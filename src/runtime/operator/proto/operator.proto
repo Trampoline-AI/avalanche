@@ -1,0 +1,100 @@
+syntax = "proto3";
+
+package avalanche.operator;
+
+// ── Service ─────────────────────────────────────────────
+
+service OperatorService {
+  rpc ListFlows(Empty) returns (FlowList);
+  rpc StartRun(StartRunRequest) returns (StartRunResponse);
+  rpc CancelRun(CancelRunRequest) returns (Empty);
+  rpc ListRuns(ListRunsRequest) returns (RunList);
+  rpc GetRun(GetRunRequest) returns (RunStateMsg);
+  rpc StreamUpdates(StreamRequest) returns (stream RunUpdate);
+}
+
+// ── Request / Response ──────────────────────────────────
+
+message Empty {}
+
+message StartRunRequest {
+  string flow_name = 1;
+}
+
+message StartRunResponse {
+  string run_id = 1;
+}
+
+message CancelRunRequest {
+  string run_id = 1;
+}
+
+message ListRunsRequest {
+  string flow_name = 1;
+}
+
+message GetRunRequest {
+  string run_id = 1;
+}
+
+message StreamRequest {
+  uint64 since_sequence = 1;
+}
+
+// ── Data Messages ───────────────────────────────────────
+
+message NodeEdges {
+  repeated string children = 1;
+}
+
+message FlowInfoMsg {
+  string name = 1;
+  string file_path = 2;
+  repeated string node_ids = 3;
+  map<string, NodeEdges> graph = 4;
+  map<string, string> node_types = 5;
+  map<string, string> display_names = 6;
+  string cron = 7;
+  double next_run_at = 8;
+  double last_run_at = 9;
+}
+
+message FlowList {
+  repeated FlowInfoMsg flows = 1;
+}
+
+message NodeStateMsg {
+  string node_id = 1;
+  string name = 2;
+  string node_type = 3;
+  string status = 4;
+  double started_at = 5;
+  double ended_at = 6;
+}
+
+message LogEntryMsg {
+  double timestamp = 1;
+  string level = 2;
+  string node_id = 3;
+  string message = 4;
+}
+
+message RunStateMsg {
+  string run_id = 1;
+  string flow_name = 2;
+  string status = 3;
+  double started_at = 4;
+  double ended_at = 5;
+  repeated NodeStateMsg nodes = 6;
+  repeated LogEntryMsg logs = 7;
+  string triggered_by = 8;
+}
+
+message RunList {
+  repeated RunStateMsg runs = 1;
+}
+
+message RunUpdate {
+  uint64 sequence = 1;
+  RunStateMsg run = 2;
+}
