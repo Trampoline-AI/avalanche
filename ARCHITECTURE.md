@@ -1,13 +1,12 @@
 # Architecture
 
-This document describes the implemented Avalanche/Avalanche architecture in this
-repository.
+This document describes the implemented Avalanche architecture in this repository.
 
 ## Bottom line
 
-Avalanche is the terminal UI and monitoring/control surface for Avalanche flows.
-It does not execute work directly. In production mode, Avalanche talks to an
-operator daemon over gRPC; the operator discovers flows, manages runs, and
+Avalanche combines a Python flow runtime, an operator daemon, and a terminal UI.
+The TUI does not execute work directly. In operator-connected mode, the TUI talks
+to the operator over gRPC; the operator discovers flows, manages runs, and
 executes work through a pluggable executor such as `LocalExecutor` or
 `RayExecutor`.
 
@@ -47,8 +46,8 @@ TUI <> Runtime
 └──────────────────────────────┘
 ```
 
-Avalanche is the frontend. The runtime is the optional backend component: the
-operator is its control plane, and the executor is its execution plane.
+The TUI is the frontend. The operator is the control plane, and the executor is
+the execution plane.
 
 ## TUI
 
@@ -124,7 +123,7 @@ Operator
 ├── CLI entrypoint
 │   └── parses --flows, --port, --ray
 ├── gRPC service
-│   ├── ListWorkflows
+│   ├── ListFlows
 │   ├── StartRun
 │   ├── CancelRun
 │   ├── ListRuns
@@ -262,7 +261,7 @@ Ray owns:
 - distributed result materialization;
 - Ray dashboard and cluster lifecycle, outside Avalanche's CLI.
 
-The operator connects to Ray, but Avalanche does not.
+The operator connects to Ray; the TUI does not.
 
 ### Executor key files
 
@@ -281,9 +280,9 @@ The protocol is intentionally small:
 
 ```python
 list_workflows() -> list[WorkflowInfo]
-list_runs(workflow_name: str) -> list[RunState]
+list_runs(flow_name: str) -> list[RunState]
 get_run(run_id: str) -> RunState | None
-start_run(workflow_name: str) -> str
+start_run(flow_name: str) -> str
 cancel_run(run_id: str) -> None
 on_run_update(callback) -> None
 on_log(callback) -> None
@@ -297,7 +296,7 @@ This boundary allows the same TUI to run against:
 
 ### Data model boundary
 
-`WorkflowInfo` is the serializable snapshot used by Avalanche:
+`WorkflowInfo` is the serializable snapshot used by the TUI:
 
 - `name`
 - `file_path`
@@ -311,7 +310,7 @@ This boundary allows the same TUI to run against:
 `RunState` captures live execution state:
 
 - `run_id`
-- `workflow_name`
+- `flow_name`
 - `status`
 - `started_at` / `ended_at`
 - per-node `NodeState`
@@ -325,10 +324,10 @@ sends control requests back through the provider.
 
 The operator exposes these main RPCs through `OperatorService`:
 
-- `ListWorkflows` returns discovered workflows.
+- `ListFlows` returns discovered flows.
 - `StartRun` starts a new workflow run.
 - `CancelRun` requests cancellation for a run.
-- `ListRuns` returns runs for a workflow.
+- `ListRuns` returns runs for a flow.
 - `GetRun` returns one run by ID.
 - `StreamUpdates` server-streams run-state updates to connected clients.
 
@@ -351,8 +350,8 @@ This mode uses `MockStateProvider` and hardcoded demo workflows such as
 
 ### Real operator mode with local execution
 
-Use this when you want Avalanche to control real discovered flows without
-Ray.
+Use this when you want the operator and TUI to control real discovered flows
+without Ray.
 
 ```bash
 uv run python -m avalanche.operator \
@@ -412,8 +411,8 @@ If a Ray head is already running on `127.0.0.1:6379`, skip `ray start` and point
 
 ### Starting a run
 
-1. The user triggers a run in Avalanche.
-2. The TUI calls `StateProvider.start_run(workflow_name)`.
+1. The user triggers a run in the TUI.
+2. The TUI calls `StateProvider.start_run(flow_name)`.
 3. In real mode, `GrpcStateProvider` sends `StartRun` to the operator.
 4. The operator looks up the workflow builder in `WorkflowRegistry`.
 5. The operator creates a `RunState` and `NodeState` entries for each node.
@@ -457,10 +456,10 @@ Ray is part of the execution plane, not the TUI plane.
 - For Ray runs, operator log capture uses `ray.util.queue` so worker logs can be
   streamed back into the run state.
 
-The effective production path is:
+The local operator-connected path is:
 
 ```text
-Avalanche TUI → GrpcStateProvider → Operator → RayExecutor → Ray cluster
+TUI -> GrpcStateProvider -> Operator -> RayExecutor -> Ray cluster
 ```
 
 ## Current caveats
@@ -477,7 +476,6 @@ Avalanche TUI → GrpcStateProvider → Operator → RayExecutor → Ray cluster
 
 ## Related documents
 
-- `spec/TUI.md` — original Avalanche/TUI design notes.
-- `spec/decisions.md` — broader Avalanche architecture decisions.
-- `spec/IMPLEMENTATION_SUMMARY.md` — historical implementation summary.
-- `doc/dag-api.md` — user-facing DAG API notes.
+- `README.md` for the shortest onboarding path.
+- `docs/getting-started.md` for the public getting-started guide.
+- `examples/README.md` for canonical runnable examples.

@@ -1,4 +1,4 @@
-"""Avalanche internal-alpha command line interface."""
+"""Avalanche command line interface."""
 
 from .app import main
 

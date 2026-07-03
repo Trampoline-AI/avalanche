@@ -1,7 +1,7 @@
 [project]
 name = "avalanche-ai"
 version = "0.2.0"
-description = ""
+description = "Python toolkit for local data-flow experiments with Iceberg and Lance"
 authors = [{ name = "Gabriel Lesperance", email = "611342+glesperance@users.noreply.github.com" }]
 requires-python = "<3.14,>=3.11"
 readme = "README.md"

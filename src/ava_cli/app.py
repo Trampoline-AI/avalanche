@@ -25,7 +25,7 @@ def main(argv: Sequence[str] | None = None) -> int:
 def _build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="ava",
-        description="Avalanche internal-alpha command line interface.",
+        description="Avalanche command line interface.",
     )
     subcommands = parser.add_subparsers(dest="command", metavar="COMMAND")
 

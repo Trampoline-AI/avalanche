@@ -15,12 +15,12 @@ test-cov-html:
 
 # Run linter
 lint:
-	uv run ruff check src/ test/ scripts/
+	uv run ruff check src/ test/
 
 # Format code
 format:
-	uv run ruff check --fix src/ test/ scripts/
-	uv run ruff format src/ test/ scripts/
+	uv run ruff check --fix src/ test/
+	uv run ruff format src/ test/
 
 # Run all checks (lint + test)
 check: lint test

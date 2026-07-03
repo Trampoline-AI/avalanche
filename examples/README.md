@@ -1,7 +1,7 @@
 # Avalanche Examples
 
-This directory contains the canonical internal-alpha examples. The canonical
-example scripts are covered by `test/example_smoke_test.py`.
+This directory contains the canonical examples. The canonical example scripts are
+covered by `test/example_smoke_test.py`.
 
 Run examples from the repository root:
 
@@ -97,5 +97,4 @@ uv run python -m avalanche.tui
   `.read()`.
 - Use one unique Stream key per consumer edge.
 - Local example artifacts are ignored by git through `.avalanche/`.
-- Ray dashboard prototypes and older design sketches are kept under
-  `spec/examples/`, not in the canonical smoke-tested onboarding path.
+- Only the examples listed here are part of the smoke-tested onboarding path.
