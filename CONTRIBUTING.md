@@ -10,10 +10,16 @@ uv sync
 
 ## Quality Gates
 
-Run the full release gate before handing off changes:
+Run the full test suite:
 
 ```bash
-make check
+make test
+```
+
+Run the full pre-commit gate before handing off changes:
+
+```bash
+make precommit-check
 ```
 
 Run the bounded smoke-test gate when checking the documented user path:

@@ -19,10 +19,16 @@ uv sync
 
 ## Required gates
 
-Run the full release gate:
+Run the full test suite:
 
 ```bash
-make check
+make test
+```
+
+Run the full pre-commit gate:
+
+```bash
+make precommit-check
 ```
 
 Run the shorter end-to-end smoke gate:
@@ -31,8 +37,8 @@ Run the shorter end-to-end smoke gate:
 make smoke-test
 ```
 
-Expected result for this release candidate: both commands pass. Some tests may be
-skipped when optional local services or terminal features are unavailable.
+Expected result for this release candidate: all required gates pass. Some tests
+may be skipped when optional local services or terminal features are unavailable.
 
 ## Local flow path
 

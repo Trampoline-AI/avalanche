@@ -1,4 +1,4 @@
-.PHONY: test test-cov test-cov-html lint format check smoke-test install clean
+.PHONY: test test-cov test-cov-html lint format precommit-check check smoke-test install clean
 
 # Run tests
 test:
@@ -22,8 +22,11 @@ format:
 	uv run ruff check --fix src/ test/
 	uv run ruff format src/ test/
 
-# Run all checks (lint + test)
-check: lint test
+# Run the full pre-commit gate (lint + test)
+precommit-check: lint test
+
+# Backwards-compatible alias for the full pre-commit gate
+check: precommit-check
 
 # Run bounded smoke tests for the documented user path
 smoke-test:

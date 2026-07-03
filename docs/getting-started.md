@@ -36,15 +36,21 @@ From the repository root:
 uv sync
 ```
 
-Run the default release gate:
+Run the full test suite:
 
 ```bash
-make check
+make test
 ```
 
-The gate runs Ruff over source and tests, then runs the full pytest suite. Some
-tests are skipped when optional local services or terminal features are not
-available.
+Some tests are skipped when optional local services or terminal features are not
+available. Before handing off changes, run the full pre-commit gate:
+
+```bash
+make precommit-check
+```
+
+The pre-commit gate runs Ruff over source and tests, then runs the full test
+suite.
 
 For a shorter end-to-end confidence check, run:
 

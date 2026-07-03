@@ -17,7 +17,7 @@ toolkit.
 - Connected TUI mode through the operator gRPC API.
 - Mock TUI mode for UI-only exploration.
 - Bounded smoke gate with `make smoke-test`.
-- Full release gate with `make check`.
+- Full pre-commit gate with `make precommit-check`.
 
 ### Known limitations
 

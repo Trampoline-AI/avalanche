@@ -23,22 +23,22 @@ For release notes, see [CHANGELOG.md](CHANGELOG.md).
 uv sync
 ```
 
-Run the release gate:
+Run the full test suite:
 
 ```bash
-make check
+make test
+```
+
+Run the full pre-commit gate before handing off changes:
+
+```bash
+make precommit-check
 ```
 
 Run the shorter end-to-end smoke gate:
 
 ```bash
 make smoke-test
-```
-
-Or run the test suite directly:
-
-```bash
-uv run pytest
 ```
 
 ## Run A Local Flow
