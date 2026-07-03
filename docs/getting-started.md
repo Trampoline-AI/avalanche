@@ -149,6 +149,8 @@ uv sync --extra runtime --extra tui
 ## Next References
 
 - [examples/README.md](../examples/README.md) for canonical example details.
+- [docs/dag-api.md](dag-api.md) for workflow DAG primitives.
+- [docs/data-model-api.md](data-model-api.md) for table and namespace APIs.
 - [ARCHITECTURE.md](../ARCHITECTURE.md) for component boundaries.
 - [CONTRIBUTING.md](../CONTRIBUTING.md) for local development expectations.
 - [CHANGELOG.md](../CHANGELOG.md) for release notes.

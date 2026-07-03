@@ -5,6 +5,11 @@ Release candidate: `0.1.0-rc0`
 Use this checklist from a fresh clone when validating the team handoff. The
 official artifact is the Git repository.
 
+Before or after the smoke path, skim the API guides:
+
+- [DAG API](../dag-api.md)
+- [Data Model API](../data-model-api.md)
+
 ## Prerequisites
 
 - Python 3.11 through 3.13.
