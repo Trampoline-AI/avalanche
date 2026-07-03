@@ -3,6 +3,8 @@
 This guide is for early users trying Avalanche locally from a fresh clone. It
 assumes Python 3.11 through 3.13, `uv`, and a local terminal.
 
+The current team release candidate is `0.1.0-rc0`.
+
 ## What Is Supported
 
 - Python flow authoring with `@ava.source`, `@ava.step`, `@ava.dest`, and
@@ -143,3 +145,6 @@ uv sync --extra runtime --extra tui
 - [examples/README.md](../examples/README.md) for canonical example details.
 - [ARCHITECTURE.md](../ARCHITECTURE.md) for component boundaries.
 - [CONTRIBUTING.md](../CONTRIBUTING.md) for local development expectations.
+- [CHANGELOG.md](../CHANGELOG.md) for release notes.
+- [docs/releases/internal-alpha-checklist.md](releases/internal-alpha-checklist.md)
+  for the team handoff checklist.

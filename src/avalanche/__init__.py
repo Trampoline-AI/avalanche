@@ -40,7 +40,7 @@ from .storage import Namespace, NamespaceConfig, ScanResult, Table, TableGroup
 # Types
 from .types import AppendResult, SnapshotMetadata, SnapshotState
 
-__version__ = "0.2.0"
+__version__ = "0.1.0rc0"
 
 __all__ = [
     # Decorators

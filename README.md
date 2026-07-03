@@ -7,13 +7,15 @@ an operator process, and a terminal UI for monitoring and control.
 ## Status
 
 Avalanche is ready for early users to try locally, but APIs, operational
-behavior, and packaging details may change before a stable release.
+behavior, and packaging details may change before a stable release. The current
+team release candidate is `0.1.0-rc0`.
 
 Use the `ava` command for operator and TUI flows. The package does not expose an
 `avalanche` command or an `avalanche init` project generator.
 
 For the full getting-started guide, see [docs/getting-started.md](docs/getting-started.md).
 For implementation boundaries, see [ARCHITECTURE.md](ARCHITECTURE.md).
+For release notes, see [CHANGELOG.md](CHANGELOG.md).
 
 ## Setup
 
@@ -124,3 +126,7 @@ uv sync --extra tui --extra runtime
 
 See [CONTRIBUTING.md](CONTRIBUTING.md) for local development commands and review
 expectations.
+
+## License
+
+Avalanche is licensed under the [Apache License 2.0](LICENSE).
