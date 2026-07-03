@@ -1,4 +1,4 @@
-.PHONY: test test-cov test-cov-html lint format precommit-check check smoke-test install clean
+.PHONY: test test-cov test-cov-html lint format precommit-check check smoke-test brand install clean
 
 # Run tests
 test:
@@ -31,6 +31,10 @@ check: precommit-check
 # Run bounded smoke tests for the documented user path
 smoke-test:
 	uv run pytest test/smoke_test.py test/example_smoke_test.py test/operator_example_discovery_test.py -v
+
+# Build checked-in brand image artifacts from the Three.js source HTML.
+brand:
+	node docs/assets/brand/source/export-brand-assets.mjs
 
 # Install dependencies
 install:

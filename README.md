@@ -1,3 +1,7 @@
+<p align="center">
+  <img align="center" src="docs/assets/brand/avalanche-logo-3d.png" width="560px" alt="Avalanche logo" />
+</p>
+
 # Avalanche
 
 Avalanche is a Python toolkit for local data-flow experiments. It combines a
