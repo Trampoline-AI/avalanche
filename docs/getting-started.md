@@ -44,6 +44,12 @@ The gate runs Ruff over source and tests, then runs the full pytest suite. Some
 tests are skipped when optional local services or terminal features are not
 available.
 
+For a shorter end-to-end confidence check, run:
+
+```bash
+make smoke-test
+```
+
 ## Run A Local Flow
 
 Start with the simplest local DAG example:

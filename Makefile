@@ -1,4 +1,4 @@
-.PHONY: test test-cov test-cov-html lint format check install clean
+.PHONY: test test-cov test-cov-html lint format check smoke-test install clean
 
 # Run tests
 test:
@@ -24,6 +24,10 @@ format:
 
 # Run all checks (lint + test)
 check: lint test
+
+# Run bounded smoke tests for the documented user path
+smoke-test:
+	uv run pytest test/smoke_test.py test/example_smoke_test.py test/operator_example_discovery_test.py -v
 
 # Install dependencies
 install:

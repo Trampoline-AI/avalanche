@@ -16,6 +16,12 @@ Run the full release gate before handing off changes:
 make check
 ```
 
+Run the bounded smoke-test gate when checking the documented user path:
+
+```bash
+make smoke-test
+```
+
 Useful focused commands:
 
 ```bash

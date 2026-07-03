@@ -27,6 +27,12 @@ Run the release gate:
 make check
 ```
 
+Run the shorter end-to-end smoke gate:
+
+```bash
+make smoke-test
+```
+
 Or run the test suite directly:
 
 ```bash
