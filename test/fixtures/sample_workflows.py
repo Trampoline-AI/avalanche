@@ -2,10 +2,38 @@
 
 import logging
 
+import avalanche as ava
 from avalanche import Logger, dest, source, step, workflow
 
 # Third-party-style logger (not avalanche.node.*)
 vendor_log = logging.getLogger("vendor.db")
+
+
+class InvocationInput(ava.BaseInput):
+    message: str = "default"
+    document: ava.File | None = None
+    document_ref: ava.S3File | None = None
+
+
+class InvocationContext(ava.RunContext):
+    request_id: str = "none"
+
+
+@source
+def capture_invocation(payload: InvocationInput, ctx: InvocationContext, log=Logger()):
+    file_text = payload.document.read_bytes().decode() if payload.document else ""
+    ref_uri = payload.document_ref.uri if payload.document_ref else ""
+    log.info(
+        "Invocation input: "
+        f"message={payload.message}; request_id={ctx.request_id}; "
+        f"execution_id={ctx.execution_id}; node={ctx.node_id}; file={file_text}; s3={ref_uri}"
+    )
+    return payload.message
+
+
+@workflow(input=InvocationInput, context=InvocationContext)
+def input_workflow():
+    capture_invocation()
 
 
 @source

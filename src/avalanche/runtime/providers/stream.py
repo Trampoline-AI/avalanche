@@ -69,6 +69,8 @@ class Stream(ParameterProvider, Generic[T]):
         key: Unique key for this stream (e.g., "docs_to_chunks")
     """
 
+    consumes_upstream = True
+
     table: "IcebergTable | Table"
     """Table to stream incremental data from."""
 

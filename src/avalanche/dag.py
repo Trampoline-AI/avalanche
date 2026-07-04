@@ -53,7 +53,7 @@ from contextvars import ContextVar
 from dataclasses import dataclass, field
 from enum import Enum
 from functools import update_wrapper, wraps
-from typing import TYPE_CHECKING, Any, Callable, DefaultDict, TypeVar
+from typing import TYPE_CHECKING, Any, Callable, DefaultDict, TypeVar, get_type_hints
 
 from ulid import ULID
 
@@ -681,6 +681,158 @@ def _inspect_providers(fn: Callable, kwargs: dict[str, Any], providers: list) ->
     return injectable_params
 
 
+def _safe_issubclass(value: Any, class_or_tuple: Any) -> bool:
+    try:
+        return isinstance(value, type) and issubclass(value, class_or_tuple)
+    except TypeError:
+        return False
+
+
+def _build_input_value(input_type: type | None, raw_input: Any) -> Any:
+    from .runtime import BaseInput
+
+    if raw_input is None:
+        if input_type is None:
+            return None
+        return input_type()
+    if input_type is None:
+        return raw_input
+    if isinstance(raw_input, input_type):
+        return raw_input
+    if not _safe_issubclass(input_type, BaseInput):
+        raise TypeError("workflow input type must inherit from ava.BaseInput")
+    return input_type.model_validate(raw_input)
+
+
+def _validate_workflow_types(input_type: type | None, context_type: type | None) -> None:
+    from .runtime import BaseContext, BaseInput
+
+    if input_type is not None and not _safe_issubclass(input_type, BaseInput):
+        raise TypeError("workflow input type must inherit from ava.BaseInput")
+    if context_type is not None and not _safe_issubclass(context_type, BaseContext):
+        raise TypeError("workflow context type must inherit from ava.BaseContext")
+
+
+def _build_context_values(
+    context_type: type | None,
+    raw_context: Any,
+    *,
+    execution_id: str,
+    workflow_name: str,
+    executor_type: str,
+) -> tuple[Any, Any]:
+    from .runtime import BaseContext, RunContext
+
+    system_context = RunContext(
+        execution_id=execution_id,
+        workflow_name=workflow_name,
+        executor_type=executor_type,
+    )
+    target_type = context_type or RunContext
+    if not _safe_issubclass(target_type, BaseContext):
+        raise TypeError("workflow context type must inherit from ava.BaseContext")
+
+    runtime_fields = {
+        "execution_id": execution_id,
+        "workflow_name": workflow_name,
+        "executor_type": executor_type,
+    }
+
+    if raw_context is not None and isinstance(raw_context, target_type):
+        if _safe_issubclass(target_type, RunContext):
+            context_value = raw_context.model_copy(update=runtime_fields)
+        else:
+            context_value = raw_context
+    elif _safe_issubclass(target_type, RunContext):
+        data = raw_context or {}
+        if not isinstance(data, dict):
+            raise TypeError("workflow context must be a mapping or BaseContext instance")
+        context_value = target_type.model_validate({**data, **runtime_fields})
+    else:
+        context_value = target_type.model_validate(raw_context or {})
+
+    return system_context, context_value
+
+
+def _context_for_node(context: Any, *, node_id: str, node_name: str) -> Any:
+    from .runtime import RunContext
+
+    if isinstance(context, RunContext):
+        return context.for_node(node_id=node_id, node_name=node_name)
+    return context
+
+
+def _inspect_runtime_params(
+    fn: Callable,
+    kwargs: dict[str, Any],
+    run_input: Any,
+    run_context: Any,
+    system_context: Any,
+) -> dict[str, Any]:
+    import inspect
+
+    from .runtime import BaseContext, BaseInput
+
+    try:
+        sig = inspect.signature(fn)
+    except (ValueError, TypeError):
+        return {}
+    try:
+        type_hints = get_type_hints(fn)
+    except Exception:
+        type_hints = {}
+
+    injected: dict[str, Any] = {}
+    for param_name, param in sig.parameters.items():
+        if param_name in kwargs:
+            continue
+        annotation = type_hints.get(param_name, param.annotation)
+        if annotation is inspect.Parameter.empty:
+            continue
+
+        if _safe_issubclass(annotation, BaseContext):
+            if run_context is not None and isinstance(run_context, annotation):
+                injected[param_name] = run_context
+            elif system_context is not None and isinstance(system_context, annotation):
+                injected[param_name] = system_context
+        elif _safe_issubclass(annotation, BaseInput):
+            if run_input is not None and isinstance(run_input, annotation):
+                injected[param_name] = run_input
+
+    return injected
+
+
+def _data_param_position(
+    fn: Callable,
+    param_name: str,
+    skip_param_names: set[str],
+    position_consuming_param_names: set[str],
+) -> int:
+    import inspect
+
+    try:
+        params = list(inspect.signature(fn).parameters.values())
+    except (ValueError, TypeError):
+        return -1
+
+    position = 0
+    for param in params:
+        if param.name == param_name:
+            return position
+        if param.name in skip_param_names:
+            continue
+        if param.name in position_consuming_param_names:
+            position += 1
+            continue
+        if param.kind in (
+            inspect.Parameter.POSITIONAL_ONLY,
+            inspect.Parameter.POSITIONAL_OR_KEYWORD,
+            inspect.Parameter.VAR_POSITIONAL,
+        ):
+            position += 1
+    return -1
+
+
 def _fetch_node_result(nf: NodeFuture, result_refs, nodes, executor):
     """Fetch the actual result value for a NodeFuture, handling chains and multi-return."""
     # If this is a chain composite, fetch the chain_end instead
@@ -761,7 +913,8 @@ def _collect_implicit_parent_results(
 def _bind_implicit_parent_results(
     fn: Callable[..., Any],
     upstream_values: list[Any],
-    injectable_params: dict[str, Any],
+    skip_param_names: set[str],
+    position_consuming_param_names: set[str],
     resolved_kwargs: dict[str, Any],
 ) -> tuple[list[Any], dict[str, Any]]:
     """
@@ -790,82 +943,59 @@ def _bind_implicit_parent_results(
     if not accepts_implicit_positionals:
         return [], {}
 
-    var_pos_index = next(
-        (
-            index
-            for index, param in enumerate(params)
-            if param.kind == inspect.Parameter.VAR_POSITIONAL
-        ),
-        None,
-    )
-    if var_pos_index is not None and len(upstream_values) > var_pos_index:
-        provider_conflicts = [
-            param.name
-            for index, param in enumerate(params[:var_pos_index])
-            if index < len(upstream_values) and param.name in injectable_params
-        ]
-        if provider_conflicts:
-            names = ", ".join(provider_conflicts)
-            raise TypeError(
-                f"Cannot implicitly bind upstream results to *args for {fn.__name__}: "
-                f"injectable parameter(s) would be double-bound by position and keyword: "
-                f"{names}"
-            )
-
-        kwarg_conflicts = [
-            param.name
-            for index, param in enumerate(params[:var_pos_index])
-            if (
-                index < len(upstream_values)
-                and param.kind == inspect.Parameter.POSITIONAL_OR_KEYWORD
-                and param.name in resolved_kwargs
-            )
-        ]
-        if kwarg_conflicts:
-            names = ", ".join(kwarg_conflicts)
-            raise TypeError(
-                f"Cannot implicitly bind upstream results to *args for {fn.__name__}: "
-                f"explicit keyword argument(s) would be double-bound by position: {names}"
-            )
-
-        return [_implicit_value_from_upstream(item) for item in upstream_values], {}
-
     resolved_args: list[Any] = []
     implicit_kwargs: dict[str, Any] = {}
+    upstream_index = 0
 
-    for index, item in enumerate(upstream_values):
-        if index >= len(params):
-            raise TypeError(
-                f"Cannot implicitly bind upstream result at position {index} for "
-                f"{fn.__name__}: function signature has no parameter at that position"
-            )
+    for param in params:
+        if param.name in skip_param_names:
+            continue
+        if param.name in position_consuming_param_names:
+            if upstream_index < len(upstream_values):
+                upstream_index += 1
+            continue
+        if upstream_index >= len(upstream_values):
+            break
 
-        param = params[index]
+        item = upstream_values[upstream_index]
         value = _implicit_value_from_upstream(item)
 
         if param.kind == inspect.Parameter.POSITIONAL_ONLY:
-            if param.name in injectable_params:
-                raise TypeError(
-                    f"Cannot inject provider parameter {param.name!r} for {fn.__name__}: "
-                    "positional-only parameters cannot be injected by keyword"
-                )
             resolved_args.append(value)
+            upstream_index += 1
             continue
 
         if param.kind == inspect.Parameter.POSITIONAL_OR_KEYWORD:
-            if param.name in injectable_params:
-                continue
             if param.name in resolved_kwargs:
                 raise TypeError(
-                    f"Cannot implicitly bind upstream result at position {index} for "
+                    f"Cannot implicitly bind upstream result at position {upstream_index} for "
                     f"{fn.__name__}: parameter {param.name!r} was also passed explicitly"
                 )
             implicit_kwargs[param.name] = value
+            upstream_index += 1
+            continue
+
+        if param.kind == inspect.Parameter.VAR_POSITIONAL:
+            resolved_args.extend(
+                _implicit_value_from_upstream(item)
+                for item in upstream_values[upstream_index:]
+            )
+            upstream_index = len(upstream_values)
             continue
 
         raise TypeError(
-            f"Cannot implicitly bind upstream result at position {index} for "
+            f"Cannot implicitly bind upstream result at position {upstream_index} for "
             f"{fn.__name__}: parameter {param.name!r} is {param.kind.description}"
+        )
+
+    if (
+        upstream_index < len(upstream_values)
+        and not skip_param_names
+        and not position_consuming_param_names
+    ):
+        raise TypeError(
+            f"Cannot implicitly bind upstream result at position {upstream_index} for "
+            f"{fn.__name__}: function signature has no parameter at that position"
         )
 
     return resolved_args, implicit_kwargs
@@ -885,6 +1015,8 @@ class Workflow:
         name: str = "workflow",
         returns: Any = None,
         cron: str | None = None,
+        input_type: type | None = None,
+        context_type: type | None = None,
     ):
         """
         Initialize workflow.
@@ -901,6 +1033,9 @@ class Workflow:
         self.name = name
         self.returns = returns
         self.cron = cron
+        _validate_workflow_types(input_type, context_type)
+        self.input_type = input_type
+        self.context_type = context_type
 
         # Validate: detect cycles via Kahn's algorithm (incomplete sort = cycle)
         order = self._topological_sort()
@@ -945,6 +1080,9 @@ class Workflow:
         self,
         executor: "Executor | None" = None,
         hooks: "RunHooks | None" = None,
+        input: Any = None,
+        context: Any = None,
+        execution_id: str | None = None,
     ) -> Any:
         """
         Execute the workflow.
@@ -952,6 +1090,9 @@ class Workflow:
         Args:
             executor: Execution engine (defaults to RayExecutor or LocalExecutor)
             hooks: Optional callbacks for monitoring node lifecycle
+            input: Optional run input payload or BaseInput instance
+            context: Optional run context payload or BaseContext instance
+            execution_id: Optional caller-owned run identity
 
         Returns:
             - If workflow returns NodeFuture: the computed value
@@ -975,8 +1116,16 @@ class Workflow:
         # Topological sort
         execution_order = self._topological_sort()
 
-        execution_id = str(ULID())
+        execution_id = execution_id or str(ULID())
         executor_type = "ray" if type(executor).__name__ == "RayExecutor" else "local"
+        run_input = _build_input_value(self.input_type, input)
+        system_context, run_context = _build_context_values(
+            self.context_type,
+            context,
+            execution_id=execution_id,
+            workflow_name=self.name,
+            executor_type=executor_type,
+        )
 
         result_refs: dict[str, Any] = {}
 
@@ -991,23 +1140,53 @@ class Workflow:
             if hooks and hooks.on_node_start:
                 hooks.on_node_start(node_id)
 
+            node_system_context = _context_for_node(
+                system_context,
+                node_id=node_id,
+                node_name=node_ref.node.fn.__name__,
+            )
+            node_run_context = _context_for_node(
+                run_context,
+                node_id=node_id,
+                node_name=node_ref.node.fn.__name__,
+            )
+            runtime_params = _inspect_runtime_params(
+                node_ref.node.fn,
+                node_ref.kwargs,
+                run_input,
+                node_run_context,
+                node_system_context,
+            )
             inspected_params = _inspect_providers(node_ref.node.fn, node_ref.kwargs, PROVIDERS)
+            provider_by_param = {}
+            position_consuming_params = set()
+            for param_name, param_value in inspected_params.items():
+                for provider in PROVIDERS:
+                    if provider.can_resolve(param_value):
+                        provider_by_param[param_name] = provider
+                        if getattr(provider, "consumes_upstream", False):
+                            position_consuming_params.add(param_name)
+                        break
+            skip_param_names = set(runtime_params) | (
+                set(inspected_params) - position_consuming_params
+            )
 
             injectable_params = {}
             if inspected_params:
-                import inspect
-
                 from .types import ParamContext
 
                 parent_ids = dependencies_map.get(node_id, [])
                 parent_results = [result_refs.get(pid) for pid in parent_ids]
 
-                sig = inspect.signature(node_ref.node.fn)
-                param_order = list(sig.parameters.keys())
-
                 for param_name, param_value in inspected_params.items():
-                    param_position = (
-                        param_order.index(param_name) if param_name in param_order else -1
+                    provider = provider_by_param.get(param_name)
+                    if provider is None:
+                        continue
+                    param_position = _data_param_position(
+                        node_ref.node.fn,
+                        param_name,
+                        skip_param_names,
+                        position_consuming_params,
                     )
 
                     param_context = ParamContext(
@@ -1018,15 +1197,12 @@ class Workflow:
                         executor_type=executor_type,
                     )
 
-                    for provider in PROVIDERS:
-                        if provider.can_resolve(param_value):
-                            resolved_value = provider.resolve(param_value, param_context)
-                            injectable_params[param_name] = (
-                                provider,
-                                param_value,
-                                resolved_value,
-                            )
-                            break
+                    resolved_value = provider.resolve(param_value, param_context)
+                    injectable_params[param_name] = (
+                        provider,
+                        param_value,
+                        resolved_value,
+                    )
 
             # Resolve explicit arguments (args and kwargs use same logic)
             resolved_args = [_resolve_to_ref(arg, result_refs) for arg in node_ref.args]
@@ -1034,7 +1210,7 @@ class Workflow:
                 k: _resolve_to_ref(v, result_refs)
                 for k, v in node_ref.kwargs.items()
                 # Exclude injectable params from normal resolution
-                if k not in injectable_params
+                if k not in injectable_params and k not in runtime_params
             }
 
             # Get original function, optionally wrapped by hooks
@@ -1058,7 +1234,8 @@ class Workflow:
                 implicit_args, implicit_kwargs = _bind_implicit_parent_results(
                     node_ref.node.fn,
                     upstream_values,
-                    injectable_params,
+                    skip_param_names,
+                    position_consuming_params,
                     resolved_kwargs,
                 )
                 resolved_args = implicit_args
@@ -1087,7 +1264,7 @@ class Workflow:
                     param_value,
                     resolved_value,
                 ) in injectable_params.items():
-                    provider_id = id(type(provider))
+                    provider_id = id(provider)
                     if provider_id not in params_by_provider:
                         params_by_provider[provider_id] = (provider, param_value, {})
                     params_by_provider[provider_id][2][param_name] = resolved_value
@@ -1102,6 +1279,8 @@ class Workflow:
                         params_to_inject.update(resolved_params)
 
                 resolved_kwargs.update(params_to_inject)
+
+            resolved_kwargs.update(runtime_params)
 
             try:
                 result = executor.submit(
@@ -1224,7 +1403,6 @@ class Workflow:
                     track_ray_node(node_id, result)
                     remaining_nodes.remove(node_id)
                     submitted_any = True
-                    drain_ray_completions(block=False)
 
                 if cancelled:
                     break
@@ -1311,6 +1489,9 @@ def workflow(
     fn: Callable[[], None] | None = None,
     *,
     cron: str | None = None,
+    input: type | None = None,
+    context: type | None = None,
+    ctx: type | None = None,
 ) -> Callable[[], Workflow] | Callable[[Callable[[], None]], Callable[[], Workflow]]:
     """
     Decorator for workflow definitions.
@@ -1327,12 +1508,23 @@ def workflow(
         def hourly_workflow():
             fetch() >> process() >> save()
 
+        @ava.workflow(input=MyInput, context=MyContext)
+        def parameterized_workflow():
+            process()
+
     Args:
         cron: Optional cron expression for scheduled execution.
+        input: Optional BaseInput subclass validated at run start.
+        context: Optional BaseContext subclass validated at run start.
+        ctx: Alias for context.
 
     Returns:
         Function that returns a Workflow object when called
     """
+
+    if context is not None and ctx is not None and context is not ctx:
+        raise ValueError("Use either context= or ctx=, not both")
+    context_type = context or ctx
 
     def decorator(fn: Callable[[], None]) -> Callable[[], Workflow]:
         @wraps(fn)
@@ -1349,6 +1541,8 @@ def workflow(
                     name=fn.__name__,
                     returns=result,
                     cron=cron,
+                    input_type=input,
+                    context_type=context_type,
                 )
             finally:
                 _workflow_context.reset(token)

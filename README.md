@@ -111,6 +111,7 @@ the tests. Package consumers can install narrower extras:
 | `tui` | Textual terminal UI dependencies |
 | `ray` | Ray executor dependencies |
 | `lance` | Lance storage backend dependencies |
+| `s3` | S3 file reference reads through `ava.S3File` and `s3fs` |
 | `all` | all optional runtime components |
 
 For local development, sync extras with commands such as:

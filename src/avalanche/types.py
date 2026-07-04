@@ -10,7 +10,7 @@ Defines core types used throughout the framework:
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from enum import Enum
-from typing import Any, Callable, Union
+from typing import Any, Callable, ClassVar, Union
 
 import polars as pl
 import pyarrow as pa
@@ -227,6 +227,8 @@ class ParameterProvider(ABC):
                 # Default injects resolved_params into kwargs
                 return custom_wrapper_fn
     """
+
+    consumes_upstream: ClassVar[bool] = False
 
     @classmethod
     @abstractmethod

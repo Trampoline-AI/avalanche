@@ -2,11 +2,21 @@
 
 from __future__ import annotations
 
+import json
 import threading
 import time
-from typing import Callable
+from collections.abc import Mapping
+from typing import Any, Callable
 
 import grpc
+from pydantic import BaseModel
+
+from avalanche.runtime import (
+    MAX_INLINE_FILE_BYTES,
+    MAX_INLINE_REQUEST_BYTES,
+    File,
+    S3File,
+)
 
 from .convert import run_state_from_proto, workflow_info_from_proto
 from .models import LogEntry, RunState, WorkflowInfo
@@ -101,9 +111,32 @@ class GrpcStateProvider:
             self.last_error = f"{e.code().name}: {e.details()}"
             return None
 
-    def start_run(self, flow_name: str) -> str:
+    def start_run(
+        self,
+        flow_name: str,
+        *,
+        input: Mapping[str, Any] | BaseModel | None = None,
+        context: Mapping[str, Any] | BaseModel | None = None,
+        files: Mapping[str, File | bytes] | None = None,
+        s3_files: Mapping[str, S3File | str] | None = None,
+    ) -> str:
+        input_files = [
+            _file_attachment(field_name, value)
+            for field_name, value in (files or {}).items()
+        ]
+        _validate_inline_request_size(input_files)
+        request = pb.StartRunRequest(
+            flow_name=flow_name,
+            input_json=_json_payload(input),
+            context_json=_json_payload(context),
+            input_files=input_files,
+            input_s3_files=[
+                _s3_file_reference(field_name, value)
+                for field_name, value in (s3_files or {}).items()
+            ],
+        )
         resp = self._call(
-            self._stub.StartRun, pb.StartRunRequest(flow_name=flow_name)
+            self._stub.StartRun, request
         )
         return resp.run_id if resp else ""
 
@@ -177,3 +210,49 @@ class GrpcStateProvider:
     def close(self) -> None:
         """Close the gRPC channel."""
         self._channel.close()
+
+
+def _json_payload(payload: Mapping[str, Any] | BaseModel | None) -> str:
+    if payload is None:
+        return ""
+    if isinstance(payload, BaseModel):
+        return payload.model_dump_json()
+    return json.dumps(payload)
+
+
+def _file_attachment(field_name: str, value: File | bytes) -> pb.FileAttachment:
+    file = value if isinstance(value, File) else File(name=field_name, content=value)
+    if len(file.content) > MAX_INLINE_FILE_BYTES:
+        raise ValueError(
+            f"File attachment '{field_name}' exceeds the maximum inline file size "
+            f"of {MAX_INLINE_FILE_BYTES} bytes. Use ava.S3File for larger files."
+        )
+    return pb.FileAttachment(
+        field_name=field_name,
+        name=file.name or "",
+        content=file.content,
+        content_type=file.content_type or "",
+        sha256=file.sha256 or "",
+    )
+
+
+def _validate_inline_request_size(files: list[pb.FileAttachment]) -> None:
+    total = sum(len(file.content) for file in files)
+    if total > MAX_INLINE_REQUEST_BYTES:
+        raise ValueError(
+            f"Inline file attachments total {total} bytes, exceeding the maximum "
+            f"inline request size of {MAX_INLINE_REQUEST_BYTES} bytes. "
+            "Use ava.S3File for larger files."
+        )
+
+
+def _s3_file_reference(field_name: str, value: S3File | str) -> pb.S3FileReference:
+    file = value if isinstance(value, S3File) else S3File(uri=value)
+    return pb.S3FileReference(
+        field_name=field_name,
+        uri=file.uri,
+        version_id=file.version_id or "",
+        etag=file.etag or "",
+        size_bytes=file.size_bytes or 0,
+        content_type=file.content_type or "",
+    )

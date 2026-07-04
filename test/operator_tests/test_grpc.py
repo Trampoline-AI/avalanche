@@ -5,10 +5,13 @@ import time
 
 import pytest
 
+import avalanche as ava
 from avalanche.operator import Operator
 from avalanche.operator.client import GrpcStateProvider
 from avalanche.operator.models import RunStatus
 from avalanche.operator.server import serve
+from avalanche.runtime import MAX_INLINE_REQUEST_BYTES, File, S3File
+from runtime.operator.proto import operator_pb2 as pb
 
 FIXTURES_DIR = os.path.join(os.path.dirname(os.path.dirname(__file__)), "fixtures")
 TEST_PORT = 17433  # Use non-default port to avoid conflicts
@@ -63,6 +66,77 @@ class TestGrpcRoundtrip:
 
         run = client.get_run(run_id)
         assert run.status == RunStatus.SUCCESS
+
+    def test_start_run_passes_json_context_and_file_attachments(self, client):
+        run_id = client.start_run(
+            "input_workflow",
+            input={"message": "from-grpc"},
+            context={"request_id": "req_grpc", "execution_id": "spoofed_user_id"},
+            files={"document": File(name="note.txt", content=b"grpc-bytes")},
+            s3_files={"document_ref": S3File(uri="s3://bucket/grpc.txt")},
+        )
+
+        deadline = time.monotonic() + 5
+        while time.monotonic() < deadline:
+            run = client.get_run(run_id)
+            if run and run.status in (RunStatus.SUCCESS, RunStatus.FAILED):
+                break
+            time.sleep(0.05)
+
+        run = client.get_run(run_id)
+        assert run is not None
+        assert run.status == RunStatus.SUCCESS
+        messages = [entry.message for entry in run.logs]
+        assert any("message=from-grpc" in message for message in messages)
+        assert any("request_id=req_grpc" in message for message in messages)
+        assert any(f"execution_id={run_id}" in message for message in messages)
+        assert not any("execution_id=spoofed_user_id" in message for message in messages)
+        assert any("file=grpc-bytes" in message for message in messages)
+        assert any("s3=s3://bucket/grpc.txt" in message for message in messages)
+
+    def test_start_run_rejects_duplicate_top_level_input_fields(self, client):
+        run_id = client.start_run(
+            "input_workflow",
+            input={"message": "from-grpc", "document": "json-value"},
+            files={"document": File(name="note.txt", content=b"grpc-bytes")},
+        )
+
+        assert run_id == ""
+        assert "INVALID_ARGUMENT" in client.last_error
+        assert "Duplicate input field 'document'" in client.last_error
+
+    def test_start_run_rejects_oversized_file_attachments(self, client):
+        with pytest.raises(ValueError, match="S3File"):
+            client.start_run(
+                "input_workflow",
+                files={"document": b"x" * (ava.MAX_INLINE_FILE_BYTES + 1)},
+            )
+
+    def test_start_run_rejects_aggregate_inline_file_bytes_before_rpc(self, client):
+        chunk = b"x" * (MAX_INLINE_REQUEST_BYTES // 2 + 1)
+
+        with pytest.raises(ValueError, match="maximum inline request size"):
+            client.start_run(
+                "simple_workflow",
+                files={"first": chunk, "second": chunk},
+            )
+
+    def test_start_run_server_rejects_aggregate_inline_file_bytes(self, client):
+        chunk = b"x" * (MAX_INLINE_REQUEST_BYTES // 2 + 1)
+
+        with pytest.raises(Exception) as exc_info:
+            client._stub.StartRun(
+                pb.StartRunRequest(
+                    flow_name="simple_workflow",
+                    input_files=[
+                        pb.FileAttachment(field_name="first", content=chunk),
+                        pb.FileAttachment(field_name="second", content=chunk),
+                    ],
+                )
+            )
+
+        assert exc_info.value.code().name == "INVALID_ARGUMENT"
+        assert "maximum inline request size" in exc_info.value.details()
 
     def test_list_runs(self, client):
         run_id = client.start_run("simple_workflow")

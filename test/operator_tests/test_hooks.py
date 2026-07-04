@@ -2,7 +2,6 @@
 
 
 import threading
-import time
 
 import pytest
 
@@ -181,109 +180,109 @@ class TestRunHooks:
 
     def test_ray_hooks_do_not_serialize_independent_branches(self):
         """Independent Ray branches should submit before hook completion waits."""
-        pytest.importorskip("ray")
-        import ray
 
-        if ray.is_initialized():
-            ray.shutdown()
+        @source
+        def slow_a():
+            return "a"
 
-        ray.init(
-            num_cpus=4,
-            ignore_reinit_error=True,
-            include_dashboard=False,
-            runtime_env={"working_dir": None},
-        )
+        @source
+        def slow_b():
+            return "b"
+
+        @workflow
+        def parallel_sources():
+            return slow_a(), slow_b()
+
+        events = []
+        result = {}
+        submitted = []
+        wait_calls = []
+        submitted_lock = threading.Lock()
+        submitted_event = threading.Event()
+        release = threading.Event()
+
+        class FakeObjectRef:
+            def __init__(self, fn, args, kwargs):
+                self.fn = fn
+                self.args = args
+                self.kwargs = kwargs
+                self.has_value = False
+                self.value = None
+
+        class FakeRay:
+            ObjectRef = FakeObjectRef
+
+            def wait(self, refs, *, num_returns=1, timeout=None):
+                wait_calls.append((len(refs), num_returns, timeout))
+                if timeout and timeout > 0:
+                    release.wait(timeout)
+                if not release.is_set():
+                    return [], list(refs)
+                ready = list(refs)[:num_returns]
+                remaining = [ref for ref in refs if ref not in ready]
+                return ready, remaining
+
+        class DeterministicRayExecutor:
+            def __init__(self):
+                self.ray = FakeRay()
+
+            def submit(self, fn, *args, num_returns=1, **kwargs):
+                if num_returns != 1:
+                    raise NotImplementedError("test fake only supports single-return nodes")
+                with submitted_lock:
+                    submitted.append(fn.__name__)
+                    if {"slow_a", "slow_b"}.issubset(submitted):
+                        submitted_event.set()
+                return FakeObjectRef(fn, args, kwargs)
+
+            def get(self, futures):
+                return [self._resolve(future) for future in futures]
+
+            def _resolve(self, value):
+                if not isinstance(value, FakeObjectRef):
+                    return value
+                if not value.has_value:
+                    args = [self._resolve(arg) for arg in value.args]
+                    kwargs = {
+                        key: self._resolve(item) for key, item in value.kwargs.items()
+                    }
+                    value.value = value.fn(*args, **kwargs)
+                    value.has_value = True
+                return value.value
+
+        DeterministicRayExecutor.__name__ = "RayExecutor"
+        executor = DeterministicRayExecutor()
+
+        def run_workflow():
+            try:
+                result["value"] = parallel_sources().run(
+                    executor=executor,
+                    hooks=RunHooks(
+                        on_node_success=lambda nid: events.append(("success", nid))
+                    ),
+                )
+            except Exception as exc:  # pragma: no cover - surfaced below
+                result["error"] = exc
+
+        thread = threading.Thread(target=run_workflow)
+        thread.start()
 
         try:
+            assert submitted_event.wait(timeout=2), (submitted, result)
+            assert set(submitted) == {"slow_a", "slow_b"}
+            assert events == []
 
-            @ray.remote
-            class Gate:
-                def __init__(self):
-                    self.started = []
-                    self.released = False
+            release.set()
+            thread.join(timeout=2)
 
-                def record_start(self, label):
-                    self.started.append(label)
-
-                def get_started(self):
-                    return list(self.started)
-
-                def release(self):
-                    self.released = True
-
-                def is_released(self):
-                    return self.released
-
-            gate = Gate.remote()
-
-            @source
-            def slow_a():
-                import time
-
-                import ray
-
-                ray.get(gate.record_start.remote("a"))
-                while not ray.get(gate.is_released.remote()):
-                    time.sleep(0.05)
-                return "a"
-
-            @source
-            def slow_b():
-                import time
-
-                import ray
-
-                ray.get(gate.record_start.remote("b"))
-                while not ray.get(gate.is_released.remote()):
-                    time.sleep(0.05)
-                return "b"
-
-            @workflow
-            def parallel_sources():
-                return slow_a(), slow_b()
-
-            events = []
-            result = {}
-
-            def run_workflow():
-                try:
-                    result["value"] = parallel_sources().run(
-                        executor=RayExecutor(),
-                        hooks=RunHooks(
-                            on_node_success=lambda nid: events.append(("success", nid))
-                        ),
-                    )
-                except Exception as exc:  # pragma: no cover - surfaced below
-                    result["error"] = exc
-
-            thread = threading.Thread(target=run_workflow)
-            thread.start()
-
-            try:
-                deadline = time.monotonic() + 5
-                started = []
-                while time.monotonic() < deadline:
-                    started = ray.get(gate.get_started.remote())
-                    if len(started) == 2:
-                        break
-                    time.sleep(0.05)
-
-                assert set(started) == {"a", "b"}
-                assert events == []
-
-                ray.get(gate.release.remote())
-                thread.join(timeout=10)
-
-                assert not thread.is_alive()
-                assert result.get("error") is None
-                assert result["value"] == ("a", "b")
-                assert len(events) == 2
-            finally:
-                ray.get(gate.release.remote())
-                thread.join(timeout=10)
-
+            assert not thread.is_alive()
+            assert result.get("error") is None
+            assert result["value"] == ("a", "b")
+            assert len(events) == 2
+            assert wait_calls
         finally:
-            ray.shutdown()
+            release.set()
+            thread.join(timeout=2)
 
     def test_ray_hooks_cancel_before_dependent_child_starts(self):
         """Cancellation observed after a parent succeeds should stop child submission."""

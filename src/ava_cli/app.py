@@ -3,11 +3,13 @@
 from __future__ import annotations
 
 import argparse
+import json
 import socket
 import subprocess
 import sys
 import time
 from collections.abc import Sequence
+from pathlib import Path
 
 _RUNTIME_OPTIONAL_MODULES = {"runtime", "grpc", "watchfiles", "croniter"}
 _TUI_OPTIONAL_MODULES = {"tui", "textual", "grpc"}
@@ -44,6 +46,36 @@ def _build_parser() -> argparse.ArgumentParser:
     operator.add_argument("--port", type=int, default=7433, help="operator gRPC port")
     operator.add_argument("--ray", action="store_true", help="use the Ray executor")
     operator.set_defaults(handler=_run_operator)
+
+    run = subcommands.add_parser(
+        "run",
+        help="start a flow run on a local operator",
+        description="Start a flow run through a running Avalanche operator.",
+    )
+    run.add_argument("flow", help="flow name to run")
+    run.add_argument(
+        "--connect",
+        default="localhost:7433",
+        metavar="HOST:PORT",
+        help="operator address",
+    )
+    run.add_argument("--input", dest="input_json", help="JSON object for workflow input")
+    run.add_argument("--context", dest="context_json", help="JSON object for run context")
+    run.add_argument(
+        "--file",
+        action="append",
+        default=[],
+        metavar="FIELD=PATH",
+        help="attach local file bytes as a top-level input field",
+    )
+    run.add_argument(
+        "--s3-file",
+        action="append",
+        default=[],
+        metavar="FIELD=S3_URI",
+        help="pass an S3 object reference as a top-level input field",
+    )
+    run.set_defaults(handler=_run_flow)
 
     tui = subcommands.add_parser(
         "tui",
@@ -96,6 +128,34 @@ def _operator_main(argv: list[str]) -> int:
     except ModuleNotFoundError as exc:
         _raise_optional_extra_error(exc, "operator", "runtime", _RUNTIME_OPTIONAL_MODULES)
     return operator_main(argv)
+
+
+def _run_flow(args: argparse.Namespace) -> int:
+    provider = _make_provider(args.connect)
+    try:
+        input_payload = _parse_json_object(args.input_json, "--input")
+        context_payload = _parse_json_object(args.context_json, "--context")
+        file_payloads = _parse_file_inputs(args.file)
+        s3_file_payloads = _parse_s3_file_inputs(args.s3_file)
+        try:
+            run_id = provider.start_run(
+                args.flow,
+                input=input_payload,
+                context=context_payload,
+                files=file_payloads,
+                s3_files=s3_file_payloads,
+            )
+        except ValueError as exc:
+            print(str(exc), file=sys.stderr)
+            return 1
+        if run_id:
+            print(run_id)
+            return 0
+        if last_error := getattr(provider, "last_error", ""):
+            print(last_error, file=sys.stderr)
+        return 1
+    finally:
+        provider.close()
 
 
 def _run_tui(args: argparse.Namespace) -> int:
@@ -171,6 +231,45 @@ def _make_provider(address: str):
     except ModuleNotFoundError as exc:
         _raise_optional_extra_error(exc, "operator", "runtime", _RUNTIME_OPTIONAL_MODULES)
     return GrpcStateProvider(address)
+
+
+def _parse_json_object(payload: str | None, flag: str) -> dict | None:
+    if payload is None:
+        return None
+    try:
+        value = json.loads(payload)
+    except json.JSONDecodeError as exc:
+        raise ValueError(f"{flag} must be valid JSON: {exc.msg}") from exc
+    if not isinstance(value, dict):
+        raise ValueError(f"{flag} must be a JSON object")
+    return value
+
+
+def _parse_assignment(value: str, flag: str) -> tuple[str, str]:
+    field, separator, payload = value.partition("=")
+    if not separator or not field or not payload:
+        raise ValueError(f"{flag} expects FIELD=VALUE")
+    return field, payload
+
+
+def _parse_file_inputs(values: list[str]):
+    from avalanche.runtime import File
+
+    files = {}
+    for value in values:
+        field, path = _parse_assignment(value, "--file")
+        files[field] = File.from_path(Path(path))
+    return files
+
+
+def _parse_s3_file_inputs(values: list[str]):
+    from avalanche.runtime import S3File
+
+    files = {}
+    for value in values:
+        field, uri = _parse_assignment(value, "--s3-file")
+        files[field] = S3File(uri=uri)
+    return files
 
 
 def _wait_for_provider(provider, *, timeout: float) -> None:

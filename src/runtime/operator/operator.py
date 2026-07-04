@@ -82,7 +82,14 @@ class Operator:
     def get_run(self, run_id: str) -> RunState | None:
         return self._runs.get(run_id)
 
-    def start_run(self, flow_name: str, triggered_by: str = "manual") -> str:
+    def start_run(
+        self,
+        flow_name: str,
+        triggered_by: str = "manual",
+        *,
+        input: dict[str, Any] | None = None,
+        context: dict[str, Any] | None = None,
+    ) -> str:
         """Start a new workflow run in a background thread."""
         builder = self._registry.get_builder(flow_name)
         info = next(p for p in self.list_workflows() if p.name == flow_name)
@@ -108,7 +115,7 @@ class Operator:
 
         t = threading.Thread(
             target=self._execute_run,
-            args=(run, builder, cancel_event),
+            args=(run, builder, cancel_event, input, context),
             daemon=True,
         )
         t.start()
@@ -183,6 +190,8 @@ class Operator:
         run: RunState,
         builder: Callable,
         cancel: threading.Event,
+        input: dict[str, Any] | None,
+        context: dict[str, Any] | None,
     ) -> None:
         """Background thread: build workflow, run it, update state."""
         run.status = RunStatus.RUNNING
@@ -228,7 +237,13 @@ class Operator:
             else:
                 hooks.wrap_fn = lambda nid, fn: _wrap_with_stdout_capture(nid, fn, run, self)
 
-            workflow.run(executor=executor, hooks=hooks)
+            workflow.run(
+                executor=executor,
+                hooks=hooks,
+                input=input,
+                context=context,
+                execution_id=run.run_id,
+            )
 
             if cancel.is_set():
                 run.status = RunStatus.CANCELLED

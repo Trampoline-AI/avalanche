@@ -32,7 +32,19 @@ from .lance import (
 from .progress import ProgressStore
 
 # Runtime primitives
-from .runtime import Cursor, Logger, Stream, consume_stream  # noqa: F401
+from .runtime import (  # noqa: F401
+    MAX_INLINE_FILE_BYTES,
+    MAX_INLINE_REQUEST_BYTES,
+    BaseContext,
+    BaseInput,
+    Cursor,
+    File,
+    Logger,
+    RunContext,
+    S3File,
+    Stream,
+    consume_stream,
+)
 
 # Storage contracts
 from .storage import Namespace, NamespaceConfig, ScanResult, Table, TableGroup
@@ -59,7 +71,14 @@ __all__ = [
     "RayExecutor",
     "get_default_executor",
     # Runtime
+    "BaseContext",
+    "BaseInput",
     "Cursor",
+    "File",
+    "MAX_INLINE_FILE_BYTES",
+    "MAX_INLINE_REQUEST_BYTES",
+    "RunContext",
+    "S3File",
     "Stream",
     "Logger",
     "consume_stream",

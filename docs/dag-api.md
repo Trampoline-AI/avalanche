@@ -149,6 +149,82 @@ snapshot. User code does not call `.read()` on the `Stream` object.
 is useful when a task needs custom progress control or coordination across
 multiple source tables.
 
+## Run input and context
+
+Workflow builders stay zero-argument. Declare runtime payload and context models
+on the workflow decorator, then receive them in source, step, or destination
+functions by type annotation.
+
+```python
+import avalanche as ava
+
+
+class DocumentInput(ava.BaseInput):
+    value: int
+    document: ava.File
+    remote_document: ava.S3File
+
+
+class RequestContext(ava.RunContext):
+    request_id: str
+
+
+@ava.source
+def load_document(payload: DocumentInput, ctx: RequestContext) -> str:
+    local_text = payload.document.read_bytes().decode()
+    return f"{ctx.request_id}:{payload.value}:{local_text}:{payload.remote_document.uri}"
+
+
+@ava.workflow(input=DocumentInput, context=RequestContext)
+def document_flow():
+    return load_document()
+```
+
+Avalanche validates `input` and `context` at run start with Pydantic. Unknown
+fields are rejected by default. Annotated input and context parameters are
+injected by type and do not consume upstream data arguments. `ava.RunContext`
+also carries runtime metadata such as `execution_id`, `workflow_name`, `node_id`,
+and `node_name`. Use `ava.BaseContext` instead when you need only user-defined
+context fields.
+
+Pass runtime values from Python with `.run(input=..., context=...)`:
+
+```python
+result = document_flow().run(
+    executor=ava.LocalExecutor(),
+    execution_id="run_123",  # optional caller-owned run identity
+    input={
+        "value": 41,
+        "document": {"name": "doc.txt", "content": b"hello"},
+        "remote_document": {"uri": "s3://bucket/large-doc.txt"},
+    },
+    context={"request_id": "req_123"},
+)
+```
+
+`ava.File` is for small file payloads carried with a run request. Inline files
+are limited to `ava.MAX_INLINE_FILE_BYTES` bytes; use `ava.S3File` above that
+limit. gRPC/CLI run requests also limit total inline file bytes to
+`ava.MAX_INLINE_REQUEST_BYTES`; use `ava.S3File` when a request needs more file
+data. Build one from a path with `ava.File.from_path(path)` or pass `{name,
+content, content_type}` in the input payload. `sha256` is computed when omitted
+and validated when supplied.
+
+`ava.S3File` is a reference to a large S3-compatible object. It validates `s3://`
+URIs and lazy-imports `s3fs` only when `open()` or `read_bytes()` is called.
+Install `avalanche-ai[s3]` if your environment does not already include `s3fs`.
+Authentication and endpoint options are passed through to `s3fs`:
+
+```python
+import os
+
+contents = payload.remote_document.read_bytes(
+    key=os.environ["AWS_ACCESS_KEY_ID"],
+    secret=os.environ["AWS_SECRET_ACCESS_KEY"],
+    client_kwargs={"endpoint_url": "https://s3.example.com"},
+)
+```
+
 ## Execution
 
 Run a workflow by constructing it and calling `.run()` with an executor:
@@ -159,6 +235,18 @@ result = document_flow().run(executor=ava.LocalExecutor())
 
 `ava.LocalExecutor` runs locally. `ava.RayExecutor` is available when Ray support
 is installed and configured.
+
+When a local operator is running, start a discovered workflow over gRPC with
+`ava run`. JSON values go through `--input` and `--context`; files and S3
+references are attached to top-level input fields without base64-in-JSON:
+
+```bash
+uv run ava run document_flow --connect localhost:7433 \
+  --input '{"value": 41}' \
+  --context '{"request_id": "req_123"}' \
+  --file document=./doc.txt \
+  --s3-file remote_document=s3://bucket/large-doc.txt
+```
 
 ## Current caveats
 

@@ -44,6 +44,36 @@ class TestOperatorLifecycle:
         assert run.status == RunStatus.SUCCESS
         assert run.ended_at is not None
 
+    def test_start_run_passes_input_context_and_file_values_to_workflow(self):
+        op = self._make_operator()
+        run_id = op.start_run(
+            "input_workflow",
+            input={
+                "message": "hello",
+                "document": {"name": "note.txt", "content": b"contents"},
+                "document_ref": {"uri": "s3://bucket/input.txt"},
+            },
+            context={"request_id": "req_456", "execution_id": "spoofed_user_id"},
+        )
+
+        deadline = time.monotonic() + 5
+        while time.monotonic() < deadline:
+            run = op.get_run(run_id)
+            if run and run.status in (RunStatus.SUCCESS, RunStatus.FAILED):
+                break
+            time.sleep(0.05)
+
+        run = op.get_run(run_id)
+        assert run is not None
+        assert run.status == RunStatus.SUCCESS
+        messages = [entry.message for entry in run.logs]
+        assert any("message=hello" in message for message in messages)
+        assert any("request_id=req_456" in message for message in messages)
+        assert any(f"execution_id={run_id}" in message for message in messages)
+        assert not any("execution_id=spoofed_user_id" in message for message in messages)
+        assert any("file=contents" in message for message in messages)
+        assert any("s3=s3://bucket/input.txt" in message for message in messages)
+
     def test_all_nodes_succeed(self):
         op = self._make_operator()
         run_id = op.start_run("simple_workflow")

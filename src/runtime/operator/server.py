@@ -2,10 +2,14 @@
 
 from __future__ import annotations
 
+import json
 import logging
 from concurrent import futures
+from typing import Any
 
 import grpc
+
+from avalanche.runtime import MAX_INLINE_FILE_BYTES, MAX_INLINE_REQUEST_BYTES
 
 from .convert import run_state_to_proto, workflow_info_to_proto
 from .operator import Operator
@@ -31,8 +35,16 @@ class OperatorServicer(pb_grpc.OperatorServiceServicer):
 
     def StartRun(self, request, context):  # noqa: N802
         try:
-            run_id = self._op.start_run(request.flow_name)
+            run_input = _decode_input_payload(request)
+            run_context = _decode_json_object(request.context_json, "context_json")
+            run_id = self._op.start_run(
+                request.flow_name,
+                input=run_input,
+                context=run_context,
+            )
             return pb.StartRunResponse(run_id=run_id)
+        except ValueError as e:
+            context.abort(grpc.StatusCode.INVALID_ARGUMENT, str(e))
         except KeyError as e:
             context.abort(grpc.StatusCode.NOT_FOUND, str(e))
 
@@ -118,3 +130,61 @@ def serve(operator: Operator, port: int = DEFAULT_PORT, block: bool = True) -> g
             server.stop(grace=1)
 
     return server
+
+
+def _decode_json_object(payload: str, field_name: str) -> dict[str, Any] | None:
+    if not payload:
+        return None
+    try:
+        value = json.loads(payload)
+    except json.JSONDecodeError as exc:
+        raise ValueError(f"Invalid {field_name}: {exc.msg}") from exc
+    if not isinstance(value, dict):
+        raise ValueError(f"{field_name} must be a JSON object")
+    return value
+
+
+def _decode_input_payload(request) -> dict[str, Any] | None:
+    payload = _decode_json_object(request.input_json, "input_json") or {}
+    _validate_inline_request_size(request.input_files)
+    for file in request.input_files:
+        if not file.field_name:
+            raise ValueError("input file attachment is missing field_name")
+        if len(file.content) > MAX_INLINE_FILE_BYTES:
+            raise ValueError(
+                f"File attachment '{file.field_name}' exceeds the maximum inline file size "
+                f"of {MAX_INLINE_FILE_BYTES} bytes. Use ava.S3File for larger files."
+            )
+        _set_input_field(payload, file.field_name, {
+            "name": file.name or None,
+            "content": bytes(file.content),
+            "content_type": file.content_type or None,
+            "sha256": file.sha256 or None,
+        })
+    for file in request.input_s3_files:
+        if not file.field_name:
+            raise ValueError("input S3 file reference is missing field_name")
+        _set_input_field(payload, file.field_name, {
+            "uri": file.uri,
+            "version_id": file.version_id or None,
+            "etag": file.etag or None,
+            "size_bytes": file.size_bytes or None,
+            "content_type": file.content_type or None,
+        })
+    return payload or None
+
+
+def _validate_inline_request_size(files) -> None:
+    total = sum(len(file.content) for file in files)
+    if total > MAX_INLINE_REQUEST_BYTES:
+        raise ValueError(
+            f"Inline file attachments total {total} bytes, exceeding the maximum "
+            f"inline request size of {MAX_INLINE_REQUEST_BYTES} bytes. "
+            "Use ava.S3File for larger files."
+        )
+
+
+def _set_input_field(payload: dict[str, Any], field_name: str, value: Any) -> None:
+    if field_name in payload:
+        raise ValueError(f"Duplicate input field '{field_name}'")
+    payload[field_name] = value

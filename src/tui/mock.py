@@ -488,7 +488,7 @@ class MockStateProvider:
     def get_run(self, run_id: str) -> RunState | None:
         return self._runs.get(run_id)
 
-    def start_run(self, flow_name: str) -> str:
+    def start_run(self, flow_name: str, **kwargs) -> str:
         info = self._workflows.get(flow_name)
         if info is None:
             raise ValueError(f"Unknown workflow: {flow_name}")
