@@ -4,6 +4,7 @@ import dataframely as dy
 import pyarrow as pa
 
 from avalanche.lance import LanceTable
+from avalanche.lineage import ROW_LINEAGE_COLUMNS
 
 
 class LanceSchema(dy.Schema):
@@ -13,6 +14,14 @@ class LanceSchema(dy.Schema):
 
 def test_lance_table_accepts_dataframely_schema_without_lance_import():
     table = LanceTable(schema=LanceSchema)
+
+    assert isinstance(table.schema, pa.Schema)
+    assert table.schema.names == ["id", "label", *ROW_LINEAGE_COLUMNS]
+    assert table.schema_fields == ("id", "label", *ROW_LINEAGE_COLUMNS)
+
+
+def test_lance_table_row_lineage_can_be_disabled_without_lance_import():
+    table = LanceTable(schema=LanceSchema, row_lineage=False)
 
     assert isinstance(table.schema, pa.Schema)
     assert table.schema.names == ["id", "label"]

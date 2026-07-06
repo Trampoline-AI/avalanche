@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import hashlib
+from contextvars import ContextVar
 from io import BytesIO
 from pathlib import Path
 from typing import Any, BinaryIO, Literal, TextIO, overload
@@ -43,6 +44,26 @@ class RunContext(BaseContext):
 
     def for_node(self, *, node_id: str, node_name: str) -> "RunContext":
         return self.model_copy(update={"node_id": node_id, "node_name": node_name})
+
+
+_current_run_context: ContextVar[RunContext | None] = ContextVar(
+    "_current_run_context",
+    default=None,
+)
+
+
+def get_current_run_context() -> RunContext | None:
+    """Return the RunContext for the currently executing workflow node, if any."""
+    return _current_run_context.get()
+
+
+def run_with_context(context: RunContext, fn: Any, *args: Any, **kwargs: Any) -> Any:
+    """Execute a function with a RunContext available to framework helpers."""
+    token = _current_run_context.set(context)
+    try:
+        return fn(*args, **kwargs)
+    finally:
+        _current_run_context.reset(token)
 
 
 class File(BaseModel):

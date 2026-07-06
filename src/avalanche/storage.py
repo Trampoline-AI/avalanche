@@ -60,9 +60,10 @@ class Table(ABC):
 
     schema: Any
 
-    def __init__(self) -> None:
+    def __init__(self, *, row_lineage: bool = True) -> None:
         self._ns: Namespace | None = None
         self._table_name = ""
+        self.row_lineage = row_lineage
 
     @property
     def identifier(self) -> str:

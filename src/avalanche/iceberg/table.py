@@ -21,7 +21,9 @@ import polars as pl
 import pyarrow as pa
 from pyiceberg.schema import Schema as IcebergSchema
 from pyiceberg.table import ALWAYS_TRUE, EMPTY_DICT, BooleanExpression, Properties, Table
+from pyiceberg.types import NestedField, StringType, TimestampType
 
+from ..lineage import ROW_LINEAGE_COLUMNS, add_row_lineage_to_data
 from ..storage import NativeScanResult
 from ..storage import Table as StorageTable
 from ..types import AppendResult
@@ -29,6 +31,58 @@ from .schema import normalize_schema
 
 if TYPE_CHECKING:
     from .namespace import IcebergAppendScan
+
+
+def _with_row_lineage_schema(schema: IcebergSchema) -> IcebergSchema:
+    existing = {field.name for field in schema.fields}
+    conflicts = sorted(existing & set(ROW_LINEAGE_COLUMNS))
+    if conflicts:
+        joined = ", ".join(conflicts)
+        raise ValueError(
+            "row_lineage=True reserves Avalanche provenance columns; "
+            f"remove or rename: {joined}"
+        )
+
+    next_field_id = max((field.field_id for field in schema.fields), default=0) + 1
+    lineage_fields = [
+        NestedField(
+            field_id=next_field_id,
+            name="_ava_updated_at",
+            field_type=TimestampType(),
+            required=False,
+        ),
+        NestedField(
+            field_id=next_field_id + 1,
+            name="_ava_execution_id",
+            field_type=StringType(),
+            required=False,
+        ),
+        NestedField(
+            field_id=next_field_id + 2,
+            name="_ava_workflow_name",
+            field_type=StringType(),
+            required=False,
+        ),
+        NestedField(
+            field_id=next_field_id + 3,
+            name="_ava_node_id",
+            field_type=StringType(),
+            required=False,
+        ),
+        NestedField(
+            field_id=next_field_id + 4,
+            name="_ava_node_name",
+            field_type=StringType(),
+            required=False,
+        ),
+        NestedField(
+            field_id=next_field_id + 5,
+            name="_ava_ctx_metadata",
+            field_type=StringType(),
+            required=False,
+        ),
+    ]
+    return IcebergSchema(*schema.fields, *lineage_fields)
 
 
 class IcebergTable(StorageTable):
@@ -58,17 +112,19 @@ class IcebergTable(StorageTable):
         ns.documents.metadata
     """
 
-    def __init__(self, schema: Any):
+    def __init__(self, schema: Any, *, row_lineage: bool = True):
         """
         Initialize table with a schema.
 
         Args:
             schema: DataFramely Schema class or PyIceberg Schema instance
         """
-        super().__init__()
+        super().__init__(row_lineage=row_lineage)
 
         # Convert schema if needed
         self.schema: IcebergSchema = normalize_schema(schema)
+        if self.row_lineage:
+            self.schema = _with_row_lineage_schema(self.schema)
 
         self._table: Table | None = None
 
@@ -138,13 +194,22 @@ class IcebergTable(StorageTable):
         else:
             arrow_data = df
 
+        if self.row_lineage:
+            from ..runtime import get_current_run_context
+
+            arrow_data = add_row_lineage_to_data(
+                arrow_data,
+                context=get_current_run_context(),
+            )
+
         arrow_data = self._cast_to_table_schema(arrow_data)
 
         # Call underlying PyIceberg append
         self._table.append(arrow_data)
 
-        # Return AppendResult with original data
-        return AppendResult(data=df, snapshot_id=self.current_version_id)
+        snapshot_id = self.current_version_id
+        assert snapshot_id is not None
+        return AppendResult(data=arrow_data, snapshot_id=snapshot_id)
 
     def _cast_to_table_schema(self, arrow_data: pa.Table | pa.RecordBatch) -> pa.Table:
         """Align Arrow field types/nullability with the declared Iceberg schema."""

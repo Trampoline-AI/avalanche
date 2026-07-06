@@ -94,6 +94,26 @@ print(result.to_dicts())
 `to_polars()`, `to_arrow()`, or `to_dicts()` depending on the shape the next step
 needs.
 
+By default, Avalanche appends framework-owned row provenance columns to every
+Iceberg and Lance table:
+
+- `_ava_updated_at`: UTC timestamp for the write operation;
+- `_ava_execution_id`: current workflow run id, when the append happens inside a
+  workflow;
+- `_ava_workflow_name`: current workflow name;
+- `_ava_node_id`: current node invocation id;
+- `_ava_node_name`: current node function name.
+- `_ava_ctx_metadata`: compact JSON object for additional
+  `RunContext.metadata` fields supplied by the caller or platform.
+
+These columns are write provenance, not full entity lineage: Avalanche does not
+infer `created_at`, primary keys, or parent row ids. Disable the default columns
+for a table with `row_lineage=False`:
+
+```python
+document = ava.IcebergTable(schema=DocumentSchema, row_lineage=False)
+```
+
 Use the backend-neutral scan/read contract for portable code:
 
 ```python
@@ -123,7 +143,8 @@ Common table members include:
 
 - `identifier`: full `namespace.table` identifier;
 - `location`: backend storage location;
-- `schema_fields`: field names in declaration order;
+- `schema_fields`: field names in declaration order, including default
+  `_ava_*` row provenance fields unless `row_lineage=False`;
 - `current_version_id`: current snapshot/version id, if one exists;
 - `append(...)`: append rows and return `ava.AppendResult`;
 - `scan(...)`: create a backend-neutral `ScanResult`;

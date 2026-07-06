@@ -189,6 +189,13 @@ and do not consume upstream data arguments.
 - `node_name`: current node function name, such as `load_document`.
 - `metadata`: optional caller/platform metadata as `dict[str, object]`.
 
+When a node writes to a default Iceberg or Lance table, Avalanche also uses this
+run context to populate row provenance columns such as `_ava_execution_id`,
+`_ava_workflow_name`, `_ava_node_id`, `_ava_node_name`, and
+`_ava_ctx_metadata`. See
+[`data-model-api.md`](data-model-api.md#append-scan-and-read) for the table-side
+`row_lineage` option.
+
 The workflow author usually does not define a custom context type. If a caller
 needs to pass request metadata, put it under `RunContext.metadata`:
 

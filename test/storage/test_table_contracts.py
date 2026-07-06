@@ -7,8 +7,10 @@ user-facing behavior belongs here so Lance and Iceberg do not drift.
 
 from __future__ import annotations
 
+import json
 from collections.abc import Callable
 from dataclasses import dataclass
+from datetime import datetime
 from typing import Any
 
 import dataframely as dy
@@ -16,9 +18,14 @@ import polars as pl
 import pyarrow as pa
 import pytest
 
+import avalanche as ava
 from avalanche import Namespace, NamespaceConfig, Table, TableGroup
 from avalanche.iceberg import IcebergNs, IcebergNsConfig, IcebergTable
 from avalanche.lance import LanceNamespace, LanceNamespaceConfig, LanceTable
+from avalanche.lineage import ROW_LINEAGE_COLUMNS
+
+BUSINESS_COLUMNS = ("id", "name", "value")
+TABLE_COLUMNS = (*BUSINESS_COLUMNS, *ROW_LINEAGE_COLUMNS)
 
 
 class ContractSchema(dy.Schema):
@@ -98,7 +105,19 @@ def _rows(*, start: int = 1, count: int = 3) -> pl.DataFrame:
 
 
 def _sorted_dicts(df: pl.DataFrame) -> list[dict[str, Any]]:
-    return df.sort("id").to_dicts()
+    return df.select(BUSINESS_COLUMNS).sort("id").to_dicts()
+
+
+def _assert_default_lineage(df: pl.DataFrame, *, expected_rows: int) -> None:
+    lineage = df.select(ROW_LINEAGE_COLUMNS)
+    assert lineage.height == expected_rows
+    for row in lineage.to_dicts():
+        assert isinstance(row["_ava_updated_at"], datetime)
+        assert row["_ava_execution_id"] is None
+        assert row["_ava_workflow_name"] is None
+        assert row["_ava_node_id"] is None
+        assert row["_ava_node_name"] is None
+        assert row["_ava_ctx_metadata"] is None
 
 
 def test_backend_matrix_includes_all_declared_backends():
@@ -110,10 +129,17 @@ def test_tables_accept_dataframely_schemas(backend: BackendCase):
 
     assert isinstance(table, Table)
     assert table.schema is not None
-    assert table.schema_fields == ("id", "name", "value")
+    assert table.schema_fields == TABLE_COLUMNS
     assert table.identifier == ""
     assert table.location == ""
     assert table.current_version_id is None
+
+
+def test_row_lineage_can_be_disabled(backend: BackendCase):
+    table = backend.table_cls(schema=ContractSchema, row_lineage=False)
+
+    assert table.row_lineage is False
+    assert table.schema_fields == BUSINESS_COLUMNS
 
 
 def test_tables_reject_invalid_schemas(backend: BackendCase):
@@ -180,8 +206,8 @@ def test_empty_bound_table_reads_as_empty_schema(namespace):
     table = namespace.records
 
     assert table.current_version_id is None
-    assert table.scan().to_arrow().schema.names == ["id", "name", "value"]
-    assert table.scan().to_polars().columns == ["id", "name", "value"]
+    assert table.scan().to_arrow().schema.names == list(TABLE_COLUMNS)
+    assert table.scan().to_polars().columns == list(TABLE_COLUMNS)
     assert table.read().height == 0
 
 
@@ -194,8 +220,9 @@ def test_append_polars_returns_append_result_and_persists_rows(namespace):
     assert result.snapshot_id == table.current_version_id
     assert result.snapshot_id is not None
     assert _sorted_dicts(result.to_polars()) == _sorted_dicts(rows)
-    assert table.scan().to_polars().sort("id").to_dicts() == _sorted_dicts(rows)
-    assert table.read().sort("id").to_dicts() == _sorted_dicts(rows)
+    _assert_default_lineage(result.to_polars(), expected_rows=3)
+    assert _sorted_dicts(table.scan().to_polars()) == _sorted_dicts(rows)
+    assert _sorted_dicts(table.read()) == _sorted_dicts(rows)
 
 
 def test_append_arrow_table_and_record_batch(namespace):
@@ -209,7 +236,7 @@ def test_append_arrow_table_and_record_batch(namespace):
     table.append(batch)
 
     expected = pl.concat([first, second])
-    assert table.read().sort("id").to_dicts() == _sorted_dicts(expected)
+    assert _sorted_dicts(table.read()) == _sorted_dicts(expected)
 
 
 def test_multiple_appends_advance_version_and_accumulate_rows(namespace):
@@ -240,7 +267,7 @@ def test_append_casts_to_declared_schema(namespace):
     arrow = table.scan().to_arrow()
 
     assert arrow.schema.field("value").type == pa.int64()
-    assert table.read().to_dicts() == [{"id": 1, "name": "one", "value": 10}]
+    assert _sorted_dicts(table.read()) == [{"id": 1, "name": "one", "value": 10}]
 
 
 def test_scan_supports_projection_filter_and_limit(namespace):
@@ -252,12 +279,38 @@ def test_scan_supports_projection_filter_and_limit(namespace):
     assert projected.height == 5
 
     filtered = table.scan(filter="id = 3").to_polars()
-    assert filtered.to_dicts() == [{"id": 3, "name": "name-3", "value": 30}]
+    assert _sorted_dicts(filtered) == [{"id": 3, "name": "name-3", "value": 30}]
 
     combined = table.scan(filter="id > 2", columns=["name"], limit=2).to_polars()
     assert combined.columns == ["name"]
     assert combined.height == 2
     assert combined["name"].to_list() == ["name-3", "name-4"]
+
+
+def test_row_lineage_captures_workflow_context(namespace):
+    table = namespace.records
+
+    @ava.source
+    def load_rows(*, records=table):
+        return records.append(_rows(count=1))
+
+    @ava.workflow
+    def lineage_flow():
+        return load_rows()
+
+    result = lineage_flow().run(
+        executor=ava.LocalExecutor(),
+        execution_id="exec_123",
+        context={"metadata": {"attempt": 2, "tenant": "acme"}},
+    )
+    row = result.to_polars().to_dicts()[0]
+
+    assert isinstance(row["_ava_updated_at"], datetime)
+    assert row["_ava_execution_id"] == "exec_123"
+    assert row["_ava_workflow_name"] == "lineage_flow"
+    assert row["_ava_node_id"] == "load_rows_1"
+    assert row["_ava_node_name"] == "load_rows"
+    assert json.loads(row["_ava_ctx_metadata"]) == {"attempt": 2, "tenant": "acme"}
 
 
 def test_drop_tables_removes_backend_data(namespace):

@@ -99,7 +99,7 @@ def chunk_documents(
             return "no documents to chunk"
 
         chunks = process_documents_to_chunks(doc_df)
-        tx.append(chunks.to_arrow().cast(dest.schema.as_arrow()))
+        tx.append(chunks.to_arrow())
         cursor.set(current_snapshot)
         return f"chunked {len(doc_df)} documents into {len(chunks)} chunks"
 
@@ -125,7 +125,7 @@ def embed_chunks_per_model(
             return f"no chunks for {model}"
 
         embeddings = generate_embeddings(chunk_df, model=model)
-        tx.append(embeddings.to_arrow().cast(dest.schema.as_arrow()))
+        tx.append(embeddings.to_arrow())
         cursor.set(current_snapshot)
         return f"embedded {len(chunk_df)} chunks with {model}"
 

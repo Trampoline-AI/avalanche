@@ -12,6 +12,8 @@ from .context import (
     File,
     RunContext,
     S3File,
+    get_current_run_context,
+    run_with_context,
 )
 from .cursor import Cursor
 from .providers import Logger, LoggerInstance, Stream, consume_stream
@@ -25,6 +27,8 @@ __all__ = [
     "MAX_INLINE_REQUEST_BYTES",
     "RunContext",
     "S3File",
+    "get_current_run_context",
+    "run_with_context",
     "Stream",
     "consume_stream",
     "Logger",

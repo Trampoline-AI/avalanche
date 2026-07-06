@@ -24,13 +24,15 @@ class IcebergTable(Table):
     _ns: IcebergNamespace | None
     _table: Table | None
 
-    def __init__(self, schema: Any) -> None: ...
+    def __init__(self, schema: Any, *, row_lineage: bool = ...) -> None: ...
 
     # Note: name() method is proxied from PyIceberg Table and returns identifier tuple
     @property
     def identifier(self) -> str: ...
     @property
     def location(self) -> str: ...
+    @property
+    def schema_fields(self) -> tuple[str, ...]: ...
     def scan(
         self,
         *args: Any,

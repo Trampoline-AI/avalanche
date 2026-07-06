@@ -8,6 +8,7 @@ from pyiceberg.schema import Schema as IcebergSchema
 from pyiceberg.types import NestedField, StringType
 
 from avalanche.iceberg import IcebergNs, IcebergNsConfig, IcebergTable
+from avalanche.lineage import ROW_LINEAGE_COLUMNS
 
 
 class TestTableSchema(dy.Schema):
@@ -43,8 +44,20 @@ class TestIcebergTableInit:
 
         table = IcebergTable(schema=pyiceberg_schema)
 
-        assert table.schema is pyiceberg_schema
         assert isinstance(table.schema, IcebergSchema)
+        assert table.schema_fields == ("id", "name", *ROW_LINEAGE_COLUMNS)
+
+    def test_pyiceberg_schema_row_lineage_can_be_disabled(self):
+        """Test PyIceberg schema identity is preserved when row lineage is disabled."""
+        pyiceberg_schema = IcebergSchema(
+            NestedField(1, "id", StringType(), required=True),
+            NestedField(2, "name", StringType(), required=True),
+        )
+
+        table = IcebergTable(schema=pyiceberg_schema, row_lineage=False)
+
+        assert table.schema is pyiceberg_schema
+        assert table.schema_fields == ("id", "name")
 
     def test_init_with_invalid_schema(self):
         """Test initialization with invalid schema type."""

@@ -11,6 +11,7 @@ import polars as pl
 import pyarrow as pa
 from pyiceberg.exceptions import CommitFailedException
 
+from avalanche.lineage import add_row_lineage_to_arrow_schema, add_row_lineage_to_data
 from avalanche.storage import ScanResult, Table
 from avalanche.types import AppendResult
 
@@ -198,9 +199,11 @@ class LanceTransaction:
 class LanceTable(Table):
     """Avalanche table backed by a Lance dataset."""
 
-    def __init__(self, schema: Any):
-        super().__init__()
+    def __init__(self, schema: Any, *, row_lineage: bool = True):
+        super().__init__(row_lineage=row_lineage)
         self.schema: pa.Schema = normalize_schema(schema)
+        if self.row_lineage:
+            self.schema = add_row_lineage_to_arrow_schema(self.schema)
 
     @property
     def current_version_id(self) -> int | None:
@@ -228,11 +231,21 @@ class LanceTable(Table):
             )
 
         lance = _require_lance()
-        arrow_data = _to_arrow(df).cast(self.schema)
+        arrow_data = _to_arrow(df)
+        if self.row_lineage:
+            from avalanche.runtime import get_current_run_context
+
+            arrow_data = add_row_lineage_to_data(
+                arrow_data,
+                context=get_current_run_context(),
+            )
+        arrow_data = arrow_data.cast(self.schema)
         mode = "append" if self._dataset_exists() else "overwrite"
         lance.write_dataset(arrow_data, self.location, mode=mode)
 
-        return AppendResult(data=df, snapshot_id=self.current_version_id)
+        snapshot_id = self.current_version_id
+        assert snapshot_id is not None
+        return AppendResult(data=arrow_data, snapshot_id=snapshot_id)
 
     def snapshot_by_id(self, snapshot_id: int) -> LanceSnapshot | None:
         """Return minimal version metadata needed by table-backed streams."""

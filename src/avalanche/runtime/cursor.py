@@ -34,8 +34,8 @@ class _CursorTransaction:
         self._tx = self.cursor.table.transaction()
         self._tx.__enter__()
         # Mark cursor as in transaction
-        self.cursor._active_tx = self._tx
-        return self._tx
+        self.cursor._active_tx = self
+        return self
 
     def __exit__(self, exc_type, exc_val, exc_tb):
         """Commit transaction and cleanup."""
@@ -45,6 +45,39 @@ class _CursorTransaction:
             # Clean up cursor state
             if hasattr(self.cursor, "_active_tx"):
                 delattr(self.cursor, "_active_tx")
+
+    def append(self, data: Any) -> Any:
+        """Append rows through the cursor transaction using table write semantics."""
+        table = self.cursor.table
+        arrow_data = data
+        if getattr(table, "row_lineage", False):
+            from avalanche.lineage import add_row_lineage_to_data
+            from avalanche.runtime import get_current_run_context
+
+            arrow_data = add_row_lineage_to_data(
+                arrow_data,
+                context=get_current_run_context(),
+            )
+
+        cast_to_schema = getattr(table, "_cast_to_table_schema", None)
+        if cast_to_schema is not None:
+            arrow_data = cast_to_schema(arrow_data)
+        else:
+            schema = getattr(table, "schema", None)
+            if schema is not None:
+                arrow_data = arrow_data.cast(schema)
+
+        assert self._tx is not None
+        return self._tx.append(arrow_data)
+
+    def set_properties(self, **kwargs: Any) -> None:
+        """Set metadata properties on the underlying transaction."""
+        assert self._tx is not None
+        self._tx.set_properties(**kwargs)
+
+    def __getattr__(self, name: str) -> Any:
+        assert self._tx is not None
+        return getattr(self._tx, name)
 
 
 class Cursor:

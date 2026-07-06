@@ -762,6 +762,20 @@ def _context_for_node(context: Any, *, node_id: str, node_name: str) -> Any:
     return context
 
 
+def _with_current_run_context(fn: Callable[..., Any], context: Any) -> Callable[..., Any]:
+    """Wrap a node function so framework helpers can read its RunContext."""
+    from .runtime import RunContext, run_with_context
+
+    if not isinstance(context, RunContext):
+        return fn
+
+    @wraps(fn)
+    def wrapped(*args: Any, **kwargs: Any) -> Any:
+        return run_with_context(context, fn, *args, **kwargs)
+
+    return wrapped
+
+
 def _inspect_runtime_params(
     fn: Callable,
     kwargs: dict[str, Any],
@@ -1281,6 +1295,7 @@ class Workflow:
                 resolved_kwargs.update(params_to_inject)
 
             resolved_kwargs.update(runtime_params)
+            actual_fn = _with_current_run_context(actual_fn, node_run_context)
 
             try:
                 result = executor.submit(
