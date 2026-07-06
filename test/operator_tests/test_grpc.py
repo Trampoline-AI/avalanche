@@ -23,6 +23,7 @@ def grpc_server():
     op = Operator(
         workflow_paths=[os.path.join(FIXTURES_DIR, "sample_workflows.py")],
         schedule=False,
+        watch=False,
     )
     server = serve(op, port=TEST_PORT, block=False)
     time.sleep(0.2)  # Let server bind

@@ -14,6 +14,7 @@ class TestOperatorLifecycle:
         return Operator(
             workflow_paths=[os.path.join(FIXTURES_DIR, "sample_workflows.py")],
             schedule=False,
+            watch=False,
         )
 
     def test_list_workflows(self):
@@ -137,6 +138,7 @@ class TestOperatorCancellation:
         return Operator(
             workflow_paths=[os.path.join(FIXTURES_DIR, "sample_workflows.py")],
             schedule=False,
+            watch=False,
         )
 
     def test_cancel_run(self):
@@ -178,6 +180,7 @@ class TestOperatorSubscription:
         return Operator(
             workflow_paths=[os.path.join(FIXTURES_DIR, "sample_workflows.py")],
             schedule=False,
+            watch=False,
         )
 
     def test_subscribe_receives_updates(self):
