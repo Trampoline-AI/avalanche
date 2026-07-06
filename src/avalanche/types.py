@@ -30,7 +30,7 @@ class AppendResult:
     - Support both passthrough and table-backed modes
 
     Attributes:
-        data: The appended data (Polars DataFrame or PyArrow Table)
+        data: The appended data (Polars DataFrame, PyArrow Table, or RecordBatch)
         snapshot_id: The snapshot ID created by this append
 
     Example:
@@ -41,20 +41,28 @@ class AppendResult:
             return result  # AppendResult(data=..., snapshot_id=...)
     """
 
-    data: Union[pl.DataFrame, pa.Table]
+    data: Union[pl.DataFrame, pa.Table, pa.RecordBatch]
     snapshot_id: int
 
     def to_polars(self) -> pl.DataFrame:
         """Convert data to Polars DataFrame if needed."""
         if isinstance(self.data, pl.DataFrame):
             return self.data
-        return pl.from_arrow(self.data)
+        result = pl.from_arrow(self.to_arrow())
+        assert isinstance(result, pl.DataFrame)
+        return result
 
     def to_arrow(self) -> pa.Table:
         """Convert data to PyArrow Table if needed."""
         if isinstance(self.data, pa.Table):
             return self.data
+        if isinstance(self.data, pa.RecordBatch):
+            return pa.Table.from_batches([self.data])
         return self.data.to_arrow()
+
+    def to_dicts(self) -> list[dict[str, Any]]:
+        """Return appended rows as Python dictionaries."""
+        return self.to_polars().to_dicts()
 
 
 class SnapshotState(str, Enum):

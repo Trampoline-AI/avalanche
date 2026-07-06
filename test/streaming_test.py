@@ -3,6 +3,7 @@
 from unittest.mock import MagicMock, patch
 
 import polars as pl
+import pyarrow as pa
 import pytest
 
 import avalanche as ava
@@ -15,6 +16,19 @@ def test_append_result_converts_between_polars_and_arrow():
     assert result.snapshot_id == 123
     assert result.to_polars().equals(df)
     assert result.to_arrow().to_pydict() == df.to_arrow().to_pydict()
+    assert result.to_dicts() == [{"id": 1, "value": "a"}, {"id": 2, "value": "b"}]
+
+
+def test_append_result_converts_record_batch_to_dicts():
+    batch = pa.record_batch(
+        [pa.array([1, 2]), pa.array(["a", "b"])],
+        names=["id", "value"],
+    )
+    result = ava.AppendResult(data=batch, snapshot_id=123)
+
+    assert result.to_arrow().to_pydict() == {"id": [1, 2], "value": ["a", "b"]}
+    assert result.to_polars().to_dicts() == result.to_dicts()
+    assert result.to_dicts() == [{"id": 1, "value": "a"}, {"id": 2, "value": "b"}]
 
 
 def test_stream_provider_marker():

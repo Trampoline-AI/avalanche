@@ -87,7 +87,12 @@ rows = pl.DataFrame(
 result = ns.document.append(rows)
 print(result.snapshot_id)
 print(result.to_polars())
+print(result.to_dicts())
 ```
+
+`AppendResult` keeps the appended rows available for downstream tasks. Use
+`to_polars()`, `to_arrow()`, or `to_dicts()` depending on the shape the next step
+needs.
 
 Use the backend-neutral scan/read contract for portable code:
 
