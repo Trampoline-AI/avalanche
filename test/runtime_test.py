@@ -154,6 +154,7 @@ class TestLogger:
         # Verify node name
         assert context["node"] == "capture_context"
 
+    @pytest.mark.ray
     def test_logger_context_with_ray_executor(self):
         """Test that Logger context has execution_id and Ray worker_id with RayExecutor."""
         import avalanche as ava

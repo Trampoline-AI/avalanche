@@ -186,6 +186,7 @@ class TestDataPassingBetweenTasks:
         assert processed_result == {"first": [2, 4, 6], "second": [12, 15, 18]}
         assert summary_result == {"count": 6}
 
+    @pytest.mark.ray
     def test_dataframe_passing_with_ray(self):
         """Test passing DataFrames through Ray executor."""
         pytest.importorskip("ray")
@@ -235,6 +236,7 @@ class TestDataPassingBetweenTasks:
         finally:
             ray.shutdown()
 
+    @pytest.mark.ray
     def test_tuple_unpacking_with_ray(self):
         """Test tuple unpacking through Ray executor."""
         pytest.importorskip("ray")

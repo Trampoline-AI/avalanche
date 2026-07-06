@@ -65,6 +65,7 @@ class TestLocalExecutor:
             executor.submit(return_triple, num_returns=2)
 
 
+@pytest.mark.ray
 class TestRayExecutor:
     """Test RayExecutor for distributed execution."""
 

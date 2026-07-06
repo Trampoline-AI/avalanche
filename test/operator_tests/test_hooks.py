@@ -130,6 +130,7 @@ class TestRunHooks:
         # then cancel is checked before node 2)
         assert call_count <= 2  # At most the first node's function ran
 
+    @pytest.mark.ray
     def test_hooks_with_ray_executor(self):
         """Hooks should fire after actual completion with RayExecutor."""
         import time
@@ -178,6 +179,7 @@ class TestRunHooks:
         success_t = timestamps[1]
         assert success_t - start_t >= 0.1, "Success fired too early — node didn't complete"
 
+    @pytest.mark.ray
     def test_ray_hooks_do_not_serialize_independent_branches(self):
         """Independent Ray branches should submit before hook completion waits."""
 
@@ -284,6 +286,7 @@ class TestRunHooks:
             release.set()
             thread.join(timeout=2)
 
+    @pytest.mark.ray
     def test_ray_hooks_cancel_before_dependent_child_starts(self):
         """Cancellation observed after a parent succeeds should stop child submission."""
         pytest.importorskip("ray")
