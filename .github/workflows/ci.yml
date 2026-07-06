@@ -15,6 +15,8 @@ jobs:
       - run: uv sync --all-extras
       - run: uv run ruff check src/ test/
       - run: uv run pytest -m "not tmux and not ray"
+        env:
+          PYTHONFAULTHANDLER: "1"
 
   ray:
     name: Ray tests
