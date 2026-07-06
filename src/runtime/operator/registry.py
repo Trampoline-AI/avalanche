@@ -61,36 +61,75 @@ class WorkflowRegistry:
         if self._scan_paths:
             self.scan(self._scan_paths)
 
+    @staticmethod
+    def _package_module_name(file_path: Path) -> tuple[str, Path] | None:
+        """Resolve a file inside a package to (dotted module name, sys.path root)."""
+        parts = [file_path.stem]
+        parent = file_path.parent
+        while (parent / "__init__.py").exists():
+            parts.append(parent.name)
+            parent = parent.parent
+        if len(parts) == 1:
+            return None
+        return ".".join(reversed(parts)), parent
+
     def _scan_file(self, file_path: Path) -> None:
-        """Import a Python file and discover @workflow functions in it."""
-        module_name = f"_avalanche_discovered_.{file_path.stem}"
+        """Import a Python file and discover @workflow functions in it.
 
-        # Remove cached module so re-scans pick up file changes
-        sys.modules.pop(module_name, None)
+        Files inside a package (a chain of __init__.py up from the file) are
+        imported under their canonical dotted name so relative imports work;
+        standalone files are loaded under a synthetic module name.
+        """
+        file_path = file_path.resolve()
+        package_info = self._package_module_name(file_path)
 
-        spec = importlib.util.spec_from_file_location(module_name, file_path)
-        if spec is None or spec.loader is None:
-            self._add_skipped_diagnostic(
-                file_path,
-                "Python import machinery could not load this file.",
-            )
-            return
-
-        module = importlib.util.module_from_spec(spec)
-        sys.modules[module_name] = module
-        try:
-            spec.loader.exec_module(module)
-        except Exception as exc:
-            self._diagnostics.append(
-                WorkflowDiscoveryDiagnostic(
-                    path=str(file_path),
-                    kind="import_error",
-                    message=self._format_exception(exc),
-                )
-            )
-            return
-        finally:
+        if package_info is not None:
+            module_name, root = package_info
+            root_str = str(root)
+            if root_str not in sys.path:
+                sys.path.insert(0, root_str)
+            # Remove cached module so re-scans pick up file changes
             sys.modules.pop(module_name, None)
+            try:
+                module = importlib.import_module(module_name)
+            except Exception as exc:
+                self._diagnostics.append(
+                    WorkflowDiscoveryDiagnostic(
+                        path=str(file_path),
+                        kind="import_error",
+                        message=self._format_exception(exc),
+                    )
+                )
+                return
+        else:
+            module_name = f"_avalanche_discovered_.{file_path.stem}"
+
+            # Remove cached module so re-scans pick up file changes
+            sys.modules.pop(module_name, None)
+
+            spec = importlib.util.spec_from_file_location(module_name, file_path)
+            if spec is None or spec.loader is None:
+                self._add_skipped_diagnostic(
+                    file_path,
+                    "Python import machinery could not load this file.",
+                )
+                return
+
+            module = importlib.util.module_from_spec(spec)
+            sys.modules[module_name] = module
+            try:
+                spec.loader.exec_module(module)
+            except Exception as exc:
+                self._diagnostics.append(
+                    WorkflowDiscoveryDiagnostic(
+                        path=str(file_path),
+                        kind="import_error",
+                        message=self._format_exception(exc),
+                    )
+                )
+                return
+            finally:
+                sys.modules.pop(module_name, None)
 
         found_workflow = False
         for attr_name in dir(module):

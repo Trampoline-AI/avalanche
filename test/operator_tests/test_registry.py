@@ -91,6 +91,31 @@ class TestWorkflowRegistry:
             )
         ]
 
+    def test_scan_discovers_workflow_in_package_with_relative_imports(self, tmp_path):
+        pkg = tmp_path / "my_pkg" / "my_belt"
+        pkg.mkdir(parents=True)
+        (tmp_path / "my_pkg" / "__init__.py").write_text("")
+        (pkg / "__init__.py").write_text("")
+        (pkg / "helpers.py").write_text("VALUE = 41\n")
+        (pkg / "flow.py").write_text(
+            "import avalanche as ava\n"
+            "from .helpers import VALUE\n"
+            "\n"
+            "@ava.source\n"
+            "def load():\n"
+            "    return VALUE + 1\n"
+            "\n"
+            "@ava.workflow\n"
+            "def package_workflow():\n"
+            "    return load()\n"
+        )
+
+        registry = WorkflowRegistry()
+        registry.scan([str(pkg / "flow.py")])
+
+        assert [w.name for w in registry.list_workflows()] == ["package_workflow"]
+        assert registry.list_diagnostics() == []
+
     def test_scan_records_skipped_diagnostic_for_file_with_no_workflows(self, tmp_path):
         no_workflow_file = tmp_path / "no_workflows.py"
         no_workflow_file.write_text("VALUE = 1\n")
