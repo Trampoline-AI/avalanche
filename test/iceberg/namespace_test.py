@@ -4,6 +4,7 @@ import os
 from tempfile import TemporaryDirectory
 
 import dataframely as dy
+import polars as pl
 import pytest
 
 from avalanche.iceberg import (
@@ -95,6 +96,38 @@ class TestIcebergNamespace:
         print_directory_tree(tmpdir, level=1)
 
         assert os.path.exists(f"{tmpdir}/test-namespace/test_table")
+
+    def test_push_binds_existing_tables_across_instances(self, tmpdir: str):
+        """Test that push() binds tables that already exist in the catalog."""
+
+        def make_ns():
+            class ReproNamespace(IcebergNs):
+                ns_config = IcebergNsConfig(
+                    name="repush-namespace",
+                    base_location=tmpdir,
+                )
+                tables: IcebergTableGroup = IcebergTableGroup(
+                    test_table=IcebergTable(schema=TestSchema)
+                )
+
+            return ReproNamespace(
+                catalog="test-catalog",
+                load_catalog_props=dict(
+                    type="sql",
+                    uri=f"sqlite:///{tmpdir}/catalog.db",
+                ),
+            )
+
+        first = make_ns()
+        first.push()
+        first.tables.test_table.append(pl.DataFrame({"id": ["1"], "name": ["a"]}))
+
+        second = make_ns()
+        second.push()
+
+        assert second.tables.test_table._table is not None
+        second.tables.test_table.append(pl.DataFrame({"id": ["2"], "name": ["b"]}))
+        assert sorted(second.tables.test_table.read()["id"].to_list()) == ["1", "2"]
 
 
 class TestIcebergTable:

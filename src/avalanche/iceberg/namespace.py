@@ -283,7 +283,8 @@ class IcebergNamespace(Namespace):
                 location=location,
             )
         else:
-            logger.warning(f"Table {table.identifier} already exists. Skipping creation.")
+            logger.debug(f"Table {table.identifier} already exists. Loading it.")
+            table._table = self.catalog.load_table(table.identifier)
 
     def drop(self, *, drop_tables: bool = False) -> None:
         """
