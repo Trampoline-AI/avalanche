@@ -207,6 +207,29 @@ class TestRenderDag:
         skip_srcs = {s for s, d in dag.skip_edges if d == "notify_slack_1"}
         assert len(skip_srcs) >= 1, "Expected skip edge to notify_slack"
 
+    def test_dense_fanin_chain_no_duplicates(self):
+        """A transitive-tournament DAG (every stage feeds all later stages)
+        must lay out as a single linear spine with skip-edge annotations,
+        never duplicating nodes."""
+        ids = [f"s{i}_1" for i in range(1, 8)]
+        graph = {
+            ids[i]: [ids[j] for j in range(i + 1, 7)]
+            for i in range(6)
+        }
+        info = WorkflowInfo(
+            name="dense", file_path="f", node_ids=ids, graph=graph,
+            node_types={i: "step" for i in ids},
+        )
+        dag, nodes = workflow_to_layout(info)
+        counts = {}
+        for n in nodes:
+            if not n.virtual:
+                counts[n.name] = counts.get(n.name, 0) + 1
+        dups = {k: v for k, v in counts.items() if v > 1}
+        assert not dups, f"duplicated nodes in layout: {dups}"
+        spine = [s.name for s in dag.steps if isinstance(s, DagNode) and not s.virtual]
+        assert spine == ids, f"expected linear spine, got {spine}"
+
     def test_render_all_branches_present_for_3way_parallel(self):
         """A workflow with 3-way parallel should render all 3 branch rows."""
         dag, nodes = workflow_to_layout(ML_WORKFLOW)

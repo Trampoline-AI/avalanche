@@ -102,7 +102,7 @@ def _extract_skip_edges(
     for parent, children in graph.items():
         normal = []
         for child in children:
-            if depth.get(child, 0) - depth.get(parent, 0) > 2:
+            if depth.get(child, 0) - depth.get(parent, 0) > 1:
                 # Long-range edge — skip it if the child is still
                 # reachable from the parent through other paths.
                 # (Even for convergence nodes: a redundant shortcut
