@@ -151,9 +151,9 @@ multiple source tables.
 
 ## Run input and context
 
-Workflow builders stay zero-argument. Declare runtime payload and context models
-on the workflow decorator, then receive them in source, step, or destination
-functions by type annotation.
+Workflow builders stay zero-argument. Declare the runtime payload model on the
+workflow decorator, then receive input and runtime context in source, step, or
+destination functions by type annotation.
 
 ```python
 import avalanche as ava
@@ -165,27 +165,32 @@ class DocumentInput(ava.BaseInput):
     remote_document: ava.S3File
 
 
-class RequestContext(ava.RunContext):
-    request_id: str
-
-
 @ava.source
-def load_document(payload: DocumentInput, ctx: RequestContext) -> str:
+def load_document(payload: DocumentInput, ctx: ava.RunContext) -> str:
     local_text = payload.document.read_bytes().decode()
-    return f"{ctx.request_id}:{payload.value}:{local_text}:{payload.remote_document.uri}"
+    return f"{ctx.execution_id}:{payload.value}:{local_text}:{payload.remote_document.uri}"
 
 
-@ava.workflow(input=DocumentInput, context=RequestContext)
+@ava.workflow(input=DocumentInput)
 def document_flow():
     return load_document()
 ```
 
-Avalanche validates `input` and `context` at run start with Pydantic. Unknown
-fields are rejected by default. Annotated input and context parameters are
-injected by type and do not consume upstream data arguments. `ava.RunContext`
-also carries runtime metadata such as `execution_id`, `workflow_name`, `node_id`,
-and `node_name`. Use `ava.BaseContext` instead when you need only user-defined
-context fields.
+Avalanche validates `input` at run start with Pydantic. Unknown fields are
+rejected by default. Annotated input and context parameters are injected by type
+and do not consume upstream data arguments.
+
+`ava.RunContext` is created by Avalanche for every run. It contains:
+
+- `execution_id`: caller/operator-owned run id, or a generated ULID.
+- `workflow_name`: the decorated workflow name.
+- `executor_type`: `"local"` or `"ray"`.
+- `node_id`: current node invocation id, such as `load_document_1`.
+- `node_name`: current node function name, such as `load_document`.
+- `metadata`: optional caller/platform metadata as `dict[str, object]`.
+
+The workflow author usually does not define a custom context type. If a caller
+needs to pass request metadata, put it under `RunContext.metadata`:
 
 Pass runtime values from Python with `.run(input=..., context=...)`:
 
@@ -198,9 +203,15 @@ result = document_flow().run(
         "document": {"name": "doc.txt", "content": b"hello"},
         "remote_document": {"uri": "s3://bucket/large-doc.txt"},
     },
-    context={"request_id": "req_123"},
+    context={"metadata": {"request_id": "req_123"}},
 )
 ```
+
+Advanced platform integrations may define a shared subclass of `ava.RunContext`
+when context fields should be required and typed, for example `org_id`,
+`project_id`, or `deployment_id`. Avalanche still owns and overwrites runtime
+fields such as `execution_id`, `workflow_name`, `executor_type`, `node_id`, and
+`node_name`; callers cannot spoof them with `context` payloads.
 
 `ava.File` is for small file payloads carried with a run request. Inline files
 are limited to `ava.MAX_INLINE_FILE_BYTES` bytes; use `ava.S3File` above that
@@ -243,7 +254,7 @@ references are attached to top-level input fields without base64-in-JSON:
 ```bash
 uv run ava run document_flow --connect localhost:7433 \
   --input '{"value": 41}' \
-  --context '{"request_id": "req_123"}' \
+  --context '{"metadata": {"request_id": "req_123"}}' \
   --file document=./doc.txt \
   --s3-file remote_document=s3://bucket/large-doc.txt
 ```
