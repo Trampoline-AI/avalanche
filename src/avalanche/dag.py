@@ -83,6 +83,12 @@ _workflow_context: ContextVar[WorkflowContext | None] = ContextVar(
 )
 
 
+def _add_graph_edge(graph, parent_id: str, child_id: str) -> None:
+    children = graph[parent_id]
+    if child_id not in children:
+        children.append(child_id)
+
+
 class NodeType(Enum):
     """Type of node in the workflow."""
 
@@ -159,11 +165,11 @@ class Node:
         # When a NodeFuture is passed as an argument, the arg is the parent
         for arg in args:
             if isinstance(arg, NodeFuture):
-                ctx.graph[arg.future_id].append(future_id)
+                _add_graph_edge(ctx.graph, arg.future_id, future_id)
 
         for kwarg_val in kwargs.values():
             if isinstance(kwarg_val, NodeFuture):
-                ctx.graph[kwarg_val.future_id].append(future_id)
+                _add_graph_edge(ctx.graph, kwarg_val.future_id, future_id)
 
         return result
 
@@ -320,7 +326,7 @@ class NodeFuture:
         if isinstance(next, NodeFuture):  # (set parent as dependency of next)
             # Graph format: {parent: [children]}
             for d in dependency_ids:
-                self.graph_ref[d].append(next.future_id)
+                _add_graph_edge(self.graph_ref, d, next.future_id)
 
             # Track incoming ref (preserves tuple_index for data passing)
             if isinstance(self.chain_end, NodeFuture):
@@ -339,7 +345,7 @@ class NodeFuture:
             # Graph format: {parent: [children]}
             for d in dependency_ids:
                 for branch in next.branches:
-                    self.graph_ref[d].append(branch.future_id)
+                    _add_graph_edge(self.graph_ref, d, branch.future_id)
 
             # Track incoming ref for each branch (preserves tuple_index for data passing)
             for branch in next.branches:
@@ -421,10 +427,10 @@ class ParallelTasks:
             branch_dep_ids = branch.as_dependency_ids()
             for dep_id in branch_dep_ids:
                 if isinstance(next, NodeFuture):
-                    self.graph_ref[dep_id].append(next.future_id)
+                    _add_graph_edge(self.graph_ref, dep_id, next.future_id)
                 else:  # ParallelTasks
                     for next_branch in next.branches:
-                        self.graph_ref[dep_id].append(next_branch.future_id)
+                        _add_graph_edge(self.graph_ref, dep_id, next_branch.future_id)
 
         if isinstance(next, NodeFuture):
             return NodeFuture(

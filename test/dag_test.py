@@ -14,6 +14,7 @@ from avalanche.dag import (
     transform,
     workflow,
 )
+from avalanche.executor import LocalExecutor
 
 
 class TestNodeDecorators:
@@ -157,6 +158,49 @@ class TestWorkflowDAGConstruction:
         # process_a and process_b's child is export
         assert "export_1" in p.graph["process_a_1"]
         assert "export_1" in p.graph["process_b_1"]
+
+    def test_walrus_explicit_arg_and_chain_dedupes_graph_edge(self):
+        @source
+        def load():
+            return "raw"
+
+        @step
+        def process(data):
+            return f"processed-{data}"
+
+        @workflow
+        def my_workflow():
+            (a := load()) >> (b := process(a))
+            return b
+
+        p = my_workflow()
+
+        assert p.graph["load_1"].count("process_1") == 1
+        assert p.run(executor=LocalExecutor()) == "processed-raw"
+
+    def test_parallel_chain_dedupes_explicit_arg_edge(self):
+        @source
+        def x():
+            return "x"
+
+        @source
+        def y():
+            return "y"
+
+        @step
+        def z(value):
+            return f"z-{value}"
+
+        @workflow
+        def my_workflow():
+            x_future = x()
+            return (x_future & y()) >> z(x_future)
+
+        p = my_workflow()
+
+        assert p.graph["x_1"].count("z_1") == 1
+        assert p.graph["y_1"].count("z_1") == 1
+        assert p.run(executor=LocalExecutor()) == "z-x"
 
     def test_variable_based_workflow(self):
         @source
