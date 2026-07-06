@@ -51,6 +51,7 @@ class TestWorkflowExecution:
         print("✓ Workflow executed locally!")
         print(f"  Result: {result}")
 
+    @pytest.mark.ray
     def test_workflow_execution_with_ray_executor(self):
         """Test workflow execution with RayExecutor - actual distributed execution!"""
         pytest.importorskip("ray")
@@ -111,6 +112,7 @@ class TestWorkflowExecution:
         finally:
             ray.shutdown()
 
+    @pytest.mark.ray
     def test_workflow_parallel_execution_with_ray(self):
         """Test parallel execution through Ray."""
         pytest.importorskip("ray")
@@ -209,6 +211,7 @@ class TestFireAndForgetWorkflows:
         assert result is None
         assert executed == ["load", "save"]
 
+    @pytest.mark.ray
     def test_fire_and_forget_with_ray(self):
         """Test fire-and-forget workflow with Ray."""
         pytest.importorskip("ray")
