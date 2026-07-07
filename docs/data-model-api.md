@@ -100,15 +100,19 @@ Iceberg and Lance table:
 - `_ava_updated_at`: UTC timestamp for the write operation;
 - `_ava_run_id`: current workflow run id, when the append happens inside a
   workflow;
+- `_ava_rerun_of`: source run id when the current run is an explicit rerun;
 - `_ava_workflow_name`: current workflow name;
 - `_ava_node_id`: current node invocation id;
-- `_ava_node_name`: current node function name.
+- `_ava_node_name`: current node function name;
+- `_ava_node_slug`: stable rerun-addressable node id;
+- `_ava_lineage_vector`: compact JSON vector clock of upstream node slug to
+  producing run id, plus the current writer;
 - `_ava_ctx_metadata`: compact JSON object for additional
   `RunContext.metadata` fields supplied by the caller or platform.
 
-These columns are write provenance, not full entity lineage: Avalanche does not
-infer `created_at`, primary keys, or parent row ids. Disable the default columns
-for a table with `row_lineage=False`:
+These columns are write provenance plus run-level lineage for reruns, not full
+entity lineage: Avalanche does not infer `created_at`, primary keys, or parent
+row ids. Disable the default columns for a table with `row_lineage=False`:
 
 ```python
 document = ava.IcebergTable(schema=DocumentSchema, row_lineage=False)
@@ -186,7 +190,7 @@ Lance tables support the neutral `append`, `scan`, `read`, `history`, and
 `append_scan` currently supports replaying one data-producing version from its
 direct parent, not arbitrary version ranges.
 
-## Streams and cursors
+## Streams, reruns, and cursors
 
 `ava.Stream(table, key=...)` consumes backend table versions incrementally and
 injects a `polars.DataFrame` into a task parameter.
@@ -207,6 +211,28 @@ def chunk_documents(
 Use it when a task needs custom progress state, a different source table than its
 destination table, or coordination across multiple tables.
 
+### Stream modes
+
+The same `ava.Stream` primitive supports three modes:
+
+1. **Data passing**: when an upstream node returns `AppendResult`, the rows are
+   passed directly to the downstream stream parameter in the same run. The
+   corresponding backend snapshot is still claimed and completed in
+   `ProgressStore` so future table-backed consumers do not process it again.
+2. **Table scan**: when there is no upstream `AppendResult`, the stream claims
+   one pending backend snapshot for `key`, reads only that snapshot's appended
+   files, and marks the snapshot done or failed.
+3. **Rerun**: when `Workflow.run(rerun=ava.Rerun(...))` is active, the stream
+   ignores processed/unprocessed status and reads all rows for the source
+   `run_id` via row-lineage columns. It bypasses `ProgressStore` completely so a
+   rerun never consumes or advances ordinary stream backlog.
+
+Rerun scans require `row_lineage=True` on the source table. If the source run is
+itself a rerun, Avalanche follows `_ava_rerun_of` as a sparse overlay and keeps
+newer rows for the same `_ava_node_slug` ahead of older parent-run rows. The
+v1 model is intentionally row-lineage-only: there is no stale bit, manifest, or
+hash column.
+
 ### Stream pacing and executors
 
 Table-backed streams claim **one pending snapshot per run**, oldest first. A
@@ -220,6 +246,12 @@ opens its own catalog connection. This requires a catalog reachable from
 worker processes — a file- or server-backed catalog. In-memory catalogs
 (`sqlite:///:memory:`) are per-process and fail at submit time with a clear
 error.
+
+Rerun stream reads use the backend-neutral `scan(filter=...)` path against
+row-lineage columns. For Iceberg this maps to the current table snapshot and
+PyIceberg filtering. For Lance it maps to Lance scans over the current dataset
+version. Ordinary table-backed stream pacing still uses the backend's
+append-scan/direct-version mechanics to process one pending snapshot per run.
 
 ## Current caveats
 

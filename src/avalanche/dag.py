@@ -74,6 +74,9 @@ class WorkflowContext:
 
     graph: DefaultDict[str, list[str]] = field(default_factory=lambda: defaultdict(list))
     instance_counter: dict[str, int] = field(default_factory=dict)
+    slug_counter: dict[str, int] = field(default_factory=dict)
+    slug_nodes: dict[str, "Node"] = field(default_factory=dict)
+    node_slugs: dict[str, str] = field(default_factory=dict)
     node_instances: dict[str, "NodeFuture"] = field(default_factory=dict)
 
 
@@ -110,7 +113,14 @@ class Node:
     Use _workflow_context.get() to access the current WorkflowContext.
     """
 
-    def __init__(self, fn: Callable[..., Any], node_type: NodeType, num_returns: int = 1):
+    def __init__(
+        self,
+        fn: Callable[..., Any],
+        node_type: NodeType,
+        num_returns: int = 1,
+        *,
+        slug: str | None = None,
+    ):
         """
         Initialize a node.
 
@@ -122,6 +132,8 @@ class Node:
         update_wrapper(self, fn)
         self.fn = fn
         self.name = fn.__name__
+        self.slug = slug or fn.__name__
+        self._explicit_slug = slug is not None
         self.node_type = node_type
         self.num_returns = num_returns
 
@@ -149,9 +161,28 @@ class Node:
         ctx.instance_counter[self.name] += 1
         future_id = f"{self.name}_{ctx.instance_counter[self.name]}"
 
+        existing_node = ctx.slug_nodes.get(self.slug)
+        if (
+            existing_node is not None
+            and existing_node is not self
+            and (existing_node._explicit_slug or self._explicit_slug)
+        ):
+            raise ValueError(
+                f"Duplicate node slug {self.slug!r} in workflow; "
+                "use unique slug= values for rerun-addressable nodes"
+            )
+        ctx.slug_nodes[self.slug] = self
+        ctx.slug_counter[self.slug] = ctx.slug_counter.get(self.slug, 0) + 1
+        slug_count = ctx.slug_counter[self.slug]
+        node_slug = self.slug if slug_count == 1 else f"{self.slug}_{slug_count}"
+        if node_slug in ctx.node_slugs.values():
+            raise ValueError(f"Duplicate node slug {node_slug!r} in workflow")
+        ctx.node_slugs[future_id] = node_slug
+
         result = NodeFuture(
             node=self,
             future_id=future_id,
+            node_slug=node_slug,
             graph_ref=ctx.graph,
             args=args,
             kwargs=kwargs,
@@ -177,7 +208,7 @@ class Node:
         return self.name
 
     def __repr__(self) -> str:
-        return f"Node({self.name}, type={self.node_type.value})"
+        return f"Node({self.name}, type={self.node_type.value}, slug={self.slug!r})"
 
 
 class NodeFuture:
@@ -213,6 +244,7 @@ class NodeFuture:
         chain_end: "NodeFuture | ParallelTasks | None" = None,
         parent_future_id: str | None = None,
         tuple_index: int | None = None,
+        node_slug: str | None = None,
     ):
         """
         Initialize NodeFuture.
@@ -230,6 +262,7 @@ class NodeFuture:
         """
         self.node = node
         self.future_id = future_id
+        self.node_slug = node_slug or node.slug
         self.graph_ref = graph_ref
         self.args = args
         self.kwargs = kwargs or {}
@@ -269,6 +302,7 @@ class NodeFuture:
         return NodeFuture(
             node=self.node,
             future_id=self.future_id,  # Keep parent's ID, no [index] suffix!
+            node_slug=self.node_slug,
             graph_ref=self.graph_ref,
             parent_future_id=None,  # No longer needed
             tuple_index=index,
@@ -337,6 +371,7 @@ class NodeFuture:
             return NodeFuture(
                 node=self.chain_start.node,
                 future_id=self.chain_start.future_id,
+                node_slug=self.chain_start.node_slug,
                 graph_ref=self.graph_ref,
                 chain_start=self.chain_start,
                 chain_end=next.chain_end,
@@ -357,6 +392,7 @@ class NodeFuture:
             return NodeFuture(
                 node=self.chain_start.node,
                 future_id=self.chain_start.future_id,
+                node_slug=self.chain_start.node_slug,
                 graph_ref=self.graph_ref,
                 chain_start=self.chain_start,
                 chain_end=next,
@@ -436,6 +472,7 @@ class ParallelTasks:
             return NodeFuture(
                 node=self.chain_start.node,
                 future_id=self.chain_start.future_id,
+                node_slug=self.chain_start.node_slug,
                 graph_ref=self.graph_ref,
                 chain_start=self.chain_start,
                 chain_end=next.chain_end,
@@ -444,6 +481,7 @@ class ParallelTasks:
             return NodeFuture(
                 node=self.chain_start.node,
                 future_id=self.chain_start.future_id,
+                node_slug=self.chain_start.node_slug,
                 graph_ref=self.graph_ref,
                 chain_start=self.chain_start,
                 chain_end=next,
@@ -472,7 +510,12 @@ class ParallelTasks:
 # Decorators
 
 
-def source(fn: F = None, *, num_returns: int = 1) -> Node | Callable[[F], Node]:
+def source(
+    fn: F | None = None,
+    *,
+    num_returns: int = 1,
+    slug: str | None = None,
+) -> Node | Callable[[F], Node]:
     """
     Decorator for source nodes.
 
@@ -492,14 +535,19 @@ def source(fn: F = None, *, num_returns: int = 1) -> Node | Callable[[F], Node]:
     """
 
     def decorator(f: F) -> Node:
-        return Node(f, NodeType.SOURCE, num_returns=num_returns)
+        return Node(f, NodeType.SOURCE, num_returns=num_returns, slug=slug)
 
     if fn is None:
         return decorator
     return decorator(fn)
 
 
-def step(fn: F = None, *, num_returns: int = 1) -> Node | Callable[[F], Node]:
+def step(
+    fn: F | None = None,
+    *,
+    num_returns: int = 1,
+    slug: str | None = None,
+) -> Node | Callable[[F], Node]:
     """
     Decorator for step nodes.
 
@@ -515,7 +563,7 @@ def step(fn: F = None, *, num_returns: int = 1) -> Node | Callable[[F], Node]:
     """
 
     def decorator(f: F) -> Node:
-        return Node(f, NodeType.STEP, num_returns=num_returns)
+        return Node(f, NodeType.STEP, num_returns=num_returns, slug=slug)
 
     if fn is None:
         return decorator
@@ -525,7 +573,12 @@ def step(fn: F = None, *, num_returns: int = 1) -> Node | Callable[[F], Node]:
 transform = step
 
 
-def dest(fn: F = None, *, num_returns: int = 1) -> Node | Callable[[F], Node]:
+def dest(
+    fn: F | None = None,
+    *,
+    num_returns: int = 1,
+    slug: str | None = None,
+) -> Node | Callable[[F], Node]:
     """
     Decorator for destination nodes.
 
@@ -541,7 +594,7 @@ def dest(fn: F = None, *, num_returns: int = 1) -> Node | Callable[[F], Node]:
     """
 
     def decorator(f: F) -> Node:
-        return Node(f, NodeType.DEST, num_returns=num_returns)
+        return Node(f, NodeType.DEST, num_returns=num_returns, slug=slug)
 
     if fn is None:
         return decorator
@@ -584,6 +637,214 @@ def _reverse_graph(parent_to_children: dict[str, list[str]]) -> dict[str, list[s
         for child_id in children:
             reversed_graph[child_id].append(parent_id)
     return dict(reversed_graph)
+
+
+def _coerce_rerun(rerun: Any):
+    if rerun is None:
+        return None
+    from .runtime import Rerun
+
+    if isinstance(rerun, Rerun):
+        return rerun
+    return Rerun.model_validate(rerun)
+
+
+def _filter_dependencies(
+    dependencies_map: dict[str, list[str]],
+    scheduled_node_ids: set[str],
+) -> dict[str, list[str]]:
+    return {
+        node_id: [parent for parent in parents if parent in scheduled_node_ids]
+        for node_id, parents in dependencies_map.items()
+        if node_id in scheduled_node_ids
+    }
+
+
+def _node_future_refs(value: Any) -> list[NodeFuture]:
+    if isinstance(value, NodeFuture):
+        return [value]
+    if isinstance(value, (list, tuple, set)):
+        refs: list[NodeFuture] = []
+        for item in value:
+            refs.extend(_node_future_refs(item))
+        return refs
+    if isinstance(value, dict):
+        refs = []
+        for item in value.values():
+            refs.extend(_node_future_refs(item))
+        return refs
+    return []
+
+
+def _runtime_param_names_from_signature(fn: Callable) -> set[str]:
+    """Names of params that get runtime-injected (RunContext/BaseContext/BaseInput).
+
+    Signature/annotation based so it works without live context/input values,
+    unlike _inspect_runtime_params which checks isinstance against provided
+    values. Used by rerun validation to avoid misclassifying a runtime-injected
+    param as a normal Python positional slot.
+    """
+    import inspect
+
+    from .runtime import BaseContext, BaseInput
+
+    try:
+        sig = inspect.signature(fn)
+    except (ValueError, TypeError):
+        return set()
+    try:
+        type_hints = get_type_hints(fn)
+    except Exception:
+        type_hints = {}
+
+    names: set[str] = set()
+    for param_name, param in sig.parameters.items():
+        annotation = type_hints.get(param_name, param.annotation)
+        if annotation is inspect.Parameter.empty:
+            continue
+        if _safe_issubclass(annotation, BaseContext) or _safe_issubclass(
+            annotation, BaseInput
+        ):
+            names.add(param_name)
+    return names
+
+
+def _rerun_positional_slot_kinds(
+    fn: Callable,
+    kwargs: dict[str, Any],
+    *,
+    providers: list,
+    runtime_param_names: set[str],
+) -> list[str]:
+    """Classify each implicit positional slot of a node as 'stream' or 'python'.
+
+    Mirrors the implicit data-passing binding rules so rerun validation matches
+    what actually happens at submit time:
+    - runtime-injected params (RunContext/BaseContext/BaseInput) are skipped;
+    - non-upstream providers (e.g. Logger) are skipped;
+    - upstream-consuming providers (ava.Stream) occupy a 'stream' slot;
+    - normal positional params occupy a 'python' slot.
+    A provider can be supplied via an explicit kwarg override or a default,
+    mirroring _inspect_providers. Keyword-only params are not implicit
+    positional slots and are ignored.
+    """
+    import inspect
+
+    try:
+        params = list(inspect.signature(fn).parameters.values())
+    except (ValueError, TypeError):
+        return []
+
+    slots: list[str] = []
+    for param in params:
+        if param.name in runtime_param_names:
+            continue
+
+        # A provider marker may come from an explicit kwarg override or the
+        # parameter default (matching _inspect_providers behavior).
+        candidates_values = []
+        if param.name in kwargs:
+            candidates_values.append(kwargs[param.name])
+        if param.default is not inspect.Parameter.empty:
+            candidates_values.append(param.default)
+
+        provider = None
+        for value in candidates_values:
+            for candidate in providers:
+                if candidate.can_resolve(value):
+                    provider = candidate
+                    break
+            if provider is not None:
+                break
+
+        if provider is not None:
+            if getattr(provider, "consumes_upstream", False):
+                slots.append("stream")
+            # Non-upstream providers do not consume an implicit position.
+            continue
+
+        # Params passed as explicit kwargs are bound by name, not by implicit
+        # position.
+        if param.name in kwargs:
+            continue
+
+        if param.kind in (
+            inspect.Parameter.POSITIONAL_ONLY,
+            inspect.Parameter.POSITIONAL_OR_KEYWORD,
+            inspect.Parameter.VAR_POSITIONAL,
+        ):
+            slots.append("python")
+
+    return slots
+
+
+def _incoming_parent_ids(
+    node_ref: NodeFuture,
+    original_dependencies_map: dict[str, list[str]],
+    node_id: str,
+) -> list[str]:
+    """Ordered parent node ids feeding a node's implicit positional slots."""
+    if node_ref._incoming_refs:
+        return [incoming.future_id for incoming in node_ref._incoming_refs]
+    return list(original_dependencies_map.get(node_id, []))
+
+
+def _validate_no_skipped_non_stream_inputs(
+    nodes: dict[str, NodeFuture],
+    scheduled_node_ids: set[str],
+    original_dependencies_map: dict[str, list[str]],
+) -> None:
+    """Reject rerun schedules where a skipped upstream feeds a non-stream input.
+
+    v1 reruns require skipped upstream data to be consumed through ava.Stream.
+    This runs before any node is submitted so the failure is a clear validation
+    error rather than a downstream Python TypeError.
+    """
+    from .runtime.providers import PROVIDERS
+
+    for node_id in scheduled_node_ids:
+        node_ref = nodes[node_id]
+
+        # 1. Explicit NodeFuture args/kwargs referencing skipped upstreams.
+        explicit_refs: list[NodeFuture] = []
+        for arg in node_ref.args:
+            explicit_refs.extend(_node_future_refs(arg))
+        for kwarg in node_ref.kwargs.values():
+            explicit_refs.extend(_node_future_refs(kwarg))
+        for ref in explicit_refs:
+            if ref.future_id not in scheduled_node_ids:
+                raise ValueError(
+                    f"Rerun node {node_id!r} has an explicit dependency on skipped "
+                    f"upstream node {ref.future_id!r}; v1 reruns require skipped "
+                    "upstream data to be consumed through ava.Stream"
+                )
+
+        # 2. Implicit chain refs bound to normal Python positional params.
+        if node_ref.args:
+            # Explicit args suppress implicit positional binding.
+            continue
+
+        runtime_param_names = _runtime_param_names_from_signature(node_ref.node.fn)
+        slots = _rerun_positional_slot_kinds(
+            node_ref.node.fn,
+            node_ref.kwargs,
+            providers=PROVIDERS,
+            runtime_param_names=runtime_param_names,
+        )
+        if not slots:
+            continue
+
+        parent_ids = _incoming_parent_ids(node_ref, original_dependencies_map, node_id)
+        for slot_kind, parent_id in zip(slots, parent_ids):
+            if slot_kind == "stream":
+                continue
+            if parent_id not in scheduled_node_ids:
+                raise ValueError(
+                    f"Rerun node {node_id!r} has an implicit dependency on skipped "
+                    f"upstream node {parent_id!r} bound to a non-stream parameter; "
+                    "v1 reruns require skipped upstream data to be consumed through "
+                    "ava.Stream"
+                )
 
 
 def _is_executor_ref(value: Any, executor: Any) -> bool:
@@ -726,6 +987,7 @@ def _build_context_values(
     run_id: str,
     workflow_name: str,
     executor_type: str,
+    rerun: Any = None,
 ) -> tuple[Any, Any]:
     from .runtime import BaseContext, RunContext
 
@@ -733,6 +995,7 @@ def _build_context_values(
         run_id=run_id,
         workflow_name=workflow_name,
         executor_type=executor_type,
+        rerun=rerun,
     )
     target_type = context_type or RunContext
     if not _safe_issubclass(target_type, BaseContext):
@@ -742,6 +1005,7 @@ def _build_context_values(
         "run_id": run_id,
         "workflow_name": workflow_name,
         "executor_type": executor_type,
+        "rerun": rerun,
     }
 
     if raw_context is not None and isinstance(raw_context, target_type):
@@ -760,24 +1024,155 @@ def _build_context_values(
     return system_context, context_value
 
 
-def _context_for_node(context: Any, *, node_id: str, node_name: str) -> Any:
+def _context_for_node(
+    context: Any,
+    *,
+    node_id: str,
+    node_name: str,
+    node_slug: str,
+) -> Any:
     from .runtime import RunContext
 
     if isinstance(context, RunContext):
-        return context.for_node(node_id=node_id, node_name=node_name)
+        return context.for_node(node_id=node_id, node_name=node_name, node_slug=node_slug)
     return context
 
 
-def _with_current_run_context(fn: Callable[..., Any], context: Any) -> Callable[..., Any]:
-    """Wrap a node function so framework helpers can read its RunContext."""
+def _unwrap_lineaged_tree(value: Any) -> Any:
+    """Strip LineagedResult envelopes recursively through tuple/list/dict.
+
+    Only unwraps envelopes; other containers/values pass through unchanged so
+    user args keep their structure.
+    """
+    from .types import LineagedResult
+
+    if isinstance(value, LineagedResult):
+        return _unwrap_lineaged_tree(value.value)
+    if isinstance(value, tuple):
+        return tuple(_unwrap_lineaged_tree(item) for item in value)
+    if isinstance(value, list):
+        return [_unwrap_lineaged_tree(item) for item in value]
+    if isinstance(value, dict):
+        return {k: _unwrap_lineaged_tree(v) for k, v in value.items()}
+    return value
+
+
+def _lineage_from_tree(value: Any) -> dict[str, str]:
+    """Collect and merge lineage vectors from LineagedResult envelopes.
+
+    Walks tuple/list/dict containers. Later producers win on key conflicts,
+    matching the row-write merge semantics.
+    """
+    from .types import LineagedResult
+
+    merged: dict[str, str] = {}
+    if isinstance(value, LineagedResult):
+        merged.update(value.lineage_vector)
+        merged.update(_lineage_from_tree(value.value))
+    elif isinstance(value, (tuple, list)):
+        for item in value:
+            merged.update(_lineage_from_tree(item))
+    elif isinstance(value, dict):
+        for item in value.values():
+            merged.update(_lineage_from_tree(item))
+    return merged
+
+
+def _reattach_lineage(value: Any, lineage_source: Any) -> Any:
+    """Reattach lineage from lineage_source onto a hook-replaced value.
+
+    Hooks that replace a node's user-facing value must not strip the internal
+    lineage needed by downstream Python-arg consumers. Preserves tuple/list
+    shape for multi-return nodes; otherwise wraps in a single LineagedResult
+    when there is any lineage to carry.
+    """
+    from .types import LineagedResult
+
+    if isinstance(value, LineagedResult):
+        return value
+
+    if isinstance(lineage_source, LineagedResult):
+        return LineagedResult(value, dict(lineage_source.lineage_vector))
+
+    if (
+        isinstance(value, tuple)
+        and isinstance(lineage_source, tuple)
+        and len(value) == len(lineage_source)
+    ):
+        return tuple(
+            _reattach_lineage(item, source)
+            for item, source in zip(value, lineage_source)
+        )
+
+    if (
+        isinstance(value, list)
+        and isinstance(lineage_source, list)
+        and len(value) == len(lineage_source)
+    ):
+        return [
+            _reattach_lineage(item, source)
+            for item, source in zip(value, lineage_source)
+        ]
+
+    lineage = _lineage_from_tree(lineage_source)
+    return LineagedResult(value, lineage) if lineage else value
+
+
+def _wrap_lineaged_result(value: Any, context: Any, *, num_returns: int) -> Any:
+    """Wrap a node return value with the lineage vector of its producers.
+
+    Multi-return nodes wrap each item individually so executor multi-return
+    (e.g. Ray) still sees the expected number of results.
+    """
+    from .types import LineagedResult
+
+    lineage = dict(context.lineage_vector)
+    if context.node_slug is not None:
+        lineage[context.node_slug] = context.run_id
+
+    if num_returns > 1 and isinstance(value, tuple):
+        return tuple(LineagedResult(item, lineage) for item in value)
+    if num_returns > 1 and isinstance(value, list):
+        return [LineagedResult(item, lineage) for item in value]
+    return LineagedResult(value, lineage)
+
+
+def _with_current_run_context(
+    fn: Callable[..., Any], context: Any, *, num_returns: int = 1
+) -> Callable[..., Any]:
+    """Wrap a node function so framework helpers can read its RunContext.
+
+    Also carries producer lineage across the executor boundary: parent
+    LineagedResult envelopes in the args/kwargs are merged into this node's
+    lineage vector (so downstream rows record actual producer versions even for
+    ordinary Python-argument dependencies), then stripped before the user
+    function runs, and the node's own result is re-wrapped with the resulting
+    vector.
+    """
     from .runtime import RunContext, run_with_context
 
     if not isinstance(context, RunContext):
-        return fn
+        # Still unwrap parent envelopes so non-context nodes never receive an
+        # internal transport type.
+        @wraps(fn)
+        def plain(*args: Any, **kwargs: Any) -> Any:
+            return fn(*_unwrap_lineaged_tree(args), **_unwrap_lineaged_tree(kwargs))
+
+        return plain
 
     @wraps(fn)
     def wrapped(*args: Any, **kwargs: Any) -> Any:
-        return run_with_context(context, fn, *args, **kwargs)
+        parent_lineage = _lineage_from_tree(args)
+        parent_lineage.update(_lineage_from_tree(kwargs))
+        if parent_lineage:
+            merged = dict(context.lineage_vector)
+            merged.update(parent_lineage)
+            context.lineage_vector = merged
+
+        unwrapped_args = _unwrap_lineaged_tree(args)
+        unwrapped_kwargs = _unwrap_lineaged_tree(kwargs)
+        result = run_with_context(context, fn, *unwrapped_args, **unwrapped_kwargs)
+        return _wrap_lineaged_result(result, context, num_returns=num_returns)
 
     return wrapped
 
@@ -867,6 +1262,10 @@ def _fetch_node_result(nf: NodeFuture, result_refs, nodes, executor):
         return tuple(results)
 
     # Regular NodeFuture handling
+    if fetch_target.future_id not in result_refs:
+        raise ValueError(
+            f"Workflow return node {fetch_target.future_id!r} was not scheduled by rerun"
+        )
     ref = result_refs[fetch_target.future_id]
     node = nodes[fetch_target.future_id]
 
@@ -876,27 +1275,93 @@ def _fetch_node_result(nf: NodeFuture, result_refs, nodes, executor):
         refs_to_fetch = list(ref)  # ref is tuple/list of refs
         if _all_fetchable_with_executor(refs_to_fetch, executor):
             fetched = executor.get(refs_to_fetch)
-            return fetched[fetch_target.tuple_index]
-        return refs_to_fetch[fetch_target.tuple_index]
+            return _unwrap_lineaged_tree(fetched[fetch_target.tuple_index])
+        return _unwrap_lineaged_tree(refs_to_fetch[fetch_target.tuple_index])
     elif node.node.num_returns > 1:
         # Multi-return node: ref is tuple/list of refs
         refs_to_fetch = list(ref)
         if _all_fetchable_with_executor(refs_to_fetch, executor):
             fetched = executor.get(refs_to_fetch)
-            return tuple(fetched)
-        return tuple(refs_to_fetch)
+            return _unwrap_lineaged_tree(tuple(fetched))
+        return _unwrap_lineaged_tree(tuple(refs_to_fetch))
     else:
         # Single return node: ref is a single ref
         if _should_fetch_with_executor(ref, executor):
-            return executor.get([ref])[0]
-        return ref
+            return _unwrap_lineaged_tree(executor.get([ref])[0])
+        return _unwrap_lineaged_tree(ref)
 
 
 def _implicit_value_from_upstream(item: Any) -> Any:
-    """Convert upstream AppendResult values the same way legacy auto-args did."""
-    from .types import AppendResult
+    """Prepare an upstream value for implicit binding, preserving lineage.
 
-    return item.data if isinstance(item, AppendResult) else item
+    - Bare AppendResult -> its .data (legacy zero-copy behavior).
+    - LineagedResult(AppendResult) -> LineagedResult(.data) so the outer context
+      wrapper can still merge the producer lineage before unwrapping for the
+      user function.
+    - Other LineagedResult / values -> passed through unchanged (the wrapper
+      merges + unwraps them).
+    """
+    from .types import AppendResult, LineagedResult
+
+    if isinstance(item, LineagedResult):
+        inner = item.value
+        if isinstance(inner, AppendResult):
+            return LineagedResult(inner.data, item.lineage_vector)
+        return item
+    if isinstance(item, AppendResult):
+        return item.data
+    return item
+
+
+def _implicit_items_from_parent_result(presult: Any) -> list[Any]:
+    """Flatten a parent result into implicit-binding items, preserving lineage.
+
+    A single-return node that returns a tuple/list is flattened into multiple
+    implicit args (legacy behavior). When wrapped in a LineagedResult envelope,
+    each flattened item keeps the parent's lineage so downstream rows still
+    record the producer.
+    """
+    from .types import LineagedResult
+
+    if isinstance(presult, LineagedResult) and isinstance(presult.value, (tuple, list)):
+        return [
+            LineagedResult(item, dict(presult.lineage_vector))
+            for item in presult.value
+        ]
+    if isinstance(presult, (tuple, list)):
+        return list(presult)
+    return [presult]
+
+
+def _indexed_parent_result(
+    presult: Any, tuple_index: int, executor: Any = None
+) -> Any:
+    """Index into a multi-return parent result, preserving any lineage envelope.
+
+    A multi-return parent whose whole result is wrapped in a single
+    ``LineagedResult`` must keep the producer lineage on the indexed element so
+    downstream Python-arg consumers still record the producer.
+
+    Under Ray the parent may be an ObjectRef to that envelope, or a tuple/list
+    of ObjectRefs (distributed ``num_returns > 1``). The driver must materialize
+    refs before indexing and after indexing so downstream binding never receives
+    a raw ObjectRef.
+    """
+    from .types import LineagedResult
+
+    if _should_fetch_with_executor(presult, executor):
+        presult = executor.get([presult])[0]
+
+    if isinstance(presult, LineagedResult):
+        value = presult.value[tuple_index]
+        if _should_fetch_with_executor(value, executor):
+            value = executor.get([value])[0]
+        return LineagedResult(value, dict(presult.lineage_vector))
+
+    item = presult[tuple_index]
+    if _should_fetch_with_executor(item, executor):
+        item = executor.get([item])[0]
+    return item
 
 
 def _collect_implicit_parent_results(
@@ -904,6 +1369,8 @@ def _collect_implicit_parent_results(
     result_refs: dict[str, Any],
     dependencies_map: dict[str, list[str]],
     node_id: str,
+    *,
+    executor: Any = None,
 ) -> list[Any]:
     """Collect flattened parent results for implicit data passing."""
     auto_values: list[Any] = []
@@ -915,17 +1382,19 @@ def _collect_implicit_parent_results(
             presult = result_refs.get(incoming.future_id)
             if presult is not None:
                 if incoming.tuple_index is not None:
-                    auto_values.append(presult[incoming.tuple_index])
+                    auto_values.append(
+                        _indexed_parent_result(
+                            presult, incoming.tuple_index, executor
+                        )
+                    )
                 else:
-                    items = presult if isinstance(presult, (tuple, list)) else [presult]
-                    auto_values.extend(items)
+                    auto_values.extend(_implicit_items_from_parent_result(presult))
     else:
         parent_ids = dependencies_map.get(node_id, [])
         for pid in parent_ids:
             presult = result_refs.get(pid)
             if presult is not None:
-                items = presult if isinstance(presult, (tuple, list)) else [presult]
-                auto_values.extend(items)
+                auto_values.extend(_implicit_items_from_parent_result(presult))
 
     return auto_values
 
@@ -1032,6 +1501,7 @@ class Workflow:
         self,
         graph: DefaultDict[str, list[str]],
         nodes: dict[str, NodeFuture],
+        node_slugs: dict[str, str] | None = None,
         name: str = "workflow",
         returns: Any = None,
         cron: str | None = None,
@@ -1050,6 +1520,9 @@ class Workflow:
         """
         self.graph = graph
         self.nodes = nodes
+        self.node_slugs = node_slugs or {
+            node_id: node_future.node_slug for node_id, node_future in nodes.items()
+        }
         self.name = name
         self.returns = returns
         self.cron = cron
@@ -1096,6 +1569,37 @@ class Workflow:
 
         return order
 
+    def _plan_rerun_execution(self, rerun: Any, execution_order: list[str]) -> list[str]:
+        slug_to_node_id = {slug: node_id for node_id, slug in self.node_slugs.items()}
+        missing = [slug for slug in rerun.start if slug not in slug_to_node_id]
+        if missing:
+            known = ", ".join(sorted(slug_to_node_id))
+            raise ValueError(
+                f"Unknown rerun start slug(s): {', '.join(missing)}. "
+                f"Known slugs: {known}"
+            )
+
+        start_node_ids = {slug_to_node_id[slug] for slug in rerun.start}
+        if rerun.mode == "lazy":
+            scheduled_node_ids = start_node_ids
+        else:
+            scheduled_node_ids = set(start_node_ids)
+            queue = list(start_node_ids)
+            while queue:
+                node_id = queue.pop(0)
+                for child_id in self.graph.get(node_id, []):
+                    if child_id not in scheduled_node_ids:
+                        scheduled_node_ids.add(child_id)
+                        queue.append(child_id)
+
+        original_dependencies_map = _reverse_graph(self.graph)
+        _validate_no_skipped_non_stream_inputs(
+            self.nodes,
+            scheduled_node_ids,
+            original_dependencies_map,
+        )
+        return [node_id for node_id in execution_order if node_id in scheduled_node_ids]
+
     def run(
         self,
         executor: "Executor | None" = None,
@@ -1103,6 +1607,7 @@ class Workflow:
         input: Any = None,
         context: Any = None,
         run_id: str | None = None,
+        rerun: Any = None,
     ) -> Any:
         """
         Execute the workflow.
@@ -1113,6 +1618,7 @@ class Workflow:
             input: Optional run input payload or BaseInput instance
             context: Optional run context payload or BaseContext instance
             run_id: Optional caller-owned run identity
+            rerun: Optional Rerun spec for re-executing part of a previous run
 
         Returns:
             - If workflow returns NodeFuture: the computed value
@@ -1135,6 +1641,10 @@ class Workflow:
 
         # Topological sort
         execution_order = self._topological_sort()
+        rerun_spec = _coerce_rerun(rerun)
+        if rerun_spec is not None:
+            execution_order = self._plan_rerun_execution(rerun_spec, execution_order)
+        scheduled_node_ids = set(execution_order)
 
         run_id = run_id or str(ULID())
         executor_type = "ray" if type(executor).__name__ == "RayExecutor" else "local"
@@ -1145,12 +1655,18 @@ class Workflow:
             run_id=run_id,
             workflow_name=self.name,
             executor_type=executor_type,
+            rerun=rerun_spec,
         )
 
         result_refs: dict[str, Any] = {}
 
-        # Build reverse dependency map (child -> parents) for execution
-        dependencies_map = _reverse_graph(self.graph)
+        # Build reverse dependency map (child -> parents) for execution.
+        # Keep the original map so rerun stream providers can still identify
+        # skipped upstream producer slugs after scheduler pruning.
+        original_dependencies_map = _reverse_graph(self.graph)
+        dependencies_map = original_dependencies_map
+        if rerun_spec is not None:
+            dependencies_map = _filter_dependencies(dependencies_map, scheduled_node_ids)
 
         from .runtime.providers import PROVIDERS
 
@@ -1164,11 +1680,13 @@ class Workflow:
                 system_context,
                 node_id=node_id,
                 node_name=node_ref.node.fn.__name__,
+                node_slug=node_ref.node_slug,
             )
             node_run_context = _context_for_node(
                 run_context,
                 node_id=node_id,
                 node_name=node_ref.node.fn.__name__,
+                node_slug=node_ref.node_slug,
             )
             runtime_params = _inspect_runtime_params(
                 node_ref.node.fn,
@@ -1195,8 +1713,13 @@ class Workflow:
             if inspected_params:
                 from .types import ParamContext
 
-                parent_ids = dependencies_map.get(node_id, [])
-                parent_results = [result_refs.get(pid) for pid in parent_ids]
+                original_parent_ids = original_dependencies_map.get(node_id, [])
+                provider_parent_results = [result_refs.get(pid) for pid in original_parent_ids]
+                upstream_node_slugs = [
+                    self.node_slugs[parent_id]
+                    for parent_id in original_parent_ids
+                    for _ in range(self.nodes[parent_id].node.num_returns)
+                ]
 
                 for param_name, param_value in inspected_params.items():
                     provider = provider_by_param.get(param_name)
@@ -1210,11 +1733,16 @@ class Workflow:
                     )
 
                     param_context = ParamContext(
-                        parent_results=parent_results,
+                        parent_results=provider_parent_results,
                         param_position=param_position,
                         node_name=node_ref.node.fn.__name__,
+                        node_slug=node_ref.node_slug,
+                        upstream_node_slugs=upstream_node_slugs,
                         run_id=run_id,
+                        rerun=rerun_spec,
+                        preserve_missing_results=rerun_spec is not None,
                         executor_type=executor_type,
+                        executor=executor,
                     )
 
                     resolved_value = provider.resolve(param_value, param_context)
@@ -1250,6 +1778,7 @@ class Workflow:
                     result_refs,
                     dependencies_map,
                     node_id,
+                    executor=executor,
                 )
                 implicit_args, implicit_kwargs = _bind_implicit_parent_results(
                     node_ref.node.fn,
@@ -1301,7 +1830,11 @@ class Workflow:
                 resolved_kwargs.update(params_to_inject)
 
             resolved_kwargs.update(runtime_params)
-            actual_fn = _with_current_run_context(actual_fn, node_run_context)
+            actual_fn = _with_current_run_context(
+                actual_fn,
+                node_run_context,
+                num_returns=node_ref.node.num_returns,
+            )
 
             try:
                 result = executor.submit(
@@ -1350,7 +1883,14 @@ class Workflow:
                 try:
                     resolved_val = resolve_submitted_result(node_ref, result)
                     if hooks and hooks.unwrap_result:
-                        result_refs[node_id] = hooks.unwrap_result(node_id, resolved_val)
+                        # Hooks operate on user-facing values; keep the
+                        # lineage-preserving envelope in result_refs for
+                        # downstream dataflow, reattaching any hook replacement.
+                        user_val = _unwrap_lineaged_tree(resolved_val)
+                        replacement = hooks.unwrap_result(node_id, user_val)
+                        result_refs[node_id] = _reattach_lineage(
+                            replacement, resolved_val
+                        )
                     if hooks and hooks.on_node_success:
                         hooks.on_node_success(node_id)
                     completed_nodes.add(node_id)
@@ -1456,9 +1996,15 @@ class Workflow:
                     # For multi-return nodes (num_returns > 1), result is
                     # a tuple of refs; for single-return it's one ref/value.
                     resolved_val = resolve_submitted_result(node_ref, result)
-                    # Unwrap side-channel data (e.g. logs from Ray workers)
+                    # Unwrap side-channel data (e.g. logs from Ray workers).
+                    # Hooks see user-facing values; result_refs keeps the
+                    # lineage-preserving envelope for downstream dataflow.
                     if hooks.unwrap_result:
-                        result = hooks.unwrap_result(node_id, resolved_val)
+                        user_val = _unwrap_lineaged_tree(resolved_val)
+                        replacement = hooks.unwrap_result(node_id, user_val)
+                        result = _reattach_lineage(replacement, resolved_val)
+                    else:
+                        result = resolved_val
                     if hooks.on_node_success:
                         hooks.on_node_success(node_id)
                 result_refs[node_id] = result
@@ -1559,6 +2105,7 @@ def workflow(
                 return Workflow(
                     graph=ctx.graph,
                     nodes=ctx.node_instances.copy(),
+                    node_slugs=ctx.node_slugs.copy(),
                     name=fn.__name__,
                     returns=result,
                     cron=cron,

@@ -114,9 +114,12 @@ def _assert_default_lineage(df: pl.DataFrame, *, expected_rows: int) -> None:
     for row in lineage.to_dicts():
         assert isinstance(row["_ava_updated_at"], datetime)
         assert row["_ava_run_id"] is None
+        assert row["_ava_rerun_of"] is None
         assert row["_ava_workflow_name"] is None
         assert row["_ava_node_id"] is None
         assert row["_ava_node_name"] is None
+        assert row["_ava_node_slug"] is None
+        assert row["_ava_lineage_vector"] is None
         assert row["_ava_ctx_metadata"] is None
 
 
@@ -310,6 +313,9 @@ def test_row_lineage_captures_workflow_context(namespace):
     assert row["_ava_workflow_name"] == "lineage_flow"
     assert row["_ava_node_id"] == "load_rows_1"
     assert row["_ava_node_name"] == "load_rows"
+    assert row["_ava_node_slug"] == "load_rows"
+    assert row["_ava_rerun_of"] is None
+    assert json.loads(row["_ava_lineage_vector"]) == {"load_rows": "exec_123"}
     assert json.loads(row["_ava_ctx_metadata"]) == {"attempt": 2, "tenant": "acme"}
 
 

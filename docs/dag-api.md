@@ -189,14 +189,19 @@ and do not consume upstream data arguments.
 - `run_id`: caller/operator-owned run id, or a generated ULID.
 - `workflow_name`: the decorated workflow name.
 - `executor_type`: `"local"` or `"ray"`.
+- `rerun`: optional `ava.Rerun` spec when this execution is a run-scoped
+  rerun of an earlier workflow run.
 - `node_id`: current node invocation id, such as `load_document_1`.
 - `node_name`: current node function name, such as `load_document`.
+- `node_slug`: stable rerun-addressable node id. Defaults to the function name
+  and can be set with `slug=` on `@ava.source`, `@ava.step`, or `@ava.dest`.
+- `lineage_vector`: internal row-lineage vector clock used by stream reruns.
 - `metadata`: optional caller/platform metadata as `dict[str, object]`.
 
 When a node writes to a default Iceberg or Lance table, Avalanche also uses this
 run context to populate row provenance columns such as `_ava_run_id`,
-`_ava_workflow_name`, `_ava_node_id`, `_ava_node_name`, and
-`_ava_ctx_metadata`. See
+`_ava_rerun_of`, `_ava_workflow_name`, `_ava_node_id`, `_ava_node_name`,
+`_ava_node_slug`, `_ava_lineage_vector`, and `_ava_ctx_metadata`. See
 [`data-model-api.md`](data-model-api.md#append-scan-and-read) for the table-side
 `row_lineage` option.
 
@@ -221,8 +226,9 @@ result = document_flow().run(
 Advanced platform integrations may define a shared subclass of `ava.RunContext`
 when context fields should be required and typed, for example `org_id`,
 `project_id`, or `deployment_id`. Avalanche still owns and overwrites runtime
-fields such as `run_id`, `workflow_name`, `executor_type`, `node_id`, and
-`node_name`; callers cannot spoof them with `context` payloads.
+fields such as `run_id`, `workflow_name`, `executor_type`, `rerun`, `node_id`,
+`node_name`, `node_slug`, and `lineage_vector`; callers cannot spoof them with
+`context` payloads.
 
 `ava.File` is for small file payloads carried with a run request. Inline files
 are limited to `ava.MAX_INLINE_FILE_BYTES` bytes; use `ava.S3File` above that
@@ -257,6 +263,45 @@ result = document_flow().run(executor=ava.LocalExecutor())
 
 `ava.LocalExecutor` runs locally. `ava.RayExecutor` is available when Ray support
 is installed and configured.
+
+### Reruns
+
+Use `ava.Rerun` when you want to re-execute a previous workflow run from one or
+more node slugs. This is separate from ordinary failure retry: reruns are an
+explicit, append-only workflow operation keyed by a source `run_id` and stable
+node slugs.
+
+```python
+result = document_flow().run(
+    executor=ava.LocalExecutor(),
+    run_id="rerun_002",
+    rerun=ava.Rerun(
+        run_id="run_001",
+        start=["load_document"],
+        mode="autorun",
+    ),
+)
+```
+
+`Rerun.start` accepts one slug or a list of slugs. Slugs default to the decorated
+function name and can be set explicitly with `slug=`:
+
+```python
+@ava.step(slug="chunk-docs")
+def chunk_documents(...): ...
+```
+
+`mode="autorun"` runs each start node and its downstream DAG closure.
+`mode="lazy"` runs only the listed start nodes; downstream state is left as-is.
+Lazy reruns support multiple start slugs for fanout cases. When a rerun skips an
+upstream node, the scheduled node should read skipped input through `ava.Stream`
+so Avalanche can replay source rows by lineage. Explicit Python arguments from
+skipped `NodeFuture`s are rejected in v1 because there is no live result to pass.
+
+`ava.Rerun(deployment_id=...)` reserves the target-deployment selector for
+operators that route the same DAG spec to a specific deployed code version. The
+in-process Python API records the value in `RunContext.rerun`; it does not switch
+code versions by itself.
 
 When a local operator is running, start a discovered workflow over gRPC with
 `ava run`. JSON values go through `--input` and `--context`; files and S3

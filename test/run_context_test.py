@@ -52,6 +52,20 @@ def test_workflow_run_validates_input_and_injects_context_without_consuming_data
     assert result == 42
 
 
+def test_workflow_run_injects_node_slug_into_run_context():
+    @ava.source(slug="load-docs")
+    def load(ctx: ava.RunContext):
+        return ctx.node_id, ctx.node_name, ctx.node_slug
+
+    @ava.workflow
+    def slug_workflow():
+        return load()
+
+    result = slug_workflow().run(executor=ava.LocalExecutor())
+
+    assert result == ("load_1", "load", "load-docs")
+
+
 def test_workflow_run_run_id_overrides_mapping_context_runtime_fields():
     @ava.source
     def load(ctx: ExampleContext):

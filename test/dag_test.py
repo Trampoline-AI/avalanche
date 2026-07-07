@@ -56,6 +56,23 @@ class TestNodeDecorators:
         assert my_dest.node_type == NodeType.DEST
         assert my_dest.name == "my_dest"
 
+    def test_node_decorators_assign_default_and_explicit_slugs(self):
+        @source
+        def default_source():
+            pass
+
+        @step(slug="chunk-docs")
+        def custom_step():
+            pass
+
+        @dest(slug="publish-results")
+        def custom_dest():
+            pass
+
+        assert default_source.slug == "default_source"
+        assert custom_step.slug == "chunk-docs"
+        assert custom_dest.slug == "publish-results"
+
 
 class TestWorkflowSynonyms:
     def test_pipeline_class_and_decorator_are_workflow_synonyms(self):
@@ -257,6 +274,29 @@ class TestWorkflowDAGConstruction:
         assert "load_2" in p.graph
         assert "process_1" in p.graph["load_1"]
         assert "process_2" in p.graph["load_2"]
+
+        assert p.node_slugs == {
+            "load_1": "load",
+            "load_2": "load_2",
+            "process_1": "process",
+            "process_2": "process_2",
+        }
+
+    def test_workflow_rejects_duplicate_explicit_slugs(self):
+        @source(slug="shared")
+        def load():
+            pass
+
+        @step(slug="shared")
+        def process():
+            pass
+
+        @workflow
+        def my_workflow():
+            load() >> process()
+
+        with pytest.raises(ValueError, match="Duplicate node slug 'shared'"):
+            my_workflow()
 
     def test_complex_parallel_structure(self):
         """Test complex nested parallel structure from docs example."""

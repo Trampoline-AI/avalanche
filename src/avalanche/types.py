@@ -65,6 +65,36 @@ class AppendResult:
         return self.to_polars().to_dicts()
 
 
+@dataclass
+class LineagedResult:
+    """A node return value carrying the lineage vector of its producers.
+
+    Reruns must record, on each produced row, which producer versions were
+    consumed (`_ava_lineage_vector`). Stream inputs merge that lineage inside
+    the worker/runtime context during `consume_stream`, but a node that
+    consumes an upstream result through an ordinary Python argument would
+    otherwise lose it once the value crosses the executor boundary.
+
+    The framework wraps node results in `LineagedResult` so downstream nodes can
+    merge the producer lineage regardless of executor. It is an internal
+    transport type: it is always unwrapped before reaching user functions, hooks
+    tests, or the final workflow return.
+    """
+
+    value: Any
+    lineage_vector: dict[str, str]
+
+
+def unwrap_lineaged(value: Any) -> Any:
+    """Return the underlying value, stripping a LineagedResult envelope."""
+    return value.value if isinstance(value, LineagedResult) else value
+
+
+def lineage_of(value: Any) -> dict[str, str]:
+    """Return the lineage vector carried by a value, or empty if none."""
+    return dict(value.lineage_vector) if isinstance(value, LineagedResult) else {}
+
+
 class SnapshotState(str, Enum):
     """
     State of a snapshot in the streaming progress tracker.
@@ -147,8 +177,13 @@ class ParamContext:
         parent_results: list[Any],
         param_position: int,
         node_name: str,
+        node_slug: str | None = None,
+        upstream_node_slugs: list[str] | None = None,
         run_id: str | None = None,
+        rerun: Any = None,
+        preserve_missing_results: bool = False,
         executor_type: str = "local",
+        executor: Any = None,
     ):
         """
         Initialize execution context for parameter resolution.
@@ -159,12 +194,42 @@ class ParamContext:
             node_name: Name of the current node function
             run_id: Optional unique ID for this workflow execution run
             executor_type: Type of executor ("local" or "ray") for worker_id resolution
+            executor: The active executor, used to materialize distributed refs
+                (e.g. Ray ObjectRef) during provider resolution
         """
         self.parent_results = parent_results
         self.param_position = param_position
         self.node_name = node_name
+        self.node_slug = node_slug or node_name
+        self.upstream_node_slugs = upstream_node_slugs or []
         self.run_id = run_id
+        self.rerun = rerun
+        self.preserve_missing_results = preserve_missing_results
         self.executor_type = executor_type
+        self.executor = executor
+
+    def materialize(self, value: Any) -> Any:
+        """Fetch distributed executor refs to concrete values if needed.
+
+        LocalExecutor values are already materialized. Ray ObjectRefs are
+        fetched via executor.get so provider resolution (e.g. Stream zero-copy
+        AppendResult detection) sees the real value rather than a ref. Recurses
+        through tuple/list/dict, preserving container shape.
+        """
+        executor = self.executor
+        if executor is None:
+            return value
+        ray = getattr(executor, "ray", None)
+        object_ref_type = getattr(ray, "ObjectRef", None)
+        if object_ref_type is not None and isinstance(value, object_ref_type):
+            return executor.get([value])[0]
+        if isinstance(value, tuple):
+            return tuple(self.materialize(item) for item in value)
+        if isinstance(value, list):
+            return [self.materialize(item) for item in value]
+        if isinstance(value, dict):
+            return {k: self.materialize(v) for k, v in value.items()}
+        return value
 
     @property
     def upstream_results(self) -> list[Any]:
@@ -188,6 +253,8 @@ class ParamContext:
                 # Normalize: handle multi-return (tuple/list) vs single-return
                 items = list(result) if isinstance(result, (tuple, list)) else [result]
                 flattened.extend(items)
+            elif self.preserve_missing_results:
+                flattened.append(None)
         return flattened
 
     def get_matching_result(self) -> Any | None:
@@ -207,6 +274,12 @@ class ParamContext:
         """
         if self.param_position < len(self.upstream_results):
             return self.upstream_results[self.param_position]
+        return None
+
+    def get_matching_node_slug(self) -> str | None:
+        """Get the upstream node slug that matches this parameter by position."""
+        if self.param_position < len(self.upstream_node_slugs):
+            return self.upstream_node_slugs[self.param_position]
         return None
 
 

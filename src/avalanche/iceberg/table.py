@@ -44,44 +44,17 @@ def _with_row_lineage_schema(schema: IcebergSchema) -> IcebergSchema:
         )
 
     next_field_id = max((field.field_id for field in schema.fields), default=0) + 1
-    lineage_fields = [
-        NestedField(
-            field_id=next_field_id,
-            name="_ava_updated_at",
-            field_type=TimestampType(),
-            required=False,
-        ),
-        NestedField(
-            field_id=next_field_id + 1,
-            name="_ava_run_id",
-            field_type=StringType(),
-            required=False,
-        ),
-        NestedField(
-            field_id=next_field_id + 2,
-            name="_ava_workflow_name",
-            field_type=StringType(),
-            required=False,
-        ),
-        NestedField(
-            field_id=next_field_id + 3,
-            name="_ava_node_id",
-            field_type=StringType(),
-            required=False,
-        ),
-        NestedField(
-            field_id=next_field_id + 4,
-            name="_ava_node_name",
-            field_type=StringType(),
-            required=False,
-        ),
-        NestedField(
-            field_id=next_field_id + 5,
-            name="_ava_ctx_metadata",
-            field_type=StringType(),
-            required=False,
-        ),
-    ]
+    lineage_fields = []
+    for offset, name in enumerate(ROW_LINEAGE_COLUMNS):
+        field_type = TimestampType() if name == "_ava_updated_at" else StringType()
+        lineage_fields.append(
+            NestedField(
+                field_id=next_field_id + offset,
+                name=name,
+                field_type=field_type,
+                required=False,
+            )
+        )
     return IcebergSchema(*schema.fields, *lineage_fields)
 
 
@@ -244,6 +217,10 @@ class IcebergTable(StorageTable):
                 "Cannot append - table has not been created yet. Call namespace.push() first."
             )
 
+        # Refresh so cross-process commits (e.g. Ray workers) are on the latest
+        # metadata before this append; avoids committing from a stale snapshot.
+        self._refresh_table_metadata()
+
         # Convert to PyArrow if needed
         if isinstance(df, pl.DataFrame):
             arrow_data = df.to_arrow()
@@ -274,6 +251,21 @@ class IcebergTable(StorageTable):
 
         return arrow_data.cast(self.schema.as_arrow())
 
+    def _refresh_table_metadata(self) -> None:
+        """Reload catalog metadata so reads see commits from other processes.
+
+        Distributed executors (e.g. Ray) commit appends from worker processes.
+        The parent-process handle caches the table it loaded at push()/reconnect
+        time and would otherwise scan a stale snapshot, returning rows written
+        before the workflow ran. Refresh binds the latest committed metadata.
+        """
+        if self._table is None:
+            return
+        refreshed = self._table.refresh()
+        if refreshed is not None:
+            self._table = refreshed
+        self.schema = self._table.schema()
+
     def scan(
         self,
         *args: Any,
@@ -291,6 +283,8 @@ class IcebergTable(StorageTable):
             raise AttributeError(
                 "Cannot scan - table has not been created yet. Call namespace.push() first."
             )
+
+        self._refresh_table_metadata()
 
         if columns is not None:
             if "selected_fields" in kwargs:
@@ -373,6 +367,13 @@ class IcebergTable(StorageTable):
         """
         # Import here to avoid circular dependency at module load time
         from .namespace import IcebergAppendScan
+
+        if self._table is None:
+            raise AttributeError(
+                "Cannot append_scan - table has not been created yet. "
+                "Call namespace.push() first."
+            )
+        self._refresh_table_metadata()
 
         return IcebergAppendScan.from_table(
             self,

@@ -15,18 +15,24 @@ if TYPE_CHECKING:
 ROW_LINEAGE_COLUMNS: tuple[str, ...] = (
     "_ava_updated_at",
     "_ava_run_id",
+    "_ava_rerun_of",
     "_ava_workflow_name",
     "_ava_node_id",
     "_ava_node_name",
+    "_ava_node_slug",
+    "_ava_lineage_vector",
     "_ava_ctx_metadata",
 )
 
 ROW_LINEAGE_ARROW_FIELDS: tuple[pa.Field, ...] = (
     pa.field("_ava_updated_at", pa.timestamp("us")),
     pa.field("_ava_run_id", pa.string()),
+    pa.field("_ava_rerun_of", pa.string()),
     pa.field("_ava_workflow_name", pa.string()),
     pa.field("_ava_node_id", pa.string()),
     pa.field("_ava_node_name", pa.string()),
+    pa.field("_ava_node_slug", pa.string()),
+    pa.field("_ava_lineage_vector", pa.string()),
     pa.field("_ava_ctx_metadata", pa.string()),
 )
 
@@ -64,6 +70,7 @@ def _to_arrow(data: pl.DataFrame | pa.Table | pa.RecordBatch) -> pa.Table:
 def _lineage_values(context: "RunContext | None") -> dict[str, Any]:
     updated_at = datetime.now(UTC).replace(tzinfo=None)
     metadata_json = None
+    lineage_vector_json = None
     if context is not None and context.metadata:
         metadata_json = json.dumps(
             context.metadata,
@@ -71,13 +78,31 @@ def _lineage_values(context: "RunContext | None") -> dict[str, Any]:
             separators=(",", ":"),
             sort_keys=True,
         )
+    if context is not None:
+        lineage_vector = dict(context.lineage_vector)
+        if context.node_slug is not None:
+            lineage_vector[context.node_slug] = context.run_id
+        if lineage_vector:
+            lineage_vector_json = json.dumps(
+                lineage_vector,
+                default=str,
+                separators=(",", ":"),
+                sort_keys=True,
+            )
 
     return {
         "_ava_updated_at": updated_at,
         "_ava_run_id": context.run_id if context is not None else None,
+        "_ava_rerun_of": (
+            context.rerun.run_id
+            if context is not None and context.rerun is not None
+            else None
+        ),
         "_ava_workflow_name": context.workflow_name if context is not None else None,
         "_ava_node_id": context.node_id if context is not None else None,
         "_ava_node_name": context.node_name if context is not None else None,
+        "_ava_node_slug": context.node_slug if context is not None else None,
+        "_ava_lineage_vector": lineage_vector_json,
         "_ava_ctx_metadata": metadata_json,
     }
 
