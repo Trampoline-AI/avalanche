@@ -207,6 +207,20 @@ def chunk_documents(
 Use it when a task needs custom progress state, a different source table than its
 destination table, or coordination across multiple tables.
 
+### Stream pacing and executors
+
+Table-backed streams claim **one pending snapshot per run**, oldest first. A
+backlog of N snapshots drains over N runs; schedule repeated runs (or an
+operator loop) to catch up. This keeps per-snapshot processing atomic: each
+snapshot is claimed, processed, and marked done or failed as a unit.
+
+Stream steps run on any executor. On `RayExecutor`, table handles are pickled
+as a reconnect recipe (catalog address + table identifier) and each worker
+opens its own catalog connection. This requires a catalog reachable from
+worker processes — a file- or server-backed catalog. In-memory catalogs
+(`sqlite:///:memory:`) are per-process and fail at submit time with a clear
+error.
+
 ## Current caveats
 
 - Schema migration commands are not part of this release candidate. Do not use

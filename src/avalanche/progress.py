@@ -188,9 +188,13 @@ class ProgressStore:
         """
         Get current cursor position.
 
+        Refreshes table metadata first so progress committed by other
+        processes (e.g. executor workers) is visible.
+
         Returns:
             Snapshot ID of cursor, or None if not set
         """
+        self.table.refresh()
         cursor_key = self._cursor_property_key()
         value = self.table.properties.get(cursor_key)
         return int(value) if value else None

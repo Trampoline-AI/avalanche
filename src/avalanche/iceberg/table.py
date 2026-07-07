@@ -85,6 +85,30 @@ def _with_row_lineage_schema(schema: IcebergSchema) -> IcebergSchema:
     return IcebergSchema(*schema.fields, *lineage_fields)
 
 
+def _reconnect_table(
+    catalog_name: str,
+    catalog_props: dict,
+    identifier: str,
+    row_lineage: bool,
+) -> "IcebergTable":
+    """Rebuild a live IcebergTable handle after crossing a process boundary.
+
+    Pickle carries the catalog address, not the connection; each worker
+    opens its own catalog connection here at unpickle time.
+    """
+    from pyiceberg.catalog import load_catalog
+
+    catalog = load_catalog(catalog_name, **catalog_props)
+    table = IcebergTable.__new__(IcebergTable)
+    table._ns = None
+    table._table_name = identifier
+    table.row_lineage = row_lineage
+    table._reconnect_spec = (catalog_name, catalog_props, identifier, row_lineage)
+    table._table = catalog.load_table(identifier)
+    table.schema = table._table.schema()
+    return table
+
+
 class IcebergTable(StorageTable):
     """
     Wrapper around PyIceberg Table that proxies all Table methods.
@@ -127,6 +151,38 @@ class IcebergTable(StorageTable):
             self.schema = _with_row_lineage_schema(self.schema)
 
         self._table: Table | None = None
+        self._reconnect_spec: tuple[str, dict, str, bool] | None = None
+
+    def __reduce__(self) -> tuple[Any, tuple]:
+        """Pickle as a reconnect recipe (catalog address + identifier).
+
+        Live catalog connections cannot cross process boundaries; executor
+        workers rebuild their own connection via ``_reconnect_table``.
+        """
+        if self._reconnect_spec is not None:
+            return (_reconnect_table, self._reconnect_spec)
+
+        from .namespace import IcebergNamespace
+
+        if self._table is None or not isinstance(self._ns, IcebergNamespace):
+            raise TypeError(
+                "Cannot pickle IcebergTable before namespace.push() binds it "
+                "to a catalog"
+            )
+
+        catalog = self._ns.catalog
+        properties = dict(catalog.properties)
+        if ":memory:" in str(properties.get("uri", "")):
+            raise TypeError(
+                "Cannot pickle IcebergTable backed by an in-memory catalog; "
+                "executor workers cannot reconnect to it. Use a file- or "
+                "server-backed catalog."
+            )
+
+        return (
+            _reconnect_table,
+            (str(catalog.name), properties, self.identifier, self.row_lineage),
+        )
 
     @property
     def identifier(self) -> str:

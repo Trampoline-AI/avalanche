@@ -196,6 +196,26 @@ class LanceTransaction:
         self._updates.update({key: None for key in keys})
 
 
+def _reconnect_lance_table(
+    location: str,
+    schema: pa.Schema,
+    row_lineage: bool,
+    table_name: str,
+) -> "LanceTable":
+    """Rebuild a LanceTable handle after crossing a process boundary.
+
+    Lance datasets are addressed by filesystem/object-store location, so the
+    recipe is the location plus the declared schema.
+    """
+    table = LanceTable.__new__(LanceTable)
+    table._ns = None
+    table._table_name = table_name
+    table.row_lineage = row_lineage
+    table.schema = schema
+    table._location_override = location
+    return table
+
+
 class LanceTable(Table):
     """Avalanche table backed by a Lance dataset."""
 
@@ -204,6 +224,26 @@ class LanceTable(Table):
         self.schema: pa.Schema = normalize_schema(schema)
         if self.row_lineage:
             self.schema = add_row_lineage_to_arrow_schema(self.schema)
+        self._location_override: str | None = None
+
+    @property
+    def location(self) -> str:
+        if self._location_override is not None:
+            return self._location_override
+        return super().location
+
+    def __reduce__(self) -> tuple[Any, tuple]:
+        """Pickle as a reconnect recipe (dataset location + schema)."""
+        location = self.location
+        if not location:
+            raise TypeError(
+                "Cannot pickle LanceTable before namespace.push() binds it "
+                "to a location"
+            )
+        return (
+            _reconnect_lance_table,
+            (location, self.schema, self.row_lineage, self._table_name),
+        )
 
     @property
     def current_version_id(self) -> int | None:
@@ -224,7 +264,7 @@ class LanceTable(Table):
         return dict(self._dataset().metadata)
 
     def append(self, df: pl.DataFrame | pa.Table | pa.RecordBatch) -> AppendResult:
-        if self._ns is None:
+        if not self.location:
             raise AttributeError(
                 "Cannot append - table has not been bound to a namespace. "
                 "Call namespace.push() first."
@@ -372,12 +412,12 @@ class LanceTable(Table):
         return entries
 
     def _dataset_path(self) -> Path:
-        if self._ns is None:
+        if not self.location:
             return Path("")
         return Path(self.location)
 
     def _dataset_exists(self) -> bool:
-        if self._ns is None:
+        if not self.location:
             return False
 
         dataset_path = self._dataset_path()
@@ -404,7 +444,7 @@ class LanceTable(Table):
         filter: Any = None,
         limit: int | None = None,
     ) -> pa.Table:
-        if self._ns is None:
+        if not self.location:
             raise AttributeError(
                 "Cannot scan - table has not been bound to a namespace. "
                 "Call namespace.push() first."
