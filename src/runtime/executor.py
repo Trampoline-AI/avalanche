@@ -7,7 +7,20 @@ Provides abstract interface for different execution backends:
 - (Future: DaskExecutor, etc.)
 """
 
+from functools import wraps
 from typing import Any, Callable, Protocol
+
+from ._async import call_sync_or_async, resolve_awaitable
+
+
+def _wrap_sync_or_async(fn: Callable) -> Callable:
+    """Wrap a task function so async task bodies resolve before returning."""
+
+    @wraps(fn)
+    def wrapper(*args: Any, **kwargs: Any) -> Any:
+        return call_sync_or_async(fn, *args, **kwargs)
+
+    return wrapper
 
 
 class Executor(Protocol):
@@ -90,7 +103,7 @@ class LocalExecutor:
         Returns:
             Result if num_returns=1, tuple of results if num_returns>1
         """
-        result = fn(*args, **kwargs)
+        result = call_sync_or_async(fn, *args, **kwargs)
         if num_returns > 1:
             # Ensure result is a tuple of expected length
             if isinstance(result, tuple) and len(result) == num_returns:
@@ -109,7 +122,7 @@ class LocalExecutor:
         For LocalExecutor, futures ARE the results (already computed),
         so just return them as-is.
         """
-        return futures
+        return [resolve_awaitable(future) for future in futures]
 
     def shutdown(self) -> None:
         """No cleanup needed for local executor."""
@@ -174,11 +187,16 @@ class RayExecutor:
         Note: Expects fn to be decorated with @ray.remote
               or will wrap it automatically.
         """
-        # If function is not already a Ray remote, make it one
-        if not hasattr(fn, "remote"):
-            fn = self.ray.remote(num_returns=num_returns)(fn)
+        # If function is not already a Ray remote, make it one. The wrapper makes
+        # coroutine task bodies first-class by resolving them inside the worker
+        # before Ray tries to serialize the task result.
+        remote_fn = fn
+        if not hasattr(remote_fn, "remote"):
+            remote_fn = self.ray.remote(num_returns=num_returns)(
+                _wrap_sync_or_async(remote_fn)
+            )
 
-        return fn.remote(*args, **kwargs)
+        return getattr(remote_fn, "remote")(*args, **kwargs)
 
     def get(self, futures: list[Any]) -> list[Any]:
         """Fetch results from Ray ObjectRefs."""

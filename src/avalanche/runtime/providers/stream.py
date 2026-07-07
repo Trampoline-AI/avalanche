@@ -10,6 +10,7 @@ from typing import TYPE_CHECKING, Any, Callable, Generator, Generic, TypeVar
 import polars as pl
 
 from avalanche.types import ParamContext, ParameterProvider
+from runtime._async import resolve_awaitable
 
 if TYPE_CHECKING:
     from pyiceberg.table import Table
@@ -158,7 +159,7 @@ class Stream(ParameterProvider, Generic[T]):
                 kwargs.update(resolved_streams)
 
                 # Call original function
-                result = original_fn(*args, **kwargs)
+                result = resolve_awaitable(original_fn(*args, **kwargs))
 
             except Exception:
                 # Exit contexts with exception info

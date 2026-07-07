@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Any
@@ -222,6 +223,38 @@ def test_failed_zero_copy_snapshot_remains_pending_for_retry(namespace):
 
     snapshot_id = loaded_snapshot_ids[0]
     store = ava.ProgressStore(ns.records, key="failure_test")
+    assert store.get_cursor() is None
+    assert snapshot_id in store.list_pending()
+
+
+def test_async_stream_step_failure_remains_pending_for_retry(namespace):
+    ns = namespace
+
+    loaded_snapshot_ids: list[int] = []
+
+    @ava.source
+    def load_data(*, source=ns.records):
+        result = source.append(_value_rows(["async-test"]))
+        loaded_snapshot_ids.append(result.snapshot_id)
+        return result
+
+    @ava.step
+    async def failing_process(
+        df: pl.DataFrame = ava.Stream(ns.records, key="async_failure_test"),
+    ):
+        await asyncio.sleep(0)
+        assert df["value"].to_list() == ["async-test"]
+        raise ValueError("Intentional async failure for testing")
+
+    @ava.workflow
+    def test_workflow():
+        return load_data() >> failing_process()
+
+    with pytest.raises(ValueError, match="Intentional async failure"):
+        test_workflow().run(executor=ava.LocalExecutor())
+
+    snapshot_id = loaded_snapshot_ids[0]
+    store = ava.ProgressStore(ns.records, key="async_failure_test")
     assert store.get_cursor() is None
     assert snapshot_id in store.list_pending()
 

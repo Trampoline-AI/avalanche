@@ -8,6 +8,10 @@ Avalanche workflows are Python functions that declare a directed acyclic graph
 - `@ava.dest` publishes, exports, or summarizes final results.
 - `@ava.workflow` captures task calls and dependencies into a runnable workflow.
 
+Node functions may be regular `def` functions or `async def` coroutines. The
+workflow `.run(...)` API is synchronous: Avalanche awaits coroutine node bodies
+inside the selected executor before passing results downstream.
+
 The body of a `@ava.workflow` function should stay declarative. It runs when the
 workflow is built, not once per row or once per input item. Put business logic in
 source, step, and destination functions.
