@@ -52,10 +52,10 @@ def test_workflow_run_validates_input_and_injects_context_without_consuming_data
     assert result == 42
 
 
-def test_workflow_run_execution_id_overrides_mapping_context_runtime_fields():
+def test_workflow_run_run_id_overrides_mapping_context_runtime_fields():
     @ava.source
     def load(ctx: ExampleContext):
-        return ctx.execution_id, ctx.workflow_name, ctx.executor_type
+        return ctx.run_id, ctx.workflow_name, ctx.executor_type
 
     @ava.workflow(context=ExampleContext)
     def context_workflow():
@@ -63,10 +63,10 @@ def test_workflow_run_execution_id_overrides_mapping_context_runtime_fields():
 
     result = context_workflow().run(
         executor=ava.LocalExecutor(),
-        execution_id="external_run",
+        run_id="external_run",
         context={
             "request_id": "req_123",
-            "execution_id": "spoofed_user_id",
+            "run_id": "spoofed_user_id",
             "workflow_name": "spoofed_workflow",
             "executor_type": "spoofed_executor",
         },

@@ -26,7 +26,7 @@ def capture_invocation(payload: InvocationInput, ctx: InvocationContext, log=Log
     log.info(
         "Invocation input: "
         f"message={payload.message}; request_id={ctx.request_id}; "
-        f"execution_id={ctx.execution_id}; node={ctx.node_id}; file={file_text}; s3={ref_uri}"
+        f"run_id={ctx.run_id}; node={ctx.node_id}; file={file_text}; s3={ref_uri}"
     )
     return payload.message
 

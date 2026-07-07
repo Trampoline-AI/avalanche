@@ -14,7 +14,7 @@ if TYPE_CHECKING:
 
 ROW_LINEAGE_COLUMNS: tuple[str, ...] = (
     "_ava_updated_at",
-    "_ava_execution_id",
+    "_ava_run_id",
     "_ava_workflow_name",
     "_ava_node_id",
     "_ava_node_name",
@@ -23,7 +23,7 @@ ROW_LINEAGE_COLUMNS: tuple[str, ...] = (
 
 ROW_LINEAGE_ARROW_FIELDS: tuple[pa.Field, ...] = (
     pa.field("_ava_updated_at", pa.timestamp("us")),
-    pa.field("_ava_execution_id", pa.string()),
+    pa.field("_ava_run_id", pa.string()),
     pa.field("_ava_workflow_name", pa.string()),
     pa.field("_ava_node_id", pa.string()),
     pa.field("_ava_node_name", pa.string()),
@@ -74,7 +74,7 @@ def _lineage_values(context: "RunContext | None") -> dict[str, Any]:
 
     return {
         "_ava_updated_at": updated_at,
-        "_ava_execution_id": context.execution_id if context is not None else None,
+        "_ava_run_id": context.run_id if context is not None else None,
         "_ava_workflow_name": context.workflow_name if context is not None else None,
         "_ava_node_id": context.node_id if context is not None else None,
         "_ava_node_name": context.node_name if context is not None else None,

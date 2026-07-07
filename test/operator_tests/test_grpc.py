@@ -72,7 +72,7 @@ class TestGrpcRoundtrip:
         run_id = client.start_run(
             "input_workflow",
             input={"message": "from-grpc"},
-            context={"request_id": "req_grpc", "execution_id": "spoofed_user_id"},
+            context={"request_id": "req_grpc", "run_id": "spoofed_user_id"},
             files={"document": File(name="note.txt", content=b"grpc-bytes")},
             s3_files={"document_ref": S3File(uri="s3://bucket/grpc.txt")},
         )
@@ -90,8 +90,8 @@ class TestGrpcRoundtrip:
         messages = [entry.message for entry in run.logs]
         assert any("message=from-grpc" in message for message in messages)
         assert any("request_id=req_grpc" in message for message in messages)
-        assert any(f"execution_id={run_id}" in message for message in messages)
-        assert not any("execution_id=spoofed_user_id" in message for message in messages)
+        assert any(f"run_id={run_id}" in message for message in messages)
+        assert not any("run_id=spoofed_user_id" in message for message in messages)
         assert any("file=grpc-bytes" in message for message in messages)
         assert any("s3=s3://bucket/grpc.txt" in message for message in messages)
 

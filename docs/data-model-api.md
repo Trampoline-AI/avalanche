@@ -98,7 +98,7 @@ By default, Avalanche appends framework-owned row provenance columns to every
 Iceberg and Lance table:
 
 - `_ava_updated_at`: UTC timestamp for the write operation;
-- `_ava_execution_id`: current workflow run id, when the append happens inside a
+- `_ava_run_id`: current workflow run id, when the append happens inside a
   workflow;
 - `_ava_workflow_name`: current workflow name;
 - `_ava_node_id`: current node invocation id;

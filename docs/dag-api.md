@@ -172,7 +172,7 @@ class DocumentInput(ava.BaseInput):
 @ava.source
 def load_document(payload: DocumentInput, ctx: ava.RunContext) -> str:
     local_text = payload.document.read_bytes().decode()
-    return f"{ctx.execution_id}:{payload.value}:{local_text}:{payload.remote_document.uri}"
+    return f"{ctx.run_id}:{payload.value}:{local_text}:{payload.remote_document.uri}"
 
 
 @ava.workflow(input=DocumentInput)
@@ -186,7 +186,7 @@ and do not consume upstream data arguments.
 
 `ava.RunContext` is created by Avalanche for every run. It contains:
 
-- `execution_id`: caller/operator-owned run id, or a generated ULID.
+- `run_id`: caller/operator-owned run id, or a generated ULID.
 - `workflow_name`: the decorated workflow name.
 - `executor_type`: `"local"` or `"ray"`.
 - `node_id`: current node invocation id, such as `load_document_1`.
@@ -194,7 +194,7 @@ and do not consume upstream data arguments.
 - `metadata`: optional caller/platform metadata as `dict[str, object]`.
 
 When a node writes to a default Iceberg or Lance table, Avalanche also uses this
-run context to populate row provenance columns such as `_ava_execution_id`,
+run context to populate row provenance columns such as `_ava_run_id`,
 `_ava_workflow_name`, `_ava_node_id`, `_ava_node_name`, and
 `_ava_ctx_metadata`. See
 [`data-model-api.md`](data-model-api.md#append-scan-and-read) for the table-side
@@ -208,7 +208,7 @@ Pass runtime values from Python with `.run(input=..., context=...)`:
 ```python
 result = document_flow().run(
     executor=ava.LocalExecutor(),
-    execution_id="run_123",  # optional caller-owned run identity
+    run_id="run_123",  # optional caller-owned run identity
     input={
         "value": 41,
         "document": {"name": "doc.txt", "content": b"hello"},
@@ -221,7 +221,7 @@ result = document_flow().run(
 Advanced platform integrations may define a shared subclass of `ava.RunContext`
 when context fields should be required and typed, for example `org_id`,
 `project_id`, or `deployment_id`. Avalanche still owns and overwrites runtime
-fields such as `execution_id`, `workflow_name`, `executor_type`, `node_id`, and
+fields such as `run_id`, `workflow_name`, `executor_type`, `node_id`, and
 `node_name`; callers cannot spoof them with `context` payloads.
 
 `ava.File` is for small file payloads carried with a run request. Inline files

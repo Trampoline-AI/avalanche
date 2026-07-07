@@ -109,7 +109,7 @@ class Logger(ParameterProvider):
 
         context = {
             "node": node_name,
-            "execution_id": param_context.execution_id,
+            "run_id": param_context.run_id,
             "worker_id": worker_id,
         }
 
@@ -127,8 +127,8 @@ class LoggerInstance:
         context_parts = []
         if self._context.get("node"):
             context_parts.append(f"node={self._context['node']}")
-        if self._context.get("execution_id"):
-            context_parts.append(f"exec={self._context['execution_id'][:8]}")
+        if self._context.get("run_id"):
+            context_parts.append(f"run={self._context['run_id'][:8]}")
         if self._context.get("worker_id"):
             worker_id = self._context["worker_id"]
             if worker_id != "local" and len(worker_id) > 8:

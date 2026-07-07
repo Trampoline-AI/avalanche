@@ -242,7 +242,7 @@ class Operator:
                 hooks=hooks,
                 input=input,
                 context=context,
-                execution_id=run.run_id,
+                run_id=run.run_id,
             )
 
             if cancel.is_set():

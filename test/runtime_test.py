@@ -139,13 +139,13 @@ class TestLogger:
         p = test_workflow()
         context = p.run(executor=LocalExecutor())
 
-        # Verify execution_id is a valid ULID (26 chars, uppercase alphanumeric)
-        assert context["execution_id"] is not None
-        assert len(context["execution_id"]) == 26
+        # Verify run_id is a valid ULID (26 chars, uppercase alphanumeric)
+        assert context["run_id"] is not None
+        assert len(context["run_id"]) == 26
         # ULID characters are 0-9 and A-Z (Crockford Base32)
         assert all(
             c in "0123456789ABCDEFGHJKMNPQRSTVWXYZ"
-            for c in context["execution_id"]
+            for c in context["run_id"]
         )
 
         # Verify worker_id is "local" for LocalExecutor
@@ -156,7 +156,7 @@ class TestLogger:
 
     @pytest.mark.ray
     def test_logger_context_with_ray_executor(self):
-        """Test that Logger context has execution_id and Ray worker_id with RayExecutor."""
+        """Test that Logger context has run_id and Ray worker_id with RayExecutor."""
         import avalanche as ava
 
         @ava.step
@@ -174,9 +174,9 @@ class TestLogger:
         # Default executor is RayExecutor
         context = p.run()
 
-        # Verify execution_id is a valid ULID
-        assert context["execution_id"] is not None
-        assert len(context["execution_id"]) == 26
+        # Verify run_id is a valid ULID
+        assert context["run_id"] is not None
+        assert len(context["run_id"]) == 26
 
         # Verify worker_id is from Ray (not "local")
         assert context["worker_id"] is not None

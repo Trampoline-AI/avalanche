@@ -54,7 +54,7 @@ class TestOperatorLifecycle:
                 "document": {"name": "note.txt", "content": b"contents"},
                 "document_ref": {"uri": "s3://bucket/input.txt"},
             },
-            context={"request_id": "req_456", "execution_id": "spoofed_user_id"},
+            context={"request_id": "req_456", "run_id": "spoofed_user_id"},
         )
 
         deadline = time.monotonic() + 5
@@ -70,8 +70,8 @@ class TestOperatorLifecycle:
         messages = [entry.message for entry in run.logs]
         assert any("message=hello" in message for message in messages)
         assert any("request_id=req_456" in message for message in messages)
-        assert any(f"execution_id={run_id}" in message for message in messages)
-        assert not any("execution_id=spoofed_user_id" in message for message in messages)
+        assert any(f"run_id={run_id}" in message for message in messages)
+        assert not any("run_id=spoofed_user_id" in message for message in messages)
         assert any("file=contents" in message for message in messages)
         assert any("s3=s3://bucket/input.txt" in message for message in messages)
 

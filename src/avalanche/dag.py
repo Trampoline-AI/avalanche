@@ -723,14 +723,14 @@ def _build_context_values(
     context_type: type | None,
     raw_context: Any,
     *,
-    execution_id: str,
+    run_id: str,
     workflow_name: str,
     executor_type: str,
 ) -> tuple[Any, Any]:
     from .runtime import BaseContext, RunContext
 
     system_context = RunContext(
-        execution_id=execution_id,
+        run_id=run_id,
         workflow_name=workflow_name,
         executor_type=executor_type,
     )
@@ -739,7 +739,7 @@ def _build_context_values(
         raise TypeError("workflow context type must inherit from ava.BaseContext")
 
     runtime_fields = {
-        "execution_id": execution_id,
+        "run_id": run_id,
         "workflow_name": workflow_name,
         "executor_type": executor_type,
     }
@@ -1102,7 +1102,7 @@ class Workflow:
         hooks: "RunHooks | None" = None,
         input: Any = None,
         context: Any = None,
-        execution_id: str | None = None,
+        run_id: str | None = None,
     ) -> Any:
         """
         Execute the workflow.
@@ -1112,7 +1112,7 @@ class Workflow:
             hooks: Optional callbacks for monitoring node lifecycle
             input: Optional run input payload or BaseInput instance
             context: Optional run context payload or BaseContext instance
-            execution_id: Optional caller-owned run identity
+            run_id: Optional caller-owned run identity
 
         Returns:
             - If workflow returns NodeFuture: the computed value
@@ -1136,13 +1136,13 @@ class Workflow:
         # Topological sort
         execution_order = self._topological_sort()
 
-        execution_id = execution_id or str(ULID())
+        run_id = run_id or str(ULID())
         executor_type = "ray" if type(executor).__name__ == "RayExecutor" else "local"
         run_input = _build_input_value(self.input_type, input)
         system_context, run_context = _build_context_values(
             self.context_type,
             context,
-            execution_id=execution_id,
+            run_id=run_id,
             workflow_name=self.name,
             executor_type=executor_type,
         )
@@ -1213,7 +1213,7 @@ class Workflow:
                         parent_results=parent_results,
                         param_position=param_position,
                         node_name=node_ref.node.fn.__name__,
-                        execution_id=execution_id,
+                        run_id=run_id,
                         executor_type=executor_type,
                     )
 

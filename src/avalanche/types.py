@@ -147,7 +147,7 @@ class ParamContext:
         parent_results: list[Any],
         param_position: int,
         node_name: str,
-        execution_id: str | None = None,
+        run_id: str | None = None,
         executor_type: str = "local",
     ):
         """
@@ -157,13 +157,13 @@ class ParamContext:
             parent_results: Raw results from parent nodes (may be tuples/lists for multi-return)
             param_position: Position of the parameter in function signature (0-indexed)
             node_name: Name of the current node function
-            execution_id: Optional unique ID for this workflow execution run
+            run_id: Optional unique ID for this workflow execution run
             executor_type: Type of executor ("local" or "ray") for worker_id resolution
         """
         self.parent_results = parent_results
         self.param_position = param_position
         self.node_name = node_name
-        self.execution_id = execution_id
+        self.run_id = run_id
         self.executor_type = executor_type
 
     @property

@@ -53,7 +53,7 @@ def _with_row_lineage_schema(schema: IcebergSchema) -> IcebergSchema:
         ),
         NestedField(
             field_id=next_field_id + 1,
-            name="_ava_execution_id",
+            name="_ava_run_id",
             field_type=StringType(),
             required=False,
         ),

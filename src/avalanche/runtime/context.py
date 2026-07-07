@@ -35,7 +35,7 @@ class BaseContext(BaseModel):
 class RunContext(BaseContext):
     """Runtime metadata injected into annotated node parameters."""
 
-    execution_id: str
+    run_id: str
     workflow_name: str
     executor_type: str = "local"
     node_id: str | None = None

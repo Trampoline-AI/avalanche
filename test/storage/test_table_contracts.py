@@ -113,7 +113,7 @@ def _assert_default_lineage(df: pl.DataFrame, *, expected_rows: int) -> None:
     assert lineage.height == expected_rows
     for row in lineage.to_dicts():
         assert isinstance(row["_ava_updated_at"], datetime)
-        assert row["_ava_execution_id"] is None
+        assert row["_ava_run_id"] is None
         assert row["_ava_workflow_name"] is None
         assert row["_ava_node_id"] is None
         assert row["_ava_node_name"] is None
@@ -300,13 +300,13 @@ def test_row_lineage_captures_workflow_context(namespace):
 
     result = lineage_flow().run(
         executor=ava.LocalExecutor(),
-        execution_id="exec_123",
+        run_id="exec_123",
         context={"metadata": {"attempt": 2, "tenant": "acme"}},
     )
     row = result.to_polars().to_dicts()[0]
 
     assert isinstance(row["_ava_updated_at"], datetime)
-    assert row["_ava_execution_id"] == "exec_123"
+    assert row["_ava_run_id"] == "exec_123"
     assert row["_ava_workflow_name"] == "lineage_flow"
     assert row["_ava_node_id"] == "load_rows_1"
     assert row["_ava_node_name"] == "load_rows"
