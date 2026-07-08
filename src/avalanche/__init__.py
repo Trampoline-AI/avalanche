@@ -20,6 +20,7 @@ from .iceberg import (
     IcebergTable,
     IcebergTableGroup,
 )
+from .input_ref import INPUT as input  # noqa: N811
 from .lance import (
     LanceNamespace,
     LanceNamespaceConfig,
@@ -65,6 +66,7 @@ __all__ = [
     "dest",
     "workflow",
     "pipeline",
+    "input",
     # Workflow
     "Workflow",
     "Pipeline",
