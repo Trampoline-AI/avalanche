@@ -8,7 +8,10 @@ from typing import Any, Type, Union
 
 import dataframely as dy
 import pyarrow as pa
+from pydantic import BaseModel
+from pyiceberg.io.pyarrow import _pyarrow_to_schema_without_ids
 from pyiceberg.schema import Schema as IcebergSchema
+from pyiceberg.schema import assign_fresh_schema_ids
 from pyiceberg.types import (
     BinaryType,
     BooleanType,
@@ -21,6 +24,8 @@ from pyiceberg.types import (
     StringType,
     TimestampType,
 )
+
+from avalanche.model_frame import model_to_arrow_schema
 
 
 def _pyarrow_type_to_iceberg_type(arrow_type: pa.DataType) -> Any:
@@ -99,7 +104,9 @@ def dataframely_to_iceberg_schema(schema: Type[dy.Schema]) -> IcebergSchema:
     return IcebergSchema(*iceberg_fields)
 
 
-def normalize_schema(schema: Union[Type[dy.Schema], IcebergSchema]) -> IcebergSchema:
+def normalize_schema(
+    schema: Union[Type[dy.Schema], IcebergSchema, type[BaseModel]],
+) -> IcebergSchema:
     """
     Normalize a schema to PyIceberg Schema.
 
@@ -136,8 +143,12 @@ def normalize_schema(schema: Union[Type[dy.Schema], IcebergSchema]) -> IcebergSc
     if isinstance(schema, type) and issubclass(schema, dy.Schema):
         return dataframely_to_iceberg_schema(schema)
 
+    if isinstance(schema, type) and issubclass(schema, BaseModel):
+        arrow_schema = model_to_arrow_schema(schema)
+        return assign_fresh_schema_ids(_pyarrow_to_schema_without_ids(arrow_schema))
+
     # Unsupported type
     raise TypeError(
-        f"Schema must be either PyIceberg Schema or DataFramely Schema class, "
-        f"got {type(schema)}"
+        "Schema must be either PyIceberg Schema, DataFramely Schema class, "
+        f"or pydantic BaseModel class, got {type(schema)}"
     )

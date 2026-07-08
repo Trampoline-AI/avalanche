@@ -5,10 +5,16 @@ This file provides type hints indicating that IcebergTable proxies
 all methods from pyiceberg.table.Table.
 """
 
+from collections.abc import Sequence
 from typing import Any, Optional, Tuple, Union
 
+import polars as pl
+import pyarrow as pa
+from pydantic import BaseModel
 from pyiceberg.schema import Schema as IcebergSchema
 from pyiceberg.table import BooleanExpression, Properties, Table
+
+from avalanche.types import AppendResult
 
 from .namespace import IcebergAppendScan, IcebergNamespace
 
@@ -23,6 +29,7 @@ class IcebergTable(Table):
     _table_name: str  # Simple table name (not full identifier)
     _ns: IcebergNamespace | None
     _table: Table | None
+    row_model: type[BaseModel] | None
 
     def __init__(self, schema: Any, *, row_lineage: bool = ...) -> None: ...
 
@@ -40,6 +47,11 @@ class IcebergTable(Table):
         filter: Any = ...,
         **kwargs: Any,
     ) -> Any: ...
+    def append(
+        self,
+        df: pl.DataFrame | pa.Table | pa.RecordBatch | BaseModel | Sequence[BaseModel],
+    ) -> AppendResult: ...
+    def read_models(self) -> list[BaseModel]: ...
     def append_scan(
         self,
         row_filter: Union[str, BooleanExpression] = ...,
