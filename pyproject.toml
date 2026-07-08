@@ -53,6 +53,9 @@ all = [
     "textual>=6.2.1",
     "watchfiles>=1.1.1",
 ]
+agent = [
+    "predict-rlm>=0.7.1",
+]
 
 [dependency-groups]
 dev = [
@@ -72,6 +75,7 @@ dev = [
     "pytest-cov>=7.0.0",
     "textual>=6.2.1",
     "watchfiles>=1.1.1",
+    "predict-rlm>=0.7.1",
 ]
 
 [tool.pytest.ini_options]
