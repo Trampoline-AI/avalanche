@@ -12,8 +12,8 @@ The current team release candidate is `0.1.0-rc0`.
 - Local flow execution with `ava.LocalExecutor`.
 - Iceberg-backed and Lance-backed storage helpers.
 - Local Iceberg examples backed by PyIceberg's SQL SQLite catalog.
-- Stream-based incremental processing with explicit `ava.Stream(..., key=...)`
-  consumer keys.
+- Run-scoped stream reads by default (`ava.Stream(table)`), with opt-in
+  backlog/incremental processing via `ava.Stream(..., key=..., mode="append_scan")`.
 - Cursor-based manual checkpoints for advanced incremental flows.
 - A local operator that discovers flow files or directories.
 - A Textual TUI in mock mode or connected to a local operator.

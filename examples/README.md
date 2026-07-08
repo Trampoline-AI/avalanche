@@ -36,7 +36,9 @@ current provider API:
 ```python
 @ava.step
 def chunk_documents(
-    docs: pl.DataFrame = ava.Stream(ns.document, key="documents_to_chunks"),
+    docs: pl.DataFrame = ava.Stream(
+        ns.document, key="documents_to_chunks", mode="append_scan"
+    ),
     *,
     dest=ns.chunk,
 ):
@@ -44,8 +46,9 @@ def chunk_documents(
     return dest.append(chunks)
 ```
 
-Each consumer edge gets a unique Stream key, and the runtime injects a
-`polars.DataFrame` for the claimed snapshot.
+This example uses append-scan streams (`mode="append_scan"`): each consumer edge
+gets a unique Stream `key`, and the runtime injects a `polars.DataFrame` for the
+claimed snapshot. The default `ava.Stream(table)` is run-scoped and takes no key.
 
 ```bash
 uv run python examples/stream_pattern.py
@@ -93,8 +96,9 @@ uv run python -m avalanche.tui
 
 ## Notes
 
-- `ava.Stream(table, key=...)` is a provider marker, not an object you call with
-  `.read()`.
-- Use one unique Stream key per consumer edge.
+- `ava.Stream(table)` is a provider marker, not an object you call with
+  `.read()`. It defaults to run-scoped reads.
+- For backlog/queue streaming use `ava.Stream(table, key="...", mode="append_scan")`
+  with one unique key per consumer edge. `key` is only valid with `append_scan`.
 - Local example artifacts are ignored by git through `.avalanche/`.
 - Only the examples listed here are part of the smoke-tested onboarding path.

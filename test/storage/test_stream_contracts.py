@@ -78,6 +78,7 @@ def namespace(backend: BackendCase, tmp_path):
         table_a = backend.table_cls(schema=StreamSchema)
         table_b = backend.table_cls(schema=StreamSchema)
         result = backend.table_cls(schema=StreamSchema)
+        no_lineage = backend.table_cls(schema=StreamSchema, row_lineage=False)
 
     ns = StreamNamespace(**backend.namespace_kwargs(str(tmp_path)))
     ns.push()
@@ -102,13 +103,13 @@ def test_consume_stream_reads_one_data_version_at_a_time(table):
     first = table.append(_rows(1, 2))
     second = table.append(_rows(1))
 
-    with consume_stream(table, key="version_stream") as df:
+    with consume_stream(table, key="version_stream", mode="append_scan") as df:
         assert df.sort("id")["id"].to_list() == [1, 2]
 
     store = ava.ProgressStore(table, key="version_stream")
     assert store.get_cursor() == first.snapshot_id
 
-    with consume_stream(table, key="version_stream") as df:
+    with consume_stream(table, key="version_stream", mode="append_scan") as df:
         assert df["id"].to_list() == [1]
 
     assert store.get_cursor() == second.snapshot_id
@@ -118,24 +119,24 @@ def test_consume_stream_reads_one_data_version_at_a_time(table):
 def test_consume_stream_returns_empty_when_no_pending_versions(table):
     table.append(_rows(1))
 
-    with consume_stream(table, key="empty_after_done") as df:
+    with consume_stream(table, key="empty_after_done", mode="append_scan") as df:
         assert df["id"].to_list() == [1]
 
-    with consume_stream(table, key="empty_after_done") as df:
+    with consume_stream(table, key="empty_after_done", mode="append_scan") as df:
         assert df.is_empty()
 
 
 def test_stream_cursor_survives_new_consumer_instance(table):
     table.append(_rows(1, 2))
 
-    with consume_stream(table, key="persistent_test") as df:
+    with consume_stream(table, key="persistent_test", mode="append_scan") as df:
         assert df.sort("id")["id"].to_list() == [1, 2]
 
     assert ava.ProgressStore(table, key="persistent_test").list_pending() == []
 
     table.append(_rows(3))
 
-    with consume_stream(table, key="persistent_test") as df:
+    with consume_stream(table, key="persistent_test", mode="append_scan") as df:
         assert df["id"].to_list() == [3]
 
 
@@ -152,7 +153,7 @@ def test_zero_copy_mode_claims_and_completes_snapshot(namespace):
 
     @ava.step
     def process_stream(
-        df: pl.DataFrame = ava.Stream(ns.records, key="zero_copy_test"),
+        df: pl.DataFrame = ava.Stream(ns.records, key="zero_copy_test", mode="append_scan"),
         *,
         dest=ns.dest,
     ):
@@ -177,7 +178,7 @@ def test_table_backed_stream_workflow_claims_and_completes_snapshot(namespace):
 
     @ava.step
     def consume_from_table(
-        df: pl.DataFrame = ava.Stream(ns.records, key="table_backed_test"),
+        df: pl.DataFrame = ava.Stream(ns.records, key="table_backed_test", mode="append_scan"),
         *,
         dest=ns.dest,
     ):
@@ -209,7 +210,7 @@ def test_failed_zero_copy_snapshot_remains_pending_for_retry(namespace):
 
     @ava.step
     def failing_process(
-        df: pl.DataFrame = ava.Stream(ns.records, key="failure_test"),
+        df: pl.DataFrame = ava.Stream(ns.records, key="failure_test", mode="append_scan"),
     ):
         assert df["value"].to_list() == ["test"]
         raise ValueError("Intentional failure for testing")
@@ -240,7 +241,9 @@ def test_async_stream_step_failure_remains_pending_for_retry(namespace):
 
     @ava.step
     async def failing_process(
-        df: pl.DataFrame = ava.Stream(ns.records, key="async_failure_test"),
+        df: pl.DataFrame = ava.Stream(
+            ns.records, key="async_failure_test", mode="append_scan"
+        ),
     ):
         await asyncio.sleep(0)
         assert df["value"].to_list() == ["async-test"]
@@ -276,7 +279,9 @@ def test_multiple_pending_snapshots_are_processed_atomically(table):
 
     processed: list[str] = []
     for _ in range(3):
-        with consume_stream(table, key="atomic_processing_test") as df:
+        with consume_stream(
+            table, key="atomic_processing_test", mode="append_scan"
+        ) as df:
             assert len(df) == 1
             processed.append(df["value"][0])
 
@@ -292,18 +297,18 @@ def test_failed_table_backed_snapshot_retries_without_data_leakage(table):
     table.append(_value_rows(["third"]))
     key = "failure_isolation_test"
 
-    with consume_stream(table, key=key) as df:
+    with consume_stream(table, key=key, mode="append_scan") as df:
         assert df["value"].to_list() == ["first"]
 
     with pytest.raises(ValueError, match="Simulated failure"):
-        with consume_stream(table, key=key) as df:
+        with consume_stream(table, key=key, mode="append_scan") as df:
             assert df["value"].to_list() == ["second"]
             raise ValueError("Simulated failure")
 
-    with consume_stream(table, key=key) as df:
+    with consume_stream(table, key=key, mode="append_scan") as df:
         assert df["value"].to_list() == ["second"]
 
-    with consume_stream(table, key=key) as df:
+    with consume_stream(table, key=key, mode="append_scan") as df:
         assert df["value"].to_list() == ["third"]
 
     assert ava.ProgressStore(table, key=key).list_pending() == []
@@ -320,8 +325,8 @@ def test_position_based_zero_copy_matching(namespace):
 
     @ava.step
     def combine_streams(
-        df_a: pl.DataFrame = ava.Stream(ns.table_a, key="process_a"),
-        df_b: pl.DataFrame = ava.Stream(ns.table_b, key="process_b"),
+        df_a: pl.DataFrame = ava.Stream(ns.table_a, key="process_a", mode="append_scan"),
+        df_b: pl.DataFrame = ava.Stream(ns.table_b, key="process_b", mode="append_scan"),
         *,
         result=ns.result,
     ):
@@ -360,9 +365,9 @@ def test_position_matching_with_mixed_results(namespace):
 
     @ava.step
     def process_positioned_streams(
-        df_a: pl.DataFrame = ava.Stream(ns.table_a, key="positioned_a"),
+        df_a: pl.DataFrame = ava.Stream(ns.table_a, key="positioned_a", mode="append_scan"),
         metadata: str = None,
-        df_b: pl.DataFrame = ava.Stream(ns.table_b, key="positioned_b"),
+        df_b: pl.DataFrame = ava.Stream(ns.table_b, key="positioned_b", mode="append_scan"),
         *,
         result=ns.result,
     ):
@@ -379,3 +384,113 @@ def test_position_matching_with_mixed_results(namespace):
 
     assert test_workflow().run(executor=ava.LocalExecutor()) == "mixed_done"
     assert ns.result.read()["value"].to_list() == ["first_second"]
+
+
+def test_run_scoped_stream_default_reads_current_run_rows_only(namespace):
+    ns = namespace
+    # Rows produced outside any workflow run (no _ava_run_id) must be ignored.
+    ns.records.append(_value_rows(["old"]))
+
+    @ava.source(slug="load-data")
+    def load_data(*, source=ns.records):
+        source.append(_value_rows(["current"]))
+        # Return a non-AppendResult so passthrough does not mask the table read.
+        return "loaded"
+
+    @ava.step(slug="process-data")
+    def process_data(df: pl.DataFrame = ava.Stream(ns.records)):
+        return sorted(df["value"].to_list())
+
+    @ava.workflow
+    def wf():
+        return load_data() >> process_data()
+
+    assert wf().run(executor=ava.LocalExecutor(), run_id="run_1") == ["current"]
+
+    # The run-scoped read leaves an unrelated append-scan cursor untouched: it
+    # neither claims nor advances any pending backlog snapshot.
+    store = ava.ProgressStore(ns.records, key="run_scoped_check")
+    assert store.get_cursor() is None
+    # Both appended snapshots (old + current) remain pending for append-scan
+    # consumers; run-scoped mode did not drain them.
+    assert len(store.list_pending()) == 2
+
+
+def test_run_scoped_stream_filters_by_upstream_producer_slug(namespace):
+    ns = namespace
+
+    @ava.source(slug="load-data")
+    def load_data(*, source=ns.records):
+        source.append(_value_rows(["wanted"]))
+        return "loaded"
+
+    @ava.source(slug="other-data")
+    def other_data(*, source=ns.records):
+        source.append(_value_rows(["noise"]))
+        return "other"
+
+    @ava.step(slug="process-data")
+    def process_data(df: pl.DataFrame = ava.Stream(ns.records)):
+        return sorted(df["value"].to_list())
+
+    @ava.workflow
+    def wf():
+        other_data()
+        return load_data() >> process_data()
+
+    # Same run, same table, but process-data must see only its upstream
+    # producer (load-data) rows, not the unrelated other-data rows.
+    assert wf().run(executor=ava.LocalExecutor(), run_id="run_1") == ["wanted"]
+
+
+def test_run_scoped_stream_requires_row_lineage(namespace):
+    ns = namespace
+
+    @ava.source(slug="load-data")
+    def load_data(*, source=ns.no_lineage):
+        source.append(_value_rows(["x"]))
+        return "loaded"
+
+    @ava.step(slug="process-data")
+    def process_data(df: pl.DataFrame = ava.Stream(ns.no_lineage)):
+        return df.height
+
+    @ava.workflow
+    def wf():
+        return load_data() >> process_data()
+
+    with pytest.raises(ValueError, match="row_lineage=True"):
+        wf().run(executor=ava.LocalExecutor(), run_id="run_1")
+
+
+def test_run_scoped_stream_passthrough_short_circuits_table_read(namespace):
+    ns = namespace
+
+    # Upstream returns an AppendResult, so passthrough short-circuits the durable
+    # read. This works even on a table without row lineage because no run-scoped
+    # scan is performed.
+    @ava.source(slug="load-data")
+    def load_data(*, source=ns.no_lineage):
+        return source.append(_value_rows(["passthrough"]))
+
+    @ava.step(slug="process-data")
+    def process_data(df: pl.DataFrame = ava.Stream(ns.no_lineage)):
+        return df["value"].to_list()
+
+    @ava.workflow
+    def wf():
+        return load_data() >> process_data()
+
+    assert wf().run(executor=ava.LocalExecutor(), run_id="run_1") == ["passthrough"]
+
+
+def test_consume_stream_rejects_append_scan_without_key(table):
+    with pytest.raises(ValueError, match="append_scan streams require key"):
+        with consume_stream(table, mode="append_scan"):
+            pass
+
+
+def test_consume_stream_rejects_run_scoped_with_key(table):
+    with pytest.raises(ValueError, match="run_scoped streams do not use key"):
+        with consume_stream(table, key="oops"):
+            pass

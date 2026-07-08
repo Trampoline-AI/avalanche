@@ -1,6 +1,7 @@
 """Runnable Stream example using the current provider API.
 
-`ava.Stream(table, key=...)` is a dependency provider. The runtime injects a
+`ava.Stream(table, key=..., mode="append_scan")` is a dependency provider. The
+runtime injects a
 single `polars.DataFrame` for the claimed snapshot; user code does not call
 `.read()` on the Stream object.
 """
@@ -84,7 +85,9 @@ def load_documents(*, docs=ns.document):
 @ava.step
 def chunk_documents(
     _loaded: object = None,
-    docs: pl.DataFrame = ava.Stream(ns.document, key="documents_to_chunks"),
+    docs: pl.DataFrame = ava.Stream(
+        ns.document, key="documents_to_chunks", mode="append_scan"
+    ),
     *,
     dest=ns.chunk,
 ):
@@ -95,7 +98,9 @@ def chunk_documents(
 @ava.step
 def embed_chunks(
     _chunked: object = None,
-    chunks: pl.DataFrame = ava.Stream(ns.chunk, key="chunks_to_embeddings"),
+    chunks: pl.DataFrame = ava.Stream(
+        ns.chunk, key="chunks_to_embeddings", mode="append_scan"
+    ),
     *,
     dest=ns.embedding,
 ):
@@ -106,7 +111,9 @@ def embed_chunks(
 @ava.dest
 def summarize_embeddings(
     _embedded: object = None,
-    embeddings: pl.DataFrame = ava.Stream(ns.embedding, key="embeddings_to_summary"),
+    embeddings: pl.DataFrame = ava.Stream(
+        ns.embedding, key="embeddings_to_summary", mode="append_scan"
+    ),
 ) -> str:
     models = sorted(set(embeddings["model"].to_list()))
     return f"summarized {len(embeddings)} embeddings from {', '.join(models)}"

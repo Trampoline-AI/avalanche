@@ -889,8 +889,8 @@ def _inspect_providers(fn: Callable, kwargs: dict[str, Any], providers: list) ->
         maps to:
         ```python
         {
-            "docs": Stream(table, key="docs_to_chunks"),
-            "chunks": Stream(table, key="chunks_to_embeddings"),
+            "docs": Stream(table),  # run-scoped
+            "chunks": Stream(table, key="chunks_to_embeddings", mode="append_scan"),
             ...
         }
         ```
@@ -904,13 +904,13 @@ def _inspect_providers(fn: Callable, kwargs: dict[str, Any], providers: list) ->
     # Examples:
     #   Given: @step
     #          def process(
-    #              data: pl.DataFrame = Stream(table_a, key="default"),
+    #              data: pl.DataFrame = Stream(table_a),
     #              logger=Logger()
     #          ):
     #              ...
     #
-    #   - Override: process(data=Stream(table_b, key="custom"))  # Explicit wins over default
-    #   - Explicit: process(data=Stream(table, key="key"))       # When no default exists
+    #   - Override: process(data=Stream(table_b))  # Explicit wins over default
+    #   - Explicit: process(data=Stream(table))    # When no default exists
     #   - Custom:   process(logger=Logger(level=DEBUG))          # Custom config override
     for param_name, param_value in kwargs.items():
         for provider in providers:
@@ -923,7 +923,7 @@ def _inspect_providers(fn: Callable, kwargs: dict[str, Any], providers: list) ->
     # Example:
     #   Given: @step
     #          def process(
-    #              data: pl.DataFrame = Stream(table, key="docs"),
+    #              data: pl.DataFrame = Stream(table),
     #              *,
     #              logger=Logger()
     #          ):

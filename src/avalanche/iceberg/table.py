@@ -360,10 +360,9 @@ class IcebergTable(StorageTable):
             scan = table.append_scan(start_snapshot_id=123)
             df = scan.to_arrow()
 
-            # Use with Stream for incremental processing
-            stream = Stream(table)
-            for batch in stream.read():
-                process(batch)
+            # For workflow-driven incremental processing, declare an append-scan
+            # Stream provider on a task parameter instead of scanning manually:
+            #   docs = ava.Stream(table, key="docs_to_chunks", mode="append_scan")
         """
         # Import here to avoid circular dependency at module load time
         from .namespace import IcebergAppendScan

@@ -57,11 +57,14 @@ def test_iceberg_table_pickle_roundtrip_reconnects(file_backed_namespace):
 
 
 def test_stream_marker_pickle_roundtrip(file_backed_namespace):
-    stream = ava.Stream(file_backed_namespace.records, key="pickle_stream")
+    stream = ava.Stream(
+        file_backed_namespace.records, key="pickle_stream", mode="append_scan"
+    )
 
     restored = pickle.loads(pickle.dumps(stream))
 
     assert restored.key == "pickle_stream"
+    assert restored.mode == "append_scan"
     assert restored.table.identifier == file_backed_namespace.records.identifier
 
 
@@ -117,7 +120,9 @@ def test_ray_executor_runs_table_backed_stream_step(tmp_path):
         ns.records.append(pl.DataFrame({"id": [1, 2], "value": ["a", "b"]}))
 
         @ava.step
-        def consume(df: pl.DataFrame = ava.Stream(ns.records, key="ray_scan")):
+        def consume(
+            df: pl.DataFrame = ava.Stream(ns.records, key="ray_scan", mode="append_scan")
+        ):
             return sorted(df["id"].to_list())
 
         @ava.workflow

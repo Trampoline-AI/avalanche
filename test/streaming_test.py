@@ -33,7 +33,7 @@ def test_append_result_converts_record_batch_to_dicts():
 
 def test_stream_provider_marker():
     table = MagicMock()
-    stream = ava.Stream(table, key="test_key")
+    stream = ava.Stream(table, key="test_key", mode="append_scan")
 
     assert isinstance(stream, ava.Stream)
     assert stream.table is table
@@ -80,7 +80,9 @@ def test_stream_wrapper_does_not_double_exit():
     with patch("avalanche.runtime.providers.stream.consume_stream", return_value=MockCM()):
 
         @ava.step
-        def failing_step(data: pl.DataFrame = ava.Stream(MagicMock(), key="test")):
+        def failing_step(
+            data: pl.DataFrame = ava.Stream(MagicMock(), key="test", mode="append_scan")
+        ):
             assert data["x"].to_list() == [1, 2, 3]
             raise ValueError("Intentional failure")
 

@@ -208,7 +208,9 @@ def test_rerun_stream_reads_source_run_rows_and_bypasses_progress_store(rerun_ns
 
     @ava.step(slug="process-data")
     def process_data(
-        df: pl.DataFrame = ava.Stream(ns.source, key="source_to_process"),
+        df: pl.DataFrame = ava.Stream(
+            ns.source, key="source_to_process", mode="append_scan"
+        ),
         *,
         output=ns.output,
     ):
@@ -286,7 +288,7 @@ def test_rerun_stream_requires_row_lineage(rerun_ns):
 
     @ava.step(slug="process-data")
     def process_data(
-        df: pl.DataFrame = ava.Stream(ns.no_lineage, key="no_lineage"),
+        df: pl.DataFrame = ava.Stream(ns.no_lineage),
     ):
         return df.height
 
@@ -310,7 +312,7 @@ def test_sparse_lazy_rerun_of_rerun_resolves_parent_run_rows(rerun_ns):
 
     @ava.step(slug="process-data")
     def process_data(
-        df: pl.DataFrame = ava.Stream(ns.source, key="source_to_process"),
+        df: pl.DataFrame = ava.Stream(ns.source),
         *,
         output=ns.output,
     ):
@@ -382,7 +384,7 @@ def test_rerun_lineage_vector_propagates_through_python_args(rerun_ns, executor_
     def wf():
         return (
             load_data(source=ns.source)
-            >> process_data(df=ava.Stream(ns.source, key="source_to_process"))
+            >> process_data(df=ava.Stream(ns.source))
             >> sink(output=ns.output)
         )
 
@@ -528,7 +530,7 @@ def test_rerun_lineage_vector_propagates_through_explicit_node_future_arg(
     @ava.workflow
     def wf():
         loaded = load_data(source=ns.source)
-        processed = process_data(df=ava.Stream(ns.source, key="source_to_process"))
+        processed = process_data(df=ava.Stream(ns.source))
         loaded >> processed
         return sink(processed, output=ns.output)
 
@@ -568,7 +570,7 @@ def test_lineage_survives_hook_replacement_without_exposing_envelope(
     def wf():
         return (
             load_data(source=ns.source)
-            >> process_data(df=ava.Stream(ns.source, key="source_to_process"))
+            >> process_data(df=ava.Stream(ns.source))
             >> sink(output=ns.output)
         )
 

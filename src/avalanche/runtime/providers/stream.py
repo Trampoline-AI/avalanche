@@ -7,7 +7,7 @@ Implements the ParameterProvider abstract base class for dependency injection of
 import hashlib
 import json
 from contextlib import contextmanager
-from typing import TYPE_CHECKING, Any, Callable, Generator, Generic, TypeVar
+from typing import TYPE_CHECKING, Any, Callable, Generator, Generic, Literal, TypeVar
 
 import polars as pl
 from pyiceberg.exceptions import CommitFailedException
@@ -25,46 +25,47 @@ if TYPE_CHECKING:
 
 T = TypeVar("T")
 
+StreamMode = Literal["run_scoped", "append_scan"]
+
 
 class Stream(ParameterProvider, Generic[T]):
     """
-    Stream provider marker for incremental data processing.
+    Stream provider marker that injects a DataFrame into a task parameter.
 
     Stream() is a provider marker (like FastAPI's Depends) that tells the
-    framework to inject incremental data with automatic progress tracking.
+    framework to resolve a table read for a task parameter. It defaults to
+    run-scoped reads; append-scan (backlog/cursor) is opt-in via ``mode``.
 
-    The framework:
-    - Claims snapshots for processing (with leases)
-    - Reads data for that snapshot
-    - Injects the DataFrame into your function
-    - Marks snapshot as done/failed
-    - Advances cursor for cleanup
+    Durable read mode (``mode``) decides how a stream reads from the table when
+    the data is not already available in memory:
 
-    Two modes (automatically determined by checking parent results):
+    1. ``run_scoped`` (default): read the rows this workflow run produced,
+       matched by row-lineage columns (``_ava_run_id`` / ``_ava_node_slug``).
+       - No ProgressStore, no cursor, no backlog draining.
+       - ``key`` is not accepted; there is no cursor to name.
+       - Use case: multi-agent / checkpoint pipelines where a table is a
+         run-scoped store of results, not a queue.
 
-    The framework inspects parent node results (in `resolve` method) for AppendResult objects:
-    - If found -> Passthrough mode (zero-copy)
-    - If not found -> Table-backed mode (read from storage table)
+    2. ``append_scan``: queue/backlog mode. Claim one pending snapshot via
+       ``ProgressStore`` and read it through ``append_scan``.
+       - Requires ``key`` to identify the progress cursor.
+       - Resilient: survives crashes, repeated attempts, separate consumer runs.
+       - Use case: incremental ingestion where each new snapshot is processed
+         once and the backlog is drained over successive runs.
 
-    1. Passthrough (zero-copy): Triggered when parent.append() returned AppendResult
-       - Data passed in-memory from upstream table.append()
-       - Fast: No table read required
-       - Use case: load_docs() >> process_docs() (same run, in-memory)
+    Passthrough (zero-copy) is an orthogonal optimization that can short-circuit
+    either mode: if a parent node returned an ``AppendResult``, its in-memory
+    data is used directly and no table read happens. ProgressStore bookkeeping
+    for ``append_scan`` is preserved in that case.
 
-    2. Table-backed: Triggered when no parent returned AppendResult
-       - Data read from the storage table
-       - Resilient: Survives crashes, repeated attempts, separate workflow runs
-       - Use case: Recover failed snapshots, or separate consumer workflow
-
-    3. Rerun: Triggered by Workflow.run(rerun=...)
-       - Reads rows for the source run via row-lineage columns
-       - Bypasses ProgressStore entirely
-       - Use case: re-execute a past run from selected node slugs
+    Rerun overrides ``mode``: when ``Workflow.run(rerun=...)`` is active, every
+    stream reads run-scoped rows for the source run via row lineage (with the
+    rerun-ancestry overlay) and bypasses ProgressStore, regardless of ``mode``.
 
     Example:
         @ava.step
         def chunk_docs(
-            docs: pl.DataFrame = ava.Stream(ns.documents, key="docs_to_chunks"),
+            docs: pl.DataFrame = ava.Stream(ns.documents),
             *,
             chunks=ns.chunks,
         ):
@@ -76,7 +77,8 @@ class Stream(ParameterProvider, Generic[T]):
 
     Attributes:
         table: Table to stream from
-        key: Unique key for this stream (e.g., "docs_to_chunks")
+        key: Unique key for the progress cursor (required for ``append_scan``).
+        mode: Durable read mode, ``run_scoped`` (default) or ``append_scan``.
     """
 
     consumes_upstream = True
@@ -84,25 +86,53 @@ class Stream(ParameterProvider, Generic[T]):
     table: "IcebergTable | Table"
     """Table to stream incremental data from."""
 
-    key: str
-    """Unique key for this stream (enables multiple streams per table)."""
+    key: "str | None"
+    """Progress-cursor key (enables multiple streams per table). Required for
+    ``append_scan``; unused for ``run_scoped``."""
 
-    def __init__(self, table: "IcebergTable | Table", *, key: str):
+    mode: StreamMode
+    """Durable read mode: ``run_scoped`` (default) or ``append_scan``."""
+
+    def __init__(
+        self,
+        table: "IcebergTable | Table",
+        *,
+        key: "str | None" = None,
+        mode: StreamMode = "run_scoped",
+    ):
         """
         Initialize a stream provider marker.
 
         Args:
             table: storage table to stream from
-            key: Unique key for this stream (required, e.g., "docs_to_chunks")
+            key: progress-cursor key. Required when ``mode="append_scan"``;
+                must be omitted for ``run_scoped`` (it has no meaning there).
+            mode: durable read mode. ``run_scoped`` (default) reads the current
+                run's rows via row lineage; ``append_scan`` drains pending
+                snapshots through ProgressStore.
 
         Example:
-            Stream(ns.documents, key="docs_to_chunks")
+            Stream(ns.documents)                              # run_scoped
+            Stream(ns.documents, key="docs_to_chunks",
+                   mode="append_scan")                        # backlog queue
         """
+        if mode not in ("run_scoped", "append_scan"):
+            raise ValueError(
+                f"Stream mode must be 'run_scoped' or 'append_scan', got {mode!r}"
+            )
+        if mode == "append_scan" and key is None:
+            raise ValueError("append_scan streams require key=...")
+        if mode == "run_scoped" and key is not None:
+            raise ValueError(
+                "run_scoped streams do not use key=...; omit key or set "
+                "mode='append_scan' for backlog/cursor streaming"
+            )
         self.table = table
         self.key = key
+        self.mode = mode
 
     def __repr__(self) -> str:
-        return f"Stream(table={self.table}, key={self.key!r})"
+        return f"Stream(table={self.table}, key={self.key!r}, mode={self.mode!r})"
 
     # ParameterProvider protocol implementation (class methods for registry use)
     @classmethod
@@ -164,6 +194,7 @@ class Stream(ParameterProvider, Generic[T]):
                 cm = consume_stream(
                     stream.table,
                     stream.key,
+                    mode=stream.mode,
                     upstream_data=upstream_data,
                     source_node_slugs=source_node_slugs,
                 )
@@ -219,8 +250,9 @@ class Stream(ParameterProvider, Generic[T]):
 @contextmanager
 def consume_stream(
     table: "IcebergTable | Table",
-    key: str,
+    key: "str | None" = None,
     *,
+    mode: StreamMode = "run_scoped",
     progress_store: "ProgressStore | None" = None,
     upstream_data: "pl.DataFrame | AppendResult | None" = None,
     rerun: "Rerun | None" = None,
@@ -229,15 +261,21 @@ def consume_stream(
     """
     Context manager for consuming a stream with automatic progress tracking.
 
-    Lifecycle:
-    1. Claim: Atomically claim a snapshot for processing
-    2. Read: Load data (from upstream or table)
-    3. Yield: Provide DataFrame to caller
-    4. Complete: Mark done and advance cursor (or mark failed on exception)
+    Mode selection (durable read plan when data is not passed in memory):
+    - Rerun active (RunContext.rerun or explicit ``rerun=``): run-scoped replay
+      of the source run's rows, bypassing ProgressStore. Overrides ``mode``.
+    - ``mode="run_scoped"`` (default): read the current run's rows via row
+      lineage. No ProgressStore, no cursor.
+    - ``mode="append_scan"``: claim one pending snapshot via ProgressStore and
+      read it through ``append_scan``. Requires ``key``.
+
+    Passthrough (``upstream_data`` set) short-circuits the table read in every
+    mode; ProgressStore bookkeeping is still performed for ``append_scan``.
 
     Args:
         table: Table to stream from
-        key: Stream key for progress tracking
+        key: Progress-cursor key. Required for ``mode="append_scan"``.
+        mode: Durable read mode, ``run_scoped`` (default) or ``append_scan``.
         progress_store: ProgressStore instance (created if None)
         upstream_data: Data from upstream (zero-copy mode), or None (table-backed)
         rerun: Optional explicit rerun spec for manual usage. Workflow runs pass
@@ -247,7 +285,7 @@ def consume_stream(
         DataFrame for the claimed snapshot or rerun source rows
 
     Example (manual usage):
-        with consume_stream(table, key="docs_to_chunks") as df:
+        with consume_stream(table, key="docs_to_chunks", mode="append_scan") as df:
             result = process(df)
             output_table.append(result.to_arrow())
 
@@ -258,10 +296,28 @@ def consume_stream(
     from avalanche.progress import ProgressStore
     from avalanche.runtime import get_current_run_context
 
+    if mode not in ("run_scoped", "append_scan"):
+        raise ValueError(
+            f"Stream mode must be 'run_scoped' or 'append_scan', got {mode!r}"
+        )
+
     context = get_current_run_context()
     active_rerun = rerun or (context.rerun if context is not None else None)
 
+    # Rerun overrides durable mode, so mode/key compatibility is only enforced
+    # for ordinary (non-rerun) execution.
+    if active_rerun is None:
+        if mode == "append_scan" and key is None:
+            raise ValueError("append_scan streams require key=...")
+        if mode == "run_scoped" and key is not None:
+            raise ValueError(
+                "run_scoped streams do not use key=...; omit key or set "
+                "mode='append_scan' for backlog/cursor streaming"
+            )
+
     if active_rerun is not None:
+        # Rerun override: always run-scoped source-run replay, regardless of
+        # the configured mode. Passthrough still short-circuits the table read.
         if upstream_data is not None:
             df = _upstream_to_polars(upstream_data)
         else:
@@ -284,13 +340,48 @@ def consume_stream(
             )
         return
 
+    if mode == "run_scoped":
+        # Run-scoped mode: read only the current run's rows via row lineage.
+        # No ProgressStore, no cursor, no backlog draining. This treats the
+        # table as a run-scoped store of results rather than a queue.
+        if upstream_data is not None:
+            df = _upstream_to_polars(upstream_data)
+        elif context is None:
+            raise RuntimeError(
+                "run_scoped streams require an active workflow run context. "
+                "Use mode='append_scan' for standalone / backlog streaming."
+            )
+        else:
+            if getattr(table, "row_lineage", True) is False:
+                raise ValueError(
+                    "run_scoped streams require tables created with "
+                    "row_lineage=True. Use mode='append_scan' for tables "
+                    "without row lineage."
+                )
+            df = _scan_run_rows(
+                table,
+                context.run_id,
+                node_slugs=source_node_slugs,
+            )
+        _merge_input_lineage(context, df)
+        yield df
+        return
+
+    if mode != "append_scan":
+        raise ValueError(
+            f"Stream mode must be 'run_scoped' or 'append_scan', got {mode!r}"
+        )
+
+    if key is None:
+        raise ValueError("append_scan streams require key=...")
+
     # Create progress store if not provided
     if progress_store is None:
         progress_store = ProgressStore(table, key=key)
 
-    # Determine mode based on upstream_data:
-    # - If upstream_data provided: Passthrough mode (parent returned AppendResult)
-    # - If upstream_data is None: Table-backed mode (read from storage table)
+    # append_scan mode. Passthrough vs table-backed is decided by upstream_data:
+    # - If upstream_data provided: passthrough (parent returned AppendResult)
+    # - If upstream_data is None: read one claimed snapshot from the table
     if upstream_data is not None:
         # Passthrough mode: data passed from upstream (zero-copy)
         df = _upstream_to_polars(upstream_data)

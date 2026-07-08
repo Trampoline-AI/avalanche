@@ -192,14 +192,15 @@ direct parent, not arbitrary version ranges.
 
 ## Streams, reruns, and cursors
 
-`ava.Stream(table, key=...)` consumes backend table versions incrementally and
-injects a `polars.DataFrame` into a task parameter.
+`ava.Stream(table)` injects a `polars.DataFrame` into a task parameter. By
+default it is run-scoped (reads the current run's rows via row lineage). Pass
+`key=...` with `mode="append_scan"` for incremental backlog draining.
 
 ```python
 @ava.step
 def chunk_documents(
     _loaded: object = None,
-    docs = ava.Stream(ns.document, key="documents_to_chunks"),
+    docs = ava.Stream(ns.document, key="documents_to_chunks", mode="append_scan"),
     *,
     dest = ns.chunk,
 ):
@@ -213,21 +214,42 @@ destination table, or coordination across multiple tables.
 
 ### Stream modes
 
-The same `ava.Stream` primitive supports three modes:
+`ava.Stream` has an explicit **durable read mode** that decides how it reads
+from the table when the data is not already available in memory:
 
-1. **Data passing**: when an upstream node returns `AppendResult`, the rows are
-   passed directly to the downstream stream parameter in the same run. The
-   corresponding backend snapshot is still claimed and completed in
-   `ProgressStore` so future table-backed consumers do not process it again.
-2. **Table scan**: when there is no upstream `AppendResult`, the stream claims
-   one pending backend snapshot for `key`, reads only that snapshot's appended
-   files, and marks the snapshot done or failed.
-3. **Rerun**: when `Workflow.run(rerun=ava.Rerun(...))` is active, the stream
-   ignores processed/unprocessed status and reads all rows for the source
-   `run_id` via row-lineage columns. It bypasses `ProgressStore` completely so a
-   rerun never consumes or advances ordinary stream backlog.
+1. **`run_scoped`** (default): read the rows this workflow run produced, matched
+   by row-lineage columns (`_ava_run_id` and the upstream producer's
+   `_ava_node_slug`). There is no `ProgressStore`, no cursor, and no backlog
+   draining. `key` is not used. This treats the table as a run-scoped store of
+   results — the common shape for multi-agent / checkpoint pipelines.
+2. **`append_scan`**: queue/backlog mode. The stream claims one pending backend
+   snapshot for `key` via `ProgressStore`, reads only that snapshot's appended
+   files, and marks the snapshot done or failed. Requires `key=...`.
 
-Rerun scans require `row_lineage=True` on the source table. If the source run is
+```python
+# Default: run-scoped, no cursor.
+docs = ava.Stream(ns.document)
+
+# Backlog / incremental queue.
+docs = ava.Stream(ns.document, key="documents_to_chunks", mode="append_scan")
+```
+
+**Passthrough is not a mode.** When an upstream node returns `AppendResult`, its
+rows are passed directly to the downstream stream in the same run, skipping the
+table read in either mode. For `append_scan` the corresponding snapshot is still
+claimed and completed in `ProgressStore`; for `run_scoped` there is no progress
+bookkeeping.
+
+**Rerun overrides the mode.** When `Workflow.run(rerun=ava.Rerun(...))` is
+active, every stream reads all rows for the source `run_id` via row-lineage
+columns and bypasses `ProgressStore` completely, regardless of `mode`, so a
+rerun never consumes or advances ordinary stream backlog.
+
+> Breaking change: the default is now `run_scoped`. Code that relied on the old
+> backlog-draining behavior must pass `mode="append_scan"` (and keep `key`).
+> `key=` is only valid with `append_scan`.
+
+Run-scoped and rerun scans require `row_lineage=True` on the table. If the source run is
 itself a rerun, Avalanche follows `_ava_rerun_of` as a sparse overlay and keeps
 newer rows for the same `_ava_node_slug` ahead of older parent-run rows. The
 v1 model is intentionally row-lineage-only: there is no stale bit, manifest, or

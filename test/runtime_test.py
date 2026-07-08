@@ -40,39 +40,59 @@ class TestStream:
     def test_stream_initialization(self):
         """Test that Stream can be initialized with a table and key."""
         table = MockTable("docs")
-        stream = Stream(table, key="test_stream")
+        stream = Stream(table, key="test_stream", mode="append_scan")
 
         assert stream.table is table
         assert stream.key == "test_stream"
+        assert stream.mode == "append_scan"
+
+    def test_stream_defaults_to_run_scoped_without_key(self):
+        """Stream defaults to run_scoped without a key."""
+        table = MockTable("docs")
+        stream = Stream(table)
+
+        assert stream.mode == "run_scoped"
+        assert stream.key is None
 
     def test_stream_is_provider(self):
         """Test that Stream can be identified as a provider."""
         table = MockTable("docs")
-        stream = Stream(table, key="test_stream")
+        stream = Stream(table)
 
         # Should be identifiable via isinstance (used by can_resolve)
         assert isinstance(stream, Stream)
         assert Stream.can_resolve(stream) is True
 
-    def test_stream_requires_key(self):
-        """Test that Stream requires key parameter."""
+    def test_append_scan_mode_requires_key(self):
+        """append_scan mode requires an explicit key."""
         table = MockTable("docs")
 
-        # Should raise TypeError without key
-        with pytest.raises(
-            TypeError,
-            match="missing 1 required keyword-only argument: 'key'",
-        ):
-            Stream(table)
+        with pytest.raises(ValueError, match="append_scan streams require key"):
+            Stream(table, mode="append_scan")
+
+    def test_run_scoped_stream_rejects_key(self):
+        """run_scoped (default) rejects key= to avoid silent append-scan drift."""
+        table = MockTable("docs")
+
+        with pytest.raises(ValueError, match="run_scoped streams do not use key"):
+            Stream(table, key="test_key")
+
+    def test_stream_rejects_invalid_mode(self):
+        """Unknown modes are rejected at construction."""
+        table = MockTable("docs")
+
+        with pytest.raises(ValueError, match="run_scoped.*append_scan"):
+            Stream(table, mode="bogus")  # type: ignore[arg-type]
 
     def test_stream_repr(self):
         """Test Stream string representation."""
         table = MockTable("docs")
-        stream = Stream(table, key="my_stream")
+        stream = Stream(table, key="my_stream", mode="append_scan")
 
         repr_str = repr(stream)
         assert "Stream" in repr_str
         assert "my_stream" in repr_str
+        assert "append_scan" in repr_str
 
 
 class TestLogger:
@@ -193,7 +213,7 @@ class TestIntegrationPatterns:
         table = MockTable("docs")
 
         # This is the pattern used in task signatures
-        def my_task(*, docs=Stream(table, key="test_key")):
+        def my_task(*, docs=Stream(table, key="test_key", mode="append_scan")):
             return docs
 
         # When called without args, gets the default

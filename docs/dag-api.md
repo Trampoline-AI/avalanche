@@ -138,7 +138,7 @@ Node parameters can use provider defaults such as `ava.Stream`, `ava.Cursor`, an
 @ava.step
 def chunk_new_documents(
     _loaded: object = None,
-    docs = ava.Stream(ns.document, key="documents_to_chunks"),
+    docs = ava.Stream(ns.document),
     *,
     dest = ns.chunk,
 ):
@@ -146,8 +146,11 @@ def chunk_new_documents(
     return dest.append(chunks)
 ```
 
-`ava.Stream(table, key=...)` injects one `polars.DataFrame` for the claimed table
-snapshot. User code does not call `.read()` on the `Stream` object.
+`ava.Stream(table)` injects one `polars.DataFrame` into the task parameter. It is
+run-scoped by default (reads the current run's rows via row lineage). For
+backlog/incremental draining use `ava.Stream(table, key="...", mode="append_scan")`,
+which claims one pending snapshot at a time. User code does not call `.read()` on
+the `Stream` object. `key` is only valid with `mode="append_scan"`.
 
 `ava.Cursor(table, key=...)` stores manual checkpoint state in table metadata and
 is useful when a task needs custom progress control or coordination across
