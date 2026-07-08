@@ -28,6 +28,107 @@ T = TypeVar("T")
 StreamMode = Literal["run_scoped", "append_scan"]
 
 
+def _table_identity(table: Any) -> str | None:
+    """Best-effort stable identity for a storage table (Iceberg id / location)."""
+    return getattr(table, "identifier", None) or getattr(table, "location", None) or None
+
+
+def _is_executor_ref(value: Any, executor: Any) -> bool:
+    """True when ``value`` is a concrete distributed ref (Ray ObjectRef)."""
+    if executor is None:
+        return False
+    ray = getattr(executor, "ray", None)
+    object_ref_type = getattr(ray, "ObjectRef", None)
+    return object_ref_type is not None and isinstance(value, object_ref_type)
+
+
+def _ray_get(value: Any) -> Any:
+    """Dereference a Ray ObjectRef if that is what ``value`` is.
+
+    Called only inside a Ray worker (from ``stream_wrapper``), never on the
+    driver — so the appended frame is materialized worker-side. Tolerant of
+    already-materialized values so nested-ref serialization quirks and tests
+    that pass concrete handles both work.
+    """
+    import ray
+
+    object_ref_type = getattr(ray, "ObjectRef", None)
+    if object_ref_type is not None and isinstance(value, object_ref_type):
+        return ray.get(value)
+    return value
+
+
+_MISSING_PARENT = object()  # sentinel: hidden parent kwarg not supplied
+
+
+def _resolve_deferred_stream_upstream(
+    upstream_data: Any, parent_value: Any = _MISSING_PARENT
+) -> Any:
+    """Resolve a ``DeferredStreamUpstream`` to an ``AppendResult`` worker-side.
+
+    Runs inside the consumer task (via ``stream_wrapper``). ``parent_value`` is
+    the producer result that Ray already auto-dereferenced from the hidden
+    top-level kwarg — a small ``AppendResultHandle`` (control metadata) under
+    the control/data split. This converts the handle into a public
+    ``AppendResult`` (fetching the frame's ``data_ref`` only here, worker-side)
+    and validates table identity. Non-passthrough parents fall back to
+    table-backed mode (None).
+
+    A producer may legitimately return ``None`` (→ table-backed fallback), so a
+    dedicated ``_MISSING_PARENT`` sentinel — not ``None`` — signals a missing
+    hidden kwarg.
+    """
+    from avalanche.types import (
+        AppendResult,
+        AppendResultHandle,
+        DeferredStreamUpstream,
+        LineagedResult,
+        materialize_append_handles,
+        unwrap_lineaged,
+    )
+
+    if not isinstance(upstream_data, DeferredStreamUpstream):
+        return upstream_data
+
+    if parent_value is _MISSING_PARENT:
+        raise RuntimeError(
+            "Deferred Stream upstream is missing its hidden parent kwarg; the "
+            "DAG submit path must inject it as a top-level task argument"
+        )
+
+    # Inspect CONTROL metadata before touching the data plane. parent_value is
+    # already auto-dereferenced by Ray; the frame still lives behind
+    # AppendResultHandle.data_ref. Validate table identity first so a mismatched
+    # parent never triggers a data-plane fetch.
+    control = parent_value
+    if isinstance(control, LineagedResult):
+        control = control.value
+
+    expected = upstream_data.table_identity
+
+    if isinstance(control, AppendResultHandle):
+        actual = control.table_identity
+        if expected is not None and actual is not None and expected != actual:
+            # Different table: not this Stream's passthrough. No frame fetched.
+            return None
+        # Passthrough confirmed on metadata alone; now fetch the frame
+        # worker-side (materialize_append_handles dereferences data_ref).
+        parent = materialize_append_handles(parent_value, _ray_get)
+        parent = unwrap_lineaged(parent)
+        return parent if isinstance(parent, AppendResult) else None
+
+    if isinstance(control, AppendResult):
+        # Already-materialized AppendResult (no handle indirection).
+        actual = control.table_identity
+        if expected is not None and actual is not None and expected != actual:
+            return None
+        return control
+
+    # Parent was not an AppendResult/handle (plain frame, None, unrelated
+    # value): not a passthrough for this Stream — use table-backed mode.
+    return None
+
+
 class Stream(ParameterProvider, Generic[T]):
     """
     Stream provider marker that injects a DataFrame into a task parameter.
@@ -155,13 +256,33 @@ class Stream(ParameterProvider, Generic[T]):
             param_value: Stream instance to resolve
             param_context: ParamContext with parent_results, executor, etc.
         """
-        from avalanche.types import AppendResult, unwrap_lineaged
+        from avalanche.types import AppendResult, DeferredStreamUpstream, unwrap_lineaged
 
         stream = param_value
 
-        matching_result = param_context.materialize(param_context.get_matching_result())
-        matching_result = unwrap_lineaged(matching_result)
-        upstream_data = matching_result if isinstance(matching_result, AppendResult) else None
+        raw_matching_result = param_context.get_matching_result()
+        if _is_executor_ref(raw_matching_result, param_context.executor):
+            # Distributed executor (Ray): do NOT fetch the parent to the driver
+            # just to detect passthrough. Carry the parent payload ref so the
+            # DAG submit path can lift it into a top-level hidden task kwarg
+            # (making Ray track it as a real scheduling dependency), then defer
+            # resolution into the consumer worker where the small
+            # AppendResultHandle (and only then its data ref) is dereferenced.
+            # The final, collision-free hidden kwarg name is stamped in the DAG
+            # submit lift (where node_id + param name are available); use a
+            # placeholder here.
+            upstream_data: Any = DeferredStreamUpstream(
+                parent_kwarg="",
+                table_identity=_table_identity(stream.table),
+                ref=raw_matching_result,
+            )
+        else:
+            # Local / already-materialized value: keep the existing behavior.
+            matching_result = param_context.materialize(raw_matching_result)
+            matching_result = unwrap_lineaged(matching_result)
+            upstream_data = (
+                matching_result if isinstance(matching_result, AppendResult) else None
+            )
         matching_slug = param_context.get_matching_node_slug()
         source_node_slugs = (
             (matching_slug,)
@@ -187,10 +308,24 @@ class Stream(ParameterProvider, Generic[T]):
 
         def stream_wrapper(*args, **kwargs):
             """Wrapper that resolves Stream dependencies within context managers."""
+            from avalanche.types import DeferredStreamUpstream
+
             # Build context managers for all stream parameters
             context_managers = []
             for param_name, resolved in resolved_params.items():
                 stream, upstream_data, source_node_slugs = resolved
+                # Worker-side boundary: if the driver deferred the parent (Ray),
+                # the parent payload ref was lifted into a top-level hidden task
+                # kwarg so Ray tracked it as a real dependency. Pop it (so it
+                # never leaks into the user function) and resolve the nested
+                # AppendResultHandle's data ref here — the appended frame is
+                # materialized inside this consumer task, never on the driver.
+                parent_value = _MISSING_PARENT
+                if isinstance(upstream_data, DeferredStreamUpstream):
+                    parent_value = kwargs.pop(upstream_data.parent_kwarg, _MISSING_PARENT)
+                upstream_data = _resolve_deferred_stream_upstream(
+                    upstream_data, parent_value
+                )
                 cm = consume_stream(
                     stream.table,
                     stream.key,

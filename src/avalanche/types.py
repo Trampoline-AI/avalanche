@@ -43,6 +43,7 @@ class AppendResult:
 
     data: Union[pl.DataFrame, pa.Table, pa.RecordBatch]
     snapshot_id: int
+    table_identity: str | None = None
 
     def to_polars(self) -> pl.DataFrame:
         """Convert data to Polars DataFrame if needed."""
@@ -63,6 +64,57 @@ class AppendResult:
     def to_dicts(self) -> list[dict[str, Any]]:
         """Return appended rows as Python dictionaries."""
         return self.to_polars().to_dicts()
+
+
+@dataclass
+class AppendResultHandle:
+    """Control-plane handle for an ``AppendResult`` whose data lives off-driver.
+
+    Under a distributed executor (Ray), a task that returns an ``AppendResult``
+    is normalized into this small handle: the frame is placed in the object
+    store and only the ``data_ref`` plus tiny metadata travel as the task
+    payload. The driver can inspect the handle (snapshot id, table identity,
+    the data ref) to detect Stream passthrough without materializing the frame.
+    The consumer worker dereferences ``data_ref`` when it actually needs rows.
+
+    Internal transport type: always materialized back into a public
+    ``AppendResult`` before reaching user functions, hooks, or the final
+    workflow return.
+    """
+
+    data_ref: Any
+    snapshot_id: int
+    table_identity: str | None = None
+
+
+@dataclass
+class DeferredStreamUpstream:
+    """Worker-side Stream parent dependency (distributed executors only).
+
+    When a ``Stream`` consumer runs under Ray, the driver must NOT fetch the
+    producer's result just to detect passthrough mode. Instead the parent ref
+    is injected as an explicit top-level hidden task kwarg (named ``parent_kwarg``)
+    so Ray tracks it as a real scheduling dependency, and this carrier travels in
+    the Stream wrapper closure with only the kwarg name plus tiny metadata.
+
+    Inside the consumer worker the wrapper pops ``parent_kwarg`` from kwargs —
+    Ray has already auto-dereferenced the producer result ref to its value,
+    which is a small ``AppendResultHandle`` (control metadata). The wrapper then
+    dereferences the handle's ``data_ref`` to the actual frame worker-side, so
+    the appended data never crosses the driver AND the consumer is never
+    scheduled before the producer completes.
+
+    Ray-serializable: carries only a kwarg name plus tiny metadata, never a ref
+    or executor object.
+    """
+
+    parent_kwarg: str
+    table_identity: str | None = None
+    # Driver-planning only: the producer payload ref. The DAG submit path lifts
+    # this into a top-level hidden task kwarg (so Ray tracks it as a real
+    # dependency) and then strips it to None before the wrapper closure is
+    # serialized, so a parent ref never travels inside the closure.
+    ref: Any = None
 
 
 @dataclass
@@ -88,6 +140,38 @@ class LineagedResult:
 def unwrap_lineaged(value: Any) -> Any:
     """Return the underlying value, stripping a LineagedResult envelope."""
     return value.value if isinstance(value, LineagedResult) else value
+
+
+def materialize_append_handles(value: Any, get_data: "Callable[[Any], Any]") -> Any:
+    """Convert internal ``AppendResultHandle``s back into public ``AppendResult``.
+
+    ``get_data`` dereferences a data ref to the concrete frame. Two call sites:
+    - worker-side (``ray.get``) before user code / Stream consumption runs, so
+      user functions never see the internal handle;
+    - driver-side (``executor.get``) only for explicit workflow returns and
+      ``unwrap_result`` hooks, where materialization is intentional.
+
+    Recurses through ``LineagedResult`` envelopes and tuple/list/dict
+    containers, preserving shape and lineage.
+    """
+    if isinstance(value, LineagedResult):
+        return LineagedResult(
+            materialize_append_handles(value.value, get_data),
+            dict(value.lineage_vector),
+        )
+    if isinstance(value, AppendResultHandle):
+        return AppendResult(
+            data=get_data(value.data_ref),
+            snapshot_id=value.snapshot_id,
+            table_identity=value.table_identity,
+        )
+    if isinstance(value, tuple):
+        return tuple(materialize_append_handles(v, get_data) for v in value)
+    if isinstance(value, list):
+        return [materialize_append_handles(v, get_data) for v in value]
+    if isinstance(value, dict):
+        return {k: materialize_append_handles(v, get_data) for k, v in value.items()}
+    return value
 
 
 def lineage_of(value: Any) -> dict[str, str]:
@@ -212,9 +296,15 @@ class ParamContext:
         """Fetch distributed executor refs to concrete values if needed.
 
         LocalExecutor values are already materialized. Ray ObjectRefs are
-        fetched via executor.get so provider resolution (e.g. Stream zero-copy
-        AppendResult detection) sees the real value rather than a ref. Recurses
-        through tuple/list/dict, preserving container shape.
+        fetched via ``executor.get``. Recurses through tuple/list/dict,
+        preserving container shape.
+
+        NOTE: the Stream provider no longer calls this on Ray ObjectRefs — it
+        defers parent resolution into the consumer worker via
+        ``DeferredStreamUpstream`` so the appended frame is never pulled to the
+        driver. This helper remains for providers/paths that legitimately need
+        a concrete value at resolution time; avoid using it on large Ray
+        payloads on the driver.
         """
         executor = self.executor
         if executor is None:

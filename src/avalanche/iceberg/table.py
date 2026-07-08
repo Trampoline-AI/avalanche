@@ -242,7 +242,11 @@ class IcebergTable(StorageTable):
 
         snapshot_id = self.current_version_id
         assert snapshot_id is not None
-        return AppendResult(data=arrow_data, snapshot_id=snapshot_id)
+        return AppendResult(
+            data=arrow_data,
+            snapshot_id=snapshot_id,
+            table_identity=self.identifier,
+        )
 
     def _cast_to_table_schema(self, arrow_data: pa.Table | pa.RecordBatch) -> pa.Table:
         """Align Arrow field types/nullability with the declared Iceberg schema."""

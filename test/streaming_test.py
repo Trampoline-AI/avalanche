@@ -94,3 +94,69 @@ def test_stream_wrapper_does_not_double_exit():
             test_workflow().run(executor=ava.LocalExecutor())
 
     assert exit_calls == ["exit_error:ValueError"]
+
+
+def test_deferred_stream_metadata_mismatch_does_not_fetch_data(monkeypatch):
+    """Table-identity mismatch must be decided on control metadata alone.
+
+    Control/data-plane split invariant: when the deferred parent is an
+    AppendResultHandle for a DIFFERENT table, resolution must return None
+    (table-backed fallback) WITHOUT ever dereferencing the handle's data_ref.
+    Fetching the frame to discover a mismatch would defeat the whole split.
+    """
+    import avalanche.runtime.providers.stream as stream_mod
+    from avalanche.types import AppendResultHandle, DeferredStreamUpstream
+
+    calls = []
+
+    def _fail_get(ref):
+        calls.append(ref)
+        raise AssertionError("data_ref must not be fetched for a mismatched table")
+
+    monkeypatch.setattr(stream_mod, "_ray_get", _fail_get)
+
+    upstream = DeferredStreamUpstream(
+        parent_kwarg="__ava_stream_parent_node_df",
+        table_identity="target.table",
+    )
+    parent_value = AppendResultHandle(
+        data_ref=object(),
+        snapshot_id=123,
+        table_identity="other.table",
+    )
+
+    result = stream_mod._resolve_deferred_stream_upstream(upstream, parent_value)
+    assert result is None
+    assert calls == [], calls
+
+
+def test_deferred_stream_matching_metadata_fetches_data_once(monkeypatch):
+    """A matching table identity resolves to AppendResult, fetching data once."""
+    import avalanche.runtime.providers.stream as stream_mod
+    from avalanche.types import AppendResult, AppendResultHandle, DeferredStreamUpstream
+
+    frame = pl.DataFrame({"x": [1, 2, 3]})
+    sentinel_ref = object()
+    calls = []
+
+    def _get(ref):
+        calls.append(ref)
+        assert ref is sentinel_ref
+        return frame
+
+    monkeypatch.setattr(stream_mod, "_ray_get", _get)
+
+    upstream = DeferredStreamUpstream(
+        parent_kwarg="__ava_stream_parent_node_df",
+        table_identity="target.table",
+    )
+    parent_value = AppendResultHandle(
+        data_ref=sentinel_ref,
+        snapshot_id=7,
+        table_identity="target.table",
+    )
+
+    result = stream_mod._resolve_deferred_stream_upstream(upstream, parent_value)
+    assert isinstance(result, AppendResult)
+    assert result.to_polars().equals(frame)
+    assert calls == [sentinel_ref], calls

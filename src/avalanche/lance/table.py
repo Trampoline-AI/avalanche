@@ -160,7 +160,7 @@ class LanceTransaction:
         self._updates: dict[str, str | None] = {}
 
     def __enter__(self) -> "LanceTransaction":
-        if self._table._ns is None:
+        if not self._table.location:
             raise AttributeError(
                 "Cannot start transaction - table has not been bound to a namespace. "
                 "Call namespace.push() first."
@@ -285,7 +285,11 @@ class LanceTable(Table):
 
         snapshot_id = self.current_version_id
         assert snapshot_id is not None
-        return AppendResult(data=arrow_data, snapshot_id=snapshot_id)
+        return AppendResult(
+            data=arrow_data,
+            snapshot_id=snapshot_id,
+            table_identity=getattr(self, "identifier", None) or self.location,
+        )
 
     def snapshot_by_id(self, snapshot_id: int) -> LanceSnapshot | None:
         """Return minimal version metadata needed by table-backed streams."""

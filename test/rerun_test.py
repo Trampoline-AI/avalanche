@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import json
-from typing import Any, cast
+from typing import Any
 
 import dataframely as dy
 import polars as pl
@@ -376,9 +376,9 @@ def test_rerun_lineage_vector_propagates_through_python_args(rerun_ns, executor_
 
     ns = rerun_ns
 
-    load_data = cast(Any, ava.source(slug="load-data")(_lineage_load_data))
-    process_data = cast(Any, ava.step(slug="process-data")(_lineage_process_data))
-    sink = cast(Any, ava.dest(slug="sink")(_lineage_sink))
+    load_data = ava.source(slug="load-data")(_lineage_load_data)
+    process_data = ava.step(slug="process-data")(_lineage_process_data)
+    sink = ava.dest(slug="sink")(_lineage_sink)
 
     @ava.workflow
     def wf():
@@ -436,8 +436,8 @@ def test_rerun_lineage_vector_propagates_through_indexed_single_return_tuple(
 
     ns = rerun_ns
 
-    split_pair = cast(Any, ava.source(slug="split-pair")(_lineage_split_pair))
-    sink = cast(Any, ava.dest(slug="sink")(_lineage_sink))
+    split_pair = ava.source(slug="split-pair")(_lineage_split_pair)
+    sink = ava.dest(slug="sink")(_lineage_sink)
 
     @ava.workflow
     def wf():
@@ -478,11 +478,8 @@ def test_rerun_lineage_vector_propagates_through_indexed_multi_return_tuple(
 
     ns = rerun_ns
 
-    split = cast(
-        Any,
-        ava.source(slug="split-multi", num_returns=2)(_lineage_split_multireturn),
-    )
-    sink = cast(Any, ava.dest(slug="sink")(_lineage_sink))
+    split = ava.source(slug="split-multi", num_returns=2)(_lineage_split_multireturn)
+    sink = ava.dest(slug="sink")(_lineage_sink)
 
     @ava.workflow
     def wf():
@@ -491,7 +488,7 @@ def test_rerun_lineage_vector_propagates_through_indexed_multi_return_tuple(
 
     executor = executor_factory()
     try:
-        assert cast(Any, wf)().run(executor=executor, run_id="source_run") == "ok"
+        assert wf().run(executor=executor, run_id="source_run") == "ok"
     finally:
         ray = getattr(executor, "ray", None)
         if ray is not None and ray.is_initialized():
@@ -523,9 +520,9 @@ def test_rerun_lineage_vector_propagates_through_explicit_node_future_arg(
 
     ns = rerun_ns
 
-    load_data = cast(Any, ava.source(slug="load-data")(_lineage_load_data))
-    process_data = cast(Any, ava.step(slug="process-data")(_lineage_process_data))
-    sink = cast(Any, ava.dest(slug="sink")(_lineage_sink))
+    load_data = ava.source(slug="load-data")(_lineage_load_data)
+    process_data = ava.step(slug="process-data")(_lineage_process_data)
+    sink = ava.dest(slug="sink")(_lineage_sink)
 
     @ava.workflow
     def wf():
@@ -536,7 +533,7 @@ def test_rerun_lineage_vector_propagates_through_explicit_node_future_arg(
 
     executor = executor_factory()
     try:
-        assert cast(Any, wf)().run(executor=executor, run_id="source_run") == "ok"
+        assert wf().run(executor=executor, run_id="source_run") == "ok"
     finally:
         ray = getattr(executor, "ray", None)
         if ray is not None and ray.is_initialized():
@@ -562,9 +559,9 @@ def test_lineage_survives_hook_replacement_without_exposing_envelope(
 
     ns = rerun_ns
 
-    load_data = cast(Any, ava.source(slug="load-data")(_lineage_load_data))
-    process_data = cast(Any, ava.step(slug="process-data")(_lineage_process_data))
-    sink = cast(Any, ava.dest(slug="sink")(_lineage_sink))
+    load_data = ava.source(slug="load-data")(_lineage_load_data)
+    process_data = ava.step(slug="process-data")(_lineage_process_data)
+    sink = ava.dest(slug="sink")(_lineage_sink)
 
     @ava.workflow
     def wf():
@@ -586,7 +583,7 @@ def test_lineage_survives_hook_replacement_without_exposing_envelope(
 
     executor = executor_factory()
     try:
-        assert cast(Any, wf)().run(
+        assert wf().run(
             executor=executor,
             hooks=RunHooks(unwrap_result=unwrap_result),
             run_id="source_run",

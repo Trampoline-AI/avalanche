@@ -1,16 +1,16 @@
 .PHONY: test test-cov test-cov-html lint format precommit-check check smoke-test brand install clean
 
-# Run tests
+# Run tests with every supported executor/storage extra installed.
 test:
-	uv run pytest
+	uv run --all-extras pytest
 
 # Run tests with coverage report
 test-cov:
-	uv run pytest --cov --cov-report=term-missing
+	uv run --all-extras pytest --cov --cov-report=term-missing
 
 # Run tests with HTML coverage report
 test-cov-html:
-	uv run pytest --cov --cov-report=html
+	uv run --all-extras pytest --cov --cov-report=html
 	@echo "Coverage report: htmlcov/index.html"
 
 # Run linter

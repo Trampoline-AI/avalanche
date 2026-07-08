@@ -66,6 +66,7 @@ dev = [
     "grpcio>=1.75.1",
     "grpcio-tools>=1.75.1",
     "moto[s3,server]>=5,<6",
+    "pylance>=0.24.0",
     "ray[default]>=2.50.0",
     "s3fs>=2023.12.2,<2024",
     "pytest-cov>=7.0.0",
