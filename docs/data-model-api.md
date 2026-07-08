@@ -7,7 +7,8 @@ The current release candidate supports:
   `TableGroup`, and `ScanResult`;
 - Iceberg-backed namespaces and tables;
 - Lance-backed namespaces and tables when the optional Lance extra is installed;
-- DataFramely schemas converted to backend-native table schemas.
+- DataFramely schemas converted to backend-native table schemas;
+- pydantic `BaseModel` schemas for model-first pipelines.
 
 ## Define schemas
 
@@ -33,6 +34,68 @@ DataFramely can validate or cast data before it is appended:
 ```python
 validated = DocumentSchema.validate(df, cast=True)
 ```
+
+## Pydantic model schemas
+
+Tables can be declared directly from a pydantic `BaseModel` subclass anywhere a
+DataFramely schema is accepted. This is the recommended source of truth for
+model-first pipelines: one declaration serves the table schema and the
+validation contract.
+
+```python
+from pydantic import BaseModel, Field
+
+class Address(BaseModel):
+    city: str = Field(description="City name")
+    zip_code: str | None = None
+
+class Person(BaseModel):
+    id: int
+    name: str = Field(description="Display name")
+    address: Address
+    tags: list[str]
+
+class PeopleNamespace(ava.IcebergNs):
+    ns_config = ava.IcebergNsConfig(name="people", base_location="...")
+
+    people = ava.IcebergTable(schema=Person)
+```
+
+Type mapping is struct-first so the lake stays queryable: scalars map to native
+columns, nested models to struct columns, and `list[...]` to list columns.
+`Field(description=...)` becomes Arrow column documentation at every nesting
+level. Fields that cannot map cleanly to Arrow (bare `Any`, non-optional
+unions, heterogeneous dicts) fail loudly at declaration; opt into a JSON-string
+column per field with the `ava.Json` marker:
+
+```python
+from typing import Annotated, Any
+
+class Event(BaseModel):
+    kind: str
+    payload: Annotated[dict[str, Any], ava.Json]
+```
+
+Model-declared tables accept model instances in `append` and read back as
+validated models:
+
+```python
+result = ns.people.append(Person(id=1, name="ada", address=Address(city="Toronto"), tags=[]))
+ns.people.append([person_a, person_b])
+
+people = ns.people.read_models()   # list[Person]
+```
+
+The returned `ava.AppendResult` is typed by the table's row model and adds
+model accessors to the frame accessors:
+
+- `to_models()` — the appended rows as validated model instances;
+- `one()` — exactly one appended model; raises on zero or multiple rows
+  (asserts the step's cardinality contract at the boundary);
+- `one_or_none()` — the lenient variant for optional-output steps.
+
+Row provenance columns (`_ava_*`) behave identically to DataFramely-schema'd
+tables, and DataFramely remains fully supported for dataframe-native pipelines.
 
 ## Iceberg namespace
 

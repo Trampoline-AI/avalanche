@@ -1,5 +1,24 @@
 # Changelog
 
+## Unreleased
+
+### Pydantic-first tables and typed AppendResult
+
+- Pydantic `BaseModel` classes are now a first-class table schema source for
+  `ava.IcebergTable(schema=...)` and `ava.LanceTable(schema=...)`: nested models
+  become struct columns, lists become list columns, `Field(description=...)`
+  becomes column documentation, and unmappable fields fail loudly with a
+  per-field `ava.Json` JSON-string opt-out.
+- Model-declared tables accept model instances (single or list) in `append(...)`
+  and read back as validated models via `read_models()`.
+- `ava.AppendResult` is generic over the row model and adds `to_models()`,
+  `one()` (asserts exactly-one-row cardinality), and `one_or_none()`.
+- New `ava.input.<field>` build-time placeholder for feeding validated run
+  input into any node's arguments.
+- Fix: futures passed explicitly as keyword arguments are no longer re-bound
+  implicitly by position.
+- See [docs/data-model-api.md](docs/data-model-api.md#pydantic-model-schemas).
+
 ## 0.1.0-rc0
 
 Initial team release candidate for Avalanche as a local-first Python data-flow
