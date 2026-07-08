@@ -58,6 +58,16 @@ from .types import AppendResult, SnapshotMetadata, SnapshotState
 __version__ = "0.1.0rc1"
 
 
+def __getattr__(name: str):
+    if name in {"agent_step", "configure_agent", "Desc", "skills"}:
+        import avalanche.agent
+
+        value = getattr(avalanche.agent, name)
+        globals()[name] = value
+        return value
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+
+
 __all__ = [
     # Decorators
     "source",
@@ -67,6 +77,8 @@ __all__ = [
     "workflow",
     "pipeline",
     "input",
+    "agent_step",
+    "configure_agent",
     # Workflow
     "Workflow",
     "Pipeline",
@@ -95,6 +107,8 @@ __all__ = [
     "SnapshotState",
     "SnapshotMetadata",
     "Json",
+    "Desc",
+    "skills",
     # Storage contracts
     "Namespace",
     "NamespaceConfig",
