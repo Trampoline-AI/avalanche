@@ -1613,13 +1613,25 @@ def _collect_implicit_parent_results(
     *,
     executor: Any = None,
 ) -> list[Any]:
-    """Collect flattened parent results for implicit data passing."""
+    """Collect flattened parent results for implicit data passing.
+
+    Parents whose NodeFuture was passed explicitly (as a positional or keyword
+    argument) are excluded: their results already flow through normal argument
+    resolution, so re-binding them implicitly would double-pass them.
+    """
+    explicit_ids = {
+        value.future_id
+        for value in (*node_ref.args, *node_ref.kwargs.values())
+        if isinstance(value, NodeFuture)
+    }
     auto_values: list[Any] = []
 
     # Use _incoming_refs if available (preserves tuple_index info).
     # Otherwise fall back to dependencies_map.
     if node_ref._incoming_refs:
         for incoming in node_ref._incoming_refs:
+            if incoming.future_id in explicit_ids:
+                continue
             presult = result_refs.get(incoming.future_id)
             if presult is not None:
                 if incoming.tuple_index is not None:
@@ -1633,6 +1645,8 @@ def _collect_implicit_parent_results(
     else:
         parent_ids = dependencies_map.get(node_id, [])
         for pid in parent_ids:
+            if pid in explicit_ids:
+                continue
             presult = result_refs.get(pid)
             if presult is not None:
                 auto_values.extend(_implicit_items_from_parent_result(presult))

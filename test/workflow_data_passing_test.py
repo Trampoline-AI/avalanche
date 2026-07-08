@@ -114,6 +114,51 @@ class TestDataPassingBetweenTasks:
         assert b_result == [4, 5, 6]
         assert merged_result == [1, 2, 3, 4, 5, 6]
 
+    def test_keyword_only_future_wiring_skips_implicit_binding(self):
+        """Futures passed as kwargs must not be re-bound implicitly by position."""
+
+        @source
+        def load_a():
+            return [1, 2, 3]
+
+        @source
+        def load_b():
+            return [4, 5, 6]
+
+        @step
+        def merge(data_a, data_b):
+            return data_a + data_b
+
+        @workflow
+        def keyword_wired():
+            a = load_a()
+            b = load_b()
+            # Both upstream futures arrive as keyword arguments only.
+            return merge(data_a=a, data_b=b)
+
+        result = keyword_wired().run(executor=LocalExecutor())
+
+        assert result == [1, 2, 3, 4, 5, 6]
+
+    def test_partial_keyword_future_wiring_with_plain_kwarg(self):
+        """A future kwarg and a plain-value kwarg coexist without double-binding."""
+
+        @source
+        def load_a():
+            return [1, 2, 3]
+
+        @step
+        def merge(data_a, suffix):
+            return data_a + suffix
+
+        @workflow
+        def mixed_wired():
+            return merge(data_a=load_a(), suffix=[9])
+
+        result = mixed_wired().run(executor=LocalExecutor())
+
+        assert result == [1, 2, 3, 9]
+
     def test_tuple_unpacking_local(self):
         """Test unpacking tuple results from tasks."""
 
