@@ -32,7 +32,7 @@ from ..dag import Node, NodeType
 from ..model_frame import arrow_to_models
 from ..storage import Namespace, Table
 from ..types import AppendResult
-from .config import AgentConfig, get_agent_config
+from .config import AgentConfig, _reject_reserved_predictor_kwargs, get_agent_config
 from .signature import generate_signature
 
 OUTPUT_FIELD_NAME = "output"
@@ -55,6 +55,7 @@ def agent_step(
     max_iterations: int | None = None,
     table: Table | None = None,
     signature: Any = None,
+    **predictor_kwargs: Any,
 ) -> Node | Any:
     """Register a typed, docstring-annotated function as an agent-backed step.
 
@@ -71,11 +72,13 @@ def agent_step(
     the docstring becomes its instructions, and the return annotation defines
     both the output model and the destination table schema. Kwargs ``lm``,
     ``sub_lm``, ``skills``, and ``max_iterations`` override
-    ``ava.configure_agent`` globals key by key. ``table=`` pins the
-    destination table; otherwise one is derived in the
-    ``configure_agent(namespace=...)`` namespace, named after the function.
-    ``signature=`` bypasses generation for existing hand-written DSPy
-    signatures.
+    ``ava.configure_agent`` globals key by key; any additional keyword
+    arguments are forwarded verbatim to ``PredictRLM`` (e.g. ``verbose``,
+    ``debug``, ``max_llm_calls``) and win over ``configure_agent`` extras of
+    the same name. ``table=`` pins the destination table; otherwise one is
+    derived in the ``configure_agent(namespace=...)`` namespace, named after
+    the function. ``signature=`` bypasses generation for existing hand-written
+    DSPy signatures.
     """
 
     def decorator(user_fn: Any) -> Node:
@@ -87,6 +90,7 @@ def agent_step(
             max_iterations=max_iterations,
             table=table,
             signature=signature,
+            predictor_kwargs=predictor_kwargs,
         )
 
     if fn is not None:
@@ -101,6 +105,7 @@ def _build_predictor(
     sub_lm: Any,
     skills: Sequence[Any] | None,
     max_iterations: int | None,
+    **predictor_kwargs: Any,
 ) -> Any:
     """Build the predict-rlm predictor for one agent-step execution.
 
@@ -118,6 +123,7 @@ def _build_predictor(
         kwargs["skills"] = list(skills)
     if max_iterations is not None:
         kwargs["max_iterations"] = max_iterations
+    kwargs.update(predictor_kwargs)
     return PredictRLM(signature, **kwargs)
 
 
@@ -134,6 +140,7 @@ class _AgentStepSpec:
         max_iterations: int | None,
         table: Table | None,
         signature: Any,
+        predictor_kwargs: dict[str, Any],
     ) -> None:
         self.user_fn = user_fn
         self.step_name = user_fn.__name__
@@ -143,6 +150,8 @@ class _AgentStepSpec:
         self.max_iterations = max_iterations
         self.table = table
         self.bridge_signature = signature
+        _reject_reserved_predictor_kwargs(predictor_kwargs)
+        self.predictor_kwargs = dict(predictor_kwargs)
 
         self.fn_signature = inspect.signature(user_fn)
         self.hints = get_type_hints(user_fn, include_extras=True)
@@ -270,6 +279,7 @@ def _make_agent_node(
     max_iterations: int | None,
     table: Table | None,
     signature: Any,
+    predictor_kwargs: dict[str, Any],
 ) -> Node:
     spec = _AgentStepSpec(
         user_fn,
@@ -279,6 +289,7 @@ def _make_agent_node(
         max_iterations=max_iterations,
         table=table,
         signature=signature,
+        predictor_kwargs=predictor_kwargs,
     )
 
     async def wrapper(*args: Any, **kwargs: Any) -> AppendResult:
@@ -329,6 +340,7 @@ async def _execute_agent_step(
             if spec.max_iterations is not None
             else config.max_iterations
         ),
+        **{**config.predictor_kwargs, **spec.predictor_kwargs},
     )
 
     try:
