@@ -78,7 +78,7 @@ def install_fake(monkeypatch, respond, output_field: str = "output"):
     """Monkeypatch the predictor seam; returns captured build kwargs + calls."""
     captured = {"builds": [], "predictors": []}
 
-    def fake_build(signature, *, lm, sub_lm, skills, max_iterations):
+    def fake_build(signature, *, lm, sub_lm, skills, max_iterations, **extra):
         captured["builds"].append(
             {
                 "signature": signature,
@@ -86,6 +86,7 @@ def install_fake(monkeypatch, respond, output_field: str = "output"):
                 "sub_lm": sub_lm,
                 "skills": skills,
                 "max_iterations": max_iterations,
+                "extra": extra,
             }
         )
         predictor = FakePredictor(respond, output_field=output_field)
@@ -366,6 +367,44 @@ class TestConfigPrecedence:
         assert build["skills"] == ["step-skill"]  # decorator wins
         assert build["sub_lm"] == "global-sub"  # global fills the gap
         assert build["max_iterations"] == 11  # global fills the gap
+
+    def test_extra_predictor_kwargs_forward_with_decorator_precedence(
+        self, lance_namespace, monkeypatch
+    ):
+        captured = install_fake(
+            monkeypatch, lambda inputs: Summary(headline="x", person_count=1)
+        )
+        configure_agent(verbose=False, max_llm_calls=10)
+
+        @ava.step
+        def load(*, people=lance_namespace.people) -> AppendResult:
+            return people.append(Person(id=1, name="ada"))
+
+        @agent_step(table=lance_namespace.summaries, verbose=True, debug=True)
+        async def summarize(person: Person) -> Summary:
+            """Summarize."""
+            ...
+
+        @ava.workflow
+        def flow():
+            return summarize(load())
+
+        flow().run(executor=LocalExecutor())
+
+        (build,) = captured["builds"]
+        assert build["extra"] == {
+            "verbose": True,  # decorator wins over configure_agent
+            "debug": True,  # decorator-only extra forwarded
+            "max_llm_calls": 10,  # configure_agent extra fills the gap
+        }
+
+    def test_reserved_predictor_kwargs_rejected_on_configure(self):
+        # `signature` and `table` are agent-step options, not PredictRLM kwargs;
+        # configure_agent must refuse to smuggle them into every predictor.
+        with pytest.raises(TypeError, match="reserved"):
+            configure_agent(signature="nope")
+        with pytest.raises(TypeError, match="reserved"):
+            configure_agent(table="nope")
 
     def test_namespace_fallback_derives_table(self, lance_namespace, monkeypatch):
         install_fake(monkeypatch, lambda inputs: Summary(headline="derived", person_count=1))

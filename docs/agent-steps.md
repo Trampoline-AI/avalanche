@@ -122,6 +122,12 @@ async def audit_rfp(...) -> RfpAudit:
     ...
 ```
 
+Beyond `lm`, `sub_lm`, `skills`, and `max_iterations`, any extra keyword
+argument on the decorator (or on `configure_agent`) is forwarded verbatim to
+`PredictRLM` — e.g. `verbose`, `debug`, `max_llm_calls`, `tools`. Decorator
+extras win over `configure_agent` extras of the same name; `signature` and
+`table` are agent-step options and are rejected as predictor kwargs.
+
 Destination table resolution, in order:
 
 1. `@ava.agent_step(table=ns.audits)` — an explicit table declared from the
