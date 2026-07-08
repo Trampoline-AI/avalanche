@@ -27,6 +27,7 @@ from .lance import (
     LanceNsConfig,
     LanceTable,
 )
+from .model_frame import Json
 
 # Progress tracking
 from .progress import ProgressStore
@@ -54,6 +55,7 @@ from .storage import Namespace, NamespaceConfig, ScanResult, Table, TableGroup
 from .types import AppendResult, SnapshotMetadata, SnapshotState
 
 __version__ = "0.1.0rc0"
+
 
 __all__ = [
     # Decorators
@@ -90,6 +92,7 @@ __all__ = [
     "AppendResult",
     "SnapshotState",
     "SnapshotMetadata",
+    "Json",
     # Storage contracts
     "Namespace",
     "NamespaceConfig",
