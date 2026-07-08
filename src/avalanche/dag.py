@@ -57,6 +57,8 @@ from typing import TYPE_CHECKING, Any, Callable, DefaultDict, TypeVar, get_type_
 
 from ulid import ULID
 
+from .input_ref import InputRef
+
 if TYPE_CHECKING:
     from .executor import Executor
     from .operator.hooks import RunHooks
@@ -714,6 +716,42 @@ def _resolve_to_ref(arg, result_refs, executor=None):
     return ref[arg.tuple_index]
 
 
+def _resolve_input_refs(
+    resolved_args: list,
+    resolved_kwargs: dict,
+    run_input: Any,
+    node_name: str,
+    workflow_name: str,
+) -> tuple[list, dict]:
+    """Resolve top-level ava.input references against the workflow run input."""
+
+    def resolve_value(value: Any) -> Any:
+        if not isinstance(value, InputRef):
+            return value
+        if run_input is None:
+            raise ValueError(
+                f"Node '{node_name}' references {value!r} in workflow '{workflow_name}', "
+                "but no run input is available. Declare @workflow(input=...) and/or "
+                "pass input= to run()."
+            )
+
+        current = run_input
+        for attr in value.path:
+            try:
+                current = getattr(current, attr)
+            except AttributeError as exc:
+                raise AttributeError(
+                    f"Node '{node_name}' references {value!r} in workflow '{workflow_name}', "
+                    f"but attribute '{attr}' is missing on {type(current).__name__}."
+                ) from exc
+        return current
+
+    return (
+        [resolve_value(value) for value in resolved_args],
+        {key: resolve_value(value) for key, value in resolved_kwargs.items()},
+    )
+
+
 def _reverse_graph(parent_to_children: dict[str, list[str]]) -> dict[str, list[str]]:
     """
     Reverse a directed graph from parent -> children to child -> parents mapping.
@@ -1351,6 +1389,7 @@ def _with_current_run_context(
 
 def _inspect_runtime_params(
     fn: Callable,
+    args: tuple[Any, ...],
     kwargs: dict[str, Any],
     run_input: Any,
     run_context: Any,
@@ -1369,9 +1408,25 @@ def _inspect_runtime_params(
     except Exception:
         type_hints = {}
 
+    position_bound_param_names: set[str] = set()
+    positional_count = len(args)
+    consumed_positionals = 0
+    for param in sig.parameters.values():
+        if consumed_positionals >= positional_count:
+            break
+        if param.kind in (
+            inspect.Parameter.POSITIONAL_ONLY,
+            inspect.Parameter.POSITIONAL_OR_KEYWORD,
+        ):
+            position_bound_param_names.add(param.name)
+            consumed_positionals += 1
+        elif param.kind is inspect.Parameter.VAR_POSITIONAL:
+            position_bound_param_names.add(param.name)
+            break
+
     injected: dict[str, Any] = {}
     for param_name, param in sig.parameters.items():
-        if param_name in kwargs:
+        if param_name in kwargs or param_name in position_bound_param_names:
             continue
         annotation = type_hints.get(param_name, param.annotation)
         if annotation is inspect.Parameter.empty:
@@ -1902,6 +1957,7 @@ class Workflow:
             )
             runtime_params = _inspect_runtime_params(
                 node_ref.node.fn,
+                node_ref.args,
                 node_ref.kwargs,
                 run_input,
                 node_run_context,
@@ -1974,6 +2030,13 @@ class Workflow:
                 # Exclude injectable params from normal resolution
                 if k not in injectable_params and k not in runtime_params
             }
+            resolved_args, resolved_kwargs = _resolve_input_refs(
+                resolved_args,
+                resolved_kwargs,
+                run_input,
+                node_ref.node.fn.__name__,
+                self.name,
+            )
 
             # Get original function, optionally wrapped by hooks
             actual_fn = node_ref.node.fn
