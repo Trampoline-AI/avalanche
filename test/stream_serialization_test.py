@@ -13,6 +13,7 @@ from typing import Any
 import dataframely as dy
 import polars as pl
 import pytest
+from pydantic import BaseModel
 
 import avalanche as ava
 from avalanche.iceberg import IcebergNs, IcebergNsConfig, IcebergTable
@@ -55,6 +56,55 @@ def test_iceberg_table_pickle_roundtrip_reconnects(file_backed_namespace):
     # The restored handle must support writes too (ProgressStore needs them)
     restored.append(pl.DataFrame({"id": [2], "value": ["b"]}))
     assert restored.read().sort("id")["id"].to_list() == [1, 2]
+
+
+class RecordModel(BaseModel):
+    id: int
+    value: str
+
+
+def test_iceberg_model_table_pickle_roundtrip_keeps_row_model(tmp_path):
+    class ModelPickleNamespace(IcebergNs):
+        ns_config = IcebergNsConfig(
+            name="pickle_model_ns",
+            base_location=str(tmp_path / "warehouse"),
+        )
+        rows = IcebergTable(schema=RecordModel)
+
+    ns = ModelPickleNamespace(
+        catalog="pickle-model-catalog",
+        load_catalog_props={"type": "sql", "uri": f"sqlite:///{tmp_path}/catalog.db"},
+    )
+    ns.push()
+
+    restored = pickle.loads(pickle.dumps(ns.rows))
+
+    assert restored.row_model is RecordModel
+    result = restored.append(RecordModel(id=1, value="a"))
+    assert result.one() == RecordModel(id=1, value="a")
+    assert restored.read_models() == [RecordModel(id=1, value="a")]
+
+
+def test_lance_model_table_pickle_roundtrip_keeps_row_model(tmp_path):
+    pytest.importorskip("lance")
+    from avalanche.lance import LanceNamespace, LanceNamespaceConfig, LanceTable
+
+    class ModelLanceNamespace(LanceNamespace):
+        ns_config = LanceNamespaceConfig(
+            name="pickle_model_lance",
+            base_location=str(tmp_path),
+        )
+        rows = LanceTable(schema=RecordModel)
+
+    ns = ModelLanceNamespace()
+    ns.push()
+
+    restored = pickle.loads(pickle.dumps(ns.rows))
+
+    assert restored.row_model is RecordModel
+    result = restored.append(RecordModel(id=1, value="a"))
+    assert result.one() == RecordModel(id=1, value="a")
+    assert restored.read_models() == [RecordModel(id=1, value="a")]
 
 
 def test_stream_marker_pickle_roundtrip(file_backed_namespace):

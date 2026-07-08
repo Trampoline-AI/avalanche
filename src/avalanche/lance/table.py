@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
@@ -9,6 +10,7 @@ from typing import Any
 
 import polars as pl
 import pyarrow as pa
+from pydantic import BaseModel
 from pyiceberg.exceptions import CommitFailedException
 
 from avalanche.lineage import add_row_lineage_to_arrow_schema, add_row_lineage_to_data
@@ -201,6 +203,7 @@ def _reconnect_lance_table(
     schema: pa.Schema,
     row_lineage: bool,
     table_name: str,
+    row_model: type | None = None,
 ) -> "LanceTable":
     """Rebuild a LanceTable handle after crossing a process boundary.
 
@@ -211,6 +214,7 @@ def _reconnect_lance_table(
     table._ns = None
     table._table_name = table_name
     table.row_lineage = row_lineage
+    table.row_model = row_model
     table.schema = schema
     table._location_override = location
     return table
@@ -221,6 +225,9 @@ class LanceTable(Table):
 
     def __init__(self, schema: Any, *, row_lineage: bool = True):
         super().__init__(row_lineage=row_lineage)
+        self.row_model = (
+            schema if isinstance(schema, type) and issubclass(schema, BaseModel) else None
+        )
         self.schema: pa.Schema = normalize_schema(schema)
         if self.row_lineage:
             self.schema = add_row_lineage_to_arrow_schema(self.schema)
@@ -242,7 +249,7 @@ class LanceTable(Table):
             )
         return (
             _reconnect_lance_table,
-            (location, self.schema, self.row_lineage, self._table_name),
+            (location, self.schema, self.row_lineage, self._table_name, self.row_model),
         )
 
     @property
@@ -263,7 +270,11 @@ class LanceTable(Table):
             return {}
         return dict(self._dataset().metadata)
 
-    def append(self, df: pl.DataFrame | pa.Table | pa.RecordBatch) -> AppendResult:
+    def append(
+        self,
+        df: pl.DataFrame | pa.Table | pa.RecordBatch | BaseModel | Sequence[BaseModel],
+    ) -> AppendResult:
+        df = self._coerce_append_input(df)
         if not self.location:
             raise AttributeError(
                 "Cannot append - table has not been bound to a namespace. "
@@ -289,6 +300,7 @@ class LanceTable(Table):
             data=arrow_data,
             snapshot_id=snapshot_id,
             table_identity=getattr(self, "identifier", None) or self.location,
+            row_model=self.row_model,
         )
 
     def snapshot_by_id(self, snapshot_id: int) -> LanceSnapshot | None:

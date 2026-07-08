@@ -10,19 +10,23 @@ Defines core types used throughout the framework:
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from enum import Enum
-from typing import Any, Callable, ClassVar, Union
+from typing import Any, Callable, ClassVar, Generic, TypeVar, Union, cast
 
 import polars as pl
 import pyarrow as pa
+from pydantic import BaseModel
+
+ModelT = TypeVar("ModelT", bound=BaseModel)
 
 
 @dataclass
-class AppendResult:
+class AppendResult(Generic[ModelT]):
     """
     Result of an append operation to an Iceberg table.
 
     Contains both the appended data (for zero-copy passing) and the
-    snapshot_id (for progress tracking).
+    snapshot_id (for progress tracking), plus an optional row_model for
+    typed model access through to_models(), one(), and one_or_none().
 
     This enables the framework to:
     - Pass data in-memory to downstream tasks (zero-copy)
@@ -32,6 +36,7 @@ class AppendResult:
     Attributes:
         data: The appended data (Polars DataFrame, PyArrow Table, or RecordBatch)
         snapshot_id: The snapshot ID created by this append
+        row_model: Optional pydantic model type for typed row access
 
     Example:
         @ava.source
@@ -44,6 +49,7 @@ class AppendResult:
     data: Union[pl.DataFrame, pa.Table, pa.RecordBatch]
     snapshot_id: int
     table_identity: str | None = None
+    row_model: type[ModelT] | None = None
 
     def to_polars(self) -> pl.DataFrame:
         """Convert data to Polars DataFrame if needed."""
@@ -64,6 +70,44 @@ class AppendResult:
     def to_dicts(self) -> list[dict[str, Any]]:
         """Return appended rows as Python dictionaries."""
         return self.to_polars().to_dicts()
+
+    def to_models(self) -> list[ModelT]:
+        """Return appended rows as pydantic model instances."""
+        from avalanche.model_frame import arrow_to_models
+
+        model = self._require_row_model()
+        return cast(list[ModelT], arrow_to_models(self.to_arrow(), model))
+
+    def one(self) -> ModelT:
+        """Return exactly one appended row as a pydantic model instance."""
+        model = self._require_row_model()
+        row_count = self.to_arrow().num_rows
+        if row_count != 1:
+            raise self._cardinality_error(model, row_count)
+        return self.to_models()[0]
+
+    def one_or_none(self) -> ModelT | None:
+        """Return one appended model row, or None when no rows were appended."""
+        model = self._require_row_model()
+        row_count = self.to_arrow().num_rows
+        if row_count == 0:
+            return None
+        if row_count > 1:
+            raise self._cardinality_error(model, row_count)
+        return self.to_models()[0]
+
+    def _require_row_model(self) -> type[ModelT]:
+        if self.row_model is None:
+            raise TypeError(
+                "Typed access is unavailable because this AppendResult did not come from "
+                "a table declared with a pydantic model schema."
+            )
+        return self.row_model
+
+    def _cardinality_error(self, model: type[ModelT], row_count: int) -> ValueError:
+        return ValueError(
+            f"Expected exactly one row for {model.__name__}; got {row_count} rows."
+        )
 
 
 @dataclass

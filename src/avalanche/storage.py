@@ -3,10 +3,12 @@
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
+from collections.abc import Sequence
 from typing import Any
 
 import polars as pl
 import pyarrow as pa
+from pydantic import BaseModel
 
 from .types import AppendResult
 from .utils import urljoin
@@ -64,6 +66,7 @@ class Table(ABC):
         self._ns: Namespace | None = None
         self._table_name = ""
         self.row_lineage = row_lineage
+        self.row_model: type[BaseModel] | None = None
 
     @property
     def identifier(self) -> str:
@@ -103,7 +106,10 @@ class Table(ABC):
         """Current table snapshot/version identity, if one exists."""
 
     @abstractmethod
-    def append(self, df: pl.DataFrame | pa.Table | pa.RecordBatch) -> AppendResult:
+    def append(
+        self,
+        df: pl.DataFrame | pa.Table | pa.RecordBatch | BaseModel | Sequence[BaseModel],
+    ) -> AppendResult:
         """Append data and return the created version identity."""
 
     @abstractmethod
@@ -113,6 +119,60 @@ class Table(ABC):
     def read(self) -> pl.DataFrame:
         """Read the current table contents as a Polars DataFrame."""
         return self.scan().to_polars()
+
+    def read_models(self) -> list[BaseModel]:
+        """Read the current table contents as pydantic model instances."""
+        if self.row_model is None:
+            raise TypeError(
+                "read_models() is unavailable because this table was not declared "
+                "with a pydantic model schema."
+            )
+
+        from .model_frame import arrow_to_models
+
+        data = self.scan().to_arrow()
+        return arrow_to_models(data, self.row_model)
+
+    def _coerce_append_input(
+        self,
+        df: pl.DataFrame | pa.Table | pa.RecordBatch | BaseModel | Sequence[BaseModel],
+    ) -> pl.DataFrame | pa.Table | pa.RecordBatch:
+        if isinstance(df, BaseModel):
+            return self._models_to_arrow([df])
+
+        if isinstance(df, (pl.DataFrame, pa.Table, pa.RecordBatch)):
+            return df
+
+        if isinstance(df, Sequence) and not isinstance(df, (str, bytes)):
+            return self._models_to_arrow(df)
+
+        return df
+
+    def _models_to_arrow(self, models: Sequence[BaseModel]) -> pa.Table:
+        if self.row_model is None:
+            raise TypeError(
+                "Cannot append pydantic model instances because this table was not "
+                "declared with a pydantic model schema."
+            )
+
+        model_list = list(models)
+        if not model_list:
+            raise ValueError(
+                "Cannot append zero rows; appending zero rows is rejected because it is "
+                "meaningless for the backend and would make the returned AppendResult's "
+                "cardinality ambiguous."
+            )
+
+        for item in model_list:
+            if not isinstance(item, self.row_model):
+                raise TypeError(
+                    f"Expected instances of {self.row_model.__name__} when appending "
+                    f"pydantic models; got {type(item).__name__}."
+                )
+
+        from .model_frame import models_to_arrow
+
+        return models_to_arrow(model_list, self.row_model)
 
 
 class TableGroup:

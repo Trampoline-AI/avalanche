@@ -15,10 +15,12 @@ All PyIceberg Table methods are accessible through this wrapper:
 - And all other PyIceberg Table methods
 """
 
+from collections.abc import Sequence
 from typing import TYPE_CHECKING, Any, Optional, Tuple, Union
 
 import polars as pl
 import pyarrow as pa
+from pydantic import BaseModel
 from pyiceberg.schema import Schema as IcebergSchema
 from pyiceberg.table import ALWAYS_TRUE, EMPTY_DICT, BooleanExpression, Properties, Table
 from pyiceberg.types import NestedField, StringType, TimestampType
@@ -43,7 +45,7 @@ def _with_row_lineage_schema(schema: IcebergSchema) -> IcebergSchema:
             f"remove or rename: {joined}"
         )
 
-    next_field_id = max((field.field_id for field in schema.fields), default=0) + 1
+    next_field_id = schema.highest_field_id + 1
     lineage_fields = []
     for offset, name in enumerate(ROW_LINEAGE_COLUMNS):
         field_type = TimestampType() if name == "_ava_updated_at" else StringType()
@@ -63,6 +65,7 @@ def _reconnect_table(
     catalog_props: dict,
     identifier: str,
     row_lineage: bool,
+    row_model: type | None = None,
 ) -> "IcebergTable":
     """Rebuild a live IcebergTable handle after crossing a process boundary.
 
@@ -76,7 +79,14 @@ def _reconnect_table(
     table._ns = None
     table._table_name = identifier
     table.row_lineage = row_lineage
-    table._reconnect_spec = (catalog_name, catalog_props, identifier, row_lineage)
+    table.row_model = row_model
+    table._reconnect_spec = (
+        catalog_name,
+        catalog_props,
+        identifier,
+        row_lineage,
+        row_model,
+    )
     table._table = catalog.load_table(identifier)
     table.schema = table._table.schema()
     return table
@@ -117,6 +127,9 @@ class IcebergTable(StorageTable):
             schema: DataFramely Schema class or PyIceberg Schema instance
         """
         super().__init__(row_lineage=row_lineage)
+        self.row_model = (
+            schema if isinstance(schema, type) and issubclass(schema, BaseModel) else None
+        )
 
         # Convert schema if needed
         self.schema: IcebergSchema = normalize_schema(schema)
@@ -124,7 +137,7 @@ class IcebergTable(StorageTable):
             self.schema = _with_row_lineage_schema(self.schema)
 
         self._table: Table | None = None
-        self._reconnect_spec: tuple[str, dict, str, bool] | None = None
+        self._reconnect_spec: tuple[str, dict, str, bool, type | None] | None = None
 
     def __reduce__(self) -> tuple[Any, tuple]:
         """Pickle as a reconnect recipe (catalog address + identifier).
@@ -154,7 +167,13 @@ class IcebergTable(StorageTable):
 
         return (
             _reconnect_table,
-            (str(catalog.name), properties, self.identifier, self.row_lineage),
+            (
+                str(catalog.name),
+                properties,
+                self.identifier,
+                self.row_lineage,
+                self.row_model,
+            ),
         )
 
     @property
@@ -192,7 +211,16 @@ class IcebergTable(StorageTable):
             return None
         return snapshot.snapshot_id
 
-    def append(self, df: Union[pl.DataFrame, pa.Table, "pa.RecordBatch"]) -> AppendResult:
+    def append(
+        self,
+        df: Union[
+            pl.DataFrame,
+            pa.Table,
+            "pa.RecordBatch",
+            BaseModel,
+            Sequence[BaseModel],
+        ],
+    ) -> AppendResult:
         """
         Append data to the table and return AppendResult.
 
@@ -212,6 +240,7 @@ class IcebergTable(StorageTable):
                 result = documents.append(docs.to_arrow())
                 return result  # AppendResult for zero-copy passing
         """
+        df = self._coerce_append_input(df)
         if self._table is None:
             raise AttributeError(
                 "Cannot append - table has not been created yet. Call namespace.push() first."
@@ -246,6 +275,7 @@ class IcebergTable(StorageTable):
             data=arrow_data,
             snapshot_id=snapshot_id,
             table_identity=self.identifier,
+            row_model=self.row_model,
         )
 
     def _cast_to_table_schema(self, arrow_data: pa.Table | pa.RecordBatch) -> pa.Table:
@@ -253,7 +283,8 @@ class IcebergTable(StorageTable):
         if isinstance(arrow_data, pa.RecordBatch):
             arrow_data = pa.Table.from_batches([arrow_data])
 
-        return arrow_data.cast(self.schema.as_arrow())
+        schema = self._table.schema() if self._table is not None else self.schema
+        return arrow_data.cast(schema.as_arrow())
 
     def _refresh_table_metadata(self) -> None:
         """Reload catalog metadata so reads see commits from other processes.
