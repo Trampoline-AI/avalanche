@@ -2057,6 +2057,7 @@ class Workflow:
         cron: str | None = None,
         input_type: type | None = None,
         context_type: type | None = None,
+        agent_defaults: dict[str, Any] | None = None,
     ):
         """
         Initialize workflow.
@@ -2079,6 +2080,7 @@ class Workflow:
         _validate_workflow_types(input_type, context_type)
         self.input_type = input_type
         self.context_type = context_type
+        self.agent_defaults = dict(agent_defaults or {})
 
         # Validate: detect cycles via Kahn's algorithm (incomplete sort = cycle)
         order = self._topological_sort()
@@ -2379,6 +2381,11 @@ class Workflow:
 
             # Get original function, optionally wrapped by hooks
             actual_fn = node_ref.node.fn
+            agent_step_spec = getattr(actual_fn, "__agent_step__", None)
+            if agent_step_spec is not None:
+                actual_fn = agent_step_spec.with_workflow_defaults(
+                    actual_fn, self.agent_defaults
+                )
             if hooks and hooks.wrap_fn:
                 actual_fn = hooks.wrap_fn(node_id, actual_fn)
             if binding_plan.positional_call_adapter is not None:
@@ -2754,6 +2761,7 @@ def workflow(
     input: type | None = None,
     context: type | None = None,
     ctx: type | None = None,
+    agent_defaults: dict[str, Any] | None = None,
 ) -> Callable[[], Workflow] | Callable[[Callable[[], None]], Callable[[], Workflow]]:
     """
     Decorator for workflow definitions.
@@ -2787,6 +2795,12 @@ def workflow(
     if context is not None and ctx is not None and context is not ctx:
         raise ValueError("Use either context= or ctx=, not both")
     context_type = context or ctx
+    if agent_defaults is not None:
+        from .agent.config import validate_runtime_kwargs
+
+        agent_defaults = validate_runtime_kwargs(
+            agent_defaults, owner="ava.workflow(agent_defaults=...)"
+        )
 
     def decorator(fn: Callable[[], None]) -> Callable[[], Workflow]:
         @wraps(fn)
@@ -2806,6 +2820,7 @@ def workflow(
                     cron=cron,
                     input_type=input,
                     context_type=context_type,
+                    agent_defaults=agent_defaults,
                 )
             finally:
                 _workflow_context.reset(token)

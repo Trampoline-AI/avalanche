@@ -7,8 +7,8 @@ Avalanche workflows are Python functions that declare a directed acyclic graph
 - `@ava.step` transforms data inside the flow. `@ava.transform` is an alias.
 - `@ava.dest` publishes, exports, or summarizes final results.
 - `@ava.workflow` captures task calls and dependencies into a runnable workflow.
-- `@ava.agent_step` declares an agent-backed step (optional `agent` extra); see
-  [`agent-steps.md`](agent-steps.md).
+- `@ava.agent_step` / `@ava.agent.step` declare agent-backed ordinary steps
+  (optional `agent` extra); see [`agent-steps.md`](agent-steps.md).
 
 Node functions may be regular `def` functions or `async def` coroutines. The
 workflow `.run(...)` API is synchronous: Avalanche awaits coroutine node bodies

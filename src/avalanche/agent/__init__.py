@@ -1,41 +1,46 @@
-"""Avalanche agent integration.
+"""Optional Avalanche agent integration."""
 
-Importing this package does not import dspy or predict_rlm; both are pulled
-in lazily at execution / signature-generation time.
-"""
+from __future__ import annotations
 
-from avalanche.agent.agent_step import (
-    AgentStepError,
-    AgentStepExecutionError,
-    agent_step,
-)
-from avalanche.agent.config import (
-    AgentConfig,
-    configure_agent,
-    get_agent_config,
-    reset_agent_config,
-)
-from avalanche.agent.desc import Desc
-from avalanche.agent.signature import generate_signature
+from .agent_step import Agent, AgentStepError, AgentStepExecutionError, agent_step, step
+from .signature import InputField, OutputField, Signature
 
 __all__ = [
-    "AgentConfig",
+    "Agent",
     "AgentStepError",
     "AgentStepExecutionError",
-    "Desc",
+    "File",
+    "InputField",
+    "OutputField",
+    "Signature",
+    "Skill",
     "agent_step",
-    "configure_agent",
-    "generate_signature",
-    "get_agent_config",
-    "reset_agent_config",
     "skills",
+    "step",
 ]
 
 
 def __getattr__(name: str):
     if name == "skills":
-        import predict_rlm.skills as skills
+        try:
+            import predict_rlm.skills as value
+        except ImportError as exc:
+            raise ImportError(_INSTALL_HINT) from exc
+    elif name in {"Skill", "File"}:
+        try:
+            import predict_rlm
 
-        globals()["skills"] = skills
-        return skills
-    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+            value = getattr(predict_rlm, name)
+        except ImportError as exc:
+            raise ImportError(_INSTALL_HINT) from exc
+    else:
+        raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+
+    globals()[name] = value
+    return value
+
+
+_INSTALL_HINT = (
+    "Agent functionality requires the optional 'agent' dependency. "
+    "Install it with: pip install 'avalanche-ai[agent]'"
+)
