@@ -356,6 +356,105 @@ class TestWorkflowDAGConstruction:
         assert "cleanup_1" in p.graph["sink_b1_1"]
         assert "cleanup_1" in p.graph["sink_b2_1"]
 
+    def test_nested_composite_parallel_passes_ordered_indexed_terminals(self):
+        @source
+        def gate():
+            return None
+
+        @source
+        def left_start():
+            return 1
+
+        @step(num_returns=2)
+        def left_terminal():
+            return 9, 10
+
+        @source
+        def right_start():
+            return 2
+
+        @step(num_returns=2)
+        def right_terminal():
+            return 20, 21
+
+        @dest
+        def collect(*values):
+            return tuple(values)
+
+        @workflow
+        def my_workflow():
+            branches = (left_start() >> left_terminal()[1]) & (
+                right_start() >> right_terminal()[0]
+            )
+            return gate() >> branches >> collect()
+
+        p = my_workflow()
+
+        assert p.graph["left_start_1"] == ["left_terminal_1"]
+        assert p.graph["right_start_1"] == ["right_terminal_1"]
+        assert p.graph["left_terminal_1"] == ["collect_1"]
+        assert p.graph["right_terminal_1"] == ["collect_1"]
+        assert p.run(executor=LocalExecutor()) == (10, 20)
+
+    def test_composite_upstream_targets_registered_downstream_chain_starts(self):
+        @source
+        def left_start():
+            return "left-start"
+
+        @step
+        def left_terminal(_value):
+            return "left"
+
+        @source
+        def right_start():
+            return "right-start"
+
+        @step
+        def right_terminal(_value):
+            return "right"
+
+        @step
+        def collect_first(*values):
+            return "first:" + ",".join(values)
+
+        @step
+        def end_first(value):
+            return value + ":end"
+
+        @step
+        def collect_second(*values):
+            return "second:" + ",".join(values)
+
+        @step
+        def end_second(value):
+            return value + ":end"
+
+        @workflow
+        def my_workflow():
+            upstream = (left_start() >> left_terminal()) & (right_start() >> right_terminal())
+            downstream = (collect_first() >> end_first()) & (collect_second() >> end_second())
+            return upstream >> downstream
+
+        p = my_workflow()
+
+        for node_id in ("collect_first_1", "collect_second_1"):
+            assert [ref.future_id for ref in p.nodes[node_id]._incoming_refs] == [
+                "left_terminal_1",
+                "right_terminal_1",
+            ]
+        assert p.graph["left_terminal_1"] == [
+            "collect_first_1",
+            "collect_second_1",
+        ]
+        assert p.graph["right_terminal_1"] == [
+            "collect_first_1",
+            "collect_second_1",
+        ]
+        assert p.run(executor=LocalExecutor()) == (
+            "first:left,right:end",
+            "second:left,right:end",
+        )
+
 
 class TestWorkflowIsolation:
     """Test that multiple workflow runs don't interfere with each other."""
@@ -572,19 +671,19 @@ class TestErrorHandling:
         assert result == ("data_a", "data_b")
 
     def test_parallel_tasks_reuse_not_affected_by_later_operations(self):
-        """Test that reusing a ParallelTasks works correctly after extending it.
-
-        Bug: If (a & b) mutates when combined with c, then using the original
-        (a & b) in a different part of the workflow gives wrong results.
-        """
+        """A chain retaining a parallel alias is isolated from later extension."""
 
         @source
-        def a():
-            return "a"
+        def root():
+            return "root"
 
-        @source
-        def b():
-            return "b"
+        @step
+        def a(value):
+            return f"{value}-a"
+
+        @step
+        def b(value):
+            return f"{value}-b"
 
         @source
         def c():
@@ -597,12 +696,10 @@ class TestErrorHandling:
         @workflow
         def test_workflow():
             ab = a() & b()
-
-            # Use ab in one place
-            result1 = ab >> collect()
-
-            # Extend ab with c for different use
+            earlier_chain = root() >> ab
             abc = ab & c()
+
+            result1 = earlier_chain >> collect()
             result2 = abc >> collect()
 
             return result1, result2
@@ -610,9 +707,8 @@ class TestErrorHandling:
         p = test_workflow()
         r1, r2 = p.run()
 
-        # Bug: r1 gets ["a", "b", "c"] instead of ["a", "b"] because ab was mutated
-        assert r1 == ["a", "b"], f"Expected ['a', 'b'], got {r1}"
-        assert r2 == ["a", "b", "c"], f"Expected ['a', 'b', 'c'], got {r2}"
+        assert r1 == ["root-a", "root-b"]
+        assert r2 == ["root-a", "root-b", "c"]
 
     def test_indexed_nodefuture_chain_returns_correct_value(self):
         """Test that chaining from an indexed NodeFuture returns the correct final value.

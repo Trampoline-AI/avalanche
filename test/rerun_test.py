@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from functools import partial
 from typing import Any
 
 import dataframely as dy
@@ -8,6 +9,28 @@ import polars as pl
 import pytest
 
 import avalanche as ava
+from avalanche._testing.rerun_helpers import (
+    RerunSelectorInput,
+    explicit_non_stream_consume,
+    explicit_non_stream_load,
+    explicit_selector_combine,
+    explicit_selector_consume,
+    explicit_selector_load_left,
+    explicit_selector_load_right,
+    explicit_selector_split,
+    explicit_selector_value,
+    keyword_only_selector_value,
+    logical_multireturn_consume,
+    logical_multireturn_sibling,
+    logical_multireturn_split,
+    positional_only_selector_consume,
+    selector_end,
+    unindexed_mixed_consume,
+    unindexed_mixed_multireturn,
+    unindexed_mixed_single_return_list,
+    unindexed_mixed_single_return_tuple,
+    varargs_selector_consume,
+)
 from avalanche._testing.rerun_helpers import (
     lineage_load_data as _lineage_load_data,
 )
@@ -282,6 +305,435 @@ def test_rerun_stream_reads_source_run_rows_and_bypasses_progress_store(rerun_ns
     ) == ["gamma"]
 
 
+@pytest.mark.parametrize("executor_factory", [ava.LocalExecutor, ava.RayExecutor])
+def test_stream_selector_preserves_trailing_positional_arg_with_base_input(
+    rerun_ns,
+    executor_factory,
+):
+    ns = rerun_ns
+    load_left = ava.source(slug="load-left")(explicit_selector_load_left)
+    consume = ava.step(slug="consume")(explicit_selector_consume)
+
+    @ava.workflow(input=RerunSelectorInput)
+    def wf():
+        loaded = load_left(source=ns.source)
+        return consume(
+            loaded,
+            "!",
+            df=ava.Stream(ns.source),
+            output=ns.output,
+        )
+
+    executor = executor_factory()
+    try:
+        assert wf().run(
+            executor=executor,
+            run_id="source_run",
+            input={"suffix": "source"},
+        ) == ["left!source"]
+        assert wf().run(
+            executor=executor,
+            run_id="rerun_run",
+            input={"suffix": "rerun"},
+            rerun=ava.Rerun(run_id="source_run", start=["consume"], mode="lazy"),
+        ) == ["left!rerun"]
+    finally:
+        ray = getattr(executor, "ray", None)
+        if ray is not None and ray.is_initialized():
+            ray.shutdown()
+
+    rerun_rows = ns.output.read().filter(pl.col("_ava_run_id") == "rerun_run")
+    assert rerun_rows["value"].to_list() == ["left!rerun"]
+    vector = json.loads(rerun_rows["_ava_lineage_vector"].to_list()[0])
+    assert vector["load-left"] == "source_run"
+    assert vector["consume"] == "rerun_run"
+
+
+@pytest.mark.parametrize("executor_factory", [ava.LocalExecutor, ava.RayExecutor])
+def test_varargs_selector_reconstructs_injected_slots_and_rejects_indexed_rerun(
+    rerun_ns,
+    executor_factory,
+):
+    ns = rerun_ns
+    split = ava.source(slug="split", num_returns=2)(explicit_selector_split)
+    consume = ava.step(slug="consume")(varargs_selector_consume)
+
+    @ava.workflow(input=RerunSelectorInput)
+    def wf():
+        pair = split(source=ns.source)
+        return consume("pre", pair[1], "post", df=ava.Stream(ns.source))
+
+    executor = executor_factory()
+    submitted: list[str] = []
+    try:
+        assert wf().run(
+            executor=executor,
+            run_id="source_run",
+            input={"suffix": "!"},
+        ) == ("pre", "right", ("post",), "!")
+        with pytest.raises(ValueError, match="indexed Stream selectors cannot replay"):
+            wf().run(
+                executor=executor,
+                run_id="rerun_run",
+                input={"suffix": "!"},
+                hooks=RunHooks(on_node_start=submitted.append),
+                rerun=ava.Rerun(run_id="source_run", start=["consume"], mode="lazy"),
+            )
+    finally:
+        ray = getattr(executor, "ray", None)
+        if ray is not None and ray.is_initialized():
+            ray.shutdown()
+
+    assert submitted == []
+
+
+@pytest.mark.parametrize("executor_factory", [ava.LocalExecutor, ava.RayExecutor])
+def test_positional_only_input_and_stream_injection_without_varargs(
+    rerun_ns,
+    executor_factory,
+):
+    ns = rerun_ns
+    split = ava.source(slug="split", num_returns=2)(explicit_selector_split)
+    consume = ava.step(slug="consume")(positional_only_selector_consume)
+
+    @ava.workflow(input=RerunSelectorInput)
+    def wf():
+        pair = split(source=ns.source)
+        return pair[1] >> consume(df=ava.Stream(ns.source))
+
+    executor = executor_factory()
+    submitted: list[str] = []
+    try:
+        assert wf().run(
+            executor=executor,
+            run_id="source_run",
+            input={"suffix": "!"},
+        ) == ("right", "!")
+        with pytest.raises(ValueError, match="indexed Stream selectors cannot replay"):
+            wf().run(
+                executor=executor,
+                run_id="rerun_run",
+                input={"suffix": "!"},
+                hooks=RunHooks(on_node_start=submitted.append),
+                rerun=ava.Rerun(run_id="source_run", start=["consume"], mode="lazy"),
+            )
+    finally:
+        ray = getattr(executor, "ray", None)
+        if ray is not None and ray.is_initialized():
+            ray.shutdown()
+
+    assert submitted == []
+
+
+@pytest.mark.parametrize("executor_factory", [ava.LocalExecutor, ava.RayExecutor])
+def test_unindexed_multireturn_mixed_stream_python_rejects_lazy_rerun(
+    rerun_ns,
+    executor_factory,
+):
+    ns = rerun_ns
+    split = ava.source(slug="split", num_returns=2)(unindexed_mixed_multireturn)
+    consume = ava.step(slug="consume")(unindexed_mixed_consume)
+
+    @ava.workflow
+    def wf():
+        return split(source=ns.source) >> consume(df=ava.Stream(ns.source))
+
+    executor = executor_factory()
+    submitted: list[str] = []
+    try:
+        assert wf().run(executor=executor, run_id="source_run") == "stream+ordinary"
+        with pytest.raises(ValueError, match="indexed Stream selectors cannot replay"):
+            wf().run(
+                executor=executor,
+                run_id="rerun_run",
+                hooks=RunHooks(on_node_start=submitted.append),
+                rerun=ava.Rerun(run_id="source_run", start=["consume"], mode="lazy"),
+            )
+    finally:
+        ray = getattr(executor, "ray", None)
+        if ray is not None and ray.is_initialized():
+            ray.shutdown()
+
+    assert submitted == []
+
+
+@pytest.mark.parametrize(
+    "producer",
+    [unindexed_mixed_single_return_tuple, unindexed_mixed_single_return_list],
+)
+def test_single_return_container_mixed_stream_python_rejects_lazy_rerun(
+    rerun_ns,
+    producer,
+):
+    ns = rerun_ns
+    split = ava.source(slug="split")(producer)
+    consume = ava.step(slug="consume")(unindexed_mixed_consume)
+
+    @ava.workflow
+    def wf():
+        return split(source=ns.source) >> consume(df=ava.Stream(ns.source))
+
+    submitted: list[str] = []
+    assert wf().run(executor=ava.LocalExecutor(), run_id="source_run") == "stream+ordinary"
+    with pytest.raises(ValueError, match="ambiguous single-return container"):
+        wf().run(
+            executor=ava.LocalExecutor(),
+            run_id="rerun_run",
+            hooks=RunHooks(on_node_start=submitted.append),
+            rerun=ava.Rerun(run_id="source_run", start=["consume"], mode="lazy"),
+        )
+
+    assert submitted == []
+
+
+@pytest.mark.parametrize("executor_factory", [ava.LocalExecutor, ava.RayExecutor])
+def test_unindexed_true_multireturn_expands_before_mixed_slot_binding(
+    rerun_ns,
+    executor_factory,
+):
+    ns = rerun_ns
+    split = ava.source(slug="split", num_returns=2)(logical_multireturn_split)
+    sibling = ava.source(slug="sibling")(logical_multireturn_sibling)
+    consume = ava.step(slug="consume")(logical_multireturn_consume)
+
+    @ava.workflow
+    def wf():
+        parents = split(source=ns.source) & sibling()
+        return parents >> consume(middle=ava.Stream(ns.source))
+
+    executor = executor_factory()
+    submitted: list[str] = []
+    try:
+        assert wf().run(executor=executor, run_id="source_run") == (
+            "left",
+            "middle",
+            "other",
+        )
+        with pytest.raises(ValueError, match="indexed Stream selectors cannot replay"):
+            wf().run(
+                executor=executor,
+                run_id="rerun_run",
+                hooks=RunHooks(on_node_start=submitted.append),
+                rerun=ava.Rerun(run_id="source_run", start=["consume"], mode="lazy"),
+            )
+    finally:
+        ray = getattr(executor, "ray", None)
+        if ray is not None and ray.is_initialized():
+            ray.shutdown()
+
+    assert submitted == []
+
+
+@pytest.mark.parametrize("executor_factory", [ava.LocalExecutor, ava.RayExecutor])
+def test_stream_selectors_preserve_reordered_keyword_mapping(
+    rerun_ns,
+    executor_factory,
+):
+    ns = rerun_ns
+    load_left = ava.source(slug="load-left")(explicit_selector_load_left)
+    load_right = ava.source(slug="load-right")(explicit_selector_load_right)
+    combine_fn = partial(
+        explicit_selector_combine,
+        left_df=ava.Stream(ns.source),
+        right_df=ava.Stream(ns.source),
+    )
+    combine_fn.__name__ = "explicit_selector_combine"
+    combine = ava.step(slug="combine")(combine_fn)
+
+    @ava.workflow
+    def wf():
+        left_ref = load_left(source=ns.source)
+        # Serialize same-table appends while keeping distinct producer slugs.
+        # One table ensures neither identity matching nor fallback reads can
+        # hide a lost parameter-name -> NodeFuture selector mapping.
+        right_ref = load_right(left_ref, source=ns.source)
+        return combine(right_df=right_ref, left_df=left_ref)
+
+    executor = executor_factory()
+    try:
+        assert wf().run(executor=executor, run_id="source_run") == "left+right"
+        assert (
+            wf().run(
+                executor=executor,
+                run_id="rerun_run",
+                rerun=ava.Rerun(run_id="source_run", start=["combine"], mode="lazy"),
+            )
+            == "left+right"
+        )
+    finally:
+        ray = getattr(executor, "ray", None)
+        if ray is not None and ray.is_initialized():
+            ray.shutdown()
+
+
+@pytest.mark.parametrize("binding_style", ["positional", "keyword"])
+def test_unindexed_explicit_multireturn_stream_selector_rejects_lazy_rerun(
+    rerun_ns,
+    binding_style,
+):
+    ns = rerun_ns
+    split = ava.source(slug="split", num_returns=2)(explicit_selector_split)
+
+    @ava.step(slug="consume")
+    def consume(df=ava.Stream(ns.source)):
+        return df["value"].to_list()[0]
+
+    @ava.workflow
+    def wf():
+        pair = split(source=ns.source)
+        if binding_style == "positional":
+            return consume(pair)
+        return consume(df=pair)
+
+    submitted: list[str] = []
+    assert wf().run(executor=ava.LocalExecutor(), run_id="source_run") == "left"
+    with pytest.raises(ValueError, match="indexed Stream selectors cannot replay"):
+        wf().run(
+            executor=ava.LocalExecutor(),
+            run_id="rerun_run",
+            hooks=RunHooks(on_node_start=submitted.append),
+            rerun=ava.Rerun(run_id="source_run", start=["consume"], mode="lazy"),
+        )
+
+    assert submitted == []
+
+
+@pytest.mark.parametrize("executor_factory", [ava.LocalExecutor, ava.RayExecutor])
+@pytest.mark.parametrize("binding_style", ["explicit", "chain"])
+def test_stream_selector_preserves_live_indexed_multi_return_and_rejects_rerun(
+    rerun_ns,
+    executor_factory,
+    binding_style,
+):
+    ns = rerun_ns
+    split = ava.source(slug="split", num_returns=2)(explicit_selector_split)
+    consume = ava.step(slug="consume")(explicit_selector_value)
+
+    @ava.workflow
+    def wf():
+        refs = split(source=ns.source)
+        if binding_style == "explicit":
+            return consume(refs[1], df=ava.Stream(ns.source))
+        return refs[1] >> consume(df=ava.Stream(ns.source))
+
+    executor = executor_factory()
+    try:
+        assert wf().run(executor=executor, run_id="source_run") == "right"
+        with pytest.raises(ValueError, match="indexed Stream selectors cannot replay"):
+            wf().run(
+                executor=executor,
+                run_id="rerun_run",
+                rerun=ava.Rerun(run_id="source_run", start=["consume"], mode="lazy"),
+            )
+    finally:
+        ray = getattr(executor, "ray", None)
+        if ray is not None and ray.is_initialized():
+            ray.shutdown()
+
+
+@pytest.mark.parametrize("executor_factory", [ava.LocalExecutor, ava.RayExecutor])
+def test_keyword_only_stream_chain_selects_index_and_rejects_rerun_before_submission(
+    rerun_ns,
+    executor_factory,
+):
+    ns = rerun_ns
+    split = ava.source(slug="split", num_returns=2)(explicit_selector_split)
+    consume = ava.step(slug="consume")(keyword_only_selector_value)
+
+    @ava.workflow
+    def wf():
+        pair = split(source=ns.source)
+        return pair[1] >> consume(df=ava.Stream(ns.source))
+
+    executor = executor_factory()
+    submitted: list[str] = []
+    try:
+        assert wf().run(executor=executor, run_id="source_run") == "right"
+        with pytest.raises(ValueError, match="indexed Stream selectors cannot replay"):
+            wf().run(
+                executor=executor,
+                run_id="rerun_run",
+                hooks=RunHooks(on_node_start=submitted.append),
+                rerun=ava.Rerun(run_id="source_run", start=["consume"], mode="lazy"),
+            )
+    finally:
+        ray = getattr(executor, "ray", None)
+        if ray is not None and ray.is_initialized():
+            ray.shutdown()
+
+    assert submitted == []
+
+
+@pytest.mark.parametrize("executor_factory", [ava.LocalExecutor, ava.RayExecutor])
+def test_indexed_stream_into_downstream_chain_targets_registered_start(
+    rerun_ns,
+    executor_factory,
+):
+    ns = rerun_ns
+    split = ava.source(slug="split", num_returns=2)(explicit_selector_split)
+    consume = ava.step(slug="consume")(keyword_only_selector_value)
+    end = ava.step(slug="end")(selector_end)
+
+    @ava.workflow
+    def wf():
+        pair = split(source=ns.source)
+        return pair[1] >> (consume(df=ava.Stream(ns.source)) >> end())
+
+    executor = executor_factory()
+    submitted: list[str] = []
+    try:
+        assert wf().run(executor=executor, run_id="source_run") == "right"
+        with pytest.raises(ValueError, match="indexed Stream selectors cannot replay"):
+            wf().run(
+                executor=executor,
+                run_id="rerun_run",
+                hooks=RunHooks(on_node_start=submitted.append),
+                rerun=ava.Rerun(run_id="source_run", start=["consume"], mode="lazy"),
+            )
+    finally:
+        ray = getattr(executor, "ray", None)
+        if ray is not None and ray.is_initialized():
+            ray.shutdown()
+
+    assert submitted == []
+
+
+@pytest.mark.parametrize("executor_factory", [ava.LocalExecutor, ava.RayExecutor])
+def test_parallel_stream_selectors_preserve_index_order_and_reject_rerun(
+    rerun_ns,
+    executor_factory,
+):
+    ns = rerun_ns
+    split = ava.source(slug="split", num_returns=2)(explicit_selector_split)
+    consume = ava.step(slug="consume")(explicit_selector_combine)
+
+    @ava.workflow
+    def wf():
+        pair = split(source=ns.source)
+        return (pair[1] & pair[0]) >> consume(
+            left_df=ava.Stream(ns.source),
+            right_df=ava.Stream(ns.source),
+        )
+
+    executor = executor_factory()
+    submitted: list[str] = []
+    try:
+        assert wf().run(executor=executor, run_id="source_run") == "right+left"
+        with pytest.raises(ValueError, match="indexed Stream selectors cannot replay"):
+            wf().run(
+                executor=executor,
+                run_id="rerun_run",
+                hooks=RunHooks(on_node_start=submitted.append),
+                rerun=ava.Rerun(run_id="source_run", start=["consume"], mode="lazy"),
+            )
+    finally:
+        ray = getattr(executor, "ray", None)
+        if ray is not None and ray.is_initialized():
+            ray.shutdown()
+
+    assert submitted == []
+
+
 def test_rerun_stream_requires_row_lineage(rerun_ns):
     ns = rerun_ns
     ns.no_lineage.append(_rows("alpha"))
@@ -367,6 +819,35 @@ def test_rerun_rejects_skipped_implicit_non_stream_upstream(rerun_ns):
             executor=ava.LocalExecutor(),
             rerun=ava.Rerun(run_id="source_run", start=["middle"], mode="lazy"),
         )
+
+
+@pytest.mark.parametrize("executor_factory", [ava.LocalExecutor, ava.RayExecutor])
+def test_rerun_rejects_skipped_explicit_non_stream_upstream(
+    executor_factory,
+):
+    load = ava.source(slug="load")(explicit_non_stream_load)
+    middle = ava.step(slug="middle")(explicit_non_stream_consume)
+
+    @ava.workflow
+    def wf():
+        loaded = load()
+        return middle(loaded)
+
+    executor = executor_factory()
+    submitted = []
+    try:
+        with pytest.raises(ValueError, match="Stream"):
+            wf().run(
+                executor=executor,
+                hooks=RunHooks(on_node_start=submitted.append),
+                rerun=ava.Rerun(run_id="source_run", start=["middle"], mode="lazy"),
+            )
+    finally:
+        ray = getattr(executor, "ray", None)
+        if ray is not None and ray.is_initialized():
+            ray.shutdown()
+
+    assert submitted == []
 
 
 @pytest.mark.parametrize("executor_factory", [ava.LocalExecutor, ava.RayExecutor])

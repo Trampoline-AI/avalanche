@@ -320,13 +320,18 @@ class NodeFuture:
         Returns:
             List of future IDs at the end of this chain
         """
+        return [ref.future_id for ref in self.as_dependency_refs()]
+
+    def as_dependency_refs(self) -> list["NodeFuture"]:
+        """Return terminal dependency refs in branch order.
+
+        Composite branches keep their chain starts in ``ParallelTasks.branches``.
+        Recursing through each branch's ``chain_end`` ensures downstream data
+        passing uses the actual terminal refs, including any tuple indexes.
+        """
         if isinstance(self.chain_end, ParallelTasks):
-            ids = []
-            for branch in self.chain_end.branches:
-                ids.extend(branch.as_dependency_ids())
-            return ids
-        else:
-            return [self.chain_end.future_id]
+            return self.chain_end.as_dependency_refs()
+        return [self.chain_end]
 
     def __rshift__(self, next: "NodeFuture | ParallelTasks") -> "NodeFuture":
         """
@@ -357,18 +362,17 @@ class NodeFuture:
             )
 
         # Get dependency IDs from self (what next will depend on)
-        dependency_ids = self.as_dependency_ids()
+        dependency_refs = self.as_dependency_refs()
+        dependency_ids = [ref.future_id for ref in dependency_refs]
 
         if isinstance(next, NodeFuture):  # (set parent as dependency of next)
+            next_start = next.chain_start
             # Graph format: {parent: [children]}
             for d in dependency_ids:
-                _add_graph_edge(self.graph_ref, d, next.future_id)
+                _add_graph_edge(self.graph_ref, d, next_start.future_id)
 
             # Track incoming ref (preserves tuple_index for data passing)
-            if isinstance(self.chain_end, NodeFuture):
-                next._incoming_refs.append(self.chain_end)
-            elif isinstance(self.chain_end, ParallelTasks):
-                next._incoming_refs.extend(self.chain_end.branches)
+            next_start._incoming_refs.extend(dependency_refs)
 
             return NodeFuture(
                 node=self.chain_start.node,
@@ -382,14 +386,11 @@ class NodeFuture:
             # Graph format: {parent: [children]}
             for d in dependency_ids:
                 for branch in next.branches:
-                    _add_graph_edge(self.graph_ref, d, branch.future_id)
+                    _add_graph_edge(self.graph_ref, d, branch.chain_start.future_id)
 
             # Track incoming ref for each branch (preserves tuple_index for data passing)
             for branch in next.branches:
-                if isinstance(self.chain_end, NodeFuture):
-                    branch._incoming_refs.append(self.chain_end)
-                elif isinstance(self.chain_end, ParallelTasks):
-                    branch._incoming_refs.extend(self.chain_end.branches)
+                branch.chain_start._incoming_refs.extend(dependency_refs)
 
             return NodeFuture(
                 node=self.chain_start.node,
@@ -442,9 +443,16 @@ class ParallelTasks:
     """
 
     def __init__(self, branches: list[NodeFuture], graph_ref: DefaultDict[str, list[str]]):
-        self.branches = branches
+        self.branches = list(branches)
         self.graph_ref = graph_ref
         self.chain_start = branches[0].chain_start
+
+    def as_dependency_refs(self) -> list[NodeFuture]:
+        """Return every branch's terminal refs in stable branch order."""
+        refs: list[NodeFuture] = []
+        for branch in self.branches:
+            refs.extend(branch.as_dependency_refs())
+        return refs
 
     def __rshift__(self, next: "NodeFuture | ParallelTasks") -> NodeFuture:
         """Sequential after parallel: (a & b) >> c"""
@@ -461,16 +469,26 @@ class ParallelTasks:
 
         # Connect all branch ends to next node(s)
         # Graph format: {parent: [children]}
-        for branch in self.branches:
-            branch_dep_ids = branch.as_dependency_ids()
-            for dep_id in branch_dep_ids:
-                if isinstance(next, NodeFuture):
-                    _add_graph_edge(self.graph_ref, dep_id, next.future_id)
-                else:  # ParallelTasks
-                    for next_branch in next.branches:
-                        _add_graph_edge(self.graph_ref, dep_id, next_branch.future_id)
+        # Keep refs in branch order without deduplicating: indexed refs can share
+        # a future_id while selecting different tuple elements.
+        incoming_refs = self.as_dependency_refs()
+        for incoming_ref in incoming_refs:
+            if isinstance(next, NodeFuture):
+                _add_graph_edge(
+                    self.graph_ref,
+                    incoming_ref.future_id,
+                    next.chain_start.future_id,
+                )
+            else:  # ParallelTasks
+                for next_branch in next.branches:
+                    _add_graph_edge(
+                        self.graph_ref,
+                        incoming_ref.future_id,
+                        next_branch.chain_start.future_id,
+                    )
 
         if isinstance(next, NodeFuture):
+            next.chain_start._incoming_refs.extend(incoming_refs)
             return NodeFuture(
                 node=self.chain_start.node,
                 future_id=self.chain_start.future_id,
@@ -480,6 +498,9 @@ class ParallelTasks:
                 chain_end=next.chain_end,
             )
         else:  # ParallelTasks
+            for next_branch in next.branches:
+                next_branch.chain_start._incoming_refs.extend(incoming_refs)
+
             return NodeFuture(
                 node=self.chain_start.node,
                 future_id=self.chain_start.future_id,
@@ -503,10 +524,10 @@ class ParallelTasks:
             )
 
         if isinstance(other, ParallelTasks):
-            self.branches.extend(other.branches)
+            branches = [*self.branches, *other.branches]
         else:
-            self.branches.append(other)
-        return self
+            branches = [*self.branches, other]
+        return ParallelTasks(branches, graph_ref=self.graph_ref)
 
 
 # Decorators
@@ -849,84 +870,287 @@ def _runtime_param_names_from_signature(fn: Callable) -> set[str]:
     return names
 
 
-def _rerun_positional_slot_kinds(
+@dataclass(frozen=True)
+class _ProviderSelector:
+    future_id: str
+    tuple_index: int | None
+    explicit: bool
+
+
+@dataclass(frozen=True)
+class _PositionalCallAdapter:
+    fixed_arg_names: tuple[str, ...]
+
+
+@dataclass(frozen=True)
+class _ImplicitParentBinding:
+    ref: NodeFuture
+    slot_index: int
+    slot_kind: str
+    may_expand_single_return: bool
+
+
+@dataclass
+class _NodeBindingPlan:
+    args: tuple[Any, ...]
+    kwargs: dict[str, Any]
+    provider_selectors: dict[str, _ProviderSelector]
+    implicit_slot_kinds: tuple[str, ...]
+    implicit_parent_bindings: tuple[_ImplicitParentBinding, ...]
+    positional_call_adapter: _PositionalCallAdapter | None = None
+
+    @property
+    def has_explicit_provider_selectors(self) -> bool:
+        return any(selector.explicit for selector in self.provider_selectors.values())
+
+
+def _matching_provider(value: Any, providers: list) -> Any | None:
+    for provider in providers:
+        if provider.can_resolve(value):
+            return provider
+    return None
+
+
+def _expand_incoming_refs(incoming_refs: list[NodeFuture]) -> list[NodeFuture]:
+    """Expand physical upstream refs into ordered logical output refs.
+
+    A true multi-return node contributes one logical slot per declared return
+    when its ref is unindexed. Explicitly indexed refs and single-return refs
+    already identify exactly one logical output.
+    """
+    logical_refs: list[NodeFuture] = []
+    for incoming in incoming_refs:
+        if incoming.tuple_index is None and incoming.node.num_returns > 1:
+            logical_refs.extend(incoming[index] for index in range(incoming.node.num_returns))
+        else:
+            logical_refs.append(incoming)
+    return logical_refs
+
+
+def _build_node_binding_plan(
     fn: Callable,
+    args: tuple[Any, ...],
     kwargs: dict[str, Any],
+    incoming_refs: list[NodeFuture],
     *,
     providers: list,
-    runtime_param_names: set[str],
-) -> list[str]:
-    """Classify each implicit positional slot of a node as 'stream' or 'python'.
-
-    Mirrors the implicit data-passing binding rules so rerun validation matches
-    what actually happens at submit time:
-    - runtime-injected params (RunContext/BaseContext/BaseInput) are skipped;
-    - non-upstream providers (e.g. Logger) are skipped;
-    - upstream-consuming providers (ava.Stream) occupy a 'stream' slot;
-    - normal positional params occupy a 'python' slot.
-    A provider can be supplied via an explicit kwarg override or a default,
-    mirroring _inspect_providers. Keyword-only params are not implicit
-    positional slots and are ignored.
-    """
+) -> _NodeBindingPlan:
+    """Bind workflow arguments without treating injected params as call slots."""
     import inspect
 
     try:
         params = list(inspect.signature(fn).parameters.values())
     except (ValueError, TypeError):
-        return []
+        return _NodeBindingPlan(args, dict(kwargs), {}, (), ())
 
-    slots: list[str] = []
+    runtime_param_names = _runtime_param_names_from_signature(fn)
+    selectors: dict[str, _ProviderSelector] = {}
+
+    # A keyword NodeFuture can select only a provider declared by the function
+    # default. Removing it then exposes that provider default to inspection.
+    for param in params:
+        value = kwargs.get(param.name)
+        if not isinstance(value, NodeFuture):
+            continue
+        if param.default is inspect.Parameter.empty:
+            continue
+        provider = _matching_provider(param.default, providers)
+        if provider is not None and getattr(provider, "consumes_upstream", False):
+            selectors[param.name] = _ProviderSelector(
+                future_id=value.future_id,
+                tuple_index=value.tuple_index,
+                explicit=True,
+            )
+
+    bound_kwargs = {name: value for name, value in kwargs.items() if name not in selectors}
+    positional_slots: list[tuple[inspect.Parameter, str]] = []
+    implicit_slots: list[tuple[inspect.Parameter, str]] = []
+
     for param in params:
         if param.name in runtime_param_names:
             continue
 
-        # A provider marker may come from an explicit kwarg override or the
-        # parameter default (matching _inspect_providers behavior).
-        candidates_values = []
-        if param.name in kwargs:
-            candidates_values.append(kwargs[param.name])
-        if param.default is not inspect.Parameter.empty:
-            candidates_values.append(param.default)
-
-        provider = None
-        for value in candidates_values:
-            for candidate in providers:
-                if candidate.can_resolve(value):
-                    provider = candidate
-                    break
-            if provider is not None:
-                break
+        if param.name in bound_kwargs:
+            provider = _matching_provider(bound_kwargs[param.name], providers)
+        elif param.default is not inspect.Parameter.empty:
+            provider = _matching_provider(param.default, providers)
+        else:
+            provider = None
 
         if provider is not None:
-            if getattr(provider, "consumes_upstream", False):
-                slots.append("stream")
-            # Non-upstream providers do not consume an implicit position.
+            if getattr(provider, "consumes_upstream", False) and param.name not in selectors:
+                # Providers can consume an upstream logical slot for ``>>`` even
+                # when Python forbids binding that parameter positionally.
+                implicit_slots.append((param, "stream"))
+                if param.kind in (
+                    inspect.Parameter.POSITIONAL_ONLY,
+                    inspect.Parameter.POSITIONAL_OR_KEYWORD,
+                ):
+                    positional_slots.append((param, "stream"))
+            # Non-upstream providers never consume a workflow argument.
             continue
 
-        # Params passed as explicit kwargs are bound by name, not by implicit
-        # position.
-        if param.name in kwargs:
+        if param.name in bound_kwargs:
             continue
-
         if param.kind in (
             inspect.Parameter.POSITIONAL_ONLY,
             inspect.Parameter.POSITIONAL_OR_KEYWORD,
-            inspect.Parameter.VAR_POSITIONAL,
         ):
-            slots.append("python")
+            positional_slots.append((param, "python"))
+            implicit_slots.append((param, "python"))
+        elif param.kind == inspect.Parameter.VAR_POSITIONAL:
+            positional_slots.append((param, "varargs"))
+            implicit_slots.append((param, "varargs"))
 
-    return slots
+    positional_bindings: list[tuple[inspect.Parameter, Any]] = []
+    arg_index = 0
+    for param, slot_kind in positional_slots:
+        if arg_index >= len(args):
+            break
+        if slot_kind == "varargs":
+            positional_bindings.extend((param, value) for value in args[arg_index:])
+            arg_index = len(args)
+            break
+
+        value = args[arg_index]
+        arg_index += 1
+        if slot_kind == "stream" and isinstance(value, NodeFuture):
+            selectors[param.name] = _ProviderSelector(
+                future_id=value.future_id,
+                tuple_index=value.tuple_index,
+                explicit=True,
+            )
+        else:
+            positional_bindings.append((param, value))
+
+    implicit_slot_kinds = tuple(
+        "python" if kind == "varargs" else kind for _, kind in implicit_slots
+    )
+    logical_incoming_refs = _expand_incoming_refs(incoming_refs)
+    implicit_parent_bindings = tuple(
+        _ImplicitParentBinding(
+            ref=incoming,
+            slot_index=slot_index,
+            slot_kind=slot_kind,
+            may_expand_single_return=(
+                incoming.tuple_index is None and incoming.node.num_returns == 1
+            ),
+        )
+        for slot_index, (slot_kind, incoming) in enumerate(
+            zip(implicit_slot_kinds, logical_incoming_refs)
+        )
+    )
+
+    # ``>>`` stores its exact upstream refs separately from args/kwargs. Match
+    # those refs to implicit upstream slots, which include upstream-consuming
+    # keyword-only providers but keep ordinary explicit positional binding
+    # restricted to parameters Python permits positionally. Explicit
+    # positional/provider selectors continue to suppress implicit chain binding.
+    if not args and not any(selector.explicit for selector in selectors.values()):
+        for (param, _), binding in zip(implicit_slots, implicit_parent_bindings):
+            if binding.slot_kind == "stream":
+                selectors[param.name] = _ProviderSelector(
+                    future_id=binding.ref.future_id,
+                    tuple_index=binding.ref.tuple_index,
+                    explicit=False,
+                )
+
+    uses_varargs = any(
+        param.kind == inspect.Parameter.VAR_POSITIONAL for param, _ in positional_bindings
+    )
+    bound_args: list[Any] = []
+    fixed_arg_names: list[str] = []
+    for param, value in positional_bindings:
+        if param.kind == inspect.Parameter.POSITIONAL_ONLY or uses_varargs:
+            bound_args.append(value)
+            if param.kind != inspect.Parameter.VAR_POSITIONAL:
+                fixed_arg_names.append(param.name)
+        elif param.kind == inspect.Parameter.POSITIONAL_OR_KEYWORD:
+            bound_kwargs[param.name] = value
+        else:
+            bound_args.append(value)
+    bound_args.extend(args[arg_index:])
+
+    has_varargs = any(param.kind == inspect.Parameter.VAR_POSITIONAL for param in params)
+    has_positional_only = any(
+        param.kind == inspect.Parameter.POSITIONAL_ONLY for param in params
+    )
+
+    return _NodeBindingPlan(
+        args=tuple(bound_args),
+        kwargs=bound_kwargs,
+        provider_selectors=selectors,
+        implicit_slot_kinds=implicit_slot_kinds,
+        implicit_parent_bindings=implicit_parent_bindings,
+        positional_call_adapter=(
+            _PositionalCallAdapter(tuple(fixed_arg_names))
+            if has_varargs or has_positional_only
+            else None
+        ),
+    )
 
 
-def _incoming_parent_ids(
+def _adapt_positional_call(
+    fn: Callable[..., Any],
+    signature_fn: Callable[..., Any],
+    adapter: _PositionalCallAdapter,
+) -> Callable[..., Any]:
+    """Rebuild positional calls after framework values are injected.
+
+    The planner removes provider selectors and skips runtime/provider slots, so
+    its top-level executor args are a compressed logical sequence. Provider
+    wrappers then inject those skipped values by keyword. Before invoking user
+    code, expand positional parameters in declaration order and append any
+    user's ``*args`` tail. Only slot metadata is captured; executor payloads
+    remain visible as top-level task args/kwargs.
+    """
+    import inspect
+
+    prefix_params: list[inspect.Parameter] = []
+    for param in inspect.signature(signature_fn).parameters.values():
+        if param.kind == inspect.Parameter.VAR_POSITIONAL:
+            break
+        if param.kind in (
+            inspect.Parameter.POSITIONAL_ONLY,
+            inspect.Parameter.POSITIONAL_OR_KEYWORD,
+        ):
+            prefix_params.append(param)
+
+    @wraps(fn)
+    def adapted(*args: Any, **kwargs: Any) -> Any:
+        fixed_count = len(adapter.fixed_arg_names)
+        fixed_values = dict(zip(adapter.fixed_arg_names, args[:fixed_count]))
+        final_args: list[Any] = []
+
+        for param in prefix_params:
+            if param.name in fixed_values:
+                final_args.append(fixed_values[param.name])
+            elif param.name in kwargs:
+                final_args.append(kwargs.pop(param.name))
+            elif param.default is not inspect.Parameter.empty:
+                final_args.append(param.default)
+            else:
+                raise TypeError(
+                    f"Cannot reconstruct positional call for {signature_fn.__name__}: "
+                    f"parameter {param.name!r} was not supplied or injected"
+                )
+
+        final_args.extend(args[fixed_count:])
+        return fn(*final_args, **kwargs)
+
+    return adapted
+
+
+def _incoming_refs_for_node(
+    nodes: dict[str, NodeFuture],
     node_ref: NodeFuture,
     original_dependencies_map: dict[str, list[str]],
     node_id: str,
-) -> list[str]:
-    """Ordered parent node ids feeding a node's implicit positional slots."""
+) -> list[NodeFuture]:
+    """Return ordered incoming refs, including tuple selectors when available."""
     if node_ref._incoming_refs:
-        return [incoming.future_id for incoming in node_ref._incoming_refs]
-    return list(original_dependencies_map.get(node_id, []))
+        return node_ref._incoming_refs
+    return [nodes[parent_id] for parent_id in original_dependencies_map.get(node_id, [])]
 
 
 def _validate_no_skipped_non_stream_inputs(
@@ -944,39 +1168,81 @@ def _validate_no_skipped_non_stream_inputs(
 
     for node_id in scheduled_node_ids:
         node_ref = nodes[node_id]
+        binding_plan = _build_node_binding_plan(
+            node_ref.node.fn,
+            node_ref.args,
+            node_ref.kwargs,
+            _incoming_refs_for_node(
+                nodes,
+                node_ref,
+                original_dependencies_map,
+                node_id,
+            ),
+            providers=PROVIDERS,
+        )
 
-        # 1. Explicit NodeFuture args/kwargs referencing skipped upstreams.
-        explicit_refs: list[NodeFuture] = []
-        for arg in node_ref.args:
-            explicit_refs.extend(_node_future_refs(arg))
-        for kwarg in node_ref.kwargs.values():
-            explicit_refs.extend(_node_future_refs(kwarg))
-        for ref in explicit_refs:
-            if ref.future_id not in scheduled_node_ids:
+        for selector in binding_plan.provider_selectors.values():
+            producer = nodes[selector.future_id]
+            if (
+                (
+                    selector.tuple_index is not None
+                    or producer.node.num_returns > 1
+                )
+                and selector.future_id not in scheduled_node_ids
+            ):
                 raise ValueError(
-                    f"Rerun node {node_id!r} has an explicit dependency on skipped "
-                    f"upstream node {ref.future_id!r}; v1 reruns require skipped "
-                    "upstream data to be consumed through ava.Stream"
+                    f"Rerun node {node_id!r} has an indexed or multi-return "
+                    "ava.Stream selector "
+                    f"for skipped upstream node {selector.future_id!r}; indexed "
+                    "Stream selectors cannot replay skipped upstreams because "
+                    "durable lineage is keyed only by (run_id, node_slug). Include "
+                    "the producer in the rerun, or model its outputs as distinct "
+                    "source nodes."
                 )
 
-        # 2. Implicit chain refs bound to normal Python positional params.
-        if node_ref.args:
+        # 1. Explicit NodeFuture args/kwargs referencing skipped upstreams.
+        for arg in binding_plan.args:
+            for ref in _node_future_refs(arg):
+                if ref.future_id not in scheduled_node_ids:
+                    raise ValueError(
+                        f"Rerun node {node_id!r} has an explicit dependency on skipped "
+                        f"upstream node {ref.future_id!r}; skipped upstream data "
+                        "must be consumed through ava.Stream"
+                    )
+
+        for kwarg in binding_plan.kwargs.values():
+            for ref in _node_future_refs(kwarg):
+                if ref.future_id not in scheduled_node_ids:
+                    raise ValueError(
+                        f"Rerun node {node_id!r} has an explicit dependency on skipped "
+                        f"upstream node {ref.future_id!r}; skipped upstream data "
+                        "must be consumed through ava.Stream"
+                    )
+
+        # 2. Implicit chain refs assigned by logical upstream slot order.
+        if node_ref.args or binding_plan.has_explicit_provider_selectors:
             # Explicit args suppress implicit positional binding.
             continue
 
-        runtime_param_names = _runtime_param_names_from_signature(node_ref.node.fn)
-        slots = _rerun_positional_slot_kinds(
-            node_ref.node.fn,
-            node_ref.kwargs,
-            providers=PROVIDERS,
-            runtime_param_names=runtime_param_names,
-        )
-        if not slots:
+        if not binding_plan.implicit_slot_kinds:
             continue
 
-        parent_ids = _incoming_parent_ids(node_ref, original_dependencies_map, node_id)
-        for slot_kind, parent_id in zip(slots, parent_ids):
-            if slot_kind == "stream":
+        for binding in binding_plan.implicit_parent_bindings:
+            parent_id = binding.ref.future_id
+            if binding.slot_kind == "stream":
+                if (
+                    parent_id not in scheduled_node_ids
+                    and binding.may_expand_single_return
+                    and "python"
+                    in binding_plan.implicit_slot_kinds[binding.slot_index + 1 :]
+                ):
+                    raise ValueError(
+                        f"Rerun node {node_id!r} has an ambiguous single-return "
+                        f"container from skipped upstream node {parent_id!r}; its "
+                        "ava.Stream slot is replayable, but tuple/list values could "
+                        "also populate a non-stream parameter. Include the producer "
+                        "in the rerun or declare separate returns."
+                    )
                 continue
             if parent_id not in scheduled_node_ids:
                 raise ValueError(
@@ -1660,6 +1926,8 @@ def _bind_implicit_parent_results(
     skip_param_names: set[str],
     position_consuming_param_names: set[str],
     resolved_kwargs: dict[str, Any],
+    *,
+    adapt_positionals: bool = False,
 ) -> tuple[list[Any], dict[str, Any]]:
     """
     Bind implicit upstream values by signature position.
@@ -1705,7 +1973,13 @@ def _bind_implicit_parent_results(
         value = _implicit_value_from_upstream(item)
 
         if param.kind == inspect.Parameter.POSITIONAL_ONLY:
-            resolved_args.append(value)
+            if adapt_positionals:
+                # The positional adapter accepts positional-only values as named
+                # slot carriers, then reconstructs the final call after
+                # provider/runtime injection.
+                implicit_kwargs[param.name] = value
+            else:
+                resolved_args.append(value)
             upstream_index += 1
             continue
 
@@ -1969,15 +2243,30 @@ class Workflow:
                 node_name=node_ref.node.fn.__name__,
                 node_slug=node_ref.node_slug,
             )
-            runtime_params = _inspect_runtime_params(
+            binding_plan = _build_node_binding_plan(
                 node_ref.node.fn,
                 node_ref.args,
                 node_ref.kwargs,
+                node_ref._incoming_refs,
+                providers=PROVIDERS,
+            )
+            binding_kwargs = binding_plan.kwargs
+            runtime_binding_kwargs = dict(binding_kwargs)
+            if binding_plan.positional_call_adapter is not None:
+                runtime_binding_kwargs.update(
+                    dict.fromkeys(
+                        binding_plan.positional_call_adapter.fixed_arg_names,
+                    )
+                )
+            runtime_params = _inspect_runtime_params(
+                node_ref.node.fn,
+                (),
+                runtime_binding_kwargs,
                 run_input,
                 node_run_context,
                 node_system_context,
             )
-            inspected_params = _inspect_providers(node_ref.node.fn, node_ref.kwargs, PROVIDERS)
+            inspected_params = _inspect_providers(node_ref.node.fn, binding_kwargs, PROVIDERS)
             provider_by_param = {}
             position_consuming_params = set()
             for param_name, param_value in inspected_params.items():
@@ -2007,19 +2296,34 @@ class Workflow:
                     provider = provider_by_param.get(param_name)
                     if provider is None:
                         continue
-                    param_position = _data_param_position(
-                        node_ref.node.fn,
-                        param_name,
-                        skip_param_names,
-                        position_consuming_params,
-                    )
+                    selector = binding_plan.provider_selectors.get(param_name)
+                    if selector is not None:
+                        selected_result = result_refs.get(selector.future_id)
+                        if selected_result is not None and selector.tuple_index is not None:
+                            selected_result = _indexed_parent_result(
+                                selected_result,
+                                selector.tuple_index,
+                                executor,
+                            )
+                        parent_results = [selected_result]
+                        param_position = 0
+                        parent_slugs = [self.node_slugs[selector.future_id]]
+                    else:
+                        parent_results = provider_parent_results
+                        param_position = _data_param_position(
+                            node_ref.node.fn,
+                            param_name,
+                            skip_param_names,
+                            position_consuming_params,
+                        )
+                        parent_slugs = upstream_node_slugs
 
                     param_context = ParamContext(
-                        parent_results=provider_parent_results,
+                        parent_results=parent_results,
                         param_position=param_position,
                         node_name=node_ref.node.fn.__name__,
                         node_slug=node_ref.node_slug,
-                        upstream_node_slugs=upstream_node_slugs,
+                        upstream_node_slugs=parent_slugs,
                         run_id=run_id,
                         rerun=rerun_spec,
                         preserve_missing_results=rerun_spec is not None,
@@ -2036,11 +2340,11 @@ class Workflow:
 
             # Resolve explicit arguments (args and kwargs use same logic)
             resolved_args = [
-                _resolve_to_ref(arg, result_refs, executor) for arg in node_ref.args
+                _resolve_to_ref(arg, result_refs, executor) for arg in binding_plan.args
             ]
             resolved_kwargs = {
                 k: _resolve_to_ref(v, result_refs, executor)
-                for k, v in node_ref.kwargs.items()
+                for k, v in binding_kwargs.items()
                 # Exclude injectable params from normal resolution
                 if k not in injectable_params and k not in runtime_params
             }
@@ -2056,14 +2360,19 @@ class Workflow:
             actual_fn = node_ref.node.fn
             if hooks and hooks.wrap_fn:
                 actual_fn = hooks.wrap_fn(node_id, actual_fn)
+            if binding_plan.positional_call_adapter is not None:
+                actual_fn = _adapt_positional_call(
+                    actual_fn,
+                    node_ref.node.fn,
+                    binding_plan.positional_call_adapter,
+                )
 
-            # Implicit data passing: If node was called with no explicit arguments
-            # and its function signature can accept positional arguments,
-            # automatically pass parent results by signature position.
+            # Implicit data passing: If a node was called with no explicit
+            # arguments, route parent results by logical upstream slot order.
             # This enables: `a() >> b() >> c()` without manual wiring.
             # Injectable params (Logger, Stream, etc.) are excluded — they're
             # handled separately by the provider system.
-            if not resolved_args:
+            if not node_ref.args and not binding_plan.has_explicit_provider_selectors:
                 upstream_values = _collect_implicit_parent_results(
                     node_ref,
                     result_refs,
@@ -2077,6 +2386,7 @@ class Workflow:
                     skip_param_names,
                     position_consuming_params,
                     resolved_kwargs,
+                    adapt_positionals=binding_plan.positional_call_adapter is not None,
                 )
                 resolved_args = implicit_args
                 resolved_kwargs.update(implicit_kwargs)

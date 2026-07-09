@@ -27,12 +27,18 @@ from __future__ import annotations
 
 import contextlib
 from dataclasses import dataclass
+from functools import wraps
 from typing import Any
 
 import polars as pl
+import pytest
 
 import avalanche as ava
 import avalanche.runtime.providers.stream as stream_mod
+from avalanche._testing.rerun_helpers import (
+    RerunSelectorInput,
+    positional_only_selector_consume,
+)
 from avalanche.operator.hooks import RunHooks
 from avalanche.types import AppendResult, AppendResultHandle, LineagedResult
 
@@ -516,6 +522,306 @@ def test_true_multireturn_index_explicit_arg_passes_selected_ref():
 
     assert result == "got:left"
     assert "split[1]" not in executor.driver_payload_gets, executor.driver_payload_gets
+
+
+@pytest.mark.parametrize("binding_style", ["explicit", "chain"])
+def test_true_multireturn_indexed_stream_selector_stays_off_driver(
+    monkeypatch,
+    binding_style,
+):
+    monkeypatch.setattr(stream_mod, "consume_stream", _fake_consume_stream)
+
+    executor = RayExecutor()
+    monkeypatch.setattr(stream_mod, "_ray_get", executor.worker_get)
+
+    @ava.source(num_returns=2)
+    def split():
+        return (
+            AppendResult(
+                data=pl.DataFrame({"x": ["left"]}),
+                snapshot_id=1,
+                table_identity="ns.dummy",
+            ),
+            AppendResult(
+                data=pl.DataFrame({"x": ["right"]}),
+                snapshot_id=2,
+                table_identity="ns.dummy",
+            ),
+        )
+
+    @ava.step
+    def consume(df=ava.Stream(_DummyTable())):
+        return df["x"][0]
+
+    @ava.workflow
+    def wf():
+        pair = split()
+        if binding_style == "explicit":
+            return consume(pair[1], df=ava.Stream(_DummyTable()))
+        return pair[1] >> consume(df=ava.Stream(_DummyTable()))
+
+    assert wf().run(executor=executor) == "right"
+    assert "split[0]" not in executor.driver_payload_gets
+    assert "split[1]" not in executor.driver_payload_gets
+    assert executor.worker_payload_gets == ["split"]
+    _assert_no_synthetic_payload_resolution(executor)
+
+
+def test_varargs_stream_selector_reconstructs_slots_without_driver_fetch(monkeypatch):
+    monkeypatch.setattr(stream_mod, "consume_stream", _fake_consume_stream)
+
+    executor = RayExecutor()
+    monkeypatch.setattr(stream_mod, "_ray_get", executor.worker_get)
+
+    @ava.source(num_returns=2)
+    def split():
+        return (
+            AppendResult(
+                data=pl.DataFrame({"x": ["left"]}),
+                snapshot_id=1,
+                table_identity="ns.dummy",
+            ),
+            AppendResult(
+                data=pl.DataFrame({"x": ["right"]}),
+                snapshot_id=2,
+                table_identity="ns.dummy",
+            ),
+        )
+
+    @ava.step
+    def consume(prefix, df=ava.Stream(_DummyTable()), *tail):
+        return prefix, df["x"][0], tail
+
+    @ava.workflow
+    def wf():
+        pair = split()
+        return consume("pre", pair[1], "post")
+
+    seen_worker_args: list[tuple[Any, ...]] = []
+
+    def wrap_fn(node_id, fn):
+        @wraps(fn)
+        def wrapped(*args, **kwargs):
+            if node_id == "consume_1":
+                seen_worker_args.append(args)
+            return fn(*args, **kwargs)
+
+        return wrapped
+
+    assert wf().run(
+        executor=executor,
+        hooks=RunHooks(wrap_fn=wrap_fn),
+    ) == ("pre", "right", ("post",))
+    assert len(seen_worker_args) == 1
+    assert seen_worker_args[0][0] == "pre"
+    assert seen_worker_args[0][1]["x"].to_list() == ["right"]
+    assert seen_worker_args[0][2:] == ("post",)
+    assert "split[0]" not in executor.driver_payload_gets
+    assert "split[1]" not in executor.driver_payload_gets
+    assert executor.worker_payload_gets == ["split"]
+    _assert_no_synthetic_payload_resolution(executor)
+
+
+def test_positional_only_injected_slots_reconstruct_without_driver_fetch(monkeypatch):
+    monkeypatch.setattr(stream_mod, "consume_stream", _fake_consume_stream)
+
+    executor = RayExecutor()
+    monkeypatch.setattr(stream_mod, "_ray_get", executor.worker_get)
+
+    @ava.source(num_returns=2)
+    def split():
+        return (
+            AppendResult(
+                data=pl.DataFrame({"value": ["left"]}),
+                snapshot_id=1,
+                table_identity="ns.dummy",
+            ),
+            AppendResult(
+                data=pl.DataFrame({"value": ["right"]}),
+                snapshot_id=2,
+                table_identity="ns.dummy",
+            ),
+        )
+
+    consume = ava.step(positional_only_selector_consume)
+
+    @ava.workflow(input=RerunSelectorInput)
+    def wf():
+        pair = split()
+        return pair[1] >> consume(df=ava.Stream(_DummyTable()))
+
+    seen_worker_args: list[tuple[Any, ...]] = []
+
+    def wrap_fn(node_id, fn):
+        @wraps(fn)
+        def wrapped(*args, **kwargs):
+            if node_id == "positional_only_selector_consume_1":
+                seen_worker_args.append(args)
+            return fn(*args, **kwargs)
+
+        return wrapped
+
+    assert wf().run(
+        executor=executor,
+        hooks=RunHooks(wrap_fn=wrap_fn),
+        input={"suffix": "!"},
+    ) == ("right", "!")
+    assert len(seen_worker_args) == 1
+    assert isinstance(seen_worker_args[0][0], RerunSelectorInput)
+    assert seen_worker_args[0][1]["value"].to_list() == ["right"]
+    assert "split[0]" not in executor.driver_payload_gets
+    assert "split[1]" not in executor.driver_payload_gets
+    assert executor.worker_payload_gets == ["split"]
+    _assert_no_synthetic_payload_resolution(executor)
+
+
+def test_implicit_varargs_reconstructs_positional_only_provider_slots(monkeypatch):
+    monkeypatch.setattr(stream_mod, "consume_stream", _fake_consume_stream)
+
+    executor = RayExecutor()
+    monkeypatch.setattr(stream_mod, "_ray_get", executor.worker_get)
+
+    @ava.source
+    def prefix():
+        return "pre"
+
+    @ava.source
+    def produce():
+        return AppendResult(
+            data=pl.DataFrame({"x": ["right"]}),
+            snapshot_id=1,
+            table_identity="ns.dummy",
+        )
+
+    @ava.source
+    def tail():
+        return "post"
+
+    @ava.step
+    def consume(prefix, df=ava.Stream(_DummyTable()), /, *tail):
+        return prefix, df["x"][0], tail
+
+    @ava.workflow
+    def wf():
+        return (prefix() & produce() & tail()) >> consume()
+
+    assert wf().run(executor=executor) == ("pre", "right", ("post",))
+    assert "produce" not in executor.driver_payload_gets
+    assert executor.worker_payload_gets == ["produce"]
+    _assert_no_synthetic_payload_resolution(executor)
+
+
+def test_unindexed_multireturn_expands_before_mixed_stream_slot(monkeypatch):
+    monkeypatch.setattr(stream_mod, "consume_stream", _fake_consume_stream)
+
+    executor = RayExecutor()
+    monkeypatch.setattr(stream_mod, "_ray_get", executor.worker_get)
+
+    @ava.source(num_returns=2)
+    def split():
+        return (
+            "left",
+            AppendResult(
+                data=pl.DataFrame({"x": ["middle"]}),
+                snapshot_id=1,
+                table_identity="ns.dummy",
+            ),
+        )
+
+    @ava.source
+    def other():
+        return "other"
+
+    @ava.step
+    def consume(left, middle, right):
+        return left, middle["x"][0], right
+
+    @ava.workflow
+    def wf():
+        return (split() & other()) >> consume(middle=ava.Stream(_DummyTable()))
+
+    assert wf().run(executor=executor) == ("left", "middle", "other")
+    assert "split[0]" not in executor.driver_payload_gets
+    assert "split[1]" not in executor.driver_payload_gets
+    assert executor.worker_payload_gets == ["split"]
+    _assert_no_synthetic_payload_resolution(executor)
+
+
+def test_keyword_only_chained_stream_selector_stays_off_driver(monkeypatch):
+    monkeypatch.setattr(stream_mod, "consume_stream", _fake_consume_stream)
+
+    executor = RayExecutor()
+    monkeypatch.setattr(stream_mod, "_ray_get", executor.worker_get)
+
+    @ava.source(num_returns=2)
+    def split():
+        return (
+            AppendResult(
+                data=pl.DataFrame({"x": ["left"]}),
+                snapshot_id=1,
+                table_identity="ns.dummy",
+            ),
+            AppendResult(
+                data=pl.DataFrame({"x": ["right"]}),
+                snapshot_id=2,
+                table_identity="ns.dummy",
+            ),
+        )
+
+    @ava.step
+    def consume(*, df=ava.Stream(_DummyTable())):
+        return df["x"][0]
+
+    @ava.workflow
+    def wf():
+        pair = split()
+        return pair[1] >> consume(df=ava.Stream(_DummyTable()))
+
+    assert wf().run(executor=executor) == "right"
+    assert "split[0]" not in executor.driver_payload_gets
+    assert "split[1]" not in executor.driver_payload_gets
+    assert executor.worker_payload_gets == ["split"]
+    _assert_no_synthetic_payload_resolution(executor)
+
+
+def test_parallel_true_multireturn_stream_selectors_stay_off_driver(monkeypatch):
+    monkeypatch.setattr(stream_mod, "consume_stream", _fake_consume_stream)
+
+    executor = RayExecutor()
+    monkeypatch.setattr(stream_mod, "_ray_get", executor.worker_get)
+
+    @ava.source(num_returns=2)
+    def split():
+        return (
+            AppendResult(
+                data=pl.DataFrame({"x": ["left"]}),
+                snapshot_id=1,
+                table_identity="ns.dummy",
+            ),
+            AppendResult(
+                data=pl.DataFrame({"x": ["right"]}),
+                snapshot_id=2,
+                table_identity="ns.dummy",
+            ),
+        )
+
+    @ava.step
+    def consume(left_df, right_df):
+        return f"{left_df['x'][0]}+{right_df['x'][0]}"
+
+    @ava.workflow
+    def wf():
+        pair = split()
+        return (pair[1] & pair[0]) >> consume(
+            left_df=ava.Stream(_DummyTable()),
+            right_df=ava.Stream(_DummyTable()),
+        )
+
+    assert wf().run(executor=executor) == "right+left"
+    assert "split[0]" not in executor.driver_payload_gets
+    assert "split[1]" not in executor.driver_payload_gets
+    assert executor.worker_payload_gets == ["split", "split"]
+    _assert_no_synthetic_payload_resolution(executor)
 
 
 # ---------------------------------------------------------------------------

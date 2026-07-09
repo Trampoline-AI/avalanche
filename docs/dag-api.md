@@ -152,6 +152,14 @@ backlog/incremental draining use `ava.Stream(table, key="...", mode="append_scan
 which claims one pending snapshot at a time. User code does not call `.read()` on
 the `Stream` object. `key` is only valid with `mode="append_scan"`.
 
+A `NodeFuture` bound to a parameter configured with an upstream-consuming
+provider such as `ava.Stream` selects that exact upstream result while the
+selected parent result is live. The selector preserves the parameter name and
+any tuple index, so keyword order does not change the mapping and `split()[1]`
+selects only index 1 from a live single- or multi-return producer. Other
+positional Python arguments retain their logical parameter binding when the
+selector is removed from the eventual worker call.
+
 `ava.Cursor(table, key=...)` stores manual checkpoint state in table metadata and
 is useful when a task needs custom progress control or coordination across
 multiple source tables.
@@ -298,8 +306,27 @@ def chunk_documents(...): ...
 `mode="lazy"` runs only the listed start nodes; downstream state is left as-is.
 Lazy reruns support multiple start slugs for fanout cases. When a rerun skips an
 upstream node, the scheduled node should read skipped input through `ava.Stream`
-so Avalanche can replay source rows by lineage. Explicit Python arguments from
-skipped `NodeFuture`s are rejected in v1 because there is no live result to pass.
+so Avalanche can replay source rows by lineage. Non-indexed `NodeFuture`
+selectors may select an `ava.Stream` parent when the node also has a
+runtime-injected `BaseInput` and ordinary Python parameters. Durable replay is
+keyed by `(run_id, node_slug)`, so it cannot distinguish tuple return slots when
+one producer writes both to the same table. A rerun that skips the producer while
+using an indexed Stream selector is therefore rejected. The same limitation
+applies when an unindexed true-multi-return parent is expanded into logical
+output slots and one of those slots binds to a Stream parameter. Include the
+producer in the rerun, or model its outputs as distinct source nodes. Explicit
+Python args from skipped `NodeFuture`s are still rejected when they are not
+bound to a Stream provider, because there is no live result to pass.
+
+Workflow inputs for reruns come from the current `.run(input=...)` call, not
+from the source run named by `Rerun.run_id`. If a workflow declares
+`@ava.workflow(input=MyInput)`, Avalanche validates the current run's `input`
+payload into `MyInput` and injects that object into node parameters annotated as
+`MyInput`. If `input` is omitted, `MyInput()` is constructed from model defaults.
+The source `Rerun.run_id` is used for skipped upstream data/lineage reads, such
+as `ava.Stream` rows; it does not restore the previous run's `BaseInput` values.
+To replay with identical parameters, pass the same input again. To rerun with
+new parameters, pass a new `input` payload.
 
 `ava.Rerun(deployment_id=...)` reserves the target-deployment selector for
 operators that route the same DAG spec to a specific deployed code version. The
