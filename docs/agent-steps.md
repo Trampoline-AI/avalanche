@@ -5,6 +5,11 @@ callable agent. The body maps workflow values into model inputs, calls the
 agent, validates or composes the raw prediction, and explicitly persists its
 own result.
 
+Agent execution is implemented on top of
+[PredictRLM](https://github.com/Trampoline-AI/predict-rlm). Avalanche lazily
+constructs a PredictRLM predictor when the injected agent is first called, while
+the surrounding function remains an ordinary Avalanche step.
+
 Agent support is optional:
 
 ```bash
@@ -21,11 +26,75 @@ ava.agent_step is ava.agent.step
 Use root aliases for typed signature classes and `ava.agent` for the optional
 agent integration namespace, skills, files, and inline signature factory.
 
+## Quick start
+
+Configure the credentials required by your PredictRLM model, then declare the
+model contract, the agent-backed step, and the workflow:
+
+```python
+import avalanche as ava
+from pydantic import BaseModel
+
+
+class Review(BaseModel):
+    summary: str
+    approved: bool
+
+
+class ReviewSignature(ava.Signature):
+    """Review a document for publication."""
+
+    document: str = ava.InputField(desc="Document text to review.")
+    review: Review = ava.OutputField(desc="Publication decision and summary.")
+
+
+@ava.agent_step(ReviewSignature, lm="openai/gpt-5.5")
+async def review_document(document: str, *, agent: ava.Agent) -> Review:
+    prediction = await agent(document=document)
+    return prediction.review
+
+
+@ava.workflow
+def review_flow():
+    return review_document("Avalanche composes durable data and agent steps.")
+
+
+result = review_flow().run(executor=ava.LocalExecutor())
+print(result.summary, result.approved)
+```
+
+The `agent` argument is injected by Avalanche; callers pass only ordinary
+workflow values. The step body is asynchronous because the model call is
+awaitable, while `Workflow.run()` remains synchronous.
+
+Use `ava.input` when the value arrives at run time instead of being fixed in the
+workflow declaration:
+
+```python
+class ReviewRequest(ava.BaseInput):
+    document: str
+
+
+@ava.workflow(input=ReviewRequest)
+def review_flow():
+    return review_document(ava.input.document)
+
+
+result = review_flow().run(
+    executor=ava.LocalExecutor(),
+    input=ReviewRequest(document="Text supplied by this workflow run."),
+)
+```
+
 ## Typed signature class
 
-A signature class is a native DSPy signature. Type annotations carry the field
-types; `ava.InputField()` and `ava.OutputField()` only mark field direction and
-optionally describe it.
+`ava.Signature` intentionally mirrors
+[DSPy's Signature API](https://dspy.ai/api/signatures/Signature/). It subclasses
+`dspy.Signature`; `ava.InputField` and `ava.OutputField` are direct re-exports of
+the DSPy field helpers; and the inline string form delegates to DSPy's signature
+factory. Type annotations carry field types, while the field helpers mark input
+and output direction and optionally describe each field. Native DSPy signature
+classes are also accepted directly.
 
 ```python
 import avalanche as ava
