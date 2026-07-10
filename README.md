@@ -134,6 +134,7 @@ the tests. Package consumers can install narrower extras:
 | `ray` | Ray executor dependencies |
 | `lance` | Lance storage backend dependencies |
 | `s3` | S3 file reference reads through `ava.S3File` and `s3fs` |
+| `agent` | agent-backed steps through [PredictRLM](https://github.com/Trampoline-AI/predict-rlm) |
 | `all` | all optional runtime components |
 
 For local development, sync extras with commands such as:

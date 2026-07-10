@@ -9,6 +9,7 @@ The current team release candidate is `0.1.0-rc0`.
 
 - Python flow authoring with `@ava.source`, `@ava.step`, `@ava.dest`, and
   `@ava.workflow`.
+- Agent-backed workflow steps with the optional `agent` extra.
 - Local flow execution with `ava.LocalExecutor`.
 - Iceberg-backed and Lance-backed storage helpers.
 - Local Iceberg examples backed by PyIceberg's SQL SQLite catalog.
@@ -150,6 +151,7 @@ Package consumers can choose narrower extras:
 | `ray` | Ray executor support |
 | `lance` | Lance storage backend support |
 | `s3` | S3 file reference reads through `ava.S3File` and `s3fs` |
+| `agent` | agent-backed workflow steps through [PredictRLM](https://github.com/Trampoline-AI/predict-rlm) |
 | `all` | all optional runtime components |
 
 For development, include extras with `uv sync --extra <name>`, for example:
@@ -173,6 +175,7 @@ uv sync --extra runtime --extra tui
 
 - [examples/README.md](../examples/README.md) for canonical example details.
 - [docs/dag-api.md](dag-api.md) for workflow DAG primitives.
+- [docs/agent-steps.md](agent-steps.md) for agent-backed workflow steps.
 - [docs/data-model-api.md](data-model-api.md) for table and namespace APIs.
 - [ARCHITECTURE.md](../ARCHITECTURE.md) for component boundaries.
 - [CONTRIBUTING.md](../CONTRIBUTING.md) for local development expectations.
