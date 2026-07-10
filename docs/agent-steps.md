@@ -49,6 +49,7 @@ class AuditRfpSig(ava.Signature):
     )
 
 
+# `ns.audit_results` is this belt's model-declared audit table.
 @ava.agent_step(
     AuditRfpSig,
     skills=[ava.agent.skills.pdf],
@@ -57,7 +58,8 @@ async def audit_rfp(
     documents: list[File],
     *,
     agent: ava.Agent,
-    dest: ava.Table,
+    # The table binding remains explicit at the step declaration boundary.
+    dest: ava.Table = ns.audit_results,
 ) -> ava.AppendResult:
     prediction = await agent(documents=documents)
     return dest.append(prediction.audit)
@@ -80,12 +82,14 @@ For a small local contract, build the native DSPy signature inline:
 quick_answer_sig = ava.agent.Signature(
     "question: str, context: str -> answer: str, citations: list[str]",
     "Answer the question from context and cite the supporting passages.",
-    skills=[ava.agent.skills.pdf],
-    tools=[search_internal_knowledge_base],
 )
 
 
-@ava.agent.step(quick_answer_sig)
+@ava.agent.step(
+    quick_answer_sig,
+    skills=[ava.agent.skills.pdf],
+    tools=[search_internal_knowledge_base],
+)
 async def answer_question(
     question: str,
     context: str,
@@ -118,7 +122,7 @@ async def render_artifacts(
     plan: ProposalPlan,
     *,
     agent: ava.Agent,
-    dest: ava.Table,
+    dest: ava.Table = ns.draft_artifacts,
 ) -> ava.AppendResult:
     prediction = await agent(plan=plan)
     return dest.append(
@@ -136,32 +140,31 @@ retry/rerun boundary, fans out independently, or has substantial I/O.
 
 ## Skills and tools
 
-A signature can declare default capabilities:
+Skills and tools are execution capabilities of a specific agent step, not
+signature metadata. A reusable signature therefore remains only the model input
+and output contract:
 
 ```python
 quick_answer_sig = ava.agent.Signature(
     "question: str -> answer: str",
     "Answer accurately.",
-    skills=[ava.agent.skills.pdf],
-    tools=[search_internal_knowledge_base],
 )
 ```
 
-`@ava.agent_step(...)` may replace either default for a particular step:
+Configure every capability where the signature is used:
 
 ```python
 @ava.agent_step(
     quick_answer_sig,
-    skills=[ava.agent.skills.docx],
+    skills=[ava.agent.skills.pdf, ava.agent.skills.docx],
     tools=[search_contract_repository],
 )
 async def answer_contract_question(..., *, agent: ava.Agent):
     ...
 ```
 
-Explicit decorator `skills=` and `tools=` replace the corresponding signature
-list; they do not concatenate. Tools are ordinary callables with unique stable
-`__name__` values. `ava.agent.skills.pdf`, `.docx`, and `.spreadsheet` are lazy,
+Tools are ordinary callables with unique stable `__name__` values.
+`ava.agent.skills.pdf`, `.docx`, and `.spreadsheet` are lazy,
 identity-preserving PredictRLM re-exports. `ava.agent.Skill` constructs custom
 PredictRLM skills.
 

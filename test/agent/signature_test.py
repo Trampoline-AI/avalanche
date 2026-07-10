@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import dspy
+import pytest
 from pydantic import BaseModel
 
 import avalanche as ava
@@ -31,7 +32,10 @@ class TestSignatureContracts:
         assert Review.output_fields["report"].annotation is Report
         assert Review.output_fields["report"].json_schema_extra["desc"] == "structured report"
         assert Review.output_fields["verdict"].annotation is str
-        assert Review.output_fields["verdict"].json_schema_extra["desc"] == "plain-language verdict"
+        assert (
+            Review.output_fields["verdict"].json_schema_extra["desc"]
+            == "plain-language verdict"
+        )
         assert Review.instructions == "Review the supplied document for compliance."
 
     def test_dynamic_signature_string_preserves_model_boundary_and_instructions(self):
@@ -48,11 +52,28 @@ class TestSignatureContracts:
         assert signature.output_fields["note"].annotation is str
         assert signature.instructions == "Return a verdict and review note."
 
+    @pytest.mark.parametrize(
+        ("name", "kwargs"),
+        [
+            ("skills", {"skills": [object()]}),
+            ("tools", {"tools": [lambda text: text]}),
+        ],
+    )
+    def test_dynamic_signature_rejects_agent_capabilities(self, name, kwargs):
+        """Inline Signature contracts cannot own execution capabilities."""
+        with pytest.raises(TypeError, match=name):
+            ava.agent.Signature(
+                "text: str -> verdict: str",
+                "Classify the supplied text.",
+                **kwargs,
+            )
+
 
 class TestAgentImports:
     def test_skills_imports_the_provider_only_when_accessed(self):
         """The provider-owned skills namespace resolves on demand."""
-        from avalanche.agent import skills
         import predict_rlm.skills
+
+        from avalanche.agent import skills
 
         assert skills is predict_rlm.skills

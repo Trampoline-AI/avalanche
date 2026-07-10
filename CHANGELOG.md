@@ -24,8 +24,8 @@
   explicitly persist their results.
 - `ava.Signature` is a subclassable native DSPy contract using
   `ava.InputField()` / `ava.OutputField()`. The identical
-  `ava.agent.Signature` also builds inline string signatures with skills and
-  tools; decorator capabilities override signature defaults.
+  `ava.agent.Signature` also builds inline string signatures; skills and tools
+  are configured only by `@ava.agent_step(...)`.
 - `@ava.workflow(agent_defaults={...})` supplies workflow-scoped PredictRLM
   runtime defaults; agent-step kwargs override them. Process-global agent
   configuration and automatic agent-step table/output behavior were removed.

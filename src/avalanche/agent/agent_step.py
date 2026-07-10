@@ -72,19 +72,14 @@ class Agent:
 
     def _resolve_signature(self) -> Any:
         if self._dspy_signature is None:
-            dspy_signature, signature_skills, signature_tools = resolve_signature(
+            self._dspy_signature = resolve_signature(
                 self._signature_declaration, name=self._step_name
             )
-            self._dspy_signature = dspy_signature
             self._skills = (
-                signature_skills
-                if self._skills_override is UNSET
-                else tuple(self._skills_override)
+                () if self._skills_override is UNSET else tuple(self._skills_override)
             )
             self._tools = (
-                signature_tools
-                if self._tools_override is UNSET
-                else tuple(self._tools_override)
+                () if self._tools_override is UNSET else tuple(self._tools_override)
             )
         return self._dspy_signature
 
@@ -168,8 +163,8 @@ def agent_step(
     """Register a bodyful workflow step with an injected callable Agent.
 
     The first positional argument is a subclassed ``ava.Signature``, an inline
-    ``ava.agent.Signature(...)``, or ``ava.Signature.from_dspy(...)``. Signature
-    skills/tools are defaults; explicit decorator capabilities replace them.
+    ``ava.agent.Signature(...)``, or another DSPy Signature class. Skills and
+    tools are configured only on this decorator.
     """
     if signature is None:
         raise TypeError("ava.agent_step requires a Signature as its first argument")
@@ -247,9 +242,12 @@ def _public_step_signature(user_fn: Callable[..., Any]) -> inspect.Signature:
             f"agent step {user_fn.__qualname__!r} agent parameter must be annotated ava.Agent"
         )
 
-    return signature.replace(
-        parameters=[parameter for name, parameter in signature.parameters.items() if name != "agent"]
-    )
+    parameters = [
+        parameter
+        for name, parameter in signature.parameters.items()
+        if name != "agent"
+    ]
+    return signature.replace(parameters=parameters)
 
 
 def _build_predictor(

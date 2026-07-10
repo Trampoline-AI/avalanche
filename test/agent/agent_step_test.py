@@ -128,66 +128,23 @@ class TestBodyfulAgentSteps:
         assert ava.agent_step is ava.agent.agent_step is ava.agent.step
         assert captured["builds"][0]["runtime_kwargs"] == {"lm": "root-lm"}
 
-    def test_dynamic_signature_capabilities_are_inherited_without_overrides(self, monkeypatch):
-        """An inline Signature's declared capabilities reach PredictRLM unchanged."""
-        signature_skill = object()
+    def test_decorator_capabilities_reach_predictor(self, monkeypatch):
+        """Decorator capabilities reach the predictor constructed for the step."""
+        skill = object()
 
-        def signature_tool(text: str) -> str:
-            return text
-
-        signature = ava.agent.Signature(
-            "text: str -> verdict: str",
-            "Classify the supplied text.",
-            skills=[signature_skill],
-            tools=[signature_tool],
-        )
-        captured = install_fake(
-            monkeypatch,
-            lambda inputs: SimpleNamespace(verdict=inputs["text"].upper()),
-        )
-
-        @ava.agent.step(signature)
-        async def classify(text: str, *, agent: ava.Agent) -> str:
-            return (await agent(text=text)).verdict
-
-        @ava.workflow
-        def flow():
-            return classify("clear")
-
-        assert flow().run(executor=LocalExecutor()) == "CLEAR"
-        build = captured["builds"][0]
-        assert build["skills"] == (signature_skill,)
-        assert build["tools"] == (signature_tool,)
-        assert list(build["signature"].input_fields) == ["text"]
-        assert list(build["signature"].output_fields) == ["verdict"]
-
-    def test_decorator_capabilities_replace_signature_capabilities(self, monkeypatch):
-        """Explicit decorator capabilities replace rather than merge Signature ones."""
-        signature_skill = object()
-        decorator_skill = object()
-
-        def signature_tool(text: str) -> str:
-            return text
-
-        def decorator_tool(text: str) -> str:
+        def tool(text: str) -> str:
             return text.upper()
 
         signature = ava.agent.Signature(
             "text: str -> verdict: str",
             "Classify the supplied text.",
-            skills=[signature_skill],
-            tools=[signature_tool],
         )
         captured = install_fake(
             monkeypatch,
             lambda inputs: SimpleNamespace(verdict=inputs["text"].upper()),
         )
 
-        @ava.agent_step(
-            signature,
-            skills=[decorator_skill],
-            tools=[decorator_tool],
-        )
+        @ava.agent_step(signature, skills=[skill], tools=[tool])
         async def classify(text: str, *, agent: ava.Agent) -> str:
             return (await agent(text=text)).verdict
 
@@ -197,10 +154,8 @@ class TestBodyfulAgentSteps:
 
         assert flow().run(executor=LocalExecutor()) == "CLEAR"
         build = captured["builds"][0]
-        assert build["skills"] == (decorator_skill,)
-        assert build["tools"] == (decorator_tool,)
-        assert signature_skill not in build["skills"]
-        assert signature_tool not in build["tools"]
+        assert build["skills"] == (skill,)
+        assert build["tools"] == (tool,)
 
     def test_agent_rejects_missing_and_unexpected_model_inputs(self):
         """Invalid model-call input names surface a precise boundary error."""
