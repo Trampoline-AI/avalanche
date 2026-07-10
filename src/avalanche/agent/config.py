@@ -10,8 +10,8 @@ from typing import Any, Mapping
 
 UNSET = object()
 
-# These define what an agent knows or can do. They belong to Signature, not a
-# workflow's or step's execution configuration.
+# These are not PredictRLM runtime kwargs. Signatures describe only model
+# inputs/outputs; skills and tools belong to the agent-step decorator.
 _RESERVED_RUNTIME_KWARGS = frozenset({"signature", "skills", "tools"})
 
 
@@ -23,7 +23,7 @@ def validate_runtime_kwargs(kwargs: Mapping[str, Any], *, owner: str) -> dict[st
     if reserved:
         rendered = ", ".join(repr(name) for name in reserved)
         raise TypeError(
-            f"{owner} cannot configure {rendered}; define those on "
-            "ava.agent.Signature instead."
+            f"{owner} cannot configure {rendered}; pass the signature as the "
+            "decorator's first argument and skills/tools on @ava.agent_step(...)."
         )
     return dict(kwargs)

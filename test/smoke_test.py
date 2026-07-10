@@ -1,6 +1,9 @@
 from __future__ import annotations
 
+import os
 import socket
+import subprocess
+import sys
 import time
 from importlib import metadata
 from pathlib import Path
@@ -24,6 +27,62 @@ def test_package_imports_and_console_entrypoint_are_available():
     scripts = {entry.name: entry.value for entry in console_scripts}
     assert scripts["ava"] == "ava_cli:main"
 
+def test_core_root_star_import_excludes_lazy_agent_symbols():
+    """Core root imports do not resolve optional agent-only packages."""
+    source_root = REPO_ROOT / "src"
+    pythonpath = os.pathsep.join(
+        filter(None, (str(source_root), os.environ.get("PYTHONPATH")))
+    )
+    script = """
+import importlib.abc
+import sys
+
+BLOCKED = {"dspy", "predict_rlm"}
+LAZY_AGENT_SYMBOLS = {
+    "Agent",
+    "AgentStepError",
+    "AgentStepExecutionError",
+    "Desc",
+    "InputField",
+    "Signature",
+    "Skill",
+    "agent_step",
+    "configure_agent",
+    "generate_signature",
+    "skills",
+}
+
+
+class BlockOptionalAgentPackages(importlib.abc.MetaPathFinder):
+    def find_spec(self, fullname, path=None, target=None):
+        if fullname.partition(".")[0] in BLOCKED:
+            raise ModuleNotFoundError(f"blocked optional dependency: {fullname}")
+        return None
+
+
+sys.meta_path.insert(0, BlockOptionalAgentPackages())
+
+import avalanche as ava
+
+assert LAZY_AGENT_SYMBOLS.isdisjoint(ava.__all__)
+namespace = {}
+exec("from avalanche import *", namespace)
+assert LAZY_AGENT_SYMBOLS.isdisjoint(namespace)
+assert BLOCKED.isdisjoint(sys.modules)
+"""
+    result = subprocess.run(
+        [sys.executable, "-c", script],
+        cwd=REPO_ROOT,
+        env={**os.environ, "PYTHONPATH": pythonpath},
+        capture_output=True,
+        text=True,
+    )
+
+    assert result.returncode == 0, (
+        "core-only root star import resolved an optional agent dependency\n"
+        f"stdout:\n{result.stdout}\n"
+        f"stderr:\n{result.stderr}"
+    )
 
 def test_operator_grpc_can_list_and_run_fixture_flow():
     from avalanche.operator import Operator
