@@ -10,6 +10,49 @@ to the operator over gRPC; the operator discovers flows, manages runs, and
 executes work through a pluggable executor such as `LocalExecutor` or
 `RayExecutor`.
 
+## Local development modes
+
+Avalanche exposes the same workflow runtime through two local development modes.
+
+### Embedded mode
+
+```text
+Python flow program -> Workflow.run() -> LocalExecutor or RayExecutor
+```
+
+The program that declares the flow builds it and calls `Workflow.run()` directly.
+The program owns execution and result handling; no operator, gRPC service, CLI
+client, or connected TUI participates.
+
+```bash
+uv run python examples/operator_workflow.py
+```
+
+### Operator-managed mode
+
+```text
+CLI or TUI -> gRPC -> Operator -> Workflow.run() -> LocalExecutor or RayExecutor
+```
+
+The operator runs separately, imports and discovers configured flow files, and
+owns run state, logs, cancellation, schedules, and file watching. The `ava run`
+command and connected TUI are control-plane clients. The TUI never executes the
+flow itself.
+
+```bash
+# Terminal 1
+uv run ava operator --flows examples --port 7433
+
+# Terminal 2: choose the CLI or TUI
+uv run ava run operator_demo_workflow --connect localhost:7433
+uv run ava tui --connect localhost:7433
+```
+
+`ava dev --flows examples` is a convenience form of operator-managed mode. It
+starts an operator subprocess and a connected TUI together. The operator still
+executes each discovered flow by calling the same `Workflow.run()` path used in
+embedded mode.
+
 ## High-level component model
 
 ```text

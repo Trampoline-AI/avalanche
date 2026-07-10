@@ -47,7 +47,17 @@ Run the shorter end-to-end smoke gate:
 make smoke-test
 ```
 
-## Run A Local Flow
+## Local Development Modes
+
+Avalanche supports two ways to run flows locally. Both execute the same
+`Workflow.run()` path with a `LocalExecutor` or `RayExecutor`; the difference is
+which process owns the run lifecycle.
+
+### Embedded Mode
+
+Run the Python program that declares the flow and call `Workflow.run()` directly.
+Definition, orchestration, execution, and result handling stay in that program,
+without an operator or gRPC connection.
 
 Start with the simplest smoke-tested example:
 
@@ -66,7 +76,12 @@ uv run python examples/operator_workflow.py
 Examples that need storage write under `.avalanche/examples/` by default. Set
 `AVALANCHE_EXAMPLE_ROOT=/path/to/tempdir` to redirect those artifacts.
 
-## Operator And TUI
+### Operator-Managed Mode
+
+Start the operator separately and point it at the Python files or directories
+that declare your flows. The operator discovers those flows, executes runs, and
+owns run state, logs, cancellation, schedules, and file watching. The CLI and TUI
+are clients of the operator; the TUI does not execute flows itself.
 
 Start a local operator and connected TUI in one interactive command:
 
@@ -81,7 +96,13 @@ example files directly; it reads the flow list exposed by the operator over gRPC
 uv run ava operator --flows examples --port 7433
 ```
 
-In another terminal:
+In another terminal, start a run from the CLI:
+
+```bash
+uv run ava run operator_demo_workflow --connect localhost:7433
+```
+
+Or connect the TUI and start runs interactively:
 
 ```bash
 uv run ava tui --connect localhost:7433

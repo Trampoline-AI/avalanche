@@ -58,7 +58,17 @@ For a shorter end-to-end confidence check, run:
 make smoke-test
 ```
 
-## Run A Local Flow
+## Local Development Modes
+
+Avalanche supports two local development modes. Both use the same workflow
+runtime and can execute through `LocalExecutor` or `RayExecutor`; they differ in
+where the run is started and managed.
+
+### Embedded Mode
+
+Run the Python program that declares the flow. The program builds the DAG and
+calls `Workflow.run()` directly, so flow definition, execution, and result
+handling stay in one process. No operator or gRPC connection is required.
 
 Start with the simplest local DAG example:
 
@@ -80,7 +90,13 @@ artifacts isolated for a test run, set `AVALANCHE_EXAMPLE_ROOT`:
 AVALANCHE_EXAMPLE_ROOT=/tmp/avalanche-example uv run python examples/stream_pattern.py
 ```
 
-## Run The Operator And TUI
+### Operator-Managed Mode
+
+Run the operator as the local control plane. It discovers flows from configured
+Python files or directories, executes them in background runs, and owns run
+state, logs, cancellation, schedules, and file watching. The CLI and connected
+TUI send run-control requests to the operator over gRPC; the TUI does not execute
+flows directly.
 
 The shortest interactive path starts the operator and connected TUI together:
 
@@ -94,7 +110,13 @@ To run them separately, start the operator in one terminal:
 uv run ava operator --flows examples --port 7433
 ```
 
-Then connect the TUI from another terminal:
+Start a discovered flow from another terminal with the CLI:
+
+```bash
+uv run ava run operator_demo_workflow --connect localhost:7433
+```
+
+Alternatively, connect the TUI and start runs interactively:
 
 ```bash
 uv run ava tui --connect localhost:7433
