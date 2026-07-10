@@ -55,7 +55,7 @@ from .storage import Namespace, NamespaceConfig, ScanResult, Table, TableGroup
 # Types
 from .types import AppendResult, SnapshotMetadata, SnapshotState
 
-__version__ = "0.1.0rc0"
+__version__ = "0.1.0rc1"
 
 
 __all__ = [

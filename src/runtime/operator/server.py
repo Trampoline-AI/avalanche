@@ -9,10 +9,15 @@ from typing import Any
 
 import grpc
 
-from avalanche.runtime import MAX_INLINE_FILE_BYTES, MAX_INLINE_REQUEST_BYTES
+from avalanche.runtime import (
+    MAX_INLINE_FILE_BYTES,
+    MAX_INLINE_REQUEST_BYTES,
+    File,
+    S3File,
+)
 
 from .convert import run_state_to_proto, workflow_info_to_proto
-from .operator import Operator
+from .operator import Operator, RunAlreadyExistsError
 from .proto import operator_pb2 as pb
 from .proto import operator_pb2_grpc as pb_grpc
 
@@ -39,10 +44,13 @@ class OperatorServicer(pb_grpc.OperatorServiceServicer):
             run_context = _decode_json_object(request.context_json, "context_json")
             run_id = self._op.start_run(
                 request.flow_name,
+                run_id=request.run_id or None,
                 input=run_input,
                 context=run_context,
             )
             return pb.StartRunResponse(run_id=run_id)
+        except RunAlreadyExistsError as e:
+            context.abort(grpc.StatusCode.ALREADY_EXISTS, str(e))
         except ValueError as e:
             context.abort(grpc.StatusCode.INVALID_ARGUMENT, str(e))
         except KeyError as e:
@@ -155,22 +163,31 @@ def _decode_input_payload(request) -> dict[str, Any] | None:
                 f"File attachment '{file.field_name}' exceeds the maximum inline file size "
                 f"of {MAX_INLINE_FILE_BYTES} bytes. Use ava.S3File for larger files."
             )
-        _set_input_field(payload, file.field_name, {
-            "name": file.name or None,
-            "content": bytes(file.content),
-            "content_type": file.content_type or None,
-            "sha256": file.sha256 or None,
-        })
+        _set_input_field(
+            payload,
+            file.field_name,
+            File(
+                name=file.name or None,
+                content=bytes(file.content),
+                content_type=file.content_type or None,
+                sha256=file.sha256 or None,
+            ),
+        )
     for file in request.input_s3_files:
         if not file.field_name:
             raise ValueError("input S3 file reference is missing field_name")
-        _set_input_field(payload, file.field_name, {
-            "uri": file.uri,
-            "version_id": file.version_id or None,
-            "etag": file.etag or None,
-            "size_bytes": file.size_bytes or None,
-            "content_type": file.content_type or None,
-        })
+        _set_input_field(
+            payload,
+            file.field_name,
+            S3File(
+                uri=file.uri,
+                version_id=file.version_id or None,
+                etag=file.etag or None,
+                size_bytes=file.size_bytes or None,
+                content_type=file.content_type or None,
+                sha256=file.sha256 or None,
+            ),
+        )
     return payload or None
 
 

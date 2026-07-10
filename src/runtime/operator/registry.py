@@ -4,12 +4,16 @@ from __future__ import annotations
 
 import importlib.util
 import sys
+import threading
+from contextlib import contextmanager
 from pathlib import Path
 from typing import Callable
 
 from avalanche.dag import Workflow
 
 from .models import WorkflowDiscoveryDiagnostic, WorkflowInfo, display_name_from_id
+
+_IMPORT_LOCK = threading.RLock()
 
 
 def workflow_to_info(p: Workflow, file_path: str) -> WorkflowInfo:
@@ -82,12 +86,21 @@ class WorkflowRegistry:
         """
         file_path = file_path.resolve()
         package_info = self._package_module_name(file_path)
+        import_root = package_info[1] if package_info is not None else file_path.parent
+        package_prefixes = (
+            [package_info[0].partition(".")[0]] if package_info is not None else []
+        )
+        with scoped_import_paths([import_root], package_prefixes):
+            self._scan_file_in_context(file_path, package_info)
+
+    def _scan_file_in_context(
+        self,
+        file_path: Path,
+        package_info: tuple[str, Path] | None,
+    ) -> None:
 
         if package_info is not None:
-            module_name, root = package_info
-            root_str = str(root)
-            if root_str not in sys.path:
-                sys.path.insert(0, root_str)
+            module_name, _root = package_info
             # Remove cached module so re-scans pick up file changes
             sys.modules.pop(module_name, None)
             try:
@@ -183,3 +196,60 @@ class WorkflowRegistry:
         if entry is None:
             raise KeyError(f"Unknown workflow: {name}")
         return entry[0]
+
+
+@contextmanager
+def scoped_import_paths(paths: list[Path], package_prefixes: list[str] | None = None):
+    resolved_paths = [path.resolve() for path in paths]
+    package_prefixes = package_prefixes or []
+    with _IMPORT_LOCK:
+        original_path = list(sys.path)
+        original_modules = dict(sys.modules)
+        evicted_modules = {
+            name: module
+            for name, module in original_modules.items()
+            if any(_module_is_in_package(name, prefix) for prefix in package_prefixes)
+        }
+        for name in evicted_modules:
+            sys.modules.pop(name, None)
+        for path in reversed(resolved_paths):
+            sys.path.insert(0, str(path))
+        try:
+            yield
+        finally:
+            for name, module in list(sys.modules.items()):
+                if any(_module_is_in_package(name, prefix) for prefix in package_prefixes):
+                    sys.modules.pop(name, None)
+                    continue
+                if not _module_loaded_from(module, resolved_paths):
+                    continue
+                original = original_modules.get(name)
+                if original is None:
+                    sys.modules.pop(name, None)
+                elif module is not original:
+                    sys.modules[name] = original
+            for name, module in original_modules.items():
+                if name in evicted_modules:
+                    sys.modules[name] = module
+                    continue
+                if _module_loaded_from(module, resolved_paths):
+                    sys.modules[name] = module
+            sys.path[:] = original_path
+
+
+def _module_is_in_package(module_name: str, package_prefix: str) -> bool:
+    return module_name == package_prefix or module_name.startswith(f"{package_prefix}.")
+
+
+def _module_loaded_from(module: object, roots: list[Path]) -> bool:
+    locations: list[str] = []
+    file_name = getattr(module, "__file__", None)
+    if isinstance(file_name, str):
+        locations.append(file_name)
+    package_paths = getattr(module, "__path__", ())
+    locations.extend(path for path in package_paths if isinstance(path, str))
+    for location in locations:
+        candidate = Path(location).resolve()
+        if any(candidate == root or candidate.is_relative_to(root) for root in roots):
+            return True
+    return False

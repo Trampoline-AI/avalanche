@@ -11,18 +11,20 @@ class Empty(_message.Message):
     def __init__(self) -> None: ...
 
 class StartRunRequest(_message.Message):
-    __slots__ = ("flow_name", "input_json", "context_json", "input_files", "input_s3_files")
+    __slots__ = ("flow_name", "input_json", "context_json", "input_files", "input_s3_files", "run_id")
     FLOW_NAME_FIELD_NUMBER: _ClassVar[int]
     INPUT_JSON_FIELD_NUMBER: _ClassVar[int]
     CONTEXT_JSON_FIELD_NUMBER: _ClassVar[int]
     INPUT_FILES_FIELD_NUMBER: _ClassVar[int]
     INPUT_S3_FILES_FIELD_NUMBER: _ClassVar[int]
+    RUN_ID_FIELD_NUMBER: _ClassVar[int]
     flow_name: str
     input_json: str
     context_json: str
     input_files: _containers.RepeatedCompositeFieldContainer[FileAttachment]
     input_s3_files: _containers.RepeatedCompositeFieldContainer[S3FileReference]
-    def __init__(self, flow_name: _Optional[str] = ..., input_json: _Optional[str] = ..., context_json: _Optional[str] = ..., input_files: _Optional[_Iterable[_Union[FileAttachment, _Mapping]]] = ..., input_s3_files: _Optional[_Iterable[_Union[S3FileReference, _Mapping]]] = ...) -> None: ...
+    run_id: str
+    def __init__(self, flow_name: _Optional[str] = ..., input_json: _Optional[str] = ..., context_json: _Optional[str] = ..., input_files: _Optional[_Iterable[_Union[FileAttachment, _Mapping]]] = ..., input_s3_files: _Optional[_Iterable[_Union[S3FileReference, _Mapping]]] = ..., run_id: _Optional[str] = ...) -> None: ...
 
 class FileAttachment(_message.Message):
     __slots__ = ("field_name", "name", "content", "content_type", "sha256")
@@ -39,20 +41,22 @@ class FileAttachment(_message.Message):
     def __init__(self, field_name: _Optional[str] = ..., name: _Optional[str] = ..., content: _Optional[bytes] = ..., content_type: _Optional[str] = ..., sha256: _Optional[str] = ...) -> None: ...
 
 class S3FileReference(_message.Message):
-    __slots__ = ("field_name", "uri", "version_id", "etag", "size_bytes", "content_type")
+    __slots__ = ("field_name", "uri", "version_id", "etag", "size_bytes", "content_type", "sha256")
     FIELD_NAME_FIELD_NUMBER: _ClassVar[int]
     URI_FIELD_NUMBER: _ClassVar[int]
     VERSION_ID_FIELD_NUMBER: _ClassVar[int]
     ETAG_FIELD_NUMBER: _ClassVar[int]
     SIZE_BYTES_FIELD_NUMBER: _ClassVar[int]
     CONTENT_TYPE_FIELD_NUMBER: _ClassVar[int]
+    SHA256_FIELD_NUMBER: _ClassVar[int]
     field_name: str
     uri: str
     version_id: str
     etag: str
     size_bytes: int
     content_type: str
-    def __init__(self, field_name: _Optional[str] = ..., uri: _Optional[str] = ..., version_id: _Optional[str] = ..., etag: _Optional[str] = ..., size_bytes: _Optional[int] = ..., content_type: _Optional[str] = ...) -> None: ...
+    sha256: str
+    def __init__(self, field_name: _Optional[str] = ..., uri: _Optional[str] = ..., version_id: _Optional[str] = ..., etag: _Optional[str] = ..., size_bytes: _Optional[int] = ..., content_type: _Optional[str] = ..., sha256: _Optional[str] = ...) -> None: ...
 
 class StartRunResponse(_message.Message):
     __slots__ = ("run_id",)

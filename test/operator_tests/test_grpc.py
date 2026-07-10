@@ -1,8 +1,11 @@
 """Tests for gRPC server + client roundtrip."""
 
+import json
 import os
+import socket
 import time
 
+import grpc
 import pytest
 
 import avalanche as ava
@@ -15,6 +18,42 @@ from runtime.operator.proto import operator_pb2 as pb
 
 FIXTURES_DIR = os.path.join(os.path.dirname(os.path.dirname(__file__)), "fixtures")
 TEST_PORT = 17433  # Use non-default port to avoid conflicts
+
+
+def _unused_port():
+    with socket.socket() as sock:
+        sock.bind(("localhost", 0))
+        return sock.getsockname()[1]
+
+
+def _wait_for_run_success(client, run_id):
+    deadline = time.monotonic() + 5
+    while time.monotonic() < deadline:
+        run = client.get_run(run_id)
+        if run and run.status in (RunStatus.SUCCESS, RunStatus.FAILED):
+            return run
+        time.sleep(0.05)
+    return client.get_run(run_id)
+
+
+def test_phase9_start_run_wire_carries_run_id_and_s3_sha256():
+    request = pb.StartRunRequest(
+        flow_name="input_workflow",
+        run_id="run_01KCVST2FP4QC5NKZNN5NS0Z2W",
+        input_s3_files=[
+            pb.S3FileReference(
+                field_name="document_ref",
+                uri="s3://bucket/document",
+                size_bytes=5,
+                sha256="2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824",
+            )
+        ],
+    )
+
+    assert request.run_id == "run_01KCVST2FP4QC5NKZNN5NS0Z2W"
+    assert request.input_s3_files[0].sha256 == (
+        "2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824"
+    )
 
 
 @pytest.fixture(scope="module")
@@ -68,13 +107,148 @@ class TestGrpcRoundtrip:
         run = client.get_run(run_id)
         assert run.status == RunStatus.SUCCESS
 
+    def test_start_run_honors_client_run_id(self, client):
+        requested_run_id = "run_client_owned"
+
+        assert client.start_run("simple_workflow", run_id=requested_run_id) == requested_run_id
+
+    def test_start_run_duplicate_custom_id_maps_to_already_exists(self, client):
+        requested_run_id = "run_grpc_duplicate"
+        assert client.start_run("simple_workflow", run_id=requested_run_id) == requested_run_id
+
+        assert client.start_run("simple_workflow", run_id=requested_run_id) == ""
+        assert "ALREADY_EXISTS" in client.last_error
+
+    def test_start_run_context_json_cannot_forge_lineage_vector(self, tmp_path):
+        workflow_path = tmp_path / "lineage_workflows.py"
+        workflow_path.write_text(
+            """
+import logging
+
+import avalanche as ava
+
+log = logging.getLogger(__name__)
+
+
+@ava.source(slug="capture")
+def capture(ctx: ava.RunContext):
+    log.info(
+        "lineage=%s; run_id=%s; workflow=%s; executor=%s; node_id=%s; "
+        "node_name=%s; node_slug=%s",
+        ctx.lineage_vector,
+        ctx.run_id,
+        ctx.workflow_name,
+        ctx.executor_type,
+        ctx.node_id,
+        ctx.node_name,
+        ctx.node_slug,
+    )
+
+
+@ava.workflow
+def lineage_context_workflow():
+    capture()
+""",
+        )
+        op = Operator(workflow_paths=[str(workflow_path)], schedule=False, watch=False)
+        port = _unused_port()
+        server = serve(op, port=port, block=False)
+        time.sleep(0.2)
+        client = GrpcStateProvider(f"localhost:{port}")
+        try:
+            run_id = "run_grpc_real"
+            response = client._stub.StartRun(
+                pb.StartRunRequest(
+                    flow_name="lineage_context_workflow",
+                    run_id=run_id,
+                    context_json=json.dumps(
+                        {
+                            "run_id": "run_fake",
+                            "workflow_name": "fake_workflow",
+                            "executor_type": "fake_executor",
+                            "node_id": "fake_node_1",
+                            "node_name": "fake_node",
+                            "node_slug": "fake-node",
+                            "lineage_vector": {"upstream": "run_fake"},
+                        }
+                    ),
+                )
+            )
+
+            assert response.run_id == run_id
+            run = _wait_for_run_success(client, run_id)
+            assert run is not None
+            assert run.status == RunStatus.SUCCESS
+            messages = [entry.message for entry in run.logs]
+            assert any("lineage={}" in message for message in messages)
+            assert any(f"run_id={run_id}" in message for message in messages)
+            assert any("workflow=lineage_context_workflow" in message for message in messages)
+            assert any("executor=local" in message for message in messages)
+            assert any("node_id=capture_1" in message for message in messages)
+            assert any("node_name=capture" in message for message in messages)
+            assert any("node_slug=capture" in message for message in messages)
+            assert not any("run_fake" in message for message in messages)
+            assert not any("fake_node" in message for message in messages)
+        finally:
+            client.close()
+            server.stop(grace=1)
+
+    @pytest.mark.parametrize(
+        "start_request",
+        [
+            pb.StartRunRequest(
+                flow_name="input_workflow",
+                run_id="run_bad_inline_checksum",
+                input_files=[
+                    pb.FileAttachment(
+                        field_name="document",
+                        content=b"contents",
+                        sha256="0" * 64,
+                    )
+                ],
+            ),
+            pb.StartRunRequest(
+                flow_name="input_workflow",
+                run_id="run_bad_s3_checksum_shape",
+                input_s3_files=[
+                    pb.S3FileReference(
+                        field_name="document_ref",
+                        uri="s3://bucket/document",
+                        sha256="not-a-digest",
+                    )
+                ],
+            ),
+            pb.StartRunRequest(
+                flow_name="input_workflow",
+                run_id="run_bad_s3_uri_shape",
+                input_s3_files=[
+                    pb.S3FileReference(
+                        field_name="document_ref",
+                        uri="https://bucket.example/document",
+                    )
+                ],
+            ),
+        ],
+    )
+    def test_start_run_rejects_bad_file_metadata_before_response(self, client, start_request):
+        with pytest.raises(grpc.RpcError) as exc_info:
+            client._stub.StartRun(start_request)
+
+        assert exc_info.value.code() == grpc.StatusCode.INVALID_ARGUMENT
+        assert client.get_run(start_request.run_id) is None
+
     def test_start_run_passes_json_context_and_file_attachments(self, client):
         run_id = client.start_run(
             "input_workflow",
             input={"message": "from-grpc"},
             context={"request_id": "req_grpc", "run_id": "spoofed_user_id"},
             files={"document": File(name="note.txt", content=b"grpc-bytes")},
-            s3_files={"document_ref": S3File(uri="s3://bucket/grpc.txt")},
+            s3_files={
+                "document_ref": S3File(
+                    uri="s3://bucket/grpc.txt",
+                    sha256="0" * 64,
+                )
+            },
         )
 
         deadline = time.monotonic() + 5

@@ -25,6 +25,10 @@ from .models import (
 from .registry import WorkflowRegistry
 
 
+class RunAlreadyExistsError(ValueError):
+    """Raised when a caller-owned run ID has already been reserved."""
+
+
 class Operator:
     """Workflow orchestrator implementing the same interface as StateProvider.
 
@@ -87,6 +91,7 @@ class Operator:
         flow_name: str,
         triggered_by: str = "manual",
         *,
+        run_id: str | None = None,
         input: dict[str, Any] | None = None,
         context: dict[str, Any] | None = None,
     ) -> str:
@@ -94,7 +99,7 @@ class Operator:
         builder = self._registry.get_builder(flow_name)
         info = next(p for p in self.list_workflows() if p.name == flow_name)
 
-        run_id = f"run_{str(uuid4())[:8]}"
+        run_id = run_id or f"run_{str(uuid4())[:8]}"
         run = RunState(
             run_id=run_id,
             flow_name=flow_name,
@@ -108,10 +113,12 @@ class Operator:
                 node_type=info.node_types[nid],
                 status=NodeStatus.PENDING,
             )
-        self._runs[run_id] = run
-
         cancel_event = threading.Event()
-        self._cancel_events[run_id] = cancel_event
+        with self._lock:
+            if run_id in self._runs:
+                raise RunAlreadyExistsError(f"Run {run_id} already exists")
+            self._runs[run_id] = run
+            self._cancel_events[run_id] = cancel_event
 
         t = threading.Thread(
             target=self._execute_run,

@@ -161,6 +161,7 @@ class S3File(BaseModel):
     etag: str | None = None
     size_bytes: int | None = None
     content_type: str | None = None
+    sha256: str | None = None
 
     @field_validator("uri")
     @classmethod
@@ -168,6 +169,18 @@ class S3File(BaseModel):
         if not value.startswith("s3://"):
             raise ValueError("S3File uri must start with s3://")
         return value
+
+    @field_validator("sha256")
+    @classmethod
+    def _validate_sha256(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        normalized = value.lower()
+        if len(normalized) != 64 or any(
+            character not in "0123456789abcdef" for character in normalized
+        ):
+            raise ValueError("S3File sha256 must be a 64-character hexadecimal digest")
+        return normalized
 
     @overload
     def open(self, mode: Literal["rb"] = "rb", **kwargs: Any) -> BinaryIO: ...
@@ -187,8 +200,16 @@ class S3File(BaseModel):
                 "or add s3fs to your environment.",
                 name="s3fs",
             ) from exc
-        return s3fs.S3FileSystem(**kwargs).open(self.uri, mode)
+        filesystem_options = dict(kwargs)
+        open_options: dict[str, Any] = {}
+        if self.version_id is not None:
+            filesystem_options.setdefault("version_aware", True)
+            open_options["version_id"] = self.version_id
+        return s3fs.S3FileSystem(**filesystem_options).open(self.uri, mode, **open_options)
 
     def read_bytes(self, **kwargs: Any) -> bytes:
         with self.open("rb", **kwargs) as file:
-            return file.read()
+            content = file.read()
+        if self.sha256 is not None and hashlib.sha256(content).hexdigest() != self.sha256:
+            raise ValueError("S3File sha256 does not match content")
+        return content

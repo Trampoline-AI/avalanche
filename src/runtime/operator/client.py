@@ -115,6 +115,7 @@ class GrpcStateProvider:
         self,
         flow_name: str,
         *,
+        run_id: str | None = None,
         input: Mapping[str, Any] | BaseModel | None = None,
         context: Mapping[str, Any] | BaseModel | None = None,
         files: Mapping[str, File | bytes] | None = None,
@@ -127,6 +128,7 @@ class GrpcStateProvider:
         _validate_inline_request_size(input_files)
         request = pb.StartRunRequest(
             flow_name=flow_name,
+            run_id=run_id or "",
             input_json=_json_payload(input),
             context_json=_json_payload(context),
             input_files=input_files,
@@ -255,4 +257,5 @@ def _s3_file_reference(field_name: str, value: S3File | str) -> pb.S3FileReferen
         etag=file.etag or "",
         size_bytes=file.size_bytes or 0,
         content_type=file.content_type or "",
+        sha256=file.sha256 or "",
     )

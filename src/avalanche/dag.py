@@ -943,6 +943,12 @@ def _build_node_binding_plan(
     except (ValueError, TypeError):
         return _NodeBindingPlan(args, dict(kwargs), {}, (), ())
 
+    from .runtime import BaseInput
+
+    try:
+        type_hints = get_type_hints(fn)
+    except Exception:
+        type_hints = {}
     runtime_param_names = _runtime_param_names_from_signature(fn)
     selectors: dict[str, _ProviderSelector] = {}
 
@@ -968,6 +974,12 @@ def _build_node_binding_plan(
 
     for param in params:
         if param.name in runtime_param_names:
+            annotation = type_hints.get(param.name, param.annotation)
+            if _safe_issubclass(annotation, BaseInput) and param.kind in (
+                inspect.Parameter.POSITIONAL_ONLY,
+                inspect.Parameter.POSITIONAL_OR_KEYWORD,
+            ):
+                positional_slots.append((param, "runtime_input"))
             continue
 
         if param.name in bound_kwargs:
@@ -1013,6 +1025,11 @@ def _build_node_binding_plan(
             break
 
         value = args[arg_index]
+        if slot_kind == "runtime_input":
+            if isinstance(value, InputRef) and not value.path:
+                arg_index += 1
+                positional_bindings.append((param, value))
+            continue
         arg_index += 1
         if slot_kind == "stream" and isinstance(value, NodeFuture):
             selectors[param.name] = _ProviderSelector(
@@ -1412,6 +1429,10 @@ def _build_context_values(
         "workflow_name": workflow_name,
         "executor_type": executor_type,
         "rerun": rerun,
+        "node_id": None,
+        "node_name": None,
+        "node_slug": None,
+        "lineage_vector": {},
     }
 
     if raw_context is not None and isinstance(raw_context, target_type):
