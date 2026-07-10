@@ -1017,6 +1017,16 @@ def _build_node_binding_plan(
     positional_bindings: list[tuple[inspect.Parameter, Any]] = []
     arg_index = 0
     for param, slot_kind in positional_slots:
+        if slot_kind == "root_input":
+            if (
+                arg_index < len(args)
+                and isinstance(args[arg_index], InputRef)
+                and not args[arg_index].path
+            ):
+                positional_bindings.append((param, args[arg_index]))
+                arg_index += 1
+            continue
+
         if arg_index >= len(args):
             break
         if slot_kind == "varargs":
