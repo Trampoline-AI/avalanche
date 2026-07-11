@@ -1772,7 +1772,13 @@ def _data_param_position(
     return -1
 
 
-def _fetch_node_result(nf: NodeFuture, result_refs, nodes, executor):
+def _fetch_node_result(
+    nf: NodeFuture,
+    result_refs,
+    nodes,
+    executor,
+    scheduled_node_ids: set[str] | None = None,
+):
     """Fetch the actual result value for a NodeFuture, handling chains and multi-return."""
     # If this is a chain composite, fetch the chain_end instead
     fetch_target = nf.chain_end if nf.chain_end != nf else nf
@@ -1781,12 +1787,23 @@ def _fetch_node_result(nf: NodeFuture, result_refs, nodes, executor):
     if isinstance(fetch_target, ParallelTasks):
         results = []
         for branch in fetch_target.branches:
-            branch_result = _fetch_node_result(branch, result_refs, nodes, executor)
+            branch_result = _fetch_node_result(
+                branch,
+                result_refs,
+                nodes,
+                executor,
+                scheduled_node_ids,
+            )
             results.append(branch_result)
         return tuple(results)
 
     # Regular NodeFuture handling
     if fetch_target.future_id not in result_refs:
+        if (
+            scheduled_node_ids is not None
+            and fetch_target.future_id not in scheduled_node_ids
+        ):
+            return None
         raise ValueError(
             f"Workflow return node {fetch_target.future_id!r} was not scheduled by rerun"
         )
@@ -2742,11 +2759,23 @@ class Workflow:
         # Handle different return types
         if isinstance(self.returns, NodeFuture):
             # Single NodeFuture returned
-            return _fetch_node_result(self.returns, result_refs, self.nodes, executor)
+            return _fetch_node_result(
+                self.returns,
+                result_refs,
+                self.nodes,
+                executor,
+                scheduled_node_ids if rerun_spec is not None else None,
+            )
         elif isinstance(self.returns, tuple):
             # Tuple of NodeFutures returned
             return tuple(
-                _fetch_node_result(nf, result_refs, self.nodes, executor)
+                _fetch_node_result(
+                    nf,
+                    result_refs,
+                    self.nodes,
+                    executor,
+                    scheduled_node_ids if rerun_spec is not None else None,
+                )
                 if isinstance(nf, NodeFuture)
                 else nf
                 for nf in self.returns

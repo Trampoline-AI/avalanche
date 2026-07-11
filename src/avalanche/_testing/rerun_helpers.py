@@ -21,6 +21,14 @@ class RerunSelectorInput(BaseInput):
     suffix: str = ""
 
 
+def rerun_scheduler_sync_node():
+    return "ok"
+
+
+async def rerun_scheduler_async_node():
+    return "ok"
+
+
 def varargs_selector_consume(
     prefix,
     payload: RerunSelectorInput,

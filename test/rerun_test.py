@@ -24,6 +24,8 @@ from avalanche._testing.rerun_helpers import (
     logical_multireturn_sibling,
     logical_multireturn_split,
     positional_only_selector_consume,
+    rerun_scheduler_async_node,
+    rerun_scheduler_sync_node,
     selector_end,
     unindexed_mixed_consume,
     unindexed_mixed_multireturn,
@@ -211,6 +213,76 @@ def test_rerun_scheduler_prunes_skipped_upstreams_on_executors(executor_factory)
             executor=executor,
             rerun=ava.Rerun(run_id="source_1", start=["middle"], mode="autorun"),
         ) == "sink"
+    finally:
+        ray = getattr(executor, "ray", None)
+        if ray is not None and ray.is_initialized():
+            ray.shutdown()
+
+
+@pytest.mark.parametrize("executor_factory", [ava.LocalExecutor, ava.RayExecutor])
+def test_rerun_scheduler_multi_start_matrix_reuses_executor(executor_factory):
+    if executor_factory is ava.RayExecutor:
+        pytest.importorskip("ray")
+
+    executor = executor_factory()
+    try:
+        for raw_node in (
+            rerun_scheduler_sync_node,
+            rerun_scheduler_async_node,
+        ):
+            root = ava.source(slug="root")(raw_node)
+            left = ava.step(slug="left")(raw_node)
+            right = ava.step(slug="right")(raw_node)
+            left_sink = ava.dest(slug="left-sink")(raw_node)
+            right_sink = ava.dest(slug="right-sink")(raw_node)
+
+            @ava.workflow
+            def wf():
+                root_result = root()
+                left_result = root_result >> left()
+                right_result = root_result >> right()
+                left_result >> left_sink()
+                right_result >> right_sink()
+
+            workflow = wf()
+            for mode, expected_slugs in (
+                ("lazy", {"left", "right"}),
+                ("autorun", {"left", "right", "left-sink", "right-sink"}),
+            ):
+                started: list[str] = []
+                workflow.run(
+                    executor=executor,
+                    hooks=RunHooks(on_node_start=started.append),
+                    rerun=ava.Rerun(
+                        run_id="source_run",
+                        start=["left", "right"],
+                        mode=mode,
+                    ),
+                )
+
+                assert len(started) == len(expected_slugs)
+                assert {workflow.node_slugs[node_id] for node_id in started} == expected_slugs
+
+        if executor_factory is ava.RayExecutor:
+            load = ava.source(slug="load")(explicit_non_stream_load)
+            middle = ava.step(slug="middle")(explicit_non_stream_consume)
+
+            @ava.workflow
+            def implicit_non_stream_wf():
+                return load() >> middle()
+
+            started = []
+            with pytest.raises(ValueError, match="Stream"):
+                implicit_non_stream_wf().run(
+                    executor=executor,
+                    hooks=RunHooks(on_node_start=started.append),
+                    rerun=ava.Rerun(
+                        run_id="source_run",
+                        start=["middle"],
+                        mode="lazy",
+                    ),
+                )
+            assert started == []
     finally:
         ray = getattr(executor, "ray", None)
         if ray is not None and ray.is_initialized():
@@ -753,6 +825,90 @@ def test_rerun_stream_requires_row_lineage(rerun_ns):
             executor=ava.LocalExecutor(),
             rerun=ava.Rerun(run_id="source_run", start=["process-data"]),
         )
+
+
+def test_rerun_stream_requires_row_lineage_before_live_passthrough(rerun_ns):
+    ns = rerun_ns
+
+    @ava.source(slug="load-data")
+    def load_data(*, source=ns.no_lineage):
+        return source.append(_rows("alpha"))
+
+    @ava.step(slug="process-data")
+    def process_data(df: pl.DataFrame = ava.Stream(ns.no_lineage)):
+        return df.height
+
+    @ava.workflow
+    def wf():
+        return load_data() >> process_data()
+
+    with pytest.raises(ValueError, match="row_lineage=True"):
+        wf().run(
+            executor=ava.LocalExecutor(),
+            rerun=ava.Rerun(run_id="source_run", start=["load-data"], mode="autorun"),
+        )
+
+
+def test_lazy_rerun_returns_none_when_single_declared_return_is_pruned():
+    events: list[str] = []
+
+    @ava.source(slug="load")
+    def load():
+        events.append("load")
+
+    @ava.step(slug="middle")
+    def middle():
+        events.append("middle")
+        return "middle"
+
+    @ava.dest(slug="sink")
+    def sink():
+        events.append("sink")
+        return "sink"
+
+    @ava.workflow
+    def wf():
+        return load() >> middle() >> sink()
+
+    result = wf().run(
+        executor=ava.LocalExecutor(),
+        rerun=ava.Rerun(run_id="source_run", start=["middle"], mode="lazy"),
+    )
+
+    assert result is None
+    assert events == ["middle"]
+
+
+def test_lazy_rerun_preserves_scheduled_tuple_return_and_none_for_pruned_return():
+    events: list[str] = []
+
+    @ava.source(slug="load")
+    def load():
+        events.append("load")
+
+    @ava.step(slug="middle")
+    def middle():
+        events.append("middle")
+        return "middle"
+
+    @ava.dest(slug="sink")
+    def sink():
+        events.append("sink")
+        return "sink"
+
+    @ava.workflow
+    def wf():
+        middle_result = load() >> middle()
+        sink_result = middle_result >> sink()
+        return middle_result, sink_result
+
+    result = wf().run(
+        executor=ava.LocalExecutor(),
+        rerun=ava.Rerun(run_id="source_run", start=["middle"], mode="lazy"),
+    )
+
+    assert result == ("middle", None)
+    assert events == ["middle"]
 
 
 def test_sparse_lazy_rerun_of_rerun_resolves_parent_run_rows(rerun_ns):
