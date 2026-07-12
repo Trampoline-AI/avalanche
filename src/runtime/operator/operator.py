@@ -11,6 +11,7 @@ import signal
 import threading
 import time
 import warnings
+from collections import deque
 from collections.abc import Mapping
 from copy import deepcopy
 from dataclasses import dataclass
@@ -35,6 +36,7 @@ _LEVEL_MAP = {
 }
 
 ExecutorBackend: TypeAlias = Literal["local", "ray"]
+STREAM_HISTORY_CAPACITY = 1024
 DeprecatedExecutorFactory: TypeAlias = (
     type[LocalExecutor] | type[RayExecutor] | partial[RayExecutor]
 )
@@ -80,6 +82,7 @@ class Operator:
         prepare_timeout: float = 15.0,
         discovery_timeout: float = 15.0,
         cancel_grace: float = 5.0,
+        stream_history_capacity: int = STREAM_HISTORY_CAPACITY,
     ) -> None:
         """Create an operator with spawn-safe executor configuration.
 
@@ -102,6 +105,8 @@ class Operator:
         self._prepare_timeout = prepare_timeout
         if cancel_grace < 0:
             raise ValueError("Cancellation grace must be non-negative")
+        if stream_history_capacity <= 0:
+            raise ValueError("Stream history capacity must be positive")
         self._cancel_grace = cancel_grace
         self._mp = multiprocessing.get_context("spawn")
         self._runs: dict[str, RunState] = {}
@@ -110,6 +115,9 @@ class Operator:
         self._log_callbacks: list[Callable[[LogEntry], None]] = []
         self._subscribers: list[queue.Queue] = []
         self._sequence = 0
+        self._stream_history: deque[tuple[int, RunState]] = deque(
+            maxlen=stream_history_capacity
+        )
         self._lock = threading.RLock()
         self._watcher_stop = threading.Event()
         self._watcher_ready = threading.Event()
@@ -285,10 +293,30 @@ class Operator:
         with self._lock:
             self._log_callbacks.append(callback)
 
-    def subscribe(self) -> queue.Queue:
+    def subscribe(self, since_sequence: int = 0) -> queue.Queue:
         subscription: queue.Queue = queue.Queue()
         with self._lock:
             self._subscribers.append(subscription)
+            current_sequence = self._sequence
+            oldest_sequence = (
+                self._stream_history[0][0]
+                if self._stream_history
+                else current_sequence + 1
+            )
+            cursor_is_replayable = (
+                since_sequence <= current_sequence
+                and since_sequence >= oldest_sequence - 1
+            )
+            if cursor_is_replayable:
+                for sequence, run in self._stream_history:
+                    if sequence > since_sequence:
+                        subscription.put_nowait((sequence, deepcopy(run)))
+            else:
+                for run_id in sorted(self._runs):
+                    self._sequence += 1
+                    snapshot = deepcopy(self._runs[run_id])
+                    self._stream_history.append((self._sequence, snapshot))
+                    subscription.put_nowait((self._sequence, deepcopy(snapshot)))
         return subscription
 
     def unsubscribe(self, subscription: queue.Queue) -> None:
@@ -583,6 +611,7 @@ class Operator:
         with self._lock:
             self._sequence += 1
             sequence = self._sequence
+            self._stream_history.append((sequence, deepcopy(run)))
             callback_notifications = tuple(
                 (callback, deepcopy(run)) for callback in self._run_callbacks
             )

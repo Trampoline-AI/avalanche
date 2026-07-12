@@ -5,7 +5,6 @@ from __future__ import annotations
 import json
 import math
 import threading
-import time
 from collections.abc import Mapping
 from numbers import Real
 from typing import Any, Callable
@@ -30,6 +29,7 @@ from .proto import operator_pb2 as pb
 from .proto import operator_pb2_grpc as pb_grpc
 
 DEFAULT_UNARY_TIMEOUT_SECONDS = 10.0
+STREAM_THREAD_JOIN_TIMEOUT_SECONDS = 2.0
 
 
 class GrpcStateProvider:
@@ -71,7 +71,10 @@ class GrpcStateProvider:
         self._stub = pb_grpc.OperatorServiceStub(self._channel)
         self._run_callbacks: list[Callable[[RunState], None]] = []
         self._log_callbacks: list[Callable[[LogEntry], None]] = []
+        self._lifecycle_lock = threading.Lock()
         self._stream_thread: threading.Thread | None = None
+        self._stream_stop = threading.Event()
+        self._closed = False
         self._last_seq: int = 0
         self._legacy_names_by_workflow_id: dict[str, str] = {}
 
@@ -186,12 +189,15 @@ class GrpcStateProvider:
 
     def _ensure_stream(self) -> None:
         """Start the background streaming thread if not already running."""
-        if self._stream_thread is not None and self._stream_thread.is_alive():
-            return
-        self._stream_thread = threading.Thread(
-            target=self._stream_loop, daemon=True
-        )
-        self._stream_thread.start()
+        with self._lifecycle_lock:
+            if self._closed or self._stream_stop.is_set():
+                return
+            if self._stream_thread is not None and self._stream_thread.is_alive():
+                return
+            self._stream_thread = threading.Thread(
+                target=self._stream_loop, daemon=True
+            )
+            self._stream_thread.start()
 
     def ping(self) -> bool:
         """Quick health check — try a fast unary call with short timeout."""
@@ -220,17 +226,31 @@ class GrpcStateProvider:
 
     def _stream_loop(self) -> None:
         """Background thread: consumes StreamUpdates and fires callbacks."""
-        while True:
+        while not self._stream_stop.is_set():
             try:
                 self.retry_count += 1
+                if self._stream_stop.is_set():
+                    break
                 stream = self._stub.StreamUpdates(
                     pb.StreamRequest(since_sequence=self._last_seq),
                     metadata=self._metadata,
                 )
-                self.connected = True
-                self.retry_count = 0
-                self.last_error = ""
+                with self._lifecycle_lock:
+                    if self._closed:
+                        break
+                    self.connected = True
+                    self.retry_count = 0
+                    self.last_error = ""
+                first_update = True
                 for update in stream:
+                    if self._stream_stop.is_set():
+                        break
+                    if first_update:
+                        first_update = False
+                        if update.sequence < self._last_seq:
+                            self._last_seq = 0
+                    if update.sequence <= self._last_seq:
+                        continue
                     self._last_seq = update.sequence
                     run = run_state_from_proto(update.run)
                     for cb in self._run_callbacks:
@@ -239,18 +259,32 @@ class GrpcStateProvider:
                         except Exception:
                             pass
             except grpc.RpcError as e:
+                if self._stream_stop.is_set():
+                    break
                 self.connected = False
                 self.last_error = f"{e.code().name}: {e.details()}"
                 delay = min(2 ** min(self.retry_count, 5), 30)
-                time.sleep(delay)
+                self._stream_stop.wait(delay)
             except Exception as e:
+                if self._stream_stop.is_set():
+                    break
                 self.connected = False
                 self.last_error = str(e)
-                time.sleep(2.0)
+                self._stream_stop.wait(2.0)
 
     def close(self) -> None:
-        """Close the gRPC channel."""
-        self._channel.close()
+        """Stop stream reconnects and close the gRPC channel."""
+        with self._lifecycle_lock:
+            close_channel = not self._closed
+            self._closed = True
+            self._stream_stop.set()
+            self.connected = False
+            thread = self._stream_thread
+        if close_channel:
+            self._channel.close()
+        if thread is not None and thread is not threading.current_thread():
+            thread.join(timeout=STREAM_THREAD_JOIN_TIMEOUT_SECONDS)
+        self.connected = False
 
 
 def _json_payload(payload: Mapping[str, Any] | BaseModel | None) -> str:

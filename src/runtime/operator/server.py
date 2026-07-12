@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import logging
+import queue
 import signal
 import threading
 from concurrent import futures
@@ -86,18 +87,16 @@ class OperatorServicer(pb_grpc.OperatorServiceServicer):
 
     def StreamUpdates(self, request, context):  # noqa: N802
         """Server-streaming RPC: yields RunUpdate messages as state changes."""
-        q = self._op.subscribe()
+        q = self._op.subscribe(request.since_sequence)
         try:
             while context.is_active():
                 try:
                     seq, run = q.get(timeout=1.0)
-                    if seq <= request.since_sequence:
-                        continue
                     yield pb.RunUpdate(
                         sequence=seq,
                         run=run_state_to_proto(run),
                     )
-                except Exception:
+                except queue.Empty:
                     # Queue.get timeout — just loop and check context.is_active()
                     continue
         finally:

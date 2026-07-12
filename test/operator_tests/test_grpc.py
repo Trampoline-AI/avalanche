@@ -2,8 +2,10 @@
 
 import os
 import socket
+import threading
 import time
 
+import grpc
 import pytest
 
 import avalanche as ava
@@ -190,7 +192,7 @@ class TestGrpcRoundtrip:
 
         deadline = time.monotonic() + 5
         while time.monotonic() < deadline:
-            if any(s == RunStatus.SUCCESS for _, s in updates):
+            if any(rid == run_id and s == RunStatus.SUCCESS for rid, s in updates):
                 break
             time.sleep(0.05)
 
@@ -198,6 +200,43 @@ class TestGrpcRoundtrip:
         statuses = [s for rid, s in updates if rid == run_id]
         assert len(statuses) > 0, "No stream updates received"
         assert RunStatus.SUCCESS in statuses
+
+    def test_reconnect_replays_terminal_update_missed_while_disconnected(self, grpc_server):
+        operator, _server = grpc_server
+        run = RunState(run_id="run_reconnect", flow_name="flow")
+        with operator._lock:
+            operator._runs[run.run_id] = run
+            cursor = operator._sequence
+        provider = GrpcStateProvider(f"localhost:{TEST_PORT}")
+        first_stream = None
+        replay_stream = None
+        try:
+            operator._notify_run(run)
+            first_stream = provider._stub.StreamUpdates(
+                pb.StreamRequest(since_sequence=cursor)
+            )
+            first = next(first_stream)
+            assert first.run.run_id == run.run_id
+            first_stream.cancel()
+
+            run.status = RunStatus.SUCCESS
+            operator._notify_run(run)
+
+            replay_stream = provider._stub.StreamUpdates(
+                pb.StreamRequest(since_sequence=first.sequence)
+            )
+            replay = next(replay_stream)
+            assert replay.sequence > first.sequence
+            assert replay.run.run_id == run.run_id
+            assert replay.run.status == RunStatus.SUCCESS.value
+        finally:
+            if first_stream is not None:
+                first_stream.cancel()
+            if replay_stream is not None:
+                replay_stream.cancel()
+            provider.close()
+            with operator._lock:
+                operator._runs.pop(run.run_id, None)
 
     def test_legacy_flow_name_request_still_starts(self, client):
         response = client._stub.StartRun(pb.StartRunRequest(flow_name="simple_workflow"))
@@ -250,6 +289,225 @@ def test_old_proto_fields_receive_identity_fallbacks():
     )
     assert run.workflow_id == "legacy"
     assert run.workflow_display_name == "legacy"
+
+
+def test_client_accepts_lower_first_sequence_after_operator_restart():
+    provider = GrpcStateProvider("localhost:1")
+    received = []
+
+    class RestartedStub:
+        def StreamUpdates(self, request, *, metadata):  # noqa: N802
+            assert request.since_sequence == 99
+            assert metadata is None
+            yield pb.RunUpdate(
+                sequence=2,
+                run=pb.RunStateMsg(
+                    run_id="run_recovered", flow_name="flow", status="success"
+                ),
+            )
+            yield pb.RunUpdate(
+                sequence=2,
+                run=pb.RunStateMsg(
+                    run_id="duplicate", flow_name="flow", status="success"
+                ),
+            )
+            yield pb.RunUpdate(
+                sequence=1,
+                run=pb.RunStateMsg(
+                    run_id="stale", flow_name="flow", status="pending"
+                ),
+            )
+            yield pb.RunUpdate(
+                sequence=3,
+                run=pb.RunStateMsg(run_id="run_live", flow_name="flow", status="running"),
+            )
+            provider._stream_stop.set()
+
+    provider._stub = RestartedStub()
+    provider._last_seq = 99
+    provider._run_callbacks.append(lambda run: received.append(run.run_id))
+    try:
+        provider._stream_loop()
+    finally:
+        provider.close()
+
+    assert received == ["run_recovered", "run_live"]
+    assert provider._last_seq == 3
+
+
+def test_client_skips_equal_first_sequence_without_epoch_reset():
+    provider = GrpcStateProvider("localhost:1")
+    received = []
+
+    class DuplicateFirstStub:
+        def StreamUpdates(self, request, *, metadata):  # noqa: N802
+            assert request.since_sequence == 99
+            assert metadata is None
+            yield pb.RunUpdate(
+                sequence=99,
+                run=pb.RunStateMsg(
+                    run_id="duplicate", flow_name="flow", status="success"
+                ),
+            )
+            yield pb.RunUpdate(
+                sequence=100,
+                run=pb.RunStateMsg(
+                    run_id="run_live", flow_name="flow", status="running"
+                ),
+            )
+            provider._stream_stop.set()
+
+    provider._stub = DuplicateFirstStub()
+    provider._last_seq = 99
+    provider._run_callbacks.append(lambda run: received.append(run.run_id))
+    try:
+        provider._stream_loop()
+    finally:
+        provider.close()
+
+    assert received == ["run_live"]
+    assert provider._last_seq == 100
+
+
+def test_concurrent_run_update_registrations_start_one_stream_thread():
+    provider = GrpcStateProvider("localhost:1")
+    registration_count = 16
+    barrier = threading.Barrier(registration_count + 1)
+    stream_entered = threading.Event()
+    release_stream = threading.Event()
+
+    class BlockingStub:
+        def __init__(self):
+            self.calls = 0
+            self.thread_ids = set()
+
+        def StreamUpdates(self, request, *, metadata):  # noqa: N802
+            self.calls += 1
+            self.thread_ids.add(threading.get_ident())
+
+            class BlockingStream:
+                def __iter__(self):
+                    return self
+
+                def __next__(self):
+                    stream_entered.set()
+                    release_stream.wait()
+                    raise StopIteration
+
+            return BlockingStream()
+
+    stub = BlockingStub()
+    provider._stub = stub
+
+    def register():
+        barrier.wait()
+        provider.on_run_update(lambda _run: None)
+
+    registrations = [threading.Thread(target=register) for _ in range(registration_count)]
+    for registration in registrations:
+        registration.start()
+    barrier.wait()
+    for registration in registrations:
+        registration.join()
+
+    assert stream_entered.wait(timeout=1.0)
+    assert stub.calls == 1
+    assert stub.thread_ids == {provider._stream_thread.ident}
+
+    provider._stream_stop.set()
+    release_stream.set()
+    provider.close()
+    assert provider._stream_thread is not None
+    assert not provider._stream_thread.is_alive()
+
+
+def test_concurrent_close_and_stream_start_leave_no_live_thread_or_calls():
+    provider = GrpcStateProvider("localhost:1")
+    participant_count = 16
+    barrier = threading.Barrier(participant_count + 2)
+    close_returned = threading.Event()
+
+    class Unavailable(grpc.RpcError):
+        def code(self):
+            return grpc.StatusCode.UNAVAILABLE
+
+        def details(self):
+            return "offline"
+
+    class FailingStub:
+        def __init__(self):
+            self.calls = 0
+            self.post_close_calls = 0
+
+        def StreamUpdates(self, request, *, metadata):  # noqa: N802
+            self.calls += 1
+            if close_returned.is_set():
+                self.post_close_calls += 1
+            raise Unavailable()
+
+    stub = FailingStub()
+    provider._stub = stub
+
+    def register():
+        barrier.wait()
+        provider.on_run_update(lambda _run: None)
+
+    def close():
+        barrier.wait()
+        provider.close()
+        close_returned.set()
+
+    registrations = [threading.Thread(target=register) for _ in range(participant_count)]
+    closer = threading.Thread(target=close)
+    for registration in registrations:
+        registration.start()
+    closer.start()
+    barrier.wait()
+    for registration in registrations:
+        registration.join()
+    closer.join()
+
+    thread = provider._stream_thread
+    assert thread is None or not thread.is_alive()
+    assert stub.calls <= 1
+    assert stub.post_close_calls == 0
+
+
+def test_client_close_stops_reconnect_thread_and_prevents_new_calls():
+    provider = GrpcStateProvider("localhost:1")
+    called = threading.Event()
+
+    class Unavailable(grpc.RpcError):
+        def code(self):
+            return grpc.StatusCode.UNAVAILABLE
+
+        def details(self):
+            return "offline"
+
+    class FailingStub:
+        def __init__(self):
+            self.calls = 0
+
+        def StreamUpdates(self, request, *, metadata):  # noqa: N802
+            self.calls += 1
+            called.set()
+            raise Unavailable()
+
+    stub = FailingStub()
+    provider._stub = stub
+    provider.connected = True
+    provider.on_run_update(lambda _run: None)
+    assert called.wait(timeout=1.0)
+
+    provider.close()
+    provider.close()
+    calls_after_close = stub.calls
+    provider.on_run_update(lambda _run: None)
+
+    assert provider._stream_thread is not None
+    assert not provider._stream_thread.is_alive()
+    assert stub.calls == calls_after_close
+    assert provider.connected is False
 
 
 def test_canonical_client_requests_include_cached_legacy_name():

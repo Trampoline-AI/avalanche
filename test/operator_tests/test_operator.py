@@ -1,6 +1,7 @@
 """Tests for Operator — workflow execution and state management."""
 
 import os
+import threading
 import time
 from functools import partial
 
@@ -8,7 +9,7 @@ import pytest
 
 from avalanche import LocalExecutor, RayExecutor
 from avalanche.operator import Operator
-from avalanche.operator.models import NodeStatus, RunStatus
+from avalanche.operator.models import NodeStatus, RunState, RunStatus
 from avalanche.operator.scheduler import Scheduler
 
 FIXTURES_DIR = os.path.join(os.path.dirname(os.path.dirname(__file__)), "fixtures")
@@ -416,3 +417,94 @@ class TestOperatorSubscription:
         assert len(updates) >= 2
         sequences = [s for s, _ in updates]
         assert sequences == sorted(sequences), "Sequences should be monotonically increasing"
+
+    def test_replays_exact_missed_updates_within_retained_history(self):
+        op = Operator([], watch=False, schedule=False, stream_history_capacity=4)
+        run = RunState(run_id="run_1", flow_name="flow")
+        op._runs[run.run_id] = run
+        try:
+            op._notify_run(run)
+            run.status = RunStatus.RUNNING
+            op._notify_run(run)
+            run.status = RunStatus.SUCCESS
+            op._notify_run(run)
+
+            assert op.subscribe(3).empty()
+            replay = op.subscribe(1)
+
+            assert [replay.get_nowait() for _ in range(2)] == [
+                (2, RunState(run_id="run_1", flow_name="flow", status=RunStatus.RUNNING)),
+                (3, RunState(run_id="run_1", flow_name="flow", status=RunStatus.SUCCESS)),
+            ]
+            assert replay.empty()
+        finally:
+            op.close()
+
+    def test_old_cursor_recovers_latest_runs_with_fresh_ordered_sequences(self):
+        op = Operator([], watch=False, schedule=False, stream_history_capacity=2)
+        op._runs = {
+            "run_b": RunState(run_id="run_b", flow_name="flow", status=RunStatus.SUCCESS),
+            "run_a": RunState(run_id="run_a", flow_name="flow", status=RunStatus.FAILED),
+        }
+        try:
+            for _ in range(3):
+                op._notify_run(op._runs["run_a"])
+
+            recovery = op.subscribe(0)
+            updates = [recovery.get_nowait(), recovery.get_nowait()]
+
+            assert [(seq, run.run_id) for seq, run in updates] == [
+                (4, "run_a"),
+                (5, "run_b"),
+            ]
+            assert recovery.empty()
+            assert [seq for seq, _ in op._stream_history] == [4, 5]
+        finally:
+            op.close()
+
+    def test_cursor_ahead_after_restart_recovers_current_runs(self):
+        op = Operator([], watch=False, schedule=False)
+        op._runs = {
+            "run_b": RunState(run_id="run_b", flow_name="flow"),
+            "run_a": RunState(run_id="run_a", flow_name="flow"),
+        }
+        try:
+            recovery = op.subscribe(99)
+
+            assert [recovery.get_nowait() for _ in range(2)] == [
+                (1, RunState(run_id="run_a", flow_name="flow")),
+                (2, RunState(run_id="run_b", flow_name="flow")),
+            ]
+            assert recovery.empty()
+        finally:
+            op.close()
+
+    def test_subscribe_notify_race_never_misses_or_duplicates_boundary_update(self):
+        for index in range(50):
+            op = Operator([], watch=False, schedule=False)
+            run = RunState(run_id=f"run_{index}", flow_name="flow")
+            op._runs[run.run_id] = run
+            barrier = threading.Barrier(3)
+            subscriptions = []
+
+            def subscribe():
+                barrier.wait()
+                subscriptions.append(op.subscribe(0))
+
+            def notify():
+                barrier.wait()
+                op._notify_run(run)
+
+            subscriber = threading.Thread(target=subscribe)
+            publisher = threading.Thread(target=notify)
+            subscriber.start()
+            publisher.start()
+            barrier.wait()
+            subscriber.join()
+            publisher.join()
+
+            queued = []
+            while not subscriptions[0].empty():
+                queued.append(subscriptions[0].get_nowait())
+            assert [(seq, state.run_id) for seq, state in queued] == [(1, run.run_id)]
+            op.close()
