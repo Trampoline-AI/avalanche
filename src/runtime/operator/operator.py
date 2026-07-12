@@ -15,7 +15,6 @@ from copy import deepcopy
 from dataclasses import dataclass
 from datetime import datetime
 from functools import partial
-from pathlib import Path
 from typing import Any, Callable, Literal, TypeAlias
 from uuid import uuid4
 
@@ -23,7 +22,7 @@ from ..executor import LocalExecutor, RayExecutor
 from .models import LogEntry, LogLevel, NodeState, NodeStatus, RunState, RunStatus, WorkflowInfo
 from .registry import AmbiguousWorkflow, WorkflowRegistry
 from .run_worker import run_worker
-from .source import is_source_path_included, resolve_live_source
+from .source import is_source_path_included, resolve_live_source, resolve_watch_roots
 from .windows_job import WindowsJob, assign_process, close_job, create_kill_on_close_job
 
 _LEVEL_MAP = {
@@ -334,12 +333,9 @@ class Operator:
     def _watch_loop(self) -> None:
         from watchfiles import watch
 
-        source_roots = tuple(
-            (path if path.is_dir() else path.parent).resolve()
-            for value in self._workflow_paths
-            for path in [Path(value.split("=", 1)[-1]).expanduser()]
-        )
-        watch_dirs = {str(path) for path in source_roots}
+        locators = tuple(descriptor.locator for descriptor in self._registry.descriptors())
+        source_roots = resolve_watch_roots(self._registry.configured_roots, locators)
+        watch_dirs = tuple(str(path) for path in source_roots)
         for changes in watch(
             *watch_dirs,
             stop_event=self._watcher_stop,

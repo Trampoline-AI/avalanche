@@ -48,6 +48,55 @@ _CREDENTIAL_SUFFIXES = {
 }
 
 
+def resolve_import_root(
+    configured_root: ConfiguredRoot, source_file: str | Path | None = None
+) -> Path:
+    """Return the live import root for a configured target or source file."""
+    target = configured_root.target.resolve()
+    if source_file is None:
+        if target.is_dir():
+            package_marker = target / "__init__.py"
+            if not package_marker.is_file():
+                return target
+            source = package_marker
+        else:
+            source = target
+    else:
+        source = Path(source_file).resolve()
+
+    package = source.parent
+    top_package: Path | None = None
+    while (package / "__init__.py").is_file():
+        top_package = package
+        package = package.parent
+    if top_package is not None:
+        return package.resolve()
+    return (target if target.is_dir() else configured_root.path).resolve()
+
+
+def resolve_watch_roots(
+    configured_roots: tuple[ConfiguredRoot, ...],
+    locators: tuple[WorkflowLocator, ...],
+) -> tuple[Path, ...]:
+    """Return deterministic, non-overlapping roots covering live imports."""
+    roots_by_alias = {root.alias: root for root in configured_roots}
+    resolved = {resolve_import_root(root) for root in configured_roots}
+    for locator in locators:
+        configured_root = roots_by_alias[locator.root_alias]
+        source_file = configured_root.path / locator.relative_file
+        resolved.add(resolve_import_root(configured_root, source_file))
+    candidates = sorted(
+        resolved,
+        key=lambda path: (len(path.parts), path.as_posix()),
+    )
+    roots: list[Path] = []
+    for candidate in candidates:
+        if any(candidate == root or candidate.is_relative_to(root) for root in roots):
+            continue
+        roots.append(candidate)
+    return tuple(roots)
+
+
 def resolve_live_source(
     configured_root: ConfiguredRoot, locator: WorkflowLocator
 ) -> tuple[Path, str]:
@@ -57,20 +106,7 @@ def resolve_live_source(
     if not source_file.is_relative_to(configured_path) or not source_file.is_file():
         raise FileNotFoundError(f"Workflow source is unavailable: {locator.relative_file}")
 
-    parent = source_file.parent
-    top_package: Path | None = None
-    while (parent / "__init__.py").is_file():
-        top_package = parent
-        parent = parent.parent
-
-    if top_package is not None:
-        import_root = parent.resolve()
-    else:
-        import_root = (
-            configured_root.target
-            if configured_root.target.is_dir()
-            else configured_path
-        ).resolve()
+    import_root = resolve_import_root(configured_root, source_file)
     return import_root, source_file.relative_to(import_root).as_posix()
 
 

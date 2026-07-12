@@ -427,6 +427,36 @@ def test_watcher_refreshes_resource_derived_cron(tmp_path):
         operator.close()
 
 
+def test_watcher_refreshes_cron_imported_from_live_package_root(tmp_path):
+    project = tmp_path / "project"
+    package = project / "workflows"
+    package.mkdir(parents=True)
+    (package / "__init__.py").write_text("")
+    schedule = project / "schedule.py"
+    schedule.write_text('CRON = "3 * * * *"\n')
+    workflow = package / "flow.py"
+    workflow.write_text(
+        "import avalanche as ava\n"
+        "from schedule import CRON\n"
+        "@ava.workflow(cron=CRON)\n"
+        "def flow():\n"
+        "    return None\n"
+    )
+    operator = Operator([str(workflow)], watch=True, schedule=False)
+    try:
+        assert operator.list_workflows()[0].cron == "3 * * * *"
+        schedule.write_text('CRON = "4,5 * * * *"\n')
+        deadline = time.monotonic() + 5.0
+        while time.monotonic() < deadline:
+            if operator.list_workflows()[0].cron == "4,5 * * * *":
+                break
+            time.sleep(0.05)
+        else:
+            raise AssertionError("import-root change did not refresh workflow cron")
+    finally:
+        operator.close()
+
+
 def test_watch_policy_includes_source_resources_and_excludes_generated_secrets(tmp_path):
     source = tmp_path / "source"
     source.mkdir()

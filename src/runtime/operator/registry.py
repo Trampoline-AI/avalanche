@@ -94,6 +94,12 @@ class WorkflowRegistry:
         with self._lock:
             return self._view
 
+    @property
+    def configured_roots(self) -> tuple[ConfiguredRoot, ...]:
+        """Return the normalized workflow roots used by the current catalog."""
+        with self._lock:
+            return self._roots
+
     def scan(self, paths: list[str]) -> CatalogView:
         """Build a complete catalog off-lock, then atomically install it."""
         roots = configure_roots(paths)
