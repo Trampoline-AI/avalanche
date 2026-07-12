@@ -2789,6 +2789,9 @@ def workflow(
             finally:
                 _workflow_context.reset(token)
 
+        # Discovery relies on an explicit marker instead of probing arbitrary callables.
+        # Keep this attribute stable: it is part of the operator/discovery boundary.
+        wrapper.__avalanche_workflow__ = True  # type: ignore[attr-defined]
         return wrapper
 
     # Support both @workflow and @workflow(cron="...")

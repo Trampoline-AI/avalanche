@@ -2,7 +2,11 @@
 
 import os
 import time
+from functools import partial
 
+import pytest
+
+from avalanche import LocalExecutor, RayExecutor
 from avalanche.operator import Operator
 from avalanche.operator.models import NodeStatus, RunStatus
 
@@ -132,6 +136,59 @@ class TestOperatorLifecycle:
         runs = op.list_runs("nonexistent")
         assert len(runs) == 0
 
+    def test_refresh_invalid_file_removes_descriptor_and_schedule(self, tmp_path):
+        workflow_file = tmp_path / "scheduled.py"
+        workflow_file.write_text(
+            "import avalanche as ava\n"
+            "@ava.workflow(cron='* * * * *')\n"
+            "def scheduled():\n"
+            "    return None\n"
+        )
+        operator = Operator(
+            workflow_paths=[str(workflow_file)], schedule=False, watch=False
+        )
+        assert [item.workflow_id for item in operator.list_workflows()] == [
+            "scheduled.py::scheduled"
+        ]
+        assert len(operator._scheduler.list_schedules()) == 1
+
+        workflow_file.write_text("invalid Python !!!\n")
+        operator._refresh_workflows()
+
+        assert operator.list_workflows() == []
+        assert operator._scheduler.list_schedules() == []
+
+    @pytest.mark.parametrize(
+        "factory",
+        [lambda: LocalExecutor(), type("CustomLocal", (LocalExecutor,), {})],
+    )
+    def test_unsupported_executor_factories_are_rejected(self, factory):
+        with pytest.raises(TypeError, match="executor_factory must be"):
+            Operator([], executor_factory=factory, watch=False, schedule=False)
+
+    def test_ray_partial_preserves_spawn_safe_init_configuration(self):
+        operator = Operator(
+            [],
+            executor_factory=partial(
+                RayExecutor,
+                ray_init_kwargs={"address": "ray://cluster:10001", "namespace": "dev"},
+                runtime_env={"env_vars": {"MODE": "test"}},
+            ),
+            watch=False,
+            schedule=False,
+        )
+        try:
+            assert operator._executor_config == {
+                "backend": "ray",
+                "ray_init_kwargs": {
+                    "address": "ray://cluster:10001",
+                    "namespace": "dev",
+                },
+                "runtime_env": {"env_vars": {"MODE": "test"}},
+            }
+        finally:
+            operator.close()
+
 
 class TestOperatorCancellation:
     def _make_operator(self):
@@ -139,6 +196,7 @@ class TestOperatorCancellation:
             workflow_paths=[os.path.join(FIXTURES_DIR, "sample_workflows.py")],
             schedule=False,
             watch=False,
+            cancel_grace=0.2,
         )
 
     def test_cancel_run(self):

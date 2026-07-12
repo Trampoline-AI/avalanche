@@ -76,7 +76,16 @@ class AvalancheApp(App):
         self._log_wrap: bool = False
         # Deep-link: select a specific workflow and optionally a node
         if workflow:
-            match = next((p for p in self.store.workflows if p.name == workflow), None)
+            match = next(
+                (p for p in self.store.workflows if p.selector == workflow), None
+            )
+            if match is None:
+                short_matches = [
+                    p
+                    for p in self.store.workflows
+                    if workflow in {p.name, p.rendered_name, p.builder_symbol}
+                ]
+                match = short_matches[0] if len(short_matches) == 1 else None
             if match:
                 self.store.switch_workflow(match)
         if node:
@@ -100,17 +109,17 @@ class AvalancheApp(App):
 
     def _on_run_update_bg(self, run: RunState) -> None:
         """Called from background thread when a run state changes."""
-        # Update current_run if it matches (keeps logs + node states fresh)
-        if self.store.current_run and self.store.current_run.run_id == run.run_id:
-            self.store.current_run = run
-        self.call_from_thread(lambda: None)
+        self.store.enqueue_run_update(run)
 
     # ── Tick ───────────────────────────────────────────────────────
 
     _poll_counter: int = 0
 
     def _tick(self) -> None:
+        catalog_revision = self.store.catalog_revision
         self.store.tick()
+        if self.store.catalog_revision != catalog_revision and self._screen:
+            self._screen._remount_dag()
         # Poll current run every ~1s as fallback if stream missed updates
         self._poll_counter += 1
         if self._poll_counter % 30 == 0:
@@ -309,7 +318,7 @@ class AvalancheApp(App):
             try:
                 fresh = provider.get_run(run_id)
                 if fresh is not None:
-                    self.store.current_run = fresh
+                    self.store.enqueue_run_update(fresh)
             except Exception:
                 pass
             finally:
@@ -350,13 +359,7 @@ class AvalancheApp(App):
             if wrapper.has_class("visible"):
                 # Just reconnected — refresh workflow list
                 wrapper.remove_class("visible")
-                self.store.workflows = provider.list_workflows()
-                if self.store.workflows and not self.store.current_workflow:
-                    self.store.switch_workflow(self.store.workflows[0])
-                    try:
-                        self._screen._remount_dag()
-                    except Exception:
-                        pass
+                self.store._refresh_workflow_catalog()
         else:
             from rich.style import Style
             from rich.text import Text
@@ -477,7 +480,9 @@ class AvalancheApp(App):
         if current is None:
             self.store.switch_workflow(workflows[0])
         else:
-            idx = next((i for i, p in enumerate(workflows) if p.name == current.name), 0)
+            idx = next(
+                (i for i, p in enumerate(workflows) if p.selector == current.selector), 0
+            )
             new_idx = (idx - 1) % len(workflows)
             self.store.switch_workflow(workflows[new_idx])
         try:
@@ -495,7 +500,9 @@ class AvalancheApp(App):
         if current is None:
             self.store.switch_workflow(workflows[0])
         else:
-            idx = next((i for i, p in enumerate(workflows) if p.name == current.name), 0)
+            idx = next(
+                (i for i, p in enumerate(workflows) if p.selector == current.selector), 0
+            )
             new_idx = (idx + 1) % len(workflows)
             self.store.switch_workflow(workflows[new_idx])
         try:

@@ -18,8 +18,12 @@ from avalanche.runtime import (
     S3File,
 )
 
-from .convert import run_state_from_proto, workflow_info_from_proto
-from .models import LogEntry, RunState, WorkflowInfo
+from .convert import (
+    discovery_diagnostic_from_proto,
+    run_state_from_proto,
+    workflow_info_from_proto,
+)
+from .models import LogEntry, RunState, WorkflowDiscoveryDiagnostic, WorkflowInfo
 from .proto import operator_pb2 as pb
 from .proto import operator_pb2_grpc as pb_grpc
 
@@ -58,11 +62,13 @@ class GrpcStateProvider:
         self._log_callbacks: list[Callable[[LogEntry], None]] = []
         self._stream_thread: threading.Thread | None = None
         self._last_seq: int = 0
+        self._legacy_names_by_workflow_id: dict[str, str] = {}
 
         # Connection state (read by TUI)
         self.connected: bool = False
         self.retry_count: int = 0
         self.last_error: str = ""
+        self.discovery_diagnostics: list[WorkflowDiscoveryDiagnostic] = []
 
     def _call(self, fn, *args, default=None, **kwargs):
         """Wrap a gRPC call with connection state tracking."""
@@ -85,11 +91,22 @@ class GrpcStateProvider:
         resp = self._call(self._stub.ListFlows, pb.Empty())
         if resp is None:
             return []
+        self._cache_legacy_workflow_names(resp)
+        self.discovery_diagnostics = [
+            discovery_diagnostic_from_proto(item) for item in resp.diagnostics
+        ]
         return [workflow_info_from_proto(p) for p in resp.flows]
 
-    def list_runs(self, flow_name: str) -> list[RunState]:
+    def list_runs(self, workflow_selector: str) -> list[RunState]:
+        legacy_name = self._legacy_names_by_workflow_id.get(
+            workflow_selector, workflow_selector
+        )
         resp = self._call(
-            self._stub.ListRuns, pb.ListRunsRequest(flow_name=flow_name)
+            self._stub.ListRuns,
+            pb.ListRunsRequest(
+                flow_name=legacy_name,
+                workflow_selector=workflow_selector,
+            ),
         )
         if resp is None:
             return []
@@ -113,7 +130,7 @@ class GrpcStateProvider:
 
     def start_run(
         self,
-        flow_name: str,
+        workflow_selector: str,
         *,
         input: Mapping[str, Any] | BaseModel | None = None,
         context: Mapping[str, Any] | BaseModel | None = None,
@@ -126,7 +143,10 @@ class GrpcStateProvider:
         ]
         _validate_inline_request_size(input_files)
         request = pb.StartRunRequest(
-            flow_name=flow_name,
+            flow_name=self._legacy_names_by_workflow_id.get(
+                workflow_selector, workflow_selector
+            ),
+            workflow_selector=workflow_selector,
             input_json=_json_payload(input),
             context_json=_json_payload(context),
             input_files=input_files,
@@ -135,9 +155,7 @@ class GrpcStateProvider:
                 for field_name, value in (s3_files or {}).items()
             ],
         )
-        resp = self._call(
-            self._stub.StartRun, request
-        )
+        resp = self._call(self._stub.StartRun, request)
         return resp.run_id if resp else ""
 
     def cancel_run(self, run_id: str) -> None:
@@ -165,7 +183,8 @@ class GrpcStateProvider:
             kwargs = {"timeout": 2.0}
             if self._metadata is not None:
                 kwargs["metadata"] = self._metadata
-            self._stub.ListFlows(pb.Empty(), **kwargs)
+            resp = self._stub.ListFlows(pb.Empty(), **kwargs)
+            self._cache_legacy_workflow_names(resp)
             if not self.connected:
                 self.retry_count = 0
             self.connected = True
@@ -176,6 +195,12 @@ class GrpcStateProvider:
             self.retry_count += 1
             self.last_error = f"{e.code().name}: {e.details()}"
             return False
+
+    def _cache_legacy_workflow_names(self, response: pb.FlowList) -> None:
+        self._legacy_names_by_workflow_id = {
+            (item.workflow_id or item.name): (item.name or item.display_name)
+            for item in response.flows
+        }
 
     def _stream_loop(self) -> None:
         """Background thread: consumes StreamUpdates and fires callbacks."""

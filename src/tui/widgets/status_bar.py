@@ -62,7 +62,7 @@ class StatusBar(Static):
             return text
 
         # ── Breadcrumb: workflow › run › node ──
-        flow_name = store.current_workflow.name if store.current_workflow else ""
+        flow_name = store.current_workflow.rendered_name if store.current_workflow else ""
         text.append("  ")
         text.append(flow_name or "—", Style(color=ICE_FROST))
 

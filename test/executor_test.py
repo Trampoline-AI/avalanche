@@ -1,5 +1,8 @@
 """Tests for executor.py - Execution engine abstraction."""
 
+import sys
+from types import SimpleNamespace
+
 import pytest
 
 from avalanche.executor import LocalExecutor, RayExecutor, get_default_executor
@@ -80,6 +83,32 @@ class TestRayExecutor:
         assert hasattr(executor, "ray")
         assert hasattr(executor, "submit")
         assert hasattr(executor, "get")
+
+    def test_ray_executor_merges_job_runtime_env_into_init_kwargs(self, monkeypatch):
+        calls = []
+        fake_ray = SimpleNamespace(
+            is_initialized=lambda: False,
+            init=lambda **kwargs: calls.append(kwargs),
+        )
+        monkeypatch.setitem(sys.modules, "ray", fake_ray)
+
+        RayExecutor(
+            runtime_env={"working_dir": "/live/import-root"},
+            ray_init_kwargs={
+                "address": "auto",
+                "runtime_env": {"env_vars": {"MODE": "test"}},
+            },
+        )
+
+        assert calls == [
+            {
+                "address": "auto",
+                "runtime_env": {
+                    "env_vars": {"MODE": "test"},
+                    "working_dir": "/live/import-root",
+                },
+            }
+        ]
 
     def test_ray_executor_executes_task(self):
         """Test that RayExecutor actually executes tasks through Ray."""

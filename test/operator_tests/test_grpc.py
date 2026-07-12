@@ -1,6 +1,7 @@
 """Tests for gRPC server + client roundtrip."""
 
 import os
+import socket
 import time
 
 import pytest
@@ -8,7 +9,13 @@ import pytest
 import avalanche as ava
 from avalanche.operator import Operator
 from avalanche.operator.client import GrpcStateProvider
-from avalanche.operator.models import RunStatus
+from avalanche.operator.convert import (
+    run_state_from_proto,
+    run_state_to_proto,
+    workflow_info_from_proto,
+    workflow_info_to_proto,
+)
+from avalanche.operator.models import RunState, RunStatus, WorkflowInfo
 from avalanche.operator.server import serve
 from avalanche.runtime import MAX_INLINE_REQUEST_BYTES, File, S3File
 from runtime.operator.proto import operator_pb2 as pb
@@ -29,6 +36,7 @@ def grpc_server():
     time.sleep(0.2)  # Let server bind
     yield op, server
     server.stop(grace=1)
+    op.close()
 
 
 @pytest.fixture
@@ -152,8 +160,16 @@ class TestGrpcRoundtrip:
         time.sleep(0.2)  # Let it start
         client.cancel_run(run_id)
 
-        time.sleep(0.5)
+        # Cancellation is a request; the coordinator publishes the terminal
+        # state after cooperative completion or the configured forced grace.
         run = client.get_run(run_id)
+        assert run.status == RunStatus.RUNNING
+        deadline = time.monotonic() + 7.0
+        while time.monotonic() < deadline:
+            run = client.get_run(run_id)
+            if run.status == RunStatus.CANCELLED:
+                break
+            time.sleep(0.05)
         assert run.status == RunStatus.CANCELLED
 
     def test_get_unknown_run_returns_none(self, client):
@@ -182,3 +198,195 @@ class TestGrpcRoundtrip:
         statuses = [s for rid, s in updates if rid == run_id]
         assert len(statuses) > 0, "No stream updates received"
         assert RunStatus.SUCCESS in statuses
+
+    def test_legacy_flow_name_request_still_starts(self, client):
+        response = client._stub.StartRun(pb.StartRunRequest(flow_name="simple_workflow"))
+        assert response.run_id.startswith("run_")
+
+
+def test_proto_identity_roundtrip_and_absolute_path_redaction(tmp_path):
+    info = WorkflowInfo(
+        name="shared",
+        display_name="Shared report",
+        workflow_id="root/reports/daily.py::shared",
+        root_alias="root",
+        relative_file="reports/daily.py",
+        builder_symbol="shared",
+        file_path=str(tmp_path / "reports" / "daily.py"),
+        node_ids=["load_1"],
+        graph={"load_1": []},
+        node_types={"load_1": "source"},
+    )
+
+    message = workflow_info_to_proto(info)
+    assert message.file_path == "reports/daily.py"
+    assert message.relative_file == "reports/daily.py"
+    assert not os.path.isabs(message.file_path)
+    restored = workflow_info_from_proto(message)
+    assert restored.workflow_id == info.workflow_id
+    assert restored.display_name == info.display_name
+    assert restored.root_alias == info.root_alias
+    assert restored.relative_file == info.relative_file
+    assert restored.builder_symbol == info.builder_symbol
+    assert restored.file_path == "reports/daily.py"
+
+    run = RunState(
+        run_id="run_1",
+        flow_name="Shared report",
+        workflow_id=info.workflow_id,
+        workflow_display_name=info.display_name,
+    )
+    assert run_state_from_proto(run_state_to_proto(run)) == run
+
+
+def test_old_proto_fields_receive_identity_fallbacks():
+    info = workflow_info_from_proto(pb.FlowInfoMsg(name="legacy", file_path="legacy.py"))
+    assert info.workflow_id == "legacy"
+    assert info.display_name == "legacy"
+    assert info.relative_file == "legacy.py"
+
+    run = run_state_from_proto(
+        pb.RunStateMsg(run_id="run_old", flow_name="legacy", status="pending")
+    )
+    assert run.workflow_id == "legacy"
+    assert run.workflow_display_name == "legacy"
+
+
+def test_canonical_client_requests_include_cached_legacy_name():
+    canonical_id = "root/reports/daily.py::build_report"
+
+    class CapturingStub:
+        def __init__(self):
+            self.start_request = None
+            self.list_request = None
+
+        def ListFlows(self, request):  # noqa: N802
+            return pb.FlowList(
+                flows=[
+                    pb.FlowInfoMsg(
+                        name="Daily report",
+                        display_name="Daily report",
+                        workflow_id=canonical_id,
+                        file_path="reports/daily.py",
+                    )
+                ]
+            )
+
+        def StartRun(self, request):  # noqa: N802
+            self.start_request = request
+            return pb.StartRunResponse(run_id="run_legacy")
+
+        def ListRuns(self, request):  # noqa: N802
+            self.list_request = request
+            return pb.RunList()
+
+    provider = GrpcStateProvider("localhost:1")
+    stub = CapturingStub()
+    provider._stub = stub
+    try:
+        workflows = provider.list_workflows()
+        assert workflows[0].workflow_id == canonical_id
+
+        assert provider.start_run(canonical_id) == "run_legacy"
+        assert stub.start_request.workflow_selector == canonical_id
+        assert stub.start_request.flow_name == "Daily report"
+
+        assert provider.list_runs(canonical_id) == []
+        assert stub.list_request.workflow_selector == canonical_id
+        assert stub.list_request.flow_name == "Daily report"
+    finally:
+        provider.close()
+
+
+def test_canonical_and_ambiguous_grpc_selection(tmp_path):
+    roots = [tmp_path / "left", tmp_path / "right"]
+    source = (
+        "import avalanche as ava\n"
+        "@ava.workflow\n"
+        "def shared():\n"
+        "    return None\n"
+    )
+    for root in roots:
+        root.mkdir()
+        (root / "flow.py").write_text(source)
+
+    with socket.socket() as sock:
+        sock.bind(("127.0.0.1", 0))
+        port = sock.getsockname()[1]
+    operator = Operator(
+        workflow_paths=[str(root) for root in roots], schedule=False, watch=False
+    )
+    server = serve(operator, port=port, block=False)
+    provider = GrpcStateProvider(f"localhost:{port}")
+    try:
+        workflows = provider.list_workflows()
+        assert [item.display_name for item in workflows] == ["shared", "shared"]
+        ids = [item.workflow_id for item in workflows]
+        assert ids == ["left/flow.py::shared", "right/flow.py::shared"]
+        assert all(not os.path.isabs(item.file_path) for item in workflows)
+
+        run_id = provider.start_run(ids[0])
+        assert run_id.startswith("run_")
+        assert [run.run_id for run in provider.list_runs(ids[0])] == [run_id]
+        assert provider.list_runs(ids[1]) == []
+
+        assert provider.start_run("shared") == ""
+        assert "INVALID_ARGUMENT" in provider.last_error
+        assert ids[0] in provider.last_error
+        assert ids[1] in provider.last_error
+        assert provider.list_runs("shared") == []
+        assert "INVALID_ARGUMENT" in provider.last_error
+
+        (roots[0] / "flow.py").write_text("VALUE = 1\n")
+        assert provider.start_run(ids[0]) == ""
+        assert "FAILED_PRECONDITION" in provider.last_error
+        assert "preparation failed" in provider.last_error.lower()
+    finally:
+        provider.close()
+        server.stop(grace=1)
+        operator.close()
+
+
+def test_blocking_server_closes_operator_in_finally(monkeypatch):
+    import runtime.operator.server as server_module
+
+    class StopResult:
+        def wait(self, timeout):
+            assert timeout == 2.0
+
+    class FakeServer:
+        def __init__(self):
+            self.stop_calls = []
+
+        def add_insecure_port(self, _address):
+            return 1
+
+        def start(self):
+            pass
+
+        def wait_for_termination(self):
+            raise KeyboardInterrupt
+
+        def stop(self, grace):
+            self.stop_calls.append(grace)
+            return StopResult()
+
+    class FakeOperator:
+        def __init__(self):
+            self.closed = False
+
+        def close(self):
+            self.closed = True
+
+    fake_server = FakeServer()
+    operator = FakeOperator()
+    monkeypatch.setattr(server_module.grpc, "server", lambda _executor: fake_server)
+    monkeypatch.setattr(
+        server_module.pb_grpc,
+        "add_OperatorServiceServicer_to_server",
+        lambda _servicer, _server: None,
+    )
+
+    assert server_module.serve(operator, port=0, block=True) is fake_server
+    assert operator.closed
+    assert fake_server.stop_calls

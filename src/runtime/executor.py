@@ -257,13 +257,19 @@ class RayExecutor:
         workflow.run(executor=executor)
     """
 
-    def __init__(self, *, ray_init_kwargs: dict | None = None):
+    def __init__(
+        self,
+        *,
+        runtime_env: dict[str, Any] | None = None,
+        ray_init_kwargs: dict[str, Any] | None = None,
+    ):
         """
         Initialize Ray executor.
 
         Args:
-            ray_init_kwargs: Arguments to pass to ray.init()
-                            If None, assumes Ray is already initialized
+            runtime_env: Job-level runtime environment to pass to ``ray.init()``.
+            ray_init_kwargs: Other arguments to pass to ``ray.init()``. If both
+                arguments are None, assumes Ray is already initialized.
         """
         try:
             import ray
@@ -274,9 +280,17 @@ class RayExecutor:
 
         self.ray = ray
 
-        if ray_init_kwargs is not None:
+        if runtime_env is not None or ray_init_kwargs is not None:
             if not ray.is_initialized():
-                ray.init(**ray_init_kwargs)
+                init_kwargs = dict(ray_init_kwargs or {})
+                if runtime_env is not None:
+                    configured_runtime_env = init_kwargs.pop("runtime_env", None)
+                    if configured_runtime_env is not None:
+                        configured_runtime_env = dict(configured_runtime_env)
+                        configured_runtime_env.update(runtime_env)
+                        runtime_env = configured_runtime_env
+                    init_kwargs["runtime_env"] = runtime_env
+                ray.init(**init_kwargs)
 
     def submit(
         self, fn: Callable, *args: Any, num_returns: int = 1, **kwargs: Any

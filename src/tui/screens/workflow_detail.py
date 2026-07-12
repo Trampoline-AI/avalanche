@@ -383,8 +383,8 @@ class WorkflowDetailScreen(Screen):
 
     def on_sidebar_workflow_selected(self, event: Sidebar.WorkflowSelected) -> None:
         store = self.app.store
-        current_name = store.current_workflow.name if store.current_workflow else ""
-        if event.workflow.name != current_name:
+        current_id = store.current_workflow.selector if store.current_workflow else ""
+        if event.workflow.selector != current_id:
             store.switch_workflow(event.workflow)
             self._remount_dag()
             self.app._refresh_widgets()

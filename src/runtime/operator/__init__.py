@@ -1,12 +1,27 @@
 """Avalanche Operator — workflow orchestration and execution."""
 
-from .models import WorkflowDiscoveryDiagnostic
+from .models import (
+    CatalogView,
+    WorkflowDescriptor,
+    WorkflowDiscoveryDiagnostic,
+    WorkflowLocator,
+)
 from .operator import Operator
-from .registry import WorkflowRegistry, workflow_to_info
+from .registry import (
+    AmbiguousWorkflow,
+    UnknownWorkflow,
+    WorkflowRegistry,
+    workflow_to_info,
+)
 
 __all__ = [
     "Operator",
+    "AmbiguousWorkflow",
+    "CatalogView",
+    "UnknownWorkflow",
+    "WorkflowDescriptor",
     "WorkflowDiscoveryDiagnostic",
+    "WorkflowLocator",
     "WorkflowRegistry",
     "workflow_to_info",
 ]

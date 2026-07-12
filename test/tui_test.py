@@ -1,6 +1,8 @@
 """Tests for the Avalanche TUI module."""
 
+import threading
 import time
+from dataclasses import replace
 from datetime import datetime
 
 import pytest
@@ -32,6 +34,14 @@ from avalanche.tui.models import (
 from avalanche.tui.ui_store import UIStore
 from avalanche.tui.widgets.run_history import RunHistoryWidget
 from avalanche.tui.widgets.sidebar import Sidebar
+
+
+def _apply_async_updates(store: UIStore, timeout: float = 1.0) -> None:
+    deadline = time.monotonic() + timeout
+    while store._runs_refresh_in_flight and time.monotonic() < deadline:
+        time.sleep(0.005)
+        store._apply_background_updates()
+    store._apply_background_updates()
 
 # ── Models ─────────────────────────────────────────────────────────────────
 
@@ -403,6 +413,7 @@ class TestUIStore:
 
     def test_runs_for_current_workflow(self):
         store = UIStore(MockStateProvider())
+        _apply_async_updates(store)
         runs = store.runs_for_current_workflow
         assert isinstance(runs, list)
         assert len(runs) >= 1
@@ -514,6 +525,189 @@ class TestUIStore:
         store.tick()
         assert store.frame == old_frame + 1
         assert len(store.workflow_statuses) > 0
+
+    def test_duplicate_display_names_use_ids_and_refresh_preserves_selection(self):
+        class MutableProvider:
+            def __init__(self):
+                self.workflows = []
+                self.selectors = []
+
+            def list_workflows(self):
+                return list(self.workflows)
+
+            def list_runs(self, workflow_selector):
+                self.selectors.append(workflow_selector)
+                return []
+
+            def get_run(self, run_id):
+                return None
+
+            def start_run(self, workflow_selector, **kwargs):
+                self.selectors.append(workflow_selector)
+                return "run_new"
+
+            def cancel_run(self, run_id):
+                pass
+
+            def on_run_update(self, callback):
+                pass
+
+            def on_log(self, callback):
+                pass
+
+        def workflow(workflow_id, source):
+            return WorkflowInfo(
+                name="shared",
+                display_name="shared",
+                workflow_id=workflow_id,
+                root_alias=workflow_id.split("/", 1)[0],
+                relative_file=source,
+                builder_symbol="shared",
+                file_path=source,
+                node_ids=["node_1"],
+                graph={},
+                node_types={"node_1": "step"},
+            )
+
+        left = workflow("left/flow.py::shared", "flow.py")
+        right = workflow("right/flow.py::shared", "flow.py")
+        provider = MutableProvider()
+        provider.workflows = [left, right]
+        store = UIStore(provider)
+        assert len(store.workflows) == 2
+        store.switch_workflow(right)
+        assert provider.selectors[-1] == right.workflow_id
+
+        def refresh(workflows):
+            provider.workflows = workflows
+            store._refresh_workflow_catalog()
+            deadline = time.monotonic() + 1
+            while store._catalog_refresh_in_flight and time.monotonic() < deadline:
+                time.sleep(0.01)
+                store._apply_background_updates()
+            assert not store._catalog_refresh_in_flight
+
+        refresh([right, left])
+        assert store.current_workflow.workflow_id == right.workflow_id
+        assert store.sidebar_selected_id == right.workflow_id
+
+        sidebar = Sidebar()
+        sidebar._test_store = store
+        sidebar._rebuild_tree()
+        rows = [item for item in sidebar._flat_items if not item.is_folder]
+        assert len(rows) == 2
+        assert [item.workflow.workflow_id for item in rows] == [
+            left.workflow_id,
+            right.workflow_id,
+        ]
+
+        refresh([left])
+        assert store.current_workflow.workflow_id == left.workflow_id
+        assert store.sidebar_selected_id == left.workflow_id
+
+        refresh([])
+        assert store.current_workflow is None
+        assert store.sidebar_selected_id == ""
+
+    def test_same_id_topology_and_schedule_display_changes_increment_revision(self):
+        store = UIStore(MockStateProvider())
+        _apply_async_updates(store)
+        original = store.current_workflow
+        assert original is not None
+
+        topology = replace(
+            original,
+            node_ids=[*original.node_ids, "new_sink_1"],
+            graph={**original.graph, original.node_ids[-1]: ["new_sink_1"]},
+            node_types={**original.node_types, "new_sink_1": "dest"},
+            display_names={**original.display_names, "new_sink_1": "New sink"},
+        )
+        revision = store.catalog_revision
+        store._reconcile_workflows(
+            [
+                topology if item.selector == original.selector else item
+                for item in store.workflows
+            ]
+        )
+        assert store.catalog_revision == revision + 1
+        assert [node.name for node in store.all_nodes] == topology.node_ids
+
+        scheduled = replace(
+            topology,
+            display_name="Renamed workflow",
+            relative_file="moved/workflow.py",
+            cron="0 * * * *",
+            next_run_at=100.0,
+            last_run_at=50.0,
+        )
+        revision = store.catalog_revision
+        store._reconcile_workflows(
+            [
+                scheduled if item.selector == original.selector else item
+                for item in store.workflows
+            ]
+        )
+        assert store.catalog_revision == revision + 1
+        assert store.current_workflow is scheduled
+        assert store.current_workflow.rendered_name == "Renamed workflow"
+
+    def test_switch_workflow_refresh_is_nonblocking_and_selector_scoped(self):
+        release: dict[str, threading.Event] = {}
+
+        def workflow(selector: str) -> WorkflowInfo:
+            return WorkflowInfo(
+                name=selector,
+                display_name=selector,
+                workflow_id=selector,
+                file_path=f"{selector}.py",
+                node_ids=["node_1"],
+                graph={},
+                node_types={"node_1": "step"},
+            )
+
+        workflows = [workflow("a"), workflow("b")]
+        runs = {
+            selector: RunState(
+                run_id=f"run_{selector}",
+                flow_name=selector,
+                workflow_id=selector,
+            )
+            for selector in ("a", "b")
+        }
+
+        class BlockingProvider:
+            def list_workflows(self):
+                return workflows
+
+            def list_runs(self, selector):
+                release.setdefault(selector, threading.Event()).wait(timeout=1.0)
+                return [runs[selector]]
+
+        started = time.monotonic()
+        store = UIStore(BlockingProvider())
+        assert time.monotonic() - started < 0.2
+        assert store.current_workflow is workflows[0]
+        assert store.current_run is None
+
+        store.switch_workflow(workflows[1])
+        assert store.current_workflow is workflows[1]
+        assert store.current_run is None
+        assert store.runs_for_current_workflow == []
+        assert store._runs_refresh_in_flight == {"a", "b"}
+
+        release["a"].set()
+        deadline = time.monotonic() + 1.0
+        while "a" in store._runs_refresh_in_flight and time.monotonic() < deadline:
+            time.sleep(0.005)
+            store._apply_background_updates()
+        assert store.current_workflow is workflows[1]
+        assert store.current_run is None
+        assert store.runs_for_current_workflow == []
+
+        release["b"].set()
+        _apply_async_updates(store)
+        assert store.current_run is runs["b"]
+        assert store.runs_for_current_workflow == [runs["b"]]
 
     def test_sidebar_cursor_movement(self):
         store = UIStore(MockStateProvider())
@@ -701,6 +895,7 @@ class TestRunHistory:
 
     def test_renders_runs(self):
         store = UIStore(MockStateProvider())
+        _apply_async_updates(store)
         w = RunHistoryWidget()
         w._test_store = store
         rendered = w.render().plain
@@ -709,6 +904,7 @@ class TestRunHistory:
 
     def test_selected_run_highlighted(self):
         store = UIStore(MockStateProvider())
+        _apply_async_updates(store)
         w = RunHistoryWidget()
         w._test_store = store
         rendered = w.render()
@@ -729,6 +925,7 @@ class TestRunHistory:
 
     def test_timestamp_format(self):
         store = UIStore(MockStateProvider())
+        _apply_async_updates(store)
         w = RunHistoryWidget()
         w._test_store = store
         rendered = w.render().plain
@@ -796,6 +993,7 @@ class TestLogTimestamps:
     def test_log_panel_renders_datetime(self):
         from avalanche.tui.widgets.log_panel import LogWidget
         store = UIStore(MockStateProvider())
+        _apply_async_updates(store)
         # Add a log entry with known timestamp
         if store.current_run:
             store.current_run.logs.append(
