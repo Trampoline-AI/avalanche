@@ -1,13 +1,16 @@
 import os
+import queue
 import sys
 import threading
 import time
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
 from avalanche.operator import Operator
-from avalanche.operator.models import RunStatus
+from avalanche.operator.models import LogLevel, NodeState, NodeStatus, RunState, RunStatus
+from runtime.operator import operator as operator_module
 from runtime.operator.source import is_source_path_included
 
 
@@ -32,6 +35,39 @@ def _wait_inactive(operator: Operator, run_id: str, timeout: float = 5.0) -> Non
             return
         time.sleep(0.03)
     raise AssertionError(f"coordinator for {run_id} was not reaped")
+
+
+class _CloseableQueue(queue.Queue):
+    def __init__(self):
+        super().__init__()
+        self.closed = False
+
+    def close(self):
+        self.closed = True
+
+
+class _InertProcess:
+    pid = None
+    exitcode = None
+
+    def is_alive(self):
+        return True
+
+
+def _protocol_test_handle(*, cancelled=False):
+    event_queue = _CloseableQueue()
+    cancel_event = threading.Event()
+    if cancelled:
+        cancel_event.set()
+    return SimpleNamespace(
+        process=_InertProcess(),
+        event_queue=event_queue,
+        cancel_event=cancel_event,
+        start_event=threading.Event(),
+        assignment_event=threading.Event(),
+        windows_job=None,
+        drain_thread=None,
+    )
 
 
 def _write_standalone(root: Path, *, deferred: bool = False, body: str | None = None) -> Path:
@@ -168,6 +204,188 @@ def test_builder_prepare_failure_does_not_publish_run(tmp_path):
         assert operator._runs == {}
     finally:
         operator.close()
+
+
+@pytest.mark.parametrize(
+    ("event", "error_match"),
+    [
+        (["not", "an", "event"], "event must be a dict"),
+        ({"type": "running", "timestamp": 1}, "unexpected preparation event type"),
+        (
+            {"type": "node_started", "node_id": "read_1", "timestamp": 1},
+            "unexpected preparation event type",
+        ),
+        ({"type": "terminal", "status": "success"}, "unexpected preparation event type"),
+    ],
+    ids=["non-dict", "running", "node", "terminal"],
+)
+def test_malformed_preparation_event_rolls_back_start(
+    tmp_path, monkeypatch, event, error_match
+):
+    workflow = _write_standalone(tmp_path)
+    operator = Operator([str(workflow)], watch=False, schedule=False)
+    torn_down = []
+
+    class FakeProcess:
+        pid = 12345
+        exitcode = None
+
+        def __init__(self, *, args, **_kwargs):
+            self.event_queue = args[8]
+
+        def start(self):
+            self.event_queue.put(event)
+
+        def is_alive(self):
+            return True
+
+    class FakeContext:
+        def Queue(self):  # noqa: N802 - mirrors multiprocessing context
+            return _CloseableQueue()
+
+        def Event(self):  # noqa: N802 - mirrors multiprocessing context
+            return threading.Event()
+
+        def Process(self, **kwargs):  # noqa: N802 - mirrors multiprocessing context
+            return FakeProcess(**kwargs)
+
+    monkeypatch.setattr(operator, "_mp", FakeContext())
+    monkeypatch.setattr(operator_module, "assign_process", lambda *_args: None)
+    monkeypatch.setattr(
+        operator_module,
+        "_teardown_process_group",
+        lambda process, _job: torn_down.append(process),
+    )
+    try:
+        with pytest.raises(RuntimeError, match=error_match):
+            operator.start_run("flow")
+        assert operator._runs == {}
+        assert operator._active_runs == {}
+        assert len(torn_down) == 1
+    finally:
+        operator.close()
+
+
+@pytest.mark.parametrize(
+    "event",
+    [
+        {"type": "unexpected"},
+        {"type": "node_started"},
+        {"type": "node_started", "node_id": "missing", "timestamp": 1},
+        {"type": "terminal", "status": "unknown"},
+        {
+            "type": "log",
+            "timestamp": 10**5000,
+            "level": 20,
+            "node_id": "operator",
+            "message": "hostile timestamp",
+        },
+        {"type": 10**5000},
+        ["not", "an", "event"],
+    ],
+    ids=[
+        "unknown-type",
+        "missing-field",
+        "unknown-node",
+        "invalid-terminal-status",
+        "huge-timestamp",
+        "huge-event-type",
+        "non-dict",
+    ],
+)
+def test_malformed_run_event_terminalizes_and_cleans_up(event):
+    operator = Operator([], watch=False, schedule=False)
+    run_id = "run_protocol_fault"
+    run = RunState(run_id=run_id, flow_name="flow", status=RunStatus.RUNNING)
+    run.nodes = {
+        "running": NodeState(
+            node_id="running", name="running", node_type="source", status=NodeStatus.RUNNING
+        ),
+        "pending": NodeState(node_id="pending", name="pending", node_type="dest"),
+    }
+    handle = _protocol_test_handle()
+    operator._runs[run_id] = run
+    operator._active_runs[run_id] = handle
+    logs = []
+    operator.on_log(logs.append)
+    updates = operator.subscribe()
+    errors = []
+
+    def drain():
+        try:
+            operator._drain_run_events(run_id, handle, [event])
+        except BaseException as exc:
+            errors.append(exc)
+
+    thread = threading.Thread(target=drain)
+    thread.start()
+    thread.join(timeout=3.0)
+
+    assert not thread.is_alive()
+    assert errors == []
+    terminal = operator.get_run(run_id)
+    assert terminal is not None
+    assert terminal.status == RunStatus.FAILED
+    assert terminal.ended_at is not None
+    assert {node.status for node in terminal.nodes.values()} == {NodeStatus.SKIPPED}
+    protocol_logs = [
+        entry
+        for entry in terminal.logs
+        if entry.level == LogLevel.ERROR
+        and entry.node_id == "operator"
+        and entry.message.startswith("Malformed coordinator event")
+    ]
+    assert len(protocol_logs) == 1
+    assert len(protocol_logs[0].message) <= 400
+    assert logs == protocol_logs
+    notifications = []
+    while not updates.empty():
+        notifications.append(updates.get_nowait()[1])
+    assert [state.status for state in notifications] == [RunStatus.FAILED]
+    assert run_id not in operator._active_runs
+    assert handle.event_queue.closed
+    operator.close()
+
+
+def test_malformed_run_event_preserves_cancellation_precedence():
+    operator = Operator([], watch=False, schedule=False)
+    run_id = "run_cancelled_protocol_fault"
+    operator._runs[run_id] = RunState(
+        run_id=run_id,
+        flow_name="flow",
+        status=RunStatus.RUNNING,
+        nodes={"pending": NodeState("pending", "pending", "source")},
+    )
+    handle = _protocol_test_handle(cancelled=True)
+    operator._active_runs[run_id] = handle
+    logs = []
+    operator.on_log(logs.append)
+
+    operator._drain_run_events(run_id, handle, [{"type": "terminal", "status": 3}])
+
+    terminal = operator.get_run(run_id)
+    assert terminal is not None
+    assert terminal.status == RunStatus.CANCELLED
+    assert terminal.ended_at is not None
+    assert terminal.nodes["pending"].status == NodeStatus.SKIPPED
+    assert len(logs) == 1
+    assert logs[0].level == LogLevel.ERROR
+    assert len(terminal.logs) == 1
+    assert run_id not in operator._active_runs
+    operator.close()
+
+
+def test_malformed_event_for_unknown_run_exits_safely():
+    operator = Operator([], watch=False, schedule=False)
+    run_id = "run_unknown"
+    handle = _protocol_test_handle()
+    operator._active_runs[run_id] = handle
+
+    operator._drain_run_events(run_id, handle, [None])
+
+    assert run_id not in operator._active_runs
+    assert handle.event_queue.closed
+    operator.close()
 
 
 @pytest.mark.parametrize("outcome", ["success", "failure", "cancel", "crash"])

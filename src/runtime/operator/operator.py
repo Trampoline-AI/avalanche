@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import math
 import multiprocessing
 import os
 import queue
@@ -44,6 +45,10 @@ class _ExecutorBackendOmitted:
 
 
 _EXECUTOR_BACKEND_OMITTED = _ExecutorBackendOmitted()
+
+
+class _CoordinatorProtocolError(RuntimeError):
+    """A coordinator event does not match the parent-side protocol."""
 
 
 @dataclass
@@ -375,9 +380,10 @@ class Operator:
                         f"{handle.process.exitcode})"
                     )
                 continue
-            if event["type"] == "prepared":
+            event_type = _validate_preparation_event(event)
+            if event_type == "prepared":
                 return event, buffered
-            if event["type"] == "prepare_failed":
+            if event_type == "prepare_failed":
                 raise RuntimeError(
                     f"Workflow preparation failed: {event['error']}\n{event['traceback']}"
                 )
@@ -434,7 +440,11 @@ class Operator:
                             continue
                         self._finish_exited_run(run_id, handle)
                         break
-                terminal = self._apply_event(run_id, event)
+                try:
+                    terminal = self._apply_event(run_id, event)
+                except _CoordinatorProtocolError as exc:
+                    self._finish_protocol_fault(run_id, handle, event, exc)
+                    break
         finally:
             _teardown_process_group(
                 handle.process, handle.windows_job, wait_before_term=2.0
@@ -444,7 +454,7 @@ class Operator:
             handle.event_queue.close()
 
     def _apply_event(self, run_id: str, event: dict[str, Any]) -> bool:
-        event_type = event["type"]
+        event_type = _validate_run_event(event)
         log_entry: LogEntry | None = None
         with self._lock:
             run = self._runs.get(run_id)
@@ -456,7 +466,12 @@ class Operator:
                     run.started_at = event["timestamp"]
             elif event_type.startswith("node_"):
                 node = run.nodes.get(event["node_id"])
-                if node is not None and run.status != RunStatus.CANCELLED:
+                if node is None:
+                    raise _CoordinatorProtocolError(
+                        "node event references unpublished node "
+                        f"{_bounded_ascii(event['node_id'])}"
+                    )
+                if run.status != RunStatus.CANCELLED:
                     status = {
                         "node_started": NodeStatus.RUNNING,
                         "node_succeeded": NodeStatus.SUCCESS,
@@ -494,6 +509,36 @@ class Operator:
             self._notify_log(log_entry)
         self._notify_run(run)
         return event_type == "terminal"
+
+    def _finish_protocol_fault(
+        self,
+        run_id: str,
+        handle: _RunHandle,
+        event: object,
+        exc: _CoordinatorProtocolError,
+    ) -> None:
+        entry = LogEntry(
+            timestamp=datetime.now(),
+            level=LogLevel.ERROR,
+            node_id="operator",
+            message=_protocol_fault_message(event, exc),
+        )
+        with self._lock:
+            run = self._runs.get(run_id)
+            if run is None or run.status in {
+                RunStatus.SUCCESS,
+                RunStatus.FAILED,
+                RunStatus.CANCELLED,
+            }:
+                return
+            run.status = (
+                RunStatus.CANCELLED if handle.cancel_event.is_set() else RunStatus.FAILED
+            )
+            run.ended_at = time.monotonic()
+            run.logs.append(entry)
+            self._skip_unfinished_nodes(run)
+        self._notify_log(entry)
+        self._notify_run(run)
 
     def _finish_exited_run(self, run_id: str, handle: _RunHandle) -> None:
         cancelled = handle.cancel_event.is_set()
@@ -563,6 +608,176 @@ class Operator:
                 callback(entry)
             except Exception:
                 pass
+
+
+_RUN_EVENT_TYPES = {
+    "running",
+    "node_started",
+    "node_succeeded",
+    "node_failed",
+    "log",
+    "terminal",
+}
+_NODE_EVENT_TYPES = {"node_started", "node_succeeded", "node_failed"}
+_TERMINAL_STATUSES = {"success", "failed", "cancelled"}
+
+
+def _validate_preparation_event(event: object) -> str:
+    event_type = _event_type(event)
+    if event_type == "prepared":
+        node_ids = _required_field(event, "node_ids")
+        if not isinstance(node_ids, list) or any(
+            type(node_id) is not str for node_id in node_ids
+        ):
+            raise _CoordinatorProtocolError("field 'node_ids' must be a list of strings")
+        if len(node_ids) != len(set(node_ids)):
+            raise _CoordinatorProtocolError("field 'node_ids' contains duplicates")
+        _graph_mapping(event, "graph")
+        node_types = _string_mapping(event, "node_types")
+        display_names = _string_mapping(event, "display_names")
+        for node_id in node_ids:
+            if node_id not in node_types:
+                raise _CoordinatorProtocolError(
+                    f"field 'node_types' is missing node {_bounded_ascii(node_id)}"
+                )
+            if node_id not in display_names:
+                raise _CoordinatorProtocolError(
+                    f"field 'display_names' is missing node {_bounded_ascii(node_id)}"
+                )
+        display_name = event.get("display_name")
+        if display_name is not None and type(display_name) is not str:
+            raise _CoordinatorProtocolError("field 'display_name' must be a string")
+        return event_type
+    if event_type == "prepare_failed":
+        _string_field(event, "error")
+        _string_field(event, "traceback")
+        return event_type
+    if event_type == "log":
+        return _validate_run_event(event)
+    if event_type in _RUN_EVENT_TYPES:
+        raise _CoordinatorProtocolError(
+            f"unexpected preparation event type {_bounded_ascii(event_type)}"
+        )
+    raise _CoordinatorProtocolError(
+        f"unknown preparation event type {_bounded_ascii(event_type)}"
+    )
+
+
+def _validate_run_event(event: object) -> str:
+    event_type = _event_type(event)
+    if event_type not in _RUN_EVENT_TYPES:
+        raise _CoordinatorProtocolError(f"unknown run event type {_bounded_ascii(event_type)}")
+    if event_type == "running":
+        _timestamp_field(event, "timestamp")
+    elif event_type in _NODE_EVENT_TYPES:
+        _string_field(event, "node_id")
+        _timestamp_field(event, "timestamp")
+        if event_type == "node_failed":
+            _string_field(event, "error")
+    elif event_type == "log":
+        timestamp = _timestamp_field(event, "timestamp")
+        try:
+            datetime.fromtimestamp(timestamp)
+        except (OSError, OverflowError, ValueError) as exc:
+            raise _CoordinatorProtocolError(
+                "field 'timestamp' is outside the supported datetime range"
+            ) from exc
+        level = _required_field(event, "level")
+        if type(level) is not int:
+            raise _CoordinatorProtocolError("field 'level' must be an integer")
+        _string_field(event, "node_id")
+        _string_field(event, "message")
+    else:
+        status = _string_field(event, "status")
+        if status not in _TERMINAL_STATUSES:
+            raise _CoordinatorProtocolError(f"invalid terminal status {_bounded_ascii(status)}")
+        if status == "failed":
+            _string_field(event, "error")
+    return event_type
+
+
+def _event_type(event: object) -> str:
+    if type(event) is not dict:
+        raise _CoordinatorProtocolError(f"event must be a dict, got {type(event).__name__}")
+    event_type = _required_field(event, "type")
+    if type(event_type) is not str:
+        raise _CoordinatorProtocolError("field 'type' must be a string")
+    return event_type
+
+
+def _required_field(event: dict[str, Any], field: str) -> Any:
+    if field not in event:
+        raise _CoordinatorProtocolError(f"missing required field {field!r}")
+    return event[field]
+
+
+def _string_field(event: dict[str, Any], field: str) -> str:
+    value = _required_field(event, field)
+    if type(value) is not str:
+        raise _CoordinatorProtocolError(f"field {field!r} must be a string")
+    return value
+
+
+def _timestamp_field(event: dict[str, Any], field: str) -> float | int:
+    value = _required_field(event, field)
+    if type(value) is int:
+        return value
+    if type(value) is float and math.isfinite(value):
+        return value
+    raise _CoordinatorProtocolError(f"field {field!r} must be a finite number")
+
+
+def _string_mapping(event: dict[str, Any], field: str) -> Mapping[str, str]:
+    value = _required_field(event, field)
+    if not isinstance(value, Mapping) or any(
+        type(key) is not str or type(item) is not str for key, item in value.items()
+    ):
+        raise _CoordinatorProtocolError(f"field {field!r} must map strings to strings")
+    return value
+
+
+def _graph_mapping(event: dict[str, Any], field: str) -> Mapping[str, list[str]]:
+    value = _required_field(event, field)
+    if not isinstance(value, Mapping) or any(
+        type(key) is not str
+        or not isinstance(children, list)
+        or any(type(child) is not str for child in children)
+        for key, children in value.items()
+    ):
+        raise _CoordinatorProtocolError(f"field {field!r} must map strings to lists of strings")
+    return value
+
+
+def _bounded_ascii(value: object, limit: int = 80) -> str:
+    if type(value) is str:
+        rendered = str.__repr__(value)
+    elif type(value) is int:
+        # Avoid both unbounded work and Python's configurable integer-to-string
+        # digit limit when describing hostile protocol values.
+        rendered = "<int>" if value.bit_length() > 256 else str(value)
+    elif type(value) is float:
+        rendered = repr(value)
+    elif type(value) is bool:
+        rendered = "True" if value else "False"
+    elif value is None:
+        rendered = "None"
+    else:
+        rendered = f"<{type(value).__name__}>"
+    if len(rendered) <= limit:
+        return rendered
+    return rendered[: limit - 3] + "..."
+
+
+def _protocol_fault_message(
+    event: object, exc: _CoordinatorProtocolError, limit: int = 400
+) -> str:
+    if type(event) is dict:
+        raw_type = dict.get(event, "type", "<missing>")
+        event_label = _bounded_ascii(raw_type)
+    else:
+        event_label = type(event).__name__
+    message = f"Malformed coordinator event {event_label}: {exc}"
+    return message if len(message) <= limit else message[: limit - 3] + "..."
 
 
 def _resolve_executor_config(
