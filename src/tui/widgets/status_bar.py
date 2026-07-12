@@ -65,6 +65,9 @@ class StatusBar(Static):
         flow_name = store.current_workflow.rendered_name if store.current_workflow else ""
         text.append("  ")
         text.append(flow_name or "—", Style(color=ICE_FROST))
+        if store.run_error:
+            text.append("  · ✗ ", Style(color=ICE_FAIL, bold=True))
+            text.append(store.run_error, Style(color=ICE_FAIL))
 
         run = store.current_run
         if run:

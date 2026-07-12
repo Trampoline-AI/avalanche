@@ -68,13 +68,22 @@ class AvalancheApp(App):
         super().__init__()
         self.register_theme(AVALANCHE_THEME)
         self.theme = "avalanche"
-        self.store = UIStore(provider or MockStateProvider())
+        self.store = UIStore(
+            provider or MockStateProvider(), defer_initial_catalog=provider is not None
+        )
         self._timer: Timer | None = None
         self._screen: WorkflowDetailScreen | None = None
         self._leader_pending: bool = False
         self._log_autoscroll: bool = True
         self._log_wrap: bool = False
-        # Deep-link: select a specific workflow and optionally a node
+        self._deep_link_workflow = workflow
+        self._deep_link_node = node
+        self._apply_deep_link()
+
+    def _apply_deep_link(self) -> None:
+        """Apply a deep link once its asynchronously loaded catalog is available."""
+        workflow = self._deep_link_workflow
+        node = self._deep_link_node
         if workflow:
             match = next(
                 (p for p in self.store.workflows if p.selector == workflow), None
@@ -88,12 +97,16 @@ class AvalancheApp(App):
                 match = short_matches[0] if len(short_matches) == 1 else None
             if match:
                 self.store.switch_workflow(match)
+                self._deep_link_workflow = None
+            else:
+                return
         if node:
             match = next((n for n in self.store.all_nodes if n.name == node), None)
             if match is None:
                 match = next((n for n in self.store.all_nodes if n.display_name == node), None)
             if match:
                 self.store.select_node(match)
+                self._deep_link_node = None
 
     def compose(self) -> ComposeResult:
         yield Header()
@@ -118,8 +131,10 @@ class AvalancheApp(App):
     def _tick(self) -> None:
         catalog_revision = self.store.catalog_revision
         self.store.tick()
-        if self.store.catalog_revision != catalog_revision and self._screen:
-            self._screen._remount_dag()
+        if self.store.catalog_revision != catalog_revision:
+            self._apply_deep_link()
+            if self._screen:
+                self._screen._remount_dag()
         # Poll current run every ~1s as fallback if stream missed updates
         self._poll_counter += 1
         if self._poll_counter % 30 == 0:
@@ -549,10 +564,9 @@ class AvalancheApp(App):
         self._refresh_widgets()
 
     def action_start_run(self) -> None:
-        self.store.start_run()
-        self.store.run_pinned = True
-        self._log_autoscroll = True
-        self._refresh_widgets()
+        if self.store.start_run_async():
+            self._log_autoscroll = True
+            self._refresh_widgets()
 
     def action_toggle_autoscroll(self) -> None:
         """s: toggle log autoscroll."""

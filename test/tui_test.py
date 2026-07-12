@@ -34,6 +34,7 @@ from avalanche.tui.models import (
 from avalanche.tui.ui_store import UIStore
 from avalanche.tui.widgets.run_history import RunHistoryWidget
 from avalanche.tui.widgets.sidebar import Sidebar
+from avalanche.tui.widgets.status_bar import StatusBar
 
 
 def _apply_async_updates(store: UIStore, timeout: float = 1.0) -> None:
@@ -42,6 +43,29 @@ def _apply_async_updates(store: UIStore, timeout: float = 1.0) -> None:
         time.sleep(0.005)
         store._apply_background_updates()
     store._apply_background_updates()
+
+
+class _SignalingQueue:
+    def __init__(self, queue):
+        self._queue = queue
+        self.put_event = threading.Event()
+
+    def put(self, item):
+        self._queue.put(item)
+        self.put_event.set()
+
+    def get(self):
+        return self._queue.get()
+
+    def empty(self):
+        return self._queue.empty()
+
+
+def _signal_background_updates(store: UIStore) -> _SignalingQueue:
+    queue = _SignalingQueue(store._background_updates)
+    store._background_updates = queue
+    return queue
+
 
 # ── Models ─────────────────────────────────────────────────────────────────
 
@@ -321,6 +345,256 @@ class TestMockStateProvider:
 
 
 class TestUIStore:
+    def test_deep_link_waits_for_workflow_before_selecting_same_named_node(self):
+        from avalanche.tui.app import AvalancheApp
+
+        entered = [threading.Event(), threading.Event()]
+        release = [threading.Event(), threading.Event()]
+
+        def workflow(selector, node):
+            return WorkflowInfo(
+                name=selector,
+                display_name=selector,
+                workflow_id=selector,
+                file_path=f"{selector}.py",
+                node_ids=[node],
+                graph={},
+                node_types={node: "step"},
+            )
+
+        default = workflow("default", "shared_node")
+        desired = workflow("desired", "shared_node")
+
+        class BlockingCatalogProvider:
+            def __init__(self):
+                self.calls = 0
+
+            def list_workflows(self):
+                call = self.calls
+                self.calls += 1
+                entered[call].set()
+                release[call].wait()
+                return [default] if call == 0 else [default, desired]
+
+            def list_runs(self, selector):
+                return []
+
+            def get_run(self, run_id):
+                return None
+
+            def start_run(self, selector, **kwargs):
+                return ""
+
+            def cancel_run(self, run_id):
+                pass
+
+            def on_run_update(self, callback):
+                pass
+
+            def on_log(self, callback):
+                pass
+
+        app = AvalancheApp(
+            BlockingCatalogProvider(), workflow="desired", node="shared_node"
+        )
+        updates = _signal_background_updates(app.store)
+        assert entered[0].wait(1.0)
+        assert app.store.workflows == []
+
+        release[0].set()
+        assert updates.put_event.wait(1.0)
+        app.store._apply_background_updates()
+        app._apply_deep_link()
+        assert app.store.current_workflow is default
+        assert app.store.selected_node is None
+        assert app._deep_link_workflow == "desired"
+        assert app._deep_link_node == "shared_node"
+
+        updates.put_event.clear()
+        app.store._refresh_workflow_catalog()
+        assert entered[1].wait(1.0)
+        release[1].set()
+        assert updates.put_event.wait(1.0)
+        app.store._apply_background_updates()
+        app._apply_deep_link()
+        assert app.store.current_workflow is desired
+        assert app.store.selected_node.name == "shared_node"
+
+    def test_async_start_is_prompt_guarded_and_applies_after_release(self):
+        release = threading.Event()
+        delegate = MockStateProvider()
+
+        class BlockingStartProvider:
+            def __init__(self):
+                self.start_calls = 0
+                self.entered = threading.Event()
+
+            def list_workflows(self):
+                return delegate.list_workflows()
+
+            def list_runs(self, selector):
+                return delegate.list_runs(selector)
+
+            def get_run(self, run_id):
+                return delegate.get_run(run_id)
+
+            def start_run(self, selector, **kwargs):
+                self.start_calls += 1
+                self.entered.set()
+                release.wait()
+                return delegate.start_run(selector, **kwargs)
+
+        provider = BlockingStartProvider()
+        store = UIStore(provider)
+        _apply_async_updates(store)
+        updates = _signal_background_updates(store)
+        assert store.start_run_async()
+        assert provider.entered.wait(1.0)
+        assert not store.start_run_async()
+        assert provider.start_calls == 1
+
+        release.set()
+        assert updates.put_event.wait(1.0)
+        store._apply_background_updates()
+        assert not store._start_run_in_flight
+        assert store.current_run is not None
+        assert store.run_pinned
+
+    def test_stale_async_start_does_not_replace_new_workflow(self):
+        release = threading.Event()
+        delegate = MockStateProvider()
+
+        class BlockingStartProvider:
+            def __init__(self):
+                self.entered = threading.Event()
+
+            def list_workflows(self):
+                return delegate.list_workflows()
+
+            def list_runs(self, selector):
+                return delegate.list_runs(selector)
+
+            def get_run(self, run_id):
+                return delegate.get_run(run_id)
+
+            def start_run(self, selector, **kwargs):
+                self.entered.set()
+                release.wait()
+                return delegate.start_run(selector, **kwargs)
+
+        provider = BlockingStartProvider()
+        store = UIStore(provider)
+        _apply_async_updates(store)
+        updates = _signal_background_updates(store)
+        started_selector = store.current_workflow.selector
+        assert store.start_run_async()
+        assert provider.entered.wait(1.0)
+        other = next(
+            workflow
+            for workflow in store.workflows
+            if workflow.selector != started_selector
+        )
+        store.switch_workflow(other)
+        _apply_async_updates(store)
+        updates.put_event.clear()
+        release.set()
+        assert updates.put_event.wait(1.0)
+        store._apply_background_updates()
+        assert store.current_workflow is other
+        assert store.current_run is None or store._run_matches(store.current_run, other)
+
+    @pytest.mark.parametrize("failed_call", ["get", "list"])
+    def test_async_start_preserves_provider_error_and_does_not_pin(self, failed_call):
+        delegate = MockStateProvider()
+
+        class FailedFollowupProvider:
+            def __init__(self):
+                self.connected = True
+                self.last_error = ""
+                self.started = False
+                self.entered = threading.Event()
+
+            def list_workflows(self):
+                return delegate.list_workflows()
+
+            def start_run(self, selector, **kwargs):
+                self.started = True
+                self.entered.set()
+                return "run_new"
+
+            def get_run(self, run_id):
+                if failed_call == "get":
+                    self.connected = False
+                    self.last_error = "UNAVAILABLE: get failed"
+                    return None
+                return RunState(run_id=run_id, flow_name="order_workflow")
+
+            def list_runs(self, selector):
+                if self.started and failed_call == "list":
+                    self.connected = False
+                    self.last_error = "DEADLINE_EXCEEDED: list failed"
+                return []
+
+        provider = FailedFollowupProvider()
+        store = UIStore(provider)
+        _apply_async_updates(store)
+        updates = _signal_background_updates(store)
+        assert store.start_run_async()
+        assert provider.entered.wait(1.0)
+        assert updates.put_event.wait(1.0)
+        store._apply_background_updates()
+        assert store.current_run is None
+        assert not store.run_pinned
+        assert store.run_error == (
+            "UNAVAILABLE: get failed"
+            if failed_call == "get"
+            else "DEADLINE_EXCEEDED: list failed"
+        )
+
+    @pytest.mark.parametrize("interaction", ["select", "deselect"])
+    def test_run_interaction_invalidates_pending_start(self, interaction):
+        release = threading.Event()
+        delegate = MockStateProvider()
+
+        class BlockingStartProvider:
+            def __init__(self):
+                self.entered = threading.Event()
+
+            def list_workflows(self):
+                return delegate.list_workflows()
+
+            def list_runs(self, selector):
+                return delegate.list_runs(selector)
+
+            def get_run(self, run_id):
+                return delegate.get_run(run_id)
+
+            def start_run(self, selector, **kwargs):
+                self.entered.set()
+                release.wait()
+                return delegate.start_run(selector, **kwargs)
+
+        provider = BlockingStartProvider()
+        store = UIStore(provider)
+        _apply_async_updates(store)
+        updates = _signal_background_updates(store)
+        assert store.current_run is not None
+        assert store.start_run_async()
+        assert provider.entered.wait(1.0)
+
+        if interaction == "select":
+            chosen = store.runs_for_current_workflow[0]
+            store.switch_run(chosen)
+        else:
+            chosen = store.current_run
+            store.deselect_run()
+
+        release.set()
+        assert updates.put_event.wait(1.0)
+        store._apply_background_updates()
+        assert store.current_run is chosen
+        assert store.run_pinned is (interaction == "select")
+
     def test_initial_state(self):
         store = UIStore(MockStateProvider())
         assert store.current_workflow is not None
@@ -653,6 +927,7 @@ class TestUIStore:
 
     def test_switch_workflow_refresh_is_nonblocking_and_selector_scoped(self):
         release: dict[str, threading.Event] = {}
+        entered: dict[str, threading.Event] = {}
 
         def workflow(selector: str) -> WorkflowInfo:
             return WorkflowInfo(
@@ -680,34 +955,47 @@ class TestUIStore:
                 return workflows
 
             def list_runs(self, selector):
-                release.setdefault(selector, threading.Event()).wait(timeout=1.0)
+                release.setdefault(selector, threading.Event())
+                entered.setdefault(selector, threading.Event()).set()
+                release[selector].wait()
                 return [runs[selector]]
 
-        started = time.monotonic()
         store = UIStore(BlockingProvider())
-        assert time.monotonic() - started < 0.2
+        updates = _signal_background_updates(store)
+        assert entered.setdefault("a", threading.Event()).wait(1.0)
         assert store.current_workflow is workflows[0]
         assert store.current_run is None
 
         store.switch_workflow(workflows[1])
+        assert entered.setdefault("b", threading.Event()).wait(1.0)
         assert store.current_workflow is workflows[1]
         assert store.current_run is None
         assert store.runs_for_current_workflow == []
         assert store._runs_refresh_in_flight == {"a", "b"}
 
         release["a"].set()
-        deadline = time.monotonic() + 1.0
-        while "a" in store._runs_refresh_in_flight and time.monotonic() < deadline:
-            time.sleep(0.005)
-            store._apply_background_updates()
+        assert updates.put_event.wait(1.0)
+        store._apply_background_updates()
         assert store.current_workflow is workflows[1]
         assert store.current_run is None
         assert store.runs_for_current_workflow == []
 
+        updates.put_event.clear()
         release["b"].set()
-        _apply_async_updates(store)
+        assert updates.put_event.wait(1.0)
+        store._apply_background_updates()
         assert store.current_run is runs["b"]
         assert store.runs_for_current_workflow == [runs["b"]]
+
+    def test_run_error_is_rendered_in_status_bar(self):
+        store = UIStore(MockStateProvider())
+        store.run_error = "UNAVAILABLE: get failed"
+        status = StatusBar()
+        status._test_store = store
+
+        rendered = status.render().plain
+
+        assert "✗ UNAVAILABLE: get failed" in rendered
 
     def test_sidebar_cursor_movement(self):
         store = UIStore(MockStateProvider())

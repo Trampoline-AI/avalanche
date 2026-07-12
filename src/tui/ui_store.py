@@ -25,11 +25,15 @@ class UIStore:
     Access from any widget via ``self.app.store``.
     """
 
-    def __init__(self, provider: StateProvider) -> None:
+    def __init__(
+        self, provider: StateProvider, *, defer_initial_catalog: bool = False
+    ) -> None:
         self.provider = provider
 
         # ── Workflow / Run ──────────────────────────────────────────
-        self.workflows: list[WorkflowInfo] = provider.list_workflows()
+        self.workflows: list[WorkflowInfo] = (
+            [] if defer_initial_catalog else provider.list_workflows()
+        )
         self.current_workflow: WorkflowInfo | None = None
         self.current_run: RunState | None = None
         self.run_pinned: bool = False  # True = user picked a run; False = follow latest
@@ -38,6 +42,10 @@ class UIStore:
         self._runs_refresh_in_flight: set[str] = set()
         self._status_refresh_in_flight = False
         self._catalog_refresh_in_flight = False
+        self._start_run_in_flight = False
+        self._start_request_generation = 0
+        self._run_interaction_generation = 0
+        self.run_error: str = ""
         self.catalog_revision = 0
 
         # ── DAG layout (derived from current_workflow) ─────────────
@@ -84,6 +92,8 @@ class UIStore:
         # Default to first workflow
         if self.workflows:
             self.switch_workflow(self.workflows[0])
+        if defer_initial_catalog:
+            self._refresh_workflow_catalog()
 
     # ── Derived properties (read-only, always consistent) ──────────
 
@@ -244,6 +254,7 @@ class UIStore:
 
     def switch_workflow(self, workflow: WorkflowInfo) -> None:
         """Switch to a different workflow — recompute DAG, reset selection."""
+        self._run_interaction_generation += 1
         self.current_workflow = workflow
         self.dag, self.all_nodes = workflow_to_layout(workflow)
         self.nav_grid = build_nav_grid(self.dag)
@@ -258,11 +269,13 @@ class UIStore:
         self._refresh_runs_cache()
 
     def switch_run(self, run: RunState) -> None:
+        self._run_interaction_generation += 1
         self.current_run = run
         self.run_pinned = True
 
     def deselect_run(self) -> None:
         """Unpin the current run — auto-follow will take over."""
+        self._run_interaction_generation += 1
         self.run_pinned = False
         self.selected_node = None
 
@@ -333,11 +346,82 @@ class UIStore:
         if not self.current_workflow:
             return None
         run_id = self.provider.start_run(self.current_workflow.selector)
+        if not run_id:
+            self.run_error = getattr(self.provider, "last_error", "") or "Run failed to start"
+            return None
         self.current_run = self.provider.get_run(run_id)
         # Refresh cache so the new run appears immediately
         self._runs_cache = self.provider.list_runs(self.current_workflow.selector)
         self.start_time = time.monotonic()
+        self.run_error = ""
         return run_id
+
+    def start_run_async(self) -> bool:
+        """Launch the complete start/get/list sequence off the UI thread."""
+        workflow = self.current_workflow
+        if workflow is None or self._start_run_in_flight:
+            return False
+
+        import threading
+
+        self._start_run_in_flight = True
+        self._start_request_generation += 1
+        request_generation = self._start_request_generation
+        interaction_generation = self._run_interaction_generation
+        workflow_selector = workflow.selector
+        provider = self.provider
+        self.run_error = ""
+
+        def _do_start() -> None:
+            run_id = ""
+            run = None
+            runs = None
+            error = ""
+            try:
+                run_id = provider.start_run(workflow_selector)
+                if not run_id:
+                    error = (
+                        getattr(provider, "last_error", "") or "Run failed to start"
+                    )
+                else:
+                    run = provider.get_run(run_id)
+                    if getattr(provider, "connected", True) is False:
+                        error = (
+                            getattr(provider, "last_error", "")
+                            or "Failed to load the started run"
+                        )
+                    else:
+                        runs = provider.list_runs(workflow_selector)
+                        if getattr(provider, "connected", True) is False:
+                            error = (
+                                getattr(provider, "last_error", "")
+                                or "Failed to refresh runs after starting"
+                            )
+                        elif run is None:
+                            run = next(
+                                (item for item in runs if item.run_id == run_id), None
+                            )
+                            if run is None:
+                                error = f"Started run {run_id} was not found"
+            except Exception as exc:
+                error = str(exc) or "Run failed to start"
+            self._background_updates.put(
+                (
+                    "start_run",
+                    (
+                        workflow_selector,
+                        request_generation,
+                        interaction_generation,
+                        run_id,
+                        run,
+                        runs,
+                        error,
+                    ),
+                )
+            )
+
+        threading.Thread(target=_do_start, daemon=True).start()
+        return True
 
     def select_next_run(self) -> None:
         """Move down in run history (toward older runs)."""
@@ -345,12 +429,14 @@ class UIStore:
         if not display:
             return
         if self.current_run is None:
+            self._run_interaction_generation += 1
             self.current_run = display[0]
             self.run_pinned = True
             return
         for i, r in enumerate(display):
             if r.run_id == self.current_run.run_id:
                 if i + 1 < len(display):
+                    self._run_interaction_generation += 1
                     self.current_run = display[i + 1]
                     self.run_pinned = True
                 return
@@ -361,12 +447,14 @@ class UIStore:
         if not display:
             return
         if self.current_run is None:
+            self._run_interaction_generation += 1
             self.current_run = display[0]
             self.run_pinned = True
             return
         for i, r in enumerate(display):
             if r.run_id == self.current_run.run_id:
                 if i > 0:
+                    self._run_interaction_generation += 1
                     self.current_run = display[i - 1]
                     self.run_pinned = True
                 return
@@ -507,6 +595,38 @@ class UIStore:
                 run = payload
                 if self.current_run and self.current_run.run_id == run.run_id:
                     self.current_run = run
+            elif kind == "start_run":
+                (
+                    selector,
+                    request_generation,
+                    interaction_generation,
+                    run_id,
+                    run,
+                    runs,
+                    error,
+                ) = payload
+                if request_generation == self._start_request_generation:
+                    self._start_run_in_flight = False
+                relevant = (
+                    request_generation == self._start_request_generation
+                    and interaction_generation == self._run_interaction_generation
+                    and self.current_workflow is not None
+                    and self.current_workflow.selector == selector
+                )
+                if not relevant:
+                    continue
+                if error:
+                    self.run_error = error
+                    continue
+                self.run_error = ""
+                self._runs_cache = runs or ([] if run is None else [run])
+                self.current_run = run or next(
+                    (item for item in self._runs_cache if item.run_id == run_id), None
+                )
+                self.run_pinned = True
+                self.start_time = time.monotonic()
+                if run_id and self._runs_cache:
+                    self.workflow_statuses[selector] = self._runs_cache[-1].status
 
     def _reconcile_workflows(self, workflows: list[WorkflowInfo]) -> None:
         old_signature = [self._workflow_revision_signature(item) for item in self.workflows]
@@ -526,6 +646,8 @@ class UIStore:
             self.sidebar_selected_id = ""
         else:
             changed_selection = selected.selector != selected_id
+            if changed_selection:
+                self._run_interaction_generation += 1
             self.current_workflow = selected
             self.dag, self.all_nodes = workflow_to_layout(selected)
             self.nav_grid = build_nav_grid(self.dag)

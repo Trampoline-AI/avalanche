@@ -260,7 +260,7 @@ def test_canonical_client_requests_include_cached_legacy_name():
             self.start_request = None
             self.list_request = None
 
-        def ListFlows(self, request):  # noqa: N802
+        def ListFlows(self, request, **kwargs):  # noqa: N802
             return pb.FlowList(
                 flows=[
                     pb.FlowInfoMsg(
@@ -272,11 +272,11 @@ def test_canonical_client_requests_include_cached_legacy_name():
                 ]
             )
 
-        def StartRun(self, request):  # noqa: N802
+        def StartRun(self, request, **kwargs):  # noqa: N802
             self.start_request = request
             return pb.StartRunResponse(run_id="run_legacy")
 
-        def ListRuns(self, request):  # noqa: N802
+        def ListRuns(self, request, **kwargs):  # noqa: N802
             self.list_request = request
             return pb.RunList()
 
@@ -296,6 +296,75 @@ def test_canonical_client_requests_include_cached_legacy_name():
         assert stub.list_request.flow_name == "Daily report"
     finally:
         provider.close()
+
+
+def test_unary_client_calls_pass_finite_timeout():
+    calls = []
+
+    class CapturingStub:
+        def _capture(self, name, timeout):
+            calls.append((name, timeout))
+            assert timeout is not None
+            assert 0 < timeout < float("inf")
+
+        def ListFlows(self, request, *, timeout, **kwargs):  # noqa: N802
+            self._capture("list", timeout)
+            return pb.FlowList()
+
+        def StartRun(self, request, *, timeout, **kwargs):  # noqa: N802
+            self._capture("start", timeout)
+            return pb.StartRunResponse(run_id="run_1")
+
+        def GetRun(self, request, *, timeout, **kwargs):  # noqa: N802
+            self._capture("get", timeout)
+            return pb.RunStateMsg(
+                run_id=request.run_id, flow_name="flow", status="pending"
+            )
+
+        def ListRuns(self, request, *, timeout, **kwargs):  # noqa: N802
+            self._capture("runs", timeout)
+            return pb.RunList()
+
+        def CancelRun(self, request, *, timeout, **kwargs):  # noqa: N802
+            self._capture("cancel", timeout)
+            return pb.Empty()
+
+    provider = GrpcStateProvider("localhost:1", unary_timeout=3.5)
+    provider._stub = CapturingStub()
+    try:
+        provider.list_workflows()
+        provider.start_run("flow")
+        provider.get_run("run_1")
+        provider.list_runs("flow")
+        provider.cancel_run("run_1")
+    finally:
+        provider.close()
+
+    assert calls == [
+        ("list", 3.5),
+        ("start", 3.5),
+        ("get", 3.5),
+        ("runs", 3.5),
+        ("cancel", 3.5),
+    ]
+
+
+@pytest.mark.parametrize(
+    ("value", "error", "message"),
+    [
+        (None, TypeError, "real number"),
+        (True, TypeError, "real number"),
+        ("1", TypeError, "real number"),
+        (0, ValueError, "positive and finite"),
+        (-1, ValueError, "positive and finite"),
+        (float("nan"), ValueError, "positive and finite"),
+        (float("inf"), ValueError, "positive and finite"),
+        (float("-inf"), ValueError, "positive and finite"),
+    ],
+)
+def test_unary_timeout_must_be_a_positive_finite_real(value, error, message):
+    with pytest.raises(error, match=message):
+        GrpcStateProvider("localhost:1", unary_timeout=value)
 
 
 def test_canonical_and_ambiguous_grpc_selection(tmp_path):

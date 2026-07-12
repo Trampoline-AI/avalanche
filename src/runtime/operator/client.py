@@ -3,9 +3,11 @@
 from __future__ import annotations
 
 import json
+import math
 import threading
 import time
 from collections.abc import Mapping
+from numbers import Real
 from typing import Any, Callable
 
 import grpc
@@ -27,6 +29,8 @@ from .models import LogEntry, RunState, WorkflowDiscoveryDiagnostic, WorkflowInf
 from .proto import operator_pb2 as pb
 from .proto import operator_pb2_grpc as pb_grpc
 
+DEFAULT_UNARY_TIMEOUT_SECONDS = 10.0
+
 
 class GrpcStateProvider:
     """StateProvider backed by a remote gRPC OperatorService.
@@ -45,9 +49,16 @@ class GrpcStateProvider:
         root_certificates: bytes | None = None,
         private_key: bytes | None = None,
         certificate_chain: bytes | None = None,
+        unary_timeout: float = DEFAULT_UNARY_TIMEOUT_SECONDS,
     ) -> None:
+        if isinstance(unary_timeout, bool) or not isinstance(unary_timeout, Real):
+            raise TypeError("unary_timeout must be a real number")
+        if not math.isfinite(unary_timeout) or unary_timeout <= 0:
+            raise ValueError("unary_timeout must be positive and finite")
+
         self._address = address
         self._metadata = (("authorization", f"Bearer {token}"),) if token else None
+        self._unary_timeout = float(unary_timeout)
         if tls:
             credentials = grpc.ssl_channel_credentials(
                 root_certificates=root_certificates,
@@ -72,6 +83,7 @@ class GrpcStateProvider:
 
     def _call(self, fn, *args, default=None, **kwargs):
         """Wrap a gRPC call with connection state tracking."""
+        kwargs.setdefault("timeout", self._unary_timeout)
         if self._metadata is not None and "metadata" not in kwargs:
             kwargs["metadata"] = self._metadata
         try:
@@ -114,15 +126,19 @@ class GrpcStateProvider:
 
     def get_run(self, run_id: str) -> RunState | None:
         try:
-            kwargs = {}
+            kwargs = {"timeout": self._unary_timeout}
             if self._metadata is not None:
                 kwargs["metadata"] = self._metadata
             resp = self._stub.GetRun(pb.GetRunRequest(run_id=run_id), **kwargs)
             self.connected = True
             self.retry_count = 0
+            self.last_error = ""
             return run_state_from_proto(resp)
         except grpc.RpcError as e:
             if e.code() == grpc.StatusCode.NOT_FOUND:
+                self.connected = True
+                self.retry_count = 0
+                self.last_error = ""
                 return None
             self.connected = False
             self.last_error = f"{e.code().name}: {e.details()}"
@@ -180,7 +196,7 @@ class GrpcStateProvider:
     def ping(self) -> bool:
         """Quick health check — try a fast unary call with short timeout."""
         try:
-            kwargs = {"timeout": 2.0}
+            kwargs = {"timeout": min(2.0, self._unary_timeout)}
             if self._metadata is not None:
                 kwargs["metadata"] = self._metadata
             resp = self._stub.ListFlows(pb.Empty(), **kwargs)
