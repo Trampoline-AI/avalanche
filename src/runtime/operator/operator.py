@@ -9,12 +9,14 @@ import queue
 import signal
 import threading
 import time
+import warnings
+from collections.abc import Mapping
 from copy import deepcopy
 from dataclasses import dataclass
 from datetime import datetime
 from functools import partial
 from pathlib import Path
-from typing import Any, Callable
+from typing import Any, Callable, Literal, TypeAlias
 from uuid import uuid4
 
 from ..executor import LocalExecutor, RayExecutor
@@ -31,6 +33,18 @@ _LEVEL_MAP = {
     logging.ERROR: LogLevel.ERROR,
     logging.CRITICAL: LogLevel.ERROR,
 }
+
+ExecutorBackend: TypeAlias = Literal["local", "ray"]
+DeprecatedExecutorFactory: TypeAlias = (
+    type[LocalExecutor] | type[RayExecutor] | partial[RayExecutor]
+)
+
+
+class _ExecutorBackendOmitted:
+    pass
+
+
+_EXECUTOR_BACKEND_OMITTED = _ExecutorBackendOmitted()
 
 
 @dataclass
@@ -50,16 +64,32 @@ class Operator:
     def __init__(
         self,
         workflow_paths: list[str] | None = None,
-        executor_factory: Callable | None = None,
+        executor_factory: DeprecatedExecutorFactory | None = None,
         watch: bool = True,
         schedule: bool = True,
         *,
+        executor_backend: ExecutorBackend | _ExecutorBackendOmitted = (
+            _EXECUTOR_BACKEND_OMITTED
+        ),
+        ray_runtime_env: Mapping[str, Any] | None = None,
+        ray_init_kwargs: Mapping[str, Any] | None = None,
         prepare_timeout: float = 15.0,
         discovery_timeout: float = 15.0,
         cancel_grace: float = 5.0,
     ) -> None:
-        factory = executor_factory or LocalExecutor
-        self._executor_config = _executor_config(factory)
+        """Create an operator with spawn-safe executor configuration.
+
+        ``executor_factory`` is deprecated and only accepts the exact
+        ``LocalExecutor`` or ``RayExecutor`` classes, or a keyword-only
+        ``functools.partial(RayExecutor, ...)``. Use ``executor_backend`` and
+        the Ray configuration mappings for new code.
+        """
+        self._executor_config = _resolve_executor_config(
+            executor_backend=executor_backend,
+            ray_runtime_env=ray_runtime_env,
+            ray_init_kwargs=ray_init_kwargs,
+            executor_factory=executor_factory,
+        )
         self._registry = WorkflowRegistry(discovery_timeout=discovery_timeout)
         self._workflow_paths = workflow_paths or []
         if self._workflow_paths:
@@ -539,7 +569,57 @@ class Operator:
                 pass
 
 
-def _executor_config(factory: Callable) -> dict[str, Any]:
+def _resolve_executor_config(
+    *,
+    executor_backend: ExecutorBackend | _ExecutorBackendOmitted,
+    ray_runtime_env: Mapping[str, Any] | None,
+    ray_init_kwargs: Mapping[str, Any] | None,
+    executor_factory: DeprecatedExecutorFactory | None,
+) -> dict[str, Any]:
+    backend_was_provided = not isinstance(
+        executor_backend, _ExecutorBackendOmitted
+    )
+    backend: ExecutorBackend = (
+        "local" if not backend_was_provided else executor_backend
+    )
+    if executor_factory is not None:
+        warnings.warn(
+            "executor_factory is deprecated; use executor_backend and the "
+            "ray_runtime_env/ray_init_kwargs configuration instead",
+            DeprecationWarning,
+            stacklevel=3,
+        )
+        if (
+            backend_was_provided
+            or ray_runtime_env is not None
+            or ray_init_kwargs is not None
+        ):
+            raise TypeError(
+                "executor_factory cannot be combined with executor_backend or "
+                "Ray configuration"
+            )
+        return _deprecated_executor_config(executor_factory)
+
+    if backend not in {"local", "ray"}:
+        raise ValueError(
+            f"Unsupported executor_backend {backend!r}; expected 'local' or 'ray'"
+        )
+    if backend == "local":
+        if ray_runtime_env is not None or ray_init_kwargs is not None:
+            raise ValueError(
+                "ray_runtime_env and ray_init_kwargs require executor_backend='ray'"
+            )
+        return {"backend": "local"}
+    return {
+        "backend": "ray",
+        "runtime_env": dict(ray_runtime_env or {}),
+        "ray_init_kwargs": dict(ray_init_kwargs or {}),
+    }
+
+
+def _deprecated_executor_config(
+    factory: DeprecatedExecutorFactory,
+) -> dict[str, Any]:
     if factory is LocalExecutor:
         return {"backend": "local"}
     if factory is RayExecutor:
@@ -561,8 +641,11 @@ def _executor_config(factory: Callable) -> dict[str, Any]:
             ),
         }
     raise TypeError(
-        "executor_factory must be LocalExecutor, RayExecutor, or a keyword-only "
-        "functools.partial of RayExecutor"
+        "Unsupported executor_factory. Per-run spawn requires serializable backend "
+        "configuration; use executor_backend='local' or executor_backend='ray' with "
+        "ray_runtime_env/ray_init_kwargs. The deprecated compatibility parameter only "
+        "accepts exact LocalExecutor, exact RayExecutor, or a keyword-only "
+        "functools.partial(RayExecutor, ...)."
     )
 
 

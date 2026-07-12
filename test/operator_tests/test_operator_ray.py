@@ -3,7 +3,6 @@ from pathlib import Path
 
 import pytest
 
-from avalanche import RayExecutor
 from avalanche.operator import Operator
 from avalanche.operator.models import RunStatus
 
@@ -55,7 +54,7 @@ def test_ray_operator_uses_live_source_for_imports_logs_and_later_runs(tmp_path)
     workflow = _write_package_workflow(tmp_path, 1)
     operator = Operator(
         [str(workflow)],
-        executor_factory=RayExecutor,
+        executor_backend="ray",
         watch=False,
         schedule=False,
         prepare_timeout=30.0,
@@ -118,7 +117,7 @@ def test_ray_operator_deferred_standalone_import_uses_live_source(tmp_path):
     )
     operator = Operator(
         [str(workflow)],
-        executor_factory=RayExecutor,
+        executor_backend="ray",
         watch=False,
         schedule=False,
         prepare_timeout=30.0,

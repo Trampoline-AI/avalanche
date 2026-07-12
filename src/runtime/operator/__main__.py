@@ -22,11 +22,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser.add_argument("--ray", action="store_true", help="use the Ray executor")
     args = parser.parse_args(list(argv) if argv is not None else None)
 
-    executor_factory = None
     if args.ray:
-        from runtime.executor import RayExecutor
-
-        executor_factory = RayExecutor
         print("Executor: Ray")
     else:
         print("Executor: Local")
@@ -35,7 +31,11 @@ def main(argv: Sequence[str] | None = None) -> int:
 
     print(f"Avalanche operator starting on port {args.port}")
     print(f"Scanning flows: {', '.join(args.flows)}")
-    serve(args.flows, port=args.port, executor_factory=executor_factory)
+    serve(
+        args.flows,
+        port=args.port,
+        executor_backend="ray" if args.ray else "local",
+    )
     return 0
 
 

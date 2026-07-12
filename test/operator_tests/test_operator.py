@@ -9,8 +9,13 @@ import pytest
 from avalanche import LocalExecutor, RayExecutor
 from avalanche.operator import Operator
 from avalanche.operator.models import NodeStatus, RunStatus
+from avalanche.operator.scheduler import Scheduler
 
 FIXTURES_DIR = os.path.join(os.path.dirname(os.path.dirname(__file__)), "fixtures")
+
+
+def arbitrary_executor_factory():
+    return LocalExecutor()
 
 
 class TestOperatorLifecycle:
@@ -160,20 +165,123 @@ class TestOperatorLifecycle:
 
     @pytest.mark.parametrize(
         "factory",
-        [lambda: LocalExecutor(), type("CustomLocal", (LocalExecutor,), {})],
+        [
+            lambda: LocalExecutor(),
+            type("CustomLocal", (LocalExecutor,), {}),
+            arbitrary_executor_factory,
+        ],
     )
     def test_unsupported_executor_factories_are_rejected(self, factory):
-        with pytest.raises(TypeError, match="executor_factory must be"):
-            Operator([], executor_factory=factory, watch=False, schedule=False)
+        with pytest.warns(DeprecationWarning, match="executor_factory is deprecated"):
+            with pytest.raises(TypeError, match="Per-run spawn requires serializable"):
+                Operator([], executor_factory=factory, watch=False, schedule=False)
+
+    @pytest.mark.parametrize(
+        ("factory", "expected"),
+        [
+            (LocalExecutor, {"backend": "local"}),
+            (
+                RayExecutor,
+                {"backend": "ray", "runtime_env": {}, "ray_init_kwargs": {}},
+            ),
+        ],
+    )
+    def test_deprecated_exact_executor_factories_remain_supported(
+        self, factory, expected
+    ):
+        with pytest.warns(DeprecationWarning, match="executor_factory is deprecated"):
+            operator = Operator(
+                [], executor_factory=factory, watch=False, schedule=False
+            )
+        try:
+            assert operator._executor_config == expected
+        finally:
+            operator.close()
+
+    @pytest.mark.parametrize(
+        ("factory", "expected"),
+        [
+            (LocalExecutor, {"backend": "local"}),
+            (
+                RayExecutor,
+                {"backend": "ray", "runtime_env": {}, "ray_init_kwargs": {}},
+            ),
+        ],
+    )
+    def test_deprecated_executor_factories_remain_positional(
+        self, factory, expected
+    ):
+        with pytest.warns(DeprecationWarning, match="executor_factory is deprecated"):
+            operator = Operator([], factory, False, False)
+        try:
+            assert operator._executor_config == expected
+        finally:
+            operator.close()
+
+    @pytest.mark.parametrize(
+        ("watch", "schedule", "expected_calls"),
+        [
+            (True, False, ["watch"]),
+            (False, True, ["schedule"]),
+        ],
+    )
+    def test_positional_watch_and_schedule_keep_their_original_slots(
+        self, monkeypatch, watch, schedule, expected_calls
+    ):
+        calls = []
+        monkeypatch.setattr(
+            Operator, "_start_watcher", lambda self: calls.append("watch")
+        )
+        monkeypatch.setattr(Scheduler, "start", lambda self: calls.append("schedule"))
+
+        with pytest.warns(DeprecationWarning, match="executor_factory is deprecated"):
+            operator = Operator(
+                [os.path.join(FIXTURES_DIR, "sample_workflows.py")],
+                LocalExecutor,
+                watch,
+                schedule,
+            )
+        try:
+            assert calls == expected_calls
+        finally:
+            operator.close()
 
     def test_ray_partial_preserves_spawn_safe_init_configuration(self):
+        with pytest.warns(DeprecationWarning, match="executor_factory is deprecated"):
+            operator = Operator(
+                [],
+                executor_factory=partial(
+                    RayExecutor,
+                    ray_init_kwargs={
+                        "address": "ray://cluster:10001",
+                        "namespace": "dev",
+                    },
+                    runtime_env={"env_vars": {"MODE": "test"}},
+                ),
+                watch=False,
+                schedule=False,
+            )
+        try:
+            assert operator._executor_config == {
+                "backend": "ray",
+                "ray_init_kwargs": {
+                    "address": "ray://cluster:10001",
+                    "namespace": "dev",
+                },
+                "runtime_env": {"env_vars": {"MODE": "test"}},
+            }
+        finally:
+            operator.close()
+
+    def test_explicit_ray_backend_preserves_spawn_safe_init_configuration(self):
         operator = Operator(
             [],
-            executor_factory=partial(
-                RayExecutor,
-                ray_init_kwargs={"address": "ray://cluster:10001", "namespace": "dev"},
-                runtime_env={"env_vars": {"MODE": "test"}},
-            ),
+            executor_backend="ray",
+            ray_init_kwargs={
+                "address": "ray://cluster:10001",
+                "namespace": "dev",
+            },
+            ray_runtime_env={"env_vars": {"MODE": "test"}},
             watch=False,
             schedule=False,
         )
@@ -188,6 +296,44 @@ class TestOperatorLifecycle:
             }
         finally:
             operator.close()
+
+    @pytest.mark.parametrize("backend", ["thread", "process"])
+    def test_invalid_executor_backend_is_rejected(self, backend):
+        with pytest.raises(ValueError, match="Unsupported executor_backend"):
+            Operator([], executor_backend=backend, watch=False, schedule=False)
+
+    @pytest.mark.parametrize(
+        "ray_config",
+        [
+            {"ray_runtime_env": {}},
+            {"ray_init_kwargs": {}},
+        ],
+    )
+    def test_local_backend_rejects_ray_configuration(self, ray_config):
+        with pytest.raises(ValueError, match="require executor_backend='ray'"):
+            Operator([], watch=False, schedule=False, **ray_config)
+
+    @pytest.mark.parametrize(
+        "explicit_config",
+        [
+            {"executor_backend": "local"},
+            {"executor_backend": "ray"},
+            {"ray_runtime_env": {}},
+            {"ray_init_kwargs": {}},
+        ],
+    )
+    def test_deprecated_factory_conflicts_with_explicit_configuration(
+        self, explicit_config
+    ):
+        with pytest.warns(DeprecationWarning, match="executor_factory is deprecated"):
+            with pytest.raises(TypeError, match="cannot be combined"):
+                Operator(
+                    [],
+                    executor_factory=LocalExecutor,
+                    watch=False,
+                    schedule=False,
+                    **explicit_config,
+                )
 
 
 class TestOperatorCancellation:
