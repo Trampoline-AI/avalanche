@@ -45,6 +45,8 @@ class UIStore:
         self._start_run_in_flight = False
         self._start_request_generation = 0
         self._run_interaction_generation = 0
+        self._workflow_context_epoch = 0
+        self._run_data_revisions: dict[str, int] = {}
         self.run_error: str = ""
         self.catalog_revision = 0
 
@@ -167,6 +169,8 @@ class UIStore:
         if workflow_selector in self._runs_refresh_in_flight:
             return
         self._runs_refresh_in_flight.add(workflow_selector)
+        data_revision = self._run_data_revision(workflow_selector)
+        context_epoch = self._workflow_context_epoch
 
         import threading
 
@@ -177,7 +181,9 @@ class UIStore:
                     runs = None
             except Exception:
                 runs = None
-            self._background_updates.put(("runs", (workflow_selector, runs)))
+            self._background_updates.put(
+                ("runs", (workflow_selector, data_revision, context_epoch, runs))
+            )
 
         threading.Thread(target=_do_refresh, daemon=True).start()
 
@@ -231,22 +237,25 @@ class UIStore:
         self._status_refresh_in_flight = True
         provider = self.provider
         workflows = list(self.workflows)
+        data_revisions = {
+            workflow.selector: self._run_data_revision(workflow.selector)
+            for workflow in workflows
+        }
 
         import threading
 
         def _do_refresh():
             try:
-                statuses: dict[str, RunStatus] = {}
+                statuses: dict[str, RunStatus | None] = {}
                 for p in workflows:
                     runs = provider.list_runs(p.selector)
                     if getattr(provider, "connected", True) is False:
                         statuses = None
                         break
-                    if runs:
-                        statuses[p.selector] = runs[-1].status
+                    statuses[p.selector] = runs[-1].status if runs else None
             except Exception:
                 statuses = None
-            self._background_updates.put(("statuses", statuses))
+            self._background_updates.put(("statuses", (data_revisions, statuses)))
 
         threading.Thread(target=_do_refresh, daemon=True).start()
 
@@ -255,6 +264,7 @@ class UIStore:
     def switch_workflow(self, workflow: WorkflowInfo) -> None:
         """Switch to a different workflow — recompute DAG, reset selection."""
         self._run_interaction_generation += 1
+        self._workflow_context_epoch += 1
         self.current_workflow = workflow
         self.dag, self.all_nodes = workflow_to_layout(workflow)
         self.nav_grid = build_nav_grid(self.dag)
@@ -349,9 +359,11 @@ class UIStore:
         if not run_id:
             self.run_error = getattr(self.provider, "last_error", "") or "Run failed to start"
             return None
+        selector = self.current_workflow.selector
         self.current_run = self.provider.get_run(run_id)
         # Refresh cache so the new run appears immediately
-        self._runs_cache = self.provider.list_runs(self.current_workflow.selector)
+        self._runs_cache = self.provider.list_runs(selector)
+        self._advance_run_data_revision(selector)
         self.start_time = time.monotonic()
         self.run_error = ""
         return run_id
@@ -369,6 +381,8 @@ class UIStore:
         request_generation = self._start_request_generation
         interaction_generation = self._run_interaction_generation
         workflow_selector = workflow.selector
+        data_revision = self._run_data_revision(workflow_selector)
+        context_epoch = self._workflow_context_epoch
         provider = self.provider
         self.run_error = ""
 
@@ -412,6 +426,8 @@ class UIStore:
                         workflow_selector,
                         request_generation,
                         interaction_generation,
+                        data_revision,
+                        context_epoch,
                         run_id,
                         run,
                         runs,
@@ -567,6 +583,13 @@ class UIStore:
             return run.workflow_id == workflow.selector
         return run.flow_name in {workflow.name, workflow.rendered_name}
 
+    def _run_data_revision(self, selector: str) -> int:
+        return self._run_data_revisions.get(selector, 0)
+
+    def _advance_run_data_revision(self, selector: str) -> None:
+        """Invalidate authoritative run-data snapshots for one workflow."""
+        self._run_data_revisions[selector] = self._run_data_revision(selector) + 1
+
     def _apply_background_updates(self) -> None:
         while not self._background_updates.empty():
             kind, payload = self._background_updates.get()
@@ -575,31 +598,83 @@ class UIStore:
                 if payload is not None:
                     self._reconcile_workflows(payload)
             elif kind == "runs":
-                selector, runs = payload
+                selector, data_revision, context_epoch, runs = payload
                 self._runs_refresh_in_flight.discard(selector)
                 if (
                     runs is not None
+                    and data_revision == self._run_data_revision(selector)
+                    and context_epoch == self._workflow_context_epoch
                     and self.current_workflow is not None
                     and self.current_workflow.selector == selector
                 ):
+                    changed = self._runs_cache != runs
                     self._runs_cache = runs
                     if not self.run_pinned:
                         self.current_run = runs[-1] if runs else None
                     if runs:
                         self.workflow_statuses[selector] = runs[-1].status
+                    if changed:
+                        self._advance_run_data_revision(selector)
             elif kind == "statuses":
                 self._status_refresh_in_flight = False
-                if payload is not None:
-                    self.workflow_statuses = payload
+                data_revisions, statuses = payload
+                if statuses is not None:
+                    current_selectors = {workflow.selector for workflow in self.workflows}
+                    for selector, status in statuses.items():
+                        if selector not in current_selectors or data_revisions.get(
+                            selector
+                        ) != self._run_data_revision(selector):
+                            continue
+                        if status is None:
+                            self.workflow_statuses.pop(selector, None)
+                        else:
+                            self.workflow_statuses[selector] = status
             elif kind == "run":
                 run = payload
-                if self.current_run and self.current_run.run_id == run.run_id:
+                workflow = next(
+                    (item for item in self.workflows if self._run_matches(run, item)),
+                    None,
+                )
+                if workflow is None:
+                    continue
+                selector = workflow.selector
+                current_match = (
+                    self.current_run
+                    if self.current_run
+                    and self.current_run.run_id == run.run_id
+                    and self.current_workflow is not None
+                    and self.current_workflow.selector == selector
+                    else None
+                )
+                cache_index = next(
+                    (
+                        index
+                        for index, cached in enumerate(self._runs_cache)
+                        if cached.run_id == run.run_id and self._run_matches(cached, workflow)
+                    ),
+                    None,
+                )
+                cached_match = (
+                    self._runs_cache[cache_index] if cache_index is not None else None
+                )
+                equivalents = [
+                    item for item in (current_match, cached_match) if item is not None
+                ]
+                if not equivalents or any(item != run for item in equivalents):
+                    self._advance_run_data_revision(selector)
+                if current_match is not None:
                     self.current_run = run
+                if cache_index is not None:
+                    self._runs_cache[cache_index] = run
+                    if cache_index == len(self._runs_cache) - 1:
+                        self.workflow_statuses[selector] = run.status
             elif kind == "start_run":
                 (
                     selector,
                     request_generation,
                     interaction_generation,
+                    data_revision,
+                    context_epoch,
                     run_id,
                     run,
                     runs,
@@ -607,13 +682,18 @@ class UIStore:
                 ) = payload
                 if request_generation == self._start_request_generation:
                     self._start_run_in_flight = False
-                relevant = (
+                context_relevant = (
                     request_generation == self._start_request_generation
                     and interaction_generation == self._run_interaction_generation
+                    and context_epoch == self._workflow_context_epoch
                     and self.current_workflow is not None
                     and self.current_workflow.selector == selector
                 )
+                data_relevant = data_revision == self._run_data_revision(selector)
+                relevant = context_relevant and data_relevant
                 if not relevant:
+                    if context_relevant and not data_relevant:
+                        self._refresh_runs_cache()
                     continue
                 if error:
                     self.run_error = error
@@ -625,6 +705,7 @@ class UIStore:
                 )
                 self.run_pinned = True
                 self.start_time = time.monotonic()
+                self._advance_run_data_revision(selector)
                 if run_id and self._runs_cache:
                     self.workflow_statuses[selector] = self._runs_cache[-1].status
 
@@ -636,6 +717,11 @@ class UIStore:
         selected = next((item for item in workflows if item.selector == selected_id), None)
         if selected is None and workflows:
             selected = workflows[0]
+        new_selected_id = selected.selector if selected is not None else ""
+        changed_selection = new_selected_id != selected_id
+        if changed_selection:
+            self._run_interaction_generation += 1
+            self._workflow_context_epoch += 1
         if selected is None:
             self.current_workflow = None
             self.current_run = None
@@ -645,9 +731,6 @@ class UIStore:
             self.nav_grid = []
             self.sidebar_selected_id = ""
         else:
-            changed_selection = selected.selector != selected_id
-            if changed_selection:
-                self._run_interaction_generation += 1
             self.current_workflow = selected
             self.dag, self.all_nodes = workflow_to_layout(selected)
             self.nav_grid = build_nav_grid(self.dag)
