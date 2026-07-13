@@ -89,6 +89,82 @@ def test_workflow_run_run_id_overrides_mapping_context_runtime_fields():
     assert result == ("external_run", "context_workflow", "local")
 
 
+def test_workflow_run_runtime_fields_override_mapping_context_lineage_and_node_fields():
+    @ava.source(slug="load-docs")
+    def load(ctx: ExampleContext):
+        return {
+            "run_id": ctx.run_id,
+            "workflow_name": ctx.workflow_name,
+            "executor_type": ctx.executor_type,
+            "rerun": ctx.rerun,
+            "node_id": ctx.node_id,
+            "node_name": ctx.node_name,
+            "node_slug": ctx.node_slug,
+            "lineage_vector": ctx.lineage_vector,
+            "request_id": ctx.request_id,
+        }
+
+    @ava.workflow(context=ExampleContext)
+    def context_workflow():
+        return load()
+
+    result = context_workflow().run(
+        executor=ava.LocalExecutor(),
+        run_id="run_real",
+        context={
+            "request_id": "req_123",
+            "run_id": "run_fake",
+            "workflow_name": "fake_workflow",
+            "executor_type": "fake_executor",
+            "rerun": {"run_id": "fake_parent", "start": ["fake-node"]},
+            "node_id": "fake_node_1",
+            "node_name": "fake_node",
+            "node_slug": "fake-node",
+            "lineage_vector": {"upstream": "run_fake"},
+        },
+    )
+
+    assert result == {
+        "run_id": "run_real",
+        "workflow_name": "context_workflow",
+        "executor_type": "local",
+        "rerun": None,
+        "node_id": "load_1",
+        "node_name": "load",
+        "node_slug": "load-docs",
+        "lineage_vector": {},
+        "request_id": "req_123",
+    }
+
+
+def test_workflow_run_sanitizes_seed_lineage_but_preserves_real_parent_lineage():
+    @ava.source(slug="upstream")
+    def load(ctx: ava.RunContext):
+        return {"root_lineage": dict(ctx.lineage_vector)}
+
+    @ava.step(slug="downstream")
+    def consume(payload, ctx: ava.RunContext):
+        return {
+            "payload": payload,
+            "downstream_lineage": dict(ctx.lineage_vector),
+        }
+
+    @ava.workflow
+    def lineage_workflow():
+        return load() >> consume()
+
+    result = lineage_workflow().run(
+        executor=ava.LocalExecutor(),
+        run_id="run_real",
+        context={"lineage_vector": {"upstream": "run_fake"}},
+    )
+
+    assert result == {
+        "payload": {"root_lineage": {}},
+        "downstream_lineage": {"upstream": "run_real"},
+    }
+
+
 def test_workflow_rejects_invalid_input_and_context_types_at_build_time():
     @ava.source
     def load():

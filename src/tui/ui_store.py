@@ -712,8 +712,13 @@ class UIStore:
     def _reconcile_workflows(self, workflows: list[WorkflowInfo]) -> None:
         old_signature = [self._workflow_revision_signature(item) for item in self.workflows]
         new_signature = [self._workflow_revision_signature(item) for item in workflows]
+        old_folders = self._workflow_folder_paths(self.workflows)
+        new_folders = self._workflow_folder_paths(workflows)
         selected_id = self.current_workflow.selector if self.current_workflow else ""
         self.workflows = workflows
+        # Remote providers start with an empty catalog. Expand folders introduced by
+        # an asynchronous refresh without reopening folders the user collapsed.
+        self.sidebar_expanded.update(new_folders - old_folders)
         selected = next((item for item in workflows if item.selector == selected_id), None)
         if selected is None and workflows:
             selected = workflows[0]
@@ -748,6 +753,16 @@ class UIStore:
         self.sidebar_width = self._compute_sidebar_width()
         if old_signature != new_signature:
             self.catalog_revision += 1
+
+    @classmethod
+    def _workflow_folder_paths(cls, workflows: list[WorkflowInfo]) -> set[str]:
+        folders: set[str] = set()
+        for workflow in workflows:
+            path = ""
+            for part in cls._tree_source_file(workflow).split("/")[:-1]:
+                path = f"{path}/{part}" if path else part
+                folders.add(path)
+        return folders
 
     @classmethod
     def _workflow_revision_signature(cls, workflow: WorkflowInfo) -> tuple:

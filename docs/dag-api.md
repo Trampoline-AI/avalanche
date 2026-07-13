@@ -7,6 +7,8 @@ Avalanche workflows are Python functions that declare a directed acyclic graph
 - `@ava.step` transforms data inside the flow. `@ava.transform` is an alias.
 - `@ava.dest` publishes, exports, or summarizes final results.
 - `@ava.workflow` captures task calls and dependencies into a runnable workflow.
+- `@ava.agent_step` / `@ava.agent.step` declare agent-backed ordinary steps
+  (optional `agent` extra); see [`agent-steps.md`](agent-steps.md).
 
 Node functions may be regular `def` functions or `async def` coroutines. The
 workflow `.run(...)` API is synchronous: Avalanche awaits coroutine node bodies
@@ -302,11 +304,17 @@ function name and can be set explicitly with `slug=`:
 def chunk_documents(...): ...
 ```
 
+Repeated invocations of a node receive generated slugs `name`, `name_2`, and so
+on. Those suffixes depend on workflow construction order, so nodes targeted by
+production reruns should use an explicit `slug=`.
+
 `mode="autorun"` runs each start node and its downstream DAG closure.
 `mode="lazy"` runs only the listed start nodes; downstream state is left as-is.
-Lazy reruns support multiple start slugs for fanout cases. When a rerun skips an
-upstream node, the scheduled node should read skipped input through `ava.Stream`
-so Avalanche can replay source rows by lineage. Non-indexed `NodeFuture`
+Lazy downstream staleness is accepted: Avalanche does not rewrite or mark
+existing downstream rows. Compare `_ava_lineage_vector` values when freshness
+matters. Lazy reruns support multiple start slugs for fanout cases. When a rerun
+skips an upstream node, the scheduled node should read skipped input through
+`ava.Stream` so Avalanche can replay source rows by lineage. Non-indexed `NodeFuture`
 selectors may select an `ava.Stream` parent when the node also has a
 runtime-injected `BaseInput` and ordinary Python parameters. Durable replay is
 keyed by `(run_id, node_slug)`, so it cannot distinguish tuple return slots when
@@ -317,6 +325,10 @@ output slots and one of those slots binds to a Stream parameter. Include the
 producer in the rerun, or model its outputs as distinct source nodes. Explicit
 Python args from skipped `NodeFuture`s are still rejected when they are not
 bound to a Stream provider, because there is no live result to pass.
+
+If a workflow declares one or more `NodeFuture` returns, each return whose fetch
+target was pruned by rerun scheduling resolves to `None`. Scheduled declared
+returns keep their normal values, including their original tuple positions.
 
 Workflow inputs for reruns come from the current `.run(input=...)` call, not
 from the source run named by `Rerun.run_id`. If a workflow declares

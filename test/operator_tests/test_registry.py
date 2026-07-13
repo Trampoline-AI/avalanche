@@ -1,5 +1,6 @@
 """Tests for WorkflowRegistry — workflow discovery from Python files."""
 
+import importlib
 import os
 import signal
 import sys
@@ -7,6 +8,7 @@ import time
 
 import pytest
 
+import avalanche as ava
 from avalanche.dag import Workflow
 from avalanche.operator.models import WorkflowDiscoveryDiagnostic
 from avalanche.operator.registry import (
@@ -421,6 +423,104 @@ class TestWorkflowRegistry:
         with pytest.raises(ValueError, match="Duplicate canonical workflow ID"):
             WorkflowRegistry().scan(["root=/tmp"])
 
+    def test_sequential_package_scans_isolate_identical_module_names(self, tmp_path):
+        first = tmp_path / "first"
+        second = tmp_path / "second"
+        _write_deployment(first, field_name="first_value", deployment="first")
+        _write_deployment(second, field_name="second_value", deployment="second")
+
+        first_registry = WorkflowRegistry()
+        first_registry.scan([str(first / "shared" / "flow.py")])
+        first_workflow = first_registry.get_builder("deployment_workflow")()
+        first_output = first_workflow.run(
+            executor=ava.LocalExecutor(),
+            input={"first_value": 1},
+            run_id="run_first",
+        )
+
+        second_registry = WorkflowRegistry()
+        second_registry.scan([str(second / "shared" / "flow.py")])
+        second_workflow = second_registry.get_builder("deployment_workflow")()
+        second_output = second_workflow.run(
+            executor=ava.LocalExecutor(),
+            input={"second_value": "two"},
+            run_id="run_second",
+        )
+
+        assert first_output == {"deployment": "first", "value": 1}
+        assert second_output == {"deployment": "second", "value": "two"}
+
+    def test_package_scan_isolates_and_restores_preloaded_package(
+        self, tmp_path, monkeypatch
+    ):
+        package_name = "registry_shared"
+        first = tmp_path / "first"
+        second = tmp_path / "second"
+        _write_deployment(
+            first,
+            field_name="first_value",
+            deployment="first",
+            package_name=package_name,
+        )
+        _write_deployment(
+            second,
+            field_name="second_value",
+            deployment="second",
+            package_name=package_name,
+        )
+        preloaded = _preload_deployment(monkeypatch, first, package_name)
+        original_path = list(sys.path)
+
+        registry = WorkflowRegistry()
+        registry.scan([str(second / package_name / "flow.py")])
+
+        assert [item.display_name for item in registry.descriptors()] == [
+            "deployment_workflow"
+        ]
+        assert registry.list_diagnostics() == []
+        assert sys.path == original_path
+        assert all(sys.modules[name] is module for name, module in preloaded.items())
+
+    def test_package_scan_restores_preloaded_package_after_import_error(
+        self, tmp_path, monkeypatch
+    ):
+        package_name = "registry_broken_shared"
+        first = tmp_path / "first"
+        second = tmp_path / "second"
+        _write_deployment(
+            first,
+            field_name="first_value",
+            deployment="first",
+            package_name=package_name,
+        )
+        _write_deployment(
+            second,
+            field_name="second_value",
+            deployment="second",
+            package_name=package_name,
+        )
+        workflow_file = second / package_name / "flow.py"
+        workflow_file.write_text(
+            "from .schema import DeploymentInput\n\n"
+            'raise RuntimeError("broken deployment import")\n'
+        )
+        preloaded = _preload_deployment(monkeypatch, first, package_name)
+        original_path = list(sys.path)
+
+        registry = WorkflowRegistry()
+        registry.scan([str(workflow_file)])
+
+        assert registry.list_workflows() == []
+        assert registry.list_diagnostics() == [
+            WorkflowDiscoveryDiagnostic(
+                path=str(workflow_file),
+                kind="import_error",
+                message="RuntimeError: broken deployment import",
+            )
+        ]
+        assert sys.path == original_path
+        assert all(sys.modules[name] is module for name, module in preloaded.items())
+
 
 class TestWorkflowToInfo:
     def test_converts_workflow_to_info(self):
@@ -450,3 +550,37 @@ class TestWorkflowToInfo:
         assert len(info.node_ids) == 3
         assert all(nid in info.node_types for nid in info.node_ids)
         assert all(nid in info.display_names for nid in info.node_ids)
+
+
+def _write_deployment(root, *, field_name, deployment, package_name="shared"):
+    package = root / package_name
+    package.mkdir(parents=True)
+    (package / "__init__.py").write_text("")
+    annotation = "int" if field_name == "first_value" else "str"
+    (package / "schema.py").write_text(
+        "from avalanche import BaseInput\n\n"
+        "class DeploymentInput(BaseInput):\n"
+        f"    {field_name}: {annotation}\n"
+    )
+    (package / "flow.py").write_text(
+        "from avalanche import source, workflow\n"
+        "from .schema import DeploymentInput\n\n"
+        "@source\n"
+        "def load(inputs: DeploymentInput):\n"
+        f"    return {{'deployment': '{deployment}', 'value': inputs.{field_name}}}\n\n"
+        "@workflow(input=DeploymentInput)\n"
+        "def deployment_workflow():\n"
+        "    return load()\n"
+    )
+
+
+def _preload_deployment(monkeypatch, root, package_name):
+    module_names = [
+        package_name,
+        f"{package_name}.schema",
+        f"{package_name}.flow",
+    ]
+    for name in reversed(module_names):
+        monkeypatch.delitem(sys.modules, name, raising=False)
+    monkeypatch.syspath_prepend(str(root))
+    return {name: importlib.import_module(name) for name in module_names}

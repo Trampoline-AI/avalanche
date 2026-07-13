@@ -2,7 +2,7 @@
 
 ## Unreleased
 
-### Pydantic-first tables and typed AppendResult
+### Native agent support: bodyful `@ava.agent_step` and typed tables
 
 - Pydantic `BaseModel` classes are now a first-class table schema source for
   `ava.IcebergTable(schema=...)` and `ava.LanceTable(schema=...)`: nested models
@@ -18,6 +18,20 @@
 - Fix: futures passed explicitly as keyword arguments are no longer re-bound
   implicitly by position.
 - See [docs/data-model-api.md](docs/data-model-api.md#pydantic-model-schemas).
+- New optional `agent` extra (`uv sync --extra agent`) with bodyful
+  `@ava.agent_step` / `@ava.agent.step` aliases. Steps receive a callable
+  `ava.Agent`, handle raw DSPy predictions in their own Python body, and
+  explicitly persist their results.
+- `ava.Signature` is a subclassable native DSPy contract using
+  `ava.InputField()` / `ava.OutputField()`. The identical
+  `ava.agent.Signature` also builds inline string signatures; skills and tools
+  are configured only by `@ava.agent_step(...)`.
+- `@ava.workflow(agent_defaults={...})` supplies workflow-scoped PredictRLM
+  runtime defaults; agent-step kwargs override them. Process-global agent
+  configuration and automatic agent-step table/output behavior were removed.
+- `ava.agent.skills`, `ava.agent.Skill`, and `ava.agent.File` lazily re-export
+  the corresponding PredictRLM APIs.
+- See [docs/agent-steps.md](docs/agent-steps.md).
 
 ## 0.1.0-rc0
 

@@ -21,7 +21,15 @@ from typing import Any, Callable, Literal, TypeAlias
 from uuid import uuid4
 
 from ..executor import LocalExecutor, RayExecutor
-from .models import LogEntry, LogLevel, NodeState, NodeStatus, RunState, RunStatus, WorkflowInfo
+from .models import (
+    LogEntry,
+    LogLevel,
+    NodeState,
+    NodeStatus,
+    RunState,
+    RunStatus,
+    WorkflowInfo,
+)
 from .registry import AmbiguousWorkflow, WorkflowRegistry
 from .run_worker import run_worker
 from .source import is_source_path_included, resolve_live_source, resolve_watch_roots
@@ -40,6 +48,10 @@ STREAM_HISTORY_CAPACITY = 1024
 DeprecatedExecutorFactory: TypeAlias = (
     type[LocalExecutor] | type[RayExecutor] | partial[RayExecutor]
 )
+
+
+class RunAlreadyExistsError(ValueError):
+    """Raised when a caller-owned run ID has already been reserved."""
 
 
 class _ExecutorBackendOmitted:
@@ -179,6 +191,7 @@ class Operator:
         flow_name: str,
         triggered_by: str = "manual",
         *,
+        run_id: str | None = None,
         input: dict[str, Any] | None = None,
         context: dict[str, Any] | None = None,
     ) -> str:
@@ -190,7 +203,9 @@ class Operator:
         with self._lock:
             if self._closed:
                 raise RuntimeError("Operator is closed")
-            run_id = f"run_{str(uuid4())[:8]}"
+            run_id = run_id or f"run_{str(uuid4())[:8]}"
+            if run_id in self._runs or run_id in self._active_runs:
+                raise RunAlreadyExistsError(f"Run {run_id} already exists")
             event_queue = self._mp.Queue()
             cancel_event = self._mp.Event()
             start_event = self._mp.Event()
@@ -222,11 +237,13 @@ class Operator:
                 assignment_event,
                 windows_job,
             )
+            # Reserve the ID before releasing the lock so concurrent callers
+            # cannot create a second coordinator with the same caller-owned ID.
+            self._active_runs[run_id] = handle
         try:
             with self._lock:
                 if self._closed:
                     raise RuntimeError("Operator closed while creating run")
-                self._active_runs[run_id] = handle
                 process.start()
                 if process.pid is None:
                     raise RuntimeError("Run coordinator did not expose a process ID")

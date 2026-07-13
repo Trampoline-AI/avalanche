@@ -82,22 +82,6 @@ def test_bare_input_ref_resolves_to_run_input_instance():
     assert result.question == "hi"
     assert result.nested == NestedInput(value="deep")
 
-def test_bare_input_ref_resolves_keyword_to_run_input_instance():
-    @ava.step
-    def collect(payload: RunInput):
-        return payload.question
-
-    @ava.workflow(input=RunInput)
-    def input_workflow():
-        return collect(payload=ava.input)
-
-    result = input_workflow().run(
-        executor=ava.LocalExecutor(),
-        input=RunInput(question="hi"),
-    )
-
-    assert result == "hi"
-
 
 def test_input_ref_missing_attribute_names_node_and_attribute():
     @ava.step

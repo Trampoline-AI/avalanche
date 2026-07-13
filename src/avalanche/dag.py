@@ -943,6 +943,12 @@ def _build_node_binding_plan(
     except (ValueError, TypeError):
         return _NodeBindingPlan(args, dict(kwargs), {}, (), ())
 
+    from .runtime import BaseInput
+
+    try:
+        type_hints = get_type_hints(fn)
+    except Exception:
+        type_hints = {}
     runtime_param_names = _runtime_param_names_from_signature(fn)
     selectors: dict[str, _ProviderSelector] = {}
 
@@ -968,6 +974,12 @@ def _build_node_binding_plan(
 
     for param in params:
         if param.name in runtime_param_names:
+            annotation = type_hints.get(param.name, param.annotation)
+            if _safe_issubclass(annotation, BaseInput) and param.kind in (
+                inspect.Parameter.POSITIONAL_ONLY,
+                inspect.Parameter.POSITIONAL_OR_KEYWORD,
+            ):
+                positional_slots.append((param, "runtime_input"))
             continue
 
         if param.name in bound_kwargs:
@@ -1005,6 +1017,16 @@ def _build_node_binding_plan(
     positional_bindings: list[tuple[inspect.Parameter, Any]] = []
     arg_index = 0
     for param, slot_kind in positional_slots:
+        if slot_kind == "root_input":
+            if (
+                arg_index < len(args)
+                and isinstance(args[arg_index], InputRef)
+                and not args[arg_index].path
+            ):
+                positional_bindings.append((param, args[arg_index]))
+                arg_index += 1
+            continue
+
         if arg_index >= len(args):
             break
         if slot_kind == "varargs":
@@ -1013,6 +1035,11 @@ def _build_node_binding_plan(
             break
 
         value = args[arg_index]
+        if slot_kind == "runtime_input":
+            if isinstance(value, InputRef) and not value.path:
+                arg_index += 1
+                positional_bindings.append((param, value))
+            continue
         arg_index += 1
         if slot_kind == "stream" and isinstance(value, NodeFuture):
             selectors[param.name] = _ProviderSelector(
@@ -1412,6 +1439,10 @@ def _build_context_values(
         "workflow_name": workflow_name,
         "executor_type": executor_type,
         "rerun": rerun,
+        "node_id": None,
+        "node_name": None,
+        "node_slug": None,
+        "lineage_vector": {},
     }
 
     if raw_context is not None and isinstance(raw_context, target_type):
@@ -1741,7 +1772,13 @@ def _data_param_position(
     return -1
 
 
-def _fetch_node_result(nf: NodeFuture, result_refs, nodes, executor):
+def _fetch_node_result(
+    nf: NodeFuture,
+    result_refs,
+    nodes,
+    executor,
+    scheduled_node_ids: set[str] | None = None,
+):
     """Fetch the actual result value for a NodeFuture, handling chains and multi-return."""
     # If this is a chain composite, fetch the chain_end instead
     fetch_target = nf.chain_end if nf.chain_end != nf else nf
@@ -1750,12 +1787,23 @@ def _fetch_node_result(nf: NodeFuture, result_refs, nodes, executor):
     if isinstance(fetch_target, ParallelTasks):
         results = []
         for branch in fetch_target.branches:
-            branch_result = _fetch_node_result(branch, result_refs, nodes, executor)
+            branch_result = _fetch_node_result(
+                branch,
+                result_refs,
+                nodes,
+                executor,
+                scheduled_node_ids,
+            )
             results.append(branch_result)
         return tuple(results)
 
     # Regular NodeFuture handling
     if fetch_target.future_id not in result_refs:
+        if (
+            scheduled_node_ids is not None
+            and fetch_target.future_id not in scheduled_node_ids
+        ):
+            return None
         raise ValueError(
             f"Workflow return node {fetch_target.future_id!r} was not scheduled by rerun"
         )
@@ -2036,6 +2084,7 @@ class Workflow:
         cron: str | None = None,
         input_type: type | None = None,
         context_type: type | None = None,
+        agent_defaults: dict[str, Any] | None = None,
     ):
         """
         Initialize workflow.
@@ -2058,6 +2107,7 @@ class Workflow:
         _validate_workflow_types(input_type, context_type)
         self.input_type = input_type
         self.context_type = context_type
+        self.agent_defaults = dict(agent_defaults or {})
 
         # Validate: detect cycles via Kahn's algorithm (incomplete sort = cycle)
         order = self._topological_sort()
@@ -2358,6 +2408,11 @@ class Workflow:
 
             # Get original function, optionally wrapped by hooks
             actual_fn = node_ref.node.fn
+            agent_step_spec = getattr(actual_fn, "__agent_step__", None)
+            if agent_step_spec is not None:
+                actual_fn = agent_step_spec.with_workflow_defaults(
+                    actual_fn, self.agent_defaults
+                )
             if hooks and hooks.wrap_fn:
                 actual_fn = hooks.wrap_fn(node_id, actual_fn)
             if binding_plan.positional_call_adapter is not None:
@@ -2704,11 +2759,23 @@ class Workflow:
         # Handle different return types
         if isinstance(self.returns, NodeFuture):
             # Single NodeFuture returned
-            return _fetch_node_result(self.returns, result_refs, self.nodes, executor)
+            return _fetch_node_result(
+                self.returns,
+                result_refs,
+                self.nodes,
+                executor,
+                scheduled_node_ids if rerun_spec is not None else None,
+            )
         elif isinstance(self.returns, tuple):
             # Tuple of NodeFutures returned
             return tuple(
-                _fetch_node_result(nf, result_refs, self.nodes, executor)
+                _fetch_node_result(
+                    nf,
+                    result_refs,
+                    self.nodes,
+                    executor,
+                    scheduled_node_ids if rerun_spec is not None else None,
+                )
                 if isinstance(nf, NodeFuture)
                 else nf
                 for nf in self.returns
@@ -2733,6 +2800,7 @@ def workflow(
     input: type | None = None,
     context: type | None = None,
     ctx: type | None = None,
+    agent_defaults: dict[str, Any] | None = None,
 ) -> Callable[[], Workflow] | Callable[[Callable[[], None]], Callable[[], Workflow]]:
     """
     Decorator for workflow definitions.
@@ -2766,6 +2834,12 @@ def workflow(
     if context is not None and ctx is not None and context is not ctx:
         raise ValueError("Use either context= or ctx=, not both")
     context_type = context or ctx
+    if agent_defaults is not None:
+        from .agent.config import validate_runtime_kwargs
+
+        agent_defaults = validate_runtime_kwargs(
+            agent_defaults, owner="ava.workflow(agent_defaults=...)"
+        )
 
     def decorator(fn: Callable[[], None]) -> Callable[[], Workflow]:
         @wraps(fn)
@@ -2785,6 +2859,7 @@ def workflow(
                     cron=cron,
                     input_type=input,
                     context_type=context_type,
+                    agent_defaults=agent_defaults,
                 )
             finally:
                 _workflow_context.reset(token)

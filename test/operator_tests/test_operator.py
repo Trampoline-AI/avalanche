@@ -3,6 +3,7 @@
 import os
 import threading
 import time
+from concurrent.futures import ThreadPoolExecutor
 from functools import partial
 
 import pytest
@@ -10,6 +11,7 @@ import pytest
 from avalanche import LocalExecutor, RayExecutor
 from avalanche.operator import Operator
 from avalanche.operator.models import NodeStatus, RunState, RunStatus
+from avalanche.operator.operator import RunAlreadyExistsError
 from avalanche.operator.scheduler import Scheduler
 
 FIXTURES_DIR = os.path.join(os.path.dirname(os.path.dirname(__file__)), "fixtures")
@@ -37,6 +39,31 @@ class TestOperatorLifecycle:
         op = self._make_operator()
         run_id = op.start_run("simple_workflow")
         assert run_id.startswith("run_")
+
+    def test_custom_run_id_reservation_rejects_sequential_duplicate(self):
+        op = self._make_operator()
+
+        assert op.start_run("simple_workflow", run_id="run_reserved") == "run_reserved"
+        with pytest.raises(RunAlreadyExistsError, match="already exists"):
+            op.start_run("simple_workflow", run_id="run_reserved")
+
+    def test_custom_run_id_reservation_is_atomic_for_concurrent_requests(self):
+        op = self._make_operator()
+
+        def reserve():
+            try:
+                return op.start_run("simple_workflow", run_id="run_concurrent")
+            except RunAlreadyExistsError as exc:
+                return exc
+
+        with ThreadPoolExecutor(max_workers=2) as pool:
+            results = list(pool.map(lambda _: reserve(), range(2)))
+
+        assert results.count("run_concurrent") == 1
+        failures = [
+            result for result in results if isinstance(result, RunAlreadyExistsError)
+        ]
+        assert len(failures) == 1
 
     def test_run_completes_successfully(self):
         op = self._make_operator()

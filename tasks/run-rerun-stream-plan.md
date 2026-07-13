@@ -33,8 +33,8 @@ wf.run(rerun=ava.Rerun(run_id="01J...", start=["chunk_docs"], mode="autorun"))
 ```
 
 `RunContext` carries the rerun spec (new optional `rerun` field) so providers and
-helpers can see it. New runs get a fresh `run_id`; the source run is encoded in
-row lineage via `_ava_rerun_of` (see below).
+helpers can see it. New runs get a fresh `run_id`; produced rows encode the
+source run in `_ava_rerun_of` (see below).
 
 **Rerun read path.** In rerun mode `consume_stream` skips `ProgressStore`
 entirely — no claim, no mark_done, no cursor. It reads rows for the source run
@@ -78,14 +78,17 @@ fix minimally: loop-claim until pending drained (bounded), and either fix or
 explicitly document the Lance single-file limit.
 
 **Lineage / staleness.** Ruled out: flipping staleness bits across the lake (too
-expensive). Direction: row-lineage vector clocks, not a separate manifest. Rerun
-runs write rows with the new `_ava_run_id`, `_ava_node_slug`, and `_ava_rerun_of`
-field. `_ava_rerun_of` is the row-lineage control field that links this rerun run
-to the run view it overlays; rerunning a rerun walks that chain to resolve sparse
-run views. Produced rows also carry a compact `_ava_lineage_vector` identifying
-the actual producer versions consumed (including mixed old/new upstreams).
-Avalanche does not maintain fresh/stale state in v1; downstream rows are
-append-only facts that consumers can compare by vector if they need a freshness
+expensive). Payload and producer-version lineage stays in row columns: rerun
+rows carry `_ava_run_id`, `_ava_node_slug`, `_ava_rerun_of`, and a compact
+`_ava_lineage_vector` identifying the actual producer versions consumed
+(including mixed old/new upstreams). A sparse lazy rerun may consume a table
+without writing any rows back to it, so row lineage on that table cannot encode
+the ancestry edge without schema-invalid synthetic rows. Each consumed table
+therefore stores one minimal durable property edge from the current rerun to its
+source run. Rerun-of-rerun resolution follows that property edge, with row
+columns retaining the payload/version facts. This property is not a full
+manifest, stale bit, or lineage hash. Avalanche does not maintain fresh/stale
+state in v1; consumers can compare lineage vectors when they need a freshness
 view. No `_ava_lineage_hash` column in v1 unless cache indexing becomes a
 concrete requirement.
 
@@ -125,9 +128,10 @@ concrete requirement.
 6. **Scheduler pruning** — autorun closure / lazy start-set-only (multi-start
    supported) in `dag.py`; matrix tests: {autorun, lazy} × {Local, Ray} ×
    {sync, async} on the existing test patterns.
-7. **Row lineage vector clocks** — add `_ava_rerun_of`, `_ava_node_slug`, and
-   `_ava_lineage_vector`; rerun resolution overlays sparse rerun chains from row
-   lineage, no full manifest support and no v1 lineage-hash column.
+7. **Lineage vector clocks and sparse ancestry** — add `_ava_rerun_of`,
+   `_ava_node_slug`, and `_ava_lineage_vector` to produced rows; record the
+   minimal per-consumed-table rerun edge needed to resolve sparse chains. No
+   full manifest, stale bit, or v1 lineage-hash column.
 8. **Docs** — `docs/dag-api.md` section: three stream modes, rerun semantics,
    trusted-adult staleness stance.
 
@@ -143,8 +147,9 @@ gate before push.
   steps on Local and Ray, autorun cascades, lazy does not.
 - Rerun mode ignores ProgressStore state both ways (doesn't read it, doesn't
   corrupt it) — asserted by test.
-- New rows from a rerun carry `_ava_rerun_of` plus lineage vector, enough to
-  resolve rerun-of-rerun sparse run views from row lineage alone.
+- New rows from a rerun carry `_ava_rerun_of` plus a lineage vector; sparse
+  rerun ancestry is resolved with the minimal durable property edge on each
+  consumed table.
 - Full suite + lint green; docs updated.
 
 ## Decisions (resolved)

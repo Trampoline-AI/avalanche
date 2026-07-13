@@ -312,11 +312,18 @@ rerun never consumes or advances ordinary stream backlog.
 > backlog-draining behavior must pass `mode="append_scan"` (and keep `key`).
 > `key=` is only valid with `append_scan`.
 
-Run-scoped and rerun scans require `row_lineage=True` on the table. If the source run is
-itself a rerun, Avalanche follows `_ava_rerun_of` as a sparse overlay and keeps
-newer rows for the same `_ava_node_slug` ahead of older parent-run rows. The
-v1 model is intentionally row-lineage-only: there is no stale bit, manifest, or
-hash column.
+Run-scoped and rerun scans require `row_lineage=True` on the table. Rerun mode
+enforces that requirement before any live `AppendResult` passthrough. Produced
+rows keep payload and producer-version lineage in `_ava_rerun_of`,
+`_ava_node_slug`, and `_ava_lineage_vector`.
+
+If the source run is itself a rerun, Avalanche overlays newer rows for the same
+`_ava_node_slug` ahead of older parent-run rows. A lazy intermediate rerun may
+consume a table without writing rows to it, so row columns on that table cannot
+represent the sparse ancestry edge. Avalanche records one minimal durable table
+property linking that rerun to its source run for each consumed table. This
+property is only the missing ancestry edge; it is not a full manifest, stale
+bit, or lineage hash.
 
 ### Stream pacing and executors
 

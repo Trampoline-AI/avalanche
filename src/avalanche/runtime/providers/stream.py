@@ -453,6 +453,8 @@ def consume_stream(
     if active_rerun is not None:
         # Rerun override: always run-scoped source-run replay, regardless of
         # the configured mode. Passthrough still short-circuits the table read.
+        if not getattr(table, "row_lineage", False):
+            raise ValueError("Rerun streams require tables created with row_lineage=True")
         if upstream_data is not None:
             df = _upstream_to_polars(upstream_data)
         else:

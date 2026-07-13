@@ -55,7 +55,27 @@ from .storage import Namespace, NamespaceConfig, ScanResult, Table, TableGroup
 # Types
 from .types import AppendResult, SnapshotMetadata, SnapshotState
 
-__version__ = "0.1.0rc0"
+__version__ = "0.1.0rc1"
+
+
+def __getattr__(name: str):
+    if name == "agent":
+        import avalanche.agent as value
+    elif name in {
+        "Agent",
+        "InputField",
+        "OutputField",
+        "Signature",
+        "agent_step",
+    }:
+        import avalanche.agent
+
+        value = getattr(avalanche.agent, name)
+    else:
+        raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+
+    globals()[name] = value
+    return value
 
 
 __all__ = [

@@ -1,6 +1,6 @@
 [project]
 name = "avalanche-ai"
-version = "0.1.0rc0"
+version = "0.1.0rc1"
 description = "Python toolkit for local data-flow experiments with Iceberg and Lance"
 authors = [{ name = "Gabriel Lesperance", email = "611342+glesperance@users.noreply.github.com" }]
 requires-python = "<3.14,>=3.11"
@@ -50,8 +50,12 @@ all = [
     "pylance>=0.24.0",
     "ray[default]>=2.50.0",
     "s3fs>=2023.12.2",
+    "predict-rlm>=0.7.1",
     "textual>=6.2.1",
     "watchfiles>=1.1.1",
+]
+agent = [
+    "predict-rlm>=0.7.1",
 ]
 
 [dependency-groups]
@@ -72,6 +76,7 @@ dev = [
     "pytest-cov>=7.0.0",
     "textual>=6.2.1",
     "watchfiles>=1.1.1",
+    "predict-rlm>=0.7.1",
 ]
 
 [tool.pytest.ini_options]

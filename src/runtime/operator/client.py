@@ -151,6 +151,7 @@ class GrpcStateProvider:
         self,
         workflow_selector: str,
         *,
+        run_id: str | None = None,
         input: Mapping[str, Any] | BaseModel | None = None,
         context: Mapping[str, Any] | BaseModel | None = None,
         files: Mapping[str, File | bytes] | None = None,
@@ -161,11 +162,13 @@ class GrpcStateProvider:
             for field_name, value in (files or {}).items()
         ]
         _validate_inline_request_size(input_files)
+        flow_name = self._legacy_names_by_workflow_id.get(
+            workflow_selector, workflow_selector
+        )
         request = pb.StartRunRequest(
-            flow_name=self._legacy_names_by_workflow_id.get(
-                workflow_selector, workflow_selector
-            ),
+            flow_name=flow_name,
             workflow_selector=workflow_selector,
+            run_id=run_id or "",
             input_json=_json_payload(input),
             context_json=_json_payload(context),
             input_files=input_files,
@@ -330,4 +333,5 @@ def _s3_file_reference(field_name: str, value: S3File | str) -> pb.S3FileReferen
         etag=file.etag or "",
         size_bytes=file.size_bytes or 0,
         content_type=file.content_type or "",
+        sha256=file.sha256 or "",
     )

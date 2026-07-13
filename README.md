@@ -18,8 +18,9 @@ Use the `ava` command for operator and TUI flows. The package does not expose an
 `avalanche` command or an `avalanche init` project generator.
 
 For the full getting-started guide, see [docs/getting-started.md](docs/getting-started.md).
-For API guides, see [docs/dag-api.md](docs/dag-api.md) and
-[docs/data-model-api.md](docs/data-model-api.md).
+For API guides, see [docs/dag-api.md](docs/dag-api.md),
+[docs/data-model-api.md](docs/data-model-api.md), and
+[docs/agent-steps.md](docs/agent-steps.md).
 For implementation boundaries, see [ARCHITECTURE.md](ARCHITECTURE.md).
 For release notes, see [CHANGELOG.md](CHANGELOG.md).
 
@@ -133,6 +134,7 @@ the tests. Package consumers can install narrower extras:
 | `ray` | Ray executor dependencies |
 | `lance` | Lance storage backend dependencies |
 | `s3` | S3 file reference reads through `ava.S3File` and `s3fs` |
+| `agent` | agent-backed steps through [PredictRLM](https://github.com/Trampoline-AI/predict-rlm) |
 | `all` | all optional runtime components |
 
 For local development, sync extras with commands such as:

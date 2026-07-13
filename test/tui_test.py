@@ -883,6 +883,27 @@ class TestUIStore:
         assert store.current_workflow is None
         assert store.sidebar_selected_id == ""
 
+    def test_async_catalog_expands_only_new_workflow_folders(self):
+        provider = MockStateProvider()
+        store = UIStore(provider)
+        store.workflows = []
+        store.sidebar_expanded.clear()
+
+        workflow = replace(
+            provider.list_workflows()[0],
+            workflow_id="fixtures/flow.py::fixture_workflow",
+            root_alias="fixtures",
+            relative_file="nested/flow.py",
+        )
+        store._reconcile_workflows([workflow])
+
+        assert store.sidebar_expanded == {"fixtures", "fixtures/nested"}
+
+        store.sidebar_expanded.clear()
+        store._reconcile_workflows([replace(workflow, next_run_at=100.0)])
+
+        assert store.sidebar_expanded == set()
+
     def test_same_id_topology_and_schedule_display_changes_increment_revision(self):
         store = UIStore(MockStateProvider())
         _apply_async_updates(store)
