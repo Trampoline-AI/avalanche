@@ -667,7 +667,7 @@ class TestErrorHandling:
 
         p = my_workflow()
         # Bug: AttributeError: 'ParallelTasks' object has no attribute 'future_id'
-        result = p.run().result()
+        result = p.run(executor=LocalExecutor()).result()
         assert result == ("data_a", "data_b")
 
     def test_parallel_tasks_reuse_not_affected_by_later_operations(self):
@@ -705,7 +705,7 @@ class TestErrorHandling:
             return result1, result2
 
         p = test_workflow()
-        r1, r2 = p.run().result()
+        r1, r2 = p.run(executor=LocalExecutor()).result()
 
         assert r1 == ["root-a", "root-b"]
         assert r2 == ["root-a", "root-b", "c"]
@@ -734,7 +734,7 @@ class TestErrorHandling:
             return chain
 
         p = test_workflow()
-        result = p.run().result()
+        result = p.run(executor=LocalExecutor()).result()
 
         # Bug: Returns "a" instead of "a_processed" because chain tracking is broken
         assert result == "a_processed", f"Expected 'a_processed', got {result}"

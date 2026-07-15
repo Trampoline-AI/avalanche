@@ -115,11 +115,12 @@ class TestLogger:
     def test_logger_as_default_parameter_in_workflow(self):
         """Test that Logger() works as a default parameter in workflow execution."""
         import avalanche as ava
+        from avalanche.executor import LocalExecutor
 
         @ava.step
         def process_with_logger(data, *, logger=Logger()):
             # Verify logger is a LoggerInstance, not Logger marker
-            # This assertion runs in Ray worker - if it fails, workflow raises
+            # This assertion runs under LocalExecutor; if it fails, workflow raises
             from avalanche.runtime.providers.logger import LoggerInstance
 
             assert isinstance(logger, LoggerInstance), (
@@ -132,9 +133,9 @@ class TestLogger:
         def test_workflow():
             return process_with_logger([1, 2, 3])
 
-        # Run workflow - should inject Logger automatically
+        # Run workflow locally - should inject Logger automatically
         p = test_workflow()
-        result = p.run().result()
+        result = p.run(executor=LocalExecutor()).result()
         # If logger wasn't injected correctly, the assertion above would have failed
         assert result["data"] == [1, 2, 3]
         assert result["logger_type"] == "LoggerInstance"
