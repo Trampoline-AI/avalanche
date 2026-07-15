@@ -65,7 +65,7 @@ def backend(request: pytest.FixtureRequest, tmp_path) -> BackendCase:
     return case
 
 
-@pytest.fixture(params=["local", "ray"])
+@pytest.fixture(params=["local", pytest.param("ray", marks=pytest.mark.ray)])
 def executor(request: pytest.FixtureRequest) -> Iterator[ava.Executor]:
     if request.param == "local":
         yield ava.LocalExecutor()

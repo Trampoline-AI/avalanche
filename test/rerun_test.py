@@ -52,6 +52,11 @@ from avalanche.iceberg import IcebergNs, IcebergNsConfig, IcebergTable
 from avalanche.operator.hooks import RunHooks
 from avalanche.types import LineagedResult, ParamContext
 
+EXECUTOR_FACTORIES = [
+    ava.LocalExecutor,
+    pytest.param(ava.RayExecutor, marks=pytest.mark.ray),
+]
+
 
 class RowSchema(dy.Schema):
     id = dy.Int64(nullable=False)
@@ -180,7 +185,7 @@ def test_rerun_scheduler_lazy_runs_only_start_set_and_autorun_cascades():
     assert events == ["middle", "sink"]
 
 
-@pytest.mark.parametrize("executor_factory", [ava.LocalExecutor, ava.RayExecutor])
+@pytest.mark.parametrize("executor_factory", EXECUTOR_FACTORIES)
 def test_rerun_scheduler_prunes_skipped_upstreams_on_executors(executor_factory):
     if executor_factory is ava.RayExecutor:
         pytest.importorskip("ray")
@@ -223,7 +228,7 @@ def test_rerun_scheduler_prunes_skipped_upstreams_on_executors(executor_factory)
             ray.shutdown()
 
 
-@pytest.mark.parametrize("executor_factory", [ava.LocalExecutor, ava.RayExecutor])
+@pytest.mark.parametrize("executor_factory", EXECUTOR_FACTORIES)
 def test_rerun_scheduler_multi_start_matrix_reuses_executor(executor_factory):
     if executor_factory is ava.RayExecutor:
         pytest.importorskip("ray")
@@ -381,7 +386,7 @@ def test_rerun_stream_reads_source_run_rows_and_bypasses_progress_store(rerun_ns
     ).result() == ["gamma"]
 
 
-@pytest.mark.parametrize("executor_factory", [ava.LocalExecutor, ava.RayExecutor])
+@pytest.mark.parametrize("executor_factory", EXECUTOR_FACTORIES)
 def test_stream_selector_preserves_trailing_positional_arg_with_base_input(
     rerun_ns,
     executor_factory,
@@ -425,7 +430,7 @@ def test_stream_selector_preserves_trailing_positional_arg_with_base_input(
     assert vector["consume"] == "rerun_run"
 
 
-@pytest.mark.parametrize("executor_factory", [ava.LocalExecutor, ava.RayExecutor])
+@pytest.mark.parametrize("executor_factory", EXECUTOR_FACTORIES)
 def test_varargs_selector_reconstructs_injected_slots_and_rejects_indexed_rerun(
     rerun_ns,
     executor_factory,
@@ -463,7 +468,7 @@ def test_varargs_selector_reconstructs_injected_slots_and_rejects_indexed_rerun(
     assert submitted == []
 
 
-@pytest.mark.parametrize("executor_factory", [ava.LocalExecutor, ava.RayExecutor])
+@pytest.mark.parametrize("executor_factory", EXECUTOR_FACTORIES)
 def test_positional_only_input_and_stream_injection_without_varargs(
     rerun_ns,
     executor_factory,
@@ -501,7 +506,7 @@ def test_positional_only_input_and_stream_injection_without_varargs(
     assert submitted == []
 
 
-@pytest.mark.parametrize("executor_factory", [ava.LocalExecutor, ava.RayExecutor])
+@pytest.mark.parametrize("executor_factory", EXECUTOR_FACTORIES)
 def test_unindexed_multireturn_mixed_stream_python_rejects_lazy_rerun(
     rerun_ns,
     executor_factory,
@@ -565,7 +570,7 @@ def test_single_return_container_mixed_stream_python_rejects_lazy_rerun(
     assert submitted == []
 
 
-@pytest.mark.parametrize("executor_factory", [ava.LocalExecutor, ava.RayExecutor])
+@pytest.mark.parametrize("executor_factory", EXECUTOR_FACTORIES)
 def test_unindexed_true_multireturn_expands_before_mixed_slot_binding(
     rerun_ns,
     executor_factory,
@@ -603,7 +608,7 @@ def test_unindexed_true_multireturn_expands_before_mixed_slot_binding(
     assert submitted == []
 
 
-@pytest.mark.parametrize("executor_factory", [ava.LocalExecutor, ava.RayExecutor])
+@pytest.mark.parametrize("executor_factory", EXECUTOR_FACTORIES)
 def test_stream_selectors_preserve_reordered_keyword_mapping(
     rerun_ns,
     executor_factory,
@@ -679,7 +684,7 @@ def test_unindexed_explicit_multireturn_stream_selector_rejects_lazy_rerun(
     assert submitted == []
 
 
-@pytest.mark.parametrize("executor_factory", [ava.LocalExecutor, ava.RayExecutor])
+@pytest.mark.parametrize("executor_factory", EXECUTOR_FACTORIES)
 @pytest.mark.parametrize("binding_style", ["explicit", "chain"])
 def test_stream_selector_preserves_live_indexed_multi_return_and_rejects_rerun(
     rerun_ns,
@@ -712,7 +717,7 @@ def test_stream_selector_preserves_live_indexed_multi_return_and_rejects_rerun(
             ray.shutdown()
 
 
-@pytest.mark.parametrize("executor_factory", [ava.LocalExecutor, ava.RayExecutor])
+@pytest.mark.parametrize("executor_factory", EXECUTOR_FACTORIES)
 def test_keyword_only_stream_chain_selects_index_and_rejects_rerun_before_submission(
     rerun_ns,
     executor_factory,
@@ -745,7 +750,7 @@ def test_keyword_only_stream_chain_selects_index_and_rejects_rerun_before_submis
     assert submitted == []
 
 
-@pytest.mark.parametrize("executor_factory", [ava.LocalExecutor, ava.RayExecutor])
+@pytest.mark.parametrize("executor_factory", EXECUTOR_FACTORIES)
 def test_indexed_stream_into_downstream_chain_targets_registered_start(
     rerun_ns,
     executor_factory,
@@ -779,7 +784,7 @@ def test_indexed_stream_into_downstream_chain_targets_registered_start(
     assert submitted == []
 
 
-@pytest.mark.parametrize("executor_factory", [ava.LocalExecutor, ava.RayExecutor])
+@pytest.mark.parametrize("executor_factory", EXECUTOR_FACTORIES)
 def test_parallel_stream_selectors_preserve_index_order_and_reject_rerun(
     rerun_ns,
     executor_factory,
@@ -994,7 +999,7 @@ def test_rerun_rejects_skipped_implicit_non_stream_upstream(rerun_ns):
         ).result()
 
 
-@pytest.mark.parametrize("executor_factory", [ava.LocalExecutor, ava.RayExecutor])
+@pytest.mark.parametrize("executor_factory", EXECUTOR_FACTORIES)
 def test_rerun_rejects_skipped_explicit_non_stream_upstream(
     executor_factory,
 ):
@@ -1023,7 +1028,7 @@ def test_rerun_rejects_skipped_explicit_non_stream_upstream(
     assert submitted == []
 
 
-@pytest.mark.parametrize("executor_factory", [ava.LocalExecutor, ava.RayExecutor])
+@pytest.mark.parametrize("executor_factory", EXECUTOR_FACTORIES)
 def test_rerun_lineage_vector_propagates_through_python_args(rerun_ns, executor_factory):
     if executor_factory is ava.RayExecutor:
         pytest.importorskip("ray")
@@ -1073,7 +1078,7 @@ def test_rerun_lineage_vector_propagates_through_python_args(rerun_ns, executor_
     assert source_rows["_ava_node_slug"].to_list() == ["load-data"]
 
 
-@pytest.mark.parametrize("executor_factory", [ava.LocalExecutor, ava.RayExecutor])
+@pytest.mark.parametrize("executor_factory", EXECUTOR_FACTORIES)
 def test_rerun_lineage_vector_propagates_through_indexed_single_return_tuple(
     rerun_ns,
     executor_factory,
@@ -1116,7 +1121,7 @@ def test_rerun_lineage_vector_propagates_through_indexed_single_return_tuple(
     assert vector["sink"] == "source_run"
 
 
-@pytest.mark.parametrize("executor_factory", [ava.LocalExecutor, ava.RayExecutor])
+@pytest.mark.parametrize("executor_factory", EXECUTOR_FACTORIES)
 def test_rerun_lineage_vector_propagates_through_indexed_multi_return_tuple(
     rerun_ns,
     executor_factory,
@@ -1158,7 +1163,7 @@ def test_rerun_lineage_vector_propagates_through_indexed_multi_return_tuple(
     assert vector["sink"] == "source_run"
 
 
-@pytest.mark.parametrize("executor_factory", [ava.LocalExecutor, ava.RayExecutor])
+@pytest.mark.parametrize("executor_factory", EXECUTOR_FACTORIES)
 def test_rerun_lineage_vector_propagates_through_explicit_node_future_arg(
     rerun_ns,
     executor_factory,
@@ -1203,7 +1208,7 @@ def test_rerun_lineage_vector_propagates_through_explicit_node_future_arg(
     assert vector["sink"] == "source_run"
 
 
-@pytest.mark.parametrize("executor_factory", [ava.LocalExecutor, ava.RayExecutor])
+@pytest.mark.parametrize("executor_factory", EXECUTOR_FACTORIES)
 def test_lineage_survives_hook_replacement_without_exposing_envelope(
     rerun_ns,
     executor_factory,
