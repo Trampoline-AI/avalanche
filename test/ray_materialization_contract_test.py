@@ -304,7 +304,7 @@ def test_final_return_no_hooks_only_fetches_terminal():
         return load() >> double() >> total()
 
     executor = RayExecutor()
-    result = wf().run(executor=executor)
+    result = wf().run(executor=executor).result()
 
     assert result == 12
     downstream = [s for s in executor.submissions if s[0] in ("double", "total")]
@@ -336,7 +336,7 @@ def test_no_return_workflow_does_not_materialize_payloads():
         load() >> double() >> sink()
 
     executor = RayExecutor()
-    result = wf().run(executor=executor)
+    result = wf().run(executor=executor).result()
 
     assert result is None
     _assert_no_driver_payload(executor)
@@ -361,7 +361,7 @@ def test_no_return_workflow_surfaces_task_failure():
 
     executor = RayExecutor()
     try:
-        wf().run(executor=executor)
+        wf().run(executor=executor).result()
     except ValueError as exc:
         assert "kaboom" in str(exc)
     else:
@@ -389,7 +389,7 @@ def test_success_hook_does_not_materialize_payloads():
 
     events: list[str] = []
     executor = RayExecutor()
-    wf().run(executor=executor, hooks=RunHooks(on_node_success=events.append))
+    wf().run(executor=executor, hooks=RunHooks(on_node_success=events.append)).result()
 
     assert set(events) == {"left_1", "right_1"}
     _assert_no_driver_payload(executor)
@@ -413,12 +413,48 @@ def test_success_hook_with_return_fetches_only_final_once():
     executor = RayExecutor()
     result = wf().run(
         executor=executor, hooks=RunHooks(on_node_success=events.append)
-    )
+    ).result()
 
     assert result == 6
     assert "load" not in executor.driver_payload_gets, executor.driver_payload_gets
     assert executor.driver_payload_gets.count("total") <= 1, executor.driver_payload_gets
     _assert_no_synthetic_payload_resolution(executor)
+
+
+@pytest.mark.parametrize("exception_type", [KeyboardInterrupt, SystemExit])
+def test_cancelled_drain_does_not_swallow_driver_hook_base_exceptions(exception_type):
+    @ava.source
+    def load():
+        return "payload"
+
+    @ava.dest
+    def sink(value):
+        return value
+
+    @ava.workflow
+    def wf():
+        return load() >> sink()
+
+    cancel_checks = 0
+
+    def cancel_after_root_submission():
+        nonlocal cancel_checks
+        cancel_checks += 1
+        return cancel_checks >= 2
+
+    def raise_from_hook(_node_id):
+        raise exception_type("hook-interrupt")
+
+    handle = wf().run(
+        executor=RayExecutor(),
+        hooks=RunHooks(
+            on_node_success=raise_from_hook,
+            cancel_requested=cancel_after_root_submission,
+        ),
+    )
+
+    with pytest.raises(exception_type, match="hook-interrupt"):
+        handle.result()
 
 
 # ---------------------------------------------------------------------------
@@ -465,7 +501,7 @@ def test_stream_passthrough_does_not_materialize_on_driver(monkeypatch):
     def wf():
         return produce() >> consume()
 
-    result = wf().run(executor=executor)
+    result = wf().run(executor=executor).result()
 
     assert result == 3
     # The driver must not fetch the producer's payload just to detect
@@ -497,7 +533,7 @@ def test_true_multireturn_index_passes_selected_ref():
         return pair[0] >> sink()
 
     executor = RayExecutor()
-    result = wf().run(executor=executor)
+    result = wf().run(executor=executor).result()
 
     assert result == "got:left"
     assert "split[1]" not in executor.driver_payload_gets, executor.driver_payload_gets
@@ -518,7 +554,7 @@ def test_true_multireturn_index_explicit_arg_passes_selected_ref():
         return sink(pair[0])
 
     executor = RayExecutor()
-    result = wf().run(executor=executor)
+    result = wf().run(executor=executor).result()
 
     assert result == "got:left"
     assert "split[1]" not in executor.driver_payload_gets, executor.driver_payload_gets
@@ -560,7 +596,7 @@ def test_true_multireturn_indexed_stream_selector_stays_off_driver(
             return consume(pair[1], df=ava.Stream(_DummyTable()))
         return pair[1] >> consume(df=ava.Stream(_DummyTable()))
 
-    assert wf().run(executor=executor) == "right"
+    assert wf().run(executor=executor).result() == "right"
     assert "split[0]" not in executor.driver_payload_gets
     assert "split[1]" not in executor.driver_payload_gets
     assert executor.worker_payload_gets == ["split"]
@@ -611,7 +647,7 @@ def test_varargs_stream_selector_reconstructs_slots_without_driver_fetch(monkeyp
     assert wf().run(
         executor=executor,
         hooks=RunHooks(wrap_fn=wrap_fn),
-    ) == ("pre", "right", ("post",))
+    ).result() == ("pre", "right", ("post",))
     assert len(seen_worker_args) == 1
     assert seen_worker_args[0][0] == "pre"
     assert seen_worker_args[0][1]["x"].to_list() == ["right"]
@@ -665,7 +701,7 @@ def test_positional_only_injected_slots_reconstruct_without_driver_fetch(monkeyp
         executor=executor,
         hooks=RunHooks(wrap_fn=wrap_fn),
         input={"suffix": "!"},
-    ) == ("right", "!")
+    ).result() == ("right", "!")
     assert len(seen_worker_args) == 1
     assert isinstance(seen_worker_args[0][0], RerunSelectorInput)
     assert seen_worker_args[0][1]["value"].to_list() == ["right"]
@@ -705,7 +741,7 @@ def test_implicit_varargs_reconstructs_positional_only_provider_slots(monkeypatc
     def wf():
         return (prefix() & produce() & tail()) >> consume()
 
-    assert wf().run(executor=executor) == ("pre", "right", ("post",))
+    assert wf().run(executor=executor).result() == ("pre", "right", ("post",))
     assert "produce" not in executor.driver_payload_gets
     assert executor.worker_payload_gets == ["produce"]
     _assert_no_synthetic_payload_resolution(executor)
@@ -740,7 +776,7 @@ def test_unindexed_multireturn_expands_before_mixed_stream_slot(monkeypatch):
     def wf():
         return (split() & other()) >> consume(middle=ava.Stream(_DummyTable()))
 
-    assert wf().run(executor=executor) == ("left", "middle", "other")
+    assert wf().run(executor=executor).result() == ("left", "middle", "other")
     assert "split[0]" not in executor.driver_payload_gets
     assert "split[1]" not in executor.driver_payload_gets
     assert executor.worker_payload_gets == ["split"]
@@ -777,7 +813,7 @@ def test_keyword_only_chained_stream_selector_stays_off_driver(monkeypatch):
         pair = split()
         return pair[1] >> consume(df=ava.Stream(_DummyTable()))
 
-    assert wf().run(executor=executor) == "right"
+    assert wf().run(executor=executor).result() == "right"
     assert "split[0]" not in executor.driver_payload_gets
     assert "split[1]" not in executor.driver_payload_gets
     assert executor.worker_payload_gets == ["split"]
@@ -817,7 +853,7 @@ def test_parallel_true_multireturn_stream_selectors_stay_off_driver(monkeypatch)
             right_df=ava.Stream(_DummyTable()),
         )
 
-    assert wf().run(executor=executor) == "right+left"
+    assert wf().run(executor=executor).result() == "right+left"
     assert "split[0]" not in executor.driver_payload_gets
     assert "split[1]" not in executor.driver_payload_gets
     assert executor.worker_payload_gets == ["split", "split"]
@@ -844,7 +880,7 @@ def test_single_return_tuple_index_uses_remote_projection():
         return pair[0] >> sink()
 
     executor = RayExecutor()
-    result = wf().run(executor=executor)
+    result = wf().run(executor=executor).result()
 
     assert result == "got:left"
     assert "split" not in executor.driver_payload_gets, (

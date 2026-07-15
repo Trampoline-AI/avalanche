@@ -49,7 +49,9 @@ When a workflow runs:
 from __future__ import annotations
 
 from collections import defaultdict
+from concurrent.futures import CancelledError
 from contextvars import ContextVar
+from copy import copy
 from dataclasses import dataclass, field
 from enum import Enum
 from functools import update_wrapper, wraps
@@ -58,6 +60,7 @@ from typing import TYPE_CHECKING, Any, Callable, DefaultDict, TypeVar, get_type_
 from ulid import ULID
 
 from .input_ref import InputRef
+from .run_handle import RunHandle
 
 if TYPE_CHECKING:
     from .executor import Executor
@@ -2187,9 +2190,9 @@ class Workflow:
         context: Any = None,
         run_id: str | None = None,
         rerun: Any = None,
-    ) -> Any:
+    ) -> RunHandle[Any]:
         """
-        Execute the workflow.
+        Start the workflow and return its process-local lifecycle handle.
 
         Args:
             executor: Execution engine (defaults to RayExecutor or LocalExecutor)
@@ -2199,11 +2202,41 @@ class Workflow:
             run_id: Optional caller-owned run identity
             rerun: Optional Rerun spec for re-executing part of a previous run
 
-        Returns:
-            - If workflow returns NodeFuture: the computed value
-            - If workflow returns tuple of NodeFutures: tuple of computed values
-            - If workflow returns nothing: None
-            - Otherwise: the return value as-is
+        The handle is returned immediately. Call ``handle.result()`` to block in
+        synchronous code or ``await handle`` from asynchronous code.
+        """
+        canonical_run_id = run_id if run_id is not None else str(ULID())
+        handle: RunHandle[Any] = RunHandle(canonical_run_id)
+        cancel_requested = handle._compose_cancel_requested(
+            hooks.cancel_requested if hooks is not None else None
+        )
+        driver_hooks = copy(hooks) if hooks is not None else None
+        if driver_hooks is not None:
+            driver_hooks.cancel_requested = cancel_requested
+        handle._start(
+            lambda: self._run_driver(
+                executor=executor,
+                hooks=driver_hooks,
+                cancel_requested=cancel_requested,
+                input=input,
+                context=context,
+                run_id=canonical_run_id,
+                rerun=rerun,
+            )
+        )
+        return handle
+
+    def _run_driver(
+        self,
+        executor: "Executor | None" = None,
+        hooks: "RunHooks | None" = None,
+        cancel_requested: Callable[[], bool] | None = None,
+        input: Any = None,
+        context: Any = None,
+        run_id: str | None = None,
+        rerun: Any = None,
+    ) -> Any:
+        """Execute the blocking workflow driver in the run-handle thread.
 
         Implementation:
             1. Topological sort to determine execution order
@@ -2225,7 +2258,8 @@ class Workflow:
             execution_order = self._plan_rerun_execution(rerun_spec, execution_order)
         scheduled_node_ids = set(execution_order)
 
-        run_id = run_id or str(ULID())
+        if run_id is None:
+            raise ValueError("workflow driver requires a run_id")
         executor_type = "ray" if type(executor).__name__ == "RayExecutor" else "local"
         run_input = _build_input_value(self.input_type, input)
         system_context, run_context = _build_context_values(
@@ -2263,7 +2297,8 @@ class Workflow:
         needs_status = bool(
             is_ray_executor
             and (
-                self.returns is None
+                cancel_requested is not None
+                or self.returns is None
                 or (
                     hooks
                     and (
@@ -2551,13 +2586,18 @@ class Workflow:
             # public AppendResult (payload fetch here is intentional).
             return _materialize_append_handles_for_driver(value, executor)
 
-        observe_ray_hooks = bool(
-            hooks
-            and is_ray_executor
-            and (hooks.on_node_success or hooks.on_node_failure or hooks.unwrap_result)
+        observe_ray_completion = bool(
+            is_ray_executor
+            and (
+                cancel_requested is not None
+                or (
+                    hooks
+                    and (hooks.on_node_success or hooks.on_node_failure or hooks.unwrap_result)
+                )
+            )
         )
 
-        if observe_ray_hooks:
+        if observe_ray_completion:
             ray = executor.ray
             pending_refs: dict[Any, str] = {}
             node_pending_refs: dict[str, list[Any]] = {}
@@ -2659,7 +2699,7 @@ class Workflow:
 
                 for node_id in list(remaining_nodes):
                     # Check cancellation before starting each node
-                    if hooks and hooks.cancel_requested and hooks.cancel_requested():
+                    if cancel_requested and cancel_requested():
                         cancelled = True
                         break
                     if not dependencies_ready(node_id):
@@ -2677,20 +2717,26 @@ class Workflow:
                     continue
                 if pending_refs:
                     drain_ray_completions(block=True)
-                    if hooks and hooks.cancel_requested:
-                        hooks.cancel_requested()
+                    if pending_refs and cancel_requested and cancel_requested():
+                        cancelled = True
                     continue
                 break
 
             while pending_refs:
-                drain_ray_completions(block=True)
-                if hooks and hooks.cancel_requested:
-                    hooks.cancel_requested()
+                try:
+                    drain_ray_completions(block=True)
+                except Exception:
+                    if not cancelled:
+                        raise
+                if pending_refs and cancel_requested and cancel_requested():
+                    cancelled = True
+            if cancelled:
+                raise CancelledError()
         else:
             for node_id in execution_order:
                 # Check cancellation before starting each node
-                if hooks and hooks.cancel_requested and hooks.cancel_requested():
-                    break
+                if cancel_requested and cancel_requested():
+                    raise CancelledError()
 
                 node_ref, result = submit_node(node_id)
                 # For non-Ray executors, resolve refs immediately so

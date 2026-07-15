@@ -1,12 +1,20 @@
 """Tests for iceberg.py - Iceberg backend integration."""
 
 import os
+import pickle
+import threading
 from tempfile import TemporaryDirectory
 
 import dataframely as dy
 import polars as pl
 import pytest
+from pyiceberg.catalog import load_catalog
+from pyiceberg.schema import Schema
+from pyiceberg.types import NestedField, StringType
+from sqlalchemy.pool import StaticPool
 
+import avalanche as ava
+import avalanche.iceberg.namespace as namespace_module
 from avalanche.iceberg import (
     IcebergAppendScan,
     IcebergNamespace,
@@ -128,6 +136,88 @@ class TestIcebergNamespace:
         assert second.tables.test_table._table is not None
         second.tables.test_table.append(pl.DataFrame({"id": ["2"], "name": ["b"]}))
         assert sorted(second.tables.test_table.read()["id"].to_list()) == ["1", "2"]
+
+    @pytest.mark.parametrize(
+        "catalog_path",
+        ["explicit", "inferred", "config-loaded", "caller-supplied"],
+    )
+    def test_in_memory_sql_catalog_survives_more_than_five_driver_threads(
+        self, catalog_path: str, monkeypatch, tmpdir: str
+    ):
+        class ThreadedNamespace(IcebergNs):
+            ns_config = IcebergNsConfig(
+                name=f"threaded-{catalog_path}",
+                base_location=tmpdir,
+            )
+            records = IcebergTable(schema=TestSchema)
+
+        properties = {"type": "sql", "uri": "sqlite:///:memory:"}
+        seeded_namespace = "seeded"
+
+        if catalog_path == "explicit":
+            ns = ThreadedNamespace(
+                catalog="threaded-explicit",
+                load_catalog_props=properties,
+            )
+        elif catalog_path == "inferred":
+            ns = ThreadedNamespace(
+                catalog="threaded-inferred",
+                load_catalog_props={"uri": "sqlite:///:memory:"},
+            )
+        else:
+            catalog = load_catalog(f"threaded-{catalog_path}", **properties)
+            catalog.create_namespace(seeded_namespace)
+            catalog.create_table(
+                (seeded_namespace, "seeded_table"),
+                Schema(NestedField(1, "id", StringType(), required=True)),
+                location=f"{tmpdir}/seeded-table",
+            )
+            if catalog_path == "config-loaded":
+                monkeypatch.setattr(namespace_module, "load_catalog", lambda name: catalog)
+                ns = ThreadedNamespace()
+            else:
+                ns = ThreadedNamespace(catalog=catalog)
+
+        ns.push()
+
+        assert ns.catalog.properties["uri"] == "sqlite:///:memory:"
+        assert isinstance(ns.catalog.engine.pool, StaticPool)
+        with pytest.raises(TypeError, match="in-memory"):
+            pickle.dumps(ns.records)
+        if catalog_path in {"config-loaded", "caller-supplied"}:
+            assert (seeded_namespace,) in ns.catalog.list_namespaces()
+            assert (seeded_namespace, "seeded_table") in ns.catalog.list_tables(
+                seeded_namespace
+            )
+
+        @ava.source
+        def list_namespaces():
+            return ns.catalog.list_namespaces()
+
+        @ava.workflow
+        def sequential_flow():
+            return list_namespaces()
+
+        for _ in range(7):
+            assert (ns.name,) in sequential_flow().run(executor=ava.LocalExecutor()).result()
+
+        barrier = threading.Barrier(8)
+
+        @ava.source
+        def list_namespaces_concurrently():
+            barrier.wait(timeout=10)
+            return ns.catalog.list_namespaces()
+
+        @ava.workflow
+        def concurrent_flow():
+            return list_namespaces_concurrently()
+
+        handles = [
+            concurrent_flow().run(executor=ava.LocalExecutor()) for _ in range(7)
+        ]
+        barrier.wait(timeout=10)
+        for handle in handles:
+            assert (ns.name,) in handle.result(timeout=10)
 
 
 class TestIcebergTable:

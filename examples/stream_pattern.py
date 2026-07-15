@@ -157,7 +157,7 @@ def generate_embeddings(chunk_df: pl.DataFrame, *, model: str) -> pl.DataFrame:
 
 def _main() -> None:
     ns.push()
-    result = stream_workflow().run(executor=ava.LocalExecutor())
+    result = stream_workflow().run(executor=ava.LocalExecutor()).result()
     print("Stream example complete")
     print(result)
     print(f"Artifacts: {EXAMPLE_ROOT}")

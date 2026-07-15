@@ -150,7 +150,7 @@ class TestWorkflowRegistry:
             executor=ava.LocalExecutor(),
             input={"first_value": 1},
             run_id="run_first",
-        )
+        ).result()
 
         second_registry = WorkflowRegistry()
         second_registry.scan([str(second / "shared" / "flow.py")])
@@ -159,7 +159,7 @@ class TestWorkflowRegistry:
             executor=ava.LocalExecutor(),
             input={"second_value": "two"},
             run_id="run_second",
-        )
+        ).result()
 
         assert first_output == {"deployment": "first", "value": 1}
         assert second_output == {"deployment": "second", "value": "two"}
@@ -190,7 +190,7 @@ class TestWorkflowRegistry:
             executor=ava.LocalExecutor(),
             input={"second_value": "two"},
             run_id="run_second",
-        )
+        ).result()
 
         assert output == {"deployment": "second", "value": "two"}
         assert registry.list_diagnostics() == []

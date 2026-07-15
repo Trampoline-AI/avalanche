@@ -10,9 +10,10 @@ Avalanche workflows are Python functions that declare a directed acyclic graph
 - `@ava.agent_step` / `@ava.agent.step` declare agent-backed ordinary steps
   (optional `agent` extra); see [`agent-steps.md`](agent-steps.md).
 
-Node functions may be regular `def` functions or `async def` coroutines. The
-workflow `.run(...)` API is synchronous: Avalanche awaits coroutine node bodies
-inside the selected executor before passing results downstream.
+Node functions may be regular `def` functions or `async def` coroutines.
+Workflow `.run(...)` starts execution and immediately returns an awaitable
+`ava.RunHandle`; Avalanche still resolves coroutine node bodies inside the
+selected executor before passing their results downstream.
 
 The body of a `@ava.workflow` function should stay declarative. It runs when the
 workflow is built, not once per row or once per input item. Put business logic in
@@ -41,7 +42,7 @@ def document_flow():
     chunks = chunk_documents(docs)
     return publish_chunks(chunks)
 
-result = document_flow().run(executor=ava.LocalExecutor())
+result = document_flow().run(executor=ava.LocalExecutor()).result()
 ```
 
 Calling a node inside a workflow returns a deferred `NodeFuture`, not the runtime
@@ -233,7 +234,7 @@ result = document_flow().run(
         "remote_document": {"uri": "s3://bucket/large-doc.txt"},
     },
     context={"metadata": {"request_id": "req_123"}},
-)
+).result()
 ```
 
 Advanced platform integrations may define a shared subclass of `ava.RunContext`
@@ -268,14 +269,26 @@ contents = payload.remote_document.read_bytes(
 
 ## Execution
 
-Run a workflow by constructing it and calling `.run()` with an executor:
+Run a workflow by constructing it and calling `.run()` with an executor. The
+returned process-local handle exposes its identity immediately:
 
 ```python
-result = document_flow().run(executor=ava.LocalExecutor())
+run = document_flow().run(executor=ava.LocalExecutor())
+print(run.run_id)
+result = run.result()
 ```
 
 `ava.LocalExecutor` runs locally. `ava.RayExecutor` is available when Ray support
-is installed and configured.
+is installed and configured. In asynchronous code, use `result = await run`;
+cancelling that individual asyncio waiter does not cancel the workflow.
+
+`run.cancel()` requests cooperative cancellation. Avalanche observes it between
+node submissions and reports an observed request as terminal cancellation; an
+active Python thread or Ray task is allowed to finish. If completion or failure
+wins before cancellation is observed, that outcome remains authoritative. A
+`RunHandle` caches its terminal output or failure, but it is not a durable run
+registry and cannot recover state after process exit. Operator-managed runs own
+durable-facing status and control separately.
 
 ### Reruns
 
@@ -293,7 +306,7 @@ result = document_flow().run(
         start=["load_document"],
         mode="autorun",
     ),
-)
+).result()
 ```
 
 `Rerun.start` accepts one slug or a list of slugs. Slugs default to the decorated

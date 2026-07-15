@@ -127,10 +127,14 @@ def test_workflow_run_rerun_validates_start_slugs_and_injects_context():
     def rerunnable_workflow():
         return process()
 
-    result = rerunnable_workflow().run(
-        executor=ava.LocalExecutor(),
-        run_id="rerun_1",
-        rerun=ava.Rerun(run_id="source_1", start=["process-docs"], mode="lazy"),
+    result = (
+        rerunnable_workflow()
+        .run(
+            executor=ava.LocalExecutor(),
+            run_id="rerun_1",
+            rerun=ava.Rerun(run_id="source_1", start=["process-docs"], mode="lazy"),
+        )
+        .result()
     )
 
     assert result == "processed"
@@ -140,7 +144,7 @@ def test_workflow_run_rerun_validates_start_slugs_and_injects_context():
         rerunnable_workflow().run(
             executor=ava.LocalExecutor(),
             rerun=ava.Rerun(run_id="source_1", start=["missing"]),
-        )
+        ).result()
 
 
 def test_rerun_scheduler_lazy_runs_only_start_set_and_autorun_cascades():
@@ -165,14 +169,14 @@ def test_rerun_scheduler_lazy_runs_only_start_set_and_autorun_cascades():
     rerunnable_workflow().run(
         executor=ava.LocalExecutor(),
         rerun=ava.Rerun(run_id="source_1", start=["middle"], mode="lazy"),
-    )
+    ).result()
     assert events == ["middle"]
 
     events.clear()
     rerunnable_workflow().run(
         executor=ava.LocalExecutor(),
         rerun=ava.Rerun(run_id="source_1", start=["middle"], mode="autorun"),
-    )
+    ).result()
     assert events == ["middle", "sink"]
 
 
@@ -208,11 +212,11 @@ def test_rerun_scheduler_prunes_skipped_upstreams_on_executors(executor_factory)
         assert lazy_workflow().run(
             executor=executor,
             rerun=ava.Rerun(run_id="source_1", start=["middle"], mode="lazy"),
-        ) == "middle"
+        ).result() == "middle"
         assert autorun_workflow().run(
             executor=executor,
             rerun=ava.Rerun(run_id="source_1", start=["middle"], mode="autorun"),
-        ) == "sink"
+        ).result() == "sink"
     finally:
         ray = getattr(executor, "ray", None)
         if ray is not None and ray.is_initialized():
@@ -258,7 +262,7 @@ def test_rerun_scheduler_multi_start_matrix_reuses_executor(executor_factory):
                         start=["left", "right"],
                         mode=mode,
                     ),
-                )
+                ).result()
 
                 assert len(started) == len(expected_slugs)
                 assert {workflow.node_slugs[node_id] for node_id in started} == expected_slugs
@@ -281,7 +285,7 @@ def test_rerun_scheduler_multi_start_matrix_reuses_executor(executor_factory):
                         start=["middle"],
                         mode="lazy",
                     ),
-                )
+                ).result()
             assert started == []
     finally:
         ray = getattr(executor, "ray", None)
@@ -327,7 +331,7 @@ def test_rerun_stream_reads_source_run_rows_and_bypasses_progress_store(rerun_ns
     assert rerunnable_workflow().run(
         executor=ava.LocalExecutor(),
         run_id="source_run",
-    ) == ["alpha", "beta"]
+    ).result() == ["alpha", "beta"]
 
     store = ava.ProgressStore(ns.source, key="source_to_process")
     cursor_before = store.get_cursor()
@@ -340,7 +344,7 @@ def test_rerun_stream_reads_source_run_rows_and_bypasses_progress_store(rerun_ns
         executor=ava.LocalExecutor(),
         run_id="rerun_1",
         rerun=ava.Rerun(run_id="source_run", start=["process-data"], mode="lazy"),
-    ) == ["alpha", "beta"]
+    ).result() == ["alpha", "beta"]
 
     # Rerun mode is independent of snapshot progress state.
     assert ava.ProgressStore(ns.source, key="source_to_process").get_cursor() == cursor_before
@@ -368,13 +372,13 @@ def test_rerun_stream_reads_source_run_rows_and_bypasses_progress_store(rerun_ns
         executor=ava.LocalExecutor(),
         run_id="source_rerun",
         rerun=ava.Rerun(run_id="source_run", start=["load-data"], mode="autorun"),
-    ) == ["gamma"]
+    ).result() == ["gamma"]
 
     assert rerunnable_workflow().run(
         executor=ava.LocalExecutor(),
         run_id="rerun_2",
         rerun=ava.Rerun(run_id="source_rerun", start=["process-data"], mode="lazy"),
-    ) == ["gamma"]
+    ).result() == ["gamma"]
 
 
 @pytest.mark.parametrize("executor_factory", [ava.LocalExecutor, ava.RayExecutor])
@@ -402,13 +406,13 @@ def test_stream_selector_preserves_trailing_positional_arg_with_base_input(
             executor=executor,
             run_id="source_run",
             input={"suffix": "source"},
-        ) == ["left!source"]
+        ).result() == ["left!source"]
         assert wf().run(
             executor=executor,
             run_id="rerun_run",
             input={"suffix": "rerun"},
             rerun=ava.Rerun(run_id="source_run", start=["consume"], mode="lazy"),
-        ) == ["left!rerun"]
+        ).result() == ["left!rerun"]
     finally:
         ray = getattr(executor, "ray", None)
         if ray is not None and ray.is_initialized():
@@ -442,7 +446,7 @@ def test_varargs_selector_reconstructs_injected_slots_and_rejects_indexed_rerun(
             executor=executor,
             run_id="source_run",
             input={"suffix": "!"},
-        ) == ("pre", "right", ("post",), "!")
+        ).result() == ("pre", "right", ("post",), "!")
         with pytest.raises(ValueError, match="indexed Stream selectors cannot replay"):
             wf().run(
                 executor=executor,
@@ -450,7 +454,7 @@ def test_varargs_selector_reconstructs_injected_slots_and_rejects_indexed_rerun(
                 input={"suffix": "!"},
                 hooks=RunHooks(on_node_start=submitted.append),
                 rerun=ava.Rerun(run_id="source_run", start=["consume"], mode="lazy"),
-            )
+            ).result()
     finally:
         ray = getattr(executor, "ray", None)
         if ray is not None and ray.is_initialized():
@@ -480,7 +484,7 @@ def test_positional_only_input_and_stream_injection_without_varargs(
             executor=executor,
             run_id="source_run",
             input={"suffix": "!"},
-        ) == ("right", "!")
+        ).result() == ("right", "!")
         with pytest.raises(ValueError, match="indexed Stream selectors cannot replay"):
             wf().run(
                 executor=executor,
@@ -488,7 +492,7 @@ def test_positional_only_input_and_stream_injection_without_varargs(
                 input={"suffix": "!"},
                 hooks=RunHooks(on_node_start=submitted.append),
                 rerun=ava.Rerun(run_id="source_run", start=["consume"], mode="lazy"),
-            )
+            ).result()
     finally:
         ray = getattr(executor, "ray", None)
         if ray is not None and ray.is_initialized():
@@ -513,14 +517,14 @@ def test_unindexed_multireturn_mixed_stream_python_rejects_lazy_rerun(
     executor = executor_factory()
     submitted: list[str] = []
     try:
-        assert wf().run(executor=executor, run_id="source_run") == "stream+ordinary"
+        assert wf().run(executor=executor, run_id="source_run").result() == "stream+ordinary"
         with pytest.raises(ValueError, match="indexed Stream selectors cannot replay"):
             wf().run(
                 executor=executor,
                 run_id="rerun_run",
                 hooks=RunHooks(on_node_start=submitted.append),
                 rerun=ava.Rerun(run_id="source_run", start=["consume"], mode="lazy"),
-            )
+            ).result()
     finally:
         ray = getattr(executor, "ray", None)
         if ray is not None and ray.is_initialized():
@@ -546,14 +550,17 @@ def test_single_return_container_mixed_stream_python_rejects_lazy_rerun(
         return split(source=ns.source) >> consume(df=ava.Stream(ns.source))
 
     submitted: list[str] = []
-    assert wf().run(executor=ava.LocalExecutor(), run_id="source_run") == "stream+ordinary"
+    assert (
+        wf().run(executor=ava.LocalExecutor(), run_id="source_run").result()
+        == "stream+ordinary"
+    )
     with pytest.raises(ValueError, match="ambiguous single-return container"):
         wf().run(
             executor=ava.LocalExecutor(),
             run_id="rerun_run",
             hooks=RunHooks(on_node_start=submitted.append),
             rerun=ava.Rerun(run_id="source_run", start=["consume"], mode="lazy"),
-        )
+        ).result()
 
     assert submitted == []
 
@@ -576,7 +583,7 @@ def test_unindexed_true_multireturn_expands_before_mixed_slot_binding(
     executor = executor_factory()
     submitted: list[str] = []
     try:
-        assert wf().run(executor=executor, run_id="source_run") == (
+        assert wf().run(executor=executor, run_id="source_run").result() == (
             "left",
             "middle",
             "other",
@@ -587,7 +594,7 @@ def test_unindexed_true_multireturn_expands_before_mixed_slot_binding(
                 run_id="rerun_run",
                 hooks=RunHooks(on_node_start=submitted.append),
                 rerun=ava.Rerun(run_id="source_run", start=["consume"], mode="lazy"),
-            )
+            ).result()
     finally:
         ray = getattr(executor, "ray", None)
         if ray is not None and ray.is_initialized():
@@ -623,13 +630,15 @@ def test_stream_selectors_preserve_reordered_keyword_mapping(
 
     executor = executor_factory()
     try:
-        assert wf().run(executor=executor, run_id="source_run") == "left+right"
+        assert wf().run(executor=executor, run_id="source_run").result() == "left+right"
         assert (
-            wf().run(
+            wf()
+            .run(
                 executor=executor,
                 run_id="rerun_run",
                 rerun=ava.Rerun(run_id="source_run", start=["combine"], mode="lazy"),
             )
+            .result()
             == "left+right"
         )
     finally:
@@ -658,14 +667,14 @@ def test_unindexed_explicit_multireturn_stream_selector_rejects_lazy_rerun(
         return consume(df=pair)
 
     submitted: list[str] = []
-    assert wf().run(executor=ava.LocalExecutor(), run_id="source_run") == "left"
+    assert wf().run(executor=ava.LocalExecutor(), run_id="source_run").result() == "left"
     with pytest.raises(ValueError, match="indexed Stream selectors cannot replay"):
         wf().run(
             executor=ava.LocalExecutor(),
             run_id="rerun_run",
             hooks=RunHooks(on_node_start=submitted.append),
             rerun=ava.Rerun(run_id="source_run", start=["consume"], mode="lazy"),
-        )
+        ).result()
 
     assert submitted == []
 
@@ -690,13 +699,13 @@ def test_stream_selector_preserves_live_indexed_multi_return_and_rejects_rerun(
 
     executor = executor_factory()
     try:
-        assert wf().run(executor=executor, run_id="source_run") == "right"
+        assert wf().run(executor=executor, run_id="source_run").result() == "right"
         with pytest.raises(ValueError, match="indexed Stream selectors cannot replay"):
             wf().run(
                 executor=executor,
                 run_id="rerun_run",
                 rerun=ava.Rerun(run_id="source_run", start=["consume"], mode="lazy"),
-            )
+            ).result()
     finally:
         ray = getattr(executor, "ray", None)
         if ray is not None and ray.is_initialized():
@@ -720,14 +729,14 @@ def test_keyword_only_stream_chain_selects_index_and_rejects_rerun_before_submis
     executor = executor_factory()
     submitted: list[str] = []
     try:
-        assert wf().run(executor=executor, run_id="source_run") == "right"
+        assert wf().run(executor=executor, run_id="source_run").result() == "right"
         with pytest.raises(ValueError, match="indexed Stream selectors cannot replay"):
             wf().run(
                 executor=executor,
                 run_id="rerun_run",
                 hooks=RunHooks(on_node_start=submitted.append),
                 rerun=ava.Rerun(run_id="source_run", start=["consume"], mode="lazy"),
-            )
+            ).result()
     finally:
         ray = getattr(executor, "ray", None)
         if ray is not None and ray.is_initialized():
@@ -754,14 +763,14 @@ def test_indexed_stream_into_downstream_chain_targets_registered_start(
     executor = executor_factory()
     submitted: list[str] = []
     try:
-        assert wf().run(executor=executor, run_id="source_run") == "right"
+        assert wf().run(executor=executor, run_id="source_run").result() == "right"
         with pytest.raises(ValueError, match="indexed Stream selectors cannot replay"):
             wf().run(
                 executor=executor,
                 run_id="rerun_run",
                 hooks=RunHooks(on_node_start=submitted.append),
                 rerun=ava.Rerun(run_id="source_run", start=["consume"], mode="lazy"),
-            )
+            ).result()
     finally:
         ray = getattr(executor, "ray", None)
         if ray is not None and ray.is_initialized():
@@ -790,14 +799,14 @@ def test_parallel_stream_selectors_preserve_index_order_and_reject_rerun(
     executor = executor_factory()
     submitted: list[str] = []
     try:
-        assert wf().run(executor=executor, run_id="source_run") == "right+left"
+        assert wf().run(executor=executor, run_id="source_run").result() == "right+left"
         with pytest.raises(ValueError, match="indexed Stream selectors cannot replay"):
             wf().run(
                 executor=executor,
                 run_id="rerun_run",
                 hooks=RunHooks(on_node_start=submitted.append),
                 rerun=ava.Rerun(run_id="source_run", start=["consume"], mode="lazy"),
-            )
+            ).result()
     finally:
         ray = getattr(executor, "ray", None)
         if ray is not None and ray.is_initialized():
@@ -824,7 +833,7 @@ def test_rerun_stream_requires_row_lineage(rerun_ns):
         rerunnable_workflow().run(
             executor=ava.LocalExecutor(),
             rerun=ava.Rerun(run_id="source_run", start=["process-data"]),
-        )
+        ).result()
 
 
 def test_rerun_stream_requires_row_lineage_before_live_passthrough(rerun_ns):
@@ -846,7 +855,7 @@ def test_rerun_stream_requires_row_lineage_before_live_passthrough(rerun_ns):
         wf().run(
             executor=ava.LocalExecutor(),
             rerun=ava.Rerun(run_id="source_run", start=["load-data"], mode="autorun"),
-        )
+        ).result()
 
 
 def test_lazy_rerun_returns_none_when_single_declared_return_is_pruned():
@@ -870,9 +879,13 @@ def test_lazy_rerun_returns_none_when_single_declared_return_is_pruned():
     def wf():
         return load() >> middle() >> sink()
 
-    result = wf().run(
-        executor=ava.LocalExecutor(),
-        rerun=ava.Rerun(run_id="source_run", start=["middle"], mode="lazy"),
+    result = (
+        wf()
+        .run(
+            executor=ava.LocalExecutor(),
+            rerun=ava.Rerun(run_id="source_run", start=["middle"], mode="lazy"),
+        )
+        .result()
     )
 
     assert result is None
@@ -902,9 +915,13 @@ def test_lazy_rerun_preserves_scheduled_tuple_return_and_none_for_pruned_return(
         sink_result = middle_result >> sink()
         return middle_result, sink_result
 
-    result = wf().run(
-        executor=ava.LocalExecutor(),
-        rerun=ava.Rerun(run_id="source_run", start=["middle"], mode="lazy"),
+    result = (
+        wf()
+        .run(
+            executor=ava.LocalExecutor(),
+            rerun=ava.Rerun(run_id="source_run", start=["middle"], mode="lazy"),
+        )
+        .result()
     )
 
     assert result == ("middle", None)
@@ -933,7 +950,7 @@ def test_sparse_lazy_rerun_of_rerun_resolves_parent_run_rows(rerun_ns):
     def wf():
         return load_data() >> process_data()
 
-    assert wf().run(executor=ava.LocalExecutor(), run_id="source_run") == [
+    assert wf().run(executor=ava.LocalExecutor(), run_id="source_run").result() == [
         "alpha",
         "beta",
     ]
@@ -943,7 +960,7 @@ def test_sparse_lazy_rerun_of_rerun_resolves_parent_run_rows(rerun_ns):
         executor=ava.LocalExecutor(),
         run_id="rerun_1",
         rerun=ava.Rerun(run_id="source_run", start=["process-data"], mode="lazy"),
-    ) == ["alpha", "beta"]
+    ).result() == ["alpha", "beta"]
 
     source_rerun_1_rows = ns.source.read().filter(pl.col("_ava_run_id") == "rerun_1")
     assert source_rerun_1_rows.height == 0
@@ -954,7 +971,7 @@ def test_sparse_lazy_rerun_of_rerun_resolves_parent_run_rows(rerun_ns):
         executor=ava.LocalExecutor(),
         run_id="rerun_2",
         rerun=ava.Rerun(run_id="rerun_1", start=["process-data"], mode="lazy"),
-    ) == ["alpha", "beta"]
+    ).result() == ["alpha", "beta"]
 
 
 def test_rerun_rejects_skipped_implicit_non_stream_upstream(rerun_ns):
@@ -974,7 +991,7 @@ def test_rerun_rejects_skipped_implicit_non_stream_upstream(rerun_ns):
         wf().run(
             executor=ava.LocalExecutor(),
             rerun=ava.Rerun(run_id="source_run", start=["middle"], mode="lazy"),
-        )
+        ).result()
 
 
 @pytest.mark.parametrize("executor_factory", [ava.LocalExecutor, ava.RayExecutor])
@@ -997,7 +1014,7 @@ def test_rerun_rejects_skipped_explicit_non_stream_upstream(
                 executor=executor,
                 hooks=RunHooks(on_node_start=submitted.append),
                 rerun=ava.Rerun(run_id="source_run", start=["middle"], mode="lazy"),
-            )
+            ).result()
     finally:
         ray = getattr(executor, "ray", None)
         if ray is not None and ray.is_initialized():
@@ -1027,12 +1044,12 @@ def test_rerun_lineage_vector_propagates_through_python_args(rerun_ns, executor_
 
     executor = executor_factory()
     try:
-        assert wf().run(executor=executor, run_id="source_run") == "ok"
+        assert wf().run(executor=executor, run_id="source_run").result() == "ok"
         assert wf().run(
             executor=executor,
             run_id="rerun_run",
             rerun=ava.Rerun(run_id="source_run", start=["process-data"], mode="autorun"),
-        ) == "ok"
+        ).result() == "ok"
     finally:
         ray = getattr(executor, "ray", None)
         if ray is not None and ray.is_initialized():
@@ -1083,7 +1100,7 @@ def test_rerun_lineage_vector_propagates_through_indexed_single_return_tuple(
 
     executor = executor_factory()
     try:
-        assert wf().run(executor=executor, run_id="source_run") == "ok"
+        assert wf().run(executor=executor, run_id="source_run").result() == "ok"
     finally:
         ray = getattr(executor, "ray", None)
         if ray is not None and ray.is_initialized():
@@ -1125,7 +1142,7 @@ def test_rerun_lineage_vector_propagates_through_indexed_multi_return_tuple(
 
     executor = executor_factory()
     try:
-        assert wf().run(executor=executor, run_id="source_run") == "ok"
+        assert wf().run(executor=executor, run_id="source_run").result() == "ok"
     finally:
         ray = getattr(executor, "ray", None)
         if ray is not None and ray.is_initialized():
@@ -1170,7 +1187,7 @@ def test_rerun_lineage_vector_propagates_through_explicit_node_future_arg(
 
     executor = executor_factory()
     try:
-        assert wf().run(executor=executor, run_id="source_run") == "ok"
+        assert wf().run(executor=executor, run_id="source_run").result() == "ok"
     finally:
         ray = getattr(executor, "ray", None)
         if ray is not None and ray.is_initialized():
@@ -1224,7 +1241,7 @@ def test_lineage_survives_hook_replacement_without_exposing_envelope(
             executor=executor,
             hooks=RunHooks(unwrap_result=unwrap_result),
             run_id="source_run",
-        ) == "ok"
+        ).result() == "ok"
     finally:
         ray = getattr(executor, "ray", None)
         if ray is not None and ray.is_initialized():

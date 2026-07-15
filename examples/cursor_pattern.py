@@ -197,7 +197,7 @@ def generate_embeddings(chunk_df: pl.DataFrame, *, model: str) -> pl.DataFrame:
 
 def _main() -> None:
     ns.push()
-    result = cursor_workflow().run(executor=ava.LocalExecutor())
+    result = cursor_workflow().run(executor=ava.LocalExecutor()).result()
     print("Cursor example complete")
     print(result)
     print(f"Artifacts: {EXAMPLE_ROOT}")

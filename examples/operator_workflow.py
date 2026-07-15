@@ -62,7 +62,7 @@ def operator_demo_workflow():
 
 
 def _main() -> None:
-    result = operator_demo_workflow().run(executor=ava.LocalExecutor())
+    result = operator_demo_workflow().run(executor=ava.LocalExecutor()).result()
     print("Operator workflow example complete")
     print(result)
 

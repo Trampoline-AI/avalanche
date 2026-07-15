@@ -87,7 +87,7 @@ def complex_dag_workflow():
 
 
 def _main() -> None:
-    result = complex_dag_workflow().run(executor=ava.LocalExecutor())
+    result = complex_dag_workflow().run(executor=ava.LocalExecutor()).result()
     print("Complex DAG example complete")
     print(result)
 

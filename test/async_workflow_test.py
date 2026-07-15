@@ -42,7 +42,7 @@ def test_source_step_dest_chain_matrix(async_mode: bool):
     def matrix_workflow():
         return load() >> double() >> save()
 
-    assert matrix_workflow().run(executor=ava.LocalExecutor()) == "saved_12"
+    assert matrix_workflow().run(executor=ava.LocalExecutor()).result() == "saved_12"
 
 
 @pytest.mark.parametrize("async_mode", TASK_MODES)
@@ -68,7 +68,7 @@ def test_explicit_args_and_multiple_returns_matrix(async_mode: bool):
         combined = combine(left, right)
         return pair, left, right, combined
 
-    pair, left, right, combined = matrix_workflow().run(executor=ava.LocalExecutor())
+    pair, left, right, combined = matrix_workflow().run(executor=ava.LocalExecutor()).result()
 
     assert pair == ([1, 2], [3, 4])
     assert left == 3
@@ -98,9 +98,13 @@ def test_runtime_injection_matrix(async_mode: bool):
     def matrix_workflow():
         return capture([1, 2, 3])
 
-    result = matrix_workflow().run(
-        executor=ava.LocalExecutor(),
-        context={"metadata": {"tenant": "acme"}},
+    result = (
+        matrix_workflow()
+        .run(
+            executor=ava.LocalExecutor(),
+            context={"metadata": {"tenant": "acme"}},
+        )
+        .result()
     )
 
     assert result == {
@@ -151,6 +155,6 @@ def test_ray_executor_resolves_async_step():
         def matrix_workflow():
             return load() >> double() >> save()
 
-        assert matrix_workflow().run(executor=ava.RayExecutor()) == "saved_12"
+        assert matrix_workflow().run(executor=ava.RayExecutor()).result() == "saved_12"
     finally:
         ray.shutdown()

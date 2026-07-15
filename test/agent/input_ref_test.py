@@ -22,9 +22,13 @@ def test_input_ref_resolves_kwarg():
     def input_workflow():
         return collect(q=ava.input.question)
 
-    result = input_workflow().run(
-        executor=ava.LocalExecutor(),
-        input=RunInput(question="hi"),
+    result = (
+        input_workflow()
+        .run(
+            executor=ava.LocalExecutor(),
+            input=RunInput(question="hi"),
+        )
+        .result()
     )
 
     assert result == "hi"
@@ -39,9 +43,13 @@ def test_input_ref_resolves_positional_arg():
     def input_workflow():
         return collect(ava.input.question)
 
-    result = input_workflow().run(
-        executor=ava.LocalExecutor(),
-        input=RunInput(question="hi"),
+    result = (
+        input_workflow()
+        .run(
+            executor=ava.LocalExecutor(),
+            input=RunInput(question="hi"),
+        )
+        .result()
     )
 
     assert result == "hi"
@@ -56,9 +64,13 @@ def test_input_ref_resolves_chained_access():
     def input_workflow():
         return collect(ava.input.nested.value)
 
-    result = input_workflow().run(
-        executor=ava.LocalExecutor(),
-        input=RunInput(question="ignored", nested=NestedInput(value="deep")),
+    result = (
+        input_workflow()
+        .run(
+            executor=ava.LocalExecutor(),
+            input=RunInput(question="ignored", nested=NestedInput(value="deep")),
+        )
+        .result()
     )
 
     assert result == "deep"
@@ -73,9 +85,13 @@ def test_bare_input_ref_resolves_to_run_input_instance():
     def input_workflow():
         return collect(ava.input)
 
-    result = input_workflow().run(
-        executor=ava.LocalExecutor(),
-        input=RunInput(question="hi", nested=NestedInput(value="deep")),
+    result = (
+        input_workflow()
+        .run(
+            executor=ava.LocalExecutor(),
+            input=RunInput(question="hi", nested=NestedInput(value="deep")),
+        )
+        .result()
     )
 
     assert isinstance(result, RunInput)
@@ -96,7 +112,7 @@ def test_input_ref_missing_attribute_names_node_and_attribute():
         missing_input_workflow().run(
             executor=ava.LocalExecutor(),
             input=RunInput(question="hi"),
-        )
+        ).result()
 
 
 def test_input_ref_without_run_input_raises_value_error():
@@ -109,7 +125,7 @@ def test_input_ref_without_run_input_raises_value_error():
         return collect(q=ava.input.question)
 
     with pytest.raises(ValueError, match="input"):
-        no_input_workflow().run(executor=ava.LocalExecutor())
+        no_input_workflow().run(executor=ava.LocalExecutor()).result()
 
 
 def test_input_ref_resolves_validated_dict_input():
@@ -121,9 +137,13 @@ def test_input_ref_resolves_validated_dict_input():
     def input_workflow():
         return collect(q=ava.input.question)
 
-    result = input_workflow().run(
-        executor=ava.LocalExecutor(),
-        input={"question": "hi", "nested": {"value": "deep"}},
+    result = (
+        input_workflow()
+        .run(
+            executor=ava.LocalExecutor(),
+            input={"question": "hi", "nested": {"value": "deep"}},
+        )
+        .result()
     )
 
     assert result == "hi"

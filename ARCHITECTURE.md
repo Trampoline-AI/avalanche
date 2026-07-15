@@ -17,12 +17,16 @@ Avalanche exposes the same workflow runtime through two local development modes.
 ### Embedded mode
 
 ```text
-Python flow program -> Workflow.run() -> LocalExecutor or RayExecutor
+Python flow program -> Workflow.run() -> RunHandle -> LocalExecutor or RayExecutor
 ```
 
 The program that declares the flow builds it and calls `Workflow.run()` directly.
-The program owns execution and result handling; no operator, gRPC service, CLI
-client, or connected TUI participates.
+The call synchronously allocates the run ID and returns a process-local
+`RunHandle`; one named non-daemon driver thread executes the existing blocking
+driver. The program explicitly waits with `.result()` or `await`. Handle
+cancellation is cooperative between node submissions and does not interrupt an
+active thread or Ray task. No operator, gRPC service, CLI client, or connected
+TUI participates.
 
 ```bash
 uv run python examples/operator_workflow.py
@@ -31,7 +35,7 @@ uv run python examples/operator_workflow.py
 ### Operator-managed mode
 
 ```text
-CLI or TUI -> gRPC -> Operator -> Workflow.run() -> LocalExecutor or RayExecutor
+CLI or TUI -> gRPC -> Operator -> Workflow.run().result() -> LocalExecutor or RayExecutor
 ```
 
 The operator runs separately, imports and discovers configured flow files, and
@@ -51,7 +55,9 @@ uv run ava tui --connect localhost:7433
 `ava dev --flows examples` is a convenience form of operator-managed mode. It
 starts an operator subprocess and a connected TUI together. The operator still
 executes each discovered flow by calling the same `Workflow.run()` path used in
-embedded mode.
+embedded mode and explicitly waits on its handle. Operator state, logs, and
+control remain the externally managed run projection; the embedded handle is
+not a durable registry, persisted result, or recovery mechanism.
 
 ## High-level component model
 

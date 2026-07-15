@@ -68,8 +68,21 @@ where the run is started and managed.
 ### Embedded Mode
 
 Run the Python program that declares the flow. The program builds the DAG and
-calls `Workflow.run()` directly, so flow definition, execution, and result
-handling stay in one process. No operator or gRPC connection is required.
+calls `Workflow.run()` directly. The call immediately returns an awaitable
+`ava.RunHandle` with a stable `run_id`; call `.result()` for a synchronous wait
+or `await` the handle from asynchronous code:
+
+```python
+run = workflow.run(executor=ava.LocalExecutor())
+print(run.run_id)
+result = run.result()
+```
+
+The handle and its cached terminal result or failure exist only in this process.
+Its driver uses one named non-daemon thread, so the process remains alive until
+execution finishes. `run.cancel()` is cooperative and is observed between node
+submissions; it does not interrupt an active Python thread or Ray task. No
+operator or gRPC connection is required.
 
 Start with the simplest local DAG example:
 

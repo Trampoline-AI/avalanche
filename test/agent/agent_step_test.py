@@ -97,7 +97,7 @@ class TestBodyfulAgentSteps:
             return summarize(load())
 
         person = Person(id=1, name="Ada")
-        assert flow().run(executor=LocalExecutor()) == {
+        assert flow().run(executor=LocalExecutor()).result() == {
             "headline": "about Ada",
             "note": "ready for review",
         }
@@ -124,7 +124,7 @@ class TestBodyfulAgentSteps:
         def flow():
             return summarize(Person(id=1, name="Ada"))
 
-        assert flow().run(executor=LocalExecutor()) == "ready for review"
+        assert flow().run(executor=LocalExecutor()).result() == "ready for review"
         assert ava.agent_step is ava.agent.agent_step is ava.agent.step
         assert captured["builds"][0]["runtime_kwargs"] == {"lm": "root-lm"}
 
@@ -152,7 +152,7 @@ class TestBodyfulAgentSteps:
         def flow():
             return classify("clear")
 
-        assert flow().run(executor=LocalExecutor()) == "CLEAR"
+        assert flow().run(executor=LocalExecutor()).result() == "CLEAR"
         build = captured["builds"][0]
         assert build["skills"] == (skill,)
         assert build["tools"] == (tool,)
@@ -172,7 +172,7 @@ class TestBodyfulAgentSteps:
             AgentStepError,
             match=r"missing input fields \['person'\].*unexpected input fields \['extra'\]",
         ):
-            flow().run(executor=LocalExecutor())
+            flow().run(executor=LocalExecutor()).result()
 
     def test_predictor_failure_includes_step_signature_and_input_types(self, monkeypatch):
         """Provider errors surface the step boundary needed to diagnose a failed call."""
@@ -191,7 +191,7 @@ class TestBodyfulAgentSteps:
             return summarize(Person(id=1, name="Ada"))
 
         with pytest.raises(AgentStepExecutionError) as error:
-            flow().run(executor=LocalExecutor())
+            flow().run(executor=LocalExecutor()).result()
 
         message = str(error.value)
         assert "summarize" in message

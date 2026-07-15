@@ -134,7 +134,7 @@ class TestLogger:
 
         # Run workflow - should inject Logger automatically
         p = test_workflow()
-        result = p.run()
+        result = p.run().result()
         # If logger wasn't injected correctly, the assertion above would have failed
         assert result["data"] == [1, 2, 3]
         assert result["logger_type"] == "LoggerInstance"
@@ -157,7 +157,7 @@ class TestLogger:
             return capture_context([1, 2, 3])
 
         p = test_workflow()
-        context = p.run(executor=LocalExecutor())
+        context = p.run(executor=LocalExecutor()).result()
 
         # Verify run_id is a valid ULID (26 chars, uppercase alphanumeric)
         assert context["run_id"] is not None
@@ -192,7 +192,7 @@ class TestLogger:
 
         p = test_workflow()
         # Default executor is RayExecutor
-        context = p.run()
+        context = p.run().result()
 
         # Verify run_id is a valid ULID
         assert context["run_id"] is not None

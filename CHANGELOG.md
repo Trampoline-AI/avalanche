@@ -2,6 +2,19 @@
 
 ## Unreleased
 
+### Awaitable workflow run handles
+
+- Breaking: `Workflow.run(...)` now immediately returns a generic, awaitable
+  `ava.RunHandle` instead of the workflow output. Use `.result()` to block or
+  `await` the handle in asynchronous code.
+- Run handles expose the synchronously allocated `run_id`, cached terminal
+  output or failure, timeout-aware result access, and cooperative cancellation.
+- Each embedded run uses one named non-daemon driver thread. Cancelling an
+  asyncio waiter does not cancel the run, and active Python or Ray work is not
+  forcibly interrupted.
+- Handles are process-local lifecycle objects. Durable operator status,
+  registries, persisted outputs, and recovery contracts are unchanged.
+
 ### Native agent support: bodyful `@ava.agent_step` and typed tables
 
 - Pydantic `BaseModel` classes are now a first-class table schema source for

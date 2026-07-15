@@ -32,6 +32,7 @@ from .model_frame import Json
 
 # Progress tracking
 from .progress import ProgressStore
+from .run_handle import RunHandle
 
 # Runtime primitives
 from .runtime import (  # noqa: F401
@@ -104,6 +105,7 @@ __all__ = [
     "MAX_INLINE_REQUEST_BYTES",
     "Rerun",
     "RunContext",
+    "RunHandle",
     "S3File",
     "Stream",
     "Logger",

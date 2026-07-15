@@ -6,6 +6,7 @@ import logging
 import queue
 import threading
 import time
+from concurrent.futures import CancelledError
 from datetime import datetime
 from typing import Any, Callable
 from uuid import uuid4
@@ -250,12 +251,14 @@ class Operator:
                 input=input,
                 context=context,
                 run_id=run.run_id,
-            )
+            ).result()
 
             if cancel.is_set():
                 run.status = RunStatus.CANCELLED
             else:
                 run.status = RunStatus.SUCCESS
+        except CancelledError:
+            run.status = RunStatus.CANCELLED
         except Exception as exc:
             import traceback
             run.status = RunStatus.FAILED

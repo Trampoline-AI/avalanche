@@ -254,7 +254,7 @@ class RayExecutor:
 
     Example:
         executor = RayExecutor()
-        workflow.run(executor=executor)
+        workflow.run(executor=executor).result()
     """
 
     def __init__(self, *, ray_init_kwargs: dict | None = None):

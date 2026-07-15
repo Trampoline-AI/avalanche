@@ -118,7 +118,7 @@ def test_table_backed_stream_runs_on_executor_storage_matrix(matrix_namespace, e
     def wf():
         return consume_table()
 
-    assert wf().run(executor=executor) == [1, 2]
+    assert wf().run(executor=executor).result() == [1, 2]
     assert ava.ProgressStore(ns.left, key="matrix_table").get_cursor() == result.snapshot_id
 
 
@@ -157,7 +157,7 @@ def test_passthrough_multistream_runs_on_executor_storage_matrix(
         (left_ref & right_ref) >> out
         return out
 
-    assert wf().run(executor=executor) == {
+    assert wf().run(executor=executor).result() == {
         "left": [1, 2],
         "right": [10, 11, 12],
     }
