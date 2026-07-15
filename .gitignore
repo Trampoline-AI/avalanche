@@ -108,5 +108,6 @@ htmlcov/
 trampoline_ai_transform
 
 .dspy_cache
+.agents/
 .hermes/
 .avalanche/
