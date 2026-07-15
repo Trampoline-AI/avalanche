@@ -279,6 +279,71 @@ def test_workflow_never_shuts_down_caller_executor():
     assert not executor.shutdown_called
 
 
+@pytest.mark.parametrize("use_default", [False, True])
+def test_ray_preparation_runs_on_caller_before_driver_thread(monkeypatch, use_default):
+    calls = []
+    caller_thread_id = threading.get_ident()
+
+    class FakeRay:
+        initialized = False
+
+        def is_initialized(self):
+            calls.append(("is_initialized", threading.get_ident()))
+            return self.initialized
+
+        def init(self, **kwargs):
+            calls.append(("init", threading.get_ident(), kwargs))
+            self.initialized = True
+
+    executor = object.__new__(ava.RayExecutor)
+    executor.ray = FakeRay()
+    executor._ray_init_kwargs = {"include_dashboard": False}
+
+    @ava.source
+    def load():
+        return "unused"
+
+    @ava.workflow
+    def flow():
+        return load()
+
+    workflow = flow()
+
+    def run_driver(**kwargs):
+        calls.append(("driver", threading.get_ident(), kwargs["executor"]))
+        return kwargs["run_id"]
+
+    monkeypatch.setattr(workflow, "_run_driver", run_driver)
+    if use_default:
+
+        def get_default_executor():
+            calls.append(("default", threading.get_ident()))
+            return executor
+
+        monkeypatch.setattr(
+            "avalanche.executor.get_default_executor", get_default_executor
+        )
+        handle = workflow.run(run_id="caller-ray-run")
+    else:
+        handle = workflow.run(executor=executor, run_id="caller-ray-run")
+
+    assert handle.run_id == "caller-ray-run"
+    assert handle.result(timeout=5) == "caller-ray-run"
+
+    preparation_calls = [call for call in calls if call[0] != "driver"]
+    if use_default:
+        assert preparation_calls[0] == ("default", caller_thread_id)
+        preparation_calls = preparation_calls[1:]
+    assert preparation_calls == [
+        ("is_initialized", caller_thread_id),
+        ("init", caller_thread_id, {"include_dashboard": False}),
+    ]
+    driver_call = calls[-1]
+    assert driver_call[0] == "driver"
+    assert driver_call[1] != caller_thread_id
+    assert driver_call[2] is executor
+
+
 @pytest.mark.ray
 def test_ray_run_returns_handle_before_remote_completion_and_caches_outcomes():
     pytest.importorskip("ray")

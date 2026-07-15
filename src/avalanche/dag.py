@@ -2207,6 +2207,12 @@ class Workflow:
         """
         canonical_run_id = run_id if run_id is not None else str(ULID())
         handle: RunHandle[Any] = RunHandle(canonical_run_id)
+        from .executor import RayExecutor, get_default_executor
+
+        resolved_executor = executor if executor is not None else get_default_executor()
+        if isinstance(resolved_executor, RayExecutor):
+            resolved_executor._prepare_for_run()
+
         cancel_requested = handle._compose_cancel_requested(
             hooks.cancel_requested if hooks is not None else None
         )
@@ -2215,7 +2221,7 @@ class Workflow:
             driver_hooks.cancel_requested = cancel_requested
         handle._start(
             lambda: self._run_driver(
-                executor=executor,
+                executor=resolved_executor,
                 hooks=driver_hooks,
                 cancel_requested=cancel_requested,
                 input=input,

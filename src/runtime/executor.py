@@ -262,8 +262,8 @@ class RayExecutor:
         Initialize Ray executor.
 
         Args:
-            ray_init_kwargs: Arguments to pass to ray.init()
-                            If None, assumes Ray is already initialized
+            ray_init_kwargs: Arguments to pass to ray.init() when this executor
+                            needs to initialize Ray.
         """
         try:
             import ray
@@ -273,10 +273,15 @@ class RayExecutor:
             ) from e
 
         self.ray = ray
+        self._ray_init_kwargs = dict(ray_init_kwargs or {})
 
         if ray_init_kwargs is not None:
-            if not ray.is_initialized():
-                ray.init(**ray_init_kwargs)
+            self._prepare_for_run()
+
+    def _prepare_for_run(self) -> None:
+        """Initialize Ray before a workflow moves execution to its driver thread."""
+        if not self.ray.is_initialized():
+            self.ray.init(**self._ray_init_kwargs)
 
     def submit(
         self, fn: Callable, *args: Any, num_returns: int = 1, **kwargs: Any
