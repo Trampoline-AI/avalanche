@@ -36,17 +36,22 @@ def _preserve_in_memory_sqlite(catalog: Catalog) -> Catalog:
     try:
         from pyiceberg.catalog.sql import SqlCatalog
         from sqlalchemy import create_engine
-        from sqlalchemy.pool import StaticPool
+        from sqlalchemy.pool import QueuePool
     except ImportError:
         return catalog
 
     if not isinstance(catalog, SqlCatalog):
         return catalog
 
+    # StaticPool can hand its one connection record to concurrent callers.
+    # A one-slot QueuePool keeps the same in-memory connection while queuing
+    # complete checkout-to-checkin leases.
     shared_engine = create_engine(
         "sqlite:///:memory:",
         connect_args={"check_same_thread": False},
-        poolclass=StaticPool,
+        poolclass=QueuePool,
+        pool_size=1,
+        max_overflow=0,
     )
     source = catalog.engine.raw_connection()
     destination = shared_engine.raw_connection()

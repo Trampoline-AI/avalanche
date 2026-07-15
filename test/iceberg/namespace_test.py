@@ -11,7 +11,7 @@ import pytest
 from pyiceberg.catalog import load_catalog
 from pyiceberg.schema import Schema
 from pyiceberg.types import NestedField, StringType
-from sqlalchemy.pool import StaticPool
+from sqlalchemy.pool import QueuePool
 
 import avalanche as ava
 import avalanche.iceberg.namespace as namespace_module
@@ -105,6 +105,36 @@ class TestIcebergNamespace:
 
         assert os.path.exists(f"{tmpdir}/test-namespace/test_table")
 
+    def test_in_memory_single_connection_pool_serializes_connection_leases(
+        self, namespace: TestNamespace
+    ):
+        """A second thread cannot use the in-memory connection concurrently."""
+        first_lease = namespace.catalog.engine.connect()
+        checkout_started = threading.Event()
+        second_lease_acquired = threading.Event()
+        errors = []
+
+        def acquire_second_lease():
+            checkout_started.set()
+            try:
+                with namespace.catalog.engine.connect():
+                    second_lease_acquired.set()
+            except BaseException as exc:
+                errors.append(exc)
+
+        thread = threading.Thread(target=acquire_second_lease)
+        thread.start()
+        try:
+            assert checkout_started.wait(5)
+            assert not second_lease_acquired.wait(0.2)
+        finally:
+            first_lease.close()
+
+        thread.join(timeout=5)
+        assert not thread.is_alive()
+        assert not errors
+        assert second_lease_acquired.is_set()
+
     def test_push_binds_existing_tables_across_instances(self, tmpdir: str):
         """Test that push() binds tables that already exist in the catalog."""
 
@@ -181,7 +211,7 @@ class TestIcebergNamespace:
         ns.push()
 
         assert ns.catalog.properties["uri"] == "sqlite:///:memory:"
-        assert isinstance(ns.catalog.engine.pool, StaticPool)
+        assert isinstance(ns.catalog.engine.pool, QueuePool)
         with pytest.raises(TypeError, match="in-memory"):
             pickle.dumps(ns.records)
         if catalog_path in {"config-loaded", "caller-supplied"}:
