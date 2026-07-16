@@ -193,7 +193,7 @@ class TestWorkflowDAGConstruction:
         p = my_workflow()
 
         assert p.graph["load_1"].count("process_1") == 1
-        assert p.run(executor=LocalExecutor()) == "processed-raw"
+        assert p.run(executor=LocalExecutor()).result() == "processed-raw"
 
     def test_parallel_chain_dedupes_explicit_arg_edge(self):
         @source
@@ -217,7 +217,7 @@ class TestWorkflowDAGConstruction:
 
         assert p.graph["x_1"].count("z_1") == 1
         assert p.graph["y_1"].count("z_1") == 1
-        assert p.run(executor=LocalExecutor()) == "z-x"
+        assert p.run(executor=LocalExecutor()).result() == "z-x"
 
     def test_variable_based_workflow(self):
         @source
@@ -394,7 +394,7 @@ class TestWorkflowDAGConstruction:
         assert p.graph["right_start_1"] == ["right_terminal_1"]
         assert p.graph["left_terminal_1"] == ["collect_1"]
         assert p.graph["right_terminal_1"] == ["collect_1"]
-        assert p.run(executor=LocalExecutor()) == (10, 20)
+        assert p.run(executor=LocalExecutor()).result() == (10, 20)
 
     def test_composite_upstream_targets_registered_downstream_chain_starts(self):
         @source
@@ -450,7 +450,7 @@ class TestWorkflowDAGConstruction:
             "collect_first_1",
             "collect_second_1",
         ]
-        assert p.run(executor=LocalExecutor()) == (
+        assert p.run(executor=LocalExecutor()).result() == (
             "first:left,right:end",
             "second:left,right:end",
         )
@@ -667,7 +667,7 @@ class TestErrorHandling:
 
         p = my_workflow()
         # Bug: AttributeError: 'ParallelTasks' object has no attribute 'future_id'
-        result = p.run()
+        result = p.run(executor=LocalExecutor()).result()
         assert result == ("data_a", "data_b")
 
     def test_parallel_tasks_reuse_not_affected_by_later_operations(self):
@@ -705,7 +705,7 @@ class TestErrorHandling:
             return result1, result2
 
         p = test_workflow()
-        r1, r2 = p.run()
+        r1, r2 = p.run(executor=LocalExecutor()).result()
 
         assert r1 == ["root-a", "root-b"]
         assert r2 == ["root-a", "root-b", "c"]
@@ -734,7 +734,7 @@ class TestErrorHandling:
             return chain
 
         p = test_workflow()
-        result = p.run()
+        result = p.run(executor=LocalExecutor()).result()
 
         # Bug: Returns "a" instead of "a_processed" because chain tracking is broken
         assert result == "a_processed", f"Expected 'a_processed', got {result}"

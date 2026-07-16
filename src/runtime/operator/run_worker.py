@@ -148,7 +148,7 @@ def run_worker(
             input=input_value,
             context=context_value,
             run_id=run_id,
-        )
+        ).result()
         status = "cancelled" if cancel_event.is_set() else "success"
         terminal_event = {"type": "terminal", "status": status}
     except BaseException as exc:

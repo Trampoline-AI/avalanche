@@ -165,7 +165,7 @@ def test_zero_copy_mode_claims_and_completes_snapshot(namespace):
     def test_workflow():
         return load_data() >> process_stream()
 
-    assert test_workflow().run(executor=ava.LocalExecutor()) == "processed"
+    assert test_workflow().run(executor=ava.LocalExecutor()).result() == "processed"
 
     store = ava.ProgressStore(ns.records, key="zero_copy_test")
     assert store.get_cursor() == loaded_snapshot_ids[0]
@@ -190,7 +190,7 @@ def test_table_backed_stream_workflow_claims_and_completes_snapshot(namespace):
     def test_workflow():
         return consume_from_table()
 
-    assert test_workflow().run(executor=ava.LocalExecutor()) == "table_backed_done"
+    assert test_workflow().run(executor=ava.LocalExecutor()).result() == "table_backed_done"
 
     store = ava.ProgressStore(ns.records, key="table_backed_test")
     assert store.get_cursor() == result.snapshot_id
@@ -220,7 +220,7 @@ def test_failed_zero_copy_snapshot_remains_pending_for_retry(namespace):
         return load_data() >> failing_process()
 
     with pytest.raises(ValueError, match="Intentional failure"):
-        test_workflow().run(executor=ava.LocalExecutor())
+        test_workflow().run(executor=ava.LocalExecutor()).result()
 
     snapshot_id = loaded_snapshot_ids[0]
     store = ava.ProgressStore(ns.records, key="failure_test")
@@ -254,7 +254,7 @@ def test_async_stream_step_failure_remains_pending_for_retry(namespace):
         return load_data() >> failing_process()
 
     with pytest.raises(ValueError, match="Intentional async failure"):
-        test_workflow().run(executor=ava.LocalExecutor())
+        test_workflow().run(executor=ava.LocalExecutor()).result()
 
     snapshot_id = loaded_snapshot_ids[0]
     store = ava.ProgressStore(ns.records, key="async_failure_test")
@@ -346,7 +346,7 @@ def test_position_based_zero_copy_matching(namespace):
     def test_workflow():
         return load_two_tables() >> combine_streams()
 
-    assert test_workflow().run(executor=ava.LocalExecutor()) == "combined"
+    assert test_workflow().run(executor=ava.LocalExecutor()).result() == "combined"
     assert ns.result.read().sort("id")["value"].to_list() == [
         "alpha_gamma",
         "beta_delta",
@@ -382,7 +382,7 @@ def test_position_matching_with_mixed_results(namespace):
     def test_workflow():
         return load_with_mixed_returns() >> process_positioned_streams()
 
-    assert test_workflow().run(executor=ava.LocalExecutor()) == "mixed_done"
+    assert test_workflow().run(executor=ava.LocalExecutor()).result() == "mixed_done"
     assert ns.result.read()["value"].to_list() == ["first_second"]
 
 
@@ -405,7 +405,7 @@ def test_run_scoped_stream_default_reads_current_run_rows_only(namespace):
     def wf():
         return load_data() >> process_data()
 
-    assert wf().run(executor=ava.LocalExecutor(), run_id="run_1") == ["current"]
+    assert wf().run(executor=ava.LocalExecutor(), run_id="run_1").result() == ["current"]
 
     # The run-scoped read leaves an unrelated append-scan cursor untouched: it
     # neither claims nor advances any pending backlog snapshot.
@@ -440,7 +440,7 @@ def test_run_scoped_stream_filters_by_upstream_producer_slug(namespace):
 
     # Same run, same table, but process-data must see only its upstream
     # producer (load-data) rows, not the unrelated other-data rows.
-    assert wf().run(executor=ava.LocalExecutor(), run_id="run_1") == ["wanted"]
+    assert wf().run(executor=ava.LocalExecutor(), run_id="run_1").result() == ["wanted"]
 
 
 def test_run_scoped_stream_requires_row_lineage(namespace):
@@ -460,7 +460,7 @@ def test_run_scoped_stream_requires_row_lineage(namespace):
         return load_data() >> process_data()
 
     with pytest.raises(ValueError, match="row_lineage=True"):
-        wf().run(executor=ava.LocalExecutor(), run_id="run_1")
+        wf().run(executor=ava.LocalExecutor(), run_id="run_1").result()
 
 
 def test_run_scoped_stream_passthrough_short_circuits_table_read(namespace):
@@ -481,7 +481,7 @@ def test_run_scoped_stream_passthrough_short_circuits_table_read(namespace):
     def wf():
         return load_data() >> process_data()
 
-    assert wf().run(executor=ava.LocalExecutor(), run_id="run_1") == ["passthrough"]
+    assert wf().run(executor=ava.LocalExecutor(), run_id="run_1").result() == ["passthrough"]
 
 
 def test_consume_stream_rejects_append_scan_without_key(table):

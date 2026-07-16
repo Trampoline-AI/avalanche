@@ -39,14 +39,18 @@ def test_workflow_run_validates_input_and_injects_context_without_consuming_data
     def example_workflow():
         return load() >> add_context()
 
-    result = example_workflow().run(
-        executor=ava.LocalExecutor(),
-        input={
-            "value": 41,
-            "document": {"name": "doc.txt", "content": b"hello"},
-            "remote_document": {"uri": "s3://bucket/key.txt"},
-        },
-        context={"request_id": "req_123"},
+    result = (
+        example_workflow()
+        .run(
+            executor=ava.LocalExecutor(),
+            input={
+                "value": 41,
+                "document": {"name": "doc.txt", "content": b"hello"},
+                "remote_document": {"uri": "s3://bucket/key.txt"},
+            },
+            context={"request_id": "req_123"},
+        )
+        .result()
     )
 
     assert result == 42
@@ -61,7 +65,7 @@ def test_workflow_run_injects_node_slug_into_run_context():
     def slug_workflow():
         return load()
 
-    result = slug_workflow().run(executor=ava.LocalExecutor())
+    result = slug_workflow().run(executor=ava.LocalExecutor()).result()
 
     assert result == ("load_1", "load", "load-docs")
 
@@ -75,15 +79,19 @@ def test_workflow_run_run_id_overrides_mapping_context_runtime_fields():
     def context_workflow():
         return load()
 
-    result = context_workflow().run(
-        executor=ava.LocalExecutor(),
-        run_id="external_run",
-        context={
-            "request_id": "req_123",
-            "run_id": "spoofed_user_id",
-            "workflow_name": "spoofed_workflow",
-            "executor_type": "spoofed_executor",
-        },
+    result = (
+        context_workflow()
+        .run(
+            executor=ava.LocalExecutor(),
+            run_id="external_run",
+            context={
+                "request_id": "req_123",
+                "run_id": "spoofed_user_id",
+                "workflow_name": "spoofed_workflow",
+                "executor_type": "spoofed_executor",
+            },
+        )
+        .result()
     )
 
     assert result == ("external_run", "context_workflow", "local")
@@ -108,20 +116,24 @@ def test_workflow_run_runtime_fields_override_mapping_context_lineage_and_node_f
     def context_workflow():
         return load()
 
-    result = context_workflow().run(
-        executor=ava.LocalExecutor(),
-        run_id="run_real",
-        context={
-            "request_id": "req_123",
-            "run_id": "run_fake",
-            "workflow_name": "fake_workflow",
-            "executor_type": "fake_executor",
-            "rerun": {"run_id": "fake_parent", "start": ["fake-node"]},
-            "node_id": "fake_node_1",
-            "node_name": "fake_node",
-            "node_slug": "fake-node",
-            "lineage_vector": {"upstream": "run_fake"},
-        },
+    result = (
+        context_workflow()
+        .run(
+            executor=ava.LocalExecutor(),
+            run_id="run_real",
+            context={
+                "request_id": "req_123",
+                "run_id": "run_fake",
+                "workflow_name": "fake_workflow",
+                "executor_type": "fake_executor",
+                "rerun": {"run_id": "fake_parent", "start": ["fake-node"]},
+                "node_id": "fake_node_1",
+                "node_name": "fake_node",
+                "node_slug": "fake-node",
+                "lineage_vector": {"upstream": "run_fake"},
+            },
+        )
+        .result()
     )
 
     assert result == {
@@ -153,10 +165,14 @@ def test_workflow_run_sanitizes_seed_lineage_but_preserves_real_parent_lineage()
     def lineage_workflow():
         return load() >> consume()
 
-    result = lineage_workflow().run(
-        executor=ava.LocalExecutor(),
-        run_id="run_real",
-        context={"lineage_vector": {"upstream": "run_fake"}},
+    result = (
+        lineage_workflow()
+        .run(
+            executor=ava.LocalExecutor(),
+            run_id="run_real",
+            context={"lineage_vector": {"upstream": "run_fake"}},
+        )
+        .result()
     )
 
     assert result == {
@@ -205,14 +221,14 @@ def test_workflow_run_rejects_unknown_input_and_context_fields():
             executor=ava.LocalExecutor(),
             input={**valid_input, "typo": "dropped"},
             context={"request_id": "req_123"},
-        )
+        ).result()
 
     with pytest.raises(ValueError, match="Extra inputs"):
         strict_workflow().run(
             executor=ava.LocalExecutor(),
             input=valid_input,
             context={"request_id": "req_123", "typo": "dropped"},
-        )
+        ).result()
 
 
 def test_inline_file_payloads_are_bounded_and_hash_checked(tmp_path):
@@ -251,4 +267,4 @@ def test_workflow_run_rejects_invalid_s3_file_reference():
         bad_workflow().run(
             executor=ava.LocalExecutor(),
             input={"remote_document": {"uri": "https://example.com/file"}},
-        )
+        ).result()

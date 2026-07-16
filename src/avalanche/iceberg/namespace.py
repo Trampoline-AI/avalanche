@@ -28,6 +28,46 @@ logger = logging.getLogger(__name__)
 logger.setLevel(logging.INFO)
 
 
+def _preserve_in_memory_sqlite(catalog: Catalog) -> Catalog:
+    """Make a SQL catalog's in-memory SQLite database safe across run threads."""
+    if catalog.properties.get("uri") != "sqlite:///:memory:":
+        return catalog
+
+    try:
+        from pyiceberg.catalog.sql import SqlCatalog
+        from sqlalchemy import create_engine
+        from sqlalchemy.pool import QueuePool
+    except ImportError:
+        return catalog
+
+    if not isinstance(catalog, SqlCatalog):
+        return catalog
+
+    # StaticPool can hand its one connection record to concurrent callers.
+    # A one-slot QueuePool keeps the same in-memory connection while queuing
+    # complete checkout-to-checkin leases.
+    shared_engine = create_engine(
+        "sqlite:///:memory:",
+        connect_args={"check_same_thread": False},
+        poolclass=QueuePool,
+        pool_size=1,
+        max_overflow=0,
+    )
+    source = catalog.engine.raw_connection()
+    destination = shared_engine.raw_connection()
+    try:
+        source.driver_connection.backup(destination.driver_connection)
+        destination.commit()
+    finally:
+        destination.close()
+        source.close()
+
+    previous_engine = catalog.engine
+    catalog.engine = shared_engine
+    previous_engine.dispose()
+    return catalog
+
+
 # ============================================================================
 # IcebergAppendScan - Incremental Scanning
 # ============================================================================
@@ -249,6 +289,7 @@ class IcebergNamespace(Namespace):
         else:
             # Try to load catalog by namespace name
             self.catalog = load_catalog(self.name)
+        self.catalog = _preserve_in_memory_sqlite(self.catalog)
 
     def _get_all_tables(self) -> list[tuple[str, IcebergTable]]:
         """Discover all IcebergTable instances from class attributes."""

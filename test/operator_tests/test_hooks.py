@@ -2,6 +2,7 @@
 
 
 import threading
+from concurrent.futures import CancelledError
 
 import pytest
 
@@ -35,7 +36,7 @@ class TestRunHooks:
         )
 
         p = test_pipe()
-        p.run(executor=LocalExecutor(), hooks=hooks)
+        p.run(executor=LocalExecutor(), hooks=hooks).result()
 
         # Should see start/success pairs in topological order
         assert len(events) == 6  # 3 nodes * 2 events each
@@ -58,7 +59,7 @@ class TestRunHooks:
             return load()
 
         p = test_pipe()
-        result = p.run(executor=LocalExecutor(), hooks=None)
+        result = p.run(executor=LocalExecutor(), hooks=None).result()
         assert result == 42
 
     def test_failure_hook_fires_on_exception(self):
@@ -78,7 +79,7 @@ class TestRunHooks:
 
         p = test_pipe()
         try:
-            p.run(executor=LocalExecutor(), hooks=hooks)
+            p.run(executor=LocalExecutor(), hooks=hooks).result()
         except ValueError:
             pass
 
@@ -123,7 +124,8 @@ class TestRunHooks:
         )
 
         p = test_pipe()
-        p.run(executor=LocalExecutor(), hooks=hooks)
+        with pytest.raises(CancelledError):
+            p.run(executor=LocalExecutor(), hooks=hooks).result()
 
         # Only 1 node should have started before cancellation kicked in
         # (cancel is checked at the TOP of the loop, so node 1 runs,
@@ -163,7 +165,7 @@ class TestRunHooks:
         hooks = RunHooks(on_node_start=on_start, on_node_success=on_success)
 
         p = test_pipe()
-        p.run(executor=RayExecutor(), hooks=hooks)
+        p.run(executor=RayExecutor(), hooks=hooks).result()
 
         # Both nodes should have start/success pairs
         assert len(events) == 4
@@ -262,7 +264,7 @@ class TestRunHooks:
                     hooks=RunHooks(
                         on_node_success=lambda nid: events.append(("success", nid))
                     ),
-                )
+                ).result()
             except Exception as exc:  # pragma: no cover - surfaced below
                 result["error"] = exc
 
@@ -341,13 +343,14 @@ class TestRunHooks:
                 nonlocal canceled
                 canceled = True
 
-            dependent_workflow().run(
-                executor=RayExecutor(),
-                hooks=RunHooks(
-                    on_node_success=on_success,
-                    cancel_requested=lambda: canceled,
-                ),
-            )
+            with pytest.raises(CancelledError):
+                dependent_workflow().run(
+                    executor=RayExecutor(),
+                    hooks=RunHooks(
+                        on_node_success=on_success,
+                        cancel_requested=lambda: canceled,
+                    ),
+                ).result()
 
             assert ray.get(recorder.get_started.remote()) == ["parent"]
         finally:

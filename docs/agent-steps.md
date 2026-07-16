@@ -59,13 +59,14 @@ def review_flow():
     return review_document("Avalanche composes durable data and agent steps.")
 
 
-result = review_flow().run(executor=ava.LocalExecutor())
+result = review_flow().run(executor=ava.LocalExecutor()).result()
 print(result.summary, result.approved)
 ```
 
 The `agent` argument is injected by Avalanche; callers pass only ordinary
 workflow values. The step body is asynchronous because the model call is
-awaitable, while `Workflow.run()` remains synchronous.
+awaitable. `Workflow.run()` returns an awaitable run handle; `.result()` is the
+explicit synchronous wait above.
 
 Use `ava.input` when the value arrives at run time instead of being fixed in the
 workflow declaration:
@@ -83,7 +84,7 @@ def review_flow():
 result = review_flow().run(
     executor=ava.LocalExecutor(),
     input=ReviewRequest(document="Text supplied by this workflow run."),
-)
+).result()
 ```
 
 ## Typed signature class

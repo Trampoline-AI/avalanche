@@ -301,10 +301,14 @@ def test_row_lineage_captures_workflow_context(namespace):
     def lineage_flow():
         return load_rows()
 
-    result = lineage_flow().run(
-        executor=ava.LocalExecutor(),
-        run_id="exec_123",
-        context={"metadata": {"attempt": 2, "tenant": "acme"}},
+    result = (
+        lineage_flow()
+        .run(
+            executor=ava.LocalExecutor(),
+            run_id="exec_123",
+            context={"metadata": {"attempt": 2, "tenant": "acme"}},
+        )
+        .result()
     )
     row = result.to_polars().to_dicts()[0]
 

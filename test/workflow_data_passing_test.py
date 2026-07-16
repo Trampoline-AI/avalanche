@@ -34,7 +34,7 @@ class TestDataPassingBetweenTasks:
 
         p = my_workflow()
         executor = LocalExecutor()
-        load_result, double_result, save_result = p.run(executor=executor)
+        load_result, double_result, save_result = p.run(executor=executor).result()
 
         # Verify results passed through chain
         assert load_result == [1, 2, 3, 4, 5]
@@ -70,7 +70,7 @@ class TestDataPassingBetweenTasks:
 
         p = df_workflow()
         executor = LocalExecutor()
-        df1, df2, df3, count = p.run(executor=executor)
+        df1, df2, df3, count = p.run(executor=executor).result()
 
         # Verify DataFrame passed through
         assert isinstance(df1, pl.DataFrame)
@@ -108,7 +108,7 @@ class TestDataPassingBetweenTasks:
 
         p = multi_source()
         executor = LocalExecutor()
-        a_result, b_result, merged_result = p.run(executor=executor)
+        a_result, b_result, merged_result = p.run(executor=executor).result()
 
         assert a_result == [1, 2, 3]
         assert b_result == [4, 5, 6]
@@ -136,7 +136,7 @@ class TestDataPassingBetweenTasks:
             # Both upstream futures arrive as keyword arguments only.
             return merge(data_a=a, data_b=b)
 
-        result = keyword_wired().run(executor=LocalExecutor())
+        result = keyword_wired().run(executor=LocalExecutor()).result()
 
         assert result == [1, 2, 3, 4, 5, 6]
 
@@ -155,7 +155,7 @@ class TestDataPassingBetweenTasks:
         def mixed_wired():
             return merge(data_a=load_a(), suffix=[9])
 
-        result = mixed_wired().run(executor=LocalExecutor())
+        result = mixed_wired().run(executor=LocalExecutor()).result()
 
         assert result == [1, 2, 3, 9]
 
@@ -190,7 +190,7 @@ class TestDataPassingBetweenTasks:
 
         p = tuple_workflow()
         executor = LocalExecutor()
-        pair_result, proc_a, proc_b, combined = p.run(executor=executor)
+        pair_result, proc_a, proc_b, combined = p.run(executor=executor).result()
 
         # Verify tuple was unpacked correctly
         assert pair_result == ([1, 2, 3], [4, 5, 6])
@@ -225,7 +225,7 @@ class TestDataPassingBetweenTasks:
 
         p = dict_workflow()
         executor = LocalExecutor()
-        pair_result, processed_result, summary_result = p.run(executor=executor)
+        pair_result, processed_result, summary_result = p.run(executor=executor).result()
 
         assert pair_result == {"first": [1, 2, 3], "second": [4, 5, 6]}
         assert processed_result == {"first": [2, 4, 6], "second": [12, 15, 18]}
@@ -270,7 +270,7 @@ class TestDataPassingBetweenTasks:
 
             p = ray_df_workflow()
             executor = RayExecutor()
-            result = p.run(executor=executor)
+            result = p.run(executor=executor).result()
 
             # Verify DataFrames passed through Ray correctly
             assert result == {"count": 5, "total": 150}
@@ -330,7 +330,7 @@ class TestDataPassingBetweenTasks:
 
             p = tuple_ray_workflow()
             executor = RayExecutor()
-            result = p.run(executor=executor)
+            result = p.run(executor=executor).result()
 
             # Verify tuple unpacking worked through Ray
             assert result == 100  # 30 + 70

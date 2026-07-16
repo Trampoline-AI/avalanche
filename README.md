@@ -57,8 +57,19 @@ which process owns the run lifecycle.
 ### Embedded Mode
 
 Run the Python program that declares the flow and call `Workflow.run()` directly.
-Definition, orchestration, execution, and result handling stay in that program,
-without an operator or gRPC connection.
+It immediately returns an awaitable `ava.RunHandle` with the run ID. Block for
+the output with `.result()` or use `await run` from asynchronous code:
+
+```python
+run = workflow.run(executor=ava.LocalExecutor())
+print(run.run_id)
+result = run.result()
+```
+
+The handle is process-local and its non-daemon driver thread keeps the embedded
+process alive until the run finishes. `run.cancel()` requests cooperative
+cancellation between node submissions; it does not forcibly stop an active
+thread or Ray task. Durable run state remains an operator responsibility.
 
 Start with the simplest smoke-tested example:
 

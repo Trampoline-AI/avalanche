@@ -180,7 +180,7 @@ def test_ray_executor_runs_table_backed_stream_step(tmp_path):
         def scan_workflow():
             return consume()
 
-        assert scan_workflow().run(executor=ava.RayExecutor()) == [1, 2]
+        assert scan_workflow().run(executor=ava.RayExecutor()).result() == [1, 2]
 
         store = ava.ProgressStore(ns.records, key="ray_scan")
         assert store.list_pending() == []
@@ -251,7 +251,7 @@ def test_ray_stream_passthrough_deferred_upstream_num_cpus_1(tmp_path):
         def wf():
             return produce() >> consume()
 
-        assert wf().run(executor=ava.RayExecutor()) == [1, 2, 3]
+        assert wf().run(executor=ava.RayExecutor()).result() == [1, 2, 3]
 
         # The consumer must not be submitted/started before the producer
         # completed: the scheduler gates it on parent completion, so the
@@ -352,7 +352,7 @@ def test_ray_stream_deferred_upstream_is_a_scheduler_visible_dependency(tmp_path
         releaser = threading.Thread(target=_releaser, daemon=True)
         releaser.start()
 
-        assert wf().run(executor=ava.RayExecutor()) == [1, 2, 3]
+        assert wf().run(executor=ava.RayExecutor()).result() == [1, 2, 3]
         releaser.join(timeout=5)
 
         labels = [label for label in ray.get(gate.events.remote())]
@@ -489,7 +489,7 @@ def test_ray_multi_stream_same_consumer_uses_distinct_deferred_parents(tmp_path)
             (left_ref & right_ref) >> out
             return out
 
-        out = wf().run(executor=ava.RayExecutor())
+        out = wf().run(executor=ava.RayExecutor()).result()
         assert out == {"left": [1, 2], "right": [10, 11, 12]}, out
 
         events = ray.get(recorder.events.remote())
@@ -565,7 +565,7 @@ def test_ray_plain_python_arg_receives_public_append_result(tmp_path):
         def wf():
             return produce() >> consume()
 
-        out = wf().run(executor=ava.RayExecutor())
+        out = wf().run(executor=ava.RayExecutor()).result()
         assert out["is_append"] is True, out
         assert out["is_handle"] is False, out
         assert out["height"] == 3, out

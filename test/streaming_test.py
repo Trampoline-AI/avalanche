@@ -58,7 +58,7 @@ def test_auto_passing_returns_without_storage_backend():
     def auto_pass_workflow():
         create_data() >> double_values() >> verify_data()
 
-    auto_pass_workflow().run(executor=ava.LocalExecutor())
+    auto_pass_workflow().run(executor=ava.LocalExecutor()).result()
 
 
 def test_stream_wrapper_does_not_double_exit():
@@ -91,7 +91,7 @@ def test_stream_wrapper_does_not_double_exit():
             failing_step()
 
         with pytest.raises(ValueError, match="Intentional failure"):
-            test_workflow().run(executor=ava.LocalExecutor())
+            test_workflow().run(executor=ava.LocalExecutor()).result()
 
     assert exit_calls == ["exit_error:ValueError"]
 

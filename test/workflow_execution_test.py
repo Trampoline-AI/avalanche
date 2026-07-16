@@ -43,7 +43,7 @@ class TestWorkflowExecution:
 
         # Execute with LocalExecutor
         executor = LocalExecutor()
-        result = p.run(executor=executor)
+        result = p.run(executor=executor).result()
 
         # Verify result
         assert result == "saved_3_items"
@@ -101,7 +101,7 @@ class TestWorkflowExecution:
 
             # Execute with RayExecutor - ACTUALLY RUNS THROUGH RAY!
             executor = RayExecutor()
-            result = p.run(executor=executor)
+            result = p.run(executor=executor).result()
 
             # Verify result
             assert result == "completed_5_items"
@@ -167,7 +167,7 @@ class TestWorkflowExecution:
 
             # Execute through Ray - branches run in parallel!
             executor = RayExecutor()
-            result = p.run(executor=executor)
+            result = p.run(executor=executor).result()
 
             # Verify final result contains expected data
             assert "sink_done" in result
@@ -205,7 +205,7 @@ class TestFireAndForgetWorkflows:
             # No return - fire and forget!
 
         p = background_job()
-        result = p.run(LocalExecutor())
+        result = p.run(LocalExecutor()).result()
 
         # Should return None but execute all nodes
         assert result is None
@@ -249,7 +249,7 @@ class TestFireAndForgetWorkflows:
                 # No return!
 
             p = fire_and_forget()
-            result = p.run()
+            result = p.run().result()
 
             # Should return None (fire-and-forget)
             assert result is None

@@ -254,7 +254,7 @@ class RayExecutor:
 
     Example:
         executor = RayExecutor()
-        workflow.run(executor=executor)
+        workflow.run(executor=executor).result()
     """
 
     def __init__(
@@ -279,18 +279,24 @@ class RayExecutor:
             ) from e
 
         self.ray = ray
+        init_kwargs = dict(ray_init_kwargs or {})
+        if runtime_env is not None or ray_init_kwargs is not None:
+            if runtime_env is not None:
+                configured_runtime_env = init_kwargs.pop("runtime_env", None)
+                if configured_runtime_env is not None:
+                    configured_runtime_env = dict(configured_runtime_env)
+                    configured_runtime_env.update(runtime_env)
+                    runtime_env = configured_runtime_env
+                init_kwargs["runtime_env"] = runtime_env
+        self._ray_init_kwargs = init_kwargs
 
         if runtime_env is not None or ray_init_kwargs is not None:
-            if not ray.is_initialized():
-                init_kwargs = dict(ray_init_kwargs or {})
-                if runtime_env is not None:
-                    configured_runtime_env = init_kwargs.pop("runtime_env", None)
-                    if configured_runtime_env is not None:
-                        configured_runtime_env = dict(configured_runtime_env)
-                        configured_runtime_env.update(runtime_env)
-                        runtime_env = configured_runtime_env
-                    init_kwargs["runtime_env"] = runtime_env
-                ray.init(**init_kwargs)
+            self._prepare_for_run()
+
+    def _prepare_for_run(self) -> None:
+        """Initialize Ray before a workflow moves execution to its driver thread."""
+        if not self.ray.is_initialized():
+            self.ray.init(**self._ray_init_kwargs)
 
     def submit(
         self, fn: Callable, *args: Any, num_returns: int = 1, **kwargs: Any
