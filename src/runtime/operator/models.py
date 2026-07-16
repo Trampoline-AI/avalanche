@@ -6,7 +6,8 @@ import time
 from dataclasses import dataclass, field
 from datetime import datetime
 from enum import Enum
-from typing import Literal
+from types import MappingProxyType
+from typing import Literal, Mapping
 
 
 class NodeStatus(Enum):
@@ -67,6 +68,8 @@ class RunState:
     nodes: dict[str, NodeState] = field(default_factory=dict)
     logs: list[LogEntry] = field(default_factory=list)
     triggered_by: str = "manual"  # "manual" | "scheduled"
+    workflow_id: str = ""
+    workflow_display_name: str = ""
 
     @property
     def elapsed(self) -> float | None:
@@ -89,13 +92,69 @@ class WorkflowInfo:
     cron: str | None = None  # cron expression for scheduled execution
     next_run_at: float | None = None  # unix timestamp of next scheduled run
     last_run_at: float | None = None  # unix timestamp of last triggered run
+    workflow_id: str = ""
+    display_name: str = ""
+    builder_symbol: str = ""
+    root_alias: str = ""
+    relative_file: str = ""
+
+    @property
+    def selector(self) -> str:
+        """Canonical selector, falling back for pre-identity fixtures."""
+        return self.workflow_id or self.name
+
+    @property
+    def rendered_name(self) -> str:
+        """Human-readable name, falling back for pre-identity fixtures."""
+        return self.display_name or self.name
+
+    @property
+    def source_file(self) -> str:
+        """Relative source path, falling back for pre-identity fixtures."""
+        return self.relative_file or self.file_path
 
 
 @dataclass(frozen=True)
 class WorkflowDiscoveryDiagnostic:
     path: str
-    kind: Literal["skipped", "import_error"]
+    kind: Literal["skipped", "import_error", "build_error", "invalid_schedule"]
     message: str
+
+
+@dataclass(frozen=True)
+class WorkflowLocator:
+    """Stable source identity without an executable or absolute path."""
+
+    root_alias: str
+    relative_file: str
+    builder_symbol: str
+
+
+@dataclass(frozen=True)
+class WorkflowDescriptor:
+    """Immutable, serializable metadata produced by discovery."""
+
+    workflow_id: str
+    display_name: str
+    locator: WorkflowLocator
+    node_ids: tuple[str, ...]
+    graph: tuple[tuple[str, tuple[str, ...]], ...]
+    node_types: tuple[tuple[str, str], ...]
+    display_names: tuple[tuple[str, str], ...]
+    cron: str | None = None
+
+
+@dataclass(frozen=True)
+class CatalogView:
+    """One atomically replaceable, current-only registry view."""
+
+    by_id: Mapping[str, WorkflowDescriptor] = field(
+        default_factory=lambda: MappingProxyType({})
+    )
+    short_names: Mapping[str, tuple[str, ...]] = field(
+        default_factory=lambda: MappingProxyType({})
+    )
+    diagnostics: tuple[WorkflowDiscoveryDiagnostic, ...] = ()
 
 
 def display_name_from_id(node_id: str) -> str:

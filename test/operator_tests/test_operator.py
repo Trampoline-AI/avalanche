@@ -1,16 +1,24 @@
 """Tests for Operator — workflow execution and state management."""
 
 import os
+import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
+from functools import partial
 
 import pytest
 
+from avalanche import LocalExecutor, RayExecutor
 from avalanche.operator import Operator
-from avalanche.operator.models import NodeStatus, RunStatus
+from avalanche.operator.models import NodeStatus, RunState, RunStatus
 from avalanche.operator.operator import RunAlreadyExistsError
+from avalanche.operator.scheduler import Scheduler
 
 FIXTURES_DIR = os.path.join(os.path.dirname(os.path.dirname(__file__)), "fixtures")
+
+
+def arbitrary_executor_factory():
+    return LocalExecutor()
 
 
 class TestOperatorLifecycle:
@@ -52,7 +60,9 @@ class TestOperatorLifecycle:
             results = list(pool.map(lambda _: reserve(), range(2)))
 
         assert results.count("run_concurrent") == 1
-        failures = [result for result in results if isinstance(result, RunAlreadyExistsError)]
+        failures = [
+            result for result in results if isinstance(result, RunAlreadyExistsError)
+        ]
         assert len(failures) == 1
 
     def test_run_completes_successfully(self):
@@ -159,6 +169,200 @@ class TestOperatorLifecycle:
         runs = op.list_runs("nonexistent")
         assert len(runs) == 0
 
+    def test_refresh_invalid_file_removes_descriptor_and_schedule(self, tmp_path):
+        workflow_file = tmp_path / "scheduled.py"
+        workflow_file.write_text(
+            "import avalanche as ava\n"
+            "@ava.workflow(cron='* * * * *')\n"
+            "def scheduled():\n"
+            "    return None\n"
+        )
+        operator = Operator(
+            workflow_paths=[str(workflow_file)], schedule=False, watch=False
+        )
+        assert [item.workflow_id for item in operator.list_workflows()] == [
+            "scheduled.py::scheduled"
+        ]
+        assert len(operator._scheduler.list_schedules()) == 1
+
+        workflow_file.write_text("invalid Python !!!\n")
+        operator._refresh_workflows()
+
+        assert operator.list_workflows() == []
+        assert operator._scheduler.list_schedules() == []
+
+    @pytest.mark.parametrize(
+        "factory",
+        [
+            lambda: LocalExecutor(),
+            type("CustomLocal", (LocalExecutor,), {}),
+            arbitrary_executor_factory,
+        ],
+    )
+    def test_unsupported_executor_factories_are_rejected(self, factory):
+        with pytest.warns(DeprecationWarning, match="executor_factory is deprecated"):
+            with pytest.raises(TypeError, match="Per-run spawn requires serializable"):
+                Operator([], executor_factory=factory, watch=False, schedule=False)
+
+    @pytest.mark.parametrize(
+        ("factory", "expected"),
+        [
+            (LocalExecutor, {"backend": "local"}),
+            (
+                RayExecutor,
+                {"backend": "ray", "runtime_env": {}, "ray_init_kwargs": {}},
+            ),
+        ],
+    )
+    def test_deprecated_exact_executor_factories_remain_supported(
+        self, factory, expected
+    ):
+        with pytest.warns(DeprecationWarning, match="executor_factory is deprecated"):
+            operator = Operator(
+                [], executor_factory=factory, watch=False, schedule=False
+            )
+        try:
+            assert operator._executor_config == expected
+        finally:
+            operator.close()
+
+    @pytest.mark.parametrize(
+        ("factory", "expected"),
+        [
+            (LocalExecutor, {"backend": "local"}),
+            (
+                RayExecutor,
+                {"backend": "ray", "runtime_env": {}, "ray_init_kwargs": {}},
+            ),
+        ],
+    )
+    def test_deprecated_executor_factories_remain_positional(
+        self, factory, expected
+    ):
+        with pytest.warns(DeprecationWarning, match="executor_factory is deprecated"):
+            operator = Operator([], factory, False, False)
+        try:
+            assert operator._executor_config == expected
+        finally:
+            operator.close()
+
+    @pytest.mark.parametrize(
+        ("watch", "schedule", "expected_calls"),
+        [
+            (True, False, ["watch"]),
+            (False, True, ["schedule"]),
+        ],
+    )
+    def test_positional_watch_and_schedule_keep_their_original_slots(
+        self, monkeypatch, watch, schedule, expected_calls
+    ):
+        calls = []
+        monkeypatch.setattr(
+            Operator, "_start_watcher", lambda self: calls.append("watch")
+        )
+        monkeypatch.setattr(Scheduler, "start", lambda self: calls.append("schedule"))
+
+        with pytest.warns(DeprecationWarning, match="executor_factory is deprecated"):
+            operator = Operator(
+                [os.path.join(FIXTURES_DIR, "sample_workflows.py")],
+                LocalExecutor,
+                watch,
+                schedule,
+            )
+        try:
+            assert calls == expected_calls
+        finally:
+            operator.close()
+
+    def test_ray_partial_preserves_spawn_safe_init_configuration(self):
+        with pytest.warns(DeprecationWarning, match="executor_factory is deprecated"):
+            operator = Operator(
+                [],
+                executor_factory=partial(
+                    RayExecutor,
+                    ray_init_kwargs={
+                        "address": "ray://cluster:10001",
+                        "namespace": "dev",
+                    },
+                    runtime_env={"env_vars": {"MODE": "test"}},
+                ),
+                watch=False,
+                schedule=False,
+            )
+        try:
+            assert operator._executor_config == {
+                "backend": "ray",
+                "ray_init_kwargs": {
+                    "address": "ray://cluster:10001",
+                    "namespace": "dev",
+                },
+                "runtime_env": {"env_vars": {"MODE": "test"}},
+            }
+        finally:
+            operator.close()
+
+    def test_explicit_ray_backend_preserves_spawn_safe_init_configuration(self):
+        operator = Operator(
+            [],
+            executor_backend="ray",
+            ray_init_kwargs={
+                "address": "ray://cluster:10001",
+                "namespace": "dev",
+            },
+            ray_runtime_env={"env_vars": {"MODE": "test"}},
+            watch=False,
+            schedule=False,
+        )
+        try:
+            assert operator._executor_config == {
+                "backend": "ray",
+                "ray_init_kwargs": {
+                    "address": "ray://cluster:10001",
+                    "namespace": "dev",
+                },
+                "runtime_env": {"env_vars": {"MODE": "test"}},
+            }
+        finally:
+            operator.close()
+
+    @pytest.mark.parametrize("backend", ["thread", "process"])
+    def test_invalid_executor_backend_is_rejected(self, backend):
+        with pytest.raises(ValueError, match="Unsupported executor_backend"):
+            Operator([], executor_backend=backend, watch=False, schedule=False)
+
+    @pytest.mark.parametrize(
+        "ray_config",
+        [
+            {"ray_runtime_env": {}},
+            {"ray_init_kwargs": {}},
+        ],
+    )
+    def test_local_backend_rejects_ray_configuration(self, ray_config):
+        with pytest.raises(ValueError, match="require executor_backend='ray'"):
+            Operator([], watch=False, schedule=False, **ray_config)
+
+    @pytest.mark.parametrize(
+        "explicit_config",
+        [
+            {"executor_backend": "local"},
+            {"executor_backend": "ray"},
+            {"ray_runtime_env": {}},
+            {"ray_init_kwargs": {}},
+        ],
+    )
+    def test_deprecated_factory_conflicts_with_explicit_configuration(
+        self, explicit_config
+    ):
+        with pytest.warns(DeprecationWarning, match="executor_factory is deprecated"):
+            with pytest.raises(TypeError, match="cannot be combined"):
+                Operator(
+                    [],
+                    executor_factory=LocalExecutor,
+                    watch=False,
+                    schedule=False,
+                    **explicit_config,
+                )
+
 
 class TestOperatorCancellation:
     def _make_operator(self):
@@ -166,6 +370,7 @@ class TestOperatorCancellation:
             workflow_paths=[os.path.join(FIXTURES_DIR, "sample_workflows.py")],
             schedule=False,
             watch=False,
+            cancel_grace=0.2,
         )
 
     def test_cancel_run(self):
@@ -239,3 +444,94 @@ class TestOperatorSubscription:
         assert len(updates) >= 2
         sequences = [s for s, _ in updates]
         assert sequences == sorted(sequences), "Sequences should be monotonically increasing"
+
+    def test_replays_exact_missed_updates_within_retained_history(self):
+        op = Operator([], watch=False, schedule=False, stream_history_capacity=4)
+        run = RunState(run_id="run_1", flow_name="flow")
+        op._runs[run.run_id] = run
+        try:
+            op._notify_run(run)
+            run.status = RunStatus.RUNNING
+            op._notify_run(run)
+            run.status = RunStatus.SUCCESS
+            op._notify_run(run)
+
+            assert op.subscribe(3).empty()
+            replay = op.subscribe(1)
+
+            assert [replay.get_nowait() for _ in range(2)] == [
+                (2, RunState(run_id="run_1", flow_name="flow", status=RunStatus.RUNNING)),
+                (3, RunState(run_id="run_1", flow_name="flow", status=RunStatus.SUCCESS)),
+            ]
+            assert replay.empty()
+        finally:
+            op.close()
+
+    def test_old_cursor_recovers_latest_runs_with_fresh_ordered_sequences(self):
+        op = Operator([], watch=False, schedule=False, stream_history_capacity=2)
+        op._runs = {
+            "run_b": RunState(run_id="run_b", flow_name="flow", status=RunStatus.SUCCESS),
+            "run_a": RunState(run_id="run_a", flow_name="flow", status=RunStatus.FAILED),
+        }
+        try:
+            for _ in range(3):
+                op._notify_run(op._runs["run_a"])
+
+            recovery = op.subscribe(0)
+            updates = [recovery.get_nowait(), recovery.get_nowait()]
+
+            assert [(seq, run.run_id) for seq, run in updates] == [
+                (4, "run_a"),
+                (5, "run_b"),
+            ]
+            assert recovery.empty()
+            assert [seq for seq, _ in op._stream_history] == [4, 5]
+        finally:
+            op.close()
+
+    def test_cursor_ahead_after_restart_recovers_current_runs(self):
+        op = Operator([], watch=False, schedule=False)
+        op._runs = {
+            "run_b": RunState(run_id="run_b", flow_name="flow"),
+            "run_a": RunState(run_id="run_a", flow_name="flow"),
+        }
+        try:
+            recovery = op.subscribe(99)
+
+            assert [recovery.get_nowait() for _ in range(2)] == [
+                (1, RunState(run_id="run_a", flow_name="flow")),
+                (2, RunState(run_id="run_b", flow_name="flow")),
+            ]
+            assert recovery.empty()
+        finally:
+            op.close()
+
+    def test_subscribe_notify_race_never_misses_or_duplicates_boundary_update(self):
+        for index in range(50):
+            op = Operator([], watch=False, schedule=False)
+            run = RunState(run_id=f"run_{index}", flow_name="flow")
+            op._runs[run.run_id] = run
+            barrier = threading.Barrier(3)
+            subscriptions = []
+
+            def subscribe():
+                barrier.wait()
+                subscriptions.append(op.subscribe(0))
+
+            def notify():
+                barrier.wait()
+                op._notify_run(run)
+
+            subscriber = threading.Thread(target=subscribe)
+            publisher = threading.Thread(target=notify)
+            subscriber.start()
+            publisher.start()
+            barrier.wait()
+            subscriber.join()
+            publisher.join()
+
+            queued = []
+            while not subscriptions[0].empty():
+                queued.append(subscriptions[0].get_nowait())
+            assert [(seq, state.run_id) for seq, state in queued] == [(1, run.run_id)]
+            op.close()

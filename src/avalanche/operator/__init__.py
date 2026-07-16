@@ -6,8 +6,13 @@ _OPTIONAL_RUNTIME_DEPS = {"runtime", "croniter", "grpc", "watchfiles"}
 
 try:
     from runtime.operator import (
+        AmbiguousWorkflow,
+        CatalogView,
         Operator,
+        UnknownWorkflow,
+        WorkflowDescriptor,
         WorkflowDiscoveryDiagnostic,
+        WorkflowLocator,
         WorkflowRegistry,
         serve,
         workflow_to_info,
@@ -22,8 +27,13 @@ except ModuleNotFoundError as exc:
     raise
 
 __all__ = [
+    "AmbiguousWorkflow",
+    "CatalogView",
     "Operator",
+    "UnknownWorkflow",
+    "WorkflowDescriptor",
     "WorkflowDiscoveryDiagnostic",
+    "WorkflowLocator",
     "WorkflowRegistry",
     "workflow_to_info",
     "serve",
