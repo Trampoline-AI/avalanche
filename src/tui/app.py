@@ -68,23 +68,45 @@ class AvalancheApp(App):
         super().__init__()
         self.register_theme(AVALANCHE_THEME)
         self.theme = "avalanche"
-        self.store = UIStore(provider or MockStateProvider())
+        self.store = UIStore(
+            provider or MockStateProvider(), defer_initial_catalog=provider is not None
+        )
         self._timer: Timer | None = None
         self._screen: WorkflowDetailScreen | None = None
         self._leader_pending: bool = False
         self._log_autoscroll: bool = True
         self._log_wrap: bool = False
-        # Deep-link: select a specific workflow and optionally a node
+        self._deep_link_workflow = workflow
+        self._deep_link_node = node
+        self._apply_deep_link()
+
+    def _apply_deep_link(self) -> None:
+        """Apply a deep link once its asynchronously loaded catalog is available."""
+        workflow = self._deep_link_workflow
+        node = self._deep_link_node
         if workflow:
-            match = next((p for p in self.store.workflows if p.name == workflow), None)
+            match = next(
+                (p for p in self.store.workflows if p.selector == workflow), None
+            )
+            if match is None:
+                short_matches = [
+                    p
+                    for p in self.store.workflows
+                    if workflow in {p.name, p.rendered_name, p.builder_symbol}
+                ]
+                match = short_matches[0] if len(short_matches) == 1 else None
             if match:
                 self.store.switch_workflow(match)
+                self._deep_link_workflow = None
+            else:
+                return
         if node:
             match = next((n for n in self.store.all_nodes if n.name == node), None)
             if match is None:
                 match = next((n for n in self.store.all_nodes if n.display_name == node), None)
             if match:
                 self.store.select_node(match)
+                self._deep_link_node = None
 
     def compose(self) -> ComposeResult:
         yield Header()
@@ -100,17 +122,19 @@ class AvalancheApp(App):
 
     def _on_run_update_bg(self, run: RunState) -> None:
         """Called from background thread when a run state changes."""
-        # Update current_run if it matches (keeps logs + node states fresh)
-        if self.store.current_run and self.store.current_run.run_id == run.run_id:
-            self.store.current_run = run
-        self.call_from_thread(lambda: None)
+        self.store.enqueue_run_update(run)
 
     # ── Tick ───────────────────────────────────────────────────────
 
     _poll_counter: int = 0
 
     def _tick(self) -> None:
+        catalog_revision = self.store.catalog_revision
         self.store.tick()
+        if self.store.catalog_revision != catalog_revision:
+            self._apply_deep_link()
+            if self._screen:
+                self._screen._remount_dag()
         # Poll current run every ~1s as fallback if stream missed updates
         self._poll_counter += 1
         if self._poll_counter % 30 == 0:
@@ -309,7 +333,7 @@ class AvalancheApp(App):
             try:
                 fresh = provider.get_run(run_id)
                 if fresh is not None:
-                    self.store.current_run = fresh
+                    self.store.enqueue_run_update(fresh)
             except Exception:
                 pass
             finally:
@@ -350,13 +374,7 @@ class AvalancheApp(App):
             if wrapper.has_class("visible"):
                 # Just reconnected — refresh workflow list
                 wrapper.remove_class("visible")
-                self.store.workflows = provider.list_workflows()
-                if self.store.workflows and not self.store.current_workflow:
-                    self.store.switch_workflow(self.store.workflows[0])
-                    try:
-                        self._screen._remount_dag()
-                    except Exception:
-                        pass
+                self.store._refresh_workflow_catalog()
         else:
             from rich.style import Style
             from rich.text import Text
@@ -477,7 +495,9 @@ class AvalancheApp(App):
         if current is None:
             self.store.switch_workflow(workflows[0])
         else:
-            idx = next((i for i, p in enumerate(workflows) if p.name == current.name), 0)
+            idx = next(
+                (i for i, p in enumerate(workflows) if p.selector == current.selector), 0
+            )
             new_idx = (idx - 1) % len(workflows)
             self.store.switch_workflow(workflows[new_idx])
         try:
@@ -495,7 +515,9 @@ class AvalancheApp(App):
         if current is None:
             self.store.switch_workflow(workflows[0])
         else:
-            idx = next((i for i, p in enumerate(workflows) if p.name == current.name), 0)
+            idx = next(
+                (i for i, p in enumerate(workflows) if p.selector == current.selector), 0
+            )
             new_idx = (idx + 1) % len(workflows)
             self.store.switch_workflow(workflows[new_idx])
         try:
@@ -542,10 +564,9 @@ class AvalancheApp(App):
         self._refresh_widgets()
 
     def action_start_run(self) -> None:
-        self.store.start_run()
-        self.store.run_pinned = True
-        self._log_autoscroll = True
-        self._refresh_widgets()
+        if self.store.start_run_async():
+            self._log_autoscroll = True
+            self._refresh_widgets()
 
     def action_toggle_autoscroll(self) -> None:
         """s: toggle log autoscroll."""

@@ -66,7 +66,7 @@ class RunDetailScreen(Screen):
 
     def on_mount(self) -> None:
         status_bar = self.query_one("#status-bar", StatusBar)
-        status_bar.flow_name = self.workflow_info.name
+        status_bar.flow_name = self.workflow_info.rendered_name
 
     def get_statuses(self) -> dict[str, NodeStatus]:
         """Get current node statuses from the run."""

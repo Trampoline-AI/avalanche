@@ -52,7 +52,7 @@ class _TreeItem:
 
 
 class Sidebar(Static, can_focus=True):
-    """Folder-tree sidebar listing workflows grouped by file_path.
+    """Folder-tree sidebar listing workflows grouped by relative source path.
 
     When focused, up/down moves cursor, enter selects/toggles.
     """
@@ -85,14 +85,17 @@ class Sidebar(Static, can_focus=True):
 
         tree: dict = {}
         for p in workflows:
-            parts = p.file_path.replace("\\", "/").split("/")
+            source = p.source_file.replace("\\", "/")
+            if p.root_alias:
+                source = f"{p.root_alias}/{source}"
+            parts = source.split("/")
             folders = parts[:-1]
             node = tree
             for f in folders:
                 if f not in node:
                     node[f] = {}
                 node = node[f]
-            node[f"__workflow__{p.name}"] = p
+            node[f"__workflow__{p.selector}"] = p
 
         self._flat_items.clear()
         self._walk_tree(tree, depth=0, path_prefix="", expanded=expanded)
@@ -101,7 +104,7 @@ class Sidebar(Static, can_focus=True):
         folders = sorted(k for k in node if not k.startswith("__workflow__"))
         workflows = sorted(
             ((k, node[k]) for k in node if k.startswith("__workflow__")),
-            key=lambda x: x[1].name,
+            key=lambda x: (x[1].rendered_name, x[1].selector),
         )
 
         for folder_name in folders:
@@ -114,7 +117,10 @@ class Sidebar(Static, can_focus=True):
 
         for _, workflow in workflows:
             self._flat_items.append(_TreeItem(
-                label=workflow.name, depth=depth, is_folder=False, workflow=workflow,
+                label=workflow.rendered_name,
+                depth=depth,
+                is_folder=False,
+                workflow=workflow,
             ))
 
     def render(self) -> Text:
@@ -127,7 +133,7 @@ class Sidebar(Static, can_focus=True):
         row_width = content_w or (store.sidebar_width - 2)
         has_focus = store.focused_pane == "sidebar"
         cursor = store.sidebar_cursor
-        selected_name = store.sidebar_selected_name
+        selected_id = store.sidebar_selected_id
         workflow_statuses = store.workflow_statuses
         frame = store.frame
 
@@ -158,8 +164,8 @@ class Sidebar(Static, can_focus=True):
                     text.append(f"{label}\n", Style(color=ICE_FROST))
             else:
                 p = item.workflow
-                is_selected = p.name == selected_name
-                status = workflow_statuses.get(p.name)
+                is_selected = p.selector == selected_id
+                status = workflow_statuses.get(p.selector)
 
                 if status is not None:
                     if status == RunStatus.RUNNING:
@@ -173,7 +179,7 @@ class Sidebar(Static, can_focus=True):
 
                 prefix = f"{indent}  "
                 # prefix + icon + space + name
-                name = _clip(p.name, len(prefix) + 2)
+                name = _clip(p.rendered_name, len(prefix) + 2)
                 content_len = len(prefix) + 2 + len(name)
                 pad = max(0, row_width - content_len)
 

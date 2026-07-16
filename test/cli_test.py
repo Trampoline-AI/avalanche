@@ -146,6 +146,30 @@ def test_ava_run_prints_provider_error_when_run_does_not_start(monkeypatch, caps
     )
 
 
+def test_ava_run_preserves_ambiguity_candidates_on_stderr(monkeypatch, capsys):
+    from ava_cli import app
+
+    class FakeProvider:
+        last_error = (
+            "INVALID_ARGUMENT: 'shared' is ambiguous:\n"
+            "  left/flow.py::shared\n"
+            "  right/flow.py::shared"
+        )
+
+        def start_run(self, workflow_selector, **kwargs):
+            return ""
+
+        def close(self):
+            pass
+
+    monkeypatch.setattr(app, "_make_provider", lambda address: FakeProvider())
+
+    assert app.main(["run", "shared"]) == 1
+    error = capsys.readouterr().err
+    assert "left/flow.py::shared" in error
+    assert "right/flow.py::shared" in error
+
+
 def test_ava_dev_starts_operator_waits_launches_tui_and_stops_operator(monkeypatch):
     from ava_cli import app
 

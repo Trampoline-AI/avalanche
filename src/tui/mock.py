@@ -426,7 +426,7 @@ class MockStateProvider:
     """Implements StateProvider with timer-driven simulation."""
 
     def __init__(self) -> None:
-        self._workflows = {p.name: p for p in ALL_WORKFLOWS}
+        self._workflows = {p.selector: p for p in ALL_WORKFLOWS}
         self._runs: dict[str, RunState] = {}
         self._run_callbacks: list[Callable[[RunState], None]] = []
         self._log_callbacks: list[Callable[[LogEntry], None]] = []
@@ -482,21 +482,34 @@ class MockStateProvider:
     def list_workflows(self) -> list[WorkflowInfo]:
         return list(self._workflows.values())
 
-    def list_runs(self, flow_name: str) -> list[RunState]:
-        return [r for r in self._runs.values() if r.flow_name == flow_name]
+    def list_runs(self, workflow_selector: str) -> list[RunState]:
+        return [
+            run
+            for run in self._runs.values()
+            if (run.workflow_id or run.flow_name) == workflow_selector
+        ]
 
     def get_run(self, run_id: str) -> RunState | None:
         return self._runs.get(run_id)
 
-    def start_run(self, flow_name: str, **kwargs) -> str:
-        info = self._workflows.get(flow_name)
+    def start_run(self, workflow_selector: str, **kwargs) -> str:
+        info = self._workflows.get(workflow_selector)
         if info is None:
-            raise ValueError(f"Unknown workflow: {flow_name}")
+            matches = [
+                item
+                for item in self._workflows.values()
+                if workflow_selector in {item.name, item.rendered_name, item.builder_symbol}
+            ]
+            info = matches[0] if len(matches) == 1 else None
+        if info is None:
+            raise ValueError(f"Unknown or ambiguous workflow: {workflow_selector}")
 
         run_id = f"run_{str(uuid4())[:8]}"
         run = RunState(
             run_id=run_id,
-            flow_name=flow_name,
+            flow_name=info.rendered_name,
+            workflow_id=info.selector,
+            workflow_display_name=info.rendered_name,
             status=RunStatus.RUNNING,
             started_at=time.monotonic(),
         )

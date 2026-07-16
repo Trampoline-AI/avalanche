@@ -18,7 +18,7 @@ class TitleBar(Static):
 
     def render(self) -> Text:
         store = self._test_store or self.app.store
-        flow_name = store.current_workflow.name if store.current_workflow else ""
+        flow_name = store.current_workflow.rendered_name if store.current_workflow else ""
         text = Text()
         text.append("  Workflow: ", Style(color=ICE_STEEL))
         text.append(flow_name or "—", Style(color=ICE_FROST, bold=True))

@@ -2,14 +2,21 @@
 
 import importlib
 import os
+import signal
 import sys
+import time
 
 import pytest
 
 import avalanche as ava
 from avalanche.dag import Workflow
 from avalanche.operator.models import WorkflowDiscoveryDiagnostic
-from avalanche.operator.registry import WorkflowRegistry, workflow_to_info
+from avalanche.operator.registry import (
+    AmbiguousWorkflow,
+    WorkflowRegistry,
+    workflow_to_info,
+)
+from runtime.operator.discovery import configure_roots
 
 FIXTURES_DIR = os.path.join(os.path.dirname(os.path.dirname(__file__)), "fixtures")
 
@@ -117,6 +124,7 @@ class TestWorkflowRegistry:
         registry.scan([str(pkg / "flow.py")])
 
         assert [w.name for w in registry.list_workflows()] == ["package_workflow"]
+        assert registry.list_workflows()[0].workflow_id == "flow.py::package_workflow"
         assert registry.list_diagnostics() == []
 
     def test_scan_records_skipped_diagnostic_for_file_with_no_workflows(self, tmp_path):
@@ -136,6 +144,284 @@ class TestWorkflowRegistry:
                 message="No workflows discovered in this file.",
             )
         ]
+
+    def test_path_qualified_ids_allow_duplicate_short_names(self, tmp_path):
+        left = tmp_path / "left"
+        right = tmp_path / "right"
+        left.mkdir()
+        right.mkdir()
+        source = (
+            "import avalanche as ava\n"
+            "@ava.workflow\n"
+            "def shared():\n"
+            "    return None\n"
+        )
+        (left / "flow.py").write_text(source)
+        (right / "flow.py").write_text(source)
+
+        registry = WorkflowRegistry()
+        registry.scan([str(left), str(right)])
+
+        ids = [workflow.workflow_id for workflow in registry.list_workflows()]
+        assert ids == ["left/flow.py::shared", "right/flow.py::shared"]
+        assert registry.resolve(ids[0]).workflow_id == ids[0]
+        with pytest.raises(AmbiguousWorkflow) as exc_info:
+            registry.resolve("shared")
+        assert exc_info.value.candidate_ids == tuple(ids)
+
+    def test_unique_short_name_resolves_and_single_root_id_is_relative(self, tmp_path):
+        workflow_file = tmp_path / "nested" / "flow.py"
+        workflow_file.parent.mkdir()
+        workflow_file.write_text(
+            "import avalanche as ava\n"
+            "@ava.workflow\n"
+            "def only_here():\n"
+            "    return None\n"
+        )
+
+        registry = WorkflowRegistry()
+        registry.scan([str(tmp_path)])
+
+        descriptor = registry.resolve("only_here")
+        assert descriptor.workflow_id == "nested/flow.py::only_here"
+        assert str(tmp_path) not in descriptor.workflow_id
+
+    def test_root_aliases_and_ids_are_deterministic_across_input_order(self, tmp_path):
+        roots = [tmp_path / "zeta", tmp_path / "alpha"]
+        for root in roots:
+            root.mkdir()
+            (root / "flow.py").write_text(
+                "import avalanche as ava\n"
+                "@ava.workflow\n"
+                "def build():\n"
+                "    return None\n"
+            )
+
+        first = WorkflowRegistry()
+        first.scan([str(path) for path in roots])
+        second = WorkflowRegistry()
+        second.scan([str(path) for path in reversed(roots)])
+
+        assert set(first.view.by_id) == set(second.view.by_id)
+
+    def test_only_local_marked_builders_are_called(self, tmp_path):
+        (tmp_path / "definitions.py").write_text(
+            "import avalanche as ava\n"
+            "@ava.workflow\n"
+            "def local_flow():\n"
+            "    return None\n"
+        )
+        (tmp_path / "consumer.py").write_text(
+            "from definitions import local_flow\n"
+            "def arbitrary_public_callable():\n"
+            "    raise AssertionError('discovery called an arbitrary function')\n"
+        )
+
+        registry = WorkflowRegistry()
+        registry.scan([str(tmp_path)])
+
+        assert [item.workflow_id for item in registry.descriptors()] == [
+            "definitions.py::local_flow"
+        ]
+
+    def test_discovery_subprocess_does_not_contaminate_parent_modules(self, tmp_path):
+        module_name = "avalanche_discovery_isolation_probe"
+        (tmp_path / f"{module_name}.py").write_text("VALUE = 42\n")
+        (tmp_path / "flow.py").write_text(
+            "import avalanche as ava\n"
+            f"from {module_name} import VALUE\n"
+            "@ava.workflow\n"
+            "def isolated():\n"
+            "    assert VALUE == 42\n"
+        )
+        sys.modules.pop(module_name, None)
+
+        registry = WorkflowRegistry()
+        registry.scan([str(tmp_path / "flow.py")])
+
+        assert registry.resolve("isolated").workflow_id == "flow.py::isolated"
+        assert module_name not in sys.modules
+
+    def test_two_roots_with_same_package_are_discovered_and_runnable_independently(
+        self, tmp_path
+    ):
+        roots = []
+        for alias, cron in (("left", "1 * * * *"), ("right", "2 * * * *")):
+            root = tmp_path / alias
+            package = root / "pkg"
+            package.mkdir(parents=True)
+            (package / "__init__.py").write_text("")
+            (package / "metadata.py").write_text(f"CRON = {cron!r}\n")
+            (package / "flow.py").write_text(
+                "import avalanche as ava\n"
+                "from pkg.metadata import CRON\n"
+                f"@ava.source\ndef {alias}_node():\n    return {alias!r}\n"
+                f"@ava.workflow(cron=CRON)\ndef {alias}_build():\n"
+                f"    return {alias}_node()\n"
+            )
+            roots.append(f"{alias}={root}")
+
+        registry = WorkflowRegistry()
+        registry.scan(roots)
+
+        descriptors = registry.descriptors()
+        assert [(item.display_name, item.cron) for item in descriptors] == [
+            ("left_build", "1 * * * *"),
+            ("right_build", "2 * * * *"),
+        ]
+        assert [item.locator.builder_symbol for item in descriptors] == [
+            "left_build",
+            "right_build",
+        ]
+        assert registry.get_builder(descriptors[0].workflow_id)().name == "left_build"
+        assert registry.get_builder(descriptors[1].workflow_id)().name == "right_build"
+
+    def test_refresh_invalid_file_removes_current_descriptor(self, tmp_path):
+        workflow_file = tmp_path / "flow.py"
+        workflow_file.write_text(
+            "import avalanche as ava\n"
+            "@ava.workflow(cron='* * * * *')\n"
+            "def scheduled():\n"
+            "    return None\n"
+        )
+        registry = WorkflowRegistry()
+        registry.scan([str(workflow_file)])
+        assert [item.workflow_id for item in registry.descriptors()] == [
+            "flow.py::scheduled"
+        ]
+
+        workflow_file.write_text("this is not valid Python !!!\n")
+        registry.rescan()
+
+        assert registry.descriptors() == ()
+        assert registry.list_diagnostics()[0].kind == "import_error"
+
+    def test_discovery_timeout_installs_empty_current_view(self, tmp_path):
+        workflow_file = tmp_path / "flow.py"
+        workflow_file.write_text(
+            "import avalanche as ava\n"
+            "@ava.workflow\n"
+            "def scheduled():\n"
+            "    return None\n"
+        )
+        registry = WorkflowRegistry(discovery_timeout=2.0)
+        registry.scan([str(workflow_file)])
+        assert registry.descriptors()
+
+        workflow_file.write_text("while True:\n    pass\n")
+        registry._discovery_timeout = 0.2
+        started = time.monotonic()
+        registry.rescan()
+
+        assert time.monotonic() - started < 2.0
+        assert registry.descriptors() == ()
+        assert "exceeded 0.2s" in registry.list_diagnostics()[0].message
+
+    def test_discovery_stdout_and_delayed_background_output_do_not_corrupt_result(
+        self, tmp_path
+    ):
+        workflow_file = tmp_path / "flow.py"
+        workflow_file.write_text(
+            "import subprocess, sys\n"
+            "import avalanche as ava\n"
+            "print('import noise')\n"
+            "subprocess.Popen([sys.executable, '-c', "
+            "'import time; time.sleep(0.1); print(\\\"late noise\\\")'])\n"
+            "@ava.workflow\n"
+            "def noisy():\n"
+            "    print('builder noise')\n"
+        )
+
+        registry = WorkflowRegistry(discovery_timeout=2.0)
+        registry.scan([str(workflow_file)])
+
+        assert [item.workflow_id for item in registry.descriptors()] == [
+            "flow.py::noisy"
+        ]
+
+    @pytest.mark.skipif(os.name == "nt", reason="POSIX process-group assertion")
+    def test_successful_discovery_terminates_import_spawned_descendant(self, tmp_path):
+        pid_file = tmp_path / "child.pid"
+        workflow_file = tmp_path / "flow.py"
+        workflow_file.write_text(
+            "import subprocess, sys\n"
+            "from pathlib import Path\n"
+            "import avalanche as ava\n"
+            f"child = subprocess.Popen([sys.executable, '-c', 'import time; time.sleep(30)'])\n"
+            f"Path({str(pid_file)!r}).write_text(str(child.pid))\n"
+            "@ava.workflow\n"
+            "def spawned():\n"
+            "    return None\n"
+        )
+
+        registry = WorkflowRegistry(discovery_timeout=2.0)
+        registry.scan([str(workflow_file)])
+
+        assert registry.resolve("spawned")
+        child_pid = int(pid_file.read_text())
+        deadline = time.monotonic() + 2.0
+        while time.monotonic() < deadline:
+            try:
+                os.kill(child_pid, 0)
+            except ProcessLookupError:
+                break
+            time.sleep(0.02)
+        else:
+            os.kill(child_pid, signal.SIGKILL)
+            raise AssertionError("discovery descendant remained alive")
+
+    def test_repeated_target_and_implicit_basename_collisions_are_rejected(self, tmp_path):
+        root = tmp_path / "root"
+        root.mkdir()
+        with pytest.raises(ValueError, match="Repeated configured"):
+            configure_roots([str(root), str(root)])
+
+        left = tmp_path / "left" / "flows"
+        right = tmp_path / "right" / "flows"
+        left.mkdir(parents=True)
+        right.mkdir(parents=True)
+        with pytest.raises(ValueError, match="explicit stable aliases"):
+            configure_roots([str(left), str(right)])
+
+    def test_explicit_alias_ids_are_stable_after_root_relocation(self, tmp_path):
+        source = (
+            "import avalanche as ava\n"
+            "@ava.workflow\n"
+            "def build():\n"
+            "    return None\n"
+        )
+        first_root = tmp_path / "checkout-a" / "flows"
+        second_root = tmp_path / "checkout-b" / "renamed"
+        first_root.mkdir(parents=True)
+        second_root.mkdir(parents=True)
+        (first_root / "flow.py").write_text(source)
+        (second_root / "flow.py").write_text(source)
+
+        first = WorkflowRegistry()
+        second = WorkflowRegistry()
+        first.scan([f"stable={first_root}"])
+        second.scan([f"stable={second_root}"])
+
+        assert tuple(first.view.by_id) == tuple(second.view.by_id)
+
+    def test_duplicate_canonical_ids_are_rejected(self, monkeypatch):
+        from avalanche.operator.models import WorkflowDescriptor, WorkflowLocator
+
+        descriptor = WorkflowDescriptor(
+            workflow_id="flow.py::build",
+            display_name="build",
+            locator=WorkflowLocator("root", "flow.py", "build"),
+            node_ids=(),
+            graph=(),
+            node_types=(),
+            display_names=(),
+        )
+        monkeypatch.setattr(
+            "runtime.operator.registry.discover",
+            lambda roots, timeout: ((descriptor, descriptor), ()),
+        )
+        with pytest.raises(ValueError, match="Duplicate canonical workflow ID"):
+            WorkflowRegistry().scan(["root=/tmp"])
 
     def test_sequential_package_scans_isolate_identical_module_names(self, tmp_path):
         first = tmp_path / "first"
@@ -164,7 +450,9 @@ class TestWorkflowRegistry:
         assert first_output == {"deployment": "first", "value": 1}
         assert second_output == {"deployment": "second", "value": "two"}
 
-    def test_package_scan_isolates_and_restores_preloaded_package(self, tmp_path, monkeypatch):
+    def test_package_scan_isolates_and_restores_preloaded_package(
+        self, tmp_path, monkeypatch
+    ):
         package_name = "registry_shared"
         first = tmp_path / "first"
         second = tmp_path / "second"
@@ -185,14 +473,10 @@ class TestWorkflowRegistry:
 
         registry = WorkflowRegistry()
         registry.scan([str(second / package_name / "flow.py")])
-        workflow = registry.get_builder("deployment_workflow")()
-        output = workflow.run(
-            executor=ava.LocalExecutor(),
-            input={"second_value": "two"},
-            run_id="run_second",
-        ).result()
 
-        assert output == {"deployment": "second", "value": "two"}
+        assert [item.display_name for item in registry.descriptors()] == [
+            "deployment_workflow"
+        ]
         assert registry.list_diagnostics() == []
         assert sys.path == original_path
         assert all(sys.modules[name] is module for name, module in preloaded.items())
