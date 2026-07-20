@@ -63,6 +63,7 @@ from .input_ref import InputRef
 from .run_handle import RunHandle
 
 if TYPE_CHECKING:
+    from .execution_services import ExecutionServicesSpec
     from .executor import Executor
     from .operator.hooks import RunHooks
 
@@ -672,13 +673,11 @@ def _stamp_deferred_stream_upstream(value: Any, *, parent_kwarg: str) -> Any:
         return replace(value, parent_kwarg=parent_kwarg, ref=None)
     if isinstance(value, tuple):
         return tuple(
-            _stamp_deferred_stream_upstream(item, parent_kwarg=parent_kwarg)
-            for item in value
+            _stamp_deferred_stream_upstream(item, parent_kwarg=parent_kwarg) for item in value
         )
     if isinstance(value, list):
         return [
-            _stamp_deferred_stream_upstream(item, parent_kwarg=parent_kwarg)
-            for item in value
+            _stamp_deferred_stream_upstream(item, parent_kwarg=parent_kwarg) for item in value
         ]
     if isinstance(value, dict):
         return {
@@ -866,9 +865,7 @@ def _runtime_param_names_from_signature(fn: Callable) -> set[str]:
         annotation = type_hints.get(param_name, param.annotation)
         if annotation is inspect.Parameter.empty:
             continue
-        if _safe_issubclass(annotation, BaseContext) or _safe_issubclass(
-            annotation, BaseInput
-        ):
+        if _safe_issubclass(annotation, BaseContext) or _safe_issubclass(annotation, BaseInput):
             names.add(param_name)
     return names
 
@@ -1214,12 +1211,8 @@ def _validate_no_skipped_non_stream_inputs(
         for selector in binding_plan.provider_selectors.values():
             producer = nodes[selector.future_id]
             if (
-                (
-                    selector.tuple_index is not None
-                    or producer.node.num_returns > 1
-                )
-                and selector.future_id not in scheduled_node_ids
-            ):
+                selector.tuple_index is not None or producer.node.num_returns > 1
+            ) and selector.future_id not in scheduled_node_ids:
                 raise ValueError(
                     f"Rerun node {node_id!r} has an indexed or multi-return "
                     "ava.Stream selector "
@@ -1263,8 +1256,7 @@ def _validate_no_skipped_non_stream_inputs(
                 if (
                     parent_id not in scheduled_node_ids
                     and binding.may_expand_single_return
-                    and "python"
-                    in binding_plan.implicit_slot_kinds[binding.slot_index + 1 :]
+                    and "python" in binding_plan.implicit_slot_kinds[binding.slot_index + 1 :]
                 ):
                     raise ValueError(
                         f"Rerun node {node_id!r} has an ambiguous single-return "
@@ -1540,8 +1532,7 @@ def _reattach_lineage(value: Any, lineage_source: Any) -> Any:
         and len(value) == len(lineage_source)
     ):
         return tuple(
-            _reattach_lineage(item, source)
-            for item, source in zip(value, lineage_source)
+            _reattach_lineage(item, source) for item, source in zip(value, lineage_source)
         )
 
     if (
@@ -1549,10 +1540,7 @@ def _reattach_lineage(value: Any, lineage_source: Any) -> Any:
         and isinstance(lineage_source, list)
         and len(value) == len(lineage_source)
     ):
-        return [
-            _reattach_lineage(item, source)
-            for item, source in zip(value, lineage_source)
-        ]
+        return [_reattach_lineage(item, source) for item, source in zip(value, lineage_source)]
 
     lineage = _lineage_from_tree(lineage_source)
     return LineagedResult(value, lineage) if lineage else value
@@ -1650,7 +1638,8 @@ def _with_current_run_context(
     back into ``AppendResult`` here (worker-side) so user code and Stream
     wrappers never see the internal transport type.
     """
-    from .runtime import RunContext, run_with_context
+    from .runtime import RunContext
+    from .runtime.context import _run_with_context
 
     if not isinstance(context, RunContext):
         # Still unwrap parent envelopes so non-context nodes never receive an
@@ -1681,7 +1670,7 @@ def _with_current_run_context(
 
         unwrapped_args = _unwrap_lineaged_tree(args)
         unwrapped_kwargs = _unwrap_lineaged_tree(kwargs)
-        result = run_with_context(context, fn, *unwrapped_args, **unwrapped_kwargs)
+        result = _run_with_context(context, fn, *unwrapped_args, **unwrapped_kwargs)
         return _wrap_lineaged_result(result, context, num_returns=num_returns)
 
     return wrapped
@@ -1694,6 +1683,8 @@ def _inspect_runtime_params(
     run_input: Any,
     run_context: Any,
     system_context: Any,
+    *,
+    defer_input: bool = False,
 ) -> dict[str, Any]:
     import inspect
 
@@ -1738,10 +1729,15 @@ def _inspect_runtime_params(
             elif system_context is not None and isinstance(system_context, annotation):
                 injected[param_name] = system_context
         elif _safe_issubclass(annotation, BaseInput):
-            if run_input is not None and isinstance(run_input, annotation):
+            if defer_input:
+                injected[param_name] = _DEFERRED_EXECUTION_SERVICE_INPUT
+            elif run_input is not None and isinstance(run_input, annotation):
                 injected[param_name] = run_input
 
     return injected
+
+
+_DEFERRED_EXECUTION_SERVICE_INPUT = object()
 
 
 def _data_param_position(
@@ -1802,10 +1798,7 @@ def _fetch_node_result(
 
     # Regular NodeFuture handling
     if fetch_target.future_id not in result_refs:
-        if (
-            scheduled_node_ids is not None
-            and fetch_target.future_id not in scheduled_node_ids
-        ):
+        if scheduled_node_ids is not None and fetch_target.future_id not in scheduled_node_ids:
             return None
         raise ValueError(
             f"Workflow return node {fetch_target.future_id!r} was not scheduled by rerun"
@@ -1877,18 +1870,13 @@ def _implicit_items_from_parent_result(presult: Any) -> list[Any]:
     from .types import LineagedResult
 
     if isinstance(presult, LineagedResult) and isinstance(presult.value, (tuple, list)):
-        return [
-            LineagedResult(item, dict(presult.lineage_vector))
-            for item in presult.value
-        ]
+        return [LineagedResult(item, dict(presult.lineage_vector)) for item in presult.value]
     if isinstance(presult, (tuple, list)):
         return list(presult)
     return [presult]
 
 
-def _indexed_parent_result(
-    presult: Any, tuple_index: int, executor: Any = None
-) -> Any:
+def _indexed_parent_result(presult: Any, tuple_index: int, executor: Any = None) -> Any:
     """Index into a parent result without materializing payloads on the driver.
 
     Preserves any ``LineagedResult`` envelope on the selected element so
@@ -1953,9 +1941,7 @@ def _collect_implicit_parent_results(
             if presult is not None:
                 if incoming.tuple_index is not None:
                     auto_values.append(
-                        _indexed_parent_result(
-                            presult, incoming.tuple_index, executor
-                        )
+                        _indexed_parent_result(presult, incoming.tuple_index, executor)
                     )
                 else:
                     auto_values.extend(_implicit_items_from_parent_result(presult))
@@ -2046,8 +2032,7 @@ def _bind_implicit_parent_results(
 
         if param.kind == inspect.Parameter.VAR_POSITIONAL:
             resolved_args.extend(
-                _implicit_value_from_upstream(item)
-                for item in upstream_values[upstream_index:]
+                _implicit_value_from_upstream(item) for item in upstream_values[upstream_index:]
             )
             upstream_index = len(upstream_values)
             continue
@@ -2157,8 +2142,7 @@ class Workflow:
         if missing:
             known = ", ".join(sorted(slug_to_node_id))
             raise ValueError(
-                f"Unknown rerun start slug(s): {', '.join(missing)}. "
-                f"Known slugs: {known}"
+                f"Unknown rerun start slug(s): {', '.join(missing)}. " f"Known slugs: {known}"
             )
 
         start_node_ids = {slug_to_node_id[slug] for slug in rerun.start}
@@ -2190,6 +2174,7 @@ class Workflow:
         context: Any = None,
         run_id: str | None = None,
         rerun: Any = None,
+        execution_services: "ExecutionServicesSpec | None" = None,
     ) -> RunHandle[Any]:
         """
         Start the workflow and return its process-local lifecycle handle.
@@ -2201,6 +2186,7 @@ class Workflow:
             context: Optional run context payload or BaseContext instance
             run_id: Optional caller-owned run identity
             rerun: Optional Rerun spec for re-executing part of a previous run
+            execution_services: Optional versioned worker lifecycle service request
 
         The handle is returned immediately. Call ``handle.result()`` to block in
         synchronous code or ``await handle`` from asynchronous code.
@@ -2228,6 +2214,8 @@ class Workflow:
                 context=context,
                 run_id=canonical_run_id,
                 rerun=rerun,
+                execution_services=execution_services,
+                receipt_sink=handle._set_execution_receipts,
             )
         )
         return handle
@@ -2241,6 +2229,8 @@ class Workflow:
         context: Any = None,
         run_id: str | None = None,
         rerun: Any = None,
+        execution_services: "ExecutionServicesSpec | None" = None,
+        receipt_sink: Callable[[tuple[Any, ...]], None] | None = None,
     ) -> Any:
         """Execute the blocking workflow driver in the run-handle thread.
 
@@ -2267,7 +2257,20 @@ class Workflow:
         if run_id is None:
             raise ValueError("workflow driver requires a run_id")
         executor_type = "ray" if type(executor).__name__ == "RayExecutor" else "local"
-        run_input = _build_input_value(self.input_type, input)
+        if execution_services is not None:
+            from .execution_services import ExecutionServicesSpec
+
+            if not isinstance(execution_services, ExecutionServicesSpec):
+                raise TypeError("execution_services must be an ExecutionServicesSpec")
+            if not hasattr(executor, "submit_with_services"):
+                raise TypeError(
+                    f"{type(executor).__name__} does not support execution services"
+                )
+        run_input = (
+            None
+            if execution_services is not None
+            else _build_input_value(self.input_type, input)
+        )
         system_context, run_context = _build_context_values(
             self.context_type,
             context,
@@ -2281,6 +2284,9 @@ class Workflow:
         # Ray-only: small per-node status refs from submit_with_status. Fetching
         # a status ref surfaces a task failure without materializing the payload.
         status_refs: dict[str, Any] = {}
+        # Service receipts are a separate control channel. They are never
+        # stored in result_refs or exposed to workflow arguments/context.
+        receipt_refs: dict[str, Any] = {}
 
         # Build reverse dependency map (child -> parents) for execution.
         # Keep the original map so rerun stream providers can still identify
@@ -2307,11 +2313,7 @@ class Workflow:
                 or self.returns is None
                 or (
                     hooks
-                    and (
-                        hooks.on_node_success
-                        or hooks.on_node_failure
-                        or hooks.unwrap_result
-                    )
+                    and (hooks.on_node_success or hooks.on_node_failure or hooks.unwrap_result)
                 )
             )
         )
@@ -2356,7 +2358,18 @@ class Workflow:
                 run_input,
                 node_run_context,
                 node_system_context,
+                defer_input=execution_services is not None,
             )
+            input_param_names = tuple(
+                name
+                for name, value in runtime_params.items()
+                if value is _DEFERRED_EXECUTION_SERVICE_INPUT
+            )
+            runtime_params = {
+                name: value
+                for name, value in runtime_params.items()
+                if value is not _DEFERRED_EXECUTION_SERVICE_INPUT
+            }
             inspected_params = _inspect_providers(node_ref.node.fn, binding_kwargs, PROVIDERS)
             provider_by_param = {}
             position_consuming_params = set()
@@ -2367,8 +2380,10 @@ class Workflow:
                         if getattr(provider, "consumes_upstream", False):
                             position_consuming_params.add(param_name)
                         break
-            skip_param_names = set(runtime_params) | (
-                set(inspected_params) - position_consuming_params
+            skip_param_names = (
+                set(runtime_params)
+                | set(input_param_names)
+                | (set(inspected_params) - position_consuming_params)
             )
 
             injectable_params = {}
@@ -2439,13 +2454,14 @@ class Workflow:
                 # Exclude injectable params from normal resolution
                 if k not in injectable_params and k not in runtime_params
             }
-            resolved_args, resolved_kwargs = _resolve_input_refs(
-                resolved_args,
-                resolved_kwargs,
-                run_input,
-                node_ref.node.fn.__name__,
-                self.name,
-            )
+            if execution_services is None:
+                resolved_args, resolved_kwargs = _resolve_input_refs(
+                    resolved_args,
+                    resolved_kwargs,
+                    run_input,
+                    node_ref.node.fn.__name__,
+                    self.name,
+                )
 
             # Get original function, optionally wrapped by hooks
             actual_fn = node_ref.node.fn
@@ -2556,7 +2572,39 @@ class Workflow:
             )
 
             try:
-                if needs_status and hasattr(executor, "submit_with_status"):
+                if execution_services is not None:
+                    from .execution_services import ExecutionTaskSpec
+
+                    parent_receipts = tuple(
+                        receipt_refs[parent_id]
+                        for parent_id in dependencies_map.get(node_id, [])
+                        if parent_id in receipt_refs
+                    )
+                    result, receipt_ref, status_ref = executor.submit_with_services(
+                        actual_fn,
+                        execution_services,
+                        ExecutionTaskSpec(
+                            run_id=run_id,
+                            workflow_name=self.name,
+                            node_id=node_id,
+                            node_name=node_ref.node.fn.__name__,
+                            node_slug=node_ref.node_slug,
+                            executor_type=executor_type,
+                        ),
+                        self.input_type,
+                        input,
+                        input_param_names,
+                        parent_receipts,
+                        node_ref.node.num_returns,
+                        *resolved_args,
+                        **resolved_kwargs,
+                    )
+                    receipt_refs[node_id] = receipt_ref
+                    if is_ray_executor and status_ref is not None:
+                        # Status is a same-task completion/failure marker. Keep
+                        # receipts worker-side until terminal publication.
+                        status_refs[node_id] = status_ref
+                elif needs_status and hasattr(executor, "submit_with_status"):
                     # Ray: get a small status ref alongside the payload so
                     # completion/failure can be observed without materializing
                     # the payload. The status ref is produced by the same task.
@@ -2580,6 +2628,35 @@ class Workflow:
                 raise
 
             return node_ref, result
+
+        def publish_terminal_receipts() -> None:
+            if receipt_sink is None:
+                return
+            if execution_services is None:
+                receipt_sink(())
+                return
+
+            from .execution_services import ExecutionServiceReceipt
+
+            terminal_node_ids = [
+                node_id
+                for node_id in execution_order
+                if not any(
+                    child_id in scheduled_node_ids for child_id in self.graph.get(node_id, [])
+                )
+            ]
+            refs = [receipt_refs[node_id] for node_id in terminal_node_ids]
+            values = executor.get(refs) if refs else []
+            receipt_sink(
+                tuple(
+                    ExecutionServiceReceipt(
+                        node_id=node_id,
+                        node_slug=self.node_slugs[node_id],
+                        value=value,
+                    )
+                    for node_id, value in zip(terminal_node_ids, values)
+                )
+            )
 
         def resolve_submitted_result(node_ref: NodeFuture, result: Any) -> Any:
             if node_ref.node.num_returns > 1 and isinstance(result, tuple):
@@ -2628,9 +2705,7 @@ class Workflow:
                         resolved_val = resolve_submitted_result(node_ref, result)
                         user_val = _unwrap_lineaged_tree(resolved_val)
                         replacement = hooks.unwrap_result(node_id, user_val)
-                        result_refs[node_id] = _reattach_lineage(
-                            replacement, resolved_val
-                        )
+                        result_refs[node_id] = _reattach_lineage(replacement, resolved_val)
                     elif node_id in status_refs:
                         # Progress-only: fetch just the tiny status ref to
                         # surface a task failure. Never materialize the payload;
@@ -2772,25 +2847,21 @@ class Workflow:
         if self.returns is None:
             already_observed = bool(
                 hooks
-                and (
-                    hooks.on_node_success
-                    or hooks.on_node_failure
-                    or hooks.unwrap_result
-                )
+                and (hooks.on_node_success or hooks.on_node_failure or hooks.unwrap_result)
             )
             if already_observed:
                 # Per-node completion/failure was already observed above (hooks).
+                publish_terminal_receipts()
                 return None
             if is_ray_executor and status_refs:
                 # Fetch only the tiny status refs: this surfaces any task
                 # failure without materializing node payloads on the driver.
                 pending_status = [
-                    status_refs[fid]
-                    for fid in execution_order
-                    if fid in status_refs
+                    status_refs[fid] for fid in execution_order if fid in status_refs
                 ]
                 if pending_status:
                     executor.get(pending_status)
+                publish_terminal_receipts()
                 return None
             # Local / non-status fallback: values are already materialized for
             # LocalExecutor; resolving them just surfaces awaitables/exceptions.
@@ -2805,10 +2876,12 @@ class Workflow:
                     all_refs.append(ref)
             if all_refs:
                 executor.get(all_refs)  # Wait for completion
+            publish_terminal_receipts()
             return None
 
         # Fetch only what the workflow explicitly returns
         # Handle different return types
+        publish_terminal_receipts()
         if isinstance(self.returns, NodeFuture):
             # Single NodeFuture returned
             return _fetch_node_result(

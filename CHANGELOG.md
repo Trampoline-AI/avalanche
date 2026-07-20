@@ -2,6 +2,17 @@
 
 ## Unreleased
 
+### Worker execution services
+
+- Added the versioned `ava.ExecutionServicesSpec` and worker-side
+  `probe -> negotiate -> open -> materialize_input -> finalize/abort -> teardown`
+  lifecycle for platform-managed task resources.
+- Local and Ray executors carry service receipts separately from user payloads;
+  terminal receipts are available through `RunHandle.execution_receipts()`.
+- Input materialization happens in the consuming worker and may be eager or lazy.
+  Failures do not silently fall back to ordinary execution.
+- See [docs/execution-services.md](docs/execution-services.md).
+
 ### Awaitable workflow run handles
 
 - Breaking: `Workflow.run(...)` now immediately returns a generic, awaitable

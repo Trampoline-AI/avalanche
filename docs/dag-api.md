@@ -290,6 +290,12 @@ wins before cancellation is observed, that outcome remains authoritative. A
 registry and cannot recover state after process exit. Operator-managed runs own
 durable-facing status and control separately.
 
+Advanced platforms can pass an `ava.ExecutionServicesSpec` to materialize typed
+inputs and task-scoped resources inside the actual Local or Ray worker. Workflow
+task code still receives its declared `BaseInput`; platform lifecycle metadata
+travels separately from workflow outputs. See
+[Execution services](execution-services.md) for provider and workflow-author DX.
+
 ### Reruns
 
 Use `ava.Rerun` when you want to re-execute a previous workflow run from one or

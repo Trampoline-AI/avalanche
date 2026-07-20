@@ -12,6 +12,10 @@ class InputRef:
             raise AttributeError(f"{type(self).__name__!r} object has no attribute {name!r}")
         return InputRef(self.path + (name,))
 
+    def __reduce__(self):
+        """Reconstruct immutable selectors across executor serialization."""
+        return type(self), (self.path,)
+
     def __repr__(self) -> str:
         return "ava.input" + "".join(f".{part}" for part in self.path)
 

@@ -92,6 +92,42 @@ def _project_index(value: Any, index: int) -> Any:
     return value[index]
 
 
+def _distributed_execution_services_task(
+    fn: Callable,
+    execution_services: Any,
+    task: Any,
+    input_type: type | None,
+    run_input: Any,
+    input_param_names: tuple[str, ...],
+    dependency_count: int,
+    user_num_returns: int,
+    /,
+    *dependency_and_user_args: Any,
+    **kwargs: Any,
+) -> Any:
+    """Ray entry point with service dependencies exposed as top-level args."""
+    from avalanche.execution_services import _run_with_execution_services
+
+    upstream_receipts = tuple(dependency_and_user_args[:dependency_count])
+    args = tuple(dependency_and_user_args[dependency_count:])
+    result, receipt = _run_with_execution_services(
+        fn,
+        execution_services,
+        task,
+        input_type,
+        run_input,
+        input_param_names,
+        upstream_receipts,
+        args,
+        kwargs,
+        num_returns=user_num_returns,
+        normalize_result=_normalize_distributed_result,
+    )
+    if user_num_returns > 1:
+        return (*result, receipt, None)
+    return result, receipt, None
+
+
 class Executor(Protocol):
     """
     Abstract interface for workflow execution engines.
@@ -145,6 +181,23 @@ class Executor(Protocol):
         only the status ref lets a caller observe completion/failure without
         materializing the payload on the driver (or in a separate worker).
         """
+        ...
+
+    def submit_with_services(
+        self,
+        fn: Callable,
+        execution_services: Any,
+        task: Any,
+        input_type: type | None,
+        run_input: Any,
+        input_param_names: tuple[str, ...],
+        receipt_dependencies: tuple[Any, ...],
+        num_returns: int,
+        /,
+        *args: Any,
+        **kwargs: Any,
+    ) -> tuple[Any, Any, Any | None]:
+        """Return separate payload, receipt, and optional status channels."""
         ...
 
     def wait(self, futures: list[Any]) -> None:
@@ -226,6 +279,37 @@ class LocalExecutor:
         """
         result = self.submit(fn, *args, num_returns=num_returns, **kwargs)
         return result, None
+
+    def submit_with_services(
+        self,
+        fn: Callable,
+        execution_services: Any,
+        task: Any,
+        input_type: type | None,
+        run_input: Any,
+        input_param_names: tuple[str, ...],
+        receipt_dependencies: tuple[Any, ...],
+        num_returns: int,
+        /,
+        *args: Any,
+        **kwargs: Any,
+    ) -> tuple[Any, Any, Any | None]:
+        """Execute a service-managed task synchronously."""
+        from avalanche.execution_services import _run_with_execution_services
+
+        result, receipt = _run_with_execution_services(
+            fn,
+            execution_services,
+            task,
+            input_type,
+            run_input,
+            input_param_names,
+            receipt_dependencies,
+            args,
+            kwargs,
+            num_returns=num_returns,
+        )
+        return result, receipt, None
 
     def wait(self, futures: list[Any]) -> None:
         """Local values are already computed; just resolve any awaitables."""
@@ -324,9 +408,7 @@ class RayExecutor:
         # before Ray tries to serialize the task result.
         remote_fn = fn
         if not hasattr(remote_fn, "remote"):
-            remote_fn = self.ray.remote(num_returns=num_returns)(
-                _wrap_sync_or_async(remote_fn)
-            )
+            remote_fn = self.ray.remote(num_returns=num_returns)(_wrap_sync_or_async(remote_fn))
 
         return getattr(remote_fn, "remote")(*args, **kwargs)
 
@@ -361,6 +443,50 @@ class RayExecutor:
         if num_returns == 1:
             return payload_refs[0], status_ref
         return tuple(payload_refs), status_ref
+
+    def submit_with_services(
+        self,
+        fn: Callable,
+        execution_services: Any,
+        task: Any,
+        input_type: type | None,
+        run_input: Any,
+        input_param_names: tuple[str, ...],
+        receipt_dependencies: tuple[Any, ...],
+        num_returns: int,
+        /,
+        *args: Any,
+        **kwargs: Any,
+    ) -> tuple[Any, Any, Any]:
+        """Submit a task with distinct payload, receipt, and status refs."""
+        if hasattr(fn, "remote"):
+            raise TypeError(
+                "submit_with_services expects a plain function, not a pre-decorated "
+                "Ray remote; it controls payload, receipt, and status return slots"
+            )
+        remote_fn = self.ray.remote(num_returns=num_returns + 2)(
+            _distributed_execution_services_task
+        )
+        refs = getattr(remote_fn, "remote")(
+            fn,
+            execution_services,
+            task,
+            input_type,
+            run_input,
+            input_param_names,
+            len(receipt_dependencies),
+            num_returns,
+            *receipt_dependencies,
+            *args,
+            **kwargs,
+        )
+        refs = list(refs)
+        receipt_ref = refs[-2]
+        status_ref = refs[-1]
+        payload_refs = refs[:-2]
+        if num_returns == 1:
+            return payload_refs[0], receipt_ref, status_ref
+        return tuple(payload_refs), receipt_ref, status_ref
 
     def wait(self, futures: list[Any]) -> None:
         """Block until refs are ready, without observing task exceptions."""

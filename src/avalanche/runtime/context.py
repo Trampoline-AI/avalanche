@@ -96,7 +96,7 @@ def get_current_run_context() -> RunContext | None:
     return _current_run_context.get()
 
 
-def run_with_context(context: RunContext, fn: Any, *args: Any, **kwargs: Any) -> Any:
+def _run_with_context(context: RunContext, fn: Any, /, *args: Any, **kwargs: Any) -> Any:
     """Execute a function with a RunContext available to framework helpers."""
     from runtime._async import resolve_awaitable
 
@@ -105,6 +105,11 @@ def run_with_context(context: RunContext, fn: Any, *args: Any, **kwargs: Any) ->
         return resolve_awaitable(fn(*args, **kwargs))
     finally:
         _current_run_context.reset(token)
+
+
+def run_with_context(context: RunContext, fn: Any, *args: Any, **kwargs: Any) -> Any:
+    """Execute a function with a RunContext available to framework helpers."""
+    return _run_with_context(context, fn, *args, **kwargs)
 
 
 class File(BaseModel):

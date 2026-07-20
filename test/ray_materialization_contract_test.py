@@ -52,6 +52,7 @@ class FakeObjectRef:
     task: "FakeTask | None" = None
     index: int | None = None  # which return slot of the task
     is_status: bool = False
+    is_receipt: bool = False
     stored_label: str | None = None
     stored_value: Any = None
     is_stored: bool = False
@@ -93,15 +94,14 @@ class RayExecutor:
         self.driver_payload_gets: list[str] = []
         self.worker_payload_gets: list[str] = []
         self.status_gets: list[str] = []
+        self.receipt_gets: list[str] = []
         self.payload_resolutions: list[tuple[str, str]] = []  # (context, task)
         self._context: str = "__driver__"
 
     # -- submission -------------------------------------------------------
 
     def submit(self, fn, *args, num_returns=1, **kwargs):
-        self.submissions.append(
-            (fn.__name__, {k: type(v).__name__ for k, v in kwargs.items()})
-        )
+        self.submissions.append((fn.__name__, {k: type(v).__name__ for k, v in kwargs.items()}))
         task = FakeTask(fn=fn, args=args, kwargs=kwargs, num_returns=num_returns)
         if num_returns > 1:
             return tuple(FakeObjectRef(task=task, index=i) for i in range(num_returns))
@@ -109,17 +109,53 @@ class RayExecutor:
 
     def submit_with_status(self, fn, *args, num_returns=1, **kwargs):
         """Return (payload_ref_or_tuple, status_ref) from the same task."""
-        self.submissions.append(
-            (fn.__name__, {k: type(v).__name__ for k, v in kwargs.items()})
-        )
+        self.submissions.append((fn.__name__, {k: type(v).__name__ for k, v in kwargs.items()}))
         task = FakeTask(fn=fn, args=args, kwargs=kwargs, num_returns=num_returns)
-        payload_refs = tuple(
-            FakeObjectRef(task=task, index=i) for i in range(num_returns)
-        )
+        payload_refs = tuple(FakeObjectRef(task=task, index=i) for i in range(num_returns))
         status_ref = FakeObjectRef(task=task, index=num_returns, is_status=True)
         if num_returns == 1:
             return payload_refs[0], status_ref
         return payload_refs, status_ref
+
+    def submit_with_services(
+        self,
+        fn,
+        execution_services,
+        task,
+        input_type,
+        run_input,
+        input_param_names,
+        receipt_dependencies,
+        num_returns,
+        /,
+        *args,
+        **kwargs,
+    ):
+        from runtime.executor import _distributed_execution_services_task
+
+        refs = self.submit(
+            _distributed_execution_services_task,
+            fn,
+            execution_services,
+            task,
+            input_type,
+            run_input,
+            input_param_names,
+            len(receipt_dependencies),
+            num_returns,
+            *receipt_dependencies,
+            *args,
+            num_returns=num_returns + 2,
+            **kwargs,
+        )
+        refs = tuple(refs)
+        receipt_ref = refs[-2]
+        receipt_ref.is_receipt = True
+        status_ref = refs[-1]
+        status_ref.is_status = True
+        if num_returns == 1:
+            return refs[0], receipt_ref, status_ref
+        return refs[:-2], receipt_ref, status_ref
 
     # -- object store -----------------------------------------------------
 
@@ -199,6 +235,9 @@ class RayExecutor:
             if isinstance(ref, FakeObjectRef) and ref.is_status:
                 self.status_gets.append(self._task_label(ref))
                 out.append(value)
+            elif isinstance(ref, FakeObjectRef) and ref.is_receipt:
+                self.receipt_gets.append(self._task_label(ref))
+                out.append(value)
             else:
                 if isinstance(ref, FakeObjectRef):
                     self.driver_payload_gets.append(self._task_label(ref))
@@ -250,7 +289,12 @@ class RayExecutor:
     def _task_label(self, ref: FakeObjectRef) -> str:
         if ref.task is not None and ref.task.fn is not None:
             name = ref.task.fn.__name__
-            if ref.task.num_returns > 1 and ref.index is not None and not ref.is_status:
+            if (
+                ref.task.num_returns > 1
+                and ref.index is not None
+                and not ref.is_status
+                and not ref.is_receipt
+            ):
                 return f"{name}[{ref.index}]"
             return name
         if ref.is_stored:
@@ -267,9 +311,9 @@ class RayExecutor:
 
 
 def _assert_no_driver_payload(executor: RayExecutor):
-    assert executor.driver_payload_gets == [], (
-        f"driver materialized payloads: {executor.driver_payload_gets}"
-    )
+    assert (
+        executor.driver_payload_gets == []
+    ), f"driver materialized payloads: {executor.driver_payload_gets}"
 
 
 def _assert_no_synthetic_payload_resolution(executor: RayExecutor):
@@ -279,6 +323,52 @@ def _assert_no_synthetic_payload_resolution(executor: RayExecutor):
         if ctx in ("__driver__", "__status__", "__projection__")
     ]
     assert synthetic == [], f"synthetic path resolved payloads: {synthetic}"
+
+
+def test_execution_service_receipts_do_not_materialize_user_payloads_on_driver():
+    from execution_services_test import RecordingServices, _raw_input, _spec
+
+    class Input(ava.BaseInput):
+        scalar: str
+        values: list[str]
+        optional: str | None
+        empty: list[str]
+        worker_pid: int
+
+    @ava.source
+    def load(value: str):
+        return [value] * 100
+
+    @ava.step
+    def left(value):
+        return value + ["left"]
+
+    @ava.step
+    def right(value):
+        return value + ["right"]
+
+    @ava.step
+    def join(left_value, right_value):
+        return len(left_value) + len(right_value)
+
+    @ava.workflow(input=Input)
+    def flow():
+        root = load(ava.input.scalar)
+        return join(left(root), right(root))
+
+    executor = RayExecutor()
+    handle = flow().run(
+        executor=executor,
+        input=_raw_input(),
+        execution_services=_spec(RecordingServices()),
+    )
+
+    assert handle.result() == 202
+    assert [receipt.node_id for receipt in handle.execution_receipts()] == ["join_1"]
+    assert executor.driver_payload_gets == ["_distributed_execution_services_task[0]"]
+    assert len(executor.status_gets) == 4
+    assert len(executor.receipt_gets) == 1
+    assert all(context != "__driver__" for context, _label in executor.payload_resolutions)
 
 
 # ---------------------------------------------------------------------------
@@ -341,9 +431,9 @@ def test_no_return_workflow_does_not_materialize_payloads():
     assert result is None
     _assert_no_driver_payload(executor)
     _assert_no_synthetic_payload_resolution(executor)
-    assert executor.ray.wait_calls or executor.status_gets, (
-        "no-return workflow never observed completion"
-    )
+    assert (
+        executor.ray.wait_calls or executor.status_gets
+    ), "no-return workflow never observed completion"
 
 
 def test_no_return_workflow_surfaces_task_failure():
@@ -411,9 +501,7 @@ def test_success_hook_with_return_fetches_only_final_once():
 
     events: list[str] = []
     executor = RayExecutor()
-    result = wf().run(
-        executor=executor, hooks=RunHooks(on_node_success=events.append)
-    ).result()
+    result = wf().run(executor=executor, hooks=RunHooks(on_node_success=events.append)).result()
 
     assert result == 6
     assert "load" not in executor.driver_payload_gets, executor.driver_payload_gets
