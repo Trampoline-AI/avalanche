@@ -320,6 +320,47 @@ The operator connects to Ray; the TUI does not.
 - `src/avalanche/runtime/`
 - `src/runtime/operator/hooks.py`
 
+## Execution services
+
+Execution services are an executor-owned worker lifecycle for platform-provided
+resources such as immutable input snapshots, task-local filesystems, output
+reservations, and commit receipts. They are separate from runtime providers such
+as `ava.Stream`: runtime providers inject task arguments from Avalanche-owned
+data systems, while execution services surround the entire user task.
+
+```text
+Workflow.run(execution_services=spec)
+  -> executor submits one service-managed task
+     -> probe -> negotiate -> open
+     -> materialize_input
+     -> user task
+     -> finalize -> receipt
+     -> teardown
+```
+
+The service request is immutable executor metadata. It must not carry credentials,
+user-facing storage URIs, absolute worker paths, open handles, actors, or affinity
+tokens. The provider acquires worker-local capabilities after scheduling. Input
+materialization may be eager or lazy; for example, a provider can return paths in
+an attempt-local filesystem whose bytes are fetched on first access.
+
+Local execution carries values directly. Ray execution returns user payloads, small
+service receipts, and status markers through separate object-reference channels. The
+driver observes statuses, while parent receipts remain worker-side dependencies of
+downstream service sessions. Fan-in follows the DAG without fetching intermediate
+payloads or receipts on the driver. `RunHandle` exposes only deterministically ordered
+terminal receipts.
+
+Any failure after `open` requests abort and then tears the session down exactly once.
+Cleanup errors are attached as notes instead of masking the primary failure. Providers
+may preserve explicit recovery state when destructive cleanup is unsafe. If an executor
+retries a task, the whole worker lifecycle starts again; Avalanche does not reuse an
+opened session. There is no fallback to ordinary execution when service negotiation or
+materialization fails.
+
+See [docs/execution-services.md](docs/execution-services.md) for the public
+protocol, provider contract, and workflow-author experience.
+
 ## Cross-component boundaries
 
 ### State provider boundary

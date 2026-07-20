@@ -46,6 +46,6 @@ def resolve_awaitable(value: Any) -> Any:
     return _run_awaitable_in_thread(value)
 
 
-def call_sync_or_async(fn: Callable[..., Any], *args: Any, **kwargs: Any) -> Any:
+def call_sync_or_async(fn: Callable[..., Any], /, *args: Any, **kwargs: Any) -> Any:
     """Call a function and synchronously resolve async results."""
     return resolve_awaitable(fn(*args, **kwargs))

@@ -5,7 +5,7 @@ from __future__ import annotations
 import asyncio
 import threading
 from concurrent.futures import CancelledError, Future
-from typing import Callable, Generic, TypeVar
+from typing import Any, Callable, Generic, TypeVar
 
 T = TypeVar("T")
 
@@ -16,6 +16,7 @@ class RunHandle(Generic[T]):
     def __init__(self, run_id: str):
         self.run_id = run_id
         self._future: Future[T] = Future()
+        self._execution_receipts: Future[tuple[Any, ...]] = Future()
         self._cancel_event = threading.Event()
         self._state_lock = threading.Lock()
         self._started = False
@@ -56,6 +57,18 @@ class RunHandle(Generic[T]):
     def exception(self, timeout: float | None = None) -> BaseException | None:
         """Return the cached failure, waiting up to ``timeout`` seconds."""
         return self._future.exception(timeout=timeout)
+
+    def execution_receipts(self, timeout: float | None = None) -> tuple[Any, ...]:
+        """Return deterministic terminal execution-service receipts.
+
+        The tuple is empty when the workflow did not use execution services.
+        Receipt failures and cancellation mirror the run's terminal outcome.
+        """
+        return self._execution_receipts.result(timeout=timeout)
+
+    def _set_execution_receipts(self, receipts: tuple[Any, ...]) -> None:
+        if not self._execution_receipts.done():
+            self._execution_receipts.set_result(receipts)
 
     def __await__(self):
         return self._wait().__await__()
@@ -100,12 +113,17 @@ class RunHandle(Generic[T]):
             except CancelledError:
                 with self._state_lock:
                     self._future.cancel()
+                    self._execution_receipts.cancel()
             except BaseException as exc:
                 with self._state_lock:
                     self._future.set_exception(exc)
+                    if not self._execution_receipts.done():
+                        self._execution_receipts.set_exception(exc)
             else:
                 with self._state_lock:
                     self._future.set_result(result)
+                    if not self._execution_receipts.done():
+                        self._execution_receipts.set_result(())
 
         with self._state_lock:
             if self._started:

@@ -7,6 +7,13 @@ with local and distributed execution.
 
 # DAG primitives
 from .dag import Pipeline, Workflow, dest, pipeline, source, step, transform, workflow
+from .execution_services import (
+    EXECUTION_SERVICES_V1,
+    ExecutionServiceReceipt,
+    ExecutionServices,
+    ExecutionServicesSpec,
+    ExecutionTaskSpec,
+)
 
 # Execution engines
 from .executor import Executor, LocalExecutor, RayExecutor, get_default_executor
@@ -96,6 +103,11 @@ __all__ = [
     "LocalExecutor",
     "RayExecutor",
     "get_default_executor",
+    "EXECUTION_SERVICES_V1",
+    "ExecutionServiceReceipt",
+    "ExecutionServices",
+    "ExecutionServicesSpec",
+    "ExecutionTaskSpec",
     # Runtime
     "BaseContext",
     "BaseInput",
