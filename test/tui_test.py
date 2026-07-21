@@ -1683,24 +1683,30 @@ class TestLogTimestamps:
         )
         assert isinstance(entry.timestamp, datetime)
 
-    def test_log_panel_renders_datetime(self):
+    @pytest.mark.asyncio
+    async def test_log_panel_renders_datetime(self):
+        from avalanche.tui.app import AvalancheApp
         from avalanche.tui.widgets.log_panel import LogWidget
-        store = UIStore(MockStateProvider())
-        _apply_async_updates(store)
-        # Add a log entry with known timestamp
-        if store.current_run:
-            store.current_run.logs.append(
+
+        app = AvalancheApp()
+        async with app.run_test(size=(120, 40)) as pilot:
+            await pilot.pause()
+            app._timer.pause()
+            app.store.run_pinned = True
+            app.store.current_run.logs.append(
                 LogEntry(
                     timestamp=datetime(2026, 3, 27, 14, 35, 1),
                     level=LogLevel.INFO,
-                    node_id=store.all_nodes[0].name,
+                    node_id=app.store.all_nodes[0].name,
                     message="Starting...",
                 )
             )
-        w = LogWidget()
-        w._test_store = store
-        rendered = w.render().plain
-        assert "2026-03-27 14:35:01" in rendered
+            app._tick()
+            await app.wait_for_refresh()
+
+            log_view = app._screen.query_one("#log-content", LogWidget)
+            rendered = "\n".join(line.text for line in log_view.lines)
+            assert "2026-03-27 14:35:01" in rendered
 
 
 # ── Headless interaction tests (Textual pilot) ────────────────────────────
@@ -2148,7 +2154,7 @@ class TestInteractions:
                 await pilot.pause()
 
             # Verify our CSS is at least being applied
-            for widget_id in ("#run-history", "#dag-container", "#log-panel"):
+            for widget_id in ("#run-history", "#dag-container", "#log-content"):
                 w = app._screen.query_one(widget_id)
                 assert w.styles.scrollbar_size_vertical == 1, (
                     f"{widget_id} scrollbar_size_vertical={w.styles.scrollbar_size_vertical}"
@@ -2170,7 +2176,7 @@ class TestInteractions:
                 app._tick()
                 await pilot.pause()
 
-            lp = app._screen.query_one("#log-panel")
+            lp = app._screen.query_one("#log-content")
 
             # Container must support horizontal scrolling
             assert lp.styles.overflow_x == "auto"

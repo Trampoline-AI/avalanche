@@ -122,35 +122,6 @@ class _TableScrollContainer(_ThinScrollContainer):
         except Exception:
             pass
 
-    def _update_log_autoscroll(self) -> None:
-        """Disable autoscroll on user input; re-enable if at bottom."""
-        if self.id != "log-panel":
-            return
-        try:
-            app = self.app
-            app._log_autoscroll = self.scroll_y >= self.max_scroll_y - 1
-        except Exception:
-            pass
-
-    def _on_mouse_scroll_up(self, event) -> None:
-        super()._on_mouse_scroll_up(event)
-        self._update_log_autoscroll()
-
-    def _on_mouse_scroll_down(self, event) -> None:
-        super()._on_mouse_scroll_down(event)
-        self._update_log_autoscroll()
-
-    def _on_scroll_up(self, event) -> None:
-        super()._on_scroll_up(event)
-        self._update_log_autoscroll()
-
-    def _on_scroll_down(self, event) -> None:
-        super()._on_scroll_down(event)
-        self._update_log_autoscroll()
-
-    def _on_scroll_to(self, message) -> None:
-        super()._on_scroll_to(message)
-        self._update_log_autoscroll()
 
 
 
@@ -255,9 +226,13 @@ class WorkflowDetailScreen(Screen):
     }
 
     /* ── Scrollable content ── */
-    #run-history-content, #log-content {
+    #run-history-content {
         height: auto;
         width: auto;
+    }
+    #log-content {
+        height: 1fr;
+        width: 1fr;
     }
 
     /* ── Status bar ── */
@@ -303,7 +278,7 @@ class WorkflowDetailScreen(Screen):
                     dag_container.styles.height = "2fr"
                     yield DagWidget(id="dag-panel")
                     yield _DagCenterBtn(" ⊡ center ", id="dag-center-btn")
-                with _TableScrollContainer(id="log-panel") as lp:
+                with Vertical(id="log-panel") as lp:
                     lp.border_title = "Logs"
                     lp.styles.height = "2fr"
                     yield Static(id="log-header", classes="pane-header")

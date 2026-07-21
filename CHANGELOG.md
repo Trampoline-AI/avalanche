@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+### TUI performance
+
+- Virtualized log rendering keeps steady and incremental refresh work bounded by
+  the visible viewport instead of rebuilding complete log history every frame.
+- Added `make tui-bench`, which enforces the 30 FPS refresh budget through
+  10,000 log rows for steady and append scenarios.
+
 ### Worker execution services
 
 - Added the versioned `ava.ExecutionServicesSpec` and worker-side

@@ -1,4 +1,4 @@
-.PHONY: test test-cov test-cov-html lint format precommit-check check smoke-test brand install clean
+.PHONY: test test-cov test-cov-html lint format precommit-check check smoke-test tui-bench brand install clean
 
 # Run tests with every supported executor/storage extra installed.
 test:
@@ -31,6 +31,10 @@ check: precommit-check
 # Run bounded smoke tests for the documented user path
 smoke-test:
 	uv run pytest test/smoke_test.py test/example_smoke_test.py test/operator_example_discovery_test.py -v
+
+# Measure TUI refresh scaling as log history grows
+tui-bench:
+	uv run python scripts/benchmark_tui.py --assert-budget
 
 # Build checked-in brand image artifacts from the Three.js source HTML.
 brand:
