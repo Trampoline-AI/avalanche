@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import logging
 import math
 import multiprocessing
@@ -759,6 +760,16 @@ class Operator:
                         node.started_at = event["timestamp"]
                     else:
                         node.ended_at = event["timestamp"]
+            elif event_type == "agent_evidence":
+                node_id = event["node_id"]
+                if node_id not in run.nodes:
+                    raise _CoordinatorProtocolError(
+                        "agent evidence references unpublished node "
+                        f"{_bounded_ascii(node_id)}"
+                    )
+                log_entry = self._record_agent_evidence_event(
+                    run, node_id, event["event"], notify=False
+                )
             elif event_type == "log":
                 if run.status in {
                     RunStatus.SUCCESS,
@@ -802,6 +813,113 @@ class Operator:
             self._notify_log(log_entry)
         self._notify_run(run)
         return event_type == "terminal"
+
+    def _record_agent_evidence_event(
+        self,
+        run: RunState,
+        node_id: str,
+        event: dict[str, Any],
+        *,
+        notify: bool = True,
+    ) -> LogEntry | None:
+        """Merge one best-effort agent event into its node trace envelope."""
+        node = run.nodes.get(node_id)
+        if node is None or not isinstance(event, dict):
+            return None
+        try:
+            envelope = (
+                json.loads(node.agent_trace_json)
+                if node.agent_trace_json is not None
+                else {
+                    "schema_version": 1,
+                    "status": "in_progress",
+                    "run_id": None,
+                    "events": [],
+                    "trace": None,
+                    "error": None,
+                }
+            )
+            if not isinstance(envelope, dict):
+                return None
+            events = envelope.get("events")
+            if not isinstance(events, list):
+                return None
+
+            kind = event.get("kind")
+            level = LogLevel.INFO
+            if kind == "evidence":
+                sequence = event.get("sequence")
+                event_kind = event.get("event_kind")
+                timestamp_ns = event.get("timestamp_ns")
+                data = event.get("data", {})
+                if (
+                    not isinstance(sequence, int)
+                    or sequence < 1
+                    or not isinstance(event_kind, str)
+                    or not isinstance(timestamp_ns, int)
+                    or not isinstance(data, dict)
+                ):
+                    return None
+                last_sequence = events[-1].get("sequence", 0) if events else 0
+                if sequence <= last_sequence:
+                    return None
+                events.append(
+                    {
+                        "sequence": sequence,
+                        "event_kind": event_kind,
+                        "timestamp_ns": timestamp_ns,
+                        "data": data,
+                    }
+                )
+                detail = []
+                if data.get("iteration") is not None:
+                    detail.append(f"iteration={data['iteration']}")
+                if data.get("duration_ms") is not None:
+                    detail.append(f"duration={data['duration_ms']}ms")
+                if data.get("error"):
+                    detail.append(f"error={data['error']}")
+                message = f"Agent {event_kind}"
+                if detail:
+                    message += " " + " ".join(detail)
+                if data.get("error") or event_kind in {"run.failed", "run.cancelled"}:
+                    level = LogLevel.ERROR
+                    envelope["status"] = "error"
+                    envelope["error"] = str(data.get("error") or event_kind)
+            elif kind == "trace_finished":
+                trace = event.get("trace")
+                if not isinstance(trace, dict):
+                    return None
+                envelope["trace"] = trace
+                envelope["status"] = str(trace.get("status") or "unavailable")
+                evidence = trace.get("evidence")
+                if isinstance(evidence, dict):
+                    envelope["run_id"] = evidence.get("run_id")
+                message = f"Agent trace {envelope['status']}"
+                if envelope["status"] == "error":
+                    level = LogLevel.ERROR
+            elif kind == "trace_unavailable":
+                error = event.get("error")
+                envelope["status"] = "unavailable"
+                envelope["error"] = str(error or "Agent trace unavailable")
+                message = f"Agent trace unavailable: {envelope['error']}"
+                level = LogLevel.WARN
+            else:
+                return None
+
+            node.agent_trace_json = json.dumps(envelope, default=str)
+            entry = LogEntry(
+                timestamp=datetime.now(),
+                level=level,
+                node_id=node_id,
+                message=message,
+            )
+            run.logs.append(entry)
+            if notify:
+                self._notify_log(entry)
+                self._notify_run(run)
+            return entry
+        except BaseException:
+            return None
 
     def _finish_protocol_fault(
         self,
@@ -918,6 +1036,7 @@ _RUN_EVENT_TYPES = {
     "node_started",
     "node_succeeded",
     "node_failed",
+    "agent_evidence",
     "log",
     "terminal",
 }
@@ -1007,6 +1126,12 @@ def _validate_run_event(event: object, *, validate_result: bool = True) -> str:
         _timestamp_field(event, "timestamp")
         if event_type == "node_failed":
             _string_field(event, "error", maximum_length=_MAX_EVENT_MESSAGE_LENGTH)
+    elif event_type == "agent_evidence":
+        _require_exact_event_keys(event, {"type", "node_id", "event"})
+        _string_field(event, "node_id", maximum_length=_MAX_EVENT_FIELD_LENGTH)
+        agent_event = _required_field(event, "event")
+        if type(agent_event) is not dict:
+            raise _CoordinatorProtocolError("field 'event' must be a dict")
     elif event_type == "log":
         _require_exact_event_keys(
             event,

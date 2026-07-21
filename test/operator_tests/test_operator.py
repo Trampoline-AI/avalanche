@@ -1,5 +1,7 @@
 """Tests for Operator — workflow execution and state management."""
 
+import asyncio
+import json
 import os
 import threading
 import time
@@ -9,10 +11,12 @@ from functools import partial
 import pytest
 
 from avalanche import LocalExecutor, RayExecutor
+from avalanche._agent_evidence import emit_agent_evidence
 from avalanche.operator import Operator
-from avalanche.operator.models import NodeStatus, RunState, RunStatus
+from avalanche.operator.models import NodeState, NodeStatus, RunState, RunStatus
 from avalanche.operator.operator import RunAlreadyExistsError
 from avalanche.operator.scheduler import Scheduler
+from runtime.operator.run_worker import _with_agent_evidence
 
 FIXTURES_DIR = os.path.join(os.path.dirname(os.path.dirname(__file__)), "fixtures")
 
@@ -60,9 +64,7 @@ class TestOperatorLifecycle:
             results = list(pool.map(lambda _: reserve(), range(2)))
 
         assert results.count("run_concurrent") == 1
-        failures = [
-            result for result in results if isinstance(result, RunAlreadyExistsError)
-        ]
+        failures = [result for result in results if isinstance(result, RunAlreadyExistsError)]
         assert len(failures) == 1
 
     def test_run_completes_successfully(self):
@@ -175,9 +177,7 @@ class TestOperatorLifecycle:
             "def scheduled():\n"
             "    return None\n"
         )
-        operator = Operator(
-            workflow_paths=[str(workflow_file)], schedule=False, watch=False
-        )
+        operator = Operator(workflow_paths=[str(workflow_file)], schedule=False, watch=False)
         assert [item.workflow_id for item in operator.list_workflows()] == [
             "scheduled.py::scheduled"
         ]
@@ -212,13 +212,9 @@ class TestOperatorLifecycle:
             ),
         ],
     )
-    def test_deprecated_exact_executor_factories_remain_supported(
-        self, factory, expected
-    ):
+    def test_deprecated_exact_executor_factories_remain_supported(self, factory, expected):
         with pytest.warns(DeprecationWarning, match="executor_factory is deprecated"):
-            operator = Operator(
-                [], executor_factory=factory, watch=False, schedule=False
-            )
+            operator = Operator([], executor_factory=factory, watch=False, schedule=False)
         try:
             assert operator._executor_config == expected
         finally:
@@ -234,9 +230,7 @@ class TestOperatorLifecycle:
             ),
         ],
     )
-    def test_deprecated_executor_factories_remain_positional(
-        self, factory, expected
-    ):
+    def test_deprecated_executor_factories_remain_positional(self, factory, expected):
         with pytest.warns(DeprecationWarning, match="executor_factory is deprecated"):
             operator = Operator([], factory, False, False)
         try:
@@ -255,9 +249,7 @@ class TestOperatorLifecycle:
         self, monkeypatch, watch, schedule, expected_calls
     ):
         calls = []
-        monkeypatch.setattr(
-            Operator, "_start_watcher", lambda self: calls.append("watch")
-        )
+        monkeypatch.setattr(Operator, "_start_watcher", lambda self: calls.append("watch"))
         monkeypatch.setattr(Scheduler, "start", lambda self: calls.append("schedule"))
 
         with pytest.warns(DeprecationWarning, match="executor_factory is deprecated"):
@@ -348,9 +340,7 @@ class TestOperatorLifecycle:
             {"ray_init_kwargs": {}},
         ],
     )
-    def test_deprecated_factory_conflicts_with_explicit_configuration(
-        self, explicit_config
-    ):
+    def test_deprecated_factory_conflicts_with_explicit_configuration(self, explicit_config):
         with pytest.warns(DeprecationWarning, match="executor_factory is deprecated"):
             with pytest.raises(TypeError, match="cannot be combined"):
                 Operator(
@@ -533,3 +523,103 @@ class TestOperatorSubscription:
                 queued.append(subscriptions[0].get_nowait())
             assert [(seq, state.run_id) for seq, state in queued] == [(1, run.run_id)]
             op.close()
+
+
+class TestAgentEvidenceTransport:
+    @staticmethod
+    def _state():
+        run = RunState(run_id="run-agent", flow_name="agent-flow")
+        run.nodes["agent_1"] = NodeState(
+            node_id="agent_1",
+            name="agent",
+            node_type="step",
+            status=NodeStatus.RUNNING,
+        )
+        return run
+
+    def test_worker_wrapper_forwards_async_agent_evidence(self):
+        class Queue:
+            def __init__(self):
+                self.items = []
+
+            def put(self, value):
+                self.items.append(value)
+
+        async def agent_node():
+            await asyncio.sleep(0)
+            emit_agent_evidence(
+                {
+                    "kind": "evidence",
+                    "sequence": 1,
+                    "event_kind": "run.started",
+                    "timestamp_ns": 1,
+                    "data": {"input_fields": ["query"]},
+                }
+            )
+            return "result"
+
+        queue = Queue()
+        wrapped = _with_agent_evidence("agent_1", agent_node, queue)
+        assert asyncio.run(wrapped()) == "result"
+        assert queue.items == [
+            {
+                "type": "agent_evidence",
+                "node_id": "agent_1",
+                "event": {
+                    "kind": "evidence",
+                    "sequence": 1,
+                    "event_kind": "run.started",
+                    "timestamp_ns": 1,
+                    "data": {"input_fields": ["query"]},
+                },
+            }
+        ]
+
+    def test_operator_merges_ordered_evidence_and_final_trace(self):
+        operator = Operator([], watch=False, schedule=False)
+        run = self._state()
+        with operator._lock:
+            operator._runs[run.run_id] = run
+
+        evidence = {
+            "type": "agent_evidence",
+            "node_id": "agent_1",
+            "event": {
+                "kind": "evidence",
+                "sequence": 1,
+                "event_kind": "code.generated",
+                "timestamp_ns": 10,
+                "data": {"iteration": 1, "code": "print('ok')"},
+            },
+        }
+        assert operator._apply_event(run.run_id, evidence) is False
+        assert operator._apply_event(run.run_id, evidence) is False
+        assert (
+            operator._apply_event(
+                run.run_id,
+                {
+                    "type": "agent_evidence",
+                    "node_id": "agent_1",
+                    "event": {
+                        "kind": "trace_finished",
+                        "trace": {
+                            "status": "completed",
+                            "evidence": {
+                                "run_id": "agent-run",
+                                "complete": True,
+                                "events": [],
+                            },
+                            "steps": [],
+                        },
+                    },
+                },
+            )
+            is False
+        )
+
+        envelope = json.loads(run.nodes["agent_1"].agent_trace_json)
+        assert envelope["status"] == "completed"
+        assert envelope["run_id"] == "agent-run"
+        assert [item["sequence"] for item in envelope["events"]] == [1]
+        assert [entry.node_id for entry in run.logs] == ["agent_1", "agent_1"]
+        operator.close()

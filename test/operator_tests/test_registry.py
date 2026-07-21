@@ -1,6 +1,7 @@
 """Tests for WorkflowRegistry — workflow discovery from Python files."""
 
 import importlib
+import json
 import os
 import signal
 import sys
@@ -151,10 +152,7 @@ class TestWorkflowRegistry:
         left.mkdir()
         right.mkdir()
         source = (
-            "import avalanche as ava\n"
-            "@ava.workflow\n"
-            "def shared():\n"
-            "    return None\n"
+            "import avalanche as ava\n" "@ava.workflow\n" "def shared():\n" "    return None\n"
         )
         (left / "flow.py").write_text(source)
         (right / "flow.py").write_text(source)
@@ -286,9 +284,7 @@ class TestWorkflowRegistry:
         )
         registry = WorkflowRegistry()
         registry.scan([str(workflow_file)])
-        assert [item.workflow_id for item in registry.descriptors()] == [
-            "flow.py::scheduled"
-        ]
+        assert [item.workflow_id for item in registry.descriptors()] == ["flow.py::scheduled"]
 
         workflow_file.write_text("this is not valid Python !!!\n")
         registry.rescan()
@@ -335,9 +331,7 @@ class TestWorkflowRegistry:
         registry = WorkflowRegistry(discovery_timeout=2.0)
         registry.scan([str(workflow_file)])
 
-        assert [item.workflow_id for item in registry.descriptors()] == [
-            "flow.py::noisy"
-        ]
+        assert [item.workflow_id for item in registry.descriptors()] == ["flow.py::noisy"]
 
     @pytest.mark.skipif(os.name == "nt", reason="POSIX process-group assertion")
     def test_successful_discovery_terminates_import_spawned_descendant(self, tmp_path):
@@ -385,10 +379,7 @@ class TestWorkflowRegistry:
 
     def test_explicit_alias_ids_are_stable_after_root_relocation(self, tmp_path):
         source = (
-            "import avalanche as ava\n"
-            "@ava.workflow\n"
-            "def build():\n"
-            "    return None\n"
+            "import avalanche as ava\n" "@ava.workflow\n" "def build():\n" "    return None\n"
         )
         first_root = tmp_path / "checkout-a" / "flows"
         second_root = tmp_path / "checkout-b" / "renamed"
@@ -450,9 +441,7 @@ class TestWorkflowRegistry:
         assert first_output == {"deployment": "first", "value": 1}
         assert second_output == {"deployment": "second", "value": "two"}
 
-    def test_package_scan_isolates_and_restores_preloaded_package(
-        self, tmp_path, monkeypatch
-    ):
+    def test_package_scan_isolates_and_restores_preloaded_package(self, tmp_path, monkeypatch):
         package_name = "registry_shared"
         first = tmp_path / "first"
         second = tmp_path / "second"
@@ -474,9 +463,7 @@ class TestWorkflowRegistry:
         registry = WorkflowRegistry()
         registry.scan([str(second / package_name / "flow.py")])
 
-        assert [item.display_name for item in registry.descriptors()] == [
-            "deployment_workflow"
-        ]
+        assert [item.display_name for item in registry.descriptors()] == ["deployment_workflow"]
         assert registry.list_diagnostics() == []
         assert sys.path == original_path
         assert all(sys.modules[name] is module for name, module in preloaded.items())
@@ -584,3 +571,57 @@ def _preload_deployment(monkeypatch, root, package_name):
         monkeypatch.delitem(sys.modules, name, raising=False)
     monkeypatch.syspath_prepend(str(root))
     return {name: importlib.import_module(name) for name in module_names}
+
+
+def test_agent_steps_are_identified_without_changing_node_type():
+    class Analyze(ava.Signature):
+        text: str = ava.InputField()
+        result: str = ava.OutputField()
+
+    @ava.source
+    def load() -> str:
+        return "input"
+
+    @ava.agent_step(Analyze)
+    async def analyze(text: str, *, agent: ava.Agent) -> str:
+        return (await agent(text=text)).result
+
+    @ava.workflow
+    def agent_flow():
+        return analyze(load())
+
+    info = workflow_to_info(agent_flow(), "<test>")
+    assert info.agent_node_ids == ["analyze_1"]
+    assert info.node_types["analyze_1"] == "step"
+
+
+def test_agent_metadata_failure_does_not_hide_workflow(monkeypatch):
+    class Analyze(ava.Signature):
+        """Analyze text."""
+
+        text: str = ava.InputField(desc="text to analyze")
+        result: str = ava.OutputField(desc="analysis")
+
+    @ava.agent_step(Analyze, max_iterations=4)
+    async def analyze(text: str, *, agent: ava.Agent) -> str:
+        return (await agent(text=text)).result
+
+    @ava.workflow(agent_defaults={"max_iterations": 2})
+    def agent_flow():
+        return analyze("input")
+
+    workflow = agent_flow()
+    info = workflow_to_info(workflow, "<test>")
+    metadata = json.loads(info.agent_metadata_json["analyze_1"])
+    assert metadata["signature"]["name"] == "Analyze"
+    assert metadata["runtime"]["max_iterations"] == 4
+
+    spec = workflow.nodes["analyze_1"].node.fn.__agent_step__
+
+    def fail_metadata(_defaults):
+        raise ValueError("invalid metadata")
+
+    monkeypatch.setattr(spec, "declaration_metadata", fail_metadata)
+    fallback = workflow_to_info(workflow, "<test>")
+    assert fallback.agent_node_ids == ["analyze_1"]
+    assert fallback.agent_metadata_json == {}

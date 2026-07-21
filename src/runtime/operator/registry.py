@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import threading
 from collections import defaultdict
 from types import MappingProxyType
@@ -44,6 +45,20 @@ def workflow_to_info(
     node_ids = workflow._topological_sort()
     node_types = {nid: workflow.nodes[nid].node.node_type.value for nid in node_ids}
     display_names = {nid: display_name_from_id(nid) for nid in node_ids}
+    agent_node_ids = []
+    agent_metadata_json = {}
+    for nid in node_ids:
+        spec = getattr(workflow.nodes[nid].node.fn, "__agent_step__", None)
+        if spec is None:
+            continue
+        agent_node_ids.append(nid)
+        try:
+            metadata = spec.declaration_metadata(workflow.agent_defaults)
+            agent_metadata_json[nid] = json.dumps(
+                metadata, ensure_ascii=False, separators=(",", ":"), sort_keys=True
+            )
+        except Exception:
+            continue
     return WorkflowInfo(
         name=workflow.name,
         display_name=workflow.name,
@@ -56,6 +71,8 @@ def workflow_to_info(
         graph=dict(workflow.graph),
         node_types=node_types,
         display_names=display_names,
+        agent_node_ids=agent_node_ids,
+        agent_metadata_json=agent_metadata_json,
         cron=workflow.cron,
     )
 
@@ -74,6 +91,8 @@ def descriptor_to_info(descriptor: WorkflowDescriptor) -> WorkflowInfo:
         graph={key: list(value) for key, value in descriptor.graph},
         node_types=dict(descriptor.node_types),
         display_names=dict(descriptor.display_names),
+        agent_node_ids=list(descriptor.agent_node_ids),
+        agent_metadata_json=dict(descriptor.agent_metadata_json),
         cron=descriptor.cron,
     )
 
@@ -108,9 +127,7 @@ class WorkflowRegistry:
         by_id: dict[str, WorkflowDescriptor] = {}
         for descriptor in descriptors:
             if descriptor.workflow_id in by_id:
-                raise ValueError(
-                    f"Duplicate canonical workflow ID: {descriptor.workflow_id}"
-                )
+                raise ValueError(f"Duplicate canonical workflow ID: {descriptor.workflow_id}")
             by_id[descriptor.workflow_id] = descriptor
         short_names: defaultdict[str, list[str]] = defaultdict(list)
         for descriptor in descriptors:

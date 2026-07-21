@@ -49,6 +49,7 @@ class NodeState:
     status: NodeStatus = NodeStatus.PENDING
     started_at: float | None = None
     ended_at: float | None = None
+    agent_trace_json: str | None = None
 
     @property
     def elapsed(self) -> float | None:
@@ -89,6 +90,8 @@ class WorkflowInfo:
     graph: dict[str, list[str]]  # adjacency list (parent -> children)
     node_types: dict[str, str]  # node_id -> "source" | "step" | "dest"
     display_names: dict[str, str] = field(default_factory=dict)  # node_id -> display name
+    agent_node_ids: list[str] = field(default_factory=list)
+    agent_metadata_json: dict[str, str] = field(default_factory=dict)
     cron: str | None = None  # cron expression for scheduled execution
     next_run_at: float | None = None  # unix timestamp of next scheduled run
     last_run_at: float | None = None  # unix timestamp of last triggered run
@@ -141,6 +144,8 @@ class WorkflowDescriptor:
     graph: tuple[tuple[str, tuple[str, ...]], ...]
     node_types: tuple[tuple[str, str], ...]
     display_names: tuple[tuple[str, str], ...]
+    agent_node_ids: tuple[str, ...] = ()
+    agent_metadata_json: tuple[tuple[str, str], ...] = ()
     cron: str | None = None
 
 

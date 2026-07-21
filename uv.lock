@@ -280,8 +280,8 @@ requires-dist = [
     { name = "grpcio", marker = "extra == 'tui'", specifier = ">=1.75.1" },
     { name = "grpcio-tools", marker = "extra == 'all'", specifier = ">=1.75.1" },
     { name = "grpcio-tools", marker = "extra == 'runtime'", specifier = ">=1.75.1" },
-    { name = "predict-rlm", marker = "extra == 'agent'", specifier = ">=0.7.1" },
-    { name = "predict-rlm", marker = "extra == 'all'", specifier = ">=0.7.1" },
+    { name = "predict-rlm", marker = "extra == 'agent'", editable = "../predict-rlm" },
+    { name = "predict-rlm", marker = "extra == 'all'", editable = "../predict-rlm" },
     { name = "pydantic", specifier = ">=2,<3" },
     { name = "pyiceberg", extras = ["glue", "pandas", "pyarrow", "s3fs", "sql-sqlite"], specifier = ">=0.9,<0.11" },
     { name = "pylance", marker = "extra == 'all'", specifier = ">=0.24.0" },
@@ -304,7 +304,7 @@ dev = [
     { name = "grpcio", specifier = ">=1.75.1" },
     { name = "grpcio-tools", specifier = ">=1.75.1" },
     { name = "moto", extras = ["s3", "server"], specifier = ">=5,<6" },
-    { name = "predict-rlm", specifier = ">=0.7.1" },
+    { name = "predict-rlm", editable = "../predict-rlm" },
     { name = "pylance", specifier = ">=0.24.0" },
     { name = "pytest", specifier = ">=8.3.1,<9" },
     { name = "pytest-asyncio", specifier = ">=0.23.8,<0.24" },
@@ -2104,8 +2104,8 @@ wheels = [
 
 [[package]]
 name = "predict-rlm"
-version = "0.7.2"
-source = { registry = "https://pypi.org/simple" }
+version = "0.8.0a0"
+source = { editable = "../predict-rlm" }
 dependencies = [
     { name = "deno" },
     { name = "dspy" },
@@ -2114,9 +2114,37 @@ dependencies = [
     { name = "pygments" },
     { name = "tenacity" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/99/a7/90a21a2f60592cf97bda51f2e235efdb6c60a2a8207157b6a9186180661c/predict_rlm-0.7.2.tar.gz", hash = "sha256:f509973f663e169ffbeae19e33dbd64fbc11457c851394c955039c51fad2c7c5", size = 253176, upload-time = "2026-07-09T17:18:47.876Z" }
-wheels = [
-    { url = "https://files.pythonhosted.org/packages/ce/20/304196374df34935d6b04af3e01370fd834bf18992bdc5079842c89a1c97/predict_rlm-0.7.2-py3-none-any.whl", hash = "sha256:439d2c08cd254dcde9cbaecf1af0cad657ac467123bae22931e8cd5ca0152205", size = 282476, upload-time = "2026-07-09T17:18:46.343Z" },
+
+[package.metadata]
+requires-dist = [
+    { name = "deno", specifier = ">=2" },
+    { name = "dspy", specifier = ">=3.2.1" },
+    { name = "formulas", marker = "extra == 'examples'", specifier = ">=1.2.0" },
+    { name = "gepa", marker = "extra == 'gepa'", specifier = ">=0.0.26" },
+    { name = "kaleido", marker = "extra == 'gepa-viz'", specifier = ">=0.2.0" },
+    { name = "litellm", marker = "extra == 'codex-lm'", specifier = ">=1.89.2" },
+    { name = "nest-asyncio", specifier = ">=1.6.0" },
+    { name = "openai", marker = "extra == 'codex-lm'", specifier = ">=1.60" },
+    { name = "openpyxl", marker = "extra == 'examples'", specifier = ">=3.1.0" },
+    { name = "plotly", marker = "extra == 'gepa-viz'", specifier = ">=5.0.0" },
+    { name = "pydantic", specifier = ">=2.8.2,<3" },
+    { name = "pygments", specifier = ">=2.0.0" },
+    { name = "pymupdf", marker = "extra == 'examples'", specifier = ">=1.24.0" },
+    { name = "tenacity", specifier = ">=8.2.0" },
+    { name = "tenacity", marker = "extra == 'codex-lm'", specifier = ">=9.1.4" },
+    { name = "tqdm", marker = "extra == 'gepa'", specifier = ">=4.0.0" },
+    { name = "websockets", marker = "extra == 'sbx'", specifier = ">=15.0,<16" },
+]
+provides-extras = ["sbx", "gepa", "codex-lm", "gepa-viz", "examples"]
+
+[package.metadata.requires-dev]
+dev = [
+    { name = "ipykernel", specifier = ">=6.29.0" },
+    { name = "pytest", specifier = ">=8.3.1,<9" },
+    { name = "pytest-asyncio", specifier = ">=0.23.8,<0.24" },
+    { name = "pytest-cov", specifier = ">=7.1.0" },
+    { name = "pytest-testdox", specifier = ">=3.1.0,<4" },
+    { name = "ruff", specifier = ">=0.11.5" },
 ]
 
 [[package]]
