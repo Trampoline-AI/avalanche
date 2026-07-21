@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import logging
 import math
 import multiprocessing
@@ -142,6 +143,7 @@ class Operator:
         self._scheduler.reconcile(self._registry.descriptors())
         if watch and self._workflow_paths:
             self._start_watcher()
+
         if schedule and self._workflow_paths:
             self._scheduler.start()
 
@@ -168,12 +170,14 @@ class Operator:
         except AmbiguousWorkflow:
             raise
         except KeyError:
-            matching_ids = sorted({
-                run.workflow_id or run.flow_name
-                for run in runs
-                if run.flow_name == workflow_selector
-                or run.workflow_display_name == workflow_selector
-            })
+            matching_ids = sorted(
+                {
+                    run.workflow_id or run.flow_name
+                    for run in runs
+                    if run.flow_name == workflow_selector
+                    or run.workflow_display_name == workflow_selector
+                }
+            )
             if len(matching_ids) > 1:
                 raise AmbiguousWorkflow(workflow_selector, tuple(matching_ids)) from None
             if not matching_ids:
@@ -316,13 +320,10 @@ class Operator:
             self._subscribers.append(subscription)
             current_sequence = self._sequence
             oldest_sequence = (
-                self._stream_history[0][0]
-                if self._stream_history
-                else current_sequence + 1
+                self._stream_history[0][0] if self._stream_history else current_sequence + 1
             )
             cursor_is_replayable = (
-                since_sequence <= current_sequence
-                and since_sequence >= oldest_sequence - 1
+                since_sequence <= current_sequence and since_sequence >= oldest_sequence - 1
             )
             if cursor_is_replayable:
                 for sequence, run in self._stream_history:
@@ -363,9 +364,7 @@ class Operator:
         drain_deadline = time.monotonic() + 2.0
         for run_id, handle in handles:
             if handle.drain_thread is not None:
-                handle.drain_thread.join(
-                    timeout=max(0.0, drain_deadline - time.monotonic())
-                )
+                handle.drain_thread.join(timeout=max(0.0, drain_deadline - time.monotonic()))
             with self._lock:
                 if self._active_runs.get(run_id) is handle:
                     self._active_runs.pop(run_id, None)
@@ -491,9 +490,7 @@ class Operator:
                     self._finish_protocol_fault(run_id, handle, event, exc)
                     break
         finally:
-            _teardown_process_group(
-                handle.process, handle.windows_job, wait_before_term=2.0
-            )
+            _teardown_process_group(handle.process, handle.windows_job, wait_before_term=2.0)
             with self._lock:
                 self._active_runs.pop(run_id, None)
             handle.event_queue.close()
@@ -527,6 +524,16 @@ class Operator:
                         node.started_at = event["timestamp"]
                     else:
                         node.ended_at = event["timestamp"]
+            elif event_type == "agent_evidence":
+                node_id = event["node_id"]
+                if node_id not in run.nodes:
+                    raise _CoordinatorProtocolError(
+                        "agent evidence references unpublished node "
+                        f"{_bounded_ascii(node_id)}"
+                    )
+                log_entry = self._record_agent_evidence_event(
+                    run, node_id, event["event"], notify=False
+                )
             elif event_type == "log":
                 if run.status in {
                     RunStatus.SUCCESS,
@@ -554,6 +561,113 @@ class Operator:
             self._notify_log(log_entry)
         self._notify_run(run)
         return event_type == "terminal"
+
+    def _record_agent_evidence_event(
+        self,
+        run: RunState,
+        node_id: str,
+        event: dict[str, Any],
+        *,
+        notify: bool = True,
+    ) -> LogEntry | None:
+        """Merge one best-effort agent event into its node trace envelope."""
+        node = run.nodes.get(node_id)
+        if node is None or not isinstance(event, dict):
+            return None
+        try:
+            envelope = (
+                json.loads(node.agent_trace_json)
+                if node.agent_trace_json is not None
+                else {
+                    "schema_version": 1,
+                    "status": "in_progress",
+                    "run_id": None,
+                    "events": [],
+                    "trace": None,
+                    "error": None,
+                }
+            )
+            if not isinstance(envelope, dict):
+                return None
+            events = envelope.get("events")
+            if not isinstance(events, list):
+                return None
+
+            kind = event.get("kind")
+            level = LogLevel.INFO
+            if kind == "evidence":
+                sequence = event.get("sequence")
+                event_kind = event.get("event_kind")
+                timestamp_ns = event.get("timestamp_ns")
+                data = event.get("data", {})
+                if (
+                    not isinstance(sequence, int)
+                    or sequence < 1
+                    or not isinstance(event_kind, str)
+                    or not isinstance(timestamp_ns, int)
+                    or not isinstance(data, dict)
+                ):
+                    return None
+                last_sequence = events[-1].get("sequence", 0) if events else 0
+                if sequence <= last_sequence:
+                    return None
+                events.append(
+                    {
+                        "sequence": sequence,
+                        "event_kind": event_kind,
+                        "timestamp_ns": timestamp_ns,
+                        "data": data,
+                    }
+                )
+                detail = []
+                if data.get("iteration") is not None:
+                    detail.append(f"iteration={data['iteration']}")
+                if data.get("duration_ms") is not None:
+                    detail.append(f"duration={data['duration_ms']}ms")
+                if data.get("error"):
+                    detail.append(f"error={data['error']}")
+                message = f"Agent {event_kind}"
+                if detail:
+                    message += " " + " ".join(detail)
+                if data.get("error") or event_kind in {"run.failed", "run.cancelled"}:
+                    level = LogLevel.ERROR
+                    envelope["status"] = "error"
+                    envelope["error"] = str(data.get("error") or event_kind)
+            elif kind == "trace_finished":
+                trace = event.get("trace")
+                if not isinstance(trace, dict):
+                    return None
+                envelope["trace"] = trace
+                envelope["status"] = str(trace.get("status") or "unavailable")
+                evidence = trace.get("evidence")
+                if isinstance(evidence, dict):
+                    envelope["run_id"] = evidence.get("run_id")
+                message = f"Agent trace {envelope['status']}"
+                if envelope["status"] == "error":
+                    level = LogLevel.ERROR
+            elif kind == "trace_unavailable":
+                error = event.get("error")
+                envelope["status"] = "unavailable"
+                envelope["error"] = str(error or "Agent trace unavailable")
+                message = f"Agent trace unavailable: {envelope['error']}"
+                level = LogLevel.WARN
+            else:
+                return None
+
+            node.agent_trace_json = json.dumps(envelope, default=str)
+            entry = LogEntry(
+                timestamp=datetime.now(),
+                level=level,
+                node_id=node_id,
+                message=message,
+            )
+            run.logs.append(entry)
+            if notify:
+                self._notify_log(entry)
+                self._notify_run(run)
+            return entry
+        except BaseException:
+            return None
 
     def _finish_protocol_fault(
         self,
@@ -661,6 +775,7 @@ _RUN_EVENT_TYPES = {
     "node_started",
     "node_succeeded",
     "node_failed",
+    "agent_evidence",
     "log",
     "terminal",
 }
@@ -720,6 +835,11 @@ def _validate_run_event(event: object) -> str:
         _timestamp_field(event, "timestamp")
         if event_type == "node_failed":
             _string_field(event, "error")
+    elif event_type == "agent_evidence":
+        _string_field(event, "node_id")
+        agent_event = _required_field(event, "event")
+        if type(agent_event) is not dict:
+            raise _CoordinatorProtocolError("field 'event' must be a dict")
     elif event_type == "log":
         timestamp = _timestamp_field(event, "timestamp")
         try:
@@ -833,12 +953,8 @@ def _resolve_executor_config(
     ray_init_kwargs: Mapping[str, Any] | None,
     executor_factory: DeprecatedExecutorFactory | None,
 ) -> dict[str, Any]:
-    backend_was_provided = not isinstance(
-        executor_backend, _ExecutorBackendOmitted
-    )
-    backend: ExecutorBackend = (
-        "local" if not backend_was_provided else executor_backend
-    )
+    backend_was_provided = not isinstance(executor_backend, _ExecutorBackendOmitted)
+    backend: ExecutorBackend = "local" if not backend_was_provided else executor_backend
     if executor_factory is not None:
         warnings.warn(
             "executor_factory is deprecated; use executor_backend and the "
@@ -846,11 +962,7 @@ def _resolve_executor_config(
             DeprecationWarning,
             stacklevel=3,
         )
-        if (
-            backend_was_provided
-            or ray_runtime_env is not None
-            or ray_init_kwargs is not None
-        ):
+        if backend_was_provided or ray_runtime_env is not None or ray_init_kwargs is not None:
             raise TypeError(
                 "executor_factory cannot be combined with executor_backend or "
                 "Ray configuration"
@@ -858,9 +970,7 @@ def _resolve_executor_config(
         return _deprecated_executor_config(executor_factory)
 
     if backend not in {"local", "ray"}:
-        raise ValueError(
-            f"Unsupported executor_backend {backend!r}; expected 'local' or 'ray'"
-        )
+        raise ValueError(f"Unsupported executor_backend {backend!r}; expected 'local' or 'ray'")
     if backend == "local":
         if ray_runtime_env is not None or ray_init_kwargs is not None:
             raise ValueError(
@@ -887,15 +997,12 @@ def _deprecated_executor_config(
         unsupported = set(factory.keywords or {}) - {"runtime_env", "ray_init_kwargs"}
         if unsupported:
             raise TypeError(
-                "Unsupported RayExecutor partial arguments: "
-                + ", ".join(sorted(unsupported))
+                "Unsupported RayExecutor partial arguments: " + ", ".join(sorted(unsupported))
             )
         return {
             "backend": "ray",
             "runtime_env": dict((factory.keywords or {}).get("runtime_env") or {}),
-            "ray_init_kwargs": dict(
-                (factory.keywords or {}).get("ray_init_kwargs") or {}
-            ),
+            "ray_init_kwargs": dict((factory.keywords or {}).get("ray_init_kwargs") or {}),
         }
     raise TypeError(
         "Unsupported executor_factory. Per-run spawn requires serializable backend "

@@ -76,6 +76,8 @@ message FlowInfoMsg {
   string root_alias = 12;
   string relative_file = 13;
   string builder_symbol = 14;
+  repeated string agent_node_ids = 15;
+  map<string, string> agent_metadata_json = 16;
 }
 
 message FlowList {
@@ -96,6 +98,7 @@ message NodeStateMsg {
   string status = 4;
   double started_at = 5;
   double ended_at = 6;
+  string agent_trace_json = 7;
 }
 
 message LogEntryMsg {

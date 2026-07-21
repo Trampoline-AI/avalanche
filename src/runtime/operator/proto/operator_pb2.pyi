@@ -79,7 +79,7 @@ class NodeEdges(_message.Message):
     def __init__(self, children: _Optional[_Iterable[str]] = ...) -> None: ...
 
 class FlowInfoMsg(_message.Message):
-    __slots__ = ("name", "file_path", "node_ids", "graph", "node_types", "display_names", "cron", "next_run_at", "last_run_at", "workflow_id", "display_name", "root_alias", "relative_file", "builder_symbol")
+    __slots__ = ("name", "file_path", "node_ids", "graph", "node_types", "display_names", "cron", "next_run_at", "last_run_at", "workflow_id", "display_name", "root_alias", "relative_file", "builder_symbol", "agent_node_ids", "agent_metadata_json")
     class GraphEntry(_message.Message):
         __slots__ = ("key", "value")
         KEY_FIELD_NUMBER: _ClassVar[int]
@@ -101,6 +101,13 @@ class FlowInfoMsg(_message.Message):
         key: str
         value: str
         def __init__(self, key: _Optional[str] = ..., value: _Optional[str] = ...) -> None: ...
+    class AgentMetadataJsonEntry(_message.Message):
+        __slots__ = ("key", "value")
+        KEY_FIELD_NUMBER: _ClassVar[int]
+        VALUE_FIELD_NUMBER: _ClassVar[int]
+        key: str
+        value: str
+        def __init__(self, key: _Optional[str] = ..., value: _Optional[str] = ...) -> None: ...
     NAME_FIELD_NUMBER: _ClassVar[int]
     FILE_PATH_FIELD_NUMBER: _ClassVar[int]
     NODE_IDS_FIELD_NUMBER: _ClassVar[int]
@@ -115,6 +122,8 @@ class FlowInfoMsg(_message.Message):
     ROOT_ALIAS_FIELD_NUMBER: _ClassVar[int]
     RELATIVE_FILE_FIELD_NUMBER: _ClassVar[int]
     BUILDER_SYMBOL_FIELD_NUMBER: _ClassVar[int]
+    AGENT_NODE_IDS_FIELD_NUMBER: _ClassVar[int]
+    AGENT_METADATA_JSON_FIELD_NUMBER: _ClassVar[int]
     name: str
     file_path: str
     node_ids: _containers.RepeatedScalarFieldContainer[str]
@@ -129,7 +138,9 @@ class FlowInfoMsg(_message.Message):
     root_alias: str
     relative_file: str
     builder_symbol: str
-    def __init__(self, name: _Optional[str] = ..., file_path: _Optional[str] = ..., node_ids: _Optional[_Iterable[str]] = ..., graph: _Optional[_Mapping[str, NodeEdges]] = ..., node_types: _Optional[_Mapping[str, str]] = ..., display_names: _Optional[_Mapping[str, str]] = ..., cron: _Optional[str] = ..., next_run_at: _Optional[float] = ..., last_run_at: _Optional[float] = ..., workflow_id: _Optional[str] = ..., display_name: _Optional[str] = ..., root_alias: _Optional[str] = ..., relative_file: _Optional[str] = ..., builder_symbol: _Optional[str] = ...) -> None: ...
+    agent_node_ids: _containers.RepeatedScalarFieldContainer[str]
+    agent_metadata_json: _containers.ScalarMap[str, str]
+    def __init__(self, name: _Optional[str] = ..., file_path: _Optional[str] = ..., node_ids: _Optional[_Iterable[str]] = ..., graph: _Optional[_Mapping[str, NodeEdges]] = ..., node_types: _Optional[_Mapping[str, str]] = ..., display_names: _Optional[_Mapping[str, str]] = ..., cron: _Optional[str] = ..., next_run_at: _Optional[float] = ..., last_run_at: _Optional[float] = ..., workflow_id: _Optional[str] = ..., display_name: _Optional[str] = ..., root_alias: _Optional[str] = ..., relative_file: _Optional[str] = ..., builder_symbol: _Optional[str] = ..., agent_node_ids: _Optional[_Iterable[str]] = ..., agent_metadata_json: _Optional[_Mapping[str, str]] = ...) -> None: ...
 
 class FlowList(_message.Message):
     __slots__ = ("flows", "diagnostics")
@@ -150,20 +161,22 @@ class DiscoveryDiagnosticMsg(_message.Message):
     def __init__(self, path: _Optional[str] = ..., kind: _Optional[str] = ..., message: _Optional[str] = ...) -> None: ...
 
 class NodeStateMsg(_message.Message):
-    __slots__ = ("node_id", "name", "node_type", "status", "started_at", "ended_at")
+    __slots__ = ("node_id", "name", "node_type", "status", "started_at", "ended_at", "agent_trace_json")
     NODE_ID_FIELD_NUMBER: _ClassVar[int]
     NAME_FIELD_NUMBER: _ClassVar[int]
     NODE_TYPE_FIELD_NUMBER: _ClassVar[int]
     STATUS_FIELD_NUMBER: _ClassVar[int]
     STARTED_AT_FIELD_NUMBER: _ClassVar[int]
     ENDED_AT_FIELD_NUMBER: _ClassVar[int]
+    AGENT_TRACE_JSON_FIELD_NUMBER: _ClassVar[int]
     node_id: str
     name: str
     node_type: str
     status: str
     started_at: float
     ended_at: float
-    def __init__(self, node_id: _Optional[str] = ..., name: _Optional[str] = ..., node_type: _Optional[str] = ..., status: _Optional[str] = ..., started_at: _Optional[float] = ..., ended_at: _Optional[float] = ...) -> None: ...
+    agent_trace_json: str
+    def __init__(self, node_id: _Optional[str] = ..., name: _Optional[str] = ..., node_type: _Optional[str] = ..., status: _Optional[str] = ..., started_at: _Optional[float] = ..., ended_at: _Optional[float] = ..., agent_trace_json: _Optional[str] = ...) -> None: ...
 
 class LogEntryMsg(_message.Message):
     __slots__ = ("timestamp", "level", "node_id", "message")

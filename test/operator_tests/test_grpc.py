@@ -13,12 +13,14 @@ import pytest
 from avalanche.operator import Operator
 from avalanche.operator.client import GrpcStateProvider
 from avalanche.operator.convert import (
+    node_state_from_proto,
+    node_state_to_proto,
     run_state_from_proto,
     run_state_to_proto,
     workflow_info_from_proto,
     workflow_info_to_proto,
 )
-from avalanche.operator.models import RunState, RunStatus, WorkflowInfo
+from avalanche.operator.models import NodeState, RunState, RunStatus, WorkflowInfo
 from avalanche.operator.server import serve
 from avalanche.runtime import File
 from runtime.operator.proto import operator_pb2 as pb
@@ -48,6 +50,7 @@ def test_start_run_wire_preserves_surviving_field_numbers():
         flow_name="input_workflow",
         run_id="run_01KCVST2FP4QC5NKZNN5NS0Z2W",
         workflow_selector="flows/input.py::input_workflow",
+
     )
 
     assert request.run_id == "run_01KCVST2FP4QC5NKZNN5NS0Z2W"
@@ -869,3 +872,77 @@ def test_blocking_server_closes_operator_in_finally(monkeypatch):
         "grpc.max_send_message_length": -1,
         "grpc.max_receive_message_length": -1,
     }
+
+
+def test_agent_fields_roundtrip_and_legacy_defaults():
+    workflow = WorkflowInfo(
+        name="agent-flow",
+        file_path="flow.py",
+        node_ids=["agent_1"],
+        graph={"agent_1": []},
+        node_types={"agent_1": "step"},
+        agent_node_ids=["agent_1"],
+        agent_metadata_json={"agent_1": '{"signature":{"name":"Inspect"}}'},
+    )
+    restored = workflow_info_from_proto(workflow_info_to_proto(workflow))
+    assert restored.agent_node_ids == ["agent_1"]
+    assert restored.agent_metadata_json == workflow.agent_metadata_json
+
+    legacy = workflow_info_from_proto(pb.FlowInfoMsg())
+    assert legacy.agent_node_ids == []
+    assert legacy.agent_metadata_json == {}
+
+    envelope = json.dumps(
+        {
+            "schema_version": 1,
+            "status": "completed",
+            "run_id": "rlm-run",
+            "events": [],
+            "trace": {"status": "completed", "evidence": {"complete": True}},
+            "error": None,
+        }
+    )
+    node = NodeState(
+        node_id="agent_1",
+        name="agent",
+        node_type="step",
+        agent_trace_json=envelope,
+    )
+    assert node_state_from_proto(node_state_to_proto(node)).agent_trace_json == envelope
+    assert (
+        node_state_from_proto(
+            pb.NodeStateMsg(
+                node_id="legacy",
+                name="legacy",
+                node_type="step",
+                status="pending",
+            )
+        ).agent_trace_json
+        is None
+    )
+
+
+def test_run_state_proto_retains_complete_agent_envelope():
+    envelope = json.dumps(
+        {
+            "schema_version": 1,
+            "status": "completed",
+            "run_id": "rlm-run",
+            "events": [{"sequence": 1}],
+            "trace": {
+                "status": "completed",
+                "evidence": {"complete": True, "events": [{"sequence": 1}]},
+            },
+            "error": None,
+        }
+    )
+    run = RunState(run_id="run", flow_name="agent-flow")
+    run.nodes["agent_1"] = NodeState(
+        node_id="agent_1",
+        name="agent",
+        node_type="step",
+        agent_trace_json=envelope,
+    )
+
+    decoded = run_state_from_proto(run_state_to_proto(run))
+    assert decoded.nodes["agent_1"].agent_trace_json == envelope

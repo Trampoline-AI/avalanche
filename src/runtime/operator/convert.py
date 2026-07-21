@@ -38,6 +38,8 @@ def workflow_info_to_proto(info: WorkflowInfo) -> pb.FlowInfoMsg:
         root_alias=info.root_alias,
         relative_file=relative_file,
         builder_symbol=info.builder_symbol,
+        agent_node_ids=info.agent_node_ids,
+        agent_metadata_json=info.agent_metadata_json,
     )
 
 
@@ -52,6 +54,8 @@ def workflow_info_from_proto(msg: pb.FlowInfoMsg) -> WorkflowInfo:
         graph=graph,
         node_types=dict(msg.node_types),
         display_names=dict(msg.display_names),
+        agent_node_ids=list(msg.agent_node_ids),
+        agent_metadata_json=dict(msg.agent_metadata_json),
         cron=msg.cron if msg.cron else None,
         next_run_at=msg.next_run_at if msg.next_run_at else None,
         last_run_at=msg.last_run_at if msg.last_run_at else None,
@@ -91,6 +95,7 @@ def node_state_to_proto(ns: NodeState) -> pb.NodeStateMsg:
         status=ns.status.value,
         started_at=ns.started_at or 0.0,
         ended_at=ns.ended_at or 0.0,
+        agent_trace_json=ns.agent_trace_json or "",
     )
 
 
@@ -102,6 +107,7 @@ def node_state_from_proto(msg: pb.NodeStateMsg) -> NodeState:
         status=NodeStatus(msg.status),
         started_at=msg.started_at if msg.started_at else None,
         ended_at=msg.ended_at if msg.ended_at else None,
+        agent_trace_json=msg.agent_trace_json or None,
     )
 
 

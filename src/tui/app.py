@@ -14,6 +14,7 @@ from .screens.workflow_detail import WorkflowDetailScreen
 from .state import StateProvider
 from .theme import AVALANCHE_THEME
 from .ui_store import UIStore
+from .widgets.agent_trace import AgentMetadataInspector, AgentTraceInspector
 from .widgets.log_panel import LogWidget
 from .widgets.run_history import RunHistoryWidget
 from .widgets.sidebar import Sidebar
@@ -24,6 +25,7 @@ _PANE_WIDGET_IDS = {
     "dag": "dag-container",
     "run-history": "run-history",
     "log": "log-panel",
+    "trace": "agent-trace-inspector",
 }
 
 
@@ -57,6 +59,7 @@ class AvalancheApp(App):
         ("s", "toggle_autoscroll", "Autoscroll"),
         ("w", "toggle_wrap", "Wrap"),
         ("enter", "activate", "Enter"),
+        Binding("m", "toggle_trace_inspector_tab", "Trace/Metadata", priority=True),
     ]
 
     def __init__(
@@ -68,9 +71,10 @@ class AvalancheApp(App):
         super().__init__()
         self.register_theme(AVALANCHE_THEME)
         self.theme = "avalanche"
-        self.store = UIStore(
-            provider or MockStateProvider(), defer_initial_catalog=provider is not None
-        )
+        defer_initial_catalog = provider is not None
+        if provider is None:
+            provider = MockStateProvider(include_agent_trace=workflow == "agent_trace")
+        self.store = UIStore(provider, defer_initial_catalog=defer_initial_catalog)
         self._timer: Timer | None = None
         self._screen: WorkflowDetailScreen | None = None
         self._leader_pending: bool = False
@@ -85,9 +89,7 @@ class AvalancheApp(App):
         workflow = self._deep_link_workflow
         node = self._deep_link_node
         if workflow:
-            match = next(
-                (p for p in self.store.workflows if p.selector == workflow), None
-            )
+            match = next((p for p in self.store.workflows if p.selector == workflow), None)
             if match is None:
                 short_matches = [
                     p
@@ -148,6 +150,30 @@ class AvalancheApp(App):
         """Refresh all visible widgets to reflect current store state."""
         if not self._screen:
             return
+        try:
+            dashboard = self._screen.query_one("#dashboard-pane")
+            inspector = self._screen.query_one("#agent-trace-inspector")
+            trace_content = self._screen.query_one("#agent-trace-content", AgentTraceInspector)
+            metadata_content = self._screen.query_one(
+                "#agent-metadata-content", AgentMetadataInspector
+            )
+            dashboard.display = not self.store.trace_inspector_open
+            inspector.display = self.store.trace_inspector_open
+            trace_active = self.store.trace_inspector_tab == "trace"
+            trace_content.display = trace_active
+            metadata_content.display = not trace_active
+            node_id = self.store.selected_agent_node_id
+            workflow = self.store.current_workflow
+            display_name = (
+                workflow.display_names.get(node_id, node_id)
+                if workflow is not None and node_id is not None
+                else "Agent step"
+            )
+            inspector.border_title = (
+                f"Agent {display_name} · {self.store.trace_inspector_tab.title()}"
+            )
+        except Exception:
+            pass
         # Show/hide sidebar + grip, sync width
         visible = self.store.sidebar_visible
         try:
@@ -180,6 +206,16 @@ class AvalancheApp(App):
             self._screen.query_one("#run-history-content").refresh(layout=True)
         except Exception:
             pass
+        if self.store.trace_inspector_open:
+            try:
+                content_id = (
+                    "#agent-trace-content"
+                    if self.store.trace_inspector_tab == "trace"
+                    else "#agent-metadata-content"
+                )
+                self._screen.query_one(content_id).refresh(layout=True)
+            except Exception:
+                pass
         # Update sticky headers
         try:
             from .widgets.run_history import RunHistoryWidget
@@ -224,9 +260,7 @@ class AvalancheApp(App):
                 avail = rh.size.width - 6
                 pad = max(3, avail - len(left) - len(right))
                 line_color = (
-                    "#60dce4"
-                    if self.store.focused_pane == "run-history"
-                    else "#5a4f80"
+                    "#60dce4" if self.store.focused_pane == "run-history" else "#5a4f80"
                 )
                 line = f"[{line_color}]{'─' * (pad - 2)}[/]"
                 rh.border_title = f"{left} {line} {right}"
@@ -297,7 +331,6 @@ class AvalancheApp(App):
         except Exception:
             pass
 
-
     # ── Run polling (fallback for missed stream events) ─────────────
 
     _poll_in_flight: bool = False
@@ -346,6 +379,7 @@ class AvalancheApp(App):
         self._ping_counter += 1
         if self._ping_counter % 60 == 0 and not self._ping_in_flight:
             import threading
+
             self._ping_in_flight = True
 
             def _do_ping():
@@ -425,6 +459,9 @@ class AvalancheApp(App):
         elif pane == "dag":
             self.store.move_nav(0, -1)
             self._refresh_widgets()
+        elif pane == "trace" and self.store.trace_inspector_tab == "trace":
+            self.store.move_trace_turn(-1)
+            self._refresh_widgets()
         elif pane == "run-history":
             self.store.select_prev_run()
             self._refresh_widgets()
@@ -443,6 +480,9 @@ class AvalancheApp(App):
             self._screen.query_one("#sidebar", Sidebar).cursor_down()
         elif pane == "dag":
             self.store.move_nav(0, 1)
+            self._refresh_widgets()
+        elif pane == "trace" and self.store.trace_inspector_tab == "trace":
+            self.store.move_trace_turn(1)
             self._refresh_widgets()
         elif pane == "run-history":
             self.store.select_next_run()
@@ -529,9 +569,28 @@ class AvalancheApp(App):
         self._refresh_widgets()
 
     def action_activate(self) -> None:
-        """Enter: activate sidebar cursor item."""
+        """Enter: activate the focused item or collapse the selected agent turn."""
         if self.store.focused_pane == "sidebar":
             self._screen.query_one("#sidebar", Sidebar).activate_cursor()
+        elif self.store.focused_pane == "trace" and self.store.trace_inspector_tab == "trace":
+            self.store.toggle_trace_turn()
+            self._refresh_widgets()
+        elif self.store.focused_pane == "dag" and self.store.open_trace_inspector():
+            self._refresh_widgets()
+            try:
+                self._screen.query_one("#agent-trace-inspector").scroll_end(animate=False)
+            except Exception:
+                pass
+
+    def action_toggle_trace_inspector_tab(self) -> None:
+        if not self.store.trace_inspector_open:
+            return
+        self.store.toggle_trace_inspector_tab()
+        self._refresh_widgets()
+        try:
+            self._screen.query_one("#agent-trace-inspector").scroll_home(animate=False)
+        except Exception:
+            pass
 
     # ── Other actions ──────────────────────────────────────────────
 
@@ -544,6 +603,10 @@ class AvalancheApp(App):
         self._refresh_widgets()
 
     def action_escape_key(self) -> None:
+        if self.store.trace_inspector_open:
+            self.store.close_trace_inspector()
+            self._refresh_widgets()
+            return
         if self.store.searching:
             self.store.cancel_search()
         elif self.store.search_query:
@@ -574,6 +637,12 @@ class AvalancheApp(App):
 
     def action_log_page_up(self) -> None:
         """Page Up: scroll log panel up, disable autoscroll."""
+        if self.store.trace_inspector_open:
+            try:
+                self._screen.query_one("#agent-trace-inspector").scroll_page_up(animate=False)
+            except Exception:
+                pass
+            return
         self._log_autoscroll = False
         try:
             log_view = self._screen.query_one("#log-content", LogWidget)
@@ -583,6 +652,12 @@ class AvalancheApp(App):
 
     def action_log_page_down(self) -> None:
         """Page Down: scroll log panel down; re-enable autoscroll at bottom."""
+        if self.store.trace_inspector_open:
+            try:
+                self._screen.query_one("#agent-trace-inspector").scroll_page_down(animate=False)
+            except Exception:
+                pass
+            return
         try:
             log_view = self._screen.query_one("#log-content", LogWidget)
             log_view.scroll_page_down(animate=False)
@@ -603,6 +678,17 @@ class AvalancheApp(App):
                 self.store.search_backspace()
             elif event.is_printable and event.character:
                 self.store.search_append(event.character)
+            event.prevent_default()
+            event.stop()
+            self._refresh_widgets()
+            return
+
+        if (
+            event.character == "o"
+            and self.store.trace_inspector_open
+            and self.store.trace_inspector_tab == "trace"
+        ):
+            self.store.toggle_trace_full_output()
             event.prevent_default()
             event.stop()
             self._refresh_widgets()

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import importlib
+import inspect
 import logging
 import os
 import sys
@@ -13,6 +14,7 @@ from functools import wraps
 from pathlib import Path
 from typing import Any, Callable
 
+from avalanche._agent_evidence import capture_agent_evidence
 from avalanche.dag import Workflow
 
 from ..executor import Executor, LocalExecutor, RayExecutor
@@ -90,8 +92,10 @@ def run_worker(
             executor = LocalExecutor()
 
             def wrap_fn(node_id: str, fn: Callable[..., Any]) -> Callable[..., Any]:
-                return _with_node_streams(node_id, fn, stdout, stderr)
-
+                wrapped = _with_node_streams(node_id, fn, stdout, stderr)
+                if getattr(fn, "__agent_step__", None) is not None:
+                    return _with_agent_evidence(node_id, wrapped, event_queue)
+                return wrapped
         elif executor_mode == "ray":
             import ray
 
@@ -118,8 +122,10 @@ def run_worker(
             ray_log_drain.start()
 
             def wrap_fn(node_id: str, fn: Callable[..., Any]) -> Callable[..., Any]:
-                return _with_ray_node_streams(node_id, fn, ray_log_queue)
-
+                wrapped = _with_ray_node_streams(node_id, fn, ray_log_queue)
+                if getattr(fn, "__agent_step__", None) is not None:
+                    return _with_agent_evidence(node_id, wrapped, ray_log_queue)
+                return wrapped
         else:
             raise ValueError(f"Unknown executor mode: {executor_mode}")
 
@@ -224,6 +230,7 @@ def _import_workflow_module(root: Path, relative_file: str):
     spec.loader.exec_module(module)
     return module
 
+
 def _workflow_metadata(workflow: Workflow) -> dict[str, Any]:
     node_ids = workflow._topological_sort()
     return {
@@ -233,9 +240,7 @@ def _workflow_metadata(workflow: Workflow) -> dict[str, Any]:
         "node_types": {
             node_id: workflow.nodes[node_id].node.node_type.value for node_id in node_ids
         },
-        "display_names": {
-            node_id: display_name_from_id(node_id) for node_id in node_ids
-        },
+        "display_names": {node_id: display_name_from_id(node_id) for node_id in node_ids},
     }
 
 
@@ -332,6 +337,42 @@ def _with_node_streams(
 
     wrapper.__name__ = fn.__name__
     wrapper.__qualname__ = fn.__qualname__
+    return wrapper
+
+
+def _with_agent_evidence(
+    node_id: str,
+    fn: Callable[..., Any],
+    event_queue: Any,
+) -> Callable[..., Any]:
+    """Forward agent evidence through the coordinator's event protocol."""
+
+    def emit(event: dict[str, Any]) -> None:
+        try:
+            event_queue.put(
+                {
+                    "type": "agent_evidence",
+                    "node_id": node_id,
+                    "event": event,
+                }
+            )
+        except BaseException:
+            pass
+
+    if inspect.iscoroutinefunction(fn):
+
+        @wraps(fn)
+        async def async_wrapper(*args: Any, **kwargs: Any) -> Any:
+            with capture_agent_evidence(emit):
+                return await fn(*args, **kwargs)
+
+        return async_wrapper
+
+    @wraps(fn)
+    def wrapper(*args: Any, **kwargs: Any) -> Any:
+        with capture_agent_evidence(emit):
+            return fn(*args, **kwargs)
+
     return wrapper
 
 

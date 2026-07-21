@@ -68,6 +68,9 @@
   configuration and automatic agent-step table/output behavior were removed.
 - `ava.agent.skills`, `ava.agent.Skill`, and `ava.agent.File` lazily re-export
   the corresponding PredictRLM APIs.
+- The agent inspector now has Trace and Metadata tabs. Metadata is available
+  before execution and shows the resolved signature, skills, static
+  instructions, tools, and effective redacted runtime configuration.
 - See [docs/agent-steps.md](docs/agent-steps.md).
 
 ## 0.1.0-rc0

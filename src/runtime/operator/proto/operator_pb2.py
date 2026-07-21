@@ -24,7 +24,7 @@ _sym_db = _symbol_database.Default()
 
 
 
-DESCRIPTOR = _descriptor_pool.Default().AddSerializedFile(b'\n\x0eoperator.proto\x12\x12\x61valanche.operator\"\x07\n\x05\x45mpty\"\xb2\x01\n\x0fStartRunRequest\x12\x11\n\tflow_name\x18\x01 \x01(\t\x12\x12\n\ninput_json\x18\x02 \x01(\t\x12\x14\n\x0c\x63ontext_json\x18\x03 \x01(\t\x12\x37\n\x0binput_files\x18\x04 \x03(\x0b\x32\".avalanche.operator.FileAttachment\x12\x0e\n\x06run_id\x18\x06 \x01(\t\x12\x19\n\x11workflow_selector\x18\x07 \x01(\t\"i\n\x0e\x46ileAttachment\x12\x12\n\nfield_name\x18\x01 \x01(\t\x12\x0c\n\x04name\x18\x02 \x01(\t\x12\x0f\n\x07\x63ontent\x18\x03 \x01(\x0c\x12\x14\n\x0c\x63ontent_type\x18\x04 \x01(\t\x12\x0e\n\x06sha256\x18\x05 \x01(\t\"\"\n\x10StartRunResponse\x12\x0e\n\x06run_id\x18\x01 \x01(\t\"\"\n\x10\x43\x61ncelRunRequest\x12\x0e\n\x06run_id\x18\x01 \x01(\t\"?\n\x0fListRunsRequest\x12\x11\n\tflow_name\x18\x01 \x01(\t\x12\x19\n\x11workflow_selector\x18\x02 \x01(\t\"\x1f\n\rGetRunRequest\x12\x0e\n\x06run_id\x18\x01 \x01(\t\"\'\n\rStreamRequest\x12\x16\n\x0esince_sequence\x18\x01 \x01(\x04\"\x1d\n\tNodeEdges\x12\x10\n\x08\x63hildren\x18\x01 \x03(\t\"\xe3\x04\n\x0b\x46lowInfoMsg\x12\x0c\n\x04name\x18\x01 \x01(\t\x12\x11\n\tfile_path\x18\x02 \x01(\t\x12\x10\n\x08node_ids\x18\x03 \x03(\t\x12\x39\n\x05graph\x18\x04 \x03(\x0b\x32*.avalanche.operator.FlowInfoMsg.GraphEntry\x12\x42\n\nnode_types\x18\x05 \x03(\x0b\x32..avalanche.operator.FlowInfoMsg.NodeTypesEntry\x12H\n\rdisplay_names\x18\x06 \x03(\x0b\x32\x31.avalanche.operator.FlowInfoMsg.DisplayNamesEntry\x12\x0c\n\x04\x63ron\x18\x07 \x01(\t\x12\x13\n\x0bnext_run_at\x18\x08 \x01(\x01\x12\x13\n\x0blast_run_at\x18\t \x01(\x01\x12\x13\n\x0bworkflow_id\x18\n \x01(\t\x12\x14\n\x0c\x64isplay_name\x18\x0b \x01(\t\x12\x12\n\nroot_alias\x18\x0c \x01(\t\x12\x15\n\rrelative_file\x18\r \x01(\t\x12\x16\n\x0e\x62uilder_symbol\x18\x0e \x01(\t\x1aK\n\nGraphEntry\x12\x0b\n\x03key\x18\x01 \x01(\t\x12,\n\x05value\x18\x02 \x01(\x0b\x32\x1d.avalanche.operator.NodeEdges:\x02\x38\x01\x1a\x30\n\x0eNodeTypesEntry\x12\x0b\n\x03key\x18\x01 \x01(\t\x12\r\n\x05value\x18\x02 \x01(\t:\x02\x38\x01\x1a\x33\n\x11\x44isplayNamesEntry\x12\x0b\n\x03key\x18\x01 \x01(\t\x12\r\n\x05value\x18\x02 \x01(\t:\x02\x38\x01\"{\n\x08\x46lowList\x12.\n\x05\x66lows\x18\x01 \x03(\x0b\x32\x1f.avalanche.operator.FlowInfoMsg\x12?\n\x0b\x64iagnostics\x18\x02 \x03(\x0b\x32*.avalanche.operator.DiscoveryDiagnosticMsg\"E\n\x16\x44iscoveryDiagnosticMsg\x12\x0c\n\x04path\x18\x01 \x01(\t\x12\x0c\n\x04kind\x18\x02 \x01(\t\x12\x0f\n\x07message\x18\x03 \x01(\t\"v\n\x0cNodeStateMsg\x12\x0f\n\x07node_id\x18\x01 \x01(\t\x12\x0c\n\x04name\x18\x02 \x01(\t\x12\x11\n\tnode_type\x18\x03 \x01(\t\x12\x0e\n\x06status\x18\x04 \x01(\t\x12\x12\n\nstarted_at\x18\x05 \x01(\x01\x12\x10\n\x08\x65nded_at\x18\x06 \x01(\x01\"Q\n\x0bLogEntryMsg\x12\x11\n\ttimestamp\x18\x01 \x01(\x01\x12\r\n\x05level\x18\x02 \x01(\t\x12\x0f\n\x07node_id\x18\x03 \x01(\t\x12\x0f\n\x07message\x18\x04 \x01(\t\"\x90\x02\n\x0bRunStateMsg\x12\x0e\n\x06run_id\x18\x01 \x01(\t\x12\x11\n\tflow_name\x18\x02 \x01(\t\x12\x0e\n\x06status\x18\x03 \x01(\t\x12\x12\n\nstarted_at\x18\x04 \x01(\x01\x12\x10\n\x08\x65nded_at\x18\x05 \x01(\x01\x12/\n\x05nodes\x18\x06 \x03(\x0b\x32 .avalanche.operator.NodeStateMsg\x12-\n\x04logs\x18\x07 \x03(\x0b\x32\x1f.avalanche.operator.LogEntryMsg\x12\x14\n\x0ctriggered_by\x18\x08 \x01(\t\x12\x13\n\x0bworkflow_id\x18\t \x01(\t\x12\x1d\n\x15workflow_display_name\x18\n \x01(\t\"8\n\x07RunList\x12-\n\x04runs\x18\x01 \x03(\x0b\x32\x1f.avalanche.operator.RunStateMsg\"K\n\tRunUpdate\x12\x10\n\x08sequence\x18\x01 \x01(\x04\x12,\n\x03run\x18\x02 \x01(\x0b\x32\x1f.avalanche.operator.RunStateMsg2\xed\x03\n\x0fOperatorService\x12\x44\n\tListFlows\x12\x19.avalanche.operator.Empty\x1a\x1c.avalanche.operator.FlowList\x12U\n\x08StartRun\x12#.avalanche.operator.StartRunRequest\x1a$.avalanche.operator.StartRunResponse\x12L\n\tCancelRun\x12$.avalanche.operator.CancelRunRequest\x1a\x19.avalanche.operator.Empty\x12L\n\x08ListRuns\x12#.avalanche.operator.ListRunsRequest\x1a\x1b.avalanche.operator.RunList\x12L\n\x06GetRun\x12!.avalanche.operator.GetRunRequest\x1a\x1f.avalanche.operator.RunStateMsg\x12S\n\rStreamUpdates\x12!.avalanche.operator.StreamRequest\x1a\x1d.avalanche.operator.RunUpdate0\x01\x62\x06proto3')
+DESCRIPTOR = _descriptor_pool.Default().AddSerializedFile(b'\n\x0eoperator.proto\x12\x12\x61valanche.operator\"\x07\n\x05\x45mpty\"\xb2\x01\n\x0fStartRunRequest\x12\x11\n\tflow_name\x18\x01 \x01(\t\x12\x12\n\ninput_json\x18\x02 \x01(\t\x12\x14\n\x0c\x63ontext_json\x18\x03 \x01(\t\x12\x37\n\x0binput_files\x18\x04 \x03(\x0b\x32\".avalanche.operator.FileAttachment\x12\x0e\n\x06run_id\x18\x06 \x01(\t\x12\x19\n\x11workflow_selector\x18\x07 \x01(\t\"i\n\x0e\x46ileAttachment\x12\x12\n\nfield_name\x18\x01 \x01(\t\x12\x0c\n\x04name\x18\x02 \x01(\t\x12\x0f\n\x07\x63ontent\x18\x03 \x01(\x0c\x12\x14\n\x0c\x63ontent_type\x18\x04 \x01(\t\x12\x0e\n\x06sha256\x18\x05 \x01(\t\"\"\n\x10StartRunResponse\x12\x0e\n\x06run_id\x18\x01 \x01(\t\"\"\n\x10\x43\x61ncelRunRequest\x12\x0e\n\x06run_id\x18\x01 \x01(\t\"?\n\x0fListRunsRequest\x12\x11\n\tflow_name\x18\x01 \x01(\t\x12\x19\n\x11workflow_selector\x18\x02 \x01(\t\"\x1f\n\rGetRunRequest\x12\x0e\n\x06run_id\x18\x01 \x01(\t\"\'\n\rStreamRequest\x12\x16\n\x0esince_sequence\x18\x01 \x01(\x04\"\x1d\n\tNodeEdges\x12\x10\n\x08\x63hildren\x18\x01 \x03(\t\"\x8a\x06\n\x0b\x46lowInfoMsg\x12\x0c\n\x04name\x18\x01 \x01(\t\x12\x11\n\tfile_path\x18\x02 \x01(\t\x12\x10\n\x08node_ids\x18\x03 \x03(\t\x12\x39\n\x05graph\x18\x04 \x03(\x0b\x32*.avalanche.operator.FlowInfoMsg.GraphEntry\x12\x42\n\nnode_types\x18\x05 \x03(\x0b\x32..avalanche.operator.FlowInfoMsg.NodeTypesEntry\x12H\n\rdisplay_names\x18\x06 \x03(\x0b\x32\x31.avalanche.operator.FlowInfoMsg.DisplayNamesEntry\x12\x0c\n\x04\x63ron\x18\x07 \x01(\t\x12\x13\n\x0bnext_run_at\x18\x08 \x01(\x01\x12\x13\n\x0blast_run_at\x18\t \x01(\x01\x12\x13\n\x0bworkflow_id\x18\n \x01(\t\x12\x14\n\x0c\x64isplay_name\x18\x0b \x01(\t\x12\x12\n\nroot_alias\x18\x0c \x01(\t\x12\x15\n\rrelative_file\x18\r \x01(\t\x12\x16\n\x0e\x62uilder_symbol\x18\x0e \x01(\t\x12\x16\n\x0e\x61gent_node_ids\x18\x0f \x03(\t\x12S\n\x13\x61gent_metadata_json\x18\x10 \x03(\x0b\x32\x36.avalanche.operator.FlowInfoMsg.AgentMetadataJsonEntry\x1aK\n\nGraphEntry\x12\x0b\n\x03key\x18\x01 \x01(\t\x12,\n\x05value\x18\x02 \x01(\x0b\x32\x1d.avalanche.operator.NodeEdges:\x02\x38\x01\x1a\x30\n\x0eNodeTypesEntry\x12\x0b\n\x03key\x18\x01 \x01(\t\x12\r\n\x05value\x18\x02 \x01(\t:\x02\x38\x01\x1a\x33\n\x11\x44isplayNamesEntry\x12\x0b\n\x03key\x18\x01 \x01(\t\x12\r\n\x05value\x18\x02 \x01(\t:\x02\x38\x01\x1a\x38\n\x16\x41gentMetadataJsonEntry\x12\x0b\n\x03key\x18\x01 \x01(\t\x12\r\n\x05value\x18\x02 \x01(\t:\x02\x38\x01\"{\n\x08\x46lowList\x12.\n\x05\x66lows\x18\x01 \x03(\x0b\x32\x1f.avalanche.operator.FlowInfoMsg\x12?\n\x0b\x64iagnostics\x18\x02 \x03(\x0b\x32*.avalanche.operator.DiscoveryDiagnosticMsg\"E\n\x16\x44iscoveryDiagnosticMsg\x12\x0c\n\x04path\x18\x01 \x01(\t\x12\x0c\n\x04kind\x18\x02 \x01(\t\x12\x0f\n\x07message\x18\x03 \x01(\t\"\x90\x01\n\x0cNodeStateMsg\x12\x0f\n\x07node_id\x18\x01 \x01(\t\x12\x0c\n\x04name\x18\x02 \x01(\t\x12\x11\n\tnode_type\x18\x03 \x01(\t\x12\x0e\n\x06status\x18\x04 \x01(\t\x12\x12\n\nstarted_at\x18\x05 \x01(\x01\x12\x10\n\x08\x65nded_at\x18\x06 \x01(\x01\x12\x18\n\x10\x61gent_trace_json\x18\x07 \x01(\t\"Q\n\x0bLogEntryMsg\x12\x11\n\ttimestamp\x18\x01 \x01(\x01\x12\r\n\x05level\x18\x02 \x01(\t\x12\x0f\n\x07node_id\x18\x03 \x01(\t\x12\x0f\n\x07message\x18\x04 \x01(\t\"\x90\x02\n\x0bRunStateMsg\x12\x0e\n\x06run_id\x18\x01 \x01(\t\x12\x11\n\tflow_name\x18\x02 \x01(\t\x12\x0e\n\x06status\x18\x03 \x01(\t\x12\x12\n\nstarted_at\x18\x04 \x01(\x01\x12\x10\n\x08\x65nded_at\x18\x05 \x01(\x01\x12/\n\x05nodes\x18\x06 \x03(\x0b\x32 .avalanche.operator.NodeStateMsg\x12-\n\x04logs\x18\x07 \x03(\x0b\x32\x1f.avalanche.operator.LogEntryMsg\x12\x14\n\x0ctriggered_by\x18\x08 \x01(\t\x12\x13\n\x0bworkflow_id\x18\t \x01(\t\x12\x1d\n\x15workflow_display_name\x18\n \x01(\t\"8\n\x07RunList\x12-\n\x04runs\x18\x01 \x03(\x0b\x32\x1f.avalanche.operator.RunStateMsg\"K\n\tRunUpdate\x12\x10\n\x08sequence\x18\x01 \x01(\x04\x12,\n\x03run\x18\x02 \x01(\x0b\x32\x1f.avalanche.operator.RunStateMsg2\xed\x03\n\x0fOperatorService\x12\x44\n\tListFlows\x12\x19.avalanche.operator.Empty\x1a\x1c.avalanche.operator.FlowList\x12U\n\x08StartRun\x12#.avalanche.operator.StartRunRequest\x1a$.avalanche.operator.StartRunResponse\x12L\n\tCancelRun\x12$.avalanche.operator.CancelRunRequest\x1a\x19.avalanche.operator.Empty\x12L\n\x08ListRuns\x12#.avalanche.operator.ListRunsRequest\x1a\x1b.avalanche.operator.RunList\x12L\n\x06GetRun\x12!.avalanche.operator.GetRunRequest\x1a\x1f.avalanche.operator.RunStateMsg\x12S\n\rStreamUpdates\x12!.avalanche.operator.StreamRequest\x1a\x1d.avalanche.operator.RunUpdate0\x01\x62\x06proto3')
 
 _globals = globals()
 _builder.BuildMessageAndEnumDescriptors(DESCRIPTOR, _globals)
@@ -37,6 +37,8 @@ if not _descriptor._USE_C_DESCRIPTORS:
   _globals['_FLOWINFOMSG_NODETYPESENTRY']._serialized_options = b'8\001'
   _globals['_FLOWINFOMSG_DISPLAYNAMESENTRY']._loaded_options = None
   _globals['_FLOWINFOMSG_DISPLAYNAMESENTRY']._serialized_options = b'8\001'
+  _globals['_FLOWINFOMSG_AGENTMETADATAJSONENTRY']._loaded_options = None
+  _globals['_FLOWINFOMSG_AGENTMETADATAJSONENTRY']._serialized_options = b'8\001'
   _globals['_EMPTY']._serialized_start=38
   _globals['_EMPTY']._serialized_end=45
   _globals['_STARTRUNREQUEST']._serialized_start=48
@@ -56,27 +58,29 @@ if not _descriptor._USE_C_DESCRIPTORS:
   _globals['_NODEEDGES']._serialized_start=546
   _globals['_NODEEDGES']._serialized_end=575
   _globals['_FLOWINFOMSG']._serialized_start=578
-  _globals['_FLOWINFOMSG']._serialized_end=1189
-  _globals['_FLOWINFOMSG_GRAPHENTRY']._serialized_start=1011
-  _globals['_FLOWINFOMSG_GRAPHENTRY']._serialized_end=1086
-  _globals['_FLOWINFOMSG_NODETYPESENTRY']._serialized_start=1088
-  _globals['_FLOWINFOMSG_NODETYPESENTRY']._serialized_end=1136
-  _globals['_FLOWINFOMSG_DISPLAYNAMESENTRY']._serialized_start=1138
-  _globals['_FLOWINFOMSG_DISPLAYNAMESENTRY']._serialized_end=1189
-  _globals['_FLOWLIST']._serialized_start=1191
-  _globals['_FLOWLIST']._serialized_end=1314
-  _globals['_DISCOVERYDIAGNOSTICMSG']._serialized_start=1316
-  _globals['_DISCOVERYDIAGNOSTICMSG']._serialized_end=1385
-  _globals['_NODESTATEMSG']._serialized_start=1387
-  _globals['_NODESTATEMSG']._serialized_end=1505
-  _globals['_LOGENTRYMSG']._serialized_start=1507
-  _globals['_LOGENTRYMSG']._serialized_end=1588
-  _globals['_RUNSTATEMSG']._serialized_start=1591
-  _globals['_RUNSTATEMSG']._serialized_end=1863
-  _globals['_RUNLIST']._serialized_start=1865
-  _globals['_RUNLIST']._serialized_end=1921
-  _globals['_RUNUPDATE']._serialized_start=1923
-  _globals['_RUNUPDATE']._serialized_end=1998
-  _globals['_OPERATORSERVICE']._serialized_start=2001
-  _globals['_OPERATORSERVICE']._serialized_end=2494
+  _globals['_FLOWINFOMSG']._serialized_end=1356
+  _globals['_FLOWINFOMSG_GRAPHENTRY']._serialized_start=1120
+  _globals['_FLOWINFOMSG_GRAPHENTRY']._serialized_end=1195
+  _globals['_FLOWINFOMSG_NODETYPESENTRY']._serialized_start=1197
+  _globals['_FLOWINFOMSG_NODETYPESENTRY']._serialized_end=1245
+  _globals['_FLOWINFOMSG_DISPLAYNAMESENTRY']._serialized_start=1247
+  _globals['_FLOWINFOMSG_DISPLAYNAMESENTRY']._serialized_end=1298
+  _globals['_FLOWINFOMSG_AGENTMETADATAJSONENTRY']._serialized_start=1300
+  _globals['_FLOWINFOMSG_AGENTMETADATAJSONENTRY']._serialized_end=1356
+  _globals['_FLOWLIST']._serialized_start=1358
+  _globals['_FLOWLIST']._serialized_end=1481
+  _globals['_DISCOVERYDIAGNOSTICMSG']._serialized_start=1483
+  _globals['_DISCOVERYDIAGNOSTICMSG']._serialized_end=1552
+  _globals['_NODESTATEMSG']._serialized_start=1555
+  _globals['_NODESTATEMSG']._serialized_end=1699
+  _globals['_LOGENTRYMSG']._serialized_start=1701
+  _globals['_LOGENTRYMSG']._serialized_end=1782
+  _globals['_RUNSTATEMSG']._serialized_start=1785
+  _globals['_RUNSTATEMSG']._serialized_end=2057
+  _globals['_RUNLIST']._serialized_start=2059
+  _globals['_RUNLIST']._serialized_end=2115
+  _globals['_RUNUPDATE']._serialized_start=2117
+  _globals['_RUNUPDATE']._serialized_end=2192
+  _globals['_OPERATORSERVICE']._serialized_start=2195
+  _globals['_OPERATORSERVICE']._serialized_end=2688
 # @@protoc_insertion_point(module_scope)
