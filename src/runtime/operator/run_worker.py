@@ -92,10 +92,7 @@ def run_worker(
             executor = LocalExecutor()
 
             def wrap_fn(node_id: str, fn: Callable[..., Any]) -> Callable[..., Any]:
-                wrapped = _with_node_streams(node_id, fn, stdout, stderr)
-                if getattr(fn, "__agent_step__", None) is not None:
-                    return _with_agent_evidence(node_id, wrapped, event_queue)
-                return wrapped
+                return _with_local_node_observers(node_id, fn, stdout, stderr, event_queue)
         elif executor_mode == "ray":
             import ray
 
@@ -122,10 +119,7 @@ def run_worker(
             ray_log_drain.start()
 
             def wrap_fn(node_id: str, fn: Callable[..., Any]) -> Callable[..., Any]:
-                wrapped = _with_ray_node_streams(node_id, fn, ray_log_queue)
-                if getattr(fn, "__agent_step__", None) is not None:
-                    return _with_agent_evidence(node_id, wrapped, ray_log_queue)
-                return wrapped
+                return _with_ray_node_observers(node_id, fn, ray_log_queue)
         else:
             raise ValueError(f"Unknown executor mode: {executor_mode}")
 
@@ -315,6 +309,18 @@ class _QueueStream:
         )
 
 
+def _with_local_node_observers(
+    node_id: str,
+    fn: Callable[..., Any],
+    stdout: _QueueStream,
+    stderr: _QueueStream,
+    event_queue: Any,
+) -> Callable[..., Any]:
+    if getattr(fn, "__agent_step__", None) is not None:
+        fn = _with_agent_evidence(node_id, fn, event_queue)
+    return _with_node_streams(node_id, fn, stdout, stderr)
+
+
 def _with_node_streams(
     node_id: str,
     fn: Callable[..., Any],
@@ -377,6 +383,16 @@ def _with_agent_evidence(
 
 
 _RAY_LOG_STOP = {"type": "_ray_log_stop"}
+
+
+def _with_ray_node_observers(
+    node_id: str,
+    fn: Callable[..., Any],
+    ray_log_queue: Any,
+) -> Callable[..., Any]:
+    if getattr(fn, "__agent_step__", None) is not None:
+        fn = _with_agent_evidence(node_id, fn, ray_log_queue)
+    return _with_ray_node_streams(node_id, fn, ray_log_queue)
 
 
 def _with_ray_node_streams(

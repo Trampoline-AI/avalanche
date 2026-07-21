@@ -16,7 +16,11 @@ from avalanche.operator import Operator
 from avalanche.operator.models import NodeState, NodeStatus, RunState, RunStatus
 from avalanche.operator.operator import RunAlreadyExistsError
 from avalanche.operator.scheduler import Scheduler
-from runtime.operator.run_worker import _with_agent_evidence
+from runtime.operator.run_worker import (
+    _QueueStream,
+    _with_local_node_observers,
+    _with_ray_node_observers,
+)
 
 FIXTURES_DIR = os.path.join(os.path.dirname(os.path.dirname(__file__)), "fixtures")
 
@@ -537,7 +541,8 @@ class TestAgentEvidenceTransport:
         )
         return run
 
-    def test_worker_wrapper_forwards_async_agent_evidence(self):
+    @pytest.mark.parametrize("backend", ["local", "ray"])
+    def test_node_observers_keep_evidence_context_while_awaiting(self, backend):
         class Queue:
             def __init__(self):
                 self.items = []
@@ -558,10 +563,21 @@ class TestAgentEvidenceTransport:
             )
             return "result"
 
+        agent_node.__agent_step__ = object()
         queue = Queue()
-        wrapped = _with_agent_evidence("agent_1", agent_node, queue)
+        if backend == "local":
+            wrapped = _with_local_node_observers(
+                "agent_1",
+                agent_node,
+                _QueueStream(queue, "operator", 20),
+                _QueueStream(queue, "operator", 40),
+                queue,
+            )
+        else:
+            wrapped = _with_ray_node_observers("agent_1", agent_node, queue)
+
         assert asyncio.run(wrapped()) == "result"
-        assert queue.items == [
+        assert [item for item in queue.items if item.get("type") == "agent_evidence"] == [
             {
                 "type": "agent_evidence",
                 "node_id": "agent_1",

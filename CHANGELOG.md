@@ -71,6 +71,8 @@
 - The agent inspector now has Trace and Metadata tabs. Metadata is available
   before execution and shows the resolved signature, skills, static
   instructions, tools, and effective redacted runtime configuration.
+- Fix: live agent evidence now remains attached across async node execution, so
+  the Trace tab receives turns and status updates under local and Ray backends.
 - See [docs/agent-steps.md](docs/agent-steps.md).
 
 ## 0.1.0-rc0
