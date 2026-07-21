@@ -27,7 +27,9 @@ def tmux(*args: str, input: str | None = None) -> str:
     """Run a tmux command and return stdout."""
     result = subprocess.run(
         ["tmux", *args],
-        capture_output=True, text=True, timeout=10,
+        capture_output=True,
+        text=True,
+        timeout=10,
         input=input,
     )
     return result.stdout
@@ -48,12 +50,12 @@ def send_keys(*keys: str) -> None:
 
 def restart_tui(args: str = "", *, width: int = 100, height: int = 40) -> None:
     """Restart the tmux session with optional TUI CLI args."""
-    subprocess.run(["tmux", "kill-session", "-t", SESSION],
-                   capture_output=True, timeout=5)
+    subprocess.run(["tmux", "kill-session", "-t", SESSION], capture_output=True, timeout=5)
     cmd = f"{TUI_CMD} {args}; sleep 30" if args else f"{TUI_CMD}; sleep 30"
     subprocess.run(
         ["tmux", "new-session", "-d", "-s", SESSION, "-x", str(width), "-y", str(height), cmd],
-        check=True, timeout=10,
+        check=True,
+        timeout=10,
         cwd=os.path.dirname(os.path.dirname(__file__)),
     )
     assert wait_for("avalanche", timeout=8), "TUI did not start"
@@ -109,14 +111,24 @@ def tui_session():
         pytest.skip("tmux not installed")
 
     # Kill any leftover session
-    subprocess.run(["tmux", "kill-session", "-t", SESSION],
-                   capture_output=True, timeout=5)
+    subprocess.run(["tmux", "kill-session", "-t", SESSION], capture_output=True, timeout=5)
 
     # Start new session
     subprocess.run(
-        ["tmux", "new-session", "-d", "-s", SESSION, "-x", "100", "-y", "40",
-         f"{TUI_CMD}; sleep 30"],
-        check=True, timeout=10,
+        [
+            "tmux",
+            "new-session",
+            "-d",
+            "-s",
+            SESSION,
+            "-x",
+            "100",
+            "-y",
+            "40",
+            f"{TUI_CMD}; sleep 30",
+        ],
+        check=True,
+        timeout=10,
         cwd=os.path.dirname(os.path.dirname(__file__)),
     )
     # Wait for the TUI to render
@@ -124,8 +136,7 @@ def tui_session():
 
     yield SESSION
 
-    subprocess.run(["tmux", "kill-session", "-t", SESSION],
-                   capture_output=True, timeout=5)
+    subprocess.run(["tmux", "kill-session", "-t", SESSION], capture_output=True, timeout=5)
 
 
 @pytest.mark.tmux
@@ -161,19 +172,29 @@ class TestTmuxRendering:
         # Status bar should show the selected node
         lines = capture()
         status_line = lines[-2] if len(lines) > 1 else ""
-        assert "validate" in status_line, (
-            f"Expected 'validate' in status bar, got: {status_line}"
-        )
+        assert (
+            "validate" in status_line
+        ), f"Expected 'validate' in status bar, got: {status_line}"
 
     def test_deep_link_workflow(self, tui_session):
         """Deep-link CLI arg should select the specified workflow."""
         # Kill current session and start with deep-link
-        subprocess.run(["tmux", "kill-session", "-t", SESSION],
-                       capture_output=True, timeout=5)
+        subprocess.run(["tmux", "kill-session", "-t", SESSION], capture_output=True, timeout=5)
         subprocess.run(
-            ["tmux", "new-session", "-d", "-s", SESSION, "-x", "100", "-y", "40",
-             f"{TUI_CMD} ml_workflow; sleep 30"],
-            check=True, timeout=10,
+            [
+                "tmux",
+                "new-session",
+                "-d",
+                "-s",
+                SESSION,
+                "-x",
+                "100",
+                "-y",
+                "40",
+                f"{TUI_CMD} ml_workflow; sleep 30",
+            ],
+            check=True,
+            timeout=10,
             cwd=os.path.dirname(os.path.dirname(__file__)),
         )
         assert wait_for("ml_workflow", timeout=8)
@@ -182,9 +203,9 @@ class TestTmuxRendering:
         lines = capture()
         combined = "\n".join(lines)
         # DAG should show ml_workflow nodes, not order_workflow
-        assert "fetch_training" in combined or "preprocess" in combined, (
-            "Deep-link to ml_workflow should show its DAG"
-        )
+        assert (
+            "fetch_training" in combined or "preprocess" in combined
+        ), "Deep-link to ml_workflow should show its DAG"
 
     def test_deep_link_notify_slack(self, tui_session):
         """Deep-linking notify_slack in ml_workflow should select it."""
@@ -230,3 +251,61 @@ class TestTmuxRendering:
         send_keys("Left")
         time.sleep(0.5)
         assert_node_selected("deploy_staging")
+
+    def test_agent_trace_inspector_real_terminal_contract(self, tui_session):
+        """Structured agent turns remain scrollable and Escape restores the dashboard."""
+        restart_tui("agent_trace/inspect_agent", width=100, height=35)
+        assert wait_for("inspect_agent", timeout=8)
+        open_explorer()
+
+        send_keys("Escape", "Enter")
+        assert wait_for("STRUCTURED TRACE", timeout=5)
+        combined = "\n".join(capture())
+        assert "EXPLORER" in combined
+        assert "STRUCTURED TRACE" in combined
+        assert "AGENT TURN 1/4" in combined
+        assert "reasoning:" in combined
+        assert "code:" in combined
+        assert "inspect_agent" in combined
+
+        send_keys("m")
+        assert wait_for("AGENT METADATA", timeout=5)
+        combined = "\n".join(capture())
+        assert "InspectRecords" in combined
+        assert "records to inspect" in combined
+        assert "MODEL / RUNTIME SETTINGS" in combined
+        assert "audit" in combined
+        assert "RLM" not in combined
+
+        send_keys("PageDown")
+        assert wait_for("AGGREGATED STATIC INSTRUCTIONS", timeout=5)
+        combined = "\n".join(capture())
+        assert "pydantic" in combined
+        assert "record_helpers" in combined
+        assert "lookup_record" in combined
+
+        send_keys("m")
+        assert wait_for("STRUCTURED TRACE", timeout=5)
+
+        send_keys("o")
+        assert wait_for("FULL OUTPUT", timeout=5)
+        combined = "\n".join(capture())
+        assert "active_count" in combined
+        assert "Grace Hopper" in combined
+
+        send_keys("Enter")
+        time.sleep(0.5)
+        combined = "\n".join(capture())
+        assert "AGENT TURN 1/4" in combined
+        send_keys("Enter")
+        assert wait_for("output (full)", timeout=5)
+
+        send_keys("Escape")
+        assert wait_for("Logs", timeout=5)
+        send_keys("w", "PageDown")
+        assert wait_for("Agent code", timeout=5)
+        combined = "\n".join(capture())
+        assert "DAG" in combined
+        assert "Agent code" in combined
+        assert "EXPLORER" in combined
+        assert "inspect_agent" in combined

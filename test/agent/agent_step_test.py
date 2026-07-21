@@ -1,7 +1,9 @@
 """Tests for bodyful ``@ava.agent_step`` workflow nodes."""
+
 from __future__ import annotations
 
 import importlib
+import json
 from types import SimpleNamespace
 from typing import Any
 
@@ -9,6 +11,7 @@ import pytest
 from pydantic import BaseModel
 
 import avalanche as ava
+from avalanche._agent_evidence import capture_agent_evidence
 from avalanche.agent import AgentStepError, AgentStepExecutionError
 from avalanche.executor import LocalExecutor
 
@@ -217,6 +220,99 @@ def test_workflow_agent_defaults_reject_capabilities(name, defaults):
             return "unreachable"
 
 
+def test_agent_declaration_metadata_is_complete_static_and_redacted():
+    from pathlib import Path
+
+    from predict_rlm import Skill
+
+    def skill_tool(record_id: str) -> str:
+        """Fetch a record by identifier."""
+        return record_id
+
+    def explicit_tool(text: str) -> str:
+        """Normalize text for review."""
+        return text.strip()
+
+    audit_skill = Skill(
+        name="audit",
+        instructions="Check every claim.",
+        packages=["pydantic"],
+        modules={"audit_helpers": "/private/audit_helpers.py"},
+        tools={"fetch_record": skill_tool},
+    )
+
+    @ava.agent_step(
+        SummarySignature,
+        skills=[audit_skill],
+        tools=[explicit_tool],
+        max_iterations=7,
+        output_dir=Path("/private/output"),
+        submit_confirmation=lambda _context: "secret callback",
+    )
+    async def summarize(person: Person, *, agent: ava.Agent) -> str:
+        return (await agent(person=person)).note
+
+    spec = summarize.fn.__agent_step__
+    metadata = spec.declaration_metadata(
+        {
+            "max_iterations": 3,
+            "debug": True,
+            "api_key": "secret",
+            "opaque": object(),
+        }
+    )
+
+    assert metadata["signature"] == {
+        "name": "SummarySignature",
+        "instructions": "Summarize the supplied person.",
+        "inputs": [
+            {
+                "name": "person",
+                "annotation": "Person",
+                "description": "person to summarize",
+            }
+        ],
+        "outputs": [
+            {
+                "name": "summary",
+                "annotation": "Summary",
+                "description": "structured summary",
+            },
+            {
+                "name": "note",
+                "annotation": "str",
+                "description": "review note",
+            },
+        ],
+    }
+    assert metadata["skills"] == [
+        {
+            "name": "audit",
+            "instructions": "Check every claim.",
+            "packages": ["pydantic"],
+            "modules": ["audit_helpers"],
+            "tools": ["fetch_record"],
+        }
+    ]
+    assert metadata["aggregated_static_instructions"] == (
+        "Summarize the supplied person.\n\n## Skill: audit\n\nCheck every claim."
+    )
+    assert metadata["packages"] == ["pydantic"]
+    assert metadata["modules"] == ["audit_helpers"]
+    assert metadata["tools"] == [
+        {"name": "fetch_record", "description": "Fetch a record by identifier."},
+        {"name": "explicit_tool", "description": "Normalize text for review."},
+    ]
+    assert metadata["runtime"]["max_iterations"] == 7
+    assert metadata["runtime"]["debug"] is True
+    assert metadata["runtime"]["max_llm_calls"] == 50
+    rendered = json.dumps(metadata)
+    assert "secret" not in rendered
+    assert "/private" not in rendered
+    assert "opaque" not in rendered
+    assert "submit_confirmation" not in metadata["runtime"]
+
+
 @pytest.mark.parametrize(
     ("name", "declare", "message"),
     [
@@ -270,3 +366,228 @@ def _decorate_wrongly_annotated_agent(signature):
     @ava.agent.step(signature)
     async def summarize(person: Person, *, agent: object) -> str:
         return person.name
+
+
+class _RecordingSink:
+    strict = True
+
+    def __init__(self):
+        self.events = []
+
+    async def emit(self, event):
+        self.events.append(event)
+
+    async def flush(self, run_id):
+        return None
+
+    async def close(self, run_id, terminal_event=None):
+        if terminal_event is not None:
+            self.events.append(terminal_event)
+
+
+class _ExportableTrace:
+    def __init__(self, status="completed", *, fail=False):
+        self.status = status
+        self.fail = fail
+        self.called = False
+
+    def to_exportable_json(self):
+        self.called = True
+        if self.fail:
+            raise ValueError("trace export failed")
+        return json.dumps(
+            {
+                "status": self.status,
+                "model": "main",
+                "sub_model": "sub",
+                "iterations": 1,
+                "max_iterations": 2,
+                "duration_ms": 10,
+                "usage": {"main": {}, "sub": {}},
+                "steps": [],
+                "evidence": {
+                    "run_id": "rlm-run",
+                    "complete": True,
+                    "terminal_outcome": self.status,
+                    "events": [],
+                },
+                "image": "data:image/png;base64,<IMAGE_BASE_64_ENCODED(12)>",
+            }
+        )
+
+
+class _EvidencePredictor:
+    def __init__(self, sinks, response=None, error=None):
+        self.sinks = sinks
+        self.response = response
+        self.error = error
+
+    async def acall(self, **inputs):
+        from predict_rlm import RunEvent, RunEventKind
+
+        payloads = [
+            (RunEventKind.RUN_STARTED, {"inputs": inputs}),
+            (RunEventKind.CODE_GENERATED, {"iteration": 1, "code": "print('ok')"}),
+            (RunEventKind.CODE_EXECUTED, {"iteration": 1, "output": "ok"}),
+            (
+                RunEventKind.PREDICT_STARTED,
+                {
+                    "call_id": "predict-1",
+                    "signature": "text -> answer",
+                    "instructions": "answer",
+                    "model": "sub",
+                    "input": {"secret": "hidden"},
+                },
+            ),
+            (
+                RunEventKind.PREDICT_FINISHED,
+                {"call_id": "predict-1", "output": {"secret": "hidden"}},
+            ),
+            (
+                RunEventKind.TOOL_STARTED,
+                {"call_id": "tool-1", "name": "lookup", "args": ["secret"]},
+            ),
+            (
+                RunEventKind.TOOL_FINISHED,
+                {"call_id": "tool-1", "name": "lookup", "result": "secret"},
+            ),
+            (
+                RunEventKind.ITERATION_RECORDED,
+                {
+                    "step": {
+                        "iteration": 1,
+                        "duration_ms": 9,
+                        "error": False,
+                        "tool_calls": [{}],
+                        "predict_calls": [{"calls": [{}]}],
+                    }
+                },
+            ),
+        ]
+        for sequence, (kind, data) in enumerate(payloads, 1):
+            event = RunEvent("rlm-run", sequence, kind, sequence, data)
+            for sink in self.sinks:
+                await sink.emit(event)
+        terminal_kind = (
+            RunEventKind.RUN_FAILED if self.error is not None else RunEventKind.RUN_SUCCEEDED
+        )
+        terminal = RunEvent(
+            "rlm-run",
+            len(payloads) + 1,
+            terminal_kind,
+            len(payloads) + 1,
+            {"error": str(self.error)} if self.error is not None else {},
+        )
+        for sink in self.sinks:
+            await sink.flush("rlm-run")
+            await sink.close("rlm-run", terminal)
+        if self.error is not None:
+            raise self.error
+        return self.response
+
+
+@pytest.mark.asyncio
+async def test_agent_streams_sanitized_evidence_and_exported_trace(monkeypatch):
+    """The observer retains user sinks and publishes only compact live fields."""
+    user_sink = _RecordingSink()
+    trace = _ExportableTrace()
+    prediction = SimpleNamespace(
+        summary=Summary(headline="done", person_count=1),
+        note="unchanged",
+        trace=trace,
+    )
+
+    def fake_build(signature, *, skills, tools, **runtime_kwargs):
+        sinks = (*runtime_kwargs["events"], agent_step_module._AvalancheEvidenceSink())
+        return _EvidencePredictor(sinks, response=prediction)
+
+    monkeypatch.setattr(agent_step_module, "_build_predictor", fake_build)
+    agent = agent_step_module.Agent(
+        signature=SummarySignature,
+        step_name="summarize",
+        runtime_kwargs={"events": (user_sink,)},
+    )
+    observed = []
+    with capture_agent_evidence(observed.append):
+        result = await agent(person=Person(id=1, name="Ada"))
+
+    assert result is prediction
+    assert [event.kind.value for event in user_sink.events] == [
+        "run.started",
+        "code.generated",
+        "code.executed",
+        "predict.started",
+        "predict.finished",
+        "tool.started",
+        "tool.finished",
+        "iteration.recorded",
+        "run.succeeded",
+    ]
+    live = [event for event in observed if event["kind"] == "evidence"]
+    assert [event["sequence"] for event in live] == list(range(1, 10))
+    assert live[0]["data"] == {"input_fields": ["person"]}
+    assert live[3]["data"]["call_id"] == "predict-1"
+    assert "input" not in live[3]["data"]
+    assert "output" not in live[4]["data"]
+    assert "args" not in live[5]["data"]
+    assert "result" not in live[6]["data"]
+    terminal = observed[-1]
+    assert terminal["kind"] == "trace_finished"
+    assert terminal["trace"]["evidence"]["complete"] is True
+    assert "IMAGE_BASE_64_ENCODED" in json.dumps(terminal)
+    assert trace.called is True
+
+
+@pytest.mark.asyncio
+async def test_agent_observer_and_trace_export_failures_do_not_change_prediction(monkeypatch):
+    trace = _ExportableTrace(fail=True)
+    prediction = SimpleNamespace(
+        summary=Summary(headline="done", person_count=1),
+        note="unchanged",
+        trace=trace,
+    )
+
+    monkeypatch.setattr(
+        agent_step_module,
+        "_build_predictor",
+        lambda *args, **kwargs: _EvidencePredictor(
+            (agent_step_module._AvalancheEvidenceSink(),), response=prediction
+        ),
+    )
+    agent = agent_step_module.Agent(
+        signature=SummarySignature,
+        step_name="summarize",
+        runtime_kwargs={},
+    )
+
+    def broken_observer(_event):
+        raise RuntimeError("devtools unavailable")
+
+    with capture_agent_evidence(broken_observer):
+        assert await agent(person=Person(id=1, name="Ada")) is prediction
+
+
+@pytest.mark.asyncio
+async def test_agent_exports_exception_trace_before_preserving_wrapped_error(monkeypatch):
+    trace = _ExportableTrace(status="error")
+    failure = ValueError("provider unavailable")
+    failure.trace = trace
+    monkeypatch.setattr(
+        agent_step_module,
+        "_build_predictor",
+        lambda *args, **kwargs: _EvidencePredictor(
+            (agent_step_module._AvalancheEvidenceSink(),), error=failure
+        ),
+    )
+    agent = agent_step_module.Agent(
+        signature=SummarySignature,
+        step_name="summarize",
+        runtime_kwargs={},
+    )
+    observed = []
+    with capture_agent_evidence(observed.append):
+        with pytest.raises(AgentStepExecutionError, match="provider unavailable"):
+            await agent(person=Person(id=1, name="Ada"))
+
+    assert observed[-1]["kind"] == "trace_finished"
+    assert observed[-1]["trace"]["status"] == "error"

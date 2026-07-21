@@ -71,9 +71,7 @@ def configure_roots(paths: list[str]) -> tuple[ConfiguredRoot, ...]:
 
 def discover(
     roots: tuple[ConfiguredRoot, ...], *, timeout: float = DEFAULT_DISCOVERY_TIMEOUT
-) -> tuple[
-    tuple[WorkflowDescriptor, ...], tuple[WorkflowDiscoveryDiagnostic, ...]
-]:
+) -> tuple[tuple[WorkflowDescriptor, ...], tuple[WorkflowDiscoveryDiagnostic, ...]]:
     """Discover in a short-lived interpreter and return value-only results."""
     payload = {
         "roots": [
@@ -117,9 +115,7 @@ def discover(
                 try:
                     process.wait(timeout=timeout)
                 except subprocess.TimeoutExpired:
-                    return (), (
-                        _discovery_failure(f"Discovery exceeded {timeout:.1f}s"),
-                    )
+                    return (), (_discovery_failure(f"Discovery exceeded {timeout:.1f}s"),)
                 finally:
                     _terminate_discovery_process(process, windows_job)
                     terminated = True
@@ -137,9 +133,7 @@ def discover(
             return (), (_discovery_failure(captured or "Discovery worker failed"),)
         try:
             result = json.loads(result_path.read_text())
-            descriptors = tuple(
-                _descriptor_from_dict(item) for item in result["descriptors"]
-            )
+            descriptors = tuple(_descriptor_from_dict(item) for item in result["descriptors"])
             diagnostics = tuple(
                 WorkflowDiscoveryDiagnostic(**item) for item in result["diagnostics"]
             )
@@ -205,9 +199,7 @@ def _bounded_diagnostic(value: str, limit: int = 4000) -> str:
 
 
 def _discovery_failure(message: str) -> WorkflowDiscoveryDiagnostic:
-    return WorkflowDiscoveryDiagnostic(
-        path="<discovery>", kind="import_error", message=message
-    )
+    return WorkflowDiscoveryDiagnostic(path="<discovery>", kind="import_error", message=message)
 
 
 def load_builder(root: ConfiguredRoot, locator: WorkflowLocator):
@@ -241,11 +233,7 @@ def _iter_files(root: ConfiguredRoot) -> list[Path]:
         return [root.target] if root.target.suffix == ".py" else []
     if not root.target.is_dir():
         return []
-    return [
-        path
-        for path in sorted(root.target.rglob("*.py"))
-        if not path.name.startswith("_")
-    ]
+    return [path for path in sorted(root.target.rglob("*.py")) if not path.name.startswith("_")]
 
 
 def _package_module_name(file_path: Path) -> tuple[str, Path] | None:
@@ -394,6 +382,28 @@ def _descriptor_to_dict(
     workflow: Workflow,
 ) -> dict[str, Any]:
     node_ids = workflow._topological_sort()
+    agent_node_ids = []
+    agent_metadata_json = []
+    for node_id in node_ids:
+        spec = getattr(workflow.nodes[node_id].node.fn, "__agent_step__", None)
+        if spec is None:
+            continue
+        agent_node_ids.append(node_id)
+        try:
+            metadata = spec.declaration_metadata(workflow.agent_defaults)
+            agent_metadata_json.append(
+                [
+                    node_id,
+                    json.dumps(
+                        metadata,
+                        ensure_ascii=False,
+                        separators=(",", ":"),
+                        sort_keys=True,
+                    ),
+                ]
+            )
+        except Exception:
+            continue
     return {
         "workflow_id": workflow_id,
         "display_name": workflow.name,
@@ -406,6 +416,8 @@ def _descriptor_to_dict(
         "graph": [[key, value] for key, value in workflow.graph.items()],
         "node_types": [[nid, workflow.nodes[nid].node.node_type.value] for nid in node_ids],
         "display_names": [[nid, display_name_from_id(nid)] for nid in node_ids],
+        "agent_node_ids": agent_node_ids,
+        "agent_metadata_json": agent_metadata_json,
         "cron": workflow.cron,
     }
 
@@ -419,6 +431,10 @@ def _descriptor_from_dict(item: dict[str, Any]) -> WorkflowDescriptor:
         graph=tuple((key, tuple(value)) for key, value in item["graph"]),
         node_types=tuple((key, value) for key, value in item["node_types"]),
         display_names=tuple((key, value) for key, value in item["display_names"]),
+        agent_node_ids=tuple(item.get("agent_node_ids", ())),
+        agent_metadata_json=tuple(
+            (key, value) for key, value in item.get("agent_metadata_json", ())
+        ),
         cron=item["cron"],
     )
 

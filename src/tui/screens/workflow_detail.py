@@ -11,6 +11,7 @@ from textual.screen import Screen
 from textual.scrollbar import ScrollBar, ScrollBarRender
 from textual.widgets import Header, Static
 
+from ..widgets.agent_trace import AgentMetadataInspector, AgentTraceInspector
 from ..widgets.dag import DagWidget
 from ..widgets.log_panel import LogWidget
 from ..widgets.run_history import RunHistoryWidget
@@ -69,6 +70,7 @@ class _HalfHeightScrollBarRender(ScrollBarRender):
 
         if window_size and size and virtual_size and size != virtual_size:
             from math import ceil
+
             bar_ratio = virtual_size / size
             thumb_size = max(1, window_size / bar_ratio)
             position_ratio = position / (virtual_size - window_size)
@@ -79,9 +81,7 @@ class _HalfHeightScrollBarRender(ScrollBarRender):
             segments[end:] = [Segment("▃", track_style_lower)] * (size - end)
             segments[start:end] = [Segment("▃", thumb_style)] * (end - start)
 
-        return Segments(
-            (segments + [Segment.line()]) * thickness, new_lines=False
-        )
+        return Segments((segments + [Segment.line()]) * thickness, new_lines=False)
 
 
 class _ThinScrollContainer(ScrollableContainer):
@@ -183,8 +183,6 @@ class _TableScrollContainer(_ThinScrollContainer):
 
 
 
-
-
 class _DagCenterBtn(Static):
     """Clickable button that re-centers the DAG in its scroll container."""
 
@@ -228,7 +226,7 @@ class WorkflowDetailScreen(Screen):
     }
 
     /* ── Shared border title styling ── */
-    #sidebar, #dag-container, #run-history, #log-panel {
+    #sidebar, #dag-container, #run-history, #log-panel, #agent-trace-inspector {
         border: solid #5a4f80;
         border-title-color: $accent;
         border-title-style: bold;
@@ -237,8 +235,20 @@ class WorkflowDetailScreen(Screen):
     #sidebar.-pane-active,
     #dag-container.-pane-active,
     #run-history.-pane-active,
-    #log-panel.-pane-active {
+    #log-panel.-pane-active,
+    #agent-trace-inspector.-pane-active {
         border: solid $accent;
+    }
+
+    #dashboard-pane, #agent-trace-inspector {
+        width: 100%;
+        height: 100%;
+    }
+    #agent-trace-inspector {
+        display: none;
+    }
+    #agent-metadata-content {
+        display: none;
     }
 
     /* ── Sidebar ── */
@@ -328,21 +338,27 @@ class WorkflowDetailScreen(Screen):
         with Horizontal(id="main-layout"):
             yield Sidebar(id="sidebar")
             with Vertical(id="right-pane"):
-                with _TableScrollContainer(id="run-history") as rh:
-                    rh.border_title = "Runs"
-                    yield Static(id="run-history-header", classes="pane-header")
-                    yield RunHistoryWidget(id="run-history-content")
-                with _DagScrollContainer(id="dag-container") as dag_container:
-                    dag_container.border_title = "DAG"
-                    dag_container.styles.height = "2fr"
-                    yield DagWidget(id="dag-panel")
-                    yield _DagCenterBtn(" ⊡ center ", id="dag-center-btn")
-                with Vertical(id="log-panel") as lp:
-                    lp.border_title = "Logs"
-                    lp.styles.height = "2fr"
-                    yield Static(id="log-header", classes="pane-header")
-                    yield LogWidget(id="log-content")
+                with Vertical(id="dashboard-pane"):
+                    with _TableScrollContainer(id="run-history") as rh:
+                        rh.border_title = "Runs"
+                        yield Static(id="run-history-header", classes="pane-header")
+                        yield RunHistoryWidget(id="run-history-content")
+                    with _DagScrollContainer(id="dag-container") as dag_container:
+                        dag_container.border_title = "DAG"
+                        dag_container.styles.height = "2fr"
+                        yield DagWidget(id="dag-panel")
+                        yield _DagCenterBtn(" ⊡ center ", id="dag-center-btn")
+                    with Vertical(id="log-panel") as lp:
+                        lp.border_title = "Logs"
+                        lp.styles.height = "2fr"
+                        yield Static(id="log-header", classes="pane-header")
+                        yield LogWidget(id="log-content")
+                with _ThinScrollContainer(id="agent-trace-inspector") as inspector:
+                    inspector.border_title = "Agent · Trace"
+                    yield AgentTraceInspector(id="agent-trace-content")
+                    yield AgentMetadataInspector(id="agent-metadata-content")
         from textual.containers import Container
+
         with Container(id="disconnect-wrapper"):
             yield Static(id="disconnect-box")
         yield StatusBar(id="status-bar")
@@ -386,7 +402,6 @@ class WorkflowDetailScreen(Screen):
                 hdr.styles.offset = (-container.scroll_x, 0)
             except Exception:
                 pass
-
 
     # ── Message handlers ───────────────────────────────────────────
 

@@ -2,9 +2,10 @@
 
 from __future__ import annotations
 
+import json
 import time
 from queue import SimpleQueue
-from typing import Any
+from typing import Any, Literal
 
 from .dag_layout import DagNode, SeqGroup, build_nav_grid, nav_move, workflow_to_layout
 from .models import LogEntry, NodeStatus, RunState, RunStatus, WorkflowInfo
@@ -25,9 +26,7 @@ class UIStore:
     Access from any widget via ``self.app.store``.
     """
 
-    def __init__(
-        self, provider: StateProvider, *, defer_initial_catalog: bool = False
-    ) -> None:
+    def __init__(self, provider: StateProvider, *, defer_initial_catalog: bool = False) -> None:
         self.provider = provider
 
         # ── Workflow / Run ──────────────────────────────────────────
@@ -61,6 +60,11 @@ class UIStore:
 
         # ── Pane focus ─────────────────────────────────────────────
         self.focused_pane: str = "dag"  # "sidebar" | "dag" | "run-history" | "log"
+        self.trace_inspector_open: bool = False
+        self.trace_inspector_tab: Literal["trace", "metadata"] = "trace"
+        self.trace_turn_index: int = 0
+        self.trace_collapsed_turns: set[int] = set()
+        self.trace_show_full_output: bool = False
 
         # ── Search ─────────────────────────────────────────────────
         self.searching: bool = False
@@ -195,6 +199,114 @@ class UIStore:
                 return _fmt_time(ns.elapsed)
         return ""
 
+    @property
+    def selected_agent_node_id(self) -> str | None:
+        workflow = self.current_workflow
+        node = self.selected_node
+        if workflow is None or node is None or node.name not in workflow.agent_node_ids:
+            return None
+        return node.name
+
+    @property
+    def selected_agent_metadata_json(self) -> str | None:
+        workflow = self.current_workflow
+        node_id = self.selected_agent_node_id
+        if workflow is None or node_id is None:
+            return None
+        return workflow.agent_metadata_json.get(node_id)
+
+    @property
+    def selected_agent_metadata(self) -> dict | None:
+        metadata_json = self.selected_agent_metadata_json
+        if not metadata_json:
+            return None
+        try:
+            metadata = json.loads(metadata_json)
+        except (TypeError, ValueError):
+            return None
+        return metadata if isinstance(metadata, dict) else None
+
+    @property
+    def selected_agent_trace_envelope(self) -> dict | None:
+        node_id = self.selected_agent_node_id
+        if node_id is None or self.current_run is None:
+            return None
+        state = self.current_run.nodes.get(node_id)
+        if state is None or not state.agent_trace_json:
+            return None
+        try:
+            envelope = json.loads(state.agent_trace_json)
+        except (TypeError, ValueError):
+            return None
+        return envelope if isinstance(envelope, dict) else None
+
+    @property
+    def selected_agent_events(self) -> list[dict]:
+        envelope = self.selected_agent_trace_envelope
+        if envelope is None:
+            return []
+        trace = envelope.get("trace")
+        if isinstance(trace, dict):
+            evidence = trace.get("evidence")
+            if isinstance(evidence, dict) and isinstance(evidence.get("events"), list):
+                return [event for event in evidence["events"] if isinstance(event, dict)]
+        events = envelope.get("events")
+        if not isinstance(events, list):
+            return []
+        return [event for event in events if isinstance(event, dict)]
+
+    @property
+    def selected_agent_steps(self) -> list[dict]:
+        envelope = self.selected_agent_trace_envelope
+        trace = envelope.get("trace") if envelope is not None else None
+        if not isinstance(trace, dict):
+            return self.selected_agent_live_steps
+        steps = trace.get("steps")
+        if not isinstance(steps, list):
+            return []
+        return [step for step in steps if isinstance(step, dict)]
+
+    @property
+    def selected_agent_live_steps(self) -> list[dict]:
+        """Build partial turn records from ordered live agent evidence."""
+        steps_by_iteration: dict[int, dict] = {}
+        for event in self.selected_agent_events:
+            kind = event.get("event_kind") or event.get("kind")
+            data = event.get("data")
+            if not isinstance(kind, str) or not isinstance(data, dict):
+                continue
+            recorded_step = data.get("step")
+            iteration = data.get("iteration")
+            if iteration is None and isinstance(recorded_step, dict):
+                iteration = recorded_step.get("iteration")
+            if not isinstance(iteration, int):
+                continue
+            step = steps_by_iteration.setdefault(
+                iteration,
+                {
+                    "iteration": iteration,
+                    "code": "",
+                    "output": None,
+                    "error": None,
+                    "duration_ms": 0,
+                    "tool_calls": [],
+                    "predict_calls": [],
+                    "lm": {},
+                    "usage": {},
+                },
+            )
+            if kind == "code.generated":
+                step["code"] = data.get("code") or ""
+            elif kind == "code.executed":
+                step["output"] = data.get("output")
+                step["error"] = data.get("error")
+            elif kind == "iteration.recorded":
+                source = recorded_step if isinstance(recorded_step, dict) else data
+                for field in ("duration_ms", "error", "tool_count", "predict_count"):
+                    if field in source:
+                        step[field] = source[field]
+        return [steps_by_iteration[key] for key in sorted(steps_by_iteration)]
+
     # ── Mutation: tick ──────────────────────────────────────────────
 
     def tick(self) -> None:
@@ -265,6 +377,7 @@ class UIStore:
         """Switch to a different workflow — recompute DAG, reset selection."""
         self._run_interaction_generation += 1
         self._workflow_context_epoch += 1
+        self.close_trace_inspector()
         self.current_workflow = workflow
         self.dag, self.all_nodes = workflow_to_layout(workflow)
         self.nav_grid = build_nav_grid(self.dag)
@@ -280,12 +393,14 @@ class UIStore:
 
     def switch_run(self, run: RunState) -> None:
         self._run_interaction_generation += 1
+        self.close_trace_inspector()
         self.current_run = run
         self.run_pinned = True
 
     def deselect_run(self) -> None:
         """Unpin the current run — auto-follow will take over."""
         self._run_interaction_generation += 1
+        self.close_trace_inspector()
         self.run_pinned = False
         self.selected_node = None
 
@@ -296,6 +411,7 @@ class UIStore:
         runs = self.runs_for_current_workflow
         latest = runs[-1] if runs else None
         if latest and (self.current_run is None or latest.run_id != self.current_run.run_id):
+            self.close_trace_inspector()
             self.current_run = latest
 
     # ── Mutation: pane focus ───────────────────────────────────────
@@ -333,11 +449,61 @@ class UIStore:
 
     # ── Mutation: node selection / navigation ──────────────────────
 
+    def open_trace_inspector(self) -> bool:
+        if self.selected_agent_node_id is None:
+            return False
+        self.trace_inspector_open = True
+        self.trace_inspector_tab = "trace"
+        self.focused_pane = "trace"
+        steps = self.selected_agent_steps
+        self.trace_turn_index = max(0, len(steps) - 1)
+        self.trace_collapsed_turns.clear()
+        self.trace_show_full_output = False
+        return True
+
+    def close_trace_inspector(self) -> None:
+        self.trace_inspector_open = False
+        self.trace_inspector_tab = "trace"
+        self.trace_turn_index = 0
+        self.trace_collapsed_turns.clear()
+        self.trace_show_full_output = False
+        if self.focused_pane == "trace":
+            self.focused_pane = "dag"
+
+    def toggle_trace_inspector_tab(self) -> None:
+        if not self.trace_inspector_open:
+            return
+        self.trace_inspector_tab = (
+            "metadata" if self.trace_inspector_tab == "trace" else "trace"
+        )
+
+    def move_trace_turn(self, delta: int) -> None:
+        steps = self.selected_agent_steps
+        if not steps:
+            self.trace_turn_index = 0
+            return
+        self.trace_turn_index = min(len(steps) - 1, max(0, self.trace_turn_index + delta))
+
+    def toggle_trace_turn(self) -> None:
+        index = self.trace_turn_index
+        if index in self.trace_collapsed_turns:
+            self.trace_collapsed_turns.remove(index)
+        elif self.selected_agent_steps:
+            self.trace_collapsed_turns.add(index)
+
+    def toggle_trace_full_output(self) -> None:
+        self.trace_show_full_output = not self.trace_show_full_output
+
     def select_node(self, node: DagNode) -> None:
+        if self.trace_inspector_open and (
+            self.selected_node is None or self.selected_node.name != node.name
+        ):
+            self.close_trace_inspector()
         self.selected_node = node
         self.preferred_row = node.row
 
     def deselect_node(self) -> None:
+        self.close_trace_inspector()
         self.selected_node = None
 
     def move_nav(self, dx: int, dy: int) -> None:
@@ -394,9 +560,7 @@ class UIStore:
             try:
                 run_id = provider.start_run(workflow_selector)
                 if not run_id:
-                    error = (
-                        getattr(provider, "last_error", "") or "Run failed to start"
-                    )
+                    error = getattr(provider, "last_error", "") or "Run failed to start"
                 else:
                     run = provider.get_run(run_id)
                     if getattr(provider, "connected", True) is False:
@@ -412,9 +576,7 @@ class UIStore:
                                 or "Failed to refresh runs after starting"
                             )
                         elif run is None:
-                            run = next(
-                                (item for item in runs if item.run_id == run_id), None
-                            )
+                            run = next((item for item in runs if item.run_id == run_id), None)
                             if run is None:
                                 error = f"Started run {run_id} was not found"
             except Exception as exc:
@@ -775,10 +937,7 @@ class UIStore:
             workflow.builder_symbol,
             tuple(workflow.node_ids),
             tuple(
-                sorted(
-                    (parent, tuple(children))
-                    for parent, children in workflow.graph.items()
-                )
+                sorted((parent, tuple(children)) for parent, children in workflow.graph.items())
             ),
             tuple(sorted(workflow.node_types.items())),
             tuple(sorted(workflow.display_names.items())),

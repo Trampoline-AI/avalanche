@@ -1,5 +1,7 @@
 """Tests for the Avalanche TUI module."""
 
+import asyncio
+import json
 import threading
 import time
 from dataclasses import replace
@@ -45,6 +47,15 @@ def _apply_async_updates(store: UIStore, timeout: float = 1.0) -> None:
     store._apply_background_updates()
 
 
+async def _wait_for_current_run(app, timeout: float = 1.0) -> None:
+    deadline = time.monotonic() + timeout
+    while app.store.current_run is None and time.monotonic() < deadline:
+        app.store._apply_background_updates()
+        await asyncio.sleep(0.005)
+    app.store._apply_background_updates()
+    assert app.store.current_run is not None
+
+
 class _SignalingQueue:
     def __init__(self, queue):
         self._queue = queue
@@ -82,8 +93,11 @@ class TestModels:
 
     def test_node_state_elapsed_running(self):
         ns = NodeState(
-            node_id="x", name="x", node_type="step",
-            status=NodeStatus.RUNNING, started_at=time.monotonic() - 2.0,
+            node_id="x",
+            name="x",
+            node_type="step",
+            status=NodeStatus.RUNNING,
+            started_at=time.monotonic() - 2.0,
         )
         assert ns.elapsed is not None
         assert ns.elapsed >= 1.9
@@ -91,8 +105,12 @@ class TestModels:
     def test_node_state_elapsed_completed(self):
         t = time.monotonic()
         ns = NodeState(
-            node_id="x", name="x", node_type="step",
-            status=NodeStatus.SUCCESS, started_at=t - 5.0, ended_at=t - 2.0,
+            node_id="x",
+            name="x",
+            node_type="step",
+            status=NodeStatus.SUCCESS,
+            started_at=t - 5.0,
+            ended_at=t - 2.0,
         )
         assert abs(ns.elapsed - 3.0) < 0.1
 
@@ -211,13 +229,12 @@ class TestRenderDag:
         statuses = {n.name: NodeStatus.PENDING for n in nodes}
         lines = render_dag_rich(dag, statuses, 0, None)
         combined = "\n".join(line.plain for line in lines)
-        assert "&" in combined, (
-            f"Expected '&' between parallel branches, got:\n{combined}"
-        )
+        assert "&" in combined, f"Expected '&' between parallel branches, got:\n{combined}"
 
     def test_cross_fork_fanin_dedup_page_highlights(self):
         """page_highlights should appear exactly once in doc_processing layout."""
         from avalanche.tui.mock import DOC_PROCESSING_WORKFLOW
+
         dag, nodes = workflow_to_layout(DOC_PROCESSING_WORKFLOW)
         ph_count = sum(1 for n in nodes if n.name == "page_highlights_1")
         assert ph_count == 1, f"page_highlights appears {ph_count} times, expected 1"
@@ -225,10 +242,11 @@ class TestRenderDag:
     def test_cross_fork_fanin_skip_edge_recorded(self):
         """push_to_cdn → page_highlights should be a skip edge after dedup."""
         from avalanche.tui.mock import DOC_PROCESSING_WORKFLOW
+
         dag, nodes = workflow_to_layout(DOC_PROCESSING_WORKFLOW)
-        assert ("push_to_cdn_1", "page_highlights_1") in dag.skip_edges, (
-            f"Expected skip edge push_to_cdn→page_highlights, got: {dag.skip_edges}"
-        )
+        assert (
+            ("push_to_cdn_1", "page_highlights_1") in dag.skip_edges
+        ), f"Expected skip edge push_to_cdn→page_highlights, got: {dag.skip_edges}"
 
     def test_partial_convergence_dedup(self):
         """Fan-in nodes reachable from some (not all) branches get deduped."""
@@ -246,12 +264,12 @@ class TestRenderDag:
         must lay out as a single linear spine with skip-edge annotations,
         never duplicating nodes."""
         ids = [f"s{i}_1" for i in range(1, 8)]
-        graph = {
-            ids[i]: [ids[j] for j in range(i + 1, 7)]
-            for i in range(6)
-        }
+        graph = {ids[i]: [ids[j] for j in range(i + 1, 7)] for i in range(6)}
         info = WorkflowInfo(
-            name="dense", file_path="f", node_ids=ids, graph=graph,
+            name="dense",
+            file_path="f",
+            node_ids=ids,
+            graph=graph,
             node_types={i: "step" for i in ids},
         )
         dag, nodes = workflow_to_layout(info)
@@ -276,9 +294,9 @@ class TestRenderDag:
         # Each line should be self-contained (no wrapping artifacts)
         for i, line in enumerate(lines):
             plain = line.plain
-            assert "─┐" not in plain or "┌──" in plain or "├" in plain, (
-                f"Line {i} has closing bracket without opening — possible wrap: {plain}"
-            )
+            assert (
+                "─┐" not in plain or "┌──" in plain or "├" in plain
+            ), f"Line {i} has closing bracket without opening — possible wrap: {plain}"
 
 
 # ── Mock Provider ──────────────────────────────────────────────────────────
@@ -394,9 +412,7 @@ class TestUIStore:
             def on_log(self, callback):
                 pass
 
-        app = AvalancheApp(
-            BlockingCatalogProvider(), workflow="desired", node="shared_node"
-        )
+        app = AvalancheApp(BlockingCatalogProvider(), workflow="desired", node="shared_node")
         updates = _signal_background_updates(app.store)
         assert entered[0].wait(1.0)
         assert app.store.workflows == []
@@ -490,9 +506,7 @@ class TestUIStore:
         assert store.start_run_async()
         assert provider.entered.wait(1.0)
         other = next(
-            workflow
-            for workflow in store.workflows
-            if workflow.selector != started_selector
+            workflow for workflow in store.workflows if workflow.selector != started_selector
         )
         store.switch_workflow(other)
         _apply_async_updates(store)
@@ -1577,8 +1591,11 @@ class TestRunHistory:
         store = UIStore(MockStateProvider())
         # Point to a non-existent workflow so list_runs returns []
         store.current_workflow = WorkflowInfo(
-            name="nonexistent", file_path="x/y.py",
-            node_ids=[], graph={}, node_types={},
+            name="nonexistent",
+            file_path="x/y.py",
+            node_ids=[],
+            graph={},
+            node_types={},
         )
         store.current_run = None
         w = RunHistoryWidget()
@@ -1623,6 +1640,7 @@ class TestRunHistory:
         w._test_store = store
         rendered = w.render().plain
         import re
+
         assert re.search(r"\d{4}-\d{2}-\d{2} \d{2}:\d{2}", rendered)
 
 
@@ -1876,6 +1894,7 @@ class TestInteractions:
 
     async def _make_app(self):
         from avalanche.tui.app import AvalancheApp
+
         return AvalancheApp()
 
     def _sidebar_workflow_order(self, app) -> list[str]:
@@ -2088,9 +2107,7 @@ class TestInteractions:
             items = sidebar._flat_items
 
             # Find workflow items (won't toggle folders and change tree)
-            workflow_indices = [
-                i for i, it in enumerate(items) if not it.is_folder
-            ]
+            workflow_indices = [i for i, it in enumerate(items) if not it.is_folder]
             assert len(workflow_indices) >= 2, "Need at least 2 workflows"
 
             for target_idx in workflow_indices[:3]:
@@ -2106,6 +2123,7 @@ class TestInteractions:
     async def test_run_history_click_selects_correct_run(self):
         """Clicking a run in run history should select that run, not an adjacent one."""
         import asyncio
+
         app = await self._make_app()
         async with app.run_test(size=(120, 40)) as pilot:
             await pilot.pause()
@@ -2127,9 +2145,9 @@ class TestInteractions:
             await pilot.pause()
 
             target_run = display[1]
-            assert app.store.selected_run_id == target_run.run_id, (
-                f"Expected run {target_run.run_id}, got {app.store.selected_run_id}"
-            )
+            assert (
+                app.store.selected_run_id == target_run.run_id
+            ), f"Expected run {target_run.run_id}, got {app.store.selected_run_id}"
 
     async def test_border_titles_present(self):
         """All panes should have border titles rendered on their borders."""
@@ -2167,9 +2185,9 @@ class TestInteractions:
             await pilot.pause()
 
             node_name = app.store.selected_node.display_name
-            assert node_name in str(lp.border_title), (
-                f"Expected '{node_name}' in border title, got '{lp.border_title}'"
-            )
+            assert node_name in str(
+                lp.border_title
+            ), f"Expected '{node_name}' in border title, got '{lp.border_title}'"
 
     async def test_sticky_headers_exist(self):
         """Run history and log panes should have separate sticky header widgets."""
@@ -2185,6 +2203,7 @@ class TestInteractions:
             # Verify the static render_header methods produce column headers
             from avalanche.tui.widgets.log_panel import LogWidget
             from avalanche.tui.widgets.run_history import RunHistoryWidget
+
             assert "Run ID" in RunHistoryWidget.render_header().plain
             assert "Timestamp" in LogWidget.render_header().plain
 
@@ -2197,28 +2216,56 @@ class TestInteractions:
             original_width = app.store.sidebar_width
 
             from textual.events import MouseDown, MouseMove, MouseUp
-            sidebar.on_mouse_down(MouseDown(
-                sidebar, x=sidebar.size.width - 1, y=5,
-                delta_x=0, delta_y=0, button=1,
-                shift=False, meta=False, ctrl=False,
-                screen_x=original_width - 1, screen_y=5,
-            ))
+
+            sidebar.on_mouse_down(
+                MouseDown(
+                    sidebar,
+                    x=sidebar.size.width - 1,
+                    y=5,
+                    delta_x=0,
+                    delta_y=0,
+                    button=1,
+                    shift=False,
+                    meta=False,
+                    ctrl=False,
+                    screen_x=original_width - 1,
+                    screen_y=5,
+                )
+            )
             assert sidebar._dragging is True
 
-            sidebar.on_mouse_move(MouseMove(
-                sidebar, x=0, y=5,
-                delta_x=5, delta_y=0, button=1,
-                shift=False, meta=False, ctrl=False,
-                screen_x=original_width + 5, screen_y=5,
-            ))
+            sidebar.on_mouse_move(
+                MouseMove(
+                    sidebar,
+                    x=0,
+                    y=5,
+                    delta_x=5,
+                    delta_y=0,
+                    button=1,
+                    shift=False,
+                    meta=False,
+                    ctrl=False,
+                    screen_x=original_width + 5,
+                    screen_y=5,
+                )
+            )
             assert app.store.sidebar_width == original_width + 5
 
-            sidebar.on_mouse_up(MouseUp(
-                sidebar, x=0, y=5,
-                delta_x=0, delta_y=0, button=1,
-                shift=False, meta=False, ctrl=False,
-                screen_x=original_width + 5, screen_y=5,
-            ))
+            sidebar.on_mouse_up(
+                MouseUp(
+                    sidebar,
+                    x=0,
+                    y=5,
+                    delta_x=0,
+                    delta_y=0,
+                    button=1,
+                    shift=False,
+                    meta=False,
+                    ctrl=False,
+                    screen_x=original_width + 5,
+                    screen_y=5,
+                )
+            )
             assert sidebar._dragging is False
 
     async def test_sidebar_drag_enforces_minimum_width(self):
@@ -2229,26 +2276,54 @@ class TestInteractions:
             sidebar = app._screen.query_one("#sidebar")
 
             from textual.events import MouseDown, MouseMove, MouseUp
-            sidebar.on_mouse_down(MouseDown(
-                sidebar, x=sidebar.size.width - 1, y=5,
-                delta_x=0, delta_y=0, button=1,
-                shift=False, meta=False, ctrl=False,
-                screen_x=30, screen_y=5,
-            ))
-            sidebar.on_mouse_move(MouseMove(
-                sidebar, x=0, y=5,
-                delta_x=-20, delta_y=0, button=1,
-                shift=False, meta=False, ctrl=False,
-                screen_x=5, screen_y=5,
-            ))
+
+            sidebar.on_mouse_down(
+                MouseDown(
+                    sidebar,
+                    x=sidebar.size.width - 1,
+                    y=5,
+                    delta_x=0,
+                    delta_y=0,
+                    button=1,
+                    shift=False,
+                    meta=False,
+                    ctrl=False,
+                    screen_x=30,
+                    screen_y=5,
+                )
+            )
+            sidebar.on_mouse_move(
+                MouseMove(
+                    sidebar,
+                    x=0,
+                    y=5,
+                    delta_x=-20,
+                    delta_y=0,
+                    button=1,
+                    shift=False,
+                    meta=False,
+                    ctrl=False,
+                    screen_x=5,
+                    screen_y=5,
+                )
+            )
             assert app.store.sidebar_width >= 15
 
-            sidebar.on_mouse_up(MouseUp(
-                sidebar, x=0, y=5,
-                delta_x=0, delta_y=0, button=1,
-                shift=False, meta=False, ctrl=False,
-                screen_x=5, screen_y=5,
-            ))
+            sidebar.on_mouse_up(
+                MouseUp(
+                    sidebar,
+                    x=0,
+                    y=5,
+                    delta_x=0,
+                    delta_y=0,
+                    button=1,
+                    shift=False,
+                    meta=False,
+                    ctrl=False,
+                    screen_x=5,
+                    screen_y=5,
+                )
+            )
 
     async def test_sidebar_text_clips_to_width(self):
         """Sidebar should clip long labels to fit within content width."""
@@ -2273,6 +2348,7 @@ class TestInteractions:
     async def test_run_history_arrow_scrolls_to_selected(self):
         """Arrow keys in run history should keep the selected run visible."""
         import asyncio
+
         app = await self._make_app()
         async with app.run_test(size=(120, 40)) as pilot:
             await pilot.pause()
@@ -2301,6 +2377,7 @@ class TestInteractions:
         since headless layout doesn't faithfully reproduce scrollbar sizing.
         """
         import asyncio
+
         app = await self._make_app()
         async with app.run_test(size=(50, 50)) as pilot:
             await pilot.pause()
@@ -2313,9 +2390,9 @@ class TestInteractions:
             # Verify our CSS is at least being applied
             for widget_id in ("#run-history", "#dag-container", "#log-content"):
                 w = app._screen.query_one(widget_id)
-                assert w.styles.scrollbar_size_vertical == 1, (
-                    f"{widget_id} scrollbar_size_vertical={w.styles.scrollbar_size_vertical}"
-                )
+                assert (
+                    w.styles.scrollbar_size_vertical == 1
+                ), f"{widget_id} scrollbar_size_vertical={w.styles.scrollbar_size_vertical}"
                 assert w.styles.scrollbar_size_horizontal == 1, (
                     f"{widget_id} scrollbar_size_horizontal="
                     f"{w.styles.scrollbar_size_horizontal}"
@@ -2324,6 +2401,7 @@ class TestInteractions:
     async def test_log_panel_allows_horizontal_scroll(self):
         """Log panel should support horizontal scrolling when content is wider than pane."""
         import asyncio
+
         app = await self._make_app()
         async with app.run_test(size=(50, 40)) as pilot:  # very narrow to force overflow
             await pilot.pause()
@@ -2439,6 +2517,7 @@ class TestInteractions:
         (no border offset needed in on_click).
         """
         from textual.pilot import OutOfBounds
+
         app = await self._make_app()
         async with app.run_test(size=(120, 40)) as pilot:
             await pilot.pause()
@@ -2456,9 +2535,9 @@ class TestInteractions:
                 except OutOfBounds:
                     continue  # node scrolled off-screen
                 await pilot.pause()
-                assert app.store.selected_node is not None, (
-                    f"Click at ({target_col}, {row_idx}) should select {node.name}"
-                )
+                assert (
+                    app.store.selected_node is not None
+                ), f"Click at ({target_col}, {row_idx}) should select {node.name}"
                 assert app.store.selected_node.name == node.name, (
                     f"Clicked {node.name} at row={row_idx}, "
                     f"but selected {app.store.selected_node.name}"
@@ -2483,9 +2562,7 @@ class TestInteractions:
             lines = rendered.plain.split("\n")
             # Should have DAG rows + possible spacer/skip-edge rows
             non_empty = [line for line in lines if line.strip()]
-            assert len(non_empty) >= 3, (
-                f"Expected at least 3 DAG rows, got {len(non_empty)}"
-            )
+            assert len(non_empty) >= 3, f"Expected at least 3 DAG rows, got {len(non_empty)}"
             # All 3 fetch nodes must appear
             combined = "\n".join(lines)
             for name in ("fetch_training", "fetch_validation", "fetch_features"):
@@ -2494,6 +2571,7 @@ class TestInteractions:
     async def test_deep_link_workflow(self):
         """App should support starting with a specific workflow selected."""
         from avalanche.tui.app import AvalancheApp
+
         app = AvalancheApp(workflow="ml_workflow")
         async with app.run_test(size=(120, 40)) as pilot:
             await pilot.pause()
@@ -2503,6 +2581,7 @@ class TestInteractions:
     async def test_deep_link_node_matches_display_name(self):
         """Deep-link node segment should accept the rendered display name."""
         from avalanche.tui.app import AvalancheApp
+
         app = AvalancheApp(workflow="ml_workflow", node="export_onnx")
         async with app.run_test(size=(120, 40)) as pilot:
             await pilot.pause()
@@ -2560,9 +2639,9 @@ class TestInteractions:
                 # Check the scroll containers didn't move
                 widget_id = "#run-history" if pane == "run-history" else "#log-panel"
                 w = app._screen.query_one(widget_id)
-                assert w.scroll_x == 0, (
-                    f"{pane}: left/right arrows should not scroll horizontally"
-                )
+                assert (
+                    w.scroll_x == 0
+                ), f"{pane}: left/right arrows should not scroll horizontally"
 
     async def test_focused_log_up_down_scrolls_log_content(self):
         """Up/down in the log pane should scroll the actual RichLog."""
@@ -2624,26 +2703,27 @@ class TestInteractions:
                 await pilot.press("right")
                 await pilot.pause()
                 assert app.store.focused_pane == pane
-                assert app.store.selected_node is not None, (
-                    f"Right should select a DAG node while {pane} is focused"
-                )
+                assert (
+                    app.store.selected_node is not None
+                ), f"Right should select a DAG node while {pane} is focused"
                 first = app.store.selected_node
 
                 await pilot.press("right")
                 await pilot.pause()
-                assert app.store.selected_node.col > first.col, (
-                    f"Right should advance DAG selection while {pane} is focused"
-                )
+                assert (
+                    app.store.selected_node.col > first.col
+                ), f"Right should advance DAG selection while {pane} is focused"
 
                 await pilot.press("left")
                 await pilot.pause()
-                assert app.store.selected_node.col == first.col, (
-                    f"Left should move DAG selection back while {pane} is focused"
-                )
+                assert (
+                    app.store.selected_node.col == first.col
+                ), f"Left should move DAG selection back while {pane} is focused"
 
     async def test_alt_arrows_change_run_without_changing_pane(self):
         """Alt+Up/Down should cycle runs without changing the focused pane."""
         import asyncio
+
         app = await self._make_app()
         async with app.run_test(size=(120, 40)) as pilot:
             await pilot.pause()
@@ -2668,3 +2748,391 @@ class TestInteractions:
             await pilot.pause()
             assert app.store.focused_pane == "dag", "Alt+Up should not change pane"
             assert app.store.selected_run_id == first_run, "Alt+Up should restore run"
+
+
+def _agent_trace_provider():
+    metadata = {
+        "signature": {
+            "name": "InspectRecords",
+            "instructions": "Inspect the supplied records.",
+            "inputs": [
+                {
+                    "name": "records",
+                    "annotation": "list[Record]",
+                    "description": "records to inspect",
+                }
+            ],
+            "outputs": [
+                {
+                    "name": "report",
+                    "annotation": "InspectionReport",
+                    "description": "structured inspection report",
+                }
+            ],
+        },
+        "runtime": {
+            "lm": "main-model",
+            "sub_lm": "sub-model",
+            "max_iterations": 5,
+            "debug": False,
+        },
+        "skills": [
+            {
+                "name": "audit",
+                "instructions": "Check every claim.",
+                "packages": ["pydantic"],
+                "modules": ["audit_helpers"],
+                "tools": ["lookup"],
+            }
+        ],
+        "aggregated_static_instructions": (
+            "Inspect the supplied records.\n\n" "## Skill: audit\n\nCheck every claim."
+        ),
+        "packages": ["pydantic"],
+        "modules": ["audit_helpers"],
+        "tools": [{"name": "lookup", "description": "Look up a record."}],
+    }
+    workflow = WorkflowInfo(
+        name="agent_flow",
+        file_path="workflows/agent_flow.py",
+        node_ids=["agent_1"],
+        graph={"agent_1": []},
+        node_types={"agent_1": "step"},
+        display_names={"agent_1": "agent"},
+        agent_node_ids=["agent_1"],
+        agent_metadata_json={"agent_1": json.dumps(metadata)},
+    )
+    events = [
+        {
+            "sequence": 1,
+            "kind": "code.generated",
+            "timestamp_ns": 1,
+            "data": {"iteration": 1, "code": "print('first')"},
+        },
+        {
+            "sequence": 2,
+            "kind": "iteration.recorded",
+            "timestamp_ns": 2,
+            "data": {"step": {"iteration": 1}},
+        },
+        {
+            "sequence": 3,
+            "kind": "code.executed",
+            "timestamp_ns": 3,
+            "data": {"iteration": 2, "output": "short-second"},
+        },
+        {
+            "sequence": 4,
+            "kind": "iteration.recorded",
+            "timestamp_ns": 4,
+            "data": {"step": {"iteration": 2}},
+        },
+    ]
+    steps = [
+        {
+            "iteration": 1,
+            "reasoning": "first reasoning",
+            "code": "print('first')",
+            "output": "first",
+            "untruncated_output": "FULL-FIRST",
+            "error": False,
+            "duration_ms": 5,
+            "tool_calls": [],
+            "predict_calls": [],
+            "lm": {"finish_reason": "stop"},
+            "usage": {"main": {}, "sub": {}},
+        },
+        {
+            "iteration": 2,
+            "reasoning": "second reasoning",
+            "code": "print('second')",
+            "output": "short-second",
+            "untruncated_output": "FULL-SECOND",
+            "error": False,
+            "duration_ms": 8,
+            "tool_calls": [
+                {
+                    "name": "lookup",
+                    "args": [],
+                    "kwargs": {},
+                    "result": "value",
+                    "error": None,
+                    "duration_ms": 1,
+                }
+            ],
+            "predict_calls": [
+                {
+                    "signature": "text -> answer",
+                    "instructions": "answer",
+                    "model": "sub",
+                    "total_usage": {},
+                    "calls": [
+                        {
+                            "duration_ms": 2,
+                            "usage": {},
+                            "input": {"text": "x"},
+                            "output": {"answer": "y"},
+                            "error": None,
+                            "lm": {"finish_reason": "stop"},
+                        }
+                    ],
+                }
+            ],
+            "lm": {"finish_reason": "stop"},
+            "usage": {
+                "main": {"input_tokens": 10, "output_tokens": 2, "cost": 0.01},
+                "sub": {"input_tokens": 4, "output_tokens": 1, "cost": 0.002},
+            },
+        },
+    ]
+    envelope = {
+        "schema_version": 1,
+        "status": "completed",
+        "run_id": "agent-run",
+        "events": [
+            {
+                "sequence": event["sequence"],
+                "event_kind": event["kind"],
+                "timestamp_ns": event["timestamp_ns"],
+                "data": event["data"],
+            }
+            for event in events
+        ],
+        "trace": {
+            "status": "completed",
+            "model": "main-model",
+            "sub_model": "sub-model",
+            "iterations": 2,
+            "max_iterations": 5,
+            "duration_ms": 20,
+            "usage": {
+                "main": {
+                    "input_tokens": 20,
+                    "output_tokens": 4,
+                    "cache_hits": 1,
+                    "cost": 0.02,
+                },
+                "sub": {
+                    "input_tokens": 8,
+                    "output_tokens": 2,
+                    "cache_hits": 0,
+                    "cost": 0.004,
+                },
+            },
+            "steps": steps,
+            "evidence": {
+                "run_id": "agent-run",
+                "complete": True,
+                "terminal_outcome": "completed",
+                "events": events,
+            },
+        },
+        "error": None,
+    }
+    run = RunState(
+        run_id="run-agent",
+        flow_name="agent_flow",
+        status=RunStatus.SUCCESS,
+    )
+    run.nodes["agent_1"] = NodeState(
+        node_id="agent_1",
+        name="agent",
+        node_type="step",
+        status=NodeStatus.SUCCESS,
+        agent_trace_json=json.dumps(envelope),
+    )
+    run.logs.extend(
+        [
+            LogEntry(datetime.now(), LogLevel.INFO, "agent_1", "Agent code.generated"),
+            LogEntry(datetime.now(), LogLevel.INFO, "agent_1", "Agent iteration.recorded"),
+        ]
+    )
+    provider = MockStateProvider()
+    provider._workflows = {"agent_flow": workflow}
+    provider._runs = {run.run_id: run}
+    return provider, envelope
+
+
+@pytest.mark.asyncio
+async def test_agent_trace_inspector_interactions_and_log_retention():
+    from avalanche.tui.app import AvalancheApp
+    from avalanche.tui.widgets.agent_trace import (
+        AgentMetadataInspector,
+        AgentTraceInspector,
+    )
+    from avalanche.tui.widgets.log_panel import LogWidget
+
+    provider, _ = _agent_trace_provider()
+    app = AvalancheApp(provider=provider, workflow="agent_flow", node="agent")
+    async with app.run_test(size=(120, 40)) as pilot:
+        await pilot.pause()
+        await _wait_for_current_run(app)
+        await pilot.pause()
+        await pilot.press("enter")
+        await pilot.pause()
+
+        assert app.store.trace_inspector_open is True
+        assert app.store.focused_pane == "trace"
+        assert app.store.trace_turn_index == 1
+        assert app.store.trace_collapsed_turns == set()
+        assert app._screen.query_one("#dashboard-pane").display is False
+        assert app._screen.query_one("#agent-trace-inspector").display is True
+
+        content = app._screen.query_one("#agent-trace-content", AgentTraceInspector)
+        rendered = content.render()
+        plain = rendered.plain
+        assert "STRUCTURED TRACE · 2 turn(s)" in plain
+        assert "AGENT TURN 1/5" in plain
+        assert "AGENT TURN 2/5" in plain
+        assert "first reasoning" in plain
+        assert "second reasoning" in plain
+        assert "tool · lookup" in plain
+        assert "predict · text -> answer · sub" in plain
+        assert "Live record: complete · terminal=completed" in plain
+        lines = plain.splitlines()
+        reasoning_label = next(line for line in lines if line.strip() == "reasoning:")
+        reasoning_body = next(line for line in lines if "first reasoning" in line)
+        code_label = next(line for line in lines if line.strip() == "code:")
+        code_body = next(line for line in lines if "print('first')" in line)
+        tool_label = next(line for line in lines if "tool · lookup" in line)
+        assert reasoning_label.startswith("    ")
+        assert reasoning_body.startswith("        ")
+        assert code_label.startswith("    ")
+        assert code_body.startswith("        ")
+        assert tool_label.startswith("    ")
+        code_offset = plain.index("print('second')")
+        assert any(
+            span.start <= code_offset < span.end for span in rendered.spans
+        ), "Python code should carry syntax-highlighting spans"
+
+        await pilot.press("m")
+        await pilot.pause()
+        assert app.store.trace_inspector_tab == "metadata"
+        metadata_content = app._screen.query_one(
+            "#agent-metadata-content", AgentMetadataInspector
+        )
+        metadata_plain = metadata_content.render().plain
+        assert metadata_content.display is True
+        assert content.display is False
+        assert (
+            "Agent agent · Metadata"
+            in app._screen.query_one("#agent-trace-inspector").border_title
+        )
+        for expected in (
+            "InspectRecords",
+            "records: list[Record] — records to inspect",
+            "MODEL / RUNTIME SETTINGS",
+            "audit",
+            "AGGREGATED STATIC INSTRUCTIONS",
+            "pydantic",
+            "audit_helpers",
+            "lookup",
+        ):
+            assert expected in metadata_plain
+        assert "RLM" not in metadata_plain
+
+        turn_index = app.store.trace_turn_index
+        collapsed_turns = set(app.store.trace_collapsed_turns)
+        show_full_output = app.store.trace_show_full_output
+        await pilot.press("up", "enter", "o")
+        assert app.store.trace_turn_index == turn_index
+        assert app.store.trace_collapsed_turns == collapsed_turns
+        assert app.store.trace_show_full_output is show_full_output
+
+        await pilot.press("m")
+        await pilot.pause()
+        assert app.store.trace_inspector_tab == "trace"
+        assert content.display is True
+        assert metadata_content.display is False
+
+        await pilot.press("o")
+        await pilot.pause()
+        assert "output (full):" in content.render().plain
+        assert "FULL-SECOND" in content.render().plain
+
+        await pilot.press("up")
+        await pilot.press("enter")
+        await pilot.pause()
+        assert app.store.trace_turn_index == 0
+        assert 0 in app.store.trace_collapsed_turns
+        assert "first reasoning" not in content.render().plain
+
+        await pilot.press("down")
+        await pilot.press("enter")
+        assert 1 in app.store.trace_collapsed_turns
+
+        await pilot.press("escape")
+        await pilot.pause()
+        assert app.store.trace_inspector_open is False
+        assert app.store.focused_pane == "dag"
+        assert app._screen.query_one("#dashboard-pane").display is True
+        logs = app._screen.query_one("#log-content", LogWidget).render().plain
+        assert "Agent code.generated" in logs
+        assert "Agent iteration.recorded" in logs
+
+
+@pytest.mark.asyncio
+async def test_agent_trace_inspector_renders_pending_failed_malformed_and_incomplete():
+    from avalanche.tui.app import AvalancheApp
+    from avalanche.tui.widgets.agent_trace import (
+        AgentMetadataInspector,
+        AgentTraceInspector,
+    )
+
+    provider, envelope = _agent_trace_provider()
+    app = AvalancheApp(provider=provider, workflow="agent_flow", node="agent")
+    async with app.run_test(size=(100, 35)) as pilot:
+        await pilot.pause()
+        await _wait_for_current_run(app)
+        await pilot.pause()
+        await pilot.press("enter")
+        content = app._screen.query_one("#agent-trace-content", AgentTraceInspector)
+        node = app.store.current_run.nodes["agent_1"]
+
+        await pilot.press("m")
+        metadata_content = app._screen.query_one(
+            "#agent-metadata-content", AgentMetadataInspector
+        )
+        workflow = app.store.current_workflow
+        workflow.agent_metadata_json["agent_1"] = "{malformed"
+        assert "Metadata unavailable or malformed" in metadata_content.render().plain
+        workflow.agent_metadata_json.pop("agent_1")
+        assert "Metadata unavailable or malformed" in metadata_content.render().plain
+        await pilot.press("m")
+        assert app.store.trace_inspector_tab == "trace"
+
+        node.agent_trace_json = "{malformed"
+        assert "unavailable or malformed" in content.render().plain
+
+        node.status = NodeStatus.RUNNING
+        node.agent_trace_json = None
+        assert "waiting for live updates" in content.render().plain
+
+        live = dict(envelope)
+        live.update({"status": "in_progress", "trace": None, "error": None})
+        node.agent_trace_json = json.dumps(live)
+        live_render = content.render().plain
+        assert "LIVE AGENT STATUS" in live_render
+        assert "LIVE TRACE · 2 turn(s)" in live_render
+        assert "AGENT TURN 1/2 · 0ms · 0 tool · 0 predict · LIVE" in live_render
+        assert "print('first')" in live_render
+        assert "short-second" in live_render
+
+        failed = dict(live)
+        failed.update({"status": "error", "error": "provider failed"})
+        node.agent_trace_json = json.dumps(failed)
+        failed_render = content.render().plain
+        assert "Status: error" in failed_render
+        assert "provider failed" in failed_render
+        assert "LIVE AGENT STATUS" in failed_render
+        assert "Code generated · turn 1" in failed_render
+        assert "Turn completed · turn 2" in failed_render
+        assert "iteration.recorded" not in failed_render
+
+        incomplete = json.loads(json.dumps(envelope))
+        incomplete["trace"]["evidence"]["complete"] = False
+        node.agent_trace_json = json.dumps(incomplete)
+        final_render = content.render().plain
+        assert "Live record: incomplete" in final_render
+        assert "STRUCTURED TRACE · 2 turn(s)" in final_render
+        assert "LIVE TRACE" not in final_render

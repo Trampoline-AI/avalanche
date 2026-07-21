@@ -10,15 +10,15 @@ from typing import Any, Mapping
 
 UNSET = object()
 
-# These are not PredictRLM runtime kwargs. Signatures describe only model
-# inputs/outputs; skills and tools belong to the agent-step decorator.
+# These are not agent runtime kwargs. Signatures describe only model inputs and
+# outputs; skills and tools belong to the agent-step decorator.
 _RESERVED_RUNTIME_KWARGS = frozenset({"signature", "skills", "tools"})
 
 
 def validate_runtime_kwargs(kwargs: Mapping[str, Any], *, owner: str) -> dict[str, Any]:
     """Return a copy of runtime kwargs or reject agent-definition fields."""
     if not isinstance(kwargs, Mapping):
-        raise TypeError(f"{owner} must be a mapping of PredictRLM runtime kwargs")
+        raise TypeError(f"{owner} must be a mapping of agent runtime kwargs")
     reserved = sorted(_RESERVED_RUNTIME_KWARGS & set(kwargs))
     if reserved:
         rendered = ", ".join(repr(name) for name in reserved)

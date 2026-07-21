@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import threading
 import time
 from datetime import datetime
@@ -25,8 +26,13 @@ ORDER_WORKFLOW = WorkflowInfo(
     name="order_workflow",
     file_path="workflows/etl/order_workflow.py",
     node_ids=[
-        "fetch_orders_1", "fetch_inventory_1", "validate_1",
-        "enrich_1", "aggregate_1", "save_warehouse_1", "notify_1",
+        "fetch_orders_1",
+        "fetch_inventory_1",
+        "validate_1",
+        "enrich_1",
+        "aggregate_1",
+        "save_warehouse_1",
+        "notify_1",
     ],
     graph={
         "fetch_orders_1": ["validate_1"],
@@ -67,8 +73,12 @@ ANALYTICS_WORKFLOW = WorkflowInfo(
     name="analytics_workflow",
     file_path="workflows/etl/analytics_workflow.py",
     node_ids=[
-        "load_events_1", "load_users_1", "join_data_1",
-        "compute_metrics_1", "export_dashboard_1", "export_alerts_1",
+        "load_events_1",
+        "load_users_1",
+        "join_data_1",
+        "compute_metrics_1",
+        "export_dashboard_1",
+        "export_alerts_1",
     ],
     graph={
         "load_events_1": ["join_data_1"],
@@ -90,9 +100,15 @@ ML_WORKFLOW = WorkflowInfo(
     name="ml_workflow",
     file_path="workflows/ml/ml_workflow.py",
     node_ids=[
-        "fetch_training_1", "fetch_validation_1", "fetch_features_1",
-        "preprocess_1", "train_model_1", "evaluate_1",
-        "export_onnx_1", "deploy_staging_1", "deploy_prod_1",
+        "fetch_training_1",
+        "fetch_validation_1",
+        "fetch_features_1",
+        "preprocess_1",
+        "train_model_1",
+        "evaluate_1",
+        "export_onnx_1",
+        "deploy_staging_1",
+        "deploy_prod_1",
         "notify_slack_1",
     ],
     graph={
@@ -124,16 +140,25 @@ DATA_PLATFORM_WORKFLOW = WorkflowInfo(
     file_path="workflows/etl/data_platform.py",
     node_ids=[
         # 3-way source fan-in
-        "ingest_clicks_1", "ingest_txns_1", "ingest_crm_1",
+        "ingest_clicks_1",
+        "ingest_txns_1",
+        "ingest_crm_1",
         # merge → step chain
-        "deduplicate_1", "normalize_1", "validate_1",
+        "deduplicate_1",
+        "normalize_1",
+        "validate_1",
         # 2-way scoring fork
-        "score_churn_1", "score_ltv_1",
+        "score_churn_1",
+        "score_ltv_1",
         # merge → 4-way export fan-out
         "build_profile_1",
-        "export_warehouse_1", "export_redis_1", "export_api_1", "send_alerts_1",
+        "export_warehouse_1",
+        "export_redis_1",
+        "export_api_1",
+        "send_alerts_1",
         # 2-way uneven fan-in
-        "update_catalog_1", "notify_team_1",
+        "update_catalog_1",
+        "notify_team_1",
     ],
     graph={
         "ingest_clicks_1": ["deduplicate_1"],
@@ -156,13 +181,21 @@ DATA_PLATFORM_WORKFLOW = WorkflowInfo(
         "send_alerts_1": ["notify_team_1"],
     },
     node_types={
-        "ingest_clicks_1": "source", "ingest_txns_1": "source", "ingest_crm_1": "source",
-        "deduplicate_1": "step", "normalize_1": "step", "validate_1": "step",
-        "score_churn_1": "step", "score_ltv_1": "step",
+        "ingest_clicks_1": "source",
+        "ingest_txns_1": "source",
+        "ingest_crm_1": "source",
+        "deduplicate_1": "step",
+        "normalize_1": "step",
+        "validate_1": "step",
+        "score_churn_1": "step",
+        "score_ltv_1": "step",
         "build_profile_1": "step",
-        "export_warehouse_1": "dest", "export_redis_1": "dest",
-        "export_api_1": "dest", "send_alerts_1": "dest",
-        "update_catalog_1": "dest", "notify_team_1": "dest",
+        "export_warehouse_1": "dest",
+        "export_redis_1": "dest",
+        "export_api_1": "dest",
+        "send_alerts_1": "dest",
+        "update_catalog_1": "dest",
+        "notify_team_1": "dest",
     },
 )
 
@@ -170,11 +203,19 @@ DOC_PROCESSING_WORKFLOW = WorkflowInfo(
     name="doc_processing",
     file_path="workflows/ml/doc_processing.py",
     node_ids=[
-        "chunk_new_docs_1", "predict_chunks_1", "push_to_cdn_1",
-        "push_chunks_pg_1", "embed_new_docs_1", "feed_into_vespa_1",
-        "page_highlights_1", "push_questions_1", "push_chunk_preds_1",
-        "corpus_prediction_1", "push_corpus_preds_1",
-        "doc_prediction_1", "push_doc_preds_1",
+        "chunk_new_docs_1",
+        "predict_chunks_1",
+        "push_to_cdn_1",
+        "push_chunks_pg_1",
+        "embed_new_docs_1",
+        "feed_into_vespa_1",
+        "page_highlights_1",
+        "push_questions_1",
+        "push_chunk_preds_1",
+        "corpus_prediction_1",
+        "push_corpus_preds_1",
+        "doc_prediction_1",
+        "push_doc_preds_1",
         "delete_tagged_docs_1",
     ],
     graph={
@@ -202,20 +243,91 @@ DOC_PROCESSING_WORKFLOW = WorkflowInfo(
     },
     node_types={
         "chunk_new_docs_1": "step",
-        "predict_chunks_1": "step", "push_to_cdn_1": "dest",
-        "push_chunks_pg_1": "dest", "embed_new_docs_1": "step",
+        "predict_chunks_1": "step",
+        "push_to_cdn_1": "dest",
+        "push_chunks_pg_1": "dest",
+        "embed_new_docs_1": "step",
         "feed_into_vespa_1": "dest",
         "page_highlights_1": "step",
-        "push_questions_1": "dest", "push_chunk_preds_1": "dest",
-        "corpus_prediction_1": "step", "push_corpus_preds_1": "dest",
-        "doc_prediction_1": "step", "push_doc_preds_1": "dest",
+        "push_questions_1": "dest",
+        "push_chunk_preds_1": "dest",
+        "corpus_prediction_1": "step",
+        "push_corpus_preds_1": "dest",
+        "doc_prediction_1": "step",
+        "push_doc_preds_1": "dest",
         "delete_tagged_docs_1": "dest",
     },
 )
 
+AGENT_TRACE_METADATA = {
+    "signature": {
+        "name": "InspectRecords",
+        "instructions": "Inspect records and summarize active entries.",
+        "inputs": [
+            {
+                "name": "records",
+                "annotation": "list[Record]",
+                "description": "records to inspect",
+            }
+        ],
+        "outputs": [
+            {
+                "name": "summary",
+                "annotation": "InspectionSummary",
+                "description": "structured inspection summary",
+            }
+        ],
+    },
+    "runtime": {
+        "lm": "main-model",
+        "sub_lm": "sub-model",
+        "max_iterations": 4,
+    },
+    "skills": [
+        {
+            "name": "audit",
+            "instructions": "Verify active status before summarizing.",
+            "packages": ["pydantic"],
+            "modules": ["record_helpers"],
+            "tools": ["lookup_record"],
+        }
+    ],
+    "aggregated_static_instructions": (
+        "Inspect records and summarize active entries.\n\n"
+        "## Skill: audit\n\nVerify active status before summarizing."
+    ),
+    "packages": ["pydantic"],
+    "modules": ["record_helpers"],
+    "tools": [
+        {
+            "name": "lookup_record",
+            "description": "Look up a record by identifier.",
+        }
+    ],
+}
+
+
+AGENT_TRACE_WORKFLOW = WorkflowInfo(
+    name="agent_trace",
+    file_path="workflows/agents/agent_trace.py",
+    node_ids=["inspect_agent_1"],
+    graph={"inspect_agent_1": []},
+    node_types={"inspect_agent_1": "step"},
+    display_names={"inspect_agent_1": "inspect_agent"},
+    agent_node_ids=["inspect_agent_1"],
+    agent_metadata_json={
+        "inspect_agent_1": json.dumps(AGENT_TRACE_METADATA, separators=(",", ":"))
+    },
+)
+
+
 ALL_WORKFLOWS = [
-    ORDER_WORKFLOW, INGEST_WORKFLOW, ANALYTICS_WORKFLOW,
-    ML_WORKFLOW, DATA_PLATFORM_WORKFLOW, DOC_PROCESSING_WORKFLOW,
+    ORDER_WORKFLOW,
+    INGEST_WORKFLOW,
+    ANALYTICS_WORKFLOW,
+    ML_WORKFLOW,
+    DATA_PLATFORM_WORKFLOW,
+    DOC_PROCESSING_WORKFLOW,
 ]
 
 # ── Fake log templates ────────────────────────────────────────────────────
@@ -425,8 +537,10 @@ SKIP_ON_FAIL = {"aggregate_1", "save_warehouse_1", "notify_1"}
 class MockStateProvider:
     """Implements StateProvider with timer-driven simulation."""
 
-    def __init__(self) -> None:
+    def __init__(self, *, include_agent_trace: bool = False) -> None:
         self._workflows = {p.selector: p for p in ALL_WORKFLOWS}
+        if include_agent_trace:
+            self._workflows[AGENT_TRACE_WORKFLOW.selector] = AGENT_TRACE_WORKFLOW
         self._runs: dict[str, RunState] = {}
         self._run_callbacks: list[Callable[[RunState], None]] = []
         self._log_callbacks: list[Callable[[LogEntry], None]] = []
@@ -449,9 +563,12 @@ class MockStateProvider:
         for nid in self._workflows["order_workflow"].node_ids:
             nt = self._workflows["order_workflow"].node_types[nid]
             run1.nodes[nid] = NodeState(
-                node_id=nid, name=display_name_from_id(nid), node_type=nt,
+                node_id=nid,
+                name=display_name_from_id(nid),
+                node_type=nt,
                 status=NodeStatus.SUCCESS,
-                started_at=base_time, ended_at=base_time + 2.0,
+                started_at=base_time,
+                ended_at=base_time + 2.0,
             )
         self._runs[run1.run_id] = run1
 
@@ -467,17 +584,132 @@ class MockStateProvider:
             nt = self._workflows["ingest_workflow"].node_types[nid]
             status = NodeStatus.SUCCESS if nid == "extract_1" else NodeStatus.FAILED
             run2.nodes[nid] = NodeState(
-                node_id=nid, name=display_name_from_id(nid), node_type=nt,
+                node_id=nid,
+                name=display_name_from_id(nid),
+                node_type=nt,
                 status=status,
-                started_at=base_time + 60, ended_at=base_time + 62,
+                started_at=base_time + 60,
+                ended_at=base_time + 62,
             )
         for nid in ["deduplicate_1", "load_1"]:
             nt = self._workflows["ingest_workflow"].node_types[nid]
             run2.nodes[nid] = NodeState(
-                node_id=nid, name=display_name_from_id(nid), node_type=nt,
+                node_id=nid,
+                name=display_name_from_id(nid),
+                node_type=nt,
                 status=NodeStatus.SKIPPED,
             )
         self._runs[run2.run_id] = run2
+
+        trace_events = [
+            {
+                "sequence": 1,
+                "kind": "code.generated",
+                "timestamp_ns": 1,
+                "data": {
+                    "iteration": 1,
+                    "code": (
+                        "records = [item for item in input_records if item.get('active')]\\n"
+                        "summary = {'active_count': len(records), 'names': "
+                        "[item['name'] for item in records]}\\n"
+                        "print(summary)"
+                    ),
+                },
+            },
+            {
+                "sequence": 2,
+                "kind": "code.executed",
+                "timestamp_ns": 2,
+                "data": {"iteration": 1, "output": "{'active_count': 2}"},
+            },
+            {
+                "sequence": 3,
+                "kind": "iteration.recorded",
+                "timestamp_ns": 3,
+                "data": {"step": {"iteration": 1}},
+            },
+        ]
+        trace_step = {
+            "iteration": 1,
+            "reasoning": "Filter active records and summarize their names.",
+            "code": trace_events[0]["data"]["code"],
+            "output": "{'active_count': 2}",
+            "untruncated_output": (
+                "FULL OUTPUT: {'active_count': 2, 'names': "
+                "['Ada Lovelace', 'Grace Hopper']}\\n" + "wrapped output line " * 12
+            ),
+            "error": False,
+            "duration_ms": 14,
+            "tool_calls": [],
+            "predict_calls": [],
+            "lm": {"finish_reason": "stop"},
+            "usage": {"main": {}, "sub": {}},
+        }
+        trace_envelope = {
+            "schema_version": 1,
+            "status": "completed",
+            "run_id": "agent-mock",
+            "events": [
+                {
+                    "sequence": event["sequence"],
+                    "event_kind": event["kind"],
+                    "timestamp_ns": event["timestamp_ns"],
+                    "data": event["data"],
+                }
+                for event in trace_events
+            ],
+            "trace": {
+                "status": "completed",
+                "model": "mock-main",
+                "sub_model": "mock-sub",
+                "iterations": 1,
+                "max_iterations": 4,
+                "duration_ms": 20,
+                "usage": {"main": {}, "sub": {}},
+                "steps": [trace_step],
+                "evidence": {
+                    "run_id": "agent-mock",
+                    "complete": True,
+                    "terminal_outcome": "completed",
+                    "events": trace_events,
+                },
+            },
+            "error": None,
+        }
+        agent_run = RunState(
+            run_id="run_agent",
+            flow_name="agent_trace",
+            status=RunStatus.SUCCESS,
+            started_at=base_time,
+            ended_at=base_time + 1,
+        )
+        agent_run.nodes["inspect_agent_1"] = NodeState(
+            node_id="inspect_agent_1",
+            name="inspect_agent",
+            node_type="step",
+            status=NodeStatus.SUCCESS,
+            started_at=base_time,
+            ended_at=base_time + 1,
+            agent_trace_json=json.dumps(trace_envelope),
+        )
+        agent_run.logs.extend(
+            [
+                LogEntry(
+                    datetime.now(),
+                    LogLevel.INFO,
+                    "inspect_agent_1",
+                    "Agent code.generated iteration=1",
+                ),
+                LogEntry(
+                    datetime.now(),
+                    LogLevel.INFO,
+                    "inspect_agent_1",
+                    "Agent iteration.recorded iteration=1 duration=14ms",
+                ),
+            ]
+        )
+        if "agent_trace" in self._workflows:
+            self._runs[agent_run.run_id] = agent_run
 
     def list_workflows(self) -> list[WorkflowInfo]:
         return list(self._workflows.values())
@@ -516,7 +748,9 @@ class MockStateProvider:
         for nid in info.node_ids:
             nt = info.node_types[nid]
             run.nodes[nid] = NodeState(
-                node_id=nid, name=display_name_from_id(nid), node_type=nt,
+                node_id=nid,
+                name=display_name_from_id(nid),
+                node_type=nt,
                 status=NodeStatus.PENDING,
             )
         self._runs[run_id] = run
