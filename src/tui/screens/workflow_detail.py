@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from rich.color import Color
 from rich.segment import Segments
+from textual import events
 from textual.app import ComposeResult
 from textual.containers import Horizontal, ScrollableContainer, Vertical
 from textual.screen import Screen
@@ -110,6 +111,64 @@ class _ThinScrollContainer(ScrollableContainer):
         sb = super().horizontal_scrollbar
         sb.renderer = _HalfHeightScrollBarRender
         return sb
+
+class _DagScrollContainer(_ThinScrollContainer):
+    """DAG viewport with cumulative, animated pointer scrolling."""
+
+    HORIZONTAL_SCROLL_STEP = 8
+    VERTICAL_SCROLL_STEP = 3
+    SCROLL_DURATION = 0.08
+
+    def _on_mouse_scroll_left(self, event: events.MouseScrollLeft) -> None:
+        self._scroll_horizontal(event, -1)
+
+    def _on_mouse_scroll_right(self, event: events.MouseScrollRight) -> None:
+        self._scroll_horizontal(event, 1)
+
+    def _on_mouse_scroll_up(self, event: events.MouseScrollUp) -> None:
+        if event.ctrl or event.shift:
+            self._scroll_horizontal(event, -1)
+        else:
+            self._scroll_vertical(event, -1)
+
+    def _on_mouse_scroll_down(self, event: events.MouseScrollDown) -> None:
+        if event.ctrl or event.shift:
+            self._scroll_horizontal(event, 1)
+        else:
+            self._scroll_vertical(event, 1)
+
+    def _scroll_horizontal(
+        self,
+        event: events.MouseEvent,
+        direction: int,
+    ) -> None:
+        if not self.allow_horizontal_scroll:
+            return
+        changed = self._scroll_to(
+            x=self.scroll_target_x + direction * self.HORIZONTAL_SCROLL_STEP,
+            animate=True,
+            duration=self.SCROLL_DURATION,
+            easing="out_cubic",
+        )
+        if changed:
+            event.stop()
+
+    def _scroll_vertical(
+        self,
+        event: events.MouseEvent,
+        direction: int,
+    ) -> None:
+        if not self.allow_vertical_scroll:
+            return
+        changed = self._scroll_to(
+            y=self.scroll_target_y + direction * self.VERTICAL_SCROLL_STEP,
+            animate=True,
+            duration=self.SCROLL_DURATION,
+            easing="out_cubic",
+        )
+        if changed:
+            event.stop()
+
 
 
 class _TableScrollContainer(_ThinScrollContainer):
@@ -273,7 +332,7 @@ class WorkflowDetailScreen(Screen):
                     rh.border_title = "Runs"
                     yield Static(id="run-history-header", classes="pane-header")
                     yield RunHistoryWidget(id="run-history-content")
-                with _ThinScrollContainer(id="dag-container") as dag_container:
+                with _DagScrollContainer(id="dag-container") as dag_container:
                     dag_container.border_title = "DAG"
                     dag_container.styles.height = "2fr"
                     yield DagWidget(id="dag-panel")

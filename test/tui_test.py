@@ -2197,6 +2197,44 @@ class TestInteractions:
             assert dag_scroll.styles.overflow_x == "auto"
             assert dag_scroll.styles.overflow_y == "auto"
 
+    async def test_dag_pointer_scroll_accumulates_smoothly(self):
+        """Rapid pointer events should accumulate into one animated target."""
+        from textual.events import MouseScrollRight
+
+        from avalanche.tui.app import AvalancheApp
+
+        app = AvalancheApp(workflow="ml_workflow")
+        async with app.run_test(size=(50, 40)) as pilot:
+            await pilot.pause()
+            app._timer.pause()
+            dag_scroll = app._screen.query_one("#dag-container")
+            assert dag_scroll.max_scroll_x > 0
+
+            def scroll_right() -> None:
+                dag_scroll._on_mouse_scroll_right(
+                    MouseScrollRight(
+                        dag_scroll,
+                        x=10,
+                        y=5,
+                        delta_x=0,
+                        delta_y=1,
+                        button=0,
+                        shift=False,
+                        meta=False,
+                        ctrl=False,
+                    )
+                )
+
+            scroll_right()
+            assert dag_scroll.scroll_target_x == 8
+            assert dag_scroll.scroll_x < dag_scroll.scroll_target_x
+
+            scroll_right()
+            assert dag_scroll.scroll_target_x == 16
+
+            await pilot.pause(0.12)
+            assert dag_scroll.scroll_x == pytest.approx(16)
+
     async def test_dag_center_button_exists(self):
         """DAG pane should have a center button."""
         app = await self._make_app()
