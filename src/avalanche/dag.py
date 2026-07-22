@@ -1593,19 +1593,18 @@ def _materialize_append_handles_for_worker(value: Any) -> Any:
 
 
 def _materialize_worker_kwargs(kwargs: dict[str, Any]) -> dict[str, Any]:
-    """Materialize worker kwargs, EXCEPT hidden Stream parent kwargs.
+    """Materialize worker kwargs except dependency-only framework carriers.
 
-    A deferred Stream upstream is lifted into a top-level hidden kwarg named
-    ``__ava_stream_parent_*`` so Ray tracks the producer as a dependency. That
-    value must NOT be generic-materialized here: ``stream_wrapper`` owns its
-    control/data split and pops the hidden kwarg itself, converting the small
-    ``AppendResultHandle`` into an ``AppendResult`` only when it decides to.
-    Fetching the handle's ``data_ref`` here would defeat the split (early frame
-    fetch) and bypass Stream's own worker-side resolver.
+    Deferred Stream and implicit upstream values are lifted into top-level hidden
+    kwargs so Ray tracks their producers as dependencies. The implicit carriers
+    are inspected only for skip outcomes before binding; Stream owns its
+    control/data split. Generic materialization here would eagerly fetch an
+    ``AppendResultHandle`` that neither path passes to ordinary user code.
     """
     return {
         key: value
-        if isinstance(key, str) and key.startswith(_STREAM_PARENT_KWARG_PREFIX)
+        if isinstance(key, str)
+        and key.startswith((_STREAM_PARENT_KWARG_PREFIX, _IMPLICIT_VALUE_KWARG_PREFIX))
         else _materialize_append_handles_for_worker(value)
         for key, value in kwargs.items()
     }
@@ -1751,6 +1750,8 @@ def _with_current_run_context(
                 ),
                 adapt_positionals=adapt_implicit_positionals,
             )
+            args = _materialize_append_handles_for_worker(args)
+            kwargs = _materialize_worker_kwargs(kwargs)
             args, kwargs = _prepare_user_call(args, kwargs)
             result = fn(*_unwrap_lineaged_tree(args), **_unwrap_lineaged_tree(kwargs))
             return _shape_skipped_result(result, num_returns=num_returns)
@@ -1780,6 +1781,8 @@ def _with_current_run_context(
             position_consuming_param_names=(implicit_position_consuming_param_names or set()),
             adapt_positionals=adapt_implicit_positionals,
         )
+        args = _materialize_append_handles_for_worker(args)
+        kwargs = _materialize_worker_kwargs(kwargs)
         args, kwargs = _prepare_user_call(args, kwargs)
 
         unwrapped_args = _unwrap_lineaged_tree(args)
