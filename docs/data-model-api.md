@@ -97,6 +97,41 @@ model accessors to the frame accessors:
 Row provenance columns (`_ava_*`) behave identically to DataFramely-schema'd
 tables, and DataFramely remains fully supported for dataframe-native pipelines.
 
+Use `ava.ModelStream` at workflow boundaries to inject row models instead of a
+Polars DataFrame:
+
+```python
+@ava.step
+def greet(person: Person = ava.ModelStream.one(ns.people)) -> str:
+    return f"Hello, {person.name}"
+
+
+@ava.step
+def maybe_greet(
+    person: Person | None = ava.ModelStream.one_or_none(ns.people),
+) -> str | None:
+    return None if person is None else f"Hello, {person.name}"
+
+
+@ava.step
+def greet_everyone(
+    people: list[Person] = ava.ModelStream.all(ns.people),
+) -> list[str]:
+    return [f"Hello, {person.name}" for person in people]
+```
+
+`one()` requires exactly one row. `one_or_none()` returns `None` for zero rows
+and rejects multiple rows. `all()` returns validated models in stable row order,
+including an empty list for zero rows. These providers require a table declared
+with a Pydantic model schema. Framework-owned `_ava_*` provenance columns are
+removed from the model boundary internally. Cardinality and validation errors
+include the table, workflow run, and upstream source node when available.
+
+`ModelStream` supports the same durable options as `Stream`, for example
+`ava.ModelStream.all(table, key="people_to_greet", mode="append_scan")`.
+Passthrough, table-backed, local, distributed, and rerun execution preserve the
+same read and progress semantics described below.
+
 ## Iceberg namespace
 
 An Iceberg namespace groups declared tables under one catalog namespace and base

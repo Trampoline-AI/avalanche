@@ -10,6 +10,7 @@ from contextlib import contextmanager
 from typing import TYPE_CHECKING, Any, Callable, Generator, Generic, Literal, TypeVar
 
 import polars as pl
+from pydantic import BaseModel
 from pyiceberg.exceptions import CommitFailedException
 
 from avalanche.types import ParamContext, ParameterProvider
@@ -24,13 +25,25 @@ if TYPE_CHECKING:
     from avalanche.types import AppendResult
 
 T = TypeVar("T")
+ModelT = TypeVar("ModelT", bound=BaseModel)
 
 StreamMode = Literal["run_scoped", "append_scan"]
+ModelStreamCardinality = Literal["one", "one_or_none", "all"]
 
 
 def _table_identity(table: Any) -> str | None:
     """Best-effort stable identity for a storage table (Iceberg id / location)."""
     return getattr(table, "identifier", None) or getattr(table, "location", None) or None
+
+def _table_label(table: Any) -> str:
+    """Human-readable table identity for model-stream errors."""
+    identity = _table_identity(table)
+    if identity:
+        return str(identity)
+    table_name = getattr(table, "_table_name", None)
+    if table_name:
+        return str(table_name)
+    return type(table).__name__
 
 
 def _is_executor_ref(value: Any, executor: Any) -> bool:
@@ -235,6 +248,12 @@ class Stream(ParameterProvider, Generic[T]):
     def __repr__(self) -> str:
         return f"Stream(table={self.table}, key={self.key!r}, mode={self.mode!r})"
 
+    def _materialize(
+        self, df: pl.DataFrame, source_node_slugs: tuple[str, ...]
+    ) -> pl.DataFrame:
+        """Project the consumed frame into the value injected into user code."""
+        return df
+
     # ParameterProvider protocol implementation (class methods for registry use)
     @classmethod
     def can_resolve(cls, param_value: Any) -> bool:
@@ -333,16 +352,18 @@ class Stream(ParameterProvider, Generic[T]):
                     upstream_data=upstream_data,
                     source_node_slugs=source_node_slugs,
                 )
-                context_managers.append((param_name, cm))
+                context_managers.append((param_name, stream, source_node_slugs, cm))
 
             # Enter contexts and collect DataFrames
             entered_contexts = []
             try:
                 resolved_streams = {}
-                for param_name, cm in context_managers:
+                for param_name, stream, source_node_slugs, cm in context_managers:
                     df = cm.__enter__()
                     entered_contexts.append(cm)
-                    resolved_streams[param_name] = df
+                    resolved_streams[param_name] = stream._materialize(
+                        df, source_node_slugs
+                    )
 
                 # Update kwargs with resolved streams
                 kwargs.update(resolved_streams)
@@ -380,6 +401,118 @@ class Stream(ParameterProvider, Generic[T]):
                 return result
 
         return stream_wrapper
+
+class ModelStream(Stream[ModelT], Generic[ModelT]):
+    """Stream provider that injects validated pydantic row models."""
+
+    cardinality: ModelStreamCardinality
+
+    def __init__(
+        self,
+        table: "IcebergTable | Table",
+        *,
+        cardinality: ModelStreamCardinality,
+        key: str | None = None,
+        mode: StreamMode = "run_scoped",
+    ):
+        if getattr(table, "row_model", None) is None:
+            raise TypeError(
+                "ModelStream requires a table declared with a pydantic model schema; "
+                f"table={_table_label(table)!r}."
+            )
+        super().__init__(table, key=key, mode=mode)
+        self.cardinality = cardinality
+
+    @classmethod
+    def one(
+        cls,
+        table: "IcebergTable | Table",
+        *,
+        key: str | None = None,
+        mode: StreamMode = "run_scoped",
+    ) -> "ModelStream[ModelT]":
+        """Inject exactly one validated row model."""
+        return cls(table, cardinality="one", key=key, mode=mode)
+
+    @classmethod
+    def one_or_none(
+        cls,
+        table: "IcebergTable | Table",
+        *,
+        key: str | None = None,
+        mode: StreamMode = "run_scoped",
+    ) -> "ModelStream[ModelT]":
+        """Inject one validated row model, or None when no rows exist."""
+        return cls(table, cardinality="one_or_none", key=key, mode=mode)
+
+    @classmethod
+    def all(
+        cls,
+        table: "IcebergTable | Table",
+        *,
+        key: str | None = None,
+        mode: StreamMode = "run_scoped",
+    ) -> "ModelStream[ModelT]":
+        """Inject all validated row models in stable table order."""
+        return cls(table, cardinality="all", key=key, mode=mode)
+
+    def __repr__(self) -> str:
+        return (
+            f"ModelStream.{self.cardinality}(table={self.table}, key={self.key!r}, "
+            f"mode={self.mode!r})"
+        )
+
+    @classmethod
+    def can_resolve(cls, param_value: Any) -> bool:
+        """Resolve only model streams; Stream handles dataframe streams."""
+        return isinstance(param_value, cls)
+
+    def _materialize(
+        self, df: pl.DataFrame, source_node_slugs: tuple[str, ...]
+    ) -> ModelT | None | list[ModelT]:
+        from avalanche.model_frame import arrow_to_models
+        from avalanche.runtime import get_current_run_context
+
+        context = get_current_run_context()
+        details = [f"table={_table_label(self.table)!r}"]
+        if context is not None:
+            details.extend(
+                (
+                    f"workflow={context.workflow_name!r}",
+                    f"run_id={context.run_id!r}",
+                )
+            )
+        if len(source_node_slugs) == 1:
+            details.append(f"source_node={source_node_slugs[0]!r}")
+        elif source_node_slugs:
+            details.append(f"source_nodes={source_node_slugs!r}")
+        error_context = ", ".join(details)
+
+        row_count = df.height
+        if self.cardinality == "one" and row_count != 1:
+            raise ValueError(
+                "ModelStream.one expected exactly one row; "
+                f"got {row_count} rows ({error_context})."
+            )
+        if self.cardinality == "one_or_none":
+            if row_count == 0:
+                return None
+            if row_count > 1:
+                raise ValueError(
+                    "ModelStream.one_or_none expected at most one row; "
+                    f"got {row_count} rows ({error_context})."
+                )
+
+        try:
+            models = arrow_to_models(df, self.table.row_model)
+        except Exception as exc:
+            raise ValueError(
+                f"ModelStream failed to validate rows ({error_context}): {exc}"
+            ) from exc
+
+        if self.cardinality == "all":
+            return models
+        return models[0]
 
 
 @contextmanager
