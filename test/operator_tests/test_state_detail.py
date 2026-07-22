@@ -641,7 +641,11 @@ def test_read_trace_streams_more_than_four_mib_in_bounded_revisioned_chunks():
                 },
             },
         )
-        expected = operator.read_trace(run.run_id, "agent_1")
+        expected = operator.read_trace(
+            run.run_id,
+            "agent_1",
+            operator_instance_id=operator.operator_instance_id,
+        )
 
         port = _unused_port()
         server = serve(operator, port=port, block=False)
@@ -667,6 +671,7 @@ def test_read_trace_streams_more_than_four_mib_in_bounded_revisioned_chunks():
         chunks = list(
             stub.ReadTrace(
                 pb.ReadTraceRequest(
+                    operator_instance_id=summaries.operator_instance_id,
                     run_id=run.run_id,
                     node_id="agent_1",
                     revision=expected.revision,
@@ -694,3 +699,79 @@ def test_read_trace_streams_more_than_four_mib_in_bounded_revisioned_chunks():
         if server is not None:
             server.stop(grace=0).wait()
         operator.close()
+
+
+def test_read_trace_rejects_reused_identity_from_previous_operator_epoch():
+    first = Operator(watch=False, schedule=False)
+    second = Operator(watch=False, schedule=False)
+    server = None
+    channel = None
+
+    def seed_trace(operator: Operator, marker: str):
+        run = _add_run(operator, "run-reused")
+        operator._apply_event(run.run_id, _evidence(1))
+        operator._apply_event(
+            run.run_id,
+            {
+                "type": "agent_evidence",
+                "node_id": "agent_1",
+                "event": {
+                    "kind": "trace_finished",
+                    "trace": {
+                        "status": "completed",
+                        "evidence": {"complete": True},
+                        "marker": marker,
+                    },
+                },
+            },
+        )
+        return operator.read_trace(
+            run.run_id,
+            "agent_1",
+            operator_instance_id=operator.operator_instance_id,
+        ).revision
+
+    try:
+        revision = seed_trace(first, "first")
+        stale_epoch = first.operator_instance_id
+        first.close()
+
+        assert seed_trace(second, "second") == revision
+        port = _unused_port()
+        server = serve(second, port=port, block=False)
+        channel = grpc.insecure_channel(f"localhost:{port}")
+        grpc.channel_ready_future(channel).result(timeout=5)
+        stub = pb_grpc.OperatorServiceStub(channel)
+
+        with pytest.raises(grpc.RpcError) as error:
+            list(
+                stub.ReadTrace(
+                    pb.ReadTraceRequest(
+                        operator_instance_id=stale_epoch,
+                        run_id="run-reused",
+                        node_id="agent_1",
+                        revision=revision,
+                    )
+                )
+            )
+        assert error.value.code() == grpc.StatusCode.FAILED_PRECONDITION
+
+        chunks = list(
+            stub.ReadTrace(
+                pb.ReadTraceRequest(
+                    operator_instance_id=second.operator_instance_id,
+                    run_id="run-reused",
+                    node_id="agent_1",
+                    revision=revision,
+                )
+            )
+        )
+        trace = json.loads(b"".join(chunk.data for chunk in chunks))
+        assert trace["marker"] == "second"
+    finally:
+        if channel is not None:
+            channel.close()
+        if server is not None:
+            server.stop(grace=0).wait()
+        first.close()
+        second.close()

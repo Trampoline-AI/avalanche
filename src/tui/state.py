@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Any, Callable, Protocol, runtime_checkable
 
-from .models import LogEntry, RunState, WorkflowInfo
+from .models import LogEntry, RunState, TraceDetail, WorkflowInfo
 
 
 class StateProvider(Protocol):
@@ -15,6 +15,9 @@ class StateProvider(Protocol):
     def list_runs(self, workflow_selector: str) -> list[RunState]: ...
 
     def get_run(self, run_id: str) -> RunState | None: ...
+    def hydrate_trace(self, run_id: str, node_id: str) -> TraceDetail | None:
+        """Hydrate one selected agent node's immutable trace body."""
+        ...
 
     def start_run(self, workflow_selector: str, **kwargs: Any) -> str:
         """Start a new run, return run_id."""
@@ -25,6 +28,10 @@ class StateProvider(Protocol):
     def on_run_update(self, callback: Callable[[RunState], None]) -> None: ...
 
     def on_log(self, callback: Callable[[LogEntry], None]) -> None: ...
+
+    def close(self) -> None:
+        """Release provider-owned streams and in-flight RPCs."""
+        ...
 
 
 @runtime_checkable

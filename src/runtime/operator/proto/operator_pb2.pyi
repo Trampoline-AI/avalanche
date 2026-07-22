@@ -115,14 +115,16 @@ class ListAgentEventsRequest(_message.Message):
     def __init__(self, run_id: _Optional[str] = ..., node_id: _Optional[str] = ..., after_event_sequence: _Optional[int] = ..., page_size: _Optional[int] = ...) -> None: ...
 
 class ReadTraceRequest(_message.Message):
-    __slots__ = ("run_id", "node_id", "revision")
+    __slots__ = ("run_id", "node_id", "revision", "operator_instance_id")
     RUN_ID_FIELD_NUMBER: _ClassVar[int]
     NODE_ID_FIELD_NUMBER: _ClassVar[int]
     REVISION_FIELD_NUMBER: _ClassVar[int]
+    OPERATOR_INSTANCE_ID_FIELD_NUMBER: _ClassVar[int]
     run_id: str
     node_id: str
     revision: int
-    def __init__(self, run_id: _Optional[str] = ..., node_id: _Optional[str] = ..., revision: _Optional[int] = ...) -> None: ...
+    operator_instance_id: str
+    def __init__(self, run_id: _Optional[str] = ..., node_id: _Optional[str] = ..., revision: _Optional[int] = ..., operator_instance_id: _Optional[str] = ...) -> None: ...
 
 class StreamRunDeltasRequest(_message.Message):
     __slots__ = ("operator_instance_id", "after_sequence")

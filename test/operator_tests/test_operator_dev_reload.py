@@ -61,6 +61,8 @@ def _protocol_test_handle(result_bundle, *, cancelled=False):
     cancel_event = threading.Event()
     if cancelled:
         cancel_event.set()
+    publication_event = threading.Event()
+    publication_event.set()
     return SimpleNamespace(
         process=_InertProcess(),
         event_queue=event_queue,
@@ -69,6 +71,7 @@ def _protocol_test_handle(result_bundle, *, cancelled=False):
         assignment_event=threading.Event(),
         windows_job=None,
         result_bundle=result_bundle,
+        publication_event=publication_event,
         drain_thread=None,
     )
 

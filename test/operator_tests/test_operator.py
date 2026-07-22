@@ -469,48 +469,61 @@ class TestOperatorSubscription:
             replay = op.subscribe(1)
 
             assert [replay.get_nowait() for _ in range(2)] == [
-                (2, RunState(run_id="run_1", flow_name="flow", status=RunStatus.RUNNING)),
-                (3, RunState(run_id="run_1", flow_name="flow", status=RunStatus.SUCCESS)),
+                (
+                    2,
+                    RunState(
+                        run_id="run_1",
+                        flow_name="flow",
+                        status=RunStatus.RUNNING,
+                        created_sequence=1,
+                        revision=2,
+                    ),
+                ),
+                (
+                    3,
+                    RunState(
+                        run_id="run_1",
+                        flow_name="flow",
+                        status=RunStatus.SUCCESS,
+                        created_sequence=1,
+                        revision=3,
+                    ),
+                ),
             ]
             assert replay.empty()
         finally:
             op.close()
 
-    def test_old_cursor_recovers_latest_runs_with_fresh_ordered_sequences(self):
+    def test_old_delta_cursor_requires_structural_reset(self):
         op = Operator([], watch=False, schedule=False, stream_history_capacity=2)
-        op._runs = {
-            "run_b": RunState(run_id="run_b", flow_name="flow", status=RunStatus.SUCCESS),
-            "run_a": RunState(run_id="run_a", flow_name="flow", status=RunStatus.FAILED),
-        }
+        run = RunState(run_id="run_a", flow_name="flow")
+        op._runs[run.run_id] = run
         try:
-            for _ in range(3):
-                op._notify_run(op._runs["run_a"])
+            op._notify_run(run)
+            run.status = RunStatus.RUNNING
+            op._notify_run(run)
+            run.status = RunStatus.SUCCESS
+            op._notify_run(run)
 
-            recovery = op.subscribe(0)
-            updates = [recovery.get_nowait(), recovery.get_nowait()]
+            recovery = op.subscribe_run_deltas(op.operator_instance_id, 0)
+            reset = recovery.get_nowait()
 
-            assert [(seq, run.run_id) for seq, run in updates] == [
-                (4, "run_a"),
-                (5, "run_b"),
-            ]
+            assert reset.reset_required.history_floor == 2
+            assert reset.reset_required.latest_sequence == 3
             assert recovery.empty()
-            assert [seq for seq, _ in op._stream_history] == [4, 5]
+            assert [delta.sequence for delta in op._stream_history] == [2, 3]
         finally:
             op.close()
 
-    def test_cursor_ahead_after_restart_recovers_current_runs(self):
+    def test_cursor_ahead_after_restart_requires_structural_reset(self):
         op = Operator([], watch=False, schedule=False)
-        op._runs = {
-            "run_b": RunState(run_id="run_b", flow_name="flow"),
-            "run_a": RunState(run_id="run_a", flow_name="flow"),
-        }
         try:
-            recovery = op.subscribe(99)
+            recovery = op.subscribe_run_deltas("previous-operator", 99)
+            reset = recovery.get_nowait()
 
-            assert [recovery.get_nowait() for _ in range(2)] == [
-                (1, RunState(run_id="run_a", flow_name="flow")),
-                (2, RunState(run_id="run_b", flow_name="flow")),
-            ]
+            assert reset.operator_instance_id == op.operator_instance_id
+            assert reset.reset_required.history_floor == 1
+            assert reset.reset_required.latest_sequence == 0
             assert recovery.empty()
         finally:
             op.close()

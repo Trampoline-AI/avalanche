@@ -7,6 +7,7 @@ from avalanche.operator.models import (
     NodeStatus,
     RunState,
     RunStatus,
+    TraceDetail,
     WorkflowInfo,
     display_name_from_id,
 )
@@ -18,6 +19,7 @@ __all__ = [
     "NodeStatus",
     "WorkflowInfo",
     "RunState",
+    "TraceDetail",
     "RunStatus",
     "display_name_from_id",
 ]

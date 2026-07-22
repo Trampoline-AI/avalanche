@@ -25,6 +25,7 @@ from avalanche.operator.models import NodeState, RunState, RunStatus, WorkflowIn
 from avalanche.operator.server import serve
 from avalanche.runtime import File
 from runtime.operator._grpc import MAX_GRPC_MESSAGE_BYTES
+from runtime.operator.client import _run_from_snapshot
 from runtime.operator.proto import operator_pb2 as pb
 from runtime.operator.results import (
     MAX_ATTACHMENT_MEDIA_TYPE_LENGTH,
@@ -257,7 +258,10 @@ def lineage_context_workflow():
             run = _wait_for_run_success(provider, run_id)
             assert run is not None
             assert run.status == RunStatus.SUCCESS
-            messages = [entry.message for entry in run.logs]
+            logs = provider._stub.ListLogs(
+                pb.ListLogsRequest(run_id=run_id, page_size=500)
+            )
+            messages = [item.entry.message for item in logs.logs]
             assert any("lineage={}" in message for message in messages)
             assert any(f"run_id={run_id}" in message for message in messages)
             assert any("workflow=lineage_context_workflow" in message for message in messages)
@@ -308,7 +312,10 @@ def lineage_context_workflow():
         run = client.get_run(run_id)
         assert run is not None
         assert run.status == RunStatus.SUCCESS
-        messages = [entry.message for entry in run.logs]
+        logs = client._stub.ListLogs(
+            pb.ListLogsRequest(run_id=run_id, page_size=500)
+        )
+        messages = [item.entry.message for item in logs.logs]
         assert any("message=from-grpc" in message for message in messages)
         assert any("request_id=req_grpc" in message for message in messages)
         assert any(f"run_id={run_id}" in message for message in messages)
@@ -405,8 +412,8 @@ def large_file_workflow():
         run = client.get_run("nonexistent")
         assert run is None
 
-    def test_stream_updates(self, client):
-        """StreamUpdates should deliver live state changes."""
+    def test_stream_run_deltas(self, client):
+        """StreamRunDeltas should materialize live state changes."""
         updates = []
 
         def on_update(run):
@@ -516,64 +523,37 @@ def test_old_proto_fields_receive_identity_fallbacks():
     assert run.workflow_display_name == "legacy"
 
 
-def test_client_accepts_lower_first_sequence_after_operator_restart():
-    provider = GrpcStateProvider("localhost:1")
-    received = []
-
-    class RestartedStub:
-        def StreamUpdates(self, request, *, metadata):  # noqa: N802
-            assert request.since_sequence == 99
-            assert metadata is None
-            yield pb.RunUpdate(
-                sequence=2,
-                run=pb.RunStateMsg(run_id="run_recovered", flow_name="flow", status="success"),
-            )
-            yield pb.RunUpdate(
-                sequence=2,
-                run=pb.RunStateMsg(run_id="duplicate", flow_name="flow", status="success"),
-            )
-            yield pb.RunUpdate(
-                sequence=1,
-                run=pb.RunStateMsg(run_id="stale", flow_name="flow", status="pending"),
-            )
-            yield pb.RunUpdate(
-                sequence=3,
-                run=pb.RunStateMsg(run_id="run_live", flow_name="flow", status="running"),
-            )
-            provider._stream_stop.set()
-
-    provider._stub = RestartedStub()
-    provider._last_seq = 99
-    provider._run_callbacks.append(lambda run: received.append(run.run_id))
-    try:
-        provider._stream_loop()
-    finally:
-        provider.close()
-
-    assert received == ["run_recovered", "run_live"]
-    assert provider._last_seq == 3
 
 
-def test_client_skips_equal_first_sequence_without_epoch_reset():
+def test_client_skips_duplicate_delta_sequence_without_epoch_reset():
     provider = GrpcStateProvider("localhost:1")
     received = []
 
     class DuplicateFirstStub:
-        def StreamUpdates(self, request, *, metadata):  # noqa: N802
-            assert request.since_sequence == 99
+        def StreamRunDeltas(self, request, *, metadata):  # noqa: N802
+            assert request.operator_instance_id == "operator-1"
+            assert request.after_sequence == 99
             assert metadata is None
-            yield pb.RunUpdate(
-                sequence=99,
-                run=pb.RunStateMsg(run_id="duplicate", flow_name="flow", status="success"),
-            )
-            yield pb.RunUpdate(
-                sequence=100,
-                run=pb.RunStateMsg(run_id="run_live", flow_name="flow", status="running"),
-            )
+            for sequence, run_id in ((99, "duplicate"), (100, "run_live")):
+                yield pb.RunDeltaEnvelope(
+                    operator_instance_id="operator-1",
+                    delta=pb.RunDelta(
+                        sequence=sequence,
+                        run_created=pb.RunCreatedDelta(
+                            summary=pb.RunSummaryMsg(
+                                run_id=run_id,
+                                flow_name="flow",
+                                status="running",
+                                created_sequence=sequence,
+                                revision=sequence,
+                            )
+                        ),
+                    ),
+                )
             provider._stream_stop.set()
 
     provider._stub = DuplicateFirstStub()
-    provider._last_seq = 99
+    provider._install_structural_baseline("operator-1", 99, {})
     provider._run_callbacks.append(lambda run: received.append(run.run_id))
     try:
         provider._stream_loop()
@@ -581,7 +561,7 @@ def test_client_skips_equal_first_sequence_without_epoch_reset():
         provider.close()
 
     assert received == ["run_live"]
-    assert provider._last_seq == 100
+    assert provider._cursor.sequence == 100
 
 
 def test_concurrent_run_update_registrations_start_one_stream_thread():
@@ -596,7 +576,7 @@ def test_concurrent_run_update_registrations_start_one_stream_thread():
             self.calls = 0
             self.thread_ids = set()
 
-        def StreamUpdates(self, request, *, metadata):  # noqa: N802
+        def StreamRunDeltas(self, request, *, metadata):  # noqa: N802
             self.calls += 1
             self.thread_ids.add(threading.get_ident())
 
@@ -654,7 +634,7 @@ def test_concurrent_close_and_stream_start_leave_no_live_thread_or_calls():
             self.calls = 0
             self.post_close_calls = 0
 
-        def StreamUpdates(self, request, *, metadata):  # noqa: N802
+        def StreamRunDeltas(self, request, *, metadata):  # noqa: N802
             self.calls += 1
             if close_returned.is_set():
                 self.post_close_calls += 1
@@ -703,7 +683,7 @@ def test_client_close_stops_reconnect_thread_and_prevents_new_calls():
         def __init__(self):
             self.calls = 0
 
-        def StreamUpdates(self, request, *, metadata):  # noqa: N802
+        def StreamRunDeltas(self, request, *, metadata):  # noqa: N802
             self.calls += 1
             called.set()
             raise Unavailable()
@@ -749,9 +729,9 @@ def test_canonical_client_requests_include_cached_legacy_name():
             self.start_request = request
             return pb.StartRunResponse(run_id="run_legacy")
 
-        def ListRuns(self, request, **kwargs):  # noqa: N802
+        def ListRunSummaries(self, request, **kwargs):  # noqa: N802
             self.list_request = request
-            return pb.RunList()
+            return pb.RunSummaryPage(operator_instance_id="operator-1")
 
     provider = GrpcStateProvider("localhost:1")
     stub = CapturingStub()
@@ -766,7 +746,7 @@ def test_canonical_client_requests_include_cached_legacy_name():
 
         assert provider.list_runs(canonical_id) == []
         assert stub.list_request.workflow_selector == canonical_id
-        assert stub.list_request.flow_name == "Daily report"
+        assert stub.list_request.page_size == 1000
     finally:
         provider.close()
 
@@ -788,13 +768,24 @@ def test_unary_client_calls_pass_finite_timeout():
             self._capture("start", timeout)
             return pb.StartRunResponse(run_id="run_1")
 
-        def GetRun(self, request, *, timeout, **kwargs):  # noqa: N802
+        def GetRunSnapshot(self, request, *, timeout, **kwargs):  # noqa: N802
             self._capture("get", timeout)
-            return pb.RunStateMsg(run_id=request.run_id, flow_name="flow", status="pending")
+            return pb.RunSnapshotMsg(
+                operator_instance_id=request.operator_instance_id,
+                as_of_sequence=request.as_of_sequence,
+                summary=pb.RunSummaryMsg(
+                    run_id=request.run_id,
+                    flow_name="flow",
+                    status="pending",
+                ),
+            )
 
-        def ListRuns(self, request, *, timeout, **kwargs):  # noqa: N802
-            self._capture("runs", timeout)
-            return pb.RunList()
+        def ListRunSummaries(self, request, *, timeout, **kwargs):  # noqa: N802
+            self._capture("cursor" if request.page_size == 1 else "runs", timeout)
+            return pb.RunSummaryPage(
+                operator_instance_id="operator-1",
+                as_of_sequence=1,
+            )
 
         def CancelRun(self, request, *, timeout, **kwargs):  # noqa: N802
             self._capture("cancel", timeout)
@@ -814,6 +805,7 @@ def test_unary_client_calls_pass_finite_timeout():
     assert calls == [
         ("list", 3.5),
         ("start", 3.5),
+        ("cursor", 3.5),
         ("get", 3.5),
         ("runs", 3.5),
         ("cancel", 3.5),
@@ -1095,3 +1087,191 @@ def test_run_state_proto_retains_complete_agent_envelope():
 
     decoded = run_state_from_proto(run_state_to_proto(run))
     assert decoded.nodes["agent_1"].agent_trace_json == envelope
+
+
+def _seed_hydration_run(operator, run_id: str) -> RunState:
+    run = RunState(run_id=run_id, flow_name="flow")
+    run.nodes["agent-1"] = NodeState(
+        node_id="agent-1",
+        name="Agent",
+        node_type="step",
+    )
+    operator._runs[run_id] = run
+    operator._notify_run(run)
+    for sequence in range(1, 6):
+        operator._apply_event(
+            run_id,
+            {
+                "type": "agent_evidence",
+                "node_id": "agent-1",
+                "event": {
+                    "kind": "evidence",
+                    "sequence": sequence,
+                    "event_kind": "code.executed",
+                    "timestamp_ns": sequence,
+                    "data": {"iteration": sequence},
+                },
+            },
+        )
+    operator._apply_event(
+        run_id,
+        {
+            "type": "agent_evidence",
+            "node_id": "agent-1",
+            "event": {
+                "kind": "trace_finished",
+                "trace": {
+                    "status": "completed",
+                    "evidence": {"run_id": run_id, "complete": True},
+                    "payload": "x" * (2 * 1024 * 1024 + 17),
+                },
+            },
+        },
+    )
+    return run
+
+
+def test_grpc_lazily_hydrates_paged_details_and_chunked_trace(
+    monkeypatch,
+):
+    monkeypatch.setattr(
+        "runtime.operator.client.DETAIL_HYDRATION_PAGE_SIZE",
+        2,
+    )
+    operator = Operator([], watch=False, schedule=False)
+    server = None
+    provider = None
+    try:
+        run = _seed_hydration_run(operator, "run-hydration")
+        port = _unused_port()
+        server = serve(operator, port=port, block=False)
+        provider = GrpcStateProvider(f"localhost:{port}")
+        delegate = provider._stub
+
+        class RecordingStub:
+            def __init__(self):
+                self.log_cursors = []
+                self.event_cursors = []
+                self.trace_chunks = 0
+                self.trace_requests = []
+
+            def __getattr__(self, name):
+                return getattr(delegate, name)
+
+            def ListLogs(self, request, **kwargs):  # noqa: N802
+                self.log_cursors.append(request.after_sequence)
+                return delegate.ListLogs(request, **kwargs)
+
+            def ListAgentEvents(self, request, **kwargs):  # noqa: N802
+                self.event_cursors.append(request.after_event_sequence)
+                return delegate.ListAgentEvents(request, **kwargs)
+
+            def ReadTrace(self, request, **kwargs):  # noqa: N802
+                self.trace_requests.append(request)
+                for chunk in delegate.ReadTrace(request, **kwargs):
+                    self.trace_chunks += 1
+                    yield chunk
+
+        recording = RecordingStub()
+        provider._stub = recording
+        hydrated = provider.get_run(run.run_id)
+
+        assert hydrated is not None
+        assert hydrated.details_hydrated
+        assert len(hydrated.logs) == 6
+        envelope = json.loads(hydrated.nodes["agent-1"].agent_trace_json)
+        assert [event["sequence"] for event in envelope["events"]] == list(range(1, 6))
+        assert envelope["trace"] is None
+        assert recording.log_cursors == [0, 2, 4]
+        assert recording.event_cursors == [0, 2, 4]
+
+        with_trace = provider.hydrate_trace(run.run_id, "agent-1")
+        assert with_trace is not None
+        assert with_trace.operator_instance_id == operator.operator_instance_id
+        assert with_trace.run_id == run.run_id
+        assert with_trace.node_id == "agent-1"
+        assert with_trace.trace_body["payload"].endswith("x" * 17)
+        assert recording.trace_chunks == 3
+        assert [request.operator_instance_id for request in recording.trace_requests] == [
+            operator.operator_instance_id
+        ]
+        assert provider.hydrate_trace(run.run_id, "agent-1") is not None
+        assert recording.trace_chunks == 3
+
+        page = operator.list_run_summaries(page_size=1)
+        snapshot = operator.get_run_snapshot(
+            run.run_id,
+            operator_instance_id=page.operator_instance_id,
+            as_of_sequence=page.as_of_sequence,
+        )
+        provider._install_structural_baseline(
+            page.operator_instance_id,
+            page.as_of_sequence,
+            {run.run_id: _run_from_snapshot(snapshot)},
+        )
+        assert not provider._runs_by_id[run.run_id].details_hydrated
+
+        rehydrated = provider.get_run(run.run_id)
+        assert rehydrated is not None
+        assert len(rehydrated.logs) == 6
+        envelope = json.loads(rehydrated.nodes["agent-1"].agent_trace_json)
+        assert len(envelope["events"]) == 5
+        assert envelope["trace"] is None
+    finally:
+        if provider is not None:
+            provider.close()
+        if server is not None:
+            server.stop(grace=1)
+        operator.close()
+
+
+def test_grpc_discards_hydration_after_epoch_reset(monkeypatch):
+    monkeypatch.setattr(
+        "runtime.operator.client.DETAIL_HYDRATION_PAGE_SIZE",
+        2,
+    )
+    operator = Operator([], watch=False, schedule=False)
+    server = None
+    provider = None
+    release = threading.Event()
+    page_read = threading.Event()
+    results = []
+    try:
+        run = _seed_hydration_run(operator, "run-stale-hydration")
+        port = _unused_port()
+        server = serve(operator, port=port, block=False)
+        provider = GrpcStateProvider(f"localhost:{port}")
+        delegate = provider._stub
+
+        class BlockingStub:
+            def __getattr__(self, name):
+                return getattr(delegate, name)
+
+            def ListLogs(self, request, **kwargs):  # noqa: N802
+                response = delegate.ListLogs(request, **kwargs)
+                if request.after_sequence == 0:
+                    page_read.set()
+                    if not release.wait(2):
+                        raise RuntimeError("hydration barrier timed out")
+                return response
+
+        provider._stub = BlockingStub()
+        reader = threading.Thread(
+            target=lambda: results.append(provider.get_run(run.run_id))
+        )
+        reader.start()
+        assert page_read.wait(2)
+        provider._install_structural_baseline("replacement-epoch", 0, {})
+        release.set()
+        reader.join(2)
+        assert not reader.is_alive()
+        assert results == [None]
+        assert provider._cursor.operator_instance_id == "replacement-epoch"
+        assert provider._runs_by_id == {}
+    finally:
+        release.set()
+        if provider is not None:
+            provider.close()
+        if server is not None:
+            server.stop(grace=1)
+        operator.close()

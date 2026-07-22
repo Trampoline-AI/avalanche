@@ -2,6 +2,18 @@
 
 ## Unreleased
 
+### Operator transport
+
+- Operator streams now replay bounded, typed run deltas under an instance epoch
+  and explicitly require a structural reset for stale cursors or restarts.
+- Remote TUI state applies deltas in sequence, ignores duplicates, and reloads
+  structural run baselines instead of receiving complete run snapshots per event.
+- Slow consumers receive an explicit reset from bounded stream queues, while
+  summary refreshes preserve already-hydrated run details.
+- Run selection paginates historical logs and agent events on demand. Trace
+  hydration uses one lifecycle-owned worker and epoch/revision-guarded detail
+  completions, with bounded retries.
+
 ### TUI performance
 
 - Virtualized log rendering keeps steady and incremental refresh work bounded by

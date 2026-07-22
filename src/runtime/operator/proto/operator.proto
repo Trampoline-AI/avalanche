@@ -91,6 +91,7 @@ message ReadTraceRequest {
   string run_id = 1;
   string node_id = 2;
   uint64 revision = 3;
+  string operator_instance_id = 4;
 }
 
 message StreamRunDeltasRequest {

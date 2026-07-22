@@ -10,6 +10,7 @@ from types import SimpleNamespace
 
 import pytest
 
+from avalanche.operator.models import TraceDescriptor, TraceDetail
 from avalanche.tui.dag_layout import (
     DagNode,
     ParGroup,
@@ -1097,6 +1098,98 @@ class TestUIStore:
         store._apply_background_updates()
         assert store.current_run is runs["b"]
         assert store.runs_for_current_workflow == [runs["b"]]
+
+    def test_summary_refresh_preserves_hydrated_current_run_details(self):
+        workflow = WorkflowInfo(
+            name="flow",
+            display_name="flow",
+            workflow_id="flow",
+            file_path="flow.py",
+            node_ids=["node"],
+            graph={},
+            node_types={"node": "step"},
+        )
+        node = NodeState(
+            node_id="node",
+            name="Node",
+            node_type="step",
+            status=NodeStatus.RUNNING,
+            agent_trace_json='{"status":"in_progress","events":[{"sequence":1}]}',
+        )
+        hydrated = RunState(
+            run_id="run_1",
+            flow_name="flow",
+            workflow_id="flow",
+            status=RunStatus.RUNNING,
+            nodes={"node": node},
+            logs=[
+                LogEntry(
+                    timestamp=datetime(2026, 7, 22),
+                    level=LogLevel.INFO,
+                    node_id="node",
+                    message="working",
+                )
+            ],
+            operator_instance_id="operator-1",
+            revision=5,
+            latest_log_sequence=4,
+        )
+        summary = RunState(
+            run_id="run_1",
+            flow_name="flow",
+            workflow_id="flow",
+            status=RunStatus.SUCCESS,
+            operator_instance_id="operator-1",
+            revision=6,
+            details_hydrated=False,
+        )
+        store = UIStore(MockStateProvider())
+        _apply_async_updates(store)
+        store.current_workflow = workflow
+        store.current_run = hydrated
+        store.run_pinned = True
+        store._runs_cache = [hydrated]
+
+        store._background_updates.put(
+            (
+                "runs",
+                (
+                    workflow.selector,
+                    store._run_data_revision(workflow.selector),
+                    store._workflow_context_epoch,
+                    [summary],
+                ),
+            )
+        )
+        store._apply_background_updates()
+
+        merged = store.current_run
+        assert merged.nodes is hydrated.nodes
+        assert merged.logs is hydrated.logs
+        assert merged is store._runs_cache[0]
+        assert merged.status is RunStatus.SUCCESS
+        assert merged.nodes["node"].agent_trace_json == node.agent_trace_json
+        assert [entry.message for entry in merged.logs] == ["working"]
+        assert merged.latest_log_sequence == 4
+        assert merged.details_hydrated
+
+        stale_summary = replace(summary, status=RunStatus.FAILED, revision=4)
+        store._background_updates.put(
+            (
+                "runs",
+                (
+                    workflow.selector,
+                    store._run_data_revision(workflow.selector),
+                    store._workflow_context_epoch,
+                    [stale_summary],
+                ),
+            )
+        )
+        store._apply_background_updates()
+
+        assert store.current_run.status is RunStatus.SUCCESS
+        assert store.current_run.nodes["node"].agent_trace_json == node.agent_trace_json
+
 
     def test_stream_terminal_update_wins_over_delayed_run_list(self):
         workflow = WorkflowInfo(
@@ -3115,6 +3208,41 @@ def _agent_trace_provider():
     return provider, envelope
 
 
+def _unhydrated_agent_trace_provider():
+    provider, complete_envelope = _agent_trace_provider()
+    run = provider._runs["run-agent"]
+    node = run.nodes["agent_1"]
+    pending_envelope = json.loads(json.dumps(complete_envelope))
+    pending_envelope["trace"] = None
+    descriptor = TraceDescriptor(
+        status="completed",
+        revision=1,
+        available=True,
+        complete=True,
+        event_count=len(pending_envelope["events"]),
+        size_bytes=100,
+    )
+    node.trace = descriptor
+    node.revision = descriptor.revision
+    node.agent_trace_json = json.dumps(pending_envelope)
+    return provider, complete_envelope, run, node, pending_envelope, descriptor
+
+
+def _trace_detail_from_run(run: RunState, node_id: str) -> TraceDetail:
+    node = run.nodes[node_id]
+    assert node.trace is not None
+    envelope = json.loads(node.agent_trace_json)
+    assert isinstance(envelope["trace"], dict)
+    return TraceDetail(
+        operator_instance_id=run.operator_instance_id,
+        run_id=run.run_id,
+        created_sequence=run.created_sequence,
+        node_id=node_id,
+        descriptor_revision=node.trace.revision,
+        trace_body=envelope["trace"],
+    )
+
+
 @pytest.mark.asyncio
 async def test_agent_trace_inspector_interactions_and_log_retention():
     from avalanche.tui.app import AvalancheApp
@@ -3123,7 +3251,6 @@ async def test_agent_trace_inspector_interactions_and_log_retention():
         AgentOutputInspector,
         AgentTraceInspector,
     )
-    from avalanche.tui.widgets.log_panel import LogWidget
 
     provider, _ = _agent_trace_provider()
     app = AvalancheApp(provider=provider, workflow="agent_flow", node="agent")
@@ -3276,10 +3403,493 @@ async def test_agent_trace_inspector_interactions_and_log_retention():
         assert app.store.trace_inspector_open is False
         assert app.store.focused_pane == "dag"
         assert app._screen.query_one("#dashboard-pane").display is True
-        log_view = app._screen.query_one("#log-content", LogWidget)
-        logs = "\n".join(line.text for line in log_view.lines)
+        logs = [entry.message for entry in app.store.logs]
         assert "Agent code.generated" in logs
         assert "Agent iteration.recorded" in logs
+
+
+@pytest.mark.asyncio
+async def test_open_trace_inspector_tracks_revisions_and_retries_hydration():
+    from avalanche.tui.app import AvalancheApp
+
+    (
+        provider,
+        complete_envelope,
+        run,
+        node,
+        pending_envelope,
+        descriptor,
+    ) = _unhydrated_agent_trace_provider()
+
+    hydration_calls = []
+    first_started = threading.Event()
+    release_first = threading.Event()
+
+    def hydrate_trace(run_id, node_id):
+        current = provider._runs[run_id]
+        current_node = current.nodes[node_id]
+        revision = current_node.trace.revision
+        hydration_calls.append(revision)
+        if revision == 1:
+            first_started.set()
+            if not release_first.wait(2):
+                raise TimeoutError("trace hydration barrier timed out")
+            return None
+        if revision == 3 and hydration_calls.count(3) == 1:
+            return None
+        hydrated_node = replace(
+            current_node,
+            agent_trace_json=json.dumps(complete_envelope),
+        )
+        hydrated = replace(current, nodes={node_id: hydrated_node})
+        provider._runs[run_id] = hydrated
+        return _trace_detail_from_run(hydrated, node_id)
+
+    provider.hydrate_trace = hydrate_trace
+    app = AvalancheApp(provider=provider, workflow="agent_flow", node="agent")
+    async with app.run_test(size=(100, 35)) as pilot:
+        await pilot.pause()
+        await _wait_for_current_run(app)
+        await pilot.press("enter")
+        for _ in range(20):
+            if first_started.is_set():
+                break
+            await pilot.pause()
+        assert first_started.is_set()
+        assert ("run-agent", "agent_1", 1) in app._trace_hydration_in_flight
+
+        node_v2 = replace(
+            node,
+            trace=replace(descriptor, revision=2),
+            revision=2,
+            agent_trace_json=json.dumps(pending_envelope),
+        )
+        run_v2 = replace(run, revision=2, nodes={"agent_1": node_v2})
+        provider._runs[run.run_id] = run_v2
+        app.store.enqueue_run_update(run_v2)
+        for _ in range(3):
+            await pilot.pause()
+        assert hydration_calls == [1]
+        assert ("run-agent", "agent_1", 1) in app._trace_hydration_in_flight
+
+        release_first.set()
+        for _ in range(40):
+            await pilot.pause()
+            envelope = app.store.selected_agent_trace_envelope
+            if 2 in hydration_calls and isinstance(envelope.get("trace"), dict):
+                break
+        assert hydration_calls[:2] == [1, 2]
+
+        await pilot.pause()
+
+        await pilot.press("m")
+        assert app.store.trace_inspector_tab == "metadata"
+        node_v3 = replace(
+            node_v2,
+            trace=replace(descriptor, revision=3),
+            revision=3,
+            agent_trace_json=json.dumps(pending_envelope),
+        )
+        run_v3 = replace(run_v2, revision=3, nodes={"agent_1": node_v3})
+        provider._runs[run.run_id] = run_v3
+        app.store.enqueue_run_update(run_v3)
+        for _ in range(3):
+            await pilot.pause()
+        assert 3 not in hydration_calls
+
+        await pilot.press("m")
+        for _ in range(40):
+            await pilot.pause()
+            envelope = app.store.selected_agent_trace_envelope
+            if hydration_calls.count(3) >= 2 and isinstance(
+                envelope.get("trace"), dict
+            ):
+                break
+        assert app.store.trace_inspector_tab == "trace"
+        assert hydration_calls.count(3) == 2
+        assert isinstance(app.store.selected_agent_trace_envelope["trace"], dict)
+
+
+@pytest.mark.asyncio
+async def test_delayed_trace_detail_rejects_stale_body_without_state_rollback():
+    from avalanche.tui.app import AvalancheApp
+
+    (
+        provider,
+        complete_envelope,
+        run,
+        node,
+        pending_envelope,
+        descriptor,
+    ) = _unhydrated_agent_trace_provider()
+    run.operator_instance_id = "operator-1"
+    run.created_sequence = 4
+    stale_node = replace(
+        node,
+        agent_trace_json=json.dumps(complete_envelope),
+    )
+    stale_run = replace(
+        run,
+        nodes={"agent_1": stale_node},
+        logs=list(run.logs),
+    )
+    newer_envelope = json.loads(json.dumps(pending_envelope))
+    newer_envelope["events"].append(
+        {"sequence": 999, "event_kind": "iteration.recorded", "data": {"new": True}}
+    )
+    descriptor_v2 = replace(
+        descriptor,
+        revision=2,
+        event_count=len(newer_envelope["events"]),
+    )
+    newer_node = replace(
+        node,
+        status=NodeStatus.FAILED,
+        ended_at=99.0,
+        trace=descriptor_v2,
+        revision=8,
+        agent_trace_json=json.dumps(newer_envelope),
+    )
+    newer_log = LogEntry(
+        datetime.now(),
+        LogLevel.ERROR,
+        "agent_1",
+        "new structural state",
+    )
+    newer_run = replace(
+        run,
+        status=RunStatus.FAILED,
+        ended_at=101.0,
+        revision=12,
+        latest_log_sequence=77,
+        nodes={"agent_1": newer_node},
+        logs=[newer_log],
+    )
+    first_started = threading.Event()
+    release_first = threading.Event()
+    second_started = threading.Event()
+    release_second = threading.Event()
+    calls = 0
+
+    def hydrate_trace(run_id, node_id):
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            first_started.set()
+            release_first.wait()
+            return _trace_detail_from_run(stale_run, node_id)
+        second_started.set()
+        release_second.wait()
+        return None
+
+    def close():
+        release_first.set()
+        release_second.set()
+
+    provider.hydrate_trace = hydrate_trace
+    provider.close = close
+    app = AvalancheApp(provider=provider, workflow="agent_flow", node="agent")
+
+    async with app.run_test(size=(100, 35)) as pilot:
+        await pilot.pause()
+        await _wait_for_current_run(app)
+        await pilot.press("enter")
+        for _ in range(20):
+            if first_started.is_set():
+                break
+            await pilot.pause()
+        assert first_started.is_set()
+
+        provider._runs[run.run_id] = newer_run
+        app.store.enqueue_run_update(newer_run)
+        for _ in range(20):
+            await pilot.pause()
+            if app.store.current_run.revision == newer_run.revision:
+                break
+        assert app.store.current_run is newer_run
+
+        release_first.set()
+        for _ in range(40):
+            await pilot.pause()
+            if second_started.is_set():
+                break
+        assert second_started.is_set()
+
+        current = app.store.current_run
+        assert current.status is RunStatus.FAILED
+        assert current.revision == 12
+        assert current.latest_log_sequence == 77
+        assert [entry.message for entry in current.logs] == ["new structural state"]
+        current_node = current.nodes["agent_1"]
+        assert current_node.status is NodeStatus.FAILED
+        assert current_node.revision == 8
+        assert current_node.trace.revision == 2
+        envelope = json.loads(current_node.agent_trace_json)
+        assert envelope["events"][-1]["sequence"] == 999
+        assert envelope["trace"] is None
+        assert ("run-agent", "agent_1", 1) not in app._trace_hydration_retry
+
+
+@pytest.mark.asyncio
+async def test_trace_hydration_persistent_failure_uses_bounded_backoff():
+    from avalanche.tui.app import AvalancheApp
+
+    provider, _, _, _, _, _ = _unhydrated_agent_trace_provider()
+    clock = [0.0]
+    calls = []
+
+    def hydrate_trace(run_id, node_id):
+        calls.append((run_id, node_id, clock[0]))
+        return None
+
+    provider.hydrate_trace = hydrate_trace
+    app = AvalancheApp(provider=provider, workflow="agent_flow", node="agent")
+    app._trace_hydration_now = lambda: clock[0]
+    key = ("run-agent", "agent_1", 1)
+
+    async def wait_for_retry(pilot, level, call_count):
+        for _ in range(40):
+            await pilot.pause()
+            retry = app._trace_hydration_retry.get(key)
+            if len(calls) == call_count and retry is not None and retry[0] == level:
+                return retry
+        raise AssertionError(f"retry level {level} was not observed")
+
+    async with app.run_test(size=(100, 35)) as pilot:
+        await pilot.pause()
+        await _wait_for_current_run(app)
+        await pilot.press("enter")
+        retry = await wait_for_retry(pilot, 1, 1)
+        assert retry == (1, 0.25)
+
+        for _ in range(20):
+            await pilot.pause()
+        assert len(calls) == 1
+
+        expected_levels = (2, 3, 4, 5, 5)
+        for call_count, level in enumerate(expected_levels, start=2):
+            clock[0] = app._trace_hydration_retry[key][1]
+            retry = await wait_for_retry(pilot, level, call_count)
+        assert retry[1] - clock[0] == 4.0
+
+        for _ in range(20):
+            await pilot.pause()
+        assert len(calls) == 6
+
+
+@pytest.mark.asyncio
+async def test_trace_hydration_completion_during_navigation_allows_retry():
+    from avalanche.tui.app import AvalancheApp
+
+    (
+        provider,
+        complete_envelope,
+        run,
+        _node,
+        _pending_envelope,
+        _descriptor,
+    ) = _unhydrated_agent_trace_provider()
+    old_workflow = provider._workflows["agent_flow"]
+    provider._workflows[ORDER_WORKFLOW.selector] = ORDER_WORKFLOW
+    started = threading.Event()
+    release = threading.Event()
+    worker_done = threading.Event()
+    calls = []
+
+    def hydrate_trace(run_id, node_id):
+        calls.append((run_id, node_id))
+        current = provider._runs[run_id]
+        hydrated_node = replace(
+            current.nodes[node_id],
+            agent_trace_json=json.dumps(complete_envelope),
+        )
+        if len(calls) == 1:
+            started.set()
+            if not release.wait(2):
+                raise TimeoutError("navigation hydration barrier timed out")
+            worker_done.set()
+        return _trace_detail_from_run(
+            replace(current, nodes={node_id: hydrated_node}),
+            node_id,
+        )
+
+    provider.hydrate_trace = hydrate_trace
+    app = AvalancheApp(provider=provider, workflow="agent_flow", node="agent")
+    key = ("run-agent", "agent_1", 1)
+    async with app.run_test(size=(100, 35)) as pilot:
+        await pilot.pause()
+        await _wait_for_current_run(app)
+        await pilot.press("enter")
+        for _ in range(20):
+            if started.is_set():
+                break
+            await pilot.pause()
+        assert started.is_set()
+        assert key in app._trace_hydration_in_flight
+
+        app.store.switch_workflow(ORDER_WORKFLOW)
+        await pilot.pause()
+        app._hydrate_selected_trace()
+        assert app.store.current_workflow.selector == ORDER_WORKFLOW.selector
+        assert app._trace_hydration_context is None
+        assert key in app._trace_hydration_in_flight
+
+        release.set()
+        assert worker_done.wait(1)
+        assert key in app._trace_hydration_in_flight
+        for _ in range(3):
+            await pilot.pause()
+        assert key not in app._trace_hydration_in_flight
+        assert calls == [("run-agent", "agent_1")]
+
+        app.store.switch_workflow(old_workflow)
+        app.store._runs_cache = [run]
+        app.store.current_run = run
+        app.store.run_pinned = True
+        agent_node = next(
+            item
+            for item in app.store.all_nodes
+            if item.name in old_workflow.agent_node_ids
+        )
+        app.store.select_node(agent_node)
+        assert app.store.open_trace_inspector()
+        app._hydrate_selected_trace()
+        for _ in range(40):
+            await pilot.pause()
+            envelope = app.store.selected_agent_trace_envelope
+            if len(calls) == 2 and isinstance(envelope.get("trace"), dict):
+                break
+        assert calls == [
+            ("run-agent", "agent_1"),
+            ("run-agent", "agent_1"),
+        ]
+        assert isinstance(app.store.selected_agent_trace_envelope["trace"], dict)
+
+
+@pytest.mark.asyncio
+async def test_trace_hydration_tab_cycles_bound_blocked_worker_and_keep_backoff():
+    from avalanche.tui.app import AvalancheApp
+
+    provider, _, _, _, _, _ = _unhydrated_agent_trace_provider()
+    clock = [100.0]
+    started = threading.Event()
+    release = threading.Event()
+    worker_done = threading.Event()
+    lock = threading.Lock()
+    calls = 0
+    active = 0
+    max_active = 0
+
+    def hydrate_trace(run_id, node_id):
+        nonlocal active, calls, max_active
+        with lock:
+            calls += 1
+            active += 1
+            max_active = max(max_active, active)
+        started.set()
+        try:
+            release.wait()
+            return None
+        finally:
+            with lock:
+                active -= 1
+            worker_done.set()
+
+    provider.hydrate_trace = hydrate_trace
+    provider.close = release.set
+    app = AvalancheApp(provider=provider, workflow="agent_flow", node="agent")
+    app._trace_hydration_now = lambda: clock[0]
+    key = ("run-agent", "agent_1", 1)
+
+    async with app.run_test(size=(100, 35)) as pilot:
+        await pilot.pause()
+        await _wait_for_current_run(app)
+        await pilot.press("enter")
+        for _ in range(20):
+            if started.is_set():
+                break
+            await pilot.pause()
+        assert started.is_set()
+
+        attempt = app._trace_hydration_attempts[key]
+        for _ in range(8):
+            await pilot.press("m")
+            await pilot.pause()
+            await pilot.press("m")
+            await pilot.pause()
+
+        with lock:
+            assert calls == 1
+            assert active == 1
+            assert max_active == 1
+        assert key in app._trace_hydration_in_flight
+        assert key in app._trace_hydration_attempts
+        assert attempt in app._trace_hydration_superseded
+
+        release.set()
+        assert worker_done.wait(1)
+        retry = None
+        for _ in range(40):
+            await pilot.pause()
+            retry = app._trace_hydration_retry.get(key)
+            if retry is not None:
+                break
+        assert retry == (1, 100.25)
+        assert key not in app._trace_hydration_in_flight
+        assert app._trace_hydration_attempts == {}
+        assert attempt not in app._trace_hydration_superseded
+
+        await pilot.press("m")
+        await pilot.pause()
+        await pilot.press("m")
+        for _ in range(5):
+            await pilot.pause()
+        assert app._trace_hydration_retry[key] == retry
+        assert calls == 1
+
+
+@pytest.mark.asyncio
+async def test_trace_hydration_shutdown_closes_provider_and_joins_worker():
+    from avalanche.tui.app import AvalancheApp
+
+    provider, _, _, _, _, _ = _unhydrated_agent_trace_provider()
+    started = threading.Event()
+    release = threading.Event()
+    close_called = threading.Event()
+    worker_done = threading.Event()
+
+    def hydrate_trace(run_id, node_id):
+        started.set()
+        try:
+            release.wait()
+            return None
+        finally:
+            worker_done.set()
+
+    def close():
+        close_called.set()
+        release.set()
+
+    provider.hydrate_trace = hydrate_trace
+    provider.close = close
+    app = AvalancheApp(provider=provider, workflow="agent_flow", node="agent")
+
+    async with app.run_test(size=(100, 35)) as pilot:
+        await pilot.pause()
+        await _wait_for_current_run(app)
+        await pilot.press("enter")
+        for _ in range(20):
+            if started.is_set():
+                break
+            await pilot.pause()
+        assert started.is_set()
+        assert not worker_done.is_set()
+
+    assert close_called.is_set()
+    assert worker_done.is_set()
+    assert all(
+        not thread.is_alive() for thread in app._trace_hydration_executor._threads
+    )
 
 
 @pytest.mark.asyncio

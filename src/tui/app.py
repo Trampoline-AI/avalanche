@@ -2,6 +2,10 @@
 
 from __future__ import annotations
 
+import threading
+import time
+from concurrent.futures import ThreadPoolExecutor
+
 from textual.app import App, ComposeResult
 from textual.binding import Binding
 from textual.timer import Timer
@@ -9,11 +13,11 @@ from textual.widgets import Header
 
 from .dag_layout import DagNode
 from .mock import MockStateProvider
-from .models import RunState, WorkflowInfo
+from .models import RunState, TraceDetail, WorkflowInfo
 from .screens.workflow_detail import WorkflowDetailScreen
 from .state import ConnectionAwareStateProvider, StateProvider
 from .theme import AVALANCHE_THEME
-from .ui_store import UIStore
+from .ui_store import TraceDetailCompletion, TraceHydrationKey, UIStore
 from .widgets.agent_trace import (
     AgentMetadataInspector,
     AgentOutputInspector,
@@ -31,6 +35,10 @@ _PANE_WIDGET_IDS = {
     "log": "log-panel",
     "trace": "agent-trace-inspector",
 }
+
+_TRACE_HYDRATION_RETRY_BASE_SECONDS = 0.25
+_TRACE_HYDRATION_RETRY_MAX_SECONDS = 4.0
+_TRACE_HYDRATION_RETRY_MAX_LEVEL = 5
 
 
 class AvalancheApp(App):
@@ -83,6 +91,17 @@ class AvalancheApp(App):
         self._leader_pending: bool = False
         self._log_autoscroll: bool = True
         self._log_wrap: bool = False
+        self._trace_hydration_in_flight: set[TraceHydrationKey] = set()
+        self._trace_hydration_attempts: dict[TraceHydrationKey, int] = {}
+        self._trace_hydration_attempt_counter = 0
+        self._trace_hydration_superseded: set[int] = set()
+        self._trace_hydration_executor = ThreadPoolExecutor(
+            max_workers=1,
+            thread_name_prefix="avalanche-trace-hydration",
+        )
+        self._trace_hydration_closed = False
+        self._trace_hydration_retry: dict[TraceHydrationKey, tuple[int, float]] = {}
+        self._trace_hydration_context: TraceHydrationKey | None = None
         self._deep_link_workflow = workflow
         self._deep_link_node = node
         self._apply_deep_link()
@@ -125,6 +144,19 @@ class AvalancheApp(App):
 
         self._timer = self.set_interval(1 / 30, self._tick)
 
+    def on_unmount(self) -> None:
+        """Cancel provider RPCs and join the trace hydration worker."""
+        if self._trace_hydration_closed:
+            return
+        self._trace_hydration_closed = True
+        close = getattr(self.store.provider, "close", None)
+        try:
+            if callable(close):
+                close()
+        finally:
+            self._trace_hydration_executor.shutdown(wait=True, cancel_futures=True)
+
+
     def _on_run_update_bg(self, run: RunState) -> None:
         """Called from background thread when a run state changes."""
         self.store.enqueue_run_update(run)
@@ -136,6 +168,8 @@ class AvalancheApp(App):
     def _tick(self) -> None:
         catalog_revision = self.store.catalog_revision
         self.store.tick()
+        self._apply_trace_hydration_completions()
+        self._hydrate_selected_trace()
         if self.store.catalog_revision != catalog_revision:
             self._apply_deep_link()
             if self._screen:
@@ -353,7 +387,6 @@ class AvalancheApp(App):
         provider = self.store.provider
         run_id = run.run_id
 
-        import threading
 
         self._poll_in_flight = True
 
@@ -368,6 +401,167 @@ class AvalancheApp(App):
                 self._poll_in_flight = False
 
         threading.Thread(target=_do_poll, daemon=True).start()
+
+    def _selected_trace_hydration_key(self) -> TraceHydrationKey | None:
+        if (
+            not self.store.trace_inspector_open
+            or self.store.trace_inspector_tab != "trace"
+        ):
+            return None
+        run = self.store.current_run
+        node_id = self.store.selected_agent_node_id
+        if run is None or node_id is None:
+            return None
+        node = run.nodes.get(node_id)
+        descriptor = node.trace if node is not None else None
+        if descriptor is None or not descriptor.available:
+            return None
+        return (run.run_id, node_id, descriptor.revision)
+
+    def _sync_trace_hydration_context(
+        self, key: TraceHydrationKey | None
+    ) -> None:
+        if key == self._trace_hydration_context:
+            return
+        self._trace_hydration_context = key
+        for active_key, attempt in self._trace_hydration_attempts.items():
+            if active_key != key:
+                self._trace_hydration_superseded.add(attempt)
+
+    def _apply_trace_hydration_completions(self) -> None:
+        for completion, applied in self.store.take_trace_hydration_completions():
+            active_key = next(
+                (
+                    key
+                    for key, attempt in self._trace_hydration_attempts.items()
+                    if attempt == completion.attempt
+                ),
+                None,
+            )
+            if active_key is None:
+                continue
+            self._trace_hydration_attempts.pop(active_key, None)
+            self._trace_hydration_in_flight.discard(active_key)
+            self._trace_hydration_superseded.discard(completion.attempt)
+            if applied:
+                self._trace_hydration_retry.pop(active_key, None)
+                continue
+            if not self._trace_detail_still_relevant(completion):
+                self._trace_hydration_retry.pop(active_key, None)
+                continue
+            level = min(
+                self._trace_hydration_retry.get(active_key, (0, 0.0))[0] + 1,
+                _TRACE_HYDRATION_RETRY_MAX_LEVEL,
+            )
+            delay = min(
+                _TRACE_HYDRATION_RETRY_BASE_SECONDS * (2 ** (level - 1)),
+                _TRACE_HYDRATION_RETRY_MAX_SECONDS,
+            )
+            self._trace_hydration_retry[active_key] = (
+                level,
+                self._trace_hydration_now() + delay,
+            )
+
+    def _trace_detail_still_relevant(
+        self, completion: TraceDetailCompletion
+    ) -> bool:
+        run = self.store.current_run
+        if (
+            run is None
+            or run.operator_instance_id != completion.operator_instance_id
+            or run.run_id != completion.run_id
+            or run.created_sequence != completion.created_sequence
+        ):
+            return False
+        node = run.nodes.get(completion.node_id)
+        descriptor = node.trace if node is not None else None
+        return (
+            node is not None
+            and node.node_id == completion.node_id
+            and descriptor is not None
+            and descriptor.revision == completion.descriptor_revision
+        )
+
+    def _trace_hydration_now(self) -> float:
+        return time.monotonic()
+
+    @staticmethod
+    def _trace_detail_completion(
+        *,
+        attempt: int,
+        operator_instance_id: str,
+        run_id: str,
+        created_sequence: int,
+        node_id: str,
+        descriptor_revision: int,
+        hydrated: TraceDetail | None,
+    ) -> TraceDetailCompletion:
+        trace_body = None
+        if hydrated is not None:
+            operator_instance_id = hydrated.operator_instance_id
+            run_id = hydrated.run_id
+            created_sequence = hydrated.created_sequence
+            node_id = hydrated.node_id
+            descriptor_revision = hydrated.descriptor_revision
+            trace_body = hydrated.trace_body
+        return TraceDetailCompletion(
+            attempt=attempt,
+            operator_instance_id=operator_instance_id,
+            run_id=run_id,
+            created_sequence=created_sequence,
+            node_id=node_id,
+            descriptor_revision=descriptor_revision,
+            trace_body=trace_body,
+        )
+
+    def _hydrate_selected_trace(self) -> None:
+        """Fetch the selected finalized trace body without blocking the UI thread."""
+        key = self._selected_trace_hydration_key()
+        self._sync_trace_hydration_context(key)
+        if key is None:
+            return
+        envelope = self.store.selected_agent_trace_envelope
+        if envelope is not None and isinstance(envelope.get("trace"), dict):
+            self._trace_hydration_retry.pop(key, None)
+            return
+        if self._trace_hydration_attempts or self._trace_hydration_closed:
+            return
+        retry = self._trace_hydration_retry.get(key)
+        if retry is not None and self._trace_hydration_now() < retry[1]:
+            return
+        hydrate = getattr(self.store.provider, "hydrate_trace", None)
+        if not callable(hydrate):
+            return
+        run = self.store.current_run
+        if run is None:
+            return
+        operator_instance_id = run.operator_instance_id
+        created_sequence = run.created_sequence
+        self._trace_hydration_in_flight.add(key)
+        self._trace_hydration_attempt_counter += 1
+        attempt = self._trace_hydration_attempt_counter
+        self._trace_hydration_attempts[key] = attempt
+        run_id, node_id, descriptor_revision = key
+
+        def _hydrate() -> None:
+            hydrated = None
+            try:
+                hydrated = hydrate(run_id, node_id)
+            except Exception:
+                pass
+            finally:
+                completion = self._trace_detail_completion(
+                    attempt=attempt,
+                    operator_instance_id=operator_instance_id,
+                    run_id=run_id,
+                    created_sequence=created_sequence,
+                    node_id=node_id,
+                    descriptor_revision=descriptor_revision,
+                    hydrated=hydrated,
+                )
+                self.store.enqueue_trace_hydration_completion(completion)
+
+        self._trace_hydration_executor.submit(_hydrate)
 
     # ── Connection monitoring ───────────────────────────────────────
 
@@ -599,12 +793,24 @@ class AvalancheApp(App):
             self.store.toggle_trace_turn()
             self._refresh_widgets()
         elif self.store.focused_pane == "dag" and self.store.open_trace_inspector():
+            self._hydrate_selected_trace()
             self._refresh_widgets()
             try:
                 self._screen.query_one("#agent-trace-inspector").scroll_end(animate=False)
             except Exception:
                 pass
 
+    def action_toggle_trace_inspector_tab(self) -> None:
+        if not self.store.trace_inspector_open:
+            return
+        self.store.toggle_trace_inspector_tab()
+        if self.store.trace_inspector_tab == "trace":
+            self._hydrate_selected_trace()
+        self._refresh_widgets()
+        try:
+            self._screen.query_one("#agent-trace-inspector").scroll_home(animate=False)
+        except Exception:
+            pass
     # ── Other actions ──────────────────────────────────────────────
 
     def action_toggle_explorer(self) -> None:

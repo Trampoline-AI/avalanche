@@ -16,6 +16,7 @@ from .models import (
     NodeStatus,
     RunState,
     RunStatus,
+    TraceDetail,
     WorkflowInfo,
     display_name_from_id,
 )
@@ -746,6 +747,31 @@ class MockStateProvider:
 
     def get_run(self, run_id: str) -> RunState | None:
         return self._runs.get(run_id)
+
+    def hydrate_trace(self, run_id: str, node_id: str) -> TraceDetail | None:
+        run = self.get_run(run_id)
+        node = run.nodes.get(node_id) if run is not None else None
+        descriptor = node.trace if node is not None else None
+        if run is None or node is None or descriptor is None or not node.agent_trace_json:
+            return None
+        try:
+            envelope = json.loads(node.agent_trace_json)
+        except (TypeError, ValueError):
+            return None
+        trace_body = envelope.get("trace") if isinstance(envelope, dict) else None
+        if not isinstance(trace_body, dict):
+            return None
+        return TraceDetail(
+            operator_instance_id=run.operator_instance_id,
+            run_id=run.run_id,
+            created_sequence=run.created_sequence,
+            node_id=node_id,
+            descriptor_revision=descriptor.revision,
+            trace_body=trace_body,
+        )
+
+    def close(self) -> None:
+        """Mock provider owns no external resources."""
 
     def start_run(self, workflow_selector: str, **kwargs) -> str:
         info = self._workflows.get(workflow_selector)

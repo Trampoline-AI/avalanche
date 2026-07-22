@@ -6,17 +6,26 @@ from pathlib import Path, PureWindowsPath
 
 from .models import (
     AgentEvent,
+    AgentEventAppended,
+    LogAppended,
     LogEntry,
     LogLevel,
     NodeSnapshot,
     NodeState,
     NodeStatus,
+    NodeStatusChanged,
+    ResetRequired,
+    RunCreated,
+    RunDelta,
+    RunDeltaEnvelope,
     RunSnapshot,
     RunState,
     RunStatus,
+    RunStatusChanged,
     RunSummary,
     SequencedLogEntry,
     TraceDescriptor,
+    TraceFinalized,
     WorkflowDiscoveryDiagnostic,
     WorkflowInfo,
 )
@@ -303,6 +312,148 @@ def agent_event_from_proto(msg: pb.AgentEventMsg) -> AgentEvent:
         event_sequence=msg.event_sequence,
         event_json=msg.event_json,
     )
+
+
+def run_delta_to_proto(delta: RunDelta) -> pb.RunDelta:
+    message = pb.RunDelta(sequence=delta.sequence)
+    change = delta.change
+    if isinstance(change, RunCreated):
+        message.run_created.CopyFrom(
+            pb.RunCreatedDelta(
+                summary=run_summary_to_proto(change.summary),
+                nodes=[node_snapshot_to_proto(node) for node in change.nodes],
+            )
+        )
+    elif isinstance(change, RunStatusChanged):
+        message.run_status_changed.CopyFrom(
+            pb.RunStatusChangedDelta(
+                run_id=change.run_id,
+                status=change.status.value,
+                started_at=change.started_at or 0.0,
+                ended_at=change.ended_at or 0.0,
+                revision=change.revision,
+            )
+        )
+    elif isinstance(change, NodeStatusChanged):
+        message.node_status_changed.CopyFrom(
+            pb.NodeStatusChangedDelta(
+                run_id=change.run_id,
+                node_id=change.node_id,
+                status=change.status.value,
+                started_at=change.started_at or 0.0,
+                ended_at=change.ended_at or 0.0,
+                revision=change.revision,
+            )
+        )
+    elif isinstance(change, LogAppended):
+        message.log_appended.CopyFrom(
+            pb.LogAppendedDelta(
+                run_id=change.run_id,
+                log=sequenced_log_entry_to_proto(change.log),
+            )
+        )
+    elif isinstance(change, AgentEventAppended):
+        message.agent_event_appended.CopyFrom(
+            pb.AgentEventAppendedDelta(
+                run_id=change.run_id,
+                node_id=change.node_id,
+                event=agent_event_to_proto(change.event),
+            )
+        )
+    elif isinstance(change, TraceFinalized):
+        message.trace_finalized.CopyFrom(
+            pb.TraceFinalizedDelta(
+                run_id=change.run_id,
+                node_id=change.node_id,
+                trace=trace_descriptor_to_proto(change.trace),
+            )
+        )
+    else:
+        raise TypeError(f"Unsupported run delta change: {type(change).__name__}")
+    return message
+
+
+def run_delta_from_proto(msg: pb.RunDelta) -> RunDelta:
+    change_name = msg.WhichOneof("change")
+    if change_name == "run_created":
+        change = RunCreated(
+            summary=run_summary_from_proto(msg.run_created.summary),
+            nodes=tuple(node_snapshot_from_proto(node) for node in msg.run_created.nodes),
+        )
+    elif change_name == "run_status_changed":
+        item = msg.run_status_changed
+        change = RunStatusChanged(
+            run_id=item.run_id,
+            status=RunStatus(item.status),
+            started_at=item.started_at if item.started_at else None,
+            ended_at=item.ended_at if item.ended_at else None,
+            revision=item.revision,
+        )
+    elif change_name == "node_status_changed":
+        item = msg.node_status_changed
+        change = NodeStatusChanged(
+            run_id=item.run_id,
+            node_id=item.node_id,
+            status=NodeStatus(item.status),
+            started_at=item.started_at if item.started_at else None,
+            ended_at=item.ended_at if item.ended_at else None,
+            revision=item.revision,
+        )
+    elif change_name == "log_appended":
+        item = msg.log_appended
+        change = LogAppended(
+            run_id=item.run_id,
+            log=sequenced_log_entry_from_proto(item.log),
+        )
+    elif change_name == "agent_event_appended":
+        item = msg.agent_event_appended
+        change = AgentEventAppended(
+            run_id=item.run_id,
+            node_id=item.node_id,
+            event=agent_event_from_proto(item.event),
+        )
+    elif change_name == "trace_finalized":
+        item = msg.trace_finalized
+        change = TraceFinalized(
+            run_id=item.run_id,
+            node_id=item.node_id,
+            trace=trace_descriptor_from_proto(item.trace),
+        )
+    else:
+        raise ValueError("run delta is missing a change")
+    return RunDelta(sequence=msg.sequence, change=change)
+
+
+def run_delta_envelope_to_proto(envelope: RunDeltaEnvelope) -> pb.RunDeltaEnvelope:
+    message = pb.RunDeltaEnvelope(operator_instance_id=envelope.operator_instance_id)
+    if envelope.delta is not None:
+        message.delta.CopyFrom(run_delta_to_proto(envelope.delta))
+    elif envelope.reset_required is not None:
+        message.reset_required.CopyFrom(
+            pb.ResetRequired(
+                history_floor=envelope.reset_required.history_floor,
+                latest_sequence=envelope.reset_required.latest_sequence,
+            )
+        )
+    return message
+
+
+def run_delta_envelope_from_proto(msg: pb.RunDeltaEnvelope) -> RunDeltaEnvelope:
+    payload = msg.WhichOneof("payload")
+    if payload == "delta":
+        return RunDeltaEnvelope(
+            operator_instance_id=msg.operator_instance_id,
+            delta=run_delta_from_proto(msg.delta),
+        )
+    if payload == "reset_required":
+        return RunDeltaEnvelope(
+            operator_instance_id=msg.operator_instance_id,
+            reset_required=ResetRequired(
+                history_floor=msg.reset_required.history_floor,
+                latest_sequence=msg.reset_required.latest_sequence,
+            ),
+        )
+    raise ValueError("run delta envelope is missing a payload")
 
 
 def _relative_source_file(info: WorkflowInfo) -> str:

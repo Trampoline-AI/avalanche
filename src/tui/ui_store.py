@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import json
 import time
+from copy import copy
+from dataclasses import dataclass
 from queue import SimpleQueue
 from typing import Any, Literal
 
@@ -17,6 +19,20 @@ _TRACE_INSPECTOR_TABS: tuple[TraceInspectorTab, ...] = (
     "output",
     "metadata",
 )
+TraceHydrationKey = tuple[str, str, int]
+
+
+@dataclass(frozen=True)
+class TraceDetailCompletion:
+    """One trace body read, isolated from mutable structural run state."""
+
+    attempt: int
+    operator_instance_id: str
+    run_id: str
+    created_sequence: int
+    node_id: str
+    descriptor_revision: int
+    trace_body: dict[str, Any] | None
 
 
 def _fmt_time(secs: float) -> str:
@@ -45,6 +61,9 @@ class UIStore:
         self.run_pinned: bool = False  # True = user picked a run; False = follow latest
         self._runs_cache: list[RunState] = []
         self._background_updates: SimpleQueue[tuple[str, Any]] = SimpleQueue()
+        self._trace_hydration_completions: list[
+            tuple[TraceDetailCompletion, bool]
+        ] = []
         self._runs_refresh_in_flight: set[str] = set()
         self._status_refresh_in_flight = False
         self._catalog_refresh_in_flight = False
@@ -353,6 +372,57 @@ class UIStore:
     def enqueue_run_update(self, run: RunState) -> None:
         """Queue provider data for application on the UI thread."""
         self._background_updates.put(("run", run))
+
+    def enqueue_trace_hydration_completion(
+        self, completion: TraceDetailCompletion
+    ) -> None:
+        """Queue one narrow trace result for consumption on the UI thread."""
+        self._background_updates.put(("trace_hydration_complete", completion))
+
+    def take_trace_hydration_completions(
+        self,
+    ) -> list[tuple[TraceDetailCompletion, bool]]:
+        """Transfer trace outcomes accumulated by the UI-thread reducer."""
+        completions = self._trace_hydration_completions
+        self._trace_hydration_completions = []
+        return completions
+
+    def _apply_trace_detail_completion(
+        self, completion: TraceDetailCompletion
+    ) -> bool:
+        """Install only a trace body when its structural identity is still exact."""
+        run = self.current_run
+        if (
+            completion.trace_body is None
+            or run is None
+            or run.operator_instance_id != completion.operator_instance_id
+            or run.run_id != completion.run_id
+            or run.created_sequence != completion.created_sequence
+        ):
+            return False
+        node = run.nodes.get(completion.node_id)
+        descriptor = node.trace if node is not None else None
+        if (
+            node is None
+            or node.node_id != completion.node_id
+            or descriptor is None
+            or descriptor.revision != completion.descriptor_revision
+        ):
+            return False
+        try:
+            envelope = json.loads(node.agent_trace_json) if node.agent_trace_json else {}
+        except (TypeError, ValueError):
+            envelope = {}
+        if not isinstance(envelope, dict):
+            envelope = {}
+        envelope["trace"] = completion.trace_body
+        updated_node = copy(node)
+        updated_node.agent_trace_json = json.dumps(envelope, default=str)
+        updated_run = copy(run)
+        updated_run.nodes = dict(run.nodes)
+        updated_run.nodes[completion.node_id] = updated_node
+        self.current_run = updated_run
+        return True
 
     def _refresh_workflow_catalog(self) -> None:
         if self._catalog_refresh_in_flight:
@@ -771,6 +841,47 @@ class UIStore:
             return f"{workflow.root_alias}/{source}"
         return source
 
+    def _merge_summary_runs(self, runs: list[RunState]) -> list[RunState]:
+        """Preserve hydrated detail while refreshing summary metadata."""
+        hydrated = {
+            run.run_id: run
+            for run in self._runs_cache
+            if run.details_hydrated
+        }
+        if self.current_run is not None and self.current_run.details_hydrated:
+            hydrated[self.current_run.run_id] = self.current_run
+
+        merged: list[RunState] = []
+        for summary in runs:
+            detail = hydrated.get(summary.run_id)
+            same_epoch = (
+                detail is not None
+                and (
+                    not summary.operator_instance_id
+                    or not detail.operator_instance_id
+                    or summary.operator_instance_id == detail.operator_instance_id
+                )
+            )
+            if summary.details_hydrated or not same_epoch:
+                merged.append(summary)
+                continue
+
+            run = copy(detail)
+            if summary.revision >= detail.revision:
+                run.flow_name = summary.flow_name
+                run.status = summary.status
+                run.started_at = summary.started_at
+                run.ended_at = summary.ended_at
+                run.triggered_by = summary.triggered_by
+                run.workflow_id = summary.workflow_id
+                run.workflow_display_name = summary.workflow_display_name
+                run.operator_instance_id = summary.operator_instance_id
+                run.created_sequence = summary.created_sequence
+                run.revision = summary.revision
+            merged.append(run)
+        return merged
+
+
     @staticmethod
     def _run_matches(run: RunState, workflow: WorkflowInfo) -> bool:
         if run.workflow_id:
@@ -801,9 +912,19 @@ class UIStore:
                     and self.current_workflow is not None
                     and self.current_workflow.selector == selector
                 ):
+                    runs = self._merge_summary_runs(runs)
                     changed = self._runs_cache != runs
                     self._runs_cache = runs
-                    if not self.run_pinned:
+                    if self.run_pinned and self.current_run is not None:
+                        self.current_run = next(
+                            (
+                                run
+                                for run in runs
+                                if run.run_id == self.current_run.run_id
+                            ),
+                            self.current_run,
+                        )
+                    else:
                         self.current_run = runs[-1] if runs else None
                     if runs:
                         self.workflow_statuses[selector] = runs[-1].status
@@ -862,6 +983,9 @@ class UIStore:
                     self._runs_cache[cache_index] = run
                     if cache_index == len(self._runs_cache) - 1:
                         self.workflow_statuses[selector] = run.status
+            elif kind == "trace_hydration_complete":
+                applied = self._apply_trace_detail_completion(payload)
+                self._trace_hydration_completions.append((payload, applied))
             elif kind == "start_run":
                 (
                     selector,

@@ -27,21 +27,30 @@ from uuid import uuid4
 from ..executor import LocalExecutor, RayExecutor
 from .models import (
     AgentEvent,
+    AgentEventAppended,
     AgentEventPage,
     FinalizedTrace,
+    LogAppended,
     LogEntry,
     LogLevel,
     LogPage,
     NodeSnapshot,
     NodeState,
     NodeStatus,
+    NodeStatusChanged,
+    ResetRequired,
+    RunCreated,
+    RunDelta,
+    RunDeltaEnvelope,
     RunSnapshot,
     RunState,
     RunStatus,
+    RunStatusChanged,
     RunSummary,
     RunSummaryPage,
     SequencedLogEntry,
     TraceDescriptor,
+    TraceFinalized,
     WorkflowInfo,
 )
 from .registry import AmbiguousWorkflow, WorkflowRegistry
@@ -75,6 +84,7 @@ _PROCESS_GROUP_POLL_INTERVAL_SECONDS = 0.02
 DETAIL_PAGE_SIZE = 100
 MAX_DETAIL_PAGE_SIZE = 500
 STRUCTURAL_BASELINE_CAPACITY = 8
+SUBSCRIBER_QUEUE_CAPACITY = 256
 _MISSING_WORKFLOW_ID = "\0"
 DeprecatedExecutorFactory: TypeAlias = (
     type[LocalExecutor] | type[RayExecutor] | partial[RayExecutor]
@@ -135,6 +145,9 @@ class _RunNotifications:
     run_callbacks: tuple[tuple[Callable[[RunState], None], RunState], ...]
     log_callbacks: tuple[tuple[Callable[[LogEntry], None], LogEntry], ...]
     subscribers: tuple[tuple[queue.Queue, RunState], ...]
+    delta_subscribers: tuple[
+        tuple[queue.Queue, tuple[RunDeltaEnvelope, ...]], ...
+    ]
     ready: threading.Event
     delivered: threading.Event
 
@@ -142,6 +155,7 @@ class _RunNotifications:
 @dataclass(frozen=True)
 class _AgentEvidenceMutation:
     entry: LogEntry
+    agent_event: AgentEvent | None = None
     finalized_trace: bytes | None = None
 
 
@@ -150,6 +164,12 @@ class _StructuralBaseline:
     as_of_sequence: int
     summaries: tuple[RunSummary, ...]
     snapshots: Mapping[str, RunSnapshot]
+
+
+@dataclass(frozen=True)
+class LegacyStreamResetRequired:
+    history_floor: int
+    latest_sequence: int
 
 class Operator:
     """Discover workflows and coordinate each local run in a spawned process."""
@@ -174,6 +194,7 @@ class Operator:
         result_retention_seconds: float | None = DEFAULT_RESULT_RETENTION_SECONDS,
         webhook_port: int = DEFAULT_WEBHOOK_PORT,
         structural_baseline_capacity: int = STRUCTURAL_BASELINE_CAPACITY,
+        subscriber_queue_capacity: int = SUBSCRIBER_QUEUE_CAPACITY,
     ) -> None:
         """Create an operator with spawn-safe executor configuration.
 
@@ -203,6 +224,8 @@ class Operator:
                 raise ValueError("Result retention must be positive and finite")
         if structural_baseline_capacity <= 0:
             raise ValueError("Structural baseline capacity must be positive")
+        if subscriber_queue_capacity <= 0:
+            raise ValueError("Subscriber queue capacity must be positive")
         self._cancel_grace = cancel_grace
         self._result_retention_seconds = (
             None if result_retention_seconds is None else float(result_retention_seconds)
@@ -215,6 +238,7 @@ class Operator:
         initial_view = None
         if self._workflow_paths:
             initial_view = self._registry.scan(self._workflow_paths, validate=routes_for)
+        self._subscriber_queue_capacity = subscriber_queue_capacity
         self._mp = multiprocessing.get_context("spawn")
         self._runs: dict[str, RunState] = {}
         self._stored_results: dict[str, StoredWorkflowResult] = {}
@@ -230,11 +254,10 @@ class Operator:
         self._run_callbacks: list[Callable[[RunState], None]] = []
         self._log_callbacks: list[Callable[[LogEntry], None]] = []
         self._subscribers: list[queue.Queue] = []
+        self._delta_subscribers: list[queue.Queue] = []
         self._operator_instance_id = uuid4().hex
         self._sequence = 0
-        self._stream_history: deque[tuple[int, RunState]] = deque(
-            maxlen=stream_history_capacity
-        )
+        self._stream_history: deque[RunDelta] = deque(maxlen=stream_history_capacity)
         self._structural_baseline_capacity = structural_baseline_capacity
         self._structural_baselines: OrderedDict[int, _StructuralBaseline] = (
             OrderedDict()
@@ -469,10 +492,15 @@ class Operator:
         run_id: str,
         node_id: str,
         *,
+        operator_instance_id: str,
         revision: int = 0,
     ) -> FinalizedTrace:
         """Copy one immutable finalized trace body out of operator-owned memory."""
         with self._lock:
+            if operator_instance_id != self._operator_instance_id:
+                raise StructuralBaselineUnavailableError(
+                    "Operator instance changed; restart snapshot synchronization"
+                )
             run = self._runs.get(run_id)
             if run is None:
                 raise KeyError(run_id)
@@ -809,31 +837,117 @@ class Operator:
             self._log_callbacks.append(callback)
 
     def subscribe(self, since_sequence: int = 0) -> queue.Queue:
-        subscription: queue.Queue = queue.Queue()
+        """Replay legacy updates from retained deltas or require a resync."""
+        subscription: queue.Queue = queue.Queue(
+            maxsize=self._subscriber_queue_capacity
+        )
         with self._lock:
+            history_floor, latest_sequence = self._history_bounds_locked()
+            cursor_is_stale = (
+                since_sequence > latest_sequence
+                or since_sequence < history_floor - 1
+            )
+            if cursor_is_stale:
+                subscription.put_nowait(
+                    LegacyStreamResetRequired(history_floor, latest_sequence)
+                )
+                return subscription
+
+            replay = []
+            if since_sequence < latest_sequence:
+                states: dict[str, RunState] = {}
+                for delta in self._stream_history:
+                    run = _apply_legacy_delta(states, delta)
+                    if run is None:
+                        subscription.put_nowait(
+                            LegacyStreamResetRequired(history_floor, latest_sequence)
+                        )
+                        return subscription
+                    if delta.sequence <= since_sequence:
+                        continue
+                    if len(replay) == self._subscriber_queue_capacity:
+                        subscription.put_nowait(
+                            LegacyStreamResetRequired(history_floor, latest_sequence)
+                        )
+                        return subscription
+                    replay.append((delta.sequence, deepcopy(run)))
+            for item in replay:
+                subscription.put_nowait(item)
             self._subscribers.append(subscription)
-            current_sequence = self._sequence
-            oldest_sequence = (
-                self._stream_history[0][0] if self._stream_history else current_sequence + 1
-            )
-            cursor_is_replayable = (
-                since_sequence <= current_sequence and since_sequence >= oldest_sequence - 1
-            )
-            if cursor_is_replayable:
-                for sequence, run in self._stream_history:
-                    if sequence > since_sequence:
-                        subscription.put_nowait((sequence, deepcopy(run)))
-            else:
-                for run_id in sorted(self._runs):
-                    self._sequence += 1
-                    snapshot = deepcopy(self._runs[run_id])
-                    self._stream_history.append((self._sequence, snapshot))
-                    subscription.put_nowait((self._sequence, deepcopy(snapshot)))
         return subscription
+
+    def subscribe_run_deltas(
+        self, operator_instance_id: str = "", after_sequence: int = 0
+    ) -> queue.Queue:
+        """Atomically replay retained deltas or require a structural reset."""
+        subscription: queue.Queue = queue.Queue(
+            maxsize=self._subscriber_queue_capacity
+        )
+        with self._lock:
+            history_floor, latest_sequence = self._history_bounds_locked()
+            epoch_is_stale = (
+                operator_instance_id != self._operator_instance_id
+                and (bool(operator_instance_id) or after_sequence != 0)
+            )
+            cursor_is_stale = (
+                after_sequence > latest_sequence
+                or after_sequence < history_floor - 1
+            )
+            replay = [
+                delta
+                for delta in self._stream_history
+                if delta.sequence > after_sequence
+            ]
+            if (
+                epoch_is_stale
+                or cursor_is_stale
+                or len(replay) > self._subscriber_queue_capacity
+            ):
+                subscription.put_nowait(self._delta_reset_locked())
+                return subscription
+
+            for delta in replay:
+                subscription.put_nowait(
+                    RunDeltaEnvelope(
+                        operator_instance_id=self._operator_instance_id,
+                        delta=delta,
+                    )
+                )
+            self._delta_subscribers.append(subscription)
+        return subscription
+
+    def _history_bounds_locked(self) -> tuple[int, int]:
+        latest_sequence = self._sequence
+        history_floor = (
+            self._stream_history[0].sequence
+            if self._stream_history
+            else latest_sequence + 1
+        )
+        return history_floor, latest_sequence
+
+    def _delta_reset_locked(self) -> RunDeltaEnvelope:
+        history_floor, latest_sequence = self._history_bounds_locked()
+        return RunDeltaEnvelope(
+            operator_instance_id=self._operator_instance_id,
+            reset_required=ResetRequired(
+                history_floor=history_floor,
+                latest_sequence=latest_sequence,
+            ),
+        )
+
+    def _legacy_reset_locked(self) -> LegacyStreamResetRequired:
+        history_floor, latest_sequence = self._history_bounds_locked()
+        return LegacyStreamResetRequired(history_floor, latest_sequence)
 
     def unsubscribe(self, subscription: queue.Queue) -> None:
         with self._lock:
             self._subscribers = [item for item in self._subscribers if item is not subscription]
+
+    def unsubscribe_run_deltas(self, subscription: queue.Queue) -> None:
+        with self._lock:
+            self._delta_subscribers = [
+                item for item in self._delta_subscribers if item is not subscription
+            ]
 
     def close(self) -> None:
         """Stop services boundedly and drain accepted notifications in order."""
@@ -1189,8 +1303,10 @@ class Operator:
             else:
                 summary_changed = False
                 changed_node_ids: tuple[str, ...] = ()
+                status_node_ids: tuple[str, ...] | None = None
                 trace_node_ids: tuple[str, ...] = ()
                 finalized_traces: dict[str, bytes] = {}
+                agent_events: dict[str, AgentEvent] = {}
                 log_entry: LogEntry | None = None
                 mutated = False
 
@@ -1219,6 +1335,7 @@ class Operator:
                         else:
                             node.ended_at = event["timestamp"]
                         changed_node_ids = (node.node_id,)
+                        status_node_ids = changed_node_ids
                         mutated = True
                 elif event_type == "agent_evidence":
                     node_id = event["node_id"]
@@ -1237,6 +1354,9 @@ class Operator:
                         log_entry = mutation.entry
                         changed_node_ids = (node_id,)
                         trace_node_ids = (node_id,)
+                        status_node_ids = ()
+                        if mutation.agent_event is not None:
+                            agent_events[node_id] = mutation.agent_event
                         if mutation.finalized_trace is not None:
                             finalized_traces[node_id] = mutation.finalized_trace
                         mutated = True
@@ -1276,6 +1396,7 @@ class Operator:
                         discard_stored_result = True
                     run.ended_at = time.monotonic()
                     changed_node_ids = self._skip_unfinished_nodes_locked(run)
+                    status_node_ids = changed_node_ids
                     summary_changed = True
                     mutated = True
 
@@ -1285,8 +1406,10 @@ class Operator:
                     run,
                     summary_changed=summary_changed,
                     changed_node_ids=changed_node_ids,
+                    status_node_ids=status_node_ids,
                     trace_node_ids=trace_node_ids,
                     finalized_traces=finalized_traces,
+                    agent_events=agent_events,
                     log_entry=log_entry,
                 )
 
@@ -1318,8 +1441,14 @@ class Operator:
                     run,
                     summary_changed=False,
                     changed_node_ids=(node_id,),
+                    status_node_ids=(),
                     trace_node_ids=(node_id,),
                     finalized_traces=finalized_traces,
+                    agent_events=(
+                        {node_id: mutation.agent_event}
+                        if mutation.agent_event is not None
+                        else {}
+                    ),
                     log_entry=mutation.entry,
                 )
             self._wait_for_notifications(notifications)
@@ -1476,7 +1605,11 @@ class Operator:
         # the aggregate client cutover. New structural reads never use it.
         node.agent_trace_json = envelope_json
         self._append_log_locked(run, entry)
-        return _AgentEvidenceMutation(entry=entry, finalized_trace=finalized_trace)
+        return _AgentEvidenceMutation(
+            entry=entry,
+            agent_event=projected_agent_event,
+            finalized_trace=finalized_trace,
+        )
 
     def _append_log_locked(self, run: RunState, entry: LogEntry) -> None:
         logs = self._logs.setdefault(run.run_id, [])
@@ -1517,6 +1650,7 @@ class Operator:
                 notifications = self._publish_run_locked(
                     run,
                     changed_node_ids=changed_node_ids,
+                    status_node_ids=changed_node_ids,
                     log_entry=entry,
                 )
         self._result_store.discard(handle.result_bundle)
@@ -1552,6 +1686,7 @@ class Operator:
             notifications = self._publish_run_locked(
                 run,
                 changed_node_ids=changed_node_ids,
+                status_node_ids=changed_node_ids,
                 log_entry=log_entry,
             )
         self._result_store.discard(handle.result_bundle)
@@ -1579,41 +1714,138 @@ class Operator:
         *,
         summary_changed: bool = True,
         changed_node_ids: tuple[str, ...] = (),
+        status_node_ids: tuple[str, ...] | None = None,
         trace_node_ids: tuple[str, ...] = (),
         finalized_traces: Mapping[str, bytes] | None = None,
+        agent_events: Mapping[str, AgentEvent] | None = None,
         log_entry: LogEntry | None = None,
     ) -> _RunNotifications:
-        """Advance state and detail watermarks while the caller holds ``_lock``."""
+        """Atomically publish one mutation to structural, detail, and delta state."""
         if self._notification_stop_enqueued:
             raise RuntimeError("Operator notification dispatcher is closed")
-        self._sequence += 1
-        sequence = self._sequence
+
         is_new = run.run_id not in self._run_created_sequences
-        created_sequence = self._run_created_sequences.setdefault(run.run_id, sequence)
+        status_node_ids = (
+            changed_node_ids if status_node_ids is None else status_node_ids
+        )
+        status_node_ids = tuple(dict.fromkeys(status_node_ids))
+        trace_node_ids = tuple(dict.fromkeys(trace_node_ids))
+        agent_events = agent_events or {}
+        finalized_traces = finalized_traces or {}
+
+        if is_new:
+            delta_count = 1
+        else:
+            delta_count = (
+                int(summary_changed)
+                + len(status_node_ids)
+                + int(log_entry is not None)
+                + len(agent_events)
+                + len(trace_node_ids)
+            )
+            if delta_count == 0:
+                summary_changed = True
+                delta_count = 1
+
+        first_sequence = self._sequence + 1
+        publication_sequence = self._sequence + delta_count
+        self._run_created_sequences.setdefault(run.run_id, first_sequence)
         if summary_changed or is_new:
-            self._run_revisions[run.run_id] = sequence
+            self._run_revisions[run.run_id] = publication_sequence
         if is_new:
             for node_id in run.nodes:
-                self._node_revisions[(run.run_id, node_id)] = created_sequence
+                self._node_revisions[(run.run_id, node_id)] = publication_sequence
         for node_id in changed_node_ids:
-            self._node_revisions[(run.run_id, node_id)] = sequence
+            self._node_revisions[(run.run_id, node_id)] = publication_sequence
 
-        finalized_traces = finalized_traces or {}
         for node_id in trace_node_ids:
             key = (run.run_id, node_id)
             descriptor = self._trace_descriptors[key]
             versions = self._trace_bodies.setdefault(key, {})
             finalized_trace = finalized_traces.get(node_id)
             if finalized_trace is not None:
-                versions[sequence] = finalized_trace
+                versions[publication_sequence] = finalized_trace
             elif descriptor.available and descriptor.revision in versions:
-                versions[sequence] = versions[descriptor.revision]
-            self._trace_descriptors[key] = replace(descriptor, revision=sequence)
+                versions[publication_sequence] = versions[descriptor.revision]
+            self._trace_descriptors[key] = replace(
+                descriptor,
+                revision=publication_sequence,
+            )
 
-        snapshot = deepcopy(run)
-        self._stream_history.append((sequence, snapshot))
+        changes: list[Any] = []
+        if is_new:
+            summary = self._run_summary_locked(run)
+            snapshot = self._run_snapshot_locked(
+                run,
+                summary=summary,
+                as_of_sequence=publication_sequence,
+            )
+            changes.append(RunCreated(summary=summary, nodes=snapshot.nodes))
+        else:
+            if summary_changed:
+                changes.append(
+                    RunStatusChanged(
+                        run_id=run.run_id,
+                        status=run.status,
+                        started_at=run.started_at,
+                        ended_at=run.ended_at,
+                        revision=publication_sequence,
+                    )
+                )
+            for node_id in status_node_ids:
+                node = run.nodes[node_id]
+                changes.append(
+                    NodeStatusChanged(
+                        run_id=run.run_id,
+                        node_id=node_id,
+                        status=node.status,
+                        started_at=node.started_at,
+                        ended_at=node.ended_at,
+                        revision=publication_sequence,
+                    )
+                )
+            if log_entry is not None:
+                changes.append(
+                    LogAppended(
+                        run_id=run.run_id,
+                        log=deepcopy(self._logs[run.run_id][-1]),
+                    )
+                )
+            for node_id, event in agent_events.items():
+                changes.append(
+                    AgentEventAppended(
+                        run_id=run.run_id,
+                        node_id=node_id,
+                        event=event,
+                    )
+                )
+            for node_id in trace_node_ids:
+                changes.append(
+                    TraceFinalized(
+                        run_id=run.run_id,
+                        node_id=node_id,
+                        trace=self._trace_descriptors[(run.run_id, node_id)],
+                    )
+                )
+
+        deltas = []
+        for change in changes:
+            self._sequence += 1
+            delta = RunDelta(sequence=self._sequence, change=change)
+            self._stream_history.append(delta)
+            deltas.append(delta)
+        if self._sequence != publication_sequence:
+            raise RuntimeError("Run publication produced an inconsistent delta batch")
+
+        envelopes = tuple(
+            RunDeltaEnvelope(
+                operator_instance_id=self._operator_instance_id,
+                delta=delta,
+            )
+            for delta in deltas
+        )
         notifications = _RunNotifications(
-            sequence=sequence,
+            sequence=publication_sequence,
             run_callbacks=tuple(
                 (callback, deepcopy(run)) for callback in self._run_callbacks
             ),
@@ -1626,6 +1858,9 @@ class Operator:
             ),
             subscribers=tuple(
                 (subscription, deepcopy(run)) for subscription in self._subscribers
+            ),
+            delta_subscribers=tuple(
+                (subscription, envelopes) for subscription in self._delta_subscribers
             ),
             ready=threading.Event(),
             delivered=threading.Event(),
@@ -1658,8 +1893,7 @@ class Operator:
             finally:
                 notifications.delivered.set()
 
-    @staticmethod
-    def _deliver_notifications(notifications: _RunNotifications) -> None:
+    def _deliver_notifications(self, notifications: _RunNotifications) -> None:
         for callback, entry in notifications.log_callbacks:
             try:
                 callback(entry)
@@ -1671,10 +1905,46 @@ class Operator:
             except Exception:
                 pass
         for subscription, snapshot in notifications.subscribers:
+            self._deliver_legacy_update(subscription, notifications.sequence, snapshot)
+        for subscription, envelopes in notifications.delta_subscribers:
+            self._deliver_delta_batch(subscription, envelopes)
+
+    def _deliver_legacy_update(
+        self,
+        subscription: queue.Queue,
+        sequence: int,
+        snapshot: RunState,
+    ) -> None:
+        with self._lock:
+            if subscription not in self._subscribers:
+                return
             try:
-                subscription.put_nowait((notifications.sequence, snapshot))
+                subscription.put_nowait((sequence, snapshot))
             except queue.Full:
-                pass
+                _replace_queue_contents(subscription, self._legacy_reset_locked())
+                self._subscribers = [
+                    item for item in self._subscribers if item is not subscription
+                ]
+
+    def _deliver_delta_batch(
+        self,
+        subscription: queue.Queue,
+        envelopes: tuple[RunDeltaEnvelope, ...],
+    ) -> None:
+        with self._lock:
+            if subscription not in self._delta_subscribers:
+                return
+            for envelope in envelopes:
+                try:
+                    subscription.put_nowait(envelope)
+                except queue.Full:
+                    _replace_queue_contents(subscription, self._delta_reset_locked())
+                    self._delta_subscribers = [
+                        item
+                        for item in self._delta_subscribers
+                        if item is not subscription
+                    ]
+                    return
 
 
 
@@ -1731,6 +2001,108 @@ def _decode_page_token(page_token: str) -> dict[str, Any]:
     ):
         raise ValueError("Invalid page token")
     return value
+
+
+def _replace_queue_contents(subscription: queue.Queue, item: Any) -> None:
+    while True:
+        try:
+            subscription.get_nowait()
+        except queue.Empty:
+            break
+    subscription.put_nowait(item)
+
+
+
+
+
+
+def _run_state_from_created(created: RunCreated) -> RunState:
+    summary = created.summary
+    run = RunState(
+        run_id=summary.run_id,
+        flow_name=summary.flow_name,
+        status=summary.status,
+        started_at=summary.started_at,
+        ended_at=summary.ended_at,
+        operator_instance_id="",
+        created_sequence=summary.created_sequence,
+        revision=summary.revision,
+        triggered_by=summary.triggered_by,
+        workflow_id=summary.workflow_id,
+        workflow_display_name=summary.workflow_display_name,
+    )
+    run.nodes = {
+        node.node_id: NodeState(
+            node_id=node.node_id,
+            name=node.name,
+            node_type=node.node_type,
+            status=node.status,
+            started_at=node.started_at,
+            ended_at=node.ended_at,
+            trace=node.trace,
+            revision=node.revision,
+        )
+        for node in created.nodes
+    }
+    return run
+
+
+def _apply_legacy_delta(
+    states: dict[str, RunState],
+    delta: RunDelta,
+) -> RunState | None:
+    change = delta.change
+    if isinstance(change, RunCreated):
+        run = _run_state_from_created(change)
+        states[run.run_id] = run
+        return run
+
+    run = states.get(change.run_id)
+    if run is None:
+        return None
+    if isinstance(change, RunStatusChanged):
+        run.status = change.status
+        run.started_at = change.started_at
+        run.ended_at = change.ended_at
+        run.revision = max(run.revision, change.revision)
+    elif isinstance(change, NodeStatusChanged):
+        node = run.nodes.get(change.node_id)
+        if node is None:
+            return None
+        node.status = change.status
+        node.started_at = change.started_at
+        node.ended_at = change.ended_at
+        node.revision = max(node.revision, change.revision)
+    elif isinstance(change, LogAppended):
+        run.logs.append(deepcopy(change.log.entry))
+        run.latest_log_sequence = max(
+            run.latest_log_sequence,
+            change.log.sequence,
+        )
+    elif isinstance(change, AgentEventAppended):
+        node = run.nodes.get(change.node_id)
+        if node is None:
+            return None
+        envelope = (
+            json.loads(node.agent_trace_json)
+            if node.agent_trace_json is not None
+            else {"status": "in_progress", "events": [], "trace": None}
+        )
+        events = envelope.setdefault("events", [])
+        events.append(json.loads(change.event.event_json))
+        node.agent_trace_json = json.dumps(envelope, default=str)
+    elif isinstance(change, TraceFinalized):
+        node = run.nodes.get(change.node_id)
+        if node is None:
+            return None
+        node.trace = change.trace
+        node.revision = max(node.revision, change.trace.revision)
+    run.revision = max(run.revision, delta.sequence)
+    return run
+
+
+
+
 
 
 _RUN_EVENT_TYPES = {

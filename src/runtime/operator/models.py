@@ -7,7 +7,7 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from enum import Enum
 from types import MappingProxyType
-from typing import Literal, Mapping
+from typing import Any, Literal, Mapping
 
 
 class NodeStatus(Enum):
@@ -50,6 +50,8 @@ class NodeState:
     started_at: float | None = None
     ended_at: float | None = None
     agent_trace_json: str | None = None
+    trace: TraceDescriptor | None = None
+    revision: int = 0
 
     @property
     def elapsed(self) -> float | None:
@@ -71,6 +73,11 @@ class RunState:
     triggered_by: str = "manual"  # "manual" | "scheduled"
     workflow_id: str = ""
     workflow_display_name: str = ""
+    operator_instance_id: str = ""
+    created_sequence: int = 0
+    revision: int = 0
+    latest_log_sequence: int = 0
+    details_hydrated: bool = True  # False only for summary-only list projections.
 
     @property
     def elapsed(self) -> float | None:
@@ -89,6 +96,19 @@ class TraceDescriptor:
     complete: bool = False
     event_count: int = 0
     size_bytes: int = 0
+
+
+@dataclass(frozen=True)
+class TraceDetail:
+    """One immutable trace body pinned to structural run and node identity."""
+
+    operator_instance_id: str
+    run_id: str
+    created_sequence: int
+    node_id: str
+    descriptor_revision: int
+    trace_body: dict[str, Any]
+
 
 
 @dataclass(frozen=True)
@@ -190,6 +210,83 @@ class FinalizedTrace:
     data: bytes
 
 
+
+@dataclass(frozen=True)
+class RunCreated:
+    summary: RunSummary
+    nodes: tuple[NodeSnapshot, ...] = ()
+
+
+@dataclass(frozen=True)
+class RunStatusChanged:
+    run_id: str
+    status: RunStatus
+    started_at: float | None = None
+    ended_at: float | None = None
+    revision: int = 0
+
+
+@dataclass(frozen=True)
+class NodeStatusChanged:
+    run_id: str
+    node_id: str
+    status: NodeStatus
+    started_at: float | None = None
+    ended_at: float | None = None
+    revision: int = 0
+
+
+@dataclass(frozen=True)
+class LogAppended:
+    run_id: str
+    log: SequencedLogEntry
+
+
+@dataclass(frozen=True)
+class AgentEventAppended:
+    run_id: str
+    node_id: str
+    event: AgentEvent
+
+
+@dataclass(frozen=True)
+class TraceFinalized:
+    run_id: str
+    node_id: str
+    trace: TraceDescriptor
+
+
+RunDeltaChange = (
+    RunCreated
+    | RunStatusChanged
+    | NodeStatusChanged
+    | LogAppended
+    | AgentEventAppended
+    | TraceFinalized
+)
+
+
+@dataclass(frozen=True)
+class RunDelta:
+    sequence: int
+    change: RunDeltaChange
+
+
+@dataclass(frozen=True)
+class ResetRequired:
+    history_floor: int
+    latest_sequence: int
+
+
+@dataclass(frozen=True)
+class RunDeltaEnvelope:
+    operator_instance_id: str
+    delta: RunDelta | None = None
+    reset_required: ResetRequired | None = None
+
+    def __post_init__(self) -> None:
+        if (self.delta is None) == (self.reset_required is None):
+            raise ValueError("delta envelope requires exactly one payload")
 @dataclass
 class WorkflowInfo:
     """Flat snapshot of a workflow — the TUI never holds real Workflow objects."""

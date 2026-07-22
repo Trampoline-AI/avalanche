@@ -19,6 +19,7 @@ from ._grpc import _BOUNDED_MESSAGE_OPTIONS
 from .convert import (
     agent_event_to_proto,
     discovery_diagnostic_to_proto,
+    run_delta_envelope_to_proto,
     run_snapshot_to_proto,
     run_state_to_proto,
     run_summary_to_proto,
@@ -26,6 +27,7 @@ from .convert import (
     workflow_info_to_proto,
 )
 from .operator import (
+    LegacyStreamResetRequired,
     Operator,
     RunAlreadyExistsError,
     RunResultNotReadyError,
@@ -196,8 +198,11 @@ class OperatorServicer(pb_grpc.OperatorServiceServicer):
             trace = self._op.read_trace(
                 request.run_id,
                 request.node_id,
+                operator_instance_id=request.operator_instance_id,
                 revision=request.revision,
             )
+        except StructuralBaselineUnavailableError as exc:
+            context.abort(grpc.StatusCode.FAILED_PRECONDITION, str(exc))
         except KeyError:
             context.abort(
                 grpc.StatusCode.NOT_FOUND,
@@ -218,7 +223,15 @@ class OperatorServicer(pb_grpc.OperatorServiceServicer):
         try:
             while context.is_active():
                 try:
-                    seq, run = q.get(timeout=1.0)
+                    item = q.get(timeout=1.0)
+                    if isinstance(item, LegacyStreamResetRequired):
+                        context.abort(
+                            grpc.StatusCode.OUT_OF_RANGE,
+                            "run update cursor is no longer replayable; "
+                            f"history_floor={item.history_floor} "
+                            f"latest_sequence={item.latest_sequence}",
+                        )
+                    seq, run = item
                     yield pb.RunUpdate(
                         sequence=seq,
                         run=run_state_to_proto(run),
@@ -228,6 +241,24 @@ class OperatorServicer(pb_grpc.OperatorServiceServicer):
                     continue
         finally:
             self._op.unsubscribe(q)
+
+    def StreamRunDeltas(self, request, context):  # noqa: N802
+        """Replay typed deltas for one operator epoch, or require a reset."""
+        subscription = self._op.subscribe_run_deltas(
+            request.operator_instance_id,
+            request.after_sequence,
+        )
+        try:
+            while context.is_active():
+                try:
+                    envelope = subscription.get(timeout=1.0)
+                except queue.Empty:
+                    continue
+                yield run_delta_envelope_to_proto(envelope)
+                if envelope.reset_required is not None:
+                    return
+        finally:
+            self._op.unsubscribe_run_deltas(subscription)
 
 
 def serve(

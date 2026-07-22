@@ -46,6 +46,13 @@ def test_structural_snapshot_contract_excludes_detail_bodies():
         "operator_instance_id",
         "as_of_sequence",
     }
+    trace_request_fields = pb.ReadTraceRequest.DESCRIPTOR.fields_by_name
+    assert set(trace_request_fields) == {
+        "run_id",
+        "node_id",
+        "revision",
+        "operator_instance_id",
+    }
 
 
 def test_snapshot_detail_cursor_and_descriptor_roundtrip():
