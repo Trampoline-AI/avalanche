@@ -63,6 +63,7 @@ from .input_ref import InputRef
 from .run_handle import RunHandle
 
 if TYPE_CHECKING:
+    from .artifacts import ArtifactManifest, ArtifactStore
     from .execution_services import ExecutionServicesSpec
     from .executor import Executor
     from .operator.hooks import RunHooks
@@ -1416,6 +1417,7 @@ def _build_context_values(
     workflow_name: str,
     executor_type: str,
     rerun: Any = None,
+    artifact_store: "ArtifactStore | None" = None,
 ) -> tuple[Any, Any]:
     from .runtime import BaseContext, RunContext
 
@@ -1424,6 +1426,7 @@ def _build_context_values(
         workflow_name=workflow_name,
         executor_type=executor_type,
         rerun=rerun,
+        artifact_store=artifact_store,
     )
     target_type = context_type or RunContext
     if not _safe_issubclass(target_type, BaseContext):
@@ -1438,6 +1441,7 @@ def _build_context_values(
         "node_name": None,
         "node_slug": None,
         "lineage_vector": {},
+        "artifact_store": artifact_store,
     }
 
     if raw_context is not None and isinstance(raw_context, target_type):
@@ -2072,6 +2076,7 @@ class Workflow:
         cron: str | None = None,
         input_type: type | None = None,
         context_type: type | None = None,
+        artifact_store: "ArtifactStore | None" = None,
         agent_defaults: dict[str, Any] | None = None,
     ):
         """
@@ -2095,6 +2100,7 @@ class Workflow:
         _validate_workflow_types(input_type, context_type)
         self.input_type = input_type
         self.context_type = context_type
+        self.artifact_store = artifact_store
         self.agent_defaults = dict(agent_defaults or {})
 
         # Validate: detect cycles via Kahn's algorithm (incomplete sort = cycle)
@@ -2165,6 +2171,20 @@ class Workflow:
             original_dependencies_map,
         )
         return [node_id for node_id in execution_order if node_id in scheduled_node_ids]
+
+    def stage_input(self, input: Any, *, run_id: str) -> Any:
+        """Stage submitted files and register remote objects before node execution."""
+        if self.artifact_store is None or input is None:
+            return input
+        from .artifacts import stage_artifact_inputs
+
+        return stage_artifact_inputs(input, self.artifact_store, run_id=run_id)
+
+    def artifact_manifest(self, run_id: str) -> "ArtifactManifest":
+        """Return the configured store's complete artifact manifest for a run."""
+        if self.artifact_store is None:
+            raise RuntimeError("workflow has no artifact_store configured")
+        return self.artifact_store.manifest(run_id)
 
     def run(
         self,
@@ -2266,6 +2286,7 @@ class Workflow:
                 raise TypeError(
                     f"{type(executor).__name__} does not support execution services"
                 )
+        input = self.stage_input(input, run_id=run_id)
         run_input = (
             None
             if execution_services is not None
@@ -2278,6 +2299,7 @@ class Workflow:
             workflow_name=self.name,
             executor_type=executor_type,
             rerun=rerun_spec,
+            artifact_store=self.artifact_store,
         )
 
         result_refs: dict[str, Any] = {}
@@ -2925,6 +2947,7 @@ def workflow(
     input: type | None = None,
     context: type | None = None,
     ctx: type | None = None,
+    artifact_store: "ArtifactStore | None" = None,
     agent_defaults: dict[str, Any] | None = None,
 ) -> Callable[[], Workflow] | Callable[[Callable[[], None]], Callable[[], Workflow]]:
     """
@@ -2951,6 +2974,7 @@ def workflow(
         input: Optional BaseInput subclass validated at run start.
         context: Optional BaseContext subclass validated at run start.
         ctx: Alias for context.
+        artifact_store: Optional durable input/output artifact store.
 
     Returns:
         Function that returns a Workflow object when called
@@ -2984,6 +3008,7 @@ def workflow(
                     cron=cron,
                     input_type=input,
                     context_type=context_type,
+                    artifact_store=artifact_store,
                     agent_defaults=agent_defaults,
                 )
             finally:

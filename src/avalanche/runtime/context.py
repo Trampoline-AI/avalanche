@@ -8,6 +8,8 @@ from typing import Any, BinaryIO, Literal, TextIO, overload
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
+from ..artifacts import ArtifactManifest, ArtifactRef, ArtifactStore
+
 MAX_INLINE_FILE_BYTES = 3 * 1024 * 1024
 MAX_INLINE_REQUEST_BYTES = MAX_INLINE_FILE_BYTES
 
@@ -73,6 +75,7 @@ class RunContext(BaseContext):
     node_slug: str | None = None
     lineage_vector: dict[str, str] = Field(default_factory=dict, exclude=True)
     metadata: dict[str, Any] = Field(default_factory=dict)
+    artifact_store: ArtifactStore | None = Field(default=None, exclude=True, repr=False)
 
     def for_node(self, *, node_id: str, node_name: str, node_slug: str) -> "RunContext":
         return self.model_copy(
@@ -83,6 +86,34 @@ class RunContext(BaseContext):
                 "lineage_vector": dict(self.lineage_vector),
             }
         )
+
+    def publish_artifact(
+        self,
+        source: str | Path,
+        *,
+        role: str,
+        name: str | None = None,
+        media_type: str | None = None,
+    ) -> ArtifactRef:
+        """Atomically publish a generated file with this run and node's lineage."""
+        if self.artifact_store is None:
+            raise RuntimeError("workflow has no artifact_store configured")
+        if self.node_id is None:
+            raise RuntimeError("artifacts can only be published from a workflow node")
+        return self.artifact_store.publish(
+            source,
+            run_id=self.run_id,
+            node_id=self.node_id,
+            role=role,
+            name=name,
+            media_type=media_type,
+        )
+
+    def artifact_manifest(self) -> ArtifactManifest:
+        """Return the current run's input/output artifact manifest."""
+        if self.artifact_store is None:
+            raise RuntimeError("workflow has no artifact_store configured")
+        return self.artifact_store.manifest(self.run_id)
 
 
 _current_run_context: ContextVar[RunContext | None] = ContextVar(

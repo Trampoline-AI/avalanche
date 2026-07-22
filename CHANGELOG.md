@@ -2,6 +2,16 @@
 
 ## Unreleased
 
+### Run-lineaged artifact storage
+
+- Added `ava.ArtifactStore`, `ava.LocalArtifactStore`, durable
+  `ava.ArtifactRef` metadata, and one input/output `ArtifactManifest` per run.
+- Configured workflows stage inline uploads and register remote objects after
+  run-ID assignment but before node execution.
+- Nodes explicitly publish generated files through
+  `RunContext.publish_artifact(...)`; local publication is atomic and rejects
+  duplicate names without overwriting existing objects.
+
 ### Worker execution services
 
 - Added the versioned `ava.ExecutionServicesSpec` and worker-side

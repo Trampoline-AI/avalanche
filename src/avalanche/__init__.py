@@ -5,6 +5,14 @@ Provides a DAG-based framework for building data transformation workflows
 with local and distributed execution.
 """
 
+from .artifacts import (
+    ArtifactManifest,
+    ArtifactRef,
+    ArtifactStore,
+    DuplicateArtifactError,
+    LocalArtifactStore,
+)
+
 # DAG primitives
 from .dag import Pipeline, Workflow, dest, pipeline, source, step, transform, workflow
 from .execution_services import (
@@ -95,6 +103,12 @@ __all__ = [
     "workflow",
     "pipeline",
     "input",
+    # Artifacts
+    "ArtifactManifest",
+    "ArtifactRef",
+    "ArtifactStore",
+    "DuplicateArtifactError",
+    "LocalArtifactStore",
     # Workflow
     "Workflow",
     "Pipeline",

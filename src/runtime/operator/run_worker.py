@@ -67,6 +67,7 @@ def run_worker(
         workflow = builder()
         if not isinstance(workflow, Workflow):
             raise TypeError("Marked builder did not return a Workflow")
+        input_value = workflow.stage_input(input_value, run_id=run_id)
         event_queue.put({"type": "prepared", **_workflow_metadata(workflow)})
     except BaseException as exc:
         event_queue.put(

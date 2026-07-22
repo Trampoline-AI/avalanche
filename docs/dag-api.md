@@ -267,6 +267,54 @@ contents = payload.remote_document.read_bytes(
 )
 ```
 
+### Durable run artifacts
+
+Configure an artifact store when files must remain usable beyond the submitting
+client, executor, or sandbox:
+
+```python
+class ArtifactInput(ava.BaseInput):
+    document: ava.ArtifactRef
+
+
+@ava.step
+def create_proposal(payload: ArtifactInput, ctx: ava.RunContext):
+    text = payload.document.read_bytes().decode()
+    generated = render_proposal(text)
+    return ctx.publish_artifact(generated, role="proposal")
+
+
+@ava.workflow(
+    input=ArtifactInput,
+    artifact_store=ava.LocalArtifactStore("./artifacts"),
+)
+def proposal_workflow():
+    return create_proposal()
+```
+
+Before nodes execute, configured workflows replace submitted `ava.File` values
+with durable `ava.ArtifactRef` values. The operator assigns the run ID before
+this staging step. Submitted `ava.S3File` and existing `ArtifactRef` values are
+registered in the new run without downloading or copying their objects.
+
+`RunContext.publish_artifact(path, role=..., name=..., media_type=...)` copies a
+generated file into configured storage and records its current run and node.
+Publication is explicit: scratch and temporary files are never inferred.
+`name` defaults to the source filename. Names are unique within each run and
+artifact kind; a duplicate raises `ava.DuplicateArtifactError` and never
+overwrites the first object.
+
+Each `ArtifactRef` records `uri`, SHA-256 `checksum`, byte `size`, `media_type`,
+`kind` (`"input"` or `"output"`), `run_id`, `node_id`, `role`, and `origin`.
+Use `workflow.artifact_manifest(run_id)`, `store.manifest(run_id)`, or
+`ctx.artifact_manifest()` to read the one manifest covering both directions.
+
+`ava.LocalArtifactStore` is the included content-addressed filesystem backend.
+It atomically publishes blobs and stores manifests in SQLite so independent
+worker processes can publish safely. `ava.ArtifactStore` is the backend contract
+for shared filesystems and object-store implementations.
+
+
 ## Execution
 
 Run a workflow by constructing it and calling `.run()` with an executor. The
