@@ -170,20 +170,24 @@ class DiscoveryDiagnosticMsg(_message.Message):
     def __init__(self, path: _Optional[str] = ..., kind: _Optional[str] = ..., message: _Optional[str] = ...) -> None: ...
 
 class NodeStateMsg(_message.Message):
-    __slots__ = ("node_id", "name", "node_type", "status", "started_at", "ended_at")
+    __slots__ = ("node_id", "name", "node_type", "status", "started_at", "ended_at", "reason", "metadata_json")
     NODE_ID_FIELD_NUMBER: _ClassVar[int]
     NAME_FIELD_NUMBER: _ClassVar[int]
     NODE_TYPE_FIELD_NUMBER: _ClassVar[int]
     STATUS_FIELD_NUMBER: _ClassVar[int]
     STARTED_AT_FIELD_NUMBER: _ClassVar[int]
     ENDED_AT_FIELD_NUMBER: _ClassVar[int]
+    REASON_FIELD_NUMBER: _ClassVar[int]
+    METADATA_JSON_FIELD_NUMBER: _ClassVar[int]
     node_id: str
     name: str
     node_type: str
     status: str
     started_at: float
     ended_at: float
-    def __init__(self, node_id: _Optional[str] = ..., name: _Optional[str] = ..., node_type: _Optional[str] = ..., status: _Optional[str] = ..., started_at: _Optional[float] = ..., ended_at: _Optional[float] = ...) -> None: ...
+    reason: str
+    metadata_json: str
+    def __init__(self, node_id: _Optional[str] = ..., name: _Optional[str] = ..., node_type: _Optional[str] = ..., status: _Optional[str] = ..., started_at: _Optional[float] = ..., ended_at: _Optional[float] = ..., reason: _Optional[str] = ..., metadata_json: _Optional[str] = ...) -> None: ...
 
 class LogEntryMsg(_message.Message):
     __slots__ = ("timestamp", "level", "node_id", "message")

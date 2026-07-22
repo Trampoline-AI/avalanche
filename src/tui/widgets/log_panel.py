@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import json
+
 from rich.style import Style
 from rich.text import Text
 from textual.widgets import Static
@@ -76,15 +78,28 @@ class LogWidget(Static):
                 text.append("  Waiting for dependencies…\n", DIM_STYLE)
                 return text
             if status == NodeStatus.SKIPPED:
-                text.append("  Skipped — upstream dependency failed.\n", Style(color=ICE_WARN))
+                node_state = (
+                    store.current_run.nodes.get(selected_node.name)
+                    if store.current_run is not None
+                    else None
+                )
+                if node_state is not None and node_state.reason is not None:
+                    text.append(f"  Skipped — {node_state.reason}\n", Style(color=ICE_WARN))
+                    if node_state.metadata is not None:
+                        metadata = json.dumps(node_state.metadata, sort_keys=True)
+                        text.append(f"  Metadata: {metadata}\n", DIM_STYLE)
+                else:
+                    text.append(
+                        "  Skipped — upstream dependency failed.\n",
+                        Style(color=ICE_WARN),
+                    )
                 return text
 
         # Filter entries for selected node
         visible = logs
         if selected_node:
             visible = [
-                e for e in logs
-                if e.node_id in (selected_node.name, selected_node.display_name)
+                e for e in logs if e.node_id in (selected_node.name, selected_node.display_name)
             ]
 
         if not visible and selected_node:
@@ -192,5 +207,5 @@ class LogWidget(Static):
                 break
             if idx > pos:
                 text.append(msg[pos:idx], base_style)
-            text.append(msg[idx:idx + len(query)], hl)
+            text.append(msg[idx : idx + len(query)], hl)
             pos = idx + len(query)

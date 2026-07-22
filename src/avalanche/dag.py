@@ -1476,6 +1476,10 @@ def _unwrap_lineaged_tree(value: Any) -> Any:
     Only unwraps envelopes; other containers/values pass through unchanged so
     user args keep their structure.
     """
+    from .types import SkipOutcome
+
+    if isinstance(value, SkipOutcome):
+        return None
     from .types import LineagedResult
 
     if isinstance(value, LineagedResult):
@@ -1552,17 +1556,20 @@ def _wrap_lineaged_result(value: Any, context: Any, *, num_returns: int) -> Any:
     Multi-return nodes wrap each item individually so executor multi-return
     (e.g. Ray) still sees the expected number of results.
     """
-    from .types import LineagedResult
+    from .types import LineagedResult, SkipOutcome
 
     lineage = dict(context.lineage_vector)
     if context.node_slug is not None:
         lineage[context.node_slug] = context.run_id
 
+    def wrap(item: Any) -> Any:
+        return item if isinstance(item, SkipOutcome) else LineagedResult(item, lineage)
+
     if num_returns > 1 and isinstance(value, tuple):
-        return tuple(LineagedResult(item, lineage) for item in value)
+        return tuple(wrap(item) for item in value)
     if num_returns > 1 and isinstance(value, list):
-        return [LineagedResult(item, lineage) for item in value]
-    return LineagedResult(value, lineage)
+        return [wrap(item) for item in value]
+    return wrap(value)
 
 
 _STREAM_PARENT_KWARG_PREFIX = "__ava_stream_parent_"
@@ -1622,8 +1629,82 @@ def _materialize_append_handles_for_driver(value: Any, executor: Any) -> Any:
     return materialize_append_handles(value, get_data)
 
 
+_IMPLICIT_VALUE_KWARG_PREFIX = "__ava_implicit_value_"
+
+
+def _bind_deferred_implicit_values(
+    args: tuple[Any, ...],
+    kwargs: dict[str, Any],
+    *,
+    binding_fn: Callable[..., Any] | None,
+    skip_param_names: set[str],
+    position_consuming_param_names: set[str],
+    adapt_positionals: bool,
+) -> tuple[tuple[Any, ...], dict[str, Any]]:
+    """Bind implicit inputs after distributed refs have materialized worker-side."""
+    if binding_fn is None:
+        return args, kwargs
+
+    from .types import skip_outcome_from_result
+
+    implicit_keys = sorted(
+        (
+            key
+            for key in kwargs
+            if isinstance(key, str) and key.startswith(_IMPLICIT_VALUE_KWARG_PREFIX)
+        ),
+        key=lambda key: int(key.removeprefix(_IMPLICIT_VALUE_KWARG_PREFIX)),
+    )
+    upstream_values = [kwargs.pop(key) for key in implicit_keys]
+    value_inputs = [
+        value for value in upstream_values if skip_outcome_from_result(value) is None
+    ]
+    implicit_args, implicit_kwargs = _bind_implicit_parent_results(
+        binding_fn,
+        value_inputs,
+        skip_param_names,
+        position_consuming_param_names,
+        kwargs,
+        adapt_positionals=adapt_positionals,
+    )
+    kwargs.update(implicit_kwargs)
+    return (*args, *implicit_args), kwargs
+
+
+def _prepare_user_call(
+    args: tuple[Any, ...], kwargs: dict[str, Any]
+) -> tuple[tuple[Any, ...], dict[str, Any]]:
+    """Remove skipped top-level data slots while preserving dependency-only kwargs."""
+    from .types import skip_outcome_from_result
+
+    filtered_args = tuple(value for value in args if skip_outcome_from_result(value) is None)
+    filtered_kwargs = {
+        key: value
+        for key, value in kwargs.items()
+        if (isinstance(key, str) and key.startswith(_STREAM_PARENT_KWARG_PREFIX))
+        or skip_outcome_from_result(value) is None
+    }
+    return filtered_args, filtered_kwargs
+
+
+def _shape_skipped_result(value: Any, *, num_returns: int) -> Any:
+    """Give whole-node skips the physical shape required by multi-return executors."""
+    from .types import SkipOutcome
+
+    if isinstance(value, SkipOutcome) and num_returns > 1:
+        return tuple(value for _ in range(num_returns))
+    return value
+
+
 def _with_current_run_context(
-    fn: Callable[..., Any], context: Any, *, num_returns: int = 1
+    fn: Callable[..., Any],
+    context: Any,
+    *,
+    num_returns: int = 1,
+    implicit_binding_fn: Callable[..., Any] | None = None,
+    implicit_skip_param_names: set[str] | None = None,
+    implicit_position_consuming_param_names: set[str] | None = None,
+    adapt_implicit_positionals: bool = False,
 ) -> Callable[..., Any]:
     """Wrap a node function so framework helpers can read its RunContext.
 
@@ -1641,6 +1722,18 @@ def _with_current_run_context(
     from .runtime import RunContext
     from .runtime.context import _run_with_context
 
+    def expose_framework_signature(wrapped_fn: Callable[..., Any]) -> Callable[..., Any]:
+        if implicit_binding_fn is not None:
+            import inspect
+
+            wrapped_fn.__signature__ = inspect.Signature(
+                parameters=(
+                    inspect.Parameter("args", inspect.Parameter.VAR_POSITIONAL),
+                    inspect.Parameter("kwargs", inspect.Parameter.VAR_KEYWORD),
+                )
+            )
+        return wrapped_fn
+
     if not isinstance(context, RunContext):
         # Still unwrap parent envelopes so non-context nodes never receive an
         # internal transport type.
@@ -1648,9 +1741,21 @@ def _with_current_run_context(
         def plain(*args: Any, **kwargs: Any) -> Any:
             args = _materialize_append_handles_for_worker(args)
             kwargs = _materialize_worker_kwargs(kwargs)
-            return fn(*_unwrap_lineaged_tree(args), **_unwrap_lineaged_tree(kwargs))
+            args, kwargs = _bind_deferred_implicit_values(
+                args,
+                kwargs,
+                binding_fn=implicit_binding_fn,
+                skip_param_names=implicit_skip_param_names or set(),
+                position_consuming_param_names=(
+                    implicit_position_consuming_param_names or set()
+                ),
+                adapt_positionals=adapt_implicit_positionals,
+            )
+            args, kwargs = _prepare_user_call(args, kwargs)
+            result = fn(*_unwrap_lineaged_tree(args), **_unwrap_lineaged_tree(kwargs))
+            return _shape_skipped_result(result, num_returns=num_returns)
 
-        return plain
+        return expose_framework_signature(plain)
 
     @wraps(fn)
     def wrapped(*args: Any, **kwargs: Any) -> Any:
@@ -1667,13 +1772,23 @@ def _with_current_run_context(
             merged = dict(context.lineage_vector)
             merged.update(parent_lineage)
             context.lineage_vector = merged
+        args, kwargs = _bind_deferred_implicit_values(
+            args,
+            kwargs,
+            binding_fn=implicit_binding_fn,
+            skip_param_names=implicit_skip_param_names or set(),
+            position_consuming_param_names=(implicit_position_consuming_param_names or set()),
+            adapt_positionals=adapt_implicit_positionals,
+        )
+        args, kwargs = _prepare_user_call(args, kwargs)
 
         unwrapped_args = _unwrap_lineaged_tree(args)
         unwrapped_kwargs = _unwrap_lineaged_tree(kwargs)
         result = _run_with_context(context, fn, *unwrapped_args, **unwrapped_kwargs)
+        result = _shape_skipped_result(result, num_returns=num_returns)
         return _wrap_lineaged_result(result, context, num_returns=num_returns)
 
-    return wrapped
+    return expose_framework_signature(wrapped)
 
 
 def _inspect_runtime_params(
@@ -2313,7 +2428,12 @@ class Workflow:
                 or self.returns is None
                 or (
                     hooks
-                    and (hooks.on_node_success or hooks.on_node_failure or hooks.unwrap_result)
+                    and (
+                        hooks.on_node_success
+                        or hooks.on_node_failure
+                        or hooks.on_node_skip
+                        or hooks.unwrap_result
+                    )
                 )
             )
         )
@@ -2484,7 +2604,10 @@ class Workflow:
             # This enables: `a() >> b() >> c()` without manual wiring.
             # Injectable params (Logger, Stream, etc.) are excluded — they're
             # handled separately by the provider system.
-            if not node_ref.args and not binding_plan.has_explicit_provider_selectors:
+            deferred_implicit_binding = bool(
+                not node_ref.args and not binding_plan.has_explicit_provider_selectors
+            )
+            if deferred_implicit_binding:
                 upstream_values = _collect_implicit_parent_results(
                     node_ref,
                     result_refs,
@@ -2492,16 +2615,8 @@ class Workflow:
                     node_id,
                     executor=executor,
                 )
-                implicit_args, implicit_kwargs = _bind_implicit_parent_results(
-                    node_ref.node.fn,
-                    upstream_values,
-                    skip_param_names,
-                    position_consuming_params,
-                    resolved_kwargs,
-                    adapt_positionals=binding_plan.positional_call_adapter is not None,
-                )
-                resolved_args = implicit_args
-                resolved_kwargs.update(implicit_kwargs)
+                for index, value in enumerate(upstream_values):
+                    resolved_kwargs[f"{_IMPLICIT_VALUE_KWARG_PREFIX}{index}"] = value
 
             # Handle injectable parameters that may need wrappers (using provider pattern)
             #
@@ -2569,6 +2684,10 @@ class Workflow:
                 actual_fn,
                 node_run_context,
                 num_returns=node_ref.node.num_returns,
+                implicit_binding_fn=(node_ref.node.fn if deferred_implicit_binding else None),
+                implicit_skip_param_names=skip_param_names,
+                implicit_position_consuming_param_names=position_consuming_params,
+                adapt_implicit_positionals=(binding_plan.positional_call_adapter is not None),
             )
 
             try:
@@ -2675,7 +2794,12 @@ class Workflow:
                 cancel_requested is not None
                 or (
                     hooks
-                    and (hooks.on_node_success or hooks.on_node_failure or hooks.unwrap_result)
+                    and (
+                        hooks.on_node_success
+                        or hooks.on_node_failure
+                        or hooks.on_node_skip
+                        or hooks.unwrap_result
+                    )
                 )
             )
         )
@@ -2694,24 +2818,30 @@ class Workflow:
                 return []
 
             def complete_ray_node(node_id: str) -> None:
+                from .types import skip_outcome_from_result
+
                 node_ref = self.nodes[node_id]
                 result = result_refs[node_id]
                 try:
-                    if hooks and hooks.unwrap_result:
+                    outcome = None
+                    if node_id in status_refs:
+                        status_value = executor.get([status_refs[node_id]])[0]
+                        outcome = skip_outcome_from_result(status_value)
+                    if hooks and hooks.unwrap_result and outcome is None:
                         # unwrap_result needs the user-facing value, so a payload
                         # fetch here is intentional. Keep the lineage-preserving
                         # envelope in result_refs for downstream dataflow,
                         # reattaching any hook replacement.
                         resolved_val = resolve_submitted_result(node_ref, result)
-                        user_val = _unwrap_lineaged_tree(resolved_val)
-                        replacement = hooks.unwrap_result(node_id, user_val)
-                        result_refs[node_id] = _reattach_lineage(replacement, resolved_val)
-                    elif node_id in status_refs:
-                        # Progress-only: fetch just the tiny status ref to
-                        # surface a task failure. Never materialize the payload;
-                        # result_refs keeps the payload ref for downstream tasks.
-                        executor.get([status_refs[node_id]])
-                    if hooks and hooks.on_node_success:
+                        outcome = skip_outcome_from_result(resolved_val)
+                        if outcome is None:
+                            user_val = _unwrap_lineaged_tree(resolved_val)
+                            replacement = hooks.unwrap_result(node_id, user_val)
+                            result_refs[node_id] = _reattach_lineage(replacement, resolved_val)
+                    if outcome is not None:
+                        if hooks and hooks.on_node_skip:
+                            hooks.on_node_skip(node_id, outcome)
+                    elif hooks and hooks.on_node_success:
                         hooks.on_node_success(node_id)
                     completed_nodes.add(node_id)
                 except Exception as exc:
@@ -2824,21 +2954,29 @@ class Workflow:
                 # on_node_success fires after actual completion (not just
                 # submission). This serializes execution but gives accurate
                 # per-node progress — the right tradeoff for the operator.
-                if hooks and (hooks.on_node_success or hooks.unwrap_result):
+                if hooks and (
+                    hooks.on_node_success or hooks.on_node_skip or hooks.unwrap_result
+                ):
+                    from .types import skip_outcome_from_result
+
                     # Wait for completion and resolve to actual value.
                     # For multi-return nodes (num_returns > 1), result is
                     # a tuple of refs; for single-return it's one ref/value.
                     resolved_val = resolve_submitted_result(node_ref, result)
+                    outcome = skip_outcome_from_result(resolved_val)
                     # Unwrap side-channel data (e.g. logs from Ray workers).
                     # Hooks see user-facing values; result_refs keeps the
                     # lineage-preserving envelope for downstream dataflow.
-                    if hooks.unwrap_result:
+                    if hooks.unwrap_result and outcome is None:
                         user_val = _unwrap_lineaged_tree(resolved_val)
                         replacement = hooks.unwrap_result(node_id, user_val)
                         result = _reattach_lineage(replacement, resolved_val)
                     else:
                         result = resolved_val
-                    if hooks.on_node_success:
+                    if outcome is not None:
+                        if hooks.on_node_skip:
+                            hooks.on_node_skip(node_id, outcome)
+                    elif hooks.on_node_success:
                         hooks.on_node_success(node_id)
                 result_refs[node_id] = result
 
@@ -2847,7 +2985,12 @@ class Workflow:
         if self.returns is None:
             already_observed = bool(
                 hooks
-                and (hooks.on_node_success or hooks.on_node_failure or hooks.unwrap_result)
+                and (
+                    hooks.on_node_success
+                    or hooks.on_node_failure
+                    or hooks.on_node_skip
+                    or hooks.unwrap_result
+                )
             )
             if already_observed:
                 # Per-node completion/failure was already observed above (hooks).

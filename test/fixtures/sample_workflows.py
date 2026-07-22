@@ -306,3 +306,18 @@ def order_workflow():
     enriched = enrich(validated)
     agg = aggregate(enriched)
     (save_warehouse(agg) & notify(agg))
+
+
+@source
+def optional_source():
+    return ava.skip("No matching files", {"partition": "2026-07-22"})
+
+
+@step
+def after_optional():
+    return "completed"
+
+
+@workflow
+def skipped_workflow():
+    optional_source() >> after_optional()
