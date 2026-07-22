@@ -79,6 +79,74 @@ class RunState:
         end = self.ended_at if self.ended_at is not None else time.monotonic()
         return end - self.started_at
 
+@dataclass(frozen=True)
+class TraceDescriptor:
+    """Location metadata for agent detail stored outside structural run state."""
+
+    status: str = "unavailable"
+    revision: int = 0
+    available: bool = False
+    complete: bool = False
+    event_count: int = 0
+    size_bytes: int = 0
+
+
+@dataclass(frozen=True)
+class NodeSnapshot:
+    """Lightweight node state used by baseline reads and run deltas."""
+
+    node_id: str
+    name: str
+    node_type: str
+    status: NodeStatus = NodeStatus.PENDING
+    started_at: float | None = None
+    ended_at: float | None = None
+    trace: TraceDescriptor | None = None
+    revision: int = 0
+
+
+@dataclass(frozen=True)
+class RunSummary:
+    """List-safe run metadata with no logs, agent events, or trace bodies."""
+
+    run_id: str
+    flow_name: str
+    status: RunStatus = RunStatus.PENDING
+    started_at: float | None = None
+    ended_at: float | None = None
+    triggered_by: str = "manual"
+    workflow_id: str = ""
+    workflow_display_name: str = ""
+    created_sequence: int = 0
+    revision: int = 0
+
+
+@dataclass(frozen=True)
+class RunSnapshot:
+    """Structural run baseline tied to one operator instance and sequence."""
+
+    operator_instance_id: str
+    as_of_sequence: int
+    summary: RunSummary
+    nodes: tuple[NodeSnapshot, ...] = ()
+    latest_log_sequence: int = 0
+
+
+@dataclass(frozen=True)
+class SequencedLogEntry:
+    """One append-only log record addressable across replay and pagination."""
+
+    sequence: int
+    entry: LogEntry
+
+
+@dataclass(frozen=True)
+class AgentEvent:
+    """One projected agent event stored independently of structural state."""
+
+    event_sequence: int
+    event_json: str
+
 
 @dataclass
 class WorkflowInfo:

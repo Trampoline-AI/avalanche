@@ -179,6 +179,7 @@ class Operator:
         self._run_callbacks: list[Callable[[RunState], None]] = []
         self._log_callbacks: list[Callable[[LogEntry], None]] = []
         self._subscribers: list[queue.Queue] = []
+        self._operator_instance_id = uuid4().hex
         self._sequence = 0
         self._stream_history: deque[tuple[int, RunState]] = deque(
             maxlen=stream_history_capacity
@@ -221,6 +222,15 @@ class Operator:
                 self._result_cleanup_thread.join(timeout=2.0)
             self._result_store.close()
             raise
+
+    @property
+    def operator_instance_id(self) -> str:
+        return self._operator_instance_id
+
+    @property
+    def current_sequence(self) -> int:
+        with self._lock:
+            return self._sequence
 
     def list_workflows(self) -> list[WorkflowInfo]:
         workflows = self._registry.list_workflows()

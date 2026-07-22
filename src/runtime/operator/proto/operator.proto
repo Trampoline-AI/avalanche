@@ -12,6 +12,12 @@ service OperatorService {
   rpc GetRun(GetRunRequest) returns (RunStateMsg);
   rpc GetRunResult(GetRunRequest) returns (RunResultMsg);
   rpc StreamUpdates(StreamRequest) returns (stream RunUpdate);
+  rpc ListRunSummaries(ListRunSummariesRequest) returns (RunSummaryPage);
+  rpc GetRunSnapshot(GetRunSnapshotRequest) returns (RunSnapshotMsg);
+  rpc ListLogs(ListLogsRequest) returns (LogPage);
+  rpc ListAgentEvents(ListAgentEventsRequest) returns (AgentEventPage);
+  rpc ReadTrace(ReadTraceRequest) returns (stream TraceChunk);
+  rpc StreamRunDeltas(StreamRunDeltasRequest) returns (stream RunDeltaEnvelope);
 }
 
 // ── Request / Response ──────────────────────────────────
@@ -54,6 +60,42 @@ message GetRunRequest {
 
 message StreamRequest {
   uint64 since_sequence = 1;
+}
+
+message ListRunSummariesRequest {
+  string workflow_selector = 1;
+  uint32 page_size = 2;
+  string page_token = 3;
+}
+
+message GetRunSnapshotRequest {
+  string run_id = 1;
+  string operator_instance_id = 2;
+  uint64 as_of_sequence = 3;
+}
+
+message ListLogsRequest {
+  string run_id = 1;
+  uint64 after_sequence = 2;
+  uint32 page_size = 3;
+}
+
+message ListAgentEventsRequest {
+  string run_id = 1;
+  string node_id = 2;
+  uint64 after_event_sequence = 3;
+  uint32 page_size = 4;
+}
+
+message ReadTraceRequest {
+  string run_id = 1;
+  string node_id = 2;
+  uint64 revision = 3;
+}
+
+message StreamRunDeltasRequest {
+  string operator_instance_id = 1;
+  uint64 after_sequence = 2;
 }
 
 // ── Data Messages ───────────────────────────────────────
@@ -145,4 +187,151 @@ message RunResultMsg {
 message RunUpdate {
   uint64 sequence = 1;
   RunStateMsg run = 2;
+}
+
+message RunSummaryMsg {
+  string run_id = 1;
+  string flow_name = 2;
+  string status = 3;
+  double started_at = 4;
+  double ended_at = 5;
+  string triggered_by = 6;
+  string workflow_id = 7;
+  string workflow_display_name = 8;
+  uint64 created_sequence = 9;
+  uint64 revision = 10;
+}
+
+message TraceDescriptorMsg {
+  string status = 1;
+  uint64 revision = 2;
+  bool available = 3;
+  bool complete = 4;
+  uint64 event_count = 5;
+  uint64 size_bytes = 6;
+}
+
+message NodeSnapshotMsg {
+  string node_id = 1;
+  string name = 2;
+  string node_type = 3;
+  string status = 4;
+  double started_at = 5;
+  double ended_at = 6;
+  TraceDescriptorMsg trace = 7;
+  uint64 revision = 8;
+}
+
+message RunSnapshotMsg {
+  string operator_instance_id = 1;
+  uint64 as_of_sequence = 2;
+  RunSummaryMsg summary = 3;
+  repeated NodeSnapshotMsg nodes = 4;
+  uint64 latest_log_sequence = 5;
+}
+
+message RunSummaryPage {
+  string operator_instance_id = 1;
+  uint64 as_of_sequence = 2;
+  repeated RunSummaryMsg runs = 3;
+  string next_page_token = 4;
+}
+
+message SequencedLogEntryMsg {
+  uint64 sequence = 1;
+  LogEntryMsg entry = 2;
+}
+
+message LogPage {
+  string operator_instance_id = 1;
+  uint64 as_of_sequence = 2;
+  repeated SequencedLogEntryMsg logs = 3;
+  uint64 next_sequence = 4;
+  bool has_more = 5;
+}
+
+message AgentEventMsg {
+  uint64 event_sequence = 1;
+  string event_json = 2;
+}
+
+message AgentEventPage {
+  string operator_instance_id = 1;
+  uint64 as_of_sequence = 2;
+  string run_id = 3;
+  string node_id = 4;
+  repeated AgentEventMsg events = 5;
+  uint64 next_event_sequence = 6;
+  bool has_more = 7;
+}
+
+message TraceChunk {
+  uint64 revision = 1;
+  uint64 chunk_index = 2;
+  bytes data = 3;
+  bool eof = 4;
+}
+
+message RunCreatedDelta {
+  RunSummaryMsg summary = 1;
+  repeated NodeSnapshotMsg nodes = 2;
+}
+
+message RunStatusChangedDelta {
+  string run_id = 1;
+  string status = 2;
+  double started_at = 3;
+  double ended_at = 4;
+  uint64 revision = 5;
+}
+
+message NodeStatusChangedDelta {
+  string run_id = 1;
+  string node_id = 2;
+  string status = 3;
+  double started_at = 4;
+  double ended_at = 5;
+  uint64 revision = 6;
+}
+
+message LogAppendedDelta {
+  string run_id = 1;
+  SequencedLogEntryMsg log = 2;
+}
+
+message AgentEventAppendedDelta {
+  string run_id = 1;
+  string node_id = 2;
+  AgentEventMsg event = 3;
+}
+
+message TraceFinalizedDelta {
+  string run_id = 1;
+  string node_id = 2;
+  TraceDescriptorMsg trace = 3;
+}
+
+message RunDelta {
+  uint64 sequence = 1;
+  oneof change {
+    RunCreatedDelta run_created = 2;
+    RunStatusChangedDelta run_status_changed = 3;
+    NodeStatusChangedDelta node_status_changed = 4;
+    LogAppendedDelta log_appended = 5;
+    AgentEventAppendedDelta agent_event_appended = 6;
+    TraceFinalizedDelta trace_finalized = 7;
+  }
+}
+
+message ResetRequired {
+  uint64 history_floor = 1;
+  uint64 latest_sequence = 2;
+}
+
+message RunDeltaEnvelope {
+  string operator_instance_id = 1;
+  oneof payload {
+    RunDelta delta = 2;
+    ResetRequired reset_required = 3;
+  }
 }

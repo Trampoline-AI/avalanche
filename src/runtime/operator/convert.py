@@ -5,12 +5,18 @@ from __future__ import annotations
 from pathlib import Path, PureWindowsPath
 
 from .models import (
+    AgentEvent,
     LogEntry,
     LogLevel,
+    NodeSnapshot,
     NodeState,
     NodeStatus,
+    RunSnapshot,
     RunState,
     RunStatus,
+    RunSummary,
+    SequencedLogEntry,
+    TraceDescriptor,
     WorkflowDiscoveryDiagnostic,
     WorkflowInfo,
 )
@@ -168,6 +174,134 @@ def log_entry_from_proto(msg: pb.LogEntryMsg) -> LogEntry:
         level=LogLevel(msg.level),
         node_id=msg.node_id,
         message=msg.message,
+    )
+
+
+def trace_descriptor_to_proto(descriptor: TraceDescriptor) -> pb.TraceDescriptorMsg:
+    return pb.TraceDescriptorMsg(
+        status=descriptor.status,
+        revision=descriptor.revision,
+        available=descriptor.available,
+        complete=descriptor.complete,
+        event_count=descriptor.event_count,
+        size_bytes=descriptor.size_bytes,
+    )
+
+
+def trace_descriptor_from_proto(msg: pb.TraceDescriptorMsg) -> TraceDescriptor:
+    return TraceDescriptor(
+        status=msg.status,
+        revision=msg.revision,
+        available=msg.available,
+        complete=msg.complete,
+        event_count=msg.event_count,
+        size_bytes=msg.size_bytes,
+    )
+
+
+def node_snapshot_to_proto(node: NodeSnapshot) -> pb.NodeSnapshotMsg:
+    message = pb.NodeSnapshotMsg(
+        node_id=node.node_id,
+        name=node.name,
+        node_type=node.node_type,
+        status=node.status.value,
+        started_at=node.started_at or 0.0,
+        ended_at=node.ended_at or 0.0,
+        revision=node.revision,
+    )
+    if node.trace is not None:
+        message.trace.CopyFrom(trace_descriptor_to_proto(node.trace))
+    return message
+
+
+def node_snapshot_from_proto(msg: pb.NodeSnapshotMsg) -> NodeSnapshot:
+    return NodeSnapshot(
+        node_id=msg.node_id,
+        name=msg.name,
+        node_type=msg.node_type,
+        status=NodeStatus(msg.status),
+        started_at=msg.started_at if msg.started_at else None,
+        ended_at=msg.ended_at if msg.ended_at else None,
+        trace=trace_descriptor_from_proto(msg.trace) if msg.HasField("trace") else None,
+        revision=msg.revision,
+    )
+
+
+def run_summary_to_proto(summary: RunSummary) -> pb.RunSummaryMsg:
+    return pb.RunSummaryMsg(
+        run_id=summary.run_id,
+        flow_name=summary.flow_name,
+        status=summary.status.value,
+        started_at=summary.started_at or 0.0,
+        ended_at=summary.ended_at or 0.0,
+        triggered_by=summary.triggered_by,
+        workflow_id=summary.workflow_id or summary.flow_name,
+        workflow_display_name=summary.workflow_display_name or summary.flow_name,
+        created_sequence=summary.created_sequence,
+        revision=summary.revision,
+    )
+
+
+def run_summary_from_proto(msg: pb.RunSummaryMsg) -> RunSummary:
+    return RunSummary(
+        run_id=msg.run_id,
+        flow_name=msg.flow_name,
+        status=RunStatus(msg.status),
+        started_at=msg.started_at if msg.started_at else None,
+        ended_at=msg.ended_at if msg.ended_at else None,
+        triggered_by=msg.triggered_by or "manual",
+        workflow_id=msg.workflow_id or msg.flow_name,
+        workflow_display_name=msg.workflow_display_name or msg.flow_name,
+        created_sequence=msg.created_sequence,
+        revision=msg.revision,
+    )
+
+
+def run_snapshot_to_proto(snapshot: RunSnapshot) -> pb.RunSnapshotMsg:
+    return pb.RunSnapshotMsg(
+        operator_instance_id=snapshot.operator_instance_id,
+        as_of_sequence=snapshot.as_of_sequence,
+        summary=run_summary_to_proto(snapshot.summary),
+        nodes=[node_snapshot_to_proto(node) for node in snapshot.nodes],
+        latest_log_sequence=snapshot.latest_log_sequence,
+    )
+
+
+def run_snapshot_from_proto(msg: pb.RunSnapshotMsg) -> RunSnapshot:
+    return RunSnapshot(
+        operator_instance_id=msg.operator_instance_id,
+        as_of_sequence=msg.as_of_sequence,
+        summary=run_summary_from_proto(msg.summary),
+        nodes=tuple(node_snapshot_from_proto(node) for node in msg.nodes),
+        latest_log_sequence=msg.latest_log_sequence,
+    )
+
+
+def sequenced_log_entry_to_proto(log: SequencedLogEntry) -> pb.SequencedLogEntryMsg:
+    return pb.SequencedLogEntryMsg(
+        sequence=log.sequence,
+        entry=log_entry_to_proto(log.entry),
+    )
+
+
+def sequenced_log_entry_from_proto(msg: pb.SequencedLogEntryMsg) -> SequencedLogEntry:
+    return SequencedLogEntry(
+        sequence=msg.sequence,
+        entry=log_entry_from_proto(msg.entry),
+    )
+
+
+def agent_event_to_proto(event: AgentEvent) -> pb.AgentEventMsg:
+    return pb.AgentEventMsg(
+        event_sequence=event.event_sequence,
+        event_json=event.event_json,
+    )
+
+
+def agent_event_from_proto(msg: pb.AgentEventMsg) -> AgentEvent:
+    return AgentEvent(
+        event_sequence=msg.event_sequence,
+        event_json=msg.event_json,
     )
 
 
