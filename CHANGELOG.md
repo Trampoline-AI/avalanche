@@ -46,6 +46,10 @@
   and read back as validated models via `read_models()`.
 - `ava.AppendResult` is generic over the row model and adds `to_models()`,
   `one()` (asserts exactly-one-row cardinality), and `one_or_none()`.
+- `ava.ModelStream.one()`, `one_or_none()`, and `all()` inject validated row
+  models at workflow stream boundaries with explicit cardinality contracts and
+  contextual errors, while preserving passthrough, table-backed, Ray, and rerun
+  behavior.
 - New `ava.input.<field>` build-time placeholder for feeding validated run
   input into any node's arguments.
 - Fix: futures passed explicitly as keyword arguments are no longer re-bound

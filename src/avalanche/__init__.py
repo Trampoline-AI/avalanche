@@ -50,6 +50,7 @@ from .runtime import (  # noqa: F401
     Cursor,
     File,
     Logger,
+    ModelStream,
     Rerun,
     RunContext,
     S3File,
@@ -120,6 +121,7 @@ __all__ = [
     "RunHandle",
     "S3File",
     "Stream",
+    "ModelStream",
     "Logger",
     "consume_stream",
     # Progress
