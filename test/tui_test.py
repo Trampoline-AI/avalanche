@@ -1709,6 +1709,163 @@ class TestLogTimestamps:
             assert "2026-03-27 14:35:01" in rendered
 
 
+class TestVirtualizedLogs:
+    @staticmethod
+    def _entry(node_id: str, message: str) -> LogEntry:
+        return LogEntry(
+            timestamp=datetime(2026, 3, 27, 14, 35, 1),
+            level=LogLevel.INFO,
+            node_id=node_id,
+            message=message,
+        )
+
+    @pytest.mark.asyncio
+    async def test_equal_cardinality_snapshot_replacement_is_rendered(self):
+        from avalanche.tui.app import AvalancheApp
+        from avalanche.tui.widgets.log_panel import LogWidget
+
+        app = AvalancheApp()
+        async with app.run_test(size=(120, 40)) as pilot:
+            await pilot.pause()
+            app._timer.pause()
+            node_id = next(iter(app.store.current_run.nodes))
+            app.store.current_run = replace(
+                app.store.current_run,
+                logs=[
+                    self._entry(node_id, "old first"),
+                    self._entry(node_id, "old second"),
+                ],
+            )
+            app._refresh_widgets()
+
+            app.store.current_run = replace(
+                app.store.current_run,
+                logs=[
+                    self._entry(node_id, "new first"),
+                    self._entry(node_id, "new second"),
+                ],
+            )
+            app._refresh_widgets()
+            log_view = app._screen.query_one("#log-content", LogWidget)
+            rendered = "\n".join(line.text for line in log_view.lines)
+
+            assert "new first" in rendered
+            assert "new second" in rendered
+            assert "old first" not in rendered
+            assert "old second" not in rendered
+
+    @pytest.mark.asyncio
+    async def test_existing_rows_restyle_when_node_status_changes(self):
+        from avalanche.tui.app import AvalancheApp
+        from avalanche.tui.theme import STATUS_STYLES
+        from avalanche.tui.widgets.log_panel import LogWidget
+
+        app = AvalancheApp()
+        async with app.run_test(size=(120, 40)) as pilot:
+            await pilot.pause()
+            app._timer.pause()
+            node_id = next(iter(app.store.current_run.nodes))
+            logs = [self._entry(node_id, "status-sensitive")]
+            nodes = dict(app.store.current_run.nodes)
+            nodes[node_id] = replace(nodes[node_id], status=NodeStatus.RUNNING)
+            app.store.current_run = replace(app.store.current_run, logs=logs, nodes=nodes)
+            app._refresh_widgets()
+
+            nodes = dict(app.store.current_run.nodes)
+            nodes[node_id] = replace(nodes[node_id], status=NodeStatus.SUCCESS)
+            app.store.current_run = replace(app.store.current_run, nodes=nodes)
+            app._refresh_widgets()
+            log_view = app._screen.query_one("#log-content", LogWidget)
+            node_segment = next(
+                segment
+                for line in log_view.lines
+                for segment in line._segments
+                if node_id in segment.text
+            )
+
+            assert node_segment.style == STATUS_STYLES[NodeStatus.SUCCESS]
+
+    @pytest.mark.asyncio
+    async def test_incremental_append_adds_exactly_one_row(self):
+        from avalanche.tui.app import AvalancheApp
+        from avalanche.tui.widgets.log_panel import LogWidget
+
+        app = AvalancheApp()
+        async with app.run_test(size=(120, 40)) as pilot:
+            await pilot.pause()
+            app._timer.pause()
+            node_id = next(iter(app.store.current_run.nodes))
+            logs = [self._entry(node_id, "first")]
+            app.store.current_run = replace(app.store.current_run, logs=logs)
+            app._refresh_widgets()
+            log_view = app._screen.query_one("#log-content", LogWidget)
+            initial_rows = len(log_view.lines)
+
+            logs.append(self._entry(node_id, "second"))
+            app._refresh_widgets()
+
+            assert initial_rows == 1
+            assert len(log_view.lines) == initial_rows + 1
+            assert [line.text.endswith(("first", "second")) for line in log_view.lines] == [
+                True,
+                True,
+            ]
+
+    @pytest.mark.asyncio
+    async def test_equivalent_snapshot_and_append_retain_prefix_without_rebuild(self):
+        from avalanche.tui.app import AvalancheApp
+        from avalanche.tui.widgets.log_panel import LogWidget
+
+        app = AvalancheApp()
+        async with app.run_test(size=(120, 40)) as pilot:
+            await pilot.pause()
+            app._timer.pause()
+            node_id = next(iter(app.store.current_run.nodes))
+            initial_logs = [self._entry(node_id, "first")]
+            app.store.current_run = replace(app.store.current_run, logs=initial_logs)
+            app._refresh_widgets()
+            log_view = app._screen.query_one("#log-content", LogWidget)
+            initial_prefix = list(log_view.lines)
+            rebuilds = 0
+            original_rebuild = log_view._rebuild
+
+            def count_rebuilds(store):
+                nonlocal rebuilds
+                rebuilds += 1
+                original_rebuild(store)
+
+            log_view._rebuild = count_rebuilds
+            app.store.current_run = replace(
+                app.store.current_run,
+                logs=list(initial_logs),
+            )
+            app._refresh_widgets()
+
+            assert rebuilds == 0
+            assert all(
+                rendered is initial
+                for rendered, initial in zip(
+                    log_view.lines, initial_prefix, strict=True
+                )
+            )
+
+            app.store.current_run = replace(
+                app.store.current_run,
+                logs=[*initial_logs, self._entry(node_id, "second")],
+            )
+            app._refresh_widgets()
+
+            assert rebuilds == 0
+            assert len(log_view.lines) == len(initial_prefix) + 1
+            assert all(
+                rendered is initial
+                for rendered, initial in zip(
+                    log_view.lines[: len(initial_prefix)], initial_prefix, strict=True
+                )
+            )
+            assert log_view.lines[-1].text.endswith("second")
+
+
 # ── Headless interaction tests (Textual pilot) ────────────────────────────
 
 
@@ -2198,42 +2355,73 @@ class TestInteractions:
             assert dag_scroll.styles.overflow_y == "auto"
 
     async def test_dag_pointer_scroll_accumulates_smoothly(self):
-        """Rapid pointer events should accumulate into one animated target."""
-        from textual.events import MouseScrollRight
+        """Pointer scroll routes by axis/modifier and stays within boundaries."""
+        from textual.events import (
+            MouseScrollDown,
+            MouseScrollLeft,
+            MouseScrollRight,
+            MouseScrollUp,
+        )
 
         from avalanche.tui.app import AvalancheApp
 
         app = AvalancheApp(workflow="ml_workflow")
-        async with app.run_test(size=(50, 40)) as pilot:
+        async with app.run_test(size=(50, 15)) as pilot:
             await pilot.pause()
             app._timer.pause()
             dag_scroll = app._screen.query_one("#dag-container")
             assert dag_scroll.max_scroll_x > 0
+            assert dag_scroll.max_scroll_y > 0
 
-            def scroll_right() -> None:
-                dag_scroll._on_mouse_scroll_right(
-                    MouseScrollRight(
-                        dag_scroll,
-                        x=10,
-                        y=5,
-                        delta_x=0,
-                        delta_y=1,
-                        button=0,
-                        shift=False,
-                        meta=False,
-                        ctrl=False,
-                    )
+            def pointer_event(event_type, *, shift=False, ctrl=False):
+                return event_type(
+                    dag_scroll,
+                    x=10,
+                    y=5,
+                    delta_x=0,
+                    delta_y=1,
+                    button=0,
+                    shift=shift,
+                    meta=False,
+                    ctrl=ctrl,
                 )
 
-            scroll_right()
+            dag_scroll._on_mouse_scroll_right(pointer_event(MouseScrollRight))
             assert dag_scroll.scroll_target_x == 8
             assert dag_scroll.scroll_x < dag_scroll.scroll_target_x
 
-            scroll_right()
+            dag_scroll._on_mouse_scroll_right(pointer_event(MouseScrollRight))
+            assert dag_scroll.scroll_target_x == 16
+
+            dag_scroll._on_mouse_scroll_left(pointer_event(MouseScrollLeft))
+            assert dag_scroll.scroll_target_x == 8
+
+            await pilot.pause(0.12)
+            assert dag_scroll.scroll_x == pytest.approx(8)
+
+            dag_scroll._on_mouse_scroll_down(pointer_event(MouseScrollDown))
+            assert dag_scroll.scroll_target_y == 3
+
+            await pilot.pause(0.12)
+            assert dag_scroll.scroll_y == pytest.approx(3)
+
+            dag_scroll._on_mouse_scroll_down(pointer_event(MouseScrollDown, shift=True))
             assert dag_scroll.scroll_target_x == 16
 
             await pilot.pause(0.12)
             assert dag_scroll.scroll_x == pytest.approx(16)
+
+            dag_scroll._on_mouse_scroll_up(pointer_event(MouseScrollUp, ctrl=True))
+            assert dag_scroll.scroll_target_x == 8
+
+            await pilot.pause(0.12)
+            assert dag_scroll.scroll_x == pytest.approx(8)
+
+            dag_scroll._scroll_to(x=0, y=0, animate=False)
+            dag_scroll._on_mouse_scroll_left(pointer_event(MouseScrollLeft))
+            dag_scroll._on_mouse_scroll_up(pointer_event(MouseScrollUp))
+            assert dag_scroll.scroll_target_x == 0
+            assert dag_scroll.scroll_target_y == 0
 
     async def test_dag_center_button_exists(self):
         """DAG pane should have a center button."""
@@ -2375,6 +2563,46 @@ class TestInteractions:
                 assert w.scroll_x == 0, (
                     f"{pane}: left/right arrows should not scroll horizontally"
                 )
+
+    async def test_focused_log_up_down_scrolls_log_content(self):
+        """Up/down in the log pane should scroll the actual RichLog."""
+        from avalanche.tui.app import AvalancheApp
+        from avalanche.tui.widgets.log_panel import LogWidget
+
+        app = AvalancheApp()
+        async with app.run_test(size=(80, 20)) as pilot:
+            await pilot.pause()
+            app._timer.pause()
+            node_id = next(iter(app.store.current_run.nodes))
+            app.store.current_run = replace(
+                app.store.current_run,
+                logs=[
+                    LogEntry(
+                        timestamp=datetime(2026, 3, 27, 14, 35, index),
+                        level=LogLevel.INFO,
+                        node_id=node_id,
+                        message=f"line {index}",
+                    )
+                    for index in range(30)
+                ],
+            )
+            app.store.focused_pane = "log"
+            app._log_autoscroll = False
+            app._refresh_widgets()
+            await pilot.pause()
+            log_view = app._screen.query_one("#log-content", LogWidget)
+            log_view.scroll_end(animate=False)
+            await pilot.pause()
+            bottom = log_view.scroll_y
+            assert bottom > 0
+
+            await pilot.press("up")
+            await pilot.pause()
+            assert log_view.scroll_y < bottom
+
+            await pilot.press("down")
+            await pilot.pause()
+            assert log_view.scroll_y == bottom
 
     async def test_left_right_move_dag_nodes_from_any_pane(self):
         """Left/right should drive DAG selection even when another pane is focused."""

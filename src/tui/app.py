@@ -430,8 +430,10 @@ class AvalancheApp(App):
             self._refresh_widgets()
             self._scroll_run_history_to_selected()
         elif pane == "log":
+            self._log_autoscroll = False
             try:
-                self._screen.query_one("#log-panel").scroll_up()
+                log_view = self._screen.query_one("#log-content", LogWidget)
+                log_view.scroll_up(animate=False)
             except Exception:
                 pass
 
@@ -448,7 +450,9 @@ class AvalancheApp(App):
             self._scroll_run_history_to_selected()
         elif pane == "log":
             try:
-                self._screen.query_one("#log-panel").scroll_down()
+                log_view = self._screen.query_one("#log-content", LogWidget)
+                log_view.scroll_down(animate=False)
+                self._log_autoscroll = log_view.scroll_y >= log_view.max_scroll_y - 1
             except Exception:
                 pass
 

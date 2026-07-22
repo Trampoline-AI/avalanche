@@ -63,6 +63,7 @@ class LogWidget(RichLog):
         self._test_store = None
         self._wrap_width = 0
         self._projection_key: tuple | None = None
+        self._logs_ref = None
         self._seen_log_count = 0
         self._visible_count = 0
         self._has_placeholder = False
@@ -95,29 +96,45 @@ class LogWidget(RichLog):
         """Append new entries or rebuild when the visible projection changes."""
         store = self._test_store or self.app.store
         selected_node = store.selected_node
+        node_statuses = store.node_statuses
         selected_status = (
-            store.node_statuses.get(selected_node.name, NodeStatus.PENDING)
-            if selected_node
-            else None
+            node_statuses.get(selected_node.name, NodeStatus.PENDING) if selected_node else None
+        )
+        status_projection = (
+            selected_status if selected_node else frozenset(node_statuses.items())
         )
         query = store.search_query
         projection_key = (
             store.current_run.run_id if store.current_run else None,
             selected_node.name if selected_node else None,
-            selected_status,
+            status_projection,
             query,
             store.search_index if query else -1,
             self._wrap_width,
         )
         logs = store.logs
+        snapshot_replaced = store.current_run is not None and logs is not self._logs_ref
+        replacement_changed = (
+            snapshot_replaced
+            and len(logs) == self._seen_log_count
+            and logs != self._logs_ref
+        )
 
-        if projection_key != self._projection_key or len(logs) < self._seen_log_count:
+        if (
+            projection_key != self._projection_key
+            or len(logs) < self._seen_log_count
+            or replacement_changed
+        ):
             self._projection_key = projection_key
             self._rebuild(store)
             return
 
+        if snapshot_replaced and len(logs) == self._seen_log_count:
+            self._logs_ref = logs
+
         if len(logs) > self._seen_log_count:
             new_entries = logs[self._seen_log_count :]
+            self._logs_ref = logs if store.current_run is not None else None
             self._seen_log_count = len(logs)
             if self._has_placeholder and any(
                 self._entry_visible(entry, selected_node) for entry in new_entries
@@ -133,6 +150,7 @@ class LogWidget(RichLog):
         self._match_lines.clear()
         self._visible_count = 0
         self._has_placeholder = False
+        self._logs_ref = store.logs if store.current_run is not None else None
         self._seen_log_count = len(store.logs)
 
         selected_node = store.selected_node
@@ -186,6 +204,7 @@ class LogWidget(RichLog):
             self._visible_count += 1
 
         if text:
+            text.remove_suffix("\n")
             self.write(text, shrink=False, scroll_end=False)
 
     @staticmethod
@@ -263,7 +282,7 @@ class LogWidget(RichLog):
 
     def _write_placeholder(self, message: str, style: Style) -> None:
         self._has_placeholder = True
-        self.write(Text(message + "\n", style=style), shrink=False, scroll_end=False)
+        self.write(Text(message, style=style), shrink=False, scroll_end=False)
 
     def scroll_to_match(self) -> None:
         """Scroll the current search match to the center of the viewport."""

@@ -9,7 +9,7 @@ import json
 import math
 import statistics
 import time
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, replace
 from datetime import datetime
 from pathlib import Path
 
@@ -67,35 +67,57 @@ async def measure(
         if app._timer is not None:
             app._timer.pause()
 
+        # Apply startup updates before replacing the snapshot under test.
+        app._tick()
+        await app.wait_for_refresh()
+
         run = app.store.current_run
         if run is None:
             raise RuntimeError("mock TUI did not initialize a current run")
 
         app.store.run_pinned = True
         node_id = app.store.all_nodes[0].name
-        run.logs = build_logs(rows, message_length, node_id)
+        app.store.current_run = replace(
+            run,
+            logs=build_logs(rows, message_length, node_id),
+        )
 
-        # Warm the widget and compositor caches before collecting samples.
-        app._tick()
+        # Isolate the visible-widget refresh path from mock-provider polling,
+        # which would replace the synthetic snapshot with its backing run.
+        app._refresh_widgets()
         await app.wait_for_refresh()
         gc.collect()
 
         durations: list[float] = []
         for _ in range(samples):
-            if scenario == "append":
-                run.logs.append(build_log(message_length, node_id))
+            current_run = app.store.current_run
+            if current_run is None:
+                raise RuntimeError("current run disappeared during benchmark")
+            if scenario == "steady":
+                app.store.current_run = replace(
+                    current_run,
+                    logs=list(current_run.logs),
+                )
+            else:
+                app.store.current_run = replace(
+                    current_run,
+                    logs=[*current_run.logs, build_log(message_length, node_id)],
+                )
             started = time.perf_counter()
-            app._tick()
+            app._refresh_widgets()
             await app.wait_for_refresh()
             durations.append((time.perf_counter() - started) * 1000)
 
+        current_run = app.store.current_run
+        if current_run is None:
+            raise RuntimeError("current run disappeared during benchmark")
         characters = sum(
             len(entry.node_id) + len(entry.level.value) + len(entry.message) + 25
-            for entry in run.logs
+            for entry in current_run.logs
         )
         return Result(
             scenario=scenario,
-            rows=rows,
+            rows=len(current_run.logs),
             characters=characters,
             p50_ms=statistics.median(durations),
             p95_ms=percentile(durations, 0.95),
