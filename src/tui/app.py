@@ -139,12 +139,6 @@ class AvalancheApp(App):
         self._poll_counter += 1
         if self._poll_counter % 30 == 0:
             self._poll_current_run()
-        # Read back match count from previous LogWidget render
-        try:
-            log_w = self._screen.query_one("#log-content", LogWidget)
-            self.store.set_match_count(len(log_w._match_lines))
-        except Exception:
-            pass
         self.store.auto_follow_latest_run()
         self._refresh_widgets()
         self._autoscroll_logs()
@@ -181,12 +175,11 @@ class AvalancheApp(App):
                 self._screen.query_one(f"#{widget_id}").refresh()
             except Exception:
                 pass
-        # Refresh scrollable content with layout=True so height recalculates
-        for widget_id in ("log-content", "run-history-content"):
-            try:
-                self._screen.query_one(f"#{widget_id}").refresh(layout=True)
-            except Exception:
-                pass
+        # Run history still sizes itself to its complete table.
+        try:
+            self._screen.query_one("#run-history-content").refresh(layout=True)
+        except Exception:
+            pass
         # Update sticky headers
         try:
             from .widgets.run_history import RunHistoryWidget
@@ -274,6 +267,7 @@ class AvalancheApp(App):
             log_w = self._screen.query_one("#log-content", LogWidget)
             # Subtract 2: 1 for the scrollbar gutter + 1 for breathing room
             log_w.wrap_width = (lp.content_size.width - 2) if self._log_wrap else 0
+            log_w.sync_from_store()
         except Exception:
             pass
 
@@ -291,19 +285,15 @@ class AvalancheApp(App):
     # ── Log autoscroll ────────────────────────────────────────────────
 
     def _autoscroll_logs(self) -> None:
-        """Scroll log panel to bottom when autoscroll is active.
-
-        Sets scroll_y directly so both content and scrollbar update in
-        the same frame — no 1-frame lag from call_after_refresh.
-        """
+        """Scroll the virtualized log view to its last row."""
         if not self._log_autoscroll:
             return
         try:
-            container = self._screen.query_one("#log-panel")
-            target = container.max_scroll_y
-            if target > 0 and container.scroll_y != target:
-                container.scroll_target_y = target
-                container.scroll_y = target
+            log_view = self._screen.query_one("#log-content", LogWidget)
+            target = log_view.max_scroll_y
+            if target > 0 and log_view.scroll_y != target:
+                log_view.scroll_target_y = target
+                log_view.scroll_y = target
         except Exception:
             pass
 
@@ -440,8 +430,10 @@ class AvalancheApp(App):
             self._refresh_widgets()
             self._scroll_run_history_to_selected()
         elif pane == "log":
+            self._log_autoscroll = False
             try:
-                self._screen.query_one("#log-panel").scroll_up()
+                log_view = self._screen.query_one("#log-content", LogWidget)
+                log_view.scroll_up(animate=False)
             except Exception:
                 pass
 
@@ -458,7 +450,9 @@ class AvalancheApp(App):
             self._scroll_run_history_to_selected()
         elif pane == "log":
             try:
-                self._screen.query_one("#log-panel").scroll_down()
+                log_view = self._screen.query_one("#log-content", LogWidget)
+                log_view.scroll_down(animate=False)
+                self._log_autoscroll = log_view.scroll_y >= log_view.max_scroll_y - 1
             except Exception:
                 pass
 
@@ -582,17 +576,17 @@ class AvalancheApp(App):
         """Page Up: scroll log panel up, disable autoscroll."""
         self._log_autoscroll = False
         try:
-            container = self._screen.query_one("#log-panel")
-            container.scroll_page_up(animate=False)
+            log_view = self._screen.query_one("#log-content", LogWidget)
+            log_view.scroll_page_up(animate=False)
         except Exception:
             pass
 
     def action_log_page_down(self) -> None:
         """Page Down: scroll log panel down; re-enable autoscroll at bottom."""
         try:
-            container = self._screen.query_one("#log-panel")
-            container.scroll_page_down(animate=False)
-            self._log_autoscroll = container.scroll_y >= container.max_scroll_y - 1
+            log_view = self._screen.query_one("#log-content", LogWidget)
+            log_view.scroll_page_down(animate=False)
+            self._log_autoscroll = log_view.scroll_y >= log_view.max_scroll_y - 1
         except Exception:
             pass
 

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from rich.color import Color
 from rich.segment import Segments
+from textual import events
 from textual.app import ComposeResult
 from textual.containers import Horizontal, ScrollableContainer, Vertical
 from textual.screen import Screen
@@ -111,6 +112,64 @@ class _ThinScrollContainer(ScrollableContainer):
         sb.renderer = _HalfHeightScrollBarRender
         return sb
 
+class _DagScrollContainer(_ThinScrollContainer):
+    """DAG viewport with cumulative, animated pointer scrolling."""
+
+    HORIZONTAL_SCROLL_STEP = 8
+    VERTICAL_SCROLL_STEP = 3
+    SCROLL_DURATION = 0.08
+
+    def _on_mouse_scroll_left(self, event: events.MouseScrollLeft) -> None:
+        self._scroll_horizontal(event, -1)
+
+    def _on_mouse_scroll_right(self, event: events.MouseScrollRight) -> None:
+        self._scroll_horizontal(event, 1)
+
+    def _on_mouse_scroll_up(self, event: events.MouseScrollUp) -> None:
+        if event.ctrl or event.shift:
+            self._scroll_horizontal(event, -1)
+        else:
+            self._scroll_vertical(event, -1)
+
+    def _on_mouse_scroll_down(self, event: events.MouseScrollDown) -> None:
+        if event.ctrl or event.shift:
+            self._scroll_horizontal(event, 1)
+        else:
+            self._scroll_vertical(event, 1)
+
+    def _scroll_horizontal(
+        self,
+        event: events.MouseEvent,
+        direction: int,
+    ) -> None:
+        if not self.allow_horizontal_scroll:
+            return
+        changed = self._scroll_to(
+            x=self.scroll_target_x + direction * self.HORIZONTAL_SCROLL_STEP,
+            animate=True,
+            duration=self.SCROLL_DURATION,
+            easing="out_cubic",
+        )
+        if changed:
+            event.stop()
+
+    def _scroll_vertical(
+        self,
+        event: events.MouseEvent,
+        direction: int,
+    ) -> None:
+        if not self.allow_vertical_scroll:
+            return
+        changed = self._scroll_to(
+            y=self.scroll_target_y + direction * self.VERTICAL_SCROLL_STEP,
+            animate=True,
+            duration=self.SCROLL_DURATION,
+            easing="out_cubic",
+        )
+        if changed:
+            event.stop()
+
+
 
 class _TableScrollContainer(_ThinScrollContainer):
     """Scroll container for table panes with sticky header sync."""
@@ -122,35 +181,6 @@ class _TableScrollContainer(_ThinScrollContainer):
         except Exception:
             pass
 
-    def _update_log_autoscroll(self) -> None:
-        """Disable autoscroll on user input; re-enable if at bottom."""
-        if self.id != "log-panel":
-            return
-        try:
-            app = self.app
-            app._log_autoscroll = self.scroll_y >= self.max_scroll_y - 1
-        except Exception:
-            pass
-
-    def _on_mouse_scroll_up(self, event) -> None:
-        super()._on_mouse_scroll_up(event)
-        self._update_log_autoscroll()
-
-    def _on_mouse_scroll_down(self, event) -> None:
-        super()._on_mouse_scroll_down(event)
-        self._update_log_autoscroll()
-
-    def _on_scroll_up(self, event) -> None:
-        super()._on_scroll_up(event)
-        self._update_log_autoscroll()
-
-    def _on_scroll_down(self, event) -> None:
-        super()._on_scroll_down(event)
-        self._update_log_autoscroll()
-
-    def _on_scroll_to(self, message) -> None:
-        super()._on_scroll_to(message)
-        self._update_log_autoscroll()
 
 
 
@@ -255,9 +285,13 @@ class WorkflowDetailScreen(Screen):
     }
 
     /* ── Scrollable content ── */
-    #run-history-content, #log-content {
+    #run-history-content {
         height: auto;
         width: auto;
+    }
+    #log-content {
+        height: 1fr;
+        width: 1fr;
     }
 
     /* ── Status bar ── */
@@ -298,12 +332,12 @@ class WorkflowDetailScreen(Screen):
                     rh.border_title = "Runs"
                     yield Static(id="run-history-header", classes="pane-header")
                     yield RunHistoryWidget(id="run-history-content")
-                with _ThinScrollContainer(id="dag-container") as dag_container:
+                with _DagScrollContainer(id="dag-container") as dag_container:
                     dag_container.border_title = "DAG"
                     dag_container.styles.height = "2fr"
                     yield DagWidget(id="dag-panel")
                     yield _DagCenterBtn(" ⊡ center ", id="dag-center-btn")
-                with _TableScrollContainer(id="log-panel") as lp:
+                with Vertical(id="log-panel") as lp:
                     lp.border_title = "Logs"
                     lp.styles.height = "2fr"
                     yield Static(id="log-header", classes="pane-header")
