@@ -130,6 +130,21 @@ Start a discovered flow from another terminal with the CLI:
 uv run ava run operator_demo_workflow --connect localhost:7433
 ```
 
+List that flow's operator history, then launch a partial rerun from a returned
+run ID. Each rerun gets a new operator-generated run ID:
+
+```bash
+uv run ava runs operator_demo_workflow --connect localhost:7433
+uv run ava run operator_demo_workflow --connect localhost:7433 \
+  --rerun-of run_abc12345 \
+  --start stage3 \
+  --rerun-mode autorun
+```
+
+`autorun` executes the selected restart nodes and their downstream closure.
+`lazy` executes only the selected nodes. The source run must exist in the
+operator's current history for the same workflow.
+
 Alternatively, connect the TUI and start runs interactively:
 
 ```bash
@@ -138,6 +153,9 @@ uv run ava tui --connect localhost:7433
 
 The TUI gets flows from the operator over gRPC. It does not import files from the
 examples directory directly.
+Select a historical run and press `Shift+R` to choose one or more restart nodes
+and the rerun mode. The status bar shows the source run, restart nodes, and mode
+for the new run.
 
 Module entry points are available if you need to bypass the `ava` wrapper:
 

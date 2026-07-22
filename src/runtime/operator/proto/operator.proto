@@ -25,6 +25,9 @@ message StartRunRequest {
   repeated S3FileReference input_s3_files = 5;
   string run_id = 6;
   string workflow_selector = 7;
+  string rerun_of = 8;
+  repeated string rerun_start = 9;
+  string rerun_mode = 10;
 }
 
 message FileAttachment {
@@ -87,6 +90,7 @@ message FlowInfoMsg {
   string root_alias = 12;
   string relative_file = 13;
   string builder_symbol = 14;
+  map<string, string> node_slugs = 15;
 }
 
 message FlowList {
@@ -127,6 +131,9 @@ message RunStateMsg {
   string triggered_by = 8;
   string workflow_id = 9;
   string workflow_display_name = 10;
+  string rerun_of = 11;
+  repeated string rerun_start = 12;
+  string rerun_mode = 13;
 }
 
 message RunList {

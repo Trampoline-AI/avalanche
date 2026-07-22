@@ -44,6 +44,7 @@ def workflow_to_info(
     node_ids = workflow._topological_sort()
     node_types = {nid: workflow.nodes[nid].node.node_type.value for nid in node_ids}
     display_names = {nid: display_name_from_id(nid) for nid in node_ids}
+    node_slugs = {nid: workflow.node_slugs[nid] for nid in node_ids}
     return WorkflowInfo(
         name=workflow.name,
         display_name=workflow.name,
@@ -56,6 +57,7 @@ def workflow_to_info(
         graph=dict(workflow.graph),
         node_types=node_types,
         display_names=display_names,
+        node_slugs=node_slugs,
         cron=workflow.cron,
     )
 
@@ -74,6 +76,7 @@ def descriptor_to_info(descriptor: WorkflowDescriptor) -> WorkflowInfo:
         graph={key: list(value) for key, value in descriptor.graph},
         node_types=dict(descriptor.node_types),
         display_names=dict(descriptor.display_names),
+        node_slugs=dict(descriptor.node_slugs),
         cron=descriptor.cron,
     )
 

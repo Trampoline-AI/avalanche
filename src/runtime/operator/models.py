@@ -7,7 +7,7 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from enum import Enum
 from types import MappingProxyType
-from typing import Literal, Mapping
+from typing import Literal, Mapping, TypeAlias
 
 
 class NodeStatus(Enum):
@@ -58,6 +58,9 @@ class NodeState:
         return end - self.started_at
 
 
+RerunMode: TypeAlias = Literal["autorun", "lazy"]
+
+
 @dataclass
 class RunState:
     run_id: str
@@ -70,6 +73,9 @@ class RunState:
     triggered_by: str = "manual"  # "manual" | "scheduled"
     workflow_id: str = ""
     workflow_display_name: str = ""
+    rerun_of: str | None = None
+    rerun_start: tuple[str, ...] = ()
+    rerun_mode: RerunMode | None = None
 
     @property
     def elapsed(self) -> float | None:
@@ -89,6 +95,7 @@ class WorkflowInfo:
     graph: dict[str, list[str]]  # adjacency list (parent -> children)
     node_types: dict[str, str]  # node_id -> "source" | "step" | "dest"
     display_names: dict[str, str] = field(default_factory=dict)  # node_id -> display name
+    node_slugs: dict[str, str] = field(default_factory=dict)  # node_id -> stable slug
     cron: str | None = None  # cron expression for scheduled execution
     next_run_at: float | None = None  # unix timestamp of next scheduled run
     last_run_at: float | None = None  # unix timestamp of last triggered run
@@ -141,6 +148,7 @@ class WorkflowDescriptor:
     graph: tuple[tuple[str, tuple[str, ...]], ...]
     node_types: tuple[tuple[str, str], ...]
     display_names: tuple[tuple[str, str], ...]
+    node_slugs: tuple[tuple[str, str], ...] = ()
     cron: str | None = None
 
 

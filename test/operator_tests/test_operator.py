@@ -169,6 +169,105 @@ class TestOperatorLifecycle:
         runs = op.list_runs("nonexistent")
         assert len(runs) == 0
 
+    def test_rerun_requires_existing_source_from_same_workflow_and_new_id(self):
+        op = self._make_operator()
+        try:
+            source_run_id = op.start_run("simple_workflow")
+
+            with pytest.raises(ValueError, match="does not exist"):
+                op.start_run(
+                    "simple_workflow",
+                    rerun_of="run_missing",
+                    start=["fetch_data"],
+                )
+            with pytest.raises(ValueError, match="belongs to workflow"):
+                op.start_run(
+                    "input_workflow",
+                    rerun_of=source_run_id,
+                    start=["capture_invocation"],
+                )
+            with pytest.raises(ValueError, match="operator-generated"):
+                op.start_run(
+                    "simple_workflow",
+                    run_id="run_caller_owned_rerun",
+                    rerun_of=source_run_id,
+                    start=["fetch_data"],
+                )
+        finally:
+            op.close()
+
+    def test_operator_rerun_matches_lazy_and_autorun_scheduler_behavior(self, tmp_path):
+        workflow_file = tmp_path / "rerunnable.py"
+        workflow_file.write_text(
+            "import avalanche as ava\n"
+            "@ava.source(slug='load')\n"
+            "def load(): print('load')\n"
+            "@ava.step(slug='middle')\n"
+            "def middle(): print('middle')\n"
+            "@ava.dest(slug='sink')\n"
+            "def sink(): print('sink')\n"
+            "@ava.workflow\n"
+            "def rerunnable(): load() >> middle() >> sink()\n"
+        )
+        op = Operator([str(workflow_file)], schedule=False, watch=False)
+
+        def wait_terminal(run_id):
+            deadline = time.monotonic() + 5
+            while time.monotonic() < deadline:
+                run = op.get_run(run_id)
+                if run and run.status in {
+                    RunStatus.SUCCESS,
+                    RunStatus.FAILED,
+                    RunStatus.CANCELLED,
+                }:
+                    return run
+                time.sleep(0.05)
+            raise AssertionError(f"run {run_id} did not finish")
+
+        try:
+            source_run_id = op.start_run("rerunnable")
+            assert wait_terminal(source_run_id).status is RunStatus.SUCCESS
+
+            lazy_id = op.start_run(
+                "rerunnable",
+                rerun_of=source_run_id,
+                start=["middle"],
+                rerun_mode="lazy",
+            )
+            lazy = wait_terminal(lazy_id)
+            assert lazy_id != source_run_id
+            assert lazy.status is RunStatus.SUCCESS
+            assert lazy.rerun_of == source_run_id
+            assert lazy.rerun_start == ("middle",)
+            assert lazy.rerun_mode == "lazy"
+            assert {
+                node.name: node.status for node in lazy.nodes.values()
+            } == {
+                "load": NodeStatus.SKIPPED,
+                "middle": NodeStatus.SUCCESS,
+                "sink": NodeStatus.SKIPPED,
+            }
+
+            autorun_id = op.start_run(
+                "rerunnable",
+                rerun_of=source_run_id,
+                start=["middle"],
+                rerun_mode="autorun",
+            )
+            autorun = wait_terminal(autorun_id)
+            assert autorun.status is RunStatus.SUCCESS
+            assert {
+                node.name: node.status for node in autorun.nodes.values()
+            } == {
+                "load": NodeStatus.SKIPPED,
+                "middle": NodeStatus.SUCCESS,
+                "sink": NodeStatus.SUCCESS,
+            }
+            assert set(op._runs) == {source_run_id, lazy_id, autorun_id}
+            assert all(isinstance(run, RunState) for run in op._runs.values())
+        finally:
+            op.close()
+
     def test_refresh_invalid_file_removes_descriptor_and_schedule(self, tmp_path):
         workflow_file = tmp_path / "scheduled.py"
         workflow_file.write_text(

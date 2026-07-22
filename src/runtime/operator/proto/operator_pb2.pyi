@@ -11,7 +11,7 @@ class Empty(_message.Message):
     def __init__(self) -> None: ...
 
 class StartRunRequest(_message.Message):
-    __slots__ = ("flow_name", "input_json", "context_json", "input_files", "input_s3_files", "run_id", "workflow_selector")
+    __slots__ = ("flow_name", "input_json", "context_json", "input_files", "input_s3_files", "run_id", "workflow_selector", "rerun_of", "rerun_start", "rerun_mode")
     FLOW_NAME_FIELD_NUMBER: _ClassVar[int]
     INPUT_JSON_FIELD_NUMBER: _ClassVar[int]
     CONTEXT_JSON_FIELD_NUMBER: _ClassVar[int]
@@ -19,6 +19,9 @@ class StartRunRequest(_message.Message):
     INPUT_S3_FILES_FIELD_NUMBER: _ClassVar[int]
     RUN_ID_FIELD_NUMBER: _ClassVar[int]
     WORKFLOW_SELECTOR_FIELD_NUMBER: _ClassVar[int]
+    RERUN_OF_FIELD_NUMBER: _ClassVar[int]
+    RERUN_START_FIELD_NUMBER: _ClassVar[int]
+    RERUN_MODE_FIELD_NUMBER: _ClassVar[int]
     flow_name: str
     input_json: str
     context_json: str
@@ -26,7 +29,10 @@ class StartRunRequest(_message.Message):
     input_s3_files: _containers.RepeatedCompositeFieldContainer[S3FileReference]
     run_id: str
     workflow_selector: str
-    def __init__(self, flow_name: _Optional[str] = ..., input_json: _Optional[str] = ..., context_json: _Optional[str] = ..., input_files: _Optional[_Iterable[_Union[FileAttachment, _Mapping]]] = ..., input_s3_files: _Optional[_Iterable[_Union[S3FileReference, _Mapping]]] = ..., run_id: _Optional[str] = ..., workflow_selector: _Optional[str] = ...) -> None: ...
+    rerun_of: str
+    rerun_start: _containers.RepeatedScalarFieldContainer[str]
+    rerun_mode: str
+    def __init__(self, flow_name: _Optional[str] = ..., input_json: _Optional[str] = ..., context_json: _Optional[str] = ..., input_files: _Optional[_Iterable[_Union[FileAttachment, _Mapping]]] = ..., input_s3_files: _Optional[_Iterable[_Union[S3FileReference, _Mapping]]] = ..., run_id: _Optional[str] = ..., workflow_selector: _Optional[str] = ..., rerun_of: _Optional[str] = ..., rerun_start: _Optional[_Iterable[str]] = ..., rerun_mode: _Optional[str] = ...) -> None: ...
 
 class FileAttachment(_message.Message):
     __slots__ = ("field_name", "name", "content", "content_type", "sha256")
@@ -99,7 +105,7 @@ class NodeEdges(_message.Message):
     def __init__(self, children: _Optional[_Iterable[str]] = ...) -> None: ...
 
 class FlowInfoMsg(_message.Message):
-    __slots__ = ("name", "file_path", "node_ids", "graph", "node_types", "display_names", "cron", "next_run_at", "last_run_at", "workflow_id", "display_name", "root_alias", "relative_file", "builder_symbol")
+    __slots__ = ("name", "file_path", "node_ids", "graph", "node_types", "display_names", "cron", "next_run_at", "last_run_at", "workflow_id", "display_name", "root_alias", "relative_file", "builder_symbol", "node_slugs")
     class GraphEntry(_message.Message):
         __slots__ = ("key", "value")
         KEY_FIELD_NUMBER: _ClassVar[int]
@@ -121,6 +127,13 @@ class FlowInfoMsg(_message.Message):
         key: str
         value: str
         def __init__(self, key: _Optional[str] = ..., value: _Optional[str] = ...) -> None: ...
+    class NodeSlugsEntry(_message.Message):
+        __slots__ = ("key", "value")
+        KEY_FIELD_NUMBER: _ClassVar[int]
+        VALUE_FIELD_NUMBER: _ClassVar[int]
+        key: str
+        value: str
+        def __init__(self, key: _Optional[str] = ..., value: _Optional[str] = ...) -> None: ...
     NAME_FIELD_NUMBER: _ClassVar[int]
     FILE_PATH_FIELD_NUMBER: _ClassVar[int]
     NODE_IDS_FIELD_NUMBER: _ClassVar[int]
@@ -135,6 +148,7 @@ class FlowInfoMsg(_message.Message):
     ROOT_ALIAS_FIELD_NUMBER: _ClassVar[int]
     RELATIVE_FILE_FIELD_NUMBER: _ClassVar[int]
     BUILDER_SYMBOL_FIELD_NUMBER: _ClassVar[int]
+    NODE_SLUGS_FIELD_NUMBER: _ClassVar[int]
     name: str
     file_path: str
     node_ids: _containers.RepeatedScalarFieldContainer[str]
@@ -149,7 +163,8 @@ class FlowInfoMsg(_message.Message):
     root_alias: str
     relative_file: str
     builder_symbol: str
-    def __init__(self, name: _Optional[str] = ..., file_path: _Optional[str] = ..., node_ids: _Optional[_Iterable[str]] = ..., graph: _Optional[_Mapping[str, NodeEdges]] = ..., node_types: _Optional[_Mapping[str, str]] = ..., display_names: _Optional[_Mapping[str, str]] = ..., cron: _Optional[str] = ..., next_run_at: _Optional[float] = ..., last_run_at: _Optional[float] = ..., workflow_id: _Optional[str] = ..., display_name: _Optional[str] = ..., root_alias: _Optional[str] = ..., relative_file: _Optional[str] = ..., builder_symbol: _Optional[str] = ...) -> None: ...
+    node_slugs: _containers.ScalarMap[str, str]
+    def __init__(self, name: _Optional[str] = ..., file_path: _Optional[str] = ..., node_ids: _Optional[_Iterable[str]] = ..., graph: _Optional[_Mapping[str, NodeEdges]] = ..., node_types: _Optional[_Mapping[str, str]] = ..., display_names: _Optional[_Mapping[str, str]] = ..., cron: _Optional[str] = ..., next_run_at: _Optional[float] = ..., last_run_at: _Optional[float] = ..., workflow_id: _Optional[str] = ..., display_name: _Optional[str] = ..., root_alias: _Optional[str] = ..., relative_file: _Optional[str] = ..., builder_symbol: _Optional[str] = ..., node_slugs: _Optional[_Mapping[str, str]] = ...) -> None: ...
 
 class FlowList(_message.Message):
     __slots__ = ("flows", "diagnostics")
@@ -198,7 +213,7 @@ class LogEntryMsg(_message.Message):
     def __init__(self, timestamp: _Optional[float] = ..., level: _Optional[str] = ..., node_id: _Optional[str] = ..., message: _Optional[str] = ...) -> None: ...
 
 class RunStateMsg(_message.Message):
-    __slots__ = ("run_id", "flow_name", "status", "started_at", "ended_at", "nodes", "logs", "triggered_by", "workflow_id", "workflow_display_name")
+    __slots__ = ("run_id", "flow_name", "status", "started_at", "ended_at", "nodes", "logs", "triggered_by", "workflow_id", "workflow_display_name", "rerun_of", "rerun_start", "rerun_mode")
     RUN_ID_FIELD_NUMBER: _ClassVar[int]
     FLOW_NAME_FIELD_NUMBER: _ClassVar[int]
     STATUS_FIELD_NUMBER: _ClassVar[int]
@@ -209,6 +224,9 @@ class RunStateMsg(_message.Message):
     TRIGGERED_BY_FIELD_NUMBER: _ClassVar[int]
     WORKFLOW_ID_FIELD_NUMBER: _ClassVar[int]
     WORKFLOW_DISPLAY_NAME_FIELD_NUMBER: _ClassVar[int]
+    RERUN_OF_FIELD_NUMBER: _ClassVar[int]
+    RERUN_START_FIELD_NUMBER: _ClassVar[int]
+    RERUN_MODE_FIELD_NUMBER: _ClassVar[int]
     run_id: str
     flow_name: str
     status: str
@@ -219,7 +237,10 @@ class RunStateMsg(_message.Message):
     triggered_by: str
     workflow_id: str
     workflow_display_name: str
-    def __init__(self, run_id: _Optional[str] = ..., flow_name: _Optional[str] = ..., status: _Optional[str] = ..., started_at: _Optional[float] = ..., ended_at: _Optional[float] = ..., nodes: _Optional[_Iterable[_Union[NodeStateMsg, _Mapping]]] = ..., logs: _Optional[_Iterable[_Union[LogEntryMsg, _Mapping]]] = ..., triggered_by: _Optional[str] = ..., workflow_id: _Optional[str] = ..., workflow_display_name: _Optional[str] = ...) -> None: ...
+    rerun_of: str
+    rerun_start: _containers.RepeatedScalarFieldContainer[str]
+    rerun_mode: str
+    def __init__(self, run_id: _Optional[str] = ..., flow_name: _Optional[str] = ..., status: _Optional[str] = ..., started_at: _Optional[float] = ..., ended_at: _Optional[float] = ..., nodes: _Optional[_Iterable[_Union[NodeStateMsg, _Mapping]]] = ..., logs: _Optional[_Iterable[_Union[LogEntryMsg, _Mapping]]] = ..., triggered_by: _Optional[str] = ..., workflow_id: _Optional[str] = ..., workflow_display_name: _Optional[str] = ..., rerun_of: _Optional[str] = ..., rerun_start: _Optional[_Iterable[str]] = ..., rerun_mode: _Optional[str] = ...) -> None: ...
 
 class RunList(_message.Message):
     __slots__ = ("runs",)

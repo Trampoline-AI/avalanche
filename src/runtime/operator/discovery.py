@@ -406,6 +406,7 @@ def _descriptor_to_dict(
         "graph": [[key, value] for key, value in workflow.graph.items()],
         "node_types": [[nid, workflow.nodes[nid].node.node_type.value] for nid in node_ids],
         "display_names": [[nid, display_name_from_id(nid)] for nid in node_ids],
+        "node_slugs": [[nid, workflow.node_slugs[nid]] for nid in node_ids],
         "cron": workflow.cron,
     }
 
@@ -419,6 +420,7 @@ def _descriptor_from_dict(item: dict[str, Any]) -> WorkflowDescriptor:
         graph=tuple((key, tuple(value)) for key, value in item["graph"]),
         node_types=tuple((key, value) for key, value in item["node_types"]),
         display_names=tuple((key, value) for key, value in item["display_names"]),
+        node_slugs=tuple((key, value) for key, value in item["node_slugs"]),
         cron=item["cron"],
     )
 

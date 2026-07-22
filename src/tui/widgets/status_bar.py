@@ -84,6 +84,12 @@ class StatusBar(Static):
                 icon = _STATUS_ICONS.get(run.status, "")
             if icon:
                 text.append(f" {icon}", _STATUS_STYLES.get(run.status, Style()))
+            if run.rerun_of is not None:
+                text.append("  · rerun of ", DIM_STYLE)
+                text.append(run.rerun_of, Style(color=ICE_FROST))
+                text.append("  · start ", DIM_STYLE)
+                text.append(", ".join(run.rerun_start), Style(color=ICE_FROST))
+                text.append(f"  · {run.rerun_mode}", DIM_STYLE)
 
             node = store.selected_node
             if node:

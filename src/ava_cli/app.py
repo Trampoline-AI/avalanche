@@ -75,7 +75,34 @@ def _build_parser() -> argparse.ArgumentParser:
         metavar="FIELD=S3_URI",
         help="pass an S3 object reference as a top-level input field",
     )
+    run.add_argument("--rerun-of", metavar="RUN_ID", help="source operator run to rerun")
+    run.add_argument(
+        "--start",
+        action="append",
+        default=[],
+        metavar="NODE_SLUG",
+        help="restart node slug; repeat for multiple nodes",
+    )
+    run.add_argument(
+        "--rerun-mode",
+        choices=("autorun", "lazy"),
+        help="autorun downstream nodes or run only selected nodes",
+    )
     run.set_defaults(handler=_run_flow)
+    runs = subcommands.add_parser(
+        "runs",
+        help="list operator runs for a flow",
+        description="List historical runs for a flow on a running Avalanche operator.",
+    )
+    runs.add_argument("flow", help="flow name whose runs should be listed")
+    runs.add_argument(
+        "--connect",
+        default="localhost:7433",
+        metavar="HOST:PORT",
+        help="operator address",
+    )
+    runs.set_defaults(handler=_list_runs)
+
 
     tui = subcommands.add_parser(
         "tui",
@@ -131,12 +158,27 @@ def _operator_main(argv: list[str]) -> int:
 
 
 def _run_flow(args: argparse.Namespace) -> int:
+    if args.rerun_of is None and (args.start or args.rerun_mode is not None):
+        print("--rerun-of is required with --start or --rerun-mode", file=sys.stderr)
+        return 1
+    if args.rerun_of is not None and not args.start:
+        print("at least one --start is required with --rerun-of", file=sys.stderr)
+        return 1
     provider = _make_provider(args.connect)
     try:
         input_payload = _parse_json_object(args.input_json, "--input")
         context_payload = _parse_json_object(args.context_json, "--context")
         file_payloads = _parse_file_inputs(args.file)
         s3_file_payloads = _parse_s3_file_inputs(args.s3_file)
+        rerun_kwargs = (
+            {
+                "rerun_of": args.rerun_of,
+                "start": args.start,
+                "rerun_mode": args.rerun_mode or "autorun",
+            }
+            if args.rerun_of is not None
+            else {}
+        )
         try:
             run_id = provider.start_run(
                 args.flow,
@@ -144,6 +186,7 @@ def _run_flow(args: argparse.Namespace) -> int:
                 context=context_payload,
                 files=file_payloads,
                 s3_files=s3_file_payloads,
+                **rerun_kwargs,
             )
         except ValueError as exc:
             print(str(exc), file=sys.stderr)
@@ -154,6 +197,32 @@ def _run_flow(args: argparse.Namespace) -> int:
         if last_error := getattr(provider, "last_error", ""):
             print(last_error, file=sys.stderr)
         return 1
+    finally:
+        provider.close()
+
+
+def _list_runs(args: argparse.Namespace) -> int:
+    provider = _make_provider(args.connect)
+    try:
+        runs = provider.list_runs(args.flow)
+        if getattr(provider, "connected", True) is False:
+            if last_error := getattr(provider, "last_error", ""):
+                print(last_error, file=sys.stderr)
+            return 1
+        print("RUN ID\tSTATUS\tRERUN OF\tSTART\tMODE")
+        for run in runs:
+            print(
+                "\t".join(
+                    (
+                        run.run_id,
+                        run.status.value,
+                        run.rerun_of or "-",
+                        ",".join(run.rerun_start) or "-",
+                        run.rerun_mode or "-",
+                    )
+                )
+            )
+        return 0
     finally:
         provider.close()
 

@@ -48,6 +48,9 @@ def test_phase9_start_run_wire_carries_run_id_and_s3_sha256():
         flow_name="input_workflow",
         run_id="run_01KCVST2FP4QC5NKZNN5NS0Z2W",
         workflow_selector="flows/input.py::input_workflow",
+        rerun_of="run_source",
+        rerun_start=["process-data", "save-data"],
+        rerun_mode="lazy",
         input_s3_files=[
             pb.S3FileReference(
                 field_name="document_ref",
@@ -65,6 +68,12 @@ def test_phase9_start_run_wire_carries_run_id_and_s3_sha256():
     assert request.workflow_selector == "flows/input.py::input_workflow"
     assert pb.StartRunRequest.RUN_ID_FIELD_NUMBER == 6
     assert pb.StartRunRequest.WORKFLOW_SELECTOR_FIELD_NUMBER == 7
+    assert request.rerun_of == "run_source"
+    assert list(request.rerun_start) == ["process-data", "save-data"]
+    assert request.rerun_mode == "lazy"
+    assert pb.StartRunRequest.RERUN_OF_FIELD_NUMBER == 8
+    assert pb.StartRunRequest.RERUN_START_FIELD_NUMBER == 9
+    assert pb.StartRunRequest.RERUN_MODE_FIELD_NUMBER == 10
     assert request.input_s3_files[0].sha256 == (
         "2cf24dba5fb0a30e26e83b2ac5b9e29e"
         "1b161e5c1fa7425e73043362938b9824"
@@ -106,6 +115,11 @@ class TestGrpcRoundtrip:
         info = next(p for p in workflows if p.name == "simple_workflow")
         assert len(info.node_ids) == 3
         assert "source" in info.node_types.values()
+        assert set(info.node_slugs.values()) == {
+            "fetch_data",
+            "process_data",
+            "save_data",
+        }
         assert info.file_path.endswith("sample_workflows.py")
 
     def test_start_run_and_complete(self, client):
@@ -122,6 +136,25 @@ class TestGrpcRoundtrip:
 
         run = client.get_run(run_id)
         assert run.status == RunStatus.SUCCESS
+
+    def test_rerun_roundtrip_carries_configuration_and_ancestry(self, client):
+        source_run_id = client.start_run("simple_workflow")
+        assert _wait_for_run_success(client, source_run_id).status is RunStatus.SUCCESS
+
+        rerun_id = client.start_run(
+            "simple_workflow",
+            rerun_of=source_run_id,
+            start=["fetch_data"],
+            rerun_mode="lazy",
+        )
+
+        assert rerun_id
+        assert rerun_id != source_run_id
+        rerun = _wait_for_run_success(client, rerun_id)
+        assert rerun.status is RunStatus.SUCCESS
+        assert rerun.rerun_of == source_run_id
+        assert rerun.rerun_start == ("fetch_data",)
+        assert rerun.rerun_mode == "lazy"
 
     def test_start_run_honors_client_run_id(self, client):
         requested_run_id = "run_client_owned"
@@ -447,6 +480,7 @@ def test_proto_identity_roundtrip_and_absolute_path_redaction(tmp_path):
         node_ids=["load_1"],
         graph={"load_1": []},
         node_types={"load_1": "source"},
+        node_slugs={"load_1": "load"},
     )
 
     message = workflow_info_to_proto(info)
@@ -466,6 +500,9 @@ def test_proto_identity_roundtrip_and_absolute_path_redaction(tmp_path):
         flow_name="Shared report",
         workflow_id=info.workflow_id,
         workflow_display_name=info.display_name,
+        rerun_of="run_source",
+        rerun_start=("load",),
+        rerun_mode="autorun",
     )
     assert run_state_from_proto(run_state_to_proto(run)) == run
 

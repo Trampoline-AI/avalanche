@@ -14,6 +14,7 @@ from pathlib import Path
 from typing import Any, Callable
 
 from avalanche.dag import Workflow
+from avalanche.runtime import Rerun
 
 from ..executor import Executor, LocalExecutor, RayExecutor
 from .hooks import RunHooks
@@ -32,6 +33,9 @@ def run_worker(
     event_queue: Any,
     cancel_event: Any,
     start_event: Any,
+    rerun_of: str | None,
+    rerun_start: tuple[str, ...],
+    rerun_mode: str,
 ) -> None:
     """Import/build exactly once, prepare, wait for the parent, and execute."""
     if os.name != "nt":
@@ -148,6 +152,11 @@ def run_worker(
             input=input_value,
             context=context_value,
             run_id=run_id,
+            rerun=(
+                Rerun(run_id=rerun_of, start=rerun_start, mode=rerun_mode)
+                if rerun_of is not None
+                else None
+            ),
         ).result()
         status = "cancelled" if cancel_event.is_set() else "success"
         terminal_event = {"type": "terminal", "status": status}
@@ -236,6 +245,7 @@ def _workflow_metadata(workflow: Workflow) -> dict[str, Any]:
         "display_names": {
             node_id: display_name_from_id(node_id) for node_id in node_ids
         },
+        "node_slugs": {node_id: workflow.node_slugs[node_id] for node_id in node_ids},
     }
 
 

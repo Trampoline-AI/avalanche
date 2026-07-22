@@ -368,7 +368,13 @@ class UIStore:
         self.run_error = ""
         return run_id
 
-    def start_run_async(self) -> bool:
+    def start_run_async(
+        self,
+        *,
+        rerun_of: str | None = None,
+        start: tuple[str, ...] = (),
+        rerun_mode: str = "autorun",
+    ) -> bool:
         """Launch the complete start/get/list sequence off the UI thread."""
         workflow = self.current_workflow
         if workflow is None or self._start_run_in_flight:
@@ -385,6 +391,15 @@ class UIStore:
         context_epoch = self._workflow_context_epoch
         provider = self.provider
         self.run_error = ""
+        start_kwargs = (
+            {
+                "rerun_of": rerun_of,
+                "start": start,
+                "rerun_mode": rerun_mode,
+            }
+            if rerun_of is not None
+            else {}
+        )
 
         def _do_start() -> None:
             run_id = ""
@@ -392,7 +407,7 @@ class UIStore:
             runs = None
             error = ""
             try:
-                run_id = provider.start_run(workflow_selector)
+                run_id = provider.start_run(workflow_selector, **start_kwargs)
                 if not run_id:
                     error = (
                         getattr(provider, "last_error", "") or "Run failed to start"
@@ -438,6 +453,16 @@ class UIStore:
 
         threading.Thread(target=_do_start, daemon=True).start()
         return True
+
+    def rerun_selected_async(self, start: tuple[str, ...], mode: str) -> bool:
+        """Rerun selected history from node slugs without blocking the UI."""
+        if self.current_run is None or not start or mode not in {"autorun", "lazy"}:
+            return False
+        return self.start_run_async(
+            rerun_of=self.current_run.run_id,
+            start=start,
+            rerun_mode=mode,
+        )
 
     def select_next_run(self) -> None:
         """Move down in run history (toward older runs)."""

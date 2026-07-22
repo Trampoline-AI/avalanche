@@ -20,6 +20,8 @@ from functools import partial
 from typing import Any, Callable, Literal, TypeAlias
 from uuid import uuid4
 
+from avalanche.runtime import Rerun
+
 from ..executor import LocalExecutor, RayExecutor
 from .models import (
     LogEntry,
@@ -194,15 +196,35 @@ class Operator:
         run_id: str | None = None,
         input: dict[str, Any] | None = None,
         context: dict[str, Any] | None = None,
+        rerun_of: str | None = None,
+        start: list[str] | tuple[str, ...] | None = None,
+        rerun_mode: Literal["autorun", "lazy"] = "autorun",
     ) -> str:
         """Synchronously prepare a live-source run before publishing its ID."""
         descriptor, configured_root = self._registry.resolve_source(flow_name)
         import_root, workflow_relative_module_file = resolve_live_source(
             configured_root, descriptor.locator
         )
+        rerun: Rerun | None = None
+        if rerun_of is not None:
+            if run_id is not None:
+                raise ValueError("A rerun must use a new operator-generated run ID")
+            rerun = Rerun(run_id=rerun_of, start=start or (), mode=rerun_mode)
+        elif start is not None or rerun_mode != "autorun":
+            raise ValueError("rerun_of is required when rerun controls are provided")
         with self._lock:
             if self._closed:
                 raise RuntimeError("Operator is closed")
+            if rerun is not None:
+                source_run = self._runs.get(rerun.run_id)
+                if source_run is None:
+                    raise ValueError(f"Source run {rerun.run_id} does not exist")
+                source_workflow_id = source_run.workflow_id or source_run.flow_name
+                if source_workflow_id != descriptor.workflow_id:
+                    raise ValueError(
+                        f"Source run {rerun.run_id} belongs to workflow "
+                        f"{source_workflow_id}, not {descriptor.workflow_id}"
+                    )
             run_id = run_id or f"run_{str(uuid4())[:8]}"
             if run_id in self._runs or run_id in self._active_runs:
                 raise RunAlreadyExistsError(f"Run {run_id} already exists")
@@ -224,6 +246,9 @@ class Operator:
                     event_queue,
                     cancel_event,
                     start_event,
+                    rerun.run_id if rerun is not None else None,
+                    rerun.start if rerun is not None else (),
+                    rerun.mode if rerun is not None else "autorun",
                 ),
                 name=f"avalanche-run-{run_id}",
                 daemon=False,
@@ -256,6 +281,7 @@ class Operator:
                 descriptor.display_name,
                 triggered_by,
                 prepared,
+                rerun,
             )
             with self._lock:
                 if self._closed:
@@ -442,6 +468,7 @@ class Operator:
         catalog_display_name: str,
         triggered_by: str,
         prepared: dict[str, Any],
+        rerun: Rerun | None,
     ) -> RunState:
         display_name = prepared.get("display_name") or catalog_display_name
         run = RunState(
@@ -451,6 +478,9 @@ class Operator:
             workflow_display_name=display_name,
             status=RunStatus.PENDING,
             triggered_by=triggered_by,
+            rerun_of=rerun.run_id if rerun is not None else None,
+            rerun_start=rerun.start if rerun is not None else (),
+            rerun_mode=rerun.mode if rerun is not None else None,
         )
         for node_id in prepared["node_ids"]:
             run.nodes[node_id] = NodeState(
