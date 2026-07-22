@@ -131,6 +131,15 @@ def run_worker(
             on_node_success=lambda node_id: event_queue.put(
                 {"type": "node_succeeded", "node_id": node_id, "timestamp": time.monotonic()}
             ),
+            on_node_skip=lambda node_id, outcome: event_queue.put(
+                {
+                    "type": "node_skipped",
+                    "node_id": node_id,
+                    "timestamp": time.monotonic(),
+                    "reason": outcome.reason,
+                    "metadata": outcome.metadata,
+                }
+            ),
             on_node_failure=lambda node_id, exc: event_queue.put(
                 {
                     "type": "node_failed",

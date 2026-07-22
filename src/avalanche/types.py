@@ -10,13 +10,44 @@ Defines core types used throughout the framework:
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from enum import Enum
-from typing import Any, Callable, ClassVar, Generic, TypeVar, Union, cast
+from typing import Any, Callable, ClassVar, Generic, Mapping, TypeVar, Union, cast
 
 import polars as pl
 import pyarrow as pa
 from pydantic import BaseModel
 
 ModelT = TypeVar("ModelT", bound=BaseModel)
+
+
+@dataclass(frozen=True)
+class SkipOutcome:
+    """Successful node outcome that intentionally carries no data value."""
+
+    reason: str
+    metadata: dict[str, Any] | None = None
+
+
+def skip(reason: str, metadata: Mapping[str, Any] | None = None) -> SkipOutcome:
+    """Mark the current node as successfully skipped."""
+    if not isinstance(reason, str):
+        raise TypeError("skip reason must be a string")
+    if metadata is not None and not isinstance(metadata, Mapping):
+        raise TypeError("skip metadata must be a mapping or None")
+    return SkipOutcome(reason=reason, metadata=dict(metadata) if metadata is not None else None)
+
+
+def skip_outcome_from_result(value: Any) -> SkipOutcome | None:
+    """Extract a whole-node skip outcome from an internal result envelope."""
+    if isinstance(value, SkipOutcome):
+        return value
+    if isinstance(value, LineagedResult):
+        return skip_outcome_from_result(value.value)
+    if isinstance(value, (tuple, list)) and value:
+        outcomes = [skip_outcome_from_result(item) for item in value]
+        first = outcomes[0]
+        if first is not None and all(outcome == first for outcome in outcomes):
+            return first
+    return None
 
 
 @dataclass

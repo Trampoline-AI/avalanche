@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from pathlib import Path, PureWindowsPath
 
 from .models import (
@@ -91,6 +92,8 @@ def node_state_to_proto(ns: NodeState) -> pb.NodeStateMsg:
         status=ns.status.value,
         started_at=ns.started_at or 0.0,
         ended_at=ns.ended_at or 0.0,
+        reason=ns.reason or "",
+        metadata_json=json.dumps(ns.metadata) if ns.metadata is not None else "",
     )
 
 
@@ -102,6 +105,8 @@ def node_state_from_proto(msg: pb.NodeStateMsg) -> NodeState:
         status=NodeStatus(msg.status),
         started_at=msg.started_at if msg.started_at else None,
         ended_at=msg.ended_at if msg.ended_at else None,
+        reason=msg.reason or None,
+        metadata=json.loads(msg.metadata_json) if msg.metadata_json else None,
     )
 
 

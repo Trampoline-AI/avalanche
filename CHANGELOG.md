@@ -1,6 +1,14 @@
 # Changelog
 
 ## Unreleased
+### First-class skipped node outcomes
+
+- Added `ava.skip(reason, metadata=None)` as a successful, non-value node
+  outcome across local, Ray, operator, protobuf, and TUI paths.
+- Authored skips record `SKIPPED`, reason, metadata, and timestamps while
+  satisfying downstream dependencies; skipped fan-in slots are omitted and
+  contribute no persisted row or lineage entry.
+
 
 ### Worker execution services
 

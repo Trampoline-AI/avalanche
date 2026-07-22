@@ -62,19 +62,22 @@ def _wrap_sync_or_async(fn: Callable) -> Callable:
 
 
 def _wrap_with_status(fn: Callable, user_num_returns: int) -> Callable:
-    """Wrap a task so it also emits a small status marker as its last return.
+    """Wrap a task so it also emits its small control outcome as the last return.
 
     The status value is produced by the *same* task as the payload, so fetching
-    only the status ref surfaces a task exception without materializing the
-    payload on the driver (or in a separate worker). ``None`` on success.
+    only the status ref surfaces both task exceptions and intentional skips
+    without materializing the payload on the driver.
     """
 
     @wraps(fn)
     def wrapper(*args: Any, **kwargs: Any) -> Any:
+        from avalanche.types import skip_outcome_from_result
+
         result = _normalize_distributed_result(call_sync_or_async(fn, *args, **kwargs))
+        status = skip_outcome_from_result(result)
         if user_num_returns > 1:
-            return (*result, None)
-        return result, None
+            return (*result, status)
+        return result, status
 
     return wrapper
 
@@ -123,9 +126,12 @@ def _distributed_execution_services_task(
         num_returns=user_num_returns,
         normalize_result=_normalize_distributed_result,
     )
+    from avalanche.types import skip_outcome_from_result
+
+    status = skip_outcome_from_result(result)
     if user_num_returns > 1:
-        return (*result, receipt, None)
-    return result, receipt, None
+        return (*result, receipt, status)
+    return result, receipt, status
 
 
 class Executor(Protocol):
@@ -422,10 +428,10 @@ class RayExecutor:
         """Submit a Ray task that also emits a tiny status marker.
 
         The task is created with ``num_returns + 1`` return values: the user
-        payload(s) followed by a small status value (``None`` on success). The
-        status ref lets the driver observe completion/failure without fetching
-        the payload, and it is produced by the *same* task so no payload is
-        deserialized in a separate worker.
+        payload(s) followed by a small control status. The status ref carries
+        a ``SkipOutcome`` for an intentional skip and ``None`` for an ordinary
+        success, letting the driver observe completion without fetching the
+        payload.
         """
         if hasattr(fn, "remote"):
             raise TypeError(

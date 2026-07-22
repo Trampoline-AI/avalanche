@@ -129,6 +129,29 @@ class TestOperatorLifecycle:
             assert ns.started_at is not None
             assert ns.ended_at is not None
 
+    def test_authored_skip_is_recorded_and_run_succeeds(self):
+        op = self._make_operator()
+        run_id = op.start_run("skipped_workflow")
+
+        deadline = time.monotonic() + 5
+        while time.monotonic() < deadline:
+            run = op.get_run(run_id)
+            if run and run.status in (RunStatus.SUCCESS, RunStatus.FAILED):
+                break
+            time.sleep(0.05)
+
+        run = op.get_run(run_id)
+        assert run is not None
+        assert run.status == RunStatus.SUCCESS
+        skipped = run.nodes["optional_source_1"]
+        assert skipped.status == NodeStatus.SKIPPED
+        assert skipped.reason == "No matching files"
+        assert skipped.metadata == {"partition": "2026-07-22"}
+        assert skipped.started_at is not None
+        assert skipped.ended_at is not None
+        assert skipped.ended_at >= skipped.started_at
+        assert run.nodes["after_optional_1"].status == NodeStatus.SUCCESS
+
     def test_node_transitions_observed(self):
         """Verify nodes go through PENDING -> RUNNING -> SUCCESS in order."""
         op = self._make_operator()

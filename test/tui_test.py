@@ -1702,6 +1702,31 @@ class TestLogTimestamps:
         rendered = w.render().plain
         assert "2026-03-27 14:35:01" in rendered
 
+    def test_log_panel_renders_authored_skip_reason_and_metadata(self):
+        from avalanche.tui.widgets.log_panel import LogWidget
+
+        store = UIStore(MockStateProvider())
+        node = store.all_nodes[0]
+        store.select_node(node)
+        store.current_run = RunState(run_id="skip_run", flow_name="skip_workflow")
+        store.current_run.nodes[node.name] = NodeState(
+            node_id=node.name,
+            name=node.display_name,
+            node_type=node.node_type,
+            status=NodeStatus.SKIPPED,
+            started_at=10.0,
+            ended_at=11.0,
+            reason="No matching files",
+            metadata={"partition": "2026-07-22"},
+        )
+        widget = LogWidget()
+        widget._test_store = store
+
+        rendered = widget.render().plain
+
+        assert "Skipped — No matching files" in rendered
+        assert 'Metadata: {"partition": "2026-07-22"}' in rendered
+
 
 # ── Headless interaction tests (Textual pilot) ────────────────────────────
 

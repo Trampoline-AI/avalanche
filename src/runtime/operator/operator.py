@@ -521,12 +521,17 @@ class Operator:
                         "node_started": NodeStatus.RUNNING,
                         "node_succeeded": NodeStatus.SUCCESS,
                         "node_failed": NodeStatus.FAILED,
+                        "node_skipped": NodeStatus.SKIPPED,
                     }[event_type]
                     node.status = status
                     if status == NodeStatus.RUNNING:
                         node.started_at = event["timestamp"]
                     else:
                         node.ended_at = event["timestamp"]
+                    if status == NodeStatus.SKIPPED:
+                        node.reason = event["reason"]
+                        metadata = event["metadata"]
+                        node.metadata = dict(metadata) if metadata is not None else None
             elif event_type == "log":
                 if run.status in {
                     RunStatus.SUCCESS,
@@ -661,10 +666,11 @@ _RUN_EVENT_TYPES = {
     "node_started",
     "node_succeeded",
     "node_failed",
+    "node_skipped",
     "log",
     "terminal",
 }
-_NODE_EVENT_TYPES = {"node_started", "node_succeeded", "node_failed"}
+_NODE_EVENT_TYPES = {"node_started", "node_succeeded", "node_failed", "node_skipped"}
 _TERMINAL_STATUSES = {"success", "failed", "cancelled"}
 
 
@@ -720,6 +726,11 @@ def _validate_run_event(event: object) -> str:
         _timestamp_field(event, "timestamp")
         if event_type == "node_failed":
             _string_field(event, "error")
+        elif event_type == "node_skipped":
+            _string_field(event, "reason")
+            metadata = _required_field(event, "metadata")
+            if metadata is not None and type(metadata) is not dict:
+                raise _CoordinatorProtocolError("field 'metadata' must be a dict or None")
     elif event_type == "log":
         timestamp = _timestamp_field(event, "timestamp")
         try:

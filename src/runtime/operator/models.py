@@ -7,7 +7,7 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from enum import Enum
 from types import MappingProxyType
-from typing import Literal, Mapping
+from typing import Any, Literal, Mapping
 
 
 class NodeStatus(Enum):
@@ -49,6 +49,8 @@ class NodeState:
     status: NodeStatus = NodeStatus.PENDING
     started_at: float | None = None
     ended_at: float | None = None
+    reason: str | None = None
+    metadata: dict[str, Any] | None = None
 
     @property
     def elapsed(self) -> float | None:

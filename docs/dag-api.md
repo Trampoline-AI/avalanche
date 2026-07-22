@@ -106,6 +106,48 @@ load_documents() >> (validate_chunks() & build_index()) >> publish_report()
 load_documents() >> validate_chunks() & build_index()
 ```
 
+## Intentional skips
+
+Return `ava.skip(reason, metadata=None)` when a node successfully determines
+that it has no value to produce. A skip does not fail the run. The operator
+records the node as `SKIPPED` with its reason, optional metadata, and lifecycle
+timestamps; the TUI shows the authored reason and metadata.
+
+Skipped results satisfy dependency ordering but do not occupy a data slot.
+This makes `&` the fan-in mechanism for optional branches: downstream implicit
+binding receives only values produced by non-skipped branches. A downstream
+node whose inputs may all skip should declare an appropriate default and may
+return its own skip before performing persistence.
+
+```python
+@ava.source
+def optional_rows():
+    rows = fetch_optional_rows()
+    if not rows:
+        return ava.skip("No rows for partition", {"partition": "2026-07-22"})
+    return rows
+
+@ava.source
+def required_rows():
+    return fetch_required_rows()
+
+@ava.dest
+def persist(rows=None):
+    if rows is None:
+        return ava.skip("Nothing to persist", {"rows": 0})
+    return table.append(rows)
+
+@ava.workflow
+def optional_flow():
+    return (optional_rows() & required_rows()) >> persist()
+```
+
+Skipped nodes produce no persisted row and contribute no value or producer
+entry to downstream lineage. Reruns execute them normally when selected; a
+fresh skip remains a successful no-value outcome. If a skipped node is the
+workflow return, `RunHandle.result()` returns `None`.
+
+
 ## Multi-return nodes
 
 Declare `num_returns` when a node returns multiple values that downstream nodes

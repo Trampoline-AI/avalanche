@@ -18,6 +18,7 @@ class RunHooks:
     on_node_start: Callable[[str], None] | None = None
     on_node_success: Callable[[str], None] | None = None
     on_node_failure: Callable[[str, Exception], None] | None = None
+    on_node_skip: Callable[[str, Any], None] | None = None
     cancel_requested: Callable[[], bool] | None = None
     wrap_fn: Callable[[str, Callable], Callable] | None = None
     """Optional function wrapper applied before executor.submit().

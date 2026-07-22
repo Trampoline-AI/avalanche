@@ -61,7 +61,7 @@ from .runtime import (  # noqa: F401
 from .storage import Namespace, NamespaceConfig, ScanResult, Table, TableGroup
 
 # Types
-from .types import AppendResult, SnapshotMetadata, SnapshotState
+from .types import AppendResult, SkipOutcome, SnapshotMetadata, SnapshotState, skip
 
 __version__ = "0.1.0rc1"
 
@@ -95,6 +95,7 @@ __all__ = [
     "workflow",
     "pipeline",
     "input",
+    "skip",
     # Workflow
     "Workflow",
     "Pipeline",
@@ -126,6 +127,7 @@ __all__ = [
     "ProgressStore",
     # Types
     "AppendResult",
+    "SkipOutcome",
     "SnapshotState",
     "SnapshotMetadata",
     "Json",

@@ -107,6 +107,8 @@ message NodeStateMsg {
   string status = 4;
   double started_at = 5;
   double ended_at = 6;
+  string reason = 7;
+  string metadata_json = 8;
 }
 
 message LogEntryMsg {
