@@ -19,6 +19,29 @@ The body of a `@ava.workflow` function should stay declarative. It runs when the
 workflow is built, not once per row or once per input item. Put business logic in
 source, step, and destination functions.
 
+## Declared namespace lifecycle
+
+Declare table namespaces on the workflow instead of calling `push()` while the
+workflow module is imported:
+
+```python
+@ava.workflow(namespaces=[analytics])
+def document_flow():
+    return load_documents() >> publish_chunks()
+```
+
+Building or discovering this workflow records `analytics` without provisioning
+it. Every direct or operator-triggered run provisions declared namespaces before
+submitting any node, so Local and Ray workers receive bound table references.
+Provisioning failures fail the run before node execution. Concurrent starts are
+serialized per namespace resource in each process, and backend `push()` operations
+remain idempotent; Iceberg handles concurrent create conflicts by loading the
+winning catalog resource.
+
+Existing workflows may continue to call `namespace.push()` explicitly and omit
+`namespaces=`.
+
+
 ## Minimal workflow
 
 ```python

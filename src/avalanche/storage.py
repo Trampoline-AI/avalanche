@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import threading
 from abc import ABC, abstractmethod
 from collections.abc import Sequence
 from typing import Any
@@ -189,6 +190,10 @@ class TableGroup:
         return [(name, table) for name, table in self._tables.items()]
 
 
+_provision_locks: dict[tuple[type["Namespace"], str, str], threading.Lock] = {}
+_provision_locks_guard = threading.Lock()
+
+
 class Namespace(ABC):
     """Backend-neutral namespace/catalog contract."""
 
@@ -213,6 +218,14 @@ class Namespace(ABC):
     def location(self) -> str:
         """Namespace storage location."""
         return urljoin(str(self.base_location), self.name)
+
+    def _provision(self) -> None:
+        """Provision this namespace once at a time within the current process."""
+        key = (type(self), str(self.base_location), self.name)
+        with _provision_locks_guard:
+            lock = _provision_locks.setdefault(key, threading.Lock())
+        with lock:
+            self.push()
 
     def _get_all_tables(self) -> list[tuple[str, Table]]:
         tables: list[tuple[str, Table]] = []

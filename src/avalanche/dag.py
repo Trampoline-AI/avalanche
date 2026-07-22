@@ -49,6 +49,7 @@ When a workflow runs:
 from __future__ import annotations
 
 from collections import defaultdict
+from collections.abc import Iterable
 from concurrent.futures import CancelledError
 from contextvars import ContextVar
 from copy import copy
@@ -61,6 +62,7 @@ from ulid import ULID
 
 from .input_ref import InputRef
 from .run_handle import RunHandle
+from .storage import Namespace
 
 if TYPE_CHECKING:
     from .execution_services import ExecutionServicesSpec
@@ -2073,6 +2075,7 @@ class Workflow:
         input_type: type | None = None,
         context_type: type | None = None,
         agent_defaults: dict[str, Any] | None = None,
+        namespaces: tuple[Namespace, ...] = (),
     ):
         """
         Initialize workflow.
@@ -2083,6 +2086,7 @@ class Workflow:
             name: Workflow name
             returns: Value(s) returned by workflow function (NodeFuture, tuple, or None)
             cron: Optional cron expression for scheduled execution
+            namespaces: Namespace resources provisioned before node execution
         """
         self.graph = graph
         self.nodes = nodes
@@ -2096,6 +2100,7 @@ class Workflow:
         self.input_type = input_type
         self.context_type = context_type
         self.agent_defaults = dict(agent_defaults or {})
+        self.namespaces = tuple(namespaces)
 
         # Validate: detect cycles via Kahn's algorithm (incomplete sort = cycle)
         order = self._topological_sort()
@@ -2165,6 +2170,16 @@ class Workflow:
             original_dependencies_map,
         )
         return [node_id for node_id in execution_order if node_id in scheduled_node_ids]
+
+    def _provision_namespaces(self) -> None:
+        for namespace in self.namespaces:
+            try:
+                namespace._provision()
+            except Exception as exc:
+                raise RuntimeError(
+                    f"Failed to provision namespace {namespace.name!r} "
+                    f"for workflow {self.name!r}: {exc}"
+                ) from exc
 
     def run(
         self,
@@ -2242,6 +2257,8 @@ class Workflow:
         Note:
             Intermediate results stay as refs (zero-copy).
         """
+        self._provision_namespaces()
+
         if executor is None:
             from .executor import get_default_executor
 
@@ -2926,6 +2943,7 @@ def workflow(
     context: type | None = None,
     ctx: type | None = None,
     agent_defaults: dict[str, Any] | None = None,
+    namespaces: Iterable[Namespace] | None = None,
 ) -> Callable[[], Workflow] | Callable[[Callable[[], None]], Callable[[], Workflow]]:
     """
     Decorator for workflow definitions.
@@ -2946,11 +2964,16 @@ def workflow(
         def parameterized_workflow():
             process()
 
+        @ava.workflow(namespaces=[analytics])
+        def provisioned_workflow():
+            process()
+
     Args:
         cron: Optional cron expression for scheduled execution.
         input: Optional BaseInput subclass validated at run start.
         context: Optional BaseContext subclass validated at run start.
         ctx: Alias for context.
+        namespaces: Namespace resources provisioned immediately before execution.
 
     Returns:
         Function that returns a Workflow object when called
@@ -2965,6 +2988,17 @@ def workflow(
         agent_defaults = validate_runtime_kwargs(
             agent_defaults, owner="ava.workflow(agent_defaults=...)"
         )
+
+    declared_namespaces: list[Namespace] = []
+    for namespace in namespaces or ():
+        if not isinstance(namespace, Namespace):
+            raise TypeError(
+                "workflow namespaces must contain Namespace instances; "
+                f"got {type(namespace).__name__}"
+            )
+        if all(namespace is not existing for existing in declared_namespaces):
+            declared_namespaces.append(namespace)
+    namespace_declarations = tuple(declared_namespaces)
 
     def decorator(fn: Callable[[], None]) -> Callable[[], Workflow]:
         @wraps(fn)
@@ -2985,6 +3019,7 @@ def workflow(
                     input_type=input,
                     context_type=context_type,
                     agent_defaults=agent_defaults,
+                    namespaces=namespace_declarations,
                 )
             finally:
                 _workflow_context.reset(token)

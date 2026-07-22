@@ -2,6 +2,18 @@
 
 ## Unreleased
 
+### Declared namespace lifecycle
+
+- `@ava.workflow(namespaces=[...])` records required table namespaces without
+  provisioning during import, DAG construction, or operator discovery.
+- Direct and operator-triggered runs provision declarations before node
+  submission. Failures stop the run before nodes start, and concurrent starts
+  serialize provisioning for each namespace resource.
+- Iceberg namespace and table creation now handles concurrent create conflicts
+  without duplicating catalog resources. Workflows without declarations retain
+  explicit `push()` behavior.
+
+
 ### Worker execution services
 
 - Added the versioned `ava.ExecutionServicesSpec` and worker-side

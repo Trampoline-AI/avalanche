@@ -9,7 +9,12 @@ import logging
 from typing import Iterable, Optional, Tuple, Union
 
 from pyiceberg.catalog import Catalog, load_catalog
-from pyiceberg.exceptions import NoSuchNamespaceError, NoSuchTableError
+from pyiceberg.exceptions import (
+    NamespaceAlreadyExistsError,
+    NoSuchNamespaceError,
+    NoSuchTableError,
+    TableAlreadyExistsError,
+)
 from pyiceberg.table import (
     ALWAYS_TRUE,
     EMPTY_DICT,
@@ -296,36 +301,32 @@ class IcebergNamespace(Namespace):
         return super()._get_all_tables()
 
     def push(self) -> None:
-        """
-        Create/update namespace and tables in catalog.
-
-        This is like 'prisma db push' - synchronizes declared schema with actual state.
-        """
+        """Idempotently create the namespace and bind every declared table."""
         if (self.name,) not in self.catalog.list_namespaces():
-            self.catalog.create_namespace(self.name)
+            try:
+                self.catalog.create_namespace(self.name)
+            except NamespaceAlreadyExistsError:
+                pass
 
-        for name, table in self._get_all_tables():
+        for _, table in self._get_all_tables():
             self._push_table(table)
 
     def _push_table(self, table: IcebergTable) -> None:
-        """Push a single table to the catalog."""
-        existing_tables = self.catalog.list_tables(self.name)
-        logger.info(f"Existing tables: {existing_tables}")
+        """Idempotently create or load one table and bind it to this instance."""
+        identifier = (self.name, table._table_name)
+        if identifier in self.catalog.list_tables(self.name):
+            table._table = self.catalog.load_table(identifier)
+            return
 
-        if (self.name, table._table_name) not in existing_tables:
-            # Compute location
-            location = urljoin(self.location, table._table_name)
-            logger.warning(f"Creating table {table.identifier} at {location}")
-
-            # Create table
+        location = urljoin(self.location, table._table_name)
+        try:
             table._table = self.catalog.create_table(
-                identifier=table.identifier,
+                identifier=identifier,
                 schema=table.schema,
                 location=location,
             )
-        else:
-            logger.debug(f"Table {table.identifier} already exists. Loading it.")
-            table._table = self.catalog.load_table(table.identifier)
+        except TableAlreadyExistsError:
+            table._table = self.catalog.load_table(identifier)
 
     def drop(self, *, drop_tables: bool = False) -> None:
         """

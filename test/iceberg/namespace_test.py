@@ -104,6 +104,11 @@ class TestIcebergNamespace:
         print_directory_tree(tmpdir, level=1)
 
         assert os.path.exists(f"{tmpdir}/test-namespace/test_table")
+        metadata_dir = f"{tmpdir}/test-namespace/test_table/metadata"
+        assert (
+            len([name for name in os.listdir(metadata_dir) if name.endswith(".metadata.json")])
+            == 1
+        )
 
     def test_in_memory_single_connection_pool_serializes_connection_leases(
         self, namespace: TestNamespace
@@ -242,9 +247,7 @@ class TestIcebergNamespace:
         def concurrent_flow():
             return list_namespaces_concurrently()
 
-        handles = [
-            concurrent_flow().run(executor=ava.LocalExecutor()) for _ in range(7)
-        ]
+        handles = [concurrent_flow().run(executor=ava.LocalExecutor()) for _ in range(7)]
         barrier.wait(timeout=10)
         for handle in handles:
             assert (ns.name,) in handle.result(timeout=10)
