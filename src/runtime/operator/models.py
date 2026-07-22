@@ -148,6 +148,48 @@ class AgentEvent:
     event_json: str
 
 
+@dataclass(frozen=True)
+class RunSummaryPage:
+    """One stable page from the operator-owned run index."""
+
+    operator_instance_id: str
+    as_of_sequence: int
+    runs: tuple[RunSummary, ...] = ()
+    next_page_token: str = ""
+
+
+@dataclass(frozen=True)
+class LogPage:
+    """Append-only run logs after an exclusive sequence cursor."""
+
+    operator_instance_id: str
+    as_of_sequence: int
+    logs: tuple[SequencedLogEntry, ...] = ()
+    next_sequence: int = 0
+    has_more: bool = False
+
+
+@dataclass(frozen=True)
+class AgentEventPage:
+    """Projected events for one agent node after an exclusive source cursor."""
+
+    operator_instance_id: str
+    as_of_sequence: int
+    run_id: str
+    node_id: str
+    events: tuple[AgentEvent, ...] = ()
+    next_event_sequence: int = 0
+    has_more: bool = False
+
+
+@dataclass(frozen=True)
+class FinalizedTrace:
+    """Immutable serialized trace body addressable by node revision."""
+
+    revision: int
+    data: bytes
+
+
 @dataclass
 class WorkflowInfo:
     """Flat snapshot of a workflow — the TUI never holds real Workflow objects."""

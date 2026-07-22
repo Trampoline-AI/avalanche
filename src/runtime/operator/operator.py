@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import base64
 import json
 import logging
 import math
@@ -13,23 +14,34 @@ import subprocess
 import threading
 import time
 import warnings
-from collections import deque
+from collections import OrderedDict, deque
 from collections.abc import Mapping
 from copy import deepcopy
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import datetime
 from functools import partial
+from types import MappingProxyType
 from typing import Any, Callable, Literal, TypeAlias
 from uuid import uuid4
 
 from ..executor import LocalExecutor, RayExecutor
 from .models import (
+    AgentEvent,
+    AgentEventPage,
+    FinalizedTrace,
     LogEntry,
     LogLevel,
+    LogPage,
+    NodeSnapshot,
     NodeState,
     NodeStatus,
+    RunSnapshot,
     RunState,
     RunStatus,
+    RunSummary,
+    RunSummaryPage,
+    SequencedLogEntry,
+    TraceDescriptor,
     WorkflowInfo,
 )
 from .registry import AmbiguousWorkflow, WorkflowRegistry
@@ -60,6 +72,10 @@ ExecutorBackend: TypeAlias = Literal["local", "ray"]
 STREAM_HISTORY_CAPACITY = 1024
 DEFAULT_RESULT_RETENTION_SECONDS = 24 * 60 * 60
 _PROCESS_GROUP_POLL_INTERVAL_SECONDS = 0.02
+DETAIL_PAGE_SIZE = 100
+MAX_DETAIL_PAGE_SIZE = 500
+STRUCTURAL_BASELINE_CAPACITY = 8
+_MISSING_WORKFLOW_ID = "\0"
 DeprecatedExecutorFactory: TypeAlias = (
     type[LocalExecutor] | type[RayExecutor] | partial[RayExecutor]
 )
@@ -76,6 +92,8 @@ class RunResultNotReadyError(RuntimeError):
 class RunResultUnavailableError(RuntimeError):
     """Raised when a failed or cancelled run has no workflow result."""
 
+class StructuralBaselineUnavailableError(RuntimeError):
+    """Raised when a client must restart structural snapshot synchronization."""
 
 class _ExecutorBackendOmitted:
     pass
@@ -97,6 +115,7 @@ class _RunHandle:
     assignment_event: Any
     windows_job: WindowsJob | None
     result_bundle: PendingResultBundle
+    publication_event: threading.Event
     drain_thread: threading.Thread | None = None
     success_quiesced: bool = False
 
@@ -109,6 +128,28 @@ class _ProcessGroupTeardown:
     def __bool__(self) -> bool:
         return self.quiesced
 
+
+@dataclass(frozen=True)
+class _RunNotifications:
+    sequence: int
+    run_callbacks: tuple[tuple[Callable[[RunState], None], RunState], ...]
+    log_callbacks: tuple[tuple[Callable[[LogEntry], None], LogEntry], ...]
+    subscribers: tuple[tuple[queue.Queue, RunState], ...]
+    ready: threading.Event
+    delivered: threading.Event
+
+
+@dataclass(frozen=True)
+class _AgentEvidenceMutation:
+    entry: LogEntry
+    finalized_trace: bytes | None = None
+
+
+@dataclass(frozen=True)
+class _StructuralBaseline:
+    as_of_sequence: int
+    summaries: tuple[RunSummary, ...]
+    snapshots: Mapping[str, RunSnapshot]
 
 class Operator:
     """Discover workflows and coordinate each local run in a spawned process."""
@@ -132,6 +173,7 @@ class Operator:
         result_storage_directory: str | os.PathLike[str] | None = None,
         result_retention_seconds: float | None = DEFAULT_RESULT_RETENTION_SECONDS,
         webhook_port: int = DEFAULT_WEBHOOK_PORT,
+        structural_baseline_capacity: int = STRUCTURAL_BASELINE_CAPACITY,
     ) -> None:
         """Create an operator with spawn-safe executor configuration.
 
@@ -159,6 +201,8 @@ class Operator:
                 raise TypeError("Result retention must be a real number or None")
             if not math.isfinite(result_retention_seconds) or result_retention_seconds <= 0:
                 raise ValueError("Result retention must be positive and finite")
+        if structural_baseline_capacity <= 0:
+            raise ValueError("Structural baseline capacity must be positive")
         self._cancel_grace = cancel_grace
         self._result_retention_seconds = (
             None if result_retention_seconds is None else float(result_retention_seconds)
@@ -175,6 +219,13 @@ class Operator:
         self._runs: dict[str, RunState] = {}
         self._stored_results: dict[str, StoredWorkflowResult] = {}
         self._result_leases: dict[str, int] = {}
+        self._run_created_sequences: dict[str, int] = {}
+        self._run_revisions: dict[str, int] = {}
+        self._node_revisions: dict[tuple[str, str], int] = {}
+        self._logs: dict[str, list[SequencedLogEntry]] = {}
+        self._agent_events: dict[tuple[str, str], list[AgentEvent]] = {}
+        self._trace_descriptors: dict[tuple[str, str], TraceDescriptor] = {}
+        self._trace_bodies: dict[tuple[str, str], dict[int, bytes]] = {}
         self._active_runs: dict[str, _RunHandle] = {}
         self._run_callbacks: list[Callable[[RunState], None]] = []
         self._log_callbacks: list[Callable[[LogEntry], None]] = []
@@ -184,6 +235,10 @@ class Operator:
         self._stream_history: deque[tuple[int, RunState]] = deque(
             maxlen=stream_history_capacity
         )
+        self._structural_baseline_capacity = structural_baseline_capacity
+        self._structural_baselines: OrderedDict[int, _StructuralBaseline] = (
+            OrderedDict()
+        )
         self._lock = threading.RLock()
         self._watcher_stop = threading.Event()
         self._watcher_ready = threading.Event()
@@ -192,6 +247,10 @@ class Operator:
         self._result_cleanup_thread: threading.Thread | None = None
         self._closed = False
         self._result_store = ResultStore(result_storage_directory)
+        self._notification_stop_enqueued = False
+        self._notification_shutdown_thread: threading.Thread | None = None
+        self._notification_queue: queue.Queue[_RunNotifications | None] = queue.Queue()
+        self._notification_thread: threading.Thread | None = None
 
         from .scheduler import Scheduler
 
@@ -202,6 +261,7 @@ class Operator:
                 self._reconcile_webhooks(initial_view.by_id.values())
             if watch and self._workflow_paths:
                 self._start_watcher()
+            self._start_notification_dispatcher()
             if schedule and self._workflow_paths:
                 self._scheduler.start()
             if self._result_retention_seconds is not None:
@@ -212,15 +272,7 @@ class Operator:
                 )
                 self._result_cleanup_thread.start()
         except BaseException:
-            self._watcher_stop.set()
-            self._result_cleanup_stop.set()
-            self._scheduler.stop()
-            self._webhooks.close()
-            if self._watcher_thread is not None:
-                self._watcher_thread.join(timeout=2.0)
-            if self._result_cleanup_thread is not None:
-                self._result_cleanup_thread.join(timeout=2.0)
-            self._result_store.close()
+            self.close()
             raise
 
     @property
@@ -259,6 +311,284 @@ class Operator:
     def list_runs(self, workflow_selector: str) -> list[RunState]:
         with self._lock:
             runs = deepcopy(list(self._runs.values()))
+        return self._matching_runs(runs, workflow_selector)
+
+    def get_run(self, run_id: str) -> RunState | None:
+        with self._lock:
+            run = self._runs.get(run_id)
+            return deepcopy(run) if run is not None else None
+
+    def list_run_summaries(
+        self,
+        workflow_selector: str = "",
+        *,
+        page_size: int = 0,
+        page_token: str = "",
+    ) -> RunSummaryPage:
+        """Return one page from an immutable retained structural baseline."""
+        size = _bounded_page_size(page_size)
+        with self._lock:
+            if page_token:
+                token = _decode_page_token(page_token)
+                if token["operator_instance_id"] != self._operator_instance_id:
+                    raise StructuralBaselineUnavailableError(
+                        "Operator instance changed; restart snapshot synchronization"
+                    )
+                if token["workflow_selector"] != workflow_selector:
+                    raise ValueError("Page token workflow selector does not match request")
+                baseline = self._retained_structural_baseline_locked(
+                    token["as_of_sequence"]
+                )
+                resolved_workflow_id = token["resolved_workflow_id"]
+                cursor_sequence = token["created_sequence"]
+                cursor_run_id = token["run_id"]
+            else:
+                baseline = self._materialize_structural_baseline_locked()
+                resolved_workflow_id = self._resolve_summary_workflow_id(
+                    baseline.summaries, workflow_selector
+                )
+                cursor_sequence = None
+                cursor_run_id = ""
+
+            summaries = [
+                summary
+                for summary in baseline.summaries
+                if not resolved_workflow_id
+                or (summary.workflow_id or summary.flow_name)
+                == resolved_workflow_id
+            ]
+            summaries.sort(key=lambda item: (-item.created_sequence, item.run_id))
+            if cursor_sequence is not None:
+                summaries = [
+                    item
+                    for item in summaries
+                    if item.created_sequence < cursor_sequence
+                    or (
+                        item.created_sequence == cursor_sequence
+                        and item.run_id > cursor_run_id
+                    )
+                ]
+
+            selected = summaries[:size]
+            next_page_token = ""
+            if len(summaries) > size:
+                last = selected[-1]
+                next_page_token = _encode_page_token(
+                    operator_instance_id=self._operator_instance_id,
+                    as_of_sequence=baseline.as_of_sequence,
+                    workflow_selector=workflow_selector,
+                    resolved_workflow_id=resolved_workflow_id,
+                    created_sequence=last.created_sequence,
+                    run_id=last.run_id,
+                )
+            return RunSummaryPage(
+                operator_instance_id=self._operator_instance_id,
+                as_of_sequence=baseline.as_of_sequence,
+                runs=tuple(selected),
+                next_page_token=next_page_token,
+            )
+
+    def get_run_snapshot(
+        self,
+        run_id: str,
+        *,
+        operator_instance_id: str,
+        as_of_sequence: int,
+    ) -> RunSnapshot | None:
+        """Return one run from an exact retained structural baseline."""
+        with self._lock:
+            if operator_instance_id != self._operator_instance_id:
+                raise StructuralBaselineUnavailableError(
+                    "Operator instance changed; restart snapshot synchronization"
+                )
+            baseline = self._retained_structural_baseline_locked(as_of_sequence)
+            return baseline.snapshots.get(run_id)
+
+    def list_logs(
+        self,
+        run_id: str,
+        *,
+        after_sequence: int = 0,
+        page_size: int = 0,
+    ) -> LogPage:
+        """Return append-only logs after an exclusive per-run cursor."""
+        size = _bounded_page_size(page_size)
+        with self._lock:
+            if run_id not in self._runs:
+                raise KeyError(run_id)
+            candidates = [
+                item for item in self._logs.get(run_id, ()) if item.sequence > after_sequence
+            ]
+            selected = candidates[:size]
+            next_sequence = selected[-1].sequence if selected else after_sequence
+            return LogPage(
+                operator_instance_id=self._operator_instance_id,
+                as_of_sequence=self._sequence,
+                logs=tuple(deepcopy(selected)),
+                next_sequence=next_sequence,
+                has_more=len(candidates) > size,
+            )
+
+    def list_agent_events(
+        self,
+        run_id: str,
+        node_id: str,
+        *,
+        after_event_sequence: int = 0,
+        page_size: int = 0,
+    ) -> AgentEventPage:
+        """Return deduplicated projected events after an exclusive source cursor."""
+        size = _bounded_page_size(page_size)
+        with self._lock:
+            run = self._runs.get(run_id)
+            if run is None:
+                raise KeyError(run_id)
+            if node_id not in run.nodes:
+                raise KeyError(node_id)
+            candidates = [
+                item
+                for item in self._agent_events.get((run_id, node_id), ())
+                if item.event_sequence > after_event_sequence
+            ]
+            selected = candidates[:size]
+            next_sequence = (
+                selected[-1].event_sequence if selected else after_event_sequence
+            )
+            return AgentEventPage(
+                operator_instance_id=self._operator_instance_id,
+                as_of_sequence=self._sequence,
+                run_id=run_id,
+                node_id=node_id,
+                events=tuple(selected),
+                next_event_sequence=next_sequence,
+                has_more=len(candidates) > size,
+            )
+
+    def read_trace(
+        self,
+        run_id: str,
+        node_id: str,
+        *,
+        revision: int = 0,
+    ) -> FinalizedTrace:
+        """Copy one immutable finalized trace body out of operator-owned memory."""
+        with self._lock:
+            run = self._runs.get(run_id)
+            if run is None:
+                raise KeyError(run_id)
+            if node_id not in run.nodes:
+                raise KeyError(node_id)
+            versions = self._trace_bodies.get((run_id, node_id), {})
+            selected_revision = revision or (max(versions) if versions else 0)
+            try:
+                data = versions[selected_revision]
+            except KeyError:
+                raise KeyError(selected_revision) from None
+            return FinalizedTrace(revision=selected_revision, data=data)
+
+    def _materialize_structural_baseline_locked(self) -> _StructuralBaseline:
+        as_of_sequence = self._sequence
+        retained = self._structural_baselines.get(as_of_sequence)
+        if retained is not None:
+            self._structural_baselines.move_to_end(as_of_sequence)
+            return retained
+
+        summaries = []
+        snapshots = {}
+        for run in self._runs.values():
+            summary = self._run_summary_locked(run)
+            summaries.append(summary)
+            snapshots[run.run_id] = self._run_snapshot_locked(
+                run,
+                summary=summary,
+                as_of_sequence=as_of_sequence,
+            )
+        baseline = _StructuralBaseline(
+            as_of_sequence=as_of_sequence,
+            summaries=tuple(summaries),
+            snapshots=MappingProxyType(snapshots),
+        )
+        self._structural_baselines[as_of_sequence] = baseline
+        while len(self._structural_baselines) > self._structural_baseline_capacity:
+            self._structural_baselines.popitem(last=False)
+        return baseline
+
+    def _retained_structural_baseline_locked(
+        self, as_of_sequence: int
+    ) -> _StructuralBaseline:
+        try:
+            baseline = self._structural_baselines[as_of_sequence]
+        except KeyError:
+            raise StructuralBaselineUnavailableError(
+                f"Structural baseline {as_of_sequence} is unavailable; "
+                "restart snapshot synchronization"
+            ) from None
+        self._structural_baselines.move_to_end(as_of_sequence)
+        return baseline
+
+    def _run_snapshot_locked(
+        self,
+        run: RunState,
+        *,
+        summary: RunSummary,
+        as_of_sequence: int,
+    ) -> RunSnapshot:
+        nodes = tuple(
+            NodeSnapshot(
+                node_id=node.node_id,
+                name=node.name,
+                node_type=node.node_type,
+                status=node.status,
+                started_at=node.started_at,
+                ended_at=node.ended_at,
+                trace=self._trace_descriptors.get((run.run_id, node.node_id)),
+                revision=self._node_revisions.get(
+                    (run.run_id, node.node_id),
+                    self._run_created_sequences.get(run.run_id, 0),
+                ),
+            )
+            for node in run.nodes.values()
+        )
+        logs = self._logs.get(run.run_id, ())
+        return RunSnapshot(
+            operator_instance_id=self._operator_instance_id,
+            as_of_sequence=as_of_sequence,
+            summary=summary,
+            nodes=nodes,
+            latest_log_sequence=logs[-1].sequence if logs else 0,
+        )
+
+    def _resolve_summary_workflow_id(
+        self,
+        summaries: tuple[RunSummary, ...],
+        workflow_selector: str,
+    ) -> str:
+        if not workflow_selector:
+            return ""
+        if any(summary.workflow_id == workflow_selector for summary in summaries):
+            return workflow_selector
+        try:
+            return self._registry.resolve(workflow_selector).workflow_id
+        except AmbiguousWorkflow:
+            raise
+        except KeyError:
+            matching_ids = sorted(
+                {
+                    summary.workflow_id or summary.flow_name
+                    for summary in summaries
+                    if summary.flow_name == workflow_selector
+                    or summary.workflow_display_name == workflow_selector
+                }
+            )
+            if len(matching_ids) > 1:
+                raise AmbiguousWorkflow(workflow_selector, tuple(matching_ids)) from None
+            return matching_ids[0] if matching_ids else _MISSING_WORKFLOW_ID
+
+    def _matching_runs(
+        self, runs: list[RunState], workflow_selector: str
+    ) -> list[RunState]:
+        if not workflow_selector:
+            return runs
         exact = [run for run in runs if run.workflow_id == workflow_selector]
         if exact:
             return exact
@@ -282,10 +612,19 @@ class Operator:
             workflow_id = matching_ids[0]
         return [run for run in runs if (run.workflow_id or run.flow_name) == workflow_id]
 
-    def get_run(self, run_id: str) -> RunState | None:
-        with self._lock:
-            run = self._runs.get(run_id)
-            return deepcopy(run) if run is not None else None
+    def _run_summary_locked(self, run: RunState) -> RunSummary:
+        return RunSummary(
+            run_id=run.run_id,
+            flow_name=run.flow_name,
+            status=run.status,
+            started_at=run.started_at,
+            ended_at=run.ended_at,
+            triggered_by=run.triggered_by,
+            workflow_id=run.workflow_id,
+            workflow_display_name=run.workflow_display_name,
+            created_sequence=self._run_created_sequences.get(run.run_id, 0),
+            revision=self._run_revisions.get(run.run_id, 0),
+        )
 
     def get_run_result(self, run_id: str) -> Any:
         """Return a successful run's decoded workflow result.
@@ -389,6 +728,7 @@ class Operator:
                 assignment_event=assignment_event,
                 windows_job=windows_job,
                 result_bundle=result_bundle,
+                publication_event=threading.Event(),
             )
             # Reserve the ID before releasing the lock so concurrent callers
             # cannot create a second coordinator with the same caller-owned ID.
@@ -410,23 +750,26 @@ class Operator:
                 triggered_by,
                 prepared,
             )
+            drain = threading.Thread(
+                target=self._drain_run_events,
+                args=(run_id, handle, buffered_events),
+                name=f"avalanche-drain-{run_id}",
+                daemon=True,
+            )
             with self._lock:
                 if self._closed:
                     raise RuntimeError("Operator closed while preparing run")
-                self._runs[run_id] = run
-                drain = threading.Thread(
-                    target=self._drain_run_events,
-                    args=(run_id, handle, buffered_events),
-                    name=f"avalanche-drain-{run_id}",
-                    daemon=True,
-                )
                 handle.drain_thread = drain
                 drain.start()
-            self._notify_run(run)
+                self._runs[run_id] = run
+                notifications = self._publish_run_locked(run)
+            self._wait_for_notifications(notifications)
+            handle.publication_event.set()
             start_event.set()
             return run_id
         except BaseException:
             cancel_event.set()
+            handle.publication_event.set()
             start_event.set()
             _teardown_process_group(process, windows_job)
             with self._lock:
@@ -493,7 +836,7 @@ class Operator:
             self._subscribers = [item for item in self._subscribers if item is not subscription]
 
     def close(self) -> None:
-        """Stop background services and boundedly tear down every active run."""
+        """Stop services boundedly and drain accepted notifications in order."""
         with self._lock:
             first_close = not self._closed
             self._closed = True
@@ -512,22 +855,26 @@ class Operator:
             handle.cancel_event.set()
             handle.start_event.set()
         deadline = time.monotonic() + self._cancel_grace
-        for run_id, handle in handles:
+        for _, handle in handles:
             if handle.process.pid is not None:
                 handle.process.join(timeout=max(0.0, deadline - time.monotonic()))
             _teardown_process_group(handle.process, handle.windows_job)
+
+        delayed_drains = []
         drain_deadline = time.monotonic() + 2.0
+        current_thread = threading.current_thread()
         for run_id, handle in handles:
-            if handle.drain_thread is not None:
-                handle.drain_thread.join(timeout=max(0.0, drain_deadline - time.monotonic()))
+            drain = handle.drain_thread
+            if drain is not None and drain is not current_thread:
+                drain.join(timeout=max(0.0, drain_deadline - time.monotonic()))
+            if drain is not None and drain.is_alive():
+                delayed_drains.append((run_id, handle))
+                continue
             with self._lock:
                 if self._active_runs.get(run_id) is handle:
                     self._active_runs.pop(run_id, None)
         if first_close:
-            with self._lock:
-                self._stored_results.clear()
-                self._result_leases.clear()
-            self._result_store.close()
+            self._begin_notification_shutdown(tuple(delayed_drains))
 
     def _result_cleanup_loop(self) -> None:
         retention = self._result_retention_seconds
@@ -558,6 +905,66 @@ class Operator:
                 with self._lock:
                     if not self._closed and run_id not in self._stored_results:
                         self._stored_results[run_id] = stored
+
+
+    def _begin_notification_shutdown(
+        self,
+        delayed_drains: tuple[tuple[str, _RunHandle], ...],
+    ) -> None:
+        if not delayed_drains:
+            self._stop_notification_dispatcher()
+            self._close_result_store()
+            return
+        shutdown_thread = threading.Thread(
+            target=self._finish_notification_shutdown,
+            args=(delayed_drains,),
+            name="avalanche-notification-shutdown",
+            daemon=True,
+        )
+        with self._lock:
+            self._notification_shutdown_thread = shutdown_thread
+        shutdown_thread.start()
+
+    def _finish_notification_shutdown(
+        self,
+        delayed_drains: tuple[tuple[str, _RunHandle], ...],
+    ) -> None:
+        for run_id, handle in delayed_drains:
+            drain = handle.drain_thread
+            if drain is not None:
+                drain.join()
+            with self._lock:
+                if self._active_runs.get(run_id) is handle:
+                    self._active_runs.pop(run_id, None)
+        self._stop_notification_dispatcher()
+        self._close_result_store()
+
+    def _close_result_store(self) -> None:
+        with self._lock:
+            self._stored_results.clear()
+            self._result_leases.clear()
+        self._result_store.close()
+
+    def _start_notification_dispatcher(self) -> None:
+        notification_thread = threading.Thread(
+            target=self._notification_loop,
+            name="avalanche-notifications",
+            daemon=True,
+        )
+        self._notification_thread = notification_thread
+        notification_thread.start()
+
+    def _stop_notification_dispatcher(self) -> None:
+        with self._lock:
+            if self._notification_stop_enqueued:
+                return
+            self._notification_stop_enqueued = True
+            notification_thread = self._notification_thread
+            if notification_thread is None or notification_thread.ident is None:
+                return
+            self._notification_queue.put_nowait(None)
+        if threading.current_thread() is not notification_thread:
+            notification_thread.join(timeout=2.0)
 
     def _start_watcher(self) -> None:
         self._watcher_thread = threading.Thread(
@@ -665,6 +1072,7 @@ class Operator:
         handle: _RunHandle,
         buffered_events: list[dict[str, Any]],
     ) -> None:
+        handle.publication_event.wait()
         terminal = False
         pending = list(buffered_events)
         dead_polls = 0
@@ -742,16 +1150,13 @@ class Operator:
         event: dict[str, Any],
     ) -> bool:
         event_type = _validate_run_event(event, validate_result=False)
+        terminal = event_type == "terminal"
         result_manifest_sha256 = (
             _result_manifest_digest_from_event(event)
-            if event_type == "terminal" and event["status"] == "success"
+            if terminal and event["status"] == "success"
             else None
         )
-        if result_manifest_sha256 is not None and not getattr(
-            handle,
-            "success_quiesced",
-            False,
-        ):
+        if result_manifest_sha256 is not None and not handle.success_quiesced:
             raise _CoordinatorProtocolError(
                 "workflow success was not quiesced before result validation"
             )
@@ -773,222 +1178,312 @@ class Operator:
             raise _CoordinatorProtocolError(
                 f"invalid workflow result publication: {exc}"
             ) from exc
-        if event_type == "terminal" and stored_result is None:
+        if terminal and stored_result is None:
             self._result_store.discard(handle.result_bundle)
-        log_entry: LogEntry | None = None
+
         discard_stored_result = False
         with self._lock:
             run = self._runs.get(run_id)
             if run is None:
                 discard_stored_result = stored_result is not None
-            elif event_type == "running":
-                if run.status != RunStatus.CANCELLED:
-                    run.status = RunStatus.RUNNING
-                    run.started_at = event["timestamp"]
-            elif event_type.startswith("node_"):
-                node = run.nodes.get(event["node_id"])
-                if node is None:
-                    raise _CoordinatorProtocolError(
-                        "node event references unpublished node "
-                        f"{_bounded_ascii(event['node_id'])}"
+            else:
+                summary_changed = False
+                changed_node_ids: tuple[str, ...] = ()
+                trace_node_ids: tuple[str, ...] = ()
+                finalized_traces: dict[str, bytes] = {}
+                log_entry: LogEntry | None = None
+                mutated = False
+
+                if event_type == "running":
+                    if run.status != RunStatus.CANCELLED:
+                        run.status = RunStatus.RUNNING
+                        run.started_at = event["timestamp"]
+                        summary_changed = True
+                        mutated = True
+                elif event_type.startswith("node_"):
+                    node = run.nodes.get(event["node_id"])
+                    if node is None:
+                        raise _CoordinatorProtocolError(
+                            "node event references unpublished node "
+                            f"{_bounded_ascii(event['node_id'])}"
+                        )
+                    if run.status != RunStatus.CANCELLED:
+                        status = {
+                            "node_started": NodeStatus.RUNNING,
+                            "node_succeeded": NodeStatus.SUCCESS,
+                            "node_failed": NodeStatus.FAILED,
+                        }[event_type]
+                        node.status = status
+                        if status == NodeStatus.RUNNING:
+                            node.started_at = event["timestamp"]
+                        else:
+                            node.ended_at = event["timestamp"]
+                        changed_node_ids = (node.node_id,)
+                        mutated = True
+                elif event_type == "agent_evidence":
+                    node_id = event["node_id"]
+                    if node_id not in run.nodes:
+                        raise _CoordinatorProtocolError(
+                            "agent evidence references unpublished node "
+                            f"{_bounded_ascii(node_id)}"
+                        )
+                    try:
+                        mutation = self._record_agent_evidence_event_locked(
+                            run, node_id, event["event"]
+                        )
+                    except BaseException:
+                        mutation = None
+                    if mutation is not None:
+                        log_entry = mutation.entry
+                        changed_node_ids = (node_id,)
+                        trace_node_ids = (node_id,)
+                        if mutation.finalized_trace is not None:
+                            finalized_traces[node_id] = mutation.finalized_trace
+                        mutated = True
+                elif event_type == "log":
+                    if run.status in {
+                        RunStatus.SUCCESS,
+                        RunStatus.FAILED,
+                        RunStatus.CANCELLED,
+                    }:
+                        return False
+                    log_entry = LogEntry(
+                        timestamp=datetime.fromtimestamp(event["timestamp"]),
+                        level=_LEVEL_MAP.get(event["level"], LogLevel.INFO),
+                        node_id=event["node_id"],
+                        message=event["message"],
                     )
-                if run.status != RunStatus.CANCELLED:
-                    status = {
-                        "node_started": NodeStatus.RUNNING,
-                        "node_succeeded": NodeStatus.SUCCESS,
-                        "node_failed": NodeStatus.FAILED,
-                    }[event_type]
-                    node.status = status
-                    if status == NodeStatus.RUNNING:
-                        node.started_at = event["timestamp"]
-                    else:
-                        node.ended_at = event["timestamp"]
-            elif event_type == "agent_evidence":
-                node_id = event["node_id"]
-                if node_id not in run.nodes:
-                    raise _CoordinatorProtocolError(
-                        "agent evidence references unpublished node "
-                        f"{_bounded_ascii(node_id)}"
-                    )
-                log_entry = self._record_agent_evidence_event(
-                    run, node_id, event["event"], notify=False
-                )
-            elif event_type == "log":
-                if run.status in {
-                    RunStatus.SUCCESS,
-                    RunStatus.FAILED,
-                    RunStatus.CANCELLED,
-                }:
-                    return False
-                log_entry = LogEntry(
-                    timestamp=datetime.fromtimestamp(event["timestamp"]),
-                    level=_LEVEL_MAP.get(event["level"], LogLevel.INFO),
-                    node_id=event["node_id"],
-                    message=event["message"],
-                )
-                run.logs.append(log_entry)
-            elif event_type == "terminal":
-                if run.status != RunStatus.CANCELLED:
-                    effective_status = (
-                        "cancelled"
-                        if event["status"] == "success"
-                        and (cancelled_result or handle.cancel_event.is_set())
-                        else event["status"]
-                    )
-                    run.status = {
-                        "success": RunStatus.SUCCESS,
-                        "failed": RunStatus.FAILED,
-                        "cancelled": RunStatus.CANCELLED,
-                    }[effective_status]
-                    if stored_result is not None and effective_status == "success":
-                        self._stored_results[run_id] = stored_result
+                    self._append_log_locked(run, log_entry)
+                    mutated = True
+                elif terminal:
+                    if run.status != RunStatus.CANCELLED:
+                        effective_status = (
+                            "cancelled"
+                            if event["status"] == "success"
+                            and (cancelled_result or handle.cancel_event.is_set())
+                            else event["status"]
+                        )
+                        run.status = {
+                            "success": RunStatus.SUCCESS,
+                            "failed": RunStatus.FAILED,
+                            "cancelled": RunStatus.CANCELLED,
+                        }[effective_status]
+                        if stored_result is not None and effective_status == "success":
+                            self._stored_results[run_id] = stored_result
+                        elif stored_result is not None:
+                            discard_stored_result = True
                     elif stored_result is not None:
                         discard_stored_result = True
-                elif stored_result is not None:
-                    discard_stored_result = True
-                run.ended_at = time.monotonic()
-                self._skip_unfinished_nodes(run)
+                    run.ended_at = time.monotonic()
+                    changed_node_ids = self._skip_unfinished_nodes_locked(run)
+                    summary_changed = True
+                    mutated = True
+
+                if not mutated:
+                    return terminal
+                notifications = self._publish_run_locked(
+                    run,
+                    summary_changed=summary_changed,
+                    changed_node_ids=changed_node_ids,
+                    trace_node_ids=trace_node_ids,
+                    finalized_traces=finalized_traces,
+                    log_entry=log_entry,
+                )
+
         if discard_stored_result and stored_result is not None:
             self._result_store.discard(stored_result)
         if run is None:
-            return event_type == "terminal"
-        if log_entry is not None:
-            self._notify_log(log_entry)
-        self._notify_run(run)
-        return event_type == "terminal"
+            return terminal
+        self._wait_for_notifications(notifications)
+        return terminal
 
     def _record_agent_evidence_event(
         self,
         run: RunState,
         node_id: str,
         event: dict[str, Any],
-        *,
-        notify: bool = True,
     ) -> LogEntry | None:
-        """Merge one best-effort agent event into its node trace envelope."""
+        """Atomically project one best-effort agent event and publish its watermark."""
+        try:
+            with self._lock:
+                mutation = self._record_agent_evidence_event_locked(run, node_id, event)
+                if mutation is None:
+                    return None
+                finalized_traces = (
+                    {node_id: mutation.finalized_trace}
+                    if mutation.finalized_trace is not None
+                    else {}
+                )
+                notifications = self._publish_run_locked(
+                    run,
+                    summary_changed=False,
+                    changed_node_ids=(node_id,),
+                    trace_node_ids=(node_id,),
+                    finalized_traces=finalized_traces,
+                    log_entry=mutation.entry,
+                )
+            self._wait_for_notifications(notifications)
+            return mutation.entry
+        except BaseException:
+            return None
+
+    def _record_agent_evidence_event_locked(
+        self,
+        run: RunState,
+        node_id: str,
+        event: dict[str, Any],
+    ) -> _AgentEvidenceMutation | None:
         node = run.nodes.get(node_id)
         if node is None or not isinstance(event, dict):
             return None
-        try:
-            envelope = (
-                json.loads(node.agent_trace_json)
-                if node.agent_trace_json is not None
-                else {
-                    "schema_version": 1,
-                    "status": "in_progress",
-                    "invocation_id": None,
-                    "run_id": None,
-                    "events": [],
-                    "trace": None,
-                    "error": None,
-                }
-            )
-            if not isinstance(envelope, dict):
-                return None
-            events = envelope.get("events")
-            if not isinstance(events, list):
-                return None
-
-            kind = event.get("kind")
-            invocation_id = event.get("invocation_id")
-            if not isinstance(invocation_id, str) or not invocation_id:
-                return None
-            level = LogLevel.INFO
-            if kind == "evidence":
-                sequence = event.get("sequence")
-                event_kind = event.get("event_kind")
-                timestamp_ns = event.get("timestamp_ns")
-                data = event.get("data", {})
-                if (
-                    not isinstance(sequence, int)
-                    or sequence < 1
-                    or not isinstance(event_kind, str)
-                    or not isinstance(timestamp_ns, int)
-                    or not isinstance(data, dict)
-                ):
-                    return None
-                last_sequence = max(
-                    (
-                        item.get("sequence", 0)
-                        for item in events
-                        if isinstance(item, dict) and item.get("invocation_id") == invocation_id
-                    ),
-                    default=0,
-                )
-                if sequence <= last_sequence:
-                    return None
-                events.append(
-                    {
-                        "invocation_id": invocation_id,
-                        "sequence": sequence,
-                        "event_kind": event_kind,
-                        "timestamp_ns": timestamp_ns,
-                        "data": data,
-                    }
-                )
-                detail = []
-                if data.get("iteration") is not None:
-                    detail.append(f"iteration={data['iteration']}")
-                if data.get("duration_ms") is not None:
-                    detail.append(f"duration={data['duration_ms']}ms")
-                if data.get("error"):
-                    detail.append(f"error={data['error']}")
-                message = f"Agent {event_kind}"
-                if detail:
-                    message += " " + " ".join(detail)
-                if data.get("error") or event_kind in {"run.failed", "run.cancelled"}:
-                    level = LogLevel.ERROR
-                    envelope["status"] = "error"
-                    envelope["error"] = str(data.get("error") or event_kind)
-            elif kind == "trace_finished":
-                trace = event.get("trace")
-                if not isinstance(trace, dict):
-                    return None
-                status = str(trace.get("status") or "unavailable")
-                evidence = trace.get("evidence")
-                run_id = evidence.get("run_id") if isinstance(evidence, dict) else None
-                envelope.update(
-                    {
-                        "invocation_id": invocation_id,
-                        "trace": trace,
-                        "status": status,
-                        "run_id": run_id,
-                        "error": None,
-                    }
-                )
-                message = f"Agent trace {status}"
-                if status == "error":
-                    level = LogLevel.ERROR
-            elif kind == "trace_unavailable":
-                error = event.get("error")
-                envelope.update(
-                    {
-                        "invocation_id": invocation_id,
-                        "status": "unavailable",
-                        "error": str(error or "Agent trace unavailable"),
-                        "trace": None,
-                        "run_id": None,
-                    }
-                )
-                message = f"Agent trace unavailable: {envelope['error']}"
-                level = LogLevel.WARN
-            else:
-                return None
-
-            node.agent_trace_json = json.dumps(envelope, default=str)
-            entry = LogEntry(
-                timestamp=datetime.now(),
-                level=level,
-                node_id=node_id,
-                message=message,
-            )
-            run.logs.append(entry)
-            if notify:
-                self._notify_log(entry)
-                self._notify_run(run)
-            return entry
-        except BaseException:
+        envelope = (
+            json.loads(node.agent_trace_json)
+            if node.agent_trace_json is not None
+            else {
+                "schema_version": 1,
+                "status": "in_progress",
+                "run_id": None,
+                "events": [],
+                "trace": None,
+                "error": None,
+            }
+        )
+        if not isinstance(envelope, dict):
             return None
+        events = envelope.get("events")
+        if not isinstance(events, list):
+            return None
+
+        key = (run.run_id, node_id)
+        projected_events = self._agent_events.setdefault(key, [])
+        previous_descriptor = self._trace_descriptors.get(
+            key, TraceDescriptor(status="in_progress")
+        )
+        finalized_trace: bytes | None = None
+        projected_agent_event: AgentEvent | None = None
+        kind = event.get("kind")
+        level = LogLevel.INFO
+        if kind == "evidence":
+            sequence = event.get("sequence")
+            event_kind = event.get("event_kind")
+            timestamp_ns = event.get("timestamp_ns")
+            data = event.get("data", {})
+            if (
+                not isinstance(sequence, int)
+                or sequence < 1
+                or not isinstance(event_kind, str)
+                or not isinstance(timestamp_ns, int)
+                or not isinstance(data, dict)
+            ):
+                return None
+            if projected_events and sequence <= projected_events[-1].event_sequence:
+                return None
+            projected = {
+                "sequence": sequence,
+                "event_kind": event_kind,
+                "timestamp_ns": timestamp_ns,
+                "data": data,
+            }
+            projected_agent_event = AgentEvent(
+                event_sequence=sequence,
+                event_json=json.dumps(
+                    projected,
+                    default=str,
+                    separators=(",", ":"),
+                ),
+            )
+            events.append(projected)
+            detail = []
+            if data.get("iteration") is not None:
+                detail.append(f"iteration={data['iteration']}")
+            if data.get("duration_ms") is not None:
+                detail.append(f"duration={data['duration_ms']}ms")
+            if data.get("error"):
+                detail.append(f"error={data['error']}")
+            message = f"Agent {event_kind}"
+            if detail:
+                message += " " + " ".join(detail)
+            if data.get("error") or event_kind in {"run.failed", "run.cancelled"}:
+                level = LogLevel.ERROR
+                envelope["status"] = "error"
+                envelope["error"] = str(data.get("error") or event_kind)
+            descriptor = TraceDescriptor(
+                status=str(envelope.get("status") or "in_progress"),
+                revision=previous_descriptor.revision,
+                available=previous_descriptor.available,
+                complete=previous_descriptor.complete,
+                event_count=len(projected_events) + 1,
+                size_bytes=previous_descriptor.size_bytes,
+            )
+        elif kind == "trace_finished":
+            trace = event.get("trace")
+            if not isinstance(trace, dict):
+                return None
+            finalized_trace = json.dumps(
+                trace,
+                default=str,
+                separators=(",", ":"),
+            ).encode()
+            versions = self._trace_bodies.get(key, {})
+            if (
+                previous_descriptor.available
+                and versions.get(previous_descriptor.revision) == finalized_trace
+            ):
+                return None
+            envelope["trace"] = trace
+            envelope["status"] = str(trace.get("status") or "unavailable")
+            evidence = trace.get("evidence")
+            if isinstance(evidence, dict):
+                envelope["run_id"] = evidence.get("run_id")
+            descriptor = TraceDescriptor(
+                status=envelope["status"],
+                revision=previous_descriptor.revision,
+                available=True,
+                complete=bool(isinstance(evidence, dict) and evidence.get("complete")),
+                event_count=len(projected_events),
+                size_bytes=len(finalized_trace),
+            )
+            message = f"Agent trace {envelope['status']}"
+            if envelope["status"] == "error":
+                level = LogLevel.ERROR
+        elif kind == "trace_unavailable":
+            error = event.get("error")
+            envelope["status"] = "unavailable"
+            envelope["error"] = str(error or "Agent trace unavailable")
+            descriptor = TraceDescriptor(
+                status="unavailable",
+                revision=previous_descriptor.revision,
+                available=False,
+                complete=False,
+                event_count=len(projected_events),
+            )
+            message = f"Agent trace unavailable: {envelope['error']}"
+            level = LogLevel.WARN
+        else:
+            return None
+
+        envelope_json = json.dumps(envelope, default=str)
+        entry = LogEntry(
+            timestamp=datetime.now(),
+            level=level,
+            node_id=node_id,
+            message=message,
+        )
+        if projected_agent_event is not None:
+            projected_events.append(projected_agent_event)
+        self._trace_descriptors[key] = descriptor
+        # Compatibility mirror for ListRuns/GetRun/StreamUpdates until
+        # the aggregate client cutover. New structural reads never use it.
+        node.agent_trace_json = envelope_json
+        self._append_log_locked(run, entry)
+        return _AgentEvidenceMutation(entry=entry, finalized_trace=finalized_trace)
+
+    def _append_log_locked(self, run: RunState, entry: LogEntry) -> None:
+        logs = self._logs.setdefault(run.run_id, [])
+        logs.append(SequencedLogEntry(sequence=len(logs) + 1, entry=deepcopy(entry)))
+        # Compatibility mirror for the pre-cutover transport.
+        run.logs.append(entry)
+
 
     def _finish_protocol_fault(
         self,
@@ -1010,21 +1505,23 @@ class Operator:
                 RunStatus.FAILED,
                 RunStatus.CANCELLED,
             }:
-                notify = False
+                notifications = None
             else:
-                notify = True
                 run.status = (
                     RunStatus.CANCELLED if handle.cancel_event.is_set() else RunStatus.FAILED
                 )
                 self._stored_results.pop(run_id, None)
                 run.ended_at = time.monotonic()
-                run.logs.append(entry)
-                self._skip_unfinished_nodes(run)
+                self._append_log_locked(run, entry)
+                changed_node_ids = self._skip_unfinished_nodes_locked(run)
+                notifications = self._publish_run_locked(
+                    run,
+                    changed_node_ids=changed_node_ids,
+                    log_entry=entry,
+                )
         self._result_store.discard(handle.result_bundle)
-        if not notify:
-            return
-        self._notify_log(entry)
-        self._notify_run(run)
+        if notifications is not None:
+            self._wait_for_notifications(notifications)
 
     def _finish_exited_run(self, run_id: str, handle: _RunHandle) -> None:
         cancelled = handle.cancel_event.is_set()
@@ -1047,13 +1544,18 @@ class Operator:
             run.status = RunStatus.CANCELLED if cancelled else RunStatus.FAILED
             self._stored_results.pop(run_id, None)
             run.ended_at = time.monotonic()
+            log_entry = None
             if not cancelled:
-                run.logs.append(entry)
-            self._skip_unfinished_nodes(run)
+                self._append_log_locked(run, entry)
+                log_entry = entry
+            changed_node_ids = self._skip_unfinished_nodes_locked(run)
+            notifications = self._publish_run_locked(
+                run,
+                changed_node_ids=changed_node_ids,
+                log_entry=log_entry,
+            )
         self._result_store.discard(handle.result_bundle)
-        if not cancelled:
-            self._notify_log(entry)
-        self._notify_run(run)
+        self._wait_for_notifications(notifications)
 
     def _force_cancel_after_grace(self, run_id: str, handle: _RunHandle) -> None:
         handle.process.join(timeout=self._cancel_grace)
@@ -1063,41 +1565,172 @@ class Operator:
         _teardown_process_group(handle.process, handle.windows_job)
 
     @staticmethod
-    def _skip_unfinished_nodes(run: RunState) -> None:
+    def _skip_unfinished_nodes_locked(run: RunState) -> tuple[str, ...]:
+        changed = []
         for node in run.nodes.values():
             if node.status in (NodeStatus.PENDING, NodeStatus.RUNNING):
                 node.status = NodeStatus.SKIPPED
+                changed.append(node.node_id)
+        return tuple(changed)
 
-    def _notify_run(self, run: RunState) -> None:
-        with self._lock:
-            self._sequence += 1
-            sequence = self._sequence
-            self._stream_history.append((sequence, deepcopy(run)))
-            callback_notifications = tuple(
+    def _publish_run_locked(
+        self,
+        run: RunState,
+        *,
+        summary_changed: bool = True,
+        changed_node_ids: tuple[str, ...] = (),
+        trace_node_ids: tuple[str, ...] = (),
+        finalized_traces: Mapping[str, bytes] | None = None,
+        log_entry: LogEntry | None = None,
+    ) -> _RunNotifications:
+        """Advance state and detail watermarks while the caller holds ``_lock``."""
+        if self._notification_stop_enqueued:
+            raise RuntimeError("Operator notification dispatcher is closed")
+        self._sequence += 1
+        sequence = self._sequence
+        is_new = run.run_id not in self._run_created_sequences
+        created_sequence = self._run_created_sequences.setdefault(run.run_id, sequence)
+        if summary_changed or is_new:
+            self._run_revisions[run.run_id] = sequence
+        if is_new:
+            for node_id in run.nodes:
+                self._node_revisions[(run.run_id, node_id)] = created_sequence
+        for node_id in changed_node_ids:
+            self._node_revisions[(run.run_id, node_id)] = sequence
+
+        finalized_traces = finalized_traces or {}
+        for node_id in trace_node_ids:
+            key = (run.run_id, node_id)
+            descriptor = self._trace_descriptors[key]
+            versions = self._trace_bodies.setdefault(key, {})
+            finalized_trace = finalized_traces.get(node_id)
+            if finalized_trace is not None:
+                versions[sequence] = finalized_trace
+            elif descriptor.available and descriptor.revision in versions:
+                versions[sequence] = versions[descriptor.revision]
+            self._trace_descriptors[key] = replace(descriptor, revision=sequence)
+
+        snapshot = deepcopy(run)
+        self._stream_history.append((sequence, snapshot))
+        notifications = _RunNotifications(
+            sequence=sequence,
+            run_callbacks=tuple(
                 (callback, deepcopy(run)) for callback in self._run_callbacks
-            )
-            subscriber_notifications = tuple(
+            ),
+            log_callbacks=(
+                tuple(
+                    (callback, deepcopy(log_entry)) for callback in self._log_callbacks
+                )
+                if log_entry is not None
+                else ()
+            ),
+            subscribers=tuple(
                 (subscription, deepcopy(run)) for subscription in self._subscribers
-            )
-        for callback, snapshot in callback_notifications:
-            try:
-                callback(snapshot)
-            except Exception:
-                pass
-        for subscription, snapshot in subscriber_notifications:
-            try:
-                subscription.put_nowait((sequence, snapshot))
-            except queue.Full:
-                pass
+            ),
+            ready=threading.Event(),
+            delivered=threading.Event(),
+        )
+        self._notification_queue.put_nowait(notifications)
+        return notifications
 
-    def _notify_log(self, entry: LogEntry) -> None:
+    def _notify_run(self, run: RunState, *, summary_changed: bool = True) -> None:
         with self._lock:
-            callbacks = tuple(self._log_callbacks)
-        for callback in callbacks:
+            notifications = self._publish_run_locked(
+                run,
+                summary_changed=summary_changed,
+            )
+        self._wait_for_notifications(notifications)
+
+    def _wait_for_notifications(self, notifications: _RunNotifications) -> None:
+        notifications.ready.set()
+        if threading.current_thread() is self._notification_thread:
+            return
+        notifications.delivered.wait()
+
+    def _notification_loop(self) -> None:
+        while True:
+            notifications = self._notification_queue.get()
+            if notifications is None:
+                return
+            notifications.ready.wait()
+            try:
+                self._deliver_notifications(notifications)
+            finally:
+                notifications.delivered.set()
+
+    @staticmethod
+    def _deliver_notifications(notifications: _RunNotifications) -> None:
+        for callback, entry in notifications.log_callbacks:
             try:
                 callback(entry)
             except Exception:
                 pass
+        for callback, snapshot in notifications.run_callbacks:
+            try:
+                callback(snapshot)
+            except Exception:
+                pass
+        for subscription, snapshot in notifications.subscribers:
+            try:
+                subscription.put_nowait((notifications.sequence, snapshot))
+            except queue.Full:
+                pass
+
+
+
+def _bounded_page_size(page_size: int) -> int:
+    if page_size < 0:
+        raise ValueError("Page size must be non-negative")
+    return min(page_size or DETAIL_PAGE_SIZE, MAX_DETAIL_PAGE_SIZE)
+
+
+def _encode_page_token(
+    *,
+    operator_instance_id: str,
+    as_of_sequence: int,
+    workflow_selector: str,
+    resolved_workflow_id: str,
+    created_sequence: int,
+    run_id: str,
+) -> str:
+    payload = json.dumps(
+        {
+            "v": 2,
+            "operator_instance_id": operator_instance_id,
+            "as_of_sequence": as_of_sequence,
+            "workflow_selector": workflow_selector,
+            "resolved_workflow_id": resolved_workflow_id,
+            "created_sequence": created_sequence,
+            "run_id": run_id,
+        },
+        separators=(",", ":"),
+        sort_keys=True,
+    ).encode()
+    return base64.urlsafe_b64encode(payload).decode().rstrip("=")
+
+
+def _decode_page_token(page_token: str) -> dict[str, Any]:
+    try:
+        padding = "=" * (-len(page_token) % 4)
+        value = json.loads(base64.urlsafe_b64decode(page_token + padding))
+    except (ValueError, TypeError):
+        raise ValueError("Invalid page token") from None
+    if not isinstance(value, dict) or value.get("v") != 2:
+        raise ValueError("Invalid page token")
+    expected_types = {
+        "operator_instance_id": str,
+        "as_of_sequence": int,
+        "workflow_selector": str,
+        "resolved_workflow_id": str,
+        "created_sequence": int,
+        "run_id": str,
+    }
+    if any(
+        type(value.get(field)) is not expected
+        for field, expected in expected_types.items()
+    ):
+        raise ValueError("Invalid page token")
+    return value
 
 
 _RUN_EVENT_TYPES = {

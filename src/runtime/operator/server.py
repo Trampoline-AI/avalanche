@@ -17,8 +17,12 @@ from avalanche.runtime import File
 
 from ._grpc import _BOUNDED_MESSAGE_OPTIONS
 from .convert import (
+    agent_event_to_proto,
     discovery_diagnostic_to_proto,
+    run_snapshot_to_proto,
     run_state_to_proto,
+    run_summary_to_proto,
+    sequenced_log_entry_to_proto,
     workflow_info_to_proto,
 )
 from .operator import (
@@ -26,6 +30,7 @@ from .operator import (
     RunAlreadyExistsError,
     RunResultNotReadyError,
     RunResultUnavailableError,
+    StructuralBaselineUnavailableError,
 )
 from .proto import operator_pb2 as pb
 from .proto import operator_pb2_grpc as pb_grpc
@@ -35,6 +40,7 @@ logger = logging.getLogger(__name__)
 
 DEFAULT_PORT = 7433
 DEFAULT_HOST = "127.0.0.1"
+TRACE_CHUNK_BYTES = 1024 * 1024
 
 
 class OperatorServicer(pb_grpc.OperatorServiceServicer):
@@ -112,6 +118,100 @@ class OperatorServicer(pb_grpc.OperatorServiceServicer):
             files=[_result_file_attachment_to_proto(item) for item in payload.files],
         )
 
+    def ListRunSummaries(self, request, context):  # noqa: N802
+        try:
+            page = self._op.list_run_summaries(
+                request.workflow_selector,
+                page_size=request.page_size,
+                page_token=request.page_token,
+            )
+        except StructuralBaselineUnavailableError as exc:
+            context.abort(grpc.StatusCode.FAILED_PRECONDITION, str(exc))
+        except AmbiguousWorkflow as exc:
+            context.abort(grpc.StatusCode.INVALID_ARGUMENT, _ambiguous_detail(exc))
+        except ValueError as exc:
+            context.abort(grpc.StatusCode.INVALID_ARGUMENT, str(exc))
+        return pb.RunSummaryPage(
+            operator_instance_id=page.operator_instance_id,
+            as_of_sequence=page.as_of_sequence,
+            runs=[run_summary_to_proto(item) for item in page.runs],
+            next_page_token=page.next_page_token,
+        )
+
+    def GetRunSnapshot(self, request, context):  # noqa: N802
+        try:
+            snapshot = self._op.get_run_snapshot(
+                request.run_id,
+                operator_instance_id=request.operator_instance_id,
+                as_of_sequence=request.as_of_sequence,
+            )
+        except StructuralBaselineUnavailableError as exc:
+            context.abort(grpc.StatusCode.FAILED_PRECONDITION, str(exc))
+        if snapshot is None:
+            context.abort(grpc.StatusCode.NOT_FOUND, f"Run {request.run_id} not found")
+        return run_snapshot_to_proto(snapshot)
+
+    def ListLogs(self, request, context):  # noqa: N802
+        try:
+            page = self._op.list_logs(
+                request.run_id,
+                after_sequence=request.after_sequence,
+                page_size=request.page_size,
+            )
+        except KeyError:
+            context.abort(grpc.StatusCode.NOT_FOUND, f"Run {request.run_id} not found")
+        return pb.LogPage(
+            operator_instance_id=page.operator_instance_id,
+            as_of_sequence=page.as_of_sequence,
+            logs=[sequenced_log_entry_to_proto(item) for item in page.logs],
+            next_sequence=page.next_sequence,
+            has_more=page.has_more,
+        )
+
+    def ListAgentEvents(self, request, context):  # noqa: N802
+        try:
+            page = self._op.list_agent_events(
+                request.run_id,
+                request.node_id,
+                after_event_sequence=request.after_event_sequence,
+                page_size=request.page_size,
+            )
+        except KeyError:
+            context.abort(
+                grpc.StatusCode.NOT_FOUND,
+                f"Run {request.run_id} or node {request.node_id} not found",
+            )
+        return pb.AgentEventPage(
+            operator_instance_id=page.operator_instance_id,
+            as_of_sequence=page.as_of_sequence,
+            run_id=page.run_id,
+            node_id=page.node_id,
+            events=[agent_event_to_proto(item) for item in page.events],
+            next_event_sequence=page.next_event_sequence,
+            has_more=page.has_more,
+        )
+
+    def ReadTrace(self, request, context):  # noqa: N802
+        try:
+            trace = self._op.read_trace(
+                request.run_id,
+                request.node_id,
+                revision=request.revision,
+            )
+        except KeyError:
+            context.abort(
+                grpc.StatusCode.NOT_FOUND,
+                f"Trace for run {request.run_id}, node {request.node_id}, "
+                f"revision {request.revision or 'latest'} not found",
+            )
+        for chunk_index, offset in enumerate(range(0, len(trace.data), TRACE_CHUNK_BYTES)):
+            data = trace.data[offset : offset + TRACE_CHUNK_BYTES]
+            yield pb.TraceChunk(
+                revision=trace.revision,
+                chunk_index=chunk_index,
+                data=data,
+                eof=offset + len(data) == len(trace.data),
+            )
     def StreamUpdates(self, request, context):  # noqa: N802
         """Server-streaming RPC: yields RunUpdate messages as state changes."""
         q = self._op.subscribe(request.since_sequence)
