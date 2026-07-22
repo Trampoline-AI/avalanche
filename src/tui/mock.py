@@ -503,6 +503,40 @@ class MockStateProvider:
             info = matches[0] if len(matches) == 1 else None
         if info is None:
             raise ValueError(f"Unknown or ambiguous workflow: {workflow_selector}")
+        rerun_of = kwargs.get("rerun_of")
+        start = tuple(kwargs.get("start") or ())
+        rerun_mode = kwargs.get("rerun_mode", "autorun")
+        eligible_node_ids: set[str] | None = None
+        if rerun_of is not None:
+            source = self._runs.get(rerun_of)
+            if source is None:
+                raise ValueError(f"Source run {rerun_of} does not exist")
+            if (source.workflow_id or source.flow_name) != info.selector:
+                raise ValueError(
+                    f"Source run {rerun_of} does not belong to workflow {info.selector}"
+                )
+            if not start:
+                raise ValueError("rerun start must include at least one node slug")
+            if rerun_mode not in {"autorun", "lazy"}:
+                raise ValueError(f"Invalid rerun mode: {rerun_mode}")
+            slug_to_id = {
+                info.node_slugs.get(node_id, display_name_from_id(node_id)): node_id
+                for node_id in info.node_ids
+            }
+            missing = [slug for slug in start if slug not in slug_to_id]
+            if missing:
+                raise ValueError(f"Unknown rerun node slugs: {', '.join(missing)}")
+            eligible_node_ids = {slug_to_id[slug] for slug in start}
+            if rerun_mode == "autorun":
+                pending = list(eligible_node_ids)
+                while pending:
+                    node_id = pending.pop()
+                    for child in info.graph.get(node_id, ()):
+                        if child not in eligible_node_ids:
+                            eligible_node_ids.add(child)
+                            pending.append(child)
+        elif start or "rerun_mode" in kwargs:
+            raise ValueError("rerun_of is required when rerun controls are provided")
 
         run_id = f"run_{str(uuid4())[:8]}"
         run = RunState(
@@ -512,6 +546,9 @@ class MockStateProvider:
             workflow_display_name=info.rendered_name,
             status=RunStatus.RUNNING,
             started_at=time.monotonic(),
+            rerun_of=rerun_of,
+            rerun_start=start,
+            rerun_mode=rerun_mode if rerun_of is not None else None,
         )
         for nid in info.node_ids:
             nt = info.node_types[nid]
@@ -519,6 +556,10 @@ class MockStateProvider:
                 node_id=nid, name=display_name_from_id(nid), node_type=nt,
                 status=NodeStatus.PENDING,
             )
+        if eligible_node_ids is not None:
+            for node_id, node in run.nodes.items():
+                if node_id not in eligible_node_ids:
+                    node.status = NodeStatus.SKIPPED
         self._runs[run_id] = run
 
         # Start simulation thread
@@ -562,7 +603,16 @@ class MockStateProvider:
         """Background thread that drives a run through execution phases."""
         phases = EXECUTION_PHASES.get(info.name, [])
 
-        for names, duration, fail_name in phases:
+        for phase_names, duration, phase_failure in phases:
+            names = [
+                name
+                for name in phase_names
+                if run.nodes.get(name) is not None
+                and run.nodes[name].status == NodeStatus.PENDING
+            ]
+            if not names:
+                continue
+            fail_name = phase_failure if phase_failure in names else None
             if run.status != RunStatus.RUNNING:
                 return
 

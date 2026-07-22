@@ -1402,6 +1402,25 @@ class TestUIStore:
 
         assert "✗ UNAVAILABLE: get failed" in rendered
 
+    def test_rerun_ancestry_is_rendered_in_status_bar(self):
+        store = UIStore(MockStateProvider())
+        store.current_run = RunState(
+            run_id="run_rerun",
+            flow_name="flow",
+            status=RunStatus.RUNNING,
+            rerun_of="run_source",
+            rerun_start=("stage3", "stage4"),
+            rerun_mode="lazy",
+        )
+        status = StatusBar()
+        status._test_store = store
+
+        rendered = status.render().plain
+
+        assert "rerun of run_source" in rendered
+        assert "start stage3, stage4" in rendered
+        assert "lazy" in rendered
+
     def test_sidebar_cursor_movement(self):
         store = UIStore(MockStateProvider())
         assert store.sidebar_cursor == 0
@@ -1881,6 +1900,44 @@ class TestInteractions:
             await pilot.pause()
             assert app.store.current_run is not old_run
             assert app.store.run_state_label == "RUNNING"
+
+    async def test_shift_r_configures_rerun_from_selected_history(self):
+        from textual.widgets import Button, Select, SelectionList
+
+        from avalanche.tui.screens.rerun import RerunScreen
+
+        app = await self._make_app()
+        async with app.run_test(size=(120, 40)) as pilot:
+            await pilot.pause()
+            source_run_id = app.store.current_run.run_id
+            workflow = app.store.current_workflow
+            first_node_id = workflow.node_ids[0]
+            first_slug = workflow.node_slugs.get(
+                first_node_id,
+                workflow.display_names.get(
+                    first_node_id, first_node_id.rsplit("_", 1)[0]
+                ),
+            )
+
+            await pilot.press("shift+r")
+            await pilot.pause()
+            assert isinstance(app.screen, RerunScreen)
+
+            selection = app.screen.query_one("#rerun-start", SelectionList)
+            selection.select(first_slug)
+            app.screen.query_one("#rerun-mode", Select).value = "lazy"
+            app.screen.query_one("#submit", Button).press()
+
+            deadline = time.monotonic() + 1
+            while app.store.current_run.run_id == source_run_id and time.monotonic() < deadline:
+                await pilot.pause(0.05)
+                app.store._apply_background_updates()
+
+            rerun = app.store.current_run
+            assert rerun.run_id != source_run_id
+            assert rerun.rerun_of == source_run_id
+            assert rerun.rerun_start == (first_slug,)
+            assert rerun.rerun_mode == "lazy"
 
     async def test_space_e_toggles_explorer(self):
         app = await self._make_app()

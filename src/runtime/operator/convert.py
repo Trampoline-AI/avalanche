@@ -30,6 +30,7 @@ def workflow_info_to_proto(info: WorkflowInfo) -> pb.FlowInfoMsg:
         graph=graph,
         node_types=info.node_types,
         display_names=info.display_names,
+        node_slugs=info.node_slugs,
         cron=info.cron or "",
         next_run_at=info.next_run_at or 0.0,
         last_run_at=info.last_run_at or 0.0,
@@ -52,6 +53,7 @@ def workflow_info_from_proto(msg: pb.FlowInfoMsg) -> WorkflowInfo:
         graph=graph,
         node_types=dict(msg.node_types),
         display_names=dict(msg.display_names),
+        node_slugs=dict(msg.node_slugs),
         cron=msg.cron if msg.cron else None,
         next_run_at=msg.next_run_at if msg.next_run_at else None,
         last_run_at=msg.last_run_at if msg.last_run_at else None,
@@ -117,6 +119,9 @@ def run_state_to_proto(run: RunState) -> pb.RunStateMsg:
         triggered_by=run.triggered_by,
         workflow_id=run.workflow_id or run.flow_name,
         workflow_display_name=run.workflow_display_name or run.flow_name,
+        rerun_of=run.rerun_of or "",
+        rerun_start=run.rerun_start,
+        rerun_mode=run.rerun_mode or "",
     )
 
 
@@ -130,6 +135,9 @@ def run_state_from_proto(msg: pb.RunStateMsg) -> RunState:
         triggered_by=msg.triggered_by or "manual",
         workflow_id=msg.workflow_id or msg.flow_name,
         workflow_display_name=msg.workflow_display_name or msg.flow_name,
+        rerun_of=msg.rerun_of or None,
+        rerun_start=tuple(msg.rerun_start),
+        rerun_mode=msg.rerun_mode or None,
     )
     for ns_msg in msg.nodes:
         ns = node_state_from_proto(ns_msg)

@@ -2,6 +2,15 @@
 
 ## Unreleased
 
+### Operator rerun controls
+
+- Operator, gRPC, Python client, CLI, and TUI run controls now expose partial
+  reruns with source-run ancestry, restart node slugs, and `autorun` or `lazy`
+  scheduling.
+- `ava runs FLOW` lists operator history and rerun ancestry. `ava run FLOW`
+  accepts `--rerun-of`, repeatable `--start`, and `--rerun-mode`.
+
+
 ### Worker execution services
 
 - Added the versioned `ava.ExecutionServicesSpec` and worker-side

@@ -10,6 +10,7 @@ from textual.widgets import Header
 from .dag_layout import DagNode
 from .mock import MockStateProvider
 from .models import RunState, WorkflowInfo
+from .screens.rerun import RerunScreen, RerunSelection
 from .screens.workflow_detail import WorkflowDetailScreen
 from .state import StateProvider
 from .theme import AVALANCHE_THEME
@@ -46,6 +47,7 @@ class AvalancheApp(App):
         Binding("tab", "workflow_next", "Tab", priority=True),
         Binding("shift+tab", "workflow_prev", "Shift+Tab", priority=True),
         ("r", "start_run", "Run"),
+        ("shift+r", "rerun", "Rerun"),
         Binding("left", "nav_left", "←", priority=True),
         Binding("right", "nav_right", "→", priority=True),
         Binding("up", "nav_up", "↑", priority=True),
@@ -565,6 +567,22 @@ class AvalancheApp(App):
 
     def action_start_run(self) -> None:
         if self.store.start_run_async():
+            self._log_autoscroll = True
+            self._refresh_widgets()
+
+    def action_rerun(self) -> None:
+        """Shift+R: configure a rerun from the selected historical run."""
+        run = self.store.current_run
+        workflow = self.store.current_workflow
+        if run is None or workflow is None:
+            return
+        self.push_screen(RerunScreen(run, workflow), self._on_rerun_configured)
+
+    def _on_rerun_configured(self, selection: RerunSelection) -> None:
+        if selection is None:
+            return
+        start, mode = selection
+        if self.store.rerun_selected_async(start, mode):
             self._log_autoscroll = True
             self._refresh_widgets()
 

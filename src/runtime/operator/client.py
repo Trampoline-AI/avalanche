@@ -5,9 +5,9 @@ from __future__ import annotations
 import json
 import math
 import threading
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from numbers import Real
-from typing import Any, Callable
+from typing import Any, Callable, Literal
 
 import grpc
 from pydantic import BaseModel
@@ -156,6 +156,9 @@ class GrpcStateProvider:
         context: Mapping[str, Any] | BaseModel | None = None,
         files: Mapping[str, File | bytes] | None = None,
         s3_files: Mapping[str, S3File | str] | None = None,
+        rerun_of: str | None = None,
+        start: Sequence[str] | None = None,
+        rerun_mode: Literal["autorun", "lazy"] = "autorun",
     ) -> str:
         input_files = [
             _file_attachment(field_name, value)
@@ -176,6 +179,9 @@ class GrpcStateProvider:
                 _s3_file_reference(field_name, value)
                 for field_name, value in (s3_files or {}).items()
             ],
+            rerun_of=rerun_of or "",
+            rerun_start=list(start or ()),
+            rerun_mode=rerun_mode if rerun_of is not None else "",
         )
         resp = self._call(self._stub.StartRun, request)
         return resp.run_id if resp else ""

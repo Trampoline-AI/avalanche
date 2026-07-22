@@ -36,6 +36,7 @@ def test_ava_help_lists_supported_commands_without_init_or_workflows(capsys):
     output = capsys.readouterr().out
     assert "operator" in output
     assert "run" in output
+    assert "runs" in output
     assert "tui" in output
     assert "dev" in output
     assert "init" not in output
@@ -124,6 +125,83 @@ def test_ava_run_passes_json_context_file_and_s3_inputs(monkeypatch, tmp_path, c
     assert captured["s3_files"]["document_ref"].uri == "s3://bucket/cli.txt"
     assert captured["closed"] is True
     assert capsys.readouterr().out.strip() == "run_cli"
+
+
+def test_ava_run_passes_rerun_controls_to_operator_client(monkeypatch, capsys):
+    from ava_cli import app
+
+    captured = {}
+
+    class FakeProvider:
+        def start_run(self, workflow_selector, **kwargs):
+            captured["selector"] = workflow_selector
+            captured["kwargs"] = kwargs
+            return "run_rerun"
+
+        def close(self):
+            captured["closed"] = True
+
+    monkeypatch.setattr(app, "_make_provider", lambda address: FakeProvider())
+
+    assert app.main([
+        "run",
+        "flow",
+        "--rerun-of",
+        "run_source",
+        "--start",
+        "stage3",
+        "--start",
+        "stage4",
+        "--rerun-mode",
+        "lazy",
+    ]) == 0
+    assert captured["selector"] == "flow"
+    assert captured["kwargs"]["rerun_of"] == "run_source"
+    assert captured["kwargs"]["start"] == ["stage3", "stage4"]
+    assert captured["kwargs"]["rerun_mode"] == "lazy"
+    assert captured["closed"] is True
+    assert capsys.readouterr().out.strip() == "run_rerun"
+
+
+def test_ava_runs_lists_operator_history_with_rerun_ancestry(monkeypatch, capsys):
+    from ava_cli import app
+    from avalanche.operator.models import RunState, RunStatus
+
+    closed = []
+
+    class FakeProvider:
+        connected = True
+
+        def list_runs(self, workflow_selector):
+            assert workflow_selector == "flow"
+            return [
+                RunState(
+                    run_id="run_source",
+                    flow_name="flow",
+                    status=RunStatus.SUCCESS,
+                ),
+                RunState(
+                    run_id="run_rerun",
+                    flow_name="flow",
+                    status=RunStatus.RUNNING,
+                    rerun_of="run_source",
+                    rerun_start=("stage3", "stage4"),
+                    rerun_mode="autorun",
+                ),
+            ]
+
+        def close(self):
+            closed.append(True)
+
+    monkeypatch.setattr(app, "_make_provider", lambda address: FakeProvider())
+
+    assert app.main(["runs", "flow"]) == 0
+    assert capsys.readouterr().out.splitlines() == [
+        "RUN ID\tSTATUS\tRERUN OF\tSTART\tMODE",
+        "run_source\tsuccess\t-\t-\t-",
+        "run_rerun\trunning\trun_source\tstage3,stage4\tautorun",
+    ]
+    assert closed == [True]
 
 
 def test_ava_run_prints_provider_error_when_run_does_not_start(monkeypatch, capsys):

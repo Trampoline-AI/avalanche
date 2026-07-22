@@ -64,6 +64,9 @@ class OperatorServicer(pb_grpc.OperatorServiceServicer):
                 run_id=request.run_id or None,
                 input=run_input,
                 context=run_context,
+                rerun_of=request.rerun_of or None,
+                start=list(request.rerun_start) if request.rerun_start else None,
+                rerun_mode=request.rerun_mode or "autorun",
             )
             return pb.StartRunResponse(run_id=run_id)
         except RunAlreadyExistsError as exc:
