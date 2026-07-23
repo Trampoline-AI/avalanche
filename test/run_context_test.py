@@ -11,7 +11,6 @@ import avalanche as ava
 class ExampleInput(ava.BaseInput):
     value: int
     document: ava.File
-    remote_document: ava.S3File
 
 
 class ExampleContext(ava.RunContext):
@@ -26,7 +25,6 @@ def test_workflow_run_validates_input_and_injects_context_without_consuming_data
         assert payload.document.read_bytes() == b"hello"
         assert payload.document.open().read() == b"hello"
         assert isinstance(payload.document.open(), BytesIO)
-        assert payload.remote_document.uri == "s3://bucket/key.txt"
         return payload.value
 
     @ava.step
@@ -46,7 +44,6 @@ def test_workflow_run_validates_input_and_injects_context_without_consuming_data
             input={
                 "value": 41,
                 "document": {"name": "doc.txt", "content": b"hello"},
-                "remote_document": {"uri": "s3://bucket/key.txt"},
             },
             context={"request_id": "req_123"},
         )
@@ -213,7 +210,6 @@ def test_workflow_run_rejects_unknown_input_and_context_fields():
     valid_input = {
         "value": 41,
         "document": {"name": "doc.txt", "content": b"hello"},
-        "remote_document": {"uri": "s3://bucket/key.txt"},
     }
 
     with pytest.raises(ValueError, match="Extra inputs"):
@@ -231,8 +227,8 @@ def test_workflow_run_rejects_unknown_input_and_context_fields():
         ).result()
 
 
-def test_inline_file_payloads_are_bounded_and_hash_checked(tmp_path):
-    content = b"small file"
+def test_file_payloads_are_unbounded_and_hash_checked(tmp_path):
+    content = b"x" * (4 * 1024 * 1024 + 1)
     digest = hashlib.sha256(content).hexdigest()
 
     file = ava.File(content=content)
@@ -242,29 +238,25 @@ def test_inline_file_payloads_are_bounded_and_hash_checked(tmp_path):
     with pytest.raises(ValueError, match="sha256"):
         ava.File(content=content, sha256="0" * 64)
 
-    with pytest.raises(ValueError, match="S3File"):
-        ava.File(content=b"x" * (ava.MAX_INLINE_FILE_BYTES + 1))
-
     large_path = tmp_path / "large.bin"
-    large_path.write_bytes(b"x" * (ava.MAX_INLINE_FILE_BYTES + 1))
-    with pytest.raises(ValueError, match="S3File"):
-        ava.File.from_path(large_path)
+    large_path.write_bytes(content)
+    from_path = ava.File.from_path(large_path)
+    assert from_path.name == "large.bin"
+    assert from_path.content == content
+    assert from_path.sha256 == digest
 
 
-def test_workflow_run_rejects_invalid_s3_file_reference():
-    class BadInput(ava.BaseInput):
-        remote_document: ava.S3File
+def test_file_size_limit_constants_are_not_public():
+    import avalanche.runtime as ava_runtime
 
-    @ava.source
-    def load(payload: BadInput):
-        return payload.remote_document.uri
+    for module in (ava, ava_runtime):
+        assert not hasattr(module, "MAX_INLINE_FILE_BYTES")
+        assert not hasattr(module, "MAX_INLINE_REQUEST_BYTES")
 
-    @ava.workflow(input=BadInput)
-    def bad_workflow():
-        return load()
 
-    with pytest.raises(ValueError, match="s3://"):
-        bad_workflow().run(
-            executor=ava.LocalExecutor(),
-            input={"remote_document": {"uri": "https://example.com/file"}},
-        ).result()
+def test_s3_file_contract_is_not_public():
+    import avalanche.runtime as ava_runtime
+
+    for module in (ava, ava_runtime):
+        assert not hasattr(module, "S3File")
+        assert "S3File" not in module.__all__

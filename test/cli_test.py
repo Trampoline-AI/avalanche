@@ -81,20 +81,36 @@ def test_ava_tui_delegates_to_tui_entrypoint(monkeypatch):
     assert captured_argv == ["--connect", "localhost:7433"]
 
 
-def test_ava_run_passes_json_context_file_and_s3_inputs(monkeypatch, tmp_path, capsys):
+def test_ava_run_rejects_removed_s3_file_flag():
+    from ava_cli import app
+
+    with pytest.raises(SystemExit) as exc_info:
+        app.main(
+            [
+                "run",
+                "input_workflow",
+                "--s3-file",
+                "document=s3://bucket/document.txt",
+            ]
+        )
+
+    assert exc_info.value.code != 0
+
+
+def test_ava_run_passes_json_context_and_file_inputs(monkeypatch, tmp_path, capsys):
     from ava_cli import app
 
     file_path = tmp_path / "input.txt"
-    file_path.write_bytes(b"cli-bytes")
+    file_content = b"x" * (4 * 1024 * 1024 + 1)
+    file_path.write_bytes(file_content)
     captured = {}
 
     class FakeProvider:
-        def start_run(self, flow_name, *, input=None, context=None, files=None, s3_files=None):
+        def start_run(self, flow_name, *, input=None, context=None, files=None):
             captured["flow_name"] = flow_name
             captured["input"] = input
             captured["context"] = context
             captured["files"] = files
-            captured["s3_files"] = s3_files
             return "run_cli"
 
         def close(self):
@@ -102,26 +118,28 @@ def test_ava_run_passes_json_context_file_and_s3_inputs(monkeypatch, tmp_path, c
 
     monkeypatch.setattr(app, "_make_provider", lambda address: FakeProvider())
 
-    assert app.main([
-        "run",
-        "input_workflow",
-        "--connect",
-        "localhost:9999",
-        "--input",
-        '{"message": "from-cli"}',
-        "--context",
-        '{"request_id": "req_cli"}',
-        "--file",
-        f"document={file_path}",
-        "--s3-file",
-        "document_ref=s3://bucket/cli.txt",
-    ]) == 0
+    assert (
+        app.main(
+            [
+                "run",
+                "input_workflow",
+                "--connect",
+                "localhost:9999",
+                "--input",
+                '{"message": "from-cli"}',
+                "--context",
+                '{"request_id": "req_cli"}',
+                "--file",
+                f"document={file_path}",
+            ]
+        )
+        == 0
+    )
 
     assert captured["flow_name"] == "input_workflow"
     assert captured["input"] == {"message": "from-cli"}
     assert captured["context"] == {"request_id": "req_cli"}
-    assert captured["files"]["document"].read_bytes() == b"cli-bytes"
-    assert captured["s3_files"]["document_ref"].uri == "s3://bucket/cli.txt"
+    assert captured["files"]["document"].read_bytes() == file_content
     assert captured["closed"] is True
     assert capsys.readouterr().out.strip() == "run_cli"
 
@@ -132,7 +150,7 @@ def test_ava_run_prints_provider_error_when_run_does_not_start(monkeypatch, caps
     class FakeProvider:
         last_error = "INVALID_ARGUMENT: too many inline file bytes"
 
-        def start_run(self, flow_name, *, input=None, context=None, files=None, s3_files=None):
+        def start_run(self, flow_name, *, input=None, context=None, files=None):
             return ""
 
         def close(self):
@@ -141,9 +159,7 @@ def test_ava_run_prints_provider_error_when_run_does_not_start(monkeypatch, caps
     monkeypatch.setattr(app, "_make_provider", lambda address: FakeProvider())
 
     assert app.main(["run", "input_workflow"]) == 1
-    assert capsys.readouterr().err.strip() == (
-        "INVALID_ARGUMENT: too many inline file bytes"
-    )
+    assert capsys.readouterr().err.strip() == ("INVALID_ARGUMENT: too many inline file bytes")
 
 
 def test_ava_run_preserves_ambiguity_candidates_on_stderr(monkeypatch, capsys):

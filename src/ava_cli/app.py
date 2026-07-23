@@ -68,13 +68,6 @@ def _build_parser() -> argparse.ArgumentParser:
         metavar="FIELD=PATH",
         help="attach local file bytes as a top-level input field",
     )
-    run.add_argument(
-        "--s3-file",
-        action="append",
-        default=[],
-        metavar="FIELD=S3_URI",
-        help="pass an S3 object reference as a top-level input field",
-    )
     run.set_defaults(handler=_run_flow)
 
     tui = subcommands.add_parser(
@@ -136,14 +129,12 @@ def _run_flow(args: argparse.Namespace) -> int:
         input_payload = _parse_json_object(args.input_json, "--input")
         context_payload = _parse_json_object(args.context_json, "--context")
         file_payloads = _parse_file_inputs(args.file)
-        s3_file_payloads = _parse_s3_file_inputs(args.s3_file)
         try:
             run_id = provider.start_run(
                 args.flow,
                 input=input_payload,
                 context=context_payload,
                 files=file_payloads,
-                s3_files=s3_file_payloads,
             )
         except ValueError as exc:
             print(str(exc), file=sys.stderr)
@@ -259,16 +250,6 @@ def _parse_file_inputs(values: list[str]):
     for value in values:
         field, path = _parse_assignment(value, "--file")
         files[field] = File.from_path(Path(path))
-    return files
-
-
-def _parse_s3_file_inputs(values: list[str]):
-    from avalanche.runtime import S3File
-
-    files = {}
-    for value in values:
-        field, uri = _parse_assignment(value, "--s3-file")
-        files[field] = S3File(uri=uri)
     return files
 
 

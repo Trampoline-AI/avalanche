@@ -12,7 +12,6 @@ vendor_log = logging.getLogger("vendor.db")
 class InvocationInput(ava.BaseInput):
     message: str = "default"
     document: ava.File | None = None
-    document_ref: ava.S3File | None = None
 
 
 class InvocationContext(ava.RunContext):
@@ -22,11 +21,10 @@ class InvocationContext(ava.RunContext):
 @source
 def capture_invocation(payload: InvocationInput, ctx: InvocationContext, log=Logger()):
     file_text = payload.document.read_bytes().decode() if payload.document else ""
-    ref_uri = payload.document_ref.uri if payload.document_ref else ""
     log.info(
         "Invocation input: "
         f"message={payload.message}; request_id={ctx.request_id}; "
-        f"run_id={ctx.run_id}; node={ctx.node_id}; file={file_text}; s3={ref_uri}"
+        f"run_id={ctx.run_id}; node={ctx.node_id}; file={file_text}"
     )
     return payload.message
 

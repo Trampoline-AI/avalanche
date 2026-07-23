@@ -229,7 +229,6 @@ all = [
     { name = "predict-rlm" },
     { name = "pylance" },
     { name = "ray", extra = ["default"] },
-    { name = "s3fs" },
     { name = "textual" },
     { name = "watchfiles" },
 ]
@@ -244,9 +243,6 @@ runtime = [
     { name = "grpcio" },
     { name = "grpcio-tools" },
     { name = "watchfiles" },
-]
-s3 = [
-    { name = "s3fs" },
 ]
 tui = [
     { name = "grpcio" },
@@ -293,14 +289,12 @@ requires-dist = [
     { name = "python-ulid", specifier = ">=3.0.0" },
     { name = "ray", extras = ["default"], marker = "extra == 'all'", specifier = ">=2.50.0" },
     { name = "ray", extras = ["default"], marker = "extra == 'ray'", specifier = ">=2.50.0" },
-    { name = "s3fs", marker = "extra == 'all'", specifier = ">=2023.12.2" },
-    { name = "s3fs", marker = "extra == 's3'", specifier = ">=2023.12.2" },
     { name = "textual", marker = "extra == 'all'", specifier = ">=6.2.1" },
     { name = "textual", marker = "extra == 'tui'", specifier = ">=6.2.1" },
     { name = "watchfiles", marker = "extra == 'all'", specifier = ">=1.1.1" },
     { name = "watchfiles", marker = "extra == 'runtime'", specifier = ">=1.1.1" },
 ]
-provides-extras = ["runtime", "tui", "ray", "lance", "s3", "all", "agent"]
+provides-extras = ["runtime", "tui", "ray", "lance", "all", "agent"]
 
 [package.metadata.requires-dev]
 dev = [

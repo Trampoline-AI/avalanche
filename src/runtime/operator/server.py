@@ -12,13 +12,9 @@ from typing import Any
 
 import grpc
 
-from avalanche.runtime import (
-    MAX_INLINE_FILE_BYTES,
-    MAX_INLINE_REQUEST_BYTES,
-    File,
-    S3File,
-)
+from avalanche.runtime import File
 
+from ._grpc import _UNLIMITED_MESSAGE_OPTIONS
 from .convert import (
     discovery_diagnostic_to_proto,
     run_state_to_proto,
@@ -45,8 +41,7 @@ class OperatorServicer(pb_grpc.OperatorServiceServicer):
         return pb.FlowList(
             flows=[workflow_info_to_proto(p) for p in workflows],
             diagnostics=[
-                discovery_diagnostic_to_proto(item)
-                for item in self._op.list_diagnostics()
+                discovery_diagnostic_to_proto(item) for item in self._op.list_diagnostics()
             ],
         )
 
@@ -122,16 +117,18 @@ def serve(operator: Operator, port: int = DEFAULT_PORT, block: bool = True) -> g
     Returns:
         The gRPC server (useful for testing when block=False).
     """
-    server = grpc.server(futures.ThreadPoolExecutor(max_workers=10))
-    pb_grpc.add_OperatorServiceServicer_to_server(
-        OperatorServicer(operator), server
+    server = grpc.server(
+        futures.ThreadPoolExecutor(max_workers=10),
+        options=_UNLIMITED_MESSAGE_OPTIONS,
     )
+    pb_grpc.add_OperatorServiceServicer_to_server(OperatorServicer(operator), server)
     server.add_insecure_port(f"[::]:{port}")
     server.start()
     logger.info(f"Operator gRPC server listening on port {port}")
 
     if block:
         previous_handlers: dict[int, Any] = {}
+
         def request_shutdown(signum, _frame) -> None:
             logger.info("Received signal %s; shutting down", signum)
             server.stop(grace=1.0)
@@ -169,15 +166,9 @@ def _decode_json_object(payload: str, field_name: str) -> dict[str, Any] | None:
 
 def _decode_input_payload(request) -> dict[str, Any] | None:
     payload = _decode_json_object(request.input_json, "input_json") or {}
-    _validate_inline_request_size(request.input_files)
     for file in request.input_files:
         if not file.field_name:
             raise ValueError("input file attachment is missing field_name")
-        if len(file.content) > MAX_INLINE_FILE_BYTES:
-            raise ValueError(
-                f"File attachment '{file.field_name}' exceeds the maximum inline file size "
-                f"of {MAX_INLINE_FILE_BYTES} bytes. Use ava.S3File for larger files."
-            )
         _set_input_field(
             payload,
             file.field_name,
@@ -188,32 +179,7 @@ def _decode_input_payload(request) -> dict[str, Any] | None:
                 sha256=file.sha256 or None,
             ),
         )
-    for file in request.input_s3_files:
-        if not file.field_name:
-            raise ValueError("input S3 file reference is missing field_name")
-        _set_input_field(
-            payload,
-            file.field_name,
-            S3File(
-                uri=file.uri,
-                version_id=file.version_id or None,
-                etag=file.etag or None,
-                size_bytes=file.size_bytes or None,
-                content_type=file.content_type or None,
-                sha256=file.sha256 or None,
-            ),
-        )
     return payload or None
-
-
-def _validate_inline_request_size(files) -> None:
-    total = sum(len(file.content) for file in files)
-    if total > MAX_INLINE_REQUEST_BYTES:
-        raise ValueError(
-            f"Inline file attachments total {total} bytes, exceeding the maximum "
-            f"inline request size of {MAX_INLINE_REQUEST_BYTES} bytes. "
-            "Use ava.S3File for larger files."
-        )
 
 
 def _set_input_field(payload: dict[str, Any], field_name: str, value: Any) -> None:

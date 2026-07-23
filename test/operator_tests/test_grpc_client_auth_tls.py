@@ -38,9 +38,10 @@ def test_grpc_state_provider_uses_secure_channel_when_tls_enabled(monkeypatch) -
         calls["certificate_chain"] = certificate_chain
         return "credentials"
 
-    def fake_secure_channel(address: str, credentials: object):
+    def fake_secure_channel(address: str, credentials: object, *, options):
         calls["address"] = address
         calls["credentials"] = credentials
+        calls["options"] = options
         return FakeChannel()
 
     monkeypatch.setattr(client_module.grpc, "ssl_channel_credentials", fake_credentials)
@@ -53,7 +54,36 @@ def test_grpc_state_provider_uses_secure_channel_when_tls_enabled(monkeypatch) -
     assert calls["address"] == "delta.example:443"
     assert calls["credentials"] == "credentials"
     assert calls["root_certificates"] == b"ca"
+    assert dict(calls["options"]) == {
+        "grpc.max_send_message_length": -1,
+        "grpc.max_receive_message_length": -1,
+    }
     assert calls["closed"] is True
+
+
+def test_grpc_state_provider_uses_unlimited_insecure_channel_options(monkeypatch) -> None:
+    calls: dict[str, object] = {}
+
+    class FakeChannel:
+        def close(self) -> None:
+            pass
+
+    def fake_insecure_channel(address: str, *, options):
+        calls["address"] = address
+        calls["options"] = options
+        return FakeChannel()
+
+    monkeypatch.setattr(client_module.grpc, "insecure_channel", fake_insecure_channel)
+    monkeypatch.setattr(client_module.pb_grpc, "OperatorServiceStub", lambda channel: object())
+
+    provider = GrpcStateProvider("localhost:7433")
+    provider.close()
+
+    assert calls["address"] == "localhost:7433"
+    assert dict(calls["options"]) == {
+        "grpc.max_send_message_length": -1,
+        "grpc.max_receive_message_length": -1,
+    }
 
 
 class AuthenticatedOperatorService(pb_grpc.OperatorServiceServicer):

@@ -43,8 +43,6 @@ from .run_handle import RunHandle
 
 # Runtime primitives
 from .runtime import (  # noqa: F401
-    MAX_INLINE_FILE_BYTES,
-    MAX_INLINE_REQUEST_BYTES,
     BaseContext,
     BaseInput,
     Cursor,
@@ -53,7 +51,6 @@ from .runtime import (  # noqa: F401
     ModelStream,
     Rerun,
     RunContext,
-    S3File,
     Stream,
     consume_stream,
 )
@@ -114,12 +111,9 @@ __all__ = [
     "BaseInput",
     "Cursor",
     "File",
-    "MAX_INLINE_FILE_BYTES",
-    "MAX_INLINE_REQUEST_BYTES",
     "Rerun",
     "RunContext",
     "RunHandle",
-    "S3File",
     "Stream",
     "ModelStream",
     "Logger",

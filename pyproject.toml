@@ -40,16 +40,12 @@ ray = [
 lance = [
     "pylance>=0.24.0",
 ]
-s3 = [
-    "s3fs>=2023.12.2",
-]
 all = [
     "croniter>=6.2.2",
     "grpcio>=1.75.1",
     "grpcio-tools>=1.75.1",
     "pylance>=0.24.0",
     "ray[default]>=2.50.0",
-    "s3fs>=2023.12.2",
     "predict-rlm>=0.7.1",
     "textual>=6.2.1",
     "watchfiles>=1.1.1",

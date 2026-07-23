@@ -4,20 +4,9 @@ import hashlib
 from contextvars import ContextVar
 from io import BytesIO
 from pathlib import Path
-from typing import Any, BinaryIO, Literal, TextIO, overload
+from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
-
-MAX_INLINE_FILE_BYTES = 3 * 1024 * 1024
-MAX_INLINE_REQUEST_BYTES = MAX_INLINE_FILE_BYTES
-
-
-def _validate_inline_file_size(size: int, *, label: str) -> None:
-    if size > MAX_INLINE_FILE_BYTES:
-        raise ValueError(
-            f"{label} is {size} bytes, exceeding the maximum inline file size "
-            f"of {MAX_INLINE_FILE_BYTES} bytes. Use ava.S3File for larger files."
-        )
 
 
 class BaseInput(BaseModel):
@@ -113,7 +102,7 @@ def run_with_context(context: RunContext, fn: Any, *args: Any, **kwargs: Any) ->
 
 
 class File(BaseModel):
-    """Small file payload carried with a workflow run request."""
+    """File payload carried with a workflow run request."""
 
     model_config = ConfigDict(arbitrary_types_allowed=True, extra="forbid")
 
@@ -125,18 +114,11 @@ class File(BaseModel):
     @classmethod
     def from_path(cls, path: str | Path, *, content_type: str | None = None) -> "File":
         file_path = Path(path)
-        _validate_inline_file_size(file_path.stat().st_size, label=str(file_path))
         return cls(
             name=file_path.name,
             content=file_path.read_bytes(),
             content_type=content_type,
         )
-
-    @field_validator("content")
-    @classmethod
-    def _validate_content_size(cls, value: bytes) -> bytes:
-        _validate_inline_file_size(len(value), label="File content")
-        return value
 
     @model_validator(mode="after")
     def _compute_or_validate_sha256(self) -> "File":
@@ -154,67 +136,3 @@ class File(BaseModel):
 
     def open(self) -> BytesIO:
         return BytesIO(self.content)
-
-
-class S3File(BaseModel):
-    """Reference to a large S3-compatible object used as workflow input."""
-
-    model_config = ConfigDict(extra="forbid")
-
-    uri: str
-    version_id: str | None = None
-    etag: str | None = None
-    size_bytes: int | None = None
-    content_type: str | None = None
-    sha256: str | None = None
-
-    @field_validator("uri")
-    @classmethod
-    def _validate_s3_uri(cls, value: str) -> str:
-        if not value.startswith("s3://"):
-            raise ValueError("S3File uri must start with s3://")
-        return value
-
-    @field_validator("sha256")
-    @classmethod
-    def _validate_sha256(cls, value: str | None) -> str | None:
-        if value is None:
-            return None
-        normalized = value.lower()
-        if len(normalized) != 64 or any(
-            character not in "0123456789abcdef" for character in normalized
-        ):
-            raise ValueError("S3File sha256 must be a 64-character hexadecimal digest")
-        return normalized
-
-    @overload
-    def open(self, mode: Literal["rb"] = "rb", **kwargs: Any) -> BinaryIO: ...
-
-    @overload
-    def open(self, mode: Literal["r"], **kwargs: Any) -> TextIO: ...
-
-    @overload
-    def open(self, mode: str = "rb", **kwargs: Any) -> BinaryIO | TextIO: ...
-
-    def open(self, mode: str = "rb", **kwargs: Any) -> BinaryIO | TextIO:
-        try:
-            import s3fs
-        except ModuleNotFoundError as exc:
-            raise ModuleNotFoundError(
-                "S3File access requires s3fs. Install it with `avalanche-ai[s3]` "
-                "or add s3fs to your environment.",
-                name="s3fs",
-            ) from exc
-        filesystem_options = dict(kwargs)
-        open_options: dict[str, Any] = {}
-        if self.version_id is not None:
-            filesystem_options.setdefault("version_aware", True)
-            open_options["version_id"] = self.version_id
-        return s3fs.S3FileSystem(**filesystem_options).open(self.uri, mode, **open_options)
-
-    def read_bytes(self, **kwargs: Any) -> bytes:
-        with self.open("rb", **kwargs) as file:
-            content = file.read()
-        if self.sha256 is not None and hashlib.sha256(content).hexdigest() != self.sha256:
-            raise ValueError("S3File sha256 does not match content")
-        return content

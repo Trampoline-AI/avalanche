@@ -5,11 +5,11 @@ import os
 import socket
 import threading
 import time
+from pathlib import Path
 
 import grpc
 import pytest
 
-import avalanche as ava
 from avalanche.operator import Operator
 from avalanche.operator.client import GrpcStateProvider
 from avalanche.operator.convert import (
@@ -20,7 +20,7 @@ from avalanche.operator.convert import (
 )
 from avalanche.operator.models import RunState, RunStatus, WorkflowInfo
 from avalanche.operator.server import serve
-from avalanche.runtime import MAX_INLINE_REQUEST_BYTES, File, S3File
+from avalanche.runtime import File
 from runtime.operator.proto import operator_pb2 as pb
 
 FIXTURES_DIR = os.path.join(os.path.dirname(os.path.dirname(__file__)), "fixtures")
@@ -43,32 +43,27 @@ def _wait_for_run_success(client, run_id):
     return client.get_run(run_id)
 
 
-def test_phase9_start_run_wire_carries_run_id_and_s3_sha256():
+def test_start_run_wire_preserves_surviving_field_numbers():
     request = pb.StartRunRequest(
         flow_name="input_workflow",
         run_id="run_01KCVST2FP4QC5NKZNN5NS0Z2W",
         workflow_selector="flows/input.py::input_workflow",
-        input_s3_files=[
-            pb.S3FileReference(
-                field_name="document_ref",
-                uri="s3://bucket/document",
-                size_bytes=5,
-                sha256=(
-                    "2cf24dba5fb0a30e26e83b2ac5b9e29e"
-                    "1b161e5c1fa7425e73043362938b9824"
-                ),
-            )
-        ],
     )
 
     assert request.run_id == "run_01KCVST2FP4QC5NKZNN5NS0Z2W"
     assert request.workflow_selector == "flows/input.py::input_workflow"
+    assert pb.StartRunRequest.FLOW_NAME_FIELD_NUMBER == 1
+    assert pb.StartRunRequest.INPUT_JSON_FIELD_NUMBER == 2
+    assert pb.StartRunRequest.CONTEXT_JSON_FIELD_NUMBER == 3
+    assert pb.StartRunRequest.INPUT_FILES_FIELD_NUMBER == 4
     assert pb.StartRunRequest.RUN_ID_FIELD_NUMBER == 6
     assert pb.StartRunRequest.WORKFLOW_SELECTOR_FIELD_NUMBER == 7
-    assert request.input_s3_files[0].sha256 == (
-        "2cf24dba5fb0a30e26e83b2ac5b9e29e"
-        "1b161e5c1fa7425e73043362938b9824"
-    )
+    assert set(pb.StartRunRequest.DESCRIPTOR.fields_by_number) == {1, 2, 3, 4, 6, 7}
+    assert "S3FileReference" not in pb.DESCRIPTOR.message_types_by_name
+
+    proto_source = Path(pb.__file__).with_name("operator.proto").read_text()
+    assert "input_s3_files" not in proto_source
+    assert "S3FileReference" not in proto_source
 
 
 @pytest.fixture(scope="module")
@@ -126,17 +121,11 @@ class TestGrpcRoundtrip:
     def test_start_run_honors_client_run_id(self, client):
         requested_run_id = "run_client_owned"
 
-        assert (
-            client.start_run("simple_workflow", run_id=requested_run_id)
-            == requested_run_id
-        )
+        assert client.start_run("simple_workflow", run_id=requested_run_id) == requested_run_id
 
     def test_start_run_duplicate_custom_id_maps_to_already_exists(self, client):
         requested_run_id = "run_grpc_duplicate"
-        assert (
-            client.start_run("simple_workflow", run_id=requested_run_id)
-            == requested_run_id
-        )
+        assert client.start_run("simple_workflow", run_id=requested_run_id) == requested_run_id
 
         assert client.start_run("simple_workflow", run_id=requested_run_id) == ""
         assert "ALREADY_EXISTS" in client.last_error
@@ -204,10 +193,7 @@ def lineage_context_workflow():
             messages = [entry.message for entry in run.logs]
             assert any("lineage={}" in message for message in messages)
             assert any(f"run_id={run_id}" in message for message in messages)
-            assert any(
-                "workflow=lineage_context_workflow" in message
-                for message in messages
-            )
+            assert any("workflow=lineage_context_workflow" in message for message in messages)
             assert any("executor=local" in message for message in messages)
             assert any("node_id=capture_1" in message for message in messages)
             assert any("node_name=capture" in message for message in messages)
@@ -219,46 +205,18 @@ def lineage_context_workflow():
             server.stop(grace=1)
             op.close()
 
-    @pytest.mark.parametrize(
-        "start_request",
-        [
-            pb.StartRunRequest(
-                flow_name="input_workflow",
-                run_id="run_bad_inline_checksum",
-                input_files=[
-                    pb.FileAttachment(
-                        field_name="document",
-                        content=b"contents",
-                        sha256="0" * 64,
-                    )
-                ],
-            ),
-            pb.StartRunRequest(
-                flow_name="input_workflow",
-                run_id="run_bad_s3_checksum_shape",
-                input_s3_files=[
-                    pb.S3FileReference(
-                        field_name="document_ref",
-                        uri="s3://bucket/document",
-                        sha256="not-a-digest",
-                    )
-                ],
-            ),
-            pb.StartRunRequest(
-                flow_name="input_workflow",
-                run_id="run_bad_s3_uri_shape",
-                input_s3_files=[
-                    pb.S3FileReference(
-                        field_name="document_ref",
-                        uri="https://bucket.example/document",
-                    )
-                ],
-            ),
-        ],
-    )
-    def test_start_run_rejects_bad_file_metadata_before_response(
-        self, client, start_request
-    ):
+    def test_start_run_rejects_bad_file_metadata_before_response(self, client):
+        start_request = pb.StartRunRequest(
+            flow_name="input_workflow",
+            run_id="run_bad_inline_checksum",
+            input_files=[
+                pb.FileAttachment(
+                    field_name="document",
+                    content=b"contents",
+                    sha256="0" * 64,
+                )
+            ],
+        )
         with pytest.raises(grpc.RpcError) as exc_info:
             client._stub.StartRun(start_request)
 
@@ -271,12 +229,6 @@ def lineage_context_workflow():
             input={"message": "from-grpc"},
             context={"request_id": "req_grpc", "run_id": "spoofed_user_id"},
             files={"document": File(name="note.txt", content=b"grpc-bytes")},
-            s3_files={
-                "document_ref": S3File(
-                    uri="s3://bucket/grpc.txt",
-                    sha256="0" * 64,
-                )
-            },
         )
 
         deadline = time.monotonic() + 5
@@ -295,7 +247,6 @@ def lineage_context_workflow():
         assert any(f"run_id={run_id}" in message for message in messages)
         assert not any("run_id=spoofed_user_id" in message for message in messages)
         assert any("file=grpc-bytes" in message for message in messages)
-        assert any("s3=s3://bucket/grpc.txt" in message for message in messages)
 
     def test_start_run_rejects_duplicate_top_level_input_fields(self, client):
         run_id = client.start_run(
@@ -308,38 +259,55 @@ def lineage_context_workflow():
         assert "INVALID_ARGUMENT" in client.last_error
         assert "Duplicate input field 'document'" in client.last_error
 
-    def test_start_run_rejects_oversized_file_attachments(self, client):
-        with pytest.raises(ValueError, match="S3File"):
-            client.start_run(
-                "input_workflow",
-                files={"document": b"x" * (ava.MAX_INLINE_FILE_BYTES + 1)},
+    def test_start_run_roundtrips_file_above_grpc_default_limit(self, tmp_path):
+        workflow_path = tmp_path / "large_file_workflow.py"
+        workflow_path.write_text(
+            """
+import avalanche as ava
+
+
+class LargeFileInput(ava.BaseInput):
+    document: ava.File
+
+
+@ava.source
+def measure(payload: LargeFileInput, log=ava.Logger()):
+    log.info(f"file_size={len(payload.document.content)}; sha256={payload.document.sha256}")
+
+
+@ava.workflow(input=LargeFileInput)
+def large_file_workflow():
+    measure()
+""",
+        )
+        operator = Operator(
+            workflow_paths=[str(workflow_path)],
+            schedule=False,
+            watch=False,
+        )
+        port = _unused_port()
+        server = serve(operator, port=port, block=False)
+        provider = GrpcStateProvider(f"localhost:{port}")
+        content = b"x" * (4 * 1024 * 1024 + 1)
+        try:
+            file = File(name="large.bin", content=content)
+            run_id = provider.start_run(
+                "large_file_workflow",
+                files={"document": file},
             )
 
-    def test_start_run_rejects_aggregate_inline_file_bytes_before_rpc(self, client):
-        chunk = b"x" * (MAX_INLINE_REQUEST_BYTES // 2 + 1)
-
-        with pytest.raises(ValueError, match="maximum inline request size"):
-            client.start_run(
-                "simple_workflow",
-                files={"first": chunk, "second": chunk},
+            assert run_id
+            run = _wait_for_run_success(provider, run_id)
+            assert run is not None
+            assert run.status == RunStatus.SUCCESS
+            assert any(
+                f"file_size={len(content)}; sha256={file.sha256}" in entry.message
+                for entry in run.logs
             )
-
-    def test_start_run_server_rejects_aggregate_inline_file_bytes(self, client):
-        chunk = b"x" * (MAX_INLINE_REQUEST_BYTES // 2 + 1)
-
-        with pytest.raises(Exception) as exc_info:
-            client._stub.StartRun(
-                pb.StartRunRequest(
-                    flow_name="simple_workflow",
-                    input_files=[
-                        pb.FileAttachment(field_name="first", content=chunk),
-                        pb.FileAttachment(field_name="second", content=chunk),
-                    ],
-                )
-            )
-
-        assert exc_info.value.code().name == "INVALID_ARGUMENT"
-        assert "maximum inline request size" in exc_info.value.details()
+        finally:
+            provider.close()
+            server.stop(grace=1)
+            operator.close()
 
     def test_list_runs(self, client):
         run_id = client.start_run("simple_workflow")
@@ -404,9 +372,7 @@ def lineage_context_workflow():
         replay_stream = None
         try:
             operator._notify_run(run)
-            first_stream = provider._stub.StreamUpdates(
-                pb.StreamRequest(since_sequence=cursor)
-            )
+            first_stream = provider._stub.StreamUpdates(pb.StreamRequest(since_sequence=cursor))
             first = next(first_stream)
             assert first.run.run_id == run.run_id
             first_stream.cancel()
@@ -493,21 +459,15 @@ def test_client_accepts_lower_first_sequence_after_operator_restart():
             assert metadata is None
             yield pb.RunUpdate(
                 sequence=2,
-                run=pb.RunStateMsg(
-                    run_id="run_recovered", flow_name="flow", status="success"
-                ),
+                run=pb.RunStateMsg(run_id="run_recovered", flow_name="flow", status="success"),
             )
             yield pb.RunUpdate(
                 sequence=2,
-                run=pb.RunStateMsg(
-                    run_id="duplicate", flow_name="flow", status="success"
-                ),
+                run=pb.RunStateMsg(run_id="duplicate", flow_name="flow", status="success"),
             )
             yield pb.RunUpdate(
                 sequence=1,
-                run=pb.RunStateMsg(
-                    run_id="stale", flow_name="flow", status="pending"
-                ),
+                run=pb.RunStateMsg(run_id="stale", flow_name="flow", status="pending"),
             )
             yield pb.RunUpdate(
                 sequence=3,
@@ -537,15 +497,11 @@ def test_client_skips_equal_first_sequence_without_epoch_reset():
             assert metadata is None
             yield pb.RunUpdate(
                 sequence=99,
-                run=pb.RunStateMsg(
-                    run_id="duplicate", flow_name="flow", status="success"
-                ),
+                run=pb.RunStateMsg(run_id="duplicate", flow_name="flow", status="success"),
             )
             yield pb.RunUpdate(
                 sequence=100,
-                run=pb.RunStateMsg(
-                    run_id="run_live", flow_name="flow", status="running"
-                ),
+                run=pb.RunStateMsg(run_id="run_live", flow_name="flow", status="running"),
             )
             provider._stream_stop.set()
 
@@ -767,9 +723,7 @@ def test_unary_client_calls_pass_finite_timeout():
 
         def GetRun(self, request, *, timeout, **kwargs):  # noqa: N802
             self._capture("get", timeout)
-            return pb.RunStateMsg(
-                run_id=request.run_id, flow_name="flow", status="pending"
-            )
+            return pb.RunStateMsg(run_id=request.run_id, flow_name="flow", status="pending")
 
         def ListRuns(self, request, *, timeout, **kwargs):  # noqa: N802
             self._capture("runs", timeout)
@@ -819,12 +773,7 @@ def test_unary_timeout_must_be_a_positive_finite_real(value, error, message):
 
 def test_canonical_and_ambiguous_grpc_selection(tmp_path):
     roots = [tmp_path / "left", tmp_path / "right"]
-    source = (
-        "import avalanche as ava\n"
-        "@ava.workflow\n"
-        "def shared():\n"
-        "    return None\n"
-    )
+    source = "import avalanche as ava\n" "@ava.workflow\n" "def shared():\n" "    return None\n"
     for root in roots:
         root.mkdir()
         (root / "flow.py").write_text(source)
@@ -897,9 +846,16 @@ def test_blocking_server_closes_operator_in_finally(monkeypatch):
         def close(self):
             self.closed = True
 
+    grpc_options = None
     fake_server = FakeServer()
     operator = FakeOperator()
-    monkeypatch.setattr(server_module.grpc, "server", lambda _executor: fake_server)
+
+    def fake_grpc_server(_executor, *, options):
+        nonlocal grpc_options
+        grpc_options = options
+        return fake_server
+
+    monkeypatch.setattr(server_module.grpc, "server", fake_grpc_server)
     monkeypatch.setattr(
         server_module.pb_grpc,
         "add_OperatorServiceServicer_to_server",
@@ -909,3 +865,7 @@ def test_blocking_server_closes_operator_in_finally(monkeypatch):
     assert server_module.serve(operator, port=0, block=True) is fake_server
     assert operator.closed
     assert fake_server.stop_calls
+    assert dict(grpc_options) == {
+        "grpc.max_send_message_length": -1,
+        "grpc.max_receive_message_length": -1,
+    }

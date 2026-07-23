@@ -163,7 +163,6 @@ Package consumers can choose narrower extras:
 | `tui` | Textual terminal UI |
 | `ray` | Ray executor support |
 | `lance` | Lance storage backend support |
-| `s3` | S3 file reference reads through `ava.S3File` and `s3fs` |
 | `agent` | agent-backed workflow steps through [PredictRLM](https://github.com/Trampoline-AI/predict-rlm) |
 | `all` | all optional runtime components |
 

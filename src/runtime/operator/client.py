@@ -12,13 +12,9 @@ from typing import Any, Callable
 import grpc
 from pydantic import BaseModel
 
-from avalanche.runtime import (
-    MAX_INLINE_FILE_BYTES,
-    MAX_INLINE_REQUEST_BYTES,
-    File,
-    S3File,
-)
+from avalanche.runtime import File
 
+from ._grpc import _UNLIMITED_MESSAGE_OPTIONS
 from .convert import (
     discovery_diagnostic_from_proto,
     run_state_from_proto,
@@ -65,9 +61,16 @@ class GrpcStateProvider:
                 private_key=private_key,
                 certificate_chain=certificate_chain,
             )
-            self._channel = grpc.secure_channel(address, credentials)
+            self._channel = grpc.secure_channel(
+                address,
+                credentials,
+                options=_UNLIMITED_MESSAGE_OPTIONS,
+            )
         else:
-            self._channel = grpc.insecure_channel(address)
+            self._channel = grpc.insecure_channel(
+                address,
+                options=_UNLIMITED_MESSAGE_OPTIONS,
+            )
         self._stub = pb_grpc.OperatorServiceStub(self._channel)
         self._run_callbacks: list[Callable[[RunState], None]] = []
         self._log_callbacks: list[Callable[[LogEntry], None]] = []
@@ -155,16 +158,11 @@ class GrpcStateProvider:
         input: Mapping[str, Any] | BaseModel | None = None,
         context: Mapping[str, Any] | BaseModel | None = None,
         files: Mapping[str, File | bytes] | None = None,
-        s3_files: Mapping[str, S3File | str] | None = None,
     ) -> str:
         input_files = [
-            _file_attachment(field_name, value)
-            for field_name, value in (files or {}).items()
+            _file_attachment(field_name, value) for field_name, value in (files or {}).items()
         ]
-        _validate_inline_request_size(input_files)
-        flow_name = self._legacy_names_by_workflow_id.get(
-            workflow_selector, workflow_selector
-        )
+        flow_name = self._legacy_names_by_workflow_id.get(workflow_selector, workflow_selector)
         request = pb.StartRunRequest(
             flow_name=flow_name,
             workflow_selector=workflow_selector,
@@ -172,10 +170,6 @@ class GrpcStateProvider:
             input_json=_json_payload(input),
             context_json=_json_payload(context),
             input_files=input_files,
-            input_s3_files=[
-                _s3_file_reference(field_name, value)
-                for field_name, value in (s3_files or {}).items()
-            ],
         )
         resp = self._call(self._stub.StartRun, request)
         return resp.run_id if resp else ""
@@ -197,9 +191,7 @@ class GrpcStateProvider:
                 return
             if self._stream_thread is not None and self._stream_thread.is_alive():
                 return
-            self._stream_thread = threading.Thread(
-                target=self._stream_loop, daemon=True
-            )
+            self._stream_thread = threading.Thread(target=self._stream_loop, daemon=True)
             self._stream_thread.start()
 
     def ping(self) -> bool:
@@ -300,38 +292,10 @@ def _json_payload(payload: Mapping[str, Any] | BaseModel | None) -> str:
 
 def _file_attachment(field_name: str, value: File | bytes) -> pb.FileAttachment:
     file = value if isinstance(value, File) else File(name=field_name, content=value)
-    if len(file.content) > MAX_INLINE_FILE_BYTES:
-        raise ValueError(
-            f"File attachment '{field_name}' exceeds the maximum inline file size "
-            f"of {MAX_INLINE_FILE_BYTES} bytes. Use ava.S3File for larger files."
-        )
     return pb.FileAttachment(
         field_name=field_name,
         name=file.name or "",
         content=file.content,
-        content_type=file.content_type or "",
-        sha256=file.sha256 or "",
-    )
-
-
-def _validate_inline_request_size(files: list[pb.FileAttachment]) -> None:
-    total = sum(len(file.content) for file in files)
-    if total > MAX_INLINE_REQUEST_BYTES:
-        raise ValueError(
-            f"Inline file attachments total {total} bytes, exceeding the maximum "
-            f"inline request size of {MAX_INLINE_REQUEST_BYTES} bytes. "
-            "Use ava.S3File for larger files."
-        )
-
-
-def _s3_file_reference(field_name: str, value: S3File | str) -> pb.S3FileReference:
-    file = value if isinstance(value, S3File) else S3File(uri=value)
-    return pb.S3FileReference(
-        field_name=field_name,
-        uri=file.uri,
-        version_id=file.version_id or "",
-        etag=file.etag or "",
-        size_bytes=file.size_bytes or 0,
         content_type=file.content_type or "",
         sha256=file.sha256 or "",
     )

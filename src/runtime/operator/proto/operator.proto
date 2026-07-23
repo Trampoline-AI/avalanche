@@ -22,7 +22,6 @@ message StartRunRequest {
   string input_json = 2;
   string context_json = 3;
   repeated FileAttachment input_files = 4;
-  repeated S3FileReference input_s3_files = 5;
   string run_id = 6;
   string workflow_selector = 7;
 }
@@ -33,16 +32,6 @@ message FileAttachment {
   bytes content = 3;
   string content_type = 4;
   string sha256 = 5;
-}
-
-message S3FileReference {
-  string field_name = 1;
-  string uri = 2;
-  string version_id = 3;
-  string etag = 4;
-  uint64 size_bytes = 5;
-  string content_type = 6;
-  string sha256 = 7;
 }
 
 message StartRunResponse {

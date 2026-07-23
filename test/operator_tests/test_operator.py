@@ -89,7 +89,6 @@ class TestOperatorLifecycle:
             input={
                 "message": "hello",
                 "document": {"name": "note.txt", "content": b"contents"},
-                "document_ref": {"uri": "s3://bucket/input.txt"},
             },
             context={"request_id": "req_456", "run_id": "spoofed_user_id"},
         )
@@ -110,7 +109,6 @@ class TestOperatorLifecycle:
         assert any(f"run_id={run_id}" in message for message in messages)
         assert not any("run_id=spoofed_user_id" in message for message in messages)
         assert any("file=contents" in message for message in messages)
-        assert any("s3=s3://bucket/input.txt" in message for message in messages)
 
     def test_all_nodes_succeed(self):
         op = self._make_operator()

@@ -1,4 +1,4 @@
-.PHONY: test test-cov test-cov-html lint format precommit-check check smoke-test tui-bench brand install clean
+.PHONY: test test-cov test-cov-html lint format precommit-check check smoke-test tui-bench proto brand install clean
 
 # Run tests with every supported executor/storage extra installed.
 test:
@@ -35,6 +35,13 @@ smoke-test:
 # Measure TUI refresh scaling as log history grows
 tui-bench:
 	uv run python scripts/benchmark_tui.py --assert-budget
+
+# Regenerate checked-in operator protobuf modules.
+proto:
+	cd src/runtime/operator/proto && uv run python -m grpc_tools.protoc \
+		-I. --python_out=. --pyi_out=. --grpc_python_out=. operator.proto
+	perl -pi -e 's/^import operator_pb2 as operator__pb2$$/from . import operator_pb2 as operator__pb2/' \
+		src/runtime/operator/proto/operator_pb2_grpc.py
 
 # Build checked-in brand image artifacts from the Three.js source HTML.
 brand:

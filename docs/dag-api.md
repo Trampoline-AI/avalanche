@@ -180,13 +180,12 @@ import avalanche as ava
 class DocumentInput(ava.BaseInput):
     value: int
     document: ava.File
-    remote_document: ava.S3File
 
 
 @ava.source
 def load_document(payload: DocumentInput, ctx: ava.RunContext) -> str:
     local_text = payload.document.read_bytes().decode()
-    return f"{ctx.run_id}:{payload.value}:{local_text}:{payload.remote_document.uri}"
+    return f"{ctx.run_id}:{payload.value}:{local_text}"
 
 
 @ava.workflow(input=DocumentInput)
@@ -231,7 +230,6 @@ result = document_flow().run(
     input={
         "value": 41,
         "document": {"name": "doc.txt", "content": b"hello"},
-        "remote_document": {"uri": "s3://bucket/large-doc.txt"},
     },
     context={"metadata": {"request_id": "req_123"}},
 ).result()
@@ -244,28 +242,10 @@ fields such as `run_id`, `workflow_name`, `executor_type`, `rerun`, `node_id`,
 `node_name`, `node_slug`, and `lineage_vector`; callers cannot spoof them with
 `context` payloads.
 
-`ava.File` is for small file payloads carried with a run request. Inline files
-are limited to `ava.MAX_INLINE_FILE_BYTES` bytes; use `ava.S3File` above that
-limit. gRPC/CLI run requests also limit total inline file bytes to
-`ava.MAX_INLINE_REQUEST_BYTES`; use `ava.S3File` when a request needs more file
-data. Build one from a path with `ava.File.from_path(path)` or pass `{name,
+`ava.File` carries file content directly with a run request, without a framework
+size limit. Build one from a path with `ava.File.from_path(path)` or pass `{name,
 content, content_type}` in the input payload. `sha256` is computed when omitted
 and validated when supplied.
-
-`ava.S3File` is a reference to a large S3-compatible object. It validates `s3://`
-URIs and lazy-imports `s3fs` only when `open()` or `read_bytes()` is called.
-Install `avalanche-ai[s3]` if your environment does not already include `s3fs`.
-Authentication and endpoint options are passed through to `s3fs`:
-
-```python
-import os
-
-contents = payload.remote_document.read_bytes(
-    key=os.environ["AWS_ACCESS_KEY_ID"],
-    secret=os.environ["AWS_SECRET_ACCESS_KEY"],
-    client_kwargs={"endpoint_url": "https://s3.example.com"},
-)
-```
 
 ## Execution
 
@@ -365,15 +345,14 @@ in-process Python API records the value in `RunContext.rerun`; it does not switc
 code versions by itself.
 
 When a local operator is running, start a discovered workflow over gRPC with
-`ava run`. JSON values go through `--input` and `--context`; files and S3
-references are attached to top-level input fields without base64-in-JSON:
+`ava run`. JSON values go through `--input` and `--context`; files are attached
+to top-level input fields without base64-in-JSON:
 
 ```bash
 uv run ava run document_flow --connect localhost:7433 \
   --input '{"value": 41}' \
   --context '{"metadata": {"request_id": "req_123"}}' \
-  --file document=./doc.txt \
-  --s3-file remote_document=s3://bucket/large-doc.txt
+  --file document=./doc.txt
 ```
 
 ## Current caveats
