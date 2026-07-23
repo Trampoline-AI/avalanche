@@ -130,7 +130,9 @@ class Sidebar(Static, can_focus=True):
         text.append("\n")  # visual gap below border title
 
         content_w = self.content_size.width if self.content_size.width > 0 else 0
-        row_width = content_w or (store.sidebar_width - 2)
+        configured_w = max(0, store.sidebar_width - 2)
+        # Textual may expose the previous content size for one layout tick after a resize.
+        row_width = min(content_w, configured_w) if content_w else configured_w
         has_focus = store.focused_pane == "sidebar"
         cursor = store.sidebar_cursor
         selected_id = store.sidebar_selected_id
