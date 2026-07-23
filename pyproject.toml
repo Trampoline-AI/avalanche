@@ -75,9 +75,6 @@ dev = [
     "predict-rlm>=0.7.1",
 ]
 
-[tool.uv.sources]
-predict-rlm = { path = "../predict-rlm", editable = true }
-
 [tool.pytest.ini_options]
 minversion = "6.0"
 addopts = "-rP --testdox"
