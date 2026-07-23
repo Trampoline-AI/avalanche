@@ -27,9 +27,18 @@ __all__ = [
 ]
 
 
-def serve(workflow_paths: list[str], port: int = 7433, **kwargs) -> None:
+def serve(
+    workflow_paths: list[str],
+    port: int = 7433,
+    *,
+    host: str = "127.0.0.1",
+    **kwargs,
+) -> None:
     """Start the operator daemon with gRPC server."""
     from .server import serve as _serve
 
     op = Operator(workflow_paths, **kwargs)
-    _serve(op, port=port, block=True)
+    try:
+        _serve(op, port=port, block=True, host=host)
+    finally:
+        op.close()

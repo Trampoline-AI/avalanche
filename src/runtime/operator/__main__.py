@@ -19,6 +19,14 @@ def main(argv: Sequence[str] | None = None) -> int:
         help="flow file or directory to scan",
     )
     parser.add_argument("--port", type=int, default=7433, help="operator gRPC port")
+    parser.add_argument(
+        "--host",
+        default="127.0.0.1",
+        help=(
+            "listen host (default: loopback); non-loopback exposure requires an "
+            "external trusted and authenticated boundary"
+        ),
+    )
     parser.add_argument("--ray", action="store_true", help="use the Ray executor")
     args = parser.parse_args(list(argv) if argv is not None else None)
 
@@ -29,11 +37,12 @@ def main(argv: Sequence[str] | None = None) -> int:
 
     from . import serve
 
-    print(f"Avalanche operator starting on port {args.port}")
+    print(f"Avalanche operator starting on {args.host}:{args.port}")
     print(f"Scanning flows: {', '.join(args.flows)}")
     serve(
         args.flows,
         port=args.port,
+        host=args.host,
         executor_backend="ray" if args.ray else "local",
     )
     return 0

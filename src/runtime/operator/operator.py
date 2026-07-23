@@ -8,6 +8,7 @@ import multiprocessing
 import os
 import queue
 import signal
+import subprocess
 import threading
 import time
 import warnings
@@ -31,6 +32,15 @@ from .models import (
     WorkflowInfo,
 )
 from .registry import AmbiguousWorkflow, WorkflowRegistry
+from .result_store import (
+    PendingResultBundle,
+    ResultPublicationCancelledError,
+    ResultStore,
+    StoredWorkflowResult,
+    duplicate_bundle_descriptor_for_spawn,
+    require_worker_descriptor_transfer,
+)
+from .results import EncodedWorkflowResult, decode_workflow_result
 from .run_worker import run_worker
 from .source import is_source_path_included, resolve_live_source, resolve_watch_roots
 from .windows_job import WindowsJob, assign_process, close_job, create_kill_on_close_job
@@ -42,9 +52,11 @@ _LEVEL_MAP = {
     logging.ERROR: LogLevel.ERROR,
     logging.CRITICAL: LogLevel.ERROR,
 }
+logger = logging.getLogger(__name__)
 
 ExecutorBackend: TypeAlias = Literal["local", "ray"]
 STREAM_HISTORY_CAPACITY = 1024
+DEFAULT_RESULT_RETENTION_SECONDS = 24 * 60 * 60
 DeprecatedExecutorFactory: TypeAlias = (
     type[LocalExecutor] | type[RayExecutor] | partial[RayExecutor]
 )
@@ -52,6 +64,14 @@ DeprecatedExecutorFactory: TypeAlias = (
 
 class RunAlreadyExistsError(ValueError):
     """Raised when a caller-owned run ID has already been reserved."""
+
+
+class RunResultNotReadyError(RuntimeError):
+    """Raised when result retrieval is attempted before terminal success."""
+
+
+class RunResultUnavailableError(RuntimeError):
+    """Raised when a failed or cancelled run has no workflow result."""
 
 
 class _ExecutorBackendOmitted:
@@ -73,7 +93,18 @@ class _RunHandle:
     start_event: Any
     assignment_event: Any
     windows_job: WindowsJob | None
+    result_bundle: PendingResultBundle
     drain_thread: threading.Thread | None = None
+    success_quiesced: bool = False
+
+
+@dataclass(frozen=True)
+class _ProcessGroupTeardown:
+    quiesced: bool
+    natural_exitcode: int | None = None
+
+    def __bool__(self) -> bool:
+        return self.quiesced
 
 
 class Operator:
@@ -95,6 +126,8 @@ class Operator:
         discovery_timeout: float = 15.0,
         cancel_grace: float = 5.0,
         stream_history_capacity: int = STREAM_HISTORY_CAPACITY,
+        result_storage_directory: str | os.PathLike[str] | None = None,
+        result_retention_seconds: float | None = DEFAULT_RESULT_RETENTION_SECONDS,
     ) -> None:
         """Create an operator with spawn-safe executor configuration.
 
@@ -119,9 +152,21 @@ class Operator:
             raise ValueError("Cancellation grace must be non-negative")
         if stream_history_capacity <= 0:
             raise ValueError("Stream history capacity must be positive")
+        if result_retention_seconds is not None:
+            if isinstance(result_retention_seconds, bool) or not isinstance(
+                result_retention_seconds, (int, float)
+            ):
+                raise TypeError("Result retention must be a real number or None")
+            if not math.isfinite(result_retention_seconds) or result_retention_seconds <= 0:
+                raise ValueError("Result retention must be positive and finite")
         self._cancel_grace = cancel_grace
+        self._result_retention_seconds = (
+            None if result_retention_seconds is None else float(result_retention_seconds)
+        )
         self._mp = multiprocessing.get_context("spawn")
         self._runs: dict[str, RunState] = {}
+        self._stored_results: dict[str, StoredWorkflowResult] = {}
+        self._result_leases: dict[str, int] = {}
         self._active_runs: dict[str, _RunHandle] = {}
         self._run_callbacks: list[Callable[[RunState], None]] = []
         self._log_callbacks: list[Callable[[LogEntry], None]] = []
@@ -134,16 +179,37 @@ class Operator:
         self._watcher_stop = threading.Event()
         self._watcher_ready = threading.Event()
         self._watcher_thread: threading.Thread | None = None
+        self._result_cleanup_stop = threading.Event()
+        self._result_cleanup_thread: threading.Thread | None = None
         self._closed = False
+        self._result_store = ResultStore(result_storage_directory)
 
         from .scheduler import Scheduler
 
         self._scheduler = Scheduler(self)
-        self._scheduler.reconcile(self._registry.descriptors())
-        if watch and self._workflow_paths:
-            self._start_watcher()
-        if schedule and self._workflow_paths:
-            self._scheduler.start()
+        try:
+            self._scheduler.reconcile(self._registry.descriptors())
+            if watch and self._workflow_paths:
+                self._start_watcher()
+            if schedule and self._workflow_paths:
+                self._scheduler.start()
+            if self._result_retention_seconds is not None:
+                self._result_cleanup_thread = threading.Thread(
+                    target=self._result_cleanup_loop,
+                    name="avalanche-result-cleanup",
+                    daemon=True,
+                )
+                self._result_cleanup_thread.start()
+        except BaseException:
+            self._watcher_stop.set()
+            self._result_cleanup_stop.set()
+            self._scheduler.stop()
+            if self._watcher_thread is not None:
+                self._watcher_thread.join(timeout=2.0)
+            if self._result_cleanup_thread is not None:
+                self._result_cleanup_thread.join(timeout=2.0)
+            self._result_store.close()
+            raise
 
     def list_workflows(self) -> list[WorkflowInfo]:
         workflows = self._registry.list_workflows()
@@ -168,12 +234,14 @@ class Operator:
         except AmbiguousWorkflow:
             raise
         except KeyError:
-            matching_ids = sorted({
-                run.workflow_id or run.flow_name
-                for run in runs
-                if run.flow_name == workflow_selector
-                or run.workflow_display_name == workflow_selector
-            })
+            matching_ids = sorted(
+                {
+                    run.workflow_id or run.flow_name
+                    for run in runs
+                    if run.flow_name == workflow_selector
+                    or run.workflow_display_name == workflow_selector
+                }
+            )
             if len(matching_ids) > 1:
                 raise AmbiguousWorkflow(workflow_selector, tuple(matching_ids)) from None
             if not matching_ids:
@@ -185,6 +253,47 @@ class Operator:
         with self._lock:
             run = self._runs.get(run_id)
             return deepcopy(run) if run is not None else None
+
+    def get_run_result(self, run_id: str) -> Any:
+        """Return a successful run's decoded workflow result.
+
+        Results are available only after terminal success. Failed, cancelled,
+        pending, and unknown runs retain their existing state semantics and do
+        not expose a partial payload.
+        """
+        return decode_workflow_result(self._get_run_result_payload(run_id))
+
+    def _get_run_result_payload(self, run_id: str) -> EncodedWorkflowResult:
+        """Load one validated result payload from private storage."""
+        with self._lock:
+            run = self._runs.get(run_id)
+            stored = self._stored_results.get(run_id)
+            if run is None:
+                raise KeyError(run_id)
+            status = run.status
+            if status in {RunStatus.PENDING, RunStatus.RUNNING}:
+                raise RunResultNotReadyError(f"Run {run_id} is not terminal")
+            if status != RunStatus.SUCCESS:
+                raise RunResultUnavailableError(
+                    f"Run {run_id} ended with status {status.value}"
+                )
+            if stored is None:
+                raise RunResultUnavailableError(
+                    f"Run {run_id} result is unavailable or expired"
+                )
+            self._result_leases[run_id] = self._result_leases.get(run_id, 0) + 1
+        try:
+            return self._result_store.load(
+                stored,
+                cancel_signal=self._result_cleanup_stop,
+            )
+        finally:
+            with self._lock:
+                remaining = self._result_leases.get(run_id, 1) - 1
+                if remaining:
+                    self._result_leases[run_id] = remaining
+                else:
+                    self._result_leases.pop(run_id, None)
 
     def start_run(
         self,
@@ -206,36 +315,47 @@ class Operator:
             run_id = run_id or f"run_{str(uuid4())[:8]}"
             if run_id in self._runs or run_id in self._active_runs:
                 raise RunAlreadyExistsError(f"Run {run_id} already exists")
+            require_worker_descriptor_transfer()
             event_queue = self._mp.Queue()
             cancel_event = self._mp.Event()
             start_event = self._mp.Event()
             assignment_event = self._mp.Event()
-            process = self._mp.Process(
-                target=run_worker,
-                args=(
-                    str(import_root),
-                    workflow_relative_module_file,
-                    descriptor.locator.builder_symbol,
-                    run_id,
-                    self._executor_config,
-                    assignment_event,
-                    input,
-                    context,
-                    event_queue,
-                    cancel_event,
-                    start_event,
-                ),
-                name=f"avalanche-run-{run_id}",
-                daemon=False,
-            )
-            windows_job = create_kill_on_close_job()
+            result_bundle = self._result_store.prepare()
+            try:
+                transferred_result_bundle = duplicate_bundle_descriptor_for_spawn(result_bundle)
+                process = self._mp.Process(
+                    target=run_worker,
+                    args=(
+                        str(import_root),
+                        workflow_relative_module_file,
+                        descriptor.locator.builder_symbol,
+                        run_id,
+                        self._executor_config,
+                        assignment_event,
+                        input,
+                        context,
+                        event_queue,
+                        cancel_event,
+                        start_event,
+                        transferred_result_bundle,
+                        (result_bundle.device, result_bundle.inode),
+                    ),
+                    name=f"avalanche-run-{run_id}",
+                    daemon=False,
+                )
+                windows_job = create_kill_on_close_job()
+            except BaseException:
+                self._result_store.discard(result_bundle)
+                _close_event_queue(event_queue)
+                raise
             handle = _RunHandle(
-                process,
-                event_queue,
-                cancel_event,
-                start_event,
-                assignment_event,
-                windows_job,
+                process=process,
+                event_queue=event_queue,
+                cancel_event=cancel_event,
+                start_event=start_event,
+                assignment_event=assignment_event,
+                windows_job=windows_job,
+                result_bundle=result_bundle,
             )
             # Reserve the ID before releasing the lock so concurrent callers
             # cannot create a second coordinator with the same caller-owned ID.
@@ -278,8 +398,10 @@ class Operator:
             _teardown_process_group(process, windows_job)
             with self._lock:
                 self._runs.pop(run_id, None)
+                self._stored_results.pop(run_id, None)
                 self._active_runs.pop(run_id, None)
-            event_queue.close()
+            self._result_store.discard(result_bundle)
+            _close_event_queue(event_queue)
             raise
 
     def cancel_run(self, run_id: str) -> None:
@@ -316,13 +438,10 @@ class Operator:
             self._subscribers.append(subscription)
             current_sequence = self._sequence
             oldest_sequence = (
-                self._stream_history[0][0]
-                if self._stream_history
-                else current_sequence + 1
+                self._stream_history[0][0] if self._stream_history else current_sequence + 1
             )
             cursor_is_replayable = (
-                since_sequence <= current_sequence
-                and since_sequence >= oldest_sequence - 1
+                since_sequence <= current_sequence and since_sequence >= oldest_sequence - 1
             )
             if cursor_is_replayable:
                 for sequence, run in self._stream_history:
@@ -348,9 +467,12 @@ class Operator:
             handles = list(self._active_runs.items())
         if first_close:
             self._watcher_stop.set()
+            self._result_cleanup_stop.set()
             self._scheduler.stop()
             if self._watcher_thread is not None:
                 self._watcher_thread.join(timeout=2.0)
+            if self._result_cleanup_thread is not None:
+                self._result_cleanup_thread.join(timeout=2.0)
 
         for _, handle in handles:
             handle.cancel_event.set()
@@ -363,12 +485,45 @@ class Operator:
         drain_deadline = time.monotonic() + 2.0
         for run_id, handle in handles:
             if handle.drain_thread is not None:
-                handle.drain_thread.join(
-                    timeout=max(0.0, drain_deadline - time.monotonic())
-                )
+                handle.drain_thread.join(timeout=max(0.0, drain_deadline - time.monotonic()))
             with self._lock:
                 if self._active_runs.get(run_id) is handle:
                     self._active_runs.pop(run_id, None)
+        if first_close:
+            with self._lock:
+                self._stored_results.clear()
+                self._result_leases.clear()
+            self._result_store.close()
+
+    def _result_cleanup_loop(self) -> None:
+        retention = self._result_retention_seconds
+        if retention is None:
+            return
+        interval = min(60.0, max(0.1, retention / 10))
+        while not self._result_cleanup_stop.wait(interval):
+            self._expire_results()
+
+    def _expire_results(self) -> None:
+        retention = self._result_retention_seconds
+        if retention is None:
+            return
+        cutoff = time.monotonic() - retention
+        expired: list[tuple[str, StoredWorkflowResult]] = []
+        with self._lock:
+            for run_id, stored in list(self._stored_results.items()):
+                if stored.published_at <= cutoff and self._result_leases.get(run_id, 0) == 0:
+                    expired.append((run_id, self._stored_results.pop(run_id)))
+        for run_id, stored in expired:
+            try:
+                self._result_store.discard(stored)
+            except (OSError, ValueError):
+                logging.getLogger(__name__).exception(
+                    "Could not remove expired workflow result %s",
+                    run_id,
+                )
+                with self._lock:
+                    if not self._closed and run_id not in self._stored_results:
+                        self._stored_results[run_id] = stored
 
     def _start_watcher(self) -> None:
         self._watcher_thread = threading.Thread(
@@ -486,26 +641,103 @@ class Operator:
                         self._finish_exited_run(run_id, handle)
                         break
                 try:
-                    terminal = self._apply_event(run_id, event)
+                    if _is_provisional_success_event(event):
+                        _validate_run_event(event)
+                        try:
+                            quiesced = _teardown_process_group(
+                                handle.process,
+                                handle.windows_job,
+                                wait_before_term=2.0,
+                            )
+                        except Exception as exc:
+                            raise _CoordinatorProtocolError(
+                                "worker process-group quiescence failed"
+                            ) from exc
+                        if not quiesced:
+                            raise _CoordinatorProtocolError(
+                                "worker process group could not be quiesced"
+                            )
+                        natural_exitcode = getattr(
+                            quiesced,
+                            "natural_exitcode",
+                            None,
+                        )
+                        if natural_exitcode not in {None, 0}:
+                            raise _CoordinatorProtocolError(
+                                "coordinator exited unsuccessfully after provisional success"
+                            )
+                        handle.success_quiesced = True
+                        if not handle.cancel_event.is_set():
+                            late_event = _event_after_provisional_success(handle.event_queue)
+                            if late_event is not None:
+                                raise _CoordinatorProtocolError(
+                                    "coordinator emitted an event after provisional success"
+                                )
+                    terminal = self._apply_event(run_id, handle, event)
                 except _CoordinatorProtocolError as exc:
                     self._finish_protocol_fault(run_id, handle, event, exc)
                     break
         finally:
-            _teardown_process_group(
-                handle.process, handle.windows_job, wait_before_term=2.0
-            )
-            with self._lock:
-                self._active_runs.pop(run_id, None)
-            handle.event_queue.close()
+            try:
+                _teardown_process_group(
+                    handle.process,
+                    handle.windows_job,
+                    wait_before_term=2.0,
+                )
+            except Exception:
+                logger.exception("Run coordinator cleanup failed for %s", run_id)
+            finally:
+                with self._lock:
+                    self._active_runs.pop(run_id, None)
+                _close_event_queue(handle.event_queue)
 
-    def _apply_event(self, run_id: str, event: dict[str, Any]) -> bool:
-        event_type = _validate_run_event(event)
+    def _apply_event(
+        self,
+        run_id: str,
+        handle: _RunHandle,
+        event: dict[str, Any],
+    ) -> bool:
+        event_type = _validate_run_event(event, validate_result=False)
+        result_manifest_sha256 = (
+            _result_manifest_digest_from_event(event)
+            if event_type == "terminal" and event["status"] == "success"
+            else None
+        )
+        if result_manifest_sha256 is not None and not getattr(
+            handle,
+            "success_quiesced",
+            False,
+        ):
+            raise _CoordinatorProtocolError(
+                "workflow success was not quiesced before result validation"
+            )
+        cancelled_result = result_manifest_sha256 is not None and handle.cancel_event.is_set()
+        try:
+            stored_result = (
+                self._result_store.accept(
+                    handle.result_bundle,
+                    result_manifest_sha256,
+                    cancel_signal=handle.cancel_event,
+                )
+                if result_manifest_sha256 is not None and not cancelled_result
+                else None
+            )
+        except ResultPublicationCancelledError:
+            cancelled_result = True
+            stored_result = None
+        except (OSError, RuntimeError, TypeError, ValueError) as exc:
+            raise _CoordinatorProtocolError(
+                f"invalid workflow result publication: {exc}"
+            ) from exc
+        if event_type == "terminal" and stored_result is None:
+            self._result_store.discard(handle.result_bundle)
         log_entry: LogEntry | None = None
+        discard_stored_result = False
         with self._lock:
             run = self._runs.get(run_id)
             if run is None:
-                return event_type == "terminal"
-            if event_type == "running":
+                discard_stored_result = stored_result is not None
+            elif event_type == "running":
                 if run.status != RunStatus.CANCELLED:
                     run.status = RunStatus.RUNNING
                     run.started_at = event["timestamp"]
@@ -543,13 +775,29 @@ class Operator:
                 run.logs.append(log_entry)
             elif event_type == "terminal":
                 if run.status != RunStatus.CANCELLED:
+                    effective_status = (
+                        "cancelled"
+                        if event["status"] == "success"
+                        and (cancelled_result or handle.cancel_event.is_set())
+                        else event["status"]
+                    )
                     run.status = {
                         "success": RunStatus.SUCCESS,
                         "failed": RunStatus.FAILED,
                         "cancelled": RunStatus.CANCELLED,
-                    }[event["status"]]
+                    }[effective_status]
+                    if stored_result is not None and effective_status == "success":
+                        self._stored_results[run_id] = stored_result
+                    elif stored_result is not None:
+                        discard_stored_result = True
+                elif stored_result is not None:
+                    discard_stored_result = True
                 run.ended_at = time.monotonic()
                 self._skip_unfinished_nodes(run)
+        if discard_stored_result and stored_result is not None:
+            self._result_store.discard(stored_result)
+        if run is None:
+            return event_type == "terminal"
         if log_entry is not None:
             self._notify_log(log_entry)
         self._notify_run(run)
@@ -575,13 +823,19 @@ class Operator:
                 RunStatus.FAILED,
                 RunStatus.CANCELLED,
             }:
-                return
-            run.status = (
-                RunStatus.CANCELLED if handle.cancel_event.is_set() else RunStatus.FAILED
-            )
-            run.ended_at = time.monotonic()
-            run.logs.append(entry)
-            self._skip_unfinished_nodes(run)
+                notify = False
+            else:
+                notify = True
+                run.status = (
+                    RunStatus.CANCELLED if handle.cancel_event.is_set() else RunStatus.FAILED
+                )
+                self._stored_results.pop(run_id, None)
+                run.ended_at = time.monotonic()
+                run.logs.append(entry)
+                self._skip_unfinished_nodes(run)
+        self._result_store.discard(handle.result_bundle)
+        if not notify:
+            return
         self._notify_log(entry)
         self._notify_run(run)
 
@@ -601,12 +855,15 @@ class Operator:
         with self._lock:
             run = self._runs.get(run_id)
             if run is None:
+                self._result_store.discard(handle.result_bundle)
                 return
             run.status = RunStatus.CANCELLED if cancelled else RunStatus.FAILED
+            self._stored_results.pop(run_id, None)
             run.ended_at = time.monotonic()
             if not cancelled:
                 run.logs.append(entry)
             self._skip_unfinished_nodes(run)
+        self._result_store.discard(handle.result_bundle)
         if not cancelled:
             self._notify_log(entry)
         self._notify_run(run)
@@ -666,16 +923,38 @@ _RUN_EVENT_TYPES = {
 }
 _NODE_EVENT_TYPES = {"node_started", "node_succeeded", "node_failed"}
 _TERMINAL_STATUSES = {"success", "failed", "cancelled"}
+_MAX_EVENT_NODES = 10_000
+_MAX_EVENT_EDGES = 100_000
+_MAX_EVENT_FIELD_LENGTH = 4096
+_MAX_EVENT_MESSAGE_LENGTH = 65_536
+_MAX_EVENT_TRACEBACK_LENGTH = 262_144
+_MAX_EVENT_TIMESTAMP_MAGNITUDE = 10**12
 
 
 def _validate_preparation_event(event: object) -> str:
     event_type = _event_type(event)
     if event_type == "prepared":
+        _require_exact_event_keys(
+            event,
+            {
+                "type",
+                "node_ids",
+                "graph",
+                "node_types",
+                "display_names",
+                "display_name",
+            },
+        )
         node_ids = _required_field(event, "node_ids")
         if not isinstance(node_ids, list) or any(
-            type(node_id) is not str for node_id in node_ids
+            type(node_id) is not str or len(node_id) > _MAX_EVENT_FIELD_LENGTH
+            for node_id in node_ids
         ):
-            raise _CoordinatorProtocolError("field 'node_ids' must be a list of strings")
+            raise _CoordinatorProtocolError(
+                "field 'node_ids' must be a bounded list of bounded strings"
+            )
+        if len(node_ids) > _MAX_EVENT_NODES:
+            raise _CoordinatorProtocolError("field 'node_ids' contains too many nodes")
         if len(node_ids) != len(set(node_ids)):
             raise _CoordinatorProtocolError("field 'node_ids' contains duplicates")
         _graph_mapping(event, "graph")
@@ -691,12 +970,15 @@ def _validate_preparation_event(event: object) -> str:
                     f"field 'display_names' is missing node {_bounded_ascii(node_id)}"
                 )
         display_name = event.get("display_name")
-        if display_name is not None and type(display_name) is not str:
-            raise _CoordinatorProtocolError("field 'display_name' must be a string")
+        if display_name is not None and (
+            type(display_name) is not str or len(display_name) > _MAX_EVENT_FIELD_LENGTH
+        ):
+            raise _CoordinatorProtocolError("field 'display_name' must be a bounded string")
         return event_type
     if event_type == "prepare_failed":
-        _string_field(event, "error")
-        _string_field(event, "traceback")
+        _require_exact_event_keys(event, {"type", "error", "traceback"})
+        _string_field(event, "error", maximum_length=_MAX_EVENT_MESSAGE_LENGTH)
+        _string_field(event, "traceback", maximum_length=_MAX_EVENT_TRACEBACK_LENGTH)
         return event_type
     if event_type == "log":
         return _validate_run_event(event)
@@ -709,18 +991,27 @@ def _validate_preparation_event(event: object) -> str:
     )
 
 
-def _validate_run_event(event: object) -> str:
+def _validate_run_event(event: object, *, validate_result: bool = True) -> str:
     event_type = _event_type(event)
     if event_type not in _RUN_EVENT_TYPES:
         raise _CoordinatorProtocolError(f"unknown run event type {_bounded_ascii(event_type)}")
     if event_type == "running":
+        _require_exact_event_keys(event, {"type", "timestamp"})
         _timestamp_field(event, "timestamp")
     elif event_type in _NODE_EVENT_TYPES:
-        _string_field(event, "node_id")
+        expected = {"type", "node_id", "timestamp"}
+        if event_type == "node_failed":
+            expected.add("error")
+        _require_exact_event_keys(event, expected)
+        _string_field(event, "node_id", maximum_length=_MAX_EVENT_FIELD_LENGTH)
         _timestamp_field(event, "timestamp")
         if event_type == "node_failed":
-            _string_field(event, "error")
+            _string_field(event, "error", maximum_length=_MAX_EVENT_MESSAGE_LENGTH)
     elif event_type == "log":
+        _require_exact_event_keys(
+            event,
+            {"type", "timestamp", "level", "node_id", "message"},
+        )
         timestamp = _timestamp_field(event, "timestamp")
         try:
             datetime.fromtimestamp(timestamp)
@@ -729,17 +1020,65 @@ def _validate_run_event(event: object) -> str:
                 "field 'timestamp' is outside the supported datetime range"
             ) from exc
         level = _required_field(event, "level")
-        if type(level) is not int:
-            raise _CoordinatorProtocolError("field 'level' must be an integer")
-        _string_field(event, "node_id")
-        _string_field(event, "message")
+        if type(level) is not int or not -(2**31) <= level < 2**31:
+            raise _CoordinatorProtocolError("field 'level' must be a bounded integer")
+        _string_field(event, "node_id", maximum_length=_MAX_EVENT_FIELD_LENGTH)
+        _string_field(event, "message", maximum_length=_MAX_EVENT_MESSAGE_LENGTH)
     else:
-        status = _string_field(event, "status")
+        status = _string_field(
+            event,
+            "status",
+            maximum_length=_MAX_EVENT_FIELD_LENGTH,
+        )
         if status not in _TERMINAL_STATUSES:
             raise _CoordinatorProtocolError(f"invalid terminal status {_bounded_ascii(status)}")
-        if status == "failed":
-            _string_field(event, "error")
+        if status == "success":
+            _require_exact_event_keys(
+                event,
+                {"type", "status", "result_manifest_sha256"},
+            )
+            if validate_result:
+                _result_manifest_digest_from_event(event)
+        elif status == "failed":
+            _require_exact_event_keys(event, {"type", "status", "error"})
+            _string_field(event, "error", maximum_length=_MAX_EVENT_MESSAGE_LENGTH)
+        else:
+            _require_exact_event_keys(event, {"type", "status"})
     return event_type
+
+
+def _is_provisional_success_event(event: object) -> bool:
+    return (
+        type(event) is dict
+        and event.get("type") == "terminal"
+        and event.get("status") == "success"
+    )
+
+
+def _event_after_provisional_success(event_queue: Any) -> object | None:
+    """Return the first post-success event after a quiesced writer, if any."""
+    for _ in range(3):
+        try:
+            return event_queue.get(timeout=0.02)
+        except queue.Empty:
+            continue
+    return None
+
+
+def _close_event_queue(event_queue: Any) -> None:
+    event_queue.close()
+    join_thread = getattr(event_queue, "join_thread", None)
+    if callable(join_thread):
+        join_thread()
+
+
+def _result_manifest_digest_from_event(event: dict[str, Any]) -> str:
+    digest = _string_field(event, "result_manifest_sha256")
+    if len(digest) != 64 or any(character not in "0123456789abcdef" for character in digest):
+        raise _CoordinatorProtocolError(
+            "field 'result_manifest_sha256' must be a lowercase hexadecimal SHA-256"
+        )
+    return digest
 
 
 def _event_type(event: object) -> str:
@@ -748,6 +1087,8 @@ def _event_type(event: object) -> str:
     event_type = _required_field(event, "type")
     if type(event_type) is not str:
         raise _CoordinatorProtocolError("field 'type' must be a string")
+    if len(event_type) > _MAX_EVENT_FIELD_LENGTH:
+        raise _CoordinatorProtocolError("field 'type' exceeds the maximum length")
     return event_type
 
 
@@ -757,26 +1098,45 @@ def _required_field(event: dict[str, Any], field: str) -> Any:
     return event[field]
 
 
-def _string_field(event: dict[str, Any], field: str) -> str:
+def _string_field(
+    event: dict[str, Any],
+    field: str,
+    *,
+    maximum_length: int = _MAX_EVENT_FIELD_LENGTH,
+) -> str:
     value = _required_field(event, field)
     if type(value) is not str:
         raise _CoordinatorProtocolError(f"field {field!r} must be a string")
+    if len(value) > maximum_length:
+        raise _CoordinatorProtocolError(f"field {field!r} exceeds the maximum length")
     return value
 
 
 def _timestamp_field(event: dict[str, Any], field: str) -> float | int:
     value = _required_field(event, field)
-    if type(value) is int:
+    if type(value) is int and abs(value) <= _MAX_EVENT_TIMESTAMP_MAGNITUDE:
         return value
-    if type(value) is float and math.isfinite(value):
+    if (
+        type(value) is float
+        and math.isfinite(value)
+        and abs(value) <= _MAX_EVENT_TIMESTAMP_MAGNITUDE
+    ):
         return value
-    raise _CoordinatorProtocolError(f"field {field!r} must be a finite number")
+    raise _CoordinatorProtocolError(f"field {field!r} must be a bounded finite number")
 
 
 def _string_mapping(event: dict[str, Any], field: str) -> Mapping[str, str]:
     value = _required_field(event, field)
-    if not isinstance(value, Mapping) or any(
-        type(key) is not str or type(item) is not str for key, item in value.items()
+    if (
+        type(value) is not dict
+        or len(value) > _MAX_EVENT_NODES
+        or any(
+            type(key) is not str
+            or type(item) is not str
+            or len(key) > _MAX_EVENT_FIELD_LENGTH
+            or len(item) > _MAX_EVENT_FIELD_LENGTH
+            for key, item in value.items()
+        )
     ):
         raise _CoordinatorProtocolError(f"field {field!r} must map strings to strings")
     return value
@@ -784,14 +1144,43 @@ def _string_mapping(event: dict[str, Any], field: str) -> Mapping[str, str]:
 
 def _graph_mapping(event: dict[str, Any], field: str) -> Mapping[str, list[str]]:
     value = _required_field(event, field)
-    if not isinstance(value, Mapping) or any(
-        type(key) is not str
-        or not isinstance(children, list)
-        or any(type(child) is not str for child in children)
-        for key, children in value.items()
+    if (
+        type(value) is not dict
+        or len(value) > _MAX_EVENT_NODES
+        or any(
+            type(key) is not str
+            or len(key) > _MAX_EVENT_FIELD_LENGTH
+            or not isinstance(children, list)
+            or len(children) > _MAX_EVENT_NODES
+            or any(type(child) is not str for child in children)
+            for key, children in value.items()
+        )
     ):
         raise _CoordinatorProtocolError(f"field {field!r} must map strings to lists of strings")
+    if any(
+        len(child) > _MAX_EVENT_FIELD_LENGTH
+        for children in value.values()
+        for child in children
+    ):
+        raise _CoordinatorProtocolError(f"field {field!r} contains an oversized node ID")
+    if sum(len(children) for children in value.values()) > _MAX_EVENT_EDGES:
+        raise _CoordinatorProtocolError(f"field {field!r} contains too many edges")
     return value
+
+
+def _require_exact_event_keys(
+    event: dict[str, Any],
+    expected: set[str],
+) -> None:
+    actual = set(event)
+    if actual != expected:
+        extra = sorted(actual - expected)
+        missing = sorted(expected - actual)
+        if extra:
+            raise _CoordinatorProtocolError(
+                f"unexpected event field {_bounded_ascii(extra[0])}"
+            )
+        raise _CoordinatorProtocolError(f"missing required field {_bounded_ascii(missing[0])}")
 
 
 def _bounded_ascii(value: object, limit: int = 80) -> str:
@@ -833,12 +1222,8 @@ def _resolve_executor_config(
     ray_init_kwargs: Mapping[str, Any] | None,
     executor_factory: DeprecatedExecutorFactory | None,
 ) -> dict[str, Any]:
-    backend_was_provided = not isinstance(
-        executor_backend, _ExecutorBackendOmitted
-    )
-    backend: ExecutorBackend = (
-        "local" if not backend_was_provided else executor_backend
-    )
+    backend_was_provided = not isinstance(executor_backend, _ExecutorBackendOmitted)
+    backend: ExecutorBackend = "local" if not backend_was_provided else executor_backend
     if executor_factory is not None:
         warnings.warn(
             "executor_factory is deprecated; use executor_backend and the "
@@ -846,11 +1231,7 @@ def _resolve_executor_config(
             DeprecationWarning,
             stacklevel=3,
         )
-        if (
-            backend_was_provided
-            or ray_runtime_env is not None
-            or ray_init_kwargs is not None
-        ):
+        if backend_was_provided or ray_runtime_env is not None or ray_init_kwargs is not None:
             raise TypeError(
                 "executor_factory cannot be combined with executor_backend or "
                 "Ray configuration"
@@ -858,9 +1239,7 @@ def _resolve_executor_config(
         return _deprecated_executor_config(executor_factory)
 
     if backend not in {"local", "ray"}:
-        raise ValueError(
-            f"Unsupported executor_backend {backend!r}; expected 'local' or 'ray'"
-        )
+        raise ValueError(f"Unsupported executor_backend {backend!r}; expected 'local' or 'ray'")
     if backend == "local":
         if ray_runtime_env is not None or ray_init_kwargs is not None:
             raise ValueError(
@@ -887,15 +1266,12 @@ def _deprecated_executor_config(
         unsupported = set(factory.keywords or {}) - {"runtime_env", "ray_init_kwargs"}
         if unsupported:
             raise TypeError(
-                "Unsupported RayExecutor partial arguments: "
-                + ", ".join(sorted(unsupported))
+                "Unsupported RayExecutor partial arguments: " + ", ".join(sorted(unsupported))
             )
         return {
             "backend": "ray",
             "runtime_env": dict((factory.keywords or {}).get("runtime_env") or {}),
-            "ray_init_kwargs": dict(
-                (factory.keywords or {}).get("ray_init_kwargs") or {}
-            ),
+            "ray_init_kwargs": dict((factory.keywords or {}).get("ray_init_kwargs") or {}),
         }
     raise TypeError(
         "Unsupported executor_factory. Per-run spawn requires serializable backend "
@@ -913,13 +1289,14 @@ def _teardown_process_group(
     wait_before_term: float = 0.0,
     term_grace: float = 1.0,
     kill_grace: float = 1.0,
-) -> None:
+) -> _ProcessGroupTeardown:
     """Boundedly stop a coordinator session and all of its descendants."""
     if process.pid is None:
         close_job(windows_job)
-        return
+        return _ProcessGroupTeardown(True, process.exitcode)
     if wait_before_term:
         process.join(timeout=wait_before_term)
+    natural_exitcode = process.exitcode if not process.is_alive() else None
     if os.name != "nt":
         group_signalled = _signal_coordinator_group(process.pid, signal.SIGTERM)
         if not group_signalled and process.is_alive():
@@ -927,7 +1304,7 @@ def _teardown_process_group(
     elif process.is_alive():
         process.terminate()
     process.join(timeout=term_grace)
-    group_alive = os.name != "nt" and _coordinator_group_exists(process.pid)
+    group_alive = os.name != "nt" and _coordinator_group_has_live_members(process.pid)
     if process.is_alive() or group_alive:
         if os.name != "nt":
             group_signalled = _signal_coordinator_group(process.pid, signal.SIGKILL)
@@ -937,6 +1314,11 @@ def _teardown_process_group(
             process.kill()
         process.join(timeout=kill_grace)
     close_job(windows_job)
+    group_alive = os.name != "nt" and _coordinator_group_has_live_members(process.pid)
+    return _ProcessGroupTeardown(
+        not process.is_alive() and not group_alive,
+        natural_exitcode,
+    )
 
 
 def _signal_coordinator_group(process_group: int, signal_number: int) -> bool:
@@ -955,3 +1337,33 @@ def _coordinator_group_exists(process_group: int) -> bool:
     except PermissionError:
         return False
     return True
+
+
+def _coordinator_group_has_live_members(process_group: int) -> bool:
+    """Treat dead or irreversibly exiting groups as quiesced."""
+    if not _coordinator_group_exists(process_group):
+        return False
+    try:
+        completed = subprocess.run(
+            ["/bin/ps", "-axo", "pgid=,stat="],
+            check=True,
+            capture_output=True,
+            text=True,
+            timeout=1.0,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return True
+    for line in completed.stdout.splitlines():
+        fields = line.split()
+        if len(fields) < 2:
+            continue
+        try:
+            pgid = int(fields[0])
+        except ValueError:
+            continue
+        state = fields[1]
+        dead = state.startswith(("Z", "X"))
+        irreversibly_exiting = state.startswith("?") and "E" in state[1:]
+        if pgid == process_group and not (dead or irreversibly_exiting):
+            return True
+    return False

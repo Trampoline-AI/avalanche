@@ -242,10 +242,163 @@ fields such as `run_id`, `workflow_name`, `executor_type`, `rerun`, `node_id`,
 `node_name`, `node_slug`, and `lineage_vector`; callers cannot spoof them with
 `context` payloads.
 
-`ava.File` carries file content directly with a run request, without a framework
-size limit. Build one from a path with `ava.File.from_path(path)` or pass `{name,
-content, content_type}` in the input payload. `sha256` is computed when omitted
-and validated when supplied.
+`ava.File` carries file content directly with a run request or terminal workflow
+result. Build one from a path with `ava.File.from_path(path)` or pass
+`{name, content, content_type}` in the input payload. `sha256` is computed when
+omitted and validated when supplied. Operator-managed transfers are subject to
+the finite gRPC envelope, and terminal results also use the stricter limits
+described below.
+
+## Workflow results
+
+A workflow may return the existing JSON scalar/container values, a Pydantic
+model, or `ava.File`. Files may also be nested in Pydantic models, lists, tuples,
+and string-keyed dictionaries:
+
+```python
+from pydantic import BaseModel
+
+
+class Report(BaseModel):
+    summary: str
+    files: list[ava.File]
+
+
+@ava.dest
+def build_report() -> Report:
+    return Report(
+        summary="complete",
+        files=[
+            ava.File(
+                name="report.txt",
+                content=b"workflow output",
+                content_type="text/plain",
+            )
+        ],
+    )
+
+
+@ava.workflow
+def report_flow():
+    return build_report()
+```
+
+In embedded mode, `RunHandle.result()` returns the original Python value, so the
+example returns a `Report` containing `ava.File`.
+
+For an operator-managed run, poll `get_run(run_id)` as usual and retrieve the
+successful terminal value separately:
+
+```python
+from avalanche.operator.client import GrpcStateProvider
+from avalanche.operator.models import RunStatus
+
+client = GrpcStateProvider("localhost:7433")
+run_id = client.start_run("report_flow")
+
+# Poll client.get_run(run_id) until it reaches RunStatus.SUCCESS.
+result = client.get_run_result(run_id)
+assert isinstance(result["files"][0], ava.File)
+```
+
+Remote Pydantic results decode from Pydantic JSON mode. Field and model
+serializers, serialization aliases, computed fields, and root models are
+honored. A serializer that replaces a `File` with JSON metadata remains JSON
+metadata; native `File` values that survive serialization become attachments,
+including non-UTF-8 content. JSON containers keep their list/tuple/dict shape,
+and every attachment marker is restored as `ava.File`.
+
+The worker atomically spools result JSON and attachments to a private pending
+directory. The parent transfers only a duplicate of its already-open,
+inode-bound pending-directory descriptor to the spawned coordinator; no
+result-bundle pathname crosses. After provisional-success quiescence, the
+parent uses anchored, no-follow operations to validate types, declared sizes
+and totals, exact bounded reads, the manifest, and SHA-256 digests. It then
+materializes those validated bytes into immutable in-process state owned by the
+result store and discards the provisional named bundle before making success
+visible. The accepted representation has no filesystem pathname or descriptor,
+so a same-user descendant that discovers and mutates its inherited pending
+namespace cannot change later retrievals.
+
+This in-memory `ava.File` result feature has hard limits: 4 MiB for the JSON
+value, 8 MiB for one attachment, 32 MiB for all attachment bytes, 32 MiB for
+value plus attachments, and 1,024 attachments. Attachment names are limited to
+1,024 characters, media types to 255 characters, encoded values to 100,000
+nodes and 100 nesting levels, and the private result manifest to 1 MiB. Every
+regular-file read and digest stops at its applicable maximum plus one byte.
+The gRPC send/receive envelope is a finite 48 MiB, leaving bounded room above
+the 32 MiB result maximum for protobuf fields and worst-case UTF-8 metadata.
+The result store retains at most 1,024 accepted results and 256 MiB of accepted
+value-and-attachment bytes in aggregate. A run whose acceptance would exceed
+either limit fails closed. The default result retention is 24 hours and can be
+configured with
+`Operator(result_retention_seconds=...)`; `None` retains results until
+`Operator.close()`. Accepted results are process-local retention, not durable
+storage: an operator restart loses them. Close and expiry release accepted
+memory; cancellation, failure, interrupted publication, and close discard
+provisional bundles. Under a configured result-storage directory, each process
+root holds a private ownership lock. When advisory file locking is available,
+startup reaps only unlocked, same-user roots with a valid implementation marker;
+live or tampered roots are left untouched. Without advisory locking, startup
+does not attempt crash-recovery reaping, so an uncleanly terminated process can
+leave provisional storage for manual removal. Normal `Operator.close()` remains
+deterministic.
+
+Result publication and CLI materialization require securely anchored
+directory-relative file operations. A platform without them fails before
+spooling or materializing result bytes with an actionable error; it never falls
+back to pathname check-then-open behavior.
+
+The result RPC carries one requested result with each file's name, media type,
+and SHA-256 digest. The receiver validates the digest before returning the
+value. The 8 MiB per-attachment, 32 MiB total-result, and 48 MiB gRPC-envelope
+ceilings apply end to end. Bounded result JSON, manifest, attachment-count, and
+metadata-string limits protect the control plane before parsing or allocation,
+and both gRPC endpoints enforce the same finite message ceiling.
+
+The operator binds `127.0.0.1` by default and has no built-in caller
+authentication. Loopback is only a local reachability and trust boundary: any
+local process may attempt to call the service. `--host` makes non-loopback
+exposure explicit, but secure remote deployment still requires an external
+authenticated boundary.
+
+Result retrieval is available only after terminal success. A nonterminal,
+failed, or cancelled run returns gRPC `FAILED_PRECONDITION`; an unknown run
+returns `NOT_FOUND`. This keeps existing run-state, failure, cancellation, and
+timeout behavior separate from successful payload delivery.
+
+The CLI can wait for and materialize scalar, direct-file, or nested-file results:
+
+```bash
+uv run ava result RUN_ID --wait --output-dir ./run-result
+```
+
+The requested output directory must not already exist, and its parent must
+exist. In a private staging directory anchored in that parent, the CLI writes
+binary attachments under collision-resistant generated filenames, verifies
+every digest and the JSON metadata document, and syncs the files and
+directories. It then atomically renames the staged child name without replacing
+an existing destination, immediately opens the requested destination through the
+retained parent descriptor, and compares that identity to the retained staging
+descriptor. A mismatch fails the command and triggers bounded,
+descriptor-anchored cleanup. Original file names never control output paths,
+and only metadata is printed.
+
+This is a local CLI for a caller-owned output namespace. POSIX and macOS do not
+offer a portable rename-by-open-directory-descriptor operation or a no-replace
+rename conditioned on the source name still identifying a specific inode.
+Consequently, the CLI does not promise exact validated-source publication or
+zero transient exposure against a hostile concurrent process running as the
+same user. Such a process can substitute the staged name and briefly create a
+wrong requested destination before the immediate identity check detects and
+removes it; hostile same-user namespace concurrency is outside the threat model.
+Within the caller-owned namespace contract, descriptor-authenticated catchable
+state is cleaned with anchored operations, and catchable failures leave no
+requested destination. An interruption after the holding `mkdir` side effect
+but before descriptor acquisition can leave private empty holding residue:
+safe cleanup cannot distinguish the created directory from a same-name
+replacement, so it does not open, adopt, or remove that entry. The requested
+destination remains absent. `SIGKILL` can also leave private holding residue.
 
 ## Execution
 

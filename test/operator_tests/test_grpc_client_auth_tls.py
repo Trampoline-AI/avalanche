@@ -6,6 +6,7 @@ import grpc
 
 from avalanche.operator.client import GrpcStateProvider
 from runtime.operator import client as client_module
+from runtime.operator._grpc import MAX_GRPC_MESSAGE_BYTES
 from runtime.operator.proto import operator_pb2 as pb
 from runtime.operator.proto import operator_pb2_grpc as pb_grpc
 
@@ -55,13 +56,13 @@ def test_grpc_state_provider_uses_secure_channel_when_tls_enabled(monkeypatch) -
     assert calls["credentials"] == "credentials"
     assert calls["root_certificates"] == b"ca"
     assert dict(calls["options"]) == {
-        "grpc.max_send_message_length": -1,
-        "grpc.max_receive_message_length": -1,
+        "grpc.max_send_message_length": MAX_GRPC_MESSAGE_BYTES,
+        "grpc.max_receive_message_length": MAX_GRPC_MESSAGE_BYTES,
     }
     assert calls["closed"] is True
 
 
-def test_grpc_state_provider_uses_unlimited_insecure_channel_options(monkeypatch) -> None:
+def test_grpc_state_provider_uses_bounded_insecure_channel_options(monkeypatch) -> None:
     calls: dict[str, object] = {}
 
     class FakeChannel:
@@ -81,8 +82,8 @@ def test_grpc_state_provider_uses_unlimited_insecure_channel_options(monkeypatch
 
     assert calls["address"] == "localhost:7433"
     assert dict(calls["options"]) == {
-        "grpc.max_send_message_length": -1,
-        "grpc.max_receive_message_length": -1,
+        "grpc.max_send_message_length": MAX_GRPC_MESSAGE_BYTES,
+        "grpc.max_receive_message_length": MAX_GRPC_MESSAGE_BYTES,
     }
 
 

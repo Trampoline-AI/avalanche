@@ -54,7 +54,7 @@ class _InertProcess:
         return True
 
 
-def _protocol_test_handle(*, cancelled=False):
+def _protocol_test_handle(result_bundle, *, cancelled=False):
     event_queue = _CloseableQueue()
     cancel_event = threading.Event()
     if cancelled:
@@ -66,8 +66,36 @@ def _protocol_test_handle(*, cancelled=False):
         start_event=threading.Event(),
         assignment_event=threading.Event(),
         windows_job=None,
+        result_bundle=result_bundle,
         drain_thread=None,
     )
+
+
+@pytest.mark.parametrize(
+    ("process_table", "expected"),
+    [
+        ("4242 Z\n4242 Z+\n", False),
+        ("4242 ?E\n", False),
+        ("4242 Z\n4242 S+\n", True),
+    ],
+)
+def test_process_group_quiescence_distinguishes_zombies_from_live_descendants(
+    monkeypatch,
+    process_table,
+    expected,
+):
+    monkeypatch.setattr(
+        operator_module,
+        "_coordinator_group_exists",
+        lambda _process_group: True,
+    )
+    monkeypatch.setattr(
+        operator_module.subprocess,
+        "run",
+        lambda *_args, **_kwargs: SimpleNamespace(stdout=process_table),
+    )
+
+    assert operator_module._coordinator_group_has_live_members(4242) is expected
 
 
 def _write_standalone(root: Path, *, deferred: bool = False, body: str | None = None) -> Path:
@@ -273,6 +301,13 @@ def test_malformed_preparation_event_rolls_back_start(
         {"type": "node_started"},
         {"type": "node_started", "node_id": "missing", "timestamp": 1},
         {"type": "terminal", "status": "unknown"},
+        {"type": "terminal", "status": "cancelled", "payload": b"forbidden"},
+        {
+            "type": "terminal",
+            "status": "success",
+            "result_manifest_sha256": "0" * 64,
+            "payload": b"forbidden",
+        },
         {
             "type": "log",
             "timestamp": 10**5000,
@@ -288,6 +323,8 @@ def test_malformed_preparation_event_rolls_back_start(
         "missing-field",
         "unknown-node",
         "invalid-terminal-status",
+        "cancelled-extra-payload",
+        "success-extra-payload",
         "huge-timestamp",
         "huge-event-type",
         "non-dict",
@@ -303,7 +340,7 @@ def test_malformed_run_event_terminalizes_and_cleans_up(event):
         ),
         "pending": NodeState(node_id="pending", name="pending", node_type="dest"),
     }
-    handle = _protocol_test_handle()
+    handle = _protocol_test_handle(operator._result_store.prepare())
     operator._runs[run_id] = run
     operator._active_runs[run_id] = handle
     logs = []
@@ -356,7 +393,10 @@ def test_malformed_run_event_preserves_cancellation_precedence():
         status=RunStatus.RUNNING,
         nodes={"pending": NodeState("pending", "pending", "source")},
     )
-    handle = _protocol_test_handle(cancelled=True)
+    handle = _protocol_test_handle(
+        operator._result_store.prepare(),
+        cancelled=True,
+    )
     operator._active_runs[run_id] = handle
     logs = []
     operator.on_log(logs.append)
@@ -378,7 +418,7 @@ def test_malformed_run_event_preserves_cancellation_precedence():
 def test_malformed_event_for_unknown_run_exits_safely():
     operator = Operator([], watch=False, schedule=False)
     run_id = "run_unknown"
-    handle = _protocol_test_handle()
+    handle = _protocol_test_handle(operator._result_store.prepare())
     operator._active_runs[run_id] = handle
 
     operator._drain_run_events(run_id, handle, [None])

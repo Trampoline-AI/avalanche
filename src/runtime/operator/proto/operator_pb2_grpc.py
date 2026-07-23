@@ -61,6 +61,11 @@ class OperatorServiceStub(object):
                 request_serializer=operator__pb2.GetRunRequest.SerializeToString,
                 response_deserializer=operator__pb2.RunStateMsg.FromString,
                 _registered_method=True)
+        self.GetRunResult = channel.unary_unary(
+                '/avalanche.operator.OperatorService/GetRunResult',
+                request_serializer=operator__pb2.GetRunRequest.SerializeToString,
+                response_deserializer=operator__pb2.RunResultMsg.FromString,
+                _registered_method=True)
         self.StreamUpdates = channel.unary_stream(
                 '/avalanche.operator.OperatorService/StreamUpdates',
                 request_serializer=operator__pb2.StreamRequest.SerializeToString,
@@ -103,6 +108,12 @@ class OperatorServiceServicer(object):
         context.set_details('Method not implemented!')
         raise NotImplementedError('Method not implemented!')
 
+    def GetRunResult(self, request, context):
+        """Missing associated documentation comment in .proto file."""
+        context.set_code(grpc.StatusCode.UNIMPLEMENTED)
+        context.set_details('Method not implemented!')
+        raise NotImplementedError('Method not implemented!')
+
     def StreamUpdates(self, request, context):
         """Missing associated documentation comment in .proto file."""
         context.set_code(grpc.StatusCode.UNIMPLEMENTED)
@@ -136,6 +147,11 @@ def add_OperatorServiceServicer_to_server(servicer, server):
                     servicer.GetRun,
                     request_deserializer=operator__pb2.GetRunRequest.FromString,
                     response_serializer=operator__pb2.RunStateMsg.SerializeToString,
+            ),
+            'GetRunResult': grpc.unary_unary_rpc_method_handler(
+                    servicer.GetRunResult,
+                    request_deserializer=operator__pb2.GetRunRequest.FromString,
+                    response_serializer=operator__pb2.RunResultMsg.SerializeToString,
             ),
             'StreamUpdates': grpc.unary_stream_rpc_method_handler(
                     servicer.StreamUpdates,
@@ -280,6 +296,33 @@ class OperatorService(object):
             '/avalanche.operator.OperatorService/GetRun',
             operator__pb2.GetRunRequest.SerializeToString,
             operator__pb2.RunStateMsg.FromString,
+            options,
+            channel_credentials,
+            insecure,
+            call_credentials,
+            compression,
+            wait_for_ready,
+            timeout,
+            metadata,
+            _registered_method=True)
+
+    @staticmethod
+    def GetRunResult(request,
+            target,
+            options=(),
+            channel_credentials=None,
+            call_credentials=None,
+            insecure=False,
+            compression=None,
+            wait_for_ready=None,
+            timeout=None,
+            metadata=None):
+        return grpc.experimental.unary_unary(
+            request,
+            target,
+            '/avalanche.operator.OperatorService/GetRunResult',
+            operator__pb2.GetRunRequest.SerializeToString,
+            operator__pb2.RunResultMsg.FromString,
             options,
             channel_credentials,
             insecure,

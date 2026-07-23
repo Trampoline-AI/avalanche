@@ -14,7 +14,7 @@ from pydantic import BaseModel
 
 from avalanche.runtime import File
 
-from ._grpc import _UNLIMITED_MESSAGE_OPTIONS
+from ._grpc import _BOUNDED_MESSAGE_OPTIONS
 from .convert import (
     discovery_diagnostic_from_proto,
     run_state_from_proto,
@@ -23,6 +23,16 @@ from .convert import (
 from .models import LogEntry, RunState, WorkflowDiscoveryDiagnostic, WorkflowInfo
 from .proto import operator_pb2 as pb
 from .proto import operator_pb2_grpc as pb_grpc
+from .results import (
+    MAX_RESULT_ATTACHMENT_BYTES,
+    MAX_RESULT_ATTACHMENTS,
+    MAX_RESULT_ATTACHMENTS_BYTES,
+    MAX_RESULT_TOTAL_BYTES,
+    MAX_RESULT_VALUE_JSON_BYTES,
+    EncodedWorkflowResult,
+    ResultFileAttachment,
+    decode_workflow_result,
+)
 
 DEFAULT_UNARY_TIMEOUT_SECONDS = 10.0
 STREAM_THREAD_JOIN_TIMEOUT_SECONDS = 2.0
@@ -64,12 +74,12 @@ class GrpcStateProvider:
             self._channel = grpc.secure_channel(
                 address,
                 credentials,
-                options=_UNLIMITED_MESSAGE_OPTIONS,
+                options=_BOUNDED_MESSAGE_OPTIONS,
             )
         else:
             self._channel = grpc.insecure_channel(
                 address,
-                options=_UNLIMITED_MESSAGE_OPTIONS,
+                options=_BOUNDED_MESSAGE_OPTIONS,
             )
         self._stub = pb_grpc.OperatorServiceStub(self._channel)
         self._run_callbacks: list[Callable[[RunState], None]] = []
@@ -149,6 +159,57 @@ class GrpcStateProvider:
             self.connected = False
             self.last_error = f"{e.code().name}: {e.details()}"
             return None
+
+    def get_run_result(self, run_id: str) -> Any:
+        """Retrieve and decode a terminally successful workflow result.
+
+        gRPC errors remain exceptions so callers can distinguish unknown,
+        nonterminal, failed, and cancelled runs from a successful ``None``
+        result.
+        """
+        kwargs = {"timeout": self._unary_timeout}
+        if self._metadata is not None:
+            kwargs["metadata"] = self._metadata
+        try:
+            response = self._stub.GetRunResult(
+                pb.GetRunRequest(run_id=run_id),
+                **kwargs,
+            )
+            _validate_wire_result_response(response)
+            payload = EncodedWorkflowResult(
+                value_json=response.value_json,
+                files=tuple(
+                    ResultFileAttachment(
+                        attachment_id=item.attachment_id,
+                        name=item.name if item.HasField("name") else None,
+                        content=bytes(item.content),
+                        media_type=(item.media_type if item.HasField("media_type") else None),
+                        sha256=item.sha256,
+                    )
+                    for item in response.files
+                ),
+            )
+            result = decode_workflow_result(payload)
+        except grpc.RpcError as exc:
+            self.connected = exc.code() in {
+                grpc.StatusCode.NOT_FOUND,
+                grpc.StatusCode.FAILED_PRECONDITION,
+            }
+            if self.connected:
+                self.retry_count = 0
+            else:
+                self.retry_count += 1
+            self.last_error = f"{exc.code().name}: {exc.details()}"
+            raise
+        except (TypeError, ValueError) as exc:
+            self.connected = False
+            self.retry_count += 1
+            self.last_error = f"DATA_LOSS: {exc}"
+            raise
+        self.connected = True
+        self.retry_count = 0
+        self.last_error = ""
+        return result
 
     def start_run(
         self,
@@ -299,3 +360,26 @@ def _file_attachment(field_name: str, value: File | bytes) -> pb.FileAttachment:
         content_type=file.content_type or "",
         sha256=file.sha256 or "",
     )
+
+
+def _validate_wire_result_response(response: pb.RunResultMsg) -> None:
+    value_size = len(response.value_json.encode("utf-8"))
+    if value_size > MAX_RESULT_VALUE_JSON_BYTES:
+        raise ValueError(f"Workflow result JSON exceeds {MAX_RESULT_VALUE_JSON_BYTES} bytes")
+    if len(response.files) > MAX_RESULT_ATTACHMENTS:
+        raise ValueError(f"Workflow result exceeds {MAX_RESULT_ATTACHMENTS} file attachments")
+    total_attachment_bytes = 0
+    for item in response.files:
+        size = len(item.content)
+        if size > MAX_RESULT_ATTACHMENT_BYTES:
+            raise ValueError(
+                f"Result file attachment exceeds {MAX_RESULT_ATTACHMENT_BYTES} bytes"
+            )
+        total_attachment_bytes += size
+        if total_attachment_bytes > MAX_RESULT_ATTACHMENTS_BYTES:
+            raise ValueError(
+                "Workflow result file attachments exceed "
+                f"{MAX_RESULT_ATTACHMENTS_BYTES} bytes"
+            )
+    if value_size + total_attachment_bytes > MAX_RESULT_TOTAL_BYTES:
+        raise ValueError(f"Workflow result exceeds {MAX_RESULT_TOTAL_BYTES} bytes")

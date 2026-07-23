@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import ipaddress
 import json
 import logging
 import queue
@@ -14,13 +15,18 @@ import grpc
 
 from avalanche.runtime import File
 
-from ._grpc import _UNLIMITED_MESSAGE_OPTIONS
+from ._grpc import _BOUNDED_MESSAGE_OPTIONS
 from .convert import (
     discovery_diagnostic_to_proto,
     run_state_to_proto,
     workflow_info_to_proto,
 )
-from .operator import Operator, RunAlreadyExistsError
+from .operator import (
+    Operator,
+    RunAlreadyExistsError,
+    RunResultNotReadyError,
+    RunResultUnavailableError,
+)
 from .proto import operator_pb2 as pb
 from .proto import operator_pb2_grpc as pb_grpc
 from .registry import AmbiguousWorkflow, UnknownWorkflow
@@ -28,6 +34,7 @@ from .registry import AmbiguousWorkflow, UnknownWorkflow
 logger = logging.getLogger(__name__)
 
 DEFAULT_PORT = 7433
+DEFAULT_HOST = "127.0.0.1"
 
 
 class OperatorServicer(pb_grpc.OperatorServiceServicer):
@@ -88,6 +95,23 @@ class OperatorServicer(pb_grpc.OperatorServiceServicer):
             context.abort(grpc.StatusCode.NOT_FOUND, f"Run {request.run_id} not found")
         return run_state_to_proto(run)
 
+    def GetRunResult(self, request, context):  # noqa: N802
+        try:
+            payload = self._op._get_run_result_payload(request.run_id)
+        except KeyError:
+            context.abort(
+                grpc.StatusCode.NOT_FOUND,
+                f"Run {request.run_id} not found",
+            )
+        except (RunResultNotReadyError, RunResultUnavailableError) as exc:
+            context.abort(grpc.StatusCode.FAILED_PRECONDITION, str(exc))
+        except (OSError, RuntimeError, TypeError, ValueError) as exc:
+            context.abort(grpc.StatusCode.DATA_LOSS, str(exc))
+        return pb.RunResultMsg(
+            value_json=payload.value_json,
+            files=[_result_file_attachment_to_proto(item) for item in payload.files],
+        )
+
     def StreamUpdates(self, request, context):  # noqa: N802
         """Server-streaming RPC: yields RunUpdate messages as state changes."""
         q = self._op.subscribe(request.since_sequence)
@@ -106,25 +130,51 @@ class OperatorServicer(pb_grpc.OperatorServiceServicer):
             self._op.unsubscribe(q)
 
 
-def serve(operator: Operator, port: int = DEFAULT_PORT, block: bool = True) -> grpc.Server:
+def serve(
+    operator: Operator,
+    port: int = DEFAULT_PORT,
+    block: bool = True,
+    *,
+    host: str = DEFAULT_HOST,
+) -> grpc.Server:
     """Start the gRPC server.
 
     Args:
         operator: The Operator instance to serve.
         port: Port to listen on.
         block: If True, blocks until server is terminated.
+        host: Explicit listen host. The loopback default limits reachability
+            but does not authenticate callers. A non-loopback host requires an
+            external trusted and authenticated boundary.
 
     Returns:
         The gRPC server (useful for testing when block=False).
     """
-    server = grpc.server(
-        futures.ThreadPoolExecutor(max_workers=10),
-        options=_UNLIMITED_MESSAGE_OPTIONS,
-    )
-    pb_grpc.add_OperatorServiceServicer_to_server(OperatorServicer(operator), server)
-    server.add_insecure_port(f"[::]:{port}")
-    server.start()
-    logger.info(f"Operator gRPC server listening on port {port}")
+    server: grpc.Server | None = None
+    try:
+        server = grpc.server(
+            futures.ThreadPoolExecutor(max_workers=10),
+            options=_BOUNDED_MESSAGE_OPTIONS,
+        )
+        pb_grpc.add_OperatorServiceServicer_to_server(OperatorServicer(operator), server)
+        listen_address = _listen_address(host, port)
+        if not _is_loopback_host(host):
+            logger.warning(
+                "Operator gRPC is listening on non-loopback address %s without built-in "
+                "authentication; use only behind a trusted and authenticated boundary",
+                listen_address,
+            )
+        if server.add_insecure_port(listen_address) == 0:
+            raise RuntimeError(f"Could not bind operator gRPC server to {listen_address}")
+        server.start()
+    except BaseException:
+        try:
+            if server is not None:
+                server.stop(grace=0)
+        finally:
+            operator.close()
+        raise
+    logger.info("Operator gRPC server listening on %s", listen_address)
 
     if block:
         previous_handlers: dict[int, Any] = {}
@@ -150,6 +200,39 @@ def serve(operator: Operator, port: int = DEFAULT_PORT, block: bool = True) -> g
                     signal.signal(signum, handler)
 
     return server
+
+
+def _listen_address(host: str, port: int) -> str:
+    if type(host) is not str or not host:
+        raise ValueError("Operator listen host must be a non-empty string")
+    if isinstance(port, bool) or not isinstance(port, int) or not 0 <= port <= 65535:
+        raise ValueError("Operator listen port must be an integer from 0 to 65535")
+    normalized = host[1:-1] if host.startswith("[") and host.endswith("]") else host
+    display_host = f"[{normalized}]" if ":" in normalized else normalized
+    return f"{display_host}:{port}"
+
+
+def _result_file_attachment_to_proto(item) -> pb.ResultFileAttachment:
+    message = pb.ResultFileAttachment(
+        attachment_id=item.attachment_id,
+        content=item.content,
+        sha256=item.sha256,
+    )
+    if item.name is not None:
+        message.name = item.name
+    if item.media_type is not None:
+        message.media_type = item.media_type
+    return message
+
+
+def _is_loopback_host(host: str) -> bool:
+    normalized = host[1:-1] if host.startswith("[") and host.endswith("]") else host
+    if normalized.lower() == "localhost":
+        return True
+    try:
+        return ipaddress.ip_address(normalized).is_loopback
+    except ValueError:
+        return False
 
 
 def _decode_json_object(payload: str, field_name: str) -> dict[str, Any] | None:

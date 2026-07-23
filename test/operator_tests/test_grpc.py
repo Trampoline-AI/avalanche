@@ -5,6 +5,7 @@ import os
 import socket
 import threading
 import time
+from concurrent import futures
 from pathlib import Path
 
 import grpc
@@ -21,10 +22,16 @@ from avalanche.operator.convert import (
 from avalanche.operator.models import RunState, RunStatus, WorkflowInfo
 from avalanche.operator.server import serve
 from avalanche.runtime import File
+from runtime.operator._grpc import MAX_GRPC_MESSAGE_BYTES
 from runtime.operator.proto import operator_pb2 as pb
+from runtime.operator.results import (
+    MAX_ATTACHMENT_MEDIA_TYPE_LENGTH,
+    MAX_ATTACHMENT_NAME_LENGTH,
+    MAX_RESULT_ATTACHMENTS,
+    MAX_RESULT_TOTAL_BYTES,
+)
 
 FIXTURES_DIR = os.path.join(os.path.dirname(os.path.dirname(__file__)), "fixtures")
-TEST_PORT = 17433  # Use non-default port to avoid conflicts
 
 
 def _unused_port():
@@ -66,6 +73,61 @@ def test_start_run_wire_preserves_surviving_field_numbers():
     assert "S3FileReference" not in proto_source
 
 
+def test_result_file_wire_preserves_empty_metadata_presence():
+    absent = pb.ResultFileAttachment(attachment_id="file_0")
+    empty = pb.ResultFileAttachment(
+        attachment_id="file_0",
+        name="",
+        media_type="",
+    )
+
+    assert not absent.HasField("name")
+    assert not absent.HasField("media_type")
+    assert empty.HasField("name")
+    assert empty.HasField("media_type")
+    assert empty.name == ""
+    assert empty.media_type == ""
+
+
+def test_grpc_envelope_includes_bounded_worst_case_metadata_headroom():
+    worst_case_metadata_bytes = MAX_RESULT_ATTACHMENTS * (
+        4 * MAX_ATTACHMENT_NAME_LENGTH + 4 * MAX_ATTACHMENT_MEDIA_TYPE_LENGTH + 256
+    )
+    assert MAX_GRPC_MESSAGE_BYTES >= (MAX_RESULT_TOTAL_BYTES + worst_case_metadata_bytes)
+
+
+def test_grpc_wire_limit_accepts_exact_edge_and_rejects_max_plus_one():
+    options = (
+        ("grpc.max_send_message_length", MAX_GRPC_MESSAGE_BYTES),
+        ("grpc.max_receive_message_length", MAX_GRPC_MESSAGE_BYTES),
+    )
+    server = grpc.server(futures.ThreadPoolExecutor(max_workers=1), options=options)
+    handler = grpc.unary_unary_rpc_method_handler(
+        lambda _request, _context: b"",
+        request_deserializer=lambda payload: payload,
+        response_serializer=lambda payload: payload,
+    )
+    server.add_generic_rpc_handlers(
+        (grpc.method_handlers_generic_handler("limits.Service", {"Probe": handler}),)
+    )
+    port = server.add_insecure_port("127.0.0.1:0")
+    server.start()
+    channel = grpc.insecure_channel(f"127.0.0.1:{port}", options=options)
+    probe = channel.unary_unary(
+        "/limits.Service/Probe",
+        request_serializer=lambda payload: payload,
+        response_deserializer=lambda payload: payload,
+    )
+    try:
+        assert probe(b"x" * MAX_GRPC_MESSAGE_BYTES, timeout=10) == b""
+        with pytest.raises(grpc.RpcError) as exc_info:
+            probe(b"x" * (MAX_GRPC_MESSAGE_BYTES + 1), timeout=10)
+        assert exc_info.value.code() == grpc.StatusCode.RESOURCE_EXHAUSTED
+    finally:
+        channel.close()
+        server.stop(grace=0)
+
+
 @pytest.fixture(scope="module")
 def grpc_server():
     """Start a gRPC server with a real Operator for the test module."""
@@ -74,9 +136,10 @@ def grpc_server():
         schedule=False,
         watch=False,
     )
-    server = serve(op, port=TEST_PORT, block=False)
+    port = _unused_port()
+    server = serve(op, port=port, block=False)
     time.sleep(0.2)  # Let server bind
-    yield op, server
+    yield op, server, port
     server.stop(grace=1)
     op.close()
 
@@ -84,7 +147,8 @@ def grpc_server():
 @pytest.fixture
 def client(grpc_server):
     """Create a GrpcStateProvider client connected to the test server."""
-    provider = GrpcStateProvider(f"localhost:{TEST_PORT}")
+    _, _, port = grpc_server
+    provider = GrpcStateProvider(f"localhost:{port}")
     yield provider
     provider.close()
 
@@ -362,12 +426,12 @@ def large_file_workflow():
         assert RunStatus.SUCCESS in statuses
 
     def test_reconnect_replays_terminal_update_missed_while_disconnected(self, grpc_server):
-        operator, _server = grpc_server
+        operator, _server, port = grpc_server
         run = RunState(run_id="run_reconnect", flow_name="flow")
         with operator._lock:
             operator._runs[run.run_id] = run
             cursor = operator._sequence
-        provider = GrpcStateProvider(f"localhost:{TEST_PORT}")
+        provider = GrpcStateProvider(f"localhost:{port}")
         first_stream = None
         replay_stream = None
         try:
@@ -825,8 +889,10 @@ def test_blocking_server_closes_operator_in_finally(monkeypatch):
     class FakeServer:
         def __init__(self):
             self.stop_calls = []
+            self.bind_address = None
 
-        def add_insecure_port(self, _address):
+        def add_insecure_port(self, address):
+            self.bind_address = address
             return 1
 
         def start(self):
@@ -865,7 +931,92 @@ def test_blocking_server_closes_operator_in_finally(monkeypatch):
     assert server_module.serve(operator, port=0, block=True) is fake_server
     assert operator.closed
     assert fake_server.stop_calls
+    assert fake_server.bind_address == "127.0.0.1:0"
     assert dict(grpc_options) == {
-        "grpc.max_send_message_length": -1,
-        "grpc.max_receive_message_length": -1,
+        "grpc.max_send_message_length": MAX_GRPC_MESSAGE_BYTES,
+        "grpc.max_receive_message_length": MAX_GRPC_MESSAGE_BYTES,
     }
+
+
+@pytest.mark.parametrize("failure_stage", ["setup", "bind"])
+def test_server_setup_and_bind_failures_close_operator_storage(
+    monkeypatch,
+    tmp_path,
+    failure_stage,
+):
+    import runtime.operator.server as server_module
+
+    class FakeServer:
+        def __init__(self):
+            self.stop_calls = []
+
+        def add_insecure_port(self, _address):
+            return 0 if failure_stage == "bind" else 1
+
+        def start(self):
+            pass
+
+        def stop(self, grace):
+            self.stop_calls.append(grace)
+
+    fake_server = FakeServer()
+    monkeypatch.setattr(
+        server_module.grpc,
+        "server",
+        lambda _executor, *, options: fake_server,
+    )
+
+    def register(_servicer, _server):
+        if failure_stage == "setup":
+            raise RuntimeError("registration failed")
+
+    monkeypatch.setattr(
+        server_module.pb_grpc,
+        "add_OperatorServiceServicer_to_server",
+        register,
+    )
+    operator = Operator(
+        [],
+        watch=False,
+        schedule=False,
+        result_storage_directory=tmp_path,
+    )
+    root = operator._result_store.root
+
+    with pytest.raises(RuntimeError):
+        server_module.serve(operator, port=7433, block=False)
+
+    assert operator._closed
+    assert not root.exists()
+    assert fake_server.stop_calls == [0]
+
+
+def test_server_non_loopback_binding_is_explicit_and_warned(monkeypatch, caplog):
+    import runtime.operator.server as server_module
+
+    class FakeServer:
+        bind_address = None
+
+        def add_insecure_port(self, address):
+            self.bind_address = address
+            return 1
+
+        def start(self):
+            pass
+
+    fake_server = FakeServer()
+    monkeypatch.setattr(
+        server_module.grpc,
+        "server",
+        lambda _executor, *, options: fake_server,
+    )
+    monkeypatch.setattr(
+        server_module.pb_grpc,
+        "add_OperatorServiceServicer_to_server",
+        lambda _servicer, _server: None,
+    )
+
+    server_module.serve(object(), port=7433, block=False, host="0.0.0.0")
+
+    assert fake_server.bind_address == "0.0.0.0:7433"
+    assert "trusted and authenticated boundary" in caplog.text

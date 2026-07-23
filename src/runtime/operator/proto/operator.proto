@@ -10,6 +10,7 @@ service OperatorService {
   rpc CancelRun(CancelRunRequest) returns (Empty);
   rpc ListRuns(ListRunsRequest) returns (RunList);
   rpc GetRun(GetRunRequest) returns (RunStateMsg);
+  rpc GetRunResult(GetRunRequest) returns (RunResultMsg);
   rpc StreamUpdates(StreamRequest) returns (stream RunUpdate);
 }
 
@@ -120,6 +121,19 @@ message RunStateMsg {
 
 message RunList {
   repeated RunStateMsg runs = 1;
+}
+
+message ResultFileAttachment {
+  string attachment_id = 1;
+  optional string name = 2;
+  bytes content = 3;
+  optional string media_type = 4;
+  string sha256 = 5;
+}
+
+message RunResultMsg {
+  string value_json = 1;
+  repeated ResultFileAttachment files = 2;
 }
 
 message RunUpdate {

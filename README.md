@@ -72,6 +72,9 @@ The handle is process-local and its non-daemon driver thread keeps the embedded
 process alive until the run finishes. `run.cancel()` requests cooperative
 cancellation between node submissions; it does not forcibly stop an active
 thread or Ray task. Durable run state remains an operator responsibility.
+Terminal values may contain `ava.File` directly or nested in supported
+Pydantic/list/tuple/dict results. Embedded `.result()` returns the original
+Python shape and `ava.File` objects.
 
 Start with the simplest smoke-tested example:
 
@@ -110,11 +113,44 @@ example files directly; it reads the flow list exposed by the operator over gRPC
 uv run ava operator --flows examples --port 7433
 ```
 
+The operator listens on `127.0.0.1` by default because its gRPC service does not
+provide built-in authentication. Binding another interface with `--host` is an
+explicit deployment choice and requires an external trusted and authenticated
+boundary. Loopback limits network reachability; it does not identify callers,
+and any process running as a local user may attempt to call the service.
+
 In another terminal, start a run from the CLI:
 
 ```bash
 uv run ava run operator_demo_workflow --connect localhost:7433
 ```
+
+Download a successful terminal result without printing binary bytes:
+
+```bash
+uv run ava result RUN_ID --connect localhost:7433 --output-dir ./run-result
+```
+
+The output directory must not already exist, and its parent directory must
+exist. The CLI writes and verifies the complete result in a private staging
+directory inside a retained, identity-pinned holding directory, syncs it, and
+atomically renames the staged name without replacing an existing destination.
+It immediately opens the requested destination through the retained parent
+descriptor and compares its identity to the retained staging descriptor.
+Substitution fails closed and triggers bounded, descriptor-anchored cleanup.
+
+The output parent is a caller-owned local namespace. POSIX and macOS provide no
+portable operation that renames an open directory descriptor, or conditionally
+renames a source name only if it still identifies a specific inode. A hostile
+concurrent process running as the same user can therefore create a transient
+wrong destination before the CLI detects and removes it; that concurrency is
+outside this local CLI threat model. Descriptor-authenticated catchable state is
+cleaned, and catchable failures leave no requested destination. An interruption
+after the holding `mkdir` side effect but before descriptor acquisition can
+leave private empty holding residue: safe cleanup cannot distinguish the
+created directory from a same-name replacement, so it does not open, adopt, or
+remove that entry. The requested destination remains absent. An uncatchable
+termination such as `SIGKILL` can also leave private holding residue.
 
 Or connect the TUI and start runs interactively:
 
