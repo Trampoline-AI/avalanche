@@ -69,6 +69,19 @@ def install_fake(monkeypatch, respond):
     return captured
 
 
+def test_build_predictor_uses_declared_predict_rlm_event_contract():
+    predictor = agent_step_module._build_predictor(
+        "question -> answer",
+        skills=(),
+        tools=(),
+    )
+
+    assert len(predictor.runtime_spec.events) == 1
+    assert isinstance(
+        predictor.runtime_spec.events[0], agent_step_module._AvalancheEvidenceSink
+    )
+
+
 class TestBodyfulAgentSteps:
     def test_body_receives_callable_agent_and_owns_multi_output_handling(self, monkeypatch):
         """A step body receives the raw prediction and decides its public result."""

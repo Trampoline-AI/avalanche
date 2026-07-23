@@ -7,35 +7,10 @@ Provides abstract interface for different execution backends:
 - (Future: DaskExecutor, etc.)
 """
 
-import json
-import os
 from functools import wraps
-from importlib.metadata import PackageNotFoundError, distribution
-from pathlib import Path
 from typing import Any, Callable, Protocol
-from urllib.parse import unquote, urlparse
 
 from ._async import call_sync_or_async, resolve_awaitable
-
-
-def _configure_ray_for_external_predict_rlm() -> None:
-    """Keep Ray workers on this environment when predict-rlm is a sibling edit."""
-    try:
-        direct_url_text = distribution("predict-rlm").read_text("direct_url.json")
-        direct_url = json.loads(direct_url_text or "{}")
-        source_url = direct_url.get("url", "")
-        source_path = Path(unquote(urlparse(source_url).path)).resolve()
-    except (json.JSONDecodeError, PackageNotFoundError, TypeError, ValueError):
-        return
-    editable = direct_url.get("dir_info", {}).get("editable") is True
-    if editable and not source_path.is_relative_to(Path.cwd().resolve()):
-        # Ray's uv hook copies only the current project, so a sibling path source
-        # disappears before workers can resolve the lock. Local Ray workers can
-        # and should reuse the already-synced interpreter instead.
-        os.environ.setdefault("RAY_ENABLE_UV_RUN_RUNTIME_ENV", "0")
-
-
-_configure_ray_for_external_predict_rlm()
 
 
 def _normalize_distributed_result(value: Any) -> Any:
