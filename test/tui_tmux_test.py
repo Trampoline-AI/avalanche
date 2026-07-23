@@ -253,7 +253,7 @@ class TestTmuxRendering:
         assert_node_selected("deploy_staging")
 
     def test_agent_trace_inspector_real_terminal_contract(self, tui_session):
-        """Structured agent turns remain scrollable and Escape restores the dashboard."""
+        """Agent output, trace controls, and metadata render in a real terminal."""
         restart_tui("agent_trace/inspect_agent", width=100, height=35)
         assert wait_for("inspect_agent", timeout=8)
         open_explorer()
@@ -268,7 +268,22 @@ class TestTmuxRendering:
         assert "code:" in combined
         assert "inspect_agent" in combined
 
-        send_keys("m")
+        send_keys("Right")
+        assert wait_for("AGENT OUTPUT", timeout=5)
+        combined = "\n".join(capture())
+        assert "summary" in combined
+        assert "InspectionSummary" in combined
+        assert "active_count" in combined
+        assert "reviewed" in combined
+        assert "SANDBOX_STDOUT_SENTINEL" not in combined
+        assert "Agent inspect_agent · Output" not in combined
+
+        send_keys("Left")
+        assert wait_for("STRUCTURED TRACE", timeout=5)
+        combined = "\n".join(capture())
+        assert "Enter collapse" in combined
+
+        send_keys("Left")
         assert wait_for("AGENT METADATA", timeout=5)
         combined = "\n".join(capture())
         assert "InspectRecords" in combined
@@ -284,7 +299,7 @@ class TestTmuxRendering:
         assert "record_helpers" in combined
         assert "lookup_record" in combined
 
-        send_keys("m")
+        send_keys("Right")
         assert wait_for("STRUCTURED TRACE", timeout=5)
 
         send_keys("o")

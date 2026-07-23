@@ -11,6 +11,13 @@ from .dag_layout import DagNode, SeqGroup, build_nav_grid, nav_move, workflow_to
 from .models import LogEntry, NodeStatus, RunState, RunStatus, WorkflowInfo
 from .state import StateProvider
 
+TraceInspectorTab = Literal["trace", "output", "metadata"]
+_TRACE_INSPECTOR_TABS: tuple[TraceInspectorTab, ...] = (
+    "trace",
+    "output",
+    "metadata",
+)
+
 
 def _fmt_time(secs: float) -> str:
     mins, s = divmod(secs, 60)
@@ -61,7 +68,7 @@ class UIStore:
         # ── Pane focus ─────────────────────────────────────────────
         self.focused_pane: str = "dag"  # "sidebar" | "dag" | "run-history" | "log"
         self.trace_inspector_open: bool = False
-        self.trace_inspector_tab: Literal["trace", "metadata"] = "trace"
+        self.trace_inspector_tab: TraceInspectorTab = "trace"
         self.trace_turn_index: int = 0
         self.trace_collapsed_turns: set[int] = set()
         self.trace_show_full_output: bool = False
@@ -254,6 +261,30 @@ class UIStore:
         if not isinstance(events, list):
             return []
         return [event for event in events if isinstance(event, dict)]
+
+    @property
+    def selected_agent_outputs(self) -> dict[str, Any] | None:
+        envelope = self.selected_agent_trace_envelope
+        trace = envelope.get("trace") if envelope is not None else None
+        if not isinstance(trace, dict):
+            return None
+        evidence = trace.get("evidence")
+        if not isinstance(evidence, dict):
+            return None
+        events = evidence.get("events")
+        if not isinstance(events, list):
+            return None
+        for event in reversed(events):
+            if not isinstance(event, dict):
+                continue
+            if (event.get("event_kind") or event.get("kind")) != "run.succeeded":
+                continue
+            data = event.get("data")
+            if not isinstance(data, dict):
+                return None
+            outputs = data.get("outputs")
+            return outputs if isinstance(outputs, dict) else None
+        return None
 
     @property
     def selected_agent_steps(self) -> list[dict]:
@@ -470,12 +501,13 @@ class UIStore:
         if self.focused_pane == "trace":
             self.focused_pane = "dag"
 
-    def toggle_trace_inspector_tab(self) -> None:
+    def move_trace_inspector_tab(self, delta: int) -> None:
         if not self.trace_inspector_open:
             return
-        self.trace_inspector_tab = (
-            "metadata" if self.trace_inspector_tab == "trace" else "trace"
-        )
+        index = _TRACE_INSPECTOR_TABS.index(self.trace_inspector_tab)
+        self.trace_inspector_tab = _TRACE_INSPECTOR_TABS[
+            (index + delta) % len(_TRACE_INSPECTOR_TABS)
+        ]
 
     def move_trace_turn(self, delta: int) -> None:
         steps = self.selected_agent_steps

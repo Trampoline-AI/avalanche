@@ -74,12 +74,24 @@ def _count_predict_calls(step: dict[str, Any]) -> int:
 
 
 def _append_tabs(text: Text, active: str) -> None:
-    for name in ("Trace", "Metadata"):
+    names = ("Trace", "Output", "Metadata")
+    for index, name in enumerate(names):
         style = "bold reverse #60dce4" if name.lower() == active else "dim"
         text.append(f" {name} ", style=style)
-        if name == "Trace":
+        if index < len(names) - 1:
             text.append(" ")
     text.append("\n\n")
+
+
+def _agent_state_label(store: Any, node_id: str | None) -> str:
+    run = store.current_run
+    if run is None or node_id is None:
+        return "unavailable"
+    state = run.nodes.get(node_id)
+    if state is None:
+        return "pending"
+    status = getattr(state, "status", None)
+    return str(getattr(status, "value", status) or "unavailable")
 
 
 class AgentTraceInspector(Static):
@@ -107,14 +119,11 @@ class AgentTraceInspector(Static):
         _append_tabs(text, "trace")
         text.append(f"AGENT TRACE · {display_name}\n", style="bold #60dce4")
         if envelope is None:
-            state = None
-            if store.current_run is not None and node_id is not None:
-                state = store.current_run.nodes.get(node_id)
-            state_label = getattr(getattr(state, "status", None), "value", "unavailable")
-            if state_label in {"pending", "running"}:
-                text.append(
-                    f"Status: {state_label} · waiting for live updates\n", style="yellow"
-                )
+            state_label = _agent_state_label(store, node_id)
+            if state_label == "pending":
+                text.append("This agent step has not run yet for this run.\n", style="yellow")
+            elif state_label == "running":
+                text.append("Status: running · waiting for live updates\n", style="yellow")
             else:
                 text.append("Trace unavailable or malformed\n", style="bold red")
             return text
@@ -151,7 +160,7 @@ class AgentTraceInspector(Static):
                 live=True,
             )
             text.append(
-                "\n↑/↓ select turn · Enter collapse · o full output · "
+                "←/→ tabs · ↑/↓ select turn · Enter collapse · o full output · "
                 "PgUp/PgDn scroll · Esc back\n",
                 style="dim",
             )
@@ -173,7 +182,7 @@ class AgentTraceInspector(Static):
         )
 
         text.append(
-            "\n↑/↓ select turn · Enter collapse · o full output · "
+            "←/→ tabs · ↑/↓ select turn · Enter collapse · o full output · "
             "PgUp/PgDn scroll · Esc back\n",
             style="dim",
         )
@@ -370,6 +379,69 @@ class AgentTraceInspector(Static):
         )
 
 
+class AgentOutputInspector(Static):
+    """Render the final structured prediction declared by the agent signature."""
+
+    DEFAULT_CSS = """
+    AgentOutputInspector {
+        width: 100%;
+        height: auto;
+        padding: 0 1;
+    }
+    """
+
+    def render(self) -> Text:
+        store = self.app.store
+        node_id = store.selected_agent_node_id
+        workflow = store.current_workflow
+        display_name = (
+            workflow.display_names.get(node_id, node_id)
+            if workflow is not None and node_id is not None
+            else "Agent step"
+        )
+        outputs = store.selected_agent_outputs
+        text = Text()
+        _append_tabs(text, "output")
+        text.append(f"AGENT OUTPUT · {display_name}\n", style="bold #60dce4")
+        if outputs is None:
+            state_label = _agent_state_label(store, node_id)
+            if state_label == "pending":
+                text.append("This agent step has not run yet for this run.\n", style="yellow")
+            elif state_label == "running":
+                text.append(
+                    "Output will be available after this agent step completes.\n",
+                    style="yellow",
+                )
+            else:
+                text.append("Output unavailable\n", style="bold red")
+            text.append("\n←/→ tabs · PgUp/PgDn scroll · Esc back\n", style="dim")
+            return text
+
+        metadata = store.selected_agent_metadata
+        signature = metadata.get("signature") if isinstance(metadata, dict) else None
+        fields = signature.get("outputs") if isinstance(signature, dict) else None
+        if isinstance(fields, list):
+            for field in fields:
+                if not isinstance(field, dict) or not isinstance(field.get("name"), str):
+                    continue
+                name = field["name"]
+                annotation = field.get("annotation")
+                description = field.get("description")
+                label = name
+                if isinstance(annotation, str) and annotation:
+                    label += f": {annotation}"
+                if isinstance(description, str) and description:
+                    label += f" — {description}"
+                rendered = _json(outputs[name]) if name in outputs else "Unavailable"
+                _append_block(text, label, rendered, indent=2)
+        else:
+            for name, value in outputs.items():
+                _append_block(text, str(name), _json(value), indent=2)
+
+        text.append("\n←/→ tabs · PgUp/PgDn scroll · Esc back\n", style="dim")
+        return text
+
+
 class AgentMetadataInspector(Static):
     """Render static agent declaration metadata as hierarchical text."""
 
@@ -396,7 +468,7 @@ class AgentMetadataInspector(Static):
         text.append(f"AGENT METADATA · {display_name}\n", style="bold #60dce4")
         if metadata is None:
             text.append("Metadata unavailable or malformed\n", style="bold red")
-            text.append("\nm switch tab · PgUp/PgDn scroll · Esc back\n", style="dim")
+            text.append("\n←/→ tabs · PgUp/PgDn scroll · Esc back\n", style="dim")
             return text
 
         self._append_signature(text, metadata.get("signature"))
@@ -410,7 +482,7 @@ class AgentMetadataInspector(Static):
         self._append_names(text, "PACKAGES", metadata.get("packages"))
         self._append_names(text, "MODULES", metadata.get("modules"))
         self._append_tools(text, metadata.get("tools"))
-        text.append("\nm switch tab · PgUp/PgDn scroll · Esc back\n", style="dim")
+        text.append("\n←/→ tabs · PgUp/PgDn scroll · Esc back\n", style="dim")
         return text
 
     @classmethod
