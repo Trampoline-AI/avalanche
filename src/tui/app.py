@@ -14,7 +14,11 @@ from .screens.workflow_detail import WorkflowDetailScreen
 from .state import StateProvider
 from .theme import AVALANCHE_THEME
 from .ui_store import UIStore
-from .widgets.agent_trace import AgentMetadataInspector, AgentTraceInspector
+from .widgets.agent_trace import (
+    AgentMetadataInspector,
+    AgentOutputInspector,
+    AgentTraceInspector,
+)
 from .widgets.log_panel import LogWidget
 from .widgets.run_history import RunHistoryWidget
 from .widgets.sidebar import Sidebar
@@ -59,7 +63,6 @@ class AvalancheApp(App):
         ("s", "toggle_autoscroll", "Autoscroll"),
         ("w", "toggle_wrap", "Wrap"),
         ("enter", "activate", "Enter"),
-        Binding("m", "toggle_trace_inspector_tab", "Trace/Metadata", priority=True),
     ]
 
     def __init__(
@@ -157,11 +160,15 @@ class AvalancheApp(App):
             metadata_content = self._screen.query_one(
                 "#agent-metadata-content", AgentMetadataInspector
             )
+            output_content = self._screen.query_one(
+                "#agent-output-content", AgentOutputInspector
+            )
             dashboard.display = not self.store.trace_inspector_open
             inspector.display = self.store.trace_inspector_open
-            trace_active = self.store.trace_inspector_tab == "trace"
-            trace_content.display = trace_active
-            metadata_content.display = not trace_active
+            active_tab = self.store.trace_inspector_tab
+            trace_content.display = active_tab == "trace"
+            output_content.display = active_tab == "output"
+            metadata_content.display = active_tab == "metadata"
             node_id = self.store.selected_agent_node_id
             workflow = self.store.current_workflow
             display_name = (
@@ -169,9 +176,7 @@ class AvalancheApp(App):
                 if workflow is not None and node_id is not None
                 else "Agent step"
             )
-            inspector.border_title = (
-                f"Agent {display_name} · {self.store.trace_inspector_tab.title()}"
-            )
+            inspector.border_title = f"Agent {display_name}"
         except Exception:
             pass
         # Show/hide sidebar + grip, sync width
@@ -207,15 +212,15 @@ class AvalancheApp(App):
         except Exception:
             pass
         if self.store.trace_inspector_open:
-            try:
-                content_id = (
-                    "#agent-trace-content"
-                    if self.store.trace_inspector_tab == "trace"
-                    else "#agent-metadata-content"
-                )
-                self._screen.query_one(content_id).refresh(layout=True)
-            except Exception:
-                pass
+            for content_id in (
+                "agent-trace-content",
+                "agent-output-content",
+                "agent-metadata-content",
+            ):
+                try:
+                    self._screen.query_one(f"#{content_id}").refresh(layout=True)
+                except Exception:
+                    pass
         # Update sticky headers
         try:
             from .widgets.run_history import RunHistoryWidget
@@ -560,11 +565,25 @@ class AvalancheApp(App):
             pass
         self._refresh_widgets()
 
+    def _move_trace_inspector_tab(self, delta: int) -> None:
+        self.store.move_trace_inspector_tab(delta)
+        self._refresh_widgets()
+        try:
+            self._screen.query_one("#agent-trace-inspector").scroll_home(animate=False)
+        except Exception:
+            pass
+
     def action_nav_left(self) -> None:
+        if self.store.focused_pane == "trace":
+            self._move_trace_inspector_tab(-1)
+            return
         self.store.move_nav(-1, 0)
         self._refresh_widgets()
 
     def action_nav_right(self) -> None:
+        if self.store.focused_pane == "trace":
+            self._move_trace_inspector_tab(1)
+            return
         self.store.move_nav(1, 0)
         self._refresh_widgets()
 
@@ -581,16 +600,6 @@ class AvalancheApp(App):
                 self._screen.query_one("#agent-trace-inspector").scroll_end(animate=False)
             except Exception:
                 pass
-
-    def action_toggle_trace_inspector_tab(self) -> None:
-        if not self.store.trace_inspector_open:
-            return
-        self.store.toggle_trace_inspector_tab()
-        self._refresh_widgets()
-        try:
-            self._screen.query_one("#agent-trace-inspector").scroll_home(animate=False)
-        except Exception:
-            pass
 
     # ── Other actions ──────────────────────────────────────────────
 

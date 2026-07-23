@@ -2750,6 +2750,9 @@ class TestInteractions:
             assert app.store.selected_run_id == first_run, "Alt+Up should restore run"
 
 
+_SANDBOX_STDOUT_SENTINEL = "SANDBOX_STDOUT_SENTINEL_DO_NOT_USE_AS_AGENT_OUTPUT"
+
+
 def _agent_trace_provider():
     metadata = {
         "signature": {
@@ -2764,10 +2767,20 @@ def _agent_trace_provider():
             ],
             "outputs": [
                 {
-                    "name": "report",
-                    "annotation": "InspectionReport",
-                    "description": "structured inspection report",
-                }
+                    "name": "summary",
+                    "annotation": "InspectionSummary",
+                    "description": "structured inspection summary",
+                },
+                {
+                    "name": "labels",
+                    "annotation": "list[str]",
+                    "description": "inspection labels",
+                },
+                {
+                    "name": "note",
+                    "annotation": "str | None",
+                    "description": "optional inspection note",
+                },
             ],
         },
         "runtime": {
@@ -2819,13 +2832,26 @@ def _agent_trace_provider():
             "sequence": 3,
             "kind": "code.executed",
             "timestamp_ns": 3,
-            "data": {"iteration": 2, "output": "short-second"},
+            "data": {"iteration": 2, "output": _SANDBOX_STDOUT_SENTINEL},
         },
         {
             "sequence": 4,
             "kind": "iteration.recorded",
             "timestamp_ns": 4,
             "data": {"step": {"iteration": 2}},
+        },
+        {
+            "sequence": 5,
+            "kind": "run.succeeded",
+            "timestamp_ns": 5,
+            "data": {
+                "status": "completed",
+                "outputs": {
+                    "summary": {"active_count": 1, "ready": False},
+                    "labels": ["reviewed"],
+                    "note": None,
+                },
+            },
         },
     ]
     steps = [
@@ -2846,7 +2872,7 @@ def _agent_trace_provider():
             "iteration": 2,
             "reasoning": "second reasoning",
             "code": "print('second')",
-            "output": "short-second",
+            "output": _SANDBOX_STDOUT_SENTINEL,
             "untruncated_output": "FULL-SECOND",
             "error": False,
             "duration_ms": 8,
@@ -2958,6 +2984,7 @@ async def test_agent_trace_inspector_interactions_and_log_retention():
     from avalanche.tui.app import AvalancheApp
     from avalanche.tui.widgets.agent_trace import (
         AgentMetadataInspector,
+        AgentOutputInspector,
         AgentTraceInspector,
     )
     from avalanche.tui.widgets.log_panel import LogWidget
@@ -3005,7 +3032,57 @@ async def test_agent_trace_inspector_interactions_and_log_retention():
             span.start <= code_offset < span.end for span in rendered.spans
         ), "Python code should carry syntax-highlighting spans"
 
-        await pilot.press("m")
+        await pilot.press("enter", "o")
+        preserved_turn_index = app.store.trace_turn_index
+        preserved_collapsed_turns = set(app.store.trace_collapsed_turns)
+        preserved_full_output = app.store.trace_show_full_output
+
+        await pilot.press("right")
+        await pilot.pause()
+        assert app.store.trace_inspector_tab == "output"
+        output_content = app._screen.query_one("#agent-output-content", AgentOutputInspector)
+        output_plain = output_content.render().plain
+        assert output_content.display is True
+        assert content.display is False
+        assert app._screen.query_one("#agent-trace-inspector").border_title == "Agent agent"
+        summary_header = "summary: InspectionSummary — structured inspection summary"
+        labels_header = "labels: list[str] — inspection labels"
+        note_header = "note: str | None — optional inspection note"
+        assert (
+            output_plain.index(summary_header)
+            < output_plain.index(labels_header)
+            < output_plain.index(note_header)
+        )
+        for expected in (
+            "AGENT OUTPUT · agent",
+            '"active_count": 1',
+            '"ready": false',
+            '"reviewed"',
+            "null",
+        ):
+            assert expected in output_plain
+        assert _SANDBOX_STDOUT_SENTINEL not in output_plain
+
+        await pilot.press("d", "m", "up", "enter", "o")
+        assert app.store.trace_inspector_tab == "output"
+        assert app.store.trace_turn_index == preserved_turn_index
+        assert app.store.trace_collapsed_turns == preserved_collapsed_turns
+        assert app.store.trace_show_full_output is preserved_full_output
+
+        await pilot.press("left")
+        await pilot.pause()
+        assert app.store.trace_inspector_tab == "trace"
+        assert content.display is True
+        assert output_content.display is False
+        assert app.store.trace_turn_index == preserved_turn_index
+        assert app.store.trace_collapsed_turns == preserved_collapsed_turns
+        assert app.store.trace_show_full_output is preserved_full_output
+
+        await pilot.press("enter", "o")
+        assert app.store.trace_collapsed_turns == set()
+        assert app.store.trace_show_full_output is False
+
+        await pilot.press("left")
         await pilot.pause()
         assert app.store.trace_inspector_tab == "metadata"
         metadata_content = app._screen.query_one(
@@ -3014,10 +3091,7 @@ async def test_agent_trace_inspector_interactions_and_log_retention():
         metadata_plain = metadata_content.render().plain
         assert metadata_content.display is True
         assert content.display is False
-        assert (
-            "Agent agent · Metadata"
-            in app._screen.query_one("#agent-trace-inspector").border_title
-        )
+        assert app._screen.query_one("#agent-trace-inspector").border_title == "Agent agent"
         for expected in (
             "InspectRecords",
             "records: list[Record] — records to inspect",
@@ -3039,7 +3113,7 @@ async def test_agent_trace_inspector_interactions_and_log_retention():
         assert app.store.trace_collapsed_turns == collapsed_turns
         assert app.store.trace_show_full_output is show_full_output
 
-        await pilot.press("m")
+        await pilot.press("right")
         await pilot.pause()
         assert app.store.trace_inspector_tab == "trace"
         assert content.display is True
@@ -3066,7 +3140,8 @@ async def test_agent_trace_inspector_interactions_and_log_retention():
         assert app.store.trace_inspector_open is False
         assert app.store.focused_pane == "dag"
         assert app._screen.query_one("#dashboard-pane").display is True
-        logs = app._screen.query_one("#log-content", LogWidget).render().plain
+        log_view = app._screen.query_one("#log-content", LogWidget)
+        logs = "\n".join(line.text for line in log_view.lines)
         assert "Agent code.generated" in logs
         assert "Agent iteration.recorded" in logs
 
@@ -3076,6 +3151,7 @@ async def test_agent_trace_inspector_renders_pending_failed_malformed_and_incomp
     from avalanche.tui.app import AvalancheApp
     from avalanche.tui.widgets.agent_trace import (
         AgentMetadataInspector,
+        AgentOutputInspector,
         AgentTraceInspector,
     )
 
@@ -3089,24 +3165,120 @@ async def test_agent_trace_inspector_renders_pending_failed_malformed_and_incomp
         content = app._screen.query_one("#agent-trace-content", AgentTraceInspector)
         node = app.store.current_run.nodes["agent_1"]
 
-        await pilot.press("m")
+        await pilot.press("left")
         metadata_content = app._screen.query_one(
             "#agent-metadata-content", AgentMetadataInspector
         )
         workflow = app.store.current_workflow
+        original_metadata_json = workflow.agent_metadata_json["agent_1"]
         workflow.agent_metadata_json["agent_1"] = "{malformed"
         assert "Metadata unavailable or malformed" in metadata_content.render().plain
         workflow.agent_metadata_json.pop("agent_1")
         assert "Metadata unavailable or malformed" in metadata_content.render().plain
-        await pilot.press("m")
+        await pilot.press("left")
+        output_content = app._screen.query_one("#agent-output-content", AgentOutputInspector)
+        fallback_output = output_content.render().plain
+        assert app.store.trace_inspector_tab == "output"
+        assert "summary:" in fallback_output
+        assert "labels:" in fallback_output
+        assert "note:" in fallback_output
+        assert "InspectionSummary" not in fallback_output
+        assert '"ready": false' in fallback_output
+        assert _SANDBOX_STDOUT_SENTINEL not in fallback_output
+
+        await pilot.press("right")
+        assert app.store.trace_inspector_tab == "metadata"
+        await pilot.press("right")
+        assert app.store.trace_inspector_tab == "trace"
+        workflow.agent_metadata_json["agent_1"] = original_metadata_json
+
+        projected = json.loads(json.dumps(envelope))
+        projected_success = projected["trace"]["evidence"]["events"][-1]
+        projected_success["event_kind"] = projected_success.pop("kind")
+        node.agent_trace_json = json.dumps(projected)
+        assert app.store.selected_agent_outputs == {
+            "summary": {"active_count": 1, "ready": False},
+            "labels": ["reviewed"],
+            "note": None,
+        }
+
+        absent_field = json.loads(json.dumps(envelope))
+        absent_field["trace"]["evidence"]["events"][-1]["data"]["outputs"].pop("note")
+        node.agent_trace_json = json.dumps(absent_field)
+        await pilot.press("right")
+        absent_output = output_content.render().plain
+        note_header = "note: str | None — optional inspection note"
+        assert note_header in absent_output
+        assert "Unavailable" in absent_output[absent_output.index(note_header) :]
+        await pilot.press("left")
+
+        malformed_success = json.loads(json.dumps(envelope))
+        malformed_success["trace"]["evidence"]["events"].append(
+            {
+                "sequence": 6,
+                "kind": "run.succeeded",
+                "data": {"status": "completed", "outputs": []},
+            }
+        )
+        node.agent_trace_json = json.dumps(malformed_success)
+        await pilot.press("right")
+        assert "Output unavailable" in output_content.render().plain
+        await pilot.press("left")
+
+        legacy = json.loads(json.dumps(envelope))
+        legacy["trace"]["evidence"]["events"] = [
+            event
+            for event in legacy["trace"]["evidence"]["events"]
+            if event.get("kind") != "run.succeeded"
+        ]
+        node.agent_trace_json = json.dumps(legacy)
+        await pilot.press("right")
+        assert "Output unavailable" in output_content.render().plain
+        await pilot.press("left")
+
+        assert app.store.trace_inspector_tab == "trace"
+        node.agent_trace_json = json.dumps(envelope)
+        assert app.store.selected_agent_outputs is not None
+        assert _SANDBOX_STDOUT_SENTINEL not in output_content.render().plain
+
+        node.agent_trace_json = "{malformed"
+        await pilot.press("right")
+        assert "Output unavailable" in output_content.render().plain
+        await pilot.press("left")
         assert app.store.trace_inspector_tab == "trace"
 
         node.agent_trace_json = "{malformed"
         assert "unavailable or malformed" in content.render().plain
 
-        node.status = NodeStatus.RUNNING
+        missing_node = app.store.current_run.nodes.pop("agent_1")
+        missing_trace = content.render().plain
+        assert "This agent step has not run yet for this run." in missing_trace
+        assert "Trace unavailable or malformed" not in missing_trace
+        await pilot.press("right")
+        missing_output = output_content.render().plain
+        assert "This agent step has not run yet for this run." in missing_output
+        assert "Output unavailable" not in missing_output
+        await pilot.press("left")
+        app.store.current_run.nodes["agent_1"] = missing_node
+
+        node.status = NodeStatus.PENDING
         node.agent_trace_json = None
+        pending_trace = content.render().plain
+        assert "This agent step has not run yet for this run." in pending_trace
+        assert "Trace unavailable or malformed" not in pending_trace
+        await pilot.press("right")
+        pending_output = output_content.render().plain
+        assert "This agent step has not run yet for this run." in pending_output
+        assert "Output unavailable" not in pending_output
+        await pilot.press("left")
+
+        node.status = NodeStatus.RUNNING
         assert "waiting for live updates" in content.render().plain
+        await pilot.press("right")
+        running_output = output_content.render().plain
+        assert "Output will be available after this agent step completes." in running_output
+        assert "This agent step has not run yet for this run." not in running_output
+        await pilot.press("left")
 
         live = dict(envelope)
         live.update({"status": "in_progress", "trace": None, "error": None})
@@ -3116,7 +3288,7 @@ async def test_agent_trace_inspector_renders_pending_failed_malformed_and_incomp
         assert "LIVE TRACE · 2 turn(s)" in live_render
         assert "AGENT TURN 1/2 · 0ms · 0 tool · 0 predict · LIVE" in live_render
         assert "print('first')" in live_render
-        assert "short-second" in live_render
+        assert _SANDBOX_STDOUT_SENTINEL in live_render
 
         failed = dict(live)
         failed.update({"status": "error", "error": "provider failed"})
@@ -3128,6 +3300,11 @@ async def test_agent_trace_inspector_renders_pending_failed_malformed_and_incomp
         assert "Code generated · turn 1" in failed_render
         assert "Turn completed · turn 2" in failed_render
         assert "iteration.recorded" not in failed_render
+        node.status = NodeStatus.FAILED
+        await pilot.press("right")
+        assert "Output unavailable" in output_content.render().plain
+        assert _SANDBOX_STDOUT_SENTINEL not in output_content.render().plain
+        await pilot.press("left")
 
         incomplete = json.loads(json.dumps(envelope))
         incomplete["trace"]["evidence"]["complete"] = False
