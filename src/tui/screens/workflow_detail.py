@@ -11,7 +11,11 @@ from textual.screen import Screen
 from textual.scrollbar import ScrollBar, ScrollBarRender
 from textual.widgets import Header, Static
 
-from ..widgets.agent_trace import AgentMetadataInspector, AgentTraceInspector
+from ..widgets.agent_trace import (
+    AgentMetadataInspector,
+    AgentOutputInspector,
+    AgentTraceInspector,
+)
 from ..widgets.dag import DagWidget
 from ..widgets.log_panel import LogWidget
 from ..widgets.run_history import RunHistoryWidget
@@ -247,7 +251,7 @@ class WorkflowDetailScreen(Screen):
     #agent-trace-inspector {
         display: none;
     }
-    #agent-metadata-content {
+    #agent-output-content, #agent-metadata-content {
         display: none;
     }
 
@@ -354,8 +358,9 @@ class WorkflowDetailScreen(Screen):
                         yield Static(id="log-header", classes="pane-header")
                         yield LogWidget(id="log-content")
                 with _ThinScrollContainer(id="agent-trace-inspector") as inspector:
-                    inspector.border_title = "Agent · Trace"
+                    inspector.border_title = "Agent"
                     yield AgentTraceInspector(id="agent-trace-content")
+                    yield AgentOutputInspector(id="agent-output-content")
                     yield AgentMetadataInspector(id="agent-metadata-content")
         from textual.containers import Container
 

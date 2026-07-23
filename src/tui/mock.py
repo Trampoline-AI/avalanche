@@ -275,7 +275,17 @@ AGENT_TRACE_METADATA = {
                 "name": "summary",
                 "annotation": "InspectionSummary",
                 "description": "structured inspection summary",
-            }
+            },
+            {
+                "name": "labels",
+                "annotation": "list[str]",
+                "description": "inspection labels",
+            },
+            {
+                "name": "note",
+                "annotation": "str | None",
+                "description": "optional inspection note",
+            },
         ],
     },
     "runtime": {
@@ -620,7 +630,7 @@ class MockStateProvider:
                 "sequence": 2,
                 "kind": "code.executed",
                 "timestamp_ns": 2,
-                "data": {"iteration": 1, "output": "{'active_count': 2}"},
+                "data": {"iteration": 1, "output": "SANDBOX_STDOUT_SENTINEL"},
             },
             {
                 "sequence": 3,
@@ -628,12 +638,25 @@ class MockStateProvider:
                 "timestamp_ns": 3,
                 "data": {"step": {"iteration": 1}},
             },
+            {
+                "sequence": 4,
+                "kind": "run.succeeded",
+                "timestamp_ns": 4,
+                "data": {
+                    "status": "completed",
+                    "outputs": {
+                        "summary": {"active_count": 1, "ready": False},
+                        "labels": ["reviewed"],
+                        "note": None,
+                    },
+                },
+            },
         ]
         trace_step = {
             "iteration": 1,
             "reasoning": "Filter active records and summarize their names.",
             "code": trace_events[0]["data"]["code"],
-            "output": "{'active_count': 2}",
+            "output": "SANDBOX_STDOUT_SENTINEL",
             "untruncated_output": (
                 "FULL OUTPUT: {'active_count': 2, 'names': "
                 "['Ada Lovelace', 'Grace Hopper']}\\n" + "wrapped output line " * 12
