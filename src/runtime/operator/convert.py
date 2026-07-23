@@ -5,13 +5,12 @@ from __future__ import annotations
 from pathlib import Path, PureWindowsPath
 
 from .models import (
-    AgentEvent,
     AgentEventAppended,
+    AgentEventDescriptor,
     LogAppended,
-    LogEntry,
     LogLevel,
+    LogRecordDescriptor,
     NodeSnapshot,
-    NodeState,
     NodeStatus,
     NodeStatusChanged,
     ResetRequired,
@@ -19,11 +18,9 @@ from .models import (
     RunDelta,
     RunDeltaEnvelope,
     RunSnapshot,
-    RunState,
     RunStatus,
     RunStatusChanged,
     RunSummary,
-    SequencedLogEntry,
     TraceDescriptor,
     TraceFinalized,
     WorkflowDiscoveryDiagnostic,
@@ -108,84 +105,6 @@ def discovery_diagnostic_from_proto(
     )
 
 
-def node_state_to_proto(ns: NodeState) -> pb.NodeStateMsg:
-    return pb.NodeStateMsg(
-        node_id=ns.node_id,
-        name=ns.name,
-        node_type=ns.node_type,
-        status=ns.status.value,
-        started_at=ns.started_at or 0.0,
-        ended_at=ns.ended_at or 0.0,
-        agent_trace_json=ns.agent_trace_json or "",
-    )
-
-
-def node_state_from_proto(msg: pb.NodeStateMsg) -> NodeState:
-    return NodeState(
-        node_id=msg.node_id,
-        name=msg.name,
-        node_type=msg.node_type,
-        status=NodeStatus(msg.status),
-        started_at=msg.started_at if msg.started_at else None,
-        ended_at=msg.ended_at if msg.ended_at else None,
-        agent_trace_json=msg.agent_trace_json or None,
-    )
-
-
-def run_state_to_proto(run: RunState) -> pb.RunStateMsg:
-    return pb.RunStateMsg(
-        run_id=run.run_id,
-        flow_name=run.flow_name,
-        status=run.status.value,
-        started_at=run.started_at or 0.0,
-        ended_at=run.ended_at or 0.0,
-        nodes=[node_state_to_proto(ns) for ns in run.nodes.values()],
-        logs=[log_entry_to_proto(le) for le in run.logs],
-        triggered_by=run.triggered_by,
-        workflow_id=run.workflow_id or run.flow_name,
-        workflow_display_name=run.workflow_display_name or run.flow_name,
-    )
-
-
-def run_state_from_proto(msg: pb.RunStateMsg) -> RunState:
-    run = RunState(
-        run_id=msg.run_id,
-        flow_name=msg.flow_name,
-        status=RunStatus(msg.status),
-        started_at=msg.started_at if msg.started_at else None,
-        ended_at=msg.ended_at if msg.ended_at else None,
-        triggered_by=msg.triggered_by or "manual",
-        workflow_id=msg.workflow_id or msg.flow_name,
-        workflow_display_name=msg.workflow_display_name or msg.flow_name,
-    )
-    for ns_msg in msg.nodes:
-        ns = node_state_from_proto(ns_msg)
-        run.nodes[ns.node_id] = ns
-    for le_msg in msg.logs:
-        run.logs.append(log_entry_from_proto(le_msg))
-    return run
-
-
-def log_entry_to_proto(le: LogEntry) -> pb.LogEntryMsg:
-    return pb.LogEntryMsg(
-        timestamp=le.timestamp.timestamp(),
-        level=le.level.value,
-        node_id=le.node_id,
-        message=le.message,
-    )
-
-
-def log_entry_from_proto(msg: pb.LogEntryMsg) -> LogEntry:
-    from datetime import datetime
-
-    return LogEntry(
-        timestamp=datetime.fromtimestamp(msg.timestamp),
-        level=LogLevel(msg.level),
-        node_id=msg.node_id,
-        message=msg.message,
-    )
-
-
 def trace_descriptor_to_proto(descriptor: TraceDescriptor) -> pb.TraceDescriptorMsg:
     return pb.TraceDescriptorMsg(
         status=descriptor.status,
@@ -194,6 +113,7 @@ def trace_descriptor_to_proto(descriptor: TraceDescriptor) -> pb.TraceDescriptor
         complete=descriptor.complete,
         event_count=descriptor.event_count,
         size_bytes=descriptor.size_bytes,
+        latest_event_sequence=descriptor.latest_event_sequence,
     )
 
 
@@ -205,6 +125,7 @@ def trace_descriptor_from_proto(msg: pb.TraceDescriptorMsg) -> TraceDescriptor:
         complete=msg.complete,
         event_count=msg.event_count,
         size_bytes=msg.size_bytes,
+        latest_event_sequence=msg.latest_event_sequence,
     )
 
 
@@ -220,6 +141,7 @@ def node_snapshot_to_proto(node: NodeSnapshot) -> pb.NodeSnapshotMsg:
     )
     if node.trace is not None:
         message.trace.CopyFrom(trace_descriptor_to_proto(node.trace))
+    message.event_page_token = node.event_page_token
     return message
 
 
@@ -233,6 +155,7 @@ def node_snapshot_from_proto(msg: pb.NodeSnapshotMsg) -> NodeSnapshot:
         ended_at=msg.ended_at if msg.ended_at else None,
         trace=trace_descriptor_from_proto(msg.trace) if msg.HasField("trace") else None,
         revision=msg.revision,
+        event_page_token=msg.event_page_token,
     )
 
 
@@ -273,6 +196,7 @@ def run_snapshot_to_proto(snapshot: RunSnapshot) -> pb.RunSnapshotMsg:
         summary=run_summary_to_proto(snapshot.summary),
         nodes=[node_snapshot_to_proto(node) for node in snapshot.nodes],
         latest_log_sequence=snapshot.latest_log_sequence,
+        log_page_token=snapshot.log_page_token,
     )
 
 
@@ -283,34 +207,55 @@ def run_snapshot_from_proto(msg: pb.RunSnapshotMsg) -> RunSnapshot:
         summary=run_summary_from_proto(msg.summary),
         nodes=tuple(node_snapshot_from_proto(node) for node in msg.nodes),
         latest_log_sequence=msg.latest_log_sequence,
+        log_page_token=msg.log_page_token,
     )
 
 
-def sequenced_log_entry_to_proto(log: SequencedLogEntry) -> pb.SequencedLogEntryMsg:
-    return pb.SequencedLogEntryMsg(
+def log_record_descriptor_to_proto(
+    log: LogRecordDescriptor,
+) -> pb.LogRecordDescriptorMsg:
+    return pb.LogRecordDescriptorMsg(
         sequence=log.sequence,
-        entry=log_entry_to_proto(log.entry),
+        timestamp=log.timestamp.timestamp(),
+        level=log.level.value,
+        node_id=log.node_id,
+        size_bytes=log.size_bytes,
+        body_token=log.body_token,
     )
 
 
-def sequenced_log_entry_from_proto(msg: pb.SequencedLogEntryMsg) -> SequencedLogEntry:
-    return SequencedLogEntry(
+def log_record_descriptor_from_proto(
+    msg: pb.LogRecordDescriptorMsg,
+) -> LogRecordDescriptor:
+    from datetime import datetime
+
+    return LogRecordDescriptor(
         sequence=msg.sequence,
-        entry=log_entry_from_proto(msg.entry),
+        timestamp=datetime.fromtimestamp(msg.timestamp),
+        level=LogLevel(msg.level),
+        node_id=msg.node_id,
+        size_bytes=msg.size_bytes,
+        body_token=msg.body_token,
     )
 
 
-def agent_event_to_proto(event: AgentEvent) -> pb.AgentEventMsg:
-    return pb.AgentEventMsg(
+def agent_event_descriptor_to_proto(
+    event: AgentEventDescriptor,
+) -> pb.AgentEventDescriptorMsg:
+    return pb.AgentEventDescriptorMsg(
         event_sequence=event.event_sequence,
-        event_json=event.event_json,
+        size_bytes=event.size_bytes,
+        body_token=event.body_token,
     )
 
 
-def agent_event_from_proto(msg: pb.AgentEventMsg) -> AgentEvent:
-    return AgentEvent(
+def agent_event_descriptor_from_proto(
+    msg: pb.AgentEventDescriptorMsg,
+) -> AgentEventDescriptor:
+    return AgentEventDescriptor(
         event_sequence=msg.event_sequence,
-        event_json=msg.event_json,
+        size_bytes=msg.size_bytes,
+        body_token=msg.body_token,
     )
 
 
@@ -349,7 +294,7 @@ def run_delta_to_proto(delta: RunDelta) -> pb.RunDelta:
         message.log_appended.CopyFrom(
             pb.LogAppendedDelta(
                 run_id=change.run_id,
-                log=sequenced_log_entry_to_proto(change.log),
+                log=log_record_descriptor_to_proto(change.log),
             )
         )
     elif isinstance(change, AgentEventAppended):
@@ -357,7 +302,7 @@ def run_delta_to_proto(delta: RunDelta) -> pb.RunDelta:
             pb.AgentEventAppendedDelta(
                 run_id=change.run_id,
                 node_id=change.node_id,
-                event=agent_event_to_proto(change.event),
+                event=agent_event_descriptor_to_proto(change.event),
             )
         )
     elif isinstance(change, TraceFinalized):
@@ -403,14 +348,14 @@ def run_delta_from_proto(msg: pb.RunDelta) -> RunDelta:
         item = msg.log_appended
         change = LogAppended(
             run_id=item.run_id,
-            log=sequenced_log_entry_from_proto(item.log),
+            log=log_record_descriptor_from_proto(item.log),
         )
     elif change_name == "agent_event_appended":
         item = msg.agent_event_appended
         change = AgentEventAppended(
             run_id=item.run_id,
             node_id=item.node_id,
-            event=agent_event_from_proto(item.event),
+            event=agent_event_descriptor_from_proto(item.event),
         )
     elif change_name == "trace_finalized":
         item = msg.trace_finalized

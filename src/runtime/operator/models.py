@@ -33,7 +33,7 @@ class LogLevel(Enum):
     ERROR = "ERROR"
 
 
-@dataclass
+@dataclass(frozen=True)
 class LogEntry:
     timestamp: datetime
     level: LogLevel
@@ -52,6 +52,7 @@ class NodeState:
     agent_trace_json: str | None = None
     trace: TraceDescriptor | None = None
     revision: int = 0
+    event_page_token: str = ""
 
     @property
     def elapsed(self) -> float | None:
@@ -86,6 +87,7 @@ class RunState:
         end = self.ended_at if self.ended_at is not None else time.monotonic()
         return end - self.started_at
 
+
 @dataclass(frozen=True)
 class TraceDescriptor:
     """Location metadata for agent detail stored outside structural run state."""
@@ -96,6 +98,7 @@ class TraceDescriptor:
     complete: bool = False
     event_count: int = 0
     size_bytes: int = 0
+    latest_event_sequence: int = 0
 
 
 @dataclass(frozen=True)
@@ -110,7 +113,6 @@ class TraceDetail:
     trace_body: dict[str, Any]
 
 
-
 @dataclass(frozen=True)
 class NodeSnapshot:
     """Lightweight node state used by baseline reads and run deltas."""
@@ -123,6 +125,7 @@ class NodeSnapshot:
     ended_at: float | None = None
     trace: TraceDescriptor | None = None
     revision: int = 0
+    event_page_token: str = ""
 
 
 @dataclass(frozen=True)
@@ -150,6 +153,7 @@ class RunSnapshot:
     summary: RunSummary
     nodes: tuple[NodeSnapshot, ...] = ()
     latest_log_sequence: int = 0
+    log_page_token: str = ""
 
 
 @dataclass(frozen=True)
@@ -158,6 +162,7 @@ class SequencedLogEntry:
 
     sequence: int
     entry: LogEntry
+    size_bytes: int = 0
 
 
 @dataclass(frozen=True)
@@ -166,6 +171,55 @@ class AgentEvent:
 
     event_sequence: int
     event_json: str
+    size_bytes: int = 0
+
+
+@dataclass(frozen=True)
+class LogDetailAppended:
+    """One identity-pinned live log body delivered outside structural state."""
+
+    operator_instance_id: str
+    run_id: str
+    created_sequence: int
+    sequence: int
+    log_sequence: int
+    log: LogEntry
+
+
+@dataclass(frozen=True)
+class AgentEventDetailAppended:
+    """One identity-pinned live agent event body delivered outside structural state."""
+
+    operator_instance_id: str
+    run_id: str
+    created_sequence: int
+    sequence: int
+    node_id: str
+    event: AgentEvent
+
+
+DetailDelta = LogDetailAppended | AgentEventDetailAppended
+
+
+@dataclass(frozen=True)
+class LogRecordDescriptor:
+    """Bounded metadata for a log body fetched through ``ReadDetail``."""
+
+    sequence: int
+    timestamp: datetime
+    level: LogLevel
+    node_id: str
+    size_bytes: int
+    body_token: str
+
+
+@dataclass(frozen=True)
+class AgentEventDescriptor:
+    """Bounded identity and availability metadata for an agent event body."""
+
+    event_sequence: int
+    size_bytes: int
+    body_token: str
 
 
 @dataclass(frozen=True)
@@ -180,26 +234,24 @@ class RunSummaryPage:
 
 @dataclass(frozen=True)
 class LogPage:
-    """Append-only run logs after an exclusive sequence cursor."""
+    """One byte-bounded page of immutable log body descriptors."""
 
     operator_instance_id: str
     as_of_sequence: int
-    logs: tuple[SequencedLogEntry, ...] = ()
-    next_sequence: int = 0
-    has_more: bool = False
+    logs: tuple[LogRecordDescriptor, ...] = ()
+    next_page_token: str = ""
 
 
 @dataclass(frozen=True)
 class AgentEventPage:
-    """Projected events for one agent node after an exclusive source cursor."""
+    """One byte-bounded page of immutable agent event body descriptors."""
 
     operator_instance_id: str
     as_of_sequence: int
     run_id: str
     node_id: str
-    events: tuple[AgentEvent, ...] = ()
-    next_event_sequence: int = 0
-    has_more: bool = False
+    events: tuple[AgentEventDescriptor, ...] = ()
+    next_page_token: str = ""
 
 
 @dataclass(frozen=True)
@@ -208,7 +260,6 @@ class FinalizedTrace:
 
     revision: int
     data: bytes
-
 
 
 @dataclass(frozen=True)
@@ -239,14 +290,14 @@ class NodeStatusChanged:
 @dataclass(frozen=True)
 class LogAppended:
     run_id: str
-    log: SequencedLogEntry
+    log: LogRecordDescriptor
 
 
 @dataclass(frozen=True)
 class AgentEventAppended:
     run_id: str
     node_id: str
-    event: AgentEvent
+    event: AgentEventDescriptor
 
 
 @dataclass(frozen=True)
@@ -287,6 +338,8 @@ class RunDeltaEnvelope:
     def __post_init__(self) -> None:
         if (self.delta is None) == (self.reset_required is None):
             raise ValueError("delta envelope requires exactly one payload")
+
+
 @dataclass
 class WorkflowInfo:
     """Flat snapshot of a workflow — the TUI never holds real Workflow objects."""
@@ -326,6 +379,27 @@ class WorkflowInfo:
     def source_file(self) -> str:
         """Relative source path, falling back for pre-identity fixtures."""
         return self.relative_file or self.file_path
+
+
+@dataclass(frozen=True)
+class StreamResetNotice:
+    """One client-local reset generation caused by a stream epoch change."""
+
+    generation: int
+    previous_sequence: int
+    observed_sequence: int
+    operator_instance_id: str = ""
+
+
+@dataclass(frozen=True)
+class ResetBaseline:
+    """Authoritative UI baseline associated with one reset generation."""
+
+    generation: int
+    operator_instance_id: str
+    as_of_sequence: int
+    workflows: tuple[WorkflowInfo, ...]
+    runs_by_workflow: Mapping[str, tuple[RunState, ...]]
 
 
 @dataclass(frozen=True)

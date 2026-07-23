@@ -8,15 +8,13 @@ service OperatorService {
   rpc ListFlows(Empty) returns (FlowList);
   rpc StartRun(StartRunRequest) returns (StartRunResponse);
   rpc CancelRun(CancelRunRequest) returns (Empty);
-  rpc ListRuns(ListRunsRequest) returns (RunList);
-  rpc GetRun(GetRunRequest) returns (RunStateMsg);
   rpc GetRunResult(GetRunRequest) returns (RunResultMsg);
-  rpc StreamUpdates(StreamRequest) returns (stream RunUpdate);
   rpc ListRunSummaries(ListRunSummariesRequest) returns (RunSummaryPage);
   rpc GetRunSnapshot(GetRunSnapshotRequest) returns (RunSnapshotMsg);
   rpc ListLogs(ListLogsRequest) returns (LogPage);
   rpc ListAgentEvents(ListAgentEventsRequest) returns (AgentEventPage);
   rpc ReadTrace(ReadTraceRequest) returns (stream TraceChunk);
+  rpc ReadDetail(ReadDetailRequest) returns (stream DetailChunk);
   rpc StreamRunDeltas(StreamRunDeltasRequest) returns (stream RunDeltaEnvelope);
 }
 
@@ -49,18 +47,10 @@ message CancelRunRequest {
   string run_id = 1;
 }
 
-message ListRunsRequest {
-  string flow_name = 1;
-  string workflow_selector = 2;
-}
-
 message GetRunRequest {
   string run_id = 1;
 }
 
-message StreamRequest {
-  uint64 since_sequence = 1;
-}
 
 message ListRunSummariesRequest {
   string workflow_selector = 1;
@@ -75,16 +65,15 @@ message GetRunSnapshotRequest {
 }
 
 message ListLogsRequest {
-  string run_id = 1;
+  string page_token = 1;
   uint64 after_sequence = 2;
   uint32 page_size = 3;
 }
 
 message ListAgentEventsRequest {
-  string run_id = 1;
-  string node_id = 2;
-  uint64 after_event_sequence = 3;
-  uint32 page_size = 4;
+  string page_token = 1;
+  uint64 after_event_sequence = 2;
+  uint32 page_size = 3;
 }
 
 message ReadTraceRequest {
@@ -92,6 +81,10 @@ message ReadTraceRequest {
   string node_id = 2;
   uint64 revision = 3;
   string operator_instance_id = 4;
+}
+
+message ReadDetailRequest {
+  string body_token = 1;
 }
 
 message StreamRunDeltasRequest {
@@ -138,40 +131,6 @@ message DiscoveryDiagnosticMsg {
   string message = 3;
 }
 
-message NodeStateMsg {
-  string node_id = 1;
-  string name = 2;
-  string node_type = 3;
-  string status = 4;
-  double started_at = 5;
-  double ended_at = 6;
-  string agent_trace_json = 7;
-}
-
-message LogEntryMsg {
-  double timestamp = 1;
-  string level = 2;
-  string node_id = 3;
-  string message = 4;
-}
-
-message RunStateMsg {
-  string run_id = 1;
-  string flow_name = 2;
-  string status = 3;
-  double started_at = 4;
-  double ended_at = 5;
-  repeated NodeStateMsg nodes = 6;
-  repeated LogEntryMsg logs = 7;
-  string triggered_by = 8;
-  string workflow_id = 9;
-  string workflow_display_name = 10;
-}
-
-message RunList {
-  repeated RunStateMsg runs = 1;
-}
-
 message ResultFileAttachment {
   string attachment_id = 1;
   optional string name = 2;
@@ -183,11 +142,6 @@ message ResultFileAttachment {
 message RunResultMsg {
   string value_json = 1;
   repeated ResultFileAttachment files = 2;
-}
-
-message RunUpdate {
-  uint64 sequence = 1;
-  RunStateMsg run = 2;
 }
 
 message RunSummaryMsg {
@@ -210,6 +164,7 @@ message TraceDescriptorMsg {
   bool complete = 4;
   uint64 event_count = 5;
   uint64 size_bytes = 6;
+  uint64 latest_event_sequence = 7;
 }
 
 message NodeSnapshotMsg {
@@ -221,6 +176,7 @@ message NodeSnapshotMsg {
   double ended_at = 6;
   TraceDescriptorMsg trace = 7;
   uint64 revision = 8;
+  string event_page_token = 9;
 }
 
 message RunSnapshotMsg {
@@ -229,6 +185,7 @@ message RunSnapshotMsg {
   RunSummaryMsg summary = 3;
   repeated NodeSnapshotMsg nodes = 4;
   uint64 latest_log_sequence = 5;
+  string log_page_token = 6;
 }
 
 message RunSummaryPage {
@@ -238,22 +195,26 @@ message RunSummaryPage {
   string next_page_token = 4;
 }
 
-message SequencedLogEntryMsg {
+message LogRecordDescriptorMsg {
   uint64 sequence = 1;
-  LogEntryMsg entry = 2;
+  double timestamp = 2;
+  string level = 3;
+  string node_id = 4;
+  uint64 size_bytes = 5;
+  string body_token = 6;
 }
 
 message LogPage {
   string operator_instance_id = 1;
   uint64 as_of_sequence = 2;
-  repeated SequencedLogEntryMsg logs = 3;
-  uint64 next_sequence = 4;
-  bool has_more = 5;
+  repeated LogRecordDescriptorMsg logs = 3;
+  string next_page_token = 4;
 }
 
-message AgentEventMsg {
+message AgentEventDescriptorMsg {
   uint64 event_sequence = 1;
-  string event_json = 2;
+  uint64 size_bytes = 2;
+  string body_token = 3;
 }
 
 message AgentEventPage {
@@ -261,9 +222,8 @@ message AgentEventPage {
   uint64 as_of_sequence = 2;
   string run_id = 3;
   string node_id = 4;
-  repeated AgentEventMsg events = 5;
-  uint64 next_event_sequence = 6;
-  bool has_more = 7;
+  repeated AgentEventDescriptorMsg events = 5;
+  string next_page_token = 6;
 }
 
 message TraceChunk {
@@ -271,6 +231,12 @@ message TraceChunk {
   uint64 chunk_index = 2;
   bytes data = 3;
   bool eof = 4;
+}
+
+message DetailChunk {
+  uint64 chunk_index = 1;
+  bytes data = 2;
+  bool eof = 3;
 }
 
 message RunCreatedDelta {
@@ -297,13 +263,13 @@ message NodeStatusChangedDelta {
 
 message LogAppendedDelta {
   string run_id = 1;
-  SequencedLogEntryMsg log = 2;
+  LogRecordDescriptorMsg log = 2;
 }
 
 message AgentEventAppendedDelta {
   string run_id = 1;
   string node_id = 2;
-  AgentEventMsg event = 3;
+  AgentEventDescriptorMsg event = 3;
 }
 
 message TraceFinalizedDelta {

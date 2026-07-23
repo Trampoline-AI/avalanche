@@ -263,6 +263,7 @@ def _operator_main(argv: list[str]) -> int:
 
 def _run_flow(args: argparse.Namespace) -> int:
     provider = _make_provider(args.connect)
+    from avalanche.operator.client import OperatorCallError
     try:
         input_payload = _parse_json_object(args.input_json, "--input")
         context_payload = _parse_json_object(args.context_json, "--context")
@@ -274,7 +275,7 @@ def _run_flow(args: argparse.Namespace) -> int:
                 context=context_payload,
                 files=file_payloads,
             )
-        except ValueError as exc:
+        except (OperatorCallError, ValueError) as exc:
             print(str(exc), file=sys.stderr)
             return 1
         if run_id:

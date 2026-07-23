@@ -252,7 +252,9 @@ def _provisional_success_run(operator: Operator, run_id: str):
         result_bundle=pending,
         drain_thread=None,
         success_quiesced=False,
+        publication_event=threading.Event(),
     )
+    handle.publication_event.set()
     operator._runs[run_id] = RunState(
         run_id=run_id,
         flow_name="flow",

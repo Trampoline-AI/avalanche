@@ -15,7 +15,7 @@ from .dag_layout import DagNode
 from .mock import MockStateProvider
 from .models import RunState, TraceDetail, WorkflowInfo
 from .screens.workflow_detail import WorkflowDetailScreen
-from .state import ConnectionAwareStateProvider, StateProvider
+from .state import ConnectionAwareStateProvider, StateProvider, get_operator_reachability
 from .theme import AVALANCHE_THEME
 from .ui_store import TraceDetailCompletion, TraceHydrationKey, UIStore
 from .widgets.agent_trace import (
@@ -104,6 +104,7 @@ class AvalancheApp(App):
         self._trace_hydration_context: TraceHydrationKey | None = None
         self._deep_link_workflow = workflow
         self._deep_link_node = node
+        self._operator_was_reachable: bool | None = None
         self._apply_deep_link()
 
     def _apply_deep_link(self) -> None:
@@ -140,22 +141,25 @@ class AvalancheApp(App):
         self.push_screen(self._screen)
 
         self.store.provider.on_run_update(self._on_run_update_bg)
+        self.store.provider.on_detail_update(self.store.enqueue_detail_update)
         self.store.provider.on_log(lambda _: None)
+        self.store.provider.start_stream()
 
         self._timer = self.set_interval(1 / 30, self._tick)
 
     def on_unmount(self) -> None:
-        """Cancel provider RPCs and join the trace hydration worker."""
+        """Cancel provider work and join both hydration workers."""
         if self._trace_hydration_closed:
             return
         self._trace_hydration_closed = True
+        self.store.request_shutdown()
         close = getattr(self.store.provider, "close", None)
         try:
             if callable(close):
                 close()
         finally:
+            self.store.shutdown()
             self._trace_hydration_executor.shutdown(wait=True, cancel_futures=True)
-
 
     def _on_run_update_bg(self, run: RunState) -> None:
         """Called from background thread when a run state changes."""
@@ -381,20 +385,27 @@ class AvalancheApp(App):
         missed updates (e.g. first run while Ray is starting).
         """
         run = self.store.current_run
-        if run is None or self._poll_in_flight:
+        workflow = self.store.current_workflow
+        if run is None or workflow is None or self._poll_in_flight:
             return
         # Only poll for active/recent runs
         provider = self.store.provider
         run_id = run.run_id
-
-
+        selector = workflow.selector
+        data_revision = self.store._run_data_revision(selector)
+        context_epoch = self.store._workflow_context_epoch
         self._poll_in_flight = True
 
         def _do_poll():
             try:
                 fresh = provider.get_run(run_id)
                 if fresh is not None:
-                    self.store.enqueue_run_update(fresh)
+                    self.store.enqueue_polled_run_update(
+                        selector,
+                        data_revision,
+                        context_epoch,
+                        fresh,
+                    )
             except Exception:
                 pass
             finally:
@@ -403,10 +414,7 @@ class AvalancheApp(App):
         threading.Thread(target=_do_poll, daemon=True).start()
 
     def _selected_trace_hydration_key(self) -> TraceHydrationKey | None:
-        if (
-            not self.store.trace_inspector_open
-            or self.store.trace_inspector_tab != "trace"
-        ):
+        if not self.store.trace_inspector_open or self.store.trace_inspector_tab != "trace":
             return None
         run = self.store.current_run
         node_id = self.store.selected_agent_node_id
@@ -418,9 +426,7 @@ class AvalancheApp(App):
             return None
         return (run.run_id, node_id, descriptor.revision)
 
-    def _sync_trace_hydration_context(
-        self, key: TraceHydrationKey | None
-    ) -> None:
+    def _sync_trace_hydration_context(self, key: TraceHydrationKey | None) -> None:
         if key == self._trace_hydration_context:
             return
         self._trace_hydration_context = key
@@ -462,9 +468,7 @@ class AvalancheApp(App):
                 self._trace_hydration_now() + delay,
             )
 
-    def _trace_detail_still_relevant(
-        self, completion: TraceDetailCompletion
-    ) -> bool:
+    def _trace_detail_still_relevant(self, completion: TraceDetailCompletion) -> bool:
         run = self.store.current_run
         if (
             run is None
@@ -569,12 +573,12 @@ class AvalancheApp(App):
     _ping_in_flight: bool = False
 
     def _check_connection(self) -> None:
-        """Show/hide disconnect overlay based on provider connection state."""
+        """Reserve the disconnect overlay for an unreachable operator."""
         provider = self.store.provider
         if not isinstance(provider, ConnectionAwareStateProvider):
-            return  # MockStateProvider — no connection tracking
+            return  # Local providers do not expose connection tracking.
 
-        # Ping every ~2s (30 ticks at 15fps), non-blocking
+        # Ping every ~2s (30 ticks at 15fps), non-blocking.
         self._ping_counter += 1
         if self._ping_counter % 60 == 0 and not self._ping_in_flight:
             import threading
@@ -589,22 +593,23 @@ class AvalancheApp(App):
 
             threading.Thread(target=_do_ping, daemon=True).start()
 
+        reachable = get_operator_reachability(provider)
+        if reachable and self._operator_was_reachable is False:
+            self.store._refresh_workflow_catalog()
+        self._operator_was_reachable = reachable
+
         try:
             wrapper = self._screen.query_one("#disconnect-wrapper")
             box = self._screen.query_one("#disconnect-box")
         except Exception:
             return
 
-        if provider.connected:
-            if wrapper.has_class("visible"):
-                # Just reconnected — refresh workflow list
-                wrapper.remove_class("visible")
-                self.store._refresh_workflow_catalog()
-        else:
-            from rich.style import Style
-            from rich.text import Text
+        if reachable:
+            wrapper.remove_class("visible")
+            return
 
-            dots = "." * ((self.store.frame // 8) % 4)
+        from rich.style import Style
+        from rich.text import Text
 
             msg = Text()
             msg.append("CONNECTION LOST\n\n", Style(color="#f06080", bold=True))
@@ -800,17 +805,6 @@ class AvalancheApp(App):
             except Exception:
                 pass
 
-    def action_toggle_trace_inspector_tab(self) -> None:
-        if not self.store.trace_inspector_open:
-            return
-        self.store.toggle_trace_inspector_tab()
-        if self.store.trace_inspector_tab == "trace":
-            self._hydrate_selected_trace()
-        self._refresh_widgets()
-        try:
-            self._screen.query_one("#agent-trace-inspector").scroll_home(animate=False)
-        except Exception:
-            pass
     # ── Other actions ──────────────────────────────────────────────
 
     def action_toggle_explorer(self) -> None:

@@ -1,23 +1,22 @@
 from datetime import datetime
 
 from runtime.operator.convert import (
-    agent_event_from_proto,
-    agent_event_to_proto,
+    agent_event_descriptor_from_proto,
+    agent_event_descriptor_to_proto,
+    log_record_descriptor_from_proto,
+    log_record_descriptor_to_proto,
     run_snapshot_from_proto,
     run_snapshot_to_proto,
-    sequenced_log_entry_from_proto,
-    sequenced_log_entry_to_proto,
 )
 from runtime.operator.models import (
-    AgentEvent,
-    LogEntry,
+    AgentEventDescriptor,
     LogLevel,
+    LogRecordDescriptor,
     NodeSnapshot,
     NodeStatus,
     RunSnapshot,
     RunStatus,
     RunSummary,
-    SequencedLogEntry,
     TraceDescriptor,
 )
 from runtime.operator.operator import Operator
@@ -35,9 +34,11 @@ def test_structural_snapshot_contract_excludes_detail_bodies():
         "summary",
         "nodes",
         "latest_log_sequence",
+        "log_page_token",
     }
     assert "logs" not in snapshot_fields
     assert "agent_trace_json" not in node_fields
+    assert "event_page_token" in node_fields
     assert "logs" not in summary_fields
     assert "trace" not in summary_fields
     snapshot_request_fields = pb.GetRunSnapshotRequest.DESCRIPTOR.fields_by_name
@@ -53,6 +54,8 @@ def test_structural_snapshot_contract_excludes_detail_bodies():
         "revision",
         "operator_instance_id",
     }
+    detail_request_fields = pb.ReadDetailRequest.DESCRIPTOR.fields_by_name
+    assert set(detail_request_fields) == {"body_token"}
 
 
 def test_snapshot_detail_cursor_and_descriptor_roundtrip():
@@ -63,6 +66,7 @@ def test_snapshot_detail_cursor_and_descriptor_roundtrip():
         complete=True,
         event_count=42,
         size_bytes=5_000_000,
+        latest_event_sequence=42,
     )
     snapshot = RunSnapshot(
         operator_instance_id="operator-1",
@@ -84,28 +88,35 @@ def test_snapshot_detail_cursor_and_descriptor_roundtrip():
                 status=NodeStatus.SUCCESS,
                 trace=descriptor,
                 revision=17,
+                event_page_token="events-token",
             ),
         ),
         latest_log_sequence=22,
+        log_page_token="logs-token",
     )
 
     assert run_snapshot_from_proto(run_snapshot_to_proto(snapshot)) == snapshot
 
 
-def test_detail_records_have_stable_sequences():
-    log = SequencedLogEntry(
+def test_detail_records_expose_only_bounded_metadata():
+    log = LogRecordDescriptor(
         sequence=12,
-        entry=LogEntry(
-            timestamp=datetime(2026, 7, 22, 12, 30),
-            level=LogLevel.INFO,
-            node_id="agent_1",
-            message="complete",
-        ),
+        timestamp=datetime(2026, 7, 22, 12, 30),
+        level=LogLevel.INFO,
+        node_id="agent_1",
+        size_bytes=5_000_000,
+        body_token="opaque-log-token",
     )
-    event = AgentEvent(event_sequence=7, event_json='{"event_kind":"code.executed"}')
+    event = AgentEventDescriptor(
+        event_sequence=7,
+        size_bytes=5_000_000,
+        body_token="opaque-event-token",
+    )
 
-    assert sequenced_log_entry_from_proto(sequenced_log_entry_to_proto(log)) == log
-    assert agent_event_from_proto(agent_event_to_proto(event)) == event
+    assert log_record_descriptor_from_proto(log_record_descriptor_to_proto(log)) == log
+    assert agent_event_descriptor_from_proto(agent_event_descriptor_to_proto(event)) == event
+    assert "message" not in pb.LogRecordDescriptorMsg.DESCRIPTOR.fields_by_name
+    assert "event_json" not in pb.AgentEventDescriptorMsg.DESCRIPTOR.fields_by_name
 
 
 def test_delta_envelope_distinguishes_changes_from_reset():
@@ -157,3 +168,12 @@ def test_service_exposes_parallel_workstream_contracts():
     } <= set(methods)
     assert methods["ReadTrace"].server_streaming is True
     assert methods["StreamRunDeltas"].server_streaming is True
+    assert methods["ReadDetail"].server_streaming is True
+
+
+def test_legacy_full_state_rpcs_and_messages_are_absent():
+    methods = pb.DESCRIPTOR.services_by_name["OperatorService"].methods_by_name
+    messages = pb.DESCRIPTOR.message_types_by_name
+
+    assert {"ListRuns", "GetRun", "StreamUpdates"}.isdisjoint(methods)
+    assert {"RunStateMsg", "RunList", "RunUpdate"}.isdisjoint(messages)

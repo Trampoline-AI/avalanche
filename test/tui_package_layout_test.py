@@ -129,10 +129,14 @@ def test_tui_launch_passes_grpc_auth_and_tls_options(monkeypatch, tmp_path):
     ca_cert = tmp_path / "ca.pem"
     ca_cert.write_bytes(b"ca")
     providers = []
+    closed = []
 
     class FakeProvider:
         def __init__(self, *args, **kwargs):
             providers.append((args, kwargs))
+
+        def close(self):
+            closed.append(True)
 
     class FakeApp:
         def __init__(self, **kwargs):
@@ -169,6 +173,7 @@ def test_tui_launch_passes_grpc_auth_and_tls_options(monkeypatch, tmp_path):
             {"token": "secret", "tls": True, "root_certificates": b"ca"},
         )
     ]
+    assert closed == [True]
 
 
 def test_tui_launch_accepts_caller_owned_provider(monkeypatch):
