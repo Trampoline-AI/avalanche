@@ -2334,11 +2334,10 @@ class TestInteractions:
             # Shrink sidebar to force clipping
             sidebar.styles.width = 18
             app.store.sidebar_width = 18
-            await pilot.pause()
 
             rendered = sidebar.render()
             lines = rendered.plain.split("\n")
-            content_width = sidebar.content_size.width or 16
+            content_width = app.store.sidebar_width - 2
             for line in lines:
                 assert len(line) <= content_width, (
                     f"Line '{line}' ({len(line)} chars) exceeds "
