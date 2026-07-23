@@ -13,6 +13,7 @@ EXAMPLES_DIR = REPO_ROOT / "examples"
 CANONICAL_FLOW_NAMES = [
     "complex_dag_workflow",
     "cursor_workflow",
+    "document_file_workflow",
     "operator_demo_workflow",
     "stream_workflow",
 ]

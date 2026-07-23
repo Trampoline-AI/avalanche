@@ -249,6 +249,43 @@ omitted and validated when supplied. Operator-managed transfers are subject to
 the finite gRPC envelope, and terminal results also use the stricter limits
 described below.
 
+### File inputs from the CLI
+
+For an operator-managed run, keep ordinary input fields in `--input` and attach
+each top-level `ava.File` field with a repeatable `--file FIELD=PATH` option:
+
+```bash
+RUN_ID=$(
+  uv run ava run document_file_workflow \
+    --connect localhost:7433 \
+    --input '{"value": 41}' \
+    --file document=./doc.txt
+)
+```
+
+The CLI reads each path immediately with `ava.File.from_path()` and sends the
+file's bytes, basename, and SHA-256 digest. CLI file inputs have no media type;
+Python callers can set `content_type` explicitly. The operator reconstructs the
+`ava.File` and validates the complete `DocumentInput` model before starting the
+workflow. `--file` addresses top-level input fields only; use it more than once
+when the model declares multiple file fields:
+
+```bash
+uv run ava run compare_documents \
+  --input '{"mode": "semantic"}' \
+  --file left=./before.pdf \
+  --file right=./after.pdf
+```
+
+A field may appear in either `--input` or `--file`, not both; the operator
+rejects that conflict as a duplicate input field. Missing paths, malformed JSON,
+and model-validation failures fail the command instead of starting a run. File
+content is bounded by the gRPC request envelope; `--file` does not pass a local
+path or filesystem capability to the operator or worker. This round trip uses
+the bundled
+[`examples/document_file_workflow.py`](../examples/document_file_workflow.py)
+flow definition.
+
 ## Workflow results
 
 A workflow may return the existing JSON scalar/container values, a Pydantic
@@ -367,11 +404,21 @@ failed, or cancelled run returns gRPC `FAILED_PRECONDITION`; an unknown run
 returns `NOT_FOUND`. This keeps existing run-state, failure, cancellation, and
 timeout behavior separate from successful payload delivery.
 
-The CLI can wait for and materialize scalar, direct-file, or nested-file results:
+### File results from the CLI
+
+`ava run` prints the run ID. Pass that ID to `ava result`; `--wait` polls until a
+nonterminal run reaches success, failure, cancellation, or the timeout:
 
 ```bash
-uv run ava result RUN_ID --wait --output-dir ./run-result
+uv run ava result "$RUN_ID" \
+  --connect localhost:7433 \
+  --wait \
+  --timeout 300 \
+  --output-dir ./run-result
 ```
+
+Without `--wait`, retrieval succeeds only when the run has already completed
+successfully. Failed and cancelled runs have no downloadable successful result.
 
 The requested output directory must not already exist, and its parent must
 exist. In a private staging directory anchored in that parent, the CLI writes
@@ -383,6 +430,27 @@ retained parent descriptor, and compares that identity to the retained staging
 descriptor. A mismatch fails the command and triggers bounded,
 descriptor-anchored cleanup. Original file names never control output paths,
 and only metadata is printed.
+
+After success, the new directory has this shape:
+
+```text
+run-result/
+├── attachment-0001-<uuid>-report.pdf
+├── attachment-0002-<uuid>-summary.txt
+└── result-<uuid>.json
+```
+
+Names are generated; the optional sanitized suffix is only a human-readable
+hint from the original filename. The result JSON records `run_id`, the original
+scalar/container result shape with each file replaced by its metadata, a flat
+`files` list, and each attachment's relative `path`, original `name`,
+`media_type`, `sha256`, and `size`. The CLI prints the same document plus
+`metadata_path` to stdout, never binary content. Scalar-only results still
+produce the JSON document with an empty `files` list.
+
+The command verifies every digest and the metadata document before publishing
+the output directory. Any catchable retrieval, validation, write, sync, or
+publication failure returns nonzero and leaves the requested destination absent.
 
 This is a local CLI for a caller-owned output namespace. POSIX and macOS do not
 offer a portable rename-by-open-directory-descriptor operation or a no-replace

@@ -119,16 +119,30 @@ explicit deployment choice and requires an external trusted and authenticated
 boundary. Loopback limits network reachability; it does not identify callers,
 and any process running as a local user may attempt to call the service.
 
-In another terminal, start a run from the CLI:
+In another terminal, start a run with JSON fields and a top-level file input.
+`--file FIELD=PATH` reads and attaches the file bytes; it does not send the local
+path to the operator:
 
 ```bash
-uv run ava run operator_demo_workflow --connect localhost:7433
+RUN_ID=$(
+  uv run ava run document_file_workflow \
+    --connect localhost:7433 \
+    --input '{"value": 41}' \
+    --file document=./doc.txt
+)
 ```
 
-Download a successful terminal result without printing binary bytes:
+This command targets the bundled
+[`document_file_workflow`](examples/document_file_workflow.py) example.
+
+Download the successful terminal result without printing binary bytes. `--wait`
+waits up to `--timeout` seconds for a nonterminal run:
 
 ```bash
-uv run ava result RUN_ID --connect localhost:7433 --output-dir ./run-result
+uv run ava result "$RUN_ID" \
+  --connect localhost:7433 \
+  --wait \
+  --output-dir ./run-result
 ```
 
 The output directory must not already exist, and its parent directory must
@@ -138,6 +152,12 @@ atomically renames the staged name without replacing an existing destination.
 It immediately opens the requested destination through the retained parent
 descriptor and compares its identity to the retained staging descriptor.
 Substitution fails closed and triggers bounded, descriptor-anchored cleanup.
+The published directory contains collision-resistant attachment filenames and a
+generated `result-<uuid>.json` with the run ID, reconstructed result shape,
+original file metadata, relative paths, sizes, and SHA-256 digests. See
+[Run input and context](docs/dag-api.md#run-input-and-context) and
+[Workflow results](docs/dag-api.md#workflow-results) for the Python and CLI
+contracts, limits, and complete output layout.
 
 The output parent is a caller-owned local namespace. POSIX and macOS provide no
 portable operation that renames an open directory descriptor, or conditionally
