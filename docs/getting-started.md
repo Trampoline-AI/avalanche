@@ -152,6 +152,61 @@ For UI-only exploration, use mock mode:
 uv run python -m avalanche.tui
 ```
 
+#### POST Body Intake
+
+Operator-managed workflows can declare a loopback HTTP webhook. Declare the
+workflow input as an `ava.BaseInput` model so Avalanche validates and injects the
+decoded request body as a typed value:
+
+```python
+import avalanche as ava
+
+
+class ReportRequest(ava.BaseInput):
+    message: str
+    priority: int = 0
+
+
+@ava.source
+def receive(payload: ReportRequest):
+    print(payload.message, payload.priority)
+
+
+@ava.workflow(input=ReportRequest, webhook=True)
+def report_webhook():
+    receive()
+```
+
+Start the operator with that flow file, then ask the operator for the generated
+loopback URL:
+
+```bash
+uv run ava operator --flows path/to/report_flow.py --webhook-port 7434
+uv run ava webhooks list --connect localhost:7433
+```
+
+Post a JSON object to the listed URL:
+
+```bash
+curl -i -X POST '<url-from-ava-webhooks-list>' \
+  -H 'Content-Type: application/json' \
+  --data '{"message":"daily report","priority":2}'
+```
+
+The endpoint accepts only `POST` requests with `Content-Type: application/json`,
+a valid `Content-Length`, and a top-level JSON object no larger than 1 MiB. It
+decodes the object and starts the discovered workflow with
+`input=<decoded-object>` and `triggered_by="webhook"`. Avalanche then constructs
+`ReportRequest` with Pydantic validation and injects it into matching node
+parameters such as `payload` above.
+
+A successfully started run returns `202` with `{"run_id": "..."}`. The HTTP
+boundary rejects an unknown route (`404`), unsupported method (`405`), malformed
+JSON or a non-object body (`400`), an oversized body (`413`), and a non-JSON
+content type (`415`). Typed input validation happens during workflow execution,
+after the run is accepted, so a schema mismatch is reported as a failed run
+rather than a synchronous HTTP validation response.
+
 ## Optional Components
 
 `uv sync` installs the development dependency group used by the test suite.
