@@ -44,6 +44,7 @@ from .result_store import (
 from .results import EncodedWorkflowResult, decode_workflow_result
 from .run_worker import run_worker
 from .source import is_source_path_included, resolve_live_source, resolve_watch_roots
+from .webhooks import DEFAULT_WEBHOOK_PORT, WebhookServer, routes_for
 from .windows_job import WindowsJob, assign_process, close_job, create_kill_on_close_job
 
 _LEVEL_MAP = {
@@ -58,6 +59,7 @@ logger = logging.getLogger(__name__)
 ExecutorBackend: TypeAlias = Literal["local", "ray"]
 STREAM_HISTORY_CAPACITY = 1024
 DEFAULT_RESULT_RETENTION_SECONDS = 24 * 60 * 60
+_PROCESS_GROUP_POLL_INTERVAL_SECONDS = 0.02
 DeprecatedExecutorFactory: TypeAlias = (
     type[LocalExecutor] | type[RayExecutor] | partial[RayExecutor]
 )
@@ -129,6 +131,7 @@ class Operator:
         stream_history_capacity: int = STREAM_HISTORY_CAPACITY,
         result_storage_directory: str | os.PathLike[str] | None = None,
         result_retention_seconds: float | None = DEFAULT_RESULT_RETENTION_SECONDS,
+        webhook_port: int = DEFAULT_WEBHOOK_PORT,
     ) -> None:
         """Create an operator with spawn-safe executor configuration.
 
@@ -143,12 +146,8 @@ class Operator:
             ray_init_kwargs=ray_init_kwargs,
             executor_factory=executor_factory,
         )
-        self._registry = WorkflowRegistry(discovery_timeout=discovery_timeout)
-        self._workflow_paths = workflow_paths or []
-        if self._workflow_paths:
-            self._registry.scan(self._workflow_paths)
-
-        self._prepare_timeout = prepare_timeout
+        if not 0 <= webhook_port <= 65535:
+            raise ValueError("Webhook port must be between 0 and 65535")
         if cancel_grace < 0:
             raise ValueError("Cancellation grace must be non-negative")
         if stream_history_capacity <= 0:
@@ -164,6 +163,14 @@ class Operator:
         self._result_retention_seconds = (
             None if result_retention_seconds is None else float(result_retention_seconds)
         )
+        self._prepare_timeout = prepare_timeout
+        self._registry = WorkflowRegistry(discovery_timeout=discovery_timeout)
+        self._workflow_paths = workflow_paths or []
+        self._webhooks = WebhookServer(self, webhook_port)
+        self._webhook_routes = {}
+        initial_view = None
+        if self._workflow_paths:
+            initial_view = self._registry.scan(self._workflow_paths, validate=routes_for)
         self._mp = multiprocessing.get_context("spawn")
         self._runs: dict[str, RunState] = {}
         self._stored_results: dict[str, StoredWorkflowResult] = {}
@@ -190,6 +197,8 @@ class Operator:
         self._scheduler = Scheduler(self)
         try:
             self._scheduler.reconcile(self._registry.descriptors())
+            if initial_view is not None:
+                self._reconcile_webhooks(initial_view.by_id.values())
             if watch and self._workflow_paths:
                 self._start_watcher()
             if schedule and self._workflow_paths:
@@ -205,6 +214,7 @@ class Operator:
             self._watcher_stop.set()
             self._result_cleanup_stop.set()
             self._scheduler.stop()
+            self._webhooks.close()
             if self._watcher_thread is not None:
                 self._watcher_thread.join(timeout=2.0)
             if self._result_cleanup_thread is not None:
@@ -215,6 +225,18 @@ class Operator:
     def list_workflows(self) -> list[WorkflowInfo]:
         workflows = self._registry.list_workflows()
         for info in workflows:
+            route = next(
+                (
+                    item
+                    for item in self._webhook_routes.values()
+                    if item.workflow_id == info.workflow_id
+                ),
+                None,
+            )
+            if route is not None:
+                info.webhook_path = route.path
+                info.webhook_url = self._webhooks.url_for(route.path)
+                info.webhook_active = self._webhooks.active
             if info.cron:
                 nxt = self._scheduler.next_run_time(info.cron)
                 info.next_run_at = nxt.timestamp() if nxt else None
@@ -470,6 +492,7 @@ class Operator:
             self._watcher_stop.set()
             self._result_cleanup_stop.set()
             self._scheduler.stop()
+            self._webhooks.close()
             if self._watcher_thread is not None:
                 self._watcher_thread.join(timeout=2.0)
             if self._result_cleanup_thread is not None:
@@ -563,8 +586,18 @@ class Operator:
         # Otherwise an old cron can resolve newly-published same-ID source in the
         # small window between these two operations.
         with self._scheduler.reconciliation_boundary():
-            view = self._registry.rescan()
+            try:
+                view = self._registry.rescan(validate=routes_for)
+            except ValueError as exc:
+                logging.getLogger(__name__).warning("Webhook catalog refresh rejected: %s", exc)
+                return
             self._scheduler.reconcile(view.by_id.values())
+            self._reconcile_webhooks(view.by_id.values())
+
+    def _reconcile_webhooks(self, descriptors) -> None:
+        routes = routes_for(tuple(descriptors))
+        self._webhooks.reconcile(routes)
+        self._webhook_routes = routes
 
     def _await_prepared(
         self, handle: _RunHandle
@@ -1428,22 +1461,41 @@ def _teardown_process_group(
             process.terminate()
     elif process.is_alive():
         process.terminate()
-    process.join(timeout=term_grace)
-    group_alive = os.name != "nt" and _coordinator_group_has_live_members(process.pid)
-    if process.is_alive() or group_alive:
+    quiesced = _wait_for_coordinator_group_quiescence(process, term_grace)
+    if not quiesced:
         if os.name != "nt":
             group_signalled = _signal_coordinator_group(process.pid, signal.SIGKILL)
             if not group_signalled and process.is_alive():
                 process.kill()
         elif hasattr(process, "kill"):
             process.kill()
-        process.join(timeout=kill_grace)
+        quiesced = _wait_for_coordinator_group_quiescence(process, kill_grace)
     close_job(windows_job)
-    group_alive = os.name != "nt" and _coordinator_group_has_live_members(process.pid)
-    return _ProcessGroupTeardown(
-        not process.is_alive() and not group_alive,
-        natural_exitcode,
-    )
+    return _ProcessGroupTeardown(quiesced, natural_exitcode)
+
+
+def _wait_for_coordinator_group_quiescence(
+    process: multiprocessing.Process,
+    timeout: float,
+) -> bool:
+    """Wait boundedly for both the coordinator and its descendants to stop."""
+    process_group = process.pid
+    if process_group is None:
+        return not process.is_alive()
+    deadline = time.monotonic() + max(0.0, timeout)
+    while True:
+        process_alive = process.is_alive()
+        group_alive = os.name != "nt" and _coordinator_group_has_live_members(process_group)
+        if not process_alive and not group_alive:
+            return True
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            return False
+        poll_interval = min(_PROCESS_GROUP_POLL_INTERVAL_SECONDS, remaining)
+        if process_alive:
+            process.join(timeout=poll_interval)
+        else:
+            time.sleep(poll_interval)
 
 
 def _signal_coordinator_group(process_group: int, signal_number: int) -> bool:
@@ -1454,20 +1506,23 @@ def _signal_coordinator_group(process_group: int, signal_number: int) -> bool:
     return True
 
 
-def _coordinator_group_exists(process_group: int) -> bool:
+def _coordinator_group_exists(process_group: int) -> bool | None:
     try:
         os.killpg(process_group, 0)
     except ProcessLookupError:
         return False
     except PermissionError:
-        return False
+        return None
     return True
 
 
 def _coordinator_group_has_live_members(process_group: int) -> bool:
     """Treat dead or irreversibly exiting groups as quiesced."""
-    if not _coordinator_group_exists(process_group):
+    group_exists = _coordinator_group_exists(process_group)
+    if group_exists is False:
         return False
+    if group_exists is None:
+        return True
     try:
         completed = subprocess.run(
             ["/bin/ps", "-axo", "pgid=,stat="],

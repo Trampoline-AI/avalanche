@@ -66,8 +66,20 @@ def _build_parser() -> argparse.ArgumentParser:
             "external trusted and authenticated boundary"
         ),
     )
+    operator.add_argument(
+        "--webhook-port", type=int, default=7434, help="loopback webhook HTTP port"
+    )
     operator.add_argument("--ray", action="store_true", help="use the Ray executor")
     operator.set_defaults(handler=_run_operator)
+
+    webhooks = subcommands.add_parser("webhooks", help="inspect local webhook routes")
+    webhook_commands = webhooks.add_subparsers(dest="webhook_command", metavar="COMMAND")
+    for name, handler in (("list", _list_webhooks), ("get", _get_webhook)):
+        command = webhook_commands.add_parser(name, help=f"{name} local webhook routes")
+        if name == "get":
+            command.add_argument("selector", help="canonical workflow selector")
+        command.add_argument("--connect", default="localhost:7433", metavar="HOST:PORT")
+        command.set_defaults(handler=handler)
 
     run = subcommands.add_parser(
         "run",
@@ -194,10 +206,51 @@ def _run_operator(args: argparse.Namespace) -> int:
         args.host,
         "--port",
         str(args.port),
+        "--webhook-port",
+        str(args.webhook_port),
     ]
     if args.ray:
         runtime_args.append("--ray")
     return _operator_main(runtime_args)
+
+
+def _webhook_record(workflow) -> dict[str, object]:
+    return {
+        "selector": workflow.selector,
+        "method": "POST",
+        "path": workflow.webhook_path,
+        "url": workflow.webhook_url or workflow.webhook_path,
+        "active": workflow.webhook_active,
+    }
+
+
+def _list_webhooks(args: argparse.Namespace) -> int:
+    provider = _make_provider(args.connect)
+    try:
+        records = [
+            _webhook_record(item) for item in provider.list_workflows() if item.webhook_path
+        ]
+        print(json.dumps(records, sort_keys=True))
+        return 0
+    finally:
+        provider.close()
+
+
+def _get_webhook(args: argparse.Namespace) -> int:
+    provider = _make_provider(args.connect)
+    try:
+        matches = [
+            item
+            for item in provider.list_workflows()
+            if item.webhook_path and item.selector == args.selector
+        ]
+        if not matches:
+            print(f"Webhook not found: {args.selector}", file=sys.stderr)
+            return 1
+        print(json.dumps(_webhook_record(matches[0]), sort_keys=True))
+        return 0
+    finally:
+        provider.close()
 
 
 def _operator_main(argv: list[str]) -> int:

@@ -79,6 +79,9 @@ message FlowInfoMsg {
   string builder_symbol = 14;
   repeated string agent_node_ids = 15;
   map<string, string> agent_metadata_json = 16;
+  string webhook_path = 17;
+  string webhook_url = 18;
+  bool webhook_active = 19;
 }
 
 message FlowList {

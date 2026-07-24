@@ -61,6 +61,7 @@ from ulid import ULID
 
 from .input_ref import InputRef
 from .run_handle import RunHandle
+from .webhook import Webhook
 
 if TYPE_CHECKING:
     from .execution_services import ExecutionServicesSpec
@@ -2070,6 +2071,7 @@ class Workflow:
         name: str = "workflow",
         returns: Any = None,
         cron: str | None = None,
+        webhook: Webhook | bool | None = None,
         input_type: type | None = None,
         context_type: type | None = None,
         agent_defaults: dict[str, Any] | None = None,
@@ -2092,6 +2094,7 @@ class Workflow:
         self.name = name
         self.returns = returns
         self.cron = cron
+        self.webhook = _normalize_webhook(webhook)
         _validate_workflow_types(input_type, context_type)
         self.input_type = input_type
         self.context_type = context_type
@@ -2922,6 +2925,7 @@ def workflow(
     fn: Callable[[], None] | None = None,
     *,
     cron: str | None = None,
+    webhook: Webhook | bool | None = None,
     input: type | None = None,
     context: type | None = None,
     ctx: type | None = None,
@@ -2959,6 +2963,7 @@ def workflow(
     if context is not None and ctx is not None and context is not ctx:
         raise ValueError("Use either context= or ctx=, not both")
     context_type = context or ctx
+    webhook = _normalize_webhook(webhook)
     if agent_defaults is not None:
         from .agent.config import validate_runtime_kwargs
 
@@ -2982,6 +2987,7 @@ def workflow(
                     name=fn.__name__,
                     returns=result,
                     cron=cron,
+                    webhook=webhook,
                     input_type=input,
                     context_type=context_type,
                     agent_defaults=agent_defaults,
@@ -3001,3 +3007,13 @@ def workflow(
 
 
 pipeline = workflow
+
+
+def _normalize_webhook(value: Webhook | bool | None) -> Webhook | None:
+    if value is True:
+        return Webhook()
+    if value is False or value is None:
+        return None
+    if not isinstance(value, Webhook):
+        raise TypeError("webhook must be ava.Webhook, True, False, or None")
+    return value

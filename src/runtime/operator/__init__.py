@@ -32,12 +32,13 @@ def serve(
     port: int = 7433,
     *,
     host: str = "127.0.0.1",
+    webhook_port: int = 7434,
     **kwargs,
 ) -> None:
     """Start the operator daemon with gRPC server."""
     from .server import serve as _serve
 
-    op = Operator(workflow_paths, **kwargs)
+    op = Operator(workflow_paths, webhook_port=webhook_port, **kwargs)
     try:
         _serve(op, port=port, block=True, host=host)
     finally:

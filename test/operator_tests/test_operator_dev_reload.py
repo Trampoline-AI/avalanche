@@ -1,10 +1,12 @@
 import os
 import queue
+import signal
 import sys
 import threading
 import time
 from pathlib import Path
 from types import SimpleNamespace
+from typing import Any, cast
 
 import pytest
 
@@ -96,6 +98,114 @@ def test_process_group_quiescence_distinguishes_zombies_from_live_descendants(
     )
 
     assert operator_module._coordinator_group_has_live_members(4242) is expected
+
+
+class _ExitedProcess:
+    pid = 4242
+    exitcode = 0
+
+    def is_alive(self):
+        return False
+
+    def join(self, timeout=None):
+        return None
+
+
+def _install_fake_teardown_clock(monkeypatch):
+    now = [0.0]
+    sleeps = []
+
+    monkeypatch.setattr(operator_module.time, "monotonic", lambda: now[0])
+
+    def sleep(duration):
+        sleeps.append(duration)
+        now[0] += duration
+
+    monkeypatch.setattr(operator_module.time, "sleep", sleep)
+    return now, sleeps
+
+
+@pytest.mark.skipif(os.name == "nt", reason="POSIX process-group behavior")
+def test_teardown_waits_for_descendants_to_disappear_after_sigkill(monkeypatch):
+    _, sleeps = _install_fake_teardown_clock(monkeypatch)
+    signals = []
+    kill_checks = 0
+
+    def signal_group(_process_group, signal_number):
+        signals.append(signal_number)
+        return True
+
+    def group_has_live_members(_process_group):
+        nonlocal kill_checks
+        if signals and signals[-1] == signal.SIGKILL:
+            kill_checks += 1
+            return kill_checks == 1
+        return True
+
+    monkeypatch.setattr(operator_module, "_signal_coordinator_group", signal_group)
+    monkeypatch.setattr(
+        operator_module,
+        "_coordinator_group_has_live_members",
+        group_has_live_members,
+    )
+    monkeypatch.setattr(operator_module, "close_job", lambda _job: None)
+
+    result = operator_module._teardown_process_group(
+        cast(Any, _ExitedProcess()),
+        None,
+        term_grace=0.0,
+        kill_grace=0.1,
+    )
+
+    assert result.quiesced
+    assert signals == [signal.SIGTERM, signal.SIGKILL]
+    assert sleeps
+
+
+@pytest.mark.skipif(os.name == "nt", reason="POSIX process-group behavior")
+def test_teardown_fails_closed_when_descendants_outlive_deadline(monkeypatch):
+    now, _ = _install_fake_teardown_clock(monkeypatch)
+    monkeypatch.setattr(
+        operator_module,
+        "_signal_coordinator_group",
+        lambda _process_group, _signal_number: True,
+    )
+    monkeypatch.setattr(
+        operator_module,
+        "_coordinator_group_has_live_members",
+        lambda _process_group: True,
+    )
+    monkeypatch.setattr(operator_module, "close_job", lambda _job: None)
+
+    result = operator_module._teardown_process_group(
+        cast(Any, _ExitedProcess()),
+        None,
+        term_grace=0.0,
+        kill_grace=0.05,
+    )
+
+    assert not result.quiesced
+    assert now[0] == pytest.approx(0.05)
+
+
+@pytest.mark.skipif(os.name == "nt", reason="POSIX process-group behavior")
+def test_process_group_permission_error_is_not_quiescence(monkeypatch):
+    def deny_process_group_access(_process_group, _signal_number):
+        raise PermissionError
+
+    monkeypatch.setattr(
+        operator_module.os,
+        "killpg",
+        deny_process_group_access,
+    )
+    monkeypatch.setattr(
+        operator_module.subprocess,
+        "run",
+        lambda *_args, **_kwargs: pytest.fail("process table must not be consulted"),
+    )
+
+    assert operator_module._coordinator_group_exists(4242) is None
+    assert operator_module._coordinator_group_has_live_members(4242)
 
 
 def _write_standalone(root: Path, *, deferred: bool = False, body: str | None = None) -> Path:

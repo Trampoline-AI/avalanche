@@ -100,6 +100,10 @@ class WorkflowInfo:
     builder_symbol: str = ""
     root_alias: str = ""
     relative_file: str = ""
+    webhook_path: str | None = None
+    webhook_enabled: bool = False
+    webhook_url: str | None = None
+    webhook_active: bool = False
 
     @property
     def selector(self) -> str:
@@ -147,6 +151,8 @@ class WorkflowDescriptor:
     agent_node_ids: tuple[str, ...] = ()
     agent_metadata_json: tuple[tuple[str, str], ...] = ()
     cron: str | None = None
+    webhook_path: str | None = None
+    webhook_enabled: bool = False
 
 
 @dataclass(frozen=True)

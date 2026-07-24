@@ -40,6 +40,9 @@ def workflow_info_to_proto(info: WorkflowInfo) -> pb.FlowInfoMsg:
         builder_symbol=info.builder_symbol,
         agent_node_ids=info.agent_node_ids,
         agent_metadata_json=info.agent_metadata_json,
+        webhook_path=info.webhook_path or "",
+        webhook_url=info.webhook_url or "",
+        webhook_active=info.webhook_active,
     )
 
 
@@ -64,6 +67,9 @@ def workflow_info_from_proto(msg: pb.FlowInfoMsg) -> WorkflowInfo:
         root_alias=msg.root_alias,
         relative_file=relative_file,
         builder_symbol=msg.builder_symbol,
+        webhook_path=msg.webhook_path or None,
+        webhook_url=msg.webhook_url or None,
+        webhook_active=msg.webhook_active,
     )
 
 

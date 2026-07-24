@@ -79,7 +79,7 @@ class NodeEdges(_message.Message):
     def __init__(self, children: _Optional[_Iterable[str]] = ...) -> None: ...
 
 class FlowInfoMsg(_message.Message):
-    __slots__ = ("name", "file_path", "node_ids", "graph", "node_types", "display_names", "cron", "next_run_at", "last_run_at", "workflow_id", "display_name", "root_alias", "relative_file", "builder_symbol", "agent_node_ids", "agent_metadata_json")
+    __slots__ = ("name", "file_path", "node_ids", "graph", "node_types", "display_names", "cron", "next_run_at", "last_run_at", "workflow_id", "display_name", "root_alias", "relative_file", "builder_symbol", "agent_node_ids", "agent_metadata_json", "webhook_path", "webhook_url", "webhook_active")
     class GraphEntry(_message.Message):
         __slots__ = ("key", "value")
         KEY_FIELD_NUMBER: _ClassVar[int]
@@ -124,6 +124,9 @@ class FlowInfoMsg(_message.Message):
     BUILDER_SYMBOL_FIELD_NUMBER: _ClassVar[int]
     AGENT_NODE_IDS_FIELD_NUMBER: _ClassVar[int]
     AGENT_METADATA_JSON_FIELD_NUMBER: _ClassVar[int]
+    WEBHOOK_PATH_FIELD_NUMBER: _ClassVar[int]
+    WEBHOOK_URL_FIELD_NUMBER: _ClassVar[int]
+    WEBHOOK_ACTIVE_FIELD_NUMBER: _ClassVar[int]
     name: str
     file_path: str
     node_ids: _containers.RepeatedScalarFieldContainer[str]
@@ -140,7 +143,10 @@ class FlowInfoMsg(_message.Message):
     builder_symbol: str
     agent_node_ids: _containers.RepeatedScalarFieldContainer[str]
     agent_metadata_json: _containers.ScalarMap[str, str]
-    def __init__(self, name: _Optional[str] = ..., file_path: _Optional[str] = ..., node_ids: _Optional[_Iterable[str]] = ..., graph: _Optional[_Mapping[str, NodeEdges]] = ..., node_types: _Optional[_Mapping[str, str]] = ..., display_names: _Optional[_Mapping[str, str]] = ..., cron: _Optional[str] = ..., next_run_at: _Optional[float] = ..., last_run_at: _Optional[float] = ..., workflow_id: _Optional[str] = ..., display_name: _Optional[str] = ..., root_alias: _Optional[str] = ..., relative_file: _Optional[str] = ..., builder_symbol: _Optional[str] = ..., agent_node_ids: _Optional[_Iterable[str]] = ..., agent_metadata_json: _Optional[_Mapping[str, str]] = ...) -> None: ...
+    webhook_path: str
+    webhook_url: str
+    webhook_active: bool
+    def __init__(self, name: _Optional[str] = ..., file_path: _Optional[str] = ..., node_ids: _Optional[_Iterable[str]] = ..., graph: _Optional[_Mapping[str, NodeEdges]] = ..., node_types: _Optional[_Mapping[str, str]] = ..., display_names: _Optional[_Mapping[str, str]] = ..., cron: _Optional[str] = ..., next_run_at: _Optional[float] = ..., last_run_at: _Optional[float] = ..., workflow_id: _Optional[str] = ..., display_name: _Optional[str] = ..., root_alias: _Optional[str] = ..., relative_file: _Optional[str] = ..., builder_symbol: _Optional[str] = ..., agent_node_ids: _Optional[_Iterable[str]] = ..., agent_metadata_json: _Optional[_Mapping[str, str]] = ..., webhook_path: _Optional[str] = ..., webhook_url: _Optional[str] = ..., webhook_active: bool = ...) -> None: ...
 
 class FlowList(_message.Message):
     __slots__ = ("flows", "diagnostics")
