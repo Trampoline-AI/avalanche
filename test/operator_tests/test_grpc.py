@@ -627,6 +627,62 @@ def test_read_trace_success_records_reachability_without_healing_update_stream()
         provider.close()
 
 
+def test_detail_hydration_rejects_advertised_and_streamed_bytes_before_accumulating():
+    class OversizedStream:
+        def __init__(self):
+            self.cancelled = False
+
+        def __iter__(self):
+            return iter([pb.DetailChunk(chunk_index=0, data=b"four", eof=True)])
+
+        def cancel(self):
+            self.cancelled = True
+
+    class DetailStub:
+        def __init__(self):
+            self.calls = 0
+            self.stream = OversizedStream()
+
+        def ReadDetail(self, request, **kwargs):  # noqa: N802
+            self.calls += 1
+            return self.stream
+
+    stub = DetailStub()
+    provider = GrpcStateProvider("localhost:1", max_detail_body_bytes=4)
+    provider._stub = stub
+    try:
+        with pytest.raises(_DetailHydrationRaceError, match="configured hydration"):
+            provider._read_detail_body("token", 5)
+        assert stub.calls == 0
+
+        with pytest.raises(_DetailHydrationRaceError, match="advertised size"):
+            provider._read_detail_body("token", 3)
+        assert stub.calls == 1
+        assert stub.stream.cancelled is True
+    finally:
+        provider.close()
+
+
+def test_trace_hydration_rejects_descriptor_above_configured_body_limit():
+    class TraceStub:
+        def __init__(self):
+            self.calls = 0
+
+        def ReadTrace(self, request, **kwargs):  # noqa: N802
+            self.calls += 1
+            return iter(())
+
+    stub = TraceStub()
+    provider = _trace_health_provider(stub)
+    provider._max_detail_body_bytes = 4
+    try:
+        with pytest.raises(_DetailHydrationRaceError, match="configured hydration"):
+            provider._hydrate_trace("run-trace-health", "agent")
+        assert stub.calls == 0
+    finally:
+        provider.close()
+
+
 @pytest.mark.parametrize(
     ("status", "failure_phase", "reachable"),
     [

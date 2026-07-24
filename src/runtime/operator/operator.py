@@ -92,6 +92,13 @@ MAX_DETAIL_PAGE_SIZE = 500
 STRUCTURAL_BASELINE_CAPACITY = 8
 SUBSCRIBER_QUEUE_CAPACITY = 256
 MAX_TRANSPORT_PAGE_BYTES = 2 * 1024 * 1024
+MAX_AGENT_EVENT_BYTES = 8 * 1024 * 1024
+MAX_TRACE_BODY_BYTES = 32 * 1024 * 1024
+MAX_NODE_DETAIL_BYTES = 64 * 1024 * 1024
+MAX_RUN_LOG_BYTES = 16 * 1024 * 1024
+MAX_RUN_LOG_ENTRIES = 100_000
+MAX_RUN_DETAIL_BYTES = 128 * 1024 * 1024
+MAX_AGENT_DETAIL_DEPTH = 64
 _MISSING_WORKFLOW_ID = "\0"
 DeprecatedExecutorFactory: TypeAlias = (
     type[LocalExecutor] | type[RayExecutor] | partial[RayExecutor]
@@ -108,6 +115,7 @@ class RunResultNotReadyError(RuntimeError):
 
 class RunResultUnavailableError(RuntimeError):
     """Raised when a failed or cancelled run has no workflow result."""
+
 
 class StructuralBaselineUnavailableError(RuntimeError):
     """Raised when a client must restart structural snapshot synchronization."""
@@ -206,6 +214,12 @@ class Operator:
         webhook_port: int = DEFAULT_WEBHOOK_PORT,
         structural_baseline_capacity: int = STRUCTURAL_BASELINE_CAPACITY,
         subscriber_queue_capacity: int = SUBSCRIBER_QUEUE_CAPACITY,
+        max_agent_event_bytes: int = MAX_AGENT_EVENT_BYTES,
+        max_trace_body_bytes: int = MAX_TRACE_BODY_BYTES,
+        max_node_detail_bytes: int = MAX_NODE_DETAIL_BYTES,
+        max_run_log_bytes: int = MAX_RUN_LOG_BYTES,
+        max_run_log_entries: int = MAX_RUN_LOG_ENTRIES,
+        max_run_detail_bytes: int = MAX_RUN_DETAIL_BYTES,
     ) -> None:
         """Create an operator with spawn-safe executor configuration.
 
@@ -237,6 +251,32 @@ class Operator:
             raise ValueError("Structural baseline capacity must be positive")
         if subscriber_queue_capacity <= 0:
             raise ValueError("Subscriber queue capacity must be positive")
+        if isinstance(max_run_log_entries, bool) or not isinstance(max_run_log_entries, int):
+            raise TypeError("Run log entry limit must be an integer")
+        if max_run_log_entries <= 0:
+            raise ValueError("Run log entry limit must be positive")
+        detail_limits = {
+            "Agent event": max_agent_event_bytes,
+            "Trace body": max_trace_body_bytes,
+            "Node detail": max_node_detail_bytes,
+            "Run log": max_run_log_bytes,
+            "Run detail": max_run_detail_bytes,
+        }
+        for label, limit in detail_limits.items():
+            if isinstance(limit, bool) or not isinstance(limit, int):
+                raise TypeError(f"{label} byte limit must be an integer")
+            if limit <= 0:
+                raise ValueError(f"{label} byte limit must be positive")
+        if max_node_detail_bytes < max(max_agent_event_bytes, max_trace_body_bytes):
+            raise ValueError("Node detail byte limit must contain the largest detail body")
+        if max_run_detail_bytes < max(max_node_detail_bytes, max_run_log_bytes):
+            raise ValueError("Run detail byte limit must contain node detail and logs")
+        self._max_agent_event_bytes = max_agent_event_bytes
+        self._max_trace_body_bytes = max_trace_body_bytes
+        self._max_node_detail_bytes = max_node_detail_bytes
+        self._max_run_log_bytes = max_run_log_bytes
+        self._max_run_log_entries = max_run_log_entries
+        self._max_run_detail_bytes = max_run_detail_bytes
         self._cancel_grace = cancel_grace
         self._result_retention_seconds = (
             None if result_retention_seconds is None else float(result_retention_seconds)
@@ -262,6 +302,9 @@ class Operator:
         self._trace_descriptors: dict[tuple[str, str], TraceDescriptor] = {}
         self._trace_bodies: dict[tuple[str, str], dict[int, bytes]] = {}
         self._trace_errors: dict[tuple[str, str], str | None] = {}
+        self._run_log_bytes: dict[str, int] = {}
+        self._run_detail_bytes: dict[str, int] = {}
+        self._node_detail_bytes: dict[tuple[str, str], int] = {}
         self._active_runs: dict[str, _RunHandle] = {}
         self._run_callbacks: list[Callable[[RunState], None]] = []
         self._log_callbacks: list[Callable[[LogEntry], None]] = []
@@ -1167,7 +1210,6 @@ class Operator:
                     if not self._closed and run_id not in self._stored_results:
                         self._stored_results[run_id] = stored
 
-
     def _begin_notification_shutdown(
         self,
         delayed_drains: tuple[tuple[str, _RunHandle], ...],
@@ -1643,15 +1685,21 @@ class Operator:
                 "timestamp_ns": timestamp_ns,
                 "data": data,
             }
+            _validate_agent_detail_depth(projected)
             event_json = json.dumps(
                 projected,
                 default=str,
                 separators=(",", ":"),
             )
+            event_size = len(event_json.encode())
+            if event_size > self._max_agent_event_bytes:
+                raise _CoordinatorProtocolError(
+                    f"agent event exceeds {self._max_agent_event_bytes} byte limit"
+                )
             projected_agent_event = AgentEvent(
                 event_sequence=sequence,
                 event_json=event_json,
-                size_bytes=len(event_json.encode()),
+                size_bytes=event_size,
             )
             detail = []
             if data.get("iteration") is not None:
@@ -1678,11 +1726,16 @@ class Operator:
             trace = event.get("trace")
             if not isinstance(trace, dict):
                 return None
+            _validate_agent_detail_depth(trace)
             finalized_trace = json.dumps(
                 trace,
                 default=str,
                 separators=(",", ":"),
             ).encode()
+            if len(finalized_trace) > self._max_trace_body_bytes:
+                raise _CoordinatorProtocolError(
+                    f"agent trace exceeds {self._max_trace_body_bytes} byte limit"
+                )
             versions = self._trace_bodies.get(key, {})
             if (
                 previous_descriptor.available
@@ -1728,26 +1781,93 @@ class Operator:
             node_id=node_id,
             message=message,
         )
+        body_size = (
+            projected_agent_event.size_bytes
+            if projected_agent_event is not None
+            else len(finalized_trace or b"")
+        )
+        log_size = len(entry.message.encode())
+        self._ensure_detail_capacity_locked(
+            run.run_id,
+            node_id,
+            log_bytes=log_size,
+            log_entries=1,
+            node_bytes=body_size,
+        )
         if projected_agent_event is not None:
             projected_events.append(projected_agent_event)
         self._trace_descriptors[key] = descriptor
         self._trace_errors[key] = error
-        self._append_log_locked(run, entry)
+        self._append_log_unchecked_locked(run, entry, log_size)
+        if body_size:
+            self._node_detail_bytes[key] = self._node_detail_bytes.get(key, 0) + body_size
+            self._run_detail_bytes[run.run_id] = (
+                self._run_detail_bytes.get(run.run_id, 0) + body_size
+            )
         return _AgentEvidenceMutation(
             entry=entry,
             agent_event=projected_agent_event,
             finalized_trace=finalized_trace,
         )
 
-    def _append_log_locked(self, run: RunState, entry: LogEntry) -> None:
+    def _ensure_detail_capacity_locked(
+        self,
+        run_id: str,
+        node_id: str,
+        *,
+        log_bytes: int = 0,
+        log_entries: int = 0,
+        node_bytes: int = 0,
+    ) -> None:
+        if len(self._logs.get(run_id, ())) + log_entries > self._max_run_log_entries:
+            raise _CoordinatorProtocolError(
+                f"run logs exceed {self._max_run_log_entries} entry limit"
+            )
+        if self._run_log_bytes.get(run_id, 0) + log_bytes > self._max_run_log_bytes:
+            raise _CoordinatorProtocolError(
+                f"run logs exceed {self._max_run_log_bytes} byte limit"
+            )
+        key = (run_id, node_id)
+        if self._node_detail_bytes.get(key, 0) + node_bytes > self._max_node_detail_bytes:
+            raise _CoordinatorProtocolError(
+                f"node detail exceeds {self._max_node_detail_bytes} byte limit"
+            )
+        if (
+            self._run_detail_bytes.get(run_id, 0) + log_bytes + node_bytes
+            > self._max_run_detail_bytes
+        ):
+            raise _CoordinatorProtocolError(
+                f"run detail exceeds {self._max_run_detail_bytes} byte limit"
+            )
+
+    def _append_log_unchecked_locked(
+        self,
+        run: RunState,
+        entry: LogEntry,
+        size_bytes: int,
+    ) -> None:
         logs = self._logs.setdefault(run.run_id, [])
         logs.append(
             SequencedLogEntry(
                 sequence=len(logs) + 1,
                 entry=deepcopy(entry),
-                size_bytes=len(entry.message.encode()),
+                size_bytes=size_bytes,
             )
         )
+        self._run_log_bytes[run.run_id] = self._run_log_bytes.get(run.run_id, 0) + size_bytes
+        self._run_detail_bytes[run.run_id] = (
+            self._run_detail_bytes.get(run.run_id, 0) + size_bytes
+        )
+
+    def _append_log_locked(self, run: RunState, entry: LogEntry) -> None:
+        size_bytes = len(entry.message.encode())
+        self._ensure_detail_capacity_locked(
+            run.run_id,
+            entry.node_id,
+            log_bytes=size_bytes,
+            log_entries=1,
+        )
+        self._append_log_unchecked_locked(run, entry, size_bytes)
 
     def _finish_protocol_fault(
         self,
@@ -2307,6 +2427,39 @@ _MAX_EVENT_FIELD_LENGTH = 4096
 _MAX_EVENT_MESSAGE_LENGTH = 65_536
 _MAX_EVENT_TRACEBACK_LENGTH = 262_144
 _MAX_EVENT_TIMESTAMP_MAGNITUDE = 10**12
+
+
+def _validate_agent_detail_depth(value: object) -> None:
+    """Reject cyclic or pathologically nested agent-owned detail bodies."""
+    active: set[int] = set()
+
+    def walk(item: object, depth: int) -> None:
+        if depth > MAX_AGENT_DETAIL_DEPTH:
+            raise _CoordinatorProtocolError(
+                f"agent detail exceeds maximum depth {MAX_AGENT_DETAIL_DEPTH}"
+            )
+        if isinstance(item, dict):
+            identity = id(item)
+            if identity in active:
+                raise _CoordinatorProtocolError("agent detail contains a reference cycle")
+            active.add(identity)
+            try:
+                for child in item.values():
+                    walk(child, depth + 1)
+            finally:
+                active.remove(identity)
+        elif isinstance(item, (list, tuple)):
+            identity = id(item)
+            if identity in active:
+                raise _CoordinatorProtocolError("agent detail contains a reference cycle")
+            active.add(identity)
+            try:
+                for child in item:
+                    walk(child, depth + 1)
+            finally:
+                active.remove(identity)
+
+    walk(value, 0)
 
 
 def _validate_preparation_event(event: object) -> str:

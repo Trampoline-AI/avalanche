@@ -14,6 +14,7 @@
   hydration uses one lifecycle-owned worker and epoch/revision-guarded detail
   completions, with bounded retries.
 
+
 ### TUI performance
 
 - Virtualized log rendering keeps steady and incremental refresh work bounded by

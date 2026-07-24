@@ -71,6 +71,7 @@ STREAM_THREAD_JOIN_TIMEOUT_SECONDS = 2.0
 RESET_BASELINE_PAGE_SIZE = 100
 RESET_BASELINE_MAX_ATTEMPTS = 5
 RESET_BASELINE_RETRY_SECONDS = 0.05
+DEFAULT_MAX_DETAIL_BODY_BYTES = 32 * 1024 * 1024
 
 
 class StreamState(str, Enum):
@@ -147,16 +148,24 @@ class GrpcStateProvider:
         private_key: bytes | None = None,
         certificate_chain: bytes | None = None,
         unary_timeout: float = DEFAULT_UNARY_TIMEOUT_SECONDS,
+        max_detail_body_bytes: int = DEFAULT_MAX_DETAIL_BODY_BYTES,
         reset_baseline_loader: Callable[[StreamResetNotice], ResetBaseline] | None = None,
     ) -> None:
         if isinstance(unary_timeout, bool) or not isinstance(unary_timeout, Real):
             raise TypeError("unary_timeout must be a real number")
         if not math.isfinite(unary_timeout) or unary_timeout <= 0:
             raise ValueError("unary_timeout must be positive and finite")
+        if isinstance(max_detail_body_bytes, bool) or not isinstance(
+            max_detail_body_bytes, int
+        ):
+            raise TypeError("max_detail_body_bytes must be an integer")
+        if max_detail_body_bytes <= 0:
+            raise ValueError("max_detail_body_bytes must be positive")
 
         self._address = address
         self._metadata = (("authorization", f"Bearer {token}"),) if token else None
         self._unary_timeout = float(unary_timeout)
+        self._max_detail_body_bytes = max_detail_body_bytes
         self._reset_baseline_loader = reset_baseline_loader
         if tls:
             credentials = grpc.ssl_channel_credentials(
@@ -384,6 +393,7 @@ class GrpcStateProvider:
         self.retry_count = 0
         self.last_error = ""
         return result
+
     def _materialize_structural_cursor(self) -> _StreamCursor:
         """Create one server-retained baseline and return its immutable cursor."""
         response = self._call(
@@ -608,7 +618,20 @@ class GrpcStateProvider:
             if not page:
                 raise _DetailHydrationRaceError("agent pagination made no progress")
 
+    def _validate_detail_body_size(self, size_bytes: int) -> None:
+        if size_bytes < 0 or size_bytes > self._max_detail_body_bytes:
+            raise _DetailHydrationRaceError(
+                "detail body exceeds the configured hydration byte limit"
+            )
+
+    @staticmethod
+    def _cancel_detail_stream(stream: Any) -> None:
+        cancel = getattr(stream, "cancel", None)
+        if callable(cancel):
+            cancel()
+
     def _read_detail_body(self, body_token: str, size_bytes: int) -> bytes:
+        self._validate_detail_body_size(size_bytes)
         try:
             chunks = self._stub.ReadDetail(
                 pb.ReadDetailRequest(body_token=body_token),
@@ -618,9 +641,14 @@ class GrpcStateProvider:
             saw_eof = False
             for expected_index, chunk in enumerate(chunks):
                 if saw_eof:
+                    self._cancel_detail_stream(chunks)
                     raise _DetailHydrationRaceError("detail stream continued after eof")
                 if chunk.chunk_index != expected_index:
+                    self._cancel_detail_stream(chunks)
                     raise _DetailHydrationRaceError("detail chunk identity changed")
+                if len(chunk.data) > size_bytes - len(data):
+                    self._cancel_detail_stream(chunks)
+                    raise _DetailHydrationRaceError("detail body exceeded its advertised size")
                 data.extend(chunk.data)
                 saw_eof = chunk.eof
         except grpc.RpcError as error:
@@ -791,6 +819,7 @@ class GrpcStateProvider:
                 current = self._runs_by_id.get(run_id)
                 return self._materialize_run_locked(current) if current is not None else run
 
+        self._validate_detail_body_size(descriptor.size_bytes)
         try:
             chunks = self._stub.ReadTrace(
                 pb.ReadTraceRequest(
@@ -805,9 +834,14 @@ class GrpcStateProvider:
             saw_eof = False
             for expected_index, chunk in enumerate(chunks):
                 if saw_eof:
+                    self._cancel_detail_stream(chunks)
                     raise _DetailHydrationRaceError("trace stream continued after eof")
                 if chunk.revision != descriptor.revision or chunk.chunk_index != expected_index:
+                    self._cancel_detail_stream(chunks)
                     raise _DetailHydrationRaceError("trace chunk identity changed")
+                if len(chunk.data) > descriptor.size_bytes - len(data):
+                    self._cancel_detail_stream(chunks)
+                    raise _DetailHydrationRaceError("trace body exceeded its advertised size")
                 data.extend(chunk.data)
                 saw_eof = chunk.eof
         except grpc.RpcError as error:

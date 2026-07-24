@@ -841,9 +841,9 @@ def test_max_log_and_large_agent_event_use_bounded_live_and_hydration_transport(
         )
         assert len(event_chunks) > 4
         assert all(len(chunk.data) <= TRACE_CHUNK_BYTES for chunk in event_chunks)
-        assert [chunk.eof for chunk in event_chunks] == [False] * (
-            len(event_chunks) - 1
-        ) + [True]
+        assert [chunk.eof for chunk in event_chunks] == [False] * (len(event_chunks) - 1) + [
+            True
+        ]
 
         for delta in operator._stream_history:
             envelope_message = run_delta_envelope_to_proto(
@@ -868,6 +868,191 @@ def test_max_log_and_large_agent_event_use_bounded_live_and_hydration_transport(
         if server is not None:
             server.stop(grace=0).wait()
         operator.close()
+
+
+def test_agent_detail_ingestion_rejects_oversize_and_excess_depth_before_retention():
+    operator = Operator(
+        watch=False,
+        schedule=False,
+        max_agent_event_bytes=256,
+        max_trace_body_bytes=256,
+        max_node_detail_bytes=512,
+        max_run_log_bytes=512,
+        max_run_detail_bytes=768,
+    )
+    try:
+        run = _add_run(operator, "run-detail-body-limits")
+        oversized = _evidence(1)
+        oversized["event"]["data"] = {"payload": "x" * 512}
+        operator._apply_event(run.run_id, _event_handle(), oversized)
+
+        nested = {}
+        cursor = nested
+        for _ in range(70):
+            child = {}
+            cursor["child"] = child
+            cursor = child
+        too_deep = _evidence(2)
+        too_deep["event"]["data"] = nested
+        operator._apply_event(run.run_id, _event_handle(), too_deep)
+
+        operator._apply_event(
+            run.run_id,
+            _event_handle(),
+            {
+                "type": "agent_evidence",
+                "node_id": "agent_1",
+                "event": {
+                    "kind": "trace_finished",
+                    "trace": {"payload": "t" * 512},
+                },
+            },
+        )
+
+        assert operator._agent_events.get((run.run_id, "agent_1"), []) == []
+        assert operator._logs.get(run.run_id, []) == []
+        assert operator._trace_bodies.get((run.run_id, "agent_1"), {}) == {}
+        assert operator._run_detail_bytes.get(run.run_id, 0) == 0
+    finally:
+        operator.close()
+
+
+def test_detail_ingestion_enforces_cumulative_node_run_and_log_quotas():
+    operator = Operator(
+        watch=False,
+        schedule=False,
+        max_agent_event_bytes=256,
+        max_trace_body_bytes=256,
+        max_node_detail_bytes=512,
+        max_run_log_bytes=512,
+        max_run_detail_bytes=900,
+    )
+    try:
+        run = _add_run(operator, "run-detail-quotas")
+        run.nodes["agent_2"] = NodeState(
+            node_id="agent_2",
+            name="Agent 2",
+            node_type="step",
+        )
+        for sequence in range(1, 21):
+            node_id = "agent_1" if sequence % 2 else "agent_2"
+            operator._apply_event(
+                run.run_id,
+                _event_handle(),
+                {
+                    "type": "agent_evidence",
+                    "node_id": node_id,
+                    "event": {
+                        "kind": "evidence",
+                        "sequence": sequence,
+                        "event_kind": "code.generated",
+                        "timestamp_ns": sequence,
+                        "data": {"payload": "x" * 64},
+                    },
+                },
+            )
+
+        retained = sum(
+            len(events)
+            for (run_id, _), events in operator._agent_events.items()
+            if run_id == run.run_id
+        )
+        assert 0 < retained < 20
+        assert operator._run_detail_bytes[run.run_id] <= 900
+        assert all(
+            size <= 512
+            for (run_id, _), size in operator._node_detail_bytes.items()
+            if run_id == run.run_id
+        )
+    finally:
+        operator.close()
+
+    log_operator = Operator(
+        watch=False,
+        schedule=False,
+        max_agent_event_bytes=256,
+        max_trace_body_bytes=256,
+        max_node_detail_bytes=512,
+        max_run_log_bytes=128,
+        max_run_detail_bytes=512,
+    )
+    try:
+        run = _add_run(log_operator, "run-log-quota")
+        for sequence in range(1, 10):
+            event = {
+                "type": "log",
+                "timestamp": float(sequence),
+                "level": logging.INFO,
+                "node_id": "agent_1",
+                "message": "l" * 48,
+            }
+            if sequence <= 2:
+                log_operator._apply_event(run.run_id, _event_handle(), event)
+            else:
+                with pytest.raises(RuntimeError, match="run logs exceed"):
+                    log_operator._apply_event(run.run_id, _event_handle(), event)
+                break
+        assert len(log_operator._logs[run.run_id]) == 2
+        assert log_operator._run_log_bytes[run.run_id] == 96
+    finally:
+        log_operator.close()
+
+    count_operator = Operator(
+        watch=False,
+        schedule=False,
+        max_run_log_entries=2,
+    )
+    try:
+        run = _add_run(count_operator, "run-log-count-quota")
+        event = {
+            "type": "log",
+            "timestamp": 1.0,
+            "level": logging.INFO,
+            "node_id": "agent_1",
+            "message": "",
+        }
+        count_operator._apply_event(run.run_id, _event_handle(), event)
+        count_operator._apply_event(run.run_id, _event_handle(), event)
+        with pytest.raises(RuntimeError, match="run logs exceed 2 entry limit"):
+            count_operator._apply_event(run.run_id, _event_handle(), event)
+        assert len(count_operator._logs[run.run_id]) == 2
+        assert count_operator._run_log_bytes[run.run_id] == 0
+    finally:
+        count_operator.close()
+
+    trace_operator = Operator(
+        watch=False,
+        schedule=False,
+        max_agent_event_bytes=256,
+        max_trace_body_bytes=256,
+        max_node_detail_bytes=512,
+        max_run_log_bytes=512,
+        max_run_detail_bytes=768,
+    )
+    try:
+        run = _add_run(trace_operator, "run-trace-quota")
+        for revision in range(3):
+            trace_operator._apply_event(
+                run.run_id,
+                _event_handle(),
+                {
+                    "type": "agent_evidence",
+                    "node_id": "agent_1",
+                    "event": {
+                        "kind": "trace_finished",
+                        "trace": {
+                            "status": "completed",
+                            "payload": str(revision) * 180,
+                        },
+                    },
+                },
+            )
+        versions = trace_operator._trace_bodies[(run.run_id, "agent_1")]
+        assert len(versions) == 2
+        assert trace_operator._node_detail_bytes[(run.run_id, "agent_1")] <= 512
+        assert trace_operator._run_detail_bytes[run.run_id] <= 768
+    finally:
+        trace_operator.close()
 
 
 def test_read_trace_rejects_reused_identity_from_previous_operator_epoch():
