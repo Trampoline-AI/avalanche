@@ -6,7 +6,16 @@ from io import BytesIO
 from pathlib import Path
 from typing import Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field,
+    SerializationInfo,
+    SerializerFunctionWrapHandler,
+    field_validator,
+    model_serializer,
+    model_validator,
+)
 
 
 class BaseInput(BaseModel):
@@ -101,8 +110,11 @@ def run_with_context(context: RunContext, fn: Any, *args: Any, **kwargs: Any) ->
     return _run_with_context(context, fn, *args, **kwargs)
 
 
+_FILE_SERIALIZER_CONTEXT_KEY = "__avalanche_operator_file_serializer__"
+
+
 class File(BaseModel):
-    """File payload carried with a workflow run request."""
+    """In-memory file value accepted as workflow input or returned as output."""
 
     model_config = ConfigDict(arbitrary_types_allowed=True, extra="forbid")
 
@@ -110,6 +122,21 @@ class File(BaseModel):
     name: str | None = None
     content_type: str | None = None
     sha256: str | None = None
+
+    @model_serializer(mode="wrap")
+    def _serialize(
+        self,
+        handler: SerializerFunctionWrapHandler,
+        info: SerializationInfo,
+    ) -> Any:
+        """Allow the operator codec to substitute an attachment marker."""
+        context = info.context
+        serializer = (
+            context.get(_FILE_SERIALIZER_CONTEXT_KEY) if isinstance(context, dict) else None
+        )
+        if callable(serializer):
+            return serializer(self)
+        return handler(self)
 
     @classmethod
     def from_path(cls, path: str | Path, *, content_type: str | None = None) -> "File":

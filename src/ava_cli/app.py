@@ -3,16 +3,30 @@
 from __future__ import annotations
 
 import argparse
+import ctypes
+import errno
+import hashlib
 import json
+import math
+import os
+import re
 import socket
+import stat
 import subprocess
 import sys
 import time
 from collections.abc import Sequence
 from pathlib import Path
+from uuid import uuid4
 
 _RUNTIME_OPTIONAL_MODULES = {"runtime", "grpc", "watchfiles", "croniter"}
 _TUI_OPTIONAL_MODULES = {"tui", "textual", "grpc"}
+_RENAME_NOREPLACE = 1
+_RENAME_EXCL = 0x00000004
+_STAGED_OUTPUT_NAME = "result"
+_MAX_STAGED_OUTPUT_ENTRIES = 2048
+_MAX_STAGED_OUTPUT_DEPTH = 8
+_MAX_PARENT_IDENTITY_SCAN = 4096
 
 
 def main(argv: Sequence[str] | None = None) -> int:
@@ -44,13 +58,28 @@ def _build_parser() -> argparse.ArgumentParser:
         help="flow file or directory to scan",
     )
     operator.add_argument("--port", type=int, default=7433, help="operator gRPC port")
+    operator.add_argument(
+        "--host",
+        default="127.0.0.1",
+        help=(
+            "listen host (default: loopback); non-loopback exposure requires an "
+            "external trusted and authenticated boundary"
+        ),
+    )
     operator.add_argument("--ray", action="store_true", help="use the Ray executor")
     operator.set_defaults(handler=_run_operator)
 
     run = subcommands.add_parser(
         "run",
         help="start a flow run on a local operator",
-        description="Start a flow run through a running Avalanche operator.",
+        description=(
+            "Start a flow run through a running Avalanche operator and print its run ID. "
+            "Use `ava result RUN_ID --output-dir PATH` to download its terminal result."
+        ),
+        epilog=(
+            "Results can also be retrieved from Python with "
+            "GrpcStateProvider.get_run_result(run_id)."
+        ),
     )
     run.add_argument("flow", help="flow name to run")
     run.add_argument(
@@ -69,6 +98,55 @@ def _build_parser() -> argparse.ArgumentParser:
         help="attach local file bytes as a top-level input field",
     )
     run.set_defaults(handler=_run_flow)
+
+    result = subcommands.add_parser(
+        "result",
+        help="download a successful run result",
+        description=(
+            "Retrieve a successful run result into a new destination directory. "
+            "The CLI builds and verifies a private staged tree, publishes its name "
+            "with an atomic no-replace rename, immediately verifies the destination "
+            "identity, and emits JSON metadata without printing binary content."
+        ),
+        epilog=(
+            "Security contract: the output parent is a caller-owned local namespace. "
+            "Descriptor-authenticated catchable state is cleaned. An interruption "
+            "after the holding mkdir side effect but before descriptor acquisition "
+            "can leave a private empty holding residue because safe cleanup cannot "
+            "distinguish a same-name replacement; the requested destination remains "
+            "absent. "
+            "Concurrent hostile mutation by another process running as the same user "
+            "is outside this CLI threat model."
+        ),
+    )
+    result.add_argument("run_id", help="run ID to retrieve")
+    result.add_argument(
+        "--connect",
+        default="localhost:7433",
+        metavar="HOST:PORT",
+        help="operator address",
+    )
+    result.add_argument(
+        "--output-dir",
+        required=True,
+        metavar="PATH",
+        help=(
+            "new destination directory for result metadata and downloaded files "
+            "(must not already exist)"
+        ),
+    )
+    result.add_argument(
+        "--wait",
+        action="store_true",
+        help="wait for a nonterminal run before retrieving its result",
+    )
+    result.add_argument(
+        "--timeout",
+        type=float,
+        default=300.0,
+        help="maximum seconds to wait with --wait (default: 300)",
+    )
+    result.set_defaults(handler=_run_result)
 
     tui = subcommands.add_parser(
         "tui",
@@ -109,7 +187,14 @@ def _build_parser() -> argparse.ArgumentParser:
 
 
 def _run_operator(args: argparse.Namespace) -> int:
-    runtime_args = ["--flows", *args.flows, "--port", str(args.port)]
+    runtime_args = [
+        "--flows",
+        *args.flows,
+        "--host",
+        args.host,
+        "--port",
+        str(args.port),
+    ]
     if args.ray:
         runtime_args.append("--ray")
     return _operator_main(runtime_args)
@@ -147,6 +232,742 @@ def _run_flow(args: argparse.Namespace) -> int:
         return 1
     finally:
         provider.close()
+
+
+def _run_result(args: argparse.Namespace) -> int:
+    if not math.isfinite(args.timeout) or args.timeout <= 0:
+        print("--timeout must be positive and finite", file=sys.stderr)
+        return 2
+    provider = _make_provider(args.connect)
+    try:
+        if args.wait and not _wait_for_terminal_run(
+            provider,
+            args.run_id,
+            timeout=args.timeout,
+        ):
+            if last_error := getattr(provider, "last_error", ""):
+                print(last_error, file=sys.stderr)
+            return 1
+        try:
+            value = provider.get_run_result(args.run_id)
+        except Exception as exc:
+            error = getattr(provider, "last_error", "") or str(exc)
+            print(error, file=sys.stderr)
+            return 1
+        try:
+            metadata = _materialize_result(
+                args.run_id,
+                value,
+                Path(args.output_dir),
+            )
+        except (OSError, RuntimeError, TypeError, ValueError) as exc:
+            print(str(exc), file=sys.stderr)
+            return 1
+        print(json.dumps(metadata, allow_nan=False, indent=2, sort_keys=True))
+        return 0
+    finally:
+        provider.close()
+
+
+def _wait_for_terminal_run(provider, run_id: str, *, timeout: float) -> bool:
+    deadline = time.monotonic() + timeout
+    while True:
+        run = provider.get_run(run_id)
+        if run is None:
+            if not getattr(provider, "last_error", ""):
+                provider.last_error = f"Run {run_id} not found"
+            return False
+        status = getattr(run.status, "value", run.status)
+        if status in {"success", "failed", "cancelled"}:
+            return True
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            provider.last_error = f"Timed out waiting for run {run_id}"
+            return False
+        time.sleep(min(0.1, remaining))
+
+
+def _materialize_result(run_id: str, value, output_directory: Path) -> dict:
+    from avalanche.runtime import File
+    from runtime.operator.results import encode_workflow_result
+
+    _reject_repeated_result_files(value, File)
+    encode_workflow_result(value)
+    _require_anchored_output_io()
+    parent_directory = output_directory.parent
+    destination_name = output_directory.name
+    if not destination_name or destination_name in {".", ".."}:
+        raise ValueError("Result output directory must have a destination name")
+    parent_fd, parent_identity = _open_output_parent(parent_directory)
+    holding_name = f".avalanche-result-{uuid4().hex}.tmp"
+    holding_fd = None
+    holding_identity = None
+    staging_fd = None
+    staging_identity = None
+    publication_attempted = False
+    publication_returned = False
+    files: list[dict] = []
+
+    def materialize(item):
+        if isinstance(item, File):
+            index = len(files) + 1
+            digest = hashlib.sha256(item.content).hexdigest()
+            if item.sha256 != digest:
+                raise ValueError("Result file digest does not match its content")
+            filename = _generated_result_filename(index, item.name)
+            _write_exclusive_file(
+                filename,
+                item.content,
+                staging_fd,
+            )
+            metadata = {
+                "path": filename,
+                "name": item.name,
+                "media_type": item.content_type,
+                "sha256": digest,
+                "size": len(item.content),
+            }
+            files.append(metadata)
+            return {"file": metadata}
+        if type(item) is tuple:
+            return [materialize(child) for child in item]
+        if type(item) is list:
+            return [materialize(child) for child in item]
+        if type(item) is dict:
+            return {key: materialize(child) for key, child in item.items()}
+        if item is None or type(item) in {bool, int, float, str}:
+            if type(item) is float and not math.isfinite(item):
+                raise ValueError("Result metadata contains a non-finite number")
+            return item
+        raise TypeError(f"Unsupported result value {type(item).__name__}")
+
+    try:
+        _verify_output_parent(
+            parent_directory,
+            parent_fd,
+            parent_identity,
+        )
+        _require_absent_destination(parent_fd, destination_name)
+        os.mkdir(holding_name, mode=0o700, dir_fd=parent_fd)
+        holding_fd, holding_identity = _open_private_directory(
+            parent_fd,
+            holding_name,
+            label="holding",
+        )
+        os.mkdir(_STAGED_OUTPUT_NAME, mode=0o700, dir_fd=holding_fd)
+        staging_fd, staging_identity = _open_private_directory(
+            holding_fd,
+            _STAGED_OUTPUT_NAME,
+            label="staging",
+        )
+        document = {
+            "run_id": run_id,
+            "result": materialize(value),
+            "files": files,
+        }
+        metadata_name = f"result-{uuid4().hex}.json"
+        metadata_bytes = (
+            json.dumps(document, allow_nan=False, indent=2, sort_keys=True) + "\n"
+        ).encode()
+        _write_exclusive_file(
+            metadata_name,
+            metadata_bytes,
+            staging_fd,
+        )
+        for item in files:
+            digest, size = _hash_output_file(
+                item["path"],
+                staging_fd,
+                maximum_bytes=item["size"],
+            )
+            if digest != item["sha256"] or size != item["size"]:
+                raise ValueError("Downloaded result file failed digest verification")
+        if (
+            _read_output_file(
+                metadata_name,
+                staging_fd,
+                maximum_bytes=len(metadata_bytes),
+            )
+            != metadata_bytes
+        ):
+            raise ValueError("Downloaded result metadata failed verification")
+        _validate_staged_entries(
+            staging_fd,
+            {metadata_name, *(item["path"] for item in files)},
+        )
+        os.fsync(staging_fd)
+        _verify_output_parent(
+            parent_directory,
+            parent_fd,
+            parent_identity,
+        )
+        _require_absent_destination(parent_fd, destination_name)
+        _validate_directory_entry_identity(
+            holding_fd,
+            _STAGED_OUTPUT_NAME,
+            staging_identity,
+            label="staged output",
+        )
+        # POSIX and macOS have no portable rename operation conditioned on the
+        # inode retained by staging_fd. Under the caller-owned namespace contract,
+        # rename the staged name and immediately verify the destination identity.
+        publication_attempted = True
+        _rename_directory_noreplace(
+            _STAGED_OUTPUT_NAME,
+            destination_name,
+            holding_fd,
+            parent_fd,
+        )
+        publication_returned = True
+        published_identity = _directory_entry_identity(parent_fd, destination_name)
+        if published_identity != staging_identity:
+            raise ValueError("Result output published output identity changed")
+        os.fsync(parent_fd)
+        _remove_directory_entry_by_identity(
+            parent_fd,
+            holding_name,
+            holding_identity,
+            maximum_entries=_MAX_PARENT_IDENTITY_SCAN,
+        )
+    except BaseException:
+        if holding_fd is not None and holding_identity is not None:
+            _cleanup_staged_output(
+                parent_fd,
+                destination_name,
+                holding_name,
+                holding_fd,
+                holding_identity,
+                _STAGED_OUTPUT_NAME,
+                staging_fd,
+                staging_identity,
+                publication_attempted=publication_attempted,
+                publication_returned=publication_returned,
+            )
+        raise
+    finally:
+        if staging_fd is not None:
+            os.close(staging_fd)
+        if holding_fd is not None:
+            os.close(holding_fd)
+        os.close(parent_fd)
+    return {**document, "metadata_path": metadata_name}
+
+
+def _reject_repeated_result_files(value, file_type: type) -> None:
+    """Preflight the CLI tree so one in-memory blob is never written repeatedly."""
+    seen: set[int] = set()
+    stack = [value]
+    while stack:
+        item = stack.pop()
+        if isinstance(item, file_type):
+            identity = id(item)
+            if identity in seen:
+                raise ValueError("Result repeats the same file attachment")
+            seen.add(identity)
+        elif type(item) in {tuple, list}:
+            stack.extend(item)
+        elif type(item) is dict:
+            stack.extend(item.values())
+
+
+def _generated_result_filename(index: int, original_name: str | None) -> str:
+    hint = re.split(r"[/\\]", original_name or "")[-1]
+    hint = re.sub(r"[^A-Za-z0-9._-]+", "_", hint).strip("._-")[:64]
+    suffix = f"-{hint}" if hint else ""
+    return f"attachment-{index:04d}-{uuid4().hex}{suffix}"
+
+
+def _require_anchored_output_io() -> None:
+    if not all(
+        function in os.supports_dir_fd
+        for function in (
+            os.open,
+            os.mkdir,
+            os.unlink,
+            os.rmdir,
+            os.rename,
+            os.stat,
+        )
+    ):
+        raise RuntimeError(
+            "Secure result materialization is unavailable: this platform does not "
+            "support directory-anchored file operations"
+        )
+    if not getattr(os, "O_DIRECTORY", 0) or not getattr(os, "O_NOFOLLOW", 0):
+        raise RuntimeError(
+            "Secure result materialization is unavailable: this platform cannot "
+            "open a directory without following symbolic links"
+        )
+    _atomic_noreplace_rename()
+
+
+def _open_output_parent(parent_directory: Path) -> tuple[int, tuple[int, int]]:
+    before = parent_directory.stat(follow_symlinks=False)
+    if not stat.S_ISDIR(before.st_mode):
+        raise ValueError("Result output parent must be a directory")
+    identity = (before.st_dev, before.st_ino)
+    descriptor = os.open(
+        parent_directory,
+        os.O_RDONLY | getattr(os, "O_DIRECTORY", 0) | getattr(os, "O_NOFOLLOW", 0),
+    )
+    metadata = os.fstat(descriptor)
+    if not stat.S_ISDIR(metadata.st_mode) or (metadata.st_dev, metadata.st_ino) != identity:
+        os.close(descriptor)
+        raise ValueError("Result output parent changed while opening")
+    return descriptor, identity
+
+
+def _verify_output_parent(
+    parent_directory: Path,
+    parent_fd: int,
+    identity: tuple[int, int],
+) -> None:
+    try:
+        metadata = parent_directory.stat(follow_symlinks=False)
+    except FileNotFoundError as exc:
+        raise ValueError("Result output parent was removed during materialization") from exc
+    if not stat.S_ISDIR(metadata.st_mode) or (metadata.st_dev, metadata.st_ino) != identity:
+        raise ValueError("Result output parent changed during materialization")
+    opened = os.fstat(parent_fd)
+    if (opened.st_dev, opened.st_ino) != identity:
+        raise ValueError("Result output parent descriptor changed")
+
+
+def _require_absent_destination(parent_fd: int, destination_name: str) -> None:
+    try:
+        os.stat(
+            destination_name,
+            dir_fd=parent_fd,
+            follow_symlinks=False,
+        )
+    except FileNotFoundError:
+        return
+    raise FileExistsError(
+        f"Result output destination {destination_name!r} must not already exist"
+    )
+
+
+def _rename_directory_noreplace(
+    source_name: str,
+    destination_name: str,
+    source_directory_fd: int,
+    destination_directory_fd: int,
+) -> None:
+    rename, flag = _atomic_noreplace_rename()
+    result = rename(
+        source_directory_fd,
+        os.fsencode(source_name),
+        destination_directory_fd,
+        os.fsencode(destination_name),
+        flag,
+    )
+    if result == 0:
+        return
+    error_number = ctypes.get_errno()
+    if error_number == errno.EEXIST:
+        raise FileExistsError(
+            f"Result output destination {destination_name!r} must not already exist"
+        )
+    raise OSError(
+        error_number,
+        os.strerror(error_number),
+        destination_name,
+    )
+
+
+def _atomic_noreplace_rename():
+    library = ctypes.CDLL(None, use_errno=True)
+    if sys.platform == "darwin":
+        rename = getattr(library, "renameatx_np", None)
+        flag = _RENAME_EXCL
+    elif sys.platform.startswith("linux"):
+        rename = getattr(library, "renameat2", None)
+        flag = _RENAME_NOREPLACE
+    else:
+        rename = None
+        flag = 0
+    if rename is None:
+        raise RuntimeError(
+            "Secure result materialization is unavailable: this platform cannot "
+            "atomically publish a new directory without replacing an existing path"
+        )
+    rename.argtypes = [
+        ctypes.c_int,
+        ctypes.c_char_p,
+        ctypes.c_int,
+        ctypes.c_char_p,
+        ctypes.c_uint,
+    ]
+    rename.restype = ctypes.c_int
+    return rename, flag
+
+
+def _open_private_directory(
+    parent_fd: int,
+    name: str,
+    *,
+    label: str,
+) -> tuple[int, tuple[int, int]]:
+    descriptor = os.open(
+        name,
+        os.O_RDONLY | getattr(os, "O_DIRECTORY", 0) | getattr(os, "O_NOFOLLOW", 0),
+        dir_fd=parent_fd,
+    )
+    try:
+        os.fchmod(descriptor, 0o700)
+        metadata = os.fstat(descriptor)
+        if not stat.S_ISDIR(metadata.st_mode):
+            raise ValueError(f"Result output {label} entry is not a directory")
+        if os.name != "nt" and stat.S_IMODE(metadata.st_mode) != 0o700:
+            raise ValueError(f"Result output {label} directory is not private")
+        if hasattr(os, "getuid") and metadata.st_uid != os.getuid():
+            raise ValueError(f"Result output {label} directory has a different owner")
+    except BaseException:
+        os.close(descriptor)
+        raise
+    return descriptor, (metadata.st_dev, metadata.st_ino)
+
+
+def _write_exclusive_file(
+    name: str,
+    content: bytes,
+    directory_fd: int,
+) -> None:
+    flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0)
+    descriptor = os.open(name, flags, 0o600, dir_fd=directory_fd)
+    try:
+        os.fchmod(descriptor, 0o600)
+        view = memoryview(content)
+        offset = 0
+        while offset < len(view):
+            written = os.write(descriptor, view[offset : offset + 1024 * 1024])
+            if written <= 0:
+                raise OSError("Result materialization made no write progress")
+            offset += written
+        os.fsync(descriptor)
+    except BaseException:
+        os.close(descriptor)
+        _unlink_output_file(name, directory_fd)
+        raise
+    else:
+        os.close(descriptor)
+
+
+def _hash_output_file(
+    name: str,
+    directory_fd: int,
+    *,
+    maximum_bytes: int,
+) -> tuple[str, int]:
+    digest = hashlib.sha256()
+    flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0)
+    descriptor = os.open(name, flags, dir_fd=directory_fd)
+    try:
+        metadata = os.fstat(descriptor)
+        _validate_output_file_metadata(metadata)
+        total = 0
+        while chunk := os.read(
+            descriptor,
+            min(1024 * 1024, maximum_bytes - total + 1),
+        ):
+            total += len(chunk)
+            if total > maximum_bytes:
+                raise ValueError(f"Downloaded result file exceeds {maximum_bytes} bytes")
+            digest.update(chunk)
+    finally:
+        os.close(descriptor)
+    return digest.hexdigest(), total
+
+
+def _read_output_file(
+    name: str,
+    directory_fd: int,
+    *,
+    maximum_bytes: int,
+) -> bytes:
+    flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0)
+    descriptor = os.open(name, flags, dir_fd=directory_fd)
+    chunks = []
+    total = 0
+    try:
+        _validate_output_file_metadata(os.fstat(descriptor))
+        while chunk := os.read(
+            descriptor,
+            min(1024 * 1024, maximum_bytes - total + 1),
+        ):
+            total += len(chunk)
+            if total > maximum_bytes:
+                raise ValueError(f"Downloaded result file exceeds {maximum_bytes} bytes")
+            chunks.append(chunk)
+    finally:
+        os.close(descriptor)
+    return b"".join(chunks)
+
+
+def _validate_output_file_metadata(metadata: os.stat_result) -> None:
+    if not stat.S_ISREG(metadata.st_mode) or metadata.st_nlink != 1:
+        raise ValueError("Downloaded result file is not a private regular file")
+    if os.name != "nt" and stat.S_IMODE(metadata.st_mode) != 0o600:
+        raise ValueError("Downloaded result file permissions are not private")
+    if hasattr(os, "getuid") and metadata.st_uid != os.getuid():
+        raise ValueError("Downloaded result file has a different owner")
+
+
+def _unlink_output_file(name: str, directory_fd: int) -> None:
+    try:
+        os.unlink(name, dir_fd=directory_fd)
+    except FileNotFoundError:
+        pass
+
+
+def _cleanup_staged_output(
+    parent_fd: int,
+    destination_name: str,
+    holding_name: str,
+    holding_fd: int,
+    holding_identity: tuple[int, int],
+    staged_name: str,
+    staging_fd: int | None,
+    staging_identity: tuple[int, int] | None,
+    *,
+    publication_attempted: bool,
+    publication_returned: bool,
+) -> None:
+    budget = [_MAX_STAGED_OUTPUT_ENTRIES]
+    destination_fd = None
+    destination_identity = None
+    if publication_attempted:
+        try:
+            destination_fd = os.open(
+                destination_name,
+                os.O_RDONLY | getattr(os, "O_DIRECTORY", 0) | getattr(os, "O_NOFOLLOW", 0),
+                dir_fd=parent_fd,
+            )
+            metadata = os.fstat(destination_fd)
+            if not stat.S_ISDIR(metadata.st_mode):
+                raise ValueError("Result output destination is not a directory")
+            destination_identity = metadata.st_dev, metadata.st_ino
+        except BaseException:
+            if destination_fd is not None:
+                os.close(destination_fd)
+                destination_fd = None
+
+    if staging_fd is not None and staging_identity is not None:
+        try:
+            _bounded_clear_directory(
+                staging_fd,
+                budget,
+                depth=0,
+            )
+        except BaseException:
+            pass
+        try:
+            os.fsync(staging_fd)
+        except BaseException:
+            pass
+        try:
+            if destination_identity == staging_identity:
+                _remove_directory_entry_by_identity(
+                    parent_fd,
+                    destination_name,
+                    staging_identity,
+                    maximum_entries=_MAX_PARENT_IDENTITY_SCAN,
+                )
+            else:
+                _remove_directory_entry_by_identity(
+                    holding_fd,
+                    staged_name,
+                    staging_identity,
+                    maximum_entries=_MAX_STAGED_OUTPUT_ENTRIES,
+                )
+        except BaseException:
+            if destination_identity == staging_identity:
+                try:
+                    _remove_directory_entry_by_identity(
+                        holding_fd,
+                        staged_name,
+                        staging_identity,
+                        maximum_entries=_MAX_STAGED_OUTPUT_ENTRIES,
+                    )
+                except BaseException:
+                    pass
+
+    if (
+        publication_returned
+        and destination_fd is not None
+        and destination_identity != staging_identity
+    ):
+        try:
+            _bounded_clear_directory(
+                destination_fd,
+                [_MAX_STAGED_OUTPUT_ENTRIES],
+                depth=0,
+            )
+            os.fsync(destination_fd)
+        except BaseException:
+            pass
+        try:
+            _remove_directory_entry_by_identity(
+                parent_fd,
+                destination_name,
+                destination_identity,
+                maximum_entries=_MAX_PARENT_IDENTITY_SCAN,
+            )
+        except BaseException:
+            pass
+    if destination_fd is not None:
+        os.close(destination_fd)
+
+    try:
+        _bounded_clear_directory(holding_fd, budget, depth=0)
+    except BaseException:
+        pass
+    try:
+        os.fsync(holding_fd)
+    except BaseException:
+        pass
+    try:
+        _remove_directory_entry_by_identity(
+            parent_fd,
+            holding_name,
+            holding_identity,
+            maximum_entries=_MAX_PARENT_IDENTITY_SCAN,
+        )
+    except BaseException:
+        pass
+    try:
+        os.fsync(parent_fd)
+    except BaseException:
+        pass
+
+
+def _validate_staged_entries(directory_fd: int, expected_names: set[str]) -> None:
+    actual_names: set[str] = set()
+    with os.scandir(directory_fd) as entries:
+        for entry in entries:
+            actual_names.add(entry.name)
+            if len(actual_names) > _MAX_STAGED_OUTPUT_ENTRIES:
+                raise ValueError("Result output staging directory has too many entries")
+            if entry.is_dir(follow_symlinks=False):
+                raise ValueError("Result output staging directory contains a directory")
+    if actual_names != expected_names:
+        raise ValueError("Result output staging directory contains unexpected entries")
+
+
+def _validate_directory_entry_identity(
+    directory_fd: int,
+    name: str,
+    expected_identity: tuple[int, int],
+    *,
+    label: str,
+) -> None:
+    if _directory_entry_identity(directory_fd, name) != expected_identity:
+        raise ValueError(f"Result output {label} identity changed")
+
+
+def _directory_entry_identity(directory_fd: int, name: str) -> tuple[int, int]:
+    descriptor = os.open(
+        name,
+        os.O_RDONLY | getattr(os, "O_DIRECTORY", 0) | getattr(os, "O_NOFOLLOW", 0),
+        dir_fd=directory_fd,
+    )
+    try:
+        metadata = os.fstat(descriptor)
+        if not stat.S_ISDIR(metadata.st_mode):
+            raise ValueError("Result output entry is not a directory")
+        return metadata.st_dev, metadata.st_ino
+    finally:
+        os.close(descriptor)
+
+
+def _bounded_clear_directory(
+    directory_fd: int,
+    remaining_entries: list[int],
+    *,
+    depth: int,
+) -> None:
+    if depth > _MAX_STAGED_OUTPUT_DEPTH:
+        raise ValueError("Result output cleanup exceeded its directory depth limit")
+    with os.scandir(directory_fd) as iterator:
+        for entry in iterator:
+            remaining_entries[0] -= 1
+            if remaining_entries[0] < 0:
+                raise ValueError("Result output cleanup exceeded its entry limit")
+            metadata = entry.stat(follow_symlinks=False)
+            if not stat.S_ISDIR(metadata.st_mode):
+                os.unlink(entry.name, dir_fd=directory_fd)
+                continue
+            child_fd = os.open(
+                entry.name,
+                os.O_RDONLY | getattr(os, "O_DIRECTORY", 0) | getattr(os, "O_NOFOLLOW", 0),
+                dir_fd=directory_fd,
+            )
+            try:
+                opened = os.fstat(child_fd)
+                if (opened.st_dev, opened.st_ino) != (
+                    metadata.st_dev,
+                    metadata.st_ino,
+                ):
+                    raise ValueError("Result output cleanup directory identity changed")
+                _bounded_clear_directory(
+                    child_fd,
+                    remaining_entries,
+                    depth=depth + 1,
+                )
+            finally:
+                os.close(child_fd)
+            current = os.stat(
+                entry.name,
+                dir_fd=directory_fd,
+                follow_symlinks=False,
+            )
+            if (current.st_dev, current.st_ino) != (
+                metadata.st_dev,
+                metadata.st_ino,
+            ):
+                raise ValueError("Result output cleanup directory identity changed")
+            os.rmdir(entry.name, dir_fd=directory_fd)
+
+
+def _remove_directory_entry_by_identity(
+    parent_fd: int,
+    preferred_name: str,
+    expected_identity: tuple[int, int],
+    *,
+    maximum_entries: int,
+) -> None:
+    try:
+        metadata = os.stat(
+            preferred_name,
+            dir_fd=parent_fd,
+            follow_symlinks=False,
+        )
+    except FileNotFoundError:
+        metadata = None
+    if (
+        metadata is not None
+        and (
+            metadata.st_dev,
+            metadata.st_ino,
+        )
+        == expected_identity
+    ):
+        os.rmdir(preferred_name, dir_fd=parent_fd)
+        return
+
+    inspected = 0
+    with os.scandir(parent_fd) as entries:
+        for entry in entries:
+            inspected += 1
+            if inspected > maximum_entries:
+                raise ValueError("Result output cleanup exceeded its parent scan limit")
+            metadata = entry.stat(follow_symlinks=False)
+            if not stat.S_ISDIR(metadata.st_mode):
+                continue
+            if (metadata.st_dev, metadata.st_ino) == expected_identity:
+                os.rmdir(entry.name, dir_fd=parent_fd)
+                return
+    raise FileNotFoundError("Result output directory identity is no longer linked")
 
 
 def _run_tui(args: argparse.Namespace) -> int:

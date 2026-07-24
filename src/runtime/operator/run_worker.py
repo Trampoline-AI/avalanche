@@ -18,6 +18,12 @@ from avalanche.dag import Workflow
 from ..executor import Executor, LocalExecutor, RayExecutor
 from .hooks import RunHooks
 from .models import display_name_from_id
+from .result_store import (
+    ResultPublicationCancelledError,
+    detach_transferred_bundle_descriptor,
+    publish_workflow_result,
+)
+from .results import encode_workflow_result
 
 
 def run_worker(
@@ -32,6 +38,50 @@ def run_worker(
     event_queue: Any,
     cancel_event: Any,
     start_event: Any,
+    transferred_result_bundle_descriptor: Any,
+    result_bundle_identity: tuple[int, int],
+) -> None:
+    """Detach exactly one inode-bound bundle capability and close it on exit."""
+    bundle_descriptor: int | None = None
+    try:
+        bundle_descriptor = detach_transferred_bundle_descriptor(
+            transferred_result_bundle_descriptor,
+            result_bundle_identity,
+        )
+        _run_worker(
+            import_root,
+            workflow_relative_module_file,
+            builder_symbol,
+            run_id,
+            executor_config,
+            assignment_event,
+            input_value,
+            context_value,
+            event_queue,
+            cancel_event,
+            start_event,
+            bundle_descriptor,
+            result_bundle_identity,
+        )
+    finally:
+        if bundle_descriptor is not None:
+            os.close(bundle_descriptor)
+
+
+def _run_worker(
+    import_root: str,
+    workflow_relative_module_file: str,
+    builder_symbol: str,
+    run_id: str,
+    executor_config: dict[str, Any],
+    assignment_event: Any,
+    input_value: dict[str, Any] | None,
+    context_value: dict[str, Any] | None,
+    event_queue: Any,
+    cancel_event: Any,
+    start_event: Any,
+    result_bundle_descriptor: int,
+    result_bundle_identity: tuple[int, int],
 ) -> None:
     """Import/build exactly once, prepare, wait for the parent, and execute."""
     if os.name != "nt":
@@ -67,20 +117,24 @@ def run_worker(
         workflow = builder()
         if not isinstance(workflow, Workflow):
             raise TypeError("Marked builder did not return a Workflow")
-        event_queue.put({"type": "prepared", **_workflow_metadata(workflow)})
+        _put_preparation_event(
+            event_queue,
+            {"type": "prepared", **_workflow_metadata(workflow)},
+        )
     except BaseException as exc:
-        event_queue.put(
+        _put_preparation_event(
+            event_queue,
             {
                 "type": "prepare_failed",
-                "error": f"{type(exc).__name__}: {exc}",
-                "traceback": traceback.format_exc(),
-            }
+                "error": _bounded_event_text(f"{type(exc).__name__}: {exc}", 65_536),
+                "traceback": _bounded_event_text(traceback.format_exc(), 262_144),
+            },
         )
         return
 
     while not start_event.wait(0.05):
         if cancel_event.is_set():
-            event_queue.put({"type": "terminal", "status": "cancelled"})
+            _put_run_event(event_queue, {"type": "terminal", "status": "cancelled"})
             return
 
     try:
@@ -123,26 +177,32 @@ def run_worker(
         else:
             raise ValueError(f"Unknown executor mode: {executor_mode}")
 
-        event_queue.put({"type": "running", "timestamp": time.monotonic()})
+        _put_run_event(event_queue, {"type": "running", "timestamp": time.monotonic()})
         hooks = RunHooks(
-            on_node_start=lambda node_id: event_queue.put(
-                {"type": "node_started", "node_id": node_id, "timestamp": time.monotonic()}
+            on_node_start=lambda node_id: _put_run_event(
+                event_queue,
+                {"type": "node_started", "node_id": node_id, "timestamp": time.monotonic()},
             ),
-            on_node_success=lambda node_id: event_queue.put(
-                {"type": "node_succeeded", "node_id": node_id, "timestamp": time.monotonic()}
+            on_node_success=lambda node_id: _put_run_event(
+                event_queue,
+                {"type": "node_succeeded", "node_id": node_id, "timestamp": time.monotonic()},
             ),
-            on_node_failure=lambda node_id, exc: event_queue.put(
+            on_node_failure=lambda node_id, exc: _put_run_event(
+                event_queue,
                 {
                     "type": "node_failed",
                     "node_id": node_id,
                     "timestamp": time.monotonic(),
-                    "error": f"{type(exc).__name__}: {exc}",
-                }
+                    "error": _bounded_event_text(
+                        f"{type(exc).__name__}: {exc}",
+                        65_536,
+                    ),
+                },
             ),
             cancel_requested=cancel_event.is_set,
             wrap_fn=wrap_fn,
         )
-        workflow.run(
+        result = workflow.run(
             executor=executor,
             hooks=hooks,
             input=input_value,
@@ -151,23 +211,41 @@ def run_worker(
         ).result()
         status = "cancelled" if cancel_event.is_set() else "success"
         terminal_event = {"type": "terminal", "status": status}
+        if status == "success":
+            encoded_result = encode_workflow_result(result)
+            manifest_sha256 = publish_workflow_result(
+                encoded_result,
+                result_bundle_descriptor,
+                result_bundle_identity,
+                cancel_event,
+            )
+            if cancel_event.is_set():
+                terminal_event = {"type": "terminal", "status": "cancelled"}
+            else:
+                terminal_event["result_manifest_sha256"] = manifest_sha256
+    except ResultPublicationCancelledError:
+        terminal_event = {"type": "terminal", "status": "cancelled"}
     except BaseException as exc:
         if cancel_event.is_set():
             terminal_event = {"type": "terminal", "status": "cancelled"}
         else:
-            event_queue.put(
+            _put_run_event(
+                event_queue,
                 {
                     "type": "log",
                     "timestamp": time.time(),
                     "level": logging.ERROR,
                     "node_id": "operator",
-                    "message": f"Run failed: {exc}\n{traceback.format_exc()}",
-                }
+                    "message": _bounded_event_text(
+                        f"Run failed: {exc}\n{traceback.format_exc()}",
+                        65_536,
+                    ),
+                },
             )
             terminal_event = {
                 "type": "terminal",
                 "status": "failed",
-                "error": f"{type(exc).__name__}: {exc}",
+                "error": _bounded_event_text(f"{type(exc).__name__}: {exc}", 65_536),
             }
     finally:
         if executor is not None:
@@ -195,7 +273,7 @@ def run_worker(
             except Exception:
                 pass
         if terminal_event is not None:
-            event_queue.put(terminal_event)
+            _put_run_event(event_queue, terminal_event)
 
 
 def _import_workflow_module(root: Path, relative_file: str):
@@ -224,6 +302,7 @@ def _import_workflow_module(root: Path, relative_file: str):
     spec.loader.exec_module(module)
     return module
 
+
 def _workflow_metadata(workflow: Workflow) -> dict[str, Any]:
     node_ids = workflow._topological_sort()
     return {
@@ -233,9 +312,7 @@ def _workflow_metadata(workflow: Workflow) -> dict[str, Any]:
         "node_types": {
             node_id: workflow.nodes[node_id].node.node_type.value for node_id in node_ids
         },
-        "display_names": {
-            node_id: display_name_from_id(node_id) for node_id in node_ids
-        },
+        "display_names": {node_id: display_name_from_id(node_id) for node_id in node_ids},
     }
 
 
@@ -257,14 +334,15 @@ class _QueueLogHandler(logging.Handler):
         node_id = self._node_id or (
             name.split(".")[-1] if name.startswith("avalanche.node.") else name
         )
-        self._queue.put(
+        _put_run_event(
+            self._queue,
             {
                 "type": "log",
                 "timestamp": record.created,
                 "level": record.levelno,
-                "node_id": node_id,
-                "message": record.getMessage(),
-            }
+                "node_id": _bounded_event_text(node_id, 4096),
+                "message": _bounded_event_text(record.getMessage(), 65_536),
+            },
         )
 
 
@@ -299,14 +377,15 @@ class _QueueStream:
         return stream.fileno()
 
     def _emit(self, message: str) -> None:
-        self._queue.put(
+        _put_run_event(
+            self._queue,
             {
                 "type": "log",
                 "timestamp": time.time(),
                 "level": self._level,
                 "node_id": self.node_id,
-                "message": message,
-            }
+                "message": _bounded_event_text(message, 65_536),
+            },
         )
 
 
@@ -382,4 +461,23 @@ def _drain_ray_logs(ray_log_queue: Any, event_queue: Any) -> None:
             return
         if event == _RAY_LOG_STOP:
             return
-        event_queue.put(event)
+        _put_run_event(event_queue, event)
+
+
+def _put_preparation_event(event_queue: Any, event: dict[str, Any]) -> None:
+    from .operator import _validate_preparation_event
+
+    _validate_preparation_event(event)
+    event_queue.put(event)
+
+
+def _put_run_event(event_queue: Any, event: dict[str, Any]) -> None:
+    from .operator import _validate_run_event
+
+    _validate_run_event(event)
+    event_queue.put(event)
+
+
+def _bounded_event_text(value: object, maximum_length: int) -> str:
+    rendered = value if type(value) is str else str(value)
+    return rendered[:maximum_length]

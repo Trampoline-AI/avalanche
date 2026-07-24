@@ -207,6 +207,28 @@ class RunList(_message.Message):
     runs: _containers.RepeatedCompositeFieldContainer[RunStateMsg]
     def __init__(self, runs: _Optional[_Iterable[_Union[RunStateMsg, _Mapping]]] = ...) -> None: ...
 
+class ResultFileAttachment(_message.Message):
+    __slots__ = ("attachment_id", "name", "content", "media_type", "sha256")
+    ATTACHMENT_ID_FIELD_NUMBER: _ClassVar[int]
+    NAME_FIELD_NUMBER: _ClassVar[int]
+    CONTENT_FIELD_NUMBER: _ClassVar[int]
+    MEDIA_TYPE_FIELD_NUMBER: _ClassVar[int]
+    SHA256_FIELD_NUMBER: _ClassVar[int]
+    attachment_id: str
+    name: str
+    content: bytes
+    media_type: str
+    sha256: str
+    def __init__(self, attachment_id: _Optional[str] = ..., name: _Optional[str] = ..., content: _Optional[bytes] = ..., media_type: _Optional[str] = ..., sha256: _Optional[str] = ...) -> None: ...
+
+class RunResultMsg(_message.Message):
+    __slots__ = ("value_json", "files")
+    VALUE_JSON_FIELD_NUMBER: _ClassVar[int]
+    FILES_FIELD_NUMBER: _ClassVar[int]
+    value_json: str
+    files: _containers.RepeatedCompositeFieldContainer[ResultFileAttachment]
+    def __init__(self, value_json: _Optional[str] = ..., files: _Optional[_Iterable[_Union[ResultFileAttachment, _Mapping]]] = ...) -> None: ...
+
 class RunUpdate(_message.Message):
     __slots__ = ("sequence", "run")
     SEQUENCE_FIELD_NUMBER: _ClassVar[int]
