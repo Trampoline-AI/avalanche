@@ -97,6 +97,11 @@ class GrpcStateProvider:
         self.last_error: str = ""
         self.discovery_diagnostics: list[WorkflowDiscoveryDiagnostic] = []
 
+    @property
+    def connection_label(self) -> str:
+        """Human-readable remote endpoint for connection status displays."""
+        return self._address
+
     def _call(self, fn, *args, default=None, **kwargs):
         """Wrap a gRPC call with connection state tracking."""
         kwargs.setdefault("timeout", self._unary_timeout)
