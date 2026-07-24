@@ -26,6 +26,7 @@ from .convert import (
     workflow_info_to_proto,
 )
 from .operator import (
+    InvalidRunIdError,
     Operator,
     RunAlreadyExistsError,
     RunResultNotReadyError,
@@ -74,6 +75,8 @@ class OperatorServicer(pb_grpc.OperatorServiceServicer):
                 context=run_context,
             )
             return pb.StartRunResponse(run_id=run_id)
+        except InvalidRunIdError as exc:
+            context.abort(grpc.StatusCode.INVALID_ARGUMENT, str(exc))
         except RunAlreadyExistsError as exc:
             context.abort(grpc.StatusCode.ALREADY_EXISTS, str(exc))
         except AmbiguousWorkflow as exc:
@@ -103,6 +106,7 @@ class OperatorServicer(pb_grpc.OperatorServiceServicer):
             value_json=payload.value_json,
             files=[_result_file_attachment_to_proto(item) for item in payload.files],
         )
+
     def ListRunSummaries(self, request, context):  # noqa: N802
         try:
             page = self._op.list_run_summaries(
@@ -137,6 +141,11 @@ class OperatorServicer(pb_grpc.OperatorServiceServicer):
         return run_snapshot_to_proto(snapshot)
 
     def ListLogs(self, request, context):  # noqa: N802
+        if not request.page_token:
+            context.abort(
+                grpc.StatusCode.INVALID_ARGUMENT,
+                "page_token from GetRunSnapshot is required",
+            )
         try:
             page = self._op.list_logs(
                 page_token=request.page_token,
@@ -157,6 +166,11 @@ class OperatorServicer(pb_grpc.OperatorServiceServicer):
         )
 
     def ListAgentEvents(self, request, context):  # noqa: N802
+        if not request.page_token:
+            context.abort(
+                grpc.StatusCode.INVALID_ARGUMENT,
+                "page_token from GetRunSnapshot is required",
+            )
         try:
             page = self._op.list_agent_events(
                 page_token=request.page_token,

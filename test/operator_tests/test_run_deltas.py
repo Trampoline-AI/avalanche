@@ -398,7 +398,7 @@ def test_client_applies_ordered_deltas_and_ignores_duplicates():
 
         provider._read_detail_body = lambda token, _size: {
             "log-token": b"complete",
-            "event-token": b'{"sequence":1,"event_kind":"code.executed","data":{}}',
+            "event-token": b'{"sequence":2,"event_kind":"code.executed","data":{}}',
         }[token]
         log_delta = RunDeltaEnvelope(
             operator_instance_id="operator-1",
@@ -431,7 +431,7 @@ def test_client_applies_ordered_deltas_and_ignores_duplicates():
                     "run-1",
                     "node-1",
                     AgentEventDescriptor(
-                        event_sequence=1,
+                        event_sequence=2,
                         size_bytes=55,
                         body_token="event-token",
                     ),
@@ -442,12 +442,12 @@ def test_client_applies_ordered_deltas_and_ignores_duplicates():
         assert run.nodes["node-1"].agent_trace_json is None
         key = ("run-1", "node-1")
         assert provider._agent_events[key] == [
-            {"sequence": 1, "event_kind": "code.executed", "data": {}}
+            {"sequence": 2, "event_kind": "code.executed", "data": {}}
         ]
         with provider._state_lock:
             materialized = provider._materialize_run_locked(run)
         assert json.loads(materialized.nodes["node-1"].agent_trace_json)["events"] == [
-            {"sequence": 1, "event_kind": "code.executed", "data": {}}
+            {"sequence": 2, "event_kind": "code.executed", "data": {}}
         ]
 
         trace_delta = RunDeltaEnvelope(

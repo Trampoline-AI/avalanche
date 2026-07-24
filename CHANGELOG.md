@@ -13,7 +13,14 @@
 - Run selection paginates historical logs and agent events on demand. Trace
   hydration uses one lifecycle-owned worker and epoch/revision-guarded detail
   completions, with bounded retries.
-
+- The transport protobuf is not backward compatible with the previous full-state
+  RPCs. Operators and remote TUI clients must upgrade together and regenerate
+  bindings from the same protocol revision.
+- Operator detail retention now enforces per-event, per-trace, per-node,
+  per-run log count/byte, and aggregate per-run limits before accepting payloads.
+- The TUI coalesces its cross-thread provider handoff in a bounded queue and
+  schedules deterministic snapshot repair if sustained pressure drops detail.
+- Caller-owned run IDs are limited to 256 UTF-8 bytes.
 
 ### TUI performance
 

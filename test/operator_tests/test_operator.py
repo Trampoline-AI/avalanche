@@ -21,7 +21,11 @@ from avalanche.operator.models import (
     RunStatus,
     RunStatusChanged,
 )
-from avalanche.operator.operator import RunAlreadyExistsError
+from avalanche.operator.operator import (
+    MAX_RUN_ID_BYTES,
+    InvalidRunIdError,
+    RunAlreadyExistsError,
+)
 from avalanche.operator.scheduler import Scheduler
 from runtime.operator.run_worker import (
     _import_isolated_ray,
@@ -62,6 +66,17 @@ class TestOperatorLifecycle:
         assert op.start_run("simple_workflow", run_id="run_reserved") == "run_reserved"
         with pytest.raises(RunAlreadyExistsError, match="already exists"):
             op.start_run("simple_workflow", run_id="run_reserved")
+
+    def test_custom_run_id_rejects_values_above_retained_summary_limit(self):
+        op = self._make_operator()
+        try:
+            with pytest.raises(InvalidRunIdError, match="256-byte UTF-8 limit"):
+                op.start_run(
+                    "simple_workflow",
+                    run_id="é" * (MAX_RUN_ID_BYTES // 2 + 1),
+                )
+        finally:
+            op.close()
 
     def test_custom_run_id_reservation_is_atomic_for_concurrent_requests(self):
         op = self._make_operator()

@@ -1082,25 +1082,11 @@ class UIStore:
         if events is None:
             events = self._events_from_node(run, detail.node_id)
             known_sequence = self._event_sequence(events)
-            if detail.event.event_sequence > known_sequence + 1:
-                self._invalidate_agent_event_details(run, detail.node_id)
-                self._schedule_detail_hydration(
-                    run,
-                    required_event=(detail.node_id, detail.event.event_sequence),
-                )
-                return False
             self._agent_event_details[agent_key] = events
             self._agent_event_sequences[agent_key] = known_sequence
         known_sequence = self._agent_event_sequences.get(agent_key, 0)
         if detail.event.event_sequence <= known_sequence:
             return True
-        if detail.event.event_sequence != known_sequence + 1:
-            self._invalidate_agent_event_details(run, detail.node_id)
-            self._schedule_detail_hydration(
-                run,
-                required_event=(detail.node_id, detail.event.event_sequence),
-            )
-            return False
         try:
             event = json.loads(detail.event.event_json)
         except (TypeError, ValueError):

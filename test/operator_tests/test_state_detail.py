@@ -240,6 +240,32 @@ def test_log_and_agent_event_pagination_use_exclusive_deduplicating_cursors():
         operator.close()
 
 
+def test_detail_pagination_requires_snapshot_issued_page_tokens():
+    operator = Operator(watch=False, schedule=False)
+    server = None
+    channel = None
+    try:
+        port = _unused_port()
+        server = serve(operator, port=port, block=False)
+        channel = grpc.insecure_channel(f"localhost:{port}")
+        stub = pb_grpc.OperatorServiceStub(channel)
+
+        for invoke in (
+            lambda: stub.ListLogs(pb.ListLogsRequest()),
+            lambda: stub.ListAgentEvents(pb.ListAgentEventsRequest()),
+        ):
+            with pytest.raises(grpc.RpcError) as error:
+                invoke()
+            assert error.value.code() is grpc.StatusCode.INVALID_ARGUMENT
+            assert "page_token from GetRunSnapshot is required" in error.value.details()
+    finally:
+        if channel is not None:
+            channel.close()
+        if server is not None:
+            server.stop(grace=0).wait()
+        operator.close()
+
+
 def test_run_summary_page_token_is_stable_when_new_runs_arrive():
     operator = Operator(watch=False, schedule=False)
     try:

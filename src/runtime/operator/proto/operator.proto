@@ -64,14 +64,21 @@ message GetRunSnapshotRequest {
   uint64 as_of_sequence = 3;
 }
 
+// Page tokens are opaque bearer references issued by GetRunSnapshot. The current
+// loopback transport does not sign them; authenticated deployments must sign or
+// tenant-bind tokens and reauthorize the referenced run on every use.
 message ListLogsRequest {
+  // Required snapshot-issued token. after_sequence is relative to this snapshot.
   string page_token = 1;
+  // Exclusive log cursor within the snapshot identified by page_token.
   uint64 after_sequence = 2;
   uint32 page_size = 3;
 }
 
 message ListAgentEventsRequest {
+  // Required snapshot-issued token. after_event_sequence is relative to this snapshot.
   string page_token = 1;
+  // Exclusive event cursor within the snapshot identified by page_token.
   uint64 after_event_sequence = 2;
   uint32 page_size = 3;
 }

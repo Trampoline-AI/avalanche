@@ -172,12 +172,12 @@ Operator
 ├── CLI entrypoint
 │   └── parses --flows, --port, --ray
 ├── gRPC service
-│   ├── ListFlows
-│   ├── StartRun
-│   ├── CancelRun
-│   ├── ListRuns
-│   ├── GetRun
-│   └── StreamUpdates
+│   ├── ListFlows / StartRun / CancelRun
+│   ├── GetRunResult
+│   ├── ListRunSummaries / GetRunSnapshot
+│   ├── ListLogs / ListAgentEvents
+│   ├── ReadTrace / ReadDetail
+│   └── StreamRunDeltas
 ├── Operator core
 │   ├── run lifecycle
 │   ├── node state tracking
@@ -407,19 +407,32 @@ This boundary allows the same TUI to run against:
 - `LogEntry` records
 - `triggered_by`
 
-The UI does not hold or mutate real DAG objects. It renders these snapshots and
-sends control requests back through the provider.
+The UI does not hold or mutate real DAG objects. It builds lightweight run state
+from paginated structural snapshots and typed deltas. Logs, agent events, traces,
+and encoded detail bodies are fetched through bounded, on-demand RPCs and merged
+only for the selected run. Control requests travel back through the provider.
 
 ### gRPC boundary
 
 The operator exposes these main RPCs through `OperatorService`:
 
 - `ListFlows` returns discovered flows.
-- `StartRun` starts a new workflow run.
+- `StartRun` starts a new workflow run; caller-owned IDs are limited to 256
+  UTF-8 bytes so retained summaries stay bounded.
 - `CancelRun` requests cancellation for a run.
-- `ListRuns` returns runs for a flow.
-- `GetRun` returns one run by ID.
-- `StreamUpdates` server-streams run-state updates to connected clients.
+- `GetRunResult` returns the encoded result for a successful run.
+- `ListRunSummaries` pages lightweight runs from a retained structural baseline.
+- `GetRunSnapshot` returns one structural run snapshot pinned to an operator
+  instance and sequence.
+- `ListLogs` and `ListAgentEvents` page snapshot-pinned detail descriptors.
+- `ReadTrace` and `ReadDetail` stream bounded chunks for immutable detail bodies.
+- `StreamRunDeltas` replays typed changes under an operator-instance epoch.
+  Stale cursors, restarts, and slow-consumer overflow require an explicit
+  structural reset.
+
+This protocol replaces the previous `ListRuns`, `GetRun`, and `StreamUpdates`
+full-state RPCs. It is a breaking wire change: clients and servers must use
+protobuf bindings generated from the same transport contract.
 
 The default operator port is `7433`.
 

@@ -91,6 +91,7 @@ DETAIL_PAGE_SIZE = 100
 MAX_DETAIL_PAGE_SIZE = 500
 STRUCTURAL_BASELINE_CAPACITY = 8
 SUBSCRIBER_QUEUE_CAPACITY = 256
+MAX_RUN_ID_BYTES = 256
 MAX_TRANSPORT_PAGE_BYTES = 2 * 1024 * 1024
 MAX_AGENT_EVENT_BYTES = 8 * 1024 * 1024
 MAX_TRACE_BODY_BYTES = 32 * 1024 * 1024
@@ -103,6 +104,10 @@ _MISSING_WORKFLOW_ID = "\0"
 DeprecatedExecutorFactory: TypeAlias = (
     type[LocalExecutor] | type[RayExecutor] | partial[RayExecutor]
 )
+
+
+class InvalidRunIdError(ValueError):
+    """Raised when a caller-owned run ID cannot be retained safely."""
 
 
 class RunAlreadyExistsError(ValueError):
@@ -944,6 +949,10 @@ class Operator:
         context: dict[str, Any] | None = None,
     ) -> str:
         """Synchronously prepare a live-source run before publishing its ID."""
+        if run_id is not None and not isinstance(run_id, str):
+            raise InvalidRunIdError("run_id must be a string")
+        if run_id and len(run_id.encode("utf-8")) > MAX_RUN_ID_BYTES:
+            raise InvalidRunIdError(f"run_id exceeds {MAX_RUN_ID_BYTES}-byte UTF-8 limit")
         descriptor, configured_root = self._registry.resolve_source(flow_name)
         import_root, workflow_relative_module_file = resolve_live_source(
             configured_root, descriptor.locator

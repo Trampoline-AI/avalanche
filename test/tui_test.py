@@ -1530,7 +1530,7 @@ class TestUIStore:
         )
         event_json = json.dumps(
             {
-                "sequence": 1,
+                "sequence": 2,
                 "event_kind": "code.executed",
                 "data": {"output": "done"},
             }
@@ -1561,7 +1561,7 @@ class TestUIStore:
                 sequence=9,
                 node_id="agent",
                 event=AgentEvent(
-                    event_sequence=1,
+                    event_sequence=2,
                     event_json=event_json,
                     size_bytes=len(event_json),
                 ),
@@ -1572,7 +1572,7 @@ class TestUIStore:
         assert [entry.message for entry in store.current_run.logs] == ["streamed detail"]
         assert store.selected_agent_events == [
             {
-                "sequence": 1,
+                "sequence": 2,
                 "event_kind": "code.executed",
                 "data": {"output": "done"},
             }
@@ -1975,7 +1975,7 @@ class TestUIStore:
         store._apply_background_updates()
         requirements = store._detail_hydration_requirements[key]
         assert requirements.log_sequence == 8
-        assert requirements.event_sequences == {"agent": 8}
+        assert requirements.event_sequences == {}
         assert provider.calls == 1
 
         provider.releases[0].set()
@@ -1986,10 +1986,10 @@ class TestUIStore:
         assert provider.started[1].is_set()
         assert provider.calls == 2
         assert key not in store._log_detail_sequences
-        assert event_key not in store._agent_event_sequences
+        assert store._agent_event_sequences[event_key] == 8
 
-        # No additional stream message arrives. The coalesced replacement alone
-        # repairs both bodies through the latest required watermarks.
+        # No additional stream message arrives. The coalesced replacement
+        # satisfies the log watermark and refreshes the full selected-run body.
         provider.releases[1].set()
         deadline = time.monotonic() + 1
         while (

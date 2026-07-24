@@ -223,6 +223,13 @@ class TestGrpcRoundtrip:
             client.start_run("simple_workflow", run_id=requested_run_id)
         assert error.value.status is grpc.StatusCode.ALREADY_EXISTS
 
+    def test_start_run_rejects_oversized_caller_owned_run_id(self, client):
+        with pytest.raises(OperatorCallError) as error:
+            client.start_run("simple_workflow", run_id="r" * 257)
+
+        assert error.value.status is grpc.StatusCode.INVALID_ARGUMENT
+        assert "256-byte UTF-8 limit" in str(error.value)
+
     def test_start_run_context_json_cannot_forge_lineage_vector(self, tmp_path):
         workflow_path = tmp_path / "lineage_workflows.py"
         workflow_path.write_text(
@@ -843,6 +850,54 @@ def test_real_idle_server_stream_reaches_live_without_an_update():
         provider.close()
         server.stop(grace=1)
         operator.close()
+
+
+def test_post_header_stream_failures_preserve_exponential_reconnect_backoff():
+    provider = GrpcStateProvider("localhost:1")
+    delays = []
+
+    class Unavailable(grpc.RpcError):
+        def code(self):
+            return grpc.StatusCode.UNAVAILABLE
+
+        def details(self):
+            return "stream aborted after headers"
+
+    class RecordingStop:
+        def __init__(self):
+            self.stopped = False
+
+        def is_set(self):
+            return self.stopped
+
+        def set(self):
+            self.stopped = True
+
+        def wait(self, delay):
+            delays.append(delay)
+            if len(delays) == 3:
+                self.stopped = True
+            return self.stopped
+
+    class AcceptedThenUnavailable:
+        def initial_metadata(self):
+            return ()
+
+        def __iter__(self):
+            raise Unavailable()
+
+    class FailingStub:
+        def StreamRunDeltas(self, request, *, metadata):  # noqa: N802
+            return AcceptedThenUnavailable()
+
+    provider._stream_stop = RecordingStop()
+    provider._stub = FailingStub()
+    try:
+        provider._stream_loop()
+    finally:
+        provider.close()
+
+    assert delays == [2, 4, 8]
 
 
 def test_stream_reconnect_transitions_through_replay_to_live():

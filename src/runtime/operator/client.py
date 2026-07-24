@@ -1245,7 +1245,6 @@ class GrpcStateProvider:
                     self.operator_reachable = True
                     if self.stream_state is not StreamState.RESET_REQUIRED:
                         self.stream_state = StreamState.LIVE
-                    self.stream_retry_count = 0
                     self.stream_error = ""
 
                 reconnect = False
@@ -1501,8 +1500,7 @@ class GrpcStateProvider:
                     run = None
                 else:
                     node_events = self._agent_events.setdefault(key, [])
-                    was_empty = not node_events
-                    if node_hydrated or (was_empty and change.event.event_sequence == 1):
+                    if node_hydrated or not node_events:
                         _append_agent_event(node_events, event_detail.event_json)
                         self._hydrated_agent_nodes.add(key)
                         self._agent_event_sequences[key] = change.event.event_sequence
