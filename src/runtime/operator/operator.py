@@ -59,6 +59,7 @@ logger = logging.getLogger(__name__)
 ExecutorBackend: TypeAlias = Literal["local", "ray"]
 STREAM_HISTORY_CAPACITY = 1024
 DEFAULT_RESULT_RETENTION_SECONDS = 24 * 60 * 60
+_PROCESS_GROUP_POLL_INTERVAL_SECONDS = 0.02
 DeprecatedExecutorFactory: TypeAlias = (
     type[LocalExecutor] | type[RayExecutor] | partial[RayExecutor]
 )
@@ -1460,22 +1461,41 @@ def _teardown_process_group(
             process.terminate()
     elif process.is_alive():
         process.terminate()
-    process.join(timeout=term_grace)
-    group_alive = os.name != "nt" and _coordinator_group_has_live_members(process.pid)
-    if process.is_alive() or group_alive:
+    quiesced = _wait_for_coordinator_group_quiescence(process, term_grace)
+    if not quiesced:
         if os.name != "nt":
             group_signalled = _signal_coordinator_group(process.pid, signal.SIGKILL)
             if not group_signalled and process.is_alive():
                 process.kill()
         elif hasattr(process, "kill"):
             process.kill()
-        process.join(timeout=kill_grace)
+        quiesced = _wait_for_coordinator_group_quiescence(process, kill_grace)
     close_job(windows_job)
-    group_alive = os.name != "nt" and _coordinator_group_has_live_members(process.pid)
-    return _ProcessGroupTeardown(
-        not process.is_alive() and not group_alive,
-        natural_exitcode,
-    )
+    return _ProcessGroupTeardown(quiesced, natural_exitcode)
+
+
+def _wait_for_coordinator_group_quiescence(
+    process: multiprocessing.Process,
+    timeout: float,
+) -> bool:
+    """Wait boundedly for both the coordinator and its descendants to stop."""
+    process_group = process.pid
+    if process_group is None:
+        return not process.is_alive()
+    deadline = time.monotonic() + max(0.0, timeout)
+    while True:
+        process_alive = process.is_alive()
+        group_alive = os.name != "nt" and _coordinator_group_has_live_members(process_group)
+        if not process_alive and not group_alive:
+            return True
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            return False
+        poll_interval = min(_PROCESS_GROUP_POLL_INTERVAL_SECONDS, remaining)
+        if process_alive:
+            process.join(timeout=poll_interval)
+        else:
+            time.sleep(poll_interval)
 
 
 def _signal_coordinator_group(process_group: int, signal_number: int) -> bool:
@@ -1486,20 +1506,23 @@ def _signal_coordinator_group(process_group: int, signal_number: int) -> bool:
     return True
 
 
-def _coordinator_group_exists(process_group: int) -> bool:
+def _coordinator_group_exists(process_group: int) -> bool | None:
     try:
         os.killpg(process_group, 0)
     except ProcessLookupError:
         return False
     except PermissionError:
-        return False
+        return None
     return True
 
 
 def _coordinator_group_has_live_members(process_group: int) -> bool:
     """Treat dead or irreversibly exiting groups as quiesced."""
-    if not _coordinator_group_exists(process_group):
+    group_exists = _coordinator_group_exists(process_group)
+    if group_exists is False:
         return False
+    if group_exists is None:
+        return True
     try:
         completed = subprocess.run(
             ["/bin/ps", "-axo", "pgid=,stat="],
