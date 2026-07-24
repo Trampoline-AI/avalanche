@@ -5,10 +5,11 @@ from __future__ import annotations
 import json
 import threading
 import time
+from collections import OrderedDict, deque
 from concurrent.futures import ThreadPoolExecutor
 from copy import copy
 from dataclasses import dataclass, field
-from queue import SimpleQueue
+from queue import Empty
 from typing import Any, Callable, Literal
 
 from .dag_layout import DagNode, SeqGroup, build_nav_grid, nav_move, workflow_to_layout
@@ -31,6 +32,8 @@ RESET_RECONCILIATION_INITIAL_BACKOFF_SECONDS = 0.1
 RESET_RECONCILIATION_MAX_BACKOFF_SECONDS = 2.0
 DETAIL_HYDRATION_INITIAL_BACKOFF_SECONDS = 0.1
 DETAIL_HYDRATION_MAX_BACKOFF_SECONDS = 2.0
+BACKGROUND_UPDATE_CAPACITY = 256
+BACKGROUND_UPDATES_PER_TICK = 64
 
 TraceInspectorTab = Literal["trace", "output", "metadata"]
 _TRACE_INSPECTOR_TABS: tuple[TraceInspectorTab, ...] = (
@@ -90,6 +93,132 @@ class _DetailHydrationRetry:
     requirements_version: int
     deadline: float
 
+
+@dataclass(frozen=True)
+class _DetailRepairWatermark:
+    """Highest dropped append for one immutable run detail stream."""
+
+    key: RunDetailKey
+    node_id: str | None
+    sequence: int
+
+
+class _BoundedBackgroundUpdates:
+    """Thread-safe UI handoff with bounded stream loss accounting."""
+
+    def __init__(self, capacity: int = BACKGROUND_UPDATE_CAPACITY) -> None:
+        self._capacity = capacity
+        self._items: deque[tuple[str, Any]] = deque()
+        self._lock = threading.Lock()
+        self._structure_lost = False
+        self._all_details_lost = False
+        self._detail_repairs: OrderedDict[tuple[RunDetailKey, str | None], int] = OrderedDict()
+
+    @staticmethod
+    def _run_key(item: tuple[str, Any]) -> RunDetailKey | None:
+        kind, payload = item
+        if kind != "run" or not isinstance(payload, RunState):
+            return None
+        return (payload.operator_instance_id, payload.run_id, payload.created_sequence)
+
+    @staticmethod
+    def _detail_watermark(item: tuple[str, Any]) -> _DetailRepairWatermark | None:
+        kind, payload = item
+        if kind != "detail":
+            return None
+        key = (payload.operator_instance_id, payload.run_id, payload.created_sequence)
+        if isinstance(payload, LogDetailAppended):
+            return _DetailRepairWatermark(key, None, payload.log_sequence)
+        if isinstance(payload, AgentEventDetailAppended):
+            return _DetailRepairWatermark(
+                key,
+                payload.node_id,
+                payload.event.event_sequence,
+            )
+        return None
+
+    def _record_detail_loss_locked(self, item: tuple[str, Any]) -> None:
+        watermark = self._detail_watermark(item)
+        if watermark is None:
+            return
+        repair_key = (watermark.key, watermark.node_id)
+        current = self._detail_repairs.get(repair_key, 0)
+        self._detail_repairs[repair_key] = max(current, watermark.sequence)
+        self._detail_repairs.move_to_end(repair_key)
+        if len(self._detail_repairs) > self._capacity:
+            self._detail_repairs.popitem(last=False)
+            self._all_details_lost = True
+
+    def _record_stream_loss_locked(self, item: tuple[str, Any]) -> None:
+        if self._run_key(item) is not None:
+            self._structure_lost = True
+        else:
+            self._record_detail_loss_locked(item)
+
+    def put(self, item: tuple[str, Any]) -> None:
+        """Enqueue without blocking, coalescing structural updates by run identity."""
+        with self._lock:
+            run_key = self._run_key(item)
+            if run_key is not None:
+                for index in range(len(self._items) - 1, -1, -1):
+                    if self._run_key(self._items[index]) == run_key:
+                        self._items[index] = item
+                        return
+            if len(self._items) < self._capacity:
+                self._items.append(item)
+                return
+            if self._detail_watermark(item) is not None:
+                self._record_detail_loss_locked(item)
+                return
+
+            evict_index = next(
+                (
+                    index
+                    for index, queued in enumerate(self._items)
+                    if self._run_key(queued) is not None
+                    or self._detail_watermark(queued) is not None
+                ),
+                0,
+            )
+            evicted = self._items[evict_index]
+            del self._items[evict_index]
+            self._record_stream_loss_locked(evicted)
+            self._items.append(item)
+
+    def get(self) -> tuple[str, Any]:
+        """Return overflow repair before ordinary queued work."""
+        with self._lock:
+            if self._structure_lost or self._all_details_lost or self._detail_repairs:
+                repairs = tuple(
+                    _DetailRepairWatermark(key, node_id, sequence)
+                    for (key, node_id), sequence in self._detail_repairs.items()
+                )
+                payload = (self._structure_lost, self._all_details_lost, repairs)
+                self._structure_lost = False
+                self._all_details_lost = False
+                self._detail_repairs.clear()
+                return ("stream_handoff_overflow", payload)
+            if not self._items:
+                raise Empty
+            return self._items.popleft()
+
+    def empty(self) -> bool:
+        with self._lock:
+            return not (
+                self._items
+                or self._structure_lost
+                or self._all_details_lost
+                or self._detail_repairs
+            )
+
+    def qsize(self) -> int:
+        with self._lock:
+            overflow = int(
+                self._structure_lost or self._all_details_lost or bool(self._detail_repairs)
+            )
+            return len(self._items) + overflow
+
+
 def _fmt_time(secs: float) -> str:
     mins, s = divmod(secs, 60)
     if mins > 0:
@@ -122,7 +251,7 @@ class UIStore:
         self.run_pinned: bool = False  # True = user picked a run; False = follow latest
         self._runs_cache: list[RunState] = []
         self._run_cache_indexes: dict[tuple[str, str, int], int] = {}
-        self._background_updates: SimpleQueue[tuple[str, Any]] = SimpleQueue()
+        self._background_updates = _BoundedBackgroundUpdates()
         self._trace_hydration_completions: list[tuple[TraceDetailCompletion, bool]] = []
         self._log_details: dict[tuple[str, str, int], list[LogEntry]] = {}
         self._log_detail_sequences: dict[tuple[str, str, int], int] = {}
@@ -1603,9 +1732,64 @@ class UIStore:
         """Invalidate authoritative run-data snapshots for one workflow."""
         self._run_data_revisions[selector] = self._run_data_revision(selector) + 1
 
+    def _run_for_detail_key(self, key: RunDetailKey) -> RunState | None:
+        if self.current_run is not None and self._detail_key(self.current_run) == key:
+            return self.current_run
+        cache_index = self._run_cache_indexes.get(key)
+        return self._runs_cache[cache_index] if cache_index is not None else None
+
+    def _repair_stream_handoff_overflow(
+        self,
+        structure_lost: bool,
+        all_details_lost: bool,
+        repairs: tuple[_DetailRepairWatermark, ...],
+    ) -> None:
+        """Recover dropped stream work from authoritative summary/detail reads."""
+        if structure_lost:
+            self._refresh_runs_cache()
+        if all_details_lost and self.current_run is not None:
+            run = self.current_run
+            self._invalidate_log_details(run)
+            self._schedule_detail_hydration(
+                run,
+                required_log_sequence=run.latest_log_sequence,
+            )
+            for node_id, node in run.nodes.items():
+                latest_event_sequence = (
+                    node.trace.latest_event_sequence if node.trace is not None else 0
+                )
+                if latest_event_sequence:
+                    self._invalidate_agent_event_details(run, node_id)
+                    self._schedule_detail_hydration(
+                        run,
+                        required_event=(node_id, latest_event_sequence),
+                    )
+        for repair in repairs:
+            run = self._run_for_detail_key(repair.key)
+            if run is None:
+                continue
+            if repair.node_id is None:
+                self._invalidate_log_details(run)
+                self._schedule_detail_hydration(
+                    run,
+                    required_log_sequence=repair.sequence,
+                )
+            else:
+                self._invalidate_agent_event_details(run, repair.node_id)
+                self._schedule_detail_hydration(
+                    run,
+                    required_event=(repair.node_id, repair.sequence),
+                )
+
     def _apply_background_updates(self) -> None:
-        while not self._background_updates.empty():
-            kind, payload = self._background_updates.get()
+        for _ in range(BACKGROUND_UPDATES_PER_TICK):
+            try:
+                kind, payload = self._background_updates.get()
+            except Empty:
+                break
+            if kind == "stream_handoff_overflow":
+                self._repair_stream_handoff_overflow(*payload)
+                continue
             if kind == "stream_reset_error":
                 notice, error = payload
                 if notice.generation == self._latest_reset_generation:

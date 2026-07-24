@@ -1109,6 +1109,81 @@ class TestUIStore:
         assert store.frame == old_frame + 1
         assert len(store.workflow_statuses) > 0
 
+    def test_stream_handoff_coalesces_and_repairs_sustained_overflow(self):
+        workflow = WorkflowInfo(
+            name="flow",
+            display_name="flow",
+            workflow_id="flow",
+            file_path="flow.py",
+            node_ids=["agent"],
+            graph={},
+            node_types={"agent": "agent"},
+            agent_node_ids=["agent"],
+        )
+        run = RunState(
+            run_id="run-1",
+            flow_name="flow",
+            workflow_id="flow",
+            nodes={
+                "agent": NodeState(
+                    node_id="agent",
+                    name="Agent",
+                    node_type="agent",
+                )
+            },
+            operator_instance_id="operator-1",
+            created_sequence=1,
+            details_hydrated=True,
+        )
+        store = UIStore(MockStateProvider())
+        _apply_async_updates(store)
+        store._background_updates = ui_store_module._BoundedBackgroundUpdates()
+        store.workflows = [workflow]
+        store.current_workflow = workflow
+        store.current_run = run
+        store._set_runs_cache([run])
+
+        for revision in range(1, 10_001):
+            store.enqueue_run_update(replace(run, revision=revision))
+        assert store._background_updates.qsize() == 1
+
+        last_sequence = ui_store_module.BACKGROUND_UPDATE_CAPACITY * 4
+        for sequence in range(1, last_sequence + 1):
+            store.enqueue_detail_update(
+                LogDetailAppended(
+                    operator_instance_id="operator-1",
+                    run_id="run-1",
+                    created_sequence=1,
+                    sequence=sequence,
+                    log_sequence=sequence,
+                    log=LogEntry(
+                        timestamp=datetime(2026, 7, 24),
+                        level=LogLevel.INFO,
+                        node_id="agent",
+                        message=f"log-{sequence}",
+                    ),
+                )
+            )
+
+        assert (
+            store._background_updates.qsize() <= ui_store_module.BACKGROUND_UPDATE_CAPACITY + 1
+        )
+        scheduled = []
+        store._schedule_detail_hydration = lambda run, **requirements: scheduled.append(
+            (run.run_id, requirements)
+        )
+        before = store._background_updates.qsize()
+        store._apply_background_updates()
+
+        assert before - store._background_updates.qsize() <= (
+            ui_store_module.BACKGROUND_UPDATES_PER_TICK
+        )
+        assert any(
+            requirements.get("required_log_sequence") == last_sequence
+            for _, requirements in scheduled
+        )
+        store.shutdown()
+
     def test_duplicate_display_names_use_ids_and_refresh_preserves_selection(self):
         class MutableProvider(_ReachableStateProvider):
             def __init__(self):
