@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import importlib
 import json
 from types import SimpleNamespace
@@ -11,11 +12,152 @@ import pytest
 from pydantic import BaseModel
 
 import avalanche as ava
-from avalanche._agent_evidence import capture_agent_evidence
-from avalanche.agent import AgentStepError, AgentStepExecutionError
+from avalanche._agent_evidence import emit_agent_evidence
+from avalanche.agent import (
+    AgentStepError,
+    AgentStepExecutionError,
+    capture_agent_evidence,
+)
 from avalanche.executor import LocalExecutor
 
 agent_step_module = importlib.import_module("avalanche.agent.agent_step")
+
+
+def test_agent_evidence_contracts_are_public_and_typed():
+    from avalanche.agent import (
+        AgentEvidenceEvent,
+        AgentEvidenceListener,
+        AgentEvidenceObserverEvent,
+        AgentInvocationId,
+        AgentTraceFinishedEvent,
+        AgentTraceUnavailableEvent,
+        ListenerErrorPolicy,
+    )
+    from avalanche.agent.evidence import capture_agent_evidence as module_capture
+
+    assert module_capture is capture_agent_evidence
+    assert AgentEvidenceEvent.__required_keys__ == {
+        "kind",
+        "invocation_id",
+        "sequence",
+        "event_kind",
+        "timestamp_ns",
+        "data",
+    }
+    assert AgentTraceFinishedEvent.__required_keys__ == {
+        "kind",
+        "invocation_id",
+        "trace",
+    }
+    assert AgentTraceUnavailableEvent.__required_keys__ == {
+        "kind",
+        "invocation_id",
+        "error",
+    }
+    assert AgentEvidenceListener is not None
+    assert AgentEvidenceObserverEvent is not None
+    assert AgentInvocationId is str
+    assert ListenerErrorPolicy is not None
+
+
+def test_agent_evidence_observer_nesting_and_error_policy():
+    outer = []
+    inner = []
+
+    with capture_agent_evidence(outer.append):
+        emit_agent_evidence(
+            {
+                "kind": "trace_unavailable",
+                "invocation_id": "outer-before",
+                "error": "before",
+            }
+        )
+        with capture_agent_evidence(inner.append):
+            emit_agent_evidence(
+                {
+                    "kind": "trace_unavailable",
+                    "invocation_id": "inner",
+                    "error": "inside",
+                }
+            )
+        emit_agent_evidence(
+            {
+                "kind": "trace_unavailable",
+                "invocation_id": "outer-after",
+                "error": "after",
+            }
+        )
+
+    assert [event["error"] for event in outer] == ["before", "after"]
+    assert [event["error"] for event in inner] == ["inside"]
+
+    def broken_listener(_event):
+        raise RuntimeError("persistence failed")
+
+    with capture_agent_evidence(broken_listener, errors="ignore"):
+        emit_agent_evidence(
+            {
+                "kind": "trace_unavailable",
+                "invocation_id": "ignored",
+                "error": "ignored",
+            }
+        )
+
+    with capture_agent_evidence(broken_listener, errors="raise"):
+        with pytest.raises(RuntimeError, match="persistence failed"):
+            emit_agent_evidence(
+                {
+                    "kind": "trace_unavailable",
+                    "invocation_id": "raised",
+                    "error": "raised",
+                }
+            )
+
+    def interrupted_listener(_event):
+        raise KeyboardInterrupt
+
+    with capture_agent_evidence(interrupted_listener, errors="ignore"):
+        with pytest.raises(KeyboardInterrupt):
+            emit_agent_evidence(
+                {
+                    "kind": "trace_unavailable",
+                    "invocation_id": "interrupted",
+                    "error": "interrupted",
+                }
+            )
+
+    with pytest.raises(ValueError, match="errors must be 'raise' or 'ignore'"):
+        with capture_agent_evidence(outer.append, errors="invalid"):
+            pass
+
+
+@pytest.mark.asyncio
+async def test_agent_evidence_observers_are_isolated_across_async_contexts():
+    ready = asyncio.Event()
+    arrivals = 0
+
+    async def observe(name):
+        nonlocal arrivals
+        events = []
+        with capture_agent_evidence(events.append, errors="raise"):
+            arrivals += 1
+            if arrivals == 2:
+                ready.set()
+            await ready.wait()
+            await asyncio.sleep(0)
+            emit_agent_evidence(
+                {
+                    "kind": "trace_unavailable",
+                    "invocation_id": name,
+                    "error": name,
+                }
+            )
+        return events
+
+    left, right = await asyncio.gather(observe("left"), observe("right"))
+
+    assert [event["error"] for event in left] == ["left"]
+    assert [event["error"] for event in right] == ["right"]
 
 
 class Person(BaseModel):
@@ -67,6 +209,132 @@ def install_fake(monkeypatch, respond):
 
     monkeypatch.setattr(agent_step_module, "_build_predictor", fake_build)
     return captured
+
+
+def test_build_predictor_uses_declared_predict_rlm_event_contract():
+    predictor = agent_step_module._build_predictor(
+        "question -> answer",
+        skills=(),
+        tools=(),
+    )
+
+    assert len(predictor.runtime_spec.events) == 1
+    assert isinstance(
+        predictor.runtime_spec.events[0], agent_step_module._AvalancheEvidenceSink
+    )
+
+
+@pytest.mark.asyncio
+async def test_predict_rlm_recorder_honors_observer_error_policy():
+    """The real recorder must not swallow a strict bridge persistence failure."""
+    from predict_rlm import (
+        EvidenceIncompleteError,
+        EvidenceRecorder,
+        RunContext,
+        RunEventKind,
+    )
+
+    class AnswerSignature(ava.Signature):
+        question: str = ava.InputField()
+        answer: str = ava.OutputField()
+
+    predictor = agent_step_module._build_predictor(
+        AnswerSignature,
+        skills=(),
+        tools=(),
+    )
+
+    class RecorderPredictor:
+        async def acall(self, **inputs):
+            recorder = EvidenceRecorder(
+                RunContext(predictor.runtime_spec, inputs),
+                predictor.runtime_spec.events,
+            )
+            await recorder.emit(RunEventKind.RUN_STARTED, inputs=inputs)
+            return SimpleNamespace(answer="ok")
+
+    class ListenerPersistenceError(RuntimeError):
+        pass
+
+    def broken_incremental_listener(event):
+        if event["kind"] == "evidence":
+            raise ListenerPersistenceError("persistence failed")
+
+    ignored_agent = agent_step_module.Agent(
+        signature=AnswerSignature,
+        step_name="answer",
+        runtime_kwargs={},
+    )
+    ignored_agent._predictor = RecorderPredictor()
+    with capture_agent_evidence(broken_incremental_listener, errors="ignore"):
+        prediction = await ignored_agent(question="ignored")
+    assert prediction.answer == "ok"
+
+    strict_agent = agent_step_module.Agent(
+        signature=AnswerSignature,
+        step_name="answer",
+        runtime_kwargs={},
+    )
+    strict_agent._predictor = RecorderPredictor()
+    with capture_agent_evidence(broken_incremental_listener, errors="raise"):
+        with pytest.raises(AgentStepExecutionError) as raised:
+            await strict_agent(question="strict")
+
+    recorder_error = raised.value.__cause__
+    assert isinstance(recorder_error, EvidenceIncompleteError)
+    assert isinstance(recorder_error.__cause__, ListenerPersistenceError)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "listener_failure",
+    [
+        KeyboardInterrupt("listener interrupted"),
+        SystemExit("listener requested exit"),
+    ],
+)
+async def test_predict_rlm_recorder_reraises_exact_listener_base_exception(
+    listener_failure,
+):
+    """PredictRLM wrapping must not replace a listener control-flow exception."""
+    from predict_rlm import EvidenceRecorder, RunContext, RunEventKind
+
+    class AnswerSignature(ava.Signature):
+        question: str = ava.InputField()
+        answer: str = ava.OutputField()
+
+    predictor = agent_step_module._build_predictor(
+        AnswerSignature,
+        skills=(),
+        tools=(),
+    )
+
+    class RecorderPredictor:
+        async def acall(self, **inputs):
+            recorder = EvidenceRecorder(
+                RunContext(predictor.runtime_spec, inputs),
+                predictor.runtime_spec.events,
+            )
+            await recorder.emit(RunEventKind.RUN_STARTED, inputs=inputs)
+            return SimpleNamespace(answer="ok")
+
+    def interrupted_incremental_listener(event):
+        if event["kind"] == "evidence":
+            raise listener_failure
+
+    agent = agent_step_module.Agent(
+        signature=AnswerSignature,
+        step_name="answer",
+        runtime_kwargs={},
+    )
+    agent._predictor = RecorderPredictor()
+
+    with capture_agent_evidence(interrupted_incremental_listener, errors="raise"):
+        with pytest.raises(type(listener_failure)) as raised:
+            await agent(question="strict")
+
+    assert raised.value is listener_failure
+    assert not isinstance(raised.value, AgentStepExecutionError)
 
 
 class TestBodyfulAgentSteps:
@@ -536,6 +804,188 @@ async def test_agent_streams_sanitized_evidence_and_exported_trace(monkeypatch):
     assert terminal["trace"]["evidence"]["complete"] is True
     assert "IMAGE_BASE_64_ENCODED" in json.dumps(terminal)
     assert trace.called is True
+
+
+@pytest.mark.asyncio
+async def test_successful_terminal_listener_failure_is_not_reclassified():
+    prediction = SimpleNamespace(trace=_ExportableTrace())
+
+    class SuccessfulPredictor:
+        async def acall(self, **inputs):
+            return prediction
+
+    agent = agent_step_module.Agent(
+        signature=SummarySignature,
+        step_name="summarize",
+        runtime_kwargs={},
+    )
+    agent._predictor = SuccessfulPredictor()
+    observed = []
+    listener_error = RuntimeError("terminal persistence failed")
+
+    def persist_then_fail(event):
+        observed.append(event)
+        if event["kind"] == "trace_finished":
+            raise listener_error
+
+    with capture_agent_evidence(persist_then_fail, errors="raise"):
+        with pytest.raises(RuntimeError) as raised:
+            await agent(person=Person(id=1, name="Ada"))
+
+    assert raised.value is listener_error
+    terminal_events = [
+        event for event in observed if event["kind"] in {"trace_finished", "trace_unavailable"}
+    ]
+    assert len(terminal_events) == 1
+    assert terminal_events[0]["kind"] == "trace_finished"
+
+
+@pytest.mark.asyncio
+async def test_concurrent_agent_calls_have_stable_generated_invocation_ids(monkeypatch):
+    """One outer observer can deterministically correlate interleaved calls."""
+    from predict_rlm import RunEvent, RunEventKind
+
+    generated_ids = iter(("generated-left", "generated-right"))
+    monkeypatch.setattr(
+        agent_step_module.uuid,
+        "uuid4",
+        lambda: SimpleNamespace(hex=next(generated_ids)),
+    )
+
+    class CorrelationSignature(ava.Signature):
+        request_id: str = ava.InputField()
+        answer: str = ava.OutputField()
+
+    class CorrelatedTrace:
+        def __init__(self, request_id):
+            self.request_id = request_id
+
+        def to_exportable_json(self):
+            return json.dumps(
+                {
+                    "status": "completed",
+                    "evidence": {
+                        "run_id": self.request_id,
+                        "complete": True,
+                        "terminal_outcome": "completed",
+                        "events": [],
+                    },
+                    "steps": [],
+                }
+            )
+
+    class ConcurrentPredictor:
+        def __init__(self):
+            self.sink = agent_step_module._AvalancheEvidenceSink()
+            self.ready = asyncio.Event()
+            self.arrivals = 0
+
+        async def acall(self, **inputs):
+            request_id = inputs["request_id"]
+            await self.sink.emit(
+                RunEvent(
+                    request_id,
+                    1,
+                    RunEventKind.PREDICT_STARTED,
+                    1,
+                    {
+                        "call_id": request_id,
+                        "invocation_id": f"caller-{request_id}",
+                    },
+                )
+            )
+            self.arrivals += 1
+            if self.arrivals == 2:
+                self.ready.set()
+            await self.ready.wait()
+            await asyncio.sleep(0)
+            await self.sink.close(
+                request_id,
+                RunEvent(
+                    request_id,
+                    2,
+                    RunEventKind.RUN_SUCCEEDED,
+                    2,
+                    {},
+                ),
+            )
+            return SimpleNamespace(
+                answer=request_id,
+                trace=CorrelatedTrace(request_id),
+            )
+
+    agent = agent_step_module.Agent(
+        signature=CorrelationSignature,
+        step_name="correlate",
+        runtime_kwargs={},
+    )
+    agent._predictor = ConcurrentPredictor()
+    observed = []
+
+    with capture_agent_evidence(observed.append, errors="raise"):
+        left, right = await asyncio.gather(
+            agent(request_id="left"),
+            agent(request_id="right"),
+        )
+
+    assert (left.answer, right.answer) == ("left", "right")
+    grouped = {}
+    for event in observed:
+        grouped.setdefault(event["invocation_id"], []).append(event)
+
+    assert set(grouped) == {"generated-left", "generated-right"}
+    assert not set(grouped) & {"left", "right", "caller-left", "caller-right"}
+    correlations = {}
+    for invocation_id, events in grouped.items():
+        assert [event["kind"] for event in events] == [
+            "evidence",
+            "evidence",
+            "trace_finished",
+        ]
+        call_id = events[0]["data"]["call_id"]
+        assert events[0]["data"].get("invocation_id") is None
+        assert events[-1]["trace"]["evidence"]["run_id"] == call_id
+        correlations[call_id] = invocation_id
+    assert set(correlations) == {"left", "right"}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("exportable_trace", [False, True])
+async def test_agent_cancellation_emits_one_typed_terminal_and_reraises_exactly(
+    exportable_trace,
+):
+    cancellation = asyncio.CancelledError("cancelled by caller")
+    if exportable_trace:
+        cancellation.trace = _ExportableTrace(status="cancelled")
+
+    class CancelledPredictor:
+        async def acall(self, **inputs):
+            raise cancellation
+
+    agent = agent_step_module.Agent(
+        signature=SummarySignature,
+        step_name="summarize",
+        runtime_kwargs={},
+    )
+    agent._predictor = CancelledPredictor()
+    observed = []
+
+    with capture_agent_evidence(observed.append, errors="raise"):
+        with pytest.raises(asyncio.CancelledError) as raised:
+            await agent(person=Person(id=1, name="Ada"))
+
+    assert raised.value is cancellation
+    assert len(observed) == 1
+    assert observed[0]["invocation_id"]
+    if exportable_trace:
+        assert observed[0]["kind"] == "trace_finished"
+        assert observed[0]["trace"]["status"] == "cancelled"
+    else:
+        assert observed[0] == {
+            "kind": "trace_unavailable",
+            "invocation_id": observed[0]["invocation_id"],
+            "error": "cancelled by caller",
+        }
 
 
 @pytest.mark.asyncio

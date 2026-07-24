@@ -28,6 +28,16 @@ from .result_store import (
 from .results import encode_workflow_result
 
 
+def _import_isolated_ray() -> Any:
+    """Import Ray without inheriting the caller's ``uv run`` project."""
+    # The operator supplies a workflow-specific working_dir and owns the whole
+    # coordinator process group. Ray's automatic uv hook would instead launch
+    # workers through the caller's project environment, adding uv subprocesses
+    # that can outlive Ray shutdown and prevent verified success quiescence.
+    os.environ["RAY_ENABLE_UV_RUN_RUNTIME_ENV"] = "0"
+    return importlib.import_module("ray")
+
+
 def run_worker(
     import_root: str,
     workflow_relative_module_file: str,
@@ -148,7 +158,7 @@ def _run_worker(
             def wrap_fn(node_id: str, fn: Callable[..., Any]) -> Callable[..., Any]:
                 return _with_local_node_observers(node_id, fn, stdout, stderr, event_queue)
         elif executor_mode == "ray":
-            import ray
+            ray = _import_isolated_ray()
 
             if ray.is_initialized():
                 raise RuntimeError(

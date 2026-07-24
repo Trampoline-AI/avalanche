@@ -85,10 +85,10 @@ class StatusBar(Static):
             if icon:
                 text.append(f" {icon}", _STATUS_STYLES.get(run.status, Style()))
 
-            node = store.selected_node
-            if node:
-                text.append(_SEP, _SEP_STYLE)
-                text.append(node.display_name, Style(color=ICE_FROST, bold=True))
+        node = store.selected_node
+        if node:
+            text.append(_SEP, _SEP_STYLE)
+            text.append(node.display_name, Style(color=ICE_FROST, bold=True))
 
         # Residual search info
         if store.search_query and not store.searching:
