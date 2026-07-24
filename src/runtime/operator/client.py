@@ -13,6 +13,7 @@ import grpc
 from pydantic import BaseModel
 
 from avalanche.runtime import File
+from avalanche.workspace import Workspace
 
 from ._grpc import _BOUNDED_MESSAGE_OPTIONS
 from .convert import (
@@ -348,7 +349,13 @@ def _json_payload(payload: Mapping[str, Any] | BaseModel | None) -> str:
         return ""
     if isinstance(payload, BaseModel):
         return payload.model_dump_json()
-    return json.dumps(payload)
+    return json.dumps(payload, default=_json_payload_default)
+
+
+def _json_payload_default(value: Any) -> Any:
+    if isinstance(value, Workspace):
+        return value._manifest_for_serialization()
+    raise TypeError(f"Input JSON does not support {type(value).__name__}")
 
 
 def _file_attachment(field_name: str, value: File | bytes) -> pb.FileAttachment:

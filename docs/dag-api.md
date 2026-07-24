@@ -249,6 +249,20 @@ omitted and validated when supplied. Operator-managed transfers are subject to
 the finite gRPC envelope, and terminal results also use the stricter limits
 described below.
 
+`ava.Workspace` is the corresponding portable recursive directory value. Create
+one with `ava.Workspace.from_path(path)` and declare it in `ava.BaseInput`, node
+parameters, or terminal results. During node execution `workspace.path` is an
+ordinary local directory. Avalanche transfers a deterministic manifest of safe
+relative paths, explicit directories, regular-file bytes, and SHA-256 digests;
+the original local path is never transferred. Changes made below `workspace.path`
+are captured automatically when the node returns. Each node invocation receives
+an isolated materialization, including local sibling nodes; its temporary tree
+is removed when that invocation succeeds or fails. Changes reach a downstream
+node only when the workspace is part of the upstream node's returned value.
+Outside user node execution, accessing `.path` raises without allocating a
+temporary directory. Terminal and pickled workspaces remain portable manifest
+values; pass one into another node invocation to obtain a new local `.path`.
+
 ### File inputs from the CLI
 
 For an operator-managed run, keep ordinary input fields in `--input` and attach
@@ -286,11 +300,23 @@ the bundled
 [`examples/document_file_workflow.py`](../examples/document_file_workflow.py)
 flow definition.
 
+### Workspace inputs from the CLI
+
+Use repeatable `--workspace FIELD=DIR` for a top-level `ava.Workspace` field:
+
+```bash
+uv run ava run report_workspace \
+  --workspace workspace=./project
+```
+
+The CLI captures the directory at submission time. A workspace field cannot be
+repeated or also appear in `--input` or `--file`.
+
 ## Workflow results
 
 A workflow may return the existing JSON scalar/container values, a Pydantic
-model, or `ava.File`. Files may also be nested in Pydantic models, lists, tuples,
-and string-keyed dictionaries:
+model, `ava.File`, or `ava.Workspace`. File and workspace values may also be
+nested in Pydantic models, lists, tuples, and string-keyed dictionaries:
 
 ```python
 from pydantic import BaseModel
@@ -321,7 +347,9 @@ def report_flow():
 ```
 
 In embedded mode, `RunHandle.result()` returns the original Python value, so the
-example returns a `Report` containing `ava.File`.
+example returns a `Report` containing `ava.File`; workspace result fields remain
+`ava.Workspace` manifest values whose `.path` is unavailable until a later node
+invocation.
 
 For an operator-managed run, poll `get_run(run_id)` as usual and retrieve the
 successful terminal value separately:
@@ -343,7 +371,8 @@ serializers, serialization aliases, computed fields, and root models are
 honored. A serializer that replaces a `File` with JSON metadata remains JSON
 metadata; native `File` values that survive serialization become attachments,
 including non-UTF-8 content. JSON containers keep their list/tuple/dict shape,
-and every attachment marker is restored as `ava.File`.
+and every attachment marker is restored as `ava.File`. Workspace markers are
+restored as `ava.Workspace`.
 
 The worker atomically spools result JSON and attachments to a private pending
 directory. The parent transfers only a duplicate of its already-open,
@@ -447,6 +476,14 @@ scalar/container result shape with each file replaced by its metadata, a flat
 `media_type`, `sha256`, and `size`. The CLI prints the same document plus
 `metadata_path` to stdout, never binary content. Scalar-only results still
 produce the JSON document with an empty `files` list.
+
+Workspace result values are written as generated directories under the result
+directory, preserving their logical nested tree. Their metadata is included in
+the JSON document; the CLI never prints file contents. Before creating staging,
+the CLI rejects a complete result tree that would exceed its 2,048-entry cleanup
+budget or its cleanup depth of eight. Accepted workspace trees are materialized,
+rehashed, and recursively synced with only a bounded ancestor chain of directory
+descriptors open at once.
 
 The command verifies every digest and the metadata document before publishing
 the output directory. Any catchable retrieval, validation, write, sync, or
