@@ -21,6 +21,9 @@
 - The TUI coalesces its cross-thread provider handoff in a bounded queue and
   schedules deterministic snapshot repair if sustained pressure drops detail.
 - Caller-owned run IDs are limited to 256 UTF-8 bytes.
+- Agent detail events retain a per-invocation source sequence and a separate
+  transport cursor, so repeated calls to the same agent node do not discard
+  later evidence when the source sequence restarts at one.
 
 ### TUI performance
 

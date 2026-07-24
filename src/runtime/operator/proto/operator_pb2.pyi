@@ -361,14 +361,16 @@ class LogPage(_message.Message):
     def __init__(self, operator_instance_id: _Optional[str] = ..., as_of_sequence: _Optional[int] = ..., logs: _Optional[_Iterable[_Union[LogRecordDescriptorMsg, _Mapping]]] = ..., next_page_token: _Optional[str] = ...) -> None: ...
 
 class AgentEventDescriptorMsg(_message.Message):
-    __slots__ = ("event_sequence", "size_bytes", "body_token")
+    __slots__ = ("event_sequence", "size_bytes", "body_token", "invocation_id")
     EVENT_SEQUENCE_FIELD_NUMBER: _ClassVar[int]
     SIZE_BYTES_FIELD_NUMBER: _ClassVar[int]
     BODY_TOKEN_FIELD_NUMBER: _ClassVar[int]
+    INVOCATION_ID_FIELD_NUMBER: _ClassVar[int]
     event_sequence: int
     size_bytes: int
     body_token: str
-    def __init__(self, event_sequence: _Optional[int] = ..., size_bytes: _Optional[int] = ..., body_token: _Optional[str] = ...) -> None: ...
+    invocation_id: str
+    def __init__(self, event_sequence: _Optional[int] = ..., size_bytes: _Optional[int] = ..., body_token: _Optional[str] = ..., invocation_id: _Optional[str] = ...) -> None: ...
 
 class AgentEventPage(_message.Message):
     __slots__ = ("operator_instance_id", "as_of_sequence", "run_id", "node_id", "events", "next_page_token")

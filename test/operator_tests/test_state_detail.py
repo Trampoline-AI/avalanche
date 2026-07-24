@@ -55,6 +55,7 @@ def _evidence(sequence: int) -> dict:
         "node_id": "agent_1",
         "event": {
             "kind": "evidence",
+            "invocation_id": "test-invocation",
             "sequence": sequence,
             "event_kind": "code.generated",
             "timestamp_ns": sequence,
@@ -160,6 +161,7 @@ def test_structural_snapshot_excludes_detail_bodies_while_explicit_read_material
                 "node_id": "agent_1",
                 "event": {
                     "kind": "trace_finished",
+                    "invocation_id": "test-invocation",
                     "trace": {
                         "status": "completed",
                         "evidence": {"run_id": "predict-run", "complete": True},
@@ -687,6 +689,7 @@ def test_read_trace_streams_more_than_four_mib_in_bounded_revisioned_chunks():
                 "node_id": "agent_1",
                 "event": {
                     "kind": "trace_finished",
+                    "invocation_id": "test-invocation",
                     "trace": {
                         "status": "completed",
                         "evidence": {"complete": True},
@@ -797,6 +800,7 @@ def test_max_log_and_large_agent_event_use_bounded_live_and_hydration_transport(
                 "node_id": "agent_1",
                 "event": {
                     "kind": "evidence",
+                    "invocation_id": "test-invocation",
                     "sequence": 1,
                     "event_kind": "large.event",
                     "timestamp_ns": 1,
@@ -930,6 +934,7 @@ def test_agent_detail_ingestion_rejects_oversize_and_excess_depth_before_retenti
                 "node_id": "agent_1",
                 "event": {
                     "kind": "trace_finished",
+                    "invocation_id": "test-invocation",
                     "trace": {"payload": "t" * 512},
                 },
             },
@@ -970,6 +975,7 @@ def test_detail_ingestion_enforces_cumulative_node_run_and_log_quotas():
                     "node_id": node_id,
                     "event": {
                         "kind": "evidence",
+                        "invocation_id": "test-invocation",
                         "sequence": sequence,
                         "event_kind": "code.generated",
                         "timestamp_ns": sequence,
@@ -1066,6 +1072,7 @@ def test_detail_ingestion_enforces_cumulative_node_run_and_log_quotas():
                     "node_id": "agent_1",
                     "event": {
                         "kind": "trace_finished",
+                        "invocation_id": "test-invocation",
                         "trace": {
                             "status": "completed",
                             "payload": str(revision) * 180,
@@ -1098,6 +1105,7 @@ def test_read_trace_rejects_reused_identity_from_previous_operator_epoch():
                 "node_id": "agent_1",
                 "event": {
                     "kind": "trace_finished",
+                    "invocation_id": "test-invocation",
                     "trace": {
                         "status": "completed",
                         "evidence": {"complete": True},
@@ -1196,6 +1204,7 @@ def test_detail_page_lookup_only_touches_page_plus_one_items():
         events = GuardedList(
             [
                 AgentEvent(
+                    invocation_id="test-invocation",
                     event_sequence=(index + 1) * 2,
                     event_json="{}",
                     size_bytes=2,

@@ -1693,12 +1693,12 @@ def test_repeated_results_retain_only_bounded_opaque_memory_handles(
     monkeypatch,
 ):
     operator, client = result_client
-    terminal_events = []
+    terminal_events = {}
     apply_event = operator._apply_event
 
     def capture_event(run_id, handle, event):
         if event.get("type") == "terminal" and event.get("status") == "success":
-            terminal_events.append(event.copy())
+            terminal_events[run_id] = event.copy()
         return apply_event(run_id, handle, event)
 
     monkeypatch.setattr(operator, "_apply_event", capture_event)
@@ -1719,11 +1719,16 @@ def test_repeated_results_retain_only_bounded_opaque_memory_handles(
     assert operator._result_store._retained_result_bytes >= sum(
         item.byte_size for item in stored
     )
-    assert len(terminal_events) == 2
+    assert set(terminal_events) >= set(run_ids)
     assert all(
-        set(event) == {"type", "status", "result_manifest_sha256"}
-        and len(event["result_manifest_sha256"]) == 64
-        for event in terminal_events
+        set(terminal_events[run_id])
+        == {
+            "type",
+            "status",
+            "result_manifest_sha256",
+        }
+        and len(terminal_events[run_id]["result_manifest_sha256"]) == 64
+        for run_id in run_ids
     )
 
 

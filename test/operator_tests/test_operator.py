@@ -645,6 +645,7 @@ class TestAgentEvidenceTransport:
                 "node_id": "agent_1",
                 "event": {
                     "kind": "evidence",
+                    "invocation_id": "agent-invocation",
                     "sequence": 1,
                     "event_kind": "code.generated",
                     "timestamp_ns": 10,
@@ -662,6 +663,7 @@ class TestAgentEvidenceTransport:
                         "node_id": "agent_1",
                         "event": {
                             "kind": "trace_finished",
+                            "invocation_id": "agent-invocation",
                             "trace": {
                                 "status": "completed",
                                 "evidence": {
@@ -699,6 +701,7 @@ class TestAgentEvidenceTransport:
             structured_event = json.loads(operator.read_detail(events.events[0].body_token))
             assert structured_event == {
                 "sequence": 1,
+                "invocation_id": "agent-invocation",
                 "event_kind": "code.generated",
                 "timestamp_ns": 10,
                 "data": {"iteration": 1, "code": "print('ok')"},
@@ -720,6 +723,7 @@ class TestAgentEvidenceTransport:
             materialized = operator.get_run(run.run_id)
             assert materialized is not None
             envelope = json.loads(materialized.nodes["agent_1"].agent_trace_json)
+            assert envelope["invocation_id"] == "agent-invocation"
             assert envelope["status"] == "completed"
             assert envelope["run_id"] == "agent-run"
             assert [item["sequence"] for item in envelope["events"]] == [1]
@@ -728,5 +732,128 @@ class TestAgentEvidenceTransport:
                 "agent_1",
             ]
             assert run.nodes["agent_1"].agent_trace_json is None
+        finally:
+            operator.close()
+
+    def test_operator_accepts_source_sequence_restart_for_new_invocation(self):
+        operator = Operator([], watch=False, schedule=False)
+        run = self._state()
+        handle = SimpleNamespace(
+            cancel_event=threading.Event(),
+            result_bundle=None,
+            success_quiesced=False,
+        )
+
+        def apply(event):
+            return operator._apply_event(
+                run.run_id,
+                handle,
+                {
+                    "type": "agent_evidence",
+                    "node_id": "agent_1",
+                    "event": event,
+                },
+            )
+
+        try:
+            with operator._lock:
+                operator._runs[run.run_id] = run
+
+            assert (
+                apply(
+                    {
+                        "kind": "evidence",
+                        "invocation_id": "invocation-a",
+                        "sequence": 1,
+                        "event_kind": "code.executed",
+                        "timestamp_ns": 1,
+                        "data": {"output": "first"},
+                    }
+                )
+                is False
+            )
+            assert (
+                apply(
+                    {
+                        "kind": "trace_finished",
+                        "invocation_id": "invocation-a",
+                        "trace": {
+                            "status": "completed",
+                            "evidence": {"run_id": "predict-a", "complete": True},
+                        },
+                    }
+                )
+                is False
+            )
+            assert (
+                apply(
+                    {
+                        "kind": "evidence",
+                        "invocation_id": "invocation-b",
+                        "sequence": 1,
+                        "event_kind": "code.executed",
+                        "timestamp_ns": 2,
+                        "data": {"output": "second"},
+                    }
+                )
+                is False
+            )
+            retained_log_count = len(operator._logs[run.run_id])
+            assert (
+                apply(
+                    {
+                        "kind": "evidence",
+                        "invocation_id": "invocation-b",
+                        "sequence": 1,
+                        "event_kind": "code.executed",
+                        "timestamp_ns": 3,
+                        "data": {"output": "duplicate"},
+                    }
+                )
+                is False
+            )
+            assert len(operator._logs[run.run_id]) == retained_log_count
+            assert (
+                apply(
+                    {
+                        "kind": "trace_unavailable",
+                        "invocation_id": "invocation-b",
+                        "error": "retry failed",
+                    }
+                )
+                is False
+            )
+
+            summaries = operator.list_run_summaries()
+            snapshot = operator.get_run_snapshot(
+                run.run_id,
+                operator_instance_id=summaries.operator_instance_id,
+                as_of_sequence=summaries.as_of_sequence,
+            )
+            assert snapshot is not None
+            trace = snapshot.nodes[0].trace
+            assert trace is not None
+            assert trace.status == "unavailable"
+            assert trace.event_count == 2
+            assert trace.latest_event_sequence == 2
+
+            page = operator.list_agent_events(page_token=snapshot.nodes[0].event_page_token)
+            assert [(item.invocation_id, item.event_sequence) for item in page.events] == [
+                ("invocation-a", 1),
+                ("invocation-b", 2),
+            ]
+            bodies = [json.loads(operator.read_detail(item.body_token)) for item in page.events]
+            assert [(body["invocation_id"], body["sequence"]) for body in bodies] == [
+                ("invocation-a", 1),
+                ("invocation-b", 1),
+            ]
+
+            materialized = operator.get_run(run.run_id)
+            assert materialized is not None
+            envelope = json.loads(materialized.nodes["agent_1"].agent_trace_json)
+            assert envelope["invocation_id"] == "invocation-b"
+            assert [
+                (item["invocation_id"], item["sequence"]) for item in envelope["events"]
+            ] == [("invocation-a", 1), ("invocation-b", 1)]
         finally:
             operator.close()

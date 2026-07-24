@@ -222,6 +222,7 @@ message AgentEventDescriptorMsg {
   uint64 event_sequence = 1;
   uint64 size_bytes = 2;
   string body_token = 3;
+  string invocation_id = 4;
 }
 
 message AgentEventPage {

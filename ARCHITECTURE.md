@@ -425,6 +425,9 @@ The operator exposes these main RPCs through `OperatorService`:
 - `GetRunSnapshot` returns one structural run snapshot pinned to an operator
   instance and sequence.
 - `ListLogs` and `ListAgentEvents` page snapshot-pinned detail descriptors.
+  Agent event descriptors carry both the invocation identity and the
+  operator-assigned retention cursor; source-local event sequences remain in
+  the fetched detail body.
 - `ReadTrace` and `ReadDetail` stream bounded chunks for immutable detail bodies.
 - `StreamRunDeltas` replays typed changes under an operator-instance epoch.
   Stale cursors, restarts, and slow-consumer overflow require an explicit

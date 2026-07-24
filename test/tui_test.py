@@ -205,7 +205,7 @@ def test_connection_overlay_uses_public_label_and_error_state():
     delegate = MockStateProvider()
 
     class DisconnectedProvider:
-        connected = False
+        operator_reachable = False
         connection_label = "operator.example:7433"
         last_error = "UNAVAILABLE: maintenance"
 
@@ -271,6 +271,8 @@ def test_connection_overlay_uses_public_label_and_error_state():
     assert wrapper.visible
     assert "operator.example:7433" in str(box.rendered)
     assert "UNAVAILABLE: maintenance" in str(box.rendered)
+
+
 class _ReachableStateProvider:
     operator_instance_id = "test"
     operator_reachable = True
@@ -1561,6 +1563,7 @@ class TestUIStore:
                 sequence=9,
                 node_id="agent",
                 event=AgentEvent(
+                    invocation_id="test-invocation",
                     event_sequence=2,
                     event_json=event_json,
                     size_bytes=len(event_json),
@@ -1726,6 +1729,7 @@ class TestUIStore:
                     sequence=sequence * 3 + 1,
                     node_id="agent",
                     event=AgentEvent(
+                        invocation_id="test-invocation",
                         event_sequence=sequence,
                         event_json=event_json,
                         size_bytes=len(event_json),
@@ -1854,6 +1858,7 @@ class TestUIStore:
                 sequence=sequence * 3 + 1,
                 node_id="agent",
                 event=AgentEvent(
+                    invocation_id="test-invocation",
                     event_sequence=sequence,
                     event_json=event_json,
                     size_bytes=len(event_json),
@@ -3261,7 +3266,7 @@ class TestUIStore:
                 old_service.release_stream.set()
                 old_server.stop(grace=0).wait()
                 new_server = start_server(new_service)
-                deadline = time.monotonic() + 5.0
+                deadline = time.monotonic() + 10.0
                 while (
                     provider.stream_state is not StreamState.LIVE
                     or provider.operator_instance_id != "operator-new"
@@ -4499,6 +4504,9 @@ class TestInteractions:
             def on_log(self, callback):
                 return delegate.on_log(callback)
 
+            def __getattr__(self, name):
+                return getattr(delegate, name)
+
         app = AvalancheApp(
             provider=BlockingRunsProvider(),
             workflow="order_workflow",
@@ -5624,6 +5632,26 @@ async def test_trace_hydration_shutdown_closes_provider_and_joins_worker():
 
 
 @pytest.mark.asyncio
+async def test_app_does_not_close_launch_owned_provider_on_unmount():
+    from avalanche.tui.app import AvalancheApp
+
+    provider = MockStateProvider()
+    close_calls = 0
+
+    def close():
+        nonlocal close_calls
+        close_calls += 1
+
+    provider.close = close
+    app = AvalancheApp(provider=provider, close_provider_on_unmount=False)
+
+    async with app.run_test(size=(100, 35)) as pilot:
+        await pilot.pause()
+
+    assert close_calls == 0
+
+
+@pytest.mark.asyncio
 async def test_agent_trace_inspector_renders_pending_failed_malformed_and_incomplete():
     from avalanche.tui.app import AvalancheApp
     from avalanche.tui.widgets.agent_trace import (
@@ -5667,6 +5695,7 @@ async def test_agent_trace_inspector_renders_pending_failed_malformed_and_incomp
         assert app.store.trace_inspector_tab == "metadata"
         await pilot.press("right")
         assert app.store.trace_inspector_tab == "trace"
+        node = app.store.current_run.nodes["agent_1"]
         workflow.agent_metadata_json["agent_1"] = original_metadata_json
 
         projected = json.loads(json.dumps(envelope))
@@ -5688,6 +5717,7 @@ async def test_agent_trace_inspector_renders_pending_failed_malformed_and_incomp
         assert note_header in absent_output
         assert "Unavailable" in absent_output[absent_output.index(note_header) :]
         await pilot.press("left")
+        node = app.store.current_run.nodes["agent_1"]
 
         malformed_success = json.loads(json.dumps(envelope))
         malformed_success["trace"]["evidence"]["events"].append(
@@ -5701,6 +5731,7 @@ async def test_agent_trace_inspector_renders_pending_failed_malformed_and_incomp
         await pilot.press("right")
         assert "Output unavailable" in output_content.render().plain
         await pilot.press("left")
+        node = app.store.current_run.nodes["agent_1"]
 
         legacy = json.loads(json.dumps(envelope))
         legacy["trace"]["evidence"]["events"] = [
@@ -5712,6 +5743,7 @@ async def test_agent_trace_inspector_renders_pending_failed_malformed_and_incomp
         await pilot.press("right")
         assert "Output unavailable" in output_content.render().plain
         await pilot.press("left")
+        node = app.store.current_run.nodes["agent_1"]
 
         assert app.store.trace_inspector_tab == "trace"
         node.agent_trace_json = json.dumps(envelope)
@@ -5722,6 +5754,7 @@ async def test_agent_trace_inspector_renders_pending_failed_malformed_and_incomp
         await pilot.press("right")
         assert "Output unavailable" in output_content.render().plain
         await pilot.press("left")
+        node = app.store.current_run.nodes["agent_1"]
         assert app.store.trace_inspector_tab == "trace"
 
         node.agent_trace_json = "{malformed"

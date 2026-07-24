@@ -108,6 +108,7 @@ def test_detail_records_expose_only_bounded_metadata():
         body_token="opaque-log-token",
     )
     event = AgentEventDescriptor(
+        invocation_id="test-invocation",
         event_sequence=7,
         size_bytes=5_000_000,
         body_token="opaque-event-token",

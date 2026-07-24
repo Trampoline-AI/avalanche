@@ -98,6 +98,7 @@ def launch_tui(
         else:
             flow = arg
 
+    owned_provider: StateProvider | None = None
     # Build provider
     if connect:
         from avalanche.operator.client import GrpcStateProvider
@@ -110,9 +111,19 @@ def launch_tui(
         if tls_ca_cert is not None:
             provider_kwargs["root_certificates"] = Path(tls_ca_cert).read_bytes()
         provider = GrpcStateProvider(connect, **provider_kwargs)
+        owned_provider = provider
 
-    app = AvalancheApp(provider=provider, workflow=flow, node=node)
-    app.run()
+    app = AvalancheApp(
+        provider=provider,
+        workflow=flow,
+        node=node,
+        close_provider_on_unmount=provider is None,
+    )
+    try:
+        app.run()
+    finally:
+        if owned_provider is not None:
+            owned_provider.close()
 
 
 __all__ = ["ConnectionAwareStateProvider", "StateProvider", "launch_tui"]

@@ -66,8 +66,7 @@ class StateProvider(Protocol):
 class ConnectionAwareStateProvider(Protocol):
     """Optional connection state exposed by remote providers."""
 
-    @property
-    def connected(self) -> bool: ...
+    operator_reachable: bool
 
     @property
     def connection_label(self) -> str: ...
@@ -80,8 +79,6 @@ class ConnectionAwareStateProvider(Protocol):
 
 def get_operator_reachability(provider: StateProvider) -> bool:
     """Return the provider's explicit operator reachability."""
-    if isinstance(provider, ConnectionAwareStateProvider):
-        return provider.connected
     return provider.operator_reachable
 
 

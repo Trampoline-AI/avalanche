@@ -373,25 +373,28 @@ class GrpcStateProvider:
                 ),
             )
             result = decode_workflow_result(payload)
-        except grpc.RpcError as exc:
-            self.connected = exc.code() in {
-                grpc.StatusCode.NOT_FOUND,
-                grpc.StatusCode.FAILED_PRECONDITION,
-            }
-            if self.connected:
+        except grpc.RpcError as error:
+            with self._lifecycle_lock:
+                if not self._closed:
+                    self.operator_reachable = error.code() not in _TRANSPORT_FAILURE_STATUSES
+                    if self.operator_reachable:
+                        self.retry_count = 0
+                    else:
+                        self.retry_count += 1
+                    self.last_error = f"{error.code().name}: {error.details()}"
+            raise
+        except (TypeError, ValueError) as error:
+            with self._lifecycle_lock:
+                if not self._closed:
+                    self.operator_reachable = True
+                    self.retry_count = 0
+                    self.last_error = f"DATA_LOSS: {error}"
+            raise
+        with self._lifecycle_lock:
+            if not self._closed:
+                self.operator_reachable = True
                 self.retry_count = 0
-            else:
-                self.retry_count += 1
-            self.last_error = f"{exc.code().name}: {exc.details()}"
-            raise
-        except (TypeError, ValueError) as exc:
-            self.connected = False
-            self.retry_count += 1
-            self.last_error = f"DATA_LOSS: {exc}"
-            raise
-        self.connected = True
-        self.retry_count = 0
-        self.last_error = ""
+                self.last_error = ""
         return result
 
     def _materialize_structural_cursor(self) -> _StreamCursor:
@@ -605,6 +608,7 @@ class GrpcStateProvider:
                 ).decode()
                 page.append(
                     AgentEvent(
+                        invocation_id=descriptor.invocation_id,
                         event_sequence=descriptor.event_sequence,
                         event_json=event_json,
                         size_bytes=descriptor.size_bytes,
@@ -1380,6 +1384,7 @@ class GrpcStateProvider:
         elif delta is not None and isinstance(delta.change, AgentEventAppended):
             descriptor = delta.change.event
             event_detail = AgentEvent(
+                invocation_id=descriptor.invocation_id,
                 event_sequence=descriptor.event_sequence,
                 event_json=self._read_detail_body(
                     descriptor.body_token,

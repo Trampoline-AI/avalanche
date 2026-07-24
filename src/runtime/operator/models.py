@@ -169,6 +169,7 @@ class SequencedLogEntry:
 class AgentEvent:
     """One projected agent event stored independently of structural state."""
 
+    invocation_id: str
     event_sequence: int
     event_json: str
     size_bytes: int = 0
@@ -217,6 +218,7 @@ class LogRecordDescriptor:
 class AgentEventDescriptor:
     """Bounded identity and availability metadata for an agent event body."""
 
+    invocation_id: str
     event_sequence: int
     size_bytes: int
     body_token: str

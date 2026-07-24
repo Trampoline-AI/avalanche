@@ -193,6 +193,7 @@ class _RunDetailCapture:
     events: Mapping[str, tuple[AgentEvent, ...]]
     trace_bodies: Mapping[str, bytes]
     trace_errors: Mapping[str, str | None]
+    trace_invocation_ids: Mapping[str, str]
 
 
 class Operator:
@@ -307,6 +308,8 @@ class Operator:
         self._trace_descriptors: dict[tuple[str, str], TraceDescriptor] = {}
         self._trace_bodies: dict[tuple[str, str], dict[int, bytes]] = {}
         self._trace_errors: dict[tuple[str, str], str | None] = {}
+        self._agent_invocation_sequences: dict[tuple[str, str, str], int] = {}
+        self._trace_invocation_ids: dict[tuple[str, str], str] = {}
         self._run_log_bytes: dict[str, int] = {}
         self._run_detail_bytes: dict[str, int] = {}
         self._node_detail_bytes: dict[tuple[str, str], int] = {}
@@ -797,6 +800,7 @@ class Operator:
         item: AgentEvent,
     ) -> AgentEventDescriptor:
         return AgentEventDescriptor(
+            invocation_id=item.invocation_id,
             event_sequence=item.event_sequence,
             size_bytes=item.size_bytes,
             body_token=_encode_transport_token(
@@ -813,6 +817,7 @@ class Operator:
         captured_run = deepcopy(run)
         trace_bodies = {}
         trace_errors = {}
+        trace_invocation_ids = {}
         events = {}
         for node_id in run.nodes:
             key = (run.run_id, node_id)
@@ -824,12 +829,14 @@ class Operator:
                 if body is not None:
                     trace_bodies[node_id] = body
             trace_errors[node_id] = self._trace_errors.get(key)
+            trace_invocation_ids[node_id] = self._trace_invocation_ids.get(key, "")
         return _RunDetailCapture(
             run=captured_run,
             logs=tuple(self._logs.get(run.run_id, ())),
             events=MappingProxyType(events),
             trace_bodies=MappingProxyType(trace_bodies),
             trace_errors=MappingProxyType(trace_errors),
+            trace_invocation_ids=MappingProxyType(trace_invocation_ids),
         )
 
     def _resolve_summary_workflow_id(
@@ -1664,12 +1671,20 @@ class Operator:
             return None
 
         key = (run.run_id, node_id)
+        invocation_id = event.get("invocation_id")
+        if (
+            not isinstance(invocation_id, str)
+            or not invocation_id
+            or len(invocation_id) > _MAX_EVENT_FIELD_LENGTH
+        ):
+            return None
         projected_events = self._agent_events.setdefault(key, [])
         previous_descriptor = self._trace_descriptors.get(
             key, TraceDescriptor(status="in_progress")
         )
         finalized_trace: bytes | None = None
         projected_agent_event: AgentEvent | None = None
+        invocation_sequence_key: tuple[str, str, str] | None = None
         kind = event.get("kind")
         level = LogLevel.INFO
         error = self._trace_errors.get(key)
@@ -1686,13 +1701,15 @@ class Operator:
                 or not isinstance(data, dict)
             ):
                 return None
-            if projected_events and sequence <= projected_events[-1].event_sequence:
+            invocation_sequence_key = (run.run_id, node_id, invocation_id)
+            if sequence <= self._agent_invocation_sequences.get(invocation_sequence_key, 0):
                 return None
             projected = {
                 "sequence": sequence,
                 "event_kind": event_kind,
                 "timestamp_ns": timestamp_ns,
                 "data": data,
+                "invocation_id": invocation_id,
             }
             _validate_agent_detail_depth(projected)
             event_json = json.dumps(
@@ -1706,7 +1723,8 @@ class Operator:
                     f"agent event exceeds {self._max_agent_event_bytes} byte limit"
                 )
             projected_agent_event = AgentEvent(
-                event_sequence=sequence,
+                invocation_id=invocation_id,
+                event_sequence=len(projected_events) + 1,
                 event_json=event_json,
                 size_bytes=event_size,
             )
@@ -1729,7 +1747,7 @@ class Operator:
                 previous_descriptor,
                 status=status,
                 event_count=len(projected_events) + 1,
-                latest_event_sequence=sequence,
+                latest_event_sequence=len(projected_events) + 1,
             )
         elif kind == "trace_finished":
             trace = event.get("trace")
@@ -1748,10 +1766,12 @@ class Operator:
             versions = self._trace_bodies.get(key, {})
             if (
                 previous_descriptor.available
+                and self._trace_invocation_ids.get(key) == invocation_id
                 and versions.get(previous_descriptor.revision) == finalized_trace
             ):
                 return None
             status = str(trace.get("status") or "unavailable")[:80]
+            error = None
             evidence = trace.get("evidence")
             descriptor = TraceDescriptor(
                 status=status,
@@ -1805,6 +1825,10 @@ class Operator:
         )
         if projected_agent_event is not None:
             projected_events.append(projected_agent_event)
+            assert invocation_sequence_key is not None
+            self._agent_invocation_sequences[invocation_sequence_key] = sequence
+        if kind != "evidence":
+            self._trace_invocation_ids[key] = invocation_id
         self._trace_descriptors[key] = descriptor
         self._trace_errors[key] = error
         self._append_log_unchecked_locked(run, entry, log_size)
@@ -2383,6 +2407,7 @@ def _materialize_run_detail(capture: _RunDetailCapture) -> RunState:
                 continue
             if isinstance(projected, dict):
                 projected_events.append(projected)
+                projected["invocation_id"] = event.invocation_id
         descriptor = node.trace
         trace = None
         body = capture.trace_bodies.get(node_id)
@@ -2395,6 +2420,7 @@ def _materialize_run_detail(capture: _RunDetailCapture) -> RunState:
                 trace = decoded
         envelope = {
             "schema_version": 1,
+            "invocation_id": capture.trace_invocation_ids.get(node_id) or None,
             "status": descriptor.status if descriptor is not None else "in_progress",
             "run_id": (
                 trace.get("evidence", {}).get("run_id")

@@ -243,6 +243,7 @@ def agent_event_descriptor_to_proto(
     event: AgentEventDescriptor,
 ) -> pb.AgentEventDescriptorMsg:
     return pb.AgentEventDescriptorMsg(
+        invocation_id=event.invocation_id,
         event_sequence=event.event_sequence,
         size_bytes=event.size_bytes,
         body_token=event.body_token,
@@ -253,6 +254,7 @@ def agent_event_descriptor_from_proto(
     msg: pb.AgentEventDescriptorMsg,
 ) -> AgentEventDescriptor:
     return AgentEventDescriptor(
+        invocation_id=msg.invocation_id,
         event_sequence=msg.event_sequence,
         size_bytes=msg.size_bytes,
         body_token=msg.body_token,

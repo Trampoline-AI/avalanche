@@ -111,7 +111,7 @@ def test_typed_delta_envelopes_roundtrip_all_changes():
         AgentEventAppended(
             "run-1",
             "node-1",
-            AgentEventDescriptor(1, 14, "event-token"),
+            AgentEventDescriptor("test-invocation", 1, 14, "event-token"),
         ),
         TraceFinalized(
             "run-1",
@@ -169,6 +169,7 @@ def test_operator_replays_typed_deltas_in_order():
                 "node_id": "node-1",
                 "event": {
                     "kind": "evidence",
+                    "invocation_id": "test-invocation",
                     "sequence": 1,
                     "event_kind": "code.executed",
                     "timestamp_ns": 1,
@@ -184,6 +185,7 @@ def test_operator_replays_typed_deltas_in_order():
                 "node_id": "node-1",
                 "event": {
                     "kind": "trace_finished",
+                    "invocation_id": "test-invocation",
                     "trace": {
                         "status": "completed",
                         "evidence": {"run_id": "predict-run", "complete": True},
@@ -431,6 +433,7 @@ def test_client_applies_ordered_deltas_and_ignores_duplicates():
                     "run-1",
                     "node-1",
                     AgentEventDescriptor(
+                        invocation_id="test-invocation",
                         event_sequence=2,
                         size_bytes=55,
                         body_token="event-token",
@@ -697,6 +700,7 @@ def test_client_delta_reducer_uses_copy_on_write_and_constant_event_append(
                                     "run-1",
                                     "node-1",
                                     AgentEventDescriptor(
+                                        invocation_id="test-invocation",
                                         event_sequence=event_sequence,
                                         size_bytes=len(event_json),
                                         body_token=f"event-{event_sequence}",
@@ -705,6 +709,7 @@ def test_client_delta_reducer_uses_copy_on_write_and_constant_event_append(
                             ),
                         ),
                         event_detail=AgentEvent(
+                            invocation_id="test-invocation",
                             event_sequence=event_sequence,
                             event_json=event_json,
                             size_bytes=len(event_json),
@@ -788,6 +793,7 @@ def test_callbacks_receive_isolated_values_without_cumulative_copies():
         assert provider._log_entries["run-1"][0].message == "original"
 
         event = AgentEvent(
+            invocation_id="test-invocation",
             event_sequence=1,
             event_json='{"sequence":1,"event_kind":"original"}',
             size_bytes=46,

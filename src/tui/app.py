@@ -15,7 +15,7 @@ from .dag_layout import DagNode
 from .mock import MockStateProvider
 from .models import RunState, TraceDetail, WorkflowInfo
 from .screens.workflow_detail import WorkflowDetailScreen
-from .state import ConnectionAwareStateProvider, StateProvider, get_operator_reachability
+from .state import StateProvider, get_operator_reachability
 from .theme import AVALANCHE_THEME
 from .ui_store import TraceDetailCompletion, TraceHydrationKey, UIStore
 from .widgets.agent_trace import (
@@ -78,6 +78,8 @@ class AvalancheApp(App):
         provider: StateProvider | None = None,
         workflow: str | None = None,
         node: str | None = None,
+        *,
+        close_provider_on_unmount: bool = True,
     ):
         super().__init__()
         self.register_theme(AVALANCHE_THEME)
@@ -86,6 +88,7 @@ class AvalancheApp(App):
         if provider is None:
             provider = MockStateProvider(include_agent_trace=workflow == "agent_trace")
         self.store = UIStore(provider, defer_initial_catalog=defer_initial_catalog)
+        self._close_provider_on_unmount = close_provider_on_unmount
         self._timer: Timer | None = None
         self._screen: WorkflowDetailScreen | None = None
         self._leader_pending: bool = False
@@ -155,7 +158,7 @@ class AvalancheApp(App):
         self.store.request_shutdown()
         close = getattr(self.store.provider, "close", None)
         try:
-            if callable(close):
+            if self._close_provider_on_unmount and callable(close):
                 close()
         finally:
             self.store.shutdown()
@@ -575,19 +578,18 @@ class AvalancheApp(App):
     def _check_connection(self) -> None:
         """Reserve the disconnect overlay for an unreachable operator."""
         provider = self.store.provider
-        if not isinstance(provider, ConnectionAwareStateProvider):
+        ping = getattr(provider, "ping", None)
+        if not callable(ping):
             return  # Local providers do not expose connection tracking.
 
         # Ping every ~2s (30 ticks at 15fps), non-blocking.
         self._ping_counter += 1
         if self._ping_counter % 60 == 0 and not self._ping_in_flight:
-            import threading
-
             self._ping_in_flight = True
 
             def _do_ping():
                 try:
-                    provider.ping()
+                    ping()
                 finally:
                     self._ping_in_flight = False
 
@@ -611,15 +613,18 @@ class AvalancheApp(App):
         from rich.style import Style
         from rich.text import Text
 
-            msg = Text()
-            msg.append("CONNECTION LOST\n\n", Style(color="#f06080", bold=True))
-            msg.append(f"{provider.connection_label}\n", Style(color="#e0f8ff"))
-            msg.append("is not reachable.\n\n", Style(color="#7ab0c8"))
-            if provider.last_error:
-                msg.append(f"{provider.last_error}\n\n", Style(color="#f0a080"))
-            msg.append(f"Reconnecting{dots:<3}", Style(color="#7ab0c8"))
-            box.update(msg)
-            wrapper.add_class("visible")
+        dots = "." * ((self.store.frame // 8) % 4)
+        msg = Text()
+        msg.append("CONNECTION LOST\n\n", Style(color="#f06080", bold=True))
+        connection_label = getattr(provider, "connection_label", "Operator")
+        last_error = getattr(provider, "last_error", "") or provider.stream_error
+        msg.append(f"{connection_label}\n", Style(color="#e0f8ff"))
+        msg.append("is not reachable.\n\n", Style(color="#7ab0c8"))
+        if last_error:
+            msg.append(f"{last_error}\n\n", Style(color="#f0a080"))
+        msg.append(f"Reconnecting{dots:<3}", Style(color="#7ab0c8"))
+        box.update(msg)
+        wrapper.add_class("visible")
 
     # ── Helpers ─────────────────────────────────────────────────────
 

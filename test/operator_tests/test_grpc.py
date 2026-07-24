@@ -2045,6 +2045,7 @@ def _seed_hydration_run(operator, run_id: str) -> RunState:
                 "node_id": "agent-1",
                 "event": {
                     "kind": "evidence",
+                    "invocation_id": "test-invocation",
                     "sequence": sequence,
                     "event_kind": "code.executed",
                     "timestamp_ns": sequence,
@@ -2060,6 +2061,7 @@ def _seed_hydration_run(operator, run_id: str) -> RunState:
             "node_id": "agent-1",
             "event": {
                 "kind": "trace_finished",
+                "invocation_id": "test-invocation",
                 "trace": {
                     "status": "completed",
                     "evidence": {"run_id": run_id, "complete": True},
