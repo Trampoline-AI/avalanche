@@ -5,6 +5,7 @@ from concurrent import futures
 import grpc
 
 from avalanche.operator.client import GrpcStateProvider
+from avalanche.tui import ConnectionAwareStateProvider
 from runtime.operator import client as client_module
 from runtime.operator.proto import operator_pb2 as pb
 from runtime.operator.proto import operator_pb2_grpc as pb_grpc
@@ -48,10 +49,12 @@ def test_grpc_state_provider_uses_secure_channel_when_tls_enabled(monkeypatch) -
     monkeypatch.setattr(client_module.grpc, "secure_channel", fake_secure_channel)
     monkeypatch.setattr(client_module.pb_grpc, "OperatorServiceStub", lambda channel: object())
 
-    provider = GrpcStateProvider("delta.example:443", tls=True, root_certificates=b"ca")
+    provider = GrpcStateProvider("operator.example:443", tls=True, root_certificates=b"ca")
+    assert isinstance(provider, ConnectionAwareStateProvider)
+    assert provider.connection_label == "operator.example:443"
     provider.close()
 
-    assert calls["address"] == "delta.example:443"
+    assert calls["address"] == "operator.example:443"
     assert calls["credentials"] == "credentials"
     assert calls["root_certificates"] == b"ca"
     assert dict(calls["options"]) == {

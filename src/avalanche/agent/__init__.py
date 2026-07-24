@@ -3,18 +3,36 @@
 from __future__ import annotations
 
 from .agent_step import Agent, AgentStepError, AgentStepExecutionError, agent_step, step
+from .evidence import (
+    AgentEvidenceEvent,
+    AgentEvidenceListener,
+    AgentEvidenceObserverEvent,
+    AgentInvocationId,
+    AgentTraceFinishedEvent,
+    AgentTraceUnavailableEvent,
+    ListenerErrorPolicy,
+    capture_agent_evidence,
+)
 from .signature import InputField, OutputField, Signature
 
 __all__ = [
     "Agent",
+    "AgentEvidenceEvent",
+    "AgentEvidenceListener",
+    "AgentEvidenceObserverEvent",
+    "AgentInvocationId",
     "AgentStepError",
     "AgentStepExecutionError",
+    "AgentTraceFinishedEvent",
+    "AgentTraceUnavailableEvent",
     "File",
     "InputField",
+    "ListenerErrorPolicy",
     "OutputField",
     "Signature",
     "Skill",
     "agent_step",
+    "capture_agent_evidence",
     "skills",
     "step",
 ]

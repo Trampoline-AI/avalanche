@@ -2,12 +2,14 @@
 
 from __future__ import annotations
 
-from typing import Any, Callable, Protocol
+from typing import Any, Callable, Protocol, runtime_checkable
 
 from .models import LogEntry, RunState, WorkflowInfo
 
 
 class StateProvider(Protocol):
+    """State and action contract consumed by the Avalanche TUI."""
+
     def list_workflows(self) -> list[WorkflowInfo]: ...
 
     def list_runs(self, workflow_selector: str) -> list[RunState]: ...
@@ -23,3 +25,22 @@ class StateProvider(Protocol):
     def on_run_update(self, callback: Callable[[RunState], None]) -> None: ...
 
     def on_log(self, callback: Callable[[LogEntry], None]) -> None: ...
+
+
+@runtime_checkable
+class ConnectionAwareStateProvider(StateProvider, Protocol):
+    """Optional connection state exposed by remote providers."""
+
+    @property
+    def connected(self) -> bool: ...
+
+    @property
+    def connection_label(self) -> str: ...
+
+    @property
+    def last_error(self) -> str: ...
+
+    def ping(self) -> bool: ...
+
+
+__all__ = ["ConnectionAwareStateProvider", "StateProvider"]

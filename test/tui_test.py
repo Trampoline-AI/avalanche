@@ -6,6 +6,7 @@ import threading
 import time
 from dataclasses import replace
 from datetime import datetime
+from types import SimpleNamespace
 
 import pytest
 
@@ -76,6 +77,81 @@ def _signal_background_updates(store: UIStore) -> _SignalingQueue:
     queue = _SignalingQueue(store._background_updates)
     store._background_updates = queue
     return queue
+
+
+def test_connection_overlay_uses_public_label_and_error_state():
+    from avalanche.tui.app import AvalancheApp
+    from avalanche.tui.state import ConnectionAwareStateProvider
+
+    delegate = MockStateProvider()
+
+    class DisconnectedProvider:
+        connected = False
+        connection_label = "operator.example:7433"
+        last_error = "UNAVAILABLE: maintenance"
+
+        def list_workflows(self):
+            return delegate.list_workflows()
+
+        def list_runs(self, workflow_selector):
+            return delegate.list_runs(workflow_selector)
+
+        def get_run(self, run_id):
+            return delegate.get_run(run_id)
+
+        def start_run(self, workflow_selector, **kwargs):
+            return delegate.start_run(workflow_selector, **kwargs)
+
+        def cancel_run(self, run_id):
+            return delegate.cancel_run(run_id)
+
+        def on_run_update(self, callback):
+            return delegate.on_run_update(callback)
+
+        def on_log(self, callback):
+            return delegate.on_log(callback)
+
+        def ping(self):
+            return False
+
+    class Wrapper:
+        visible = False
+
+        def has_class(self, name):
+            return name == "visible" and self.visible
+
+        def add_class(self, name):
+            assert name == "visible"
+            self.visible = True
+
+    class Box:
+        rendered = None
+
+        def update(self, value):
+            self.rendered = value
+
+    provider = DisconnectedProvider()
+    assert isinstance(provider, ConnectionAwareStateProvider)
+    wrapper = Wrapper()
+    box = Box()
+    screen = SimpleNamespace(
+        query_one=lambda selector: {
+            "#disconnect-wrapper": wrapper,
+            "#disconnect-box": box,
+        }[selector]
+    )
+    app = SimpleNamespace(
+        store=SimpleNamespace(provider=provider, frame=0),
+        _screen=screen,
+        _ping_counter=0,
+        _ping_in_flight=False,
+    )
+
+    AvalancheApp._check_connection(app)
+
+    assert wrapper.visible
+    assert "operator.example:7433" in str(box.rendered)
+    assert "UNAVAILABLE: maintenance" in str(box.rendered)
 
 
 # ── Models ─────────────────────────────────────────────────────────────────
@@ -1862,9 +1938,7 @@ class TestVirtualizedLogs:
             assert rebuilds == 0
             assert all(
                 rendered is initial
-                for rendered, initial in zip(
-                    log_view.lines, initial_prefix, strict=True
-                )
+                for rendered, initial in zip(log_view.lines, initial_prefix, strict=True)
             )
 
             app.store.current_run = replace(

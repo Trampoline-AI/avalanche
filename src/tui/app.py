@@ -11,7 +11,7 @@ from .dag_layout import DagNode
 from .mock import MockStateProvider
 from .models import RunState, WorkflowInfo
 from .screens.workflow_detail import WorkflowDetailScreen
-from .state import StateProvider
+from .state import ConnectionAwareStateProvider, StateProvider
 from .theme import AVALANCHE_THEME
 from .ui_store import UIStore
 from .widgets.agent_trace import (
@@ -377,7 +377,7 @@ class AvalancheApp(App):
     def _check_connection(self) -> None:
         """Show/hide disconnect overlay based on provider connection state."""
         provider = self.store.provider
-        if not hasattr(provider, "ping"):
+        if not isinstance(provider, ConnectionAwareStateProvider):
             return  # MockStateProvider — no connection tracking
 
         # Ping every ~2s (30 ticks at 15fps), non-blocking
@@ -388,8 +388,10 @@ class AvalancheApp(App):
             self._ping_in_flight = True
 
             def _do_ping():
-                provider.ping()
-                self._ping_in_flight = False
+                try:
+                    provider.ping()
+                finally:
+                    self._ping_in_flight = False
 
             threading.Thread(target=_do_ping, daemon=True).start()
 
@@ -412,8 +414,10 @@ class AvalancheApp(App):
 
             msg = Text()
             msg.append("CONNECTION LOST\n\n", Style(color="#f06080", bold=True))
-            msg.append(f"{provider._address}\n", Style(color="#e0f8ff"))
+            msg.append(f"{provider.connection_label}\n", Style(color="#e0f8ff"))
             msg.append("is not reachable.\n\n", Style(color="#7ab0c8"))
+            if provider.last_error:
+                msg.append(f"{provider.last_error}\n\n", Style(color="#f0a080"))
             msg.append(f"Reconnecting{dots:<3}", Style(color="#7ab0c8"))
             box.update(msg)
             wrapper.add_class("visible")
