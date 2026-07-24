@@ -27,6 +27,9 @@ def main(argv: Sequence[str] | None = None) -> int:
             "external trusted and authenticated boundary"
         ),
     )
+    parser.add_argument(
+        "--webhook-port", type=int, default=7434, help="loopback webhook HTTP port"
+    )
     parser.add_argument("--ray", action="store_true", help="use the Ray executor")
     args = parser.parse_args(list(argv) if argv is not None else None)
 
@@ -43,6 +46,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         args.flows,
         port=args.port,
         host=args.host,
+        webhook_port=args.webhook_port,
         executor_backend="ray" if args.ray else "local",
     )
     return 0

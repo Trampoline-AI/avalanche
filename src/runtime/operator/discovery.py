@@ -419,6 +419,8 @@ def _descriptor_to_dict(
         "agent_node_ids": agent_node_ids,
         "agent_metadata_json": agent_metadata_json,
         "cron": workflow.cron,
+        "webhook_path": workflow.webhook.path if workflow.webhook else None,
+        "webhook_enabled": workflow.webhook is not None,
     }
 
 
@@ -436,6 +438,8 @@ def _descriptor_from_dict(item: dict[str, Any]) -> WorkflowDescriptor:
             (key, value) for key, value in item.get("agent_metadata_json", ())
         ),
         cron=item["cron"],
+        webhook_path=item.get("webhook_path"),
+        webhook_enabled=item.get("webhook_enabled", False),
     )
 
 

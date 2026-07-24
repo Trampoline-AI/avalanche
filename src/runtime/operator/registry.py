@@ -74,6 +74,8 @@ def workflow_to_info(
         agent_node_ids=agent_node_ids,
         agent_metadata_json=agent_metadata_json,
         cron=workflow.cron,
+        webhook_path=workflow.webhook.path if workflow.webhook else None,
+        webhook_enabled=workflow.webhook is not None,
     )
 
 
@@ -94,6 +96,8 @@ def descriptor_to_info(descriptor: WorkflowDescriptor) -> WorkflowInfo:
         agent_node_ids=list(descriptor.agent_node_ids),
         agent_metadata_json=dict(descriptor.agent_metadata_json),
         cron=descriptor.cron,
+        webhook_path=descriptor.webhook_path,
+        webhook_enabled=descriptor.webhook_enabled,
     )
 
 
@@ -119,10 +123,17 @@ class WorkflowRegistry:
         with self._lock:
             return self._roots
 
-    def scan(self, paths: list[str]) -> CatalogView:
+    def scan(
+        self,
+        paths: list[str],
+        *,
+        validate: Callable[[tuple[WorkflowDescriptor, ...]], object] | None = None,
+    ) -> CatalogView:
         """Build a complete catalog off-lock, then atomically install it."""
         roots = configure_roots(paths)
         descriptors, diagnostics = discover(roots, timeout=self._discovery_timeout)
+        if validate is not None:
+            validate(descriptors)
 
         by_id: dict[str, WorkflowDescriptor] = {}
         for descriptor in descriptors:
@@ -148,13 +159,17 @@ class WorkflowRegistry:
             self._view = view
         return view
 
-    def rescan(self) -> CatalogView:
+    def rescan(
+        self,
+        *,
+        validate: Callable[[tuple[WorkflowDescriptor, ...]], object] | None = None,
+    ) -> CatalogView:
         """Refresh configured roots without retaining a last-good descriptor."""
         with self._lock:
             paths = list(self._scan_paths)
         if not paths:
             return self.view
-        return self.scan(paths)
+        return self.scan(paths, validate=validate)
 
     def resolve(self, selector: str) -> WorkflowDescriptor:
         descriptor, _ = self.resolve_source(selector)

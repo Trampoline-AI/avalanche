@@ -60,6 +60,7 @@ from .storage import Namespace, NamespaceConfig, ScanResult, Table, TableGroup
 
 # Types
 from .types import AppendResult, SnapshotMetadata, SnapshotState
+from .webhook import Webhook
 
 __version__ = "0.1.0rc1"
 
@@ -96,6 +97,7 @@ __all__ = [
     # Workflow
     "Workflow",
     "Pipeline",
+    "Webhook",
     # Executors
     "Executor",
     "LocalExecutor",

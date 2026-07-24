@@ -67,6 +67,8 @@ def test_ava_operator_delegates_to_runtime_operator_with_flows(monkeypatch):
             "127.0.0.1",
             "--port",
             "17777",
+            "--webhook-port",
+            "7434",
             "--ray",
         ]
     ]

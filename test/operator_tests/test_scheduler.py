@@ -1,9 +1,8 @@
 import threading
-from types import SimpleNamespace
 
 from croniter import croniter
 
-from avalanche.operator.models import WorkflowDescriptor, WorkflowLocator
+from avalanche.operator.models import CatalogView, WorkflowDescriptor, WorkflowLocator
 from avalanche.operator.scheduler import Scheduler
 from runtime.operator.operator import Operator
 
@@ -121,10 +120,13 @@ def test_operator_refresh_serializes_catalog_publication_with_schedule_replaceme
     finish_rescan = threading.Event()
     started: list[tuple[str, str]] = []
 
-    def rescan():
+    def rescan(*, validate=None):
         catalog_published.set()
         assert finish_rescan.wait(timeout=2.0)
-        return SimpleNamespace(by_id={})
+        descriptors = ()
+        if validate is not None:
+            validate(descriptors)
+        return CatalogView()
 
     operator._registry.rescan = rescan
     operator.start_run = lambda workflow_id, triggered_by: started.append(
