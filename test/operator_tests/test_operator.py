@@ -7,6 +7,7 @@ import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
 from functools import partial
+from types import SimpleNamespace
 
 import pytest
 
@@ -596,6 +597,11 @@ class TestAgentEvidenceTransport:
         run = self._state()
         with operator._lock:
             operator._runs[run.run_id] = run
+        handle = SimpleNamespace(
+            cancel_event=threading.Event(),
+            result_bundle=None,
+            success_quiesced=False,
+        )
 
         evidence = {
             "type": "agent_evidence",
@@ -608,11 +614,12 @@ class TestAgentEvidenceTransport:
                 "data": {"iteration": 1, "code": "print('ok')"},
             },
         }
-        assert operator._apply_event(run.run_id, evidence) is False
-        assert operator._apply_event(run.run_id, evidence) is False
+        assert operator._apply_event(run.run_id, handle, evidence) is False
+        assert operator._apply_event(run.run_id, handle, evidence) is False
         assert (
             operator._apply_event(
                 run.run_id,
+                handle,
                 {
                     "type": "agent_evidence",
                     "node_id": "agent_1",
