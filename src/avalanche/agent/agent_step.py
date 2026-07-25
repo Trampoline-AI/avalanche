@@ -2,17 +2,19 @@
 
 from __future__ import annotations
 
+import asyncio
 import inspect
 import json
 import math
 import types
+import uuid
 from contextvars import ContextVar
 from enum import Enum
 from functools import update_wrapper
 from pathlib import Path
 from typing import Any, Callable, Mapping, Sequence, Union, get_args, get_origin
 
-from .._agent_evidence import emit_agent_evidence
+from .._agent_evidence import AgentInvocationId, emit_agent_evidence
 from ..dag import Node, NodeType
 from .config import UNSET, validate_runtime_kwargs
 from .signature import resolve_signature
@@ -31,23 +33,70 @@ _WORKFLOW_AGENT_DEFAULTS: ContextVar[Mapping[str, Any]] = ContextVar(
 )
 
 
-class _AvalancheEvidenceSink:
-    """Best-effort projection of agent evidence into Avalanche."""
+class _AgentInvocationState:
+    """Task-local evidence state for one agent invocation."""
 
-    strict = False
+    def __init__(self, invocation_id: AgentInvocationId) -> None:
+        self.invocation_id = invocation_id
+        self.listener_base_exception: BaseException | None = None
+
+
+_AGENT_INVOCATION_STATE: ContextVar[_AgentInvocationState | None] = ContextVar(
+    "avalanche_agent_invocation_state", default=None
+)
+
+
+class _AvalancheEvidenceSink:
+    """Project PredictRLM evidence under the bridge's explicit error policy."""
+
+    strict = True
 
     async def emit(self, event: Any) -> None:
-        emit_agent_evidence(_project_evidence_event(event))
+        state = _current_invocation_state()
+        projected = _project_evidence_event(
+            event,
+            invocation_id=state.invocation_id,
+        )
+        _emit_sink_evidence(projected, state=state)
 
     async def flush(self, run_id: str) -> None:
         return None
 
     async def close(self, run_id: str, terminal_event: Any | None = None) -> None:
         if terminal_event is not None:
-            emit_agent_evidence(_project_evidence_event(terminal_event))
+            state = _current_invocation_state()
+            projected = _project_evidence_event(
+                terminal_event,
+                invocation_id=state.invocation_id,
+            )
+            _emit_sink_evidence(projected, state=state)
 
 
-def _project_evidence_event(event: Any) -> dict[str, Any]:
+def _current_invocation_state() -> _AgentInvocationState:
+    state = _AGENT_INVOCATION_STATE.get()
+    if state is None:
+        raise RuntimeError("agent evidence emitted outside an agent invocation")
+    return state
+
+
+def _emit_sink_evidence(
+    event: dict[str, Any],
+    *,
+    state: _AgentInvocationState,
+) -> None:
+    try:
+        emit_agent_evidence(event)
+    except BaseException as exc:
+        if not isinstance(exc, Exception) and state.listener_base_exception is None:
+            state.listener_base_exception = exc
+        raise
+
+
+def _project_evidence_event(
+    event: Any,
+    *,
+    invocation_id: AgentInvocationId,
+) -> dict[str, Any]:
     kind_value = getattr(getattr(event, "kind", None), "value", None)
     event_kind = kind_value if isinstance(kind_value, str) else str(getattr(event, "kind", ""))
     raw_data = getattr(event, "data", {})
@@ -104,6 +153,7 @@ def _project_evidence_event(event: Any) -> dict[str, Any]:
 
     return {
         "kind": "evidence",
+        "invocation_id": invocation_id,
         "sequence": int(getattr(event, "sequence", 0)),
         "event_kind": event_kind,
         "timestamp_ns": int(getattr(event, "timestamp_ns", 0)),
@@ -111,21 +161,41 @@ def _project_evidence_event(event: Any) -> dict[str, Any]:
     }
 
 
-def _emit_terminal_trace(trace: Any) -> bool:
+def _emit_terminal_trace(
+    trace: Any,
+    *,
+    invocation_id: AgentInvocationId,
+) -> bool:
     try:
         exported = trace.to_exportable_json()
         parsed = json.loads(exported)
         if not isinstance(parsed, dict):
             raise TypeError("exported trace is not a JSON object")
-    except BaseException as exc:
-        _emit_trace_unavailable(exc)
+    except Exception as exc:
+        _emit_trace_unavailable(exc, invocation_id=invocation_id)
         return False
-    emit_agent_evidence({"kind": "trace_finished", "trace": parsed})
+    emit_agent_evidence(
+        {
+            "kind": "trace_finished",
+            "invocation_id": invocation_id,
+            "trace": parsed,
+        }
+    )
     return True
 
 
-def _emit_trace_unavailable(error: Any) -> None:
-    emit_agent_evidence({"kind": "trace_unavailable", "error": str(error)})
+def _emit_trace_unavailable(
+    error: Any,
+    *,
+    invocation_id: AgentInvocationId,
+) -> None:
+    emit_agent_evidence(
+        {
+            "kind": "trace_unavailable",
+            "invocation_id": invocation_id,
+            "error": str(error),
+        }
+    )
 
 
 class Agent:
@@ -163,26 +233,50 @@ class Agent:
                 **self._runtime_kwargs,
             )
 
+        state = _AgentInvocationState(uuid.uuid4().hex)
+        invocation_token = _AGENT_INVOCATION_STATE.set(state)
         try:
-            prediction = await self._predictor.acall(**inputs)
+            try:
+                prediction = await self._predictor.acall(**inputs)
+            except asyncio.CancelledError as exc:
+                trace = getattr(exc, "trace", None)
+                try:
+                    if trace is None:
+                        _emit_trace_unavailable(exc, invocation_id=state.invocation_id)
+                    else:
+                        _emit_terminal_trace(trace, invocation_id=state.invocation_id)
+                except Exception as evidence_error:
+                    try:
+                        setattr(exc, "evidence_error", evidence_error)
+                    except Exception:
+                        pass
+                raise
+            except Exception as exc:
+                if state.listener_base_exception is not None:
+                    raise state.listener_base_exception
+                trace = getattr(exc, "trace", None)
+                if trace is None:
+                    _emit_trace_unavailable(exc, invocation_id=state.invocation_id)
+                else:
+                    _emit_terminal_trace(trace, invocation_id=state.invocation_id)
+                input_types = {name: type(value).__name__ for name, value in inputs.items()}
+                raise AgentStepExecutionError(
+                    f"agent step {self._step_name!r} failed calling "
+                    f"{_describe_signature(dspy_signature)}: {exc}. "
+                    f"input types: {input_types}."
+                ) from exc
+
             trace = getattr(prediction, "trace", None)
             if trace is None:
-                _emit_trace_unavailable("Agent trace unavailable")
+                _emit_trace_unavailable(
+                    "Agent trace unavailable",
+                    invocation_id=state.invocation_id,
+                )
             else:
-                _emit_terminal_trace(trace)
+                _emit_terminal_trace(trace, invocation_id=state.invocation_id)
             return prediction
-        except Exception as exc:
-            trace = getattr(exc, "trace", None)
-            if trace is None:
-                _emit_trace_unavailable(exc)
-            else:
-                _emit_terminal_trace(trace)
-            input_types = {name: type(value).__name__ for name, value in inputs.items()}
-            raise AgentStepExecutionError(
-                f"agent step {self._step_name!r} failed calling "
-                f"{_describe_signature(dspy_signature)}: {exc}. "
-                f"input types: {input_types}."
-            ) from exc
+        finally:
+            _AGENT_INVOCATION_STATE.reset(invocation_token)
 
     def _resolve_signature(self) -> Any:
         if self._dspy_signature is None:

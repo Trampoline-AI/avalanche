@@ -17,15 +17,21 @@ from avalanche.runtime import File
 
 from ._grpc import _BOUNDED_MESSAGE_OPTIONS
 from .convert import (
+    agent_event_descriptor_to_proto,
     discovery_diagnostic_to_proto,
-    run_state_to_proto,
+    log_record_descriptor_to_proto,
+    run_delta_envelope_to_proto,
+    run_snapshot_to_proto,
+    run_summary_to_proto,
     workflow_info_to_proto,
 )
 from .operator import (
+    InvalidRunIdError,
     Operator,
     RunAlreadyExistsError,
     RunResultNotReadyError,
     RunResultUnavailableError,
+    StructuralBaselineUnavailableError,
 )
 from .proto import operator_pb2 as pb
 from .proto import operator_pb2_grpc as pb_grpc
@@ -35,6 +41,7 @@ logger = logging.getLogger(__name__)
 
 DEFAULT_PORT = 7433
 DEFAULT_HOST = "127.0.0.1"
+TRACE_CHUNK_BYTES = 1024 * 1024
 
 
 class OperatorServicer(pb_grpc.OperatorServiceServicer):
@@ -68,6 +75,8 @@ class OperatorServicer(pb_grpc.OperatorServiceServicer):
                 context=run_context,
             )
             return pb.StartRunResponse(run_id=run_id)
+        except InvalidRunIdError as exc:
+            context.abort(grpc.StatusCode.INVALID_ARGUMENT, str(exc))
         except RunAlreadyExistsError as exc:
             context.abort(grpc.StatusCode.ALREADY_EXISTS, str(exc))
         except AmbiguousWorkflow as exc:
@@ -80,20 +89,6 @@ class OperatorServicer(pb_grpc.OperatorServiceServicer):
     def CancelRun(self, request, context):  # noqa: N802
         self._op.cancel_run(request.run_id)
         return pb.Empty()
-
-    def ListRuns(self, request, context):  # noqa: N802
-        selector = request.workflow_selector or request.flow_name
-        try:
-            runs = self._op.list_runs(selector)
-        except AmbiguousWorkflow as exc:
-            context.abort(grpc.StatusCode.INVALID_ARGUMENT, _ambiguous_detail(exc))
-        return pb.RunList(runs=[run_state_to_proto(r) for r in runs])
-
-    def GetRun(self, request, context):  # noqa: N802
-        run = self._op.get_run(request.run_id)
-        if run is None:
-            context.abort(grpc.StatusCode.NOT_FOUND, f"Run {request.run_id} not found")
-        return run_state_to_proto(run)
 
     def GetRunResult(self, request, context):  # noqa: N802
         try:
@@ -112,22 +107,154 @@ class OperatorServicer(pb_grpc.OperatorServiceServicer):
             files=[_result_file_attachment_to_proto(item) for item in payload.files],
         )
 
-    def StreamUpdates(self, request, context):  # noqa: N802
-        """Server-streaming RPC: yields RunUpdate messages as state changes."""
-        q = self._op.subscribe(request.since_sequence)
+    def ListRunSummaries(self, request, context):  # noqa: N802
         try:
+            page = self._op.list_run_summaries(
+                request.workflow_selector,
+                page_size=request.page_size,
+                page_token=request.page_token,
+            )
+        except StructuralBaselineUnavailableError as exc:
+            context.abort(grpc.StatusCode.FAILED_PRECONDITION, str(exc))
+        except AmbiguousWorkflow as exc:
+            context.abort(grpc.StatusCode.INVALID_ARGUMENT, _ambiguous_detail(exc))
+        except ValueError as exc:
+            context.abort(grpc.StatusCode.INVALID_ARGUMENT, str(exc))
+        return pb.RunSummaryPage(
+            operator_instance_id=page.operator_instance_id,
+            as_of_sequence=page.as_of_sequence,
+            runs=[run_summary_to_proto(item) for item in page.runs],
+            next_page_token=page.next_page_token,
+        )
+
+    def GetRunSnapshot(self, request, context):  # noqa: N802
+        try:
+            snapshot = self._op.get_run_snapshot(
+                request.run_id,
+                operator_instance_id=request.operator_instance_id,
+                as_of_sequence=request.as_of_sequence,
+            )
+        except StructuralBaselineUnavailableError as exc:
+            context.abort(grpc.StatusCode.FAILED_PRECONDITION, str(exc))
+        if snapshot is None:
+            context.abort(grpc.StatusCode.NOT_FOUND, f"Run {request.run_id} not found")
+        return run_snapshot_to_proto(snapshot)
+
+    def ListLogs(self, request, context):  # noqa: N802
+        if not request.page_token:
+            context.abort(
+                grpc.StatusCode.INVALID_ARGUMENT,
+                "page_token from GetRunSnapshot is required",
+            )
+        try:
+            page = self._op.list_logs(
+                page_token=request.page_token,
+                after_sequence=request.after_sequence,
+                page_size=request.page_size,
+            )
+        except StructuralBaselineUnavailableError as exc:
+            context.abort(grpc.StatusCode.FAILED_PRECONDITION, str(exc))
+        except KeyError:
+            context.abort(grpc.StatusCode.NOT_FOUND, "Log target not found")
+        except ValueError as exc:
+            context.abort(grpc.StatusCode.INVALID_ARGUMENT, str(exc))
+        return pb.LogPage(
+            operator_instance_id=page.operator_instance_id,
+            as_of_sequence=page.as_of_sequence,
+            logs=[log_record_descriptor_to_proto(item) for item in page.logs],
+            next_page_token=page.next_page_token,
+        )
+
+    def ListAgentEvents(self, request, context):  # noqa: N802
+        if not request.page_token:
+            context.abort(
+                grpc.StatusCode.INVALID_ARGUMENT,
+                "page_token from GetRunSnapshot is required",
+            )
+        try:
+            page = self._op.list_agent_events(
+                page_token=request.page_token,
+                after_event_sequence=request.after_event_sequence,
+                page_size=request.page_size,
+            )
+        except StructuralBaselineUnavailableError as exc:
+            context.abort(grpc.StatusCode.FAILED_PRECONDITION, str(exc))
+        except KeyError:
+            context.abort(grpc.StatusCode.NOT_FOUND, "Agent event target not found")
+        except ValueError as exc:
+            context.abort(grpc.StatusCode.INVALID_ARGUMENT, str(exc))
+        return pb.AgentEventPage(
+            operator_instance_id=page.operator_instance_id,
+            as_of_sequence=page.as_of_sequence,
+            run_id=page.run_id,
+            node_id=page.node_id,
+            events=[agent_event_descriptor_to_proto(item) for item in page.events],
+            next_page_token=page.next_page_token,
+        )
+
+    def ReadTrace(self, request, context):  # noqa: N802
+        try:
+            trace = self._op.read_trace(
+                request.run_id,
+                request.node_id,
+                operator_instance_id=request.operator_instance_id,
+                revision=request.revision,
+            )
+        except StructuralBaselineUnavailableError as exc:
+            context.abort(grpc.StatusCode.FAILED_PRECONDITION, str(exc))
+        except KeyError:
+            context.abort(
+                grpc.StatusCode.NOT_FOUND,
+                f"Trace for run {request.run_id}, node {request.node_id}, "
+                f"revision {request.revision or 'latest'} not found",
+            )
+        for chunk_index, offset in enumerate(range(0, len(trace.data), TRACE_CHUNK_BYTES)):
+            data = trace.data[offset : offset + TRACE_CHUNK_BYTES]
+            yield pb.TraceChunk(
+                revision=trace.revision,
+                chunk_index=chunk_index,
+                data=data,
+                eof=offset + len(data) == len(trace.data),
+            )
+
+    def ReadDetail(self, request, context):  # noqa: N802
+        try:
+            data = self._op.read_detail(request.body_token)
+        except StructuralBaselineUnavailableError as exc:
+            context.abort(grpc.StatusCode.FAILED_PRECONDITION, str(exc))
+        except KeyError:
+            context.abort(grpc.StatusCode.NOT_FOUND, "Detail body not found")
+        except ValueError as exc:
+            context.abort(grpc.StatusCode.INVALID_ARGUMENT, str(exc))
+        if not data:
+            yield pb.DetailChunk(chunk_index=0, data=b"", eof=True)
+            return
+        for chunk_index, offset in enumerate(range(0, len(data), TRACE_CHUNK_BYTES)):
+            chunk = data[offset : offset + TRACE_CHUNK_BYTES]
+            yield pb.DetailChunk(
+                chunk_index=chunk_index,
+                data=chunk,
+                eof=offset + len(chunk) == len(data),
+            )
+
+    def StreamRunDeltas(self, request, context):  # noqa: N802
+        """Replay typed deltas for one operator epoch, or require a reset."""
+        subscription = self._op.subscribe_run_deltas(
+            request.operator_instance_id,
+            request.after_sequence,
+        )
+        try:
+            context.send_initial_metadata(())
             while context.is_active():
                 try:
-                    seq, run = q.get(timeout=1.0)
-                    yield pb.RunUpdate(
-                        sequence=seq,
-                        run=run_state_to_proto(run),
-                    )
+                    envelope = subscription.get(timeout=1.0)
                 except queue.Empty:
-                    # Queue.get timeout — just loop and check context.is_active()
                     continue
+                yield run_delta_envelope_to_proto(envelope)
+                if envelope.reset_required is not None:
+                    return
         finally:
-            self._op.unsubscribe(q)
+            self._op.unsubscribe_run_deltas(subscription)
 
 
 def serve(

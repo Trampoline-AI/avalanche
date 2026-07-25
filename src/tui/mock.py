@@ -10,12 +10,17 @@ from typing import Callable
 from uuid import uuid4
 
 from .models import (
+    DetailDelta,
+    LogDetailAppended,
     LogEntry,
     LogLevel,
     NodeState,
     NodeStatus,
+    ResetBaseline,
     RunState,
     RunStatus,
+    StreamResetNotice,
+    TraceDetail,
     WorkflowInfo,
     display_name_from_id,
 )
@@ -548,12 +553,18 @@ class MockStateProvider:
     """Implements StateProvider with timer-driven simulation."""
 
     def __init__(self, *, include_agent_trace: bool = False) -> None:
+        self.operator_instance_id = "mock"
+        self.operator_reachable = True
+        self.stream_state = "live"
+        self.stream_error = ""
         self._workflows = {p.selector: p for p in ALL_WORKFLOWS}
         if include_agent_trace:
             self._workflows[AGENT_TRACE_WORKFLOW.selector] = AGENT_TRACE_WORKFLOW
         self._runs: dict[str, RunState] = {}
         self._run_callbacks: list[Callable[[RunState], None]] = []
         self._log_callbacks: list[Callable[[LogEntry], None]] = []
+        self._detail_callbacks: list[Callable[[DetailDelta], None]] = []
+        self._stream_reset_callbacks: list[Callable[[StreamResetNotice], None]] = []
         self._threads: list[threading.Thread] = []
 
         self._pre_seed_runs()
@@ -747,6 +758,31 @@ class MockStateProvider:
     def get_run(self, run_id: str) -> RunState | None:
         return self._runs.get(run_id)
 
+    def hydrate_trace(self, run_id: str, node_id: str) -> TraceDetail | None:
+        run = self.get_run(run_id)
+        node = run.nodes.get(node_id) if run is not None else None
+        descriptor = node.trace if node is not None else None
+        if run is None or node is None or descriptor is None or not node.agent_trace_json:
+            return None
+        try:
+            envelope = json.loads(node.agent_trace_json)
+        except (TypeError, ValueError):
+            return None
+        trace_body = envelope.get("trace") if isinstance(envelope, dict) else None
+        if not isinstance(trace_body, dict):
+            return None
+        return TraceDetail(
+            operator_instance_id=run.operator_instance_id,
+            run_id=run.run_id,
+            created_sequence=run.created_sequence,
+            node_id=node_id,
+            descriptor_revision=descriptor.revision,
+            trace_body=trace_body,
+        )
+
+    def close(self) -> None:
+        """Mock provider owns no external resources."""
+
     def start_run(self, workflow_selector: str, **kwargs) -> str:
         info = self._workflows.get(workflow_selector)
         if info is None:
@@ -807,13 +843,56 @@ class MockStateProvider:
     def on_log(self, callback: Callable[[LogEntry], None]) -> None:
         self._log_callbacks.append(callback)
 
+    def on_detail_update(self, callback: Callable[[DetailDelta], None]) -> None:
+        self._detail_callbacks.append(callback)
+
+    def start_stream(self) -> None:
+        """Mocks deliver callbacks directly and need no stream worker."""
+
+    def on_stream_reset(self, callback: Callable[[StreamResetNotice], None]) -> None:
+        self._stream_reset_callbacks.append(callback)
+
+    def load_reset_baseline(self, notice: StreamResetNotice) -> ResetBaseline:
+        workflows = tuple(self.list_workflows())
+        return ResetBaseline(
+            generation=notice.generation,
+            operator_instance_id=self.operator_instance_id,
+            as_of_sequence=0,
+            workflows=workflows,
+            runs_by_workflow={
+                workflow.selector: tuple(self.list_runs(workflow.selector))
+                for workflow in workflows
+            },
+        )
+
+    def acknowledge_stream_reset(
+        self,
+        generation: int,
+        operator_instance_id: str,
+        reconciled_sequence: int,
+    ) -> None:
+        if self.stream_state != "reset_required":
+            raise RuntimeError("stream reset is not required")
+        self.operator_instance_id = operator_instance_id
+        self.stream_state = "live"
+
     def _notify_run(self, run: RunState) -> None:
         for cb in self._run_callbacks:
             cb(run)
 
-    def _notify_log(self, entry: LogEntry) -> None:
+    def _notify_log(self, run: RunState, entry: LogEntry) -> None:
         for cb in self._log_callbacks:
             cb(entry)
+        detail = LogDetailAppended(
+            operator_instance_id=self.operator_instance_id,
+            run_id=run.run_id,
+            created_sequence=run.created_sequence,
+            sequence=len(run.logs),
+            log_sequence=len(run.logs),
+            log=entry,
+        )
+        for cb in self._detail_callbacks:
+            cb(detail)
 
     def _simulate_run(self, run: RunState, info: WorkflowInfo) -> None:
         """Background thread that drives a run through execution phases."""
@@ -898,4 +977,4 @@ class MockStateProvider:
                 message=msg,
             )
             run.logs.append(entry)
-            self._notify_log(entry)
+            self._notify_log(run, entry)

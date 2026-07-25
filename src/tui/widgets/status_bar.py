@@ -7,6 +7,7 @@ from rich.text import Text
 from textual.widgets import Static
 
 from ..models import RunStatus
+from ..state import get_operator_reachability, get_stream_state
 from ..theme import (
     DIM_STYLE,
     ICE_BRIGHT,
@@ -14,6 +15,7 @@ from ..theme import (
     ICE_FROST,
     ICE_STEEL,
     ICE_TEAL,
+    ICE_WARN,
     SPINNER_FRAMES,
 )
 
@@ -33,6 +35,15 @@ _STATUS_ICONS: dict[RunStatus, str] = {
     RunStatus.SUCCESS: "✓",
     RunStatus.FAILED: "✗",
     RunStatus.CANCELLED: "⊘",
+}
+
+_STREAM_STATUS: dict[str, tuple[str, Style]] = {
+    "connecting": ("live updates connecting", Style(color=ICE_STEEL)),
+    "replaying": ("live updates replaying", Style(color=ICE_BRIGHT)),
+    "live": ("live updates live", Style(color=ICE_TEAL)),
+    "reset_required": ("live updates reset required", Style(color=ICE_WARN, bold=True)),
+    "failed": ("live updates interrupted", Style(color=ICE_WARN, bold=True)),
+    "stopped": ("live updates stopped", Style(color=ICE_STEEL)),
 }
 
 
@@ -85,10 +96,10 @@ class StatusBar(Static):
             if icon:
                 text.append(f" {icon}", _STATUS_STYLES.get(run.status, Style()))
 
-            node = store.selected_node
-            if node:
-                text.append(_SEP, _SEP_STYLE)
-                text.append(node.display_name, Style(color=ICE_FROST, bold=True))
+        node = store.selected_node
+        if node:
+            text.append(_SEP, _SEP_STYLE)
+            text.append(node.display_name, Style(color=ICE_FROST, bold=True))
 
         # Residual search info
         if store.search_query and not store.searching:
@@ -99,4 +110,12 @@ class StatusBar(Static):
                     f"  ▽▽ {store.search_index + 1}/{store.match_count}",
                     Style(color=ICE_STEEL),
                 )
+
+        reachable = get_operator_reachability(store.provider)
+        stream_state = get_stream_state(store.provider)
+        if reachable is False:
+            text.append("  · operator unreachable", Style(color=ICE_FAIL, bold=True))
+        elif stream_state in _STREAM_STATUS:
+            label, style = _STREAM_STATUS[stream_state]
+            text.append(f"  · {label}", style)
         return text

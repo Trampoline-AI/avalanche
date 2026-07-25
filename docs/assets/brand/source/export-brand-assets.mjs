@@ -188,7 +188,11 @@ function writeDiamondHtml(tmpRoot) {
   return path;
 }
 
-function makeTransparentWithPadding(raw, out, { erode = false, resizeContent = null } = {}) {
+function makeTransparentWithPadding(
+  raw,
+  out,
+  { erode = false, resizeContent = null, backgroundPadding = 0 } = {},
+) {
   const cleaned = join(dirname(raw), `${out.split('/').pop()}.clean.png`);
   const mask = join(dirname(raw), `${out.split('/').pop()}.mask.png`);
 
@@ -201,7 +205,11 @@ function makeTransparentWithPadding(raw, out, { erode = false, resizeContent = n
 
   const args = [input, '-trim', '+repage'];
   if (resizeContent) args.push('-resize', `${resizeContent}!`);
-  args.push('-gravity', 'center', '-background', 'none', '-bordercolor', 'none', '-border', '144', '-depth', '8', out);
+  args.push('-gravity', 'center');
+  if (backgroundPadding) {
+    args.push('-background', 'white', '-bordercolor', 'white', '-border', `${backgroundPadding}`);
+  }
+  args.push('-background', 'none', '-bordercolor', 'none', '-border', '144', '-depth', '8', out);
   run(magick, args);
 }
 
@@ -249,7 +257,10 @@ try {
     outPath: diamondRaw,
   });
 
-  makeTransparentWithPadding(logoRaw, outputs.logo, { resizeContent: '3825x1299' });
+  makeTransparentWithPadding(logoRaw, outputs.logo, {
+    resizeContent: '3537x1011',
+    backgroundPadding: 144,
+  });
   makeTransparentWithPadding(diamondRaw, diamondFull, { erode: true, resizeContent: '2600x3457' });
   make1024Diamond(diamondFull, outputs.diamond1024);
 

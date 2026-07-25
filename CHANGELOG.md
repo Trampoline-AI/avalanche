@@ -2,6 +2,29 @@
 
 ## Unreleased
 
+### Operator transport
+
+- Operator streams now replay bounded, typed run deltas under an instance epoch
+  and explicitly require a structural reset for stale cursors or restarts.
+- Remote TUI state applies deltas in sequence, ignores duplicates, and reloads
+  structural run baselines instead of receiving complete run snapshots per event.
+- Slow consumers receive an explicit reset from bounded stream queues, while
+  summary refreshes preserve already-hydrated run details.
+- Run selection paginates historical logs and agent events on demand. Trace
+  hydration uses one lifecycle-owned worker and epoch/revision-guarded detail
+  completions, with bounded retries.
+- The transport protobuf is not backward compatible with the previous full-state
+  RPCs. Operators and remote TUI clients must upgrade together and regenerate
+  bindings from the same protocol revision.
+- Operator detail retention now enforces per-event, per-trace, per-node,
+  per-run log count/byte, and aggregate per-run limits before accepting payloads.
+- The TUI coalesces its cross-thread provider handoff in a bounded queue and
+  schedules deterministic snapshot repair if sustained pressure drops detail.
+- Caller-owned run IDs are limited to 256 UTF-8 bytes.
+- Agent detail events retain a per-invocation source sequence and a separate
+  transport cursor, so repeated calls to the same agent node do not discard
+  later evidence when the source sequence restarts at one.
+
 ### TUI performance
 
 - Virtualized log rendering keeps steady and incremental refresh work bounded by

@@ -2,13 +2,38 @@
 
 import asyncio
 import json
+import socket
 import threading
 import time
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import replace
 from datetime import datetime
+from types import SimpleNamespace
 
+import grpc
 import pytest
 
+import avalanche.tui.ui_store as ui_store_module
+from avalanche.operator.client import (
+    GrpcStateProvider,
+    OperatorCallError,
+    StaleResetAcknowledgementError,
+    StreamState,
+)
+from avalanche.operator.convert import (
+    run_snapshot_to_proto,
+    run_summary_to_proto,
+    workflow_info_to_proto,
+)
+from avalanche.operator.models import (
+    AgentEvent,
+    AgentEventDetailAppended,
+    LogDetailAppended,
+    RunSnapshot,
+    RunSummary,
+    TraceDescriptor,
+    TraceDetail,
+)
 from avalanche.tui.dag_layout import (
     DagNode,
     ParGroup,
@@ -29,14 +54,109 @@ from avalanche.tui.models import (
     LogLevel,
     NodeState,
     NodeStatus,
+    ResetBaseline,
     RunState,
     RunStatus,
+    StreamResetNotice,
     WorkflowInfo,
 )
+from avalanche.tui.state import get_operator_reachability, get_stream_state
 from avalanche.tui.ui_store import UIStore
 from avalanche.tui.widgets.run_history import RunHistoryWidget
 from avalanche.tui.widgets.sidebar import Sidebar
 from avalanche.tui.widgets.status_bar import StatusBar
+from runtime.operator.proto import operator_pb2 as pb
+from runtime.operator.proto import operator_pb2_grpc as pb_grpc
+
+
+def _retry_hydration_workflow() -> WorkflowInfo:
+    return WorkflowInfo(
+        name="flow",
+        display_name="flow",
+        workflow_id="flow",
+        file_path="flow.py",
+        node_ids=["node"],
+        graph={},
+        node_types={"node": "step"},
+    )
+
+
+def _retry_hydration_run(
+    log_sequence: int = 1,
+    *,
+    operator_instance_id: str = "operator-1",
+    hydrated: bool = False,
+) -> RunState:
+    return RunState(
+        run_id="run-retry",
+        flow_name="flow",
+        workflow_id="flow",
+        operator_instance_id=operator_instance_id,
+        created_sequence=1,
+        revision=log_sequence,
+        latest_log_sequence=log_sequence,
+        details_hydrated=hydrated,
+        logs=(
+            [
+                LogEntry(
+                    timestamp=datetime(2026, 7, 22),
+                    level=LogLevel.INFO,
+                    node_id="node",
+                    message=f"log-{sequence}",
+                )
+                for sequence in range(1, log_sequence + 1)
+            ]
+            if hydrated
+            else []
+        ),
+    )
+
+
+class _RetryHydrationProvider(MockStateProvider):
+    def __init__(self, outcomes):
+        super().__init__()
+        self.outcomes = list(outcomes)
+        self.calls = 0
+        self.completed = [threading.Event() for _ in self.outcomes]
+
+    def list_workflows(self):
+        return []
+
+    def get_run(self, run_id):
+        assert run_id == "run-retry"
+        attempt = self.calls
+        self.calls += 1
+        try:
+            outcome = self.outcomes[attempt]
+            if isinstance(outcome, Exception):
+                raise outcome
+            return outcome
+        finally:
+            self.completed[attempt].set()
+
+
+def _retry_hydration_store(outcomes):
+    workflow = _retry_hydration_workflow()
+    run = _retry_hydration_run()
+    provider = _RetryHydrationProvider(outcomes)
+    store = UIStore(provider)
+    store.workflows = [workflow]
+    store.current_workflow = workflow
+    store.current_run = run
+    store.run_pinned = True
+    store._set_runs_cache([run])
+    clock = [100.0]
+    store._detail_hydration_now = lambda: clock[0]
+    return store, provider, workflow, run, clock
+
+
+def _finish_retry_hydration_attempt(store, provider, attempt):
+    assert provider.completed[attempt].wait(timeout=1)
+    deadline = time.monotonic() + 1
+    while store._detail_hydrations_in_flight and time.monotonic() < deadline:
+        store._apply_background_updates()
+        time.sleep(0.001)
+    assert not store._detail_hydrations_in_flight
 
 
 def _apply_async_updates(store: UIStore, timeout: float = 1.0) -> None:
@@ -47,7 +167,7 @@ def _apply_async_updates(store: UIStore, timeout: float = 1.0) -> None:
     store._apply_background_updates()
 
 
-async def _wait_for_current_run(app, timeout: float = 1.0) -> None:
+async def _wait_for_current_run(app, timeout: float = 5.0) -> None:
     deadline = time.monotonic() + timeout
     while app.store.current_run is None and time.monotonic() < deadline:
         app.store._apply_background_updates()
@@ -76,6 +196,169 @@ def _signal_background_updates(store: UIStore) -> _SignalingQueue:
     queue = _SignalingQueue(store._background_updates)
     store._background_updates = queue
     return queue
+
+
+def test_connection_overlay_uses_public_label_and_error_state():
+    from avalanche.tui.app import AvalancheApp
+    from avalanche.tui.state import ConnectionAwareStateProvider
+
+    delegate = MockStateProvider()
+
+    class DisconnectedProvider:
+        operator_reachable = False
+        connection_label = "operator.example:7433"
+        last_error = "UNAVAILABLE: maintenance"
+
+        def list_workflows(self):
+            return delegate.list_workflows()
+
+        def list_runs(self, workflow_selector):
+            return delegate.list_runs(workflow_selector)
+
+        def get_run(self, run_id):
+            return delegate.get_run(run_id)
+
+        def start_run(self, workflow_selector, **kwargs):
+            return delegate.start_run(workflow_selector, **kwargs)
+
+        def cancel_run(self, run_id):
+            return delegate.cancel_run(run_id)
+
+        def on_run_update(self, callback):
+            return delegate.on_run_update(callback)
+
+        def on_log(self, callback):
+            return delegate.on_log(callback)
+
+        def ping(self):
+            return False
+
+    class Wrapper:
+        visible = False
+
+        def has_class(self, name):
+            return name == "visible" and self.visible
+
+        def add_class(self, name):
+            assert name == "visible"
+            self.visible = True
+
+    class Box:
+        rendered = None
+
+        def update(self, value):
+            self.rendered = value
+
+    provider = DisconnectedProvider()
+    assert isinstance(provider, ConnectionAwareStateProvider)
+    wrapper = Wrapper()
+    box = Box()
+    screen = SimpleNamespace(
+        query_one=lambda selector: {
+            "#disconnect-wrapper": wrapper,
+            "#disconnect-box": box,
+        }[selector]
+    )
+    app = SimpleNamespace(
+        store=SimpleNamespace(provider=provider, frame=0),
+        _screen=screen,
+        _ping_counter=0,
+        _ping_in_flight=False,
+    )
+
+    AvalancheApp._check_connection(app)
+
+    assert wrapper.visible
+    assert "operator.example:7433" in str(box.rendered)
+    assert "UNAVAILABLE: maintenance" in str(box.rendered)
+
+
+class _ReachableStateProvider:
+    operator_instance_id = "test"
+    operator_reachable = True
+    stream_state = "live"
+    stream_error = ""
+
+    def on_stream_reset(self, callback) -> None:
+        self._stream_reset_callback = callback
+
+    def load_reset_baseline(self, notice: StreamResetNotice) -> ResetBaseline:
+        raise RuntimeError("reset baseline is not configured for this test provider")
+
+    def acknowledge_stream_reset(
+        self,
+        generation: int,
+        operator_instance_id: str,
+        reconciled_sequence: int,
+    ) -> None:
+        if self.stream_state != "reset_required":
+            raise RuntimeError("stream reset is not required")
+        self.operator_instance_id = operator_instance_id
+        self.stream_state = "live"
+
+
+class _ApplicationErrorRefreshProvider(MockStateProvider):
+    def __init__(self) -> None:
+        super().__init__()
+        self.fail_operation: str | None = None
+
+    def _raise_if_failed(self, operation: str) -> None:
+        if self.fail_operation == operation:
+            raise OperatorCallError(
+                grpc.StatusCode.INVALID_ARGUMENT,
+                f"{operation} rejected",
+            )
+
+    def list_workflows(self) -> list[WorkflowInfo]:
+        self._raise_if_failed("catalog")
+        return super().list_workflows()
+
+    def list_runs(self, workflow_selector: str) -> list[RunState]:
+        self._raise_if_failed("runs")
+        return super().list_runs(workflow_selector)
+
+    def start_run(self, workflow_selector: str, **kwargs) -> str:
+        self._raise_if_failed("start")
+        return super().start_run(workflow_selector, **kwargs)
+
+
+@pytest.mark.asyncio
+async def test_synchronous_stream_start_sees_every_callback_before_first_detail():
+    from avalanche.tui.app import AvalancheApp
+
+    detail = LogDetailAppended(
+        operator_instance_id="mock",
+        run_id="run-sync",
+        created_sequence=1,
+        sequence=2,
+        log_sequence=1,
+        log=LogEntry(
+            timestamp=datetime(2026, 7, 22),
+            level=LogLevel.INFO,
+            node_id="node",
+            message="first",
+        ),
+    )
+
+    class SynchronousStartProvider(MockStateProvider):
+        def __init__(self):
+            super().__init__()
+            self.started = False
+            self.first_detail_dispatched = False
+
+        def start_stream(self):
+            assert len(self._run_callbacks) == 1
+            assert len(self._detail_callbacks) == 1
+            assert len(self._log_callbacks) == 1
+            self.started = True
+            self._detail_callbacks[0](detail)
+            self.first_detail_dispatched = True
+
+    provider = SynchronousStartProvider()
+    app = AvalancheApp(provider=provider)
+    async with app.run_test(size=(80, 30)):
+        assert provider.started
+        assert provider.first_detail_dispatched
 
 
 # ── Models ─────────────────────────────────────────────────────────────────
@@ -311,6 +594,12 @@ class TestMockStateProvider:
         assert "order_workflow" in names
         assert "data_platform" in names
 
+    def test_exposes_explicit_transport_health(self):
+        provider = MockStateProvider()
+
+        assert get_operator_reachability(provider) is True
+        assert get_stream_state(provider) == "live"
+
     def test_pre_seeded_runs(self):
         provider = MockStateProvider()
         runs = provider.list_runs("order_workflow")
@@ -383,7 +672,7 @@ class TestUIStore:
         default = workflow("default", "shared_node")
         desired = workflow("desired", "shared_node")
 
-        class BlockingCatalogProvider:
+        class BlockingCatalogProvider(_ReachableStateProvider):
             def __init__(self):
                 self.calls = 0
 
@@ -410,6 +699,9 @@ class TestUIStore:
                 pass
 
             def on_log(self, callback):
+                pass
+
+            def on_detail_update(self, callback):
                 pass
 
         app = AvalancheApp(BlockingCatalogProvider(), workflow="desired", node="shared_node")
@@ -440,7 +732,7 @@ class TestUIStore:
         release = threading.Event()
         delegate = MockStateProvider()
 
-        class BlockingStartProvider:
+        class BlockingStartProvider(_ReachableStateProvider):
             def __init__(self):
                 self.start_calls = 0
                 self.entered = threading.Event()
@@ -480,7 +772,7 @@ class TestUIStore:
         release = threading.Event()
         delegate = MockStateProvider()
 
-        class BlockingStartProvider:
+        class BlockingStartProvider(_ReachableStateProvider):
             def __init__(self):
                 self.entered = threading.Event()
 
@@ -521,9 +813,9 @@ class TestUIStore:
     def test_async_start_preserves_provider_error_and_does_not_pin(self, failed_call):
         delegate = MockStateProvider()
 
-        class FailedFollowupProvider:
+        class FailedFollowupProvider(_ReachableStateProvider):
             def __init__(self):
-                self.connected = True
+                self.operator_reachable = True
                 self.last_error = ""
                 self.started = False
                 self.entered = threading.Event()
@@ -538,15 +830,20 @@ class TestUIStore:
 
             def get_run(self, run_id):
                 if failed_call == "get":
-                    self.connected = False
-                    self.last_error = "UNAVAILABLE: get failed"
-                    return None
+                    self.operator_reachable = False
+                    raise OperatorCallError(
+                        grpc.StatusCode.UNAVAILABLE,
+                        "get failed",
+                    )
                 return RunState(run_id=run_id, flow_name="order_workflow")
 
             def list_runs(self, selector):
                 if self.started and failed_call == "list":
-                    self.connected = False
-                    self.last_error = "DEADLINE_EXCEEDED: list failed"
+                    self.operator_reachable = False
+                    raise OperatorCallError(
+                        grpc.StatusCode.DEADLINE_EXCEEDED,
+                        "list failed",
+                    )
                 return []
 
         provider = FailedFollowupProvider()
@@ -570,7 +867,7 @@ class TestUIStore:
         release = threading.Event()
         delegate = MockStateProvider()
 
-        class BlockingStartProvider:
+        class BlockingStartProvider(_ReachableStateProvider):
             def __init__(self):
                 self.entered = threading.Event()
 
@@ -814,8 +1111,83 @@ class TestUIStore:
         assert store.frame == old_frame + 1
         assert len(store.workflow_statuses) > 0
 
+    def test_stream_handoff_coalesces_and_repairs_sustained_overflow(self):
+        workflow = WorkflowInfo(
+            name="flow",
+            display_name="flow",
+            workflow_id="flow",
+            file_path="flow.py",
+            node_ids=["agent"],
+            graph={},
+            node_types={"agent": "agent"},
+            agent_node_ids=["agent"],
+        )
+        run = RunState(
+            run_id="run-1",
+            flow_name="flow",
+            workflow_id="flow",
+            nodes={
+                "agent": NodeState(
+                    node_id="agent",
+                    name="Agent",
+                    node_type="agent",
+                )
+            },
+            operator_instance_id="operator-1",
+            created_sequence=1,
+            details_hydrated=True,
+        )
+        store = UIStore(MockStateProvider())
+        _apply_async_updates(store)
+        store._background_updates = ui_store_module._BoundedBackgroundUpdates()
+        store.workflows = [workflow]
+        store.current_workflow = workflow
+        store.current_run = run
+        store._set_runs_cache([run])
+
+        for revision in range(1, 10_001):
+            store.enqueue_run_update(replace(run, revision=revision))
+        assert store._background_updates.qsize() == 1
+
+        last_sequence = ui_store_module.BACKGROUND_UPDATE_CAPACITY * 4
+        for sequence in range(1, last_sequence + 1):
+            store.enqueue_detail_update(
+                LogDetailAppended(
+                    operator_instance_id="operator-1",
+                    run_id="run-1",
+                    created_sequence=1,
+                    sequence=sequence,
+                    log_sequence=sequence,
+                    log=LogEntry(
+                        timestamp=datetime(2026, 7, 24),
+                        level=LogLevel.INFO,
+                        node_id="agent",
+                        message=f"log-{sequence}",
+                    ),
+                )
+            )
+
+        assert (
+            store._background_updates.qsize() <= ui_store_module.BACKGROUND_UPDATE_CAPACITY + 1
+        )
+        scheduled = []
+        store._schedule_detail_hydration = lambda run, **requirements: scheduled.append(
+            (run.run_id, requirements)
+        )
+        before = store._background_updates.qsize()
+        store._apply_background_updates()
+
+        assert before - store._background_updates.qsize() <= (
+            ui_store_module.BACKGROUND_UPDATES_PER_TICK
+        )
+        assert any(
+            requirements.get("required_log_sequence") == last_sequence
+            for _, requirements in scheduled
+        )
+        store.shutdown()
+
     def test_duplicate_display_names_use_ids_and_refresh_preserves_selection(self):
-        class MutableProvider:
+        class MutableProvider(_ReachableStateProvider):
             def __init__(self):
                 self.workflows = []
                 self.selectors = []
@@ -841,6 +1213,9 @@ class TestUIStore:
                 pass
 
             def on_log(self, callback):
+                pass
+
+            def on_detail_update(self, callback):
                 pass
 
         def workflow(workflow_id, source):
@@ -985,7 +1360,7 @@ class TestUIStore:
             for selector in ("a", "b")
         }
 
-        class BlockingProvider:
+        class BlockingProvider(_ReachableStateProvider):
             def list_workflows(self):
                 return workflows
 
@@ -1022,6 +1397,870 @@ class TestUIStore:
         assert store.current_run is runs["b"]
         assert store.runs_for_current_workflow == [runs["b"]]
 
+    def test_summary_refresh_preserves_hydrated_current_run_details(self):
+        workflow = WorkflowInfo(
+            name="flow",
+            display_name="flow",
+            workflow_id="flow",
+            file_path="flow.py",
+            node_ids=["node"],
+            graph={},
+            node_types={"node": "step"},
+        )
+        node = NodeState(
+            node_id="node",
+            name="Node",
+            node_type="step",
+            status=NodeStatus.RUNNING,
+            agent_trace_json='{"status":"in_progress","events":[{"sequence":1}]}',
+        )
+        hydrated = RunState(
+            run_id="run_1",
+            flow_name="flow",
+            workflow_id="flow",
+            status=RunStatus.RUNNING,
+            nodes={"node": node},
+            logs=[
+                LogEntry(
+                    timestamp=datetime(2026, 7, 22),
+                    level=LogLevel.INFO,
+                    node_id="node",
+                    message="working",
+                )
+            ],
+            operator_instance_id="operator-1",
+            revision=5,
+            latest_log_sequence=4,
+        )
+        summary = RunState(
+            run_id="run_1",
+            flow_name="flow",
+            workflow_id="flow",
+            status=RunStatus.SUCCESS,
+            operator_instance_id="operator-1",
+            revision=6,
+            details_hydrated=False,
+        )
+        store = UIStore(MockStateProvider())
+        _apply_async_updates(store)
+        store.current_workflow = workflow
+        store.current_run = hydrated
+        store.run_pinned = True
+        store._runs_cache = [hydrated]
+
+        store._background_updates.put(
+            (
+                "runs",
+                (
+                    workflow.selector,
+                    store._run_data_revision(workflow.selector),
+                    store._workflow_context_epoch,
+                    [summary],
+                ),
+            )
+        )
+        store._apply_background_updates()
+
+        merged = store.current_run
+        assert merged.nodes is hydrated.nodes
+        assert merged.logs is hydrated.logs
+        assert merged is store._runs_cache[0]
+        assert merged.status is RunStatus.SUCCESS
+        assert merged.nodes["node"].agent_trace_json == node.agent_trace_json
+        assert [entry.message for entry in merged.logs] == ["working"]
+        assert merged.latest_log_sequence == 4
+        assert merged.details_hydrated
+
+        stale_summary = replace(summary, status=RunStatus.FAILED, revision=4)
+        store._background_updates.put(
+            (
+                "runs",
+                (
+                    workflow.selector,
+                    store._run_data_revision(workflow.selector),
+                    store._workflow_context_epoch,
+                    [stale_summary],
+                ),
+            )
+        )
+        store._apply_background_updates()
+
+        assert store.current_run.status is RunStatus.SUCCESS
+        assert store.current_run.nodes["node"].agent_trace_json == node.agent_trace_json
+
+    def test_live_detail_deltas_populate_ui_without_structural_bodies(self):
+        workflow = WorkflowInfo(
+            name="flow",
+            display_name="flow",
+            workflow_id="flow",
+            file_path="flow.py",
+            node_ids=["agent"],
+            graph={},
+            node_types={"agent": "agent"},
+            agent_node_ids=["agent"],
+        )
+        run = RunState(
+            run_id="run_1",
+            flow_name="flow",
+            workflow_id="flow",
+            nodes={
+                "agent": NodeState(
+                    node_id="agent",
+                    name="Agent",
+                    node_type="agent",
+                )
+            },
+            operator_instance_id="operator-1",
+            created_sequence=7,
+            details_hydrated=False,
+        )
+        store = UIStore(MockStateProvider())
+        _apply_async_updates(store)
+        store.workflows = [workflow]
+        store.current_workflow = workflow
+        store.current_run = run
+        store.run_pinned = True
+        store._set_runs_cache([run])
+        store.dag, store.all_nodes = workflow_to_layout(workflow)
+        store.select_node(store.all_nodes[0])
+
+        log = LogEntry(
+            timestamp=datetime(2026, 7, 22),
+            level=LogLevel.INFO,
+            node_id="agent",
+            message="streamed detail",
+        )
+        event_json = json.dumps(
+            {
+                "sequence": 2,
+                "event_kind": "code.executed",
+                "data": {"output": "done"},
+            }
+        )
+        store.enqueue_run_update(
+            replace(
+                run,
+                revision=8,
+                latest_log_sequence=1,
+                details_hydrated=False,
+            )
+        )
+        store.enqueue_detail_update(
+            LogDetailAppended(
+                operator_instance_id="operator-1",
+                run_id="run_1",
+                created_sequence=7,
+                sequence=8,
+                log_sequence=1,
+                log=log,
+            )
+        )
+        store.enqueue_detail_update(
+            AgentEventDetailAppended(
+                operator_instance_id="operator-1",
+                run_id="run_1",
+                created_sequence=7,
+                sequence=9,
+                node_id="agent",
+                event=AgentEvent(
+                    invocation_id="test-invocation",
+                    event_sequence=2,
+                    event_json=event_json,
+                    size_bytes=len(event_json),
+                ),
+            )
+        )
+        store._apply_background_updates()
+
+        assert [entry.message for entry in store.current_run.logs] == ["streamed detail"]
+        assert store.selected_agent_events == [
+            {
+                "sequence": 2,
+                "event_kind": "code.executed",
+                "data": {"output": "done"},
+            }
+        ]
+
+        structural = replace(
+            store.current_run,
+            status=RunStatus.SUCCESS,
+            logs=[],
+            nodes={
+                "agent": replace(
+                    store.current_run.nodes["agent"],
+                    agent_trace_json=None,
+                )
+            },
+            revision=10,
+            latest_log_sequence=1,
+            details_hydrated=False,
+        )
+        store.enqueue_run_update(structural)
+        store._apply_background_updates()
+
+        assert store.current_run.status is RunStatus.SUCCESS
+        assert [entry.message for entry in store.current_run.logs] == ["streamed detail"]
+        assert store.selected_agent_events[0]["data"]["output"] == "done"
+
+    def test_live_detail_append_cost_is_independent_of_cached_history(self, monkeypatch):
+        append_count = 1000
+
+        class CountedDetails(list):
+            def __init__(self, values=()):
+                super().__init__(values)
+                self.append_calls = 0
+                self.iterated_slots = 0
+                self.sliced_slots = 0
+
+            def append(self, value):
+                self.append_calls += 1
+                return super().append(value)
+
+            def __iter__(self):
+                self.iterated_slots += list.__len__(self)
+                return super().__iter__()
+
+            def __getitem__(self, key):
+                value = super().__getitem__(key)
+                if isinstance(key, slice):
+                    self.sliced_slots += len(value)
+                return value
+
+        class IndexedOnlyRunCache(list):
+            scans = 0
+
+            def __iter__(self):
+                type(self).scans += 1
+                raise AssertionError("hot detail delivery scanned the run cache")
+
+        workflow = WorkflowInfo(
+            name="flow",
+            display_name="flow",
+            workflow_id="flow",
+            file_path="flow.py",
+            node_ids=["agent"],
+            graph={},
+            node_types={"agent": "agent"},
+            agent_node_ids=["agent"],
+        )
+        logs = CountedDetails()
+        run = RunState(
+            run_id="run_1",
+            flow_name="flow",
+            workflow_id="flow",
+            nodes={
+                "agent": NodeState(
+                    node_id="agent",
+                    name="Agent",
+                    node_type="agent",
+                    agent_trace_json='{"events":[]}',
+                )
+            },
+            operator_instance_id="operator-1",
+            created_sequence=7,
+            details_hydrated=True,
+            logs=logs,
+        )
+        store = UIStore(MockStateProvider())
+        _apply_async_updates(store)
+        store.workflows = [workflow]
+        store.current_workflow = workflow
+        store.current_run = run
+        store.run_pinned = True
+        store._set_runs_cache([run])
+        store._remember_run_details(run)
+        event_key = (*store._detail_key(run), "agent")
+        events = CountedDetails(store._agent_event_details[event_key])
+        store._agent_event_details[event_key] = events
+        store._runs_cache = IndexedOnlyRunCache(store._runs_cache)
+
+        original_copy = ui_store_module.copy
+        copy_calls = 0
+
+        def counted_copy(value):
+            nonlocal copy_calls
+            copy_calls += 1
+            return original_copy(value)
+
+        monkeypatch.setattr(ui_store_module, "copy", counted_copy)
+
+        for sequence in range(1, append_count + 1):
+            structural = replace(
+                store.current_run,
+                logs=[],
+                nodes={
+                    "agent": replace(
+                        store.current_run.nodes["agent"],
+                        agent_trace_json=None,
+                    )
+                },
+                revision=sequence,
+                latest_log_sequence=sequence,
+                details_hydrated=False,
+            )
+            event_json = json.dumps(
+                {
+                    "sequence": sequence,
+                    "event_kind": "iteration.recorded",
+                    "data": {"iteration": sequence},
+                }
+            )
+            store.enqueue_run_update(structural)
+            store.enqueue_detail_update(
+                LogDetailAppended(
+                    operator_instance_id="operator-1",
+                    run_id="run_1",
+                    created_sequence=7,
+                    sequence=sequence * 3,
+                    log_sequence=sequence,
+                    log=LogEntry(
+                        timestamp=datetime(2026, 7, 22),
+                        level=LogLevel.INFO,
+                        node_id="agent",
+                        message=f"log-{sequence}",
+                    ),
+                )
+            )
+            store.enqueue_detail_update(
+                AgentEventDetailAppended(
+                    operator_instance_id="operator-1",
+                    run_id="run_1",
+                    created_sequence=7,
+                    sequence=sequence * 3 + 1,
+                    node_id="agent",
+                    event=AgentEvent(
+                        invocation_id="test-invocation",
+                        event_sequence=sequence,
+                        event_json=event_json,
+                        size_bytes=len(event_json),
+                    ),
+                )
+            )
+            store._apply_background_updates()
+
+        assert logs.append_calls == append_count
+        assert events.append_calls == append_count
+        assert logs.iterated_slots == 0
+        assert logs.sliced_slots == 0
+        assert events.iterated_slots == 0
+        assert events.sliced_slots == 0
+        assert IndexedOnlyRunCache.scans == 0
+        assert copy_calls <= append_count * 2
+        assert list.__len__(logs) == append_count
+        assert list.__len__(events) == append_count
+        assert list.__getitem__(logs, -1).message == f"log-{append_count}"
+        assert list.__getitem__(events, -1)["sequence"] == append_count
+
+    def test_switch_back_hydration_advances_watermarks_and_repairs_gaps(self):
+        workflow = WorkflowInfo(
+            name="flow",
+            display_name="flow",
+            workflow_id="flow",
+            file_path="flow.py",
+            node_ids=["agent"],
+            graph={},
+            node_types={"agent": "agent"},
+            agent_node_ids=["agent"],
+        )
+
+        def event(sequence):
+            return {
+                "sequence": sequence,
+                "event_kind": "iteration.recorded",
+                "data": {"iteration": sequence},
+            }
+
+        def hydrated(
+            log_sequence,
+            event_sequence,
+            revision,
+            trace_revision,
+        ):
+            events = [event(sequence) for sequence in range(1, event_sequence + 1)]
+            return RunState(
+                run_id="run-a",
+                flow_name="flow",
+                workflow_id="flow",
+                operator_instance_id="operator-1",
+                created_sequence=7,
+                revision=revision,
+                latest_log_sequence=log_sequence,
+                details_hydrated=True,
+                logs=[
+                    LogEntry(
+                        timestamp=datetime(2026, 7, 22),
+                        level=LogLevel.INFO,
+                        node_id="agent",
+                        message=f"log-{sequence}",
+                    )
+                    for sequence in range(1, log_sequence + 1)
+                ],
+                nodes={
+                    "agent": NodeState(
+                        node_id="agent",
+                        name="Agent",
+                        node_type="agent",
+                        revision=revision,
+                        trace=TraceDescriptor(
+                            status="completed",
+                            revision=trace_revision,
+                            available=True,
+                            complete=True,
+                            event_count=event_sequence,
+                        ),
+                        agent_trace_json=json.dumps(
+                            {
+                                "events": events,
+                                "trace": {"marker": f"trace-{trace_revision}"},
+                            }
+                        ),
+                    )
+                },
+            )
+
+        def structural(run, revision, latest_log_sequence):
+            return replace(
+                run,
+                revision=revision,
+                latest_log_sequence=latest_log_sequence,
+                details_hydrated=False,
+                logs=[],
+                nodes={
+                    "agent": replace(
+                        run.nodes["agent"],
+                        revision=revision,
+                        agent_trace_json=None,
+                    )
+                },
+            )
+
+        def log_detail(sequence):
+            return LogDetailAppended(
+                operator_instance_id="operator-1",
+                run_id="run-a",
+                created_sequence=7,
+                sequence=sequence * 3,
+                log_sequence=sequence,
+                log=LogEntry(
+                    timestamp=datetime(2026, 7, 22),
+                    level=LogLevel.INFO,
+                    node_id="agent",
+                    message=f"log-{sequence}",
+                ),
+            )
+
+        def event_detail(sequence):
+            event_json = json.dumps(event(sequence))
+            return AgentEventDetailAppended(
+                operator_instance_id="operator-1",
+                run_id="run-a",
+                created_sequence=7,
+                sequence=sequence * 3 + 1,
+                node_id="agent",
+                event=AgentEvent(
+                    invocation_id="test-invocation",
+                    event_sequence=sequence,
+                    event_json=event_json,
+                    size_bytes=len(event_json),
+                ),
+            )
+
+        class GapHydrationProvider(MockStateProvider):
+            def __init__(self):
+                super().__init__()
+                self.results = []
+                self.started = []
+                self.releases = []
+                self.calls = 0
+
+            def get_run(self, run_id):
+                assert run_id == "run-a"
+                attempt = self.calls
+                self.calls += 1
+                self.started[attempt].set()
+                self.releases[attempt].wait(timeout=2)
+                return self.results[attempt]
+
+            def prepare(self, *results):
+                self.results = list(results)
+                self.started = [threading.Event() for _ in results]
+                self.releases = [threading.Event() for _ in results]
+
+        provider = GapHydrationProvider()
+        store = UIStore(provider)
+        _apply_async_updates(store)
+        run_a1 = hydrated(1, 1, 1, 1)
+        run_b = replace(
+            run_a1,
+            run_id="run-b",
+            created_sequence=8,
+            logs=[],
+            nodes={},
+            details_hydrated=False,
+        )
+        store.workflows = [workflow]
+        store.current_workflow = workflow
+        store.current_run = run_a1
+        store.run_pinned = True
+        store._set_runs_cache([run_a1, run_b])
+        store._remember_run_details(run_a1)
+
+        store.switch_run(run_b)
+        for sequence in (2, 3):
+            store.enqueue_run_update(structural(run_a1, sequence, sequence))
+            store.enqueue_detail_update(log_detail(sequence))
+            store.enqueue_detail_update(event_detail(sequence))
+            store._apply_background_updates()
+        assert provider.calls == 0
+
+        store.switch_run(store._runs_cache[0])
+        run_a3 = hydrated(3, 3, 3, 3)
+        store.enqueue_polled_run_update(
+            workflow.selector,
+            store._run_data_revision(workflow.selector),
+            store._workflow_context_epoch,
+            run_a3,
+        )
+        store._apply_background_updates()
+
+        key = store._detail_key(run_a3)
+        event_key = (*key, "agent")
+        assert store.current_run.logs is run_a3.logs
+        assert store._log_detail_sequences[key] == 3
+        assert store._agent_event_sequences[event_key] == 3
+        assert (
+            json.loads(store.current_run.nodes["agent"].agent_trace_json)["trace"]["marker"]
+            == "trace-3"
+        )
+
+        store.enqueue_run_update(structural(store.current_run, 4, 4))
+        store.enqueue_detail_update(log_detail(4))
+        store.enqueue_detail_update(event_detail(4))
+        store._apply_background_updates()
+        assert [entry.message for entry in store.current_run.logs] == [
+            "log-1",
+            "log-2",
+            "log-3",
+            "log-4",
+        ]
+        assert store._agent_event_sequences[event_key] == 4
+
+        logs_through_4 = store.current_run.logs
+        events_through_4 = store._agent_event_details[event_key]
+        stale = hydrated(2, 2, 2, 2)
+        store.enqueue_polled_run_update(
+            workflow.selector,
+            store._run_data_revision(workflow.selector),
+            store._workflow_context_epoch,
+            stale,
+        )
+        store._apply_background_updates()
+        assert store.current_run.logs is logs_through_4
+        assert store._agent_event_details[event_key] is events_through_4
+        assert store.current_run.revision == 4
+        assert (
+            json.loads(store.current_run.nodes["agent"].agent_trace_json)["trace"]["marker"]
+            == "trace-3"
+        )
+
+        run_a6 = hydrated(6, 6, 6, 6)
+        run_a8 = hydrated(8, 8, 8, 8)
+        provider.prepare(run_a6, run_a8)
+
+        store.enqueue_run_update(structural(store.current_run, 6, 6))
+        store.enqueue_detail_update(log_detail(6))
+        store.enqueue_detail_update(event_detail(6))
+        store._apply_background_updates()
+        assert provider.started[0].wait(timeout=1)
+        assert provider.calls == 1
+
+        store.enqueue_run_update(structural(store.current_run, 8, 8))
+        store.enqueue_detail_update(log_detail(8))
+        store.enqueue_detail_update(event_detail(8))
+        store._apply_background_updates()
+        requirements = store._detail_hydration_requirements[key]
+        assert requirements.log_sequence == 8
+        assert requirements.event_sequences == {}
+        assert provider.calls == 1
+
+        provider.releases[0].set()
+        deadline = time.monotonic() + 1
+        while not provider.started[1].is_set() and time.monotonic() < deadline:
+            store._apply_background_updates()
+            time.sleep(0.005)
+        assert provider.started[1].is_set()
+        assert provider.calls == 2
+        assert key not in store._log_detail_sequences
+        assert store._agent_event_sequences[event_key] == 8
+
+        # No additional stream message arrives. The coalesced replacement
+        # satisfies the log watermark and refreshes the full selected-run body.
+        provider.releases[1].set()
+        deadline = time.monotonic() + 1
+        while (
+            key in store._detail_hydrations_in_flight
+            or key in store._detail_hydration_requirements
+        ) and time.monotonic() < deadline:
+            store._apply_background_updates()
+            time.sleep(0.005)
+        store._apply_background_updates()
+
+        assert provider.calls == 2
+        assert key not in store._detail_hydrations_in_flight
+        assert key not in store._detail_hydration_requirements
+        assert store.current_run.logs is run_a8.logs
+        assert store._log_detail_sequences[key] == 8
+        assert store._agent_event_sequences[event_key] == 8
+        assert store._agent_event_details[event_key][-1]["sequence"] == 8
+        assert (
+            json.loads(store.current_run.nodes["agent"].agent_trace_json)["trace"]["marker"]
+            == "trace-8"
+        )
+
+        stale_logs = store.current_run.logs
+        stale_events = store._agent_event_details[event_key]
+        store.enqueue_polled_run_update(
+            workflow.selector,
+            store._run_data_revision(workflow.selector),
+            store._workflow_context_epoch,
+            run_a6,
+        )
+        store._apply_background_updates()
+        assert store.current_run.revision == 8
+        assert store.current_run.logs is stale_logs
+        assert store._agent_event_details[event_key] is stale_events
+
+        workers = set(store._detail_hydration_executor._threads)
+        assert len(workers) == 1
+        store.shutdown()
+        assert all(not worker.is_alive() for worker in workers)
+
+    def test_superseded_detail_completion_cannot_clear_new_worker_attempt(self):
+        workflow = WorkflowInfo(
+            name="flow",
+            display_name="flow",
+            workflow_id="flow",
+            file_path="flow.py",
+            node_ids=["node"],
+            graph={},
+            node_types={"node": "step"},
+        )
+        run = RunState(
+            run_id="run-blocked",
+            flow_name="flow",
+            workflow_id="flow",
+            operator_instance_id="operator-1",
+            created_sequence=1,
+            revision=1,
+            latest_log_sequence=1,
+            details_hydrated=False,
+        )
+        reset_run = replace(run, revision=2, latest_log_sequence=2)
+        started = [threading.Event(), threading.Event()]
+        released = [threading.Event(), threading.Event()]
+        worker_done = [threading.Event(), threading.Event()]
+        close_called = threading.Event()
+
+        class BlockingProvider(MockStateProvider):
+            def __init__(self):
+                super().__init__()
+                self.calls = 0
+
+            def get_run(self, run_id):
+                assert run_id == "run-blocked"
+                attempt = self.calls
+                self.calls += 1
+                started[attempt].set()
+                try:
+                    released[attempt].wait(timeout=2)
+                    return run
+                finally:
+                    worker_done[attempt].set()
+
+            def close(self):
+                close_called.set()
+                for release in released:
+                    release.set()
+
+        provider = BlockingProvider()
+        store = UIStore(provider)
+        store.workflows = [workflow]
+        store.current_workflow = workflow
+        store.current_run = run
+        store.run_pinned = True
+        store._set_runs_cache([run])
+        store._schedule_detail_hydration(run, required_log_sequence=1)
+        assert started[0].wait(timeout=1)
+
+        store._apply_reset_baseline(
+            ResetBaseline(
+                generation=1,
+                operator_instance_id="operator-1",
+                as_of_sequence=2,
+                workflows=(workflow,),
+                runs_by_workflow={workflow.selector: (reset_run,)},
+            )
+        )
+        store._schedule_detail_hydration(reset_run, required_log_sequence=2)
+        replacement_generation = store._detail_hydrations_in_flight[
+            store._detail_key(reset_run)
+        ]
+        released[0].set()
+        assert started[1].wait(timeout=1)
+        store._apply_background_updates()
+
+        key = store._detail_key(reset_run)
+        assert store._detail_hydrations_in_flight[key] == replacement_generation
+        assert store._detail_hydration_requirements[key].log_sequence == 2
+        assert provider.calls == 2
+
+        workers = set(store._detail_hydration_executor._threads)
+        assert store._detail_hydration_executor._max_workers == 1
+        assert len(workers) == 1
+        assert not worker_done[1].is_set()
+
+        store.request_shutdown()
+        provider.close()
+        store.shutdown()
+
+        assert close_called.is_set()
+        assert all(done.is_set() for done in worker_done)
+        assert all(not worker.is_alive() for worker in workers)
+
+    @pytest.mark.parametrize("failure_kind", ["none", "error", "insufficient"])
+    def test_detail_hydration_persistent_failure_uses_bounded_backoff(self, failure_kind):
+        if failure_kind == "error":
+            outcomes = [RuntimeError("unavailable"), RuntimeError("unavailable")]
+        elif failure_kind == "insufficient":
+            outcomes = [
+                _retry_hydration_run(hydrated=True),
+                _retry_hydration_run(hydrated=True),
+            ]
+        else:
+            outcomes = [None, None]
+        store, provider, _workflow, run, clock = _retry_hydration_store(outcomes)
+        key = store._detail_key(run)
+        try:
+            store._schedule_detail_hydration(run, required_log_sequence=3)
+            _finish_retry_hydration_attempt(store, provider, 0)
+
+            first_retry = store._detail_hydration_retries[key]
+            assert first_retry.deadline == pytest.approx(100.1)
+            for _ in range(250):
+                store._apply_background_updates()
+            assert provider.calls == 1
+
+            clock[0] = first_retry.deadline
+            store._apply_background_updates()
+            _finish_retry_hydration_attempt(store, provider, 1)
+
+            second_retry = store._detail_hydration_retries[key]
+            assert second_retry.deadline == pytest.approx(100.3)
+            assert second_retry.generation != first_retry.generation
+            for _ in range(250):
+                store._apply_background_updates()
+            assert provider.calls == 2
+        finally:
+            store.shutdown()
+
+    def test_detail_hydration_progress_resets_retry_backoff(self):
+        store, provider, _workflow, run, clock = _retry_hydration_store(
+            [None, None, _retry_hydration_run(2, hydrated=True)]
+        )
+        key = store._detail_key(run)
+        try:
+            store._schedule_detail_hydration(run, required_log_sequence=3)
+            _finish_retry_hydration_attempt(store, provider, 0)
+            clock[0] = store._detail_hydration_retries[key].deadline
+            store._apply_background_updates()
+            _finish_retry_hydration_attempt(store, provider, 1)
+            assert store._detail_hydration_failures[key] == 2
+
+            clock[0] = store._detail_hydration_retries[key].deadline
+            store._apply_background_updates()
+            _finish_retry_hydration_attempt(store, provider, 2)
+
+            assert store._log_detail_sequences[key] == 2
+            assert store._detail_hydration_failures[key] == 1
+            assert store._detail_hydration_retries[key].deadline == pytest.approx(
+                clock[0] + 0.1
+            )
+        finally:
+            store.shutdown()
+
+    def test_stronger_detail_requirement_resets_and_supersedes_delayed_retry(self):
+        store, provider, _workflow, run, clock = _retry_hydration_store([None, None])
+        key = store._detail_key(run)
+        try:
+            store._schedule_detail_hydration(run, required_log_sequence=2)
+            _finish_retry_hydration_attempt(store, provider, 0)
+            old_retry = store._detail_hydration_retries[key]
+
+            store._schedule_detail_hydration(run, required_log_sequence=4)
+            _finish_retry_hydration_attempt(store, provider, 1)
+            current_retry = store._detail_hydration_retries[key]
+
+            assert provider.calls == 2
+            assert store._detail_hydration_requirements[key].log_sequence == 4
+            assert store._detail_hydration_failures[key] == 1
+            assert current_retry.deadline == pytest.approx(clock[0] + 0.1)
+            assert current_retry.generation != old_retry.generation
+
+            store._apply_detail_hydration_retry(key, old_retry.generation)
+            assert store._detail_hydration_retries[key] == current_retry
+            assert provider.calls == 2
+        finally:
+            store.shutdown()
+
+    def test_detail_retry_cancelled_by_navigation_reset_and_shutdown(self):
+        store, provider, workflow, run, _clock = _retry_hydration_store([None, None, None])
+        key = store._detail_key(run)
+
+        store._schedule_detail_hydration(run, required_log_sequence=2)
+        _finish_retry_hydration_attempt(store, provider, 0)
+        navigation_retry = store._detail_hydration_retries[key]
+        other = replace(run, run_id="other", created_sequence=2)
+        store.switch_run(other)
+        store._apply_detail_hydration_retry(key, navigation_retry.generation)
+        assert provider.calls == 1
+        assert key not in store._detail_hydration_retries
+
+        store.switch_run(run)
+        store._schedule_detail_hydration(run, required_log_sequence=2)
+        _finish_retry_hydration_attempt(store, provider, 1)
+        reset_retry = store._detail_hydration_retries[key]
+        reset_run = _retry_hydration_run(2, operator_instance_id="operator-2")
+        store._apply_reset_baseline(
+            ResetBaseline(
+                generation=1,
+                operator_instance_id="operator-2",
+                as_of_sequence=2,
+                workflows=(workflow,),
+                runs_by_workflow={workflow.selector: (reset_run,)},
+            )
+        )
+        store._apply_detail_hydration_retry(key, reset_retry.generation)
+        assert provider.calls == 2
+        assert not store._detail_hydration_retries
+        assert not store._detail_hydration_requirements
+
+        assert store.current_run is not None
+        reset_key = store._detail_key(store.current_run)
+        store._schedule_detail_hydration(store.current_run, required_log_sequence=3)
+        _finish_retry_hydration_attempt(store, provider, 2)
+        shutdown_retry = store._detail_hydration_retries[reset_key]
+        workers = set(store._detail_hydration_executor._threads)
+        assert len(workers) == 1
+
+        store.request_shutdown()
+        store._apply_detail_hydration_retry(reset_key, shutdown_retry.generation)
+        store.shutdown()
+
+        assert provider.calls == 3
+        assert not store._detail_hydration_retries
+        assert not store._detail_hydration_requirements
+        assert all(not worker.is_alive() for worker in workers)
+
     def test_stream_terminal_update_wins_over_delayed_run_list(self):
         workflow = WorkflowInfo(
             name="flow",
@@ -1043,7 +2282,7 @@ class TestUIStore:
         entered = threading.Event()
         release = threading.Event()
 
-        class BlockingProvider:
+        class BlockingProvider(_ReachableStateProvider):
             def list_workflows(self):
                 return [workflow]
 
@@ -1057,7 +2296,7 @@ class TestUIStore:
         assert entered.wait(1.0)
         store.current_run = stale
         store.run_pinned = True
-        store._runs_cache = [older, stale]
+        store._set_runs_cache([older, stale])
         store.workflow_statuses = {workflow.selector: stale.status}
 
         store.enqueue_run_update(terminal)
@@ -1097,7 +2336,7 @@ class TestUIStore:
         entered = threading.Event()
         release = threading.Event()
 
-        class BlockingProvider:
+        class BlockingProvider(_ReachableStateProvider):
             block = False
 
             def list_workflows(self):
@@ -1152,7 +2391,7 @@ class TestUIStore:
         entered = threading.Event()
         release = threading.Event()
 
-        class BlockingFirstProvider:
+        class BlockingFirstProvider(_ReachableStateProvider):
             calls = 0
 
             def list_workflows(self):
@@ -1216,7 +2455,7 @@ class TestUIStore:
         entered = threading.Event()
         release = threading.Event()
 
-        class BlockingAProvider:
+        class BlockingAProvider(_ReachableStateProvider):
             def list_workflows(self):
                 return workflows
 
@@ -1267,7 +2506,7 @@ class TestUIStore:
         terminal = replace(running, status=RunStatus.SUCCESS)
         release = threading.Event()
 
-        class BlockingStartProvider:
+        class BlockingStartProvider(_ReachableStateProvider):
             def __init__(self):
                 self.entered = threading.Event()
                 self.list_calls = 0
@@ -1396,7 +2635,7 @@ class TestUIStore:
         store.workflows = [workflow]
         store.current_workflow = workflow
         store.current_run = latest
-        store._runs_cache = [older, latest]
+        store._set_runs_cache([older, latest])
         store.workflow_statuses = {workflow.selector: latest.status}
 
         store.enqueue_run_update(updated_older)
@@ -1405,6 +2644,270 @@ class TestUIStore:
         assert store._runs_cache == [updated_older, latest]
         assert store.current_run is latest
         assert store.workflow_statuses[workflow.selector] is RunStatus.SUCCESS
+
+    def test_reset_reconciliation_retries_after_loader_attempt_budget_exhausts(self):
+        class ExhaustingProvider(MockStateProvider):
+            def __init__(self):
+                super().__init__()
+                self.load_notices = []
+
+            def load_reset_baseline(self, notice):
+                self.load_notices.append(notice)
+                if len(self.load_notices) == 1:
+                    raise RuntimeError(
+                        "operator state did not stabilize while loading " "the reset baseline"
+                    )
+                return ResetBaseline(
+                    generation=notice.generation,
+                    operator_instance_id="operator-recovered",
+                    as_of_sequence=notice.observed_sequence,
+                    workflows=(INGEST_WORKFLOW,),
+                    runs_by_workflow={INGEST_WORKFLOW.selector: ()},
+                )
+
+        provider = ExhaustingProvider()
+        provider.stream_state = "reset_required"
+        store = UIStore(provider)
+        notice = StreamResetNotice(
+            generation=1,
+            previous_sequence=99,
+            observed_sequence=2,
+        )
+        try:
+            store._on_stream_reset(notice)
+            deadline = time.monotonic() + 2.0
+            while (
+                provider.stream_state != "live" or len(provider.load_notices) < 2
+            ) and time.monotonic() < deadline:
+                store._apply_background_updates()
+                time.sleep(0.01)
+
+            assert provider.load_notices == [notice, notice]
+            assert provider.operator_instance_id == "operator-recovered"
+            assert provider.stream_state == "live"
+            assert store.workflows == [INGEST_WORKFLOW]
+            assert store.run_error == ""
+            assert store._reset_reconciliations_in_flight == set()
+        finally:
+            store.shutdown()
+
+    @pytest.mark.parametrize(
+        ("generation", "operator_instance_id", "as_of_sequence"),
+        [
+            (2, "operator-new", 2),
+            (1, "operator-wrong", 2),
+            (1, "operator-new", 1),
+        ],
+    )
+    def test_reset_reconciliation_retries_invalid_baseline(
+        self,
+        generation,
+        operator_instance_id,
+        as_of_sequence,
+    ):
+        class InvalidThenValidProvider(MockStateProvider):
+            def __init__(self):
+                super().__init__()
+                self.load_count = 0
+
+            def load_reset_baseline(self, notice):
+                self.load_count += 1
+                if self.load_count == 1:
+                    return ResetBaseline(
+                        generation=generation,
+                        operator_instance_id=operator_instance_id,
+                        as_of_sequence=as_of_sequence,
+                        workflows=(),
+                        runs_by_workflow={},
+                    )
+                return ResetBaseline(
+                    generation=notice.generation,
+                    operator_instance_id=notice.operator_instance_id,
+                    as_of_sequence=notice.observed_sequence,
+                    workflows=(INGEST_WORKFLOW,),
+                    runs_by_workflow={INGEST_WORKFLOW.selector: ()},
+                )
+
+        provider = InvalidThenValidProvider()
+        provider.stream_state = "reset_required"
+        store = UIStore(provider)
+        notice = StreamResetNotice(
+            generation=1,
+            previous_sequence=99,
+            observed_sequence=2,
+            operator_instance_id="operator-new",
+        )
+        try:
+            store._on_stream_reset(notice)
+            deadline = time.monotonic() + 2.0
+            while (
+                provider.stream_state != "live" or provider.load_count < 2
+            ) and time.monotonic() < deadline:
+                store._apply_background_updates()
+                time.sleep(0.01)
+
+            assert provider.load_count == 2
+            assert provider.operator_instance_id == "operator-new"
+            assert provider.stream_state == "live"
+            assert store.workflows == [INGEST_WORKFLOW]
+            assert store.run_error == ""
+            assert store._reset_reconciliations_in_flight == set()
+        finally:
+            store.shutdown()
+
+    def test_reset_baseline_rejects_delayed_current_run_poll(self):
+        from avalanche.tui.app import AvalancheApp
+
+        poll_entered = threading.Event()
+        release_poll = threading.Event()
+        stale = RunState(
+            run_id="run-1",
+            flow_name=ORDER_WORKFLOW.name,
+            workflow_id=ORDER_WORKFLOW.selector,
+            status=RunStatus.RUNNING,
+            operator_instance_id="operator-1",
+            revision=1,
+        )
+        authoritative = replace(stale, status=RunStatus.SUCCESS, revision=2)
+
+        class BlockingPollProvider(MockStateProvider):
+            def get_run(self, run_id):
+                assert run_id == stale.run_id
+                poll_entered.set()
+                release_poll.wait()
+                return stale
+
+        provider = BlockingPollProvider()
+        app = AvalancheApp(provider=provider)
+        store = app.store
+        store.workflows = [ORDER_WORKFLOW]
+        store.current_workflow = ORDER_WORKFLOW
+        store.current_run = stale
+        store._runs_cache = [stale]
+        try:
+            app._poll_current_run()
+            assert poll_entered.wait(timeout=1.0)
+            store._apply_reset_baseline(
+                ResetBaseline(
+                    generation=1,
+                    operator_instance_id="operator-1",
+                    as_of_sequence=2,
+                    workflows=(ORDER_WORKFLOW,),
+                    runs_by_workflow={ORDER_WORKFLOW.selector: (authoritative,)},
+                )
+            )
+            release_poll.set()
+            deadline = time.monotonic() + 1.0
+            while app._poll_in_flight and time.monotonic() < deadline:
+                time.sleep(0.01)
+            store._apply_background_updates()
+
+            assert store.current_run is authoritative
+            assert store._runs_cache == [authoritative]
+            assert store.workflow_statuses[ORDER_WORKFLOW.selector] is RunStatus.SUCCESS
+        finally:
+            release_poll.set()
+            store.shutdown()
+
+    def test_catalog_response_started_before_reset_cannot_overwrite_baseline(self):
+        catalog_entered = threading.Event()
+        catalog_release = threading.Event()
+        baseline_entered = threading.Event()
+        baseline_release = threading.Event()
+
+        class BlockingCatalogProvider(MockStateProvider):
+            def __init__(self):
+                super().__init__()
+                self.block_catalog = False
+
+            def list_workflows(self):
+                if self.block_catalog:
+                    catalog_entered.set()
+                    catalog_release.wait()
+                    return [INGEST_WORKFLOW]
+                return super().list_workflows()
+
+        provider = BlockingCatalogProvider()
+
+        def load_baseline(notice):
+            baseline_entered.set()
+            baseline_release.wait()
+            return ResetBaseline(
+                generation=notice.generation,
+                operator_instance_id="operator-restarted",
+                as_of_sequence=notice.observed_sequence,
+                workflows=(ORDER_WORKFLOW,),
+                runs_by_workflow={ORDER_WORKFLOW.selector: ()},
+            )
+
+        store = UIStore(provider, reset_baseline_loader=load_baseline)
+        _apply_async_updates(store)
+        original_workflows = list(store.workflows)
+        updates = _signal_background_updates(store)
+        provider.block_catalog = True
+        store._refresh_workflow_catalog()
+        assert catalog_entered.wait(timeout=1.0)
+
+        provider.stream_state = "reset_required"
+        store._on_stream_reset(
+            StreamResetNotice(
+                generation=1,
+                previous_sequence=99,
+                observed_sequence=2,
+            )
+        )
+        assert baseline_entered.wait(timeout=1.0)
+        catalog_release.set()
+        assert updates.put_event.wait(timeout=1.0)
+        store._apply_background_updates()
+        assert store.workflows == original_workflows
+
+        updates.put_event.clear()
+        baseline_release.set()
+        assert updates.put_event.wait(timeout=1.0)
+        store._apply_background_updates()
+        assert store.workflows == [ORDER_WORKFLOW]
+        assert provider.operator_instance_id == "operator-restarted"
+        assert provider.stream_state == "live"
+
+    @pytest.mark.parametrize("refresh", ["catalog", "runs", "statuses"])
+    def test_application_error_refresh_preserves_authoritative_caches(self, refresh):
+        provider = _ApplicationErrorRefreshProvider()
+        store = UIStore(provider)
+        _apply_async_updates(store)
+        workflows = list(store.workflows)
+        runs = list(store._runs_cache)
+        statuses = dict(store.workflow_statuses)
+        updates = _signal_background_updates(store)
+        provider.fail_operation = "catalog" if refresh == "catalog" else "runs"
+
+        if refresh == "catalog":
+            store._refresh_workflow_catalog()
+        elif refresh == "runs":
+            store._refresh_runs_cache()
+        else:
+            store._refresh_workflow_statuses()
+
+        assert updates.put_event.wait(timeout=1.0)
+        store._apply_background_updates()
+        assert store.workflows == workflows
+        assert store._runs_cache == runs
+        assert store.workflow_statuses == statuses
+        assert provider.operator_reachable is True
+
+    def test_application_error_start_preserves_current_run_and_cache(self):
+        provider = _ApplicationErrorRefreshProvider()
+        store = UIStore(provider)
+        _apply_async_updates(store)
+        current_run = store.current_run
+        runs = list(store._runs_cache)
+        provider.fail_operation = "start"
+
+        assert store.start_run() is None
+        assert store.current_run is current_run
+        assert store._runs_cache == runs
+        assert store.run_error == "INVALID_ARGUMENT: start rejected"
+        assert provider.operator_reachable is True
 
     def test_run_error_is_rendered_in_status_bar(self):
         store = UIStore(MockStateProvider())
@@ -1415,6 +2918,387 @@ class TestUIStore:
         rendered = status.render().plain
 
         assert "✗ UNAVAILABLE: get failed" in rendered
+
+    @pytest.mark.parametrize(
+        ("stream_state", "label"),
+        [
+            ("failed", "live updates interrupted"),
+            ("replaying", "live updates replaying"),
+            ("reset_required", "live updates reset required"),
+        ],
+    )
+    def test_transport_health_is_rendered_separately_in_status_bar(self, stream_state, label):
+        provider = MockStateProvider()
+        provider.operator_reachable = True
+        provider.stream_state = stream_state
+        store = UIStore(provider)
+        status = StatusBar()
+        status._test_store = store
+
+        assert label in status.render().plain
+
+        provider.operator_reachable = False
+        rendered = status.render().plain
+        assert "operator unreachable" in rendered
+        assert label not in rendered
+
+    @pytest.mark.asyncio
+    async def test_ping_success_during_stream_failure_keeps_disconnect_overlay_hidden(self):
+        from avalanche.tui.app import AvalancheApp
+
+        class HealthProvider(MockStateProvider):
+            def __init__(self):
+                super().__init__()
+                self._address = "operator.example:7433"
+                self.operator_reachable = True
+                self.stream_state = "failed"
+                self.stream_error = "UNAVAILABLE: update stream failed"
+                self.pinged = threading.Event()
+
+            def ping(self):
+                self.operator_reachable = True
+                self.pinged.set()
+                return True
+
+        provider = HealthProvider()
+        app = AvalancheApp(provider=provider)
+        async with app.run_test(size=(120, 40)) as pilot:
+            await pilot.pause()
+            app._timer.pause()
+            app._ping_counter = 59
+            app._check_connection()
+            assert await asyncio.to_thread(provider.pinged.wait, 1.0)
+
+            wrapper = app._screen.query_one("#disconnect-wrapper")
+            for _ in range(3):
+                app._check_connection()
+                assert not wrapper.has_class("visible")
+            status = app._screen.query_one("#status-bar", StatusBar)
+            assert "live updates interrupted" in status.render().plain
+
+            provider.stream_state = "live"
+            app._check_connection()
+            assert not wrapper.has_class("visible")
+            assert "live updates live" in status.render().plain
+
+    def test_provider_restart_installs_baseline_before_exact_generation_ack(self):
+        stale_workflow = ORDER_WORKFLOW
+        workflow = INGEST_WORKFLOW
+        stale = RunState(
+            run_id="run_stale",
+            flow_name=stale_workflow.name,
+            status=RunStatus.SUCCESS,
+        )
+        recovered = RunState(
+            run_id="run_recovered",
+            flow_name=workflow.name,
+            status=RunStatus.RUNNING,
+        )
+        release = threading.Event()
+        stream_waiting = threading.Event()
+        notices = []
+
+        class LiveStream:
+            def initial_metadata(self):
+                return ()
+
+            def __iter__(self):
+                return self
+
+            def __next__(self):
+                stream_waiting.set()
+                release.wait()
+                raise StopIteration
+
+        class RestartedStub:
+            def __init__(self):
+                self.stream_calls = 0
+
+            def ListFlows(self, request, **kwargs):  # noqa: N802
+                return pb.FlowList(flows=[workflow_info_to_proto(stale_workflow)])
+
+            def ListRunSummaries(self, request, **kwargs):  # noqa: N802
+                return pb.RunSummaryPage(
+                    operator_instance_id="operator-original",
+                    as_of_sequence=99,
+                )
+
+            def StreamRunDeltas(self, request, *, metadata):  # noqa: N802
+                self.stream_calls += 1
+                assert metadata is None
+                if self.stream_calls == 1:
+                    assert request.operator_instance_id == "operator-original"
+                    assert request.after_sequence == 99
+                    return iter(
+                        (
+                            pb.RunDeltaEnvelope(
+                                operator_instance_id="operator-restarted",
+                                reset_required=pb.ResetRequired(
+                                    history_floor=1,
+                                    latest_sequence=2,
+                                ),
+                            ),
+                        )
+                    )
+                assert request.operator_instance_id == "operator-restarted"
+                assert request.after_sequence == 3
+                return LiveStream()
+
+        def load_baseline(notice: StreamResetNotice) -> ResetBaseline:
+            notices.append(notice)
+            return ResetBaseline(
+                generation=notice.generation,
+                operator_instance_id="operator-restarted",
+                as_of_sequence=3,
+                workflows=(workflow,),
+                runs_by_workflow={workflow.selector: (recovered,)},
+            )
+
+        provider = GrpcStateProvider(
+            "localhost:1",
+            reset_baseline_loader=load_baseline,
+        )
+        provider._stub = RestartedStub()
+        provider._install_structural_baseline("operator-original", 99, {})
+        store = UIStore(provider)
+        _apply_async_updates(store)
+        store.current_run = stale
+        store.run_pinned = True
+        try:
+            provider.on_run_update(store.enqueue_run_update)
+            provider.start_stream()
+            deadline = time.monotonic() + 2.0
+            while (
+                store.current_run is None
+                or store.current_run.run_id != recovered.run_id
+                or provider.stream_state is not StreamState.LIVE
+            ) and time.monotonic() < deadline:
+                store._apply_background_updates()
+                time.sleep(0.01)
+
+            assert stream_waiting.wait(timeout=1.0)
+            assert notices == [
+                StreamResetNotice(
+                    generation=1,
+                    previous_sequence=99,
+                    observed_sequence=2,
+                    operator_instance_id="operator-restarted",
+                )
+            ]
+            assert store.current_workflow is workflow
+            assert [run.run_id for run in store._runs_cache] == [recovered.run_id]
+            assert store.current_run is recovered
+            assert store.run_pinned is False
+            assert provider.stream_state is StreamState.LIVE
+            assert provider._cursor.operator_instance_id == "operator-restarted"
+            assert provider._cursor.sequence == 3
+            with pytest.raises(StaleResetAcknowledgementError):
+                provider.acknowledge_stream_reset(
+                    generation=1,
+                    operator_instance_id="operator-restarted",
+                    reconciled_sequence=3,
+                )
+        finally:
+            provider._stream_stop.set()
+            release.set()
+            provider.close()
+
+    def test_launch_path_recovers_after_operator_restart_with_default_baseline(
+        self, monkeypatch
+    ):
+        from tui import launch_tui
+        from tui.app import AvalancheApp
+
+        workflow = ORDER_WORKFLOW
+        old_run = RunState(
+            run_id="run_old",
+            flow_name=workflow.name,
+            status=RunStatus.SUCCESS,
+            workflow_id=workflow.selector,
+            workflow_display_name=workflow.display_name,
+        )
+        summaries = [
+            RunSummary(
+                run_id="run_recovered",
+                flow_name=workflow.name,
+                status=RunStatus.SUCCESS,
+                workflow_id=workflow.selector,
+                workflow_display_name=workflow.display_name,
+                created_sequence=1,
+                revision=1,
+            ),
+            RunSummary(
+                run_id="run_live",
+                flow_name=workflow.name,
+                status=RunStatus.RUNNING,
+                workflow_id=workflow.selector,
+                workflow_display_name=workflow.display_name,
+                created_sequence=2,
+                revision=3,
+            ),
+        ]
+
+        class RestartService(pb_grpc.OperatorServiceServicer):
+            def __init__(
+                self,
+                operator_id,
+                stream_sequence,
+                stream_run,
+                baseline_summaries=(),
+            ):
+                self.operator_id = operator_id
+                self.stream_sequence = stream_sequence
+                self.stream_run = stream_run
+                self.baseline_summaries = list(baseline_summaries) or [
+                    RunSummary(
+                        run_id=stream_run.run_id,
+                        flow_name=stream_run.flow_name,
+                        status=stream_run.status,
+                        workflow_id=stream_run.workflow_id,
+                        workflow_display_name=stream_run.workflow_display_name,
+                        created_sequence=1,
+                        revision=stream_sequence,
+                    )
+                ]
+                self.baseline_sequence = 3 if baseline_summaries else stream_sequence
+                self.stream_sent = threading.Event()
+                self.release_stream = threading.Event()
+                self.summary_tokens = []
+                self.snapshot_calls = []
+
+            def ListFlows(self, request, context):  # noqa: N802
+                return pb.FlowList(flows=[workflow_info_to_proto(workflow)])
+
+            def StreamRunDeltas(self, request, context):  # noqa: N802
+                context.send_initial_metadata(())
+                if request.operator_instance_id != self.operator_id:
+                    yield pb.RunDeltaEnvelope(
+                        operator_instance_id=self.operator_id,
+                        reset_required=pb.ResetRequired(
+                            history_floor=1,
+                            latest_sequence=self.stream_sequence,
+                        ),
+                    )
+                    return
+                assert request.after_sequence == self.baseline_sequence
+                self.stream_sent.set()
+                while context.is_active() and not self.release_stream.wait(0.01):
+                    pass
+
+            def ListRunSummaries(self, request, context):  # noqa: N802
+                self.summary_tokens.append(request.page_token)
+                index = 0 if not request.page_token else 1
+                next_page_token = "page-2" if index + 1 < len(self.baseline_summaries) else ""
+                runs = (
+                    [run_summary_to_proto(self.baseline_summaries[index])]
+                    if index < len(self.baseline_summaries)
+                    else []
+                )
+                return pb.RunSummaryPage(
+                    operator_instance_id=self.operator_id,
+                    as_of_sequence=self.baseline_sequence,
+                    runs=runs,
+                    next_page_token=next_page_token,
+                )
+
+            def GetRunSnapshot(self, request, context):  # noqa: N802
+                self.snapshot_calls.append(
+                    (
+                        request.run_id,
+                        request.operator_instance_id,
+                        request.as_of_sequence,
+                    )
+                )
+                summary = next(
+                    item for item in self.baseline_summaries if item.run_id == request.run_id
+                )
+                return run_snapshot_to_proto(
+                    RunSnapshot(
+                        operator_instance_id=self.operator_id,
+                        as_of_sequence=self.baseline_sequence,
+                        summary=summary,
+                    )
+                )
+
+        with socket.socket() as sock:
+            sock.bind(("localhost", 0))
+            port = sock.getsockname()[1]
+        address = f"localhost:{port}"
+
+        def start_server(service):
+            server = grpc.server(ThreadPoolExecutor(max_workers=4))
+            pb_grpc.add_OperatorServiceServicer_to_server(service, server)
+            assert server.add_insecure_port(address) == port
+            server.start()
+            return server
+
+        old_service = RestartService("operator-old", 99, old_run)
+        new_service = RestartService(
+            "operator-new",
+            2,
+            replace(old_run, run_id="run_reset"),
+            summaries,
+        )
+        old_server = start_server(old_service)
+        new_server = None
+
+        def exercise_launch(app):
+            nonlocal new_server
+            provider = app.store.provider
+            assert isinstance(provider, GrpcStateProvider)
+            assert provider._reset_baseline_loader is None
+            try:
+                deadline = time.monotonic() + 2.0
+                while not app.store.workflows and time.monotonic() < deadline:
+                    app.store._apply_background_updates()
+                    time.sleep(0.01)
+                _apply_async_updates(app.store)
+                provider.on_run_update(app.store.enqueue_run_update)
+                provider.start_stream()
+                deadline = time.monotonic() + 2.0
+                while not old_service.stream_sent.is_set() and time.monotonic() < deadline:
+                    app.store._apply_background_updates()
+                    time.sleep(0.01)
+                assert old_service.stream_sent.is_set()
+                assert provider._cursor.operator_instance_id == "operator-old"
+                assert provider._cursor.sequence == 99
+
+                old_service.release_stream.set()
+                old_server.stop(grace=0).wait()
+                new_server = start_server(new_service)
+                deadline = time.monotonic() + 10.0
+                while (
+                    provider.stream_state is not StreamState.LIVE
+                    or provider.operator_instance_id != "operator-new"
+                    or app.store.current_run is None
+                    or app.store.current_run.run_id != "run_live"
+                ) and time.monotonic() < deadline:
+                    app.store._apply_background_updates()
+                    time.sleep(0.01)
+
+                assert provider.stream_state is StreamState.LIVE
+                assert provider.operator_instance_id == "operator-new"
+                assert provider._cursor.operator_instance_id == "operator-new"
+                assert provider._cursor.sequence == 3
+                assert app.store.current_run is not None
+                assert app.store.current_run.run_id == "run_live"
+                assert new_service.summary_tokens == ["", "page-2"]
+                assert new_service.snapshot_calls == [
+                    ("run_recovered", "operator-new", 3),
+                    ("run_live", "operator-new", 3),
+                ]
+            finally:
+                provider.close()
+
+        monkeypatch.setattr(AvalancheApp, "run", exercise_launch)
+        try:
+            launch_tui(["--connect", address])
+        finally:
+            old_service.release_stream.set()
+            new_service.release_stream.set()
+            old_server.stop(grace=0)
+            if new_server is not None:
+                new_server.stop(grace=0)
 
     def test_sidebar_cursor_movement(self):
         store = UIStore(MockStateProvider())
@@ -1862,9 +3746,7 @@ class TestVirtualizedLogs:
             assert rebuilds == 0
             assert all(
                 rendered is initial
-                for rendered, initial in zip(
-                    log_view.lines, initial_prefix, strict=True
-                )
+                for rendered, initial in zip(log_view.lines, initial_prefix, strict=True)
             )
 
             app.store.current_run = replace(
@@ -2588,6 +4470,72 @@ class TestInteractions:
             assert app.store.selected_node.name == "export_onnx_1"
             assert app.store.selected_node.display_name == "export_onnx"
 
+    async def test_deep_link_node_renders_while_runs_are_still_loading(self):
+        """Deep-link selection must not be hidden behind asynchronous run loading."""
+        from avalanche.tui.app import AvalancheApp
+
+        delegate = MockStateProvider()
+        catalog_entered = threading.Event()
+        catalog_release = threading.Event()
+        runs_release = threading.Event()
+
+        class BlockingRunsProvider:
+            def list_workflows(self):
+                catalog_entered.set()
+                catalog_release.wait()
+                return delegate.list_workflows()
+
+            def list_runs(self, workflow_selector):
+                runs_release.wait()
+                return delegate.list_runs(workflow_selector)
+
+            def get_run(self, run_id):
+                return delegate.get_run(run_id)
+
+            def start_run(self, workflow_selector, **kwargs):
+                return delegate.start_run(workflow_selector, **kwargs)
+
+            def cancel_run(self, run_id):
+                return delegate.cancel_run(run_id)
+
+            def on_run_update(self, callback):
+                return delegate.on_run_update(callback)
+
+            def on_log(self, callback):
+                return delegate.on_log(callback)
+
+            def __getattr__(self, name):
+                return getattr(delegate, name)
+
+        app = AvalancheApp(
+            provider=BlockingRunsProvider(),
+            workflow="order_workflow",
+            node="validate",
+        )
+        updates = _signal_background_updates(app.store)
+        assert catalog_entered.wait(1.0)
+        catalog_release.set()
+        assert updates.put_event.wait(1.0)
+        app.store._apply_background_updates()
+        app._apply_deep_link()
+
+        try:
+            async with app.run_test(size=(120, 40)) as pilot:
+                await pilot.pause()
+                app._timer.pause()
+                app._refresh_widgets()
+
+                assert app.store.current_run is None
+                assert app.store.selected_node is not None
+                assert app.store.selected_node.display_name == "validate"
+                assert "validate" in app._screen.query_one("#dag-panel").render().plain
+                assert "validate" in str(app._screen.query_one("#log-panel").border_title)
+                assert (
+                    "validate" in app._screen.query_one("#status-bar", StatusBar).render().plain
+                )
+        finally:
+            runs_release.set()
+
     async def test_dag_arrows_move_nodes_not_scroll(self):
         """Arrow keys in DAG pane should move node selection, not scroll the container."""
         app = await self._make_app()
@@ -2978,6 +4926,41 @@ def _agent_trace_provider():
     return provider, envelope
 
 
+def _unhydrated_agent_trace_provider():
+    provider, complete_envelope = _agent_trace_provider()
+    run = provider._runs["run-agent"]
+    node = run.nodes["agent_1"]
+    pending_envelope = json.loads(json.dumps(complete_envelope))
+    pending_envelope["trace"] = None
+    descriptor = TraceDescriptor(
+        status="completed",
+        revision=1,
+        available=True,
+        complete=True,
+        event_count=len(pending_envelope["events"]),
+        size_bytes=100,
+    )
+    node.trace = descriptor
+    node.revision = descriptor.revision
+    node.agent_trace_json = json.dumps(pending_envelope)
+    return provider, complete_envelope, run, node, pending_envelope, descriptor
+
+
+def _trace_detail_from_run(run: RunState, node_id: str) -> TraceDetail:
+    node = run.nodes[node_id]
+    assert node.trace is not None
+    envelope = json.loads(node.agent_trace_json)
+    assert isinstance(envelope["trace"], dict)
+    return TraceDetail(
+        operator_instance_id=run.operator_instance_id,
+        run_id=run.run_id,
+        created_sequence=run.created_sequence,
+        node_id=node_id,
+        descriptor_revision=node.trace.revision,
+        trace_body=envelope["trace"],
+    )
+
+
 @pytest.mark.asyncio
 async def test_agent_trace_inspector_interactions_and_log_retention():
     from avalanche.tui.app import AvalancheApp
@@ -2986,7 +4969,6 @@ async def test_agent_trace_inspector_interactions_and_log_retention():
         AgentOutputInspector,
         AgentTraceInspector,
     )
-    from avalanche.tui.widgets.log_panel import LogWidget
 
     provider, _ = _agent_trace_provider()
     app = AvalancheApp(provider=provider, workflow="agent_flow", node="agent")
@@ -3139,10 +5121,534 @@ async def test_agent_trace_inspector_interactions_and_log_retention():
         assert app.store.trace_inspector_open is False
         assert app.store.focused_pane == "dag"
         assert app._screen.query_one("#dashboard-pane").display is True
-        log_view = app._screen.query_one("#log-content", LogWidget)
-        logs = "\n".join(line.text for line in log_view.lines)
+        logs = [entry.message for entry in app.store.logs]
         assert "Agent code.generated" in logs
         assert "Agent iteration.recorded" in logs
+
+
+@pytest.mark.asyncio
+async def test_open_trace_inspector_tracks_revisions_and_retries_hydration():
+    from avalanche.tui.app import AvalancheApp
+
+    (
+        provider,
+        complete_envelope,
+        run,
+        node,
+        pending_envelope,
+        descriptor,
+    ) = _unhydrated_agent_trace_provider()
+
+    hydration_calls = []
+    first_started = threading.Event()
+    release_first = threading.Event()
+
+    def hydrate_trace(run_id, node_id):
+        current = provider._runs[run_id]
+        current_node = current.nodes[node_id]
+        revision = current_node.trace.revision
+        hydration_calls.append(revision)
+        if revision == 1:
+            first_started.set()
+            release_first.wait()
+            return None
+        if revision == 3 and hydration_calls.count(3) == 1:
+            return None
+        hydrated_node = replace(
+            current_node,
+            agent_trace_json=json.dumps(complete_envelope),
+        )
+        hydrated = replace(current, nodes={node_id: hydrated_node})
+        provider._runs[run_id] = hydrated
+        return _trace_detail_from_run(hydrated, node_id)
+
+    provider.hydrate_trace = hydrate_trace
+    app = AvalancheApp(provider=provider, workflow="agent_flow", node="agent")
+    async with app.run_test(size=(100, 35)) as pilot:
+        try:
+            await pilot.pause()
+            await _wait_for_current_run(app)
+            await pilot.press("enter")
+            for _ in range(20):
+                if first_started.is_set():
+                    break
+                await pilot.pause()
+            assert first_started.is_set()
+            assert ("run-agent", "agent_1", 1) in app._trace_hydration_in_flight
+
+            node_v2 = replace(
+                node,
+                trace=replace(descriptor, revision=2),
+                revision=2,
+                agent_trace_json=json.dumps(pending_envelope),
+            )
+            run_v2 = replace(run, revision=2, nodes={"agent_1": node_v2})
+            provider._runs[run.run_id] = run_v2
+            app.store.enqueue_run_update(run_v2)
+            for _ in range(3):
+                await pilot.pause()
+            assert hydration_calls == [1]
+            assert ("run-agent", "agent_1", 1) in app._trace_hydration_in_flight
+        finally:
+            release_first.set()
+
+        for _ in range(40):
+            await pilot.pause()
+            envelope = app.store.selected_agent_trace_envelope
+            if 2 in hydration_calls and isinstance(envelope.get("trace"), dict):
+                break
+        assert hydration_calls[:2] == [1, 2]
+
+        await pilot.pause()
+
+        await pilot.press("left")
+        assert app.store.trace_inspector_tab == "metadata"
+        node_v3 = replace(
+            node_v2,
+            trace=replace(descriptor, revision=3),
+            revision=3,
+            agent_trace_json=json.dumps(pending_envelope),
+        )
+        run_v3 = replace(run_v2, revision=3, nodes={"agent_1": node_v3})
+        provider._runs[run.run_id] = run_v3
+        app.store.enqueue_run_update(run_v3)
+        for _ in range(3):
+            await pilot.pause()
+        assert 3 not in hydration_calls
+
+        await pilot.press("right")
+        for _ in range(40):
+            await pilot.pause()
+            envelope = app.store.selected_agent_trace_envelope
+            if hydration_calls.count(3) >= 2 and isinstance(envelope.get("trace"), dict):
+                break
+        assert app.store.trace_inspector_tab == "trace"
+        assert hydration_calls.count(3) == 2
+        assert isinstance(app.store.selected_agent_trace_envelope["trace"], dict)
+
+
+@pytest.mark.asyncio
+async def test_delayed_trace_detail_rejects_stale_body_without_state_rollback():
+    from avalanche.tui.app import AvalancheApp
+
+    (
+        provider,
+        complete_envelope,
+        run,
+        node,
+        pending_envelope,
+        descriptor,
+    ) = _unhydrated_agent_trace_provider()
+    run.operator_instance_id = "operator-1"
+    run.created_sequence = 4
+    stale_node = replace(
+        node,
+        agent_trace_json=json.dumps(complete_envelope),
+    )
+    stale_run = replace(
+        run,
+        nodes={"agent_1": stale_node},
+        logs=list(run.logs),
+    )
+    newer_envelope = json.loads(json.dumps(pending_envelope))
+    newer_envelope["events"].append(
+        {"sequence": 999, "event_kind": "iteration.recorded", "data": {"new": True}}
+    )
+    descriptor_v2 = replace(
+        descriptor,
+        revision=2,
+        event_count=len(newer_envelope["events"]),
+    )
+    newer_node = replace(
+        node,
+        status=NodeStatus.FAILED,
+        ended_at=99.0,
+        trace=descriptor_v2,
+        revision=8,
+        agent_trace_json=json.dumps(newer_envelope),
+    )
+    newer_log = LogEntry(
+        datetime.now(),
+        LogLevel.ERROR,
+        "agent_1",
+        "new structural state",
+    )
+    newer_run = replace(
+        run,
+        status=RunStatus.FAILED,
+        ended_at=101.0,
+        revision=12,
+        latest_log_sequence=77,
+        nodes={"agent_1": newer_node},
+        logs=[newer_log],
+    )
+    first_started = threading.Event()
+    release_first = threading.Event()
+    second_started = threading.Event()
+    release_second = threading.Event()
+    calls = 0
+
+    def hydrate_trace(run_id, node_id):
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            first_started.set()
+            release_first.wait()
+            return _trace_detail_from_run(stale_run, node_id)
+        second_started.set()
+        release_second.wait()
+        return None
+
+    def close():
+        release_first.set()
+        release_second.set()
+
+    provider.hydrate_trace = hydrate_trace
+    provider.close = close
+    app = AvalancheApp(provider=provider, workflow="agent_flow", node="agent")
+
+    async with app.run_test(size=(100, 35)) as pilot:
+        await pilot.pause()
+        await _wait_for_current_run(app)
+        await pilot.press("enter")
+        for _ in range(20):
+            if first_started.is_set():
+                break
+            await pilot.pause()
+        assert first_started.is_set()
+
+        provider._runs[run.run_id] = newer_run
+        app.store.enqueue_run_update(newer_run)
+        for _ in range(20):
+            await pilot.pause()
+            if app.store.current_run.revision == newer_run.revision:
+                break
+        assert app.store.current_run is newer_run
+
+        release_first.set()
+        for _ in range(40):
+            await pilot.pause()
+            if second_started.is_set():
+                break
+        assert second_started.is_set()
+
+        current = app.store.current_run
+        assert current.status is RunStatus.FAILED
+        assert current.revision == 12
+        assert current.latest_log_sequence == 77
+        assert [entry.message for entry in current.logs] == ["new structural state"]
+        current_node = current.nodes["agent_1"]
+        assert current_node.status is NodeStatus.FAILED
+        assert current_node.revision == 8
+        assert current_node.trace.revision == 2
+        envelope = json.loads(current_node.agent_trace_json)
+        assert envelope["events"][-1]["sequence"] == 999
+        assert envelope["trace"] is None
+        assert ("run-agent", "agent_1", 1) not in app._trace_hydration_retry
+
+
+@pytest.mark.asyncio
+async def test_trace_hydration_persistent_failure_uses_bounded_backoff():
+    from avalanche.tui.app import AvalancheApp
+
+    provider, _, _, _, _, _ = _unhydrated_agent_trace_provider()
+    clock = [0.0]
+    calls = []
+    completed_attempts = []
+
+    def hydrate_trace(run_id, node_id):
+        calls.append((run_id, node_id, clock[0]))
+        try:
+            return None
+        finally:
+            completed_attempts.append(len(calls))
+
+    provider.hydrate_trace = hydrate_trace
+    app = AvalancheApp(provider=provider, workflow="agent_flow", node="agent")
+    app._trace_hydration_now = lambda: clock[0]
+    key = ("run-agent", "agent_1", 1)
+
+    async def wait_for_retry(pilot, level, call_count, after_deadline):
+        for _ in range(40):
+            await pilot.pause()
+            retry = app._trace_hydration_retry.get(key)
+            if (
+                len(calls) == call_count
+                and len(completed_attempts) == call_count
+                and retry is not None
+                and retry[0] == level
+                and retry[1] > after_deadline
+            ):
+                return retry
+        raise AssertionError(f"retry level {level} was not observed")
+
+    async with app.run_test(size=(100, 35)) as pilot:
+        await pilot.pause()
+        await _wait_for_current_run(app)
+        await pilot.press("enter")
+        retry = await wait_for_retry(pilot, 1, 1, clock[0])
+        assert retry == (1, 0.25)
+
+        for _ in range(20):
+            await pilot.pause()
+        assert len(calls) == 1
+
+        expected_levels = (2, 3, 4, 5, 5)
+        for call_count, level in enumerate(expected_levels, start=2):
+            clock[0] = app._trace_hydration_retry[key][1]
+            retry = await wait_for_retry(pilot, level, call_count, clock[0])
+        assert retry[1] - clock[0] == 4.0
+
+        for _ in range(20):
+            await pilot.pause()
+        assert len(calls) == 6
+
+
+@pytest.mark.asyncio
+async def test_trace_hydration_completion_during_navigation_allows_retry():
+    from avalanche.tui.app import AvalancheApp
+
+    (
+        provider,
+        complete_envelope,
+        run,
+        _node,
+        _pending_envelope,
+        _descriptor,
+    ) = _unhydrated_agent_trace_provider()
+    old_workflow = provider._workflows["agent_flow"]
+    provider._workflows[ORDER_WORKFLOW.selector] = ORDER_WORKFLOW
+    started = threading.Event()
+    release = threading.Event()
+    completion_ready = threading.Event()
+    pending_completions = []
+    calls = []
+
+    def hydrate_trace(run_id, node_id):
+        calls.append((run_id, node_id))
+        current = provider._runs[run_id]
+        hydrated_node = replace(
+            current.nodes[node_id],
+            agent_trace_json=json.dumps(complete_envelope),
+        )
+        if len(calls) == 1:
+            started.set()
+            release.wait()
+        return _trace_detail_from_run(
+            replace(current, nodes={node_id: hydrated_node}),
+            node_id,
+        )
+
+    provider.hydrate_trace = hydrate_trace
+    app = AvalancheApp(provider=provider, workflow="agent_flow", node="agent")
+    enqueue_completion = app.store.enqueue_trace_hydration_completion
+
+    def signal_completion(completion):
+        pending_completions.append(completion)
+        completion_ready.set()
+
+    def deliver_completion():
+        assert len(pending_completions) == 1
+        enqueue_completion(pending_completions.pop())
+        completion_ready.clear()
+        app.store._apply_background_updates()
+        app._apply_trace_hydration_completions()
+
+    app.store.enqueue_trace_hydration_completion = signal_completion
+    key = ("run-agent", "agent_1", 1)
+    async with app.run_test(size=(100, 35)) as pilot:
+        try:
+            await pilot.pause()
+            await _wait_for_current_run(app)
+            await pilot.press("enter")
+            for _ in range(20):
+                if started.is_set():
+                    break
+                await pilot.pause()
+            assert started.is_set()
+            attempt = app._trace_hydration_attempts[key]
+            assert key in app._trace_hydration_in_flight
+
+            app.store.switch_workflow(ORDER_WORKFLOW)
+            await pilot.pause()
+            app._hydrate_selected_trace()
+            assert app.store.current_workflow.selector == ORDER_WORKFLOW.selector
+            assert app._trace_hydration_context is None
+            assert app._trace_hydration_attempts == {key: attempt}
+            assert key in app._trace_hydration_in_flight
+            assert attempt in app._trace_hydration_superseded
+        finally:
+            release.set()
+
+        await asyncio.to_thread(completion_ready.wait)
+        assert key in app._trace_hydration_in_flight
+        deliver_completion()
+        assert key not in app._trace_hydration_in_flight
+        assert key not in app._trace_hydration_attempts
+        assert attempt not in app._trace_hydration_superseded
+        assert calls == [("run-agent", "agent_1")]
+
+        app.store.switch_workflow(old_workflow)
+        app.store._runs_cache = [run]
+        app.store.current_run = run
+        app.store.run_pinned = True
+        agent_node = next(
+            item for item in app.store.all_nodes if item.name in old_workflow.agent_node_ids
+        )
+        app.store.select_node(agent_node)
+        assert app.store.open_trace_inspector()
+        app._hydrate_selected_trace()
+        await asyncio.to_thread(completion_ready.wait)
+        deliver_completion()
+        assert calls == [
+            ("run-agent", "agent_1"),
+            ("run-agent", "agent_1"),
+        ]
+        assert isinstance(app.store.selected_agent_trace_envelope["trace"], dict)
+
+
+@pytest.mark.asyncio
+async def test_trace_hydration_tab_cycles_bound_blocked_worker_and_keep_backoff():
+    from avalanche.tui.app import AvalancheApp
+
+    provider, _, _, _, _, _ = _unhydrated_agent_trace_provider()
+    clock = [100.0]
+    started = threading.Event()
+    release = threading.Event()
+    worker_done = threading.Event()
+    lock = threading.Lock()
+    calls = 0
+    active = 0
+    max_active = 0
+
+    def hydrate_trace(run_id, node_id):
+        nonlocal active, calls, max_active
+        with lock:
+            calls += 1
+            active += 1
+            max_active = max(max_active, active)
+        started.set()
+        try:
+            release.wait()
+            return None
+        finally:
+            with lock:
+                active -= 1
+            worker_done.set()
+
+    provider.hydrate_trace = hydrate_trace
+    provider.close = release.set
+    app = AvalancheApp(provider=provider, workflow="agent_flow", node="agent")
+    app._trace_hydration_now = lambda: clock[0]
+    key = ("run-agent", "agent_1", 1)
+
+    async with app.run_test(size=(100, 35)) as pilot:
+        await pilot.pause()
+        await _wait_for_current_run(app)
+        await pilot.press("enter")
+        for _ in range(20):
+            if started.is_set():
+                break
+            await pilot.pause()
+        assert started.is_set()
+
+        attempt = app._trace_hydration_attempts[key]
+        for _ in range(8):
+            await pilot.press("left")
+            await pilot.pause()
+            await pilot.press("right")
+            await pilot.pause()
+
+        with lock:
+            assert calls == 1
+            assert active == 1
+            assert max_active == 1
+        assert key in app._trace_hydration_in_flight
+        assert key in app._trace_hydration_attempts
+        assert attempt in app._trace_hydration_superseded
+
+        release.set()
+        await asyncio.to_thread(worker_done.wait)
+        retry = None
+        for _ in range(40):
+            await pilot.pause()
+            retry = app._trace_hydration_retry.get(key)
+            if retry is not None:
+                break
+        assert retry == (1, 100.25)
+        assert key not in app._trace_hydration_in_flight
+        assert app._trace_hydration_attempts == {}
+        assert attempt not in app._trace_hydration_superseded
+
+        await pilot.press("left")
+        await pilot.pause()
+        await pilot.press("right")
+        for _ in range(5):
+            await pilot.pause()
+        assert app._trace_hydration_retry[key] == retry
+        assert calls == 1
+
+
+@pytest.mark.asyncio
+async def test_trace_hydration_shutdown_closes_provider_and_joins_worker():
+    from avalanche.tui.app import AvalancheApp
+
+    provider, _, _, _, _, _ = _unhydrated_agent_trace_provider()
+    started = threading.Event()
+    release = threading.Event()
+    close_called = threading.Event()
+    worker_done = threading.Event()
+
+    def hydrate_trace(run_id, node_id):
+        started.set()
+        try:
+            release.wait()
+            return None
+        finally:
+            worker_done.set()
+
+    def close():
+        close_called.set()
+        release.set()
+
+    provider.hydrate_trace = hydrate_trace
+    provider.close = close
+    app = AvalancheApp(provider=provider, workflow="agent_flow", node="agent")
+
+    async with app.run_test(size=(100, 35)) as pilot:
+        await pilot.pause()
+        await _wait_for_current_run(app)
+        await pilot.press("enter")
+        for _ in range(20):
+            if started.is_set():
+                break
+            await pilot.pause()
+        assert started.is_set()
+        assert not worker_done.is_set()
+
+    assert close_called.is_set()
+    assert worker_done.is_set()
+    assert all(not thread.is_alive() for thread in app._trace_hydration_executor._threads)
+
+
+@pytest.mark.asyncio
+async def test_app_does_not_close_launch_owned_provider_on_unmount():
+    from avalanche.tui.app import AvalancheApp
+
+    provider = MockStateProvider()
+    close_calls = 0
+
+    def close():
+        nonlocal close_calls
+        close_calls += 1
+
+    provider.close = close
+    app = AvalancheApp(provider=provider, close_provider_on_unmount=False)
+
+    async with app.run_test(size=(100, 35)) as pilot:
+        await pilot.pause()
+
+    assert close_calls == 0
 
 
 @pytest.mark.asyncio
@@ -3189,6 +5695,7 @@ async def test_agent_trace_inspector_renders_pending_failed_malformed_and_incomp
         assert app.store.trace_inspector_tab == "metadata"
         await pilot.press("right")
         assert app.store.trace_inspector_tab == "trace"
+        node = app.store.current_run.nodes["agent_1"]
         workflow.agent_metadata_json["agent_1"] = original_metadata_json
 
         projected = json.loads(json.dumps(envelope))
@@ -3210,6 +5717,7 @@ async def test_agent_trace_inspector_renders_pending_failed_malformed_and_incomp
         assert note_header in absent_output
         assert "Unavailable" in absent_output[absent_output.index(note_header) :]
         await pilot.press("left")
+        node = app.store.current_run.nodes["agent_1"]
 
         malformed_success = json.loads(json.dumps(envelope))
         malformed_success["trace"]["evidence"]["events"].append(
@@ -3223,6 +5731,7 @@ async def test_agent_trace_inspector_renders_pending_failed_malformed_and_incomp
         await pilot.press("right")
         assert "Output unavailable" in output_content.render().plain
         await pilot.press("left")
+        node = app.store.current_run.nodes["agent_1"]
 
         legacy = json.loads(json.dumps(envelope))
         legacy["trace"]["evidence"]["events"] = [
@@ -3234,6 +5743,7 @@ async def test_agent_trace_inspector_renders_pending_failed_malformed_and_incomp
         await pilot.press("right")
         assert "Output unavailable" in output_content.render().plain
         await pilot.press("left")
+        node = app.store.current_run.nodes["agent_1"]
 
         assert app.store.trace_inspector_tab == "trace"
         node.agent_trace_json = json.dumps(envelope)
@@ -3244,6 +5754,7 @@ async def test_agent_trace_inspector_renders_pending_failed_malformed_and_incomp
         await pilot.press("right")
         assert "Output unavailable" in output_content.render().plain
         await pilot.press("left")
+        node = app.store.current_run.nodes["agent_1"]
         assert app.store.trace_inspector_tab == "trace"
 
         node.agent_trace_json = "{malformed"
@@ -3254,11 +5765,13 @@ async def test_agent_trace_inspector_renders_pending_failed_malformed_and_incomp
         assert "This agent step has not run yet for this run." in missing_trace
         assert "Trace unavailable or malformed" not in missing_trace
         await pilot.press("right")
+        app.store.current_run.nodes.pop("agent_1", None)
         missing_output = output_content.render().plain
         assert "This agent step has not run yet for this run." in missing_output
         assert "Output unavailable" not in missing_output
         await pilot.press("left")
         app.store.current_run.nodes["agent_1"] = missing_node
+        node = app.store.current_run.nodes["agent_1"]
 
         node.status = NodeStatus.PENDING
         node.agent_trace_json = None
@@ -3266,18 +5779,26 @@ async def test_agent_trace_inspector_renders_pending_failed_malformed_and_incomp
         assert "This agent step has not run yet for this run." in pending_trace
         assert "Trace unavailable or malformed" not in pending_trace
         await pilot.press("right")
+        node = app.store.current_run.nodes["agent_1"]
+        node.status = NodeStatus.PENDING
+        node.agent_trace_json = None
         pending_output = output_content.render().plain
         assert "This agent step has not run yet for this run." in pending_output
         assert "Output unavailable" not in pending_output
         await pilot.press("left")
+        node = app.store.current_run.nodes["agent_1"]
 
         node.status = NodeStatus.RUNNING
         assert "waiting for live updates" in content.render().plain
         await pilot.press("right")
+        node = app.store.current_run.nodes["agent_1"]
+        node.status = NodeStatus.RUNNING
+        node.agent_trace_json = None
         running_output = output_content.render().plain
         assert "Output will be available after this agent step completes." in running_output
         assert "This agent step has not run yet for this run." not in running_output
         await pilot.press("left")
+        node = app.store.current_run.nodes["agent_1"]
 
         live = dict(envelope)
         live.update({"status": "in_progress", "trace": None, "error": None})
@@ -3301,10 +5822,14 @@ async def test_agent_trace_inspector_renders_pending_failed_malformed_and_incomp
         assert "iteration.recorded" not in failed_render
         node.status = NodeStatus.FAILED
         await pilot.press("right")
+        node = app.store.current_run.nodes["agent_1"]
+        node.status = NodeStatus.FAILED
+        node.agent_trace_json = json.dumps(failed)
         assert "Output unavailable" in output_content.render().plain
         assert _SANDBOX_STDOUT_SENTINEL not in output_content.render().plain
         await pilot.press("left")
 
+        node = app.store.current_run.nodes["agent_1"]
         incomplete = json.loads(json.dumps(envelope))
         incomplete["trace"]["evidence"]["complete"] = False
         node.agent_trace_json = json.dumps(incomplete)

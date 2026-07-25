@@ -14,10 +14,21 @@ import pytest
 from avalanche import LocalExecutor, RayExecutor
 from avalanche._agent_evidence import emit_agent_evidence
 from avalanche.operator import Operator
-from avalanche.operator.models import NodeState, NodeStatus, RunState, RunStatus
-from avalanche.operator.operator import RunAlreadyExistsError
+from avalanche.operator.models import (
+    NodeState,
+    NodeStatus,
+    RunState,
+    RunStatus,
+    RunStatusChanged,
+)
+from avalanche.operator.operator import (
+    MAX_RUN_ID_BYTES,
+    InvalidRunIdError,
+    RunAlreadyExistsError,
+)
 from avalanche.operator.scheduler import Scheduler
 from runtime.operator.run_worker import (
+    _import_isolated_ray,
     _QueueStream,
     _with_local_node_observers,
     _with_ray_node_observers,
@@ -55,6 +66,17 @@ class TestOperatorLifecycle:
         assert op.start_run("simple_workflow", run_id="run_reserved") == "run_reserved"
         with pytest.raises(RunAlreadyExistsError, match="already exists"):
             op.start_run("simple_workflow", run_id="run_reserved")
+
+    def test_custom_run_id_rejects_values_above_retained_summary_limit(self):
+        op = self._make_operator()
+        try:
+            with pytest.raises(InvalidRunIdError, match="256-byte UTF-8 limit"):
+                op.start_run(
+                    "simple_workflow",
+                    run_id="é" * (MAX_RUN_ID_BYTES // 2 + 1),
+                )
+        finally:
+            op.close()
 
     def test_custom_run_id_reservation_is_atomic_for_concurrent_requests(self):
         op = self._make_operator()
@@ -336,6 +358,21 @@ class TestOperatorLifecycle:
         with pytest.raises(ValueError, match="require executor_backend='ray'"):
             Operator([], watch=False, schedule=False, **ray_config)
 
+    def test_isolated_ray_import_disables_uv_runtime_env_hook(self, monkeypatch):
+        imported = SimpleNamespace()
+
+        def import_module(name):
+            assert name == "ray"
+            assert os.environ["RAY_ENABLE_UV_RUN_RUNTIME_ENV"] == "0"
+            return imported
+
+        monkeypatch.setenv("RAY_ENABLE_UV_RUN_RUNTIME_ENV", "1")
+        monkeypatch.setattr(
+            "runtime.operator.run_worker.importlib.import_module", import_module
+        )
+
+        assert _import_isolated_ray() is imported
+
     @pytest.mark.parametrize(
         "explicit_config",
         [
@@ -410,7 +447,7 @@ class TestOperatorSubscription:
 
     def test_subscribe_receives_updates(self):
         op = self._make_operator()
-        q = op.subscribe()
+        q = op.subscribe_run_deltas()
 
         run_id = op.start_run("simple_workflow")
 
@@ -419,23 +456,22 @@ class TestOperatorSubscription:
         deadline = time.monotonic() + 5
         while time.monotonic() < deadline:
             try:
-                seq, run = q.get(timeout=0.1)
-                updates.append((seq, run.status))
+                envelope = q.get(timeout=0.1)
+                updates.append(envelope.delta)
             except Exception:
                 pass
             run = op.get_run(run_id)
             if run and run.status == RunStatus.SUCCESS:
                 # Drain remaining
                 while not q.empty():
-                    seq, run = q.get_nowait()
-                    updates.append((seq, run.status))
+                    updates.append(q.get_nowait().delta)
                 break
 
-        op.unsubscribe(q)
+        op.unsubscribe_run_deltas(q)
 
-        # Should have received multiple updates with increasing sequence
+        # Every accepted mutation is delivered once in global sequence order.
         assert len(updates) >= 2
-        sequences = [s for s, _ in updates]
+        sequences = [delta.sequence for delta in updates]
         assert sequences == sorted(sequences), "Sequences should be monotonically increasing"
 
     def test_replays_exact_missed_updates_within_retained_history(self):
@@ -449,52 +485,50 @@ class TestOperatorSubscription:
             run.status = RunStatus.SUCCESS
             op._notify_run(run)
 
-            assert op.subscribe(3).empty()
-            replay = op.subscribe(1)
+            assert op.subscribe_run_deltas(op.operator_instance_id, 3).empty()
+            replay = op.subscribe_run_deltas(op.operator_instance_id, 1)
 
-            assert [replay.get_nowait() for _ in range(2)] == [
-                (2, RunState(run_id="run_1", flow_name="flow", status=RunStatus.RUNNING)),
-                (3, RunState(run_id="run_1", flow_name="flow", status=RunStatus.SUCCESS)),
-            ]
+            envelopes = [replay.get_nowait() for _ in range(2)]
+            assert [item.delta.sequence for item in envelopes] == [2, 3]
+            assert [
+                item.delta.change.status
+                for item in envelopes
+                if isinstance(item.delta.change, RunStatusChanged)
+            ] == [RunStatus.RUNNING, RunStatus.SUCCESS]
             assert replay.empty()
         finally:
             op.close()
 
-    def test_old_cursor_recovers_latest_runs_with_fresh_ordered_sequences(self):
+    def test_old_delta_cursor_requires_structural_reset(self):
         op = Operator([], watch=False, schedule=False, stream_history_capacity=2)
-        op._runs = {
-            "run_b": RunState(run_id="run_b", flow_name="flow", status=RunStatus.SUCCESS),
-            "run_a": RunState(run_id="run_a", flow_name="flow", status=RunStatus.FAILED),
-        }
+        run = RunState(run_id="run_a", flow_name="flow")
+        op._runs[run.run_id] = run
         try:
-            for _ in range(3):
-                op._notify_run(op._runs["run_a"])
+            op._notify_run(run)
+            run.status = RunStatus.RUNNING
+            op._notify_run(run)
+            run.status = RunStatus.SUCCESS
+            op._notify_run(run)
 
-            recovery = op.subscribe(0)
-            updates = [recovery.get_nowait(), recovery.get_nowait()]
+            recovery = op.subscribe_run_deltas(op.operator_instance_id, 0)
+            reset = recovery.get_nowait()
 
-            assert [(seq, run.run_id) for seq, run in updates] == [
-                (4, "run_a"),
-                (5, "run_b"),
-            ]
+            assert reset.reset_required.history_floor == 2
+            assert reset.reset_required.latest_sequence == 3
             assert recovery.empty()
-            assert [seq for seq, _ in op._stream_history] == [4, 5]
+            assert [delta.sequence for delta in op._stream_history] == [2, 3]
         finally:
             op.close()
 
-    def test_cursor_ahead_after_restart_recovers_current_runs(self):
+    def test_cursor_ahead_after_restart_requires_structural_reset(self):
         op = Operator([], watch=False, schedule=False)
-        op._runs = {
-            "run_b": RunState(run_id="run_b", flow_name="flow"),
-            "run_a": RunState(run_id="run_a", flow_name="flow"),
-        }
         try:
-            recovery = op.subscribe(99)
+            recovery = op.subscribe_run_deltas("previous-operator", 99)
+            reset = recovery.get_nowait()
 
-            assert [recovery.get_nowait() for _ in range(2)] == [
-                (1, RunState(run_id="run_a", flow_name="flow")),
-                (2, RunState(run_id="run_b", flow_name="flow")),
-            ]
+            assert reset.operator_instance_id == op.operator_instance_id
+            assert reset.reset_required.history_floor == 1
+            assert reset.reset_required.latest_sequence == 0
             assert recovery.empty()
         finally:
             op.close()
@@ -509,7 +543,7 @@ class TestOperatorSubscription:
 
             def subscribe():
                 barrier.wait()
-                subscriptions.append(op.subscribe(0))
+                subscriptions.append(op.subscribe_run_deltas(op.operator_instance_id, 0))
 
             def notify():
                 barrier.wait()
@@ -526,7 +560,7 @@ class TestOperatorSubscription:
             queued = []
             while not subscriptions[0].empty():
                 queued.append(subscriptions[0].get_nowait())
-            assert [(seq, state.run_id) for seq, state in queued] == [(1, run.run_id)]
+            assert [envelope.delta.sequence for envelope in queued] == [1]
             op.close()
 
 
@@ -556,6 +590,7 @@ class TestAgentEvidenceTransport:
             emit_agent_evidence(
                 {
                     "kind": "evidence",
+                    "invocation_id": "agent-invocation",
                     "sequence": 1,
                     "event_kind": "run.started",
                     "timestamp_ns": 1,
@@ -584,6 +619,7 @@ class TestAgentEvidenceTransport:
                 "node_id": "agent_1",
                 "event": {
                     "kind": "evidence",
+                    "invocation_id": "agent-invocation",
                     "sequence": 1,
                     "event_kind": "run.started",
                     "timestamp_ns": 1,
@@ -595,54 +631,229 @@ class TestAgentEvidenceTransport:
     def test_operator_merges_ordered_evidence_and_final_trace(self):
         operator = Operator([], watch=False, schedule=False)
         run = self._state()
-        with operator._lock:
-            operator._runs[run.run_id] = run
+        handle = SimpleNamespace(
+            cancel_event=threading.Event(),
+            result_bundle=None,
+            success_quiesced=False,
+        )
+        try:
+            with operator._lock:
+                operator._runs[run.run_id] = run
+
+            evidence = {
+                "type": "agent_evidence",
+                "node_id": "agent_1",
+                "event": {
+                    "kind": "evidence",
+                    "invocation_id": "agent-invocation",
+                    "sequence": 1,
+                    "event_kind": "code.generated",
+                    "timestamp_ns": 10,
+                    "data": {"iteration": 1, "code": "print('ok')"},
+                },
+            }
+            assert operator._apply_event(run.run_id, handle, evidence) is False
+            assert operator._apply_event(run.run_id, handle, evidence) is False
+            assert (
+                operator._apply_event(
+                    run.run_id,
+                    handle,
+                    {
+                        "type": "agent_evidence",
+                        "node_id": "agent_1",
+                        "event": {
+                            "kind": "trace_finished",
+                            "invocation_id": "agent-invocation",
+                            "trace": {
+                                "status": "completed",
+                                "evidence": {
+                                    "run_id": "agent-run",
+                                    "complete": True,
+                                    "events": [],
+                                },
+                                "steps": [],
+                            },
+                        },
+                    },
+                )
+                is False
+            )
+
+            assert run.nodes["agent_1"].agent_trace_json is None
+            assert run.logs == []
+
+            summaries = operator.list_run_summaries()
+            snapshot = operator.get_run_snapshot(
+                run.run_id,
+                operator_instance_id=summaries.operator_instance_id,
+                as_of_sequence=summaries.as_of_sequence,
+            )
+            assert snapshot is not None
+            node = snapshot.nodes[0]
+            assert node.trace is not None
+            assert node.trace.status == "completed"
+            assert node.trace.available is True
+            assert node.trace.complete is True
+            assert node.trace.event_count == 1
+
+            events = operator.list_agent_events(page_token=node.event_page_token)
+            assert [item.event_sequence for item in events.events] == [1]
+            structured_event = json.loads(operator.read_detail(events.events[0].body_token))
+            assert structured_event == {
+                "sequence": 1,
+                "invocation_id": "agent-invocation",
+                "event_kind": "code.generated",
+                "timestamp_ns": 10,
+                "data": {"iteration": 1, "code": "print('ok')"},
+            }
+
+            finalized = operator.read_trace(
+                run.run_id,
+                "agent_1",
+                operator_instance_id=snapshot.operator_instance_id,
+                revision=node.trace.revision,
+            )
+            finalized_trace = json.loads(finalized.data)
+            assert finalized_trace["status"] == "completed"
+            assert finalized_trace["evidence"]["run_id"] == "agent-run"
+
+            logs = operator.list_logs(page_token=snapshot.log_page_token)
+            assert len(logs.logs) == 2
+
+            materialized = operator.get_run(run.run_id)
+            assert materialized is not None
+            envelope = json.loads(materialized.nodes["agent_1"].agent_trace_json)
+            assert envelope["invocation_id"] == "agent-invocation"
+            assert envelope["status"] == "completed"
+            assert envelope["run_id"] == "agent-run"
+            assert [item["sequence"] for item in envelope["events"]] == [1]
+            assert [entry.node_id for entry in materialized.logs] == [
+                "agent_1",
+                "agent_1",
+            ]
+            assert run.nodes["agent_1"].agent_trace_json is None
+        finally:
+            operator.close()
+
+    def test_operator_accepts_source_sequence_restart_for_new_invocation(self):
+        operator = Operator([], watch=False, schedule=False)
+        run = self._state()
         handle = SimpleNamespace(
             cancel_event=threading.Event(),
             result_bundle=None,
             success_quiesced=False,
         )
 
-        evidence = {
-            "type": "agent_evidence",
-            "node_id": "agent_1",
-            "event": {
-                "kind": "evidence",
-                "sequence": 1,
-                "event_kind": "code.generated",
-                "timestamp_ns": 10,
-                "data": {"iteration": 1, "code": "print('ok')"},
-            },
-        }
-        assert operator._apply_event(run.run_id, handle, evidence) is False
-        assert operator._apply_event(run.run_id, handle, evidence) is False
-        assert (
-            operator._apply_event(
+        def apply(event):
+            return operator._apply_event(
                 run.run_id,
                 handle,
                 {
                     "type": "agent_evidence",
                     "node_id": "agent_1",
-                    "event": {
-                        "kind": "trace_finished",
-                        "trace": {
-                            "status": "completed",
-                            "evidence": {
-                                "run_id": "agent-run",
-                                "complete": True,
-                                "events": [],
-                            },
-                            "steps": [],
-                        },
-                    },
+                    "event": event,
                 },
             )
-            is False
-        )
 
-        envelope = json.loads(run.nodes["agent_1"].agent_trace_json)
-        assert envelope["status"] == "completed"
-        assert envelope["run_id"] == "agent-run"
-        assert [item["sequence"] for item in envelope["events"]] == [1]
-        assert [entry.node_id for entry in run.logs] == ["agent_1", "agent_1"]
-        operator.close()
+        try:
+            with operator._lock:
+                operator._runs[run.run_id] = run
+
+            assert (
+                apply(
+                    {
+                        "kind": "evidence",
+                        "invocation_id": "invocation-a",
+                        "sequence": 1,
+                        "event_kind": "code.executed",
+                        "timestamp_ns": 1,
+                        "data": {"output": "first"},
+                    }
+                )
+                is False
+            )
+            assert (
+                apply(
+                    {
+                        "kind": "trace_finished",
+                        "invocation_id": "invocation-a",
+                        "trace": {
+                            "status": "completed",
+                            "evidence": {"run_id": "predict-a", "complete": True},
+                        },
+                    }
+                )
+                is False
+            )
+            assert (
+                apply(
+                    {
+                        "kind": "evidence",
+                        "invocation_id": "invocation-b",
+                        "sequence": 1,
+                        "event_kind": "code.executed",
+                        "timestamp_ns": 2,
+                        "data": {"output": "second"},
+                    }
+                )
+                is False
+            )
+            retained_log_count = len(operator._logs[run.run_id])
+            assert (
+                apply(
+                    {
+                        "kind": "evidence",
+                        "invocation_id": "invocation-b",
+                        "sequence": 1,
+                        "event_kind": "code.executed",
+                        "timestamp_ns": 3,
+                        "data": {"output": "duplicate"},
+                    }
+                )
+                is False
+            )
+            assert len(operator._logs[run.run_id]) == retained_log_count
+            assert (
+                apply(
+                    {
+                        "kind": "trace_unavailable",
+                        "invocation_id": "invocation-b",
+                        "error": "retry failed",
+                    }
+                )
+                is False
+            )
+
+            summaries = operator.list_run_summaries()
+            snapshot = operator.get_run_snapshot(
+                run.run_id,
+                operator_instance_id=summaries.operator_instance_id,
+                as_of_sequence=summaries.as_of_sequence,
+            )
+            assert snapshot is not None
+            trace = snapshot.nodes[0].trace
+            assert trace is not None
+            assert trace.status == "unavailable"
+            assert trace.event_count == 2
+            assert trace.latest_event_sequence == 2
+
+            page = operator.list_agent_events(page_token=snapshot.nodes[0].event_page_token)
+            assert [(item.invocation_id, item.event_sequence) for item in page.events] == [
+                ("invocation-a", 1),
+                ("invocation-b", 2),
+            ]
+            bodies = [json.loads(operator.read_detail(item.body_token)) for item in page.events]
+            assert [(body["invocation_id"], body["sequence"]) for body in bodies] == [
+                ("invocation-a", 1),
+                ("invocation-b", 1),
+            ]
+
+            materialized = operator.get_run(run.run_id)
+            assert materialized is not None
+            envelope = json.loads(materialized.nodes["agent_1"].agent_trace_json)
+            assert envelope["invocation_id"] == "invocation-b"
+            assert [
+                (item["invocation_id"], item["sequence"]) for item in envelope["events"]
+            ] == [("invocation-a", 1), ("invocation-b", 1)]
+        finally:
+            operator.close()
