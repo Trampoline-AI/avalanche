@@ -586,6 +586,122 @@ def test_client_log_delta_append_never_copies_cumulative_history():
         provider.close()
 
 
+def test_client_detail_cache_evicts_oldest_buckets_within_count_and_byte_limits():
+    provider = GrpcStateProvider(
+        "localhost:1",
+        max_detail_body_bytes=1,
+        max_retained_detail_count=3,
+        max_retained_detail_bytes=3,
+    )
+    provider._read_detail_body = lambda _token, _size: b"x"
+    sequence = 0
+    try:
+        for index in range(6):
+            run_id = f"run-{index}"
+            sequence += 1
+            provider._apply_delta_envelope(
+                RunDeltaEnvelope(
+                    operator_instance_id="operator-1",
+                    delta=RunDelta(
+                        sequence=sequence,
+                        change=RunCreated(
+                            summary=RunSummary(
+                                run_id=run_id,
+                                flow_name="flow",
+                                status=RunStatus.RUNNING,
+                                created_sequence=sequence,
+                                revision=sequence,
+                            )
+                        ),
+                    ),
+                )
+            )
+            sequence += 1
+            provider._apply_delta_envelope(
+                RunDeltaEnvelope(
+                    operator_instance_id="operator-1",
+                    delta=RunDelta(
+                        sequence=sequence,
+                        change=LogAppended(
+                            run_id,
+                            LogRecordDescriptor(
+                                sequence=1,
+                                timestamp=datetime(2026, 7, 22),
+                                level=LogLevel.INFO,
+                                node_id="node-1",
+                                size_bytes=1,
+                                body_token=f"log-{index}",
+                            ),
+                        ),
+                    ),
+                )
+            )
+
+            assert provider._retained_detail_count <= 3
+            assert provider._retained_detail_bytes <= 3
+            assert len(provider._detail_cache_usage) <= 3
+
+        assert list(provider._detail_cache_usage) == [
+            provider._log_cache_key("run-3"),
+            provider._log_cache_key("run-4"),
+            provider._log_cache_key("run-5"),
+        ]
+        assert set(provider._log_entries) == {"run-3", "run-4", "run-5"}
+        assert provider._retained_detail_count == 3
+        assert provider._retained_detail_bytes == 3
+
+        provider._install_structural_baseline("operator-2", sequence + 1, {})
+        assert provider._detail_cache_usage == {}
+        assert provider._retained_detail_count == 0
+        assert provider._retained_detail_bytes == 0
+        assert provider._log_entries == {}
+
+        provider._apply_delta_envelope(
+            RunDeltaEnvelope(
+                operator_instance_id="operator-2",
+                delta=RunDelta(
+                    sequence=sequence + 2,
+                    change=RunCreated(
+                        summary=RunSummary(
+                            run_id="run-after-reset",
+                            flow_name="flow",
+                            status=RunStatus.RUNNING,
+                            created_sequence=sequence + 2,
+                            revision=sequence + 2,
+                        )
+                    ),
+                ),
+            )
+        )
+        provider._apply_delta_envelope(
+            RunDeltaEnvelope(
+                operator_instance_id="operator-2",
+                delta=RunDelta(
+                    sequence=sequence + 3,
+                    change=LogAppended(
+                        "run-after-reset",
+                        LogRecordDescriptor(
+                            sequence=1,
+                            timestamp=datetime(2026, 7, 22),
+                            level=LogLevel.INFO,
+                            node_id="node-1",
+                            size_bytes=1,
+                            body_token="log-after-reset",
+                        ),
+                    ),
+                ),
+            )
+        )
+        assert provider._retained_detail_count == 1
+    finally:
+        provider.close()
+
+    assert provider._detail_cache_usage == {}
+    assert provider._retained_detail_count == 0
+    assert provider._retained_detail_bytes == 0
+    assert provider._log_entries == {}
+
+
 def test_client_delta_reducer_uses_copy_on_write_and_constant_event_append(
     monkeypatch,
 ):
@@ -888,11 +1004,14 @@ def test_hydrated_run_rejects_body_when_trace_descriptor_advanced():
                 snapshot,
                 hydrated,
                 logs=[],
+                log_bytes=0,
                 starting_cursor=starting_cursor,
                 hydrated_agent_nodes={key},
                 agent_sequences={key: 1},
                 agent_events={key: [{"sequence": 1}]},
+                agent_event_bytes={key: 14},
                 trace_bodies={key: {"marker": "stale"}},
+                trace_body_bytes={key: 18},
             )
         retained = provider._runs_by_id["run-1"]
         assert retained.nodes["node-1"].trace.revision == 3

@@ -634,6 +634,78 @@ def test_read_trace_success_records_reachability_without_healing_update_stream()
         provider.close()
 
 
+def test_trace_cache_evicts_oldest_bodies_across_unique_run_node_keys():
+    trace_data = b"{}"
+    descriptor = TraceDescriptor(
+        status="completed",
+        revision=4,
+        available=True,
+        complete=True,
+        size_bytes=len(trace_data),
+    )
+    runs = {
+        f"run-{index}": RunState(
+            run_id=f"run-{index}",
+            flow_name="flow",
+            operator_instance_id="operator-1",
+            created_sequence=index + 1,
+            revision=4,
+            nodes={
+                "agent": NodeState(
+                    node_id="agent",
+                    name="agent",
+                    node_type="agent",
+                    trace=descriptor,
+                    revision=4,
+                )
+            },
+        )
+        for index in range(4)
+    }
+
+    class TraceStub:
+        def ReadTrace(self, request, **kwargs):  # noqa: N802
+            return iter(
+                [
+                    pb.TraceChunk(
+                        revision=request.revision,
+                        chunk_index=0,
+                        data=trace_data,
+                        eof=True,
+                    )
+                ]
+            )
+
+    provider = GrpcStateProvider(
+        "localhost:1",
+        max_detail_body_bytes=2,
+        max_retained_detail_count=2,
+        max_retained_detail_bytes=4,
+    )
+    provider._stub = TraceStub()
+    provider._install_structural_baseline("operator-1", 4, runs)
+    provider.get_run = lambda run_id: runs.get(run_id)
+    try:
+        for run_id in runs:
+            detail = provider.hydrate_trace(run_id, "agent")
+            assert detail is not None
+            assert detail.trace_body == {}
+            assert provider._retained_detail_count <= 2
+            assert provider._retained_detail_bytes <= 4
+            assert len(provider._detail_cache_usage) <= 2
+
+        retained = [provider._trace_cache_key(run_id, "agent") for run_id in runs]
+        assert list(provider._detail_cache_usage) == retained[-2:]
+        assert set(provider._trace_bodies) == {
+            ("run-2", "agent"),
+            ("run-3", "agent"),
+        }
+        assert provider._retained_detail_count == 2
+        assert provider._retained_detail_bytes == 4
+    finally:
+        provider.close()
+
+
 def test_detail_hydration_rejects_advertised_and_streamed_bytes_before_accumulating():
     class OversizedStream:
         def __init__(self):
@@ -666,6 +738,180 @@ def test_detail_hydration_rejects_advertised_and_streamed_bytes_before_accumulat
             provider._read_detail_body("token", 3)
         assert stub.calls == 1
         assert stub.stream.cancelled is True
+    finally:
+        provider.close()
+
+
+@pytest.mark.parametrize(
+    ("name", "value", "error"),
+    [
+        ("max_retained_detail_count", True, TypeError),
+        ("max_retained_detail_count", 1.5, TypeError),
+        ("max_retained_detail_count", 0, ValueError),
+        ("max_retained_detail_bytes", False, TypeError),
+        ("max_retained_detail_bytes", "1", TypeError),
+        ("max_retained_detail_bytes", -1, ValueError),
+        ("max_paged_items", True, TypeError),
+        ("max_paged_items", 1.5, TypeError),
+        ("max_paged_items", 0, ValueError),
+    ],
+)
+def test_retained_detail_limits_require_positive_integers(name, value, error):
+    with pytest.raises(error, match=rf"{name} must be"):
+        GrpcStateProvider("localhost:1", **{name: value})
+
+
+@pytest.mark.parametrize(
+    ("detail_kind", "max_count", "max_bytes", "limit_name"),
+    [
+        ("logs", 3, 100, "body count"),
+        ("events", 100, 3, "byte"),
+    ],
+)
+def test_multi_page_detail_hydration_fails_before_unbounded_or_partial_publication(
+    detail_kind,
+    max_count,
+    max_bytes,
+    limit_name,
+):
+    class PagedDetailStub:
+        def __init__(self):
+            self.body_reads = 0
+
+        def ListRunSummaries(self, request, **kwargs):  # noqa: N802
+            return pb.RunSummaryPage(
+                operator_instance_id="operator-1",
+                as_of_sequence=4,
+            )
+
+        def GetRunSnapshot(self, request, **kwargs):  # noqa: N802
+            node = pb.NodeSnapshotMsg(
+                node_id="node-1",
+                name="Node",
+                node_type="agent",
+                status="running",
+                revision=4,
+            )
+            if detail_kind == "events":
+                node.trace.CopyFrom(
+                    pb.TraceDescriptorMsg(
+                        status="in_progress",
+                        revision=4,
+                        event_count=4,
+                        latest_event_sequence=4,
+                    )
+                )
+                node.event_page_token = "events"
+            return pb.RunSnapshotMsg(
+                operator_instance_id="operator-1",
+                as_of_sequence=4,
+                summary=pb.RunSummaryMsg(
+                    run_id="run-1",
+                    flow_name="flow",
+                    status="running",
+                    created_sequence=1,
+                    revision=4,
+                ),
+                nodes=[node],
+                latest_log_sequence=4 if detail_kind == "logs" else 0,
+                log_page_token="logs" if detail_kind == "logs" else "",
+            )
+
+        def ListLogs(self, request, **kwargs):  # noqa: N802
+            sequence = request.after_sequence + 1
+            return pb.LogPage(
+                operator_instance_id="operator-1",
+                as_of_sequence=4,
+                logs=[
+                    pb.LogRecordDescriptorMsg(
+                        sequence=sequence,
+                        timestamp=float(sequence),
+                        level="INFO",
+                        node_id="node-1",
+                        size_bytes=1,
+                        body_token=f"log-{sequence}",
+                    )
+                ],
+                next_page_token="logs" if sequence < 4 else "",
+            )
+
+        def ListAgentEvents(self, request, **kwargs):  # noqa: N802
+            sequence = request.after_event_sequence + 1
+            return pb.AgentEventPage(
+                operator_instance_id="operator-1",
+                as_of_sequence=4,
+                run_id="run-1",
+                node_id="node-1",
+                events=[
+                    pb.AgentEventDescriptorMsg(
+                        invocation_id="invocation",
+                        event_sequence=sequence,
+                        size_bytes=1,
+                        body_token=f"event-{sequence}",
+                    )
+                ],
+                next_page_token="events" if sequence < 4 else "",
+            )
+
+        def ReadDetail(self, request, **kwargs):  # noqa: N802
+            self.body_reads += 1
+            yield pb.DetailChunk(chunk_index=0, data=b"x", eof=True)
+
+    stub = PagedDetailStub()
+    provider = GrpcStateProvider(
+        "localhost:1",
+        max_detail_body_bytes=1,
+        max_retained_detail_count=max_count,
+        max_retained_detail_bytes=max_bytes,
+    )
+    provider._stub = stub
+    try:
+        with pytest.raises(OperatorCallError) as error:
+            provider.get_run("run-1")
+        assert error.value.status is grpc.StatusCode.RESOURCE_EXHAUSTED
+        assert limit_name in error.value.details
+        assert stub.body_reads == 3
+        assert provider._runs_by_id == {}
+        assert provider._log_entries == {}
+        assert provider._agent_events == {}
+        assert provider._retained_detail_count == 0
+        assert provider._retained_detail_bytes == 0
+    finally:
+        provider.close()
+
+
+def test_run_summary_pagination_fails_before_unbounded_page_or_list_accumulation():
+    class UnboundedSummaryStub:
+        def __init__(self):
+            self.calls = 0
+
+        def ListRunSummaries(self, request, **kwargs):  # noqa: N802
+            self.calls += 1
+            return pb.RunSummaryPage(
+                operator_instance_id="operator-1",
+                as_of_sequence=self.calls,
+                runs=[
+                    pb.RunSummaryMsg(
+                        run_id=f"run-{self.calls}",
+                        flow_name="flow",
+                        status="running",
+                        created_sequence=self.calls,
+                        revision=self.calls,
+                    )
+                ],
+                next_page_token=f"page-{self.calls}",
+            )
+
+    stub = UnboundedSummaryStub()
+    provider = GrpcStateProvider("localhost:1", max_paged_items=2)
+    provider._stub = stub
+    try:
+        with pytest.raises(OperatorCallError) as error:
+            provider.list_runs("flow")
+        assert error.value.status is grpc.StatusCode.RESOURCE_EXHAUSTED
+        assert "pagination item limit" in error.value.details
+        assert stub.calls == 2
+        assert provider._runs_by_id == {}
     finally:
         provider.close()
 
@@ -898,6 +1144,146 @@ def test_post_header_stream_failures_preserve_exponential_reconnect_backoff():
         provider.close()
 
     assert delays == [2, 4, 8]
+
+
+def test_duplicate_only_streams_do_not_reset_reconnect_backoff_or_cursor():
+    provider = GrpcStateProvider("localhost:1")
+    delays = []
+    requests = []
+
+    class Unavailable(grpc.RpcError):
+        def code(self):
+            return grpc.StatusCode.UNAVAILABLE
+
+        def details(self):
+            return "duplicate replay aborted"
+
+    class RecordingStop:
+        def __init__(self):
+            self.stopped = False
+
+        def is_set(self):
+            return self.stopped
+
+        def set(self):
+            self.stopped = True
+
+        def wait(self, delay):
+            delays.append(delay)
+            if len(delays) == 3:
+                self.stopped = True
+            return self.stopped
+
+    duplicate = pb.RunDeltaEnvelope(
+        operator_instance_id="operator-1",
+        delta=pb.RunDelta(
+            sequence=7,
+            run_created=pb.RunCreatedDelta(
+                summary=pb.RunSummaryMsg(
+                    run_id="duplicate",
+                    flow_name="flow",
+                    status="running",
+                    created_sequence=7,
+                    revision=7,
+                )
+            ),
+        ),
+    )
+
+    class DuplicateThenUnavailable:
+        def initial_metadata(self):
+            return ()
+
+        def __iter__(self):
+            yield duplicate
+            raise Unavailable()
+
+    class DuplicateStub:
+        def StreamRunDeltas(self, request, *, metadata):  # noqa: N802
+            requests.append((request.operator_instance_id, request.after_sequence))
+            return DuplicateThenUnavailable()
+
+    provider._install_structural_baseline("operator-1", 7, {})
+    provider._stream_stop = RecordingStop()
+    provider._stub = DuplicateStub()
+    try:
+        provider._stream_loop()
+    finally:
+        provider.close()
+
+    assert delays == [2, 4, 8]
+    assert requests == [("operator-1", 7)] * 3
+    assert provider._cursor.sequence == 7
+
+
+def test_authoritative_stream_progress_resets_reconnect_backoff():
+    provider = GrpcStateProvider("localhost:1")
+    delays = []
+
+    class Unavailable(grpc.RpcError):
+        def code(self):
+            return grpc.StatusCode.UNAVAILABLE
+
+        def details(self):
+            return "stream aborted"
+
+    class RecordingStop:
+        def __init__(self):
+            self.stopped = False
+
+        def is_set(self):
+            return self.stopped
+
+        def set(self):
+            self.stopped = True
+
+        def wait(self, delay):
+            delays.append(delay)
+            if len(delays) == 2:
+                self.stopped = True
+            return self.stopped
+
+    class ProgressThenUnavailable:
+        def initial_metadata(self):
+            return ()
+
+        def __iter__(self):
+            yield pb.RunDeltaEnvelope(
+                operator_instance_id="operator-1",
+                delta=pb.RunDelta(
+                    sequence=1,
+                    run_created=pb.RunCreatedDelta(
+                        summary=pb.RunSummaryMsg(
+                            run_id="run-1",
+                            flow_name="flow",
+                            status="running",
+                            created_sequence=1,
+                            revision=1,
+                        )
+                    ),
+                ),
+            )
+            raise Unavailable()
+
+    class ProgressStub:
+        def __init__(self):
+            self.calls = 0
+
+        def StreamRunDeltas(self, request, *, metadata):  # noqa: N802
+            self.calls += 1
+            if self.calls == 1:
+                raise Unavailable()
+            return ProgressThenUnavailable()
+
+    provider._stream_stop = RecordingStop()
+    provider._stub = ProgressStub()
+    try:
+        provider._stream_loop()
+    finally:
+        provider.close()
+
+    assert delays == [2, 1]
+    assert provider._cursor.sequence == 1
 
 
 def test_stream_reconnect_transitions_through_replay_to_live():

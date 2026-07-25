@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import math
 import threading
+from collections import OrderedDict
 from collections.abc import Mapping, Sequence
 from copy import deepcopy
 from dataclasses import dataclass, replace
@@ -73,6 +74,9 @@ RESET_BASELINE_PAGE_SIZE = 100
 RESET_BASELINE_MAX_ATTEMPTS = 5
 RESET_BASELINE_RETRY_SECONDS = 0.05
 DEFAULT_MAX_DETAIL_BODY_BYTES = 32 * 1024 * 1024
+DEFAULT_MAX_RETAINED_DETAIL_COUNT = 100_000
+DEFAULT_MAX_RETAINED_DETAIL_BYTES = 128 * 1024 * 1024
+DEFAULT_MAX_PAGED_ITEMS = 100_000
 
 
 class StreamState(str, Enum):
@@ -109,6 +113,10 @@ class OperatorCallError(RuntimeError):
         super().__init__(f"{status.name}: {details}")
 
 
+class _ClientBudgetExceededError(OperatorCallError):
+    """A local client budget rejection that retries cannot make smaller."""
+
+
 class StaleResetAcknowledgementError(RuntimeError):
     """A reset acknowledgement that no longer matches the pending generation."""
 
@@ -121,6 +129,40 @@ class _ResetBaselineMismatchError(RuntimeError):
 class _StreamCursor:
     operator_instance_id: str = ""
     sequence: int = 0
+
+
+@dataclass
+class _DetailBudget:
+    max_count: int
+    max_bytes: int
+    count: int = 0
+    size_bytes: int = 0
+    cache_keys: int = 0
+
+    def reserve(self, count: int, size_bytes: int) -> None:
+        if self.count + count > self.max_count:
+            raise _ClientBudgetExceededError(
+                grpc.StatusCode.RESOURCE_EXHAUSTED,
+                "client detail hydration exceeds the configured retained body count limit",
+            )
+        if self.size_bytes + size_bytes > self.max_bytes:
+            raise _ClientBudgetExceededError(
+                grpc.StatusCode.RESOURCE_EXHAUSTED,
+                "client detail hydration exceeds the configured retained byte limit",
+            )
+        self.count += count
+        self.size_bytes += size_bytes
+
+    def reserve_cache_key(self) -> None:
+        if self.cache_keys + 1 > self.max_count:
+            raise _ClientBudgetExceededError(
+                grpc.StatusCode.RESOURCE_EXHAUSTED,
+                "client detail hydration exceeds the configured retained cache key limit",
+            )
+        self.cache_keys += 1
+
+
+_DetailCacheKey = tuple[str, str, str]
 
 
 class _DeltaResetError(RuntimeError):
@@ -150,6 +192,9 @@ class GrpcStateProvider:
         certificate_chain: bytes | None = None,
         unary_timeout: float = DEFAULT_UNARY_TIMEOUT_SECONDS,
         max_detail_body_bytes: int = DEFAULT_MAX_DETAIL_BODY_BYTES,
+        max_retained_detail_count: int = DEFAULT_MAX_RETAINED_DETAIL_COUNT,
+        max_retained_detail_bytes: int = DEFAULT_MAX_RETAINED_DETAIL_BYTES,
+        max_paged_items: int = DEFAULT_MAX_PAGED_ITEMS,
         reset_baseline_loader: Callable[[StreamResetNotice], ResetBaseline] | None = None,
     ) -> None:
         if isinstance(unary_timeout, bool) or not isinstance(unary_timeout, Real):
@@ -162,11 +207,23 @@ class GrpcStateProvider:
             raise TypeError("max_detail_body_bytes must be an integer")
         if max_detail_body_bytes <= 0:
             raise ValueError("max_detail_body_bytes must be positive")
+        self._validate_positive_integer(
+            "max_retained_detail_count",
+            max_retained_detail_count,
+        )
+        self._validate_positive_integer(
+            "max_retained_detail_bytes",
+            max_retained_detail_bytes,
+        )
+        self._validate_positive_integer("max_paged_items", max_paged_items)
 
         self._address = address
         self._metadata = (("authorization", f"Bearer {token}"),) if token else None
         self._unary_timeout = float(unary_timeout)
         self._max_detail_body_bytes = max_detail_body_bytes
+        self._max_retained_detail_count = max_retained_detail_count
+        self._max_retained_detail_bytes = max_retained_detail_bytes
+        self._max_paged_items = max_paged_items
         self._reset_baseline_loader = reset_baseline_loader
         if tls:
             credentials = grpc.ssl_channel_credentials(
@@ -209,6 +266,9 @@ class GrpcStateProvider:
         self._hydrated_trace_revisions: dict[tuple[str, str], int] = {}
         self._agent_events: dict[tuple[str, str], list[Any]] = {}
         self._trace_bodies: dict[tuple[str, str], dict[str, Any]] = {}
+        self._detail_cache_usage: OrderedDict[_DetailCacheKey, tuple[int, int]] = OrderedDict()
+        self._retained_detail_count = 0
+        self._retained_detail_bytes = 0
         self._reset_generation: int = 0
         self._pending_reset: StreamResetNotice | None = None
         self._validated_reset_baseline: ResetBaseline | None = None
@@ -223,6 +283,13 @@ class GrpcStateProvider:
         self.stream_retry_count: int = 0
         self.stream_error: str = ""
         self.discovery_diagnostics: list[WorkflowDiscoveryDiagnostic] = []
+
+    @staticmethod
+    def _validate_positive_integer(name: str, value: int) -> None:
+        if isinstance(value, bool) or not isinstance(value, int):
+            raise TypeError(f"{name} must be an integer")
+        if value <= 0:
+            raise ValueError(f"{name} must be positive")
 
     @property
     def connected(self) -> bool:
@@ -284,7 +351,11 @@ class GrpcStateProvider:
         """List lightweight run summaries without detail bodies."""
         runs: list[RunState] = []
         page_token = ""
+        seen_tokens: set[str] = set()
+        page_count = 0
         while True:
+            page_count += 1
+            self._validate_page_accumulation(page_count, "run summary pages")
             response = self._call(
                 self._stub.ListRunSummaries,
                 pb.ListRunSummariesRequest(
@@ -295,17 +366,35 @@ class GrpcStateProvider:
             )
             if response is None:
                 return []
-            runs.extend(
-                _run_from_summary(
-                    response.operator_instance_id,
-                    run_summary_from_proto(item),
+            for item in response.runs:
+                self._validate_page_accumulation(
+                    len(runs) + 1,
+                    "run summaries",
                 )
-                for item in response.runs
-            )
-            page_token = response.next_page_token
-            if not page_token:
+                runs.append(
+                    _run_from_summary(
+                        response.operator_instance_id,
+                        run_summary_from_proto(item),
+                    )
+                )
+            next_page_token = response.next_page_token
+            if not next_page_token:
                 runs.sort(key=lambda run: (run.created_sequence, run.run_id))
                 return runs
+            if next_page_token in seen_tokens:
+                raise OperatorCallError(
+                    grpc.StatusCode.DATA_LOSS,
+                    "run summary pagination repeated a page token",
+                )
+            seen_tokens.add(next_page_token)
+            page_token = next_page_token
+
+    def _validate_page_accumulation(self, count: int, item_name: str) -> None:
+        if count > self._max_paged_items:
+            raise _ClientBudgetExceededError(
+                grpc.StatusCode.RESOURCE_EXHAUSTED,
+                f"client {item_name} exceed the configured pagination item limit",
+            )
 
     def get_run(self, run_id: str) -> RunState | None:
         """Fetch one pinned structural snapshot and lazily hydrate its details."""
@@ -429,6 +518,8 @@ class GrpcStateProvider:
     def _hydrate_run_snapshot(self, snapshot: RunSnapshot) -> RunState:
         """Hydrate append-only details without weakening the structural baseline."""
         run = _run_from_snapshot(snapshot)
+        budget = self._new_detail_budget()
+        budget.reserve_cache_key()
         with self._state_lock:
             starting_cursor = self._cursor
             cached = self._runs_by_id.get(run.run_id)
@@ -440,11 +531,21 @@ class GrpcStateProvider:
             logs_hydrated = reuse_cached and run.run_id in self._hydrated_log_runs
             log_sequence = self._log_sequences.get(run.run_id, 0) if logs_hydrated else 0
             logs = list(self._log_entries.get(run.run_id, ())) if logs_hydrated else []
+            log_bytes = 0
+            if logs_hydrated:
+                log_usage = self._detail_cache_usage.get(
+                    self._log_cache_key(run.run_id),
+                    (len(logs), sum(len(log.message.encode()) for log in logs)),
+                )
+                budget.reserve(*log_usage)
+                log_bytes = log_usage[1]
 
             hydrated_agent_nodes: set[tuple[str, str]] = set()
             agent_sequences: dict[tuple[str, str], int] = {}
             agent_events: dict[tuple[str, str], list[Any]] = {}
+            agent_event_bytes: dict[tuple[str, str], int] = {}
             trace_bodies: dict[tuple[str, str], dict[str, Any]] = {}
+            trace_body_bytes: dict[tuple[str, str], int] = {}
             if reuse_cached and cached is not None:
                 for node_id, node in run.nodes.items():
                     key = (run.run_id, node_id)
@@ -457,11 +558,30 @@ class GrpcStateProvider:
                             node.trace.revision if node.trace is not None else 0
                         )
                         agent_events[key] = list(self._agent_events.get(key, ()))
+                        event_usage = self._detail_cache_usage.get(
+                            self._agent_cache_key(*key),
+                            (
+                                len(agent_events[key]),
+                                sum(
+                                    len(json.dumps(event, default=str).encode())
+                                    for event in agent_events[key]
+                                ),
+                            ),
+                        )
+                        budget.reserve(*event_usage)
+                        agent_event_bytes[key] = event_usage[1]
                         if (
                             cached_trace_revision == snapshot_trace_revision
                             and key in self._trace_bodies
                         ):
+                            budget.reserve_cache_key()
                             trace_bodies[key] = self._trace_bodies[key]
+                            trace_usage = self._detail_cache_usage.get(
+                                self._trace_cache_key(*key),
+                                (1, node.trace.size_bytes),
+                            )
+                            budget.reserve(*trace_usage)
+                            trace_body_bytes[key] = trace_usage[1]
                         hydrated_agent_nodes.add(key)
                         agent_sequences[key] = self._agent_event_sequences.get(key, 0)
 
@@ -472,14 +592,17 @@ class GrpcStateProvider:
                 operator_instance_id=snapshot.operator_instance_id,
                 expected_as_of=detail_as_of,
                 after_sequence=log_sequence,
+                budget=budget,
             )
             logs.extend(item.entry for item in new_logs)
+            log_bytes += sum(item.size_bytes for item in new_logs)
         if log_sequence < snapshot.latest_log_sequence:
             raise _DetailHydrationRaceError("log hydration ended below snapshot watermark")
 
         for node_id, node in run.nodes.items():
             if node.trace is None:
                 continue
+            budget.reserve_cache_key()
             key = (run.run_id, node_id)
             node_events = agent_events.setdefault(key, [])
             event_count = len(node_events)
@@ -491,9 +614,13 @@ class GrpcStateProvider:
                     operator_instance_id=snapshot.operator_instance_id,
                     expected_as_of=detail_as_of,
                     after_event_sequence=agent_sequences.get(key, 0),
+                    budget=budget,
                 )
                 for event in events:
                     _append_agent_event(node_events, event.event_json)
+                agent_event_bytes[key] = agent_event_bytes.get(key, 0) + sum(
+                    event.size_bytes for event in events
+                )
                 agent_sequences[key] = event_sequence
                 hydrated_agent_nodes.add(key)
                 event_count = len(node_events)
@@ -508,11 +635,14 @@ class GrpcStateProvider:
             snapshot,
             run,
             logs=logs,
+            log_bytes=log_bytes,
             starting_cursor=starting_cursor,
             hydrated_agent_nodes=hydrated_agent_nodes,
             agent_sequences=agent_sequences,
             agent_events=agent_events,
+            agent_event_bytes=agent_event_bytes,
             trace_bodies=trace_bodies,
+            trace_body_bytes=trace_body_bytes,
         )
 
     def _read_log_pages(
@@ -522,6 +652,7 @@ class GrpcStateProvider:
         operator_instance_id: str,
         expected_as_of: int,
         after_sequence: int,
+        budget: _DetailBudget,
     ) -> tuple[list[SequencedLogEntry], int]:
         logs = []
         cursor = after_sequence
@@ -540,16 +671,17 @@ class GrpcStateProvider:
                 operator_instance_id=operator_instance_id,
                 expected_as_of=expected_as_of,
             )
-            descriptors = [log_record_descriptor_from_proto(item) for item in response.logs]
-            page = []
-            for descriptor in descriptors:
+            page_had_items = False
+            for item in response.logs:
+                descriptor = log_record_descriptor_from_proto(item)
                 if descriptor.sequence != cursor + 1:
                     raise _DetailHydrationRaceError("log page is not contiguous")
+                budget.reserve(1, descriptor.size_bytes)
                 message = self._read_detail_body(
                     descriptor.body_token,
                     descriptor.size_bytes,
                 ).decode()
-                page.append(
+                logs.append(
                     SequencedLogEntry(
                         sequence=descriptor.sequence,
                         entry=LogEntry(
@@ -562,11 +694,11 @@ class GrpcStateProvider:
                     )
                 )
                 cursor = descriptor.sequence
-            logs.extend(page)
+                page_had_items = True
             token = response.next_page_token
             if not token:
                 return logs, cursor
-            if not page:
+            if not page_had_items:
                 raise _DetailHydrationRaceError("log pagination made no progress")
 
     def _read_agent_event_pages(
@@ -578,6 +710,7 @@ class GrpcStateProvider:
         operator_instance_id: str,
         expected_as_of: int,
         after_event_sequence: int,
+        budget: _DetailBudget,
     ) -> tuple[list[AgentEvent], int]:
         events = []
         cursor = after_event_sequence
@@ -598,16 +731,17 @@ class GrpcStateProvider:
             )
             if response.run_id != run_id or response.node_id != node_id:
                 raise _DetailHydrationRaceError("agent page identity changed")
-            descriptors = [agent_event_descriptor_from_proto(item) for item in response.events]
-            page = []
-            for descriptor in descriptors:
+            page_had_items = False
+            for item in response.events:
+                descriptor = agent_event_descriptor_from_proto(item)
                 if descriptor.event_sequence <= cursor:
                     raise _DetailHydrationRaceError("agent event sequence is not increasing")
+                budget.reserve(1, descriptor.size_bytes)
                 event_json = self._read_detail_body(
                     descriptor.body_token,
                     descriptor.size_bytes,
                 ).decode()
-                page.append(
+                events.append(
                     AgentEvent(
                         invocation_id=descriptor.invocation_id,
                         event_sequence=descriptor.event_sequence,
@@ -616,11 +750,11 @@ class GrpcStateProvider:
                     )
                 )
                 cursor = descriptor.event_sequence
-            events.extend(page)
+                page_had_items = True
             token = response.next_page_token
             if not token:
                 return events, cursor
-            if not page:
+            if not page_had_items:
                 raise _DetailHydrationRaceError("agent pagination made no progress")
 
     def _validate_detail_body_size(self, size_bytes: int) -> None:
@@ -628,6 +762,138 @@ class GrpcStateProvider:
             raise _DetailHydrationRaceError(
                 "detail body exceeds the configured hydration byte limit"
             )
+
+    def _new_detail_budget(self) -> _DetailBudget:
+        return _DetailBudget(
+            max_count=self._max_retained_detail_count,
+            max_bytes=self._max_retained_detail_bytes,
+        )
+
+    @staticmethod
+    def _log_cache_key(run_id: str) -> _DetailCacheKey:
+        return ("logs", run_id, "")
+
+    @staticmethod
+    def _agent_cache_key(run_id: str, node_id: str) -> _DetailCacheKey:
+        return ("events", run_id, node_id)
+
+    @staticmethod
+    def _trace_cache_key(run_id: str, node_id: str) -> _DetailCacheKey:
+        return ("trace", run_id, node_id)
+
+    def _touch_detail_cache_locked(self, key: _DetailCacheKey) -> None:
+        if key in self._detail_cache_usage:
+            self._detail_cache_usage.move_to_end(key)
+
+    def _evict_detail_cache_locked(self, key: _DetailCacheKey) -> None:
+        usage = self._detail_cache_usage.pop(key, None)
+        if usage is not None:
+            self._retained_detail_count -= usage[0]
+            self._retained_detail_bytes -= usage[1]
+        kind, run_id, node_id = key
+        if kind == "logs":
+            self._log_entries.pop(run_id, None)
+            self._log_sequences.pop(run_id, None)
+            self._hydrated_log_runs.discard(run_id)
+        elif kind == "events":
+            node_key = (run_id, node_id)
+            self._agent_events.pop(node_key, None)
+            self._agent_event_sequences.pop(node_key, None)
+            self._hydrated_agent_nodes.discard(node_key)
+        else:
+            node_key = (run_id, node_id)
+            self._trace_bodies.pop(node_key, None)
+            self._hydrated_trace_revisions.pop(node_key, None)
+
+    def _reserve_detail_cache_locked(
+        self,
+        replacements: Mapping[_DetailCacheKey, tuple[int, int]],
+        removals: set[_DetailCacheKey] | None = None,
+    ) -> None:
+        removed_keys = removals or set()
+        replacement_count = sum(usage[0] for usage in replacements.values())
+        replacement_bytes = sum(usage[1] for usage in replacements.values())
+        if replacement_count > self._max_retained_detail_count:
+            raise _ClientBudgetExceededError(
+                grpc.StatusCode.RESOURCE_EXHAUSTED,
+                "client detail hydration exceeds the configured retained body count limit",
+            )
+        if replacement_bytes > self._max_retained_detail_bytes:
+            raise _ClientBudgetExceededError(
+                grpc.StatusCode.RESOURCE_EXHAUSTED,
+                "client detail hydration exceeds the configured retained byte limit",
+            )
+
+        affected_keys = replacements.keys() | removed_keys
+        replaced_count = sum(
+            self._detail_cache_usage.get(key, (0, 0))[0] for key in affected_keys
+        )
+        replaced_bytes = sum(
+            self._detail_cache_usage.get(key, (0, 0))[1] for key in affected_keys
+        )
+        retained_count = self._retained_detail_count - replaced_count
+        retained_bytes = self._retained_detail_bytes - replaced_bytes
+        retained_keys = len(self._detail_cache_usage.keys() - affected_keys)
+        while (
+            retained_count + replacement_count > self._max_retained_detail_count
+            or retained_bytes + replacement_bytes > self._max_retained_detail_bytes
+            or retained_keys + len(replacements) > self._max_retained_detail_count
+        ):
+            candidate = next(
+                (key for key in self._detail_cache_usage if key not in affected_keys),
+                None,
+            )
+            if candidate is None:
+                raise RuntimeError("retained detail cache accounting is inconsistent")
+            usage = self._detail_cache_usage[candidate]
+            self._evict_detail_cache_locked(candidate)
+            retained_count -= usage[0]
+            retained_bytes -= usage[1]
+            retained_keys -= 1
+
+        for key in removed_keys:
+            self._evict_detail_cache_locked(key)
+        for key, usage in replacements.items():
+            previous = self._detail_cache_usage.pop(key, None)
+            if previous is not None:
+                self._retained_detail_count -= previous[0]
+                self._retained_detail_bytes -= previous[1]
+            self._detail_cache_usage[key] = usage
+            self._retained_detail_count += usage[0]
+            self._retained_detail_bytes += usage[1]
+
+    def _clear_detail_caches_locked(self) -> None:
+        self._log_sequences.clear()
+        self._hydrated_log_runs.clear()
+        self._log_entries.clear()
+        self._agent_event_sequences.clear()
+        self._hydrated_agent_nodes.clear()
+        self._agent_events.clear()
+        self._trace_bodies.clear()
+        self._hydrated_trace_revisions.clear()
+        self._detail_cache_usage.clear()
+        self._retained_detail_count = 0
+        self._retained_detail_bytes = 0
+
+    def _evict_run_detail_caches_locked(self, run_id: str) -> None:
+        cache_keys = {key for key in self._detail_cache_usage if key[1] == run_id}
+        if run_id in self._log_entries or run_id in self._hydrated_log_runs:
+            cache_keys.add(self._log_cache_key(run_id))
+        cache_keys.update(
+            self._agent_cache_key(*key)
+            for key in self._agent_events.keys() | self._hydrated_agent_nodes
+            if key[0] == run_id
+        )
+        cache_keys.update(
+            self._trace_cache_key(*key) for key in self._trace_bodies if key[0] == run_id
+        )
+        cache_keys.update(
+            self._trace_cache_key(*key)
+            for key in self._hydrated_trace_revisions
+            if key[0] == run_id
+        )
+        for key in cache_keys:
+            self._evict_detail_cache_locked(key)
 
     @staticmethod
     def _cancel_detail_stream(stream: Any) -> None:
@@ -689,12 +955,17 @@ class GrpcStateProvider:
         *,
         starting_cursor: _StreamCursor,
         logs: list[LogEntry],
+        log_bytes: int,
         hydrated_agent_nodes: set[tuple[str, str]],
         agent_sequences: dict[tuple[str, str], int],
         agent_events: dict[tuple[str, str], list[Any]],
+        agent_event_bytes: dict[tuple[str, str], int],
         trace_bodies: dict[tuple[str, str], dict[str, Any]],
+        trace_body_bytes: dict[tuple[str, str], int],
     ) -> RunState:
         with self._state_lock:
+            if self._closed:
+                raise RuntimeError("state provider closed during detail hydration")
             current_cursor = self._cursor
             if (
                 starting_cursor.operator_instance_id
@@ -755,6 +1026,33 @@ class GrpcStateProvider:
             for node in result.nodes.values():
                 node.agent_trace_json = None
 
+            replacements: dict[_DetailCacheKey, tuple[int, int]] = {
+                self._log_cache_key(result.run_id): (len(logs), log_bytes)
+            }
+            trace_revisions: dict[tuple[str, str], int] = {}
+            for key in hydrated_agent_nodes:
+                replacements[self._agent_cache_key(*key)] = (
+                    len(agent_events.get(key, ())),
+                    agent_event_bytes.get(key, 0),
+                )
+                if key in trace_bodies:
+                    descriptor = result.nodes[key[1]].trace
+                    if descriptor is None:
+                        raise RuntimeError("hydrated trace body has no descriptor")
+                    trace_revisions[key] = descriptor.revision
+                    replacements[self._trace_cache_key(*key)] = (
+                        1,
+                        trace_body_bytes[key],
+                    )
+            retained_run_keys = {
+                key for key in self._detail_cache_usage if key[1] == result.run_id
+            }
+            removed_cache_keys = retained_run_keys - replacements.keys()
+            self._reserve_detail_cache_locked(
+                replacements,
+                removals=removed_cache_keys,
+            )
+
             self._runs_by_id[result.run_id] = result
             self._run_revisions[result.run_id] = max(
                 self._run_revisions.get(result.run_id, 0), result.revision
@@ -775,6 +1073,7 @@ class GrpcStateProvider:
                 self._agent_events[key] = agent_events.get(key, [])
                 if key in trace_bodies:
                     self._trace_bodies[key] = trace_bodies[key]
+                    self._hydrated_trace_revisions[key] = trace_revisions[key]
                 else:
                     self._trace_bodies.pop(key, None)
                     self._hydrated_trace_revisions.pop(key, None)
@@ -784,6 +1083,7 @@ class GrpcStateProvider:
         """Build compatibility detail only for an explicit state read."""
         result = deepcopy(run)
         if result.run_id in self._hydrated_log_runs:
+            self._touch_detail_cache_locked(self._log_cache_key(result.run_id))
             result.logs = list(self._log_entries.get(result.run_id, ()))
             result.latest_log_sequence = self._log_sequences.get(result.run_id, 0)
             result.details_hydrated = True
@@ -793,6 +1093,8 @@ class GrpcStateProvider:
             if key not in self._hydrated_agent_nodes and trace_body is None:
                 node.agent_trace_json = None
                 continue
+            self._touch_detail_cache_locked(self._agent_cache_key(*key))
+            self._touch_detail_cache_locked(self._trace_cache_key(*key))
             descriptor = node.trace
             status = descriptor.status if descriptor is not None else "in_progress"
             node.agent_trace_json = _materialize_agent_trace_json(
@@ -821,10 +1123,14 @@ class GrpcStateProvider:
         key = (run_id, node_id)
         with self._state_lock:
             if self._hydrated_trace_revisions.get(key) == descriptor.revision:
+                self._touch_detail_cache_locked(self._trace_cache_key(*key))
                 current = self._runs_by_id.get(run_id)
                 return self._materialize_run_locked(current) if current is not None else run
 
         self._validate_detail_body_size(descriptor.size_bytes)
+        budget = self._new_detail_budget()
+        budget.reserve_cache_key()
+        budget.reserve(1, descriptor.size_bytes)
         try:
             chunks = self._stub.ReadTrace(
                 pb.ReadTraceRequest(
@@ -862,6 +1168,8 @@ class GrpcStateProvider:
             raise _DetailHydrationRaceError("trace body is not a JSON object")
 
         with self._state_lock:
+            if self._closed:
+                return None
             current_cursor = self._cursor
             current = self._runs_by_id.get(run_id)
             current_node = current.nodes.get(node_id) if current is not None else None
@@ -878,6 +1186,11 @@ class GrpcStateProvider:
                 or current_descriptor.revision != descriptor.revision
             ):
                 return None
+            self._reserve_detail_cache_locked(
+                {
+                    self._trace_cache_key(*key): (1, descriptor.size_bytes),
+                }
+            )
             self._trace_bodies[key] = trace
             self._hydrated_trace_revisions[key] = descriptor.revision
             return self._materialize_run_locked(current)
@@ -943,6 +1256,8 @@ class GrpcStateProvider:
                 return baseline
             except _ResetBaselineMismatchError as error:
                 last_error = error
+            except _ClientBudgetExceededError:
+                raise
             except OperatorCallError as error:
                 if error.status not in _RESET_BASELINE_RETRY_STATUSES:
                     raise
@@ -984,7 +1299,10 @@ class GrpcStateProvider:
         seen_tokens: set[str] = set()
         seen_run_ids: set[str] = set()
         marker: tuple[str, int] | None = None
+        page_count = 0
         while True:
+            page_count += 1
+            self._validate_page_accumulation(page_count, "run summary pages")
             page = self._call(
                 self._stub.ListRunSummaries,
                 pb.ListRunSummariesRequest(
@@ -1005,6 +1323,10 @@ class GrpcStateProvider:
                 )
             assert marker is not None
             for message in page.runs:
+                self._validate_page_accumulation(
+                    len(summaries) + 1,
+                    "run summaries",
+                )
                 summary = run_summary_from_proto(message)
                 if summary.run_id in seen_run_ids:
                     raise _ResetBaselineMismatchError(
@@ -1262,7 +1584,8 @@ class GrpcStateProvider:
                             "delta envelope omitted its operator instance identifier"
                         )
 
-                    current_cursor = self._cursor
+                    with self._state_lock:
+                        current_cursor = self._cursor
                     reset = envelope.reset_required
                     epoch_changed = (
                         bool(current_cursor.operator_instance_id)
@@ -1291,6 +1614,8 @@ class GrpcStateProvider:
                         )
                         reconnect = True
                         break
+                    with self._state_lock:
+                        made_progress = self._cursor != current_cursor
                     if run is not None:
                         self._notify_run_callbacks(run)
                     if detail is not None:
@@ -1303,7 +1628,8 @@ class GrpcStateProvider:
                         self.operator_reachable = True
                         if self.stream_state is not StreamState.RESET_REQUIRED:
                             self.stream_state = StreamState.LIVE
-                        self.stream_retry_count = 0
+                        if made_progress:
+                            self.stream_retry_count = 0
                         self.stream_error = ""
 
                 if reconnect:
@@ -1408,6 +1734,8 @@ class GrpcStateProvider:
         event_detail: AgentEvent | None = None,
     ) -> tuple[RunState | None, DetailDelta | None]:
         delta = envelope.delta
+        if self._closed:
+            return None, None
         if delta is None:
             raise _DeltaResetError("delta payload missing")
         cursor = self._cursor
@@ -1431,6 +1759,8 @@ class GrpcStateProvider:
             if change.summary.revision <= old_revision:
                 run = None
             else:
+                self._evict_run_detail_caches_locked(run.run_id)
+                self._reserve_detail_cache_locked({self._log_cache_key(run.run_id): (0, 0)})
                 self._runs_by_id[run.run_id] = run
                 self._run_revisions[run.run_id] = change.summary.revision
                 for node in run.nodes.values():
@@ -1480,8 +1810,24 @@ class GrpcStateProvider:
                     run = None
                 else:
                     if logs_hydrated:
-                        self._log_entries.setdefault(change.run_id, []).append(log_detail)
-                        self._log_sequences[change.run_id] = change.log.sequence
+                        cache_key = self._log_cache_key(change.run_id)
+                        retained_count, retained_bytes = self._detail_cache_usage.get(
+                            cache_key,
+                            (len(self._log_entries.get(change.run_id, ())), 0),
+                        )
+                        replacement = (
+                            retained_count + 1,
+                            retained_bytes + change.log.size_bytes,
+                        )
+                        if (
+                            replacement[0] > self._max_retained_detail_count
+                            or replacement[1] > self._max_retained_detail_bytes
+                        ):
+                            self._evict_detail_cache_locked(cache_key)
+                        else:
+                            self._reserve_detail_cache_locked({cache_key: replacement})
+                            self._log_entries.setdefault(change.run_id, []).append(log_detail)
+                            self._log_sequences[change.run_id] = change.log.sequence
                     run.latest_log_sequence = max(run.latest_log_sequence, change.log.sequence)
                     detail = LogDetailAppended(
                         operator_instance_id=operator_instance_id,
@@ -1507,9 +1853,25 @@ class GrpcStateProvider:
                 else:
                     node_events = self._agent_events.setdefault(key, [])
                     if node_hydrated or not node_events:
-                        _append_agent_event(node_events, event_detail.event_json)
-                        self._hydrated_agent_nodes.add(key)
-                        self._agent_event_sequences[key] = change.event.event_sequence
+                        cache_key = self._agent_cache_key(*key)
+                        retained_count, retained_bytes = self._detail_cache_usage.get(
+                            cache_key,
+                            (len(node_events), 0),
+                        )
+                        replacement = (
+                            retained_count + 1,
+                            retained_bytes + change.event.size_bytes,
+                        )
+                        if (
+                            replacement[0] > self._max_retained_detail_count
+                            or replacement[1] > self._max_retained_detail_bytes
+                        ):
+                            self._evict_detail_cache_locked(cache_key)
+                        else:
+                            self._reserve_detail_cache_locked({cache_key: replacement})
+                            _append_agent_event(node_events, event_detail.event_json)
+                            self._hydrated_agent_nodes.add(key)
+                            self._agent_event_sequences[key] = change.event.event_sequence
                     detail = AgentEventDetailAppended(
                         operator_instance_id=operator_instance_id,
                         run_id=change.run_id,
@@ -1533,8 +1895,7 @@ class GrpcStateProvider:
                     node.revision = max(node.revision, change.trace.revision)
                     run.nodes = dict(current.nodes)
                     run.nodes[change.node_id] = node
-                    self._trace_bodies.pop(key, None)
-                    self._hydrated_trace_revisions.pop(key, None)
+                    self._evict_detail_cache_locked(self._trace_cache_key(*key))
                     self._trace_revisions[key] = change.trace.revision
             else:
                 raise _DeltaResetError("unsupported delta change")
@@ -1599,20 +1960,13 @@ class GrpcStateProvider:
                 for run_id, run in runs.items()
                 for node_id, node in run.nodes.items()
             }
-            self._log_sequences.clear()
-            self._hydrated_log_runs.clear()
-            self._log_entries.clear()
-            self._agent_event_sequences.clear()
-            self._hydrated_agent_nodes.clear()
-            self._agent_events.clear()
-            self._trace_bodies.clear()
+            self._clear_detail_caches_locked()
             self._trace_revisions = {
                 (run_id, node_id): node.trace.revision
                 for run_id, run in runs.items()
                 for node_id, node in run.nodes.items()
                 if node.trace is not None
             }
-            self._hydrated_trace_revisions.clear()
             self.operator_instance_id = operator_instance_id
             self._cursor = _StreamCursor(operator_instance_id, as_of_sequence)
 
@@ -1652,6 +2006,8 @@ class GrpcStateProvider:
             self._channel.close()
         if thread is not None and thread is not threading.current_thread():
             thread.join(timeout=STREAM_THREAD_JOIN_TIMEOUT_SECONDS)
+        with self._state_lock:
+            self._clear_detail_caches_locked()
 
 
 def _structural_callback_projection(run: RunState) -> RunState:

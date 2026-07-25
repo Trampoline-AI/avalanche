@@ -12,7 +12,7 @@
   summary refreshes preserve already-hydrated run details.
 - Run selection paginates historical logs and agent events on demand. Trace
   hydration uses one lifecycle-owned worker and epoch/revision-guarded detail
-  completions, with bounded retries.
+  completions, with bounded backoff.
 - The transport protobuf is not backward compatible with the previous full-state
   RPCs. Operators and remote TUI clients must upgrade together and regenerate
   bindings from the same protocol revision.
