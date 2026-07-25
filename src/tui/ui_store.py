@@ -3,13 +3,37 @@
 from __future__ import annotations
 
 import json
+import threading
 import time
-from queue import SimpleQueue
-from typing import Any, Literal
+from collections import OrderedDict, deque
+from concurrent.futures import ThreadPoolExecutor
+from copy import copy
+from dataclasses import dataclass, field
+from queue import Empty
+from typing import Any, Callable, Literal
 
 from .dag_layout import DagNode, SeqGroup, build_nav_grid, nav_move, workflow_to_layout
-from .models import LogEntry, NodeStatus, RunState, RunStatus, WorkflowInfo
-from .state import StateProvider
+from .models import (
+    AgentEventDetailAppended,
+    DetailDelta,
+    LogDetailAppended,
+    LogEntry,
+    NodeState,
+    NodeStatus,
+    ResetBaseline,
+    RunState,
+    RunStatus,
+    StreamResetNotice,
+    WorkflowInfo,
+)
+from .state import StateProvider, get_stream_state
+
+RESET_RECONCILIATION_INITIAL_BACKOFF_SECONDS = 0.1
+RESET_RECONCILIATION_MAX_BACKOFF_SECONDS = 2.0
+DETAIL_HYDRATION_INITIAL_BACKOFF_SECONDS = 0.1
+DETAIL_HYDRATION_MAX_BACKOFF_SECONDS = 2.0
+BACKGROUND_UPDATE_CAPACITY = 256
+BACKGROUND_UPDATES_PER_TICK = 64
 
 TraceInspectorTab = Literal["trace", "output", "metadata"]
 _TRACE_INSPECTOR_TABS: tuple[TraceInspectorTab, ...] = (
@@ -17,6 +41,182 @@ _TRACE_INSPECTOR_TABS: tuple[TraceInspectorTab, ...] = (
     "output",
     "metadata",
 )
+TraceHydrationKey = tuple[str, str, int]
+RunDetailKey = tuple[str, str, int]
+
+
+@dataclass(frozen=True)
+class TraceDetailCompletion:
+    """One trace body read, isolated from mutable structural run state."""
+
+    attempt: int
+    operator_instance_id: str
+    run_id: str
+    created_sequence: int
+    node_id: str
+    descriptor_revision: int
+    trace_body: dict[str, Any] | None
+
+
+@dataclass
+class _DetailHydrationRequirements:
+    """Highest missing detail watermarks for one immutable run identity."""
+
+    log_sequence: int = 0
+    event_sequences: dict[str, int] = field(default_factory=dict)
+    version: int = 0
+
+    def merge(
+        self,
+        *,
+        log_sequence: int,
+        event: tuple[str, int] | None,
+    ) -> bool:
+        previous_log_sequence = self.log_sequence
+        self.log_sequence = max(self.log_sequence, log_sequence)
+        stronger = self.log_sequence > previous_log_sequence
+        if event is not None:
+            node_id, event_sequence = event
+            previous_event_sequence = self.event_sequences.get(node_id, 0)
+            self.event_sequences[node_id] = max(previous_event_sequence, event_sequence)
+            stronger = self.event_sequences[node_id] > previous_event_sequence or stronger
+        if stronger:
+            self.version += 1
+        return stronger
+
+
+@dataclass(frozen=True)
+class _DetailHydrationRetry:
+    """One UI-loop deadline guarded by an opaque retry generation."""
+
+    generation: int
+    requirements_version: int
+    deadline: float
+
+
+@dataclass(frozen=True)
+class _DetailRepairWatermark:
+    """Highest dropped append for one immutable run detail stream."""
+
+    key: RunDetailKey
+    node_id: str | None
+    sequence: int
+
+
+class _BoundedBackgroundUpdates:
+    """Thread-safe UI handoff with bounded stream loss accounting."""
+
+    def __init__(self, capacity: int = BACKGROUND_UPDATE_CAPACITY) -> None:
+        self._capacity = capacity
+        self._items: deque[tuple[str, Any]] = deque()
+        self._lock = threading.Lock()
+        self._structure_lost = False
+        self._all_details_lost = False
+        self._detail_repairs: OrderedDict[tuple[RunDetailKey, str | None], int] = OrderedDict()
+
+    @staticmethod
+    def _run_key(item: tuple[str, Any]) -> RunDetailKey | None:
+        kind, payload = item
+        if kind != "run" or not isinstance(payload, RunState):
+            return None
+        return (payload.operator_instance_id, payload.run_id, payload.created_sequence)
+
+    @staticmethod
+    def _detail_watermark(item: tuple[str, Any]) -> _DetailRepairWatermark | None:
+        kind, payload = item
+        if kind != "detail":
+            return None
+        key = (payload.operator_instance_id, payload.run_id, payload.created_sequence)
+        if isinstance(payload, LogDetailAppended):
+            return _DetailRepairWatermark(key, None, payload.log_sequence)
+        if isinstance(payload, AgentEventDetailAppended):
+            return _DetailRepairWatermark(
+                key,
+                payload.node_id,
+                payload.event.event_sequence,
+            )
+        return None
+
+    def _record_detail_loss_locked(self, item: tuple[str, Any]) -> None:
+        watermark = self._detail_watermark(item)
+        if watermark is None:
+            return
+        repair_key = (watermark.key, watermark.node_id)
+        current = self._detail_repairs.get(repair_key, 0)
+        self._detail_repairs[repair_key] = max(current, watermark.sequence)
+        self._detail_repairs.move_to_end(repair_key)
+        if len(self._detail_repairs) > self._capacity:
+            self._detail_repairs.popitem(last=False)
+            self._all_details_lost = True
+
+    def _record_stream_loss_locked(self, item: tuple[str, Any]) -> None:
+        if self._run_key(item) is not None:
+            self._structure_lost = True
+        else:
+            self._record_detail_loss_locked(item)
+
+    def put(self, item: tuple[str, Any]) -> None:
+        """Enqueue without blocking, coalescing structural updates by run identity."""
+        with self._lock:
+            run_key = self._run_key(item)
+            if run_key is not None:
+                for index in range(len(self._items) - 1, -1, -1):
+                    if self._run_key(self._items[index]) == run_key:
+                        self._items[index] = item
+                        return
+            if len(self._items) < self._capacity:
+                self._items.append(item)
+                return
+            if self._detail_watermark(item) is not None:
+                self._record_detail_loss_locked(item)
+                return
+
+            evict_index = next(
+                (
+                    index
+                    for index, queued in enumerate(self._items)
+                    if self._run_key(queued) is not None
+                    or self._detail_watermark(queued) is not None
+                ),
+                0,
+            )
+            evicted = self._items[evict_index]
+            del self._items[evict_index]
+            self._record_stream_loss_locked(evicted)
+            self._items.append(item)
+
+    def get(self) -> tuple[str, Any]:
+        """Return overflow repair before ordinary queued work."""
+        with self._lock:
+            if self._structure_lost or self._all_details_lost or self._detail_repairs:
+                repairs = tuple(
+                    _DetailRepairWatermark(key, node_id, sequence)
+                    for (key, node_id), sequence in self._detail_repairs.items()
+                )
+                payload = (self._structure_lost, self._all_details_lost, repairs)
+                self._structure_lost = False
+                self._all_details_lost = False
+                self._detail_repairs.clear()
+                return ("stream_handoff_overflow", payload)
+            if not self._items:
+                raise Empty
+            return self._items.popleft()
+
+    def empty(self) -> bool:
+        with self._lock:
+            return not (
+                self._items
+                or self._structure_lost
+                or self._all_details_lost
+                or self._detail_repairs
+            )
+
+    def qsize(self) -> int:
+        with self._lock:
+            overflow = int(
+                self._structure_lost or self._all_details_lost or bool(self._detail_repairs)
+            )
+            return len(self._items) + overflow
 
 
 def _fmt_time(secs: float) -> str:
@@ -33,7 +233,13 @@ class UIStore:
     Access from any widget via ``self.app.store``.
     """
 
-    def __init__(self, provider: StateProvider, *, defer_initial_catalog: bool = False) -> None:
+    def __init__(
+        self,
+        provider: StateProvider,
+        *,
+        defer_initial_catalog: bool = False,
+        reset_baseline_loader: Callable[[StreamResetNotice], ResetBaseline] | None = None,
+    ) -> None:
         self.provider = provider
 
         # ── Workflow / Run ──────────────────────────────────────────
@@ -44,17 +250,43 @@ class UIStore:
         self.current_run: RunState | None = None
         self.run_pinned: bool = False  # True = user picked a run; False = follow latest
         self._runs_cache: list[RunState] = []
-        self._background_updates: SimpleQueue[tuple[str, Any]] = SimpleQueue()
+        self._run_cache_indexes: dict[tuple[str, str, int], int] = {}
+        self._background_updates = _BoundedBackgroundUpdates()
+        self._trace_hydration_completions: list[tuple[TraceDetailCompletion, bool]] = []
+        self._log_details: dict[tuple[str, str, int], list[LogEntry]] = {}
+        self._log_detail_sequences: dict[tuple[str, str, int], int] = {}
+        self._agent_event_details: dict[tuple[str, str, int, str], list[dict[str, Any]]] = {}
+        self._agent_event_sequences: dict[tuple[str, str, int, str], int] = {}
+        self._detail_hydrations_in_flight: dict[RunDetailKey, int] = {}
+        self._detail_hydration_requirements: dict[
+            RunDetailKey, _DetailHydrationRequirements
+        ] = {}
+        self._detail_hydration_retries: dict[RunDetailKey, _DetailHydrationRetry] = {}
+        self._detail_hydration_failures: dict[RunDetailKey, int] = {}
+        self._invalid_agent_event_details: set[tuple[str, str, int, str]] = set()
         self._runs_refresh_in_flight: set[str] = set()
         self._status_refresh_in_flight = False
         self._catalog_refresh_in_flight = False
         self._start_run_in_flight = False
         self._start_request_generation = 0
         self._run_interaction_generation = 0
+        self._detail_hydration_generation = 0
+        self._detail_hydration_retry_generation = 0
+        self._detail_hydration_now: Callable[[], float] = time.monotonic
         self._workflow_context_epoch = 0
         self._run_data_revisions: dict[str, int] = {}
         self.run_error: str = ""
         self.catalog_revision = 0
+        self._reset_baseline_loader = reset_baseline_loader or provider.load_reset_baseline
+        self._reset_reconciliations_in_flight: set[int] = set()
+        self._latest_reset_generation = 0
+        self._shutdown = threading.Event()
+        self._detail_hydration_executor = ThreadPoolExecutor(
+            max_workers=1,
+            thread_name_prefix="avalanche-detail-hydration",
+        )
+        self._detail_hydration_executor_closed = False
+        provider.on_stream_reset(self._on_stream_reset)
 
         # ── DAG layout (derived from current_workflow) ─────────────
         self.dag: SeqGroup | None = None
@@ -107,6 +339,19 @@ class UIStore:
             self.switch_workflow(self.workflows[0])
         if defer_initial_catalog:
             self._refresh_workflow_catalog()
+
+    def request_shutdown(self) -> None:
+        """Stop accepting background work before provider teardown."""
+        self._shutdown.set()
+        self._cancel_detail_hydration_repairs()
+
+    def shutdown(self) -> None:
+        """Stop background work and join the owned detail hydration worker."""
+        self.request_shutdown()
+        if self._detail_hydration_executor_closed:
+            return
+        self._detail_hydration_executor_closed = True
+        self._detail_hydration_executor.shutdown(wait=True, cancel_futures=True)
 
     # ── Derived properties (read-only, always consistent) ──────────
 
@@ -188,8 +433,6 @@ class UIStore:
         def _do_refresh():
             try:
                 runs = provider.list_runs(workflow_selector)
-                if getattr(provider, "connected", True) is False:
-                    runs = None
             except Exception:
                 runs = None
             self._background_updates.put(
@@ -249,18 +492,41 @@ class UIStore:
 
     @property
     def selected_agent_events(self) -> list[dict]:
+        run = self.current_run
+        node_id = self.selected_agent_node_id
+        if run is None or node_id is None:
+            return []
+        key = (
+            run.operator_instance_id,
+            run.run_id,
+            run.created_sequence,
+            node_id,
+        )
+        cached = self._agent_event_details.get(key)
+        if cached is not None:
+            return cached
         envelope = self.selected_agent_trace_envelope
-        if envelope is None:
-            return []
-        trace = envelope.get("trace")
-        if isinstance(trace, dict):
-            evidence = trace.get("evidence")
-            if isinstance(evidence, dict) and isinstance(evidence.get("events"), list):
-                return [event for event in evidence["events"] if isinstance(event, dict)]
-        events = envelope.get("events")
-        if not isinstance(events, list):
-            return []
-        return [event for event in events if isinstance(event, dict)]
+        events: list[dict[str, Any]] = []
+        if envelope is not None:
+            trace = envelope.get("trace")
+            if isinstance(trace, dict):
+                evidence = trace.get("evidence")
+                if isinstance(evidence, dict) and isinstance(evidence.get("events"), list):
+                    events = [event for event in evidence["events"] if isinstance(event, dict)]
+            if not events:
+                raw_events = envelope.get("events")
+                if isinstance(raw_events, list):
+                    events = [event for event in raw_events if isinstance(event, dict)]
+        self._agent_event_details[key] = events
+        self._agent_event_sequences[key] = max(
+            (
+                event.get("sequence", 0)
+                for event in events
+                if isinstance(event.get("sequence"), int)
+            ),
+            default=0,
+        )
+        return events
 
     @property
     def selected_agent_outputs(self) -> dict[str, Any] | None:
@@ -338,6 +604,499 @@ class UIStore:
                         step[field] = source[field]
         return [steps_by_iteration[key] for key in sorted(steps_by_iteration)]
 
+    @staticmethod
+    def _detail_key(run: RunState) -> RunDetailKey:
+        return (run.operator_instance_id, run.run_id, run.created_sequence)
+
+    def _set_runs_cache(self, runs: list[RunState]) -> None:
+        """Replace run history and rebuild its constant-time identity index."""
+        self._runs_cache = runs
+        self._run_cache_indexes = {
+            self._detail_key(run): index for index, run in enumerate(runs)
+        }
+
+    def _replace_run_references(self, run: RunState) -> None:
+        """Replace current/cache references for one exact run identity."""
+        key = self._detail_key(run)
+        if self.current_run is not None and self._detail_key(self.current_run) == key:
+            self.current_run = run
+        cache_index = self._run_cache_indexes.get(key)
+        if cache_index is not None:
+            self._runs_cache[cache_index] = run
+
+    @staticmethod
+    def _events_from_node(run: RunState, node_id: str) -> list[dict[str, Any]]:
+        node = run.nodes.get(node_id)
+        if node is None or not node.agent_trace_json:
+            return []
+        try:
+            envelope = json.loads(node.agent_trace_json)
+        except (TypeError, ValueError):
+            return []
+        if not isinstance(envelope, dict):
+            return []
+        trace = envelope.get("trace")
+        if isinstance(trace, dict):
+            evidence = trace.get("evidence")
+            if isinstance(evidence, dict) and isinstance(evidence.get("events"), list):
+                return [event for event in evidence["events"] if isinstance(event, dict)]
+        events = envelope.get("events")
+        if not isinstance(events, list):
+            return []
+        return [event for event in events if isinstance(event, dict)]
+
+    @staticmethod
+    def _event_sequence(events: list[dict[str, Any]]) -> int:
+        return max(
+            (
+                event.get("sequence", 0)
+                for event in events
+                if isinstance(event.get("sequence"), int)
+            ),
+            default=0,
+        )
+
+    @staticmethod
+    def _node_has_trace_body(node: NodeState) -> bool:
+        if not node.agent_trace_json:
+            return False
+        try:
+            envelope = json.loads(node.agent_trace_json)
+        except (TypeError, ValueError):
+            return False
+        return isinstance(envelope, dict) and isinstance(envelope.get("trace"), dict)
+
+    def _remember_run_details(self, run: RunState) -> set[str]:
+        """Adopt explicit detail containers only when their watermark advances."""
+        adopted_event_nodes: set[str] = set()
+        if not run.details_hydrated:
+            return adopted_event_nodes
+        key = self._detail_key(run)
+        known_log_sequence = self._log_detail_sequences.get(key, -1)
+        if key not in self._log_details or run.latest_log_sequence > known_log_sequence:
+            self._log_details[key] = run.logs
+            self._log_detail_sequences[key] = run.latest_log_sequence
+
+        for node_id, node in run.nodes.items():
+            if not node.agent_trace_json:
+                continue
+            agent_key = (*key, node_id)
+            events = self._events_from_node(run, node_id)
+            event_sequence = self._event_sequence(events)
+            known_event_sequence = self._agent_event_sequences.get(agent_key, -1)
+            if (
+                agent_key not in self._agent_event_details
+                or agent_key in self._invalid_agent_event_details
+                or event_sequence > known_event_sequence
+            ):
+                self._agent_event_details[agent_key] = events
+                self._agent_event_sequences[agent_key] = event_sequence
+                self._invalid_agent_event_details.discard(agent_key)
+                adopted_event_nodes.add(node_id)
+        return adopted_event_nodes
+
+    def _merge_cached_details(self, run: RunState, previous: RunState | None) -> RunState:
+        adopted_event_nodes = self._remember_run_details(run)
+        result = run
+        key = self._detail_key(result)
+        cached_logs = self._log_details.get(key)
+        if cached_logs is not None and run.logs is not cached_logs:
+            result = copy(result)
+            result.logs = cached_logs
+        if cached_logs is not None:
+            result.details_hydrated = (
+                self._log_detail_sequences.get(key, 0) >= run.latest_log_sequence
+            )
+        if previous is not None and self._detail_key(previous) == key:
+            nodes: dict[str, NodeState] | None = None
+            for node_id, node in result.nodes.items():
+                prior = previous.nodes.get(node_id)
+                if prior is None or prior.agent_trace_json is None:
+                    continue
+                prior_revision = prior.trace.revision if prior.trace is not None else 0
+                revision = node.trace.revision if node.trace is not None else 0
+                preserve_prior = (
+                    node.agent_trace_json is None and prior_revision == revision
+                ) or (
+                    node.agent_trace_json is not None
+                    and (
+                        revision < prior_revision
+                        or (
+                            revision == prior_revision
+                            and node_id not in adopted_event_nodes
+                            and (
+                                not self._node_has_trace_body(node)
+                                or self._node_has_trace_body(prior)
+                            )
+                        )
+                    )
+                )
+                if not preserve_prior:
+                    continue
+                preserved = copy(node)
+                preserved.agent_trace_json = prior.agent_trace_json
+                if nodes is None:
+                    if result is run:
+                        result = copy(result)
+                    nodes = dict(result.nodes)
+                nodes[node_id] = preserved
+            if nodes is not None:
+                result.nodes = nodes
+        return result
+
+    def _invalidate_log_details(self, run: RunState) -> None:
+        key = self._detail_key(run)
+        self._log_details.pop(key, None)
+        self._log_detail_sequences.pop(key, None)
+        cache_index = self._run_cache_indexes.get(key)
+        cached = self._runs_cache[cache_index] if cache_index is not None else None
+        for candidate in (run, cached):
+            if candidate is not None:
+                candidate.details_hydrated = False
+
+    def _invalidate_agent_event_details(self, run: RunState, node_id: str) -> None:
+        agent_key = (*self._detail_key(run), node_id)
+        self._agent_event_details.pop(agent_key, None)
+        self._agent_event_sequences.pop(agent_key, None)
+        self._invalid_agent_event_details.add(agent_key)
+
+    def _cancel_detail_hydration_repairs(self) -> None:
+        """Supersede all attempts and UI-loop retry deadlines."""
+        self._detail_hydrations_in_flight.clear()
+        self._detail_hydration_requirements.clear()
+        self._detail_hydration_retries.clear()
+        self._detail_hydration_failures.clear()
+
+    def _reset_detail_hydration_backoff(self, key: RunDetailKey) -> None:
+        self._detail_hydration_retries.pop(key, None)
+        self._detail_hydration_failures.pop(key, None)
+
+    def _finish_detail_hydration(self, key: RunDetailKey) -> None:
+        self._detail_hydration_requirements.pop(key, None)
+        self._reset_detail_hydration_backoff(key)
+
+    def _schedule_detail_hydration(
+        self,
+        run: RunState,
+        *,
+        required_log_sequence: int = 0,
+        required_event: tuple[str, int] | None = None,
+    ) -> None:
+        """Coalesce missing watermarks and immediately start newly stronger work."""
+        workflow = self.current_workflow
+        key = self._detail_key(run)
+        if self._shutdown.is_set() or workflow is None or not self._run_matches(run, workflow):
+            return
+        requirements = self._detail_hydration_requirements.setdefault(
+            key, _DetailHydrationRequirements()
+        )
+        stronger = requirements.merge(
+            log_sequence=required_log_sequence,
+            event=required_event,
+        )
+        if stronger:
+            self._reset_detail_hydration_backoff(key)
+        self._start_detail_hydration(run, key)
+
+    def _start_detail_hydration(self, run: RunState, key: RunDetailKey) -> None:
+        """Submit one repair using the current structural epoch and requirements."""
+        workflow = self.current_workflow
+        requirements = self._detail_hydration_requirements.get(key)
+        if (
+            self._shutdown.is_set()
+            or key in self._detail_hydrations_in_flight
+            or key in self._detail_hydration_retries
+            or requirements is None
+            or workflow is None
+            or not self._run_matches(run, workflow)
+        ):
+            return
+        selector = workflow.selector
+        self._detail_hydration_generation += 1
+        generation = self._detail_hydration_generation
+        self._detail_hydrations_in_flight[key] = generation
+        try:
+            self._detail_hydration_executor.submit(
+                self._load_detail_hydration,
+                run.run_id,
+                selector,
+                self._run_data_revision(selector),
+                self._workflow_context_epoch,
+                key,
+                generation,
+                requirements.version,
+                run.revision,
+            )
+        except RuntimeError:
+            self._detail_hydrations_in_flight.pop(key, None)
+
+    def _load_detail_hydration(
+        self,
+        run_id: str,
+        selector: str,
+        data_revision: int,
+        context_epoch: int,
+        key: RunDetailKey,
+        generation: int,
+        requirements_version: int,
+        minimum_revision: int,
+    ) -> None:
+        """Read one full detail baseline on the lifecycle-owned worker."""
+        try:
+            fresh = self.provider.get_run(run_id)
+        except Exception:
+            fresh = None
+        if self._shutdown.is_set():
+            return
+        self._background_updates.put(
+            (
+                "detail_hydration",
+                (
+                    selector,
+                    data_revision,
+                    context_epoch,
+                    key,
+                    generation,
+                    requirements_version,
+                    minimum_revision,
+                    fresh,
+                ),
+            )
+        )
+
+    def _schedule_detail_hydration_retry(
+        self,
+        key: RunDetailKey,
+        requirements: _DetailHydrationRequirements,
+    ) -> None:
+        """Record one exponential deadline for the UI loop, never the RPC worker."""
+        if self._shutdown.is_set() or key in self._detail_hydrations_in_flight:
+            return
+        failures = self._detail_hydration_failures.get(key, 0) + 1
+        self._detail_hydration_failures[key] = failures
+        delay = min(
+            DETAIL_HYDRATION_INITIAL_BACKOFF_SECONDS * (2 ** min(failures - 1, 10)),
+            DETAIL_HYDRATION_MAX_BACKOFF_SECONDS,
+        )
+        self._detail_hydration_retry_generation += 1
+        self._detail_hydration_retries[key] = _DetailHydrationRetry(
+            generation=self._detail_hydration_retry_generation,
+            requirements_version=requirements.version,
+            deadline=self._detail_hydration_now() + delay,
+        )
+
+    def _apply_detail_hydration_retry(
+        self,
+        key: RunDetailKey,
+        generation: int,
+    ) -> None:
+        """Launch only the still-current delayed retry generation."""
+        retry = self._detail_hydration_retries.get(key)
+        if retry is None or retry.generation != generation:
+            return
+        requirements = self._detail_hydration_requirements.get(key)
+        if (
+            self._shutdown.is_set()
+            or requirements is None
+            or requirements.version != retry.requirements_version
+        ):
+            self._detail_hydration_retries.pop(key, None)
+            return
+        current = self.current_run
+        workflow = self.current_workflow
+        if (
+            current is None
+            or self._detail_key(current) != key
+            or workflow is None
+            or not self._run_matches(current, workflow)
+        ):
+            self._finish_detail_hydration(key)
+            return
+        self._detail_hydration_retries.pop(key)
+        self._start_detail_hydration(current, key)
+
+    def _start_due_detail_hydrations(self) -> None:
+        """Run due retry callbacks synchronously on the UI owner thread."""
+        if self._shutdown.is_set():
+            return
+        now = self._detail_hydration_now()
+        due = [
+            (key, retry.generation)
+            for key, retry in self._detail_hydration_retries.items()
+            if retry.deadline <= now
+        ]
+        for key, generation in due:
+            self._apply_detail_hydration_retry(key, generation)
+
+    def _detail_requirements_satisfied_by_cache(
+        self,
+        key: RunDetailKey,
+        requirements: _DetailHydrationRequirements,
+    ) -> bool:
+        if self._log_detail_sequences.get(key, -1) < requirements.log_sequence:
+            return False
+        return all(
+            self._agent_event_sequences.get((*key, node_id), -1) >= event_sequence
+            for node_id, event_sequence in requirements.event_sequences.items()
+        )
+
+    def _adopt_detail_hydration_progress(
+        self,
+        fresh: RunState,
+        current: RunState,
+        key: RunDetailKey,
+        requirements: _DetailHydrationRequirements,
+    ) -> bool:
+        """Adopt monotonic bodies and report progress toward pending watermarks."""
+        before_log = self._log_detail_sequences.get(key, -1)
+        before_events = {
+            node_id: self._agent_event_sequences.get((*key, node_id), -1)
+            for node_id in requirements.event_sequences
+        }
+        merged = self._merge_cached_details(fresh, current)
+        self._replace_run_references(merged)
+        return self._log_detail_sequences.get(key, -1) > before_log or any(
+            self._agent_event_sequences.get((*key, node_id), -1) > before_events[node_id]
+            for node_id in requirements.event_sequences
+        )
+
+    def _apply_detail_hydration_completion(
+        self,
+        *,
+        selector: str,
+        data_revision: int,
+        context_epoch: int,
+        key: RunDetailKey,
+        generation: int,
+        requirements_version: int,
+        minimum_revision: int,
+        fresh: RunState | None,
+    ) -> None:
+        """Apply progress, replace superseded work once, or back off failures."""
+        if self._detail_hydrations_in_flight.get(key) != generation:
+            return
+        self._detail_hydrations_in_flight.pop(key)
+        requirements = self._detail_hydration_requirements.get(key)
+        if requirements is None:
+            return
+        current = self.current_run
+        workflow = self.current_workflow
+        if (
+            current is None
+            or self._detail_key(current) != key
+            or workflow is None
+            or not self._run_matches(current, workflow)
+        ):
+            self._finish_detail_hydration(key)
+            return
+        if self._detail_requirements_satisfied_by_cache(key, requirements):
+            self._finish_detail_hydration(key)
+            return
+        current_attempt = (
+            selector == workflow.selector
+            and context_epoch == self._workflow_context_epoch
+            and data_revision == self._run_data_revision(selector)
+        )
+        superseded = requirements.version != requirements_version or not current_attempt
+        if superseded:
+            self._start_detail_hydration(current, key)
+            return
+        progress = False
+        structurally_current = (
+            fresh is not None
+            and self._detail_key(fresh) == key
+            and fresh.revision >= minimum_revision
+            and fresh.revision >= current.revision
+        )
+        if structurally_current and fresh.details_hydrated:
+            progress = self._adopt_detail_hydration_progress(
+                fresh,
+                current,
+                key,
+                requirements,
+            )
+        if self._detail_requirements_satisfied_by_cache(key, requirements):
+            self._finish_detail_hydration(key)
+            return
+        if progress:
+            self._reset_detail_hydration_backoff(key)
+        self._schedule_detail_hydration_retry(key, requirements)
+
+    def _apply_detail_update(self, detail: DetailDelta) -> bool:
+        run = self.current_run
+        if (
+            run is None
+            or run.operator_instance_id != detail.operator_instance_id
+            or run.run_id != detail.run_id
+            or run.created_sequence != detail.created_sequence
+        ):
+            return False
+        key = self._detail_key(run)
+        if isinstance(detail, LogDetailAppended):
+            logs = self._log_details.get(key)
+            if logs is None:
+                if not run.details_hydrated and detail.log_sequence != 1:
+                    self._invalidate_log_details(run)
+                    self._schedule_detail_hydration(
+                        run, required_log_sequence=detail.log_sequence
+                    )
+                    return False
+                logs = list(run.logs)
+                known_sequence = run.latest_log_sequence if run.details_hydrated else 0
+                self._log_details[key] = logs
+                self._log_detail_sequences[key] = known_sequence
+            known_sequence = self._log_detail_sequences.get(key, 0)
+            if detail.log_sequence <= known_sequence:
+                return True
+            if detail.log_sequence != known_sequence + 1:
+                self._invalidate_log_details(run)
+                self._schedule_detail_hydration(run, required_log_sequence=detail.log_sequence)
+                return False
+            logs.append(detail.log)
+            self._log_detail_sequences[key] = detail.log_sequence
+            cached_index = self._run_cache_indexes.get(key)
+            cached = self._runs_cache[cached_index] if cached_index is not None else None
+            for candidate in (run, cached):
+                if candidate is None:
+                    continue
+                candidate.logs = logs
+                candidate.latest_log_sequence = max(
+                    candidate.latest_log_sequence, detail.log_sequence
+                )
+                candidate.details_hydrated = True
+            return True
+
+        if not isinstance(detail, AgentEventDetailAppended):
+            return False
+        node = run.nodes.get(detail.node_id)
+        if node is None:
+            return False
+        agent_key = (*key, detail.node_id)
+        if agent_key in self._invalid_agent_event_details:
+            self._schedule_detail_hydration(
+                run,
+                required_event=(detail.node_id, detail.event.event_sequence),
+            )
+            return False
+        events = self._agent_event_details.get(agent_key)
+        if events is None:
+            events = self._events_from_node(run, detail.node_id)
+            known_sequence = self._event_sequence(events)
+            self._agent_event_details[agent_key] = events
+            self._agent_event_sequences[agent_key] = known_sequence
+        known_sequence = self._agent_event_sequences.get(agent_key, 0)
+        if detail.event.event_sequence <= known_sequence:
+            return True
+        try:
+            event = json.loads(detail.event.event_json)
+        except (TypeError, ValueError):
+            return False
+        if not isinstance(event, dict):
+            return False
+        events.append(event)
+        self._agent_event_sequences[agent_key] = detail.event.event_sequence
+        return True
+
     # ── Mutation: tick ──────────────────────────────────────────────
 
     def tick(self) -> None:
@@ -354,22 +1113,162 @@ class UIStore:
         """Queue provider data for application on the UI thread."""
         self._background_updates.put(("run", run))
 
+    def enqueue_detail_update(self, detail: DetailDelta) -> None:
+        """Queue one identity-pinned detail append for the UI-thread reducer."""
+        self._background_updates.put(("detail", detail))
+
+    def enqueue_trace_hydration_completion(self, completion: TraceDetailCompletion) -> None:
+        """Queue one narrow trace result for consumption on the UI thread."""
+        self._background_updates.put(("trace_hydration_complete", completion))
+
+    def take_trace_hydration_completions(
+        self,
+    ) -> list[tuple[TraceDetailCompletion, bool]]:
+        """Transfer trace outcomes accumulated by the UI-thread reducer."""
+        completions = self._trace_hydration_completions
+        self._trace_hydration_completions = []
+        return completions
+
+    def _apply_trace_detail_completion(self, completion: TraceDetailCompletion) -> bool:
+        """Install only a trace body when its structural identity is still exact."""
+        run = self.current_run
+        if (
+            completion.trace_body is None
+            or run is None
+            or run.operator_instance_id != completion.operator_instance_id
+            or run.run_id != completion.run_id
+            or run.created_sequence != completion.created_sequence
+        ):
+            return False
+        node = run.nodes.get(completion.node_id)
+        descriptor = node.trace if node is not None else None
+        if (
+            node is None
+            or node.node_id != completion.node_id
+            or descriptor is None
+            or descriptor.revision != completion.descriptor_revision
+        ):
+            return False
+        try:
+            envelope = json.loads(node.agent_trace_json) if node.agent_trace_json else {}
+        except (TypeError, ValueError):
+            envelope = {}
+        if not isinstance(envelope, dict):
+            envelope = {}
+        envelope["trace"] = completion.trace_body
+        updated_node = copy(node)
+        updated_node.agent_trace_json = json.dumps(envelope, default=str)
+        updated_run = copy(run)
+        updated_run.nodes = dict(run.nodes)
+        updated_run.nodes[completion.node_id] = updated_node
+        self._replace_run_references(updated_run)
+        return True
+
+    def enqueue_polled_run_update(
+        self,
+        selector: str,
+        data_revision: int,
+        context_epoch: int,
+        run: RunState,
+    ) -> None:
+        """Queue a unary poll result only for the state epoch that requested it."""
+        self._background_updates.put(
+            ("polled_run", (selector, data_revision, context_epoch, run))
+        )
+
+    @staticmethod
+    def _reset_baseline_validation_error(
+        notice: StreamResetNotice,
+        baseline: ResetBaseline | None,
+    ) -> str:
+        if baseline is None or baseline.generation != notice.generation:
+            return "baseline generation mismatch"
+        if (
+            not baseline.operator_instance_id
+            or (
+                notice.operator_instance_id
+                and baseline.operator_instance_id != notice.operator_instance_id
+            )
+            or baseline.as_of_sequence < notice.observed_sequence
+        ):
+            return "invalid baseline identity or high-water"
+        return ""
+
+    def _on_stream_reset(self, notice: StreamResetNotice) -> None:
+        """Reconcile an authoritative baseline until this reset is no longer pending."""
+        if (
+            self._shutdown.is_set()
+            or get_stream_state(self.provider) == "stopped"
+            or notice.generation < self._latest_reset_generation
+            or notice.generation in self._reset_reconciliations_in_flight
+        ):
+            return
+        self._latest_reset_generation = notice.generation
+        self._cancel_detail_hydration_repairs()
+        # Invalidate catalog/run responses issued before this reset immediately,
+        # rather than waiting for the authoritative baseline to finish loading.
+        self._workflow_context_epoch += 1
+        self._reset_reconciliations_in_flight.add(notice.generation)
+        loader = self._reset_baseline_loader
+
+        def _do_reconcile() -> None:
+            retry_count = 0
+            while not self._reset_reconciliation_stopped(notice.generation):
+                try:
+                    baseline = loader(notice)
+                    if validation_error := self._reset_baseline_validation_error(
+                        notice, baseline
+                    ):
+                        raise RuntimeError(validation_error)
+                except Exception as exc:
+                    error = str(exc) or "Failed to reconcile live state"
+                    self._background_updates.put(("stream_reset_error", (notice, error)))
+                    delay = min(
+                        RESET_RECONCILIATION_INITIAL_BACKOFF_SECONDS
+                        * (2 ** min(retry_count, 10)),
+                        RESET_RECONCILIATION_MAX_BACKOFF_SECONDS,
+                    )
+                    retry_count += 1
+                    if self._wait_for_reset_retry(notice.generation, delay):
+                        break
+                    continue
+                self._background_updates.put(("stream_reset", (notice, baseline, "")))
+                return
+            self._reset_reconciliations_in_flight.discard(notice.generation)
+
+        threading.Thread(target=_do_reconcile, daemon=True).start()
+
+    def _reset_reconciliation_stopped(self, generation: int) -> bool:
+        return (
+            self._shutdown.is_set()
+            or generation != self._latest_reset_generation
+            or get_stream_state(self.provider) == "stopped"
+        )
+
+    def _wait_for_reset_retry(self, generation: int, delay: float) -> bool:
+        deadline = time.monotonic() + delay
+        while not self._reset_reconciliation_stopped(generation):
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                return False
+            self._shutdown.wait(min(remaining, 0.1))
+        return True
+
     def _refresh_workflow_catalog(self) -> None:
         if self._catalog_refresh_in_flight:
             return
         self._catalog_refresh_in_flight = True
         provider = self.provider
+        context_epoch = self._workflow_context_epoch
 
         import threading
 
         def _do_refresh():
             try:
                 workflows = provider.list_workflows()
-                if getattr(provider, "connected", True) is False:
-                    workflows = None
             except Exception:
                 workflows = None
-            self._background_updates.put(("catalog", workflows))
+            self._background_updates.put(("catalog", (context_epoch, workflows)))
 
         threading.Thread(target=_do_refresh, daemon=True).start()
 
@@ -392,9 +1291,6 @@ class UIStore:
                 statuses: dict[str, RunStatus | None] = {}
                 for p in workflows:
                     runs = provider.list_runs(p.selector)
-                    if getattr(provider, "connected", True) is False:
-                        statuses = None
-                        break
                     statuses[p.selector] = runs[-1].status if runs else None
             except Exception:
                 statuses = None
@@ -408,6 +1304,7 @@ class UIStore:
         """Switch to a different workflow — recompute DAG, reset selection."""
         self._run_interaction_generation += 1
         self._workflow_context_epoch += 1
+        self._cancel_detail_hydration_repairs()
         self.close_trace_inspector()
         self.current_workflow = workflow
         self.dag, self.all_nodes = workflow_to_layout(workflow)
@@ -417,13 +1314,14 @@ class UIStore:
         self.sidebar_selected_id = workflow.selector
 
         # Never show the previous workflow's runs while the new history loads.
-        self._runs_cache = []
+        self._set_runs_cache([])
         self.current_run = None
         self.run_pinned = False
         self._refresh_runs_cache()
 
     def switch_run(self, run: RunState) -> None:
         self._run_interaction_generation += 1
+        self._cancel_detail_hydration_repairs()
         self.close_trace_inspector()
         self.current_run = run
         self.run_pinned = True
@@ -431,6 +1329,7 @@ class UIStore:
     def deselect_run(self) -> None:
         """Unpin the current run — auto-follow will take over."""
         self._run_interaction_generation += 1
+        self._cancel_detail_hydration_repairs()
         self.close_trace_inspector()
         self.run_pinned = False
         self.selected_node = None
@@ -442,6 +1341,7 @@ class UIStore:
         runs = self.runs_for_current_workflow
         latest = runs[-1] if runs else None
         if latest and (self.current_run is None or latest.run_id != self.current_run.run_id):
+            self._cancel_detail_hydration_repairs()
             self.close_trace_inspector()
             self.current_run = latest
 
@@ -553,14 +1453,22 @@ class UIStore:
     def start_run(self) -> str | None:
         if not self.current_workflow:
             return None
-        run_id = self.provider.start_run(self.current_workflow.selector)
-        if not run_id:
-            self.run_error = getattr(self.provider, "last_error", "") or "Run failed to start"
-            return None
         selector = self.current_workflow.selector
-        self.current_run = self.provider.get_run(run_id)
-        # Refresh cache so the new run appears immediately
-        self._runs_cache = self.provider.list_runs(selector)
+        try:
+            run_id = self.provider.start_run(selector)
+            if not run_id:
+                self.run_error = "Run failed to start"
+                return None
+            run = self.provider.get_run(run_id)
+            runs = self.provider.list_runs(selector)
+        except Exception as exc:
+            self.run_error = str(exc) or "Run failed to start"
+            return None
+        # Refresh cache so the new run appears immediately.
+        self._set_runs_cache(runs)
+        self.current_run = run
+        if run is not None:
+            self._replace_run_references(run)
         self._advance_run_data_revision(selector)
         self.start_time = time.monotonic()
         self.run_error = ""
@@ -592,25 +1500,14 @@ class UIStore:
             try:
                 run_id = provider.start_run(workflow_selector)
                 if not run_id:
-                    error = getattr(provider, "last_error", "") or "Run failed to start"
+                    error = "Run failed to start"
                 else:
                     run = provider.get_run(run_id)
-                    if getattr(provider, "connected", True) is False:
-                        error = (
-                            getattr(provider, "last_error", "")
-                            or "Failed to load the started run"
-                        )
-                    else:
-                        runs = provider.list_runs(workflow_selector)
-                        if getattr(provider, "connected", True) is False:
-                            error = (
-                                getattr(provider, "last_error", "")
-                                or "Failed to refresh runs after starting"
-                            )
-                        elif run is None:
-                            run = next((item for item in runs if item.run_id == run_id), None)
-                            if run is None:
-                                error = f"Started run {run_id} was not found"
+                    runs = provider.list_runs(workflow_selector)
+                    if run is None:
+                        run = next((item for item in runs if item.run_id == run_id), None)
+                        if run is None:
+                            error = f"Started run {run_id} was not found"
             except Exception as exc:
                 error = str(exc) or "Run failed to start"
             self._background_updates.put(
@@ -640,6 +1537,7 @@ class UIStore:
             return
         if self.current_run is None:
             self._run_interaction_generation += 1
+            self._cancel_detail_hydration_repairs()
             self.current_run = display[0]
             self.run_pinned = True
             return
@@ -647,6 +1545,7 @@ class UIStore:
             if r.run_id == self.current_run.run_id:
                 if i + 1 < len(display):
                     self._run_interaction_generation += 1
+                    self._cancel_detail_hydration_repairs()
                     self.current_run = display[i + 1]
                     self.run_pinned = True
                 return
@@ -658,6 +1557,7 @@ class UIStore:
             return
         if self.current_run is None:
             self._run_interaction_generation += 1
+            self._cancel_detail_hydration_repairs()
             self.current_run = display[0]
             self.run_pinned = True
             return
@@ -665,6 +1565,7 @@ class UIStore:
             if r.run_id == self.current_run.run_id:
                 if i > 0:
                     self._run_interaction_generation += 1
+                    self._cancel_detail_hydration_repairs()
                     self.current_run = display[i - 1]
                     self.run_pinned = True
                 return
@@ -771,6 +1672,39 @@ class UIStore:
             return f"{workflow.root_alias}/{source}"
         return source
 
+    def _merge_summary_runs(self, runs: list[RunState]) -> list[RunState]:
+        """Preserve hydrated detail while refreshing summary metadata."""
+        hydrated = {run.run_id: run for run in self._runs_cache if run.details_hydrated}
+        if self.current_run is not None and self.current_run.details_hydrated:
+            hydrated[self.current_run.run_id] = self.current_run
+
+        merged: list[RunState] = []
+        for summary in runs:
+            detail = hydrated.get(summary.run_id)
+            same_epoch = detail is not None and (
+                not summary.operator_instance_id
+                or not detail.operator_instance_id
+                or summary.operator_instance_id == detail.operator_instance_id
+            )
+            if summary.details_hydrated or not same_epoch:
+                merged.append(summary)
+                continue
+
+            run = copy(detail)
+            if summary.revision >= detail.revision:
+                run.flow_name = summary.flow_name
+                run.status = summary.status
+                run.started_at = summary.started_at
+                run.ended_at = summary.ended_at
+                run.triggered_by = summary.triggered_by
+                run.workflow_id = summary.workflow_id
+                run.workflow_display_name = summary.workflow_display_name
+                run.operator_instance_id = summary.operator_instance_id
+                run.created_sequence = summary.created_sequence
+                run.revision = summary.revision
+            merged.append(run)
+        return merged
+
     @staticmethod
     def _run_matches(run: RunState, workflow: WorkflowInfo) -> bool:
         if run.workflow_id:
@@ -784,13 +1718,97 @@ class UIStore:
         """Invalidate authoritative run-data snapshots for one workflow."""
         self._run_data_revisions[selector] = self._run_data_revision(selector) + 1
 
+    def _run_for_detail_key(self, key: RunDetailKey) -> RunState | None:
+        if self.current_run is not None and self._detail_key(self.current_run) == key:
+            return self.current_run
+        cache_index = self._run_cache_indexes.get(key)
+        return self._runs_cache[cache_index] if cache_index is not None else None
+
+    def _repair_stream_handoff_overflow(
+        self,
+        structure_lost: bool,
+        all_details_lost: bool,
+        repairs: tuple[_DetailRepairWatermark, ...],
+    ) -> None:
+        """Recover dropped stream work from authoritative summary/detail reads."""
+        if structure_lost:
+            self._refresh_runs_cache()
+        if all_details_lost and self.current_run is not None:
+            run = self.current_run
+            self._invalidate_log_details(run)
+            self._schedule_detail_hydration(
+                run,
+                required_log_sequence=run.latest_log_sequence,
+            )
+            for node_id, node in run.nodes.items():
+                latest_event_sequence = (
+                    node.trace.latest_event_sequence if node.trace is not None else 0
+                )
+                if latest_event_sequence:
+                    self._invalidate_agent_event_details(run, node_id)
+                    self._schedule_detail_hydration(
+                        run,
+                        required_event=(node_id, latest_event_sequence),
+                    )
+        for repair in repairs:
+            run = self._run_for_detail_key(repair.key)
+            if run is None:
+                continue
+            if repair.node_id is None:
+                self._invalidate_log_details(run)
+                self._schedule_detail_hydration(
+                    run,
+                    required_log_sequence=repair.sequence,
+                )
+            else:
+                self._invalidate_agent_event_details(run, repair.node_id)
+                self._schedule_detail_hydration(
+                    run,
+                    required_event=(repair.node_id, repair.sequence),
+                )
+
     def _apply_background_updates(self) -> None:
-        while not self._background_updates.empty():
-            kind, payload = self._background_updates.get()
+        for _ in range(BACKGROUND_UPDATES_PER_TICK):
+            try:
+                kind, payload = self._background_updates.get()
+            except Empty:
+                break
+            if kind == "stream_handoff_overflow":
+                self._repair_stream_handoff_overflow(*payload)
+                continue
+            if kind == "stream_reset_error":
+                notice, error = payload
+                if notice.generation == self._latest_reset_generation:
+                    self.run_error = f"Live state reset failed: {error}"
+                continue
+            if kind == "stream_reset":
+                notice, baseline, error = payload
+                self._reset_reconciliations_in_flight.discard(notice.generation)
+                if notice.generation != self._latest_reset_generation:
+                    continue
+                if error:
+                    self.run_error = f"Live state reset failed: {error}"
+                    continue
+                validation_error = self._reset_baseline_validation_error(notice, baseline)
+                if validation_error:
+                    self.run_error = f"Live state reset failed: {validation_error}"
+                    self._on_stream_reset(notice)
+                    continue
+                self._apply_reset_baseline(baseline)
+                try:
+                    self.provider.acknowledge_stream_reset(
+                        notice.generation,
+                        baseline.operator_instance_id,
+                        baseline.as_of_sequence,
+                    )
+                except Exception as exc:
+                    self.run_error = f"Live state reset failed: {exc}"
+                continue
             if kind == "catalog":
                 self._catalog_refresh_in_flight = False
-                if payload is not None:
-                    self._reconcile_workflows(payload)
+                context_epoch, workflows = payload
+                if workflows is not None and context_epoch == self._workflow_context_epoch:
+                    self._reconcile_workflows(workflows)
             elif kind == "runs":
                 selector, data_revision, context_epoch, runs = payload
                 self._runs_refresh_in_flight.discard(selector)
@@ -801,9 +1819,19 @@ class UIStore:
                     and self.current_workflow is not None
                     and self.current_workflow.selector == selector
                 ):
+                    runs = self._merge_summary_runs(runs)
                     changed = self._runs_cache != runs
-                    self._runs_cache = runs
-                    if not self.run_pinned:
+                    pinned_key = (
+                        self._detail_key(self.current_run)
+                        if self.run_pinned and self.current_run is not None
+                        else None
+                    )
+                    self._set_runs_cache(runs)
+                    if pinned_key is not None:
+                        cache_index = self._run_cache_indexes.get(pinned_key)
+                        if cache_index is not None:
+                            self.current_run = self._runs_cache[cache_index]
+                    else:
                         self.current_run = runs[-1] if runs else None
                     if runs:
                         self.workflow_statuses[selector] = runs[-1].status
@@ -823,8 +1851,37 @@ class UIStore:
                             self.workflow_statuses.pop(selector, None)
                         else:
                             self.workflow_statuses[selector] = status
-            elif kind == "run":
-                run = payload
+            elif kind == "detail_hydration":
+                (
+                    selector,
+                    data_revision,
+                    context_epoch,
+                    key,
+                    generation,
+                    requirements_version,
+                    minimum_revision,
+                    fresh,
+                ) = payload
+                self._apply_detail_hydration_completion(
+                    selector=selector,
+                    data_revision=data_revision,
+                    context_epoch=context_epoch,
+                    key=key,
+                    generation=generation,
+                    requirements_version=requirements_version,
+                    minimum_revision=minimum_revision,
+                    fresh=fresh,
+                )
+            elif kind in {"run", "polled_run"}:
+                if kind == "polled_run":
+                    selector, data_revision, context_epoch, run = payload
+                    if (
+                        context_epoch != self._workflow_context_epoch
+                        or data_revision != self._run_data_revision(selector)
+                    ):
+                        continue
+                else:
+                    run = payload
                 workflow = next(
                     (item for item in self.workflows if self._run_matches(run, item)),
                     None,
@@ -832,36 +1889,36 @@ class UIStore:
                 if workflow is None:
                     continue
                 selector = workflow.selector
+                key = self._detail_key(run)
                 current_match = (
                     self.current_run
-                    if self.current_run
-                    and self.current_run.run_id == run.run_id
+                    if self.current_run is not None
+                    and self._detail_key(self.current_run) == key
                     and self.current_workflow is not None
                     and self.current_workflow.selector == selector
                     else None
                 )
-                cache_index = next(
-                    (
-                        index
-                        for index, cached in enumerate(self._runs_cache)
-                        if cached.run_id == run.run_id and self._run_matches(cached, workflow)
-                    ),
-                    None,
-                )
+                cache_index = self._run_cache_indexes.get(key)
                 cached_match = (
                     self._runs_cache[cache_index] if cache_index is not None else None
                 )
+                previous = current_match or cached_match
+                if previous is not None and run.revision < previous.revision:
+                    continue
+                run = self._merge_cached_details(run, previous)
                 equivalents = [
                     item for item in (current_match, cached_match) if item is not None
                 ]
                 if not equivalents or any(item != run for item in equivalents):
                     self._advance_run_data_revision(selector)
-                if current_match is not None:
-                    self.current_run = run
-                if cache_index is not None:
-                    self._runs_cache[cache_index] = run
-                    if cache_index == len(self._runs_cache) - 1:
-                        self.workflow_statuses[selector] = run.status
+                self._replace_run_references(run)
+                if cache_index == len(self._runs_cache) - 1:
+                    self.workflow_statuses[selector] = run.status
+            elif kind == "detail":
+                self._apply_detail_update(payload)
+            elif kind == "trace_hydration_complete":
+                applied = self._apply_trace_detail_completion(payload)
+                self._trace_hydration_completions.append((payload, applied))
             elif kind == "start_run":
                 (
                     selector,
@@ -893,15 +1950,61 @@ class UIStore:
                     self.run_error = error
                     continue
                 self.run_error = ""
-                self._runs_cache = runs or ([] if run is None else [run])
+                self._set_runs_cache(runs or ([] if run is None else [run]))
                 self.current_run = run or next(
                     (item for item in self._runs_cache if item.run_id == run_id), None
                 )
+                if self.current_run is not None:
+                    self._replace_run_references(self.current_run)
                 self.run_pinned = True
                 self.start_time = time.monotonic()
                 self._advance_run_data_revision(selector)
                 if run_id and self._runs_cache:
                     self.workflow_statuses[selector] = self._runs_cache[-1].status
+        self._start_due_detail_hydrations()
+
+    def _apply_reset_baseline(self, baseline: ResetBaseline) -> None:
+        """Atomically replace catalog/run caches before acknowledging a reset."""
+        self._log_details.clear()
+        self._log_detail_sequences.clear()
+        self._agent_event_details.clear()
+        self._agent_event_sequences.clear()
+        self._cancel_detail_hydration_repairs()
+        self._invalid_agent_event_details.clear()
+        pinned_run_id = (
+            self.current_run.run_id if self.run_pinned and self.current_run else None
+        )
+        previous_selectors = {workflow.selector for workflow in self.workflows}
+        baseline_selectors = {workflow.selector for workflow in baseline.workflows}
+        self._workflow_context_epoch += 1
+        for selector in previous_selectors | baseline_selectors:
+            self._advance_run_data_revision(selector)
+
+        self._reconcile_workflows(list(baseline.workflows))
+        # A selection change can schedule a refresh during reconciliation. Invalidate
+        # it too so a pre-baseline response cannot overwrite authoritative state.
+        for selector in previous_selectors | baseline_selectors:
+            self._advance_run_data_revision(selector)
+        self.workflow_statuses = {
+            selector: runs[-1].status
+            for selector, runs in baseline.runs_by_workflow.items()
+            if runs
+        }
+        if self.current_workflow is None:
+            self._set_runs_cache([])
+            self.current_run = None
+            self.run_pinned = False
+        else:
+            selector = self.current_workflow.selector
+            runs = list(baseline.runs_by_workflow.get(selector, ()))
+            self._set_runs_cache(runs)
+            pinned = next(
+                (run for run in runs if run.run_id == pinned_run_id),
+                None,
+            )
+            self.current_run = pinned or (runs[-1] if runs else None)
+            self.run_pinned = pinned is not None
+        self.run_error = ""
 
     def _reconcile_workflows(self, workflows: list[WorkflowInfo]) -> None:
         old_signature = [self._workflow_revision_signature(item) for item in self.workflows]
@@ -924,7 +2027,7 @@ class UIStore:
         if selected is None:
             self.current_workflow = None
             self.current_run = None
-            self._runs_cache = []
+            self._set_runs_cache([])
             self.dag = None
             self.all_nodes = []
             self.nav_grid = []
@@ -936,7 +2039,7 @@ class UIStore:
             self.sidebar_selected_id = selected.selector
             if changed_selection:
                 self.current_run = None
-                self._runs_cache = []
+                self._set_runs_cache([])
                 self.run_pinned = False
                 self._refresh_runs_cache()
             if self.selected_node is not None:

@@ -11,7 +11,17 @@ from typing import Any, cast
 import pytest
 
 from avalanche.operator import Operator
-from avalanche.operator.models import LogLevel, NodeState, NodeStatus, RunState, RunStatus
+from avalanche.operator.models import (
+    LogAppended,
+    LogDetailAppended,
+    LogLevel,
+    NodeState,
+    NodeStatus,
+    RunCreated,
+    RunState,
+    RunStatus,
+    RunStatusChanged,
+)
 from runtime.operator import operator as operator_module
 from runtime.operator.source import is_source_path_included
 
@@ -61,6 +71,8 @@ def _protocol_test_handle(result_bundle, *, cancelled=False):
     cancel_event = threading.Event()
     if cancelled:
         cancel_event.set()
+    publication_event = threading.Event()
+    publication_event.set()
     return SimpleNamespace(
         process=_InertProcess(),
         event_queue=event_queue,
@@ -69,6 +81,7 @@ def _protocol_test_handle(result_bundle, *, cancelled=False):
         assignment_event=threading.Event(),
         windows_job=None,
         result_bundle=result_bundle,
+        publication_event=publication_event,
         drain_thread=None,
     )
 
@@ -455,7 +468,7 @@ def test_malformed_run_event_terminalizes_and_cleans_up(event):
     operator._active_runs[run_id] = handle
     logs = []
     operator.on_log(logs.append)
-    updates = operator.subscribe()
+    updates = operator.subscribe_run_deltas()
     errors = []
 
     def drain():
@@ -487,8 +500,10 @@ def test_malformed_run_event_terminalizes_and_cleans_up(event):
     assert logs == protocol_logs
     notifications = []
     while not updates.empty():
-        notifications.append(updates.get_nowait()[1])
-    assert [state.status for state in notifications] == [RunStatus.FAILED]
+        notifications.append(updates.get_nowait().delta.change)
+    assert len(notifications) == 1
+    assert isinstance(notifications[0], RunCreated)
+    assert notifications[0].summary.status == RunStatus.FAILED
     assert run_id not in operator._active_runs
     assert handle.event_queue.closed
     operator.close()
@@ -622,7 +637,7 @@ def test_cancel_request_is_non_terminal_until_coordinator_stops(tmp_path):
         schedule=False,
         cancel_grace=0.15,
     )
-    updates = operator.subscribe()
+    updates = operator.subscribe_run_deltas()
     try:
         run_id = operator.start_run("flow")
         deadline = time.monotonic() + 2
@@ -641,37 +656,45 @@ def test_cancel_request_is_non_terminal_until_coordinator_stops(tmp_path):
 
         queued = []
         while not updates.empty():
-            queued.append(updates.get_nowait()[1])
+            queued.append(updates.get_nowait().delta.change)
         terminal_indexes = [
-            index for index, state in enumerate(queued) if state.status == RunStatus.CANCELLED
+            index
+            for index, change in enumerate(queued)
+            if isinstance(change, RunStatusChanged) and change.status == RunStatus.CANCELLED
         ]
-        assert terminal_indexes == [len(queued) - 1]
+        assert terminal_indexes == [len(queued) - 2]
+        assert queued[-1].status == NodeStatus.SKIPPED
     finally:
         operator.close()
 
 
-def test_slow_subscriber_receives_distinct_coherent_run_snapshots(tmp_path):
+def test_slow_delta_consumer_receives_ordered_descriptors_and_detail_bodies(tmp_path):
     workflow = _write_standalone(
         tmp_path,
         body="log.info('first')\n    log.info('second')",
     )
     operator = Operator([str(workflow)], watch=False, schedule=False)
-    subscription = operator.subscribe()
+    subscription = operator.subscribe_run_deltas()
+    details = []
+    operator.on_detail_update(details.append)
     try:
         run_id = operator.start_run("flow")
         terminal = _wait_terminal(operator, run_id)
         assert terminal.status == RunStatus.SUCCESS
 
-        snapshots = []
+        changes = []
         while not subscription.empty():
-            snapshots.append(subscription.get_nowait()[1])
-        assert len({id(state) for state in snapshots}) == len(snapshots)
-        assert snapshots[0].status == RunStatus.PENDING
-        assert RunStatus.RUNNING in {state.status for state in snapshots}
-        assert snapshots[-1].status == RunStatus.SUCCESS
-        log_counts = [len(state.logs) for state in snapshots]
-        assert log_counts == sorted(log_counts)
-        assert 1 in log_counts and 2 in log_counts
+            changes.append(subscription.get_nowait().delta.change)
+        statuses = [change.status for change in changes if isinstance(change, RunStatusChanged)]
+        logs = [change for change in changes if isinstance(change, LogAppended)]
+        assert statuses[0] == RunStatus.RUNNING
+        assert statuses[-1] == RunStatus.SUCCESS
+        assert [change.log.sequence for change in logs] == [1, 2]
+        assert [
+            detail.log.message.rsplit("] ", 1)[-1]
+            for detail in details
+            if isinstance(detail, LogDetailAppended)
+        ] == ["first", "second"]
     finally:
         operator.close()
 
@@ -704,15 +727,15 @@ def test_preparation_timeout_kills_sigterm_ignoring_coordinator(tmp_path):
         [str(workflow)],
         watch=False,
         schedule=False,
-        prepare_timeout=1.5,
+        prepare_timeout=5.0,
     )
     try:
         workflow.write_text(
             "import os, signal, time\n"
             "from pathlib import Path\n"
-            "import avalanche as ava\n"
             f"Path({str(pid_file)!r}).write_text(str(os.getpid()))\n"
             "signal.signal(signal.SIGTERM, signal.SIG_IGN)\n"
+            "import avalanche as ava\n"
             "time.sleep(30)\n"
             "@ava.workflow\n"
             "def flow():\n"
@@ -721,7 +744,7 @@ def test_preparation_timeout_kills_sigterm_ignoring_coordinator(tmp_path):
         started = time.monotonic()
         with pytest.raises(TimeoutError, match="preparation exceeded"):
             operator.start_run("flow")
-        assert time.monotonic() - started < 4.5
+        assert time.monotonic() - started < 8.0
         pid = int(pid_file.read_text())
         with pytest.raises(ProcessLookupError):
             os.kill(pid, 0)

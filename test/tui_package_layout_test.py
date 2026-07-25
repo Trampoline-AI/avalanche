@@ -43,7 +43,7 @@ def test_public_provider_contract_keeps_connection_state_optional():
     assert "ping" not in StateProvider.__dict__
 
     class ConnectedProvider:
-        connected = False
+        operator_reachable = False
         connection_label = "operator.example:7433"
         last_error = "unavailable"
 
@@ -129,10 +129,14 @@ def test_tui_launch_passes_grpc_auth_and_tls_options(monkeypatch, tmp_path):
     ca_cert = tmp_path / "ca.pem"
     ca_cert.write_bytes(b"ca")
     providers = []
+    closed = []
 
     class FakeProvider:
         def __init__(self, *args, **kwargs):
             providers.append((args, kwargs))
+
+        def close(self):
+            closed.append(True)
 
     class FakeApp:
         def __init__(self, **kwargs):
@@ -169,6 +173,7 @@ def test_tui_launch_passes_grpc_auth_and_tls_options(monkeypatch, tmp_path):
             {"token": "secret", "tls": True, "root_certificates": b"ca"},
         )
     ]
+    assert closed == [True]
 
 
 def test_tui_launch_accepts_caller_owned_provider(monkeypatch):
@@ -195,7 +200,14 @@ def test_tui_launch_accepts_caller_owned_provider(monkeypatch):
 
     tui.launch_tui(["orders/prepare"], provider=provider)
 
-    assert launched == [{"provider": provider, "workflow": "orders", "node": "prepare"}]
+    assert launched == [
+        {
+            "provider": provider,
+            "workflow": "orders",
+            "node": "prepare",
+            "close_provider_on_unmount": False,
+        }
+    ]
     assert provider.closed is False
 
 
@@ -227,6 +239,9 @@ def test_tui_launch_accepts_connect_equals_syntax(monkeypatch):
         def __init__(self, address, **kwargs):
             providers.append((self, address, kwargs))
 
+        def close(self):
+            return None
+
     class FakeApp:
         def __init__(self, **kwargs):
             launched.append(kwargs)
@@ -250,6 +265,7 @@ def test_tui_launch_accepts_connect_equals_syntax(monkeypatch):
             "provider": providers[0][0],
             "workflow": "orders",
             "node": "prepare",
+            "close_provider_on_unmount": False,
         }
     ]
 
@@ -271,7 +287,14 @@ def test_tui_launch_without_provider_preserves_mock_path(monkeypatch):
 
     tui.launch_tui(["orders"])
 
-    assert launched == [{"provider": None, "workflow": "orders", "node": None}]
+    assert launched == [
+        {
+            "provider": None,
+            "workflow": "orders",
+            "node": None,
+            "close_provider_on_unmount": True,
+        }
+    ]
 
 
 def test_core_operator_models_do_not_depend_on_optional_tui_package():

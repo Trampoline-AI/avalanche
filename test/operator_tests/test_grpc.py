@@ -7,24 +7,41 @@ import threading
 import time
 from concurrent import futures
 from pathlib import Path
+from types import SimpleNamespace
 
 import grpc
 import pytest
 
 from avalanche.operator import Operator
-from avalanche.operator.client import GrpcStateProvider
+from avalanche.operator.client import (
+    GrpcStateProvider,
+    OperatorCallError,
+    StaleResetAcknowledgementError,
+    StreamState,
+)
 from avalanche.operator.convert import (
-    node_state_from_proto,
-    node_state_to_proto,
-    run_state_from_proto,
-    run_state_to_proto,
+    run_snapshot_to_proto,
+    run_summary_to_proto,
     workflow_info_from_proto,
     workflow_info_to_proto,
 )
-from avalanche.operator.models import NodeState, RunState, RunStatus, WorkflowInfo
+from avalanche.operator.models import (
+    NodeSnapshot,
+    NodeState,
+    NodeStatus,
+    ResetBaseline,
+    RunSnapshot,
+    RunState,
+    RunStatus,
+    RunSummary,
+    StreamResetNotice,
+    TraceDescriptor,
+    WorkflowInfo,
+)
 from avalanche.operator.server import serve
 from avalanche.runtime import File
 from runtime.operator._grpc import MAX_GRPC_MESSAGE_BYTES
+from runtime.operator.client import _DetailHydrationRaceError, _run_from_snapshot
 from runtime.operator.proto import operator_pb2 as pb
 from runtime.operator.results import (
     MAX_ATTACHMENT_MEDIA_TYPE_LENGTH,
@@ -32,6 +49,15 @@ from runtime.operator.results import (
     MAX_RESULT_ATTACHMENTS,
     MAX_RESULT_TOTAL_BYTES,
 )
+
+
+def _event_handle() -> SimpleNamespace:
+    return SimpleNamespace(
+        cancel_event=threading.Event(),
+        result_bundle=None,
+        success_quiesced=False,
+    )
+
 
 FIXTURES_DIR = os.path.join(os.path.dirname(os.path.dirname(__file__)), "fixtures")
 
@@ -57,7 +83,6 @@ def test_start_run_wire_preserves_surviving_field_numbers():
         flow_name="input_workflow",
         run_id="run_01KCVST2FP4QC5NKZNN5NS0Z2W",
         workflow_selector="flows/input.py::input_workflow",
-
     )
 
     assert request.run_id == "run_01KCVST2FP4QC5NKZNN5NS0Z2W"
@@ -194,8 +219,16 @@ class TestGrpcRoundtrip:
         requested_run_id = "run_grpc_duplicate"
         assert client.start_run("simple_workflow", run_id=requested_run_id) == requested_run_id
 
-        assert client.start_run("simple_workflow", run_id=requested_run_id) == ""
-        assert "ALREADY_EXISTS" in client.last_error
+        with pytest.raises(OperatorCallError) as error:
+            client.start_run("simple_workflow", run_id=requested_run_id)
+        assert error.value.status is grpc.StatusCode.ALREADY_EXISTS
+
+    def test_start_run_rejects_oversized_caller_owned_run_id(self, client):
+        with pytest.raises(OperatorCallError) as error:
+            client.start_run("simple_workflow", run_id="r" * 257)
+
+        assert error.value.status is grpc.StatusCode.INVALID_ARGUMENT
+        assert "256-byte UTF-8 limit" in str(error.value)
 
     def test_start_run_context_json_cannot_forge_lineage_vector(self, tmp_path):
         workflow_path = tmp_path / "lineage_workflows.py"
@@ -257,7 +290,7 @@ def lineage_context_workflow():
             run = _wait_for_run_success(provider, run_id)
             assert run is not None
             assert run.status == RunStatus.SUCCESS
-            messages = [entry.message for entry in run.logs]
+            messages = [item.message for item in run.logs]
             assert any("lineage={}" in message for message in messages)
             assert any(f"run_id={run_id}" in message for message in messages)
             assert any("workflow=lineage_context_workflow" in message for message in messages)
@@ -308,7 +341,7 @@ def lineage_context_workflow():
         run = client.get_run(run_id)
         assert run is not None
         assert run.status == RunStatus.SUCCESS
-        messages = [entry.message for entry in run.logs]
+        messages = [item.message for item in run.logs]
         assert any("message=from-grpc" in message for message in messages)
         assert any("request_id=req_grpc" in message for message in messages)
         assert any(f"run_id={run_id}" in message for message in messages)
@@ -316,15 +349,15 @@ def lineage_context_workflow():
         assert any("file=grpc-bytes" in message for message in messages)
 
     def test_start_run_rejects_duplicate_top_level_input_fields(self, client):
-        run_id = client.start_run(
-            "input_workflow",
-            input={"message": "from-grpc", "document": "json-value"},
-            files={"document": File(name="note.txt", content=b"grpc-bytes")},
-        )
+        with pytest.raises(OperatorCallError) as error:
+            client.start_run(
+                "input_workflow",
+                input={"message": "from-grpc", "document": "json-value"},
+                files={"document": File(name="note.txt", content=b"grpc-bytes")},
+            )
 
-        assert run_id == ""
-        assert "INVALID_ARGUMENT" in client.last_error
-        assert "Duplicate input field 'document'" in client.last_error
+        assert error.value.status is grpc.StatusCode.INVALID_ARGUMENT
+        assert "Duplicate input field 'document'" in str(error.value)
 
     def test_start_run_roundtrips_file_above_grpc_default_limit(self, tmp_path):
         workflow_path = tmp_path / "large_file_workflow.py"
@@ -405,14 +438,15 @@ def large_file_workflow():
         run = client.get_run("nonexistent")
         assert run is None
 
-    def test_stream_updates(self, client):
-        """StreamUpdates should deliver live state changes."""
+    def test_stream_run_deltas(self, client):
+        """StreamRunDeltas should materialize live state changes."""
         updates = []
 
         def on_update(run):
             updates.append((run.run_id, run.status))
 
         client.on_run_update(on_update)
+        client.start_stream()
         time.sleep(0.2)  # Let stream connect
 
         run_id = client.start_run("simple_workflow")
@@ -427,41 +461,6 @@ def large_file_workflow():
         statuses = [s for rid, s in updates if rid == run_id]
         assert len(statuses) > 0, "No stream updates received"
         assert RunStatus.SUCCESS in statuses
-
-    def test_reconnect_replays_terminal_update_missed_while_disconnected(self, grpc_server):
-        operator, _server, port = grpc_server
-        run = RunState(run_id="run_reconnect", flow_name="flow")
-        with operator._lock:
-            operator._runs[run.run_id] = run
-            cursor = operator._sequence
-        provider = GrpcStateProvider(f"localhost:{port}")
-        first_stream = None
-        replay_stream = None
-        try:
-            operator._notify_run(run)
-            first_stream = provider._stub.StreamUpdates(pb.StreamRequest(since_sequence=cursor))
-            first = next(first_stream)
-            assert first.run.run_id == run.run_id
-            first_stream.cancel()
-
-            run.status = RunStatus.SUCCESS
-            operator._notify_run(run)
-
-            replay_stream = provider._stub.StreamUpdates(
-                pb.StreamRequest(since_sequence=first.sequence)
-            )
-            replay = next(replay_stream)
-            assert replay.sequence > first.sequence
-            assert replay.run.run_id == run.run_id
-            assert replay.run.status == RunStatus.SUCCESS.value
-        finally:
-            if first_stream is not None:
-                first_stream.cancel()
-            if replay_stream is not None:
-                replay_stream.cancel()
-            provider.close()
-            with operator._lock:
-                operator._runs.pop(run.run_id, None)
 
     def test_legacy_flow_name_request_still_starts(self, client):
         response = client._stub.StartRun(pb.StartRunRequest(flow_name="simple_workflow"))
@@ -494,14 +493,6 @@ def test_proto_identity_roundtrip_and_absolute_path_redaction(tmp_path):
     assert restored.builder_symbol == info.builder_symbol
     assert restored.file_path == "reports/daily.py"
 
-    run = RunState(
-        run_id="run_1",
-        flow_name="Shared report",
-        workflow_id=info.workflow_id,
-        workflow_display_name=info.display_name,
-    )
-    assert run_state_from_proto(run_state_to_proto(run)) == run
-
 
 def test_old_proto_fields_receive_identity_fallbacks():
     info = workflow_info_from_proto(pb.FlowInfoMsg(name="legacy", file_path="legacy.py"))
@@ -509,71 +500,1428 @@ def test_old_proto_fields_receive_identity_fallbacks():
     assert info.display_name == "legacy"
     assert info.relative_file == "legacy.py"
 
-    run = run_state_from_proto(
-        pb.RunStateMsg(run_id="run_old", flow_name="legacy", status="pending")
-    )
-    assert run.workflow_id == "legacy"
-    assert run.workflow_display_name == "legacy"
 
-
-def test_client_accepts_lower_first_sequence_after_operator_restart():
+def test_ping_success_does_not_heal_failed_update_stream():
     provider = GrpcStateProvider("localhost:1")
+
+    class Unavailable(grpc.RpcError):
+        def code(self):
+            return grpc.StatusCode.UNAVAILABLE
+
+        def details(self):
+            return "stream offline"
+
+    class SplitHealthStub:
+        def StreamRunDeltas(self, request, *, metadata):  # noqa: N802
+            raise Unavailable()
+
+        def ListFlows(self, request, **kwargs):  # noqa: N802
+            return pb.FlowList()
+
+    provider._stub = SplitHealthStub()
+    try:
+        provider.on_run_update(lambda _run: None)
+        provider.start_stream()
+        deadline = time.monotonic() + 1.0
+        while provider.stream_state is not StreamState.FAILED and time.monotonic() < deadline:
+            time.sleep(0.005)
+
+        assert provider.stream_state is StreamState.FAILED
+        assert provider.operator_reachable is False
+        assert provider.ping() is True
+        assert provider.operator_reachable is True
+        assert provider.stream_state is StreamState.FAILED
+        assert provider.stream_error == "UNAVAILABLE: stream offline"
+    finally:
+        provider.close()
+
+
+@pytest.mark.parametrize(
+    ("status", "reachable"),
+    [
+        (grpc.StatusCode.INVALID_ARGUMENT, True),
+        (grpc.StatusCode.ALREADY_EXISTS, True),
+        (grpc.StatusCode.FAILED_PRECONDITION, True),
+        (grpc.StatusCode.UNAUTHENTICATED, True),
+        (grpc.StatusCode.UNAVAILABLE, False),
+        (grpc.StatusCode.DEADLINE_EXCEEDED, False),
+    ],
+)
+def test_ping_classifies_application_errors_separately_from_transport_failures(
+    status, reachable
+):
+    provider = GrpcStateProvider("localhost:1")
+
+    class RpcFailure(grpc.RpcError):
+        def code(self):
+            return status
+
+        def details(self):
+            return "operation failed"
+
+    class ErrorStub:
+        def ListFlows(self, request, **kwargs):  # noqa: N802
+            raise RpcFailure()
+
+    provider._stub = ErrorStub()
+    provider.operator_reachable = not reachable
+    try:
+        assert provider.ping() is False
+        assert provider.operator_reachable is reachable
+        assert provider.last_error == f"{status.name}: operation failed"
+    finally:
+        provider.close()
+
+
+def _trace_health_provider(stub) -> GrpcStateProvider:
+    trace_data = b'{"complete":true}'
+    descriptor = TraceDescriptor(
+        status="completed",
+        revision=3,
+        available=True,
+        complete=True,
+        size_bytes=len(trace_data),
+    )
+    run = RunState(
+        run_id="run-trace-health",
+        flow_name="flow",
+        operator_instance_id="operator-1",
+        created_sequence=1,
+        revision=3,
+        nodes={
+            "agent": NodeState(
+                node_id="agent",
+                name="agent",
+                node_type="step",
+                trace=descriptor,
+                revision=3,
+            )
+        },
+    )
+    provider = GrpcStateProvider("localhost:1")
+    provider._stub = stub
+    provider._runs_by_id[run.run_id] = run
+    provider.get_run = lambda run_id: run if run_id == run.run_id else None
+    return provider
+
+
+def test_read_trace_success_records_reachability_without_healing_update_stream():
+    class SuccessfulStub:
+        def ReadTrace(self, request, **kwargs):  # noqa: N802
+            return iter(
+                [
+                    pb.TraceChunk(
+                        revision=request.revision,
+                        chunk_index=0,
+                        data=b'{"complete":true}',
+                        eof=True,
+                    )
+                ]
+            )
+
+    provider = _trace_health_provider(SuccessfulStub())
+    provider.operator_reachable = False
+    provider.stream_state = StreamState.FAILED
+    provider.stream_error = "UNAVAILABLE: live updates interrupted"
+    try:
+        detail = provider.hydrate_trace("run-trace-health", "agent")
+        assert detail is not None
+        assert detail.trace_body == {"complete": True}
+        assert provider.operator_reachable is True
+        assert provider.stream_state is StreamState.FAILED
+        assert provider.stream_error == "UNAVAILABLE: live updates interrupted"
+    finally:
+        provider.close()
+
+
+def test_trace_cache_evicts_oldest_bodies_across_unique_run_node_keys():
+    trace_data = b"{}"
+    descriptor = TraceDescriptor(
+        status="completed",
+        revision=4,
+        available=True,
+        complete=True,
+        size_bytes=len(trace_data),
+    )
+    runs = {
+        f"run-{index}": RunState(
+            run_id=f"run-{index}",
+            flow_name="flow",
+            operator_instance_id="operator-1",
+            created_sequence=index + 1,
+            revision=4,
+            nodes={
+                "agent": NodeState(
+                    node_id="agent",
+                    name="agent",
+                    node_type="agent",
+                    trace=descriptor,
+                    revision=4,
+                )
+            },
+        )
+        for index in range(4)
+    }
+
+    class TraceStub:
+        def ReadTrace(self, request, **kwargs):  # noqa: N802
+            return iter(
+                [
+                    pb.TraceChunk(
+                        revision=request.revision,
+                        chunk_index=0,
+                        data=trace_data,
+                        eof=True,
+                    )
+                ]
+            )
+
+    provider = GrpcStateProvider(
+        "localhost:1",
+        max_detail_body_bytes=2,
+        max_retained_detail_count=2,
+        max_retained_detail_bytes=4,
+    )
+    provider._stub = TraceStub()
+    provider._install_structural_baseline("operator-1", 4, runs)
+    provider.get_run = lambda run_id: runs.get(run_id)
+    try:
+        for run_id in runs:
+            detail = provider.hydrate_trace(run_id, "agent")
+            assert detail is not None
+            assert detail.trace_body == {}
+            assert provider._retained_detail_count <= 2
+            assert provider._retained_detail_bytes <= 4
+            assert len(provider._detail_cache_usage) <= 2
+
+        retained = [provider._trace_cache_key(run_id, "agent") for run_id in runs]
+        assert list(provider._detail_cache_usage) == retained[-2:]
+        assert set(provider._trace_bodies) == {
+            ("run-2", "agent"),
+            ("run-3", "agent"),
+        }
+        assert provider._retained_detail_count == 2
+        assert provider._retained_detail_bytes == 4
+    finally:
+        provider.close()
+
+
+def test_detail_hydration_rejects_advertised_and_streamed_bytes_before_accumulating():
+    class OversizedStream:
+        def __init__(self):
+            self.cancelled = False
+
+        def __iter__(self):
+            return iter([pb.DetailChunk(chunk_index=0, data=b"four", eof=True)])
+
+        def cancel(self):
+            self.cancelled = True
+
+    class DetailStub:
+        def __init__(self):
+            self.calls = 0
+            self.stream = OversizedStream()
+
+        def ReadDetail(self, request, **kwargs):  # noqa: N802
+            self.calls += 1
+            return self.stream
+
+    stub = DetailStub()
+    provider = GrpcStateProvider("localhost:1", max_detail_body_bytes=4)
+    provider._stub = stub
+    try:
+        with pytest.raises(_DetailHydrationRaceError, match="configured hydration"):
+            provider._read_detail_body("token", 5)
+        assert stub.calls == 0
+
+        with pytest.raises(_DetailHydrationRaceError, match="advertised size"):
+            provider._read_detail_body("token", 3)
+        assert stub.calls == 1
+        assert stub.stream.cancelled is True
+    finally:
+        provider.close()
+
+
+@pytest.mark.parametrize(
+    ("name", "value", "error"),
+    [
+        ("max_retained_detail_count", True, TypeError),
+        ("max_retained_detail_count", 1.5, TypeError),
+        ("max_retained_detail_count", 0, ValueError),
+        ("max_retained_detail_bytes", False, TypeError),
+        ("max_retained_detail_bytes", "1", TypeError),
+        ("max_retained_detail_bytes", -1, ValueError),
+        ("max_paged_items", True, TypeError),
+        ("max_paged_items", 1.5, TypeError),
+        ("max_paged_items", 0, ValueError),
+    ],
+)
+def test_retained_detail_limits_require_positive_integers(name, value, error):
+    with pytest.raises(error, match=rf"{name} must be"):
+        GrpcStateProvider("localhost:1", **{name: value})
+
+
+@pytest.mark.parametrize(
+    ("detail_kind", "max_count", "max_bytes", "limit_name"),
+    [
+        ("logs", 3, 100, "body count"),
+        ("events", 100, 3, "byte"),
+    ],
+)
+def test_multi_page_detail_hydration_fails_before_unbounded_or_partial_publication(
+    detail_kind,
+    max_count,
+    max_bytes,
+    limit_name,
+):
+    class PagedDetailStub:
+        def __init__(self):
+            self.body_reads = 0
+
+        def ListRunSummaries(self, request, **kwargs):  # noqa: N802
+            return pb.RunSummaryPage(
+                operator_instance_id="operator-1",
+                as_of_sequence=4,
+            )
+
+        def GetRunSnapshot(self, request, **kwargs):  # noqa: N802
+            node = pb.NodeSnapshotMsg(
+                node_id="node-1",
+                name="Node",
+                node_type="agent",
+                status="running",
+                revision=4,
+            )
+            if detail_kind == "events":
+                node.trace.CopyFrom(
+                    pb.TraceDescriptorMsg(
+                        status="in_progress",
+                        revision=4,
+                        event_count=4,
+                        latest_event_sequence=4,
+                    )
+                )
+                node.event_page_token = "events"
+            return pb.RunSnapshotMsg(
+                operator_instance_id="operator-1",
+                as_of_sequence=4,
+                summary=pb.RunSummaryMsg(
+                    run_id="run-1",
+                    flow_name="flow",
+                    status="running",
+                    created_sequence=1,
+                    revision=4,
+                ),
+                nodes=[node],
+                latest_log_sequence=4 if detail_kind == "logs" else 0,
+                log_page_token="logs" if detail_kind == "logs" else "",
+            )
+
+        def ListLogs(self, request, **kwargs):  # noqa: N802
+            sequence = request.after_sequence + 1
+            return pb.LogPage(
+                operator_instance_id="operator-1",
+                as_of_sequence=4,
+                logs=[
+                    pb.LogRecordDescriptorMsg(
+                        sequence=sequence,
+                        timestamp=float(sequence),
+                        level="INFO",
+                        node_id="node-1",
+                        size_bytes=1,
+                        body_token=f"log-{sequence}",
+                    )
+                ],
+                next_page_token="logs" if sequence < 4 else "",
+            )
+
+        def ListAgentEvents(self, request, **kwargs):  # noqa: N802
+            sequence = request.after_event_sequence + 1
+            return pb.AgentEventPage(
+                operator_instance_id="operator-1",
+                as_of_sequence=4,
+                run_id="run-1",
+                node_id="node-1",
+                events=[
+                    pb.AgentEventDescriptorMsg(
+                        invocation_id="invocation",
+                        event_sequence=sequence,
+                        size_bytes=1,
+                        body_token=f"event-{sequence}",
+                    )
+                ],
+                next_page_token="events" if sequence < 4 else "",
+            )
+
+        def ReadDetail(self, request, **kwargs):  # noqa: N802
+            self.body_reads += 1
+            yield pb.DetailChunk(chunk_index=0, data=b"x", eof=True)
+
+    stub = PagedDetailStub()
+    provider = GrpcStateProvider(
+        "localhost:1",
+        max_detail_body_bytes=1,
+        max_retained_detail_count=max_count,
+        max_retained_detail_bytes=max_bytes,
+    )
+    provider._stub = stub
+    try:
+        with pytest.raises(OperatorCallError) as error:
+            provider.get_run("run-1")
+        assert error.value.status is grpc.StatusCode.RESOURCE_EXHAUSTED
+        assert limit_name in error.value.details
+        assert stub.body_reads == 3
+        assert provider._runs_by_id == {}
+        assert provider._log_entries == {}
+        assert provider._agent_events == {}
+        assert provider._retained_detail_count == 0
+        assert provider._retained_detail_bytes == 0
+    finally:
+        provider.close()
+
+
+def test_run_summary_pagination_fails_before_unbounded_page_or_list_accumulation():
+    class UnboundedSummaryStub:
+        def __init__(self):
+            self.calls = 0
+
+        def ListRunSummaries(self, request, **kwargs):  # noqa: N802
+            self.calls += 1
+            return pb.RunSummaryPage(
+                operator_instance_id="operator-1",
+                as_of_sequence=self.calls,
+                runs=[
+                    pb.RunSummaryMsg(
+                        run_id=f"run-{self.calls}",
+                        flow_name="flow",
+                        status="running",
+                        created_sequence=self.calls,
+                        revision=self.calls,
+                    )
+                ],
+                next_page_token=f"page-{self.calls}",
+            )
+
+    stub = UnboundedSummaryStub()
+    provider = GrpcStateProvider("localhost:1", max_paged_items=2)
+    provider._stub = stub
+    try:
+        with pytest.raises(OperatorCallError) as error:
+            provider.list_runs("flow")
+        assert error.value.status is grpc.StatusCode.RESOURCE_EXHAUSTED
+        assert "pagination item limit" in error.value.details
+        assert stub.calls == 2
+        assert provider._runs_by_id == {}
+    finally:
+        provider.close()
+
+
+def test_trace_hydration_rejects_descriptor_above_configured_body_limit():
+    class TraceStub:
+        def __init__(self):
+            self.calls = 0
+
+        def ReadTrace(self, request, **kwargs):  # noqa: N802
+            self.calls += 1
+            return iter(())
+
+    stub = TraceStub()
+    provider = _trace_health_provider(stub)
+    provider._max_detail_body_bytes = 4
+    try:
+        with pytest.raises(_DetailHydrationRaceError, match="configured hydration"):
+            provider._hydrate_trace("run-trace-health", "agent")
+        assert stub.calls == 0
+    finally:
+        provider.close()
+
+
+@pytest.mark.parametrize(
+    ("status", "failure_phase", "reachable"),
+    [
+        (grpc.StatusCode.UNAVAILABLE, "creation", False),
+        (grpc.StatusCode.UNAVAILABLE, "iteration", False),
+        (grpc.StatusCode.INVALID_ARGUMENT, "creation", True),
+        (grpc.StatusCode.INVALID_ARGUMENT, "iteration", True),
+    ],
+)
+def test_read_trace_classifies_creation_and_iteration_failures(
+    status, failure_phase, reachable
+):
+    class RpcFailure(grpc.RpcError):
+        def code(self):
+            return status
+
+        def details(self):
+            return "trace failed"
+
+    class FailingStream:
+        def __iter__(self):
+            raise RpcFailure()
+
+    class FailingStub:
+        def ReadTrace(self, request, **kwargs):  # noqa: N802
+            if failure_phase == "creation":
+                raise RpcFailure()
+            return FailingStream()
+
+    provider = _trace_health_provider(FailingStub())
+    provider.operator_reachable = not reachable
+    provider.stream_state = StreamState.FAILED
+    provider.stream_error = "existing stream failure"
+    try:
+        with pytest.raises(OperatorCallError) as error:
+            provider.hydrate_trace("run-trace-health", "agent")
+        assert error.value.status is status
+        assert provider.operator_reachable is reachable
+        assert provider.last_error == f"{status.name}: trace failed"
+        assert provider.stream_state is StreamState.FAILED
+        assert provider.stream_error == "existing stream failure"
+    finally:
+        provider.close()
+
+
+@pytest.mark.parametrize("status", [None, grpc.StatusCode.INVALID_ARGUMENT])
+def test_unary_completion_after_close_cannot_overwrite_terminal_health(status):
+    provider = GrpcStateProvider("localhost:1")
+    entered = threading.Event()
+    release = threading.Event()
+    outcomes = []
+
+    class RpcFailure(grpc.RpcError):
+        def code(self):
+            return status
+
+        def details(self):
+            return "late application error"
+
+    class BlockingStub:
+        def ListFlows(self, request, **kwargs):  # noqa: N802
+            entered.set()
+            assert release.wait(timeout=1.0)
+            if status is not None:
+                raise RpcFailure()
+            return pb.FlowList()
+
+    def invoke() -> None:
+        try:
+            outcomes.append(provider.list_workflows())
+        except Exception as error:
+            outcomes.append(error)
+
+    provider._stub = BlockingStub()
+    provider.operator_reachable = True
+    provider.retry_count = 4
+    provider.last_error = "before close"
+    provider.stream_state = StreamState.LIVE
+    thread = threading.Thread(target=invoke)
+    thread.start()
+    assert entered.wait(timeout=1.0)
+
+    provider.close()
+    release.set()
+    thread.join(timeout=1.0)
+
+    assert not thread.is_alive()
+    if status is None:
+        assert outcomes == [[]]
+    else:
+        assert len(outcomes) == 1
+        assert isinstance(outcomes[0], OperatorCallError)
+        assert outcomes[0].status is status
+    assert provider.operator_reachable is False
+    assert provider.retry_count == 4
+    assert provider.last_error == "before close"
+    assert provider.stream_state is StreamState.STOPPED
+
+
+def test_idle_accepted_stream_reaches_live_after_metadata_handshake():
+    provider = GrpcStateProvider("localhost:1")
+    metadata_read = threading.Event()
+    iterating = threading.Event()
+    release = threading.Event()
+
+    class IdleStream:
+        def initial_metadata(self):
+            metadata_read.set()
+            return ()
+
+        def __iter__(self):
+            return self
+
+        def __next__(self):
+            iterating.set()
+            release.wait()
+            raise StopIteration
+
+    class IdleStub:
+        def StreamRunDeltas(self, request, *, metadata):  # noqa: N802
+            return IdleStream()
+
+    provider._stub = IdleStub()
+    try:
+        provider.on_run_update(lambda _run: None)
+        provider.start_stream()
+        assert metadata_read.wait(timeout=1.0)
+        assert iterating.wait(timeout=1.0)
+        assert provider.operator_reachable is True
+        assert provider.stream_state is StreamState.LIVE
+    finally:
+        provider._stream_stop.set()
+        release.set()
+        provider.close()
+
+
+def test_real_idle_server_stream_reaches_live_without_an_update():
+    port = _unused_port()
+    operator = Operator(
+        workflow_paths=[os.path.join(FIXTURES_DIR, "sample_workflows.py")],
+        schedule=False,
+        watch=False,
+    )
+    server = serve(operator, port=port, block=False)
+    provider = GrpcStateProvider(f"localhost:{port}")
     received = []
+    try:
+        provider.on_run_update(lambda run: received.append(run))
+        provider.start_stream()
+        deadline = time.monotonic() + 2.0
+        while provider.stream_state is not StreamState.LIVE and time.monotonic() < deadline:
+            time.sleep(0.01)
 
-    class RestartedStub:
-        def StreamUpdates(self, request, *, metadata):  # noqa: N802
-            assert request.since_sequence == 99
-            assert metadata is None
-            yield pb.RunUpdate(
-                sequence=2,
-                run=pb.RunStateMsg(run_id="run_recovered", flow_name="flow", status="success"),
-            )
-            yield pb.RunUpdate(
-                sequence=2,
-                run=pb.RunStateMsg(run_id="duplicate", flow_name="flow", status="success"),
-            )
-            yield pb.RunUpdate(
-                sequence=1,
-                run=pb.RunStateMsg(run_id="stale", flow_name="flow", status="pending"),
-            )
-            yield pb.RunUpdate(
-                sequence=3,
-                run=pb.RunStateMsg(run_id="run_live", flow_name="flow", status="running"),
-            )
-            provider._stream_stop.set()
+        assert provider.operator_reachable is True
+        assert provider.stream_state is StreamState.LIVE
+        assert received == []
+    finally:
+        provider.close()
+        server.stop(grace=1)
+        operator.close()
 
-    provider._stub = RestartedStub()
-    provider._last_seq = 99
-    provider._run_callbacks.append(lambda run: received.append(run.run_id))
+
+def test_post_header_stream_failures_preserve_exponential_reconnect_backoff():
+    provider = GrpcStateProvider("localhost:1")
+    delays = []
+
+    class Unavailable(grpc.RpcError):
+        def code(self):
+            return grpc.StatusCode.UNAVAILABLE
+
+        def details(self):
+            return "stream aborted after headers"
+
+    class RecordingStop:
+        def __init__(self):
+            self.stopped = False
+
+        def is_set(self):
+            return self.stopped
+
+        def set(self):
+            self.stopped = True
+
+        def wait(self, delay):
+            delays.append(delay)
+            if len(delays) == 3:
+                self.stopped = True
+            return self.stopped
+
+    class AcceptedThenUnavailable:
+        def initial_metadata(self):
+            return ()
+
+        def __iter__(self):
+            raise Unavailable()
+
+    class FailingStub:
+        def StreamRunDeltas(self, request, *, metadata):  # noqa: N802
+            return AcceptedThenUnavailable()
+
+    provider._stream_stop = RecordingStop()
+    provider._stub = FailingStub()
     try:
         provider._stream_loop()
     finally:
         provider.close()
 
-    assert received == ["run_recovered", "run_live"]
-    assert provider._last_seq == 3
+    assert delays == [2, 4, 8]
 
 
-def test_client_skips_equal_first_sequence_without_epoch_reset():
+def test_duplicate_only_streams_do_not_reset_reconnect_backoff_or_cursor():
+    provider = GrpcStateProvider("localhost:1")
+    delays = []
+    requests = []
+
+    class Unavailable(grpc.RpcError):
+        def code(self):
+            return grpc.StatusCode.UNAVAILABLE
+
+        def details(self):
+            return "duplicate replay aborted"
+
+    class RecordingStop:
+        def __init__(self):
+            self.stopped = False
+
+        def is_set(self):
+            return self.stopped
+
+        def set(self):
+            self.stopped = True
+
+        def wait(self, delay):
+            delays.append(delay)
+            if len(delays) == 3:
+                self.stopped = True
+            return self.stopped
+
+    duplicate = pb.RunDeltaEnvelope(
+        operator_instance_id="operator-1",
+        delta=pb.RunDelta(
+            sequence=7,
+            run_created=pb.RunCreatedDelta(
+                summary=pb.RunSummaryMsg(
+                    run_id="duplicate",
+                    flow_name="flow",
+                    status="running",
+                    created_sequence=7,
+                    revision=7,
+                )
+            ),
+        ),
+    )
+
+    class DuplicateThenUnavailable:
+        def initial_metadata(self):
+            return ()
+
+        def __iter__(self):
+            yield duplicate
+            raise Unavailable()
+
+    class DuplicateStub:
+        def StreamRunDeltas(self, request, *, metadata):  # noqa: N802
+            requests.append((request.operator_instance_id, request.after_sequence))
+            return DuplicateThenUnavailable()
+
+    provider._install_structural_baseline("operator-1", 7, {})
+    provider._stream_stop = RecordingStop()
+    provider._stub = DuplicateStub()
+    try:
+        provider._stream_loop()
+    finally:
+        provider.close()
+
+    assert delays == [2, 4, 8]
+    assert requests == [("operator-1", 7)] * 3
+    assert provider._cursor.sequence == 7
+
+
+def test_authoritative_stream_progress_resets_reconnect_backoff():
+    provider = GrpcStateProvider("localhost:1")
+    delays = []
+
+    class Unavailable(grpc.RpcError):
+        def code(self):
+            return grpc.StatusCode.UNAVAILABLE
+
+        def details(self):
+            return "stream aborted"
+
+    class RecordingStop:
+        def __init__(self):
+            self.stopped = False
+
+        def is_set(self):
+            return self.stopped
+
+        def set(self):
+            self.stopped = True
+
+        def wait(self, delay):
+            delays.append(delay)
+            if len(delays) == 2:
+                self.stopped = True
+            return self.stopped
+
+    class ProgressThenUnavailable:
+        def initial_metadata(self):
+            return ()
+
+        def __iter__(self):
+            yield pb.RunDeltaEnvelope(
+                operator_instance_id="operator-1",
+                delta=pb.RunDelta(
+                    sequence=1,
+                    run_created=pb.RunCreatedDelta(
+                        summary=pb.RunSummaryMsg(
+                            run_id="run-1",
+                            flow_name="flow",
+                            status="running",
+                            created_sequence=1,
+                            revision=1,
+                        )
+                    ),
+                ),
+            )
+            raise Unavailable()
+
+    class ProgressStub:
+        def __init__(self):
+            self.calls = 0
+
+        def StreamRunDeltas(self, request, *, metadata):  # noqa: N802
+            self.calls += 1
+            if self.calls == 1:
+                raise Unavailable()
+            return ProgressThenUnavailable()
+
+    provider._stream_stop = RecordingStop()
+    provider._stub = ProgressStub()
+    try:
+        provider._stream_loop()
+    finally:
+        provider.close()
+
+    assert delays == [2, 1]
+    assert provider._cursor.sequence == 1
+
+
+def test_stream_reconnect_transitions_through_replay_to_live():
+    provider = GrpcStateProvider("localhost:1")
+    observed = []
+
+    class Unavailable(grpc.RpcError):
+        def code(self):
+            return grpc.StatusCode.UNAVAILABLE
+
+        def details(self):
+            return "stream offline"
+
+    class ImmediateRetryEvent:
+        def __init__(self):
+            self._event = threading.Event()
+
+        def is_set(self):
+            return self._event.is_set()
+
+        def set(self):
+            self._event.set()
+
+        def wait(self, _timeout=None):
+            observed.append(provider.stream_state)
+            return self._event.is_set()
+
+    class ReconnectingStub:
+        def __init__(self):
+            self.calls = 0
+
+        def StreamRunDeltas(self, request, *, metadata):  # noqa: N802
+            self.calls += 1
+            observed.append(provider.stream_state)
+            if self.calls == 1:
+                raise Unavailable()
+
+            class ReplayStream:
+                def initial_metadata(self):
+                    observed.append(provider.stream_state)
+                    return ()
+
+                def __iter__(self):
+                    observed.append(provider.stream_state)
+                    yield pb.RunDeltaEnvelope(
+                        operator_instance_id="operator-1",
+                        delta=pb.RunDelta(
+                            sequence=1,
+                            run_created=pb.RunCreatedDelta(
+                                summary=pb.RunSummaryMsg(
+                                    run_id="run_live",
+                                    flow_name="flow",
+                                    status="running",
+                                    created_sequence=1,
+                                    revision=1,
+                                )
+                            ),
+                        ),
+                    )
+                    provider._stream_stop.set()
+
+            return ReplayStream()
+
+    provider._stream_stop = ImmediateRetryEvent()
+    provider._stub = ReconnectingStub()
+    provider._run_callbacks.append(lambda _run: None)
+    try:
+        provider._stream_loop()
+    finally:
+        provider.close()
+
+    assert observed == [
+        StreamState.CONNECTING,
+        StreamState.FAILED,
+        StreamState.CONNECTING,
+        StreamState.REPLAYING,
+        StreamState.LIVE,
+    ]
+    assert provider.operator_reachable is False
+    assert provider.stream_state is StreamState.STOPPED
+
+
+def test_client_list_runs_returns_oldest_to_newest_across_summary_pages():
+    summaries = [
+        RunSummary(
+            run_id="run-new",
+            flow_name="flow",
+            status=RunStatus.RUNNING,
+            created_sequence=2,
+            revision=2,
+        ),
+        RunSummary(
+            run_id="run-old",
+            flow_name="flow",
+            status=RunStatus.SUCCESS,
+            created_sequence=1,
+            revision=1,
+        ),
+    ]
+
+    class PagedSummaryStub:
+        def ListRunSummaries(self, request, **kwargs):  # noqa: N802
+            if not request.page_token:
+                return pb.RunSummaryPage(
+                    operator_instance_id="operator-1",
+                    as_of_sequence=2,
+                    runs=[run_summary_to_proto(summaries[0])],
+                    next_page_token="older",
+                )
+            assert request.page_token == "older"
+            return pb.RunSummaryPage(
+                operator_instance_id="operator-1",
+                as_of_sequence=2,
+                runs=[run_summary_to_proto(summaries[1])],
+            )
+
+    provider = GrpcStateProvider("localhost:1")
+    provider._stub = PagedSummaryStub()
+    try:
+        runs = provider.list_runs("flow")
+    finally:
+        provider.close()
+
+    assert [run.run_id for run in runs] == ["run-old", "run-new"]
+
+
+def test_reset_baseline_retains_runs_for_removed_workflows():
+    live_workflow = WorkflowInfo(
+        name="removed",
+        file_path="live.py",
+        node_ids=[],
+        graph={},
+        node_types={},
+        workflow_id="live.py::live",
+    )
+    removed_summary = RunSummary(
+        run_id="run-removed",
+        flow_name="removed",
+        status=RunStatus.RUNNING,
+        workflow_id="removed.py::removed",
+        created_sequence=1,
+        revision=1,
+    )
+    snapshot = RunSnapshot(
+        operator_instance_id="operator-1",
+        as_of_sequence=2,
+        summary=removed_summary,
+    )
+
+    grouped = GrpcStateProvider._group_snapshot_runs(
+        (live_workflow,),
+        [snapshot],
+    )
+
+    assert list(grouped) == [
+        live_workflow.selector,
+        removed_summary.workflow_id,
+    ]
+    assert [run.run_id for run in grouped[removed_summary.workflow_id]] == ["run-removed"]
+
+
+@pytest.mark.parametrize("first_failure", ["transient", "mismatch", "evicted"])
+def test_default_reset_loader_retries_and_builds_bounded_authoritative_baseline(
+    first_failure,
+):
+    workflow = WorkflowInfo(
+        name="flow",
+        file_path="flow.py",
+        node_ids=["step"],
+        graph={"step": []},
+        node_types={"step": "step"},
+        display_names={"step": "Step"},
+        workflow_id="flow.py::flow",
+        display_name="Flow",
+    )
+    summaries = [
+        RunSummary(
+            run_id="run_1",
+            flow_name="flow",
+            status=RunStatus.SUCCESS,
+            workflow_id=workflow.selector,
+            workflow_display_name="Flow",
+            created_sequence=1,
+            revision=1,
+        ),
+        RunSummary(
+            run_id="run_2",
+            flow_name="flow",
+            status=RunStatus.RUNNING,
+            workflow_id=workflow.selector,
+            workflow_display_name="Flow",
+            created_sequence=2,
+            revision=3,
+        ),
+    ]
+    snapshots = {
+        "run_1": RunSnapshot(
+            operator_instance_id="operator-new",
+            as_of_sequence=3,
+            summary=summaries[0],
+        ),
+        "run_2": RunSnapshot(
+            operator_instance_id="operator-new",
+            as_of_sequence=3,
+            summary=summaries[1],
+            nodes=(
+                NodeSnapshot(
+                    node_id="step",
+                    name="Step",
+                    node_type="step",
+                    status=NodeStatus.RUNNING,
+                    revision=3,
+                ),
+            ),
+        ),
+    }
+
+    class Retryable(grpc.RpcError):
+        def __init__(self, status):
+            self._status = status
+
+        def code(self):
+            return self._status
+
+        def details(self):
+            return "baseline version temporarily unavailable"
+
+    class BaselineStub:
+        def __init__(self):
+            self.summary_attempts = 0
+            self.summary_calls = 0
+            self.list_flows_calls = 0
+            self.snapshot_calls = []
+
+        def ListRunSummaries(self, request, **kwargs):  # noqa: N802
+            self.summary_calls += 1
+            if not request.page_token:
+                self.summary_attempts += 1
+                if first_failure == "transient" and self.summary_attempts == 1:
+                    raise Retryable(grpc.StatusCode.UNAVAILABLE)
+                operator_id = (
+                    "operator-old"
+                    if first_failure == "mismatch" and self.summary_attempts == 1
+                    else "operator-new"
+                )
+                return pb.RunSummaryPage(
+                    operator_instance_id=operator_id,
+                    as_of_sequence=3,
+                    runs=[run_summary_to_proto(summaries[0])],
+                    next_page_token="page-2",
+                )
+            assert request.page_token == "page-2"
+            return pb.RunSummaryPage(
+                operator_instance_id="operator-new",
+                as_of_sequence=3,
+                runs=[run_summary_to_proto(summaries[1])],
+            )
+
+        def ListFlows(self, request, **kwargs):  # noqa: N802
+            self.list_flows_calls += 1
+            return pb.FlowList(flows=[workflow_info_to_proto(workflow)])
+
+        def GetRunSnapshot(self, request, **kwargs):  # noqa: N802
+            self.snapshot_calls.append(request.run_id)
+            assert request.operator_instance_id == "operator-new"
+            assert request.as_of_sequence == 3
+            if first_failure == "evicted" and len(self.snapshot_calls) == 1:
+                raise Retryable(grpc.StatusCode.FAILED_PRECONDITION)
+            return run_snapshot_to_proto(snapshots[request.run_id])
+
+    provider = GrpcStateProvider("localhost:1")
+    stub = BaselineStub()
+    provider._stub = stub
+    try:
+        baseline = provider.load_reset_baseline(
+            StreamResetNotice(
+                generation=7,
+                previous_sequence=99,
+                observed_sequence=2,
+            )
+        )
+    finally:
+        provider.close()
+
+    assert baseline.generation == 7
+    assert baseline.operator_instance_id == "operator-new"
+    assert baseline.as_of_sequence == 3
+    assert [item.selector for item in baseline.workflows] == [workflow.selector]
+    assert [run.run_id for run in baseline.runs_by_workflow[workflow.selector]] == [
+        "run_1",
+        "run_2",
+    ]
+    assert baseline.runs_by_workflow[workflow.selector][1].nodes["step"].status is (
+        NodeStatus.RUNNING
+    )
+    assert stub.summary_calls == (3 if first_failure == "transient" else 4)
+    assert stub.snapshot_calls == (
+        ["run_1", "run_1", "run_2"] if first_failure == "evicted" else ["run_1", "run_2"]
+    )
+    assert stub.list_flows_calls == 3
+
+
+def test_default_reset_loader_uses_immutable_snapshot_while_updates_continue():
+    workflow = WorkflowInfo(
+        name="flow",
+        file_path="flow.py",
+        node_ids=[],
+        graph={},
+        node_types={},
+        workflow_id="flow.py::flow",
+    )
+    summary = RunSummary(
+        run_id="run_1",
+        flow_name="flow",
+        status=RunStatus.RUNNING,
+        workflow_id=workflow.selector,
+        created_sequence=1,
+        revision=2,
+    )
+    snapshot = RunSnapshot(
+        operator_instance_id="operator-live",
+        as_of_sequence=2,
+        summary=summary,
+    )
+
+    class AdvancingStub:
+        def __init__(self):
+            self.current_sequence = 2
+            self.summary_calls = 0
+            self.snapshot_requests = []
+
+        def ListFlows(self, request, **kwargs):  # noqa: N802
+            return pb.FlowList(flows=[workflow_info_to_proto(workflow)])
+
+        def ListRunSummaries(self, request, **kwargs):  # noqa: N802
+            self.summary_calls += 1
+            response = pb.RunSummaryPage(
+                operator_instance_id="operator-live",
+                as_of_sequence=self.current_sequence,
+                runs=[run_summary_to_proto(summary)],
+            )
+            self.current_sequence += 1
+            return response
+
+        def GetRunSnapshot(self, request, **kwargs):  # noqa: N802
+            self.snapshot_requests.append(request)
+            self.current_sequence += 1
+            return run_snapshot_to_proto(snapshot)
+
+    provider = GrpcStateProvider("localhost:1")
+    stub = AdvancingStub()
+    provider._stub = stub
+    try:
+        baseline = provider.load_reset_baseline(
+            StreamResetNotice(
+                generation=1,
+                previous_sequence=99,
+                observed_sequence=2,
+            )
+        )
+    finally:
+        provider.close()
+
+    assert baseline.as_of_sequence == 2
+    assert stub.summary_calls == 1
+    assert len(stub.snapshot_requests) == 1
+    request = stub.snapshot_requests[0]
+    assert request.run_id == summary.run_id
+    assert request.operator_instance_id == "operator-live"
+    assert request.as_of_sequence == 2
+
+
+def test_restart_reset_rejects_stale_generation_and_rebinds_delta_epoch():
+    def load_baseline(notice):
+        return ResetBaseline(
+            generation=notice.generation,
+            operator_instance_id="operator-restarted",
+            as_of_sequence=3,
+            workflows=(),
+            runs_by_workflow={},
+        )
+
+    provider = GrpcStateProvider(
+        "localhost:1",
+        reset_baseline_loader=load_baseline,
+    )
+    reset_notices = []
+    reset_observed = threading.Event()
+    waiting = threading.Event()
+    release = threading.Event()
+    received = []
+
+    reset_envelope = pb.RunDeltaEnvelope(
+        operator_instance_id="operator-restarted",
+        delta=pb.RunDelta(
+            sequence=2,
+            run_created=pb.RunCreatedDelta(
+                summary=pb.RunSummaryMsg(
+                    run_id="run_recovered",
+                    flow_name="flow",
+                    status="success",
+                    created_sequence=2,
+                    revision=2,
+                )
+            ),
+        ),
+    )
+
+    class RestartedStream:
+        def initial_metadata(self):
+            return ()
+
+        def __iter__(self):
+            yield pb.RunDeltaEnvelope(
+                operator_instance_id="operator-restarted",
+                delta=pb.RunDelta(
+                    sequence=4,
+                    run_created=pb.RunCreatedDelta(
+                        summary=pb.RunSummaryMsg(
+                            run_id="run_newer",
+                            flow_name="flow",
+                            status="running",
+                            created_sequence=4,
+                            revision=4,
+                        )
+                    ),
+                ),
+            )
+            waiting.set()
+            release.wait()
+
+    class RestartedStub:
+        def __init__(self):
+            self.calls = 0
+
+        def StreamRunDeltas(self, request, *, metadata):  # noqa: N802
+            self.calls += 1
+            assert metadata is None
+            if self.calls == 1:
+                assert request.operator_instance_id == "operator-original"
+                assert request.after_sequence == 99
+                return iter((reset_envelope,))
+            assert request.operator_instance_id == "operator-restarted"
+            assert request.after_sequence == 3
+            return RestartedStream()
+
+    def on_reset(notice):
+        reset_notices.append(notice)
+        reset_observed.set()
+
+    provider._stub = RestartedStub()
+    provider._install_structural_baseline("operator-original", 99, {})
+    provider.on_stream_reset(on_reset)
+    provider._run_callbacks.append(lambda run: received.append(run.run_id))
+    try:
+        provider._ensure_stream()
+        assert reset_observed.wait(timeout=1.0)
+        notice = reset_notices[0]
+        assert notice == StreamResetNotice(
+            generation=1,
+            previous_sequence=99,
+            observed_sequence=2,
+            operator_instance_id="operator-restarted",
+        )
+        assert provider.stream_state is StreamState.RESET_REQUIRED
+        assert provider._cursor == provider._cursor.__class__("operator-original", 99)
+
+        baseline = provider.load_reset_baseline(notice)
+        assert baseline.operator_instance_id == "operator-restarted"
+        assert baseline.as_of_sequence == 3
+        with pytest.raises(StaleResetAcknowledgementError):
+            provider.acknowledge_stream_reset(
+                generation=notice.generation + 1,
+                operator_instance_id="operator-restarted",
+                reconciled_sequence=3,
+            )
+        provider.acknowledge_stream_reset(
+            generation=notice.generation,
+            reconciled_sequence=3,
+            operator_instance_id="operator-restarted",
+        )
+        assert waiting.wait(timeout=1.0)
+        assert provider.stream_state is StreamState.LIVE
+        assert provider._cursor.operator_instance_id == "operator-restarted"
+        assert provider._cursor.sequence == 4
+        assert received == ["run_newer"]
+    finally:
+        provider._stream_stop.set()
+        release.set()
+        provider.close()
+
+
+@pytest.mark.parametrize(
+    ("operator_instance_id", "reconciled_sequence"),
+    [
+        ("operator-other", 3),
+        ("operator-restarted", 2),
+        ("operator-restarted", 4),
+    ],
+)
+def test_reset_acknowledgement_requires_exact_validated_baseline(
+    operator_instance_id,
+    reconciled_sequence,
+):
+    notice = StreamResetNotice(
+        generation=1,
+        previous_sequence=99,
+        observed_sequence=2,
+    )
+    expected = ResetBaseline(
+        generation=notice.generation,
+        operator_instance_id="operator-restarted",
+        as_of_sequence=3,
+        workflows=(),
+        runs_by_workflow={},
+    )
+    provider = GrpcStateProvider(
+        "localhost:1",
+        reset_baseline_loader=lambda _notice: expected,
+    )
+    provider._pending_reset = notice
+    provider.stream_state = StreamState.RESET_REQUIRED
+    try:
+        with pytest.raises(
+            StaleResetAcknowledgementError,
+            match="has no validated baseline",
+        ):
+            provider.acknowledge_stream_reset(
+                generation=notice.generation,
+                operator_instance_id=expected.operator_instance_id,
+                reconciled_sequence=expected.as_of_sequence,
+            )
+        assert provider.load_reset_baseline(notice) is expected
+        with pytest.raises(
+            ValueError,
+            match="does not match the validated baseline",
+        ):
+            provider.acknowledge_stream_reset(
+                generation=notice.generation,
+                operator_instance_id=operator_instance_id,
+                reconciled_sequence=reconciled_sequence,
+            )
+        assert provider._pending_reset is notice
+        assert provider.stream_state is StreamState.RESET_REQUIRED
+
+        provider.acknowledge_stream_reset(
+            generation=notice.generation,
+            operator_instance_id=expected.operator_instance_id,
+            reconciled_sequence=expected.as_of_sequence,
+        )
+        assert provider.stream_state is StreamState.LIVE
+    finally:
+        provider.close()
+
+
+@pytest.mark.parametrize("observed_sequence", [99, 100])
+def test_delta_epoch_change_requires_reset_at_equal_or_higher_sequence(
+    observed_sequence,
+):
+    provider = GrpcStateProvider("localhost:1")
+    reset_notices = []
+    reset_observed = threading.Event()
+
+    class RestartedStub:
+        def StreamRunDeltas(self, request, *, metadata):  # noqa: N802
+            assert request.operator_instance_id == "operator-original"
+            assert request.after_sequence == 99
+            assert metadata is None
+            yield pb.RunDeltaEnvelope(
+                operator_instance_id="operator-restarted",
+                delta=pb.RunDelta(
+                    sequence=observed_sequence,
+                    run_created=pb.RunCreatedDelta(
+                        summary=pb.RunSummaryMsg(
+                            run_id="run-restarted",
+                            flow_name="flow",
+                            status="running",
+                            created_sequence=observed_sequence,
+                            revision=observed_sequence,
+                        )
+                    ),
+                ),
+            )
+
+    def on_reset(notice):
+        reset_notices.append(notice)
+        reset_observed.set()
+
+    provider._stub = RestartedStub()
+    provider._install_structural_baseline("operator-original", 99, {})
+    provider.on_stream_reset(on_reset)
+    try:
+        provider._ensure_stream()
+        assert reset_observed.wait(timeout=1.0)
+        assert reset_notices == [
+            StreamResetNotice(
+                generation=1,
+                previous_sequence=99,
+                observed_sequence=observed_sequence,
+                operator_instance_id="operator-restarted",
+            )
+        ]
+        assert provider.stream_state is StreamState.RESET_REQUIRED
+        assert provider._cursor.operator_instance_id == "operator-original"
+        assert provider._cursor.sequence == 99
+    finally:
+        provider.close()
+
+
+def test_client_skips_duplicate_delta_sequence_without_epoch_reset():
     provider = GrpcStateProvider("localhost:1")
     received = []
 
     class DuplicateFirstStub:
-        def StreamUpdates(self, request, *, metadata):  # noqa: N802
-            assert request.since_sequence == 99
+        def StreamRunDeltas(self, request, *, metadata):  # noqa: N802
+            assert request.operator_instance_id == "operator-1"
+            assert request.after_sequence == 99
             assert metadata is None
-            yield pb.RunUpdate(
-                sequence=99,
-                run=pb.RunStateMsg(run_id="duplicate", flow_name="flow", status="success"),
-            )
-            yield pb.RunUpdate(
-                sequence=100,
-                run=pb.RunStateMsg(run_id="run_live", flow_name="flow", status="running"),
-            )
+            for sequence, run_id in ((99, "duplicate"), (100, "run_live")):
+                yield pb.RunDeltaEnvelope(
+                    operator_instance_id="operator-1",
+                    delta=pb.RunDelta(
+                        sequence=sequence,
+                        run_created=pb.RunCreatedDelta(
+                            summary=pb.RunSummaryMsg(
+                                run_id=run_id,
+                                flow_name="flow",
+                                status="running",
+                                created_sequence=sequence,
+                                revision=sequence,
+                            )
+                        ),
+                    ),
+                )
             provider._stream_stop.set()
 
     provider._stub = DuplicateFirstStub()
-    provider._last_seq = 99
+    provider._install_structural_baseline("operator-1", 99, {})
     provider._run_callbacks.append(lambda run: received.append(run.run_id))
     try:
         provider._stream_loop()
@@ -581,10 +1929,10 @@ def test_client_skips_equal_first_sequence_without_epoch_reset():
         provider.close()
 
     assert received == ["run_live"]
-    assert provider._last_seq == 100
+    assert provider._cursor.sequence == 100
 
 
-def test_concurrent_run_update_registrations_start_one_stream_thread():
+def test_concurrent_start_stream_calls_start_one_stream_thread():
     provider = GrpcStateProvider("localhost:1")
     registration_count = 16
     barrier = threading.Barrier(registration_count + 1)
@@ -596,7 +1944,7 @@ def test_concurrent_run_update_registrations_start_one_stream_thread():
             self.calls = 0
             self.thread_ids = set()
 
-        def StreamUpdates(self, request, *, metadata):  # noqa: N802
+        def StreamRunDeltas(self, request, *, metadata):  # noqa: N802
             self.calls += 1
             self.thread_ids.add(threading.get_ident())
 
@@ -617,6 +1965,7 @@ def test_concurrent_run_update_registrations_start_one_stream_thread():
     def register():
         barrier.wait()
         provider.on_run_update(lambda _run: None)
+        provider.start_stream()
 
     registrations = [threading.Thread(target=register) for _ in range(registration_count)]
     for registration in registrations:
@@ -654,7 +2003,7 @@ def test_concurrent_close_and_stream_start_leave_no_live_thread_or_calls():
             self.calls = 0
             self.post_close_calls = 0
 
-        def StreamUpdates(self, request, *, metadata):  # noqa: N802
+        def StreamRunDeltas(self, request, *, metadata):  # noqa: N802
             self.calls += 1
             if close_returned.is_set():
                 self.post_close_calls += 1
@@ -666,6 +2015,7 @@ def test_concurrent_close_and_stream_start_leave_no_live_thread_or_calls():
     def register():
         barrier.wait()
         provider.on_run_update(lambda _run: None)
+        provider.start_stream()
 
     def close():
         barrier.wait()
@@ -703,26 +2053,29 @@ def test_client_close_stops_reconnect_thread_and_prevents_new_calls():
         def __init__(self):
             self.calls = 0
 
-        def StreamUpdates(self, request, *, metadata):  # noqa: N802
+        def StreamRunDeltas(self, request, *, metadata):  # noqa: N802
             self.calls += 1
             called.set()
             raise Unavailable()
 
     stub = FailingStub()
     provider._stub = stub
-    provider.connected = True
+    provider.operator_reachable = True
     provider.on_run_update(lambda _run: None)
+    provider.start_stream()
     assert called.wait(timeout=1.0)
 
     provider.close()
     provider.close()
     calls_after_close = stub.calls
     provider.on_run_update(lambda _run: None)
+    provider.start_stream()
 
     assert provider._stream_thread is not None
     assert not provider._stream_thread.is_alive()
     assert stub.calls == calls_after_close
-    assert provider.connected is False
+    assert provider.operator_reachable is False
+    assert provider.stream_state is StreamState.STOPPED
 
 
 def test_canonical_client_requests_include_cached_legacy_name():
@@ -749,9 +2102,9 @@ def test_canonical_client_requests_include_cached_legacy_name():
             self.start_request = request
             return pb.StartRunResponse(run_id="run_legacy")
 
-        def ListRuns(self, request, **kwargs):  # noqa: N802
+        def ListRunSummaries(self, request, **kwargs):  # noqa: N802
             self.list_request = request
-            return pb.RunList()
+            return pb.RunSummaryPage(operator_instance_id="operator-1")
 
     provider = GrpcStateProvider("localhost:1")
     stub = CapturingStub()
@@ -766,7 +2119,7 @@ def test_canonical_client_requests_include_cached_legacy_name():
 
         assert provider.list_runs(canonical_id) == []
         assert stub.list_request.workflow_selector == canonical_id
-        assert stub.list_request.flow_name == "Daily report"
+        assert stub.list_request.page_size == 1000
     finally:
         provider.close()
 
@@ -788,13 +2141,24 @@ def test_unary_client_calls_pass_finite_timeout():
             self._capture("start", timeout)
             return pb.StartRunResponse(run_id="run_1")
 
-        def GetRun(self, request, *, timeout, **kwargs):  # noqa: N802
+        def GetRunSnapshot(self, request, *, timeout, **kwargs):  # noqa: N802
             self._capture("get", timeout)
-            return pb.RunStateMsg(run_id=request.run_id, flow_name="flow", status="pending")
+            return pb.RunSnapshotMsg(
+                operator_instance_id=request.operator_instance_id,
+                as_of_sequence=request.as_of_sequence,
+                summary=pb.RunSummaryMsg(
+                    run_id=request.run_id,
+                    flow_name="flow",
+                    status="pending",
+                ),
+            )
 
-        def ListRuns(self, request, *, timeout, **kwargs):  # noqa: N802
-            self._capture("runs", timeout)
-            return pb.RunList()
+        def ListRunSummaries(self, request, *, timeout, **kwargs):  # noqa: N802
+            self._capture("cursor" if request.page_size == 1 else "runs", timeout)
+            return pb.RunSummaryPage(
+                operator_instance_id="operator-1",
+                as_of_sequence=1,
+            )
 
         def CancelRun(self, request, *, timeout, **kwargs):  # noqa: N802
             self._capture("cancel", timeout)
@@ -814,6 +2178,7 @@ def test_unary_client_calls_pass_finite_timeout():
     assert calls == [
         ("list", 3.5),
         ("start", 3.5),
+        ("cursor", 3.5),
         ("get", 3.5),
         ("runs", 3.5),
         ("cancel", 3.5),
@@ -865,17 +2230,21 @@ def test_canonical_and_ambiguous_grpc_selection(tmp_path):
         assert [run.run_id for run in provider.list_runs(ids[0])] == [run_id]
         assert provider.list_runs(ids[1]) == []
 
-        assert provider.start_run("shared") == ""
-        assert "INVALID_ARGUMENT" in provider.last_error
-        assert ids[0] in provider.last_error
-        assert ids[1] in provider.last_error
-        assert provider.list_runs("shared") == []
-        assert "INVALID_ARGUMENT" in provider.last_error
+        with pytest.raises(OperatorCallError) as error:
+            provider.start_run("shared")
+        assert error.value.status is grpc.StatusCode.INVALID_ARGUMENT
+        assert ids[0] in str(error.value)
+        assert ids[1] in str(error.value)
+
+        with pytest.raises(OperatorCallError) as error:
+            provider.list_runs("shared")
+        assert error.value.status is grpc.StatusCode.INVALID_ARGUMENT
 
         (roots[0] / "flow.py").write_text("VALUE = 1\n")
-        assert provider.start_run(ids[0]) == ""
-        assert "FAILED_PRECONDITION" in provider.last_error
-        assert "preparation failed" in provider.last_error.lower()
+        with pytest.raises(OperatorCallError) as error:
+            provider.start_run(ids[0])
+        assert error.value.status is grpc.StatusCode.FAILED_PRECONDITION
+        assert "preparation failed" in str(error.value).lower()
     finally:
         provider.close()
         server.stop(grace=1)
@@ -1023,6 +2392,8 @@ def test_server_non_loopback_binding_is_explicit_and_warned(monkeypatch, caplog)
 
     assert fake_server.bind_address == "0.0.0.0:7433"
     assert "trusted and authenticated boundary" in caplog.text
+
+
 def test_agent_fields_roundtrip_and_legacy_defaults():
     workflow = WorkflowInfo(
         name="agent-flow",
@@ -1041,57 +2412,418 @@ def test_agent_fields_roundtrip_and_legacy_defaults():
     assert legacy.agent_node_ids == []
     assert legacy.agent_metadata_json == {}
 
-    envelope = json.dumps(
-        {
-            "schema_version": 1,
-            "status": "completed",
-            "run_id": "rlm-run",
-            "events": [],
-            "trace": {"status": "completed", "evidence": {"complete": True}},
-            "error": None,
-        }
-    )
-    node = NodeState(
-        node_id="agent_1",
-        name="agent",
+
+def _seed_hydration_run(operator, run_id: str) -> RunState:
+    run = RunState(run_id=run_id, flow_name="flow")
+    run.nodes["agent-1"] = NodeState(
+        node_id="agent-1",
+        name="Agent",
         node_type="step",
-        agent_trace_json=envelope,
     )
-    assert node_state_from_proto(node_state_to_proto(node)).agent_trace_json == envelope
-    assert (
-        node_state_from_proto(
-            pb.NodeStateMsg(
-                node_id="legacy",
-                name="legacy",
-                node_type="step",
-                status="pending",
-            )
-        ).agent_trace_json
-        is None
-    )
-
-
-def test_run_state_proto_retains_complete_agent_envelope():
-    envelope = json.dumps(
-        {
-            "schema_version": 1,
-            "status": "completed",
-            "run_id": "rlm-run",
-            "events": [{"sequence": 1}],
-            "trace": {
-                "status": "completed",
-                "evidence": {"complete": True, "events": [{"sequence": 1}]},
+    operator._runs[run_id] = run
+    operator._notify_run(run)
+    for sequence in range(1, 6):
+        operator._apply_event(
+            run_id,
+            _event_handle(),
+            {
+                "type": "agent_evidence",
+                "node_id": "agent-1",
+                "event": {
+                    "kind": "evidence",
+                    "invocation_id": "test-invocation",
+                    "sequence": sequence,
+                    "event_kind": "code.executed",
+                    "timestamp_ns": sequence,
+                    "data": {"iteration": sequence},
+                },
             },
-            "error": None,
-        }
+        )
+    operator._apply_event(
+        run_id,
+        _event_handle(),
+        {
+            "type": "agent_evidence",
+            "node_id": "agent-1",
+            "event": {
+                "kind": "trace_finished",
+                "invocation_id": "test-invocation",
+                "trace": {
+                    "status": "completed",
+                    "evidence": {"run_id": run_id, "complete": True},
+                    "payload": "x" * (2 * 1024 * 1024 + 17),
+                },
+            },
+        },
     )
-    run = RunState(run_id="run", flow_name="agent-flow")
-    run.nodes["agent_1"] = NodeState(
-        node_id="agent_1",
-        name="agent",
-        node_type="step",
-        agent_trace_json=envelope,
-    )
+    return run
 
-    decoded = run_state_from_proto(run_state_to_proto(run))
-    assert decoded.nodes["agent_1"].agent_trace_json == envelope
+
+def test_grpc_lazily_hydrates_paged_details_and_chunked_trace(
+    monkeypatch,
+):
+    monkeypatch.setattr(
+        "runtime.operator.client.DETAIL_HYDRATION_PAGE_SIZE",
+        2,
+    )
+    operator = Operator([], watch=False, schedule=False)
+    server = None
+    provider = None
+    try:
+        run = _seed_hydration_run(operator, "run-hydration")
+        port = _unused_port()
+        server = serve(operator, port=port, block=False)
+        provider = GrpcStateProvider(f"localhost:{port}")
+        delegate = provider._stub
+
+        class RecordingStub:
+            def __init__(self):
+                self.log_cursors = []
+                self.event_cursors = []
+                self.trace_chunks = 0
+                self.trace_requests = []
+
+            def __getattr__(self, name):
+                return getattr(delegate, name)
+
+            def ListLogs(self, request, **kwargs):  # noqa: N802
+                self.log_cursors.append(request.after_sequence)
+                return delegate.ListLogs(request, **kwargs)
+
+            def ListAgentEvents(self, request, **kwargs):  # noqa: N802
+                self.event_cursors.append(request.after_event_sequence)
+                return delegate.ListAgentEvents(request, **kwargs)
+
+            def ReadTrace(self, request, **kwargs):  # noqa: N802
+                self.trace_requests.append(request)
+                for chunk in delegate.ReadTrace(request, **kwargs):
+                    self.trace_chunks += 1
+                    yield chunk
+
+        recording = RecordingStub()
+        provider._stub = recording
+        hydrated = provider.get_run(run.run_id)
+
+        assert hydrated is not None
+        assert hydrated.details_hydrated
+        assert len(hydrated.logs) == 6
+        envelope = json.loads(hydrated.nodes["agent-1"].agent_trace_json)
+        assert [event["sequence"] for event in envelope["events"]] == list(range(1, 6))
+        assert envelope["trace"] is None
+        assert recording.log_cursors == [0, 2, 4]
+        assert recording.event_cursors == [0, 2, 4]
+
+        with_trace = provider.hydrate_trace(run.run_id, "agent-1")
+        assert with_trace is not None
+        assert with_trace.operator_instance_id == operator.operator_instance_id
+        assert with_trace.run_id == run.run_id
+        assert with_trace.node_id == "agent-1"
+        assert with_trace.trace_body["payload"].endswith("x" * 17)
+        assert recording.trace_chunks == 3
+        assert [request.operator_instance_id for request in recording.trace_requests] == [
+            operator.operator_instance_id
+        ]
+        assert provider.hydrate_trace(run.run_id, "agent-1") is not None
+        assert recording.trace_chunks == 3
+
+        page = operator.list_run_summaries(page_size=1)
+        snapshot = operator.get_run_snapshot(
+            run.run_id,
+            operator_instance_id=page.operator_instance_id,
+            as_of_sequence=page.as_of_sequence,
+        )
+        provider._install_structural_baseline(
+            page.operator_instance_id,
+            page.as_of_sequence,
+            {run.run_id: _run_from_snapshot(snapshot)},
+        )
+        assert not provider._runs_by_id[run.run_id].details_hydrated
+
+        rehydrated = provider.get_run(run.run_id)
+        assert rehydrated is not None
+        assert len(rehydrated.logs) == 6
+        envelope = json.loads(rehydrated.nodes["agent-1"].agent_trace_json)
+        assert len(envelope["events"]) == 5
+        assert envelope["trace"] is None
+    finally:
+        if provider is not None:
+            provider.close()
+        if server is not None:
+            server.stop(grace=1)
+        operator.close()
+
+
+def test_grpc_discards_hydration_after_epoch_reset(monkeypatch):
+    monkeypatch.setattr(
+        "runtime.operator.client.DETAIL_HYDRATION_PAGE_SIZE",
+        2,
+    )
+    operator = Operator([], watch=False, schedule=False)
+    server = None
+    provider = None
+    release = threading.Event()
+    page_read = threading.Event()
+    results = []
+    errors = []
+    try:
+        run = _seed_hydration_run(operator, "run-stale-hydration")
+        port = _unused_port()
+        server = serve(operator, port=port, block=False)
+        provider = GrpcStateProvider(f"localhost:{port}")
+        delegate = provider._stub
+
+        class BlockingStub:
+            def __getattr__(self, name):
+                return getattr(delegate, name)
+
+            def ListLogs(self, request, **kwargs):  # noqa: N802
+                response = delegate.ListLogs(request, **kwargs)
+                if request.after_sequence == 0:
+                    page_read.set()
+                    if not release.wait(2):
+                        raise RuntimeError("hydration barrier timed out")
+                return response
+
+        provider._stub = BlockingStub()
+
+        def read_run():
+            try:
+                results.append(provider.get_run(run.run_id))
+            except Exception as error:
+                errors.append(error)
+
+        reader = threading.Thread(target=read_run)
+        reader.start()
+        assert page_read.wait(2)
+        provider._install_structural_baseline("replacement-epoch", 0, {})
+        release.set()
+        reader.join(2)
+        assert not reader.is_alive()
+        assert results == []
+        assert len(errors) == 1
+        assert isinstance(errors[0], _DetailHydrationRaceError)
+        assert provider._cursor.operator_instance_id == "replacement-epoch"
+        assert provider._runs_by_id == {}
+    finally:
+        release.set()
+        if provider is not None:
+            provider.close()
+        if server is not None:
+            server.stop(grace=1)
+        operator.close()
+
+
+@pytest.mark.parametrize(
+    "status",
+    [
+        grpc.StatusCode.PERMISSION_DENIED,
+        grpc.StatusCode.RESOURCE_EXHAUSTED,
+        grpc.StatusCode.INTERNAL,
+        grpc.StatusCode.UNAVAILABLE,
+    ],
+)
+def test_detail_hydration_preserves_non_not_found_status(status):
+    provider = GrpcStateProvider("localhost:1")
+
+    class StatusError(grpc.RpcError):
+        def code(self):
+            return status
+
+        def details(self):
+            return "detail denied"
+
+    class FailingDetailStub:
+        def ListRunSummaries(self, request, **kwargs):  # noqa: N802
+            return pb.RunSummaryPage(
+                operator_instance_id="operator-1",
+                as_of_sequence=2,
+            )
+
+        def GetRunSnapshot(self, request, **kwargs):  # noqa: N802
+            return pb.RunSnapshotMsg(
+                operator_instance_id="operator-1",
+                as_of_sequence=2,
+                summary=pb.RunSummaryMsg(
+                    run_id="run-1",
+                    flow_name="flow",
+                    status="running",
+                    created_sequence=1,
+                    revision=2,
+                ),
+                latest_log_sequence=1,
+                log_page_token="logs-token",
+            )
+
+        def ListLogs(self, request, **kwargs):  # noqa: N802
+            raise StatusError()
+
+    provider._stub = FailingDetailStub()
+    try:
+        with pytest.raises(OperatorCallError) as error:
+            provider.get_run("run-1")
+        assert error.value.status is status
+        assert error.value.details == "detail denied"
+    finally:
+        provider.close()
+
+
+def test_get_run_retries_from_fresh_cursor_after_hydration_restart():
+    provider = GrpcStateProvider("localhost:1")
+
+    class RestartedDuringHydration(grpc.RpcError):
+        def code(self):
+            return grpc.StatusCode.FAILED_PRECONDITION
+
+        def details(self):
+            return "operator restarted during detail pagination"
+
+    class RestartingHydrationStub:
+        def __init__(self):
+            self.summary_calls = 0
+            self.snapshot_epochs = []
+            self.log_calls = 0
+
+        def ListRunSummaries(self, request, **kwargs):  # noqa: N802
+            self.summary_calls += 1
+            return pb.RunSummaryPage(
+                operator_instance_id=f"operator-{self.summary_calls}",
+                as_of_sequence=self.summary_calls,
+            )
+
+        def GetRunSnapshot(self, request, **kwargs):  # noqa: N802
+            self.snapshot_epochs.append((request.operator_instance_id, request.as_of_sequence))
+            first_attempt = len(self.snapshot_epochs) == 1
+            return pb.RunSnapshotMsg(
+                operator_instance_id=request.operator_instance_id,
+                as_of_sequence=request.as_of_sequence,
+                summary=pb.RunSummaryMsg(
+                    run_id=request.run_id,
+                    flow_name="flow",
+                    status="running",
+                    created_sequence=1,
+                    revision=request.as_of_sequence,
+                ),
+                latest_log_sequence=1 if first_attempt else 0,
+                log_page_token="logs-token" if first_attempt else "",
+            )
+
+        def ListLogs(self, request, **kwargs):  # noqa: N802
+            self.log_calls += 1
+            raise RestartedDuringHydration()
+
+    stub = RestartingHydrationStub()
+    provider._stub = stub
+    try:
+        run = provider.get_run("run-1")
+    finally:
+        provider.close()
+
+    assert run is not None
+    assert run.operator_instance_id == "operator-2"
+    assert stub.summary_calls == 2
+    assert stub.snapshot_epochs == [("operator-1", 1), ("operator-2", 2)]
+    assert stub.log_calls == 1
+
+
+def test_get_run_rethrows_exact_hydration_restart_error_after_bounded_retries():
+    provider = GrpcStateProvider("localhost:1")
+    failure = OperatorCallError(
+        grpc.StatusCode.FAILED_PRECONDITION,
+        "operator restarted during hydration",
+    )
+    summary_calls = 0
+    snapshot_cursors = []
+
+    class SnapshotStub:
+        def ListRunSummaries(self, request, **kwargs):  # noqa: N802
+            nonlocal summary_calls
+            summary_calls += 1
+            return pb.RunSummaryPage(
+                operator_instance_id=f"operator-{summary_calls}",
+                as_of_sequence=summary_calls,
+            )
+
+        def GetRunSnapshot(self, request, **kwargs):  # noqa: N802
+            snapshot_cursors.append((request.operator_instance_id, request.as_of_sequence))
+            return pb.RunSnapshotMsg(
+                operator_instance_id=request.operator_instance_id,
+                as_of_sequence=request.as_of_sequence,
+                summary=pb.RunSummaryMsg(
+                    run_id=request.run_id,
+                    flow_name="flow",
+                    status="running",
+                    created_sequence=1,
+                    revision=request.as_of_sequence,
+                ),
+            )
+
+    def fail_hydration(_snapshot):
+        raise failure
+
+    provider._stub = SnapshotStub()
+    provider._hydrate_run_snapshot = fail_hydration
+    try:
+        with pytest.raises(OperatorCallError) as error:
+            provider.get_run("run-1")
+    finally:
+        provider.close()
+
+    assert error.value is failure
+    assert error.value.status is grpc.StatusCode.FAILED_PRECONDITION
+    assert error.value.details == "operator restarted during hydration"
+    assert summary_calls == 3
+    assert snapshot_cursors == [
+        ("operator-1", 1),
+        ("operator-2", 2),
+        ("operator-3", 3),
+    ]
+
+
+def test_unrelated_updates_do_not_invalidate_detail_page_tokens(monkeypatch):
+    monkeypatch.setattr(
+        "runtime.operator.client.DETAIL_HYDRATION_PAGE_SIZE",
+        2,
+    )
+    operator = Operator([], watch=False, schedule=False)
+    server = None
+    provider = None
+    try:
+        target = _seed_hydration_run(operator, "run-target")
+        unrelated = RunState(run_id="run-unrelated", flow_name="flow")
+        with operator._lock:
+            operator._runs[unrelated.run_id] = unrelated
+        operator._notify_run(unrelated)
+        port = _unused_port()
+        server = serve(operator, port=port, block=False)
+        provider = GrpcStateProvider(f"localhost:{port}")
+        delegate = provider._stub
+        page_sequences = []
+        updated = False
+
+        class UpdatingStub:
+            def __getattr__(self, name):
+                return getattr(delegate, name)
+
+            def ListLogs(self, request, **kwargs):  # noqa: N802
+                nonlocal updated
+                response = delegate.ListLogs(request, **kwargs)
+                page_sequences.append(response.as_of_sequence)
+                if not updated:
+                    updated = True
+                    unrelated.status = RunStatus.RUNNING
+                    operator._notify_run(unrelated)
+                return response
+
+        provider._stub = UpdatingStub()
+        hydrated = provider.get_run(target.run_id)
+        assert hydrated is not None
+        assert len(hydrated.logs) == 6
+        assert len(json.loads(hydrated.nodes["agent-1"].agent_trace_json)["events"]) == 5
+        assert len(page_sequences) > 1
+        assert len(set(page_sequences)) == 1
+    finally:
+        if provider is not None:
+            provider.close()
+        if server is not None:
+            server.stop(grace=0).wait()
+        operator.close()

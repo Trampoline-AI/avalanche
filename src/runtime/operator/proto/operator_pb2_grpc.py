@@ -51,25 +51,45 @@ class OperatorServiceStub(object):
                 request_serializer=operator__pb2.CancelRunRequest.SerializeToString,
                 response_deserializer=operator__pb2.Empty.FromString,
                 _registered_method=True)
-        self.ListRuns = channel.unary_unary(
-                '/avalanche.operator.OperatorService/ListRuns',
-                request_serializer=operator__pb2.ListRunsRequest.SerializeToString,
-                response_deserializer=operator__pb2.RunList.FromString,
-                _registered_method=True)
-        self.GetRun = channel.unary_unary(
-                '/avalanche.operator.OperatorService/GetRun',
-                request_serializer=operator__pb2.GetRunRequest.SerializeToString,
-                response_deserializer=operator__pb2.RunStateMsg.FromString,
-                _registered_method=True)
         self.GetRunResult = channel.unary_unary(
                 '/avalanche.operator.OperatorService/GetRunResult',
                 request_serializer=operator__pb2.GetRunRequest.SerializeToString,
                 response_deserializer=operator__pb2.RunResultMsg.FromString,
                 _registered_method=True)
-        self.StreamUpdates = channel.unary_stream(
-                '/avalanche.operator.OperatorService/StreamUpdates',
-                request_serializer=operator__pb2.StreamRequest.SerializeToString,
-                response_deserializer=operator__pb2.RunUpdate.FromString,
+        self.ListRunSummaries = channel.unary_unary(
+                '/avalanche.operator.OperatorService/ListRunSummaries',
+                request_serializer=operator__pb2.ListRunSummariesRequest.SerializeToString,
+                response_deserializer=operator__pb2.RunSummaryPage.FromString,
+                _registered_method=True)
+        self.GetRunSnapshot = channel.unary_unary(
+                '/avalanche.operator.OperatorService/GetRunSnapshot',
+                request_serializer=operator__pb2.GetRunSnapshotRequest.SerializeToString,
+                response_deserializer=operator__pb2.RunSnapshotMsg.FromString,
+                _registered_method=True)
+        self.ListLogs = channel.unary_unary(
+                '/avalanche.operator.OperatorService/ListLogs',
+                request_serializer=operator__pb2.ListLogsRequest.SerializeToString,
+                response_deserializer=operator__pb2.LogPage.FromString,
+                _registered_method=True)
+        self.ListAgentEvents = channel.unary_unary(
+                '/avalanche.operator.OperatorService/ListAgentEvents',
+                request_serializer=operator__pb2.ListAgentEventsRequest.SerializeToString,
+                response_deserializer=operator__pb2.AgentEventPage.FromString,
+                _registered_method=True)
+        self.ReadTrace = channel.unary_stream(
+                '/avalanche.operator.OperatorService/ReadTrace',
+                request_serializer=operator__pb2.ReadTraceRequest.SerializeToString,
+                response_deserializer=operator__pb2.TraceChunk.FromString,
+                _registered_method=True)
+        self.ReadDetail = channel.unary_stream(
+                '/avalanche.operator.OperatorService/ReadDetail',
+                request_serializer=operator__pb2.ReadDetailRequest.SerializeToString,
+                response_deserializer=operator__pb2.DetailChunk.FromString,
+                _registered_method=True)
+        self.StreamRunDeltas = channel.unary_stream(
+                '/avalanche.operator.OperatorService/StreamRunDeltas',
+                request_serializer=operator__pb2.StreamRunDeltasRequest.SerializeToString,
+                response_deserializer=operator__pb2.RunDeltaEnvelope.FromString,
                 _registered_method=True)
 
 
@@ -96,25 +116,49 @@ class OperatorServiceServicer(object):
         context.set_details('Method not implemented!')
         raise NotImplementedError('Method not implemented!')
 
-    def ListRuns(self, request, context):
-        """Missing associated documentation comment in .proto file."""
-        context.set_code(grpc.StatusCode.UNIMPLEMENTED)
-        context.set_details('Method not implemented!')
-        raise NotImplementedError('Method not implemented!')
-
-    def GetRun(self, request, context):
-        """Missing associated documentation comment in .proto file."""
-        context.set_code(grpc.StatusCode.UNIMPLEMENTED)
-        context.set_details('Method not implemented!')
-        raise NotImplementedError('Method not implemented!')
-
     def GetRunResult(self, request, context):
         """Missing associated documentation comment in .proto file."""
         context.set_code(grpc.StatusCode.UNIMPLEMENTED)
         context.set_details('Method not implemented!')
         raise NotImplementedError('Method not implemented!')
 
-    def StreamUpdates(self, request, context):
+    def ListRunSummaries(self, request, context):
+        """Missing associated documentation comment in .proto file."""
+        context.set_code(grpc.StatusCode.UNIMPLEMENTED)
+        context.set_details('Method not implemented!')
+        raise NotImplementedError('Method not implemented!')
+
+    def GetRunSnapshot(self, request, context):
+        """Missing associated documentation comment in .proto file."""
+        context.set_code(grpc.StatusCode.UNIMPLEMENTED)
+        context.set_details('Method not implemented!')
+        raise NotImplementedError('Method not implemented!')
+
+    def ListLogs(self, request, context):
+        """Missing associated documentation comment in .proto file."""
+        context.set_code(grpc.StatusCode.UNIMPLEMENTED)
+        context.set_details('Method not implemented!')
+        raise NotImplementedError('Method not implemented!')
+
+    def ListAgentEvents(self, request, context):
+        """Missing associated documentation comment in .proto file."""
+        context.set_code(grpc.StatusCode.UNIMPLEMENTED)
+        context.set_details('Method not implemented!')
+        raise NotImplementedError('Method not implemented!')
+
+    def ReadTrace(self, request, context):
+        """Missing associated documentation comment in .proto file."""
+        context.set_code(grpc.StatusCode.UNIMPLEMENTED)
+        context.set_details('Method not implemented!')
+        raise NotImplementedError('Method not implemented!')
+
+    def ReadDetail(self, request, context):
+        """Missing associated documentation comment in .proto file."""
+        context.set_code(grpc.StatusCode.UNIMPLEMENTED)
+        context.set_details('Method not implemented!')
+        raise NotImplementedError('Method not implemented!')
+
+    def StreamRunDeltas(self, request, context):
         """Missing associated documentation comment in .proto file."""
         context.set_code(grpc.StatusCode.UNIMPLEMENTED)
         context.set_details('Method not implemented!')
@@ -138,25 +182,45 @@ def add_OperatorServiceServicer_to_server(servicer, server):
                     request_deserializer=operator__pb2.CancelRunRequest.FromString,
                     response_serializer=operator__pb2.Empty.SerializeToString,
             ),
-            'ListRuns': grpc.unary_unary_rpc_method_handler(
-                    servicer.ListRuns,
-                    request_deserializer=operator__pb2.ListRunsRequest.FromString,
-                    response_serializer=operator__pb2.RunList.SerializeToString,
-            ),
-            'GetRun': grpc.unary_unary_rpc_method_handler(
-                    servicer.GetRun,
-                    request_deserializer=operator__pb2.GetRunRequest.FromString,
-                    response_serializer=operator__pb2.RunStateMsg.SerializeToString,
-            ),
             'GetRunResult': grpc.unary_unary_rpc_method_handler(
                     servicer.GetRunResult,
                     request_deserializer=operator__pb2.GetRunRequest.FromString,
                     response_serializer=operator__pb2.RunResultMsg.SerializeToString,
             ),
-            'StreamUpdates': grpc.unary_stream_rpc_method_handler(
-                    servicer.StreamUpdates,
-                    request_deserializer=operator__pb2.StreamRequest.FromString,
-                    response_serializer=operator__pb2.RunUpdate.SerializeToString,
+            'ListRunSummaries': grpc.unary_unary_rpc_method_handler(
+                    servicer.ListRunSummaries,
+                    request_deserializer=operator__pb2.ListRunSummariesRequest.FromString,
+                    response_serializer=operator__pb2.RunSummaryPage.SerializeToString,
+            ),
+            'GetRunSnapshot': grpc.unary_unary_rpc_method_handler(
+                    servicer.GetRunSnapshot,
+                    request_deserializer=operator__pb2.GetRunSnapshotRequest.FromString,
+                    response_serializer=operator__pb2.RunSnapshotMsg.SerializeToString,
+            ),
+            'ListLogs': grpc.unary_unary_rpc_method_handler(
+                    servicer.ListLogs,
+                    request_deserializer=operator__pb2.ListLogsRequest.FromString,
+                    response_serializer=operator__pb2.LogPage.SerializeToString,
+            ),
+            'ListAgentEvents': grpc.unary_unary_rpc_method_handler(
+                    servicer.ListAgentEvents,
+                    request_deserializer=operator__pb2.ListAgentEventsRequest.FromString,
+                    response_serializer=operator__pb2.AgentEventPage.SerializeToString,
+            ),
+            'ReadTrace': grpc.unary_stream_rpc_method_handler(
+                    servicer.ReadTrace,
+                    request_deserializer=operator__pb2.ReadTraceRequest.FromString,
+                    response_serializer=operator__pb2.TraceChunk.SerializeToString,
+            ),
+            'ReadDetail': grpc.unary_stream_rpc_method_handler(
+                    servicer.ReadDetail,
+                    request_deserializer=operator__pb2.ReadDetailRequest.FromString,
+                    response_serializer=operator__pb2.DetailChunk.SerializeToString,
+            ),
+            'StreamRunDeltas': grpc.unary_stream_rpc_method_handler(
+                    servicer.StreamRunDeltas,
+                    request_deserializer=operator__pb2.StreamRunDeltasRequest.FromString,
+                    response_serializer=operator__pb2.RunDeltaEnvelope.SerializeToString,
             ),
     }
     generic_handler = grpc.method_handlers_generic_handler(
@@ -253,60 +317,6 @@ class OperatorService(object):
             _registered_method=True)
 
     @staticmethod
-    def ListRuns(request,
-            target,
-            options=(),
-            channel_credentials=None,
-            call_credentials=None,
-            insecure=False,
-            compression=None,
-            wait_for_ready=None,
-            timeout=None,
-            metadata=None):
-        return grpc.experimental.unary_unary(
-            request,
-            target,
-            '/avalanche.operator.OperatorService/ListRuns',
-            operator__pb2.ListRunsRequest.SerializeToString,
-            operator__pb2.RunList.FromString,
-            options,
-            channel_credentials,
-            insecure,
-            call_credentials,
-            compression,
-            wait_for_ready,
-            timeout,
-            metadata,
-            _registered_method=True)
-
-    @staticmethod
-    def GetRun(request,
-            target,
-            options=(),
-            channel_credentials=None,
-            call_credentials=None,
-            insecure=False,
-            compression=None,
-            wait_for_ready=None,
-            timeout=None,
-            metadata=None):
-        return grpc.experimental.unary_unary(
-            request,
-            target,
-            '/avalanche.operator.OperatorService/GetRun',
-            operator__pb2.GetRunRequest.SerializeToString,
-            operator__pb2.RunStateMsg.FromString,
-            options,
-            channel_credentials,
-            insecure,
-            call_credentials,
-            compression,
-            wait_for_ready,
-            timeout,
-            metadata,
-            _registered_method=True)
-
-    @staticmethod
     def GetRunResult(request,
             target,
             options=(),
@@ -334,7 +344,115 @@ class OperatorService(object):
             _registered_method=True)
 
     @staticmethod
-    def StreamUpdates(request,
+    def ListRunSummaries(request,
+            target,
+            options=(),
+            channel_credentials=None,
+            call_credentials=None,
+            insecure=False,
+            compression=None,
+            wait_for_ready=None,
+            timeout=None,
+            metadata=None):
+        return grpc.experimental.unary_unary(
+            request,
+            target,
+            '/avalanche.operator.OperatorService/ListRunSummaries',
+            operator__pb2.ListRunSummariesRequest.SerializeToString,
+            operator__pb2.RunSummaryPage.FromString,
+            options,
+            channel_credentials,
+            insecure,
+            call_credentials,
+            compression,
+            wait_for_ready,
+            timeout,
+            metadata,
+            _registered_method=True)
+
+    @staticmethod
+    def GetRunSnapshot(request,
+            target,
+            options=(),
+            channel_credentials=None,
+            call_credentials=None,
+            insecure=False,
+            compression=None,
+            wait_for_ready=None,
+            timeout=None,
+            metadata=None):
+        return grpc.experimental.unary_unary(
+            request,
+            target,
+            '/avalanche.operator.OperatorService/GetRunSnapshot',
+            operator__pb2.GetRunSnapshotRequest.SerializeToString,
+            operator__pb2.RunSnapshotMsg.FromString,
+            options,
+            channel_credentials,
+            insecure,
+            call_credentials,
+            compression,
+            wait_for_ready,
+            timeout,
+            metadata,
+            _registered_method=True)
+
+    @staticmethod
+    def ListLogs(request,
+            target,
+            options=(),
+            channel_credentials=None,
+            call_credentials=None,
+            insecure=False,
+            compression=None,
+            wait_for_ready=None,
+            timeout=None,
+            metadata=None):
+        return grpc.experimental.unary_unary(
+            request,
+            target,
+            '/avalanche.operator.OperatorService/ListLogs',
+            operator__pb2.ListLogsRequest.SerializeToString,
+            operator__pb2.LogPage.FromString,
+            options,
+            channel_credentials,
+            insecure,
+            call_credentials,
+            compression,
+            wait_for_ready,
+            timeout,
+            metadata,
+            _registered_method=True)
+
+    @staticmethod
+    def ListAgentEvents(request,
+            target,
+            options=(),
+            channel_credentials=None,
+            call_credentials=None,
+            insecure=False,
+            compression=None,
+            wait_for_ready=None,
+            timeout=None,
+            metadata=None):
+        return grpc.experimental.unary_unary(
+            request,
+            target,
+            '/avalanche.operator.OperatorService/ListAgentEvents',
+            operator__pb2.ListAgentEventsRequest.SerializeToString,
+            operator__pb2.AgentEventPage.FromString,
+            options,
+            channel_credentials,
+            insecure,
+            call_credentials,
+            compression,
+            wait_for_ready,
+            timeout,
+            metadata,
+            _registered_method=True)
+
+    @staticmethod
+    def ReadTrace(request,
             target,
             options=(),
             channel_credentials=None,
@@ -347,9 +465,63 @@ class OperatorService(object):
         return grpc.experimental.unary_stream(
             request,
             target,
-            '/avalanche.operator.OperatorService/StreamUpdates',
-            operator__pb2.StreamRequest.SerializeToString,
-            operator__pb2.RunUpdate.FromString,
+            '/avalanche.operator.OperatorService/ReadTrace',
+            operator__pb2.ReadTraceRequest.SerializeToString,
+            operator__pb2.TraceChunk.FromString,
+            options,
+            channel_credentials,
+            insecure,
+            call_credentials,
+            compression,
+            wait_for_ready,
+            timeout,
+            metadata,
+            _registered_method=True)
+
+    @staticmethod
+    def ReadDetail(request,
+            target,
+            options=(),
+            channel_credentials=None,
+            call_credentials=None,
+            insecure=False,
+            compression=None,
+            wait_for_ready=None,
+            timeout=None,
+            metadata=None):
+        return grpc.experimental.unary_stream(
+            request,
+            target,
+            '/avalanche.operator.OperatorService/ReadDetail',
+            operator__pb2.ReadDetailRequest.SerializeToString,
+            operator__pb2.DetailChunk.FromString,
+            options,
+            channel_credentials,
+            insecure,
+            call_credentials,
+            compression,
+            wait_for_ready,
+            timeout,
+            metadata,
+            _registered_method=True)
+
+    @staticmethod
+    def StreamRunDeltas(request,
+            target,
+            options=(),
+            channel_credentials=None,
+            call_credentials=None,
+            insecure=False,
+            compression=None,
+            wait_for_ready=None,
+            timeout=None,
+            metadata=None):
+        return grpc.experimental.unary_stream(
+            request,
+            target,
+            '/avalanche.operator.OperatorService/StreamRunDeltas',
+            operator__pb2.StreamRunDeltasRequest.SerializeToString,
+            operator__pb2.RunDeltaEnvelope.FromString,
             options,
             channel_credentials,
             insecure,
