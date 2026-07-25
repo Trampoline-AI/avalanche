@@ -4,6 +4,7 @@ Runtime primitives for Avalanche tasks.
 Provides Cursor, Stream, Logger, and run input/context types.
 """
 
+from ..workspace import Workspace
 from .context import (
     BaseContext,
     BaseInput,
@@ -21,6 +22,7 @@ __all__ = [
     "BaseInput",
     "Cursor",
     "File",
+    "Workspace",
     "Rerun",
     "RunContext",
     "get_current_run_context",

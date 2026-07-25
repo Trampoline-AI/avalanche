@@ -52,6 +52,7 @@ from .runtime import (  # noqa: F401
     Rerun,
     RunContext,
     Stream,
+    Workspace,
     consume_stream,
 )
 
@@ -113,6 +114,7 @@ __all__ = [
     "BaseInput",
     "Cursor",
     "File",
+    "Workspace",
     "Rerun",
     "RunContext",
     "RunHandle",

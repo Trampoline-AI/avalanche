@@ -14,6 +14,7 @@ from pydantic import BaseModel
 
 from avalanche.runtime import File
 from avalanche.runtime.context import _FILE_SERIALIZER_CONTEXT_KEY
+from avalanche.workspace import _WORKSPACE_SERIALIZER_CONTEXT_KEY, Workspace
 
 _RESULT_FORMAT_VERSION = 1
 MAX_RESULT_ATTACHMENTS = 1024
@@ -60,11 +61,20 @@ def encode_workflow_result(value: Any) -> EncodedWorkflowResult:
             "attachment_id": attachment_id,
         }
 
+    def serialize_workspace(workspace: Workspace) -> dict[str, Any]:
+        return {
+            "__operator_workspace_marker__": marker_token,
+            "manifest": workspace._manifest_for_serialization(),
+        }
+
     if isinstance(value, BaseModel) and not isinstance(value, File):
         value = value.model_dump(
             mode="json",
             by_alias=True,
-            context={_FILE_SERIALIZER_CONTEXT_KEY: serialize_file},
+            context={
+                _FILE_SERIALIZER_CONTEXT_KEY: serialize_file,
+                _WORKSPACE_SERIALIZER_CONTEXT_KEY: serialize_workspace,
+            },
         )
     encoded = _encode_value(
         value,
@@ -213,6 +223,8 @@ def _encode_value(
             "kind": "file",
             "attachment_id": _append_attachment(value, attachments),
         }
+    if isinstance(value, Workspace):
+        return {"kind": "workspace", "manifest": value._manifest_for_serialization()}
     if (
         type(value) is dict
         and value.get("__operator_file_marker__") == marker_token
@@ -222,6 +234,12 @@ def _encode_value(
         if type(attachment_id) is not str:
             raise TypeError("Pydantic File serializer returned an invalid marker")
         return {"kind": "file", "attachment_id": attachment_id}
+    if (
+        type(value) is dict
+        and value.get("__operator_workspace_marker__") == marker_token
+        and set(value) == {"__operator_workspace_marker__", "manifest"}
+    ):
+        return {"kind": "workspace", "manifest": value["manifest"]}
     if value is None or type(value) in {bool, int, str}:
         return {"kind": "scalar", "value": value}
     if type(value) is float:
@@ -232,7 +250,13 @@ def _encode_value(
         dumped = value.model_dump(
             mode="json",
             by_alias=True,
-            context={_FILE_SERIALIZER_CONTEXT_KEY: serialize_file},
+            context={
+                _FILE_SERIALIZER_CONTEXT_KEY: serialize_file,
+                _WORKSPACE_SERIALIZER_CONTEXT_KEY: lambda workspace: {
+                    "__operator_workspace_marker__": marker_token,
+                    "manifest": workspace._manifest_for_serialization(),
+                },
+            },
         )
         return _encode_value(
             dumped,
@@ -294,7 +318,7 @@ def _encode_value(
         }
     raise TypeError(
         "Operator workflow results support JSON scalar/container values, "
-        "Pydantic models, and avalanche.File values"
+        "Pydantic models, ava.File values, and ava.Workspace values"
     )
 
 
@@ -455,6 +479,13 @@ def _decode_value(
         if isinstance(attachments, dict):
             return attachments[attachment_id]
         return None
+    if kind == "workspace":
+        if set(encoded) != {"kind", "manifest"} or type(encoded["manifest"]) is not dict:
+            raise ValueError("Malformed workspace workflow result")
+        try:
+            return Workspace.from_manifest(encoded["manifest"])
+        except (TypeError, ValueError) as exc:
+            raise ValueError(f"Malformed workspace workflow result: {exc}") from exc
     raise ValueError(f"Unknown workflow result kind {kind!r}")
 
 

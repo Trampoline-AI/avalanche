@@ -126,6 +126,294 @@ def test_ava_run_help_points_to_cli_and_python_result_retrieval(capsys):
     assert "GrpcStateProvider.get_run_result(run_id)" in output
 
 
+def test_ava_run_captures_workspace_inputs_and_rejects_duplicate_bindings(
+    monkeypatch, tmp_path, capsys
+):
+    from ava_cli import app
+    from avalanche import Workspace
+
+    source = tmp_path / "source"
+    source.mkdir()
+    (source / "nested.txt").write_text("workspace")
+    captured = {}
+
+    class FakeProvider:
+        def start_run(self, flow, **kwargs):
+            captured.update(kwargs)
+            return "run_workspace"
+
+        def close(self):
+            pass
+
+    monkeypatch.setattr(app, "_make_provider", lambda address: FakeProvider())
+    assert app.main(["run", "flow", "--workspace", f"workspace={source}"]) == 0
+    assert isinstance(captured["input"]["workspace"], Workspace)
+    assert {
+        entry.path: entry.content
+        for entry in captured["input"]["workspace"].entries
+        if entry.kind == "file"
+    } == {"nested.txt": b"workspace"}
+    assert (
+        app.main(
+            [
+                "run",
+                "flow",
+                "--workspace",
+                f"workspace={source}",
+                "--workspace",
+                f"workspace={source}",
+            ]
+        )
+        == 1
+    )
+    assert (
+        app.main(
+            [
+                "run",
+                "flow",
+                "--input",
+                '{"workspace":"already-bound"}',
+                "--workspace",
+                f"workspace={source}",
+            ]
+        )
+        == 1
+    )
+    assert (
+        app.main(
+            [
+                "run",
+                "flow",
+                "--file",
+                f"workspace={source / 'nested.txt'}",
+                "--workspace",
+                f"workspace={source}",
+            ]
+        )
+        == 1
+    )
+    assert capsys.readouterr().err.count("Duplicate input field 'workspace'") == 3
+
+
+def test_ava_result_materializes_nested_workspace_tree(monkeypatch, tmp_path, capsys):
+    from ava_cli import app
+    from avalanche import Workspace
+
+    source = tmp_path / "source"
+    (source / "nested").mkdir(parents=True)
+    (source / "nested" / "report.txt").write_text("report")
+
+    class FakeProvider:
+        def get_run_result(self, run_id):
+            return {"output": Workspace.from_path(source)}
+
+        def close(self):
+            pass
+
+    monkeypatch.setattr(app, "_make_provider", lambda address: FakeProvider())
+    output = tmp_path / "download"
+    assert app.main(["result", "run_workspace", "--output-dir", str(output)]) == 0
+    metadata = json.loads(capsys.readouterr().out)
+    root = metadata["workspaces"][0]["path"]
+    assert (output / root / "nested" / "report.txt").read_text() == "report"
+
+
+def test_ava_result_verifies_workspace_digest_before_publication(tmp_path):
+    from ava_cli import app
+    from avalanche import Workspace
+    from avalanche.workspace import WorkspaceEntry
+
+    corrupt = Workspace.model_construct(
+        entries=(
+            WorkspaceEntry.model_construct(
+                path="report.txt",
+                kind="file",
+                content=b"report",
+                sha256="0" * 64,
+            ),
+        )
+    )
+    output = tmp_path / "download"
+
+    with pytest.raises(ValueError, match="sha256"):
+        app._materialize_result("run_corrupt_workspace", corrupt, output)
+
+    assert not output.exists()
+    assert list(tmp_path.iterdir()) == []
+
+
+def test_ava_result_rehashes_materialized_workspace_files(monkeypatch, tmp_path):
+    from ava_cli import app
+    from avalanche import Workspace
+
+    source = tmp_path / "source"
+    source.mkdir()
+    (source / "report.txt").write_text("report")
+    output = tmp_path / "download"
+    write_exclusive_file = app._write_exclusive_file
+
+    def corrupt_after_write(name, content, directory_fd):
+        write_exclusive_file(name, content, directory_fd)
+        if content == b"report":
+            descriptor = app.os.open(
+                name,
+                app.os.O_WRONLY | app.os.O_TRUNC | app.os.O_NOFOLLOW,
+                dir_fd=directory_fd,
+            )
+            try:
+                app.os.write(descriptor, b"tamper")
+                app.os.fsync(descriptor)
+            finally:
+                app.os.close(descriptor)
+
+    monkeypatch.setattr(app, "_write_exclusive_file", corrupt_after_write)
+
+    with pytest.raises(ValueError, match="failed digest verification"):
+        app._materialize_result(
+            "run_corrupt_materialization",
+            Workspace.from_path(source),
+            output,
+        )
+
+    assert not output.exists()
+    assert list(tmp_path.iterdir()) == [source]
+
+
+def test_ava_result_recursively_syncs_workspace_directories(monkeypatch, tmp_path):
+    from ava_cli import app
+    from avalanche import Workspace
+
+    source = tmp_path / "source"
+    (source / "nested" / "deep").mkdir(parents=True)
+    (source / "nested" / "deep" / "report.txt").write_text("report")
+    output = tmp_path / "download"
+    fsync = app.os.fsync
+    synced_directories: set[tuple[int, int]] = set()
+
+    def record_fsync(descriptor):
+        metadata = app.os.fstat(descriptor)
+        if stat.S_ISDIR(metadata.st_mode):
+            synced_directories.add((metadata.st_dev, metadata.st_ino))
+        return fsync(descriptor)
+
+    monkeypatch.setattr(app.os, "fsync", record_fsync)
+
+    metadata = app._materialize_result(
+        "run_synced_workspace",
+        Workspace.from_path(source),
+        output,
+    )
+
+    root = output / metadata["workspaces"][0]["path"]
+    published_directories = {
+        (path.stat().st_dev, path.stat().st_ino)
+        for path in (root, root / "nested", root / "nested" / "deep")
+    }
+    assert published_directories <= synced_directories
+
+
+def test_ava_result_rejects_workspace_beyond_cleanup_depth_before_staging(
+    monkeypatch,
+    tmp_path,
+):
+    from ava_cli import app
+    from avalanche import Workspace
+
+    entries = []
+    parts = []
+    for index in range(app._MAX_STAGED_OUTPUT_DEPTH):
+        parts.append(f"level-{index}")
+        entries.append({"kind": "directory", "path": "/".join(parts)})
+    workspace = Workspace.from_manifest({"version": 1, "entries": entries})
+
+    def unexpected_staging():
+        raise AssertionError("CLI preflight did not run before staging")
+
+    monkeypatch.setattr(app, "_require_anchored_output_io", unexpected_staging)
+
+    with pytest.raises(ValueError, match="materialization depth limit"):
+        app._materialize_result("run_too_deep", workspace, tmp_path / "download")
+
+    assert list(tmp_path.iterdir()) == []
+
+
+def test_ava_result_rejects_workspace_beyond_cleanup_entry_budget_before_staging(
+    monkeypatch,
+    tmp_path,
+):
+    from ava_cli import app
+    from avalanche import Workspace
+
+    workspace = Workspace.from_manifest(
+        {
+            "version": 1,
+            "entries": [
+                {"kind": "directory", "path": f"entry-{index:04d}"}
+                for index in range(app._MAX_STAGED_OUTPUT_ENTRIES - 1)
+            ],
+        }
+    )
+
+    def unexpected_staging():
+        raise AssertionError("CLI preflight did not run before staging")
+
+    monkeypatch.setattr(app, "_require_anchored_output_io", unexpected_staging)
+
+    with pytest.raises(ValueError, match="cleanup entry limit"):
+        app._materialize_result("run_too_wide", workspace, tmp_path / "download")
+
+    assert list(tmp_path.iterdir()) == []
+
+
+def test_ava_result_materializes_wide_workspace_with_bounded_descriptors(
+    monkeypatch,
+    tmp_path,
+):
+    from ava_cli import app
+    from avalanche import Workspace
+
+    workspace = Workspace.from_manifest(
+        {
+            "version": 1,
+            "entries": [
+                {"kind": "directory", "path": f"directory-{index:04d}"} for index in range(256)
+            ],
+        }
+    )
+    output = tmp_path / "download"
+    open_private_directory = app._open_private_directory
+    tracked_descriptors: list[int] = []
+    maximum_open = 0
+
+    def limited_open_private_directory(*args, **kwargs):
+        nonlocal maximum_open
+        still_open = []
+        for descriptor in tracked_descriptors:
+            try:
+                app.os.fstat(descriptor)
+            except OSError:
+                continue
+            still_open.append(descriptor)
+        tracked_descriptors[:] = still_open
+        if len(tracked_descriptors) >= 12:
+            raise OSError(app.errno.EMFILE, "simulated descriptor exhaustion")
+        descriptor, identity = open_private_directory(*args, **kwargs)
+        tracked_descriptors.append(descriptor)
+        maximum_open = max(maximum_open, len(tracked_descriptors))
+        return descriptor, identity
+
+    monkeypatch.setattr(
+        app,
+        "_open_private_directory",
+        limited_open_private_directory,
+    )
+
+    app._materialize_result("run_wide_workspace", workspace, output)
+
+    assert output.is_dir()
+    assert maximum_open < 12
+
+
 def test_ava_result_help_documents_no_replace_and_local_namespace_contract(capsys):
     from ava_cli import app
 

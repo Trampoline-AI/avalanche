@@ -34,6 +34,7 @@ from avalanche.operator.client import GrpcStateProvider
 from avalanche.operator.models import RunState, RunStatus
 from avalanche.operator.server import serve
 from avalanche.runtime import File
+from avalanche.workspace import Workspace
 from runtime.operator import operator as operator_module
 from runtime.operator import result_store as result_store_module
 from runtime.operator.operator import RunResultUnavailableError
@@ -159,6 +160,10 @@ def _discover_and_mutate_from_escaped_descriptor(
 class _PydanticResultWithFile(BaseModel):
     created_at: datetime
     file: File
+
+
+class _NestedPydanticWorkspaceResult(BaseModel):
+    workspaces: list[Workspace]
 
 
 class _FieldSerializedFile(BaseModel):
@@ -470,6 +475,29 @@ def test_result_codec_uses_pydantic_json_values_while_extracting_files():
     assert decoded["file"].content == b"\xff\x00"
 
 
+def test_result_codec_transports_workspace_nested_in_pydantic_model(tmp_path):
+    source = tmp_path / "source"
+    (source / "nested").mkdir(parents=True)
+    (source / "nested" / "report.txt").write_text("report")
+
+    decoded = decode_workflow_result(
+        encode_workflow_result(
+            {"result": _NestedPydanticWorkspaceResult(workspaces=[Workspace.from_path(source)])}
+        )
+    )
+
+    workspace = decoded["result"]["workspaces"][0]
+    assert isinstance(workspace, Workspace)
+    assert {
+        entry.path: entry.content for entry in workspace.entries if entry.kind == "file"
+    } == {"nested/report.txt": b"report"}
+
+
+def test_result_codec_supported_type_error_lists_workspace():
+    with pytest.raises(TypeError, match=r"ava\.File values, and ava\.Workspace values"):
+        encode_workflow_result(object())
+
+
 def test_result_codec_honors_field_serializer_that_replaces_file_with_metadata():
     value = _FieldSerializedFile(file=File(content=b"\xff"))
 
@@ -533,6 +561,40 @@ def test_result_codec_preserves_alias_root_and_computed_field_json_semantics():
 )
 def test_result_codec_strictly_rejects_malformed_documents(value_json):
     with pytest.raises(ValueError):
+        decode_workflow_result(EncodedWorkflowResult(value_json=value_json))
+
+
+@pytest.mark.parametrize(
+    "manifest",
+    [
+        {},
+        {"entries": []},
+        {"version": 1},
+        {"version": 2, "entries": []},
+        {"version": True, "entries": []},
+        {"version": "1", "entries": []},
+        {"version": None, "entries": []},
+        {"version": 1, "entries": {}},
+        {"version": 1, "entries": [None]},
+        {"version": 1, "entries": [{}]},
+        {"version": 1, "entries": [{"kind": "directory"}]},
+        {
+            "version": 1,
+            "entries": [{"kind": "directory", "path": "dir", "extra": True}],
+        },
+        {
+            "version": 1,
+            "entries": [{"kind": "file", "path": "value.txt"}],
+        },
+    ],
+)
+def test_result_codec_rejects_noncanonical_workspace_manifests(manifest):
+    value_json = json.dumps(
+        {"version": 1, "value": {"kind": "workspace", "manifest": manifest}},
+        separators=(",", ":"),
+    )
+
+    with pytest.raises(ValueError, match="Malformed workspace workflow result"):
         decode_workflow_result(EncodedWorkflowResult(value_json=value_json))
 
 
