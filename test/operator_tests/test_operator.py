@@ -18,6 +18,7 @@ from avalanche.operator.models import NodeState, NodeStatus, RunState, RunStatus
 from avalanche.operator.operator import RunAlreadyExistsError
 from avalanche.operator.scheduler import Scheduler
 from runtime.operator.run_worker import (
+    _import_isolated_ray,
     _QueueStream,
     _with_local_node_observers,
     _with_ray_node_observers,
@@ -336,6 +337,21 @@ class TestOperatorLifecycle:
         with pytest.raises(ValueError, match="require executor_backend='ray'"):
             Operator([], watch=False, schedule=False, **ray_config)
 
+    def test_isolated_ray_import_disables_uv_runtime_env_hook(self, monkeypatch):
+        imported = SimpleNamespace()
+
+        def import_module(name):
+            assert name == "ray"
+            assert os.environ["RAY_ENABLE_UV_RUN_RUNTIME_ENV"] == "0"
+            return imported
+
+        monkeypatch.setenv("RAY_ENABLE_UV_RUN_RUNTIME_ENV", "1")
+        monkeypatch.setattr(
+            "runtime.operator.run_worker.importlib.import_module", import_module
+        )
+
+        assert _import_isolated_ray() is imported
+
     @pytest.mark.parametrize(
         "explicit_config",
         [
@@ -556,6 +572,7 @@ class TestAgentEvidenceTransport:
             emit_agent_evidence(
                 {
                     "kind": "evidence",
+                    "invocation_id": "agent-invocation",
                     "sequence": 1,
                     "event_kind": "run.started",
                     "timestamp_ns": 1,
@@ -584,6 +601,7 @@ class TestAgentEvidenceTransport:
                 "node_id": "agent_1",
                 "event": {
                     "kind": "evidence",
+                    "invocation_id": "agent-invocation",
                     "sequence": 1,
                     "event_kind": "run.started",
                     "timestamp_ns": 1,
@@ -608,6 +626,7 @@ class TestAgentEvidenceTransport:
             "node_id": "agent_1",
             "event": {
                 "kind": "evidence",
+                "invocation_id": "agent-invocation",
                 "sequence": 1,
                 "event_kind": "code.generated",
                 "timestamp_ns": 10,
@@ -625,6 +644,7 @@ class TestAgentEvidenceTransport:
                     "node_id": "agent_1",
                     "event": {
                         "kind": "trace_finished",
+                        "invocation_id": "agent-invocation",
                         "trace": {
                             "status": "completed",
                             "evidence": {
@@ -643,6 +663,98 @@ class TestAgentEvidenceTransport:
         envelope = json.loads(run.nodes["agent_1"].agent_trace_json)
         assert envelope["status"] == "completed"
         assert envelope["run_id"] == "agent-run"
+        assert envelope["invocation_id"] == "agent-invocation"
         assert [item["sequence"] for item in envelope["events"]] == [1]
+        assert [item["invocation_id"] for item in envelope["events"]] == ["agent-invocation"]
         assert [entry.node_id for entry in run.logs] == ["agent_1", "agent_1"]
+        operator.close()
+
+    def test_operator_terminal_snapshots_are_coherent_across_invocations(self):
+        operator = Operator([], watch=False, schedule=False)
+        run = self._state()
+
+        def record(event):
+            return operator._record_agent_evidence_event(
+                run,
+                "agent_1",
+                event,
+                notify=False,
+            )
+
+        def evidence(invocation_id):
+            return {
+                "kind": "evidence",
+                "invocation_id": invocation_id,
+                "sequence": 1,
+                "event_kind": "run.started",
+                "timestamp_ns": 1,
+                "data": {},
+            }
+
+        def finished(invocation_id, run_id):
+            return {
+                "kind": "trace_finished",
+                "invocation_id": invocation_id,
+                "trace": {
+                    "status": "completed",
+                    "evidence": {"run_id": run_id, "events": []},
+                    "steps": [],
+                },
+            }
+
+        assert record(evidence("invocation-a")) is not None
+        assert record(finished("invocation-a", "run-a")) is not None
+        snapshot_a = json.loads(run.nodes["agent_1"].agent_trace_json)
+        assert {
+            key: snapshot_a[key] for key in ("invocation_id", "status", "run_id", "error")
+        } == {
+            "invocation_id": "invocation-a",
+            "status": "completed",
+            "run_id": "run-a",
+            "error": None,
+        }
+        assert snapshot_a["trace"]["evidence"]["run_id"] == "run-a"
+
+        assert record(evidence("invocation-b")) is not None
+        assert (
+            record(
+                {
+                    "kind": "trace_unavailable",
+                    "invocation_id": "invocation-b",
+                    "error": "trace export failed",
+                }
+            )
+            is not None
+        )
+        snapshot_b = json.loads(run.nodes["agent_1"].agent_trace_json)
+        assert {
+            key: snapshot_b[key]
+            for key in ("invocation_id", "status", "run_id", "trace", "error")
+        } == {
+            "invocation_id": "invocation-b",
+            "status": "unavailable",
+            "run_id": None,
+            "trace": None,
+            "error": "trace export failed",
+        }
+
+        assert record(evidence("invocation-c")) is not None
+        assert record(finished("invocation-c", "run-c")) is not None
+        snapshot_c = json.loads(run.nodes["agent_1"].agent_trace_json)
+        assert {
+            key: snapshot_c[key] for key in ("invocation_id", "status", "run_id", "error")
+        } == {
+            "invocation_id": "invocation-c",
+            "status": "completed",
+            "run_id": "run-c",
+            "error": None,
+        }
+        assert snapshot_c["trace"]["evidence"]["run_id"] == "run-c"
+        assert [
+            (event["invocation_id"], event["sequence"]) for event in snapshot_c["events"]
+        ] == [
+            ("invocation-a", 1),
+            ("invocation-b", 1),
+            ("invocation-c", 1),
+        ]
         operator.close()

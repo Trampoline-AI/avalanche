@@ -866,6 +866,7 @@ class Operator:
                 else {
                     "schema_version": 1,
                     "status": "in_progress",
+                    "invocation_id": None,
                     "run_id": None,
                     "events": [],
                     "trace": None,
@@ -879,6 +880,9 @@ class Operator:
                 return None
 
             kind = event.get("kind")
+            invocation_id = event.get("invocation_id")
+            if not isinstance(invocation_id, str) or not invocation_id:
+                return None
             level = LogLevel.INFO
             if kind == "evidence":
                 sequence = event.get("sequence")
@@ -893,11 +897,19 @@ class Operator:
                     or not isinstance(data, dict)
                 ):
                     return None
-                last_sequence = events[-1].get("sequence", 0) if events else 0
+                last_sequence = max(
+                    (
+                        item.get("sequence", 0)
+                        for item in events
+                        if isinstance(item, dict) and item.get("invocation_id") == invocation_id
+                    ),
+                    default=0,
+                )
                 if sequence <= last_sequence:
                     return None
                 events.append(
                     {
+                        "invocation_id": invocation_id,
                         "sequence": sequence,
                         "event_kind": event_kind,
                         "timestamp_ns": timestamp_ns,
@@ -922,18 +934,32 @@ class Operator:
                 trace = event.get("trace")
                 if not isinstance(trace, dict):
                     return None
-                envelope["trace"] = trace
-                envelope["status"] = str(trace.get("status") or "unavailable")
+                status = str(trace.get("status") or "unavailable")
                 evidence = trace.get("evidence")
-                if isinstance(evidence, dict):
-                    envelope["run_id"] = evidence.get("run_id")
-                message = f"Agent trace {envelope['status']}"
-                if envelope["status"] == "error":
+                run_id = evidence.get("run_id") if isinstance(evidence, dict) else None
+                envelope.update(
+                    {
+                        "invocation_id": invocation_id,
+                        "trace": trace,
+                        "status": status,
+                        "run_id": run_id,
+                        "error": None,
+                    }
+                )
+                message = f"Agent trace {status}"
+                if status == "error":
                     level = LogLevel.ERROR
             elif kind == "trace_unavailable":
                 error = event.get("error")
-                envelope["status"] = "unavailable"
-                envelope["error"] = str(error or "Agent trace unavailable")
+                envelope.update(
+                    {
+                        "invocation_id": invocation_id,
+                        "status": "unavailable",
+                        "error": str(error or "Agent trace unavailable"),
+                        "trace": None,
+                        "run_id": None,
+                    }
+                )
                 message = f"Agent trace unavailable: {envelope['error']}"
                 level = LogLevel.WARN
             else:

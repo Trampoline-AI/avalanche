@@ -22,6 +22,16 @@ Run from the repository root:
 make brand
 ```
 
+The export requires Google Chrome and ImageMagick 7's `magick` command. On
+macOS, install ImageMagick with:
+
+```bash
+brew install imagemagick
+```
+
+Set `CHROME=/path/to/chrome` when Chrome is not installed at the default macOS
+application path, or `MAGICK=/path/to/magick` when `magick` is not on `PATH`.
+
 The command rebuilds the compiled PNGs from the checked-in Three.js source HTML:
 
 - `avalanche-logo-3d.png`
