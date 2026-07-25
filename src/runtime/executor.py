@@ -49,6 +49,7 @@ def _normalize_distributed_result(value: Any) -> Any:
     preserving shape and lineage.
     """
     from avalanche.types import AppendResult, AppendResultHandle, LineagedResult
+    from avalanche.workspace import Workspace
 
     if isinstance(value, LineagedResult):
         return LineagedResult(
@@ -62,6 +63,8 @@ def _normalize_distributed_result(value: Any) -> Any:
             snapshot_id=value.snapshot_id,
             table_identity=value.table_identity,
         )
+    if isinstance(value, Workspace):
+        return value.snapshot()
     if isinstance(value, tuple):
         return tuple(_normalize_distributed_result(v) for v in value)
     if isinstance(value, list):
@@ -81,7 +84,10 @@ def _wrap_sync_or_async(fn: Callable) -> Callable:
 
     @wraps(fn)
     def wrapper(*args: Any, **kwargs: Any) -> Any:
-        return _normalize_distributed_result(call_sync_or_async(fn, *args, **kwargs))
+        from avalanche.workspace import run_workspace_invocation
+
+        result = run_workspace_invocation(call_sync_or_async, fn, *args, **kwargs)
+        return _normalize_distributed_result(result)
 
     return wrapper
 
@@ -96,7 +102,10 @@ def _wrap_with_status(fn: Callable, user_num_returns: int) -> Callable:
 
     @wraps(fn)
     def wrapper(*args: Any, **kwargs: Any) -> Any:
-        result = _normalize_distributed_result(call_sync_or_async(fn, *args, **kwargs))
+        from avalanche.workspace import run_workspace_invocation
+
+        result = run_workspace_invocation(call_sync_or_async, fn, *args, **kwargs)
+        result = _normalize_distributed_result(result)
         if user_num_returns > 1:
             return (*result, None)
         return result, None
@@ -132,10 +141,12 @@ def _distributed_execution_services_task(
 ) -> Any:
     """Ray entry point with service dependencies exposed as top-level args."""
     from avalanche.execution_services import _run_with_execution_services
+    from avalanche.workspace import run_workspace_invocation
 
     upstream_receipts = tuple(dependency_and_user_args[:dependency_count])
     args = tuple(dependency_and_user_args[dependency_count:])
-    result, receipt = _run_with_execution_services(
+    result, receipt = run_workspace_invocation(
+        _run_with_execution_services,
         fn,
         execution_services,
         task,
@@ -273,7 +284,9 @@ class LocalExecutor:
         Returns:
             Result if num_returns=1, tuple of results if num_returns>1
         """
-        result = call_sync_or_async(fn, *args, **kwargs)
+        from avalanche.workspace import run_workspace_invocation
+
+        result = run_workspace_invocation(call_sync_or_async, fn, *args, **kwargs)
         if num_returns > 1:
             # Ensure result is a tuple of expected length
             if isinstance(result, tuple) and len(result) == num_returns:
@@ -321,8 +334,10 @@ class LocalExecutor:
     ) -> tuple[Any, Any, Any | None]:
         """Execute a service-managed task synchronously."""
         from avalanche.execution_services import _run_with_execution_services
+        from avalanche.workspace import run_workspace_invocation
 
-        result, receipt = _run_with_execution_services(
+        result, receipt = run_workspace_invocation(
+            _run_with_execution_services,
             fn,
             execution_services,
             task,

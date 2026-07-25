@@ -16,7 +16,7 @@ import subprocess
 import sys
 import time
 from collections.abc import Sequence
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from uuid import uuid4
 
 _RUNTIME_OPTIONAL_MODULES = {"runtime", "grpc", "watchfiles", "croniter"}
@@ -108,6 +108,13 @@ def _build_parser() -> argparse.ArgumentParser:
         default=[],
         metavar="FIELD=PATH",
         help="attach local file bytes as a top-level input field",
+    )
+    run.add_argument(
+        "--workspace",
+        action="append",
+        default=[],
+        metavar="FIELD=DIR",
+        help="capture a local directory as a top-level Workspace input field",
     )
     run.set_defaults(handler=_run_flow)
 
@@ -264,9 +271,24 @@ def _operator_main(argv: list[str]) -> int:
 def _run_flow(args: argparse.Namespace) -> int:
     provider = _make_provider(args.connect)
     try:
-        input_payload = _parse_json_object(args.input_json, "--input")
-        context_payload = _parse_json_object(args.context_json, "--context")
-        file_payloads = _parse_file_inputs(args.file)
+        try:
+            input_payload = _parse_json_object(args.input_json, "--input")
+            context_payload = _parse_json_object(args.context_json, "--context")
+            file_payloads = _parse_file_inputs(args.file)
+            workspace_payloads = _parse_workspace_inputs(args.workspace)
+            duplicate_fields = set(file_payloads).intersection(workspace_payloads)
+            if duplicate_fields:
+                raise ValueError(f"Duplicate input field '{sorted(duplicate_fields)[0]}'")
+            if input_payload is not None:
+                duplicate_fields = set(input_payload).intersection(
+                    file_payloads | workspace_payloads
+                )
+                if duplicate_fields:
+                    raise ValueError(f"Duplicate input field '{sorted(duplicate_fields)[0]}'")
+            input_payload = {**(input_payload or {}), **workspace_payloads} or None
+        except ValueError as exc:
+            print(str(exc), file=sys.stderr)
+            return 1
         try:
             run_id = provider.start_run(
                 args.flow,
@@ -342,10 +364,12 @@ def _wait_for_terminal_run(provider, run_id: str, *, timeout: float) -> bool:
 
 def _materialize_result(run_id: str, value, output_directory: Path) -> dict:
     from avalanche.runtime import File
+    from avalanche.workspace import Workspace
     from runtime.operator.results import encode_workflow_result
 
     _reject_repeated_result_files(value, File)
     encode_workflow_result(value)
+    _preflight_result_materialization(value, File, Workspace)
     _require_anchored_output_io()
     parent_directory = output_directory.parent
     destination_name = output_directory.name
@@ -360,6 +384,8 @@ def _materialize_result(run_id: str, value, output_directory: Path) -> dict:
     publication_attempted = False
     publication_returned = False
     files: list[dict] = []
+    workspaces: list[dict] = []
+    workspace_identities: dict[str, tuple[int, int]] = {}
 
     def materialize(item):
         if isinstance(item, File):
@@ -382,6 +408,24 @@ def _materialize_result(run_id: str, value, output_directory: Path) -> dict:
             }
             files.append(metadata)
             return {"file": metadata}
+        if isinstance(item, Workspace):
+            index = len(workspaces) + 1
+            root_name = f"workspace-{index:04d}-{uuid4().hex}"
+            manifest, root_identity = _materialize_workspace_tree(
+                item,
+                root_name,
+                staging_fd,
+            )
+            workspace_identities[root_name] = root_identity
+            metadata = {
+                "path": root_name,
+                "entries": len(item.entries),
+                "sha256": hashlib.sha256(
+                    json.dumps(manifest, sort_keys=True, separators=(",", ":")).encode()
+                ).hexdigest(),
+            }
+            workspaces.append(metadata)
+            return {"workspace": metadata}
         if type(item) is tuple:
             return [materialize(child) for child in item]
         if type(item) is list:
@@ -418,6 +462,8 @@ def _materialize_result(run_id: str, value, output_directory: Path) -> dict:
             "result": materialize(value),
             "files": files,
         }
+        if workspaces:
+            document["workspaces"] = workspaces
         metadata_name = f"result-{uuid4().hex}.json"
         metadata_bytes = (
             json.dumps(document, allow_nan=False, indent=2, sort_keys=True) + "\n"
@@ -446,8 +492,19 @@ def _materialize_result(run_id: str, value, output_directory: Path) -> dict:
             raise ValueError("Downloaded result metadata failed verification")
         _validate_staged_entries(
             staging_fd,
-            {metadata_name, *(item["path"] for item in files)},
+            {
+                metadata_name,
+                *(item["path"] for item in files),
+                *(item["path"] for item in workspaces),
+            },
         )
+        for root_name, root_identity in workspace_identities.items():
+            _validate_directory_entry_identity(
+                staging_fd,
+                root_name,
+                root_identity,
+                label="workspace",
+            )
         os.fsync(staging_fd)
         _verify_output_parent(
             parent_directory,
@@ -521,6 +578,42 @@ def _reject_repeated_result_files(value, file_type: type) -> None:
             stack.extend(item)
         elif type(item) is dict:
             stack.extend(item.values())
+
+
+def _preflight_result_materialization(
+    value,
+    file_type: type,
+    workspace_type: type,
+) -> None:
+    """Reject result trees that cannot be deterministically cleaned."""
+    staged_entries = 1  # The metadata document.
+    stack = [value]
+    while stack:
+        item = stack.pop()
+        if isinstance(item, file_type):
+            staged_entries += 1
+        elif isinstance(item, workspace_type):
+            manifest = item.manifest()
+            validated = workspace_type.from_manifest(manifest)
+            staged_entries += 1 + len(validated.entries)
+            for entry in validated.entries:
+                path_depth = len(PurePosixPath(entry.path).parts)
+                cleanup_depth = path_depth + (entry.kind == "directory")
+                if cleanup_depth > _MAX_STAGED_OUTPUT_DEPTH:
+                    raise ValueError(
+                        "Workspace exceeds the CLI result materialization depth limit"
+                    )
+        elif type(item) in {tuple, list}:
+            stack.extend(item)
+        elif type(item) is dict:
+            stack.extend(item.values())
+        elif item is None or type(item) in {bool, int, float, str}:
+            if type(item) is float and not math.isfinite(item):
+                raise ValueError("Result metadata contains a non-finite number")
+        else:
+            raise TypeError(f"Unsupported result value {type(item).__name__}")
+        if staged_entries > _MAX_STAGED_OUTPUT_ENTRIES:
+            raise ValueError("Result exceeds the CLI materialization cleanup entry limit")
 
 
 def _generated_result_filename(index: int, original_name: str | None) -> str:
@@ -704,6 +797,140 @@ def _write_exclusive_file(
         raise
     else:
         os.close(descriptor)
+
+
+def _materialize_workspace_tree(
+    workspace,
+    root_name: str,
+    staging_fd: int,
+) -> tuple[dict, tuple[int, int]]:
+    """Write, verify, and recursively sync one validated workspace tree."""
+    from avalanche.workspace import Workspace
+
+    manifest = workspace.manifest()
+    validated = Workspace.from_manifest(manifest)
+    os.mkdir(root_name, mode=0o700, dir_fd=staging_fd)
+    root_fd, root_identity = _open_private_directory(
+        staging_fd,
+        root_name,
+        label="workspace",
+    )
+    directory_identities: dict[str, tuple[int, int]] = {"": root_identity}
+    try:
+        directories = [entry for entry in validated.entries if entry.kind == "directory"]
+        directories.sort(key=lambda entry: (len(PurePosixPath(entry.path).parts), entry.path))
+        for entry in directories:
+            path = PurePosixPath(entry.path)
+            parent_path = "" if str(path.parent) == "." else str(path.parent)
+            parent_fd = _open_workspace_directory(
+                root_fd,
+                parent_path,
+                directory_identities,
+            )
+            try:
+                os.mkdir(path.name, mode=0o700, dir_fd=parent_fd)
+                child_fd, child_identity = _open_private_directory(
+                    parent_fd,
+                    path.name,
+                    label="workspace",
+                )
+                os.close(child_fd)
+                directory_identities[entry.path] = child_identity
+            finally:
+                os.close(parent_fd)
+
+        files = [entry for entry in validated.entries if entry.kind == "file"]
+        for entry in files:
+            path = PurePosixPath(entry.path)
+            parent_path = "" if str(path.parent) == "." else str(path.parent)
+            content = entry.content
+            digest = entry.sha256
+            if type(content) is not bytes or type(digest) is not str:
+                raise ValueError("Malformed workspace file entry")
+            if hashlib.sha256(content).hexdigest() != digest:
+                raise ValueError(
+                    f"Workspace file {entry.path!r} digest does not match its content"
+                )
+            parent_fd = _open_workspace_directory(
+                root_fd,
+                parent_path,
+                directory_identities,
+            )
+            try:
+                _write_exclusive_file(path.name, content, parent_fd)
+            finally:
+                os.close(parent_fd)
+
+        for entry in files:
+            path = PurePosixPath(entry.path)
+            parent_path = "" if str(path.parent) == "." else str(path.parent)
+            content = entry.content
+            digest = entry.sha256
+            if type(content) is not bytes or type(digest) is not str:
+                raise ValueError("Malformed workspace file entry")
+            parent_fd = _open_workspace_directory(
+                root_fd,
+                parent_path,
+                directory_identities,
+            )
+            try:
+                actual_digest, actual_size = _hash_output_file(
+                    path.name,
+                    parent_fd,
+                    maximum_bytes=len(content),
+                )
+            finally:
+                os.close(parent_fd)
+            if actual_digest != digest or actual_size != len(content):
+                raise ValueError(
+                    f"Materialized workspace file {entry.path!r} failed digest verification"
+                )
+
+        for directory in sorted(
+            (path for path in directory_identities if path),
+            key=lambda path: len(PurePosixPath(path).parts) if path else 0,
+            reverse=True,
+        ):
+            directory_fd = _open_workspace_directory(
+                root_fd,
+                directory,
+                directory_identities,
+            )
+            try:
+                os.fsync(directory_fd)
+            finally:
+                os.close(directory_fd)
+        os.fsync(root_fd)
+    finally:
+        os.close(root_fd)
+    return manifest, root_identity
+
+
+def _open_workspace_directory(
+    root_fd: int,
+    relative_path: str,
+    identities: dict[str, tuple[int, int]],
+) -> int:
+    """Open one workspace directory while retaining only its ancestor chain."""
+    descriptor = os.dup(root_fd)
+    current_path = ""
+    try:
+        for part in PurePosixPath(relative_path).parts if relative_path else ():
+            child_fd, child_identity = _open_private_directory(
+                descriptor,
+                part,
+                label="workspace",
+            )
+            current_path = f"{current_path}/{part}" if current_path else part
+            if child_identity != identities[current_path]:
+                os.close(child_fd)
+                raise ValueError("Result output workspace identity changed")
+            os.close(descriptor)
+            descriptor = child_fd
+        return descriptor
+    except BaseException:
+        os.close(descriptor)
+        raise
 
 
 def _hash_output_file(
@@ -901,8 +1128,12 @@ def _validate_staged_entries(directory_fd: int, expected_names: set[str]) -> Non
             actual_names.add(entry.name)
             if len(actual_names) > _MAX_STAGED_OUTPUT_ENTRIES:
                 raise ValueError("Result output staging directory has too many entries")
-            if entry.is_dir(follow_symlinks=False):
-                raise ValueError("Result output staging directory contains a directory")
+            if not entry.is_dir(follow_symlinks=False) and not entry.is_file(
+                follow_symlinks=False
+            ):
+                raise ValueError(
+                    "Result output staging directory contains an unsupported entry"
+                )
     if actual_names != expected_names:
         raise ValueError("Result output staging directory contains unexpected entries")
 
@@ -1123,8 +1354,22 @@ def _parse_file_inputs(values: list[str]):
     files = {}
     for value in values:
         field, path = _parse_assignment(value, "--file")
+        if field in files:
+            raise ValueError(f"Duplicate input field '{field}'")
         files[field] = File.from_path(Path(path))
     return files
+
+
+def _parse_workspace_inputs(values: list[str]):
+    from avalanche.workspace import Workspace
+
+    workspaces = {}
+    for value in values:
+        field, path = _parse_assignment(value, "--workspace")
+        if field in workspaces:
+            raise ValueError(f"Duplicate input field '{field}'")
+        workspaces[field] = Workspace.from_path(Path(path))
+    return workspaces
 
 
 def _wait_for_provider(provider, *, timeout: float) -> None:

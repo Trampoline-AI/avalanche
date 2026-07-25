@@ -81,9 +81,11 @@ The handle is process-local and its non-daemon driver thread keeps the embedded
 process alive until the run finishes. `run.cancel()` requests cooperative
 cancellation between node submissions; it does not forcibly stop an active
 thread or Ray task. Durable run state remains an operator responsibility.
-Terminal values may contain `ava.File` directly or nested in supported
-Pydantic/list/tuple/dict results. Embedded `.result()` returns the original
-Python shape and `ava.File` objects.
+Terminal values may contain `ava.File` or `ava.Workspace` directly or nested in
+supported Pydantic/list/tuple/dict results. Embedded `.result()` returns the
+original Python shape and portable file/workspace objects. A terminal
+`Workspace` carries its serializable manifest; its local `.path` exists only
+while Avalanche is executing user node code.
 
 Start with the simplest smoke-tested example:
 Run it through the local operator:
