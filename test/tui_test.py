@@ -48,15 +48,6 @@ def _apply_async_updates(store: UIStore, timeout: float = 1.0) -> None:
     store._apply_background_updates()
 
 
-async def _wait_for_current_run(app, timeout: float = 1.0) -> None:
-    deadline = time.monotonic() + timeout
-    while app.store.current_run is None and time.monotonic() < deadline:
-        app.store._apply_background_updates()
-        await asyncio.sleep(0.005)
-    app.store._apply_background_updates()
-    assert app.store.current_run is not None
-
-
 class _SignalingQueue:
     def __init__(self, queue):
         self._queue = queue
@@ -77,6 +68,24 @@ def _signal_background_updates(store: UIStore) -> _SignalingQueue:
     queue = _SignalingQueue(store._background_updates)
     store._background_updates = queue
     return queue
+
+
+async def _wait_for_current_run(app, updates: _SignalingQueue, timeout: float = 2.0) -> None:
+    deadline = time.monotonic() + timeout
+    while app.store.current_run is None:
+        updates.put_event.clear()
+        app.store._apply_background_updates()
+        app._apply_deep_link()
+        if app.store.current_run is not None:
+            break
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            break
+        await asyncio.to_thread(updates.put_event.wait, remaining)
+    app.store._apply_background_updates()
+    assert (
+        app.store.current_run is not None
+    ), f"Timed out after {timeout:.1f}s waiting for the current run update"
 
 
 def test_connection_overlay_uses_public_label_and_error_state():
@@ -3127,9 +3136,10 @@ async def test_agent_trace_inspector_interactions_and_log_retention():
 
     provider, _ = _agent_trace_provider()
     app = AvalancheApp(provider=provider, workflow="agent_flow", node="agent")
+    updates = _signal_background_updates(app.store)
     async with app.run_test(size=(120, 40)) as pilot:
         await pilot.pause()
-        await _wait_for_current_run(app)
+        await _wait_for_current_run(app, updates)
         await pilot.pause()
         await pilot.press("enter")
         await pilot.pause()
@@ -3293,9 +3303,10 @@ async def test_agent_trace_inspector_renders_pending_failed_malformed_and_incomp
 
     provider, envelope = _agent_trace_provider()
     app = AvalancheApp(provider=provider, workflow="agent_flow", node="agent")
+    updates = _signal_background_updates(app.store)
     async with app.run_test(size=(100, 35)) as pilot:
         await pilot.pause()
-        await _wait_for_current_run(app)
+        await _wait_for_current_run(app, updates)
         await pilot.pause()
         await pilot.press("enter")
         content = app._screen.query_one("#agent-trace-content", AgentTraceInspector)
