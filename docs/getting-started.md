@@ -3,7 +3,7 @@
 This guide is for early users trying Avalanche locally from a fresh clone. It
 assumes Python 3.11 through 3.13, `uv`, and a local terminal.
 
-The current team release candidate is `0.1.0-rc0`.
+The current team release candidate is `0.1.0-rc2`.
 
 ## What Is Supported
 

@@ -115,7 +115,7 @@ class TraceDetail:
 
 @dataclass(frozen=True)
 class NodeSnapshot:
-    """Lightweight node state used by baseline reads and run deltas."""
+    """Lightweight node state used by baseline reads and run updates."""
 
     node_id: str
     name: str
@@ -199,7 +199,7 @@ class AgentEventDetailAppended:
     event: AgentEvent
 
 
-DetailDelta = LogDetailAppended | AgentEventDetailAppended
+DetailUpdate = LogDetailAppended | AgentEventDetailAppended
 
 
 @dataclass(frozen=True)
@@ -309,7 +309,7 @@ class TraceFinalized:
     trace: TraceDescriptor
 
 
-RunDeltaChange = (
+RunUpdateChange = (
     RunCreated
     | RunStatusChanged
     | NodeStatusChanged
@@ -320,9 +320,9 @@ RunDeltaChange = (
 
 
 @dataclass(frozen=True)
-class RunDelta:
+class RunUpdate:
     sequence: int
-    change: RunDeltaChange
+    change: RunUpdateChange
 
 
 @dataclass(frozen=True)
@@ -332,14 +332,14 @@ class ResetRequired:
 
 
 @dataclass(frozen=True)
-class RunDeltaEnvelope:
+class RunUpdateEnvelope:
     operator_instance_id: str
-    delta: RunDelta | None = None
+    update: RunUpdate | None = None
     reset_required: ResetRequired | None = None
 
     def __post_init__(self) -> None:
-        if (self.delta is None) == (self.reset_required is None):
-            raise ValueError("delta envelope requires exactly one payload")
+        if (self.update is None) == (self.reset_required is None):
+            raise ValueError("update envelope requires exactly one payload")
 
 
 @dataclass

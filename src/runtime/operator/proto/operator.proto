@@ -2,9 +2,9 @@ syntax = "proto3";
 
 package avalanche.operator;
 
-// Breaking migration: ListRuns/GetRun/StreamUpdates and the old state messages
-// map to ListRunSummaries/GetRunSnapshot/StreamRunDeltas plus the paged detail
-// APIs below. Remote operators and clients must upgrade together.
+// Breaking migration: the previous full-state run APIs are replaced by bounded
+// summary, snapshot, detail, and typed update APIs below. Remote operators and
+// clients must upgrade together.
 
 // ── Service ─────────────────────────────────────────────
 
@@ -19,7 +19,7 @@ service OperatorService {
   rpc ListAgentEvents(ListAgentEventsRequest) returns (AgentEventPage);
   rpc ReadTrace(ReadTraceRequest) returns (stream TraceChunk);
   rpc ReadDetail(ReadDetailRequest) returns (stream DetailChunk);
-  rpc StreamRunDeltas(StreamRunDeltasRequest) returns (stream RunDeltaEnvelope);
+  rpc StreamRunUpdates(StreamRunUpdatesRequest) returns (stream RunUpdateEnvelope);
 }
 
 // ── Request / Response ──────────────────────────────────
@@ -98,7 +98,7 @@ message ReadDetailRequest {
   string body_token = 1;
 }
 
-message StreamRunDeltasRequest {
+message StreamRunUpdatesRequest {
   string operator_instance_id = 1;
   uint64 after_sequence = 2;
 }
@@ -251,12 +251,12 @@ message DetailChunk {
   bool eof = 3;
 }
 
-message RunCreatedDelta {
+message RunCreated {
   RunSummaryMsg summary = 1;
   repeated NodeSnapshotMsg nodes = 2;
 }
 
-message RunStatusChangedDelta {
+message RunStatusChanged {
   string run_id = 1;
   string status = 2;
   double started_at = 3;
@@ -264,7 +264,7 @@ message RunStatusChangedDelta {
   uint64 revision = 5;
 }
 
-message NodeStatusChangedDelta {
+message NodeStatusChanged {
   string run_id = 1;
   string node_id = 2;
   string status = 3;
@@ -273,32 +273,32 @@ message NodeStatusChangedDelta {
   uint64 revision = 6;
 }
 
-message LogAppendedDelta {
+message LogAppended {
   string run_id = 1;
   LogRecordDescriptorMsg log = 2;
 }
 
-message AgentEventAppendedDelta {
+message AgentEventAppended {
   string run_id = 1;
   string node_id = 2;
   AgentEventDescriptorMsg event = 3;
 }
 
-message TraceFinalizedDelta {
+message TraceFinalized {
   string run_id = 1;
   string node_id = 2;
   TraceDescriptorMsg trace = 3;
 }
 
-message RunDelta {
+message RunUpdate {
   uint64 sequence = 1;
   oneof change {
-    RunCreatedDelta run_created = 2;
-    RunStatusChangedDelta run_status_changed = 3;
-    NodeStatusChangedDelta node_status_changed = 4;
-    LogAppendedDelta log_appended = 5;
-    AgentEventAppendedDelta agent_event_appended = 6;
-    TraceFinalizedDelta trace_finalized = 7;
+    RunCreated run_created = 2;
+    RunStatusChanged run_status_changed = 3;
+    NodeStatusChanged node_status_changed = 4;
+    LogAppended log_appended = 5;
+    AgentEventAppended agent_event_appended = 6;
+    TraceFinalized trace_finalized = 7;
   }
 }
 
@@ -307,10 +307,10 @@ message ResetRequired {
   uint64 latest_sequence = 2;
 }
 
-message RunDeltaEnvelope {
+message RunUpdateEnvelope {
   string operator_instance_id = 1;
   oneof payload {
-    RunDelta delta = 2;
+    RunUpdate update = 2;
     ResetRequired reset_required = 3;
   }
 }

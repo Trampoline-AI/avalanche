@@ -438,8 +438,8 @@ def large_file_workflow():
         run = client.get_run("nonexistent")
         assert run is None
 
-    def test_stream_run_deltas(self, client):
-        """StreamRunDeltas should materialize live state changes."""
+    def test_stream_run_updates(self, client):
+        """StreamRunUpdates should materialize live state changes."""
         updates = []
 
         def on_update(run):
@@ -512,7 +512,7 @@ def test_ping_success_does_not_heal_failed_update_stream():
             return "stream offline"
 
     class SplitHealthStub:
-        def StreamRunDeltas(self, request, *, metadata):  # noqa: N802
+        def StreamRunUpdates(self, request, *, metadata):  # noqa: N802
             raise Unavailable()
 
         def ListFlows(self, request, **kwargs):  # noqa: N802
@@ -1055,7 +1055,7 @@ def test_idle_accepted_stream_reaches_live_after_metadata_handshake():
             raise StopIteration
 
     class IdleStub:
-        def StreamRunDeltas(self, request, *, metadata):  # noqa: N802
+        def StreamRunUpdates(self, request, *, metadata):  # noqa: N802
             return IdleStream()
 
     provider._stub = IdleStub()
@@ -1133,7 +1133,7 @@ def test_post_header_stream_failures_preserve_exponential_reconnect_backoff():
             raise Unavailable()
 
     class FailingStub:
-        def StreamRunDeltas(self, request, *, metadata):  # noqa: N802
+        def StreamRunUpdates(self, request, *, metadata):  # noqa: N802
             return AcceptedThenUnavailable()
 
     provider._stream_stop = RecordingStop()
@@ -1174,11 +1174,11 @@ def test_duplicate_only_streams_do_not_reset_reconnect_backoff_or_cursor():
                 self.stopped = True
             return self.stopped
 
-    duplicate = pb.RunDeltaEnvelope(
+    duplicate = pb.RunUpdateEnvelope(
         operator_instance_id="operator-1",
-        delta=pb.RunDelta(
+        update=pb.RunUpdate(
             sequence=7,
-            run_created=pb.RunCreatedDelta(
+            run_created=pb.RunCreated(
                 summary=pb.RunSummaryMsg(
                     run_id="duplicate",
                     flow_name="flow",
@@ -1199,7 +1199,7 @@ def test_duplicate_only_streams_do_not_reset_reconnect_backoff_or_cursor():
             raise Unavailable()
 
     class DuplicateStub:
-        def StreamRunDeltas(self, request, *, metadata):  # noqa: N802
+        def StreamRunUpdates(self, request, *, metadata):  # noqa: N802
             requests.append((request.operator_instance_id, request.after_sequence))
             return DuplicateThenUnavailable()
 
@@ -1248,11 +1248,11 @@ def test_authoritative_stream_progress_resets_reconnect_backoff():
             return ()
 
         def __iter__(self):
-            yield pb.RunDeltaEnvelope(
+            yield pb.RunUpdateEnvelope(
                 operator_instance_id="operator-1",
-                delta=pb.RunDelta(
+                update=pb.RunUpdate(
                     sequence=1,
-                    run_created=pb.RunCreatedDelta(
+                    run_created=pb.RunCreated(
                         summary=pb.RunSummaryMsg(
                             run_id="run-1",
                             flow_name="flow",
@@ -1269,7 +1269,7 @@ def test_authoritative_stream_progress_resets_reconnect_backoff():
         def __init__(self):
             self.calls = 0
 
-        def StreamRunDeltas(self, request, *, metadata):  # noqa: N802
+        def StreamRunUpdates(self, request, *, metadata):  # noqa: N802
             self.calls += 1
             if self.calls == 1:
                 raise Unavailable()
@@ -1315,7 +1315,7 @@ def test_stream_reconnect_transitions_through_replay_to_live():
         def __init__(self):
             self.calls = 0
 
-        def StreamRunDeltas(self, request, *, metadata):  # noqa: N802
+        def StreamRunUpdates(self, request, *, metadata):  # noqa: N802
             self.calls += 1
             observed.append(provider.stream_state)
             if self.calls == 1:
@@ -1328,11 +1328,11 @@ def test_stream_reconnect_transitions_through_replay_to_live():
 
                 def __iter__(self):
                     observed.append(provider.stream_state)
-                    yield pb.RunDeltaEnvelope(
+                    yield pb.RunUpdateEnvelope(
                         operator_instance_id="operator-1",
-                        delta=pb.RunDelta(
+                        update=pb.RunUpdate(
                             sequence=1,
-                            run_created=pb.RunCreatedDelta(
+                            run_created=pb.RunCreated(
                                 summary=pb.RunSummaryMsg(
                                     run_id="run_live",
                                     flow_name="flow",
@@ -1656,7 +1656,7 @@ def test_default_reset_loader_uses_immutable_snapshot_while_updates_continue():
     assert request.as_of_sequence == 2
 
 
-def test_restart_reset_rejects_stale_generation_and_rebinds_delta_epoch():
+def test_restart_reset_rejects_stale_generation_and_rebinds_update_epoch():
     def load_baseline(notice):
         return ResetBaseline(
             generation=notice.generation,
@@ -1676,11 +1676,11 @@ def test_restart_reset_rejects_stale_generation_and_rebinds_delta_epoch():
     release = threading.Event()
     received = []
 
-    reset_envelope = pb.RunDeltaEnvelope(
+    reset_envelope = pb.RunUpdateEnvelope(
         operator_instance_id="operator-restarted",
-        delta=pb.RunDelta(
+        update=pb.RunUpdate(
             sequence=2,
-            run_created=pb.RunCreatedDelta(
+            run_created=pb.RunCreated(
                 summary=pb.RunSummaryMsg(
                     run_id="run_recovered",
                     flow_name="flow",
@@ -1697,11 +1697,11 @@ def test_restart_reset_rejects_stale_generation_and_rebinds_delta_epoch():
             return ()
 
         def __iter__(self):
-            yield pb.RunDeltaEnvelope(
+            yield pb.RunUpdateEnvelope(
                 operator_instance_id="operator-restarted",
-                delta=pb.RunDelta(
+                update=pb.RunUpdate(
                     sequence=4,
-                    run_created=pb.RunCreatedDelta(
+                    run_created=pb.RunCreated(
                         summary=pb.RunSummaryMsg(
                             run_id="run_newer",
                             flow_name="flow",
@@ -1719,7 +1719,7 @@ def test_restart_reset_rejects_stale_generation_and_rebinds_delta_epoch():
         def __init__(self):
             self.calls = 0
 
-        def StreamRunDeltas(self, request, *, metadata):  # noqa: N802
+        def StreamRunUpdates(self, request, *, metadata):  # noqa: N802
             self.calls += 1
             assert metadata is None
             if self.calls == 1:
@@ -1840,7 +1840,7 @@ def test_reset_acknowledgement_requires_exact_validated_baseline(
 
 
 @pytest.mark.parametrize("observed_sequence", [99, 100])
-def test_delta_epoch_change_requires_reset_at_equal_or_higher_sequence(
+def test_update_epoch_change_requires_reset_at_equal_or_higher_sequence(
     observed_sequence,
 ):
     provider = GrpcStateProvider("localhost:1")
@@ -1848,15 +1848,15 @@ def test_delta_epoch_change_requires_reset_at_equal_or_higher_sequence(
     reset_observed = threading.Event()
 
     class RestartedStub:
-        def StreamRunDeltas(self, request, *, metadata):  # noqa: N802
+        def StreamRunUpdates(self, request, *, metadata):  # noqa: N802
             assert request.operator_instance_id == "operator-original"
             assert request.after_sequence == 99
             assert metadata is None
-            yield pb.RunDeltaEnvelope(
+            yield pb.RunUpdateEnvelope(
                 operator_instance_id="operator-restarted",
-                delta=pb.RunDelta(
+                update=pb.RunUpdate(
                     sequence=observed_sequence,
-                    run_created=pb.RunCreatedDelta(
+                    run_created=pb.RunCreated(
                         summary=pb.RunSummaryMsg(
                             run_id="run-restarted",
                             flow_name="flow",
@@ -1893,21 +1893,21 @@ def test_delta_epoch_change_requires_reset_at_equal_or_higher_sequence(
         provider.close()
 
 
-def test_client_skips_duplicate_delta_sequence_without_epoch_reset():
+def test_client_skips_duplicate_update_sequence_without_epoch_reset():
     provider = GrpcStateProvider("localhost:1")
     received = []
 
     class DuplicateFirstStub:
-        def StreamRunDeltas(self, request, *, metadata):  # noqa: N802
+        def StreamRunUpdates(self, request, *, metadata):  # noqa: N802
             assert request.operator_instance_id == "operator-1"
             assert request.after_sequence == 99
             assert metadata is None
             for sequence, run_id in ((99, "duplicate"), (100, "run_live")):
-                yield pb.RunDeltaEnvelope(
+                yield pb.RunUpdateEnvelope(
                     operator_instance_id="operator-1",
-                    delta=pb.RunDelta(
+                    update=pb.RunUpdate(
                         sequence=sequence,
-                        run_created=pb.RunCreatedDelta(
+                        run_created=pb.RunCreated(
                             summary=pb.RunSummaryMsg(
                                 run_id=run_id,
                                 flow_name="flow",
@@ -1944,7 +1944,7 @@ def test_concurrent_start_stream_calls_start_one_stream_thread():
             self.calls = 0
             self.thread_ids = set()
 
-        def StreamRunDeltas(self, request, *, metadata):  # noqa: N802
+        def StreamRunUpdates(self, request, *, metadata):  # noqa: N802
             self.calls += 1
             self.thread_ids.add(threading.get_ident())
 
@@ -2003,7 +2003,7 @@ def test_concurrent_close_and_stream_start_leave_no_live_thread_or_calls():
             self.calls = 0
             self.post_close_calls = 0
 
-        def StreamRunDeltas(self, request, *, metadata):  # noqa: N802
+        def StreamRunUpdates(self, request, *, metadata):  # noqa: N802
             self.calls += 1
             if close_returned.is_set():
                 self.post_close_calls += 1
@@ -2053,7 +2053,7 @@ def test_client_close_stops_reconnect_thread_and_prevents_new_calls():
         def __init__(self):
             self.calls = 0
 
-        def StreamRunDeltas(self, request, *, metadata):  # noqa: N802
+        def StreamRunUpdates(self, request, *, metadata):  # noqa: N802
             self.calls += 1
             called.set()
             raise Unavailable()

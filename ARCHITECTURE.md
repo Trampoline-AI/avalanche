@@ -177,7 +177,7 @@ Operator
 │   ├── ListRunSummaries / GetRunSnapshot
 │   ├── ListLogs / ListAgentEvents
 │   ├── ReadTrace / ReadDetail
-│   └── StreamRunDeltas
+│   └── StreamRunUpdates
 ├── Operator core
 │   ├── run lifecycle
 │   ├── node state tracking
@@ -408,7 +408,7 @@ This boundary allows the same TUI to run against:
 - `triggered_by`
 
 The UI does not hold or mutate real DAG objects. It builds lightweight run state
-from paginated structural snapshots and typed deltas. Logs, agent events, traces,
+from paginated structural snapshots and typed updates. Logs, agent events, traces,
 and encoded detail bodies are fetched through bounded, on-demand RPCs and merged
 only for the selected run. Control requests travel back through the provider.
 
@@ -429,7 +429,7 @@ The operator exposes these main RPCs through `OperatorService`:
   operator-assigned retention cursor; source-local event sequences remain in
   the fetched detail body.
 - `ReadTrace` and `ReadDetail` stream bounded chunks for immutable detail bodies.
-- `StreamRunDeltas` replays typed changes under an operator-instance epoch.
+- `StreamRunUpdates` replays typed changes under an operator-instance epoch.
   Stale cursors, restarts, and slow-consumer overflow require an explicit
   structural reset.
 

@@ -447,7 +447,7 @@ class TestOperatorSubscription:
 
     def test_subscribe_receives_updates(self):
         op = self._make_operator()
-        q = op.subscribe_run_deltas()
+        q = op.subscribe_run_updates()
 
         run_id = op.start_run("simple_workflow")
 
@@ -457,21 +457,21 @@ class TestOperatorSubscription:
         while time.monotonic() < deadline:
             try:
                 envelope = q.get(timeout=0.1)
-                updates.append(envelope.delta)
+                updates.append(envelope.update)
             except Exception:
                 pass
             run = op.get_run(run_id)
             if run and run.status == RunStatus.SUCCESS:
                 # Drain remaining
                 while not q.empty():
-                    updates.append(q.get_nowait().delta)
+                    updates.append(q.get_nowait().update)
                 break
 
-        op.unsubscribe_run_deltas(q)
+        op.unsubscribe_run_updates(q)
 
         # Every accepted mutation is delivered once in global sequence order.
         assert len(updates) >= 2
-        sequences = [delta.sequence for delta in updates]
+        sequences = [update.sequence for update in updates]
         assert sequences == sorted(sequences), "Sequences should be monotonically increasing"
 
     def test_replays_exact_missed_updates_within_retained_history(self):
@@ -485,21 +485,21 @@ class TestOperatorSubscription:
             run.status = RunStatus.SUCCESS
             op._notify_run(run)
 
-            assert op.subscribe_run_deltas(op.operator_instance_id, 3).empty()
-            replay = op.subscribe_run_deltas(op.operator_instance_id, 1)
+            assert op.subscribe_run_updates(op.operator_instance_id, 3).empty()
+            replay = op.subscribe_run_updates(op.operator_instance_id, 1)
 
             envelopes = [replay.get_nowait() for _ in range(2)]
-            assert [item.delta.sequence for item in envelopes] == [2, 3]
+            assert [item.update.sequence for item in envelopes] == [2, 3]
             assert [
-                item.delta.change.status
+                item.update.change.status
                 for item in envelopes
-                if isinstance(item.delta.change, RunStatusChanged)
+                if isinstance(item.update.change, RunStatusChanged)
             ] == [RunStatus.RUNNING, RunStatus.SUCCESS]
             assert replay.empty()
         finally:
             op.close()
 
-    def test_old_delta_cursor_requires_structural_reset(self):
+    def test_old_update_cursor_requires_structural_reset(self):
         op = Operator([], watch=False, schedule=False, stream_history_capacity=2)
         run = RunState(run_id="run_a", flow_name="flow")
         op._runs[run.run_id] = run
@@ -510,20 +510,20 @@ class TestOperatorSubscription:
             run.status = RunStatus.SUCCESS
             op._notify_run(run)
 
-            recovery = op.subscribe_run_deltas(op.operator_instance_id, 0)
+            recovery = op.subscribe_run_updates(op.operator_instance_id, 0)
             reset = recovery.get_nowait()
 
             assert reset.reset_required.history_floor == 2
             assert reset.reset_required.latest_sequence == 3
             assert recovery.empty()
-            assert [delta.sequence for delta in op._stream_history] == [2, 3]
+            assert [update.sequence for update in op._stream_history] == [2, 3]
         finally:
             op.close()
 
     def test_cursor_ahead_after_restart_requires_structural_reset(self):
         op = Operator([], watch=False, schedule=False)
         try:
-            recovery = op.subscribe_run_deltas("previous-operator", 99)
+            recovery = op.subscribe_run_updates("previous-operator", 99)
             reset = recovery.get_nowait()
 
             assert reset.operator_instance_id == op.operator_instance_id
@@ -543,7 +543,7 @@ class TestOperatorSubscription:
 
             def subscribe():
                 barrier.wait()
-                subscriptions.append(op.subscribe_run_deltas(op.operator_instance_id, 0))
+                subscriptions.append(op.subscribe_run_updates(op.operator_instance_id, 0))
 
             def notify():
                 barrier.wait()
@@ -560,7 +560,7 @@ class TestOperatorSubscription:
             queued = []
             while not subscriptions[0].empty():
                 queued.append(subscriptions[0].get_nowait())
-            assert [envelope.delta.sequence for envelope in queued] == [1]
+            assert [envelope.update.sequence for envelope in queued] == [1]
             op.close()
 
 

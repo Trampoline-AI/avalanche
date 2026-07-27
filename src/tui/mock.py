@@ -10,7 +10,7 @@ from typing import Callable
 from uuid import uuid4
 
 from .models import (
-    DetailDelta,
+    DetailUpdate,
     LogDetailAppended,
     LogEntry,
     LogLevel,
@@ -563,7 +563,7 @@ class MockStateProvider:
         self._runs: dict[str, RunState] = {}
         self._run_callbacks: list[Callable[[RunState], None]] = []
         self._log_callbacks: list[Callable[[LogEntry], None]] = []
-        self._detail_callbacks: list[Callable[[DetailDelta], None]] = []
+        self._detail_callbacks: list[Callable[[DetailUpdate], None]] = []
         self._stream_reset_callbacks: list[Callable[[StreamResetNotice], None]] = []
         self._threads: list[threading.Thread] = []
 
@@ -843,7 +843,7 @@ class MockStateProvider:
     def on_log(self, callback: Callable[[LogEntry], None]) -> None:
         self._log_callbacks.append(callback)
 
-    def on_detail_update(self, callback: Callable[[DetailDelta], None]) -> None:
+    def on_detail_update(self, callback: Callable[[DetailUpdate], None]) -> None:
         self._detail_callbacks.append(callback)
 
     def start_stream(self) -> None:

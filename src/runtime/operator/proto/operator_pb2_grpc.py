@@ -26,7 +26,11 @@ if _version_not_supported:
 
 
 class OperatorServiceStub(object):
-    """── Service ─────────────────────────────────────────────
+    """Breaking migration: the previous full-state run APIs are replaced by bounded
+    summary, snapshot, detail, and typed update APIs below. Remote operators and
+    clients must upgrade together.
+
+    ── Service ─────────────────────────────────────────────
 
     """
 
@@ -86,15 +90,19 @@ class OperatorServiceStub(object):
                 request_serializer=operator__pb2.ReadDetailRequest.SerializeToString,
                 response_deserializer=operator__pb2.DetailChunk.FromString,
                 _registered_method=True)
-        self.StreamRunDeltas = channel.unary_stream(
-                '/avalanche.operator.OperatorService/StreamRunDeltas',
-                request_serializer=operator__pb2.StreamRunDeltasRequest.SerializeToString,
-                response_deserializer=operator__pb2.RunDeltaEnvelope.FromString,
+        self.StreamRunUpdates = channel.unary_stream(
+                '/avalanche.operator.OperatorService/StreamRunUpdates',
+                request_serializer=operator__pb2.StreamRunUpdatesRequest.SerializeToString,
+                response_deserializer=operator__pb2.RunUpdateEnvelope.FromString,
                 _registered_method=True)
 
 
 class OperatorServiceServicer(object):
-    """── Service ─────────────────────────────────────────────
+    """Breaking migration: the previous full-state run APIs are replaced by bounded
+    summary, snapshot, detail, and typed update APIs below. Remote operators and
+    clients must upgrade together.
+
+    ── Service ─────────────────────────────────────────────
 
     """
 
@@ -158,7 +166,7 @@ class OperatorServiceServicer(object):
         context.set_details('Method not implemented!')
         raise NotImplementedError('Method not implemented!')
 
-    def StreamRunDeltas(self, request, context):
+    def StreamRunUpdates(self, request, context):
         """Missing associated documentation comment in .proto file."""
         context.set_code(grpc.StatusCode.UNIMPLEMENTED)
         context.set_details('Method not implemented!')
@@ -217,10 +225,10 @@ def add_OperatorServiceServicer_to_server(servicer, server):
                     request_deserializer=operator__pb2.ReadDetailRequest.FromString,
                     response_serializer=operator__pb2.DetailChunk.SerializeToString,
             ),
-            'StreamRunDeltas': grpc.unary_stream_rpc_method_handler(
-                    servicer.StreamRunDeltas,
-                    request_deserializer=operator__pb2.StreamRunDeltasRequest.FromString,
-                    response_serializer=operator__pb2.RunDeltaEnvelope.SerializeToString,
+            'StreamRunUpdates': grpc.unary_stream_rpc_method_handler(
+                    servicer.StreamRunUpdates,
+                    request_deserializer=operator__pb2.StreamRunUpdatesRequest.FromString,
+                    response_serializer=operator__pb2.RunUpdateEnvelope.SerializeToString,
             ),
     }
     generic_handler = grpc.method_handlers_generic_handler(
@@ -231,7 +239,11 @@ def add_OperatorServiceServicer_to_server(servicer, server):
 
  # This class is part of an EXPERIMENTAL API.
 class OperatorService(object):
-    """── Service ─────────────────────────────────────────────
+    """Breaking migration: the previous full-state run APIs are replaced by bounded
+    summary, snapshot, detail, and typed update APIs below. Remote operators and
+    clients must upgrade together.
+
+    ── Service ─────────────────────────────────────────────
 
     """
 
@@ -506,7 +518,7 @@ class OperatorService(object):
             _registered_method=True)
 
     @staticmethod
-    def StreamRunDeltas(request,
+    def StreamRunUpdates(request,
             target,
             options=(),
             channel_credentials=None,
@@ -519,9 +531,9 @@ class OperatorService(object):
         return grpc.experimental.unary_stream(
             request,
             target,
-            '/avalanche.operator.OperatorService/StreamRunDeltas',
-            operator__pb2.StreamRunDeltasRequest.SerializeToString,
-            operator__pb2.RunDeltaEnvelope.FromString,
+            '/avalanche.operator.OperatorService/StreamRunUpdates',
+            operator__pb2.StreamRunUpdatesRequest.SerializeToString,
+            operator__pb2.RunUpdateEnvelope.FromString,
             options,
             channel_credentials,
             insecure,

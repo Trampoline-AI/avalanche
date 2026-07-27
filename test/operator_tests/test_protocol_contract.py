@@ -120,12 +120,12 @@ def test_detail_records_expose_only_bounded_metadata():
     assert "event_json" not in pb.AgentEventDescriptorMsg.DESCRIPTOR.fields_by_name
 
 
-def test_delta_envelope_distinguishes_changes_from_reset():
-    delta = pb.RunDeltaEnvelope(
+def test_update_envelope_distinguishes_changes_from_reset():
+    update = pb.RunUpdateEnvelope(
         operator_instance_id="operator-1",
-        delta=pb.RunDelta(
+        update=pb.RunUpdate(
             sequence=24,
-            node_status_changed=pb.NodeStatusChangedDelta(
+            node_status_changed=pb.NodeStatusChanged(
                 run_id="run-1",
                 node_id="agent_1",
                 status="success",
@@ -133,14 +133,46 @@ def test_delta_envelope_distinguishes_changes_from_reset():
             ),
         ),
     )
-    reset = pb.RunDeltaEnvelope(
+    reset = pb.RunUpdateEnvelope(
         operator_instance_id="operator-2",
         reset_required=pb.ResetRequired(history_floor=100, latest_sequence=200),
     )
 
-    assert delta.WhichOneof("payload") == "delta"
-    assert delta.delta.WhichOneof("change") == "node_status_changed"
+    assert update.WhichOneof("payload") == "update"
+    assert update.update.WhichOneof("change") == "node_status_changed"
     assert reset.WhichOneof("payload") == "reset_required"
+
+
+def test_run_update_is_a_sequenced_typed_change_record():
+    update_fields = pb.RunUpdate.DESCRIPTOR.fields_by_name
+    change_fields = pb.RunUpdate.DESCRIPTOR.oneofs_by_name["change"].fields
+    envelope_fields = pb.RunUpdateEnvelope.DESCRIPTOR.fields_by_name
+    payload_fields = pb.RunUpdateEnvelope.DESCRIPTOR.oneofs_by_name["payload"].fields
+
+    assert {name: field.number for name, field in update_fields.items()} == {
+        "sequence": 1,
+        "run_created": 2,
+        "run_status_changed": 3,
+        "node_status_changed": 4,
+        "log_appended": 5,
+        "agent_event_appended": 6,
+        "trace_finalized": 7,
+    }
+    assert [field.name for field in change_fields] == [
+        "run_created",
+        "run_status_changed",
+        "node_status_changed",
+        "log_appended",
+        "agent_event_appended",
+        "trace_finalized",
+    ]
+    assert "run" not in update_fields
+    assert {name: field.number for name, field in envelope_fields.items()} == {
+        "operator_instance_id": 1,
+        "update": 2,
+        "reset_required": 3,
+    }
+    assert [field.name for field in payload_fields] == ["update", "reset_required"]
 
 
 def test_operator_identity_is_stable_and_distinguishes_restarts():
@@ -165,10 +197,10 @@ def test_service_exposes_parallel_workstream_contracts():
         "ListLogs",
         "ListAgentEvents",
         "ReadTrace",
-        "StreamRunDeltas",
+        "StreamRunUpdates",
     } <= set(methods)
     assert methods["ReadTrace"].server_streaming is True
-    assert methods["StreamRunDeltas"].server_streaming is True
+    assert methods["StreamRunUpdates"].server_streaming is True
     assert methods["ReadDetail"].server_streaming is True
 
 
@@ -177,4 +209,4 @@ def test_legacy_full_state_rpcs_and_messages_are_absent():
     messages = pb.DESCRIPTOR.message_types_by_name
 
     assert {"ListRuns", "GetRun", "StreamUpdates"}.isdisjoint(methods)
-    assert {"RunStateMsg", "RunList", "RunUpdate"}.isdisjoint(messages)
+    assert {"RunStateMsg", "RunList"}.isdisjoint(messages)
