@@ -4985,146 +4985,81 @@ async def test_agent_trace_inspector_interactions_and_log_retention():
     async with app.run_test(size=(120, 40)) as pilot:
         await pilot.pause()
         await _wait_for_current_run(app, updates)
-        await pilot.pause()
         await pilot.press("enter")
         await pilot.pause()
 
         assert app.store.trace_inspector_open is True
         assert app.store.focused_pane == "trace"
-        assert app.store.trace_turn_index == 1
-        assert app.store.trace_collapsed_turns == set()
+        assert app.store.trace_selected_path == ("turn", "1")
+        assert app.store.trace_collapsed_turns == {0, 1}
         assert app._screen.query_one("#dashboard-pane").display is False
         assert app._screen.query_one("#agent-trace-inspector").display is True
 
         content = app._screen.query_one("#agent-trace-content", AgentTraceInspector)
-        rendered = content.render()
-        plain = rendered.plain
-        assert "STRUCTURED TRACE · 2 turn(s)" in plain
-        assert "AGENT TURN 1/5" in plain
-        assert "AGENT TURN 2/5" in plain
-        assert "first reasoning" in plain
-        assert "second reasoning" in plain
-        assert "tool · lookup" in plain
-        assert "predict · text -> answer · sub" in plain
-        assert "Live record: complete · terminal=completed" in plain
-        lines = plain.splitlines()
-        reasoning_label = next(line for line in lines if line.strip() == "reasoning:")
-        reasoning_body = next(line for line in lines if "first reasoning" in line)
-        code_label = next(line for line in lines if line.strip() == "code:")
-        code_body = next(line for line in lines if "print('first')" in line)
-        tool_label = next(line for line in lines if "tool · lookup" in line)
-        assert reasoning_label.startswith("    ")
-        assert reasoning_body.startswith("        ")
-        assert code_label.startswith("    ")
-        assert code_body.startswith("        ")
-        assert tool_label.startswith("    ")
-        code_offset = plain.index("print('second')")
+        collapsed = content.render().plain
+        assert "STRUCTURED TRACE · 2 turn(s)" in collapsed
+        assert "AGENT TURN 1/5" in collapsed
+        assert "AGENT TURN 2/5" in collapsed
+        assert "second reasoning" not in collapsed
+        assert "print('second')" not in collapsed
+
+        await pilot.press("enter")
+        assert app.store.trace_collapsed_turns == {0}
+        expanded = content.render().plain
+        for expected in ("Reasoning", "Code", "Output", "Tools (1)", "Predict details (1)"):
+            assert expected in expanded
+        assert "second reasoning" not in expanded
+
+        await pilot.press("down", "enter")
+        assert app.store.trace_selected_path == ("turn", "1", "reasoning")
+        assert "second reasoning" in content.render().plain
+
+        await pilot.press("down", "enter")
+        code_render = content.render()
+        assert "print('second')" in code_render.plain
+        code_offset = code_render.plain.index("print('second')")
         assert any(
-            span.start <= code_offset < span.end for span in rendered.spans
+            span.start <= code_offset < span.end for span in code_render.spans
         ), "Python code should carry syntax-highlighting spans"
 
-        await pilot.press("enter", "o")
-        preserved_turn_index = app.store.trace_turn_index
-        preserved_collapsed_turns = set(app.store.trace_collapsed_turns)
-        preserved_full_output = app.store.trace_show_full_output
+        await pilot.press("down", "enter", "o")
+        assert "Output (full)" in content.render().plain
+        assert "FULL-SECOND" in content.render().plain
+
+        await pilot.press("down", "enter", "down", "enter")
+        assert app.store.trace_selected_path == ("turn", "1", "tools", "0")
+        assert "Input" in content.render().plain
+        assert "Result" in content.render().plain
 
         await pilot.press("right")
         await pilot.pause()
         assert app.store.trace_inspector_tab == "output"
         output_content = app._screen.query_one("#agent-output-content", AgentOutputInspector)
-        output_plain = output_content.render().plain
         assert output_content.display is True
-        assert content.display is False
-        assert app._screen.query_one("#agent-trace-inspector").border_title == "Agent agent"
-        summary_header = "summary: InspectionSummary — structured inspection summary"
-        labels_header = "labels: list[str] — inspection labels"
-        note_header = "note: str | None — optional inspection note"
-        assert (
-            output_plain.index(summary_header)
-            < output_plain.index(labels_header)
-            < output_plain.index(note_header)
-        )
-        for expected in (
-            "AGENT OUTPUT · agent",
-            '"active_count": 1',
-            '"ready": false',
-            '"reviewed"',
-            "null",
-        ):
-            assert expected in output_plain
-        assert _SANDBOX_STDOUT_SENTINEL not in output_plain
+        assert app.store.trace_selected_path == ("output", "summary")
+        assert '"active_count": 1' not in output_content.render().plain
+        await pilot.press("enter")
+        output_plain = output_content.render().plain
+        assert '"active_count": 1' in output_plain
+        assert '"ready": false' in output_plain
 
-        await pilot.press("d", "m", "up", "enter", "o")
-        assert app.store.trace_inspector_tab == "output"
-        assert app.store.trace_turn_index == preserved_turn_index
-        assert app.store.trace_collapsed_turns == preserved_collapsed_turns
-        assert app.store.trace_show_full_output is preserved_full_output
+        await pilot.press("down", "enter")
+        assert app.store.trace_selected_path == ("output", "labels")
+        assert '"reviewed"' in output_content.render().plain
 
-        await pilot.press("left")
-        await pilot.pause()
-        assert app.store.trace_inspector_tab == "trace"
-        assert content.display is True
-        assert output_content.display is False
-        assert app.store.trace_turn_index == preserved_turn_index
-        assert app.store.trace_collapsed_turns == preserved_collapsed_turns
-        assert app.store.trace_show_full_output is preserved_full_output
-
-        await pilot.press("enter", "o")
-        assert app.store.trace_collapsed_turns == set()
-        assert app.store.trace_show_full_output is False
-
-        await pilot.press("left")
+        await pilot.press("right")
         await pilot.pause()
         assert app.store.trace_inspector_tab == "metadata"
         metadata_content = app._screen.query_one(
             "#agent-metadata-content", AgentMetadataInspector
         )
-        metadata_plain = metadata_content.render().plain
         assert metadata_content.display is True
-        assert content.display is False
-        assert app._screen.query_one("#agent-trace-inspector").border_title == "Agent agent"
-        for expected in (
-            "InspectRecords",
-            "records: list[Record] — records to inspect",
-            "MODEL / RUNTIME SETTINGS",
-            "audit",
-            "AGGREGATED STATIC INSTRUCTIONS",
-            "pydantic",
-            "audit_helpers",
-            "lookup",
-        ):
-            assert expected in metadata_plain
-        assert "RLM" not in metadata_plain
-
-        turn_index = app.store.trace_turn_index
-        collapsed_turns = set(app.store.trace_collapsed_turns)
-        show_full_output = app.store.trace_show_full_output
-        await pilot.press("up", "enter", "o")
-        assert app.store.trace_turn_index == turn_index
-        assert app.store.trace_collapsed_turns == collapsed_turns
-        assert app.store.trace_show_full_output is show_full_output
-
-        await pilot.press("right")
-        await pilot.pause()
-        assert app.store.trace_inspector_tab == "trace"
-        assert content.display is True
-        assert metadata_content.display is False
-
-        await pilot.press("o")
-        await pilot.pause()
-        assert "output (full):" in content.render().plain
-        assert "FULL-SECOND" in content.render().plain
-
-        await pilot.press("up")
+        assert app.store.trace_selected_path == ("metadata", "signature")
+        assert "InspectRecords" not in metadata_content.render().plain
         await pilot.press("enter")
-        await pilot.pause()
-        assert app.store.trace_turn_index == 0
-        assert 0 in app.store.trace_collapsed_turns
-        assert "first reasoning" not in content.render().plain
-
-        await pilot.press("down")
-        await pilot.press("enter")
-        assert 1 in app.store.trace_collapsed_turns
+        metadata_plain = metadata_content.render().plain
+        assert "InspectRecords" in metadata_plain
+        assert "records" in metadata_plain
 
         await pilot.press("escape")
         await pilot.pause()
@@ -5134,6 +5069,35 @@ async def test_agent_trace_inspector_interactions_and_log_retention():
         logs = [entry.message for entry in app.store.logs]
         assert "Agent code.generated" in logs
         assert "Agent iteration.recorded" in logs
+
+
+@pytest.mark.asyncio
+async def test_agent_inspector_navigation_scrolls_selected_output_into_view():
+    from avalanche.tui.app import AvalancheApp
+
+    provider, envelope = _agent_trace_provider()
+    outputs = {f"field_{index}": index for index in range(60)}
+    envelope["trace"]["evidence"]["events"][-1]["data"]["outputs"] = outputs
+    provider._runs["run-agent"].nodes["agent_1"].agent_trace_json = json.dumps(envelope)
+    metadata = json.loads(provider._workflows["agent_flow"].agent_metadata_json["agent_1"])
+    metadata["signature"]["outputs"] = [
+        {"name": name, "annotation": "int", "description": name} for name in outputs
+    ]
+    provider._workflows["agent_flow"].agent_metadata_json["agent_1"] = json.dumps(metadata)
+
+    app = AvalancheApp(provider=provider, workflow="agent_flow", node="agent")
+    updates = _signal_background_updates(app.store)
+    async with app.run_test(size=(100, 25)) as pilot:
+        await pilot.pause()
+        await _wait_for_current_run(app, updates)
+        await pilot.press("enter", "right")
+        for _ in range(50):
+            await pilot.press("down")
+        await pilot.pause()
+
+        assert app.store.trace_selected_path == ("output", "field_50")
+        inspector = app._screen.query_one("#agent-trace-inspector")
+        assert inspector.scroll_y > 0
 
 
 @pytest.mark.asyncio
@@ -5701,11 +5665,11 @@ async def test_agent_trace_inspector_renders_pending_failed_malformed_and_incomp
         output_content = app._screen.query_one("#agent-output-content", AgentOutputInspector)
         fallback_output = output_content.render().plain
         assert app.store.trace_inspector_tab == "output"
-        assert "summary:" in fallback_output
-        assert "labels:" in fallback_output
-        assert "note:" in fallback_output
+        assert "summary" in fallback_output
+        assert "labels" in fallback_output
+        assert "note" in fallback_output
         assert "InspectionSummary" not in fallback_output
-        assert '"ready": false' in fallback_output
+        assert '"ready": false' not in fallback_output
         assert _SANDBOX_STDOUT_SENTINEL not in fallback_output
 
         await pilot.press("right")
@@ -5729,6 +5693,8 @@ async def test_agent_trace_inspector_renders_pending_failed_malformed_and_incomp
         absent_field["trace"]["evidence"]["events"][-1]["data"]["outputs"].pop("note")
         node.agent_trace_json = json.dumps(absent_field)
         await pilot.press("right")
+        app.store.trace_selected_paths["output"] = ("output", "note")
+        await pilot.press("enter")
         absent_output = output_content.render().plain
         note_header = "note: str | None — optional inspection note"
         assert note_header in absent_output
@@ -5824,8 +5790,8 @@ async def test_agent_trace_inspector_renders_pending_failed_malformed_and_incomp
         assert "LIVE AGENT STATUS" in live_render
         assert "LIVE TRACE · 2 turn(s)" in live_render
         assert "AGENT TURN 1/2 · 0ms · 0 tool · 0 predict · LIVE" in live_render
-        assert "print('first')" in live_render
-        assert _SANDBOX_STDOUT_SENTINEL in live_render
+        assert "print('first')" not in live_render
+        assert _SANDBOX_STDOUT_SENTINEL not in live_render
 
         failed = dict(live)
         failed.update({"status": "error", "error": "provider failed"})

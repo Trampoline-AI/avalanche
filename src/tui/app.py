@@ -720,9 +720,10 @@ class AvalancheApp(App):
         elif pane == "dag":
             self.store.move_nav(0, -1)
             self._refresh_widgets()
-        elif pane == "trace" and self.store.trace_inspector_tab == "trace":
+        elif pane == "trace":
             self.store.move_trace_turn(-1)
             self._refresh_widgets()
+            self._scroll_trace_selection_into_view()
         elif pane == "run-history":
             self.store.select_prev_run()
             self._refresh_widgets()
@@ -742,9 +743,10 @@ class AvalancheApp(App):
         elif pane == "dag":
             self.store.move_nav(0, 1)
             self._refresh_widgets()
-        elif pane == "trace" and self.store.trace_inspector_tab == "trace":
+        elif pane == "trace":
             self.store.move_trace_turn(1)
             self._refresh_widgets()
+            self._scroll_trace_selection_into_view()
         elif pane == "run-history":
             self.store.select_next_run()
             self._refresh_widgets()
@@ -821,6 +823,26 @@ class AvalancheApp(App):
             pass
         self._refresh_widgets()
 
+    def _scroll_trace_selection_into_view(self) -> None:
+        """Keep hierarchy selection visible without forcing a viewport redraw."""
+        if not self._screen:
+            return
+        try:
+            if self.store.trace_inspector_tab == "trace":
+                self._screen.query_one(
+                    "#agent-trace-content", AgentTraceInspector
+                ).scroll_selected_into_view()
+            elif self.store.trace_inspector_tab == "output":
+                self._screen.query_one(
+                    "#agent-output-content", AgentOutputInspector
+                ).scroll_selected_into_view()
+            else:
+                self._screen.query_one(
+                    "#agent-metadata-content", AgentMetadataInspector
+                ).scroll_selected_into_view()
+        except Exception:
+            pass
+
     def _move_trace_inspector_tab(self, delta: int) -> None:
         self.store.move_trace_inspector_tab(delta)
         self._refresh_widgets()
@@ -847,9 +869,10 @@ class AvalancheApp(App):
         """Enter: activate the focused item or collapse the selected agent turn."""
         if self.store.focused_pane == "sidebar":
             self._screen.query_one("#sidebar", Sidebar).activate_cursor()
-        elif self.store.focused_pane == "trace" and self.store.trace_inspector_tab == "trace":
+        elif self.store.focused_pane == "trace":
             self.store.toggle_trace_turn()
             self._refresh_widgets()
+            self._scroll_trace_selection_into_view()
         elif self.store.focused_pane == "dag" and self.store.open_trace_inspector():
             self._hydrate_selected_trace()
             self._refresh_widgets()
@@ -1016,6 +1039,7 @@ class AvalancheApp(App):
             event.prevent_default()
             event.stop()
             self._refresh_widgets()
+            self._scroll_trace_selection_into_view()
             return
 
         # Leader key: space → {e}

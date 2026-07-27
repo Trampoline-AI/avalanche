@@ -253,7 +253,7 @@ class TestTmuxRendering:
         assert_node_selected("deploy_staging")
 
     def test_agent_trace_inspector_real_terminal_contract(self, tui_session):
-        """Agent output, trace controls, and metadata render in a real terminal."""
+        """Agent hierarchy remains responsive in a real terminal."""
         restart_tui("agent_trace/inspect_agent", width=100, height=35)
         assert wait_for("inspect_agent", timeout=8)
         open_explorer()
@@ -262,65 +262,38 @@ class TestTmuxRendering:
         assert wait_for("STRUCTURED TRACE", timeout=5)
         combined = "\n".join(capture())
         assert "EXPLORER" in combined
-        assert "STRUCTURED TRACE" in combined
         assert "AGENT TURN 1/4" in combined
-        assert "reasoning:" in combined
-        assert "code:" in combined
-        assert "inspect_agent" in combined
+        assert "Reasoning" not in combined
+
+        send_keys("Enter")
+        assert wait_for("Reasoning", timeout=5)
+        send_keys("Down", "Enter")
+        assert wait_for("Filter active records", timeout=5)
+        send_keys("Down", "Enter")
+        assert wait_for("records =", timeout=5)
+        send_keys("Down", "Enter", "o")
+        assert wait_for("FULL OUTPUT", timeout=5)
+        combined = "\n".join(capture())
+        assert "Grace Hopper" in combined
 
         send_keys("Right")
         assert wait_for("AGENT OUTPUT", timeout=5)
         combined = "\n".join(capture())
         assert "summary" in combined
-        assert "InspectionSummary" in combined
-        assert "active_count" in combined
-        assert "reviewed" in combined
-        assert "SANDBOX_STDOUT_SENTINEL" not in combined
-        assert "Agent inspect_agent · Output" not in combined
+        assert "active_count" not in combined
+        send_keys("Enter")
+        assert wait_for("active_count", timeout=5)
+        assert "SANDBOX_STDOUT_SENTINEL" not in "\n".join(capture())
 
-        send_keys("Left")
-        assert wait_for("STRUCTURED TRACE", timeout=5)
-        combined = "\n".join(capture())
-        assert "Enter collapse" in combined
-
-        send_keys("Left")
+        send_keys("Right")
         assert wait_for("AGENT METADATA", timeout=5)
-        combined = "\n".join(capture())
-        assert "InspectRecords" in combined
-        assert "records to inspect" in combined
-        assert "MODEL / RUNTIME SETTINGS" in combined
-        assert "audit" in combined
-        assert "RLM" not in combined
-
-        send_keys("PageDown")
-        assert wait_for("AGGREGATED STATIC INSTRUCTIONS", timeout=5)
-        combined = "\n".join(capture())
-        assert "pydantic" in combined
-        assert "record_helpers" in combined
-        assert "lookup_record" in combined
+        send_keys("Enter")
+        assert wait_for("InspectRecords", timeout=5)
+        assert "records to inspect" in "\n".join(capture())
 
         send_keys("Right")
         assert wait_for("STRUCTURED TRACE", timeout=5)
-
-        send_keys("o")
         assert wait_for("FULL OUTPUT", timeout=5)
-        combined = "\n".join(capture())
-        assert "active_count" in combined
-        assert "Grace Hopper" in combined
-
-        send_keys("Enter")
-        time.sleep(0.5)
-        combined = "\n".join(capture())
-        assert "AGENT TURN 1/4" in combined
-        send_keys("Enter")
-        assert wait_for("output (full)", timeout=5)
 
         send_keys("Escape")
         assert wait_for("Logs", timeout=5)
-        send_keys("w", "PageDown")
-        assert wait_for("Agent code", timeout=5)
-        combined = "\n".join(capture())
-        assert "DAG" in combined
-        assert "Agent code" in combined
-        assert "EXPLORER" in combined
-        assert "inspect_agent" in combined

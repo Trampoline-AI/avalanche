@@ -303,6 +303,13 @@ class UIStore:
         self.trace_inspector_tab: TraceInspectorTab = "trace"
         self.trace_turn_index: int = 0
         self.trace_collapsed_turns: set[int] = set()
+        self.trace_expanded_items: set[tuple[str, ...]] = set()
+        self.trace_selected_paths: dict[TraceInspectorTab, tuple[str, ...] | None] = {
+            tab: None for tab in _TRACE_INSPECTOR_TABS
+        }
+        self._trace_known_turn_count: int = 0
+        self.trace_hierarchy_revision: int = 0
+
         self.trace_show_full_output: bool = False
 
         # ── Search ─────────────────────────────────────────────────
@@ -466,6 +473,11 @@ class UIStore:
         return workflow.agent_metadata_json.get(node_id)
 
     @property
+    def selected_agent_metadata_content_token(self) -> str:
+        """Stable metadata source token for virtual inspector body caches."""
+        return self.selected_agent_metadata_json or ""
+
+    @property
     def selected_agent_metadata(self) -> dict | None:
         metadata_json = self.selected_agent_metadata_json
         if not metadata_json:
@@ -489,6 +501,15 @@ class UIStore:
         except (TypeError, ValueError):
             return None
         return envelope if isinstance(envelope, dict) else None
+
+    @property
+    def selected_agent_trace_content_token(self) -> str:
+        """Stable trace source token for virtual inspector body caches."""
+        node_id = self.selected_agent_node_id
+        if node_id is None or self.current_run is None:
+            return ""
+        state = self.current_run.nodes.get(node_id)
+        return "" if state is None else state.agent_trace_json or ""
 
     @property
     def selected_agent_events(self) -> list[dict]:
@@ -557,11 +578,16 @@ class UIStore:
         envelope = self.selected_agent_trace_envelope
         trace = envelope.get("trace") if envelope is not None else None
         if not isinstance(trace, dict):
-            return self.selected_agent_live_steps
-        steps = trace.get("steps")
-        if not isinstance(steps, list):
-            return []
-        return [step for step in steps if isinstance(step, dict)]
+            steps = self.selected_agent_live_steps
+        else:
+            raw_steps = trace.get("steps")
+            steps = (
+                [step for step in raw_steps if isinstance(step, dict)]
+                if isinstance(raw_steps, list)
+                else []
+            )
+        self._reconcile_trace_turns(len(steps))
+        return steps
 
     @property
     def selected_agent_live_steps(self) -> list[dict]:
@@ -1380,6 +1406,128 @@ class UIStore:
 
     # ── Mutation: node selection / navigation ──────────────────────
 
+    @property
+    def trace_selected_path(self) -> tuple[str, ...] | None:
+        """Selected visible hierarchy item on the active inspector tab."""
+        return self.trace_selected_paths[self.trace_inspector_tab]
+
+    def trace_inspector_navigation_paths(self) -> list[tuple[str, ...]]:
+        """Return visible, expandable hierarchy entries without rendering bodies."""
+        if self.trace_inspector_tab == "trace":
+            return self._trace_navigation_paths()
+        if self.trace_inspector_tab == "output":
+            outputs = self.selected_agent_outputs
+            if outputs is None:
+                return []
+            metadata = self.selected_agent_metadata
+            signature = metadata.get("signature") if isinstance(metadata, dict) else None
+            declared = signature.get("outputs") if isinstance(signature, dict) else None
+            declared_names = (
+                [
+                    field["name"]
+                    for field in declared
+                    if isinstance(field, dict) and isinstance(field.get("name"), str)
+                ]
+                if isinstance(declared, list)
+                else []
+            )
+            names = declared_names or list(outputs)
+            names.extend(name for name in outputs if name not in names)
+            return [("output", name) for name in names]
+        metadata = self.selected_agent_metadata
+        if metadata is None:
+            return []
+        return [
+            ("metadata", key)
+            for key in (
+                "signature",
+                "runtime",
+                "skills",
+                "aggregated_static_instructions",
+                "packages",
+                "modules",
+                "tools",
+            )
+        ]
+
+    def _touch_trace_hierarchy(self) -> None:
+        self.trace_hierarchy_revision += 1
+
+    def _reconcile_trace_turns(self, turn_count: int) -> None:
+        """Collapse only newly observed streamed or hydrated turns."""
+        if not self.trace_inspector_open:
+            return
+        if turn_count == self._trace_known_turn_count:
+            return
+        if turn_count > self._trace_known_turn_count:
+            self.trace_collapsed_turns.update(range(self._trace_known_turn_count, turn_count))
+        elif turn_count < self._trace_known_turn_count:
+            self.trace_collapsed_turns.intersection_update(range(turn_count))
+            self.trace_expanded_items = {
+                path
+                for path in self.trace_expanded_items
+                if path[0] != "turn" or int(path[1]) < turn_count
+            }
+            selected = self.trace_selected_paths["trace"]
+            if (
+                selected is not None
+                and selected[0] == "turn"
+                and int(selected[1]) >= turn_count
+            ):
+                self.trace_selected_paths["trace"] = (
+                    ("turn", str(turn_count - 1)) if turn_count else None
+                )
+        self._trace_known_turn_count = turn_count
+        self._touch_trace_hierarchy()
+
+    def _trace_navigation_paths(self) -> list[tuple[str, ...]]:
+        paths: list[tuple[str, ...]] = []
+        for index, step in enumerate(self.selected_agent_steps):
+            turn = ("turn", str(index))
+            paths.append(turn)
+            if index in self.trace_collapsed_turns:
+                continue
+            paths.extend(turn + (section,) for section in ("reasoning", "code", "output"))
+            tools = turn + ("tools",)
+            paths.append(tools)
+            calls = step.get("tool_calls")
+            if tools in self.trace_expanded_items and isinstance(calls, list):
+                for call_index, call in enumerate(calls):
+                    if not isinstance(call, dict):
+                        continue
+                    tool = tools + (str(call_index),)
+                    paths.append(tool)
+                    if tool in self.trace_expanded_items:
+                        paths.extend((tool + ("input",), tool + ("result",)))
+            predict = turn + ("predict",)
+            paths.append(predict)
+            groups = step.get("predict_calls")
+            if predict in self.trace_expanded_items and isinstance(groups, list):
+                for group_index, group in enumerate(groups):
+                    if not isinstance(group, dict):
+                        continue
+                    group_path = predict + (str(group_index),)
+                    paths.append(group_path)
+                    if group_path not in self.trace_expanded_items:
+                        continue
+                    calls = group.get("calls")
+                    if not isinstance(calls, list):
+                        continue
+                    for call_index, call in enumerate(calls):
+                        if not isinstance(call, dict):
+                            continue
+                        call_path = group_path + (str(call_index),)
+                        paths.append(call_path)
+                        if call_path in self.trace_expanded_items:
+                            paths.extend((call_path + ("input",), call_path + ("output",)))
+            paths.append(turn + ("metadata",))
+        return paths
+
+    def _set_trace_selection(self, path: tuple[str, ...] | None) -> None:
+        self.trace_selected_paths[self.trace_inspector_tab] = path
+        if path is not None and path[0] == "turn":
+            self.trace_turn_index = int(path[1])
+
     def open_trace_inspector(self) -> bool:
         if self.selected_agent_node_id is None:
             return False
@@ -1388,8 +1536,15 @@ class UIStore:
         self.focused_pane = "trace"
         steps = self.selected_agent_steps
         self.trace_turn_index = max(0, len(steps) - 1)
-        self.trace_collapsed_turns.clear()
+        self.trace_collapsed_turns = set(range(len(steps)))
+        self._trace_known_turn_count = len(steps)
+        self.trace_expanded_items.clear()
+        self.trace_selected_paths = {tab: None for tab in _TRACE_INSPECTOR_TABS}
+        if steps:
+            self._set_trace_selection(("turn", str(self.trace_turn_index)))
         self.trace_show_full_output = False
+        self._touch_trace_hierarchy()
+
         return True
 
     def close_trace_inspector(self) -> None:
@@ -1397,7 +1552,12 @@ class UIStore:
         self.trace_inspector_tab = "trace"
         self.trace_turn_index = 0
         self.trace_collapsed_turns.clear()
+        self._trace_known_turn_count = 0
+        self.trace_expanded_items.clear()
+        self.trace_selected_paths = {tab: None for tab in _TRACE_INSPECTOR_TABS}
         self.trace_show_full_output = False
+        self._touch_trace_hierarchy()
+
         if self.focused_pane == "trace":
             self.focused_pane = "dag"
 
@@ -1408,23 +1568,46 @@ class UIStore:
         self.trace_inspector_tab = _TRACE_INSPECTOR_TABS[
             (index + delta) % len(_TRACE_INSPECTOR_TABS)
         ]
+        if self.trace_selected_path is None:
+            paths = self.trace_inspector_navigation_paths()
+            self._set_trace_selection(paths[0] if paths else None)
 
     def move_trace_turn(self, delta: int) -> None:
-        steps = self.selected_agent_steps
-        if not steps:
-            self.trace_turn_index = 0
+        """Move through visible hierarchy entries on whichever tab is active."""
+        paths = self.trace_inspector_navigation_paths()
+        if not paths:
+            self._set_trace_selection(None)
             return
-        self.trace_turn_index = min(len(steps) - 1, max(0, self.trace_turn_index + delta))
+        selected = self.trace_selected_path
+        if selected not in paths:
+            self._set_trace_selection(paths[0])
+            return
+        index = paths.index(selected)
+        self._set_trace_selection(paths[min(len(paths) - 1, max(0, index + delta))])
 
     def toggle_trace_turn(self) -> None:
-        index = self.trace_turn_index
-        if index in self.trace_collapsed_turns:
-            self.trace_collapsed_turns.remove(index)
-        elif self.selected_agent_steps:
-            self.trace_collapsed_turns.add(index)
+        """Toggle the selected expandable hierarchy item."""
+        path = self.trace_selected_path
+        if path is None or path not in self.trace_inspector_navigation_paths():
+            return
+        if path[0] == "turn" and len(path) == 2:
+            index = int(path[1])
+            if index in self.trace_collapsed_turns:
+                self.trace_collapsed_turns.remove(index)
+            else:
+                self.trace_collapsed_turns.add(index)
+            self._touch_trace_hierarchy()
+
+            return
+        if path in self.trace_expanded_items:
+            self.trace_expanded_items.remove(path)
+        else:
+            self.trace_expanded_items.add(path)
+        self._touch_trace_hierarchy()
 
     def toggle_trace_full_output(self) -> None:
         self.trace_show_full_output = not self.trace_show_full_output
+        self._touch_trace_hierarchy()
 
     def select_node(self, node: DagNode) -> None:
         if self.trace_inspector_open and (
