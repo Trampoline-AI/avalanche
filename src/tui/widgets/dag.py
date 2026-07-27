@@ -6,6 +6,17 @@ from rich.text import Text
 from textual.widgets import Static
 
 from ..dag_layout import DagNode, render_dag_rich
+from ..theme import AGENT_MARKER, AGENT_STYLE, DIM_STYLE
+
+
+def _dag_hint(nodes: list[DagNode]) -> Text:
+    """Describe DAG selection and agent inspection controls."""
+    hint = Text("Click or ↑↓←→ select node", DIM_STYLE)
+    if any(node.is_agent for node in nodes):
+        hint.append("  •  Enter inspect selected agent step  •  ", DIM_STYLE)
+        hint.append(f"{AGENT_MARKER} agent step", AGENT_STYLE)
+    return hint
+
 
 
 class DagWidget(Static, can_focus=False):
@@ -27,6 +38,8 @@ class DagWidget(Static, can_focus=False):
             store.dag, store.node_statuses, store.frame,
             store.selected_node, store.node_elapsed,
         )
+        lines.append(_dag_hint(store.all_nodes))
+
 
         # Build hit regions from the plain text of each line.
         # Use _render_row to match each node only on its visual row,

@@ -14,6 +14,8 @@ from rich.text import Text
 
 from .models import NodeStatus, WorkflowInfo, display_name_from_id
 from .theme import (
+    AGENT_MARKER,
+    AGENT_STYLE,
     ARROW_STYLE,
     BRACKET_STYLE,
     DIM_STYLE,
@@ -37,6 +39,7 @@ class DagNode:
     name: str  # node_id — unique graph identity (e.g. "fetch_orders_1")
     node_type: str  # "source" | "step" | "dest" | "virtual"
     display_name: str = ""  # human-readable label (e.g. "fetch_orders")
+    is_agent: bool = False
     col: int = 0
     row: int = 0
 
@@ -167,6 +170,7 @@ def workflow_to_layout(info: WorkflowInfo) -> tuple[SeqGroup, list[DagNode]]:
 
     level = _topo_depth(clean_graph, info.node_ids)
     node_order = {nid: i for i, nid in enumerate(info.node_ids)}
+    agent_node_ids = frozenset(info.agent_node_ids)
 
     all_nodes: list[DagNode] = []
     roots = [nid for nid in info.node_ids if not parents_of.get(nid)]
@@ -174,7 +178,12 @@ def workflow_to_layout(info: WorkflowInfo) -> tuple[SeqGroup, list[DagNode]]:
     def make_node(nid: str) -> DagNode:
         nt = node_types.get(nid, "step")
         dname = info.display_names.get(nid) or display_name_from_id(nid)
-        dn = DagNode(name=nid, node_type=nt, display_name=dname)
+        dn = DagNode(
+            name=nid,
+            node_type=nt,
+            display_name=dname,
+            is_agent=nid in agent_node_ids,
+        )
         all_nodes.append(dn)
         return dn
 
@@ -536,6 +545,8 @@ def plain_node_width(
     if node.virtual:
         return len(VIRTUAL_LABELS.get(node.name, node.name))
     w = 4 + len(node.display_name)  # " ○ name "
+    if node.is_agent:
+        w += 2  # " ◈"
     dur = _duration_label(elapsed, status)
     w += len(dur) + 3  # " (dur) " — space, parens, trailing space
     return w
@@ -600,12 +611,19 @@ def append_node(
         text.append(m, VIRTUAL_STYLE)
         return
     dur = _duration_label(elapsed, status)
+    agent_marker = f" {AGENT_MARKER}" if node.is_agent else ""
     if node is selected:
         sel = Style(bgcolor=ICE_STEEL, bold=True)
-        label = f" {m} {node.display_name} ({dur}) " if dur else f" {m} {node.display_name} "
+        label = (
+            f" {m}{agent_marker} {node.display_name} ({dur}) "
+            if dur
+            else f" {m}{agent_marker} {node.display_name} "
+        )
         text.append(label, Style(color=ICE_FROST) + sel)
     else:
         text.append(f" {m}", style)
+        if node.is_agent:
+            text.append(agent_marker, AGENT_STYLE)
         text.append(f" {node.display_name} ", Style(color=ICE_FROST))
         if dur:
             text.append(f"({dur}) ", DIM_STYLE)
