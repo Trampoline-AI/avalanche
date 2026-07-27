@@ -13,7 +13,7 @@ from textual.widgets import Header
 
 from .dag_layout import DagNode
 from .mock import MockStateProvider
-from .models import RunState, TraceDetail, WorkflowInfo
+from .models import RunState, RunStatus, TraceDetail, WorkflowInfo
 from .screens.workflow_detail import WorkflowDetailScreen
 from .state import StateProvider, get_operator_reachability
 from .theme import AVALANCHE_THEME
@@ -70,6 +70,8 @@ class AvalancheApp(App):
         Binding("pagedown", "log_page_down", "PgDn", priority=True),
         ("s", "toggle_autoscroll", "Autoscroll"),
         ("w", "toggle_wrap", "Wrap"),
+        Binding("d", "toggle_dag", "DAG", priority=True),
+        Binding("l", "toggle_logs", "Logs", priority=True),
         ("enter", "activate", "Enter"),
     ]
 
@@ -103,6 +105,15 @@ class AvalancheApp(App):
             thread_name_prefix="avalanche-trace-hydration",
         )
         self._trace_hydration_closed = False
+        self._run_control_executor = ThreadPoolExecutor(
+            max_workers=1,
+            thread_name_prefix="avalanche-run-control",
+        )
+        self._cancel_run_requests: set[str] = set()
+        self._run_controls_closed = False
+        self._dag_visible = True
+        self._logs_visible = True
+        self._run_actions_menu_open = False
         self._trace_hydration_retry: dict[TraceHydrationKey, tuple[int, float]] = {}
         self._trace_hydration_context: TraceHydrationKey | None = None
         self._deep_link_workflow = workflow
@@ -155,6 +166,7 @@ class AvalancheApp(App):
         if self._trace_hydration_closed:
             return
         self._trace_hydration_closed = True
+        self._run_controls_closed = True
         self.store.request_shutdown()
         close = getattr(self.store.provider, "close", None)
         try:
@@ -163,6 +175,7 @@ class AvalancheApp(App):
         finally:
             self.store.shutdown()
             self._trace_hydration_executor.shutdown(wait=True, cancel_futures=True)
+            self._run_control_executor.shutdown(wait=True, cancel_futures=True)
 
     def _on_run_update_bg(self, run: RunState) -> None:
         """Called from background thread when a run state changes."""
@@ -192,6 +205,7 @@ class AvalancheApp(App):
 
     def _refresh_widgets(self) -> None:
         """Refresh all visible widgets to reflect current store state."""
+        self._normalize_focused_pane()
         if not self._screen:
             return
         try:
@@ -218,6 +232,10 @@ class AvalancheApp(App):
                 else "Agent step"
             )
             inspector.border_title = f"Agent {display_name}"
+        except Exception:
+            pass
+        try:
+            self._screen.sync_controls()
         except Exception:
             pass
         # Show/hide sidebar + grip, sync width
@@ -651,15 +669,45 @@ class AvalancheApp(App):
         self._sync_sidebar_focus()
         self._refresh_widgets()
 
+    def _visible_panes(self) -> list[str]:
+        """Return panes that can receive navigation in the current layout."""
+        if self.store.trace_inspector_open:
+            return ["trace"]
+
+        panes = ["run-history"]
+        if self._dag_visible:
+            panes.append("dag")
+        if self._logs_visible:
+            panes.append("log")
+        if self.store.sidebar_visible:
+            panes.insert(0, "sidebar")
+        return panes
+
+    def _normalize_focused_pane(self) -> None:
+        """Move focus out of collapsed dashboard panes."""
+        if self.store.focused_pane in {"sidebar", "trace"}:
+            return
+        panes = self._visible_panes()
+        if self.store.focused_pane not in panes:
+            self.store.focused_pane = panes[0]
+
+    def _cycle_visible_panes(self, direction: int) -> None:
+        """Cycle focus among panes visible in the current layout."""
+        panes = self._visible_panes()
+        if self.store.focused_pane not in panes:
+            self.store.focused_pane = panes[0]
+        current = panes.index(self.store.focused_pane)
+        self.store.focused_pane = panes[(current + direction) % len(panes)]
+
     # ── Pane focus ─────────────────────────────────────────────────
 
     def action_focus_next_pane(self) -> None:
-        self.store.cycle_pane(1)
+        self._cycle_visible_panes(1)
         self._sync_sidebar_focus()
         self._refresh_widgets()
 
     def action_focus_prev_pane(self) -> None:
-        self.store.cycle_pane(-1)
+        self._cycle_visible_panes(-1)
         self._sync_sidebar_focus()
         self._refresh_widgets()
 
@@ -839,9 +887,67 @@ class AvalancheApp(App):
         self._refresh_widgets()
 
     def action_start_run(self) -> None:
+        self._run_actions_menu_open = False
         if self.store.start_run_async():
             self._log_autoscroll = True
             self._refresh_widgets()
+
+    def can_cancel_selected_run(self) -> bool:
+        run = self.store.current_run
+        return (
+            run is not None
+            and run.status in {RunStatus.PENDING, RunStatus.RUNNING}
+            and run.run_id not in self._cancel_run_requests
+        )
+
+    def action_cancel_run(self) -> None:
+        """Request cancellation without blocking the Textual event loop."""
+        run = self.store.current_run
+        if run is None or not self.can_cancel_selected_run():
+            return
+
+        run_id = run.run_id
+        self._cancel_run_requests.add(run_id)
+        self._run_actions_menu_open = False
+        self._refresh_widgets()
+
+        def request_cancel() -> None:
+            error = ""
+            try:
+                self.store.provider.cancel_run(run_id)
+            except Exception as exc:
+                error = str(exc) or "Run failed to stop"
+            if not self._run_controls_closed:
+                self.call_from_thread(self._complete_cancel_run, run_id, error)
+
+        self._run_control_executor.submit(request_cancel)
+
+    def _complete_cancel_run(self, run_id: str, error: str) -> None:
+        """Apply the completed cancellation request on the UI thread."""
+        self._cancel_run_requests.discard(run_id)
+        if error:
+            self.store.run_error = error
+        self._refresh_widgets()
+
+    def action_toggle_run_actions_menu(self) -> None:
+        if self._screen is not None and self._screen.size.height <= 15:
+            return
+        self._run_actions_menu_open = not self._run_actions_menu_open
+        self._refresh_widgets()
+
+    def action_toggle_dag(self) -> None:
+        """d: hide or show the DAG without remounting it."""
+        self._dag_visible = not self._dag_visible
+        if not self._dag_visible and self.store.focused_pane == "dag":
+            self.store.focused_pane = "run-history"
+        self._refresh_widgets()
+
+    def action_toggle_logs(self) -> None:
+        """l: hide or show logs without remounting their content."""
+        self._logs_visible = not self._logs_visible
+        if not self._logs_visible and self.store.focused_pane == "log":
+            self.store.focused_pane = "run-history"
+        self._refresh_widgets()
 
     def action_toggle_autoscroll(self) -> None:
         """s: toggle log autoscroll."""

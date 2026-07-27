@@ -9,7 +9,7 @@ from textual.app import ComposeResult
 from textual.containers import Horizontal, ScrollableContainer, Vertical
 from textual.screen import Screen
 from textual.scrollbar import ScrollBar, ScrollBarRender
-from textual.widgets import Header, Static
+from textual.widgets import Button, Header, Static
 
 from ..widgets.agent_trace import (
     AgentMetadataInspector,
@@ -116,6 +116,7 @@ class _ThinScrollContainer(ScrollableContainer):
         sb.renderer = _HalfHeightScrollBarRender
         return sb
 
+
 class _DagScrollContainer(_ThinScrollContainer):
     """DAG viewport with cumulative, animated pointer scrolling."""
 
@@ -174,7 +175,6 @@ class _DagScrollContainer(_ThinScrollContainer):
             event.stop()
 
 
-
 class _TableScrollContainer(_ThinScrollContainer):
     """Scroll container for table panes with sticky header sync."""
 
@@ -184,7 +184,6 @@ class _TableScrollContainer(_ThinScrollContainer):
             self.screen._sync_header_for(self)
         except Exception:
             pass
-
 
 
 class _DagCenterBtn(Static):
@@ -211,6 +210,7 @@ class WorkflowDetailScreen(Screen):
     """Two-pane layout: sidebar on left, DAG + run history + logs on right."""
 
     AUTO_FOCUS = ""  # Disable auto-focus so DAG navigation works immediately
+    _control_state: tuple[bool, bool, bool, bool, bool, bool, int] | None = None
 
     CSS = """
     WorkflowDetailScreen {
@@ -248,6 +248,54 @@ class WorkflowDetailScreen(Screen):
         width: 100%;
         height: 100%;
     }
+    #dag-section, #log-section {
+        height: 2fr;
+    }
+    #dag-section.-collapsed, #log-section.-collapsed {
+        height: 1;
+    }
+    .pane-controls {
+        height: 1;
+        width: 100%;
+        background: $panel;
+    }
+    .pane-controls Button {
+        height: 1;
+        min-height: 1;
+        min-width: 0;
+        padding: 0 1;
+    }
+    .control-hint {
+        width: 1fr;
+        content-align: right middle;
+        color: $text-muted;
+    }
+    #run-toolbar {
+        dock: top;
+        height: 4;
+    }
+    #run-toolbar.-menu-open {
+        height: 8;
+    }
+    #run-controls {
+        height: 2;
+    }
+    #run-action-menu {
+        display: none;
+        height: 4;
+        background: $panel;
+    }
+    #run-action-menu.-open {
+        display: block;
+    }
+    #run-action-menu Button {
+        height: 1;
+        min-height: 1;
+        width: 100%;
+        min-width: 0;
+        padding: 0 1;
+    }
+
     #agent-trace-inspector {
         display: none;
     }
@@ -286,12 +334,30 @@ class WorkflowDetailScreen(Screen):
     /* ── Runs ── */
     #run-history {
         height: 1fr;
+        min-height: 8;
+    }
+    #run-history.-actions-open {
+        height: 12;
+        min-height: 12;
+    }
+    #run-history.-compact {
+        min-height: 6;
+    }
+    #run-history.-compact #run-history-content {
+        display: none;
     }
     .pane-header {
         dock: top;
         height: 2;
         width: 100%;
         background: $background;
+    }
+    #run-history-header {
+        dock: none;
+    }
+    #log-section.-compact {
+        height: 3;
+        min-height: 3;
     }
     /* ── Log panel ── */
     #log-panel {
@@ -345,18 +411,35 @@ class WorkflowDetailScreen(Screen):
                 with Vertical(id="dashboard-pane"):
                     with _TableScrollContainer(id="run-history") as rh:
                         rh.border_title = "Runs"
-                        yield Static(id="run-history-header", classes="pane-header")
+                        with Vertical(id="run-toolbar"):
+                            with Horizontal(id="run-controls", classes="pane-controls"):
+                                yield Button("Start run (r)", id="run-start-button")
+                                yield Button("Stop selected", id="run-stop-button")
+                                yield Button("Actions ▾", id="run-actions-button")
+                                yield Static("↑↓ select", classes="control-hint")
+                            with Vertical(id="run-action-menu"):
+                                yield Button("Start run (r)", id="run-menu-start-button")
+                                yield Button("Stop selected run", id="run-menu-stop-button")
+                            yield Static(id="run-history-header", classes="pane-header")
                         yield RunHistoryWidget(id="run-history-content")
-                    with _DagScrollContainer(id="dag-container") as dag_container:
-                        dag_container.border_title = "DAG"
-                        dag_container.styles.height = "2fr"
-                        yield DagWidget(id="dag-panel")
-                        yield _DagCenterBtn(" ⊡ center ", id="dag-center-btn")
-                    with Vertical(id="log-panel") as lp:
-                        lp.border_title = "Logs"
-                        lp.styles.height = "2fr"
-                        yield Static(id="log-header", classes="pane-header")
-                        yield LogWidget(id="log-content")
+                    with Vertical(id="dag-section"):
+                        with Horizontal(id="dag-controls", classes="pane-controls"):
+                            yield Button("Hide DAG (d)", id="dag-toggle-button")
+                            yield Static("collapse / restore", classes="control-hint")
+                        with _DagScrollContainer(id="dag-container") as dag_container:
+                            dag_container.border_title = "DAG"
+                            dag_container.styles.height = "1fr"
+                            yield DagWidget(id="dag-panel")
+                            yield _DagCenterBtn(" ⊡ center ", id="dag-center-btn")
+                    with Vertical(id="log-section"):
+                        with Horizontal(id="log-controls", classes="pane-controls"):
+                            yield Button("Hide Logs (l)", id="log-toggle-button")
+                            yield Static("collapse / restore", classes="control-hint")
+                        with Vertical(id="log-panel") as lp:
+                            lp.border_title = "Logs"
+                            lp.styles.height = "1fr"
+                            yield Static(id="log-header", classes="pane-header")
+                            yield LogWidget(id="log-content")
                 with _ThinScrollContainer(id="agent-trace-inspector") as inspector:
                     inspector.border_title = "Agent"
                     yield AgentTraceInspector(id="agent-trace-content")
@@ -374,6 +457,56 @@ class WorkflowDetailScreen(Screen):
             sidebar.styles.width = self.app.store.sidebar_width
         except Exception:
             pass
+
+    def sync_controls(self) -> None:
+        """Reflect app-owned control state without remounting pane content."""
+        app = self.app
+        dag_visible = app._dag_visible
+        logs_visible = app._logs_visible
+        can_start = (
+            app.store.current_workflow is not None and not app.store._start_run_in_flight
+        )
+        can_stop = app.can_cancel_selected_run()
+        compact_layout = self.size.height <= 15
+        menu_was_open = app._run_actions_menu_open
+        if compact_layout:
+            app._run_actions_menu_open = False
+        menu_open = app._run_actions_menu_open
+        control_state = (
+            dag_visible,
+            logs_visible,
+            can_start,
+            can_stop,
+            menu_open,
+            compact_layout,
+            self.size.height,
+        )
+        if control_state == self._control_state and not (compact_layout and menu_was_open):
+            return
+        self._control_state = control_state
+
+        self.query_one("#dag-section").set_class(not dag_visible, "-collapsed")
+        self.query_one("#dag-container").display = dag_visible
+        self.query_one("#dag-toggle-button", Button).label = (
+            "Hide DAG (d)" if dag_visible else "Show DAG (d)"
+        )
+        self.query_one("#log-section").set_class(not logs_visible, "-collapsed")
+        self.query_one("#log-panel").display = logs_visible
+        self.query_one("#log-toggle-button", Button).label = (
+            "Hide Logs (l)" if logs_visible else "Show Logs (l)"
+        )
+        self.query_one("#run-start-button", Button).disabled = not can_start
+        self.query_one("#run-stop-button", Button).disabled = not can_stop
+        menu_button = self.query_one("#run-actions-button", Button)
+        menu_button.disabled = compact_layout or (not can_start and not can_stop)
+        self.query_one("#log-section").set_class(compact_layout, "-compact")
+        self.query_one("#run-history").set_class(compact_layout, "-compact")
+        self.query_one("#run-toolbar").set_class(menu_open, "-menu-open")
+        self.query_one("#run-history").set_class(menu_open, "-actions-open")
+        menu_button.label = "Actions ▴" if menu_open else "Actions ▾"
+        self.query_one("#run-action-menu").set_class(menu_open, "-open")
+        self.query_one("#run-menu-start-button", Button).disabled = not can_start
+        self.query_one("#run-menu-stop-button", Button).disabled = not can_stop
 
     def _remount_dag(self) -> None:
         """Replace the DAG widget when workflow changes."""
@@ -434,6 +567,22 @@ class WorkflowDetailScreen(Screen):
                 self.app._refresh_widgets()
                 return
             widget = widget.parent
+
+    def on_button_pressed(self, event: Button.Pressed) -> None:
+        """Dispatch pane-local controls to the application actions."""
+        action_by_button = {
+            "dag-toggle-button": self.app.action_toggle_dag,
+            "log-toggle-button": self.app.action_toggle_logs,
+            "run-start-button": self.app.action_start_run,
+            "run-stop-button": self.app.action_cancel_run,
+            "run-actions-button": self.app.action_toggle_run_actions_menu,
+            "run-menu-start-button": self.app.action_start_run,
+            "run-menu-stop-button": self.app.action_cancel_run,
+        }
+        action = action_by_button.get(event.button.id)
+        if action is not None:
+            action()
+            event.stop()
 
     def on_sidebar_workflow_selected(self, event: Sidebar.WorkflowSelected) -> None:
         store = self.app.store
