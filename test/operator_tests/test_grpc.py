@@ -38,7 +38,7 @@ from avalanche.operator.models import (
     TraceDescriptor,
     WorkflowInfo,
 )
-from avalanche.operator.server import OperatorServicer, serve
+from avalanche.operator.server import serve
 from avalanche.runtime import File
 from runtime.operator._grpc import MAX_GRPC_MESSAGE_BYTES
 from runtime.operator.client import _DetailHydrationRaceError, _run_from_snapshot
@@ -66,31 +66,6 @@ def _unused_port():
     with socket.socket() as sock:
         sock.bind(("localhost", 0))
         return sock.getsockname()[1]
-
-
-def test_serve_uses_supplied_servicer_factory():
-    operator = Operator(
-        workflow_paths=[os.path.join(FIXTURES_DIR, "sample_workflows.py")],
-        schedule=False,
-        watch=False,
-    )
-    created_for = []
-
-    def servicer_factory(candidate):
-        created_for.append(candidate)
-        return OperatorServicer(candidate)
-
-    server = serve(
-        operator,
-        port=_unused_port(),
-        block=False,
-        servicer_factory=servicer_factory,
-    )
-    try:
-        assert created_for == [operator]
-    finally:
-        server.stop(grace=0).wait(timeout=1)
-        operator.close()
 
 
 def _wait_for_run_success(client, run_id):

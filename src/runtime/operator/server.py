@@ -8,7 +8,6 @@ import logging
 import queue
 import signal
 import threading
-from collections.abc import Callable
 from concurrent import futures
 from typing import Any
 
@@ -264,7 +263,6 @@ def serve(
     block: bool = True,
     *,
     host: str = DEFAULT_HOST,
-    servicer_factory: Callable[[Operator], pb_grpc.OperatorServiceServicer] | None = None,
 ) -> grpc.Server:
     """Start the gRPC server.
 
@@ -275,7 +273,6 @@ def serve(
         host: Explicit listen host. The loopback default limits reachability
             but does not authenticate callers. A non-loopback host requires an
             external trusted and authenticated boundary.
-        servicer_factory: Optional integration seam for extending selected RPCs.
 
     Returns:
         The gRPC server (useful for testing when block=False).
@@ -286,12 +283,7 @@ def serve(
             futures.ThreadPoolExecutor(max_workers=10),
             options=_BOUNDED_MESSAGE_OPTIONS,
         )
-        servicer = (
-            OperatorServicer(operator)
-            if servicer_factory is None
-            else servicer_factory(operator)
-        )
-        pb_grpc.add_OperatorServiceServicer_to_server(servicer, server)
+        pb_grpc.add_OperatorServiceServicer_to_server(OperatorServicer(operator), server)
         listen_address = _listen_address(host, port)
         if not _is_loopback_host(host):
             logger.warning(
