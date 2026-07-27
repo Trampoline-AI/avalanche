@@ -1,6 +1,6 @@
 # Internal Alpha Checklist
 
-Release candidate: `0.1.0-rc0`
+Release candidate: `0.1.0-rc2`
 
 Use this checklist from a fresh clone when validating the team handoff. The
 official artifact is the Git repository.

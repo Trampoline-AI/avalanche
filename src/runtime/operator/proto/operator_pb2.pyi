@@ -116,7 +116,7 @@ class ReadDetailRequest(_message.Message):
     body_token: str
     def __init__(self, body_token: _Optional[str] = ...) -> None: ...
 
-class StreamRunDeltasRequest(_message.Message):
+class StreamRunUpdatesRequest(_message.Message):
     __slots__ = ("operator_instance_id", "after_sequence")
     OPERATOR_INSTANCE_ID_FIELD_NUMBER: _ClassVar[int]
     AFTER_SEQUENCE_FIELD_NUMBER: _ClassVar[int]
@@ -410,7 +410,7 @@ class DetailChunk(_message.Message):
     eof: bool
     def __init__(self, chunk_index: _Optional[int] = ..., data: _Optional[bytes] = ..., eof: bool = ...) -> None: ...
 
-class RunCreatedDelta(_message.Message):
+class RunCreated(_message.Message):
     __slots__ = ("summary", "nodes")
     SUMMARY_FIELD_NUMBER: _ClassVar[int]
     NODES_FIELD_NUMBER: _ClassVar[int]
@@ -418,7 +418,7 @@ class RunCreatedDelta(_message.Message):
     nodes: _containers.RepeatedCompositeFieldContainer[NodeSnapshotMsg]
     def __init__(self, summary: _Optional[_Union[RunSummaryMsg, _Mapping]] = ..., nodes: _Optional[_Iterable[_Union[NodeSnapshotMsg, _Mapping]]] = ...) -> None: ...
 
-class RunStatusChangedDelta(_message.Message):
+class RunStatusChanged(_message.Message):
     __slots__ = ("run_id", "status", "started_at", "ended_at", "revision")
     RUN_ID_FIELD_NUMBER: _ClassVar[int]
     STATUS_FIELD_NUMBER: _ClassVar[int]
@@ -432,7 +432,7 @@ class RunStatusChangedDelta(_message.Message):
     revision: int
     def __init__(self, run_id: _Optional[str] = ..., status: _Optional[str] = ..., started_at: _Optional[float] = ..., ended_at: _Optional[float] = ..., revision: _Optional[int] = ...) -> None: ...
 
-class NodeStatusChangedDelta(_message.Message):
+class NodeStatusChanged(_message.Message):
     __slots__ = ("run_id", "node_id", "status", "started_at", "ended_at", "revision")
     RUN_ID_FIELD_NUMBER: _ClassVar[int]
     NODE_ID_FIELD_NUMBER: _ClassVar[int]
@@ -448,7 +448,7 @@ class NodeStatusChangedDelta(_message.Message):
     revision: int
     def __init__(self, run_id: _Optional[str] = ..., node_id: _Optional[str] = ..., status: _Optional[str] = ..., started_at: _Optional[float] = ..., ended_at: _Optional[float] = ..., revision: _Optional[int] = ...) -> None: ...
 
-class LogAppendedDelta(_message.Message):
+class LogAppended(_message.Message):
     __slots__ = ("run_id", "log")
     RUN_ID_FIELD_NUMBER: _ClassVar[int]
     LOG_FIELD_NUMBER: _ClassVar[int]
@@ -456,7 +456,7 @@ class LogAppendedDelta(_message.Message):
     log: LogRecordDescriptorMsg
     def __init__(self, run_id: _Optional[str] = ..., log: _Optional[_Union[LogRecordDescriptorMsg, _Mapping]] = ...) -> None: ...
 
-class AgentEventAppendedDelta(_message.Message):
+class AgentEventAppended(_message.Message):
     __slots__ = ("run_id", "node_id", "event")
     RUN_ID_FIELD_NUMBER: _ClassVar[int]
     NODE_ID_FIELD_NUMBER: _ClassVar[int]
@@ -466,7 +466,7 @@ class AgentEventAppendedDelta(_message.Message):
     event: AgentEventDescriptorMsg
     def __init__(self, run_id: _Optional[str] = ..., node_id: _Optional[str] = ..., event: _Optional[_Union[AgentEventDescriptorMsg, _Mapping]] = ...) -> None: ...
 
-class TraceFinalizedDelta(_message.Message):
+class TraceFinalized(_message.Message):
     __slots__ = ("run_id", "node_id", "trace")
     RUN_ID_FIELD_NUMBER: _ClassVar[int]
     NODE_ID_FIELD_NUMBER: _ClassVar[int]
@@ -476,7 +476,7 @@ class TraceFinalizedDelta(_message.Message):
     trace: TraceDescriptorMsg
     def __init__(self, run_id: _Optional[str] = ..., node_id: _Optional[str] = ..., trace: _Optional[_Union[TraceDescriptorMsg, _Mapping]] = ...) -> None: ...
 
-class RunDelta(_message.Message):
+class RunUpdate(_message.Message):
     __slots__ = ("sequence", "run_created", "run_status_changed", "node_status_changed", "log_appended", "agent_event_appended", "trace_finalized")
     SEQUENCE_FIELD_NUMBER: _ClassVar[int]
     RUN_CREATED_FIELD_NUMBER: _ClassVar[int]
@@ -486,13 +486,13 @@ class RunDelta(_message.Message):
     AGENT_EVENT_APPENDED_FIELD_NUMBER: _ClassVar[int]
     TRACE_FINALIZED_FIELD_NUMBER: _ClassVar[int]
     sequence: int
-    run_created: RunCreatedDelta
-    run_status_changed: RunStatusChangedDelta
-    node_status_changed: NodeStatusChangedDelta
-    log_appended: LogAppendedDelta
-    agent_event_appended: AgentEventAppendedDelta
-    trace_finalized: TraceFinalizedDelta
-    def __init__(self, sequence: _Optional[int] = ..., run_created: _Optional[_Union[RunCreatedDelta, _Mapping]] = ..., run_status_changed: _Optional[_Union[RunStatusChangedDelta, _Mapping]] = ..., node_status_changed: _Optional[_Union[NodeStatusChangedDelta, _Mapping]] = ..., log_appended: _Optional[_Union[LogAppendedDelta, _Mapping]] = ..., agent_event_appended: _Optional[_Union[AgentEventAppendedDelta, _Mapping]] = ..., trace_finalized: _Optional[_Union[TraceFinalizedDelta, _Mapping]] = ...) -> None: ...
+    run_created: RunCreated
+    run_status_changed: RunStatusChanged
+    node_status_changed: NodeStatusChanged
+    log_appended: LogAppended
+    agent_event_appended: AgentEventAppended
+    trace_finalized: TraceFinalized
+    def __init__(self, sequence: _Optional[int] = ..., run_created: _Optional[_Union[RunCreated, _Mapping]] = ..., run_status_changed: _Optional[_Union[RunStatusChanged, _Mapping]] = ..., node_status_changed: _Optional[_Union[NodeStatusChanged, _Mapping]] = ..., log_appended: _Optional[_Union[LogAppended, _Mapping]] = ..., agent_event_appended: _Optional[_Union[AgentEventAppended, _Mapping]] = ..., trace_finalized: _Optional[_Union[TraceFinalized, _Mapping]] = ...) -> None: ...
 
 class ResetRequired(_message.Message):
     __slots__ = ("history_floor", "latest_sequence")
@@ -502,12 +502,12 @@ class ResetRequired(_message.Message):
     latest_sequence: int
     def __init__(self, history_floor: _Optional[int] = ..., latest_sequence: _Optional[int] = ...) -> None: ...
 
-class RunDeltaEnvelope(_message.Message):
-    __slots__ = ("operator_instance_id", "delta", "reset_required")
+class RunUpdateEnvelope(_message.Message):
+    __slots__ = ("operator_instance_id", "update", "reset_required")
     OPERATOR_INSTANCE_ID_FIELD_NUMBER: _ClassVar[int]
-    DELTA_FIELD_NUMBER: _ClassVar[int]
+    UPDATE_FIELD_NUMBER: _ClassVar[int]
     RESET_REQUIRED_FIELD_NUMBER: _ClassVar[int]
     operator_instance_id: str
-    delta: RunDelta
+    update: RunUpdate
     reset_required: ResetRequired
-    def __init__(self, operator_instance_id: _Optional[str] = ..., delta: _Optional[_Union[RunDelta, _Mapping]] = ..., reset_required: _Optional[_Union[ResetRequired, _Mapping]] = ...) -> None: ...
+    def __init__(self, operator_instance_id: _Optional[str] = ..., update: _Optional[_Union[RunUpdate, _Mapping]] = ..., reset_required: _Optional[_Union[ResetRequired, _Mapping]] = ...) -> None: ...

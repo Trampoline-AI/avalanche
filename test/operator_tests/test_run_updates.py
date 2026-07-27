@@ -11,12 +11,12 @@ import pytest
 import runtime.operator.client as client_module
 from runtime.operator.client import (
     GrpcStateProvider,
-    _DeltaResetError,
     _DetailHydrationRaceError,
+    _RunUpdateResetError,
 )
 from runtime.operator.convert import (
-    run_delta_envelope_from_proto,
-    run_delta_envelope_to_proto,
+    run_update_envelope_from_proto,
+    run_update_envelope_to_proto,
 )
 from runtime.operator.models import (
     AgentEvent,
@@ -35,13 +35,13 @@ from runtime.operator.models import (
     ResetBaseline,
     ResetRequired,
     RunCreated,
-    RunDelta,
-    RunDeltaEnvelope,
     RunSnapshot,
     RunState,
     RunStatus,
     RunStatusChanged,
     RunSummary,
+    RunUpdate,
+    RunUpdateEnvelope,
     TraceDescriptor,
     TraceFinalized,
 )
@@ -64,10 +64,10 @@ def _drain(subscription):
     return values
 
 
-def _created(sequence: int = 1, *, epoch: str = "operator-1") -> RunDeltaEnvelope:
-    return RunDeltaEnvelope(
+def _created(sequence: int = 1, *, epoch: str = "operator-1") -> RunUpdateEnvelope:
+    return RunUpdateEnvelope(
         operator_instance_id=epoch,
-        delta=RunDelta(
+        update=RunUpdate(
             sequence=sequence,
             change=RunCreated(
                 summary=RunSummary(
@@ -92,9 +92,9 @@ def _created(sequence: int = 1, *, epoch: str = "operator-1") -> RunDeltaEnvelop
     )
 
 
-def test_typed_delta_envelopes_roundtrip_all_changes():
+def test_typed_update_envelopes_roundtrip_all_changes():
     changes = [
-        _created().delta.change,
+        _created().update.change,
         RunStatusChanged("run-1", RunStatus.RUNNING, started_at=1.0, revision=2),
         NodeStatusChanged("run-1", "node-1", NodeStatus.SUCCESS, ended_at=2.0, revision=3),
         LogAppended(
@@ -128,14 +128,16 @@ def test_typed_delta_envelopes_roundtrip_all_changes():
     ]
 
     for sequence, change in enumerate(changes, start=1):
-        envelope = RunDeltaEnvelope(
+        envelope = RunUpdateEnvelope(
             operator_instance_id="operator-1",
-            delta=RunDelta(sequence=sequence, change=change),
+            update=RunUpdate(sequence=sequence, change=change),
         )
-        assert run_delta_envelope_from_proto(run_delta_envelope_to_proto(envelope)) == envelope
+        assert (
+            run_update_envelope_from_proto(run_update_envelope_to_proto(envelope)) == envelope
+        )
 
 
-def test_operator_replays_typed_deltas_in_order():
+def test_operator_replays_typed_updates_in_order():
     operator = Operator([], watch=False, schedule=False, stream_history_capacity=16)
     run = RunState(run_id="run-1", flow_name="flow")
     run.nodes["node-1"] = NodeState("node-1", "Node", "step")
@@ -195,11 +197,11 @@ def test_operator_replays_typed_deltas_in_order():
             },
         )
 
-        envelopes = _drain(operator.subscribe_run_deltas(operator.operator_instance_id, 0))
-        assert [envelope.delta.sequence for envelope in envelopes] == list(
+        envelopes = _drain(operator.subscribe_run_updates(operator.operator_instance_id, 0))
+        assert [envelope.update.sequence for envelope in envelopes] == list(
             range(1, operator.current_sequence + 1)
         )
-        assert [type(envelope.delta.change) for envelope in envelopes] == [
+        assert [type(envelope.update.change) for envelope in envelopes] == [
             RunCreated,
             RunStatusChanged,
             NodeStatusChanged,
@@ -211,9 +213,9 @@ def test_operator_replays_typed_deltas_in_order():
             TraceFinalized,
         ]
         replay = _drain(
-            operator.subscribe_run_deltas(
+            operator.subscribe_run_updates(
                 operator.operator_instance_id,
-                envelopes[2].delta.sequence,
+                envelopes[2].update.sequence,
             )
         )
         assert replay == envelopes[3:]
@@ -231,15 +233,15 @@ def test_stale_cursor_and_epoch_explicitly_require_reset():
             run.status = status
             operator._notify_run(run)
 
-        stale_cursor = operator.subscribe_run_deltas(operator.operator_instance_id, 0)
+        stale_cursor = operator.subscribe_run_updates(operator.operator_instance_id, 0)
         cursor_reset = stale_cursor.get_nowait()
-        assert cursor_reset.delta is None
+        assert cursor_reset.update is None
         assert cursor_reset.reset_required == ResetRequired(
             history_floor=2,
             latest_sequence=3,
         )
 
-        stale_epoch = operator.subscribe_run_deltas("previous-operator", 3)
+        stale_epoch = operator.subscribe_run_updates("previous-operator", 3)
         epoch_reset = stale_epoch.get_nowait()
         assert epoch_reset.operator_instance_id == operator.operator_instance_id
         assert epoch_reset.reset_required is not None
@@ -248,7 +250,7 @@ def test_stale_cursor_and_epoch_explicitly_require_reset():
         operator.close()
 
 
-def test_slow_delta_consumer_gets_bounded_overflow_reset_on_terminal_update():
+def test_slow_update_consumer_gets_bounded_overflow_reset_on_terminal_update():
     operator = Operator(
         [],
         watch=False,
@@ -260,7 +262,7 @@ def test_slow_delta_consumer_gets_bounded_overflow_reset_on_terminal_update():
     operator._runs[run.run_id] = run
     try:
         operator._notify_run(run)
-        subscription = operator.subscribe_run_deltas(
+        subscription = operator.subscribe_run_updates(
             operator.operator_instance_id,
             operator.current_sequence,
         )
@@ -279,7 +281,7 @@ def test_slow_delta_consumer_gets_bounded_overflow_reset_on_terminal_update():
             history_floor=1,
             latest_sequence=4,
         )
-        assert subscription not in operator._delta_subscribers
+        assert subscription not in operator._update_subscribers
         assert operator.get_run(run.run_id).status is RunStatus.SUCCESS
     finally:
         operator.close()
@@ -303,7 +305,7 @@ def test_operator_restart_rejects_previous_epoch_cursor():
         first._runs[run.run_id] = run
         first._notify_run(run)
 
-        subscription = second.subscribe_run_deltas(
+        subscription = second.subscribe_run_updates(
             first.operator_instance_id,
             first.current_sequence,
         )
@@ -315,7 +317,7 @@ def test_operator_restart_rejects_previous_epoch_cursor():
         second.close()
 
 
-def test_bounded_journal_retains_deltas_not_run_state_snapshots():
+def test_bounded_journal_retains_updates_not_run_state_snapshots():
     operator = Operator([], watch=False, schedule=False, stream_history_capacity=2)
     run = RunState(run_id="run-large", flow_name="flow")
     run.nodes = {
@@ -339,7 +341,7 @@ def test_bounded_journal_retains_deltas_not_run_state_snapshots():
             )
 
         assert len(operator._stream_history) == 2
-        assert all(isinstance(item, RunDelta) for item in operator._stream_history)
+        assert all(isinstance(item, RunUpdate) for item in operator._stream_history)
         assert all(isinstance(item.change, LogAppended) for item in operator._stream_history)
         assert [item.change.log.size_bytes for item in operator._stream_history] == [
             65_536,
@@ -364,27 +366,27 @@ def test_bounded_journal_retains_deltas_not_run_state_snapshots():
         operator.close()
 
 
-def test_client_applies_ordered_deltas_and_ignores_duplicates():
+def test_client_applies_ordered_updates_and_ignores_duplicates():
     provider = GrpcStateProvider("localhost:1")
     try:
-        run, _ = provider._apply_delta_envelope(_created())
+        run, _ = provider._apply_update_envelope(_created())
         assert run.status == RunStatus.PENDING
 
-        status = RunDeltaEnvelope(
+        status = RunUpdateEnvelope(
             operator_instance_id="operator-1",
-            delta=RunDelta(
+            update=RunUpdate(
                 sequence=2,
                 change=RunStatusChanged("run-1", RunStatus.RUNNING, started_at=1.0, revision=2),
             ),
         )
-        run, _ = provider._apply_delta_envelope(status)
+        run, _ = provider._apply_update_envelope(status)
         assert run.status == RunStatus.RUNNING
-        assert provider._apply_delta_envelope(status) == (None, None)
+        assert provider._apply_update_envelope(status) == (None, None)
         assert provider._cursor.sequence == 2
 
-        node_delta = RunDeltaEnvelope(
+        node_update = RunUpdateEnvelope(
             operator_instance_id="operator-1",
-            delta=RunDelta(
+            update=RunUpdate(
                 sequence=3,
                 change=NodeStatusChanged(
                     "run-1",
@@ -395,16 +397,16 @@ def test_client_applies_ordered_deltas_and_ignores_duplicates():
                 ),
             ),
         )
-        run, _ = provider._apply_delta_envelope(node_delta)
+        run, _ = provider._apply_update_envelope(node_update)
         assert run.nodes["node-1"].status == NodeStatus.SUCCESS
 
         provider._read_detail_body = lambda token, _size: {
             "log-token": b"complete",
             "event-token": b'{"sequence":2,"event_kind":"code.executed","data":{}}',
         }[token]
-        log_delta = RunDeltaEnvelope(
+        log_update = RunUpdateEnvelope(
             operator_instance_id="operator-1",
-            delta=RunDelta(
+            update=RunUpdate(
                 sequence=4,
                 change=LogAppended(
                     "run-1",
@@ -419,15 +421,15 @@ def test_client_applies_ordered_deltas_and_ignores_duplicates():
                 ),
             ),
         )
-        run, detail = provider._apply_delta_envelope(log_delta)
+        run, detail = provider._apply_update_envelope(log_update)
         assert isinstance(detail, LogDetailAppended)
         assert detail.log.message == "complete"
         assert run.logs == []
         assert run.latest_log_sequence == 1
 
-        event_delta = RunDeltaEnvelope(
+        event_update = RunUpdateEnvelope(
             operator_instance_id="operator-1",
-            delta=RunDelta(
+            update=RunUpdate(
                 sequence=5,
                 change=AgentEventAppended(
                     "run-1",
@@ -441,7 +443,7 @@ def test_client_applies_ordered_deltas_and_ignores_duplicates():
                 ),
             ),
         )
-        run, _ = provider._apply_delta_envelope(event_delta)
+        run, _ = provider._apply_update_envelope(event_update)
         assert run.nodes["node-1"].agent_trace_json is None
         key = ("run-1", "node-1")
         assert provider._agent_events[key] == [
@@ -453,9 +455,9 @@ def test_client_applies_ordered_deltas_and_ignores_duplicates():
             {"sequence": 2, "event_kind": "code.executed", "data": {}}
         ]
 
-        trace_delta = RunDeltaEnvelope(
+        trace_update = RunUpdateEnvelope(
             operator_instance_id="operator-1",
-            delta=RunDelta(
+            update=RunUpdate(
                 sequence=6,
                 change=TraceFinalized(
                     "run-1",
@@ -471,7 +473,7 @@ def test_client_applies_ordered_deltas_and_ignores_duplicates():
                 ),
             ),
         )
-        run, _ = provider._apply_delta_envelope(trace_delta)
+        run, _ = provider._apply_update_envelope(trace_update)
         assert run.nodes["node-1"].trace.status == "completed"
         assert run.nodes["node-1"].agent_trace_json is None
         with provider._state_lock:
@@ -482,10 +484,10 @@ def test_client_applies_ordered_deltas_and_ignores_duplicates():
         provider._trace_bodies[key] = {"status": "completed", "marker": "revision-6"}
         provider._hydrated_trace_revisions[key] = 6
 
-        run, _ = provider._apply_delta_envelope(
-            RunDeltaEnvelope(
+        run, _ = provider._apply_update_envelope(
+            RunUpdateEnvelope(
                 operator_instance_id="operator-1",
-                delta=RunDelta(
+                update=RunUpdate(
                     sequence=7,
                     change=TraceFinalized(
                         "run-1",
@@ -510,11 +512,11 @@ def test_client_applies_ordered_deltas_and_ignores_duplicates():
             materialized = provider._materialize_run_locked(run)
         assert json.loads(materialized.nodes["node-1"].agent_trace_json)["trace"] is None
 
-        with pytest.raises(_DeltaResetError, match="sequence gap"):
-            provider._apply_delta_envelope(
-                RunDeltaEnvelope(
+        with pytest.raises(_RunUpdateResetError, match="sequence gap"):
+            provider._apply_update_envelope(
+                RunUpdateEnvelope(
                     operator_instance_id="operator-1",
-                    delta=RunDelta(
+                    update=RunUpdate(
                         sequence=9,
                         change=RunStatusChanged("run-1", RunStatus.SUCCESS, revision=8),
                     ),
@@ -524,7 +526,7 @@ def test_client_applies_ordered_deltas_and_ignores_duplicates():
         provider.close()
 
 
-def test_client_log_delta_append_never_copies_cumulative_history():
+def test_client_log_update_append_never_copies_cumulative_history():
     class AppendOnlyList(list):
         def __init__(self):
             super().__init__()
@@ -542,7 +544,7 @@ def test_client_log_delta_append_never_copies_cumulative_history():
 
     provider = GrpcStateProvider("localhost:1")
     try:
-        initial, _ = provider._apply_delta_envelope(_created())
+        initial, _ = provider._apply_update_envelope(_created())
         structural_logs = AppendOnlyList()
         retained_logs = AppendOnlyList()
         initial.logs = structural_logs
@@ -555,10 +557,10 @@ def test_client_log_delta_append_never_copies_cumulative_history():
                 node_id="node-1",
                 message=str(log_sequence),
             )
-            run, detail = provider._apply_delta_envelope_locked(
-                RunDeltaEnvelope(
+            run, detail = provider._apply_update_envelope_locked(
+                RunUpdateEnvelope(
                     operator_instance_id="operator-1",
-                    delta=RunDelta(
+                    update=RunUpdate(
                         sequence=log_sequence + 1,
                         change=LogAppended(
                             "run-1",
@@ -599,10 +601,10 @@ def test_client_detail_cache_evicts_oldest_buckets_within_count_and_byte_limits(
         for index in range(6):
             run_id = f"run-{index}"
             sequence += 1
-            provider._apply_delta_envelope(
-                RunDeltaEnvelope(
+            provider._apply_update_envelope(
+                RunUpdateEnvelope(
                     operator_instance_id="operator-1",
-                    delta=RunDelta(
+                    update=RunUpdate(
                         sequence=sequence,
                         change=RunCreated(
                             summary=RunSummary(
@@ -617,10 +619,10 @@ def test_client_detail_cache_evicts_oldest_buckets_within_count_and_byte_limits(
                 )
             )
             sequence += 1
-            provider._apply_delta_envelope(
-                RunDeltaEnvelope(
+            provider._apply_update_envelope(
+                RunUpdateEnvelope(
                     operator_instance_id="operator-1",
-                    delta=RunDelta(
+                    update=RunUpdate(
                         sequence=sequence,
                         change=LogAppended(
                             run_id,
@@ -656,10 +658,10 @@ def test_client_detail_cache_evicts_oldest_buckets_within_count_and_byte_limits(
         assert provider._retained_detail_bytes == 0
         assert provider._log_entries == {}
 
-        provider._apply_delta_envelope(
-            RunDeltaEnvelope(
+        provider._apply_update_envelope(
+            RunUpdateEnvelope(
                 operator_instance_id="operator-2",
-                delta=RunDelta(
+                update=RunUpdate(
                     sequence=sequence + 2,
                     change=RunCreated(
                         summary=RunSummary(
@@ -673,10 +675,10 @@ def test_client_detail_cache_evicts_oldest_buckets_within_count_and_byte_limits(
                 ),
             )
         )
-        provider._apply_delta_envelope(
-            RunDeltaEnvelope(
+        provider._apply_update_envelope(
+            RunUpdateEnvelope(
                 operator_instance_id="operator-2",
-                delta=RunDelta(
+                update=RunUpdate(
                     sequence=sequence + 3,
                     change=LogAppended(
                         "run-after-reset",
@@ -702,12 +704,12 @@ def test_client_detail_cache_evicts_oldest_buckets_within_count_and_byte_limits(
     assert provider._log_entries == {}
 
 
-def test_client_delta_reducer_uses_copy_on_write_and_constant_event_append(
+def test_client_update_reducer_uses_copy_on_write_and_constant_event_append(
     monkeypatch,
 ):
     provider = GrpcStateProvider("localhost:1")
     try:
-        initial, _ = provider._apply_delta_envelope(_created())
+        initial, _ = provider._apply_update_envelope(_created())
         key = ("run-1", "node-1")
         provider._hydrated_agent_nodes.add(key)
         provider._agent_event_sequences[key] = 0
@@ -717,7 +719,7 @@ def test_client_delta_reducer_uses_copy_on_write_and_constant_event_append(
         parsed_event_bodies = []
 
         def reject_full_copy(_value):
-            raise AssertionError("delta reducer deep-copied complete run state")
+            raise AssertionError("update reducer deep-copied complete run state")
 
         def parse_one_event(value, *args, **kwargs):
             assert '"events"' not in value
@@ -728,10 +730,10 @@ def test_client_delta_reducer_uses_copy_on_write_and_constant_event_append(
             guarded.setattr(client_module, "deepcopy", reject_full_copy)
             guarded.setattr(client_module.json, "loads", parse_one_event)
             with provider._state_lock:
-                status_run, _ = provider._apply_delta_envelope_locked(
-                    RunDeltaEnvelope(
+                status_run, _ = provider._apply_update_envelope_locked(
+                    RunUpdateEnvelope(
                         operator_instance_id="operator-1",
-                        delta=RunDelta(
+                        update=RunUpdate(
                             sequence=2,
                             change=RunStatusChanged(
                                 "run-1",
@@ -746,10 +748,10 @@ def test_client_delta_reducer_uses_copy_on_write_and_constant_event_append(
                 assert status_run.nodes is initial.nodes
                 assert status_run.logs is initial.logs
 
-                node_run, _ = provider._apply_delta_envelope_locked(
-                    RunDeltaEnvelope(
+                node_run, _ = provider._apply_update_envelope_locked(
+                    RunUpdateEnvelope(
                         operator_instance_id="operator-1",
-                        delta=RunDelta(
+                        update=RunUpdate(
                             sequence=3,
                             change=NodeStatusChanged(
                                 "run-1",
@@ -772,10 +774,10 @@ def test_client_delta_reducer_uses_copy_on_write_and_constant_event_append(
                     node_id="node-1",
                     message="complete",
                 )
-                log_run, _ = provider._apply_delta_envelope_locked(
-                    RunDeltaEnvelope(
+                log_run, _ = provider._apply_update_envelope_locked(
+                    RunUpdateEnvelope(
                         operator_instance_id="operator-1",
-                        delta=RunDelta(
+                        update=RunUpdate(
                             sequence=4,
                             change=LogAppended(
                                 "run-1",
@@ -807,10 +809,10 @@ def test_client_delta_reducer_uses_copy_on_write_and_constant_event_append(
                             "data": {"iteration": event_sequence},
                         }
                     )
-                    event_run, _ = provider._apply_delta_envelope_locked(
-                        RunDeltaEnvelope(
+                    event_run, _ = provider._apply_update_envelope_locked(
+                        RunUpdateEnvelope(
                             operator_instance_id="operator-1",
-                            delta=RunDelta(
+                            update=RunUpdate(
                                 sequence=event_sequence + 4,
                                 change=AgentEventAppended(
                                     "run-1",
@@ -851,7 +853,7 @@ def test_client_delta_reducer_uses_copy_on_write_and_constant_event_append(
 def test_callbacks_receive_isolated_values_without_cumulative_copies():
     provider = GrpcStateProvider("localhost:1")
     try:
-        run, _ = provider._apply_delta_envelope(_created())
+        run, _ = provider._apply_update_envelope(_created())
         assert run.details_hydrated is False
 
         observed_runs = []
@@ -1235,7 +1237,7 @@ def test_get_run_retries_when_pinned_baseline_expires():
     assert stub.snapshot_sequences == [1, 2]
 
 
-def test_client_installs_authoritative_baseline_before_resuming_deltas():
+def test_client_installs_authoritative_baseline_before_resuming_updates():
     provider = GrpcStateProvider("localhost:1")
 
     class ExactSnapshotStub:
@@ -1281,10 +1283,10 @@ def test_client_installs_authoritative_baseline_before_resuming_deltas():
         assert provider._cursor.sequence == 3
         assert provider._runs_by_id["run-1"] is baseline
 
-        run, _ = provider._apply_delta_envelope(
-            RunDeltaEnvelope(
+        run, _ = provider._apply_update_envelope(
+            RunUpdateEnvelope(
                 operator_instance_id="operator-1",
-                delta=RunDelta(
+                update=RunUpdate(
                     sequence=4,
                     change=RunStatusChanged(
                         "run-1",
@@ -1306,13 +1308,13 @@ def test_client_resets_baseline_and_resumes_after_operator_restart():
     class RestartedStub:
         stream_calls = 0
 
-        def StreamRunDeltas(self, request, *, metadata):  # noqa: N802
+        def StreamRunUpdates(self, request, *, metadata):  # noqa: N802
             assert metadata is None
             self.stream_calls += 1
             if self.stream_calls == 1:
                 assert request.operator_instance_id == "old-operator"
                 assert request.after_sequence == 99
-                yield pb.RunDeltaEnvelope(
+                yield pb.RunUpdateEnvelope(
                     operator_instance_id="new-operator",
                     reset_required=pb.ResetRequired(
                         history_floor=1,
@@ -1322,11 +1324,11 @@ def test_client_resets_baseline_and_resumes_after_operator_restart():
                 return
             assert request.operator_instance_id == "new-operator"
             assert request.after_sequence == 2
-            yield pb.RunDeltaEnvelope(
+            yield pb.RunUpdateEnvelope(
                 operator_instance_id="new-operator",
-                delta=pb.RunDelta(
+                update=pb.RunUpdate(
                     sequence=3,
-                    run_status_changed=pb.RunStatusChangedDelta(
+                    run_status_changed=pb.RunStatusChanged(
                         run_id="run-1",
                         status="success",
                         ended_at=3.0,

@@ -5,7 +5,7 @@ from __future__ import annotations
 from typing import Any, Callable, Protocol, runtime_checkable
 
 from .models import (
-    DetailDelta,
+    DetailUpdate,
     LogEntry,
     ResetBaseline,
     RunState,
@@ -41,7 +41,7 @@ class StateProvider(Protocol):
     def on_run_update(self, callback: Callable[[RunState], None]) -> None: ...
 
     def on_log(self, callback: Callable[[LogEntry], None]) -> None: ...
-    def on_detail_update(self, callback: Callable[[DetailDelta], None]) -> None: ...
+    def on_detail_update(self, callback: Callable[[DetailUpdate], None]) -> None: ...
     def start_stream(self) -> None:
         """Start update delivery after all callbacks are registered."""
         ...

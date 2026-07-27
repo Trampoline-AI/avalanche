@@ -32,7 +32,7 @@ from .models import (
     AgentEventDescriptor,
     AgentEventDetailAppended,
     AgentEventPage,
-    DetailDelta,
+    DetailUpdate,
     FinalizedTrace,
     LogAppended,
     LogDetailAppended,
@@ -46,14 +46,14 @@ from .models import (
     NodeStatusChanged,
     ResetRequired,
     RunCreated,
-    RunDelta,
-    RunDeltaEnvelope,
     RunSnapshot,
     RunState,
     RunStatus,
     RunStatusChanged,
     RunSummary,
     RunSummaryPage,
+    RunUpdate,
+    RunUpdateEnvelope,
     SequencedLogEntry,
     TraceDescriptor,
     TraceFinalized,
@@ -165,8 +165,8 @@ class _RunNotifications:
     sequence: int
     run_callbacks: tuple[tuple[Callable[[RunState], None], RunState], ...]
     log_callbacks: tuple[tuple[Callable[[LogEntry], None], LogEntry], ...]
-    detail_callbacks: tuple[tuple[Callable[[DetailDelta], None], DetailDelta], ...]
-    delta_subscribers: tuple[tuple[queue.Queue, tuple[RunDeltaEnvelope, ...]], ...]
+    detail_callbacks: tuple[tuple[Callable[[DetailUpdate], None], DetailUpdate], ...]
+    update_subscribers: tuple[tuple[queue.Queue, tuple[RunUpdateEnvelope, ...]], ...]
     ready: threading.Event
     delivered: threading.Event
 
@@ -316,11 +316,11 @@ class Operator:
         self._active_runs: dict[str, _RunHandle] = {}
         self._run_callbacks: list[Callable[[RunState], None]] = []
         self._log_callbacks: list[Callable[[LogEntry], None]] = []
-        self._detail_callbacks: list[Callable[[DetailDelta], None]] = []
-        self._delta_subscribers: list[queue.Queue] = []
+        self._detail_callbacks: list[Callable[[DetailUpdate], None]] = []
+        self._update_subscribers: list[queue.Queue] = []
         self._operator_instance_id = uuid4().hex
         self._sequence = 0
-        self._stream_history: deque[RunDelta] = deque(maxlen=stream_history_capacity)
+        self._stream_history: deque[RunUpdate] = deque(maxlen=stream_history_capacity)
         self._structural_baseline_capacity = structural_baseline_capacity
         self._structural_baselines: OrderedDict[int, _StructuralBaseline] = OrderedDict()
         self._lock = threading.RLock()
@@ -1091,17 +1091,17 @@ class Operator:
         with self._lock:
             self._log_callbacks.append(callback)
 
-    def on_detail_update(self, callback: Callable[[DetailDelta], None]) -> None:
+    def on_detail_update(self, callback: Callable[[DetailUpdate], None]) -> None:
         with self._lock:
             self._detail_callbacks.append(callback)
 
     def start_stream(self) -> None:
         """In-process callbacks are already live once registered."""
 
-    def subscribe_run_deltas(
+    def subscribe_run_updates(
         self, operator_instance_id: str = "", after_sequence: int = 0
     ) -> queue.Queue:
-        """Atomically replay retained deltas or require a structural reset."""
+        """Atomically replay retained updates or require a structural reset."""
         subscription: queue.Queue = queue.Queue(maxsize=self._subscriber_queue_capacity)
         with self._lock:
             history_floor, latest_sequence = self._history_bounds_locked()
@@ -1112,24 +1112,24 @@ class Operator:
                 after_sequence > latest_sequence or after_sequence < history_floor - 1
             )
             replay = [
-                delta for delta in self._stream_history if delta.sequence > after_sequence
+                update for update in self._stream_history if update.sequence > after_sequence
             ]
             if (
                 epoch_is_stale
                 or cursor_is_stale
                 or len(replay) > self._subscriber_queue_capacity
             ):
-                subscription.put_nowait(self._delta_reset_locked())
+                subscription.put_nowait(self._update_reset_locked())
                 return subscription
 
-            for delta in replay:
+            for update in replay:
                 subscription.put_nowait(
-                    RunDeltaEnvelope(
+                    RunUpdateEnvelope(
                         operator_instance_id=self._operator_instance_id,
-                        delta=delta,
+                        update=update,
                     )
                 )
-            self._delta_subscribers.append(subscription)
+            self._update_subscribers.append(subscription)
         return subscription
 
     def _history_bounds_locked(self) -> tuple[int, int]:
@@ -1139,9 +1139,9 @@ class Operator:
         )
         return history_floor, latest_sequence
 
-    def _delta_reset_locked(self) -> RunDeltaEnvelope:
+    def _update_reset_locked(self) -> RunUpdateEnvelope:
         history_floor, latest_sequence = self._history_bounds_locked()
-        return RunDeltaEnvelope(
+        return RunUpdateEnvelope(
             operator_instance_id=self._operator_instance_id,
             reset_required=ResetRequired(
                 history_floor=history_floor,
@@ -1149,10 +1149,10 @@ class Operator:
             ),
         )
 
-    def unsubscribe_run_deltas(self, subscription: queue.Queue) -> None:
+    def unsubscribe_run_updates(self, subscription: queue.Queue) -> None:
         with self._lock:
-            self._delta_subscribers = [
-                item for item in self._delta_subscribers if item is not subscription
+            self._update_subscribers = [
+                item for item in self._update_subscribers if item is not subscription
             ]
 
     def close(self) -> None:
@@ -2004,7 +2004,7 @@ class Operator:
         agent_events: Mapping[str, AgentEvent] | None = None,
         log_entry: LogEntry | None = None,
     ) -> _RunNotifications:
-        """Atomically publish one mutation to structural, detail, and delta state."""
+        """Atomically publish one mutation to structural, detail, and update state."""
         if self._notification_stop_enqueued:
             raise RuntimeError("Operator notification dispatcher is closed")
 
@@ -2016,21 +2016,21 @@ class Operator:
         finalized_traces = finalized_traces or {}
 
         if is_new:
-            delta_count = 1
+            update_count = 1
         else:
-            delta_count = (
+            update_count = (
                 int(summary_changed)
                 + len(status_node_ids)
                 + int(log_entry is not None)
                 + len(agent_events)
                 + len(trace_node_ids)
             )
-            if delta_count == 0:
+            if update_count == 0:
                 summary_changed = True
-                delta_count = 1
+                update_count = 1
 
         first_sequence = self._sequence + 1
-        publication_sequence = self._sequence + delta_count
+        publication_sequence = self._sequence + update_count
         self._run_created_sequences.setdefault(run.run_id, first_sequence)
         if summary_changed or is_new:
             self._run_revisions[run.run_id] = publication_sequence
@@ -2115,37 +2115,37 @@ class Operator:
                     )
                 )
 
-        deltas = []
+        updates = []
         for change in changes:
             self._sequence += 1
-            delta = RunDelta(sequence=self._sequence, change=change)
-            self._stream_history.append(delta)
-            deltas.append(delta)
+            update = RunUpdate(sequence=self._sequence, change=change)
+            self._stream_history.append(update)
+            updates.append(update)
         if self._sequence != publication_sequence:
-            raise RuntimeError("Run publication produced an inconsistent delta batch")
+            raise RuntimeError("Run publication produced an inconsistent update batch")
 
         envelopes = tuple(
-            RunDeltaEnvelope(
+            RunUpdateEnvelope(
                 operator_instance_id=self._operator_instance_id,
-                delta=delta,
+                update=update,
             )
-            for delta in deltas
+            for update in updates
         )
         structural_run = deepcopy(run)
         structural_run.logs = []
         structural_run.details_hydrated = False
         for node in structural_run.nodes.values():
             node.agent_trace_json = None
-        detail_updates: list[DetailDelta] = []
-        for delta in deltas:
-            change = delta.change
+        detail_updates: list[DetailUpdate] = []
+        for update in updates:
+            change = update.change
             if isinstance(change, LogAppended) and log_entry is not None:
                 detail_updates.append(
                     LogDetailAppended(
                         operator_instance_id=self._operator_instance_id,
                         run_id=run.run_id,
                         created_sequence=self._run_created_sequences[run.run_id],
-                        sequence=delta.sequence,
+                        sequence=update.sequence,
                         log_sequence=change.log.sequence,
                         log=deepcopy(log_entry),
                     )
@@ -2156,7 +2156,7 @@ class Operator:
                         operator_instance_id=self._operator_instance_id,
                         run_id=run.run_id,
                         created_sequence=self._run_created_sequences[run.run_id],
-                        sequence=delta.sequence,
+                        sequence=update.sequence,
                         node_id=change.node_id,
                         event=deepcopy(agent_events[change.node_id]),
                     )
@@ -2176,8 +2176,8 @@ class Operator:
                 if log_entry is not None
                 else ()
             ),
-            delta_subscribers=tuple(
-                (subscription, envelopes) for subscription in self._delta_subscribers
+            update_subscribers=tuple(
+                (subscription, envelopes) for subscription in self._update_subscribers
             ),
             ready=threading.Event(),
             delivered=threading.Event(),
@@ -2226,24 +2226,24 @@ class Operator:
                 callback(detail)
             except Exception:
                 pass
-        for subscription, envelopes in notifications.delta_subscribers:
-            self._deliver_delta_batch(subscription, envelopes)
+        for subscription, envelopes in notifications.update_subscribers:
+            self._deliver_update_batch(subscription, envelopes)
 
-    def _deliver_delta_batch(
+    def _deliver_update_batch(
         self,
         subscription: queue.Queue,
-        envelopes: tuple[RunDeltaEnvelope, ...],
+        envelopes: tuple[RunUpdateEnvelope, ...],
     ) -> None:
         with self._lock:
-            if subscription not in self._delta_subscribers:
+            if subscription not in self._update_subscribers:
                 return
             for envelope in envelopes:
                 try:
                     subscription.put_nowait(envelope)
                 except queue.Full:
-                    _replace_queue_contents(subscription, self._delta_reset_locked())
-                    self._delta_subscribers = [
-                        item for item in self._delta_subscribers if item is not subscription
+                    _replace_queue_contents(subscription, self._update_reset_locked())
+                    self._update_subscribers = [
+                        item for item in self._update_subscribers if item is not subscription
                     ]
                     return
 

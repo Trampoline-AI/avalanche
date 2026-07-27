@@ -468,7 +468,7 @@ def test_malformed_run_event_terminalizes_and_cleans_up(event):
     operator._active_runs[run_id] = handle
     logs = []
     operator.on_log(logs.append)
-    updates = operator.subscribe_run_deltas()
+    updates = operator.subscribe_run_updates()
     errors = []
 
     def drain():
@@ -500,7 +500,7 @@ def test_malformed_run_event_terminalizes_and_cleans_up(event):
     assert logs == protocol_logs
     notifications = []
     while not updates.empty():
-        notifications.append(updates.get_nowait().delta.change)
+        notifications.append(updates.get_nowait().update.change)
     assert len(notifications) == 1
     assert isinstance(notifications[0], RunCreated)
     assert notifications[0].summary.status == RunStatus.FAILED
@@ -637,7 +637,7 @@ def test_cancel_request_is_non_terminal_until_coordinator_stops(tmp_path):
         schedule=False,
         cancel_grace=0.15,
     )
-    updates = operator.subscribe_run_deltas()
+    updates = operator.subscribe_run_updates()
     try:
         run_id = operator.start_run("flow")
         deadline = time.monotonic() + 2
@@ -656,7 +656,7 @@ def test_cancel_request_is_non_terminal_until_coordinator_stops(tmp_path):
 
         queued = []
         while not updates.empty():
-            queued.append(updates.get_nowait().delta.change)
+            queued.append(updates.get_nowait().update.change)
         terminal_indexes = [
             index
             for index, change in enumerate(queued)
@@ -668,13 +668,13 @@ def test_cancel_request_is_non_terminal_until_coordinator_stops(tmp_path):
         operator.close()
 
 
-def test_slow_delta_consumer_receives_ordered_descriptors_and_detail_bodies(tmp_path):
+def test_slow_update_consumer_receives_ordered_descriptors_and_detail_bodies(tmp_path):
     workflow = _write_standalone(
         tmp_path,
         body="log.info('first')\n    log.info('second')",
     )
     operator = Operator([str(workflow)], watch=False, schedule=False)
-    subscription = operator.subscribe_run_deltas()
+    subscription = operator.subscribe_run_updates()
     details = []
     operator.on_detail_update(details.append)
     try:
@@ -684,7 +684,7 @@ def test_slow_delta_consumer_receives_ordered_descriptors_and_detail_bodies(tmp_
 
         changes = []
         while not subscription.empty():
-            changes.append(subscription.get_nowait().delta.change)
+            changes.append(subscription.get_nowait().update.change)
         statuses = [change.status for change in changes if isinstance(change, RunStatusChanged)]
         logs = [change for change in changes if isinstance(change, LogAppended)]
         assert statuses[0] == RunStatus.RUNNING

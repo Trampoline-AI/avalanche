@@ -4,9 +4,9 @@
 
 ### Operator transport
 
-- Operator streams now replay bounded, typed run deltas under an instance epoch
+- Operator streams now replay bounded, typed run updates under an instance epoch
   and explicitly require a structural reset for stale cursors or restarts.
-- Remote TUI state applies deltas in sequence, ignores duplicates, and reloads
+- Remote TUI state applies updates in sequence, ignores duplicates, and reloads
   structural run baselines instead of receiving complete run snapshots per event.
 - Slow consumers receive an explicit reset from bounded stream queues, while
   summary refreshes preserve already-hydrated run details.

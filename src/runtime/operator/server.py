@@ -20,9 +20,9 @@ from .convert import (
     agent_event_descriptor_to_proto,
     discovery_diagnostic_to_proto,
     log_record_descriptor_to_proto,
-    run_delta_envelope_to_proto,
     run_snapshot_to_proto,
     run_summary_to_proto,
+    run_update_envelope_to_proto,
     workflow_info_to_proto,
 )
 from .operator import (
@@ -237,9 +237,9 @@ class OperatorServicer(pb_grpc.OperatorServiceServicer):
                 eof=offset + len(chunk) == len(data),
             )
 
-    def StreamRunDeltas(self, request, context):  # noqa: N802
-        """Replay typed deltas for one operator epoch, or require a reset."""
-        subscription = self._op.subscribe_run_deltas(
+    def StreamRunUpdates(self, request, context):  # noqa: N802
+        """Replay typed updates for one operator epoch, or require a reset."""
+        subscription = self._op.subscribe_run_updates(
             request.operator_instance_id,
             request.after_sequence,
         )
@@ -250,11 +250,11 @@ class OperatorServicer(pb_grpc.OperatorServiceServicer):
                     envelope = subscription.get(timeout=1.0)
                 except queue.Empty:
                     continue
-                yield run_delta_envelope_to_proto(envelope)
+                yield run_update_envelope_to_proto(envelope)
                 if envelope.reset_required is not None:
                     return
         finally:
-            self._op.unsubscribe_run_deltas(subscription)
+            self._op.unsubscribe_run_updates(subscription)
 
 
 def serve(

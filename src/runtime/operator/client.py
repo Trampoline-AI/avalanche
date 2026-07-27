@@ -24,16 +24,16 @@ from .convert import (
     agent_event_descriptor_from_proto,
     discovery_diagnostic_from_proto,
     log_record_descriptor_from_proto,
-    run_delta_envelope_from_proto,
     run_snapshot_from_proto,
     run_summary_from_proto,
+    run_update_envelope_from_proto,
     workflow_info_from_proto,
 )
 from .models import (
     AgentEvent,
     AgentEventAppended,
     AgentEventDetailAppended,
-    DetailDelta,
+    DetailUpdate,
     LogAppended,
     LogDetailAppended,
     LogEntry,
@@ -41,11 +41,11 @@ from .models import (
     NodeStatusChanged,
     ResetBaseline,
     RunCreated,
-    RunDeltaEnvelope,
     RunSnapshot,
     RunState,
     RunStatusChanged,
     RunSummary,
+    RunUpdateEnvelope,
     SequencedLogEntry,
     StreamResetNotice,
     TraceDetail,
@@ -165,7 +165,7 @@ class _DetailBudget:
 _DetailCacheKey = tuple[str, str, str]
 
 
-class _DeltaResetError(RuntimeError):
+class _RunUpdateResetError(RuntimeError):
     pass
 
 
@@ -244,7 +244,7 @@ class GrpcStateProvider:
         self._stub = pb_grpc.OperatorServiceStub(self._channel)
         self._run_callbacks: list[Callable[[RunState], None]] = []
         self._log_callbacks: list[Callable[[LogEntry], None]] = []
-        self._detail_callbacks: list[Callable[[DetailDelta], None]] = []
+        self._detail_callbacks: list[Callable[[DetailUpdate], None]] = []
         self._stream_reset_callbacks: list[Callable[[StreamResetNotice], None]] = []
         self._lifecycle_lock = threading.Lock()
         self._state_lock = threading.RLock()
@@ -1228,11 +1228,11 @@ class GrpcStateProvider:
     def on_log(self, callback: Callable[[LogEntry], None]) -> None:
         self._log_callbacks.append(callback)
 
-    def on_detail_update(self, callback: Callable[[DetailDelta], None]) -> None:
+    def on_detail_update(self, callback: Callable[[DetailUpdate], None]) -> None:
         self._detail_callbacks.append(callback)
 
     def start_stream(self) -> None:
-        """Start delta consumption after every callback is registered."""
+        """Start update consumption after every callback is registered."""
         self._ensure_stream()
 
     def on_stream_reset(self, callback: Callable[[StreamResetNotice], None]) -> None:
@@ -1539,7 +1539,7 @@ class GrpcStateProvider:
         }
 
     def _stream_loop(self) -> None:
-        """Consume ordered run deltas without conflating stream and unary health."""
+        """Consume ordered run updates without conflating stream and unary health."""
         while not self._stream_stop.is_set():
             try:
                 with self._lifecycle_lock:
@@ -1550,8 +1550,8 @@ class GrpcStateProvider:
                     self.stream_retry_count += 1
                 with self._state_lock:
                     cursor = self._cursor
-                stream = self._stub.StreamRunDeltas(
-                    pb.StreamRunDeltasRequest(
+                stream = self._stub.StreamRunUpdates(
+                    pb.StreamRunUpdatesRequest(
                         operator_instance_id=cursor.operator_instance_id,
                         after_sequence=cursor.sequence,
                     ),
@@ -1578,10 +1578,10 @@ class GrpcStateProvider:
                 for message in stream:
                     if self._stream_stop.is_set():
                         break
-                    envelope = run_delta_envelope_from_proto(message)
+                    envelope = run_update_envelope_from_proto(message)
                     if not envelope.operator_instance_id:
                         raise RuntimeError(
-                            "delta envelope omitted its operator instance identifier"
+                            "update envelope omitted its operator instance identifier"
                         )
 
                     with self._state_lock:
@@ -1595,7 +1595,7 @@ class GrpcStateProvider:
                         observed_sequence = (
                             reset.latest_sequence
                             if reset is not None
-                            else envelope.delta.sequence
+                            else envelope.update.sequence
                         )
                         self._require_stream_reset(
                             envelope.operator_instance_id,
@@ -1605,12 +1605,12 @@ class GrpcStateProvider:
                         break
 
                     try:
-                        run, detail = self._apply_delta_envelope(envelope)
-                    except _DeltaResetError:
-                        assert envelope.delta is not None
+                        run, detail = self._apply_update_envelope(envelope)
+                    except _RunUpdateResetError:
+                        assert envelope.update is not None
                         self._require_stream_reset(
                             envelope.operator_instance_id,
-                            envelope.delta.sequence,
+                            envelope.update.sequence,
                         )
                         reconnect = True
                         break
@@ -1664,7 +1664,7 @@ class GrpcStateProvider:
         operator_instance_id: str,
         observed_sequence: int,
     ) -> None:
-        """Block delta consumption until the exact replacement baseline is installed."""
+        """Block update consumption until the exact replacement baseline is installed."""
         with self._lifecycle_lock:
             self._reset_generation += 1
             notice = StreamResetNotice(
@@ -1687,17 +1687,17 @@ class GrpcStateProvider:
             if self._reset_acknowledged.wait(0.1):
                 break
 
-    def _apply_delta_envelope(
-        self, envelope: RunDeltaEnvelope
-    ) -> tuple[RunState | None, DetailDelta | None]:
-        delta = envelope.delta
+    def _apply_update_envelope(
+        self, envelope: RunUpdateEnvelope
+    ) -> tuple[RunState | None, DetailUpdate | None]:
+        update = envelope.update
         with self._state_lock:
-            if delta is not None and delta.sequence <= self._cursor.sequence:
+            if update is not None and update.sequence <= self._cursor.sequence:
                 return None, None
         log_detail: LogEntry | None = None
         event_detail: AgentEvent | None = None
-        if delta is not None and isinstance(delta.change, LogAppended):
-            descriptor = delta.change.log
+        if update is not None and isinstance(update.change, LogAppended):
+            descriptor = update.change.log
             message = self._read_detail_body(
                 descriptor.body_token,
                 descriptor.size_bytes,
@@ -1708,8 +1708,8 @@ class GrpcStateProvider:
                 node_id=descriptor.node_id,
                 message=message,
             )
-        elif delta is not None and isinstance(delta.change, AgentEventAppended):
-            descriptor = delta.change.event
+        elif update is not None and isinstance(update.change, AgentEventAppended):
+            descriptor = update.change.event
             event_detail = AgentEvent(
                 invocation_id=descriptor.invocation_id,
                 event_sequence=descriptor.event_sequence,
@@ -1720,39 +1720,39 @@ class GrpcStateProvider:
                 size_bytes=descriptor.size_bytes,
             )
         with self._state_lock:
-            return self._apply_delta_envelope_locked(
+            return self._apply_update_envelope_locked(
                 envelope,
                 log_detail=log_detail,
                 event_detail=event_detail,
             )
 
-    def _apply_delta_envelope_locked(
+    def _apply_update_envelope_locked(
         self,
-        envelope: RunDeltaEnvelope,
+        envelope: RunUpdateEnvelope,
         *,
         log_detail: LogEntry | None = None,
         event_detail: AgentEvent | None = None,
-    ) -> tuple[RunState | None, DetailDelta | None]:
-        delta = envelope.delta
+    ) -> tuple[RunState | None, DetailUpdate | None]:
+        update = envelope.update
         if self._closed:
             return None, None
-        if delta is None:
-            raise _DeltaResetError("delta payload missing")
+        if update is None:
+            raise _RunUpdateResetError("update payload missing")
         cursor = self._cursor
         operator_instance_id = cursor.operator_instance_id
         if operator_instance_id:
             if envelope.operator_instance_id != operator_instance_id:
-                raise _DeltaResetError("operator epoch changed")
+                raise _RunUpdateResetError("operator epoch changed")
         else:
             operator_instance_id = envelope.operator_instance_id
 
-        if delta.sequence <= cursor.sequence:
+        if update.sequence <= cursor.sequence:
             return None, None
-        if delta.sequence != cursor.sequence + 1:
-            raise _DeltaResetError("delta sequence gap")
+        if update.sequence != cursor.sequence + 1:
+            raise _RunUpdateResetError("update sequence gap")
 
-        change = delta.change
-        detail: DetailDelta | None = None
+        change = update.change
+        detail: DetailUpdate | None = None
         if isinstance(change, RunCreated):
             run = _run_from_created(envelope.operator_instance_id, change)
             old_revision = self._run_revisions.get(run.run_id, -1)
@@ -1771,7 +1771,7 @@ class GrpcStateProvider:
         else:
             current = self._runs_by_id.get(change.run_id)
             if current is None:
-                raise _DeltaResetError(f"delta references unknown run {change.run_id}")
+                raise _RunUpdateResetError(f"update references unknown run {change.run_id}")
             run = replace(current)
             if isinstance(change, RunStatusChanged):
                 old_revision = self._run_revisions.get(change.run_id, 0)
@@ -1786,8 +1786,8 @@ class GrpcStateProvider:
             elif isinstance(change, NodeStatusChanged):
                 node = run.nodes.get(change.node_id)
                 if node is None:
-                    raise _DeltaResetError(
-                        f"delta references unknown node {change.run_id}/{change.node_id}"
+                    raise _RunUpdateResetError(
+                        f"update references unknown node {change.run_id}/{change.node_id}"
                     )
                 key = (change.run_id, change.node_id)
                 if change.revision <= self._node_revisions.get(key, 0):
@@ -1803,7 +1803,7 @@ class GrpcStateProvider:
                     self._node_revisions[key] = change.revision
             elif isinstance(change, LogAppended):
                 if log_detail is None:
-                    raise _DeltaResetError("log delta detail is unavailable")
+                    raise _RunUpdateResetError("log update detail is unavailable")
                 logs_hydrated = change.run_id in self._hydrated_log_runs
                 known_sequence = self._log_sequences.get(change.run_id, 0)
                 if logs_hydrated and change.log.sequence <= known_sequence:
@@ -1833,17 +1833,17 @@ class GrpcStateProvider:
                         operator_instance_id=operator_instance_id,
                         run_id=change.run_id,
                         created_sequence=current.created_sequence,
-                        sequence=delta.sequence,
+                        sequence=update.sequence,
                         log_sequence=change.log.sequence,
                         log=log_detail,
                     )
             elif isinstance(change, AgentEventAppended):
                 if event_detail is None:
-                    raise _DeltaResetError("agent event delta detail is unavailable")
+                    raise _RunUpdateResetError("agent event update detail is unavailable")
                 node = run.nodes.get(change.node_id)
                 if node is None:
-                    raise _DeltaResetError(
-                        f"delta references unknown node {change.run_id}/{change.node_id}"
+                    raise _RunUpdateResetError(
+                        f"update references unknown node {change.run_id}/{change.node_id}"
                     )
                 key = (change.run_id, change.node_id)
                 node_hydrated = key in self._hydrated_agent_nodes
@@ -1876,15 +1876,15 @@ class GrpcStateProvider:
                         operator_instance_id=operator_instance_id,
                         run_id=change.run_id,
                         created_sequence=current.created_sequence,
-                        sequence=delta.sequence,
+                        sequence=update.sequence,
                         node_id=change.node_id,
                         event=event_detail,
                     )
             elif isinstance(change, TraceFinalized):
                 node = run.nodes.get(change.node_id)
                 if node is None:
-                    raise _DeltaResetError(
-                        f"delta references unknown node {change.run_id}/{change.node_id}"
+                    raise _RunUpdateResetError(
+                        f"update references unknown node {change.run_id}/{change.node_id}"
                     )
                 key = (change.run_id, change.node_id)
                 if change.trace.revision <= self._trace_revisions.get(key, 0):
@@ -1898,15 +1898,15 @@ class GrpcStateProvider:
                     self._evict_detail_cache_locked(self._trace_cache_key(*key))
                     self._trace_revisions[key] = change.trace.revision
             else:
-                raise _DeltaResetError("unsupported delta change")
+                raise _RunUpdateResetError("unsupported update change")
 
             if run is not None:
                 run.operator_instance_id = operator_instance_id
-                run.revision = max(run.revision, delta.sequence)
+                run.revision = max(run.revision, update.sequence)
                 self._runs_by_id[run.run_id] = run
 
         self.operator_instance_id = operator_instance_id
-        self._cursor = _StreamCursor(operator_instance_id, delta.sequence)
+        self._cursor = _StreamCursor(operator_instance_id, update.sequence)
         return run, detail
 
     def _reload_structural_state(self) -> None:
@@ -1926,7 +1926,7 @@ class GrpcStateProvider:
     ) -> tuple[str, int, dict[str, RunState]]:
         """Health-owned loader; every snapshot must use its exact epoch/high-water."""
         del load_snapshot
-        raise _DeltaResetError("authoritative structural baseline loader is not installed")
+        raise _RunUpdateResetError("authoritative structural baseline loader is not installed")
 
     def _install_structural_baseline(
         self,
@@ -1984,7 +1984,7 @@ class GrpcStateProvider:
             except Exception:
                 pass
 
-    def _notify_detail_callbacks(self, detail: DetailDelta) -> None:
+    def _notify_detail_callbacks(self, detail: DetailUpdate) -> None:
         for callback in self._detail_callbacks:
             try:
                 callback(_detail_callback_projection(detail))
@@ -2022,7 +2022,7 @@ def _structural_callback_projection(run: RunState) -> RunState:
     )
 
 
-def _detail_callback_projection(detail: DetailDelta) -> DetailDelta:
+def _detail_callback_projection(detail: DetailUpdate) -> DetailUpdate:
     """Detach the one changed detail value without copying cumulative history."""
     if isinstance(detail, LogDetailAppended):
         return replace(detail, log=replace(detail.log))

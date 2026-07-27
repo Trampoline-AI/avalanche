@@ -15,7 +15,7 @@ from typing import Any, Callable, Literal
 from .dag_layout import DagNode, SeqGroup, build_nav_grid, nav_move, workflow_to_layout
 from .models import (
     AgentEventDetailAppended,
-    DetailDelta,
+    DetailUpdate,
     LogDetailAppended,
     LogEntry,
     NodeState,
@@ -1022,7 +1022,7 @@ class UIStore:
             self._reset_detail_hydration_backoff(key)
         self._schedule_detail_hydration_retry(key, requirements)
 
-    def _apply_detail_update(self, detail: DetailDelta) -> bool:
+    def _apply_detail_update(self, detail: DetailUpdate) -> bool:
         run = self.current_run
         if (
             run is None
@@ -1113,7 +1113,7 @@ class UIStore:
         """Queue provider data for application on the UI thread."""
         self._background_updates.put(("run", run))
 
-    def enqueue_detail_update(self, detail: DetailDelta) -> None:
+    def enqueue_detail_update(self, detail: DetailUpdate) -> None:
         """Queue one identity-pinned detail append for the UI-thread reducer."""
         self._background_updates.put(("detail", detail))
 

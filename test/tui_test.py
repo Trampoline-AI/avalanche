@@ -1497,7 +1497,7 @@ class TestUIStore:
         assert store.current_run.status is RunStatus.SUCCESS
         assert store.current_run.nodes["node"].agent_trace_json == node.agent_trace_json
 
-    def test_live_detail_deltas_populate_ui_without_structural_bodies(self):
+    def test_live_detail_updates_populate_ui_without_structural_bodies(self):
         workflow = WorkflowInfo(
             name="flow",
             display_name="flow",
@@ -3032,7 +3032,7 @@ class TestUIStore:
                     as_of_sequence=99,
                 )
 
-            def StreamRunDeltas(self, request, *, metadata):  # noqa: N802
+            def StreamRunUpdates(self, request, *, metadata):  # noqa: N802
                 self.stream_calls += 1
                 assert metadata is None
                 if self.stream_calls == 1:
@@ -3040,7 +3040,7 @@ class TestUIStore:
                     assert request.after_sequence == 99
                     return iter(
                         (
-                            pb.RunDeltaEnvelope(
+                            pb.RunUpdateEnvelope(
                                 operator_instance_id="operator-restarted",
                                 reset_required=pb.ResetRequired(
                                     history_floor=1,
@@ -3178,10 +3178,10 @@ class TestUIStore:
             def ListFlows(self, request, context):  # noqa: N802
                 return pb.FlowList(flows=[workflow_info_to_proto(workflow)])
 
-            def StreamRunDeltas(self, request, context):  # noqa: N802
+            def StreamRunUpdates(self, request, context):  # noqa: N802
                 context.send_initial_metadata(())
                 if request.operator_instance_id != self.operator_id:
-                    yield pb.RunDeltaEnvelope(
+                    yield pb.RunUpdateEnvelope(
                         operator_instance_id=self.operator_id,
                         reset_required=pb.ResetRequired(
                             history_floor=1,

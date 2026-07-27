@@ -2,7 +2,7 @@
 
 from avalanche.operator.models import (
     AgentEventDetailAppended,
-    DetailDelta,
+    DetailUpdate,
     LogDetailAppended,
     LogEntry,
     LogLevel,
@@ -19,7 +19,7 @@ from avalanche.operator.models import (
 
 __all__ = [
     "AgentEventDetailAppended",
-    "DetailDelta",
+    "DetailUpdate",
     "LogEntry",
     "LogLevel",
     "LogDetailAppended",

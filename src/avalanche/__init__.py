@@ -63,7 +63,7 @@ from .storage import Namespace, NamespaceConfig, ScanResult, Table, TableGroup
 from .types import AppendResult, SnapshotMetadata, SnapshotState
 from .webhook import Webhook
 
-__version__ = "0.1.0rc1"
+__version__ = "0.1.0rc2"
 
 
 def __getattr__(name: str):
