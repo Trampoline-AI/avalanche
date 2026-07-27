@@ -46,12 +46,12 @@ all = [
     "grpcio-tools>=1.75.1",
     "pylance>=0.24.0",
     "ray[default]>=2.50.0",
-    "predict-rlm>=0.7.1",
+    "predict-rlm>=0.8.0a",
     "textual>=6.2.1",
     "watchfiles>=1.1.1",
 ]
 agent = [
-    "predict-rlm>=0.7.1",
+    "predict-rlm>=0.8.0a",
 ]
 
 [dependency-groups]
@@ -72,7 +72,7 @@ dev = [
     "pytest-cov>=7.0.0",
     "textual>=6.2.1",
     "watchfiles>=1.1.1",
-    "predict-rlm>=0.7.1",
+    "predict-rlm>=0.8.0a0",
 ]
 
 [tool.pytest.ini_options]
