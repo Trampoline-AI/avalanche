@@ -44,6 +44,14 @@ Give your coding agent Avalanche's workflow-authoring skill:
 npx skills add Trampoline-AI/avalanche
 ```
 
+### Workshop project setup
+
+Create a project with editable local checkouts of Avalanche and PredictRLM:
+
+```bash
+npx skills add https://github.com/Trampoline-AI/avalanche/tree/main/.agents/skills/avalanche-demo-init
+```
+
 
 
 ### Quick Example
