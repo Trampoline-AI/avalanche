@@ -47,6 +47,25 @@ _AGENT_EVIDENCE_OBSERVER: ContextVar[_Observer | None] = ContextVar(
     "avalanche_agent_evidence_observer", default=None
 )
 
+_AGENT_LOG_NODE_ID: ContextVar[str | None] = ContextVar(
+    "avalanche_agent_log_node_id", default=None
+)
+
+
+@contextmanager
+def capture_agent_log_node(node_id: str) -> Iterator[None]:
+    """Associate logs emitted by an agent invocation with its workflow node."""
+    token = _AGENT_LOG_NODE_ID.set(node_id)
+    try:
+        yield
+    finally:
+        _AGENT_LOG_NODE_ID.reset(token)
+
+
+def current_agent_log_node_id() -> str | None:
+    """Return the workflow node currently executing an agent invocation."""
+    return _AGENT_LOG_NODE_ID.get()
+
 
 @contextmanager
 def capture_agent_evidence(

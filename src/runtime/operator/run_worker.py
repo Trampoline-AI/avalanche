@@ -14,7 +14,11 @@ from functools import wraps
 from pathlib import Path
 from typing import Any, Callable
 
-from avalanche._agent_evidence import capture_agent_evidence
+from avalanche._agent_evidence import (
+    capture_agent_evidence,
+    capture_agent_log_node,
+    current_agent_log_node_id,
+)
 from avalanche.dag import Workflow
 
 from ..executor import Executor, LocalExecutor, RayExecutor
@@ -341,8 +345,10 @@ class _QueueLogHandler(logging.Handler):
 
     def emit(self, record: logging.LogRecord) -> None:
         name = record.name
-        node_id = self._node_id or (
-            name.split(".")[-1] if name.startswith("avalanche.node.") else name
+        node_id = (
+            current_agent_log_node_id()
+            or self._node_id
+            or (name.split(".")[-1] if name.startswith("avalanche.node.") else name)
         )
         _put_run_event(
             self._queue,
@@ -393,7 +399,7 @@ class _QueueStream:
                 "type": "log",
                 "timestamp": time.time(),
                 "level": self._level,
-                "node_id": self.node_id,
+                "node_id": current_agent_log_node_id() or self.node_id,
                 "message": _bounded_event_text(message, 65_536),
             },
         )
@@ -417,8 +423,26 @@ def _with_node_streams(
     stdout: _QueueStream,
     stderr: _QueueStream,
 ) -> Callable[..., Any]:
-    name = display_name_from_id(node_id)
+    name = node_id
 
+    if inspect.iscoroutinefunction(fn):
+
+        @wraps(fn)
+        async def async_wrapper(*args: Any, **kwargs: Any) -> Any:
+            old_stdout, old_stderr = stdout.node_id, stderr.node_id
+            stdout.node_id = name
+            stderr.node_id = name
+            try:
+                return await fn(*args, **kwargs)
+            finally:
+                stdout.flush()
+                stderr.flush()
+                stdout.node_id = old_stdout
+                stderr.node_id = old_stderr
+
+        return async_wrapper
+
+    @wraps(fn)
     def wrapper(*args: Any, **kwargs: Any) -> Any:
         old_stdout, old_stderr = stdout.node_id, stderr.node_id
         stdout.node_id = name
@@ -431,8 +455,6 @@ def _with_node_streams(
             stdout.node_id = old_stdout
             stderr.node_id = old_stderr
 
-    wrapper.__name__ = fn.__name__
-    wrapper.__qualname__ = fn.__qualname__
     return wrapper
 
 
@@ -459,14 +481,14 @@ def _with_agent_evidence(
 
         @wraps(fn)
         async def async_wrapper(*args: Any, **kwargs: Any) -> Any:
-            with capture_agent_evidence(emit):
+            with capture_agent_evidence(emit), capture_agent_log_node(node_id):
                 return await fn(*args, **kwargs)
 
         return async_wrapper
 
     @wraps(fn)
     def wrapper(*args: Any, **kwargs: Any) -> Any:
-        with capture_agent_evidence(emit):
+        with capture_agent_evidence(emit), capture_agent_log_node(node_id):
             return fn(*args, **kwargs)
 
     return wrapper
@@ -491,7 +513,31 @@ def _with_ray_node_streams(
     ray_log_queue: Any,
 ) -> Callable[..., Any]:
     """Return a cloudpickle-safe worker wrapper using only a Ray queue."""
-    name = display_name_from_id(node_id)
+    name = node_id
+
+    if inspect.iscoroutinefunction(fn):
+
+        @wraps(fn)
+        async def async_wrapper(*args: Any, **kwargs: Any) -> Any:
+            stdout = _QueueStream(ray_log_queue, name, logging.INFO)
+            stderr = _QueueStream(ray_log_queue, name, logging.ERROR)
+            old_stdout, old_stderr = sys.stdout, sys.stderr
+            root_logger = logging.getLogger()
+            old_level = root_logger.level
+            handler = _QueueLogHandler(ray_log_queue, node_id)
+            root_logger.addHandler(handler)
+            root_logger.setLevel(logging.DEBUG)
+            sys.stdout, sys.stderr = stdout, stderr
+            try:
+                return await fn(*args, **kwargs)
+            finally:
+                stdout.flush()
+                stderr.flush()
+                sys.stdout, sys.stderr = old_stdout, old_stderr
+                root_logger.removeHandler(handler)
+                root_logger.setLevel(old_level)
+
+        return async_wrapper
 
     @wraps(fn)
     def wrapper(*args: Any, **kwargs: Any) -> Any:
@@ -500,7 +546,7 @@ def _with_ray_node_streams(
         old_stdout, old_stderr = sys.stdout, sys.stderr
         root_logger = logging.getLogger()
         old_level = root_logger.level
-        handler = _QueueLogHandler(ray_log_queue, name)
+        handler = _QueueLogHandler(ray_log_queue, node_id)
         root_logger.addHandler(handler)
         root_logger.setLevel(logging.DEBUG)
         sys.stdout, sys.stderr = stdout, stderr
