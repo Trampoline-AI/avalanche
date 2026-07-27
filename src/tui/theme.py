@@ -71,6 +71,9 @@ LOG_LEVEL_STYLES: dict[LogLevel, Style] = {
 # ── DAG rendering constants ───────────────────────────────────────────────
 
 SPINNER_FRAMES = ["◐", "◑", "◒", "◓"]
+AGENT_MARKER = "◈"
+AGENT_STYLE = Style(color=ICE_PURPLE, bold=True)
+
 
 STATUS_CHARS: dict[NodeStatus, str] = {
     NodeStatus.PENDING: "○",
