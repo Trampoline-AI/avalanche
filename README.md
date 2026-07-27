@@ -87,8 +87,7 @@ original Python shape and portable file/workspace objects. A terminal
 `Workspace` carries its serializable manifest; its local `.path` exists only
 while Avalanche is executing user node code.
 
-Start with the simplest smoke-tested example:
-Run it through the local operator:
+Run the simplest smoke-tested example through the local operator:
 
 ```bash
 uv run ava dev --flows path/to/flow
