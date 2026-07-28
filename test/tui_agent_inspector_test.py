@@ -3,10 +3,13 @@
 from __future__ import annotations
 
 import json
+from collections.abc import Mapping, Sequence
 
 import pytest
 from textual.app import App, ComposeResult
+from textual.binding import Binding
 
+from avalanche.tui.app import AvalancheApp
 from avalanche.tui.dag_layout import DagNode
 from avalanche.tui.mock import MockStateProvider
 from avalanche.tui.models import NodeState, NodeStatus, RunState, RunStatus, WorkflowInfo
@@ -28,6 +31,39 @@ class _InspectorHarness(App[None]):
         yield AgentOutputInspector(id="output")
         yield AgentMetadataInspector(id="metadata")
 
+
+
+class _CountingMapping(Mapping[str, object]):
+    def __init__(self, size: int) -> None:
+        self.size = size
+        self.items_yielded = 0
+
+    def __getitem__(self, key: str) -> object:
+        return {"payload": key}
+
+    def __iter__(self):
+        return iter(())
+
+    def __len__(self) -> int:
+        return self.size
+
+    def items(self):
+        for index in range(self.size):
+            self.items_yielded += 1
+            yield f"item-{index}", {"payload": index}
+
+
+class _CountingSequence(Sequence[str]):
+    def __init__(self, size: int) -> None:
+        self.size = size
+        self.items_read = 0
+
+    def __getitem__(self, index: int) -> str:
+        self.items_read += 1
+        return f"value-{index}"
+
+    def __len__(self) -> int:
+        return self.size
 
 def _store(*, steps: list[dict], outputs: dict[str, object]) -> UIStore:
     metadata = {
@@ -126,7 +162,7 @@ async def test_agent_inspector_hierarchy_navigates_and_expands_each_tab():
         assert "Reasoning" not in collapsed
         assert "print('ready')" not in collapsed
         assert "←/→ tabs · ↑/↓ select · Enter expand/collapse · o full output" in collapsed
-        assert "PgUp/PgDn page · Esc back" in collapsed
+        assert "e/z all · PgUp/PgDn page · Esc back" in collapsed
 
         store.toggle_trace_turn()
         expanded = trace.render().plain
@@ -178,6 +214,19 @@ async def test_agent_inspector_hierarchy_navigates_and_expands_each_tab():
         store.toggle_trace_turn()
         assert "Inspect" in metadata.render().plain
 
+
+
+def test_inspector_expand_binding_uses_non_conflicting_e_key():
+
+    bindings = [
+        binding for binding in AvalancheApp.BINDINGS if isinstance(binding, Binding)
+    ]
+    expand_actions = {
+        binding.key
+        for binding in bindings
+        if binding.action == "expand_trace_hierarchy"
+    }
+    assert expand_actions == {"e"}
 
 def test_streamed_turns_default_to_collapsed_without_recollapsing_existing_turns():
     store = _store(steps=[_step(1)], outputs={"summary": {"ok": True}})
@@ -327,3 +376,350 @@ async def test_collapsed_and_offscreen_bodies_are_never_formatted(
         monkeypatch.setattr(trace, "_viewport", lambda: (10_000, 10))
         trace.render()
         assert calls == []
+
+
+def test_live_evidence_preserves_reasoning_and_terminal_outputs():
+    store = _store(steps=[], outputs={})
+    node = store.current_run.nodes["agent"]
+    node.status = NodeStatus.RUNNING
+    node.agent_trace_json = json.dumps(
+        {
+            "events": [
+                {
+                    "kind": "iteration.recorded",
+                    "data": {
+                        "step": {
+                            "iteration": 1,
+                            "reasoning": "Captured before hydration.",
+                        }
+                    },
+                }
+            ]
+        }
+    )
+    assert store.selected_agent_inspector_state == "live"
+    assert store.selected_agent_live_steps[0]["reasoning"] == "Captured before hydration."
+
+    node.status = NodeStatus.SUCCESS
+    node.agent_trace_json = json.dumps(
+        {
+            "events": [
+                {
+                    "kind": "run.succeeded",
+                    "data": {"status": "completed", "outputs": {"summary": "ready"}},
+                }
+            ]
+        }
+    )
+    assert store.selected_agent_inspector_state == "completed_with_output"
+    assert store.selected_agent_outputs == {"summary": "ready"}
+
+
+def test_inspector_states_distinguish_delay_completion_and_malformed_data():
+    store = _store(steps=[], outputs={})
+    node = store.current_run.nodes["agent"]
+    node.agent_trace_json = None
+    node.status = NodeStatus.PENDING
+    assert store.selected_agent_inspector_state == "pending"
+    node.status = NodeStatus.SUCCESS
+    assert store.selected_agent_inspector_state == "completed_without_output"
+    node.agent_trace_json = "{"
+    assert store.selected_agent_inspector_state == "malformed"
+
+
+def test_hydration_state_yields_to_installed_trace_body():
+    from avalanche.operator.models import TraceDescriptor
+
+    store = _store(steps=[], outputs={"summary": "ready"})
+    node = store.current_run.nodes["agent"]
+    node.trace = TraceDescriptor(available=True)
+    assert store.selected_agent_inspector_state == "completed_with_output"
+
+    node.agent_trace_json = None
+    assert store.selected_agent_inspector_state == "hydrating"
+
+
+def test_reasoning_navigation_includes_nested_values():
+    store = _store(steps=[_step(1, {"nested": {"values": [1, 2]}})], outputs={})
+    store.toggle_trace_turn()
+    store.move_trace_turn(1)
+    assert store.trace_selected_path == ("turn", "0", "reasoning")
+    store.toggle_trace_turn()
+    assert ("turn", "0", "reasoning", "key", "nested") in (
+        store.trace_inspector_navigation_paths()
+    )
+
+
+@pytest.mark.asyncio
+async def test_trace_rendering_distinguishes_pending_live_failed_malformed_and_incomplete():
+    store = _store(steps=[_step(1)], outputs={"summary": "ready"})
+    node = store.current_run.nodes["agent"]
+
+    def set_trace(status: NodeStatus, trace_json: str | None) -> None:
+        node.status = status
+        node.agent_trace_json = trace_json
+        store._invalidate_agent_event_details(store.current_run, "agent")
+        store._touch_trace_hierarchy()
+
+    app = _InspectorHarness(store)
+    async with app.run_test(size=(100, 20)):
+        trace = app.query_one("#trace", AgentTraceInspector)
+        set_trace(NodeStatus.PENDING, None)
+        assert "This agent step has not run yet" in trace.render().plain
+
+        set_trace(NodeStatus.RUNNING, None)
+        assert "waiting for live updates" in trace.render().plain
+
+        set_trace(
+            NodeStatus.RUNNING,
+            json.dumps(
+                {
+                    "events": [
+                        {
+                            "kind": "code.generated",
+                            "data": {"iteration": 1, "code": "print('live')"},
+                        }
+                    ]
+                }
+            ),
+        )
+        assert "LIVE TRACE · 1 turn(s)" in trace.render().plain
+
+        set_trace(NodeStatus.FAILED, None)
+        assert "Agent failed before a structured trace" in trace.render().plain
+
+        set_trace(NodeStatus.SUCCESS, "{")
+        assert "Trace is malformed." in trace.render().plain
+
+        completed_trace = _store(steps=[_step(1)], outputs={"summary": "ready"})
+        set_trace(
+            NodeStatus.FAILED,
+            completed_trace.current_run.nodes["agent"].agent_trace_json,
+        )
+        failed_trace = trace.render().plain
+        assert "Status: failed" in failed_trace
+        assert "submitted" not in failed_trace
+
+        incomplete = json.loads(_store(steps=[_step(1)], outputs={"summary": "ready"})
+                               .current_run.nodes["agent"].agent_trace_json)
+        incomplete["trace"]["evidence"]["complete"] = False
+        set_trace(NodeStatus.SUCCESS, json.dumps(incomplete))
+        assert "Live record: incomplete" in trace.render().plain
+
+
+@pytest.mark.asyncio
+async def test_live_reasoning_stays_hidden_until_iteration_is_recorded():
+    store = _store(steps=[], outputs={})
+    node = store.current_run.nodes["agent"]
+    node.status = NodeStatus.RUNNING
+    node.agent_trace_json = json.dumps(
+        {
+            "events": [
+                {
+                    "kind": "code.generated",
+                    "data": {"iteration": 1, "code": "print('live')"},
+                }
+            ]
+        }
+    )
+    store.trace_collapsed_turns.clear()
+    store.trace_selected_paths["trace"] = ("turn", "0")
+    app = _InspectorHarness(store)
+    async with app.run_test(size=(100, 20)):
+        trace = app.query_one("#trace", AgentTraceInspector)
+        assert "Reasoning" not in trace.render().plain
+
+        node.agent_trace_json = json.dumps(
+            {
+                "events": [
+                    {
+                        "kind": "iteration.recorded",
+                        "data": {
+                            "step": {
+                                "iteration": 1,
+                                "reasoning": "Captured reasoning.",
+                            }
+                        },
+                    }
+                ]
+            }
+        )
+        store._invalidate_agent_event_details(store.current_run, "agent")
+        store._touch_trace_hierarchy()
+        assert "Reasoning" in trace.render().plain
+
+
+@pytest.mark.asyncio
+async def test_expand_all_keeps_large_list_layout_and_work_bounded(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    store = _store(steps=[], outputs={"summary": {}})
+    sequence = _CountingSequence(50_000)
+    monkeypatch.setattr(
+        UIStore,
+        "selected_agent_outputs",
+        property(lambda _: {"summary": sequence}),
+    )
+    app = _InspectorHarness(store)
+    async with app.run_test(size=(100, 20)):
+        store.move_trace_inspector_tab(1)
+        store.expand_trace_hierarchy()
+        output = app.query_one("#output", AgentOutputInspector)
+        output.render()
+        assert output._layout is not None
+        assert len(output._layout.rows) < 250
+        assert sequence.items_read == 0
+
+        store.move_trace_turn(1)
+        output.render()
+        assert output._layout is not None
+        assert len(output._layout.rows) < 250
+        assert sequence.items_read == 0
+
+        store.move_trace_turn(1)
+        output.render()
+        assert output._layout is not None
+        assert len(output._layout.rows) < 250
+        assert sequence.items_read <= 10
+
+
+@pytest.mark.asyncio
+async def test_expand_all_lazily_slices_large_mapping_pages(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    store = _store(steps=[], outputs={"summary": {}})
+    mapping = _CountingMapping(50_000)
+    monkeypatch.setattr(
+        UIStore,
+        "selected_agent_outputs",
+        property(lambda _: {"summary": mapping}),
+    )
+    app = _InspectorHarness(store)
+    async with app.run_test(size=(100, 20)):
+        store.move_trace_inspector_tab(1)
+        store.expand_trace_hierarchy()
+        output = app.query_one("#output", AgentOutputInspector)
+        output.render()
+        assert output._layout is not None
+        assert len(output._layout.rows) < 250
+        assert mapping.items_yielded == 0
+
+        store.move_trace_turn(1)
+        output.render()
+        assert output._layout is not None
+        assert len(output._layout.rows) < 250
+        assert mapping.items_yielded == 0
+
+        store.move_trace_turn(1)
+        output.render()
+        assert output._layout is not None
+        assert len(output._layout.rows) < 250
+        assert mapping.items_yielded <= 10
+        next_page = (
+            "output",
+            "summary",
+            "range",
+            "0",
+            "500",
+            "range",
+            "5",
+            "10",
+        )
+        store._set_trace_selection(next_page)
+        store._touch_trace_hierarchy()
+        output.render()
+        assert mapping.items_yielded == 10
+
+
+        distant_page = (
+            "output",
+            "summary",
+            "range",
+            "49500",
+            "50000",
+            "range",
+            "49500",
+            "49505",
+        )
+        store._set_trace_selection(distant_page)
+        store._touch_trace_hierarchy()
+        output.render()
+        assert output._layout is not None
+        assert any("Visit earlier mapping pages" in row.label for row in output._layout.rows)
+        assert mapping.items_yielded <= 10
+
+
+def test_expanding_one_tab_preserves_other_tab_manual_collapses():
+    store = _store(steps=[], outputs={"summary": {"ok": True}})
+    store.move_trace_inspector_tab(2)
+    metadata_path = ("metadata", "signature")
+    assert store.trace_selected_path == metadata_path
+    store.expand_trace_hierarchy()
+    store.toggle_trace_turn()
+    assert metadata_path in store.trace_collapsed_items
+
+    store.move_trace_inspector_tab(-1)
+    store.expand_trace_hierarchy()
+    assert metadata_path in store.trace_collapsed_items
+    store.move_trace_inspector_tab(1)
+    assert not store.trace_path_expanded(metadata_path)
+
+
+
+@pytest.mark.asyncio
+async def test_mapping_key_named_range_preserves_page_cache_identity(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    store = _store(steps=[], outputs={"summary": {}})
+    mapping = _CountingMapping(50_000)
+    monkeypatch.setattr(
+        UIStore,
+        "selected_agent_outputs",
+        property(lambda _: {"summary": {"range": mapping}}),
+    )
+    app = _InspectorHarness(store)
+    async with app.run_test(size=(100, 20)):
+        store.move_trace_inspector_tab(1)
+        store.expand_trace_hierarchy()
+        output = app.query_one("#output", AgentOutputInspector)
+        for _ in range(3):
+            store.move_trace_turn(1)
+            output.render()
+        assert mapping.items_yielded == 5
+
+        next_page = (
+            "output",
+            "summary",
+            "key",
+            "range",
+            "range",
+            "0",
+            "500",
+            "range",
+            "5",
+            "10",
+        )
+        store._set_trace_selection(next_page)
+        store._touch_trace_hierarchy()
+        output.render()
+        assert mapping.items_yielded == 10
+
+
+@pytest.mark.asyncio
+async def test_completed_rlm_marks_only_the_final_turn_submitted():
+    store = _store(steps=[_step(1), _step(2)], outputs={"summary": "ready"})
+    envelope = json.loads(store.current_run.nodes["agent"].agent_trace_json)
+    envelope["trace"]["status"] = "completed"
+    store.current_run.nodes["agent"].agent_trace_json = json.dumps(envelope)
+    store.current_run.status = RunStatus.RUNNING
+    app = _InspectorHarness(store)
+    async with app.run_test(size=(100, 20)):
+        trace = app.query_one("#trace", AgentTraceInspector)
+        assert trace.render().plain.count("submitted") == 1
+
+        node = store.current_run.nodes["agent"]
+        node.status = NodeStatus.FAILED
+        assert "submitted" not in trace.render().plain
+
+        node.status = NodeStatus.SKIPPED
+        assert "submitted" not in trace.render().plain

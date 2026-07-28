@@ -111,6 +111,7 @@ def _project_evidence_event(
         step = step if isinstance(step, Mapping) else {}
         projected = {
             "iteration": step.get("iteration"),
+            "reasoning": step.get("reasoning"),
             "duration_ms": step.get("duration_ms"),
             "error": step.get("error"),
             "tool_count": len(step.get("tool_calls") or []),
@@ -144,6 +145,12 @@ def _project_evidence_event(
         projected = {
             key: data.get(key)
             for key in ("iteration", "output", "error")
+            if data.get(key) is not None
+        }
+    elif event_kind == "run.succeeded":
+        projected = {
+            key: data.get(key)
+            for key in ("status", "outputs")
             if data.get(key) is not None
         }
     elif event_kind in {"run.failed", "run.cancelled"}:
@@ -369,6 +376,7 @@ class _AgentStepSpec:
             "runtime": _effective_runtime_metadata(
                 workflow_defaults or {}, self.runtime_kwargs
             ),
+            "models": _effective_model_metadata(workflow_defaults or {}, self.runtime_kwargs),
             "skills": [_serialize_skill(skill) for skill in skills],
             "aggregated_static_instructions": aggregated_instructions,
             "packages": packages,
@@ -496,7 +504,6 @@ def _effective_runtime_metadata(
     }
     effective.update(workflow_defaults)
     effective.update(step_overrides)
-
     serialized: dict[str, Any] = {}
     for name, value in effective.items():
         if name in _OMITTED_RUNTIME_KEYS or _is_sensitive_key(name):
@@ -505,6 +512,75 @@ def _effective_runtime_metadata(
         if safe_value is not _OMIT_METADATA:
             serialized[name] = safe_value
     return serialized
+
+
+def _effective_model_metadata(
+    workflow_defaults: Mapping[str, Any], step_overrides: Mapping[str, Any]
+) -> dict[str, dict[str, Any]]:
+    """Describe only declaratively supported model sources; never probe DSPy globals."""
+    models: dict[str, dict[str, Any]] = {}
+    for runtime_key, label in (("lm", "main"), ("sub_lm", "sub")):
+        if runtime_key in step_overrides:
+            value = step_overrides[runtime_key]
+            source = "step override"
+        elif runtime_key in workflow_defaults:
+            value = workflow_defaults[runtime_key]
+            source = "workflow default"
+        else:
+            models[label] = {"source": "PredictRLM default"}
+            continue
+        models[label] = {
+            "source": source,
+            "identity": _strict_model_metadata_value(value, runtime_key),
+        }
+    return models
+
+
+def _strict_model_metadata_value(value: Any, runtime_key: str, path: str = "") -> Any:
+    """Serialize explicit model descriptors without silently omitting nested values."""
+    if value is None or isinstance(value, (str, bool, int)):
+        return value
+    if isinstance(value, float):
+        if math.isfinite(value):
+            return value
+        _raise_unsupported_model_descriptor(value, runtime_key, path)
+    if isinstance(value, Enum):
+        return _strict_model_metadata_value(value.value, runtime_key, path)
+    if isinstance(value, Mapping):
+        result: dict[str, Any] = {}
+        for key, item in value.items():
+            if not isinstance(key, str):
+                _raise_unsupported_model_descriptor(key, runtime_key, path)
+            if _is_sensitive_key(key):
+                continue
+            item_path = f"{path}.{key}" if path else key
+            result[key] = _strict_model_metadata_value(item, runtime_key, item_path)
+        return result
+    if isinstance(value, (list, tuple)):
+        return [
+            _strict_model_metadata_value(item, runtime_key, f"{path}[{index}]")
+            for index, item in enumerate(value)
+        ]
+
+    value_type = type(value)
+    module = value_type.__module__
+    if module == "dspy" or module.startswith(("dspy.", "predict_rlm.")):
+        descriptor = {"type": f"{module}.{value_type.__qualname__}"}
+        instance_name = getattr(value, "model", None) or getattr(value, "name", None)
+        if isinstance(instance_name, str):
+            descriptor["name"] = instance_name
+        return descriptor
+    _raise_unsupported_model_descriptor(value, runtime_key, path)
+
+
+def _raise_unsupported_model_descriptor(value: Any, runtime_key: str, path: str) -> None:
+    value_type = type(value)
+    location = f" at {path}" if path else ""
+    raise TypeError(
+        f"Unsupported {runtime_key} model descriptor{location}: "
+        f"{value_type.__module__}.{value_type.__qualname__}; "
+        "use a string, JSON-compatible descriptor, or a DSPy/PredictRLM model."
+    )
 
 
 def _safe_runtime_value(value: Any) -> Any:
