@@ -6,6 +6,7 @@ import json
 import threading
 import time
 from collections import OrderedDict, deque
+from collections.abc import Iterator, Mapping, Sequence
 from concurrent.futures import ThreadPoolExecutor
 from copy import copy
 from dataclasses import dataclass, field
@@ -45,6 +46,7 @@ TraceHydrationKey = tuple[str, str, int]
 RunDetailKey = tuple[str, str, int]
 
 
+MappingSource = tuple[tuple[str, ...], ...]
 @dataclass(frozen=True)
 class TraceDetailCompletion:
     """One trace body read, isolated from mutable structural run state."""
@@ -85,6 +87,25 @@ class _DetailHydrationRequirements:
         return stronger
 
 
+
+
+@dataclass
+class _MappingPageCache:
+    """Sequentially cache mapping entries without revisiting consumed prefixes."""
+
+    iterator: Iterator[tuple[str, Any]]
+    entries: list[tuple[str, Any]] = field(default_factory=list)
+    exhausted: bool = False
+
+    def page(self, start: int, end: int) -> tuple[tuple[str, Any], ...] | None:
+        if start > len(self.entries):
+            return None
+        while len(self.entries) < end and not self.exhausted:
+            try:
+                self.entries.append(next(self.iterator))
+            except StopIteration:
+                self.exhausted = True
+        return tuple(self.entries[start:end])
 @dataclass(frozen=True)
 class _DetailHydrationRetry:
     """One UI-loop deadline guarded by an opaque retry generation."""
@@ -304,10 +325,16 @@ class UIStore:
         self.trace_turn_index: int = 0
         self.trace_collapsed_turns: set[int] = set()
         self.trace_expanded_items: set[tuple[str, ...]] = set()
+        self.trace_expanded_all_tabs: set[TraceInspectorTab] = set()
+        self.trace_collapsed_items: set[tuple[str, ...]] = set()
         self.trace_selected_paths: dict[TraceInspectorTab, tuple[str, ...] | None] = {
             tab: None for tab in _TRACE_INSPECTOR_TABS
         }
         self._trace_known_turn_count: int = 0
+        self._mapping_page_caches: dict[
+            tuple[str, MappingSource], _MappingPageCache
+        ] = {}
+        self._mapping_page_cache_token: str | None = None
         self.trace_hierarchy_revision: int = 0
 
         self.trace_show_full_output: bool = False
@@ -512,6 +539,45 @@ class UIStore:
         return "" if state is None else state.agent_trace_json or ""
 
     @property
+    def selected_agent_inspector_state(self) -> str:
+        """Describe the selected agent detail without treating delayed data as invalid."""
+        node_id = self.selected_agent_node_id
+        run = self.current_run
+        if node_id is None or run is None:
+            return "pending"
+        state = run.nodes.get(node_id)
+        if state is None or state.status is NodeStatus.PENDING:
+            return "pending"
+        raw = state.agent_trace_json
+        envelope: dict[str, Any] | None = None
+        if raw:
+            try:
+                decoded = json.loads(raw)
+            except (TypeError, ValueError):
+                return "malformed"
+            if not isinstance(decoded, dict):
+                return "malformed"
+            envelope = decoded
+            if "trace" in envelope and envelope["trace"] is not None and not isinstance(
+                envelope["trace"], dict
+            ):
+                return "malformed"
+        if state.status is NodeStatus.FAILED or (
+            envelope is not None and envelope.get("error")
+        ):
+            return "failed"
+        if state.status is NodeStatus.RUNNING:
+            return "live"
+        if (
+            state.trace is not None
+            and state.trace.available
+            and not self._node_has_trace_body(state)
+        ):
+            return "hydrating"
+        outputs = self.selected_agent_outputs
+        return "completed_with_output" if outputs else "completed_without_output"
+
+    @property
     def selected_agent_events(self) -> list[dict]:
         run = self.current_run
         node_id = self.selected_agent_node_id
@@ -551,16 +617,22 @@ class UIStore:
 
     @property
     def selected_agent_outputs(self) -> dict[str, Any] | None:
+        """Return the newest terminal outputs from hydrated or live evidence."""
         envelope = self.selected_agent_trace_envelope
         trace = envelope.get("trace") if envelope is not None else None
-        if not isinstance(trace, dict):
-            return None
-        evidence = trace.get("evidence")
-        if not isinstance(evidence, dict):
-            return None
-        events = evidence.get("events")
-        if not isinstance(events, list):
-            return None
+        events: list[Any] = []
+        if isinstance(trace, dict):
+            evidence = trace.get("evidence")
+            if isinstance(evidence, dict) and isinstance(evidence.get("events"), list):
+                events = evidence["events"]
+        if (
+            not events
+            and isinstance(envelope, dict)
+            and isinstance(envelope.get("events"), list)
+        ):
+            events = envelope["events"]
+        if not events:
+            events = self.selected_agent_events
         for event in reversed(events):
             if not isinstance(event, dict):
                 continue
@@ -568,7 +640,7 @@ class UIStore:
                 continue
             data = event.get("data")
             if not isinstance(data, dict):
-                return None
+                continue
             outputs = data.get("outputs")
             return outputs if isinstance(outputs, dict) else None
         return None
@@ -608,6 +680,7 @@ class UIStore:
                 iteration,
                 {
                     "iteration": iteration,
+                    "reasoning": None,
                     "code": "",
                     "output": None,
                     "error": None,
@@ -625,7 +698,13 @@ class UIStore:
                 step["error"] = data.get("error")
             elif kind == "iteration.recorded":
                 source = recorded_step if isinstance(recorded_step, dict) else data
-                for field in ("duration_ms", "error", "tool_count", "predict_count"):
+                for field in (
+                    "reasoning",
+                    "duration_ms",
+                    "error",
+                    "tool_count",
+                    "predict_count",
+                ):
                     if field in source:
                         step[field] = source[field]
         return [steps_by_iteration[key] for key in sorted(steps_by_iteration)]
@@ -1411,8 +1490,167 @@ class UIStore:
         """Selected visible hierarchy item on the active inspector tab."""
         return self.trace_selected_paths[self.trace_inspector_tab]
 
+    def trace_path_expanded(self, path: tuple[str, ...]) -> bool:
+        """Whether an item is visibly expanded in the active inspector tab."""
+        return path in self.trace_expanded_items or (
+            self.trace_inspector_tab in self.trace_expanded_all_tabs
+            and path not in self.trace_collapsed_items
+        )
+
+    def trace_path_materialized(self, path: tuple[str, ...]) -> bool:
+        """Whether expanded descendants should enter the current bounded layout."""
+        if not self.trace_path_expanded(path):
+            return False
+        if self.trace_inspector_tab not in self.trace_expanded_all_tabs:
+            return True
+        selected = self.trace_selected_path
+        return path in self.trace_expanded_items or (
+            selected is not None and path == selected[: len(path)]
+        )
+
+    def mapping_page_items(
+        self,
+        source: MappingSource,
+        value: Mapping[str, Any],
+        start: int,
+        end: int,
+    ) -> tuple[tuple[str, Any], ...] | None:
+        """Return a cached sequential mapping page without rescanning its prefix."""
+        source_token = (
+            self.selected_agent_metadata_content_token
+            if self.trace_inspector_tab == "metadata"
+            else self.selected_agent_trace_content_token
+        )
+        token = f"{source_token}:{self.trace_show_full_output}"
+        if token != self._mapping_page_cache_token:
+            self._mapping_page_caches.clear()
+            self._mapping_page_cache_token = token
+        key = (self.trace_inspector_tab, source)
+        cache = self._mapping_page_caches.get(key)
+        if cache is None:
+            cache = _MappingPageCache(iter(value.items()))
+            self._mapping_page_caches[key] = cache
+        return cache.page(start, end)
+
+    def _active_trace_path_root(self) -> str:
+        return "turn" if self.trace_inspector_tab == "trace" else self.trace_inspector_tab
+
+    def _clear_active_trace_paths(self, paths: set[tuple[str, ...]]) -> None:
+        root = self._active_trace_path_root()
+        paths.intersection_update(path for path in paths if path[0] != root)
+
+    def _append_value_navigation_paths(
+        self,
+        paths: list[tuple[str, ...]],
+        path: tuple[str, ...],
+        value: Any,
+        *,
+        start: int = 0,
+        end: int | None = None,
+        source: MappingSource | None = None,
+    ) -> None:
+        """Append only expanded collection descendants, bounded to one page."""
+        source = (("root", *path),) if source is None else source
+        if not self.trace_path_materialized(path):
+            return
+        if isinstance(value, Mapping):
+            size = len(value)
+        elif isinstance(value, Sequence) and not isinstance(value, (str, bytes, bytearray)):
+            size = len(value)
+        else:
+            return
+        end = size if end is None else end
+        count = end - start
+        if count > 100:
+            page_width = (count + 99) // 100
+            for page_start in range(start, end, page_width):
+                page_end = min(end, page_start + page_width)
+                page = path + ("range", str(page_start), str(page_end))
+                paths.append(page)
+                if self.trace_path_materialized(page):
+                    self._append_value_navigation_paths(
+                        paths, page, value, start=page_start, end=page_end, source=source
+                    )
+            return
+        if isinstance(value, Mapping):
+            items = self.mapping_page_items(source, value, start, end)
+            if items is None:
+                return
+            for key, item in items:
+                if not isinstance(key, str):
+                    continue
+                child = path + ("key", key)
+                if isinstance(item, Mapping) or (
+                    isinstance(item, Sequence) and not isinstance(item, (str, bytes, bytearray))
+                ):
+                    paths.append(child)
+                    self._append_value_navigation_paths(
+                        paths, child, item, source=source + (("key", key),)
+                    )
+            return
+        for index in range(start, end):
+            item = value[index]
+            child = path + ("index", str(index))
+            if isinstance(item, Mapping) or (
+                isinstance(item, Sequence) and not isinstance(item, (str, bytes, bytearray))
+            ):
+                paths.append(child)
+                self._append_value_navigation_paths(
+                    paths, child, item, source=source + (("index", str(index)),)
+                )
+
+    def _metadata_inspector_values(self) -> dict[str, Any]:
+        metadata = self.selected_agent_metadata
+        if metadata is None:
+            return {}
+        signature = metadata.get("signature")
+        signature = signature if isinstance(signature, Mapping) else {}
+        runtime = metadata.get("runtime")
+        runtime = runtime if isinstance(runtime, Mapping) else {}
+        models = metadata.get("models")
+        if not isinstance(models, Mapping):
+            models = {
+                "main": (
+                    {"identity": runtime["lm"], "source": "effective runtime"}
+                    if "lm" in runtime
+                    else {"source": "PredictRLM default"}
+                ),
+                "sub": (
+                    {"identity": runtime["sub_lm"], "source": "effective runtime"}
+                    if "sub_lm" in runtime
+                    else {"source": "PredictRLM default"}
+                ),
+            }
+        skills = metadata.get("skills")
+        skill_records = {
+            skill["name"]: {
+                "instructions": skill.get("instructions", ""),
+                "packages": skill.get("packages", []),
+                "modules": skill.get("modules", []),
+                "tools": skill.get("tools", []),
+            }
+            for skill in skills
+            if isinstance(skill, Mapping) and isinstance(skill.get("name"), str)
+        } if isinstance(skills, list) else {}
+        return {
+            "signature": {
+                "instructions": signature.get("instructions", ""),
+                "name": signature.get("name", ""),
+            },
+            "inputs": signature.get("inputs", []),
+            "outputs": signature.get("outputs", []),
+            "skills": skill_records,
+            "models": models,
+            "runtime": {
+                key: value for key, value in runtime.items() if key not in {"lm", "sub_lm"}
+            },
+            "packages": metadata.get("packages", []),
+            "modules": metadata.get("modules", []),
+            "tools": metadata.get("tools", []),
+        }
+
     def trace_inspector_navigation_paths(self) -> list[tuple[str, ...]]:
-        """Return visible, expandable hierarchy entries without rendering bodies."""
+        """Return visible expandable hierarchy entries without formatting values."""
         if self.trace_inspector_tab == "trace":
             return self._trace_navigation_paths()
         if self.trace_inspector_tab == "output":
@@ -1420,35 +1658,25 @@ class UIStore:
             if outputs is None:
                 return []
             metadata = self.selected_agent_metadata
-            signature = metadata.get("signature") if isinstance(metadata, dict) else None
-            declared = signature.get("outputs") if isinstance(signature, dict) else None
-            declared_names = (
-                [
-                    field["name"]
-                    for field in declared
-                    if isinstance(field, dict) and isinstance(field.get("name"), str)
-                ]
-                if isinstance(declared, list)
-                else []
-            )
-            names = declared_names or list(outputs)
+            signature = metadata.get("signature") if isinstance(metadata, Mapping) else None
+            declared = signature.get("outputs") if isinstance(signature, Mapping) else None
+            names = [
+                field["name"]
+                for field in declared
+                if isinstance(field, Mapping) and isinstance(field.get("name"), str)
+            ] if isinstance(declared, list) else []
+            names = names or list(outputs)
             names.extend(name for name in outputs if name not in names)
-            return [("output", name) for name in names]
-        metadata = self.selected_agent_metadata
-        if metadata is None:
-            return []
-        return [
-            ("metadata", key)
-            for key in (
-                "signature",
-                "runtime",
-                "skills",
-                "aggregated_static_instructions",
-                "packages",
-                "modules",
-                "tools",
-            )
-        ]
+            paths = [("output", name) for name in names]
+            for name in names:
+                if name in outputs:
+                    self._append_value_navigation_paths(paths, ("output", name), outputs[name])
+            return paths
+        values = self._metadata_inspector_values()
+        paths = [("metadata", key) for key in values]
+        for key, value in values.items():
+            self._append_value_navigation_paths(paths, ("metadata", key), value)
+        return paths
 
     def _touch_trace_hierarchy(self) -> None:
         self.trace_hierarchy_revision += 1
@@ -1487,28 +1715,54 @@ class UIStore:
             paths.append(turn)
             if index in self.trace_collapsed_turns:
                 continue
-            paths.extend(turn + (section,) for section in ("reasoning", "code", "output"))
+            sections = ["code", "output"]
+            if step.get("reasoning") is not None:
+                sections.insert(0, "reasoning")
+            paths.extend(turn + (section,) for section in sections)
+            if step.get("reasoning") is not None:
+                self._append_value_navigation_paths(
+                    paths, turn + ("reasoning",), step["reasoning"]
+                )
+            self._append_value_navigation_paths(
+                paths, turn + ("output",), step.get(
+                    "untruncated_output" if self.trace_show_full_output else "output"
+                )
+            )
             tools = turn + ("tools",)
             paths.append(tools)
             calls = step.get("tool_calls")
-            if tools in self.trace_expanded_items and isinstance(calls, list):
+            if self.trace_path_materialized(tools) and isinstance(calls, list):
                 for call_index, call in enumerate(calls):
                     if not isinstance(call, dict):
                         continue
                     tool = tools + (str(call_index),)
                     paths.append(tool)
-                    if tool in self.trace_expanded_items:
-                        paths.extend((tool + ("input",), tool + ("result",)))
+                    if self.trace_path_materialized(tool):
+                        input_path = tool + ("input",)
+                        result_path = tool + ("result",)
+                        paths.extend((input_path, result_path))
+                        self._append_value_navigation_paths(
+                            paths,
+                            input_path,
+                            {
+                                key: call.get(key)
+                                for key in ("args", "kwargs")
+                                if call.get(key)
+                            },
+                        )
+                        self._append_value_navigation_paths(
+                            paths, result_path, call.get("error") or call.get("result")
+                        )
             predict = turn + ("predict",)
             paths.append(predict)
             groups = step.get("predict_calls")
-            if predict in self.trace_expanded_items and isinstance(groups, list):
+            if self.trace_path_materialized(predict) and isinstance(groups, list):
                 for group_index, group in enumerate(groups):
                     if not isinstance(group, dict):
                         continue
                     group_path = predict + (str(group_index),)
                     paths.append(group_path)
-                    if group_path not in self.trace_expanded_items:
+                    if not self.trace_path_materialized(group_path):
                         continue
                     calls = group.get("calls")
                     if not isinstance(calls, list):
@@ -1518,9 +1772,28 @@ class UIStore:
                             continue
                         call_path = group_path + (str(call_index),)
                         paths.append(call_path)
-                        if call_path in self.trace_expanded_items:
-                            paths.extend((call_path + ("input",), call_path + ("output",)))
-            paths.append(turn + ("metadata",))
+                        if self.trace_path_materialized(call_path):
+                            input_path = call_path + ("input",)
+                            output_path = call_path + ("output",)
+                            paths.extend((input_path, output_path))
+                            self._append_value_navigation_paths(
+                                paths, input_path, call.get("input")
+                            )
+                            self._append_value_navigation_paths(
+                                paths, output_path, call.get("error") or call.get("output")
+                            )
+            metadata_path = turn + ("metadata",)
+            paths.append(metadata_path)
+            self._append_value_navigation_paths(
+                paths,
+                metadata_path,
+                {
+                    "finish_reason": step.get("lm", {}).get("finish_reason")
+                    if isinstance(step.get("lm"), dict)
+                    else None,
+                    "usage": step.get("usage") if isinstance(step.get("usage"), dict) else {},
+                },
+            )
         return paths
 
     def _set_trace_selection(self, path: tuple[str, ...] | None) -> None:
@@ -1539,6 +1812,10 @@ class UIStore:
         self.trace_collapsed_turns = set(range(len(steps)))
         self._trace_known_turn_count = len(steps)
         self.trace_expanded_items.clear()
+        self.trace_expanded_all_tabs.clear()
+        self.trace_collapsed_items.clear()
+        self._mapping_page_caches.clear()
+        self._mapping_page_cache_token = None
         self.trace_selected_paths = {tab: None for tab in _TRACE_INSPECTOR_TABS}
         if steps:
             self._set_trace_selection(("turn", str(self.trace_turn_index)))
@@ -1554,6 +1831,10 @@ class UIStore:
         self.trace_collapsed_turns.clear()
         self._trace_known_turn_count = 0
         self.trace_expanded_items.clear()
+        self.trace_expanded_all_tabs.clear()
+        self.trace_collapsed_items.clear()
+        self._mapping_page_caches.clear()
+        self._mapping_page_cache_token = None
         self.trace_selected_paths = {tab: None for tab in _TRACE_INSPECTOR_TABS}
         self.trace_show_full_output = False
         self._touch_trace_hierarchy()
@@ -1583,7 +1864,10 @@ class UIStore:
             self._set_trace_selection(paths[0])
             return
         index = paths.index(selected)
-        self._set_trace_selection(paths[min(len(paths) - 1, max(0, index + delta))])
+        next_path = paths[min(len(paths) - 1, max(0, index + delta))]
+        self._set_trace_selection(next_path)
+        if self.trace_inspector_tab in self.trace_expanded_all_tabs:
+            self._touch_trace_hierarchy()
 
     def toggle_trace_turn(self) -> None:
         """Toggle the selected expandable hierarchy item."""
@@ -1596,13 +1880,39 @@ class UIStore:
                 self.trace_collapsed_turns.remove(index)
             else:
                 self.trace_collapsed_turns.add(index)
-            self._touch_trace_hierarchy()
-
-            return
-        if path in self.trace_expanded_items:
-            self.trace_expanded_items.remove(path)
+        elif self.trace_path_expanded(path):
+            self.trace_expanded_items.discard(path)
+            self.trace_collapsed_items.add(path)
         else:
+            self.trace_collapsed_items.discard(path)
             self.trace_expanded_items.add(path)
+        self._touch_trace_hierarchy()
+
+    def expand_trace_hierarchy(self) -> None:
+        """Logically expand the active hierarchy without eagerly building every page."""
+        if not self.trace_inspector_open:
+            return
+        self.trace_expanded_all_tabs.add(self.trace_inspector_tab)
+        self._clear_active_trace_paths(self.trace_collapsed_items)
+        if self.trace_inspector_tab == "trace":
+            self.trace_collapsed_turns.clear()
+        paths = self.trace_inspector_navigation_paths()
+        selected = self.trace_selected_path
+        normalized = selected if selected in paths else (paths[0] if paths else None)
+        self._set_trace_selection(normalized)
+        self._touch_trace_hierarchy()
+
+    def collapse_trace_hierarchy(self) -> None:
+        """Collapse the active hierarchy immediately and normalize its selection."""
+        if not self.trace_inspector_open:
+            return
+        self._clear_active_trace_paths(self.trace_expanded_items)
+        self.trace_expanded_all_tabs.discard(self.trace_inspector_tab)
+        self._clear_active_trace_paths(self.trace_collapsed_items)
+        if self.trace_inspector_tab == "trace":
+            self.trace_collapsed_turns = set(range(len(self.selected_agent_steps)))
+        paths = self.trace_inspector_navigation_paths()
+        self._set_trace_selection(paths[0] if paths else None)
         self._touch_trace_hierarchy()
 
     def toggle_trace_full_output(self) -> None:

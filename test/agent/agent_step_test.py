@@ -525,6 +525,8 @@ def test_agent_declaration_metadata_is_complete_static_and_redacted():
         {
             "max_iterations": 3,
             "debug": True,
+            "lm": "workflow-main",
+            "sub_lm": "workflow-sub",
             "api_key": "secret",
             "opaque": object(),
         }
@@ -576,9 +578,81 @@ def test_agent_declaration_metadata_is_complete_static_and_redacted():
     assert metadata["runtime"]["max_llm_calls"] == 50
     rendered = json.dumps(metadata)
     assert "secret" not in rendered
+    assert metadata["models"] == {
+        "main": {"source": "workflow default", "identity": "workflow-main"},
+        "sub": {"source": "workflow default", "identity": "workflow-sub"},
+    }
+    assert spec.declaration_metadata()["models"] == {
+        "main": {"source": "PredictRLM default"},
+        "sub": {"source": "PredictRLM default"},
+    }
     assert "/private" not in rendered
     assert "opaque" not in rendered
     assert "submit_confirmation" not in metadata["runtime"]
+
+
+@pytest.mark.parametrize("runtime_key", ("lm", "sub_lm"))
+def test_agent_declaration_metadata_rejects_unsupported_model_descriptors(runtime_key):
+    @ava.agent_step(SummarySignature)
+    async def summarize(person: Person, *, agent: ava.Agent) -> str:
+        return (await agent(person=person)).note
+
+    spec = summarize.fn.__agent_step__
+    with pytest.raises(TypeError, match=rf"Unsupported {runtime_key} model descriptor"):
+        spec.declaration_metadata({runtime_key: object()})
+
+
+@pytest.mark.parametrize(
+    ("runtime_key", "descriptor", "location"),
+    [
+        ("lm", {"client": object()}, "client"),
+        ("sub_lm", ["supported", object()], r"\[1\]"),
+    ],
+)
+def test_agent_declaration_metadata_rejects_nested_unsupported_model_descriptors(
+    runtime_key, descriptor, location
+):
+    @ava.agent_step(SummarySignature)
+    async def summarize(person: Person, *, agent: ava.Agent) -> str:
+        return (await agent(person=person)).note
+
+    spec = summarize.fn.__agent_step__
+    with pytest.raises(
+        TypeError, match=rf"Unsupported {runtime_key} model descriptor at {location}"
+    ):
+        spec.declaration_metadata({runtime_key: descriptor})
+
+
+def test_agent_declaration_metadata_preserves_supported_nested_model_descriptors():
+    @ava.agent_step(SummarySignature)
+    async def summarize(person: Person, *, agent: ava.Agent) -> str:
+        return (await agent(person=person)).note
+
+    metadata = summarize.fn.__agent_step__.declaration_metadata(
+        {
+            "lm": {
+                "provider": "openai",
+                "options": {"model": "gpt-5", "temperature": 0.2},
+                "api_key": "secret",
+            },
+            "sub_lm": ["anthropic", {"model": "claude"}],
+        }
+    )
+
+    assert metadata["models"] == {
+        "main": {
+            "source": "workflow default",
+            "identity": {
+                "provider": "openai",
+                "options": {"model": "gpt-5", "temperature": 0.2},
+            },
+        },
+        "sub": {
+            "source": "workflow default",
+            "identity": ["anthropic", {"model": "claude"}],
+        },
+    }
+    assert "secret" not in json.dumps(metadata)
 
 
 @pytest.mark.parametrize(
@@ -724,6 +798,7 @@ class _EvidencePredictor:
                 {
                     "step": {
                         "iteration": 1,
+                        "reasoning": "Check the evidence before summarizing.",
                         "duration_ms": 9,
                         "error": False,
                         "tool_calls": [{}],
@@ -744,7 +819,9 @@ class _EvidencePredictor:
             len(payloads) + 1,
             terminal_kind,
             len(payloads) + 1,
-            {"error": str(self.error)} if self.error is not None else {},
+            {"error": str(self.error)}
+            if self.error is not None
+            else {"status": "completed", "outputs": {"summary": "done"}},
         )
         for sink in self.sinks:
             await sink.flush("rlm-run")
@@ -798,6 +875,8 @@ async def test_agent_streams_sanitized_evidence_and_exported_trace(monkeypatch):
     assert "input" not in live[3]["data"]
     assert "output" not in live[4]["data"]
     assert "args" not in live[5]["data"]
+    assert live[7]["data"]["reasoning"] == "Check the evidence before summarizing."
+    assert live[8]["data"] == {"status": "completed", "outputs": {"summary": "done"}}
     assert "result" not in live[6]["data"]
     terminal = observed[-1]
     assert terminal["kind"] == "trace_finished"

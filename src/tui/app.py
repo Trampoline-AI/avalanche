@@ -75,6 +75,8 @@ class AvalancheApp(App):
         Binding("d", "toggle_dag", "DAG", priority=True),
         Binding("l", "toggle_logs", "Logs", priority=True),
         ("enter", "activate", "Enter"),
+        Binding("e", "expand_trace_hierarchy", "Expand all"),
+        Binding("z", "collapse_trace_hierarchy", "Collapse all", priority=True),
     ]
 
     def __init__(
@@ -897,6 +899,23 @@ class AvalancheApp(App):
                 self._screen.query_one("#agent-trace-inspector").scroll_end(animate=False)
             except Exception:
                 pass
+
+    def action_expand_trace_hierarchy(self) -> None:
+        if self.store.focused_pane != "trace":
+            return
+        self.store.expand_trace_hierarchy()
+        self._refresh_widgets()
+        self._scroll_trace_selection_into_view()
+
+    def action_collapse_trace_hierarchy(self) -> None:
+        if self.store.focused_pane != "trace":
+            return
+        self.store.collapse_trace_hierarchy()
+        self._refresh_widgets()
+        try:
+            self._screen.query_one("#agent-trace-inspector").scroll_home(animate=False)
+        except Exception:
+            pass
 
     # ── Other actions ──────────────────────────────────────────────
 
