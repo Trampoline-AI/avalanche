@@ -59,7 +59,9 @@ class AvalancheApp(App):
         ("escape", "escape_key", "Esc"),
         Binding("tab", "workflow_next", "Tab", priority=True),
         Binding("shift+tab", "workflow_prev", "Shift+Tab", priority=True),
-        ("r", "start_run", "Run"),
+        Binding("r", "start_run", "Run", priority=True),
+        Binding("x", "cancel_run", "Stop", priority=True),
+        Binding("a", "toggle_run_actions_menu", "Actions", priority=True),
         Binding("left", "nav_left", "←", priority=True),
         Binding("right", "nav_right", "→", priority=True),
         Binding("up", "nav_up", "↑", priority=True),
@@ -112,6 +114,8 @@ class AvalancheApp(App):
         self._cancel_run_requests: set[str] = set()
         self._run_controls_closed = False
         self._dag_visible = True
+        self._restore_dag_focus = False
+        self._restore_log_focus = False
         self._logs_visible = True
         self._run_actions_menu_open = False
         self._trace_hydration_retry: dict[TraceHydrationKey, tuple[int, float]] = {}
@@ -683,8 +687,21 @@ class AvalancheApp(App):
             panes.insert(0, "sidebar")
         return panes
 
+
     def _normalize_focused_pane(self) -> None:
         """Move focus out of collapsed dashboard panes."""
+        if (
+            self._restore_dag_focus
+            and not self._dag_visible
+            and self.store.focused_pane != "run-history"
+        ):
+            self._restore_dag_focus = False
+        if (
+            self._restore_log_focus
+            and not self._logs_visible
+            and self.store.focused_pane != "run-history"
+        ):
+            self._restore_log_focus = False
         if self.store.focused_pane in {"sidebar", "trace"}:
             return
         panes = self._visible_panes()
@@ -915,6 +932,10 @@ class AvalancheApp(App):
             self._log_autoscroll = True
             self._refresh_widgets()
 
+    def can_start_run(self) -> bool:
+        """Return whether the current workflow can start a run."""
+        return self.store.current_workflow is not None and not self.store._start_run_in_flight
+
     def can_cancel_selected_run(self) -> bool:
         run = self.store.current_run
         return (
@@ -953,23 +974,41 @@ class AvalancheApp(App):
         self._refresh_widgets()
 
     def action_toggle_run_actions_menu(self) -> None:
-        if self._screen is not None and self._screen.size.height <= 15:
+        if (
+            (self._screen is not None and self._screen.size.height <= 15)
+            or (not self.can_start_run() and not self.can_cancel_selected_run())
+        ):
             return
         self._run_actions_menu_open = not self._run_actions_menu_open
         self._refresh_widgets()
 
+
     def action_toggle_dag(self) -> None:
         """d: hide or show the DAG without remounting it."""
-        self._dag_visible = not self._dag_visible
-        if not self._dag_visible and self.store.focused_pane == "dag":
-            self.store.focused_pane = "run-history"
+        if self._dag_visible:
+            self._dag_visible = False
+            self._restore_dag_focus = self.store.focused_pane == "dag"
+            if self._restore_dag_focus:
+                self.store.focused_pane = "run-history"
+        else:
+            self._dag_visible = True
+            if self._restore_dag_focus and self.store.focused_pane == "run-history":
+                self.store.focused_pane = "dag"
+            self._restore_dag_focus = False
         self._refresh_widgets()
 
     def action_toggle_logs(self) -> None:
         """l: hide or show logs without remounting their content."""
-        self._logs_visible = not self._logs_visible
-        if not self._logs_visible and self.store.focused_pane == "log":
-            self.store.focused_pane = "run-history"
+        if self._logs_visible:
+            self._logs_visible = False
+            self._restore_log_focus = self.store.focused_pane == "log"
+            if self._restore_log_focus:
+                self.store.focused_pane = "run-history"
+        else:
+            self._logs_visible = True
+            if self._restore_log_focus and self.store.focused_pane == "run-history":
+                self.store.focused_pane = "log"
+            self._restore_log_focus = False
         self._refresh_widgets()
 
     def action_toggle_autoscroll(self) -> None:
