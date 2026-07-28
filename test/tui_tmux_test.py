@@ -93,6 +93,16 @@ def wait_for(text: str, timeout: float = 5.0) -> bool:
         time.sleep(0.2)
     return False
 
+def _wait_for_status_run(run_id: str, timeout: float = 5.0) -> bool:
+    """Wait until the status bar identifies the selected run."""
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        lines = capture()
+        if len(lines) > 1 and run_id in lines[-2]:
+            return True
+        time.sleep(0.2)
+    return False
+
 
 def assert_node_selected(node_name: str) -> None:
     """Assert the selected node is visible in a selection-specific UI surface."""
@@ -297,3 +307,47 @@ class TestTmuxRendering:
 
         send_keys("Escape")
         assert wait_for("Logs", timeout=5)
+
+    def test_run_controls_legend_and_bindings_in_real_terminal(self, tui_session):
+        """Runs legend remains visible while its advertised shortcuts control runs."""
+        restart_tui(width=100, height=40)
+        combined = "\n".join(capture())
+        for key_label in ("[r] Run", "[x] Stop", "[a] Actions", "[↑↓] Select"):
+            assert key_label in combined
+
+        run_header = find_text("Run ID")
+        assert run_header is not None
+        send_keys("r")
+        assert wait_for("running", timeout=5)
+        send_keys("a")
+        deadline = time.monotonic() + 5
+        while time.monotonic() < deadline:
+            opened_header = find_text("Run ID")
+            if opened_header is not None and opened_header[0] > run_header[0]:
+                break
+            time.sleep(0.2)
+        else:
+            pytest.fail("Actions shortcut did not expand the Runs pane")
+        send_keys("x")
+        assert wait_for("cancelled", timeout=5)
+        run_ids = [
+            next(token for token in line.split() if token.startswith("run_"))
+            for line in capture()
+            if "run_" in line and any(status in line for status in ("cancelled", "success"))
+        ]
+        assert len(run_ids) >= 2
+        newest_run_id, older_run_id = run_ids[:2]
+
+        send_keys("d", "Down")
+        assert _wait_for_status_run(older_run_id)
+        send_keys("Up")
+        assert _wait_for_status_run(newest_run_id)
+
+        restart_tui(width=50, height=15)
+        combined = "\n".join(capture())
+        for key_label in ("[r] Run", "[x] Stop", "[a] Actions", "[↑↓] Select"):
+            assert key_label in combined
+        send_keys("a")
+        time.sleep(0.3)
+        assert "[a] Actions" in "\n".join(capture())
+        assert not find_text("Stop selected run")

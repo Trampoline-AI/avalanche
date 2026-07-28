@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from rich.color import Color
 from rich.segment import Segments
+from rich.text import Text
 from textual import events
 from textual.app import ComposeResult
 from textual.containers import Horizontal, ScrollableContainer, Vertical
@@ -265,9 +266,11 @@ class WorkflowDetailScreen(Screen):
         min-width: 0;
         padding: 0 1;
     }
-    .control-hint {
-        width: 1fr;
-        content-align: right middle;
+    .pane-key-hint {
+        height: 1;
+        width: 100%;
+        padding: 0 1;
+        background: $panel;
         color: $text-muted;
     }
     #run-toolbar {
@@ -277,8 +280,21 @@ class WorkflowDetailScreen(Screen):
     #run-toolbar.-menu-open {
         height: 8;
     }
-    #run-controls {
-        height: 2;
+    #run-key-legend, #run-controls {
+        height: 1;
+        width: 100%;
+    }
+    #run-key-legend {
+        background: $panel;
+    }
+    #run-key-legend Static {
+        width: auto;
+        height: 1;
+        padding: 0 1;
+        color: $text;
+    }
+    #run-key-legend Static.-disabled {
+        color: $text-muted;
     }
     #run-action-menu {
         display: none;
@@ -412,29 +428,37 @@ class WorkflowDetailScreen(Screen):
                     with _TableScrollContainer(id="run-history") as rh:
                         rh.border_title = "Runs"
                         with Vertical(id="run-toolbar"):
+                            with Horizontal(id="run-key-legend"):
+                                yield Static(Text("[r] Run"), id="run-key-run")
+                                yield Static(Text("[x] Stop"), id="run-key-stop")
+                                yield Static(Text("[a] Actions"), id="run-key-actions")
+                                yield Static(Text("[↑↓] Select"), id="run-key-select")
                             with Horizontal(id="run-controls", classes="pane-controls"):
                                 yield Button("Start run (r)", id="run-start-button")
                                 yield Button("Stop selected", id="run-stop-button")
                                 yield Button("Actions ▾", id="run-actions-button")
-                                yield Static("↑↓ select", classes="control-hint")
                             with Vertical(id="run-action-menu"):
                                 yield Button("Start run (r)", id="run-menu-start-button")
                                 yield Button("Stop selected run", id="run-menu-stop-button")
                             yield Static(id="run-history-header", classes="pane-header")
                         yield RunHistoryWidget(id="run-history-content")
                     with Vertical(id="dag-section"):
-                        with Horizontal(id="dag-controls", classes="pane-controls"):
-                            yield Button("Hide DAG (d)", id="dag-toggle-button")
-                            yield Static("collapse / restore", classes="control-hint")
+                        yield Static(
+                            Text("[d] DAG · hide"),
+                            id="dag-key-hint",
+                            classes="pane-key-hint",
+                        )
                         with _DagScrollContainer(id="dag-container") as dag_container:
                             dag_container.border_title = "DAG"
                             dag_container.styles.height = "1fr"
                             yield DagWidget(id="dag-panel")
                             yield _DagCenterBtn(" ⊡ center ", id="dag-center-btn")
                     with Vertical(id="log-section"):
-                        with Horizontal(id="log-controls", classes="pane-controls"):
-                            yield Button("Hide Logs (l)", id="log-toggle-button")
-                            yield Static("collapse / restore", classes="control-hint")
+                        yield Static(
+                            Text("[l] Logs · hide"),
+                            id="log-key-hint",
+                            classes="pane-key-hint",
+                        )
                         with Vertical(id="log-panel") as lp:
                             lp.border_title = "Logs"
                             lp.styles.height = "1fr"
@@ -452,6 +476,7 @@ class WorkflowDetailScreen(Screen):
         yield StatusBar(id="status-bar")
 
     def on_mount(self) -> None:
+        self._control_state = None
         try:
             sidebar = self.query_one("#sidebar", Sidebar)
             sidebar.styles.width = self.app.store.sidebar_width
@@ -463,9 +488,7 @@ class WorkflowDetailScreen(Screen):
         app = self.app
         dag_visible = app._dag_visible
         logs_visible = app._logs_visible
-        can_start = (
-            app.store.current_workflow is not None and not app.store._start_run_in_flight
-        )
+        can_start = app.can_start_run()
         can_stop = app.can_cancel_selected_run()
         compact_layout = self.size.height <= 15
         menu_was_open = app._run_actions_menu_open
@@ -487,16 +510,21 @@ class WorkflowDetailScreen(Screen):
 
         self.query_one("#dag-section").set_class(not dag_visible, "-collapsed")
         self.query_one("#dag-container").display = dag_visible
-        self.query_one("#dag-toggle-button", Button).label = (
-            "Hide DAG (d)" if dag_visible else "Show DAG (d)"
+        self.query_one("#dag-key-hint", Static).update(
+            Text("[d] DAG · hide" if dag_visible else "[d] DAG hidden · restore")
         )
         self.query_one("#log-section").set_class(not logs_visible, "-collapsed")
         self.query_one("#log-panel").display = logs_visible
-        self.query_one("#log-toggle-button", Button).label = (
-            "Hide Logs (l)" if logs_visible else "Show Logs (l)"
+        self.query_one("#log-key-hint", Static).update(
+            Text("[l] Logs · hide" if logs_visible else "[l] Logs hidden · restore")
         )
         self.query_one("#run-start-button", Button).disabled = not can_start
         self.query_one("#run-stop-button", Button).disabled = not can_stop
+        self.query_one("#run-key-run", Static).set_class(not can_start, "-disabled")
+        self.query_one("#run-key-stop", Static).set_class(not can_stop, "-disabled")
+        self.query_one("#run-key-actions", Static).set_class(
+            compact_layout or (not can_start and not can_stop), "-disabled"
+        )
         menu_button = self.query_one("#run-actions-button", Button)
         menu_button.disabled = compact_layout or (not can_start and not can_stop)
         self.query_one("#log-section").set_class(compact_layout, "-compact")
@@ -571,8 +599,6 @@ class WorkflowDetailScreen(Screen):
     def on_button_pressed(self, event: Button.Pressed) -> None:
         """Dispatch pane-local controls to the application actions."""
         action_by_button = {
-            "dag-toggle-button": self.app.action_toggle_dag,
-            "log-toggle-button": self.app.action_toggle_logs,
             "run-start-button": self.app.action_start_run,
             "run-stop-button": self.app.action_cancel_run,
             "run-actions-button": self.app.action_toggle_run_actions_menu,
