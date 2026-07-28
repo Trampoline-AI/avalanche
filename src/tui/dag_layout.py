@@ -14,8 +14,8 @@ from rich.text import Text
 
 from .models import NodeStatus, WorkflowInfo, display_name_from_id
 from .theme import (
-    AGENT_MARKER,
-    AGENT_STYLE,
+    AGENT_CAPTION_SELECTED_STYLE,
+    AGENT_CAPTION_STYLE,
     ARROW_STYLE,
     BRACKET_STYLE,
     DIM_STYLE,
@@ -42,6 +42,10 @@ class DagNode:
     is_agent: bool = False
     col: int = 0
     row: int = 0
+    render_row: int | None = None
+    caption_render_row: int | None = None
+    render_col: int | None = None
+    caption_col: int | None = None
 
     def __post_init__(self) -> None:
         if not self.display_name:
@@ -431,91 +435,217 @@ def _collect_node_names(steps: list[DagNode | ParGroup]) -> set[str]:
     return names
 
 
-def _render_cross_track_skip_edges(
-    lines: list[Text], skip_edges: list[tuple[str, str]],
+def _collect_nodes(steps: list[DagNode | ParGroup]) -> list[DagNode]:
+    """Collect nodes whose render anchors need a track-row offset."""
+    nodes: list[DagNode] = []
+    for step in steps:
+        if isinstance(step, DagNode):
+            nodes.append(step)
+        elif isinstance(step, ParGroup):
+            for branch in step.branches:
+                nodes.extend(_collect_nodes(branch.steps))
+    return nodes
+
+
+
+def _anchor_rendered_nodes(lines: list[Text], steps: list[DagNode | ParGroup]) -> None:
+    """Record each node occurrence's exact label and caption columns."""
+    next_col_by_row: dict[int, int] = {}
+    for node in _collect_nodes(steps):
+        if node.virtual or node.render_row is None:
+            continue
+        needle = f" {node.display_name} "
+        row = node.render_row
+        col = lines[row].plain.find(needle, next_col_by_row.get(row, 0))
+        if col < 0:
+            continue
+        node.render_col = col
+        node.caption_col = col + 1 if node.is_agent else None
+        next_col_by_row[row] = col + len(needle)
+
+
+def _reserve_drop_lanes(
+    lines: list[Text],
+    raw_edges: list[tuple[int, int, int, int]],
+) -> list[tuple[int, int, int, int]]:
+    """Allocate bounded, caption-safe drop lanes for skip-edge connectors."""
+    max_width = max((len(line.plain) for line in lines), default=0)
+    blocked_from_row = [0] * (len(lines) + 1)
+    for row in range(len(lines) - 1, -1, -1):
+        blocked_columns = sum(
+            1 << col for col, glyph in enumerate(lines[row].plain) if glyph != " "
+        )
+        blocked_from_row[row] = blocked_from_row[row + 1] | blocked_columns
+
+    used_columns: set[int] = set()
+    endpoint_lanes: dict[tuple[int, int], int] = {}
+    next_gutter_column = max_width + 1
+
+    def _allocate(preferred: int, start_row: int) -> int:
+        nonlocal next_gutter_column
+        blocked_columns = blocked_from_row[min(start_row, len(lines))]
+        for distance in range(33):
+            candidates = [preferred] if distance == 0 else [
+                preferred - distance,
+                preferred + distance,
+            ]
+            for col in candidates:
+                if (
+                    col >= 0
+                    and not blocked_columns & (1 << col)
+                    and col - 1 not in used_columns
+                    and col not in used_columns
+                    and col + 1 not in used_columns
+                ):
+                    used_columns.add(col)
+                    return col
+        while (
+            next_gutter_column - 1 in used_columns
+            or next_gutter_column in used_columns
+            or next_gutter_column + 1 in used_columns
+        ):
+            next_gutter_column += 2
+        lane = next_gutter_column
+        used_columns.add(lane)
+        next_gutter_column += 2
+        return lane
+
+    def _lane(row: int, anchor: int) -> int:
+        key = (row, anchor)
+        if key not in endpoint_lanes:
+            endpoint_lanes[key] = _allocate(anchor, row + 1)
+        return endpoint_lanes[key]
+
+    return [
+        (src_row, _lane(src_row, src_col), dst_row, _lane(dst_row, dst_col))
+        for src_row, src_col, dst_row, dst_col in raw_edges
+    ]
+
+
+def _append_routed_skip_edges(
+    lines: list[Text],
+    edges: list[tuple[int, int, int, int]],
+    raw_edges: list[tuple[int, int, int, int]],
 ) -> None:
-    """Render skip edge connectors across tracks by searching rendered text."""
-    from rich.style import Style as _Style
+    """Append caption-safe skip connectors with endpoint leaders."""
+    max_col = max(max(src_col, dst_col) for _, src_col, _, dst_col in edges) + 1
+    for line in lines:
+        if len(line.plain) < max_col:
+            line.append(" " * (max_col - len(line.plain)))
 
-    node_positions: dict[str, tuple[int, int]] = {}
-    for ri, line in enumerate(lines):
-        plain = line.plain
-        for src, dst in skip_edges:
-            for node_id in (src, dst):
-                if node_id not in node_positions:
-                    dname = display_name_from_id(node_id)
-                    idx = plain.find(f" {dname} ")
-                    if idx >= 0:
-                        center = idx + 1 + len(dname) // 2
-                        node_positions[node_id] = (ri, center)
+    routes = sorted(
+        zip(edges, raw_edges, strict=True),
+        key=lambda route: abs(route[0][3] - route[0][1]),
+    )
+    edge_styles = [
+        Style(color=SKIP_EDGE_COLORS[index % len(SKIP_EDGE_COLORS)])
+        for index in range(len(routes))
+    ]
+    connector_start = len(lines)
+    for index, ((_, src_col, _, dst_col), _) in enumerate(routes):
+        style = edge_styles[index]
+        left, right = min(src_col, dst_col), max(src_col, dst_col)
+        line = Text()
+        line.append(" " * left)
+        line.append("╰", style)
+        line.append("┄" * (right - left - 1), style)
+        line.append("╯", style)
+        line.append(" " * (max_col - right - 1))
+        lines.append(line)
 
-    raw_edges = []
-    for src, dst in skip_edges:
-        sp = node_positions.get(src)
-        dp = node_positions.get(dst)
-        if sp and dp:
-            raw_edges.append((sp[0], sp[1], dp[0], dp[1]))
+    glyphs_by_row: dict[int, dict[int, tuple[str, Style]]] = {}
+    leader_intervals_by_row: dict[int, list[tuple[int, int]]] = {}
+    scheduled_leaders: set[tuple[int, int, int]] = set()
 
+
+    def _add_endpoint_leader(
+        row: int,
+        lane: int,
+        anchor: int,
+        style: Style,
+    ) -> None:
+        leader_key = (row, lane, anchor)
+        if leader_key in scheduled_leaders:
+            return
+        scheduled_leaders.add(leader_key)
+        plain = lines[row].plain
+        direction = 1 if lane > anchor else -1
+        attachment = anchor
+        while 0 <= attachment < len(plain) and plain[attachment] != " ":
+            attachment += direction
+        if attachment < 0 or attachment >= len(plain):
+            return
+        left, right = min(attachment, lane), max(attachment, lane)
+        if any(plain[col] != " " for col in range(left, right + 1)):
+            return
+        if lane == attachment:
+            return
+        intervals = leader_intervals_by_row.setdefault(row, [])
+        if any(
+            left <= existing_right and existing_left <= right
+            for existing_left, existing_right in intervals
+        ):
+            raise RuntimeError("overlapping DAG skip-edge endpoint leaders")
+        intervals.append((left, right))
+        glyphs = glyphs_by_row.setdefault(row, {})
+        if lane > attachment:
+            glyphs[attachment] = ("╰", style)
+            for col in range(attachment + 1, lane):
+                glyphs[col] = ("┄", style)
+            glyphs[lane] = ("╮", style)
+        else:
+            glyphs[attachment] = ("╯", style)
+            for col in range(lane + 1, attachment):
+                glyphs[col] = ("┄", style)
+            glyphs[lane] = ("╭", style)
+
+    for index, ((src_row, src_col, dst_row, dst_col), raw_edge) in enumerate(routes):
+        style = edge_styles[index]
+        _, src_anchor, _, dst_anchor = raw_edge
+        horizontal_row = connector_start + index
+        for row in range(src_row + 1, horizontal_row):
+            glyphs_by_row.setdefault(row, {})[src_col] = ("┆", style)
+        for row in range(dst_row + 1, horizontal_row):
+            glyphs_by_row.setdefault(row, {})[dst_col] = ("┆", style)
+        _add_endpoint_leader(src_row + 1, src_col, src_anchor, style)
+        _add_endpoint_leader(dst_row + 1, dst_col, dst_anchor, style)
+
+    for row, glyphs in glyphs_by_row.items():
+        line = lines[row]
+        characters = list(line.plain)
+        styled_glyphs: list[tuple[int, str, Style]] = []
+        for col, (glyph, style) in glyphs.items():
+            if characters[col] == " ":
+                characters[col] = glyph
+                styled_glyphs.append((col, glyph, style))
+        if styled_glyphs:
+            line.plain = "".join(characters)
+            for col, _, style in styled_glyphs:
+                line.stylize(style, col, col + 1)
+
+def _render_cross_track_skip_edges(
+    lines: list[Text],
+    skip_edges: list[tuple[str, str]],
+    nodes: list[DagNode],
+) -> None:
+    """Render cross-track skip connectors through caption-safe reserved lanes."""
+    node_positions = {
+        node.name: (
+            node.render_row,
+            node.render_col + 1 + len(node.display_name) // 2,
+        )
+        for node in nodes
+        if not node.virtual and node.render_row is not None and node.render_col is not None
+    }
+    raw_edges = [
+        (src_pos[0], src_pos[1], dst_pos[0], dst_pos[1])
+        for src, dst in skip_edges
+        if (src_pos := node_positions.get(src)) and (dst_pos := node_positions.get(dst))
+    ]
     if not raw_edges:
         return
 
-    cols_used: list[int] = []
-    edges: list[tuple[int, int, int, int]] = []
-    for sr, sc, dr, dc in raw_edges:
-        while any(abs(sc - u) < 2 for u in cols_used):
-            sc += 2
-        while any(abs(dc - u) < 2 for u in cols_used):
-            dc += 2
-        cols_used.extend([sc, dc])
-        edges.append((sr, sc, dr, dc))
-
-    max_col = max(max(sc, dc) for _, sc, _, dc in edges) + 1
-    edges_sorted = sorted(edges, key=lambda e: abs(e[3] - e[1]))
-    edge_styles = [
-        _Style(color=SKIP_EDGE_COLORS[i % len(SKIP_EDGE_COLORS)])
-        for i in range(len(edges_sorted))
-    ]
-
-    def _splice(line: Text, col: int, char: str, style: _Style) -> Text:
-        plain = line.plain
-        if col >= len(plain) or plain[col] != " ":
-            return line
-        before = line[:col]
-        after = line[col + 1:]
-        new = Text()
-        new.append_text(before)
-        new.append(char, style)
-        new.append_text(after)
-        return new
-
-    # Pad all existing lines to max_col so vertical ┆ can be spliced
-    # through short lines (e.g. empty track separators, narrower tracks)
-    for i in range(len(lines)):
-        plain = lines[i].plain
-        if len(plain) < max_col:
-            lines[i].append(" " * (max_col - len(plain)))
-
-    connector_start = len(lines)
-    for ei, (sr, sc, dr, dc) in enumerate(edges_sorted):
-        style = edge_styles[ei]
-        left, right = min(sc, dc), max(sc, dc)
-        t = Text()
-        t.append(" " * left)
-        t.append("╰", style)
-        t.append("┄" * (right - left - 1), style)
-        t.append("╯", style)
-        pad = max_col - right - 1
-        if pad > 0:
-            t.append(" " * pad)
-        lines.append(t)
-
-    for ei, (sr, sc, dr, dc) in enumerate(edges_sorted):
-        style = edge_styles[ei]
-        horiz_row = connector_start + ei
-        for ri in range(sr + 1, horiz_row):
-            lines[ri] = _splice(lines[ri], sc, "┆", style)
-        for ri in range(dr + 1, horiz_row):
-            lines[ri] = _splice(lines[ri], dc, "┆", style)
+    _append_routed_skip_edges(lines, _reserve_drop_lanes(lines, raw_edges), raw_edges)
 
 
 # ── Rich text rendering ───────────────────────────────────────────────────
@@ -544,12 +674,11 @@ def plain_node_width(
 ) -> int:
     if node.virtual:
         return len(VIRTUAL_LABELS.get(node.name, node.name))
-    w = 4 + len(node.display_name)  # " ○ name "
-    if node.is_agent:
-        w += 2  # " ◈"
     dur = _duration_label(elapsed, status)
-    w += len(dur) + 3  # " (dur) " — space, parens, trailing space
-    return w
+    primary_width = 4 + len(node.display_name) + len(dur) + 3  # " ○ name (dur) "
+    if node.is_agent:
+        return max(primary_width, 3 + len("(agent)"))
+    return primary_width
 
 
 def measure_seq(
@@ -611,22 +740,36 @@ def append_node(
         text.append(m, VIRTUAL_STYLE)
         return
     dur = _duration_label(elapsed, status)
-    agent_marker = f" {AGENT_MARKER}" if node.is_agent else ""
     if node is selected:
         sel = Style(bgcolor=ICE_STEEL, bold=True)
         label = (
-            f" {m}{agent_marker} {node.display_name} ({dur}) "
+            f" {m} {node.display_name} ({dur}) "
             if dur
-            else f" {m}{agent_marker} {node.display_name} "
+            else f" {m} {node.display_name} "
         )
         text.append(label, Style(color=ICE_FROST) + sel)
     else:
         text.append(f" {m}", style)
-        if node.is_agent:
-            text.append(agent_marker, AGENT_STYLE)
         text.append(f" {node.display_name} ", Style(color=ICE_FROST))
         if dur:
             text.append(f"({dur}) ", DIM_STYLE)
+
+def append_node_caption(
+    text: Text,
+    node: DagNode,
+    status: NodeStatus,
+    selected: DagNode | None,
+    elapsed: float | None = None,
+) -> None:
+    """Append a node-width caption row aligned under its display name."""
+    width = plain_node_width(node, elapsed, status)
+    if not node.is_agent:
+        text.append(" " * width)
+        return
+    text.append(" " * 3)
+    style = AGENT_CAPTION_SELECTED_STYLE if node is selected else AGENT_CAPTION_STYLE
+    text.append("(agent)", style)
+    text.append(" " * (width - 3 - len("(agent)")))
 
 
 def append_seq(
@@ -650,6 +793,27 @@ def append_seq(
             # Render the widest branch (same as what measure_par uses)
             widest = max(step.branches, key=lambda b: measure_seq(b, node_elapsed, statuses))
             append_seq(text, widest, statuses, frame, selected, node_elapsed)
+
+def append_seq_caption(
+    text: Text,
+    seq: SeqGroup,
+    statuses: dict[str, NodeStatus],
+    selected: DagNode | None,
+    node_elapsed: dict[str, float | None] | None = None,
+) -> None:
+    """Append captions and padding that match a sequence's primary row."""
+    if node_elapsed is None:
+        node_elapsed = {}
+    for i, step in enumerate(seq.steps):
+        if i > 0:
+            text.append(" " * 4)
+        if isinstance(step, DagNode):
+            status = statuses.get(step.name, NodeStatus.PENDING)
+            elapsed = node_elapsed.get(step.name)
+            append_node_caption(text, step, status, selected, elapsed)
+        elif isinstance(step, ParGroup):
+            widest = max(step.branches, key=lambda b: measure_seq(b, node_elapsed, statuses))
+            append_seq_caption(text, widest, statuses, selected, node_elapsed)
 
 
 def render_dag_rich(
@@ -679,11 +843,17 @@ def render_dag_rich(
                 if s in track_node_names and d in track_node_names
             ]
             track_dag = SeqGroup(steps=track_steps, skip_edges=track_skips)
+            if ti > 0 and all_lines:
+                all_lines.append(Text())  # blank separator between tracks
+            track_offset = len(all_lines)
             track_lines = render_dag_rich(
                 track_dag, statuses, frame, selected, node_elapsed,
             )
-            if ti > 0 and all_lines:
-                all_lines.append(Text())  # blank separator between tracks
+            for node in _collect_nodes(track_steps):
+                if node.render_row is not None:
+                    node.render_row += track_offset
+                if node.caption_render_row is not None:
+                    node.caption_render_row += track_offset
             all_lines.extend(track_lines)
         # Render cross-track skip edge connectors
         cross_skips = [
@@ -695,7 +865,11 @@ def render_dag_rich(
             )
         ]
         if cross_skips:
-            _render_cross_track_skip_edges(all_lines, cross_skips)
+            _render_cross_track_skip_edges(
+                all_lines,
+                cross_skips,
+                [node for track in tracks for node in _collect_nodes(track)],
+            )
         return all_lines
     def _max_parallel(steps: list) -> int:
         """Recursively find the max number of parallel branches in any ParGroup."""
@@ -750,68 +924,114 @@ def render_dag_rich(
     has_skip_edges = bool(dag.skip_edges)
     flat_steps = _flatten_to_columns(dag.steps)
     max_branches = _max_parallel(dag.steps)
-    # Add spacer rows between branches only when skip edges need routing
     if has_skip_edges:
-        max_height = max(1, 2 * max_branches - 1)
+        logical_height = max(1, 2 * max_branches - 1)
     else:
-        max_height = max_branches
-    mid = max_height // 2
+        logical_height = max_branches
+    mid = logical_height // 2
 
-    columns: list[list[tuple[Text, int]]] = []
-    is_virtual: list[bool] = []  # track which columns are virtual start/end
-    is_par: list[bool] = []  # track which columns are parallel groups
+    def _seq_has_agent(seq: SeqGroup) -> bool:
+        return any(
+            step.is_agent
+            if isinstance(step, DagNode)
+            else any(_seq_has_agent(branch) for branch in step.branches)
+            for step in seq.steps
+        )
 
+    logical_has_caption = [False] * logical_height
     for step in flat_steps:
         if isinstance(step, DagNode):
-            step._render_row = mid
-            elapsed = (node_elapsed or {}).get(step.name)
-            status = statuses.get(step.name, NodeStatus.PENDING)
-            w = plain_node_width(step, elapsed, status)
-            col: list[tuple[Text, int]] = []
-            for row in range(max_height):
-                if row == mid:
-                    t = Text()
-                    append_node(t, step, status, frame, selected, elapsed)
-                    col.append((t, w))
-                else:
-                    col.append((Text(" " * w), w))
-            columns.append(col)
-            is_virtual.append(step.virtual)
-            is_par.append(False)
-
+            logical_has_caption[mid] |= step.is_agent
         elif isinstance(step, ParGroup):
             n = len(step.branches)
-            branch_data = []
-            # Spaced layout when skip edges present, compact otherwise
             if has_skip_edges:
                 spaced_h = 2 * n - 1
                 row_stride = 2
             else:
                 spaced_h = n
                 row_stride = 1
-            par_offset = (max_height - spaced_h) // 2
+            par_offset = (logical_height - spaced_h) // 2
+            for branch_index, branch in enumerate(step.branches):
+                logical_row = par_offset + branch_index * row_stride
+                logical_has_caption[logical_row] |= _seq_has_agent(branch)
+
+    logical_row_starts: list[int] = []
+    physical_rows: list[int] = []
+    for logical_row, has_caption in enumerate(logical_has_caption):
+        logical_row_starts.append(len(physical_rows))
+        physical_rows.append(logical_row)
+        if has_caption:
+            physical_rows.append(logical_row)
+    render_height = len(physical_rows)
+
+    columns: list[list[tuple[Text, int]]] = []
+    is_virtual: list[bool] = []  # track which columns are virtual start/end
+
+    for step in flat_steps:
+        if isinstance(step, DagNode):
+            step.render_row = logical_row_starts[mid]
+            step.caption_render_row = step.render_row + 1 if step.is_agent else None
+            elapsed = (node_elapsed or {}).get(step.name)
+            status = statuses.get(step.name, NodeStatus.PENDING)
+            w = plain_node_width(step, elapsed, status)
+            col: list[tuple[Text, int]] = []
+            for row in range(render_height):
+                if row == step.render_row:
+                    t = Text()
+                    append_node(t, step, status, frame, selected, elapsed)
+                    col.append((t, w))
+                elif step.caption_render_row is not None and row == step.caption_render_row:
+                    t = Text()
+                    append_node_caption(t, step, status, selected, elapsed)
+                    col.append((t, w))
+                else:
+                    col.append((Text(" " * w), w))
+            columns.append(col)
+            is_virtual.append(step.virtual)
+
+        elif isinstance(step, ParGroup):
+            n = len(step.branches)
+            branch_data = []
+            # Spaced layout when skip edges present, compact otherwise.
+            if has_skip_edges:
+                spaced_h = 2 * n - 1
+                row_stride = 2
+            else:
+                spaced_h = n
+                row_stride = 1
+            par_offset = (logical_height - spaced_h) // 2
             for bi, b in enumerate(step.branches):
-                render_row = par_offset + bi * row_stride
+                logical_row = par_offset + bi * row_stride
+                render_row = logical_row_starts[logical_row]
                 for s in b.steps:
                     if isinstance(s, DagNode):
-                        s._render_row = render_row
-                t = Text()
-                append_seq(t, b, statuses, frame, selected, node_elapsed)
-                branch_data.append((t, measure_seq(b, node_elapsed, statuses)))
+                        s.render_row = render_row
+                        s.caption_render_row = render_row + 1 if s.is_agent else None
+                primary = Text()
+                append_seq(primary, b, statuses, frame, selected, node_elapsed)
+                caption = Text()
+                append_seq_caption(caption, b, statuses, selected, node_elapsed)
+                branch_data.append((primary, caption, measure_seq(b, node_elapsed, statuses)))
 
-            max_w = max(w for _, w in branch_data)
+            max_w = max(w for _, _, w in branch_data)
             col_w = 5 + max_w + 1 + 4  # open_b + content + space/pad + close_b
 
             col = []
-            for row in range(max_height):
-                rel = row - par_offset
+            for row, logical_row in enumerate(physical_rows):
+                is_caption_row = row > logical_row_starts[logical_row]
+                rel = logical_row - par_offset
                 if rel >= 0 and rel < spaced_h and rel % row_stride == 0:
-                    # Branch row
                     branch_idx = rel // row_stride
-                    branch_text, bw = branch_data[branch_idx]
-                    pad_needed = max_w - bw
+                    primary, caption, bw = branch_data[branch_idx]
+                    if is_caption_row:
+                        line = Text(" " * 5)
+                        line.append_text(caption)
+                        line.append(" " * (col_w - 5 - bw))
+                        col.append((line, col_w))
+                        continue
 
-                    is_mid = (row == mid)
+                    pad_needed = max_w - bw
+                    is_mid = logical_row == mid
                     if n == 1:
                         open_b, close_b = "──── ", "────"
                     elif branch_idx == 0:
@@ -826,14 +1046,14 @@ def render_dag_rich(
 
                     line = Text()
                     line.append(open_b, BRACKET_STYLE)
-                    line.append_text(branch_text)
+                    line.append_text(primary)
                     line.append(" ")
                     if pad_needed > 0:
                         line.append("─" * pad_needed, BRACKET_STYLE)
                     line.append(close_b, BRACKET_STYLE)
                     col.append((line, col_w))
                 elif rel >= 0 and rel < spaced_h and rel % row_stride != 0:
-                    # Spacer row between branches — show vertical connector
+                    # Preserve a vertical bracket connector through both physical rows.
                     t = Text()
                     t.append(" │ ", BRACKET_STYLE)
                     t.append(" " * (col_w - 3))
@@ -842,21 +1062,20 @@ def render_dag_rich(
                     col.append((Text(" " * col_w), col_w))
             columns.append(col)
             is_virtual.append(False)
-            is_par.append(True)
 
     pad = "        "  # horizontal padding on both sides
     result = []
-    for row in range(max_height):
+    for row in range(render_height):
         line = Text()
         line.append(pad)
         for ci, col_data in enumerate(columns):
             if ci > 0:
-                # Skip arrows adjacent to virtual start/end nodes
+                # Skip arrows adjacent to virtual start/end nodes.
                 prev_virtual = is_virtual[ci - 1]
                 curr_virtual = is_virtual[ci]
                 if prev_virtual or curr_virtual:
                     line.append(" ")
-                elif row == mid:
+                elif row == logical_row_starts[mid]:
                     line.append(" >> ", ARROW_STYLE)
                 else:
                     line.append("    ")
@@ -864,31 +1083,22 @@ def render_dag_rich(
             line.append_text(text_obj)
         line.append(pad)
         result.append(line)
+    _anchor_rendered_nodes(result, dag.steps)
+
 
     # Draw routed dotted connectors for skip edges.
-    # Each edge gets vertical dots dropping through DAG rows from source
-    # and target, meeting at a horizontal dotted line below.
+    # Each edge gets vertical drops through empty cells, then a horizontal
+    # dotted line below the DAG. Agent captions remain intact.
     if dag.skip_edges:
-        # Find column positions of nodes — center of the display_name label
-        node_positions: dict[str, tuple[int, int]] = {}  # node_id -> (row, center_col)
-        for ri, line in enumerate(result):
-            plain = line.plain
-            for step in dag.steps:
-                if isinstance(step, DagNode) and not step.virtual:
-                    idx = plain.find(f" {step.display_name} ")
-                    if idx >= 0:
-                        center = idx + 1 + len(step.display_name) // 2
-                        node_positions.setdefault(step.name, (ri, center))
-                elif isinstance(step, ParGroup):
-                    for branch in step.branches:
-                        for s in branch.steps:
-                            if isinstance(s, DagNode) and not s.virtual:
-                                idx = plain.find(f" {s.display_name} ")
-                                if idx >= 0:
-                                    center = idx + 1 + len(s.display_name) // 2
-                                    node_positions.setdefault(s.name, (ri, center))
+        node_positions = {
+            node.name: (
+                node.render_row,
+                node.render_col + 1 + len(node.display_name) // 2,
+            )
+            for node in _collect_nodes(dag.steps)
+            if not node.virtual and node.render_row is not None and node.render_col is not None
+        }
 
-        # Build list of resolved connectors, ensuring min 2-col gap between drops
         raw_edges = []
         for src, dst in dag.skip_edges:
             src_pos = node_positions.get(src)
@@ -896,79 +1106,10 @@ def render_dag_rich(
             if src_pos and dst_pos:
                 raw_edges.append((src_pos[0], src_pos[1], dst_pos[0], dst_pos[1]))
 
-        # Offset drop columns to avoid overlap (min 2-col spacing).
-        # Use a single shared list so source and destination drops
-        # don't land on the same column.
-        cols_used: list[int] = []
-        edges: list[tuple[int, int, int, int]] = []
-        for src_row, src_col, dst_row, dst_col in raw_edges:
-            sc = src_col
-            while any(abs(sc - u) < 2 for u in cols_used):
-                sc += 2
-            cols_used.append(sc)
-            dc = dst_col
-            while any(abs(dc - u) < 2 for u in cols_used):
-                dc += 2
-            cols_used.append(dc)
-            edges.append((src_row, sc, dst_row, dc))
+        edges = _reserve_drop_lanes(result, raw_edges)
 
         if edges:
-            max_col = max(max(sc, dc) for _, sc, _, dc in edges) + 1
-
-            # Sort: shortest span first (rendered topmost below DAG)
-            edges_sorted = sorted(edges, key=lambda e: abs(e[3] - e[1]))
-
-            # Each edge gets a color
-            edge_styles = [
-                Style(color=SKIP_EDGE_COLORS[i % len(SKIP_EDGE_COLORS)])
-                for i in range(len(edges_sorted))
-            ]
-
-            # Punch vertical dashed lines through DAG spacer rows.
-            # Only replace spaces — don't overwrite label text or brackets.
-            # Splice into the Rich Text to preserve existing styling.
-            def _splice_char(line: Text, col: int, char: str, style: Style) -> Text:
-                """Replace a single space in a Rich Text line with a styled char."""
-                plain = line.plain
-                if col >= len(plain) or plain[col] != " ":
-                    return line
-                # Split the Text at the column boundary and reassemble
-                before = line[:col]
-                after = line[col + 1:]
-                new = Text()
-                new.append_text(before)
-                new.append(char, style)
-                new.append_text(after)
-                return new
-
-            # Horizontal connector rows below the DAG (dashed lines)
-            connector_start = len(result)
-            for ei, (src_row, src_col, dst_row, dst_col) in enumerate(edges_sorted):
-                style = edge_styles[ei]
-                left = min(src_col, dst_col)
-                right = max(src_col, dst_col)
-                t = Text()
-                t.append(" " * left)
-                t.append("╰", style)
-                t.append("┄" * (right - left - 1), style)
-                t.append("╯", style)
-                # Pad to max_col so other edges' ┆ drops have space to splice
-                pad = max_col - right - 1
-                if pad > 0:
-                    t.append(" " * pad)
-                result.append(t)
-
-            # Second pass: punch ┆ on ALL rows between each endpoint and
-            # its horizontal connector row (both through DAG and other connectors)
-            for ei, (src_row, src_col, dst_row, dst_col) in enumerate(edges_sorted):
-                style = edge_styles[ei]
-                horiz_row = connector_start + ei
-                # Source drops down from src_row to horiz_row
-                for ri in range(src_row + 1, horiz_row):
-                    result[ri] = _splice_char(result[ri], src_col, "┆", style)
-                # Target drops down from dst_row to horiz_row
-                for ri in range(dst_row + 1, horiz_row):
-                    result[ri] = _splice_char(result[ri], dst_col, "┆", style)
+            _append_routed_skip_edges(result, edges, raw_edges)
 
     return result
 
@@ -1039,12 +1180,12 @@ def nav_move(
             for n in col_nodes:
                 if getattr(n, "_branch_index", None) == branch:
                     return n, n.row
-        # Match by visual rendering row (e.g. evaluate → deploy_staging
-        # when both are on the middle rendering row)
-        render_row = getattr(current, "_render_row", None)
+        # Match by the primary visual row (e.g. evaluate → deploy_staging
+        # when both render on the middle row).
+        render_row = current.render_row
         if render_row is not None:
             for n in col_nodes:
-                if getattr(n, "_render_row", None) == render_row:
+                if n.render_row == render_row:
                     return n, n.row
         # Fall back to preferred row
         new_row = min(preferred_row, len(col_nodes) - 1)
