@@ -5060,6 +5060,57 @@ async def test_agent_trace_inspector_interactions_and_log_retention():
         metadata_plain = metadata_content.render().plain
         assert "InspectRecords" in metadata_plain
         assert "records" in metadata_plain
+        await pilot.press("enter")
+
+        await pilot.press("down")
+        assert app.store.trace_selected_path == ("metadata", "inputs")
+        await pilot.press("enter")
+        assert app.store.trace_path_expanded(("metadata", "inputs"))
+        await pilot.press("down")
+        assert app.store.trace_selected_path == ("metadata", "inputs", "index", "0")
+        await pilot.press("enter")
+        assert app.store.trace_path_expanded(("metadata", "inputs", "index", "0"))
+        await pilot.press("down")
+        assert app.store.trace_selected_path == (
+            "metadata",
+            "inputs",
+            "index",
+            "0",
+            "key",
+            "name",
+        )
+        await pilot.press("down")
+        assert app.store.trace_selected_path == (
+            "metadata",
+            "inputs",
+            "index",
+            "0",
+            "key",
+            "annotation",
+        )
+        await pilot.press("down")
+        assert app.store.trace_selected_path == (
+            "metadata",
+            "inputs",
+            "index",
+            "0",
+            "key",
+            "description",
+        )
+
+        await pilot.press("down")
+        assert app.store.trace_selected_path == ("metadata", "outputs")
+        await pilot.press("enter", "down")
+        assert app.store.trace_selected_path == ("metadata", "outputs", "index", "0")
+        await pilot.press("enter", "down")
+        assert app.store.trace_selected_path == (
+            "metadata",
+            "outputs",
+            "index",
+            "0",
+            "key",
+            "name",
+        )
 
         await pilot.press("escape")
         await pilot.pause()
@@ -5726,4 +5777,3 @@ async def test_agent_trace_inspector_renders_pending_failed_malformed_and_incomp
         assert "summary" in legacy_output or "Completed without output." in legacy_output
         await pilot.press("left")
         node = app.store.current_run.nodes["agent_1"]
-
