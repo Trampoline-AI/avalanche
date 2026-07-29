@@ -1496,29 +1496,37 @@ class UIStore:
     def _trace_path_within(path: tuple[str, ...], root: tuple[str, ...]) -> bool:
         return len(path) >= len(root) and path[: len(root)] == root
 
+    @staticmethod
+    def _trace_path_crosses_collection_page(
+        path: tuple[str, ...],
+        root: tuple[str, ...],
+    ) -> bool:
+        """Whether a descendant crosses a synthetic bounded collection page."""
+        relative = path[len(root) :]
+        return any(
+            relative[index] == "range"
+            and relative[index + 1].isdigit()
+            and relative[index + 2].isdigit()
+            for index in range(len(relative) - 2)
+        )
+
     def trace_path_expanded(self, path: tuple[str, ...]) -> bool:
         """Whether an item is visibly expanded in the active inspector tab."""
         if any(
             self._trace_path_within(path, collapsed) for collapsed in self.trace_collapsed_items
         ):
             return False
-        return path in self.trace_expanded_items or any(
-            self._trace_path_within(path, root) for root in self.trace_expanded_subtrees
+        if path in self.trace_expanded_items:
+            return True
+        return any(
+            self._trace_path_within(path, root)
+            and not self._trace_path_crosses_collection_page(path, root)
+            for root in self.trace_expanded_subtrees
         )
 
     def trace_path_materialized(self, path: tuple[str, ...]) -> bool:
-        """Materialize only the selected branch of recursively expanded subtrees."""
-        if not self.trace_path_expanded(path):
-            return False
-        if path in self.trace_expanded_items:
-            return True
-        recursively_expanded = any(
-            self._trace_path_within(path, root) for root in self.trace_expanded_subtrees
-        )
-        if not recursively_expanded:
-            return True
-        selected = self.trace_selected_path
-        return selected is not None and path == selected[: len(path)]
+        """Materialize expanded branches independently of the current selection."""
+        return self.trace_path_expanded(path)
 
     def mapping_page_items(
         self,
@@ -1553,8 +1561,9 @@ class UIStore:
         start: int = 0,
         end: int | None = None,
         source: MappingSource | None = None,
+        include_scalar_leaves: bool = False,
     ) -> None:
-        """Append only expanded collection descendants, bounded to one page."""
+        """Append expanded collection descendants, optionally including scalar leaves."""
         source = (("root", *path),) if source is None else source
         if not self.trace_path_materialized(path):
             return
@@ -1574,7 +1583,13 @@ class UIStore:
                 paths.append(page)
                 if self.trace_path_materialized(page):
                     self._append_value_navigation_paths(
-                        paths, page, value, start=page_start, end=page_end, source=source
+                        paths,
+                        page,
+                        value,
+                        start=page_start,
+                        end=page_end,
+                        source=source,
+                        include_scalar_leaves=include_scalar_leaves,
                     )
             return
         if isinstance(value, Mapping):
@@ -1585,23 +1600,35 @@ class UIStore:
                 if not isinstance(key, str):
                     continue
                 child = path + ("key", key)
-                if isinstance(item, Mapping) or (
+                is_collection = isinstance(item, Mapping) or (
                     isinstance(item, Sequence) and not isinstance(item, (str, bytes, bytearray))
-                ):
+                )
+                if include_scalar_leaves or is_collection:
                     paths.append(child)
+                if is_collection:
                     self._append_value_navigation_paths(
-                        paths, child, item, source=source + (("key", key),)
+                        paths,
+                        child,
+                        item,
+                        source=source + (("key", key),),
+                        include_scalar_leaves=include_scalar_leaves,
                     )
             return
         for index in range(start, end):
             item = value[index]
             child = path + ("index", str(index))
-            if isinstance(item, Mapping) or (
+            is_collection = isinstance(item, Mapping) or (
                 isinstance(item, Sequence) and not isinstance(item, (str, bytes, bytearray))
-            ):
+            )
+            if include_scalar_leaves or is_collection:
                 paths.append(child)
+            if is_collection:
                 self._append_value_navigation_paths(
-                    paths, child, item, source=source + (("index", str(index)),)
+                    paths,
+                    child,
+                    item,
+                    source=source + (("index", str(index)),),
+                    include_scalar_leaves=include_scalar_leaves,
                 )
 
     def _metadata_inspector_values(self) -> dict[str, Any]:
@@ -1659,7 +1686,7 @@ class UIStore:
         }
 
     def trace_inspector_navigation_paths(self) -> list[tuple[str, ...]]:
-        """Return visible expandable hierarchy entries without formatting values."""
+        """Return visible selectable hierarchy entries without formatting values."""
         if self.trace_inspector_tab == "trace":
             return self._trace_navigation_paths()
         if self.trace_inspector_tab == "output":
@@ -1685,10 +1712,16 @@ class UIStore:
                 if name in outputs:
                     self._append_value_navigation_paths(paths, ("output", name), outputs[name])
             return paths
-        values = self._metadata_inspector_values()
-        paths = [("metadata", key) for key in values]
-        for key, value in values.items():
-            self._append_value_navigation_paths(paths, ("metadata", key), value)
+        paths: list[tuple[str, ...]] = []
+        for key, value in self._metadata_inspector_values().items():
+            path = ("metadata", key)
+            paths.append(path)
+            self._append_value_navigation_paths(
+                paths,
+                path,
+                value,
+                include_scalar_leaves=True,
+            )
         return paths
 
     def _touch_trace_hierarchy(self) -> None:

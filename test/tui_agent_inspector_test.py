@@ -227,7 +227,7 @@ def test_inspector_expand_binding_uses_non_conflicting_e_key():
     assert expand_actions == {"e"}
 
 
-def test_recursive_expand_and_collapse_are_scoped_to_selected_object():
+def test_recursive_expand_and_collapse_are_scoped_and_selection_stable():
     store = _store(
         steps=[],
         outputs={
@@ -246,19 +246,52 @@ def test_recursive_expand_and_collapse_are_scoped_to_selected_object():
 
     store.expand_trace_hierarchy()
     selected_child = selected + ("key", "selected")
+    nested_child = selected_child + ("key", "nested")
     sibling_child = sibling + ("key", "sibling")
     paths = store.trace_inspector_navigation_paths()
     assert selected_child in paths
+    assert nested_child in paths
     assert sibling_child not in paths
     assert store.trace_path_expanded(selected_child)
+    assert store.trace_path_expanded(nested_child)
     assert not store.trace_path_expanded(sibling_child)
 
     store.move_trace_turn(1)
     assert store.trace_selected_path == selected_child
+    assert nested_child in store.trace_inspector_navigation_paths()
+    assert store.trace_path_expanded(nested_child)
+
     store.collapse_trace_hierarchy()
     assert store.trace_selected_path == selected_child
     assert selected_child in store.trace_collapsed_items
+    assert nested_child not in store.trace_inspector_navigation_paths()
     assert store.trace_path_expanded(selected)
+
+    store._set_trace_selection(selected)
+    store.collapse_trace_hierarchy()
+    assert not store.trace_path_expanded(selected)
+    assert selected_child not in store.trace_inspector_navigation_paths()
+
+
+@pytest.mark.asyncio
+async def test_recursive_expansion_remains_visible_while_selection_moves():
+    store = _store(
+        steps=[],
+        outputs={"summary": {"selected": {"nested": {"leaf": "DEEPLY_VISIBLE"}}}},
+    )
+    app = _InspectorHarness(store)
+    async with app.run_test(size=(100, 20)):
+        store.move_trace_inspector_tab(1)
+        store.expand_trace_hierarchy()
+        output = app.query_one("#output", AgentOutputInspector)
+        assert "DEEPLY_VISIBLE" in output.render().plain
+
+        store.move_trace_turn(1)
+        assert store.trace_selected_path == ("output", "summary", "key", "selected")
+        assert "DEEPLY_VISIBLE" in output.render().plain
+
+        store.collapse_trace_hierarchy()
+        assert "DEEPLY_VISIBLE" not in output.render().plain
 
 
 @pytest.mark.asyncio
@@ -640,17 +673,24 @@ async def test_expand_all_keeps_large_list_layout_and_work_bounded(
         assert len(output._layout.rows) < 250
         assert sequence.items_read == 0
 
-        store.move_trace_turn(1)
+        page = ("output", "summary", "range", "0", "500")
+        store._set_trace_selection(page)
+        store.expand_trace_hierarchy()
         output.render()
-        assert output._layout is not None
-        assert len(output._layout.rows) < 250
         assert sequence.items_read == 0
 
-        store.move_trace_turn(1)
+        subpage = page + ("range", "0", "5")
+        store._set_trace_selection(subpage)
+        store.expand_trace_hierarchy()
         output.render()
         assert output._layout is not None
         assert len(output._layout.rows) < 250
-        assert sequence.items_read <= 10
+        assert 0 < sequence.items_read <= 10
+
+        items_read = sequence.items_read
+        store._set_trace_selection(page + ("range", "5", "10"))
+        output.render()
+        assert sequence.items_read == items_read
 
 
 @pytest.mark.asyncio
@@ -674,48 +714,36 @@ async def test_expand_all_lazily_slices_large_mapping_pages(
         assert len(output._layout.rows) < 250
         assert mapping.items_yielded == 0
 
-        store.move_trace_turn(1)
+        first_page = ("output", "summary", "range", "0", "500")
+        store._set_trace_selection(first_page)
+        store.expand_trace_hierarchy()
         output.render()
-        assert output._layout is not None
-        assert len(output._layout.rows) < 250
         assert mapping.items_yielded == 0
 
-        store.move_trace_turn(1)
+        first_subpage = first_page + ("range", "0", "5")
+        store._set_trace_selection(first_subpage)
+        store.expand_trace_hierarchy()
         output.render()
-        assert output._layout is not None
-        assert len(output._layout.rows) < 250
-        assert mapping.items_yielded <= 10
-        next_page = (
-            "output",
-            "summary",
-            "range",
-            "0",
-            "500",
-            "range",
-            "5",
-            "10",
-        )
-        store._set_trace_selection(next_page)
-        store._touch_trace_hierarchy()
+        assert mapping.items_yielded == 5
+
+        next_subpage = first_page + ("range", "5", "10")
+        store._set_trace_selection(next_subpage)
+        output.render()
+        assert mapping.items_yielded == 5
+        store.expand_trace_hierarchy()
         output.render()
         assert mapping.items_yielded == 10
 
-        distant_page = (
-            "output",
-            "summary",
-            "range",
-            "49500",
-            "50000",
-            "range",
-            "49500",
-            "49505",
-        )
+        distant_page = ("output", "summary", "range", "49500", "50000")
         store._set_trace_selection(distant_page)
-        store._touch_trace_hierarchy()
+        store.expand_trace_hierarchy()
+        distant_subpage = distant_page + ("range", "49500", "49505")
+        store._set_trace_selection(distant_subpage)
+        store.expand_trace_hierarchy()
         output.render()
         assert output._layout is not None
         assert any("Visit earlier mapping pages" in row.label for row in output._layout.rows)
-        assert mapping.items_yielded <= 10
+        assert mapping.items_yielded == 10
 
 
 def test_expanding_one_tab_preserves_other_tab_manual_collapses():
@@ -750,25 +778,25 @@ async def test_mapping_key_named_range_preserves_page_cache_identity(
         store.move_trace_inspector_tab(1)
         store.expand_trace_hierarchy()
         output = app.query_one("#output", AgentOutputInspector)
-        for _ in range(3):
-            store.move_trace_turn(1)
-            output.render()
+        mapping_root = ("output", "summary", "key", "range")
+        assert store.trace_path_expanded(mapping_root)
+
+        page = mapping_root + ("range", "0", "500")
+        store._set_trace_selection(page)
+        store.expand_trace_hierarchy()
+        assert mapping.items_yielded == 0
+
+        first_subpage = page + ("range", "0", "5")
+        store._set_trace_selection(first_subpage)
+        store.expand_trace_hierarchy()
+        output.render()
         assert mapping.items_yielded == 5
 
-        next_page = (
-            "output",
-            "summary",
-            "key",
-            "range",
-            "range",
-            "0",
-            "500",
-            "range",
-            "5",
-            "10",
-        )
-        store._set_trace_selection(next_page)
-        store._touch_trace_hierarchy()
+        next_subpage = page + ("range", "5", "10")
+        store._set_trace_selection(next_subpage)
+        output.render()
+        assert mapping.items_yielded == 5
+        store.expand_trace_hierarchy()
         output.render()
         assert mapping.items_yielded == 10
 

@@ -93,13 +93,17 @@
   the corresponding PredictRLM APIs.
 - The agent inspector now has Trace and Metadata tabs. Metadata is available
   before execution and shows the resolved signature, skills, static
-  instructions, tools, and effective redacted runtime configuration.
+  instructions, tools, and effective redacted runtime configuration. Expanded
+  metadata fields follow their rendered order and include selectable scalar
+  leaves.
 - Fix: live agent evidence now remains attached across async node execution, so
   the Trace tab receives turns and status updates under local and Ray backends.
 - Agent inspector object controls are always visible and recursively expand or
-  collapse only the selected subtree. Trace durations use seconds, completed
-  traces infer terminal status when older envelopes omit it, and custom model
-  types retain useful declaration metadata instead of dropping the pane.
+  collapse only the selected subtree without changing expansion state when the
+  selection moves. Large collections remain lazily paginated. Trace durations
+  use seconds, completed traces infer terminal status when older envelopes omit
+  it, and custom model types retain useful declaration metadata instead of
+  dropping the pane.
 - See [docs/agent-steps.md](docs/agent-steps.md).
 
 ## 0.1.0-rc0
