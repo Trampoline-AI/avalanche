@@ -93,6 +93,7 @@ def wait_for(text: str, timeout: float = 5.0) -> bool:
         time.sleep(0.2)
     return False
 
+
 def _wait_for_status_run(run_id: str, timeout: float = 5.0) -> bool:
     """Wait until the status bar identifies the selected run."""
     deadline = time.monotonic() + timeout
@@ -274,6 +275,14 @@ class TestTmuxRendering:
         assert "EXPLORER" in combined
         assert "AGENT TURN 1/4" in combined
         assert "Reasoning" not in combined
+        assert "Expand all" in combined
+        assert "Collapse all" in combined
+
+        send_keys("e")
+        assert wait_for("Reasoning", timeout=5)
+        send_keys("z")
+        time.sleep(0.3)
+        assert "Reasoning" not in "\n".join(capture())
 
         send_keys("Enter")
         assert wait_for("Reasoning", timeout=5)

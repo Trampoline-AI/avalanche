@@ -149,9 +149,7 @@ def _project_evidence_event(
         }
     elif event_kind == "run.succeeded":
         projected = {
-            key: data.get(key)
-            for key in ("status", "outputs")
-            if data.get(key) is not None
+            key: data.get(key) for key in ("status", "outputs") if data.get(key) is not None
         }
     elif event_kind in {"run.failed", "run.cancelled"}:
         projected = {
@@ -562,15 +560,17 @@ def _strict_model_metadata_value(value: Any, runtime_key: str, path: str = "") -
             for index, item in enumerate(value)
         ]
 
+    if inspect.isclass(value):
+        return {"type": f"{value.__module__}.{value.__qualname__}"}
+
     value_type = type(value)
     module = value_type.__module__
+    descriptor = {"type": f"{module}.{value_type.__qualname__}"}
     if module == "dspy" or module.startswith(("dspy.", "predict_rlm.")):
-        descriptor = {"type": f"{module}.{value_type.__qualname__}"}
         instance_name = getattr(value, "model", None) or getattr(value, "name", None)
         if isinstance(instance_name, str):
             descriptor["name"] = instance_name
-        return descriptor
-    _raise_unsupported_model_descriptor(value, runtime_key, path)
+    return descriptor
 
 
 def _raise_unsupported_model_descriptor(value: Any, runtime_key: str, path: str) -> None:

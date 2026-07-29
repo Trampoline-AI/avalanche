@@ -57,8 +57,13 @@ def workflow_to_info(
             agent_metadata_json[nid] = json.dumps(
                 metadata, ensure_ascii=False, separators=(",", ":"), sort_keys=True
             )
-        except Exception:
-            continue
+        except Exception as exc:
+            agent_metadata_json[nid] = json.dumps(
+                {"error": str(exc) or type(exc).__name__},
+                ensure_ascii=False,
+                separators=(",", ":"),
+                sort_keys=True,
+            )
     return WorkflowInfo(
         name=workflow.name,
         display_name=workflow.name,

@@ -689,7 +689,6 @@ class AvalancheApp(App):
             panes.insert(0, "sidebar")
         return panes
 
-
     def _normalize_focused_pane(self) -> None:
         """Move focus out of collapsed dashboard panes."""
         if (
@@ -912,10 +911,7 @@ class AvalancheApp(App):
             return
         self.store.collapse_trace_hierarchy()
         self._refresh_widgets()
-        try:
-            self._screen.query_one("#agent-trace-inspector").scroll_home(animate=False)
-        except Exception:
-            pass
+        self._scroll_trace_selection_into_view()
 
     # ── Other actions ──────────────────────────────────────────────
 
@@ -993,14 +989,12 @@ class AvalancheApp(App):
         self._refresh_widgets()
 
     def action_toggle_run_actions_menu(self) -> None:
-        if (
-            (self._screen is not None and self._screen.size.height <= 15)
-            or (not self.can_start_run() and not self.can_cancel_selected_run())
+        if (self._screen is not None and self._screen.size.height <= 15) or (
+            not self.can_start_run() and not self.can_cancel_selected_run()
         ):
             return
         self._run_actions_menu_open = not self._run_actions_menu_open
         self._refresh_widgets()
-
 
     def action_toggle_dag(self) -> None:
         """d: hide or show the DAG without remounting it."""

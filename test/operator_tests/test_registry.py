@@ -624,4 +624,6 @@ def test_agent_metadata_failure_does_not_hide_workflow(monkeypatch):
     monkeypatch.setattr(spec, "declaration_metadata", fail_metadata)
     fallback = workflow_to_info(workflow, "<test>")
     assert fallback.agent_node_ids == ["analyze_1"]
-    assert fallback.agent_metadata_json == {}
+    assert json.loads(fallback.agent_metadata_json["analyze_1"]) == {
+        "error": "invalid metadata"
+    }
