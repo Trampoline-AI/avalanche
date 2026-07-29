@@ -64,7 +64,7 @@ def test_ray_operator_uses_live_source_for_imports_logs_and_later_runs(tmp_path)
         first = _wait_terminal(operator, first_id)
         assert first.status == RunStatus.SUCCESS
         assert {entry.node_id for entry in first.logs if "=1:1" in entry.message} == {
-            "read"
+            "read_1"
         }
         assert any("stdout=1:1" in entry.message for entry in first.logs)
         assert any("stderr=1:1" in entry.message for entry in first.logs)
