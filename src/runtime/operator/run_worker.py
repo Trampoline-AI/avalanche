@@ -100,6 +100,7 @@ def _run_worker(
     result_bundle_identity: tuple[int, int],
 ) -> None:
     """Import/build exactly once, prepare, wait for the parent, and execute."""
+    event_queue = _SealableEventQueue(event_queue)
     if os.name != "nt":
         try:
             os.setsid()
@@ -286,8 +287,14 @@ def _run_worker(
                     ray.shutdown()
             except Exception:
                 pass
+        # The terminal success event is a protocol boundary: the operator
+        # quiesces the coordinator and rejects every event observed after it.
+        # Flush partial captured output first so interpreter shutdown cannot
+        # turn pre-terminal output into a late protocol event.
+        stdout.flush()
+        stderr.flush()
         if terminal_event is not None:
-            _put_run_event(event_queue, terminal_event)
+            _put_terminal_run_event(event_queue, terminal_event)
 
 
 def _import_workflow_module(root: Path, relative_file: str):
@@ -328,6 +335,27 @@ def _workflow_metadata(workflow: Workflow) -> dict[str, Any]:
         },
         "display_names": {node_id: display_name_from_id(node_id) for node_id in node_ids},
     }
+
+
+class _SealableEventQueue:
+    """Serialize the terminal event and reject asynchronous writes after it."""
+
+    def __init__(self, event_queue: Any) -> None:
+        self._event_queue = event_queue
+        self._lock = threading.Lock()
+        self._sealed = False
+
+    def put(self, event: dict[str, Any]) -> None:
+        with self._lock:
+            if not self._sealed:
+                self._event_queue.put(event)
+
+    def put_terminal(self, event: dict[str, Any]) -> None:
+        with self._lock:
+            if self._sealed:
+                raise RuntimeError("coordinator event queue is already terminal")
+            self._event_queue.put(event)
+            self._sealed = True
 
 
 def _install_log_capture(event_queue: Any) -> None:
@@ -590,6 +618,16 @@ def _put_run_event(event_queue: Any, event: dict[str, Any]) -> None:
 
     _validate_run_event(event)
     event_queue.put(event)
+
+
+def _put_terminal_run_event(
+    event_queue: _SealableEventQueue,
+    event: dict[str, Any],
+) -> None:
+    from .operator import _validate_run_event
+
+    _validate_run_event(event)
+    event_queue.put_terminal(event)
 
 
 def _bounded_event_text(value: object, maximum_length: int) -> str:

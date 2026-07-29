@@ -1657,6 +1657,98 @@ def test_valid_success_is_accepted_only_after_quiescence(monkeypatch):
         operator.close()
 
 
+def test_worker_flushes_partial_stream_output_before_provisional_success(tmp_path):
+    workflow_path = tmp_path / "partial_stream_output.py"
+    workflow_path.write_text(
+        """
+import avalanche as ava
+
+print("partial import output", end="")
+
+
+@ava.source
+def value():
+    return "complete"
+
+
+@ava.workflow
+def partial_stream_output():
+    return value()
+"""
+    )
+    operator = Operator([str(workflow_path)], watch=False, schedule=False)
+    try:
+        run_id = operator.start_run("partial_stream_output")
+        deadline = time.monotonic() + 10
+        while time.monotonic() < deadline:
+            run = operator.get_run(run_id)
+            if run is not None and run.status in {
+                RunStatus.SUCCESS,
+                RunStatus.FAILED,
+                RunStatus.CANCELLED,
+            }:
+                break
+            time.sleep(0.02)
+        else:
+            pytest.fail("Run did not become terminal")
+
+        assert run.status == RunStatus.SUCCESS
+        assert operator.get_run_result(run_id) == "complete"
+        assert any(entry.message == "partial import output" for entry in run.logs)
+    finally:
+        operator.close()
+
+
+def test_worker_seals_asynchronous_output_after_provisional_success(tmp_path):
+    workflow_path = tmp_path / "asynchronous_stream_output.py"
+    workflow_path.write_text(
+        """
+import threading
+import time
+
+import avalanche as ava
+
+
+@ava.source
+def value():
+    def delayed_output():
+        time.sleep(0.2)
+        print("background output after result")
+
+    threading.Thread(target=delayed_output).start()
+    return "complete"
+
+
+@ava.workflow
+def asynchronous_stream_output():
+    return value()
+"""
+    )
+    operator = Operator([str(workflow_path)], watch=False, schedule=False)
+    try:
+        run_id = operator.start_run("asynchronous_stream_output")
+        deadline = time.monotonic() + 10
+        while time.monotonic() < deadline:
+            run = operator.get_run(run_id)
+            if run is not None and run.status in {
+                RunStatus.SUCCESS,
+                RunStatus.FAILED,
+                RunStatus.CANCELLED,
+            }:
+                break
+            time.sleep(0.02)
+        else:
+            pytest.fail("Run did not become terminal")
+
+        assert run.status == RunStatus.SUCCESS
+        assert operator.get_run_result(run_id) == "complete"
+        assert all(
+            entry.message != "background output after result" for entry in run.logs
+        )
+    finally:
+        operator.close()
+
+
 def test_operator_and_grpc_roundtrip_existing_json_result(result_client):
     operator, client = result_client
     run_id = client.start_run("json_result")
