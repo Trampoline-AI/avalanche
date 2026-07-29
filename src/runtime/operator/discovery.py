@@ -402,8 +402,18 @@ def _descriptor_to_dict(
                     ),
                 ]
             )
-        except Exception:
-            continue
+        except Exception as exc:
+            agent_metadata_json.append(
+                [
+                    node_id,
+                    json.dumps(
+                        {"error": str(exc) or type(exc).__name__},
+                        ensure_ascii=False,
+                        separators=(",", ":"),
+                        sort_keys=True,
+                    ),
+                ]
+            )
     return {
         "workflow_id": workflow_id,
         "display_name": workflow.name,

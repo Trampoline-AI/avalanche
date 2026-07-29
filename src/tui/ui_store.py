@@ -47,6 +47,8 @@ RunDetailKey = tuple[str, str, int]
 
 
 MappingSource = tuple[tuple[str, ...], ...]
+
+
 @dataclass(frozen=True)
 class TraceDetailCompletion:
     """One trace body read, isolated from mutable structural run state."""
@@ -87,8 +89,6 @@ class _DetailHydrationRequirements:
         return stronger
 
 
-
-
 @dataclass
 class _MappingPageCache:
     """Sequentially cache mapping entries without revisiting consumed prefixes."""
@@ -106,6 +106,8 @@ class _MappingPageCache:
             except StopIteration:
                 self.exhausted = True
         return tuple(self.entries[start:end])
+
+
 @dataclass(frozen=True)
 class _DetailHydrationRetry:
     """One UI-loop deadline guarded by an opaque retry generation."""
@@ -325,15 +327,13 @@ class UIStore:
         self.trace_turn_index: int = 0
         self.trace_collapsed_turns: set[int] = set()
         self.trace_expanded_items: set[tuple[str, ...]] = set()
-        self.trace_expanded_all_tabs: set[TraceInspectorTab] = set()
+        self.trace_expanded_subtrees: set[tuple[str, ...]] = set()
         self.trace_collapsed_items: set[tuple[str, ...]] = set()
         self.trace_selected_paths: dict[TraceInspectorTab, tuple[str, ...] | None] = {
             tab: None for tab in _TRACE_INSPECTOR_TABS
         }
         self._trace_known_turn_count: int = 0
-        self._mapping_page_caches: dict[
-            tuple[str, MappingSource], _MappingPageCache
-        ] = {}
+        self._mapping_page_caches: dict[tuple[str, MappingSource], _MappingPageCache] = {}
         self._mapping_page_cache_token: str | None = None
         self.trace_hierarchy_revision: int = 0
 
@@ -558,8 +558,10 @@ class UIStore:
             if not isinstance(decoded, dict):
                 return "malformed"
             envelope = decoded
-            if "trace" in envelope and envelope["trace"] is not None and not isinstance(
-                envelope["trace"], dict
+            if (
+                "trace" in envelope
+                and envelope["trace"] is not None
+                and not isinstance(envelope["trace"], dict)
             ):
                 return "malformed"
         if state.status is NodeStatus.FAILED or (
@@ -1490,23 +1492,33 @@ class UIStore:
         """Selected visible hierarchy item on the active inspector tab."""
         return self.trace_selected_paths[self.trace_inspector_tab]
 
+    @staticmethod
+    def _trace_path_within(path: tuple[str, ...], root: tuple[str, ...]) -> bool:
+        return len(path) >= len(root) and path[: len(root)] == root
+
     def trace_path_expanded(self, path: tuple[str, ...]) -> bool:
         """Whether an item is visibly expanded in the active inspector tab."""
-        return path in self.trace_expanded_items or (
-            self.trace_inspector_tab in self.trace_expanded_all_tabs
-            and path not in self.trace_collapsed_items
+        if any(
+            self._trace_path_within(path, collapsed) for collapsed in self.trace_collapsed_items
+        ):
+            return False
+        return path in self.trace_expanded_items or any(
+            self._trace_path_within(path, root) for root in self.trace_expanded_subtrees
         )
 
     def trace_path_materialized(self, path: tuple[str, ...]) -> bool:
-        """Whether expanded descendants should enter the current bounded layout."""
+        """Materialize only the selected branch of recursively expanded subtrees."""
         if not self.trace_path_expanded(path):
             return False
-        if self.trace_inspector_tab not in self.trace_expanded_all_tabs:
+        if path in self.trace_expanded_items:
+            return True
+        recursively_expanded = any(
+            self._trace_path_within(path, root) for root in self.trace_expanded_subtrees
+        )
+        if not recursively_expanded:
             return True
         selected = self.trace_selected_path
-        return path in self.trace_expanded_items or (
-            selected is not None and path == selected[: len(path)]
-        )
+        return selected is not None and path == selected[: len(path)]
 
     def mapping_page_items(
         self,
@@ -1531,13 +1543,6 @@ class UIStore:
             cache = _MappingPageCache(iter(value.items()))
             self._mapping_page_caches[key] = cache
         return cache.page(start, end)
-
-    def _active_trace_path_root(self) -> str:
-        return "turn" if self.trace_inspector_tab == "trace" else self.trace_inspector_tab
-
-    def _clear_active_trace_paths(self, paths: set[tuple[str, ...]]) -> None:
-        root = self._active_trace_path_root()
-        paths.intersection_update(path for path in paths if path[0] != root)
 
     def _append_value_navigation_paths(
         self,
@@ -1622,16 +1627,20 @@ class UIStore:
                 ),
             }
         skills = metadata.get("skills")
-        skill_records = {
-            skill["name"]: {
-                "instructions": skill.get("instructions", ""),
-                "packages": skill.get("packages", []),
-                "modules": skill.get("modules", []),
-                "tools": skill.get("tools", []),
+        skill_records = (
+            {
+                skill["name"]: {
+                    "instructions": skill.get("instructions", ""),
+                    "packages": skill.get("packages", []),
+                    "modules": skill.get("modules", []),
+                    "tools": skill.get("tools", []),
+                }
+                for skill in skills
+                if isinstance(skill, Mapping) and isinstance(skill.get("name"), str)
             }
-            for skill in skills
-            if isinstance(skill, Mapping) and isinstance(skill.get("name"), str)
-        } if isinstance(skills, list) else {}
+            if isinstance(skills, list)
+            else {}
+        )
         return {
             "signature": {
                 "instructions": signature.get("instructions", ""),
@@ -1660,11 +1669,15 @@ class UIStore:
             metadata = self.selected_agent_metadata
             signature = metadata.get("signature") if isinstance(metadata, Mapping) else None
             declared = signature.get("outputs") if isinstance(signature, Mapping) else None
-            names = [
-                field["name"]
-                for field in declared
-                if isinstance(field, Mapping) and isinstance(field.get("name"), str)
-            ] if isinstance(declared, list) else []
+            names = (
+                [
+                    field["name"]
+                    for field in declared
+                    if isinstance(field, Mapping) and isinstance(field.get("name"), str)
+                ]
+                if isinstance(declared, list)
+                else []
+            )
             names = names or list(outputs)
             names.extend(name for name in outputs if name not in names)
             paths = [("output", name) for name in names]
@@ -1696,6 +1709,11 @@ class UIStore:
                 for path in self.trace_expanded_items
                 if path[0] != "turn" or int(path[1]) < turn_count
             }
+            self.trace_expanded_subtrees = {
+                path
+                for path in self.trace_expanded_subtrees
+                if path[0] != "turn" or int(path[1]) < turn_count
+            }
             selected = self.trace_selected_paths["trace"]
             if (
                 selected is not None
@@ -1724,9 +1742,9 @@ class UIStore:
                     paths, turn + ("reasoning",), step["reasoning"]
                 )
             self._append_value_navigation_paths(
-                paths, turn + ("output",), step.get(
-                    "untruncated_output" if self.trace_show_full_output else "output"
-                )
+                paths,
+                turn + ("output",),
+                step.get("untruncated_output" if self.trace_show_full_output else "output"),
             )
             tools = turn + ("tools",)
             paths.append(tools)
@@ -1744,11 +1762,7 @@ class UIStore:
                         self._append_value_navigation_paths(
                             paths,
                             input_path,
-                            {
-                                key: call.get(key)
-                                for key in ("args", "kwargs")
-                                if call.get(key)
-                            },
+                            {key: call.get(key) for key in ("args", "kwargs") if call.get(key)},
                         )
                         self._append_value_navigation_paths(
                             paths, result_path, call.get("error") or call.get("result")
@@ -1812,7 +1826,7 @@ class UIStore:
         self.trace_collapsed_turns = set(range(len(steps)))
         self._trace_known_turn_count = len(steps)
         self.trace_expanded_items.clear()
-        self.trace_expanded_all_tabs.clear()
+        self.trace_expanded_subtrees.clear()
         self.trace_collapsed_items.clear()
         self._mapping_page_caches.clear()
         self._mapping_page_cache_token = None
@@ -1831,7 +1845,7 @@ class UIStore:
         self.trace_collapsed_turns.clear()
         self._trace_known_turn_count = 0
         self.trace_expanded_items.clear()
-        self.trace_expanded_all_tabs.clear()
+        self.trace_expanded_subtrees.clear()
         self.trace_collapsed_items.clear()
         self._mapping_page_caches.clear()
         self._mapping_page_cache_token = None
@@ -1866,7 +1880,7 @@ class UIStore:
         index = paths.index(selected)
         next_path = paths[min(len(paths) - 1, max(0, index + delta))]
         self._set_trace_selection(next_path)
-        if self.trace_inspector_tab in self.trace_expanded_all_tabs:
+        if self.trace_expanded_subtrees:
             self._touch_trace_hierarchy()
 
     def toggle_trace_turn(self) -> None:
@@ -1889,30 +1903,54 @@ class UIStore:
         self._touch_trace_hierarchy()
 
     def expand_trace_hierarchy(self) -> None:
-        """Logically expand the active hierarchy without eagerly building every page."""
+        """Recursively expand only the hierarchy rooted at the current selection."""
         if not self.trace_inspector_open:
             return
-        self.trace_expanded_all_tabs.add(self.trace_inspector_tab)
-        self._clear_active_trace_paths(self.trace_collapsed_items)
-        if self.trace_inspector_tab == "trace":
-            self.trace_collapsed_turns.clear()
         paths = self.trace_inspector_navigation_paths()
         selected = self.trace_selected_path
-        normalized = selected if selected in paths else (paths[0] if paths else None)
-        self._set_trace_selection(normalized)
+        selected = selected if selected in paths else (paths[0] if paths else None)
+        if selected is None:
+            return
+        self._set_trace_selection(selected)
+        self.trace_expanded_subtrees.add(selected)
+        self.trace_collapsed_items = {
+            path
+            for path in self.trace_collapsed_items
+            if not self._trace_path_within(path, selected)
+        }
+        if selected[0] == "turn" and len(selected) == 2:
+            self.trace_collapsed_turns.discard(int(selected[1]))
         self._touch_trace_hierarchy()
 
     def collapse_trace_hierarchy(self) -> None:
-        """Collapse the active hierarchy immediately and normalize its selection."""
+        """Collapse only the hierarchy rooted at the current selection."""
         if not self.trace_inspector_open:
             return
-        self._clear_active_trace_paths(self.trace_expanded_items)
-        self.trace_expanded_all_tabs.discard(self.trace_inspector_tab)
-        self._clear_active_trace_paths(self.trace_collapsed_items)
-        if self.trace_inspector_tab == "trace":
-            self.trace_collapsed_turns = set(range(len(self.selected_agent_steps)))
         paths = self.trace_inspector_navigation_paths()
-        self._set_trace_selection(paths[0] if paths else None)
+        selected = self.trace_selected_path
+        selected = selected if selected in paths else (paths[0] if paths else None)
+        if selected is None:
+            return
+        self.trace_expanded_items = {
+            path
+            for path in self.trace_expanded_items
+            if not self._trace_path_within(path, selected)
+        }
+        self.trace_expanded_subtrees = {
+            path
+            for path in self.trace_expanded_subtrees
+            if not self._trace_path_within(path, selected)
+        }
+        self.trace_collapsed_items = {
+            path
+            for path in self.trace_collapsed_items
+            if not self._trace_path_within(path, selected)
+        }
+        if selected[0] == "turn" and len(selected) == 2:
+            self.trace_collapsed_turns.add(int(selected[1]))
+        else:
+            self.trace_collapsed_items.add(selected)
+        self._set_trace_selection(selected)
         self._touch_trace_hierarchy()
 
     def toggle_trace_full_output(self) -> None:

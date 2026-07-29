@@ -32,7 +32,6 @@ class _InspectorHarness(App[None]):
         yield AgentMetadataInspector(id="metadata")
 
 
-
 class _CountingMapping(Mapping[str, object]):
     def __init__(self, size: int) -> None:
         self.size = size
@@ -64,6 +63,7 @@ class _CountingSequence(Sequence[str]):
 
     def __len__(self) -> int:
         return self.size
+
 
 def _store(*, steps: list[dict], outputs: dict[str, object]) -> UIStore:
     metadata = {
@@ -161,8 +161,9 @@ async def test_agent_inspector_hierarchy_navigates_and_expands_each_tab():
         collapsed = trace.render().plain
         assert "Reasoning" not in collapsed
         assert "print('ready')" not in collapsed
-        assert "←/→ tabs · ↑/↓ select · Enter expand/collapse · o full output" in collapsed
-        assert "e/z all · PgUp/PgDn page · Esc back" in collapsed
+        assert "[Enter] Expand/Collapse" in collapsed
+        assert "[e] Expand all under selection" in collapsed
+        assert "[z] Collapse all under selection" in collapsed
 
         store.toggle_trace_turn()
         expanded = trace.render().plain
@@ -213,20 +214,86 @@ async def test_agent_inspector_hierarchy_navigates_and_expands_each_tab():
         assert "Inspect" not in metadata.render().plain
         store.toggle_trace_turn()
         assert "Inspect" in metadata.render().plain
-
+        controls = metadata.render().plain
+        assert "[e] Expand all under selection" in controls
+        assert "[z] Collapse all under selection" in controls
 
 
 def test_inspector_expand_binding_uses_non_conflicting_e_key():
-
-    bindings = [
-        binding for binding in AvalancheApp.BINDINGS if isinstance(binding, Binding)
-    ]
+    bindings = [binding for binding in AvalancheApp.BINDINGS if isinstance(binding, Binding)]
     expand_actions = {
-        binding.key
-        for binding in bindings
-        if binding.action == "expand_trace_hierarchy"
+        binding.key for binding in bindings if binding.action == "expand_trace_hierarchy"
     }
     assert expand_actions == {"e"}
+
+
+def test_recursive_expand_and_collapse_are_scoped_to_selected_object():
+    store = _store(
+        steps=[],
+        outputs={
+            "summary": [
+                {"selected": {"nested": [1, 2]}},
+                {"sibling": {"must_stay_closed": True}},
+            ]
+        },
+    )
+    store.move_trace_inspector_tab(1)
+    store.toggle_trace_turn()
+    store.move_trace_turn(1)
+    selected = ("output", "summary", "index", "0")
+    sibling = ("output", "summary", "index", "1")
+    assert store.trace_selected_path == selected
+
+    store.expand_trace_hierarchy()
+    selected_child = selected + ("key", "selected")
+    sibling_child = sibling + ("key", "sibling")
+    paths = store.trace_inspector_navigation_paths()
+    assert selected_child in paths
+    assert sibling_child not in paths
+    assert store.trace_path_expanded(selected_child)
+    assert not store.trace_path_expanded(sibling_child)
+
+    store.move_trace_turn(1)
+    assert store.trace_selected_path == selected_child
+    store.collapse_trace_hierarchy()
+    assert store.trace_selected_path == selected_child
+    assert selected_child in store.trace_collapsed_items
+    assert store.trace_path_expanded(selected)
+
+
+@pytest.mark.asyncio
+async def test_trace_status_infers_success_and_durations_render_in_seconds():
+    store = _store(steps=[_step(1)], outputs={"summary": "ready"})
+    envelope = json.loads(store.current_run.nodes["agent"].agent_trace_json)
+    envelope.pop("status")
+    envelope["trace"].pop("status", None)
+    envelope["trace"]["duration_ms"] = 12_500
+    envelope["trace"]["steps"][0]["duration_ms"] = 2_450
+    store.current_run.nodes["agent"].agent_trace_json = json.dumps(envelope)
+    app = _InspectorHarness(store)
+
+    async with app.run_test(size=(100, 30)):
+        rendered = app.query_one("#trace", AgentTraceInspector).render().plain
+        assert "Status: completed" in rendered
+        assert "Duration: 12.5s" in rendered
+        assert "AGENT TURN 1/3 · 2.5s" in rendered
+        assert "ms" not in rendered
+
+
+@pytest.mark.asyncio
+async def test_metadata_pane_distinguishes_unpublished_and_malformed_payloads():
+    store = _store(steps=[], outputs={})
+    store.move_trace_inspector_tab(2)
+    app = _InspectorHarness(store)
+
+    async with app.run_test(size=(100, 20)):
+        metadata = app.query_one("#metadata", AgentMetadataInspector)
+        store.current_workflow.agent_metadata_json.clear()
+        assert "Restart the operator" in metadata.render().plain
+
+        store.current_workflow.agent_metadata_json["agent"] = "{"
+        assert "Metadata payload is malformed" in metadata.render().plain
+
 
 def test_streamed_turns_default_to_collapsed_without_recollapsing_existing_turns():
     store = _store(steps=[_step(1)], outputs={"summary": {"ok": True}})
@@ -500,8 +567,11 @@ async def test_trace_rendering_distinguishes_pending_live_failed_malformed_and_i
         assert "Status: failed" in failed_trace
         assert "submitted" not in failed_trace
 
-        incomplete = json.loads(_store(steps=[_step(1)], outputs={"summary": "ready"})
-                               .current_run.nodes["agent"].agent_trace_json)
+        incomplete = json.loads(
+            _store(steps=[_step(1)], outputs={"summary": "ready"})
+            .current_run.nodes["agent"]
+            .agent_trace_json
+        )
         incomplete["trace"]["evidence"]["complete"] = False
         set_trace(NodeStatus.SUCCESS, json.dumps(incomplete))
         assert "Live record: incomplete" in trace.render().plain
@@ -630,7 +700,6 @@ async def test_expand_all_lazily_slices_large_mapping_pages(
         output.render()
         assert mapping.items_yielded == 10
 
-
         distant_page = (
             "output",
             "summary",
@@ -663,7 +732,6 @@ def test_expanding_one_tab_preserves_other_tab_manual_collapses():
     assert metadata_path in store.trace_collapsed_items
     store.move_trace_inspector_tab(1)
     assert not store.trace_path_expanded(metadata_path)
-
 
 
 @pytest.mark.asyncio

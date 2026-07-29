@@ -592,35 +592,39 @@ def test_agent_declaration_metadata_is_complete_static_and_redacted():
 
 
 @pytest.mark.parametrize("runtime_key", ("lm", "sub_lm"))
-def test_agent_declaration_metadata_rejects_unsupported_model_descriptors(runtime_key):
+def test_agent_declaration_metadata_describes_custom_model_types(runtime_key):
+    class CustomModel:
+        pass
+
     @ava.agent_step(SummarySignature)
     async def summarize(person: Person, *, agent: ava.Agent) -> str:
         return (await agent(person=person)).note
 
-    spec = summarize.fn.__agent_step__
-    with pytest.raises(TypeError, match=rf"Unsupported {runtime_key} model descriptor"):
-        spec.declaration_metadata({runtime_key: object()})
+    metadata = summarize.fn.__agent_step__.declaration_metadata({runtime_key: CustomModel()})
+    label = "main" if runtime_key == "lm" else "sub"
+    identity = metadata["models"][label]["identity"]
+    assert identity["type"].endswith(".CustomModel")
 
 
 @pytest.mark.parametrize(
-    ("runtime_key", "descriptor", "location"),
+    ("runtime_key", "descriptor", "expected_type"),
     [
-        ("lm", {"client": object()}, "client"),
-        ("sub_lm", ["supported", object()], r"\[1\]"),
+        ("lm", {"client": object()}, "builtins.object"),
+        ("sub_lm", ["supported", object()], "builtins.object"),
     ],
 )
-def test_agent_declaration_metadata_rejects_nested_unsupported_model_descriptors(
-    runtime_key, descriptor, location
+def test_agent_declaration_metadata_describes_nested_custom_model_types(
+    runtime_key, descriptor, expected_type
 ):
     @ava.agent_step(SummarySignature)
     async def summarize(person: Person, *, agent: ava.Agent) -> str:
         return (await agent(person=person)).note
 
-    spec = summarize.fn.__agent_step__
-    with pytest.raises(
-        TypeError, match=rf"Unsupported {runtime_key} model descriptor at {location}"
-    ):
-        spec.declaration_metadata({runtime_key: descriptor})
+    metadata = summarize.fn.__agent_step__.declaration_metadata({runtime_key: descriptor})
+    label = "main" if runtime_key == "lm" else "sub"
+    identity = metadata["models"][label]["identity"]
+    nested = identity["client"] if isinstance(identity, dict) else identity[1]
+    assert nested == {"type": expected_type}
 
 
 def test_agent_declaration_metadata_preserves_supported_nested_model_descriptors():

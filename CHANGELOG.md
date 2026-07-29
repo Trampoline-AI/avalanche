@@ -96,6 +96,10 @@
   instructions, tools, and effective redacted runtime configuration.
 - Fix: live agent evidence now remains attached across async node execution, so
   the Trace tab receives turns and status updates under local and Ray backends.
+- Agent inspector object controls are always visible and recursively expand or
+  collapse only the selected subtree. Trace durations use seconds, completed
+  traces infer terminal status when older envelopes omit it, and custom model
+  types retain useful declaration metadata instead of dropping the pane.
 - See [docs/agent-steps.md](docs/agent-steps.md).
 
 ## 0.1.0-rc0

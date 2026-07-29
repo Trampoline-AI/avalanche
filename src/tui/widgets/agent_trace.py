@@ -22,8 +22,9 @@ _VIEWPORT_BUFFER_LINES = 12
 _COLLECTION_PAGE_SIZE = 100
 _SCALAR_PREVIEW_LIMIT = 160
 _TRACE_CONTROLS = (
-    "←/→ tabs · ↑/↓ select · Enter expand/collapse · o full output · "
-    "e/z all · PgUp/PgDn page · Esc back\n"
+    "←/→ Tabs · ↑/↓ Select · [Enter] Expand/Collapse\n"
+    "[e] Expand all under selection · [z] Collapse all under selection\n"
+    "[o] Full output · PgUp/PgDn Page · Esc Back\n"
 )
 
 
@@ -48,6 +49,13 @@ def _usage_label(usage: Any) -> str:
         f" · {usage.get('cache_hits', 0)} cache"
         f" · ${float(usage.get('cost', 0) or 0):.6f}"
     )
+
+
+def _duration_seconds(duration_ms: Any) -> str:
+    """Render declared millisecond trace durations in user-scale seconds."""
+    if isinstance(duration_ms, bool) or not isinstance(duration_ms, (int, float)):
+        return "—"
+    return f"{duration_ms / 1000:.1f}s"
 
 
 def _count_predict_calls(step: dict[str, Any]) -> int:
@@ -125,13 +133,12 @@ def _collection_size(value: Any) -> int | None:
 
 def _scalar_preview(value: Any) -> str:
     rendered = (
-        _json(value)
-        if not isinstance(value, str)
-        else json.dumps(value, ensure_ascii=False)
+        _json(value) if not isinstance(value, str) else json.dumps(value, ensure_ascii=False)
     )
     if len(rendered) <= _SCALAR_PREVIEW_LIMIT:
         return rendered
     return f"{rendered[:_SCALAR_PREVIEW_LIMIT - 1]}…"
+
 
 @dataclass(frozen=True)
 class _InspectorRow:
@@ -470,7 +477,10 @@ def _trace_leading(store: Any) -> tuple[Text, list[dict[str, Any]], bool]:
     inspector_state = store.selected_agent_inspector_state
     evidence = trace.get("evidence") if isinstance(trace.get("evidence"), dict) else None
     run_id = envelope.get("run_id") or (evidence or {}).get("run_id") or "—"
-    status = str(envelope.get("status") or "unavailable")
+    declared_status = envelope.get("status")
+    if not isinstance(declared_status, str) or not declared_status:
+        declared_status = trace.get("status")
+    status = declared_status if isinstance(declared_status, str) and declared_status else ""
     if inspector_state == "pending":
         status = "pending"
     elif inspector_state == "live":
@@ -479,6 +489,10 @@ def _trace_leading(store: Any) -> tuple[Text, list[dict[str, Any]], bool]:
         status = "hydrating"
     elif inspector_state == "failed":
         status = "failed"
+    elif inspector_state.startswith("completed") and not status:
+        status = "completed"
+    elif not status:
+        status = "unavailable"
     status_style = (
         "green"
         if inspector_state.startswith("completed") and status == "completed"
@@ -496,7 +510,7 @@ def _trace_leading(store: Any) -> tuple[Text, list[dict[str, Any]], bool]:
     )
     text.append(
         f"Turns: {trace.get('iterations', 0)}/{trace.get('max_iterations', '—')}"
-        f" · Duration: {trace.get('duration_ms', 0)}ms\n"
+        f" · Duration: {_duration_seconds(trace.get('duration_ms'))}\n"
     )
     text.append(f"Main: {_usage_label(usage.get('main'))}\n")
     text.append(f"Sub:  {_usage_label(usage.get('sub'))}\n")
@@ -793,7 +807,7 @@ class AgentTraceInspector(_VirtualInspector):
             is_submitted = submitted and index == len(steps) - 1
             label = (
                 f"AGENT TURN {step.get('iteration', index + 1)}/{max_turns}"
-                f" · {step.get('duration_ms', 0)}ms · "
+                f" · {_duration_seconds(step.get('duration_ms'))} · "
                 f"{tool_count} tool · {predict_count} predict"
                 f"{' · LIVE' if live else ''}{' · ERROR' if step.get('error') else ''}"
                 f"{' · submitted' if is_submitted else ''}"
@@ -1118,9 +1132,23 @@ class AgentMetadataInspector(_VirtualInspector):
             _append_tabs(leading, "metadata")
             leading.append(f"AGENT METADATA · {display_name}\n", style="bold #60dce4")
             leading.append(_TRACE_CONTROLS, style="dim")
+            metadata_json = store.selected_agent_metadata_json
             metadata = store.selected_agent_metadata
             if metadata is None:
-                leading.append("Metadata unavailable or malformed\n", style="bold red")
+                if metadata_json:
+                    leading.append("Metadata payload is malformed.\n", style="bold red")
+                else:
+                    leading.append(
+                        "Metadata was not published by the operator. Restart the operator "
+                        "to refresh workflow declarations.\n",
+                        style="yellow",
+                    )
+                return leading, []
+            metadata_error = metadata.get("error")
+            if isinstance(metadata_error, str):
+                leading.append(
+                    f"Metadata declaration failed: {metadata_error}\n", style="bold red"
+                )
                 return leading, []
             signature = metadata.get("signature")
             signature = signature if isinstance(signature, Mapping) else {}
@@ -1142,16 +1170,20 @@ class AgentMetadataInspector(_VirtualInspector):
                     ),
                 }
             skills = metadata.get("skills")
-            skill_records = {
-                skill["name"]: {
-                    "instructions": skill.get("instructions", ""),
-                    "packages": skill.get("packages", []),
-                    "modules": skill.get("modules", []),
-                    "tools": skill.get("tools", []),
+            skill_records = (
+                {
+                    skill["name"]: {
+                        "instructions": skill.get("instructions", ""),
+                        "packages": skill.get("packages", []),
+                        "modules": skill.get("modules", []),
+                        "tools": skill.get("tools", []),
+                    }
+                    for skill in skills
+                    if isinstance(skill, Mapping) and isinstance(skill.get("name"), str)
                 }
-                for skill in skills
-                if isinstance(skill, Mapping) and isinstance(skill.get("name"), str)
-            } if isinstance(skills, list) else {}
+                if isinstance(skills, list)
+                else {}
+            )
             values: dict[str, Any] = {
                 "signature": {
                     "instructions": signature.get("instructions", ""),
