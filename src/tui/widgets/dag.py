@@ -6,17 +6,6 @@ from rich.text import Text
 from textual.widgets import Static
 
 from ..dag_layout import DagNode, render_dag_rich
-from ..theme import AGENT_CAPTION_STYLE, DIM_STYLE
-
-
-def _dag_hint(nodes: list[DagNode]) -> Text:
-    """Describe DAG selection and agent inspection controls."""
-    hint = Text("Click or ↑↓←→ select node", DIM_STYLE)
-    if any(node.is_agent for node in nodes):
-        hint.append("  •  Enter inspect selected agent step  •  ", DIM_STYLE)
-        hint.append("(agent) agent step", AGENT_CAPTION_STYLE)
-    return hint
-
 
 
 class DagWidget(Static, can_focus=False):
@@ -35,11 +24,12 @@ class DagWidget(Static, can_focus=False):
         if store.dag is None:
             return Text()
         lines = render_dag_rich(
-            store.dag, store.node_statuses, store.frame,
-            store.selected_node, store.node_elapsed,
+            store.dag,
+            store.node_statuses,
+            store.frame,
+            store.selected_node,
+            store.node_elapsed,
         )
-        lines.append(_dag_hint(store.all_nodes))
-
 
         # Build regions for each node's name and, for agent nodes, caption.
         # Primary rows disambiguate duplicate display names in parallel branches.
@@ -68,7 +58,7 @@ class DagWidget(Static, can_focus=False):
                 caption = "(agent)"
                 caption_plain = lines[node.caption_render_row].plain
                 caption_col = node.caption_col
-                if caption_plain[caption_col:caption_col + len(caption)] == caption:
+                if caption_plain[caption_col : caption_col + len(caption)] == caption:
                     self._hit_regions.append(
                         (node.caption_render_row, caption_col, caption_col + len(caption), node)
                     )

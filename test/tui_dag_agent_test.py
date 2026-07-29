@@ -68,8 +68,7 @@ def _workflow_with_parallel_agent_steps() -> WorkflowInfo:
             "publish_1": ["join_1"],
         },
         node_types={
-            node_id: "step"
-            for node_id in ["source_1", "review_1", "publish_1", "join_1"]
+            node_id: "step" for node_id in ["source_1", "review_1", "publish_1", "join_1"]
         },
         display_names={
             "source_1": "source",
@@ -131,10 +130,7 @@ def _dense_workflow(node_count: int, *, agents: bool = False) -> WorkflowInfo:
         name="dense_agent_captions",
         file_path="dense_agent_captions.py",
         node_ids=node_ids,
-        graph={
-            node_ids[index]: node_ids[index + 1:]
-            for index in range(node_count - 1)
-        },
+        graph={node_ids[index]: node_ids[index + 1 :] for index in range(node_count - 1)},
         node_types={node_id: "step" for node_id in node_ids},
         agent_node_ids=node_ids if agents else [],
     )
@@ -176,7 +172,7 @@ def test_agent_captions_expand_parallel_rows_without_touching_skip_edges():
         assert node.display_name in primary
         assert "(agent)" in caption
         caption_col = primary.index(node.display_name)
-        assert caption[caption_col:caption_col + len("(agent)")] == "(agent)"
+        assert caption[caption_col : caption_col + len("(agent)")] == "(agent)"
         assert "(agent)" not in primary
 
     source = next(node for node in nodes if node.name == "source_1")
@@ -229,13 +225,13 @@ def test_cross_track_skip_drop_stays_continuous_beside_agent_captions():
     assert target.caption_col is not None
     assert (
         lines[source.caption_render_row].plain[
-            source.caption_col:source.caption_col + len("(agent)")
+            source.caption_col : source.caption_col + len("(agent)")
         ]
         == "(agent)"
     )
     assert (
         lines[target.caption_render_row].plain[
-            target.caption_col:target.caption_col + len("(agent)")
+            target.caption_col : target.caption_col + len("(agent)")
         ]
         == "(agent)"
     )
@@ -285,7 +281,6 @@ def test_dense_skip_edges_render_without_quadratic_lane_scan():
     assert len(leader_lanes) == len(small_nodes)
 
 
-
 @pytest.mark.asyncio
 async def test_duplicate_agent_captions_keep_distinct_click_and_scroll_anchors():
     workflow = _workflow_with_duplicate_agent_steps()
@@ -322,8 +317,9 @@ async def test_duplicate_agent_captions_keep_distinct_click_and_scroll_anchors()
             assert dag._last_scrolled_node is not None
             assert dag._last_scrolled_node.name == node.name
 
+
 @pytest.mark.asyncio
-async def test_agent_dag_hint_explains_selection_and_inspector_activation():
+async def test_agent_dag_omits_legend_and_preserves_inspector_activation():
     app = AvalancheApp(workflow="agent_trace")
 
     async with app.run_test(size=(120, 40)) as pilot:
@@ -331,9 +327,9 @@ async def test_agent_dag_hint_explains_selection_and_inspector_activation():
         dag = app._screen.query_one("#dag-panel")
         rendered = dag.render().plain
 
-        assert "Click or ↑↓←→ select node" in rendered
-        assert "Enter inspect selected agent step" in rendered
-        assert "(agent) agent step" in rendered
+        assert "Click or" not in rendered
+        assert "Enter inspect" not in rendered
+        assert "(agent) agent step" not in rendered
 
         agent_node = next(node for node in app.store.all_nodes if node.is_agent)
         dag.render()  # populate name and caption click regions

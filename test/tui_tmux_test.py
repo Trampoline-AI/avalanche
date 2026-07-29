@@ -175,6 +175,16 @@ class TestTmuxRendering:
         assert "fetch_validation" in combined, "Missing fetch_validation branch"
         assert "fetch_features" in combined, "Missing fetch_features branch"
 
+    def test_agent_dag_omits_embedded_control_legend(self, tui_session):
+        """The DAG does not embed a control legend beneath its graph."""
+        restart_tui("agent_trace", width=100)
+        assert wait_for("inspect_agent_1", timeout=8)
+
+        combined = "\n".join(capture())
+        assert "Click or" not in combined
+        assert "Enter inspect" not in combined
+        assert "(agent) agent step" not in combined
+
     def test_deep_link_node_selects_status_bar(self, tui_session):
         """Deep-linking to a DAG node should show it in the status bar."""
         restart_tui("order_workflow/validate", width=220)
