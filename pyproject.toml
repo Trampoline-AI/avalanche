@@ -73,6 +73,10 @@ dev = [
     "textual>=6.2.1",
     "watchfiles>=1.1.1",
     "predict-rlm>=0.8.0a0",
+    "marimo>=0.20,<0.21",
+]
+examples = [
+    "openpyxl>=3.1,<4",
 ]
 
 [tool.pytest.ini_options]
