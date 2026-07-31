@@ -20,6 +20,7 @@ from runtime.operator.models import (
     RunStatus,
     RunSummary,
     TraceDescriptor,
+    TraceHeader,
     WorkflowTopology,
 )
 from runtime.operator.operator import Operator
@@ -71,6 +72,16 @@ def test_snapshot_detail_cursor_and_descriptor_roundtrip():
         event_count=42,
         size_bytes=5_000_000,
         latest_event_sequence=42,
+        header=TraceHeader(
+            status="completed",
+            model="main",
+            sub_model="sub",
+            iterations=3,
+            max_iterations=5,
+            duration_ms=1250,
+            usage_json='{"main":{"input_tokens":12}}',
+            telemetry_json='{"trace_id":"trace-1"}',
+        ),
     )
     snapshot = RunSnapshot(
         operator_instance_id="operator-1",
@@ -102,6 +113,7 @@ def test_snapshot_detail_cursor_and_descriptor_roundtrip():
             graph=(("agent_1", ()),),
             node_types=(("agent_1", "step"),),
             display_names=(("agent_1", "Agent"),),
+            agent_metadata_json=(("agent_1", '{"signature":{"name":"Analyze"}}'),),
         ),
     )
 

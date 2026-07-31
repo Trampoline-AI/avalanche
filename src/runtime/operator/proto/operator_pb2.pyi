@@ -131,7 +131,7 @@ class NodeEdges(_message.Message):
     def __init__(self, children: _Optional[_Iterable[str]] = ...) -> None: ...
 
 class WorkflowTopologyMsg(_message.Message):
-    __slots__ = ("node_ids", "graph", "node_types", "display_names")
+    __slots__ = ("node_ids", "graph", "node_types", "display_names", "agent_metadata_json")
     class GraphEntry(_message.Message):
         __slots__ = ("key", "value")
         KEY_FIELD_NUMBER: _ClassVar[int]
@@ -153,15 +153,24 @@ class WorkflowTopologyMsg(_message.Message):
         key: str
         value: str
         def __init__(self, key: _Optional[str] = ..., value: _Optional[str] = ...) -> None: ...
+    class AgentMetadataJsonEntry(_message.Message):
+        __slots__ = ("key", "value")
+        KEY_FIELD_NUMBER: _ClassVar[int]
+        VALUE_FIELD_NUMBER: _ClassVar[int]
+        key: str
+        value: str
+        def __init__(self, key: _Optional[str] = ..., value: _Optional[str] = ...) -> None: ...
     NODE_IDS_FIELD_NUMBER: _ClassVar[int]
     GRAPH_FIELD_NUMBER: _ClassVar[int]
     NODE_TYPES_FIELD_NUMBER: _ClassVar[int]
     DISPLAY_NAMES_FIELD_NUMBER: _ClassVar[int]
+    AGENT_METADATA_JSON_FIELD_NUMBER: _ClassVar[int]
     node_ids: _containers.RepeatedScalarFieldContainer[str]
     graph: _containers.MessageMap[str, NodeEdges]
     node_types: _containers.ScalarMap[str, str]
     display_names: _containers.ScalarMap[str, str]
-    def __init__(self, node_ids: _Optional[_Iterable[str]] = ..., graph: _Optional[_Mapping[str, NodeEdges]] = ..., node_types: _Optional[_Mapping[str, str]] = ..., display_names: _Optional[_Mapping[str, str]] = ...) -> None: ...
+    agent_metadata_json: _containers.ScalarMap[str, str]
+    def __init__(self, node_ids: _Optional[_Iterable[str]] = ..., graph: _Optional[_Mapping[str, NodeEdges]] = ..., node_types: _Optional[_Mapping[str, str]] = ..., display_names: _Optional[_Mapping[str, str]] = ..., agent_metadata_json: _Optional[_Mapping[str, str]] = ...) -> None: ...
 
 class FlowInfoMsg(_message.Message):
     __slots__ = ("name", "file_path", "node_ids", "graph", "node_types", "display_names", "cron", "next_run_at", "last_run_at", "workflow_id", "display_name", "root_alias", "relative_file", "builder_symbol", "agent_node_ids", "agent_metadata_json", "webhook_path", "webhook_url", "webhook_active")
@@ -315,8 +324,28 @@ class RunSummaryMsg(_message.Message):
     revision: int
     def __init__(self, run_id: _Optional[str] = ..., flow_name: _Optional[str] = ..., status: _Optional[str] = ..., started_at: _Optional[float] = ..., ended_at: _Optional[float] = ..., triggered_by: _Optional[str] = ..., workflow_id: _Optional[str] = ..., workflow_display_name: _Optional[str] = ..., created_sequence: _Optional[int] = ..., revision: _Optional[int] = ...) -> None: ...
 
+class TraceHeaderMsg(_message.Message):
+    __slots__ = ("status", "model", "sub_model", "iterations", "max_iterations", "duration_ms", "usage_json", "telemetry_json")
+    STATUS_FIELD_NUMBER: _ClassVar[int]
+    MODEL_FIELD_NUMBER: _ClassVar[int]
+    SUB_MODEL_FIELD_NUMBER: _ClassVar[int]
+    ITERATIONS_FIELD_NUMBER: _ClassVar[int]
+    MAX_ITERATIONS_FIELD_NUMBER: _ClassVar[int]
+    DURATION_MS_FIELD_NUMBER: _ClassVar[int]
+    USAGE_JSON_FIELD_NUMBER: _ClassVar[int]
+    TELEMETRY_JSON_FIELD_NUMBER: _ClassVar[int]
+    status: str
+    model: str
+    sub_model: str
+    iterations: int
+    max_iterations: int
+    duration_ms: int
+    usage_json: str
+    telemetry_json: str
+    def __init__(self, status: _Optional[str] = ..., model: _Optional[str] = ..., sub_model: _Optional[str] = ..., iterations: _Optional[int] = ..., max_iterations: _Optional[int] = ..., duration_ms: _Optional[int] = ..., usage_json: _Optional[str] = ..., telemetry_json: _Optional[str] = ...) -> None: ...
+
 class TraceDescriptorMsg(_message.Message):
-    __slots__ = ("status", "revision", "available", "complete", "event_count", "size_bytes", "latest_event_sequence")
+    __slots__ = ("status", "revision", "available", "complete", "event_count", "size_bytes", "latest_event_sequence", "header")
     STATUS_FIELD_NUMBER: _ClassVar[int]
     REVISION_FIELD_NUMBER: _ClassVar[int]
     AVAILABLE_FIELD_NUMBER: _ClassVar[int]
@@ -324,6 +353,7 @@ class TraceDescriptorMsg(_message.Message):
     EVENT_COUNT_FIELD_NUMBER: _ClassVar[int]
     SIZE_BYTES_FIELD_NUMBER: _ClassVar[int]
     LATEST_EVENT_SEQUENCE_FIELD_NUMBER: _ClassVar[int]
+    HEADER_FIELD_NUMBER: _ClassVar[int]
     status: str
     revision: int
     available: bool
@@ -331,7 +361,8 @@ class TraceDescriptorMsg(_message.Message):
     event_count: int
     size_bytes: int
     latest_event_sequence: int
-    def __init__(self, status: _Optional[str] = ..., revision: _Optional[int] = ..., available: bool = ..., complete: bool = ..., event_count: _Optional[int] = ..., size_bytes: _Optional[int] = ..., latest_event_sequence: _Optional[int] = ...) -> None: ...
+    header: TraceHeaderMsg
+    def __init__(self, status: _Optional[str] = ..., revision: _Optional[int] = ..., available: bool = ..., complete: bool = ..., event_count: _Optional[int] = ..., size_bytes: _Optional[int] = ..., latest_event_sequence: _Optional[int] = ..., header: _Optional[_Union[TraceHeaderMsg, _Mapping]] = ...) -> None: ...
 
 class NodeSnapshotMsg(_message.Message):
     __slots__ = ("node_id", "name", "node_type", "status", "started_at", "ended_at", "trace", "revision", "event_page_token", "error")

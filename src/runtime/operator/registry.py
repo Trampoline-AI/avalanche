@@ -35,6 +35,28 @@ class AmbiguousWorkflow(KeyError):  # noqa: N818 - domain exception name is inte
         )
 
 
+def agent_metadata_for_workflow(workflow: Workflow, node_ids: list[str]) -> dict[str, str]:
+    """Serialize stable agent declaration metadata for catalog and run projections."""
+    metadata_by_node: dict[str, str] = {}
+    for node_id in node_ids:
+        spec = getattr(workflow.nodes[node_id].node.fn, "__agent_step__", None)
+        if spec is None:
+            continue
+        try:
+            metadata = spec.declaration_metadata(workflow.agent_defaults)
+            metadata_by_node[node_id] = json.dumps(
+                metadata, ensure_ascii=False, separators=(",", ":"), sort_keys=True
+            )
+        except Exception as exc:
+            metadata_by_node[node_id] = json.dumps(
+                {"error": str(exc) or type(exc).__name__},
+                ensure_ascii=False,
+                separators=(",", ":"),
+                sort_keys=True,
+            )
+    return metadata_by_node
+
+
 def workflow_to_info(
     workflow: Workflow,
     file_path: str,
@@ -47,25 +69,8 @@ def workflow_to_info(
     node_ids = workflow._topological_sort()
     node_types = {nid: workflow.nodes[nid].node.node_type.value for nid in node_ids}
     display_names = {nid: display_name_from_id(nid) for nid in node_ids}
-    agent_node_ids = []
-    agent_metadata_json = {}
-    for nid in node_ids:
-        spec = getattr(workflow.nodes[nid].node.fn, "__agent_step__", None)
-        if spec is None:
-            continue
-        agent_node_ids.append(nid)
-        try:
-            metadata = spec.declaration_metadata(workflow.agent_defaults)
-            agent_metadata_json[nid] = json.dumps(
-                metadata, ensure_ascii=False, separators=(",", ":"), sort_keys=True
-            )
-        except Exception as exc:
-            agent_metadata_json[nid] = json.dumps(
-                {"error": str(exc) or type(exc).__name__},
-                ensure_ascii=False,
-                separators=(",", ":"),
-                sort_keys=True,
-            )
+    agent_metadata_json = agent_metadata_for_workflow(workflow, node_ids)
+    agent_node_ids = list(agent_metadata_json)
     return WorkflowInfo(
         name=workflow.name,
         display_name=workflow.name,

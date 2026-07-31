@@ -60,6 +60,7 @@ from .models import (
     SequencedLogEntry,
     TraceDescriptor,
     TraceFinalized,
+    TraceHeader,
     WorkflowInfo,
     WorkflowTopology,
 )
@@ -1405,6 +1406,11 @@ class Operator:
             display_names=tuple(
                 (node_id, prepared["display_names"][node_id]) for node_id in node_ids
             ),
+            agent_metadata_json=tuple(
+                (node_id, prepared["agent_metadata_json"][node_id])
+                for node_id in node_ids
+                if node_id in prepared["agent_metadata_json"]
+            ),
         )
         run = RunState(
             run_id=run_id,
@@ -1803,6 +1809,7 @@ class Operator:
             if not isinstance(trace, dict):
                 return None
             _validate_agent_detail_depth(trace)
+            header = _trace_header_from_payload(trace)
             trace_header = {
                 name: value
                 for name, value in trace.items()
@@ -1841,6 +1848,7 @@ class Operator:
                 latest_event_sequence=(
                     projected_events[-1].event_sequence if projected_events else 0
                 ),
+                header=header,
             )
             message = f"Agent trace {status}"
             if status == "error":
@@ -2607,6 +2615,68 @@ def _validate_agent_detail_depth(value: object) -> None:
     walk(value, 0)
 
 
+def _trace_header_from_payload(trace: dict[str, Any]) -> TraceHeader | None:
+    """Validate the stable PredictRLM RunTrace header at the coordinator boundary."""
+    if "model" not in trace:
+        return None
+
+    status = trace.get("status")
+    if type(status) is not str or not status or len(status) > _MAX_EVENT_FIELD_LENGTH:
+        raise _CoordinatorProtocolError(
+            "agent trace header field 'status' must be a non-empty bounded string"
+        )
+    model = trace.get("model")
+    if type(model) is not str or not model or len(model) > _MAX_EVENT_FIELD_LENGTH:
+        raise _CoordinatorProtocolError(
+            "agent trace header field 'model' must be a non-empty bounded string"
+        )
+    sub_model = trace.get("sub_model")
+    if sub_model is not None and (
+        type(sub_model) is not str or len(sub_model) > _MAX_EVENT_FIELD_LENGTH
+    ):
+        raise _CoordinatorProtocolError(
+            "agent trace header field 'sub_model' must be a bounded string or null"
+        )
+
+    iterations = trace.get("iterations")
+    if type(iterations) is not int or iterations < 0:
+        raise _CoordinatorProtocolError(
+            "agent trace header field 'iterations' must be a non-negative integer"
+        )
+    max_iterations = trace.get("max_iterations")
+    if type(max_iterations) is not int or max_iterations < 0:
+        raise _CoordinatorProtocolError(
+            "agent trace header field 'max_iterations' must be a non-negative integer"
+        )
+    duration_ms = trace.get("duration_ms")
+    if type(duration_ms) is not int or duration_ms < 0:
+        raise _CoordinatorProtocolError(
+            "agent trace header field 'duration_ms' must be a non-negative integer"
+        )
+
+    usage = trace.get("usage")
+    if not isinstance(usage, dict):
+        raise _CoordinatorProtocolError("agent trace header field 'usage' must be an object")
+    telemetry = trace.get("telemetry_ref")
+    if telemetry is not None and not isinstance(telemetry, dict):
+        raise _CoordinatorProtocolError(
+            "agent trace header field 'telemetry_ref' must be an object or null"
+        )
+
+    return TraceHeader(
+        status=status,
+        model=model,
+        sub_model=sub_model,
+        iterations=iterations,
+        max_iterations=max_iterations,
+        duration_ms=duration_ms,
+        usage_json=json.dumps(usage, separators=(",", ":")),
+        telemetry_json=(
+            json.dumps(telemetry, separators=(",", ":")) if telemetry is not None else None
+        ),
+    )
+
+
 def _validate_preparation_event(event: object) -> str:
     event_type = _event_type(event)
     if event_type == "prepared":
@@ -2619,6 +2689,7 @@ def _validate_preparation_event(event: object) -> str:
                 "node_types",
                 "display_names",
                 "display_name",
+                "agent_metadata_json",
             },
         )
         node_ids = _required_field(event, "node_ids")
@@ -2636,6 +2707,7 @@ def _validate_preparation_event(event: object) -> str:
         _graph_mapping(event, "graph")
         node_types = _string_mapping(event, "node_types")
         display_names = _string_mapping(event, "display_names")
+        agent_metadata_json = _string_mapping(event, "agent_metadata_json")
         for node_id in node_ids:
             if node_id not in node_types:
                 raise _CoordinatorProtocolError(
@@ -2645,6 +2717,13 @@ def _validate_preparation_event(event: object) -> str:
                 raise _CoordinatorProtocolError(
                     f"field 'display_names' is missing node {_bounded_ascii(node_id)}"
                 )
+        unknown_agent_nodes = set(agent_metadata_json).difference(node_ids)
+        if unknown_agent_nodes:
+            unknown = min(unknown_agent_nodes)
+            raise _CoordinatorProtocolError(
+                f"field 'agent_metadata_json' references unknown node "
+                f"{_bounded_ascii(unknown)}"
+            )
         display_name = event.get("display_name")
         if display_name is not None and (
             type(display_name) is not str or len(display_name) > _MAX_EVENT_FIELD_LENGTH

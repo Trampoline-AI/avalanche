@@ -26,6 +26,7 @@ from .models import (
     ScanTargetInfo,
     TraceDescriptor,
     TraceFinalized,
+    TraceHeader,
     WorkflowDiscoveryDiagnostic,
     WorkflowInfo,
     WorkflowTopology,
@@ -155,6 +156,7 @@ def workflow_topology_to_proto(topology: WorkflowTopology) -> pb.WorkflowTopolog
         graph={parent: pb.NodeEdges(children=children) for parent, children in topology.graph},
         node_types=dict(topology.node_types),
         display_names=dict(topology.display_names),
+        agent_metadata_json=dict(topology.agent_metadata_json),
     )
 
 
@@ -165,11 +167,45 @@ def workflow_topology_from_proto(msg: pb.WorkflowTopologyMsg) -> WorkflowTopolog
         graph=tuple((node_id, tuple(msg.graph[node_id].children)) for node_id in node_ids),
         node_types=tuple((node_id, msg.node_types[node_id]) for node_id in node_ids),
         display_names=tuple((node_id, msg.display_names[node_id]) for node_id in node_ids),
+        agent_metadata_json=tuple(
+            (node_id, msg.agent_metadata_json[node_id])
+            for node_id in node_ids
+            if node_id in msg.agent_metadata_json
+        ),
+    )
+
+
+def trace_header_to_proto(header: TraceHeader) -> pb.TraceHeaderMsg:
+    message = pb.TraceHeaderMsg(
+        status=header.status,
+        model=header.model,
+        iterations=header.iterations,
+        max_iterations=header.max_iterations,
+        duration_ms=header.duration_ms,
+        usage_json=header.usage_json,
+    )
+    if header.sub_model is not None:
+        message.sub_model = header.sub_model
+    if header.telemetry_json is not None:
+        message.telemetry_json = header.telemetry_json
+    return message
+
+
+def trace_header_from_proto(msg: pb.TraceHeaderMsg) -> TraceHeader:
+    return TraceHeader(
+        status=msg.status,
+        model=msg.model,
+        sub_model=msg.sub_model if msg.HasField("sub_model") else None,
+        iterations=msg.iterations,
+        max_iterations=msg.max_iterations,
+        duration_ms=msg.duration_ms,
+        usage_json=msg.usage_json,
+        telemetry_json=msg.telemetry_json if msg.HasField("telemetry_json") else None,
     )
 
 
 def trace_descriptor_to_proto(descriptor: TraceDescriptor) -> pb.TraceDescriptorMsg:
-    return pb.TraceDescriptorMsg(
+    message = pb.TraceDescriptorMsg(
         status=descriptor.status,
         revision=descriptor.revision,
         available=descriptor.available,
@@ -178,6 +214,9 @@ def trace_descriptor_to_proto(descriptor: TraceDescriptor) -> pb.TraceDescriptor
         size_bytes=descriptor.size_bytes,
         latest_event_sequence=descriptor.latest_event_sequence,
     )
+    if descriptor.header is not None:
+        message.header.CopyFrom(trace_header_to_proto(descriptor.header))
+    return message
 
 
 def trace_descriptor_from_proto(msg: pb.TraceDescriptorMsg) -> TraceDescriptor:
@@ -189,6 +228,7 @@ def trace_descriptor_from_proto(msg: pb.TraceDescriptorMsg) -> TraceDescriptor:
         event_count=msg.event_count,
         size_bytes=msg.size_bytes,
         latest_event_sequence=msg.latest_event_sequence,
+        header=trace_header_from_proto(msg.header) if msg.HasField("header") else None,
     )
 
 

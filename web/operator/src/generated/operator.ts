@@ -259,6 +259,12 @@ export interface WorkflowTopologyMsg {
     displayNames: {
         [key: string]: string;
     };
+    /**
+     * @generated from protobuf field: map<string, string> agent_metadata_json = 5
+     */
+    agentMetadataJson: {
+        [key: string]: string;
+    };
 }
 /**
  * @generated from protobuf message avalanche.operator.FlowInfoMsg
@@ -496,6 +502,43 @@ export interface RunSummaryMsg {
     revision: string;
 }
 /**
+ * @generated from protobuf message avalanche.operator.TraceHeaderMsg
+ */
+export interface TraceHeaderMsg {
+    /**
+     * @generated from protobuf field: string status = 1
+     */
+    status: string;
+    /**
+     * @generated from protobuf field: string model = 2
+     */
+    model: string;
+    /**
+     * @generated from protobuf field: optional string sub_model = 3
+     */
+    subModel?: string;
+    /**
+     * @generated from protobuf field: uint64 iterations = 4
+     */
+    iterations: string;
+    /**
+     * @generated from protobuf field: uint64 max_iterations = 5
+     */
+    maxIterations: string;
+    /**
+     * @generated from protobuf field: uint64 duration_ms = 6
+     */
+    durationMs: string;
+    /**
+     * @generated from protobuf field: string usage_json = 7
+     */
+    usageJson: string;
+    /**
+     * @generated from protobuf field: optional string telemetry_json = 8
+     */
+    telemetryJson?: string;
+}
+/**
  * @generated from protobuf message avalanche.operator.TraceDescriptorMsg
  */
 export interface TraceDescriptorMsg {
@@ -527,6 +570,10 @@ export interface TraceDescriptorMsg {
      * @generated from protobuf field: uint64 latest_event_sequence = 7
      */
     latestEventSequence: string;
+    /**
+     * @generated from protobuf field: avalanche.operator.TraceHeaderMsg header = 8
+     */
+    header?: TraceHeaderMsg;
 }
 /**
  * @generated from protobuf message avalanche.operator.NodeSnapshotMsg
@@ -1841,7 +1888,8 @@ class WorkflowTopologyMsg$Type extends MessageType<WorkflowTopologyMsg> {
             { no: 1, name: "node_ids", kind: "scalar", repeat: 2 /*RepeatType.UNPACKED*/, T: 9 /*ScalarType.STRING*/ },
             { no: 2, name: "graph", kind: "map", K: 9 /*ScalarType.STRING*/, V: { kind: "message", T: () => NodeEdges } },
             { no: 3, name: "node_types", kind: "map", K: 9 /*ScalarType.STRING*/, V: { kind: "scalar", T: 9 /*ScalarType.STRING*/ } },
-            { no: 4, name: "display_names", kind: "map", K: 9 /*ScalarType.STRING*/, V: { kind: "scalar", T: 9 /*ScalarType.STRING*/ } }
+            { no: 4, name: "display_names", kind: "map", K: 9 /*ScalarType.STRING*/, V: { kind: "scalar", T: 9 /*ScalarType.STRING*/ } },
+            { no: 5, name: "agent_metadata_json", kind: "map", K: 9 /*ScalarType.STRING*/, V: { kind: "scalar", T: 9 /*ScalarType.STRING*/ } }
         ]);
     }
     create(value?: PartialMessage<WorkflowTopologyMsg>): WorkflowTopologyMsg {
@@ -1850,6 +1898,7 @@ class WorkflowTopologyMsg$Type extends MessageType<WorkflowTopologyMsg> {
         message.graph = {};
         message.nodeTypes = {};
         message.displayNames = {};
+        message.agentMetadataJson = {};
         if (value !== undefined)
             reflectionMergePartial<WorkflowTopologyMsg>(this, message, value);
         return message;
@@ -1870,6 +1919,9 @@ class WorkflowTopologyMsg$Type extends MessageType<WorkflowTopologyMsg> {
                     break;
                 case /* map<string, string> display_names */ 4:
                     this.binaryReadMap4(message.displayNames, reader, options);
+                    break;
+                case /* map<string, string> agent_metadata_json */ 5:
+                    this.binaryReadMap5(message.agentMetadataJson, reader, options);
                     break;
                 default:
                     let u = options.readUnknownField;
@@ -1930,6 +1982,22 @@ class WorkflowTopologyMsg$Type extends MessageType<WorkflowTopologyMsg> {
         }
         map[key ?? ""] = val ?? "";
     }
+    private binaryReadMap5(map: WorkflowTopologyMsg["agentMetadataJson"], reader: IBinaryReader, options: BinaryReadOptions): void {
+        let len = reader.uint32(), end = reader.pos + len, key: keyof WorkflowTopologyMsg["agentMetadataJson"] | undefined, val: WorkflowTopologyMsg["agentMetadataJson"][any] | undefined;
+        while (reader.pos < end) {
+            let [fieldNo, wireType] = reader.tag();
+            switch (fieldNo) {
+                case 1:
+                    key = reader.string();
+                    break;
+                case 2:
+                    val = reader.string();
+                    break;
+                default: throw new globalThis.Error("unknown map entry field for avalanche.operator.WorkflowTopologyMsg.agent_metadata_json");
+            }
+        }
+        map[key ?? ""] = val ?? "";
+    }
     internalBinaryWrite(message: WorkflowTopologyMsg, writer: IBinaryWriter, options: BinaryWriteOptions): IBinaryWriter {
         /* repeated string node_ids = 1; */
         for (let i = 0; i < message.nodeIds.length; i++)
@@ -1947,6 +2015,9 @@ class WorkflowTopologyMsg$Type extends MessageType<WorkflowTopologyMsg> {
         /* map<string, string> display_names = 4; */
         for (let k of globalThis.Object.keys(message.displayNames))
             writer.tag(4, WireType.LengthDelimited).fork().tag(1, WireType.LengthDelimited).string(k).tag(2, WireType.LengthDelimited).string(message.displayNames[k]).join();
+        /* map<string, string> agent_metadata_json = 5; */
+        for (let k of globalThis.Object.keys(message.agentMetadataJson))
+            writer.tag(5, WireType.LengthDelimited).fork().tag(1, WireType.LengthDelimited).string(k).tag(2, WireType.LengthDelimited).string(message.agentMetadataJson[k]).join();
         let u = options.writeUnknownFields;
         if (u !== false)
             (u == true ? UnknownFieldHandler.onWrite : u)(this.typeName, message, writer);
@@ -2681,6 +2752,107 @@ class RunSummaryMsg$Type extends MessageType<RunSummaryMsg> {
  */
 export const RunSummaryMsg = new RunSummaryMsg$Type();
 // @generated message type with reflection information, may provide speed optimized methods
+class TraceHeaderMsg$Type extends MessageType<TraceHeaderMsg> {
+    constructor() {
+        super("avalanche.operator.TraceHeaderMsg", [
+            { no: 1, name: "status", kind: "scalar", T: 9 /*ScalarType.STRING*/ },
+            { no: 2, name: "model", kind: "scalar", T: 9 /*ScalarType.STRING*/ },
+            { no: 3, name: "sub_model", kind: "scalar", opt: true, T: 9 /*ScalarType.STRING*/ },
+            { no: 4, name: "iterations", kind: "scalar", T: 4 /*ScalarType.UINT64*/ },
+            { no: 5, name: "max_iterations", kind: "scalar", T: 4 /*ScalarType.UINT64*/ },
+            { no: 6, name: "duration_ms", kind: "scalar", T: 4 /*ScalarType.UINT64*/ },
+            { no: 7, name: "usage_json", kind: "scalar", T: 9 /*ScalarType.STRING*/ },
+            { no: 8, name: "telemetry_json", kind: "scalar", opt: true, T: 9 /*ScalarType.STRING*/ }
+        ]);
+    }
+    create(value?: PartialMessage<TraceHeaderMsg>): TraceHeaderMsg {
+        const message = globalThis.Object.create((this.messagePrototype!));
+        message.status = "";
+        message.model = "";
+        message.iterations = "0";
+        message.maxIterations = "0";
+        message.durationMs = "0";
+        message.usageJson = "";
+        if (value !== undefined)
+            reflectionMergePartial<TraceHeaderMsg>(this, message, value);
+        return message;
+    }
+    internalBinaryRead(reader: IBinaryReader, length: number, options: BinaryReadOptions, target?: TraceHeaderMsg): TraceHeaderMsg {
+        let message = target ?? this.create(), end = reader.pos + length;
+        while (reader.pos < end) {
+            let [fieldNo, wireType] = reader.tag();
+            switch (fieldNo) {
+                case /* string status */ 1:
+                    message.status = reader.string();
+                    break;
+                case /* string model */ 2:
+                    message.model = reader.string();
+                    break;
+                case /* optional string sub_model */ 3:
+                    message.subModel = reader.string();
+                    break;
+                case /* uint64 iterations */ 4:
+                    message.iterations = reader.uint64().toString();
+                    break;
+                case /* uint64 max_iterations */ 5:
+                    message.maxIterations = reader.uint64().toString();
+                    break;
+                case /* uint64 duration_ms */ 6:
+                    message.durationMs = reader.uint64().toString();
+                    break;
+                case /* string usage_json */ 7:
+                    message.usageJson = reader.string();
+                    break;
+                case /* optional string telemetry_json */ 8:
+                    message.telemetryJson = reader.string();
+                    break;
+                default:
+                    let u = options.readUnknownField;
+                    if (u === "throw")
+                        throw new globalThis.Error(`Unknown field ${fieldNo} (wire type ${wireType}) for ${this.typeName}`);
+                    let d = reader.skip(wireType);
+                    if (u !== false)
+                        (u === true ? UnknownFieldHandler.onRead : u)(this.typeName, message, fieldNo, wireType, d);
+            }
+        }
+        return message;
+    }
+    internalBinaryWrite(message: TraceHeaderMsg, writer: IBinaryWriter, options: BinaryWriteOptions): IBinaryWriter {
+        /* string status = 1; */
+        if (message.status !== "")
+            writer.tag(1, WireType.LengthDelimited).string(message.status);
+        /* string model = 2; */
+        if (message.model !== "")
+            writer.tag(2, WireType.LengthDelimited).string(message.model);
+        /* optional string sub_model = 3; */
+        if (message.subModel !== undefined)
+            writer.tag(3, WireType.LengthDelimited).string(message.subModel);
+        /* uint64 iterations = 4; */
+        if (message.iterations !== "0")
+            writer.tag(4, WireType.Varint).uint64(message.iterations);
+        /* uint64 max_iterations = 5; */
+        if (message.maxIterations !== "0")
+            writer.tag(5, WireType.Varint).uint64(message.maxIterations);
+        /* uint64 duration_ms = 6; */
+        if (message.durationMs !== "0")
+            writer.tag(6, WireType.Varint).uint64(message.durationMs);
+        /* string usage_json = 7; */
+        if (message.usageJson !== "")
+            writer.tag(7, WireType.LengthDelimited).string(message.usageJson);
+        /* optional string telemetry_json = 8; */
+        if (message.telemetryJson !== undefined)
+            writer.tag(8, WireType.LengthDelimited).string(message.telemetryJson);
+        let u = options.writeUnknownFields;
+        if (u !== false)
+            (u == true ? UnknownFieldHandler.onWrite : u)(this.typeName, message, writer);
+        return writer;
+    }
+}
+/**
+ * @generated MessageType for protobuf message avalanche.operator.TraceHeaderMsg
+ */
+export const TraceHeaderMsg = new TraceHeaderMsg$Type();
+// @generated message type with reflection information, may provide speed optimized methods
 class TraceDescriptorMsg$Type extends MessageType<TraceDescriptorMsg> {
     constructor() {
         super("avalanche.operator.TraceDescriptorMsg", [
@@ -2690,7 +2862,8 @@ class TraceDescriptorMsg$Type extends MessageType<TraceDescriptorMsg> {
             { no: 4, name: "complete", kind: "scalar", T: 8 /*ScalarType.BOOL*/ },
             { no: 5, name: "event_count", kind: "scalar", T: 4 /*ScalarType.UINT64*/ },
             { no: 6, name: "size_bytes", kind: "scalar", T: 4 /*ScalarType.UINT64*/ },
-            { no: 7, name: "latest_event_sequence", kind: "scalar", T: 4 /*ScalarType.UINT64*/ }
+            { no: 7, name: "latest_event_sequence", kind: "scalar", T: 4 /*ScalarType.UINT64*/ },
+            { no: 8, name: "header", kind: "message", T: () => TraceHeaderMsg }
         ]);
     }
     create(value?: PartialMessage<TraceDescriptorMsg>): TraceDescriptorMsg {
@@ -2732,6 +2905,9 @@ class TraceDescriptorMsg$Type extends MessageType<TraceDescriptorMsg> {
                 case /* uint64 latest_event_sequence */ 7:
                     message.latestEventSequence = reader.uint64().toString();
                     break;
+                case /* avalanche.operator.TraceHeaderMsg header */ 8:
+                    message.header = TraceHeaderMsg.internalBinaryRead(reader, reader.uint32(), options, message.header);
+                    break;
                 default:
                     let u = options.readUnknownField;
                     if (u === "throw")
@@ -2765,6 +2941,9 @@ class TraceDescriptorMsg$Type extends MessageType<TraceDescriptorMsg> {
         /* uint64 latest_event_sequence = 7; */
         if (message.latestEventSequence !== "0")
             writer.tag(7, WireType.Varint).uint64(message.latestEventSequence);
+        /* avalanche.operator.TraceHeaderMsg header = 8; */
+        if (message.header)
+            TraceHeaderMsg.internalBinaryWrite(message.header, writer.tag(8, WireType.LengthDelimited).fork(), options).join();
         let u = options.writeUnknownFields;
         if (u !== false)
             (u == true ? UnknownFieldHandler.onWrite : u)(this.typeName, message, writer);

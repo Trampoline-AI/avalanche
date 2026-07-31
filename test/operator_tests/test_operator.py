@@ -687,6 +687,13 @@ class TestAgentEvidenceTransport:
                             "invocation_id": "agent-invocation",
                             "trace": {
                                 "status": "completed",
+                                "model": "main",
+                                "sub_model": "sub",
+                                "iterations": 1,
+                                "max_iterations": 4,
+                                "duration_ms": 125,
+                                "usage": {"main": {"input_tokens": 12}, "sub": {}},
+                                "telemetry_ref": {"trace_id": "trace-1"},
                                 "evidence": {
                                     "run_id": "agent-run",
                                     "complete": True,
@@ -716,6 +723,11 @@ class TestAgentEvidenceTransport:
             assert node.trace.available is True
             assert node.trace.complete is True
             assert node.trace.event_count == 1
+            assert node.trace.header is not None
+            assert node.trace.header.model == "main"
+            assert node.trace.header.iterations == 1
+            assert json.loads(node.trace.header.usage_json)["main"]["input_tokens"] == 12
+            assert json.loads(node.trace.header.telemetry_json)["trace_id"] == "trace-1"
 
             events = operator.list_agent_events(page_token=node.event_page_token)
             assert [item.event_sequence for item in events.events] == [1]
@@ -890,6 +902,7 @@ def test_prepared_run_retains_immutable_topology_after_source_metadata_changes()
         "graph": {"source_1": ["step_1"], "step_1": []},
         "node_types": {"source_1": "source", "step_1": "step"},
         "display_names": {"source_1": "Source", "step_1": "Step"},
+        "agent_metadata_json": {"step_1": '{"signature":{"name":"Analyze"}}'},
     }
 
     run = Operator._run_from_prepared(
@@ -902,7 +915,11 @@ def test_prepared_run_retains_immutable_topology_after_source_metadata_changes()
     prepared["node_ids"].append("new_1")
     prepared["graph"]["source_1"] = ["new_1"]
     prepared["display_names"]["step_1"] = "Changed"
+    prepared["agent_metadata_json"]["step_1"] = '{"signature":{"name":"Changed"}}'
 
     assert run.topology.node_ids == ("source_1", "step_1")
     assert run.topology.graph == (("source_1", ("step_1",)), ("step_1", ()))
     assert dict(run.topology.display_names) == {"source_1": "Source", "step_1": "Step"}
+    assert dict(run.topology.agent_metadata_json) == {
+        "step_1": '{"signature":{"name":"Analyze"}}'
+    }

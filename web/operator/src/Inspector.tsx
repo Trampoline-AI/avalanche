@@ -53,9 +53,10 @@ export function Inspector({
   const detailCache = useRef(new Map<string, unknown>());
   const scrollParent = useRef<HTMLDivElement>(null);
   const node: NodeSnapshotMsg | undefined = run?.nodes.find((item) => item.nodeId === nodeId);
-  const declaration = workflow
-    ? parseAgentDeclaration(workflow.agentMetadataJson[nodeId ?? ""])
-    : undefined;
+  const declarationJson = run
+    ? run.topology?.agentMetadataJson[nodeId ?? ""]
+    : workflow?.agentMetadataJson[nodeId ?? ""];
+  const declaration = declarationJson ? parseAgentDeclaration(declarationJson) : undefined;
 
   useEffect(() => {
     setTab("overview");
@@ -98,6 +99,16 @@ export function Inspector({
       (left, right) => Number(left.sequence) - Number(right.sequence),
     );
   }, [liveLogs, logs]);
+  const traceUsage = useMemo<unknown>(() => {
+    const usageJson = node?.trace?.header?.usageJson;
+    return usageJson ? JSON.parse(usageJson) : undefined;
+  }, [node?.trace?.header?.usageJson]);
+  const traceTelemetry = useMemo<unknown>(() => {
+    const telemetryJson = node?.trace?.header?.telemetryJson;
+    return telemetryJson ? JSON.parse(telemetryJson) : undefined;
+  }, [node?.trace?.header?.telemetryJson]);
+  const declaredFields =
+    tab === "inputs" ? declaration?.inputs : tab === "output" ? declaration?.outputs : undefined;
   const virtualizer = useVirtualizer({
     count: turns.length,
     getScrollElement: () => scrollParent.current,
@@ -271,7 +282,31 @@ export function Inspector({
                   <div><dt>Events</dt><dd>{node.trace.eventCount}</dd></div>
                   <div><dt>Size</dt><dd>{node.trace.sizeBytes} B</dd></div>
                   <div><dt>Complete</dt><dd>{node.trace.complete ? "yes" : "no"}</dd></div>
+                  {node.trace.header && (
+                    <>
+                      <div><dt>Model</dt><dd>{node.trace.header.model}</dd></div>
+                      <div>
+                        <dt>Iterations</dt>
+                        <dd>
+                          {node.trace.header.iterations}/{node.trace.header.maxIterations}
+                        </dd>
+                      </div>
+                      <div><dt>Duration</dt><dd>{node.trace.header.durationMs} ms</dd></div>
+                    </>
+                  )}
                 </dl>
+                {traceUsage !== undefined && (
+                  <div className="trace-summary">
+                    <h3>Usage</h3>
+                    <ValueView value={traceUsage} />
+                  </div>
+                )}
+                {traceTelemetry !== undefined && (
+                  <div className="trace-summary">
+                    <h3>Telemetry</h3>
+                    <ValueView value={traceTelemetry} />
+                  </div>
+                )}
               </section>
             )}
           </>
@@ -279,6 +314,17 @@ export function Inspector({
         {(tab === "inputs" || tab === "output") && (
           <section>
             <h3>{tab === "inputs" ? "Invocation inputs" : "Terminal output"}</h3>
+            {declaredFields?.length ? (
+              <div className="declared-fields">
+                <small>Declared fields</small>
+                {declaredFields.map((field) => (
+                  <span key={field.name}>
+                    <strong>{field.name}</strong>
+                    <code>{field.type}</code>
+                  </span>
+                ))}
+              </div>
+            ) : null}
             {selectedPayload && valueKey in selectedPayload ? (
               <ValueView value={selectedPayload[valueKey]} />
             ) : (

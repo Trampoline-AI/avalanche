@@ -178,6 +178,7 @@ export function GraphCanvas({
       graph: workflow.graph,
       nodeTypes: workflow.nodeTypes,
       displayNames: workflow.displayNames,
+      agentMetadataJson: workflow.agentMetadataJson,
     };
   }, [runTopology, workflow]);
   const graph = useMemo(() => {
