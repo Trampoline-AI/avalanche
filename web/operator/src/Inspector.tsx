@@ -24,6 +24,9 @@ interface InspectorProps {
 }
 
 type RunTab = "overview" | "inputs" | "output" | "trace" | "logs";
+const EMPTY_EVENTS: AgentEventDescriptorMsg[] = [];
+const EMPTY_LOGS: LogRecordDescriptorMsg[] = [];
+
 
 function JsonBlock({ value }: { value: unknown }) {
   return <pre className="json-block">{JSON.stringify(value, null, 2)}</pre>;
@@ -39,8 +42,8 @@ export function Inspector({
   workflow,
   run,
   nodeId,
-  liveEvents = [],
-  liveLogs = [],
+  liveEvents = EMPTY_EVENTS,
+  liveLogs = EMPTY_LOGS,
   onClose,
 }: InspectorProps) {
   const [tab, setTab] = useState<RunTab>("overview");
@@ -129,6 +132,8 @@ export function Inspector({
     }
     const cached = detailCache.current.get(descriptor.bodyToken);
     if (cached !== undefined) {
+      detailCache.current.delete(descriptor.bodyToken);
+      detailCache.current.set(descriptor.bodyToken, cached);
       setDetail(cached);
       return;
     }

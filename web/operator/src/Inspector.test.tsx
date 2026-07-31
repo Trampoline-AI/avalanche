@@ -1,5 +1,16 @@
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
+
+vi.mock("@tanstack/react-virtual", () => ({
+  useVirtualizer: ({ count }: { count: number }) => ({
+    getTotalSize: () => count * 64,
+    getVirtualItems: () =>
+      Array.from({ length: count }, (_, index) => ({
+        index,
+        start: index * 64,
+      })),
+  }),
+}));
 
 import type { OperatorApi } from "./api";
 import type {
@@ -109,6 +120,16 @@ function api(): OperatorApi {
       predictCount: 0,
       error: false,
     },
+    {
+      eventSequence: "2",
+      sizeBytes: "64",
+      bodyToken: "output-body",
+      invocationId: "invocation-1",
+      eventKind: "run.succeeded",
+      toolCount: 0,
+      predictCount: 0,
+      error: false,
+    },
   ];
   return {
     getCatalog: async (): Promise<CatalogSnapshotMsg> => {
@@ -122,7 +143,17 @@ function api(): OperatorApi {
     },
     listAgentEvents: async () => events,
     listLogs: async () => [],
-    readDetail: async () => ({ inputs: { question: "Why?" } }),
+    readDetail: async (bodyToken) =>
+      bodyToken === "input-body"
+        ? { inputs: { question: "Why?" } }
+        : {
+            outputs: {
+              answer: {
+                kind: "predict_rlm_file",
+                path: "/workspace/result.txt",
+              },
+            },
+          },
     startRun: async () => "unused",
     cancelRun: async () => undefined,
   };
@@ -149,5 +180,79 @@ describe("Inspector", () => {
     expect(screen.getByText("Declared fields")).toBeInTheDocument();
     expect(screen.getByText("question")).toBeInTheDocument();
     await waitFor(() => expect(screen.getByText("Why?")).toBeInTheDocument());
+
+    fireEvent.click(screen.getByRole("button", { name: "output" }));
+    expect(screen.getByText("answer")).toBeInTheDocument();
+    await waitFor(() =>
+      expect(screen.getByText("/workspace/result.txt")).toBeInTheDocument(),
+    );
+  });
+
+  it("hydrates complete turns on demand and evicts the least recently used body", async () => {
+    const events: AgentEventDescriptorMsg[] = Array.from({ length: 10 }, (_, index) => ({
+      eventSequence: String(index + 1),
+      sizeBytes: "64",
+      bodyToken: `turn-${index + 1}`,
+      invocationId: "invocation-1",
+      eventKind: "iteration.recorded",
+      iteration: index + 1,
+      durationMs: "10",
+      toolCount: 1,
+      predictCount: 1,
+      error: false,
+    }));
+    const readDetail = vi.fn(async (token: string) => ({
+      reasoning: `reasoning-${token}`,
+      code: `code-${token}`,
+      output: `output-${token}`,
+      finish: { reason: "stop" },
+      usage: { input_tokens: 4 },
+      tool_calls: [{ name: "lookup" }],
+      predict_calls: [{ signature: "Answer" }],
+    }));
+    const operatorApi = {
+      ...api(),
+      listAgentEvents: async () => events,
+      readDetail,
+    };
+    render(
+      <Inspector
+        api={operatorApi}
+        workflow={workflow}
+        run={run}
+        nodeId="agent_1"
+        onClose={() => undefined}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "trace" }));
+    await waitFor(() => expect(screen.getByText("reasoning-turn-10")).toBeInTheDocument());
+    fireEvent.click(screen.getByRole("button", { name: "Following live" }));
+
+    const turnButtons = screen
+      .getAllByRole("button")
+      .filter((button) => button.classList.contains("turn-row"));
+    for (let turn = 1; turn <= 7; turn += 1) {
+      fireEvent.click(turnButtons[turn - 1]);
+      await waitFor(() =>
+        expect(screen.getByText(`reasoning-turn-${turn}`)).toBeInTheDocument(),
+      );
+    }
+    fireEvent.click(turnButtons[9]);
+    await waitFor(() => expect(screen.getByText("reasoning-turn-10")).toBeInTheDocument());
+    for (let turn = 8; turn <= 9; turn += 1) {
+      fireEvent.click(turnButtons[turn - 1]);
+      await waitFor(() =>
+        expect(screen.getByText(`reasoning-turn-${turn}`)).toBeInTheDocument(),
+      );
+    }
+
+    fireEvent.click(turnButtons[9]);
+    await waitFor(() => expect(screen.getByText("reasoning-turn-10")).toBeInTheDocument());
+    fireEvent.click(turnButtons[0]);
+    await waitFor(() => expect(screen.getByText("reasoning-turn-1")).toBeInTheDocument());
+
+    expect(readDetail.mock.calls.filter(([token]) => token === "turn-10")).toHaveLength(1);
+    expect(readDetail.mock.calls.filter(([token]) => token === "turn-1")).toHaveLength(2);
   });
 });

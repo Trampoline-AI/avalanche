@@ -1,6 +1,8 @@
-import { describe, expect, it } from "vitest";
+import { renderHook, waitFor } from "@testing-library/react";
+import { describe, expect, it, vi } from "vitest";
 
 import type { StructuralBaseline } from "./api";
+import type { OperatorApi } from "./api";
 import {
   CatalogSnapshotMsg,
   FlowInfoMsg,
@@ -10,7 +12,7 @@ import {
   RunSummaryMsg,
   WorkflowTopologyMsg,
 } from "./generated/operator";
-import { emptyProjection, projectionReducer } from "./state";
+import { emptyProjection, projectionReducer, useOperatorProjection } from "./state";
 
 const workflow = FlowInfoMsg.create({
   name: "orders",
@@ -166,5 +168,53 @@ describe("projectionReducer", () => {
     expect(() => projectionReducer(state, { type: "envelope", envelope: reset })).toThrow(
       "structural reset",
     );
+  });
+
+  it("reloads an authoritative baseline after a stream reset notice", async () => {
+    const replacement: StructuralBaseline = {
+      ...baseline,
+      asOfSequence: "8",
+      catalog: CatalogSnapshotMsg.create({
+        ...baseline.catalog,
+        asOfSequence: "8",
+        revision: "2",
+      }),
+    };
+    const loadBaseline = vi
+      .fn<() => Promise<StructuralBaseline>>()
+      .mockResolvedValueOnce(baseline)
+      .mockResolvedValue(replacement);
+    let streamCount = 0;
+    const operatorApi: OperatorApi = {
+      getCatalog: async () => replacement.catalog,
+      loadBaseline,
+      streamUpdates: () => {
+        streamCount += 1;
+        return (async function* () {
+          if (streamCount === 1) {
+            yield OperatorUpdateEnvelope.create({
+              operatorInstanceId: "operator-1",
+              payload: {
+                oneofKind: "resetRequired",
+                resetRequired: { historyFloor: "2", latestSequence: "8" },
+              },
+            });
+          } else {
+            await new Promise<never>(() => undefined);
+          }
+        })();
+      },
+      listAgentEvents: async () => [],
+      listLogs: async () => [],
+      readDetail: async () => undefined,
+      startRun: async () => "run-2",
+      cancelRun: async () => undefined,
+    };
+
+    const { result } = renderHook(() => useOperatorProjection(operatorApi));
+
+    await waitFor(() => expect(result.current.state.catalog?.revision).toBe("2"));
+    expect(loadBaseline).toHaveBeenCalledTimes(2);
+    expect(result.current.state.sequence).toBe("8");
   });
 });
