@@ -119,6 +119,25 @@ def test_browser_listener_serves_assets_and_spa_routes(tmp_path: Path):
         operator.close()
 
 
+def test_browser_listener_serves_packaged_operator_application():
+    operator = Operator([], watch=False, schedule=False)
+    server = start_browser_server(operator, port=0)
+    try:
+        connection = http.client.HTTPConnection(server.host, server.port, timeout=5)
+        connection.request("GET", "/")
+        response = connection.getresponse()
+        body = response.read()
+
+        assert response.status == 200
+        assert response.getheader("Content-Type") == "text/html"
+        assert b"<title>Avalanche Operator</title>" in body
+        assert b'<div id="root"></div>' in body
+        connection.close()
+    finally:
+        server.close()
+        operator.close()
+
+
 def test_browser_listener_rejects_non_loopback_without_trusted_proxy(tmp_path: Path):
     operator = Operator([], watch=False, schedule=False)
     try:

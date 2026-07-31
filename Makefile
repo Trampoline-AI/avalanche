@@ -43,6 +43,18 @@ proto:
 	perl -pi -e 's/^import operator_pb2 as operator__pb2$$/from . import operator_pb2 as operator__pb2/' \
 		src/runtime/operator/proto/operator_pb2_grpc.py
 
+# Regenerate the checked-in TypeScript operator client.
+web-proto:
+	cd web/operator && pnpm generate
+
+# Build the packaged browser interface.
+web-build:
+	cd web/operator && pnpm build
+
+# Run browser projection and component tests.
+web-test:
+	cd web/operator && pnpm test
+
 # Build checked-in brand image artifacts from the Three.js source HTML.
 brand:
 	node docs/assets/brand/source/export-brand-assets.mjs
