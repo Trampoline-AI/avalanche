@@ -12,7 +12,9 @@ from contextvars import ContextVar
 from enum import Enum
 from functools import update_wrapper
 from pathlib import Path
-from typing import Any, Callable, Mapping, Sequence, Union, get_args, get_origin
+from typing import Any, Callable, Mapping, Sequence, TypeAlias, Union, get_args, get_origin
+
+from pydantic import BaseModel
 
 from .._agent_evidence import AgentInvocationId, emit_agent_evidence
 from ..dag import Node, NodeType
@@ -92,6 +94,62 @@ def _emit_sink_evidence(
         raise
 
 
+JsonValue: TypeAlias = (
+    str | int | float | bool | None | list["JsonValue"] | dict[str, "JsonValue"]
+)
+_MAX_EVIDENCE_VALUE_BYTES = 4 * 1024 * 1024
+_MAX_EVIDENCE_COLLECTION_ITEMS = 10_000
+_MAX_EVIDENCE_DEPTH = 32
+
+
+def _unavailable_value(reason: str) -> dict[str, JsonValue]:
+    return {"kind": "unavailable", "reason": reason}
+
+
+def _project_agent_value(value: object, *, depth: int = 0) -> JsonValue:
+    if depth > _MAX_EVIDENCE_DEPTH:
+        return _unavailable_value("maximum nesting depth exceeded")
+    if value is None or isinstance(value, (str, bool, int)):
+        return value
+    if isinstance(value, float):
+        return value if math.isfinite(value) else _unavailable_value("non-finite number")
+
+    try:
+        import predict_rlm
+    except ImportError:
+        predict_rlm = None
+    if predict_rlm is not None and isinstance(value, predict_rlm.File):
+        path = value.path
+        if isinstance(path, str) and path:
+            return {"kind": "predict_rlm_file", "path": path}
+        return _unavailable_value("PredictRLM file has no host path")
+
+    if isinstance(value, BaseModel):
+        value = value.model_dump(mode="python")
+    if isinstance(value, Mapping):
+        if len(value) > _MAX_EVIDENCE_COLLECTION_ITEMS:
+            return _unavailable_value("mapping exceeds item limit")
+        projected: dict[str, JsonValue] = {}
+        for key, item in value.items():
+            if not isinstance(key, str):
+                return _unavailable_value("mapping keys must be strings")
+            projected[key] = _project_agent_value(item, depth=depth + 1)
+        return projected
+    if isinstance(value, (list, tuple)):
+        if len(value) > _MAX_EVIDENCE_COLLECTION_ITEMS:
+            return _unavailable_value("sequence exceeds item limit")
+        return [_project_agent_value(item, depth=depth + 1) for item in value]
+    return _unavailable_value(f"unsupported value type: {type(value).__name__}")
+
+
+def _bounded_agent_value(value: object) -> JsonValue:
+    projected = _project_agent_value(value)
+    encoded = json.dumps(projected, separators=(",", ":")).encode()
+    if len(encoded) > _MAX_EVIDENCE_VALUE_BYTES:
+        return _unavailable_value("value exceeds byte limit")
+    return projected
+
+
 def _project_evidence_event(
     event: Any,
     *,
@@ -105,13 +163,16 @@ def _project_evidence_event(
 
     if event_kind == "run.started":
         inputs = data.get("inputs")
-        projected["input_fields"] = sorted(inputs) if isinstance(inputs, Mapping) else []
+        projected_inputs = _bounded_agent_value(inputs) if isinstance(inputs, Mapping) else {}
+        projected = {
+            "input_fields": sorted(inputs) if isinstance(inputs, Mapping) else [],
+            "inputs": projected_inputs,
+        }
     elif event_kind == "iteration.recorded":
         step = data.get("step")
         step = step if isinstance(step, Mapping) else {}
         projected = {
             "iteration": step.get("iteration"),
-            "reasoning": step.get("reasoning"),
             "duration_ms": step.get("duration_ms"),
             "error": step.get("error"),
             "tool_count": len(step.get("tool_calls") or []),
@@ -120,6 +181,7 @@ def _project_evidence_event(
                 for group in (step.get("predict_calls") or [])
                 if isinstance(group, Mapping)
             ),
+            "step": _bounded_agent_value(step),
         }
     elif event_kind == "predict.started":
         projected = {
@@ -149,7 +211,8 @@ def _project_evidence_event(
         }
     elif event_kind == "run.succeeded":
         projected = {
-            key: data.get(key) for key in ("status", "outputs") if data.get(key) is not None
+            "status": data.get("status"),
+            "outputs": _bounded_agent_value(data.get("outputs", {})),
         }
     elif event_kind in {"run.failed", "run.cancelled"}:
         projected = {

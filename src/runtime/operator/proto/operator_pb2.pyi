@@ -130,6 +130,39 @@ class NodeEdges(_message.Message):
     children: _containers.RepeatedScalarFieldContainer[str]
     def __init__(self, children: _Optional[_Iterable[str]] = ...) -> None: ...
 
+class WorkflowTopologyMsg(_message.Message):
+    __slots__ = ("node_ids", "graph", "node_types", "display_names")
+    class GraphEntry(_message.Message):
+        __slots__ = ("key", "value")
+        KEY_FIELD_NUMBER: _ClassVar[int]
+        VALUE_FIELD_NUMBER: _ClassVar[int]
+        key: str
+        value: NodeEdges
+        def __init__(self, key: _Optional[str] = ..., value: _Optional[_Union[NodeEdges, _Mapping]] = ...) -> None: ...
+    class NodeTypesEntry(_message.Message):
+        __slots__ = ("key", "value")
+        KEY_FIELD_NUMBER: _ClassVar[int]
+        VALUE_FIELD_NUMBER: _ClassVar[int]
+        key: str
+        value: str
+        def __init__(self, key: _Optional[str] = ..., value: _Optional[str] = ...) -> None: ...
+    class DisplayNamesEntry(_message.Message):
+        __slots__ = ("key", "value")
+        KEY_FIELD_NUMBER: _ClassVar[int]
+        VALUE_FIELD_NUMBER: _ClassVar[int]
+        key: str
+        value: str
+        def __init__(self, key: _Optional[str] = ..., value: _Optional[str] = ...) -> None: ...
+    NODE_IDS_FIELD_NUMBER: _ClassVar[int]
+    GRAPH_FIELD_NUMBER: _ClassVar[int]
+    NODE_TYPES_FIELD_NUMBER: _ClassVar[int]
+    DISPLAY_NAMES_FIELD_NUMBER: _ClassVar[int]
+    node_ids: _containers.RepeatedScalarFieldContainer[str]
+    graph: _containers.MessageMap[str, NodeEdges]
+    node_types: _containers.ScalarMap[str, str]
+    display_names: _containers.ScalarMap[str, str]
+    def __init__(self, node_ids: _Optional[_Iterable[str]] = ..., graph: _Optional[_Mapping[str, NodeEdges]] = ..., node_types: _Optional[_Mapping[str, str]] = ..., display_names: _Optional[_Mapping[str, str]] = ...) -> None: ...
+
 class FlowInfoMsg(_message.Message):
     __slots__ = ("name", "file_path", "node_ids", "graph", "node_types", "display_names", "cron", "next_run_at", "last_run_at", "workflow_id", "display_name", "root_alias", "relative_file", "builder_symbol", "agent_node_ids", "agent_metadata_json", "webhook_path", "webhook_url", "webhook_active")
     class GraphEntry(_message.Message):
@@ -283,7 +316,7 @@ class TraceDescriptorMsg(_message.Message):
     def __init__(self, status: _Optional[str] = ..., revision: _Optional[int] = ..., available: bool = ..., complete: bool = ..., event_count: _Optional[int] = ..., size_bytes: _Optional[int] = ..., latest_event_sequence: _Optional[int] = ...) -> None: ...
 
 class NodeSnapshotMsg(_message.Message):
-    __slots__ = ("node_id", "name", "node_type", "status", "started_at", "ended_at", "trace", "revision", "event_page_token")
+    __slots__ = ("node_id", "name", "node_type", "status", "started_at", "ended_at", "trace", "revision", "event_page_token", "error")
     NODE_ID_FIELD_NUMBER: _ClassVar[int]
     NAME_FIELD_NUMBER: _ClassVar[int]
     NODE_TYPE_FIELD_NUMBER: _ClassVar[int]
@@ -293,6 +326,7 @@ class NodeSnapshotMsg(_message.Message):
     TRACE_FIELD_NUMBER: _ClassVar[int]
     REVISION_FIELD_NUMBER: _ClassVar[int]
     EVENT_PAGE_TOKEN_FIELD_NUMBER: _ClassVar[int]
+    ERROR_FIELD_NUMBER: _ClassVar[int]
     node_id: str
     name: str
     node_type: str
@@ -302,23 +336,26 @@ class NodeSnapshotMsg(_message.Message):
     trace: TraceDescriptorMsg
     revision: int
     event_page_token: str
-    def __init__(self, node_id: _Optional[str] = ..., name: _Optional[str] = ..., node_type: _Optional[str] = ..., status: _Optional[str] = ..., started_at: _Optional[float] = ..., ended_at: _Optional[float] = ..., trace: _Optional[_Union[TraceDescriptorMsg, _Mapping]] = ..., revision: _Optional[int] = ..., event_page_token: _Optional[str] = ...) -> None: ...
+    error: str
+    def __init__(self, node_id: _Optional[str] = ..., name: _Optional[str] = ..., node_type: _Optional[str] = ..., status: _Optional[str] = ..., started_at: _Optional[float] = ..., ended_at: _Optional[float] = ..., trace: _Optional[_Union[TraceDescriptorMsg, _Mapping]] = ..., revision: _Optional[int] = ..., event_page_token: _Optional[str] = ..., error: _Optional[str] = ...) -> None: ...
 
 class RunSnapshotMsg(_message.Message):
-    __slots__ = ("operator_instance_id", "as_of_sequence", "summary", "nodes", "latest_log_sequence", "log_page_token")
+    __slots__ = ("operator_instance_id", "as_of_sequence", "summary", "nodes", "latest_log_sequence", "log_page_token", "topology")
     OPERATOR_INSTANCE_ID_FIELD_NUMBER: _ClassVar[int]
     AS_OF_SEQUENCE_FIELD_NUMBER: _ClassVar[int]
     SUMMARY_FIELD_NUMBER: _ClassVar[int]
     NODES_FIELD_NUMBER: _ClassVar[int]
     LATEST_LOG_SEQUENCE_FIELD_NUMBER: _ClassVar[int]
     LOG_PAGE_TOKEN_FIELD_NUMBER: _ClassVar[int]
+    TOPOLOGY_FIELD_NUMBER: _ClassVar[int]
     operator_instance_id: str
     as_of_sequence: int
     summary: RunSummaryMsg
     nodes: _containers.RepeatedCompositeFieldContainer[NodeSnapshotMsg]
     latest_log_sequence: int
     log_page_token: str
-    def __init__(self, operator_instance_id: _Optional[str] = ..., as_of_sequence: _Optional[int] = ..., summary: _Optional[_Union[RunSummaryMsg, _Mapping]] = ..., nodes: _Optional[_Iterable[_Union[NodeSnapshotMsg, _Mapping]]] = ..., latest_log_sequence: _Optional[int] = ..., log_page_token: _Optional[str] = ...) -> None: ...
+    topology: WorkflowTopologyMsg
+    def __init__(self, operator_instance_id: _Optional[str] = ..., as_of_sequence: _Optional[int] = ..., summary: _Optional[_Union[RunSummaryMsg, _Mapping]] = ..., nodes: _Optional[_Iterable[_Union[NodeSnapshotMsg, _Mapping]]] = ..., latest_log_sequence: _Optional[int] = ..., log_page_token: _Optional[str] = ..., topology: _Optional[_Union[WorkflowTopologyMsg, _Mapping]] = ...) -> None: ...
 
 class RunSummaryPage(_message.Message):
     __slots__ = ("operator_instance_id", "as_of_sequence", "runs", "next_page_token")
@@ -361,16 +398,28 @@ class LogPage(_message.Message):
     def __init__(self, operator_instance_id: _Optional[str] = ..., as_of_sequence: _Optional[int] = ..., logs: _Optional[_Iterable[_Union[LogRecordDescriptorMsg, _Mapping]]] = ..., next_page_token: _Optional[str] = ...) -> None: ...
 
 class AgentEventDescriptorMsg(_message.Message):
-    __slots__ = ("event_sequence", "size_bytes", "body_token", "invocation_id")
+    __slots__ = ("event_sequence", "size_bytes", "body_token", "invocation_id", "event_kind", "iteration", "duration_ms", "error", "tool_count", "predict_count")
     EVENT_SEQUENCE_FIELD_NUMBER: _ClassVar[int]
     SIZE_BYTES_FIELD_NUMBER: _ClassVar[int]
     BODY_TOKEN_FIELD_NUMBER: _ClassVar[int]
     INVOCATION_ID_FIELD_NUMBER: _ClassVar[int]
+    EVENT_KIND_FIELD_NUMBER: _ClassVar[int]
+    ITERATION_FIELD_NUMBER: _ClassVar[int]
+    DURATION_MS_FIELD_NUMBER: _ClassVar[int]
+    ERROR_FIELD_NUMBER: _ClassVar[int]
+    TOOL_COUNT_FIELD_NUMBER: _ClassVar[int]
+    PREDICT_COUNT_FIELD_NUMBER: _ClassVar[int]
     event_sequence: int
     size_bytes: int
     body_token: str
     invocation_id: str
-    def __init__(self, event_sequence: _Optional[int] = ..., size_bytes: _Optional[int] = ..., body_token: _Optional[str] = ..., invocation_id: _Optional[str] = ...) -> None: ...
+    event_kind: str
+    iteration: int
+    duration_ms: int
+    error: bool
+    tool_count: int
+    predict_count: int
+    def __init__(self, event_sequence: _Optional[int] = ..., size_bytes: _Optional[int] = ..., body_token: _Optional[str] = ..., invocation_id: _Optional[str] = ..., event_kind: _Optional[str] = ..., iteration: _Optional[int] = ..., duration_ms: _Optional[int] = ..., error: bool = ..., tool_count: _Optional[int] = ..., predict_count: _Optional[int] = ...) -> None: ...
 
 class AgentEventPage(_message.Message):
     __slots__ = ("operator_instance_id", "as_of_sequence", "run_id", "node_id", "events", "next_page_token")
@@ -411,12 +460,14 @@ class DetailChunk(_message.Message):
     def __init__(self, chunk_index: _Optional[int] = ..., data: _Optional[bytes] = ..., eof: bool = ...) -> None: ...
 
 class RunCreated(_message.Message):
-    __slots__ = ("summary", "nodes")
+    __slots__ = ("summary", "nodes", "topology")
     SUMMARY_FIELD_NUMBER: _ClassVar[int]
     NODES_FIELD_NUMBER: _ClassVar[int]
+    TOPOLOGY_FIELD_NUMBER: _ClassVar[int]
     summary: RunSummaryMsg
     nodes: _containers.RepeatedCompositeFieldContainer[NodeSnapshotMsg]
-    def __init__(self, summary: _Optional[_Union[RunSummaryMsg, _Mapping]] = ..., nodes: _Optional[_Iterable[_Union[NodeSnapshotMsg, _Mapping]]] = ...) -> None: ...
+    topology: WorkflowTopologyMsg
+    def __init__(self, summary: _Optional[_Union[RunSummaryMsg, _Mapping]] = ..., nodes: _Optional[_Iterable[_Union[NodeSnapshotMsg, _Mapping]]] = ..., topology: _Optional[_Union[WorkflowTopologyMsg, _Mapping]] = ...) -> None: ...
 
 class RunStatusChanged(_message.Message):
     __slots__ = ("run_id", "status", "started_at", "ended_at", "revision")
@@ -433,20 +484,22 @@ class RunStatusChanged(_message.Message):
     def __init__(self, run_id: _Optional[str] = ..., status: _Optional[str] = ..., started_at: _Optional[float] = ..., ended_at: _Optional[float] = ..., revision: _Optional[int] = ...) -> None: ...
 
 class NodeStatusChanged(_message.Message):
-    __slots__ = ("run_id", "node_id", "status", "started_at", "ended_at", "revision")
+    __slots__ = ("run_id", "node_id", "status", "started_at", "ended_at", "revision", "error")
     RUN_ID_FIELD_NUMBER: _ClassVar[int]
     NODE_ID_FIELD_NUMBER: _ClassVar[int]
     STATUS_FIELD_NUMBER: _ClassVar[int]
     STARTED_AT_FIELD_NUMBER: _ClassVar[int]
     ENDED_AT_FIELD_NUMBER: _ClassVar[int]
     REVISION_FIELD_NUMBER: _ClassVar[int]
+    ERROR_FIELD_NUMBER: _ClassVar[int]
     run_id: str
     node_id: str
     status: str
     started_at: float
     ended_at: float
     revision: int
-    def __init__(self, run_id: _Optional[str] = ..., node_id: _Optional[str] = ..., status: _Optional[str] = ..., started_at: _Optional[float] = ..., ended_at: _Optional[float] = ..., revision: _Optional[int] = ...) -> None: ...
+    error: str
+    def __init__(self, run_id: _Optional[str] = ..., node_id: _Optional[str] = ..., status: _Optional[str] = ..., started_at: _Optional[float] = ..., ended_at: _Optional[float] = ..., revision: _Optional[int] = ..., error: _Optional[str] = ...) -> None: ...
 
 class LogAppended(_message.Message):
     __slots__ = ("run_id", "log")

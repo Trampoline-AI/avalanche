@@ -874,12 +874,15 @@ async def test_agent_streams_sanitized_evidence_and_exported_trace(monkeypatch):
     ]
     live = [event for event in observed if event["kind"] == "evidence"]
     assert [event["sequence"] for event in live] == list(range(1, 10))
-    assert live[0]["data"] == {"input_fields": ["person"]}
+    assert live[0]["data"] == {
+        "input_fields": ["person"],
+        "inputs": {"person": {"id": 1, "name": "Ada"}},
+    }
     assert live[3]["data"]["call_id"] == "predict-1"
     assert "input" not in live[3]["data"]
     assert "output" not in live[4]["data"]
     assert "args" not in live[5]["data"]
-    assert live[7]["data"]["reasoning"] == "Check the evidence before summarizing."
+    assert live[7]["data"]["step"]["reasoning"] == "Check the evidence before summarizing."
     assert live[8]["data"] == {"status": "completed", "outputs": {"summary": "done"}}
     assert "result" not in live[6]["data"]
     terminal = observed[-1]
@@ -1124,3 +1127,31 @@ async def test_agent_exports_exception_trace_before_preserving_wrapped_error(mon
 
     assert observed[-1]["kind"] == "trace_finished"
     assert observed[-1]["trace"]["status"] == "error"
+
+
+def test_agent_value_projection_preserves_nested_predict_rlm_files():
+    from predict_rlm import File
+
+    projected = agent_step_module._bounded_agent_value(
+        {
+            "source": File(path="/tmp/source.pdf"),
+            "outputs": [File(path="/tmp/report.xlsx")],
+        }
+    )
+
+    assert projected == {
+        "source": {"kind": "predict_rlm_file", "path": "/tmp/source.pdf"},
+        "outputs": [{"kind": "predict_rlm_file", "path": "/tmp/report.xlsx"}],
+    }
+
+
+def test_agent_value_projection_marks_unsupported_and_oversized_values_unavailable():
+    unsupported = agent_step_module._bounded_agent_value({"value": object()})
+    oversized = agent_step_module._bounded_agent_value(
+        "x" * (agent_step_module._MAX_EVIDENCE_VALUE_BYTES + 1)
+    )
+
+    assert unsupported == {
+        "value": {"kind": "unavailable", "reason": "unsupported value type: object"}
+    }
+    assert oversized == {"kind": "unavailable", "reason": "value exceeds byte limit"}

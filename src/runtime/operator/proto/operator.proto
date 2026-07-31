@@ -109,6 +109,13 @@ message NodeEdges {
   repeated string children = 1;
 }
 
+message WorkflowTopologyMsg {
+  repeated string node_ids = 1;
+  map<string, NodeEdges> graph = 2;
+  map<string, string> node_types = 3;
+  map<string, string> display_names = 4;
+}
+
 message FlowInfoMsg {
   string name = 1;
   string file_path = 2;
@@ -188,6 +195,7 @@ message NodeSnapshotMsg {
   TraceDescriptorMsg trace = 7;
   uint64 revision = 8;
   string event_page_token = 9;
+  optional string error = 10;
 }
 
 message RunSnapshotMsg {
@@ -197,6 +205,7 @@ message RunSnapshotMsg {
   repeated NodeSnapshotMsg nodes = 4;
   uint64 latest_log_sequence = 5;
   string log_page_token = 6;
+  WorkflowTopologyMsg topology = 7;
 }
 
 message RunSummaryPage {
@@ -227,6 +236,12 @@ message AgentEventDescriptorMsg {
   uint64 size_bytes = 2;
   string body_token = 3;
   string invocation_id = 4;
+  string event_kind = 5;
+  optional uint32 iteration = 6;
+  optional uint64 duration_ms = 7;
+  bool error = 8;
+  uint32 tool_count = 9;
+  uint32 predict_count = 10;
 }
 
 message AgentEventPage {
@@ -254,6 +269,7 @@ message DetailChunk {
 message RunCreated {
   RunSummaryMsg summary = 1;
   repeated NodeSnapshotMsg nodes = 2;
+  WorkflowTopologyMsg topology = 3;
 }
 
 message RunStatusChanged {
@@ -271,6 +287,7 @@ message NodeStatusChanged {
   double started_at = 4;
   double ended_at = 5;
   uint64 revision = 6;
+  optional string error = 7;
 }
 
 message LogAppended {

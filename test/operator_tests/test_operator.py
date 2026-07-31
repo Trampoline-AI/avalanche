@@ -647,9 +647,27 @@ class TestAgentEvidenceTransport:
                     "kind": "evidence",
                     "invocation_id": "agent-invocation",
                     "sequence": 1,
-                    "event_kind": "code.generated",
+                    "event_kind": "iteration.recorded",
                     "timestamp_ns": 10,
-                    "data": {"iteration": 1, "code": "print('ok')"},
+                    "data": {
+                        "iteration": 1,
+                        "duration_ms": 12,
+                        "error": False,
+                        "tool_count": 1,
+                        "predict_count": 1,
+                        "step": {
+                            "iteration": 1,
+                            "reasoning": "Inspect",
+                            "code": "print('ok')",
+                            "output": "ok",
+                            "untruncated_output": "ok",
+                            "error": False,
+                            "duration_ms": 12,
+                            "tool_calls": [{"name": "lookup", "result": "ok"}],
+                            "predict_calls": [{"signature": "Answer", "calls": [{}]}],
+                            "usage": {"main": {"input_tokens": 4}},
+                        },
+                    },
                 },
             }
             assert operator._apply_event(run.run_id, handle, evidence) is False
@@ -698,14 +716,14 @@ class TestAgentEvidenceTransport:
 
             events = operator.list_agent_events(page_token=node.event_page_token)
             assert [item.event_sequence for item in events.events] == [1]
+            assert events.events[0].event_kind == "iteration.recorded"
+            assert events.events[0].iteration == 1
+            assert events.events[0].tool_count == 1
+            assert events.events[0].predict_count == 1
             structured_event = json.loads(operator.read_detail(events.events[0].body_token))
-            assert structured_event == {
-                "sequence": 1,
-                "invocation_id": "agent-invocation",
-                "event_kind": "code.generated",
-                "timestamp_ns": 10,
-                "data": {"iteration": 1, "code": "print('ok')"},
-            }
+            assert structured_event["data"]["step"]["reasoning"] == "Inspect"
+            assert structured_event["data"]["step"]["tool_calls"][0]["name"] == "lookup"
+            assert structured_event["data"]["step"]["predict_calls"][0]["signature"] == "Answer"
 
             finalized = operator.read_trace(
                 run.run_id,
@@ -716,6 +734,8 @@ class TestAgentEvidenceTransport:
             finalized_trace = json.loads(finalized.data)
             assert finalized_trace["status"] == "completed"
             assert finalized_trace["evidence"]["run_id"] == "agent-run"
+            assert "steps" not in finalized_trace
+            assert "events" not in finalized_trace["evidence"]
 
             logs = operator.list_logs(page_token=snapshot.log_page_token)
             assert len(logs.logs) == 2
@@ -727,6 +747,7 @@ class TestAgentEvidenceTransport:
             assert envelope["status"] == "completed"
             assert envelope["run_id"] == "agent-run"
             assert [item["sequence"] for item in envelope["events"]] == [1]
+            assert envelope["trace"]["steps"][0]["reasoning"] == "Inspect"
             assert [entry.node_id for entry in materialized.logs] == [
                 "agent_1",
                 "agent_1",
@@ -857,3 +878,28 @@ class TestAgentEvidenceTransport:
             ] == [("invocation-a", 1), ("invocation-b", 1)]
         finally:
             operator.close()
+
+
+def test_prepared_run_retains_immutable_topology_after_source_metadata_changes():
+    prepared = {
+        "display_name": "Original",
+        "node_ids": ["source_1", "step_1"],
+        "graph": {"source_1": ["step_1"], "step_1": []},
+        "node_types": {"source_1": "source", "step_1": "step"},
+        "display_names": {"source_1": "Source", "step_1": "Step"},
+    }
+
+    run = Operator._run_from_prepared(
+        "run-topology",
+        "flow.py::original",
+        "Original",
+        "manual",
+        prepared,
+    )
+    prepared["node_ids"].append("new_1")
+    prepared["graph"]["source_1"] = ["new_1"]
+    prepared["display_names"]["step_1"] = "Changed"
+
+    assert run.topology.node_ids == ("source_1", "step_1")
+    assert run.topology.graph == (("source_1", ("step_1",)), ("step_1", ()))
+    assert dict(run.topology.display_names) == {"source_1": "Source", "step_1": "Step"}
