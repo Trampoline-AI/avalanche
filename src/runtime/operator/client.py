@@ -22,30 +22,31 @@ from avalanche.workspace import Workspace
 from ._grpc import _BOUNDED_MESSAGE_OPTIONS
 from .convert import (
     agent_event_descriptor_from_proto,
-    discovery_diagnostic_from_proto,
+    catalog_snapshot_from_proto,
     log_record_descriptor_from_proto,
+    operator_update_envelope_from_proto,
     run_snapshot_from_proto,
     run_summary_from_proto,
-    run_update_envelope_from_proto,
-    workflow_info_from_proto,
 )
 from .models import (
     AgentEvent,
     AgentEventAppended,
     AgentEventDetailAppended,
+    CatalogReplaced,
+    CatalogSnapshot,
     DetailUpdate,
     LogAppended,
     LogDetailAppended,
     LogEntry,
     NodeState,
     NodeStatusChanged,
+    OperatorUpdateEnvelope,
     ResetBaseline,
     RunCreated,
     RunSnapshot,
     RunState,
     RunStatusChanged,
     RunSummary,
-    RunUpdateEnvelope,
     SequencedLogEntry,
     StreamResetNotice,
     TraceDetail,
@@ -243,6 +244,7 @@ class GrpcStateProvider:
             )
         self._stub = pb_grpc.OperatorServiceStub(self._channel)
         self._run_callbacks: list[Callable[[RunState], None]] = []
+        self._catalog_callbacks: list[Callable[[CatalogSnapshot], None]] = []
         self._log_callbacks: list[Callable[[LogEntry], None]] = []
         self._detail_callbacks: list[Callable[[DetailUpdate], None]] = []
         self._stream_reset_callbacks: list[Callable[[StreamResetNotice], None]] = []
@@ -272,6 +274,7 @@ class GrpcStateProvider:
         self._reset_generation: int = 0
         self._pending_reset: StreamResetNotice | None = None
         self._validated_reset_baseline: ResetBaseline | None = None
+        self._catalog = CatalogSnapshot()
         self._legacy_names_by_workflow_id: dict[str, str] = {}
 
         # Operator reachability is independent from live-update stream health.
@@ -339,13 +342,14 @@ class GrpcStateProvider:
             self.last_error = str(operation_error)
         return operation_error
 
+    def get_catalog(self) -> CatalogSnapshot:
+        catalog = catalog_snapshot_from_proto(self._call(self._stub.GetCatalog, pb.Empty()))
+        with self._state_lock:
+            self._install_catalog_locked(catalog)
+        return catalog
+
     def list_workflows(self) -> list[WorkflowInfo]:
-        resp = self._call(self._stub.ListFlows, pb.Empty())
-        self._cache_legacy_workflow_names(resp)
-        self.discovery_diagnostics = [
-            discovery_diagnostic_from_proto(item) for item in resp.diagnostics
-        ]
-        return [workflow_info_from_proto(p) for p in resp.flows]
+        return list(self.get_catalog().workflows)
 
     def list_runs(self, workflow_selector: str) -> list[RunState]:
         """List lightweight run summaries without detail bodies."""
@@ -1231,6 +1235,9 @@ class GrpcStateProvider:
     def on_run_update(self, callback: Callable[[RunState], None]) -> None:
         self._run_callbacks.append(callback)
 
+    def on_catalog_update(self, callback: Callable[[CatalogSnapshot], None]) -> None:
+        self._catalog_callbacks.append(callback)
+
     def on_log(self, callback: Callable[[LogEntry], None]) -> None:
         self._log_callbacks.append(callback)
 
@@ -1278,22 +1285,32 @@ class GrpcStateProvider:
         ) from last_error
 
     def _load_authoritative_reset_baseline(self, notice: StreamResetNotice) -> ResetBaseline:
-        workflows = tuple(self.list_workflows())
+        catalog = self.get_catalog()
         marker, summaries = self._list_run_summaries()
         snapshots = [
             self._get_consistent_run_snapshot(summary, marker) for summary in summaries
         ]
-        if tuple(self.list_workflows()) != workflows:
+        confirmed_catalog = self.get_catalog()
+        if replace(confirmed_catalog, as_of_sequence=0) != replace(catalog, as_of_sequence=0):
             raise _ResetBaselineMismatchError(
                 "workflow catalog changed during baseline loading"
             )
+        if (
+            catalog.operator_instance_id != marker[0]
+            or confirmed_catalog.operator_instance_id != marker[0]
+            or catalog.as_of_sequence > marker[1]
+            or confirmed_catalog.as_of_sequence < marker[1]
+        ):
+            raise _ResetBaselineMismatchError(
+                "workflow catalog does not span the run baseline high-water mark"
+            )
 
-        runs_by_workflow = self._group_snapshot_runs(workflows, snapshots)
+        runs_by_workflow = self._group_snapshot_runs(catalog.workflows, snapshots)
         return ResetBaseline(
             generation=notice.generation,
             operator_instance_id=marker[0],
             as_of_sequence=marker[1],
-            workflows=workflows,
+            catalog=catalog,
             runs_by_workflow=runs_by_workflow,
         )
 
@@ -1500,6 +1517,8 @@ class GrpcStateProvider:
                 for workflow_runs in validated.runs_by_workflow.values()
                 for run in workflow_runs
             }
+            with self._state_lock:
+                self._install_catalog_locked(validated.catalog)
             self._replace_structural_baseline(
                 operator_instance_id,
                 reconciled_sequence,
@@ -1511,6 +1530,7 @@ class GrpcStateProvider:
             self.stream_retry_count = 0
             self.stream_error = ""
             self._reset_acknowledged.set()
+        self._notify_catalog_callbacks(validated.catalog)
 
     def _ensure_stream(self) -> None:
         """Start the background streaming thread if not already running."""
@@ -1530,7 +1550,7 @@ class GrpcStateProvider:
             kwargs = {"timeout": min(2.0, self._unary_timeout)}
             if self._metadata is not None:
                 kwargs["metadata"] = self._metadata
-            resp = self._stub.ListFlows(pb.Empty(), **kwargs)
+            resp = self._stub.GetCatalog(pb.Empty(), **kwargs)
             self._cache_legacy_workflow_names(resp)
             self._record_unary_success()
             return True
@@ -1538,14 +1558,21 @@ class GrpcStateProvider:
             self._record_unary_error(e)
             return False
 
-    def _cache_legacy_workflow_names(self, response: pb.FlowList) -> None:
+    def _cache_legacy_workflow_names(self, catalog: CatalogSnapshot) -> None:
         self._legacy_names_by_workflow_id = {
             (item.workflow_id or item.name): (item.name or item.display_name)
-            for item in response.flows
+            for item in catalog.workflows
         }
 
+    def _install_catalog_locked(self, catalog: CatalogSnapshot) -> None:
+        if catalog.revision < self._catalog.revision:
+            return
+        self._catalog = deepcopy(catalog)
+        self._cache_legacy_workflow_names(catalog)
+        self.discovery_diagnostics = list(catalog.diagnostics)
+
     def _stream_loop(self) -> None:
-        """Consume ordered run updates without conflating stream and unary health."""
+        """Consume ordered operator updates without conflating stream and unary health."""
         while not self._stream_stop.is_set():
             try:
                 with self._lifecycle_lock:
@@ -1556,8 +1583,8 @@ class GrpcStateProvider:
                     self.stream_retry_count += 1
                 with self._state_lock:
                     cursor = self._cursor
-                stream = self._stub.StreamRunUpdates(
-                    pb.StreamRunUpdatesRequest(
+                stream = self._stub.StreamOperatorUpdates(
+                    pb.StreamOperatorUpdatesRequest(
                         operator_instance_id=cursor.operator_instance_id,
                         after_sequence=cursor.sequence,
                     ),
@@ -1584,7 +1611,7 @@ class GrpcStateProvider:
                 for message in stream:
                     if self._stream_stop.is_set():
                         break
-                    envelope = run_update_envelope_from_proto(message)
+                    envelope = operator_update_envelope_from_proto(message)
                     if not envelope.operator_instance_id:
                         raise RuntimeError(
                             "update envelope omitted its operator instance identifier"
@@ -1642,7 +1669,7 @@ class GrpcStateProvider:
                     continue
                 if self._stream_stop.is_set():
                     break
-                raise RuntimeError("update stream ended")
+                raise RuntimeError("operator update stream ended")
             except grpc.RpcError as error:
                 if self._stream_stop.is_set():
                     break
@@ -1694,7 +1721,7 @@ class GrpcStateProvider:
                 break
 
     def _apply_update_envelope(
-        self, envelope: RunUpdateEnvelope
+        self, envelope: OperatorUpdateEnvelope
     ) -> tuple[RunState | None, DetailUpdate | None]:
         update = envelope.update
         with self._state_lock:
@@ -1732,15 +1759,23 @@ class GrpcStateProvider:
                 size_bytes=descriptor.size_bytes,
             )
         with self._state_lock:
-            return self._apply_update_envelope_locked(
+            result = self._apply_update_envelope_locked(
                 envelope,
                 log_detail=log_detail,
                 event_detail=event_detail,
             )
+            catalog = (
+                deepcopy(self._catalog)
+                if update is not None and isinstance(update.change, CatalogReplaced)
+                else None
+            )
+        if catalog is not None:
+            self._notify_catalog_callbacks(catalog)
+        return result
 
     def _apply_update_envelope_locked(
         self,
-        envelope: RunUpdateEnvelope,
+        envelope: OperatorUpdateEnvelope,
         *,
         log_detail: LogEntry | None = None,
         event_detail: AgentEvent | None = None,
@@ -1765,7 +1800,16 @@ class GrpcStateProvider:
 
         change = update.change
         detail: DetailUpdate | None = None
-        if isinstance(change, RunCreated):
+        if isinstance(change, CatalogReplaced):
+            catalog = change.catalog
+            if (
+                catalog.operator_instance_id != envelope.operator_instance_id
+                or catalog.as_of_sequence != update.sequence
+            ):
+                raise _RunUpdateResetError("catalog update marker mismatch")
+            self._install_catalog_locked(catalog)
+            run = None
+        elif isinstance(change, RunCreated):
             run = _run_from_created(envelope.operator_instance_id, change)
             old_revision = self._run_revisions.get(run.run_id, -1)
             if change.summary.revision <= old_revision:
@@ -1982,6 +2026,13 @@ class GrpcStateProvider:
             }
             self.operator_instance_id = operator_instance_id
             self._cursor = _StreamCursor(operator_instance_id, as_of_sequence)
+
+    def _notify_catalog_callbacks(self, catalog: CatalogSnapshot) -> None:
+        for callback in self._catalog_callbacks:
+            try:
+                callback(deepcopy(catalog))
+            except Exception:
+                pass
 
     def _notify_run_callbacks(self, run: RunState) -> None:
         for callback in self._run_callbacks:

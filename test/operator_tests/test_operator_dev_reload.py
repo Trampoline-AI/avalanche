@@ -468,7 +468,7 @@ def test_malformed_run_event_terminalizes_and_cleans_up(event):
     operator._active_runs[run_id] = handle
     logs = []
     operator.on_log(logs.append)
-    updates = operator.subscribe_run_updates()
+    updates = operator.subscribe_operator_updates()
     errors = []
 
     def drain():
@@ -637,7 +637,7 @@ def test_cancel_request_is_non_terminal_until_coordinator_stops(tmp_path):
         schedule=False,
         cancel_grace=0.15,
     )
-    updates = operator.subscribe_run_updates()
+    updates = operator.subscribe_operator_updates()
     try:
         run_id = operator.start_run("flow")
         deadline = time.monotonic() + 2
@@ -674,7 +674,7 @@ def test_slow_update_consumer_receives_ordered_descriptors_and_detail_bodies(tmp
         body="log.info('first')\n    log.info('second')",
     )
     operator = Operator([str(workflow)], watch=False, schedule=False)
-    subscription = operator.subscribe_run_updates()
+    subscription = operator.subscribe_operator_updates()
     details = []
     operator.on_detail_update(details.append)
     try:

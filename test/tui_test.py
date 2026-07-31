@@ -50,6 +50,7 @@ from avalanche.tui.mock import (
     MockStateProvider,
 )
 from avalanche.tui.models import (
+    CatalogSnapshot,
     LogEntry,
     LogLevel,
     NodeState,
@@ -2106,7 +2107,7 @@ class TestUIStore:
                 generation=1,
                 operator_instance_id="operator-1",
                 as_of_sequence=2,
-                workflows=(workflow,),
+                catalog=CatalogSnapshot(workflows=(workflow,)),
                 runs_by_workflow={workflow.selector: (reset_run,)},
             )
         )
@@ -2244,7 +2245,7 @@ class TestUIStore:
                 generation=1,
                 operator_instance_id="operator-2",
                 as_of_sequence=2,
-                workflows=(workflow,),
+                catalog=CatalogSnapshot(workflows=(workflow,)),
                 runs_by_workflow={workflow.selector: (reset_run,)},
             )
         )
@@ -2670,7 +2671,7 @@ class TestUIStore:
                     generation=notice.generation,
                     operator_instance_id="operator-recovered",
                     as_of_sequence=notice.observed_sequence,
-                    workflows=(INGEST_WORKFLOW,),
+                    catalog=CatalogSnapshot(workflows=(INGEST_WORKFLOW,)),
                     runs_by_workflow={INGEST_WORKFLOW.selector: ()},
                 )
 
@@ -2726,14 +2727,14 @@ class TestUIStore:
                         generation=generation,
                         operator_instance_id=operator_instance_id,
                         as_of_sequence=as_of_sequence,
-                        workflows=(),
+                        catalog=CatalogSnapshot(workflows=()),
                         runs_by_workflow={},
                     )
                 return ResetBaseline(
                     generation=notice.generation,
                     operator_instance_id=notice.operator_instance_id,
                     as_of_sequence=notice.observed_sequence,
-                    workflows=(INGEST_WORKFLOW,),
+                    catalog=CatalogSnapshot(workflows=(INGEST_WORKFLOW,)),
                     runs_by_workflow={INGEST_WORKFLOW.selector: ()},
                 )
 
@@ -2801,7 +2802,7 @@ class TestUIStore:
                     generation=1,
                     operator_instance_id="operator-1",
                     as_of_sequence=2,
-                    workflows=(ORDER_WORKFLOW,),
+                    catalog=CatalogSnapshot(workflows=(ORDER_WORKFLOW,)),
                     runs_by_workflow={ORDER_WORKFLOW.selector: (authoritative,)},
                 )
             )
@@ -2845,7 +2846,7 @@ class TestUIStore:
                 generation=notice.generation,
                 operator_instance_id="operator-restarted",
                 as_of_sequence=notice.observed_sequence,
-                workflows=(ORDER_WORKFLOW,),
+                catalog=CatalogSnapshot(workflows=(ORDER_WORKFLOW,)),
                 runs_by_workflow={ORDER_WORKFLOW.selector: ()},
             )
 
@@ -3023,8 +3024,8 @@ class TestUIStore:
             def __init__(self):
                 self.stream_calls = 0
 
-            def ListFlows(self, request, **kwargs):  # noqa: N802
-                return pb.FlowList(flows=[workflow_info_to_proto(stale_workflow)])
+            def GetCatalog(self, request, **kwargs):  # noqa: N802
+                return pb.CatalogSnapshotMsg(workflows=[workflow_info_to_proto(stale_workflow)])
 
             def ListRunSummaries(self, request, **kwargs):  # noqa: N802
                 return pb.RunSummaryPage(
@@ -3032,7 +3033,7 @@ class TestUIStore:
                     as_of_sequence=99,
                 )
 
-            def StreamRunUpdates(self, request, *, metadata):  # noqa: N802
+            def StreamOperatorUpdates(self, request, *, metadata):  # noqa: N802
                 self.stream_calls += 1
                 assert metadata is None
                 if self.stream_calls == 1:
@@ -3040,7 +3041,7 @@ class TestUIStore:
                     assert request.after_sequence == 99
                     return iter(
                         (
-                            pb.RunUpdateEnvelope(
+                            pb.OperatorUpdateEnvelope(
                                 operator_instance_id="operator-restarted",
                                 reset_required=pb.ResetRequired(
                                     history_floor=1,
@@ -3059,7 +3060,7 @@ class TestUIStore:
                 generation=notice.generation,
                 operator_instance_id="operator-restarted",
                 as_of_sequence=3,
-                workflows=(workflow,),
+                catalog=CatalogSnapshot(workflows=(workflow,)),
                 runs_by_workflow={workflow.selector: (recovered,)},
             )
 
@@ -3175,13 +3176,17 @@ class TestUIStore:
                 self.summary_tokens = []
                 self.snapshot_calls = []
 
-            def ListFlows(self, request, context):  # noqa: N802
-                return pb.FlowList(flows=[workflow_info_to_proto(workflow)])
+            def GetCatalog(self, request, context):  # noqa: N802
+                return pb.CatalogSnapshotMsg(
+                    operator_instance_id=self.operator_id,
+                    as_of_sequence=self.baseline_sequence,
+                    workflows=[workflow_info_to_proto(workflow)],
+                )
 
-            def StreamRunUpdates(self, request, context):  # noqa: N802
+            def StreamOperatorUpdates(self, request, context):  # noqa: N802
                 context.send_initial_metadata(())
                 if request.operator_instance_id != self.operator_id:
-                    yield pb.RunUpdateEnvelope(
+                    yield pb.OperatorUpdateEnvelope(
                         operator_instance_id=self.operator_id,
                         reset_required=pb.ResetRequired(
                             history_floor=1,

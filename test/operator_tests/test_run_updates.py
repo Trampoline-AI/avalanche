@@ -15,14 +15,15 @@ from runtime.operator.client import (
     _RunUpdateResetError,
 )
 from runtime.operator.convert import (
-    run_update_envelope_from_proto,
-    run_update_envelope_to_proto,
+    operator_update_envelope_from_proto,
+    operator_update_envelope_to_proto,
 )
 from runtime.operator.models import (
     AgentEvent,
     AgentEventAppended,
     AgentEventDescriptor,
     AgentEventDetailAppended,
+    CatalogSnapshot,
     LogAppended,
     LogDetailAppended,
     LogEntry,
@@ -32,6 +33,8 @@ from runtime.operator.models import (
     NodeState,
     NodeStatus,
     NodeStatusChanged,
+    OperatorUpdate,
+    OperatorUpdateEnvelope,
     ResetBaseline,
     ResetRequired,
     RunCreated,
@@ -40,8 +43,6 @@ from runtime.operator.models import (
     RunStatus,
     RunStatusChanged,
     RunSummary,
-    RunUpdate,
-    RunUpdateEnvelope,
     TraceDescriptor,
     TraceFinalized,
 )
@@ -64,10 +65,10 @@ def _drain(subscription):
     return values
 
 
-def _created(sequence: int = 1, *, epoch: str = "operator-1") -> RunUpdateEnvelope:
-    return RunUpdateEnvelope(
+def _created(sequence: int = 1, *, epoch: str = "operator-1") -> OperatorUpdateEnvelope:
+    return OperatorUpdateEnvelope(
         operator_instance_id=epoch,
-        update=RunUpdate(
+        update=OperatorUpdate(
             sequence=sequence,
             change=RunCreated(
                 summary=RunSummary(
@@ -128,12 +129,13 @@ def test_typed_update_envelopes_roundtrip_all_changes():
     ]
 
     for sequence, change in enumerate(changes, start=1):
-        envelope = RunUpdateEnvelope(
+        envelope = OperatorUpdateEnvelope(
             operator_instance_id="operator-1",
-            update=RunUpdate(sequence=sequence, change=change),
+            update=OperatorUpdate(sequence=sequence, change=change),
         )
         assert (
-            run_update_envelope_from_proto(run_update_envelope_to_proto(envelope)) == envelope
+            operator_update_envelope_from_proto(operator_update_envelope_to_proto(envelope))
+            == envelope
         )
 
 
@@ -197,7 +199,9 @@ def test_operator_replays_typed_updates_in_order():
             },
         )
 
-        envelopes = _drain(operator.subscribe_run_updates(operator.operator_instance_id, 0))
+        envelopes = _drain(
+            operator.subscribe_operator_updates(operator.operator_instance_id, 0)
+        )
         assert [envelope.update.sequence for envelope in envelopes] == list(
             range(1, operator.current_sequence + 1)
         )
@@ -213,7 +217,7 @@ def test_operator_replays_typed_updates_in_order():
             TraceFinalized,
         ]
         replay = _drain(
-            operator.subscribe_run_updates(
+            operator.subscribe_operator_updates(
                 operator.operator_instance_id,
                 envelopes[2].update.sequence,
             )
@@ -233,7 +237,7 @@ def test_stale_cursor_and_epoch_explicitly_require_reset():
             run.status = status
             operator._notify_run(run)
 
-        stale_cursor = operator.subscribe_run_updates(operator.operator_instance_id, 0)
+        stale_cursor = operator.subscribe_operator_updates(operator.operator_instance_id, 0)
         cursor_reset = stale_cursor.get_nowait()
         assert cursor_reset.update is None
         assert cursor_reset.reset_required == ResetRequired(
@@ -241,7 +245,7 @@ def test_stale_cursor_and_epoch_explicitly_require_reset():
             latest_sequence=3,
         )
 
-        stale_epoch = operator.subscribe_run_updates("previous-operator", 3)
+        stale_epoch = operator.subscribe_operator_updates("previous-operator", 3)
         epoch_reset = stale_epoch.get_nowait()
         assert epoch_reset.operator_instance_id == operator.operator_instance_id
         assert epoch_reset.reset_required is not None
@@ -262,7 +266,7 @@ def test_slow_update_consumer_gets_bounded_overflow_reset_on_terminal_update():
     operator._runs[run.run_id] = run
     try:
         operator._notify_run(run)
-        subscription = operator.subscribe_run_updates(
+        subscription = operator.subscribe_operator_updates(
             operator.operator_instance_id,
             operator.current_sequence,
         )
@@ -305,7 +309,7 @@ def test_operator_restart_rejects_previous_epoch_cursor():
         first._runs[run.run_id] = run
         first._notify_run(run)
 
-        subscription = second.subscribe_run_updates(
+        subscription = second.subscribe_operator_updates(
             first.operator_instance_id,
             first.current_sequence,
         )
@@ -341,7 +345,7 @@ def test_bounded_journal_retains_updates_not_run_state_snapshots():
             )
 
         assert len(operator._stream_history) == 2
-        assert all(isinstance(item, RunUpdate) for item in operator._stream_history)
+        assert all(isinstance(item, OperatorUpdate) for item in operator._stream_history)
         assert all(isinstance(item.change, LogAppended) for item in operator._stream_history)
         assert [item.change.log.size_bytes for item in operator._stream_history] == [
             65_536,
@@ -372,9 +376,9 @@ def test_client_applies_ordered_updates_and_ignores_duplicates():
         run, _ = provider._apply_update_envelope(_created())
         assert run.status == RunStatus.PENDING
 
-        status = RunUpdateEnvelope(
+        status = OperatorUpdateEnvelope(
             operator_instance_id="operator-1",
-            update=RunUpdate(
+            update=OperatorUpdate(
                 sequence=2,
                 change=RunStatusChanged("run-1", RunStatus.RUNNING, started_at=1.0, revision=2),
             ),
@@ -384,9 +388,9 @@ def test_client_applies_ordered_updates_and_ignores_duplicates():
         assert provider._apply_update_envelope(status) == (None, None)
         assert provider._cursor.sequence == 2
 
-        node_update = RunUpdateEnvelope(
+        node_update = OperatorUpdateEnvelope(
             operator_instance_id="operator-1",
-            update=RunUpdate(
+            update=OperatorUpdate(
                 sequence=3,
                 change=NodeStatusChanged(
                     "run-1",
@@ -404,9 +408,9 @@ def test_client_applies_ordered_updates_and_ignores_duplicates():
             "log-token": b"complete",
             "event-token": b'{"sequence":2,"event_kind":"code.executed","data":{}}',
         }[token]
-        log_update = RunUpdateEnvelope(
+        log_update = OperatorUpdateEnvelope(
             operator_instance_id="operator-1",
-            update=RunUpdate(
+            update=OperatorUpdate(
                 sequence=4,
                 change=LogAppended(
                     "run-1",
@@ -427,9 +431,9 @@ def test_client_applies_ordered_updates_and_ignores_duplicates():
         assert run.logs == []
         assert run.latest_log_sequence == 1
 
-        event_update = RunUpdateEnvelope(
+        event_update = OperatorUpdateEnvelope(
             operator_instance_id="operator-1",
-            update=RunUpdate(
+            update=OperatorUpdate(
                 sequence=5,
                 change=AgentEventAppended(
                     "run-1",
@@ -455,9 +459,9 @@ def test_client_applies_ordered_updates_and_ignores_duplicates():
             {"sequence": 2, "event_kind": "code.executed", "data": {}}
         ]
 
-        trace_update = RunUpdateEnvelope(
+        trace_update = OperatorUpdateEnvelope(
             operator_instance_id="operator-1",
-            update=RunUpdate(
+            update=OperatorUpdate(
                 sequence=6,
                 change=TraceFinalized(
                     "run-1",
@@ -485,9 +489,9 @@ def test_client_applies_ordered_updates_and_ignores_duplicates():
         provider._hydrated_trace_revisions[key] = 6
 
         run, _ = provider._apply_update_envelope(
-            RunUpdateEnvelope(
+            OperatorUpdateEnvelope(
                 operator_instance_id="operator-1",
-                update=RunUpdate(
+                update=OperatorUpdate(
                     sequence=7,
                     change=TraceFinalized(
                         "run-1",
@@ -514,9 +518,9 @@ def test_client_applies_ordered_updates_and_ignores_duplicates():
 
         with pytest.raises(_RunUpdateResetError, match="sequence gap"):
             provider._apply_update_envelope(
-                RunUpdateEnvelope(
+                OperatorUpdateEnvelope(
                     operator_instance_id="operator-1",
-                    update=RunUpdate(
+                    update=OperatorUpdate(
                         sequence=9,
                         change=RunStatusChanged("run-1", RunStatus.SUCCESS, revision=8),
                     ),
@@ -558,9 +562,9 @@ def test_client_log_update_append_never_copies_cumulative_history():
                 message=str(log_sequence),
             )
             run, detail = provider._apply_update_envelope_locked(
-                RunUpdateEnvelope(
+                OperatorUpdateEnvelope(
                     operator_instance_id="operator-1",
-                    update=RunUpdate(
+                    update=OperatorUpdate(
                         sequence=log_sequence + 1,
                         change=LogAppended(
                             "run-1",
@@ -602,9 +606,9 @@ def test_client_detail_cache_evicts_oldest_buckets_within_count_and_byte_limits(
             run_id = f"run-{index}"
             sequence += 1
             provider._apply_update_envelope(
-                RunUpdateEnvelope(
+                OperatorUpdateEnvelope(
                     operator_instance_id="operator-1",
-                    update=RunUpdate(
+                    update=OperatorUpdate(
                         sequence=sequence,
                         change=RunCreated(
                             summary=RunSummary(
@@ -620,9 +624,9 @@ def test_client_detail_cache_evicts_oldest_buckets_within_count_and_byte_limits(
             )
             sequence += 1
             provider._apply_update_envelope(
-                RunUpdateEnvelope(
+                OperatorUpdateEnvelope(
                     operator_instance_id="operator-1",
-                    update=RunUpdate(
+                    update=OperatorUpdate(
                         sequence=sequence,
                         change=LogAppended(
                             run_id,
@@ -659,9 +663,9 @@ def test_client_detail_cache_evicts_oldest_buckets_within_count_and_byte_limits(
         assert provider._log_entries == {}
 
         provider._apply_update_envelope(
-            RunUpdateEnvelope(
+            OperatorUpdateEnvelope(
                 operator_instance_id="operator-2",
-                update=RunUpdate(
+                update=OperatorUpdate(
                     sequence=sequence + 2,
                     change=RunCreated(
                         summary=RunSummary(
@@ -676,9 +680,9 @@ def test_client_detail_cache_evicts_oldest_buckets_within_count_and_byte_limits(
             )
         )
         provider._apply_update_envelope(
-            RunUpdateEnvelope(
+            OperatorUpdateEnvelope(
                 operator_instance_id="operator-2",
-                update=RunUpdate(
+                update=OperatorUpdate(
                     sequence=sequence + 3,
                     change=LogAppended(
                         "run-after-reset",
@@ -731,9 +735,9 @@ def test_client_update_reducer_uses_copy_on_write_and_constant_event_append(
             guarded.setattr(client_module.json, "loads", parse_one_event)
             with provider._state_lock:
                 status_run, _ = provider._apply_update_envelope_locked(
-                    RunUpdateEnvelope(
+                    OperatorUpdateEnvelope(
                         operator_instance_id="operator-1",
-                        update=RunUpdate(
+                        update=OperatorUpdate(
                             sequence=2,
                             change=RunStatusChanged(
                                 "run-1",
@@ -749,9 +753,9 @@ def test_client_update_reducer_uses_copy_on_write_and_constant_event_append(
                 assert status_run.logs is initial.logs
 
                 node_run, _ = provider._apply_update_envelope_locked(
-                    RunUpdateEnvelope(
+                    OperatorUpdateEnvelope(
                         operator_instance_id="operator-1",
-                        update=RunUpdate(
+                        update=OperatorUpdate(
                             sequence=3,
                             change=NodeStatusChanged(
                                 "run-1",
@@ -775,9 +779,9 @@ def test_client_update_reducer_uses_copy_on_write_and_constant_event_append(
                     message="complete",
                 )
                 log_run, _ = provider._apply_update_envelope_locked(
-                    RunUpdateEnvelope(
+                    OperatorUpdateEnvelope(
                         operator_instance_id="operator-1",
-                        update=RunUpdate(
+                        update=OperatorUpdate(
                             sequence=4,
                             change=LogAppended(
                                 "run-1",
@@ -810,9 +814,9 @@ def test_client_update_reducer_uses_copy_on_write_and_constant_event_append(
                         }
                     )
                     event_run, _ = provider._apply_update_envelope_locked(
-                        RunUpdateEnvelope(
+                        OperatorUpdateEnvelope(
                             operator_instance_id="operator-1",
-                            update=RunUpdate(
+                            update=OperatorUpdate(
                                 sequence=event_sequence + 4,
                                 change=AgentEventAppended(
                                     "run-1",
@@ -1284,9 +1288,9 @@ def test_client_installs_authoritative_baseline_before_resuming_updates():
         assert provider._runs_by_id["run-1"] is baseline
 
         run, _ = provider._apply_update_envelope(
-            RunUpdateEnvelope(
+            OperatorUpdateEnvelope(
                 operator_instance_id="operator-1",
-                update=RunUpdate(
+                update=OperatorUpdate(
                     sequence=4,
                     change=RunStatusChanged(
                         "run-1",
@@ -1308,13 +1312,13 @@ def test_client_resets_baseline_and_resumes_after_operator_restart():
     class RestartedStub:
         stream_calls = 0
 
-        def StreamRunUpdates(self, request, *, metadata):  # noqa: N802
+        def StreamOperatorUpdates(self, request, *, metadata):  # noqa: N802
             assert metadata is None
             self.stream_calls += 1
             if self.stream_calls == 1:
                 assert request.operator_instance_id == "old-operator"
                 assert request.after_sequence == 99
-                yield pb.RunUpdateEnvelope(
+                yield pb.OperatorUpdateEnvelope(
                     operator_instance_id="new-operator",
                     reset_required=pb.ResetRequired(
                         history_floor=1,
@@ -1324,9 +1328,9 @@ def test_client_resets_baseline_and_resumes_after_operator_restart():
                 return
             assert request.operator_instance_id == "new-operator"
             assert request.after_sequence == 2
-            yield pb.RunUpdateEnvelope(
+            yield pb.OperatorUpdateEnvelope(
                 operator_instance_id="new-operator",
-                update=pb.RunUpdate(
+                update=pb.OperatorUpdate(
                     sequence=3,
                     run_status_changed=pb.RunStatusChanged(
                         run_id="run-1",
@@ -1350,7 +1354,7 @@ def test_client_resets_baseline_and_resumes_after_operator_restart():
         generation=notice.generation,
         operator_instance_id="new-operator",
         as_of_sequence=2,
-        workflows=(),
+        catalog=CatalogSnapshot(workflows=()),
         runs_by_workflow={"flow": (baseline,)},
     )
 

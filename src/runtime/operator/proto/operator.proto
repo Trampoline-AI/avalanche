@@ -9,7 +9,7 @@ package avalanche.operator;
 // ── Service ─────────────────────────────────────────────
 
 service OperatorService {
-  rpc ListFlows(Empty) returns (FlowList);
+  rpc GetCatalog(Empty) returns (CatalogSnapshotMsg);
   rpc StartRun(StartRunRequest) returns (StartRunResponse);
   rpc CancelRun(CancelRunRequest) returns (Empty);
   rpc GetRunResult(GetRunRequest) returns (RunResultMsg);
@@ -19,7 +19,7 @@ service OperatorService {
   rpc ListAgentEvents(ListAgentEventsRequest) returns (AgentEventPage);
   rpc ReadTrace(ReadTraceRequest) returns (stream TraceChunk);
   rpc ReadDetail(ReadDetailRequest) returns (stream DetailChunk);
-  rpc StreamRunUpdates(StreamRunUpdatesRequest) returns (stream RunUpdateEnvelope);
+  rpc StreamOperatorUpdates(StreamOperatorUpdatesRequest) returns (stream OperatorUpdateEnvelope);
 }
 
 // ── Request / Response ──────────────────────────────────
@@ -98,7 +98,7 @@ message ReadDetailRequest {
   string body_token = 1;
 }
 
-message StreamRunUpdatesRequest {
+message StreamOperatorUpdatesRequest {
   string operator_instance_id = 1;
   uint64 after_sequence = 2;
 }
@@ -138,15 +138,25 @@ message FlowInfoMsg {
   bool webhook_active = 19;
 }
 
-message FlowList {
-  repeated FlowInfoMsg flows = 1;
-  repeated DiscoveryDiagnosticMsg diagnostics = 2;
-}
 
 message DiscoveryDiagnosticMsg {
   string path = 1;
   string kind = 2;
   string message = 3;
+}
+
+message ScanTargetMsg {
+  string alias = 1;
+  string target_path = 2;
+  string kind = 3;
+}
+message CatalogSnapshotMsg {
+  string operator_instance_id = 1;
+  uint64 as_of_sequence = 2;
+  uint64 revision = 3;
+  repeated FlowInfoMsg workflows = 4;
+  repeated ScanTargetMsg scan_targets = 5;
+  repeated DiscoveryDiagnosticMsg diagnostics = 6;
 }
 
 message ResultFileAttachment {
@@ -307,7 +317,11 @@ message TraceFinalized {
   TraceDescriptorMsg trace = 3;
 }
 
-message RunUpdate {
+message CatalogReplaced {
+  CatalogSnapshotMsg catalog = 1;
+}
+
+message OperatorUpdate {
   uint64 sequence = 1;
   oneof change {
     RunCreated run_created = 2;
@@ -316,6 +330,7 @@ message RunUpdate {
     LogAppended log_appended = 5;
     AgentEventAppended agent_event_appended = 6;
     TraceFinalized trace_finalized = 7;
+    CatalogReplaced catalog_replaced = 8;
   }
 }
 
@@ -324,10 +339,10 @@ message ResetRequired {
   uint64 latest_sequence = 2;
 }
 
-message RunUpdateEnvelope {
+message OperatorUpdateEnvelope {
   string operator_instance_id = 1;
   oneof payload {
-    RunUpdate update = 2;
+    OperatorUpdate update = 2;
     ResetRequired reset_required = 3;
   }
 }

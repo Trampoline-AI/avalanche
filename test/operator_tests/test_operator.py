@@ -196,7 +196,7 @@ class TestOperatorLifecycle:
         runs = op.list_runs("nonexistent")
         assert len(runs) == 0
 
-    def test_refresh_invalid_file_removes_descriptor_and_schedule(self, tmp_path):
+    def test_refresh_invalid_file_retains_descriptor_and_schedule(self, tmp_path):
         workflow_file = tmp_path / "scheduled.py"
         workflow_file.write_text(
             "import avalanche as ava\n"
@@ -213,8 +213,11 @@ class TestOperatorLifecycle:
         workflow_file.write_text("invalid Python !!!\n")
         operator._refresh_workflows()
 
-        assert operator.list_workflows() == []
-        assert operator._scheduler.list_schedules() == []
+        assert [item.workflow_id for item in operator.list_workflows()] == [
+            "scheduled.py::scheduled"
+        ]
+        assert len(operator._scheduler.list_schedules()) == 1
+        assert [item.kind for item in operator.list_diagnostics()] == ["import_error"]
 
     @pytest.mark.parametrize(
         "factory",
@@ -447,7 +450,7 @@ class TestOperatorSubscription:
 
     def test_subscribe_receives_updates(self):
         op = self._make_operator()
-        q = op.subscribe_run_updates()
+        q = op.subscribe_operator_updates()
 
         run_id = op.start_run("simple_workflow")
 
@@ -467,7 +470,7 @@ class TestOperatorSubscription:
                     updates.append(q.get_nowait().update)
                 break
 
-        op.unsubscribe_run_updates(q)
+        op.unsubscribe_operator_updates(q)
 
         # Every accepted mutation is delivered once in global sequence order.
         assert len(updates) >= 2
@@ -485,8 +488,8 @@ class TestOperatorSubscription:
             run.status = RunStatus.SUCCESS
             op._notify_run(run)
 
-            assert op.subscribe_run_updates(op.operator_instance_id, 3).empty()
-            replay = op.subscribe_run_updates(op.operator_instance_id, 1)
+            assert op.subscribe_operator_updates(op.operator_instance_id, 3).empty()
+            replay = op.subscribe_operator_updates(op.operator_instance_id, 1)
 
             envelopes = [replay.get_nowait() for _ in range(2)]
             assert [item.update.sequence for item in envelopes] == [2, 3]
@@ -510,7 +513,7 @@ class TestOperatorSubscription:
             run.status = RunStatus.SUCCESS
             op._notify_run(run)
 
-            recovery = op.subscribe_run_updates(op.operator_instance_id, 0)
+            recovery = op.subscribe_operator_updates(op.operator_instance_id, 0)
             reset = recovery.get_nowait()
 
             assert reset.reset_required.history_floor == 2
@@ -523,7 +526,7 @@ class TestOperatorSubscription:
     def test_cursor_ahead_after_restart_requires_structural_reset(self):
         op = Operator([], watch=False, schedule=False)
         try:
-            recovery = op.subscribe_run_updates("previous-operator", 99)
+            recovery = op.subscribe_operator_updates("previous-operator", 99)
             reset = recovery.get_nowait()
 
             assert reset.operator_instance_id == op.operator_instance_id
@@ -543,7 +546,7 @@ class TestOperatorSubscription:
 
             def subscribe():
                 barrier.wait()
-                subscriptions.append(op.subscribe_run_updates(op.operator_instance_id, 0))
+                subscriptions.append(op.subscribe_operator_updates(op.operator_instance_id, 0))
 
             def notify():
                 barrier.wait()

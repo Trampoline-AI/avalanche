@@ -116,7 +116,7 @@ class ReadDetailRequest(_message.Message):
     body_token: str
     def __init__(self, body_token: _Optional[str] = ...) -> None: ...
 
-class StreamRunUpdatesRequest(_message.Message):
+class StreamOperatorUpdatesRequest(_message.Message):
     __slots__ = ("operator_instance_id", "after_sequence")
     OPERATOR_INSTANCE_ID_FIELD_NUMBER: _ClassVar[int]
     AFTER_SEQUENCE_FIELD_NUMBER: _ClassVar[int]
@@ -233,14 +233,6 @@ class FlowInfoMsg(_message.Message):
     webhook_active: bool
     def __init__(self, name: _Optional[str] = ..., file_path: _Optional[str] = ..., node_ids: _Optional[_Iterable[str]] = ..., graph: _Optional[_Mapping[str, NodeEdges]] = ..., node_types: _Optional[_Mapping[str, str]] = ..., display_names: _Optional[_Mapping[str, str]] = ..., cron: _Optional[str] = ..., next_run_at: _Optional[float] = ..., last_run_at: _Optional[float] = ..., workflow_id: _Optional[str] = ..., display_name: _Optional[str] = ..., root_alias: _Optional[str] = ..., relative_file: _Optional[str] = ..., builder_symbol: _Optional[str] = ..., agent_node_ids: _Optional[_Iterable[str]] = ..., agent_metadata_json: _Optional[_Mapping[str, str]] = ..., webhook_path: _Optional[str] = ..., webhook_url: _Optional[str] = ..., webhook_active: bool = ...) -> None: ...
 
-class FlowList(_message.Message):
-    __slots__ = ("flows", "diagnostics")
-    FLOWS_FIELD_NUMBER: _ClassVar[int]
-    DIAGNOSTICS_FIELD_NUMBER: _ClassVar[int]
-    flows: _containers.RepeatedCompositeFieldContainer[FlowInfoMsg]
-    diagnostics: _containers.RepeatedCompositeFieldContainer[DiscoveryDiagnosticMsg]
-    def __init__(self, flows: _Optional[_Iterable[_Union[FlowInfoMsg, _Mapping]]] = ..., diagnostics: _Optional[_Iterable[_Union[DiscoveryDiagnosticMsg, _Mapping]]] = ...) -> None: ...
-
 class DiscoveryDiagnosticMsg(_message.Message):
     __slots__ = ("path", "kind", "message")
     PATH_FIELD_NUMBER: _ClassVar[int]
@@ -250,6 +242,32 @@ class DiscoveryDiagnosticMsg(_message.Message):
     kind: str
     message: str
     def __init__(self, path: _Optional[str] = ..., kind: _Optional[str] = ..., message: _Optional[str] = ...) -> None: ...
+
+class ScanTargetMsg(_message.Message):
+    __slots__ = ("alias", "target_path", "kind")
+    ALIAS_FIELD_NUMBER: _ClassVar[int]
+    TARGET_PATH_FIELD_NUMBER: _ClassVar[int]
+    KIND_FIELD_NUMBER: _ClassVar[int]
+    alias: str
+    target_path: str
+    kind: str
+    def __init__(self, alias: _Optional[str] = ..., target_path: _Optional[str] = ..., kind: _Optional[str] = ...) -> None: ...
+
+class CatalogSnapshotMsg(_message.Message):
+    __slots__ = ("operator_instance_id", "as_of_sequence", "revision", "workflows", "scan_targets", "diagnostics")
+    OPERATOR_INSTANCE_ID_FIELD_NUMBER: _ClassVar[int]
+    AS_OF_SEQUENCE_FIELD_NUMBER: _ClassVar[int]
+    REVISION_FIELD_NUMBER: _ClassVar[int]
+    WORKFLOWS_FIELD_NUMBER: _ClassVar[int]
+    SCAN_TARGETS_FIELD_NUMBER: _ClassVar[int]
+    DIAGNOSTICS_FIELD_NUMBER: _ClassVar[int]
+    operator_instance_id: str
+    as_of_sequence: int
+    revision: int
+    workflows: _containers.RepeatedCompositeFieldContainer[FlowInfoMsg]
+    scan_targets: _containers.RepeatedCompositeFieldContainer[ScanTargetMsg]
+    diagnostics: _containers.RepeatedCompositeFieldContainer[DiscoveryDiagnosticMsg]
+    def __init__(self, operator_instance_id: _Optional[str] = ..., as_of_sequence: _Optional[int] = ..., revision: _Optional[int] = ..., workflows: _Optional[_Iterable[_Union[FlowInfoMsg, _Mapping]]] = ..., scan_targets: _Optional[_Iterable[_Union[ScanTargetMsg, _Mapping]]] = ..., diagnostics: _Optional[_Iterable[_Union[DiscoveryDiagnosticMsg, _Mapping]]] = ...) -> None: ...
 
 class ResultFileAttachment(_message.Message):
     __slots__ = ("attachment_id", "name", "content", "media_type", "sha256")
@@ -529,8 +547,14 @@ class TraceFinalized(_message.Message):
     trace: TraceDescriptorMsg
     def __init__(self, run_id: _Optional[str] = ..., node_id: _Optional[str] = ..., trace: _Optional[_Union[TraceDescriptorMsg, _Mapping]] = ...) -> None: ...
 
-class RunUpdate(_message.Message):
-    __slots__ = ("sequence", "run_created", "run_status_changed", "node_status_changed", "log_appended", "agent_event_appended", "trace_finalized")
+class CatalogReplaced(_message.Message):
+    __slots__ = ("catalog",)
+    CATALOG_FIELD_NUMBER: _ClassVar[int]
+    catalog: CatalogSnapshotMsg
+    def __init__(self, catalog: _Optional[_Union[CatalogSnapshotMsg, _Mapping]] = ...) -> None: ...
+
+class OperatorUpdate(_message.Message):
+    __slots__ = ("sequence", "run_created", "run_status_changed", "node_status_changed", "log_appended", "agent_event_appended", "trace_finalized", "catalog_replaced")
     SEQUENCE_FIELD_NUMBER: _ClassVar[int]
     RUN_CREATED_FIELD_NUMBER: _ClassVar[int]
     RUN_STATUS_CHANGED_FIELD_NUMBER: _ClassVar[int]
@@ -538,6 +562,7 @@ class RunUpdate(_message.Message):
     LOG_APPENDED_FIELD_NUMBER: _ClassVar[int]
     AGENT_EVENT_APPENDED_FIELD_NUMBER: _ClassVar[int]
     TRACE_FINALIZED_FIELD_NUMBER: _ClassVar[int]
+    CATALOG_REPLACED_FIELD_NUMBER: _ClassVar[int]
     sequence: int
     run_created: RunCreated
     run_status_changed: RunStatusChanged
@@ -545,7 +570,8 @@ class RunUpdate(_message.Message):
     log_appended: LogAppended
     agent_event_appended: AgentEventAppended
     trace_finalized: TraceFinalized
-    def __init__(self, sequence: _Optional[int] = ..., run_created: _Optional[_Union[RunCreated, _Mapping]] = ..., run_status_changed: _Optional[_Union[RunStatusChanged, _Mapping]] = ..., node_status_changed: _Optional[_Union[NodeStatusChanged, _Mapping]] = ..., log_appended: _Optional[_Union[LogAppended, _Mapping]] = ..., agent_event_appended: _Optional[_Union[AgentEventAppended, _Mapping]] = ..., trace_finalized: _Optional[_Union[TraceFinalized, _Mapping]] = ...) -> None: ...
+    catalog_replaced: CatalogReplaced
+    def __init__(self, sequence: _Optional[int] = ..., run_created: _Optional[_Union[RunCreated, _Mapping]] = ..., run_status_changed: _Optional[_Union[RunStatusChanged, _Mapping]] = ..., node_status_changed: _Optional[_Union[NodeStatusChanged, _Mapping]] = ..., log_appended: _Optional[_Union[LogAppended, _Mapping]] = ..., agent_event_appended: _Optional[_Union[AgentEventAppended, _Mapping]] = ..., trace_finalized: _Optional[_Union[TraceFinalized, _Mapping]] = ..., catalog_replaced: _Optional[_Union[CatalogReplaced, _Mapping]] = ...) -> None: ...
 
 class ResetRequired(_message.Message):
     __slots__ = ("history_floor", "latest_sequence")
@@ -555,12 +581,12 @@ class ResetRequired(_message.Message):
     latest_sequence: int
     def __init__(self, history_floor: _Optional[int] = ..., latest_sequence: _Optional[int] = ...) -> None: ...
 
-class RunUpdateEnvelope(_message.Message):
+class OperatorUpdateEnvelope(_message.Message):
     __slots__ = ("operator_instance_id", "update", "reset_required")
     OPERATOR_INSTANCE_ID_FIELD_NUMBER: _ClassVar[int]
     UPDATE_FIELD_NUMBER: _ClassVar[int]
     RESET_REQUIRED_FIELD_NUMBER: _ClassVar[int]
     operator_instance_id: str
-    update: RunUpdate
+    update: OperatorUpdate
     reset_required: ResetRequired
-    def __init__(self, operator_instance_id: _Optional[str] = ..., update: _Optional[_Union[RunUpdate, _Mapping]] = ..., reset_required: _Optional[_Union[ResetRequired, _Mapping]] = ...) -> None: ...
+    def __init__(self, operator_instance_id: _Optional[str] = ..., update: _Optional[_Union[OperatorUpdate, _Mapping]] = ..., reset_required: _Optional[_Union[ResetRequired, _Mapping]] = ...) -> None: ...

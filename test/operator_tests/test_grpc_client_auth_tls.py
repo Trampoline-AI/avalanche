@@ -91,8 +91,8 @@ def test_grpc_state_provider_uses_bounded_insecure_channel_options(monkeypatch) 
 
 
 class AuthenticatedOperatorService(pb_grpc.OperatorServiceServicer):
-    def ListFlows(self, request, context):  # noqa: N802
+    def GetCatalog(self, request, context):  # noqa: N802
         authorization = dict(context.invocation_metadata()).get("authorization")
         if authorization != "Bearer secret":
             context.abort(grpc.StatusCode.UNAUTHENTICATED, "missing_bearer")
-        return pb.FlowList(flows=[pb.FlowInfoMsg(name="demo-flow")])
+        return pb.CatalogSnapshotMsg(workflows=[pb.FlowInfoMsg(name="demo-flow")])

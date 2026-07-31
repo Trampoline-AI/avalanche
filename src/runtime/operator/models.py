@@ -305,6 +305,34 @@ class TraceHeader:
 
 
 @dataclass(frozen=True)
+class ScanTargetInfo:
+    """One normalized workflow discovery target exposed to clients."""
+
+    alias: str
+    target_path: str
+    kind: Literal["file", "directory"]
+
+
+@dataclass(frozen=True)
+class CatalogSnapshot:
+    """One complete authoritative current-workflow catalog projection."""
+
+    operator_instance_id: str = ""
+    as_of_sequence: int = 0
+    revision: int = 0
+    workflows: tuple[WorkflowInfo, ...] = ()
+    scan_targets: tuple[ScanTargetInfo, ...] = ()
+    diagnostics: tuple[WorkflowDiscoveryDiagnostic, ...] = ()
+
+
+@dataclass(frozen=True)
+class CatalogReplaced:
+    """One full catalog publication carried by the operator update stream."""
+
+    catalog: CatalogSnapshot
+
+
+@dataclass(frozen=True)
 class RunCreated:
     summary: RunSummary
     nodes: tuple[NodeSnapshot, ...] = ()
@@ -359,12 +387,13 @@ RunUpdateChange = (
     | AgentEventAppended
     | TraceFinalized
 )
+OperatorUpdateChange = RunUpdateChange | CatalogReplaced
 
 
 @dataclass(frozen=True)
-class RunUpdate:
+class OperatorUpdate:
     sequence: int
-    change: RunUpdateChange
+    change: OperatorUpdateChange
 
 
 @dataclass(frozen=True)
@@ -374,14 +403,14 @@ class ResetRequired:
 
 
 @dataclass(frozen=True)
-class RunUpdateEnvelope:
+class OperatorUpdateEnvelope:
     operator_instance_id: str
-    update: RunUpdate | None = None
+    update: OperatorUpdate | None = None
     reset_required: ResetRequired | None = None
 
     def __post_init__(self) -> None:
         if (self.update is None) == (self.reset_required is None):
-            raise ValueError("update envelope requires exactly one payload")
+            raise ValueError("operator update envelope requires exactly one payload")
 
 
 @dataclass
@@ -442,14 +471,16 @@ class ResetBaseline:
     generation: int
     operator_instance_id: str
     as_of_sequence: int
-    workflows: tuple[WorkflowInfo, ...]
+    catalog: CatalogSnapshot
     runs_by_workflow: Mapping[str, tuple[RunState, ...]]
 
 
 @dataclass(frozen=True)
 class WorkflowDiscoveryDiagnostic:
     path: str
-    kind: Literal["skipped", "import_error", "build_error", "invalid_schedule"]
+    kind: Literal[
+        "skipped", "import_error", "build_error", "invalid_schedule", "invalid_catalog"
+    ]
     message: str
 
 
@@ -482,14 +513,16 @@ class WorkflowDescriptor:
 
 @dataclass(frozen=True)
 class CatalogView:
-    """One atomically replaceable, current-only registry view."""
+    """One atomically replaceable current-workflow registry view."""
 
+    revision: int = 0
     by_id: Mapping[str, WorkflowDescriptor] = field(
         default_factory=lambda: MappingProxyType({})
     )
     short_names: Mapping[str, tuple[str, ...]] = field(
         default_factory=lambda: MappingProxyType({})
     )
+    scan_targets: tuple[ScanTargetInfo, ...] = ()
     diagnostics: tuple[WorkflowDiscoveryDiagnostic, ...] = ()
 
 

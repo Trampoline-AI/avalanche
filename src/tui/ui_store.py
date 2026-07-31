@@ -16,6 +16,7 @@ from typing import Any, Callable, Literal
 from .dag_layout import DagNode, SeqGroup, build_nav_grid, nav_move, workflow_to_layout
 from .models import (
     AgentEventDetailAppended,
+    CatalogSnapshot,
     DetailUpdate,
     LogDetailAppended,
     LogEntry,
@@ -269,6 +270,7 @@ class UIStore:
         self.workflows: list[WorkflowInfo] = (
             [] if defer_initial_catalog else provider.list_workflows()
         )
+        self.catalog = CatalogSnapshot(workflows=tuple(self.workflows))
         self.current_workflow: WorkflowInfo | None = None
         self.current_run: RunState | None = None
         self.run_pinned: bool = False  # True = user picked a run; False = follow latest
@@ -1282,6 +1284,10 @@ class UIStore:
         self._background_updates.put(
             ("polled_run", (selector, data_revision, context_epoch, run))
         )
+
+    def enqueue_catalog_update(self, catalog: CatalogSnapshot) -> None:
+        """Queue one authoritative catalog replacement for the UI thread."""
+        self._background_updates.put(("catalog_replaced", catalog))
 
     @staticmethod
     def _reset_baseline_validation_error(
@@ -2368,6 +2374,13 @@ class UIStore:
                 except Exception as exc:
                     self.run_error = f"Live state reset failed: {exc}"
                 continue
+            if kind == "catalog_replaced":
+                catalog = payload
+                if catalog.revision >= self.catalog_revision:
+                    self.catalog = catalog
+                    self.catalog_revision = catalog.revision
+                    self._reconcile_workflows(list(catalog.workflows))
+                continue
             if kind == "catalog":
                 self._catalog_refresh_in_flight = False
                 context_epoch, workflows = payload
@@ -2539,12 +2552,14 @@ class UIStore:
             self.current_run.run_id if self.run_pinned and self.current_run else None
         )
         previous_selectors = {workflow.selector for workflow in self.workflows}
-        baseline_selectors = {workflow.selector for workflow in baseline.workflows}
+        baseline_selectors = {workflow.selector for workflow in baseline.catalog.workflows}
         self._workflow_context_epoch += 1
         for selector in previous_selectors | baseline_selectors:
             self._advance_run_data_revision(selector)
 
-        self._reconcile_workflows(list(baseline.workflows))
+        self.catalog = baseline.catalog
+        self.catalog_revision = baseline.catalog.revision
+        self._reconcile_workflows(list(baseline.catalog.workflows))
         # A selection change can schedule a refresh during reconciliation. Invalidate
         # it too so a pre-baseline response cannot overwrite authoritative state.
         for selector in previous_selectors | baseline_selectors:
