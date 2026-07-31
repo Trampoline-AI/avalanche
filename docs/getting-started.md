@@ -136,6 +136,21 @@ Alternatively, connect the TUI and start runs interactively:
 uv run ava tui --connect localhost:7433
 ```
 
+Or enable the operator's browser interface:
+
+```bash
+uv run ava operator --flows examples --web
+```
+
+Open `http://127.0.0.1:7435`. The browser receives the same ordered operator
+updates as the TUI, including live catalog replacement when watched workflow
+sources change. Current definitions update in place; historical run canvases
+retain the topology and agent declarations captured for that run. The browser
+listener defaults to loopback and has no built-in authentication. Use
+`--web-trusted-proxy` with a non-loopback `--web-host` only behind a trusted,
+authenticated proxy.
+
+
 The TUI gets flows from the operator over gRPC. It does not import files from the
 examples directory directly.
 

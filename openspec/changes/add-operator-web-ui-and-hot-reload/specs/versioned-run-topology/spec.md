@@ -6,7 +6,7 @@ Retain the exact workflow definition used by each run so operator clients can re
 
 ### Requirement: Capture an immutable executed topology
 
-When the operator creates a run, it SHALL retain an immutable workflow topology snapshot derived from the workflow that was prepared for that run. The snapshot SHALL include node identity and ordering, graph edges, node types, and display metadata required to render the run's workflow graph.
+When the operator creates a run, it SHALL retain an immutable workflow topology snapshot derived from the workflow that was prepared for that run. The snapshot SHALL include node identity and ordering, graph edges, node types, display metadata required to render the run's workflow graph, and serialized agent declaration metadata required to interpret retained invocation values without consulting the current catalog.
 
 #### Scenario: Run begins from the current workflow
 - **WHEN** a run is created for a workflow
