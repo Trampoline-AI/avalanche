@@ -24,10 +24,10 @@ function JsonEditor({ value, onChange }: JsonEditorProps) {
           keymap.of([]),
           EditorView.lineWrapping,
           EditorView.theme({
-            "&": { backgroundColor: "#0e1112", color: "#dce4df" },
-            ".cm-content": { caretColor: "#eeff8c", minHeight: "110px" },
-            ".cm-gutters": { backgroundColor: "#0e1112", color: "#626b67", border: "0" },
-            "&.cm-focused": { outline: "1px solid #778357" },
+            "&": { backgroundColor: "#ffffff", color: "#17211c" },
+            ".cm-content": { caretColor: "#2563eb", minHeight: "110px" },
+            ".cm-gutters": { backgroundColor: "#f6f8f7", color: "#7b8680", border: "0" },
+            "&.cm-focused": { outline: "1px solid #9bb6f5" },
           }),
           EditorView.updateListener.of((update) => {
             if (update.docChanged) onChange(update.state.doc.toString());
