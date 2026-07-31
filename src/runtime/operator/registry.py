@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import threading
 from collections import defaultdict
+from dataclasses import replace
 from types import MappingProxyType
 from typing import Callable
 
@@ -13,6 +14,7 @@ from avalanche.dag import Workflow
 from .discovery import ConfiguredRoot, configure_roots, discover, load_builder
 from .models import (
     CatalogView,
+    ScanTargetInfo,
     WorkflowDescriptor,
     WorkflowDiscoveryDiagnostic,
     WorkflowInfo,
@@ -134,17 +136,78 @@ class WorkflowRegistry:
         *,
         validate: Callable[[tuple[WorkflowDescriptor, ...]], object] | None = None,
     ) -> CatalogView:
-        """Build a complete catalog off-lock, then atomically install it."""
+        """Configure roots and atomically install one complete valid catalog."""
         roots = configure_roots(paths)
+        with self._lock:
+            self._scan_paths = tuple(paths)
+            self._roots = roots
+        return self._scan_roots(roots, validate=validate)
+
+    def rescan(
+        self,
+        *,
+        validate: Callable[[tuple[WorkflowDescriptor, ...]], object] | None = None,
+    ) -> CatalogView:
+        """Refresh configured roots while preserving the last valid catalog."""
+        with self._lock:
+            roots = self._roots
+        if not roots:
+            return self.view
+        return self._scan_roots(roots, validate=validate)
+
+    def _scan_roots(
+        self,
+        roots: tuple[ConfiguredRoot, ...],
+        *,
+        validate: Callable[[tuple[WorkflowDescriptor, ...]], object] | None,
+    ) -> CatalogView:
         descriptors, diagnostics = discover(roots, timeout=self._discovery_timeout)
-        if validate is not None:
-            validate(descriptors)
+        candidate_diagnostics = list(diagnostics)
+        try:
+            if validate is not None:
+                validate(descriptors)
+        except ValueError as exc:
+            candidate_diagnostics.append(
+                WorkflowDiscoveryDiagnostic(
+                    path=", ".join(str(root.target) for root in roots),
+                    kind="invalid_catalog",
+                    message=str(exc),
+                )
+            )
 
         by_id: dict[str, WorkflowDescriptor] = {}
         for descriptor in descriptors:
             if descriptor.workflow_id in by_id:
-                raise ValueError(f"Duplicate canonical workflow ID: {descriptor.workflow_id}")
+                candidate_diagnostics.append(
+                    WorkflowDiscoveryDiagnostic(
+                        path=descriptor.locator.relative_file,
+                        kind="invalid_catalog",
+                        message=f"Duplicate canonical workflow ID: {descriptor.workflow_id}",
+                    )
+                )
+                break
             by_id[descriptor.workflow_id] = descriptor
+
+        scan_targets = tuple(
+            ScanTargetInfo(
+                alias=root.alias,
+                target_path=str(root.target),
+                kind="directory" if root.target == root.path else "file",
+            )
+            for root in roots
+        )
+        diagnostics_tuple = tuple(candidate_diagnostics)
+        candidate_failed = any(item.kind != "skipped" for item in diagnostics_tuple)
+        if candidate_failed:
+            with self._lock:
+                self._view = replace(
+                    self._view,
+                    scan_targets=scan_targets,
+                    diagnostics=diagnostics_tuple,
+                )
+                return self._view
+
+        by_id = dict(sorted(by_id.items()))
         short_names: defaultdict[str, list[str]] = defaultdict(list)
         for descriptor in descriptors:
             short_names[descriptor.display_name].append(descriptor.workflow_id)
@@ -153,28 +216,16 @@ class WorkflowRegistry:
             name: tuple(sorted(set(candidate_ids)))
             for name, candidate_ids in short_names.items()
         }
-        view = CatalogView(
-            by_id=MappingProxyType(dict(sorted(by_id.items()))),
-            short_names=MappingProxyType(dict(sorted(frozen_short_names.items()))),
-            diagnostics=diagnostics,
-        )
         with self._lock:
-            self._scan_paths = tuple(paths)
-            self._roots = roots
+            view = CatalogView(
+                revision=self._view.revision + 1,
+                by_id=MappingProxyType(by_id),
+                short_names=MappingProxyType(dict(sorted(frozen_short_names.items()))),
+                scan_targets=scan_targets,
+                diagnostics=diagnostics_tuple,
+            )
             self._view = view
-        return view
-
-    def rescan(
-        self,
-        *,
-        validate: Callable[[tuple[WorkflowDescriptor, ...]], object] | None = None,
-    ) -> CatalogView:
-        """Refresh configured roots without retaining a last-good descriptor."""
-        with self._lock:
-            paths = list(self._scan_paths)
-        if not paths:
-            return self.view
-        return self.scan(paths, validate=validate)
+            return view
 
     def resolve(self, selector: str) -> WorkflowDescriptor:
         descriptor, _ = self.resolve_source(selector)
@@ -210,8 +261,9 @@ class WorkflowRegistry:
         with self._lock:
             self._manual[workflow.name] = (builder, info)
 
-    def list_workflows(self) -> list[WorkflowInfo]:
-        scanned = [descriptor_to_info(item) for item in self.descriptors()]
+    def list_workflows(self, view: CatalogView | None = None) -> list[WorkflowInfo]:
+        catalog = view if view is not None else self.view
+        scanned = [descriptor_to_info(item) for item in catalog.by_id.values()]
         with self._lock:
             manual = [entry[1] for entry in self._manual.values()]
         return scanned + manual

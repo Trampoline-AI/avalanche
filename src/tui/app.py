@@ -161,6 +161,7 @@ class AvalancheApp(App):
         self.push_screen(self._screen)
 
         self.store.provider.on_run_update(self._on_run_update_bg)
+        self.store.provider.on_catalog_update(self.store.enqueue_catalog_update)
         self.store.provider.on_detail_update(self.store.enqueue_detail_update)
         self.store.provider.on_log(lambda _: None)
         self.store.provider.start_stream()

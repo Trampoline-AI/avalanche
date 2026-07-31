@@ -145,9 +145,9 @@ def test_detail_records_expose_only_bounded_metadata():
 
 
 def test_update_envelope_distinguishes_changes_from_reset():
-    update = pb.RunUpdateEnvelope(
+    update = pb.OperatorUpdateEnvelope(
         operator_instance_id="operator-1",
-        update=pb.RunUpdate(
+        update=pb.OperatorUpdate(
             sequence=24,
             node_status_changed=pb.NodeStatusChanged(
                 run_id="run-1",
@@ -157,7 +157,7 @@ def test_update_envelope_distinguishes_changes_from_reset():
             ),
         ),
     )
-    reset = pb.RunUpdateEnvelope(
+    reset = pb.OperatorUpdateEnvelope(
         operator_instance_id="operator-2",
         reset_required=pb.ResetRequired(history_floor=100, latest_sequence=200),
     )
@@ -168,10 +168,10 @@ def test_update_envelope_distinguishes_changes_from_reset():
 
 
 def test_run_update_is_a_sequenced_typed_change_record():
-    update_fields = pb.RunUpdate.DESCRIPTOR.fields_by_name
-    change_fields = pb.RunUpdate.DESCRIPTOR.oneofs_by_name["change"].fields
-    envelope_fields = pb.RunUpdateEnvelope.DESCRIPTOR.fields_by_name
-    payload_fields = pb.RunUpdateEnvelope.DESCRIPTOR.oneofs_by_name["payload"].fields
+    update_fields = pb.OperatorUpdate.DESCRIPTOR.fields_by_name
+    change_fields = pb.OperatorUpdate.DESCRIPTOR.oneofs_by_name["change"].fields
+    envelope_fields = pb.OperatorUpdateEnvelope.DESCRIPTOR.fields_by_name
+    payload_fields = pb.OperatorUpdateEnvelope.DESCRIPTOR.oneofs_by_name["payload"].fields
 
     assert {name: field.number for name, field in update_fields.items()} == {
         "sequence": 1,
@@ -181,6 +181,7 @@ def test_run_update_is_a_sequenced_typed_change_record():
         "log_appended": 5,
         "agent_event_appended": 6,
         "trace_finalized": 7,
+        "catalog_replaced": 8,
     }
     assert [field.name for field in change_fields] == [
         "run_created",
@@ -189,6 +190,7 @@ def test_run_update_is_a_sequenced_typed_change_record():
         "log_appended",
         "agent_event_appended",
         "trace_finalized",
+        "catalog_replaced",
     ]
     assert "run" not in update_fields
     assert {name: field.number for name, field in envelope_fields.items()} == {
@@ -221,10 +223,10 @@ def test_service_exposes_parallel_workstream_contracts():
         "ListLogs",
         "ListAgentEvents",
         "ReadTrace",
-        "StreamRunUpdates",
+        "StreamOperatorUpdates",
     } <= set(methods)
     assert methods["ReadTrace"].server_streaming is True
-    assert methods["StreamRunUpdates"].server_streaming is True
+    assert methods["StreamOperatorUpdates"].server_streaming is True
     assert methods["ReadDetail"].server_streaming is True
 
 

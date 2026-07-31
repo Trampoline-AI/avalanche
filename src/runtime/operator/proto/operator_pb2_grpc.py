@@ -40,10 +40,10 @@ class OperatorServiceStub(object):
         Args:
             channel: A grpc.Channel.
         """
-        self.ListFlows = channel.unary_unary(
-                '/avalanche.operator.OperatorService/ListFlows',
+        self.GetCatalog = channel.unary_unary(
+                '/avalanche.operator.OperatorService/GetCatalog',
                 request_serializer=operator__pb2.Empty.SerializeToString,
-                response_deserializer=operator__pb2.FlowList.FromString,
+                response_deserializer=operator__pb2.CatalogSnapshotMsg.FromString,
                 _registered_method=True)
         self.StartRun = channel.unary_unary(
                 '/avalanche.operator.OperatorService/StartRun',
@@ -90,10 +90,10 @@ class OperatorServiceStub(object):
                 request_serializer=operator__pb2.ReadDetailRequest.SerializeToString,
                 response_deserializer=operator__pb2.DetailChunk.FromString,
                 _registered_method=True)
-        self.StreamRunUpdates = channel.unary_stream(
-                '/avalanche.operator.OperatorService/StreamRunUpdates',
-                request_serializer=operator__pb2.StreamRunUpdatesRequest.SerializeToString,
-                response_deserializer=operator__pb2.RunUpdateEnvelope.FromString,
+        self.StreamOperatorUpdates = channel.unary_stream(
+                '/avalanche.operator.OperatorService/StreamOperatorUpdates',
+                request_serializer=operator__pb2.StreamOperatorUpdatesRequest.SerializeToString,
+                response_deserializer=operator__pb2.OperatorUpdateEnvelope.FromString,
                 _registered_method=True)
 
 
@@ -106,7 +106,7 @@ class OperatorServiceServicer(object):
 
     """
 
-    def ListFlows(self, request, context):
+    def GetCatalog(self, request, context):
         """Missing associated documentation comment in .proto file."""
         context.set_code(grpc.StatusCode.UNIMPLEMENTED)
         context.set_details('Method not implemented!')
@@ -166,7 +166,7 @@ class OperatorServiceServicer(object):
         context.set_details('Method not implemented!')
         raise NotImplementedError('Method not implemented!')
 
-    def StreamRunUpdates(self, request, context):
+    def StreamOperatorUpdates(self, request, context):
         """Missing associated documentation comment in .proto file."""
         context.set_code(grpc.StatusCode.UNIMPLEMENTED)
         context.set_details('Method not implemented!')
@@ -175,10 +175,10 @@ class OperatorServiceServicer(object):
 
 def add_OperatorServiceServicer_to_server(servicer, server):
     rpc_method_handlers = {
-            'ListFlows': grpc.unary_unary_rpc_method_handler(
-                    servicer.ListFlows,
+            'GetCatalog': grpc.unary_unary_rpc_method_handler(
+                    servicer.GetCatalog,
                     request_deserializer=operator__pb2.Empty.FromString,
-                    response_serializer=operator__pb2.FlowList.SerializeToString,
+                    response_serializer=operator__pb2.CatalogSnapshotMsg.SerializeToString,
             ),
             'StartRun': grpc.unary_unary_rpc_method_handler(
                     servicer.StartRun,
@@ -225,10 +225,10 @@ def add_OperatorServiceServicer_to_server(servicer, server):
                     request_deserializer=operator__pb2.ReadDetailRequest.FromString,
                     response_serializer=operator__pb2.DetailChunk.SerializeToString,
             ),
-            'StreamRunUpdates': grpc.unary_stream_rpc_method_handler(
-                    servicer.StreamRunUpdates,
-                    request_deserializer=operator__pb2.StreamRunUpdatesRequest.FromString,
-                    response_serializer=operator__pb2.RunUpdateEnvelope.SerializeToString,
+            'StreamOperatorUpdates': grpc.unary_stream_rpc_method_handler(
+                    servicer.StreamOperatorUpdates,
+                    request_deserializer=operator__pb2.StreamOperatorUpdatesRequest.FromString,
+                    response_serializer=operator__pb2.OperatorUpdateEnvelope.SerializeToString,
             ),
     }
     generic_handler = grpc.method_handlers_generic_handler(
@@ -248,7 +248,7 @@ class OperatorService(object):
     """
 
     @staticmethod
-    def ListFlows(request,
+    def GetCatalog(request,
             target,
             options=(),
             channel_credentials=None,
@@ -261,9 +261,9 @@ class OperatorService(object):
         return grpc.experimental.unary_unary(
             request,
             target,
-            '/avalanche.operator.OperatorService/ListFlows',
+            '/avalanche.operator.OperatorService/GetCatalog',
             operator__pb2.Empty.SerializeToString,
-            operator__pb2.FlowList.FromString,
+            operator__pb2.CatalogSnapshotMsg.FromString,
             options,
             channel_credentials,
             insecure,
@@ -518,7 +518,7 @@ class OperatorService(object):
             _registered_method=True)
 
     @staticmethod
-    def StreamRunUpdates(request,
+    def StreamOperatorUpdates(request,
             target,
             options=(),
             channel_credentials=None,
@@ -531,9 +531,9 @@ class OperatorService(object):
         return grpc.experimental.unary_stream(
             request,
             target,
-            '/avalanche.operator.OperatorService/StreamRunUpdates',
-            operator__pb2.StreamRunUpdatesRequest.SerializeToString,
-            operator__pb2.RunUpdateEnvelope.FromString,
+            '/avalanche.operator.OperatorService/StreamOperatorUpdates',
+            operator__pb2.StreamOperatorUpdatesRequest.SerializeToString,
+            operator__pb2.OperatorUpdateEnvelope.FromString,
             options,
             channel_credentials,
             insecure,

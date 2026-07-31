@@ -26,6 +26,7 @@ from avalanche.operator.convert import (
     workflow_info_to_proto,
 )
 from avalanche.operator.models import (
+    CatalogSnapshot,
     NodeSnapshot,
     NodeState,
     NodeStatus,
@@ -512,11 +513,11 @@ def test_ping_success_does_not_heal_failed_update_stream():
             return "stream offline"
 
     class SplitHealthStub:
-        def StreamRunUpdates(self, request, *, metadata):  # noqa: N802
+        def StreamOperatorUpdates(self, request, *, metadata):  # noqa: N802
             raise Unavailable()
 
-        def ListFlows(self, request, **kwargs):  # noqa: N802
-            return pb.FlowList()
+        def GetCatalog(self, request, **kwargs):  # noqa: N802
+            return pb.CatalogSnapshotMsg()
 
     provider._stub = SplitHealthStub()
     try:
@@ -560,7 +561,7 @@ def test_ping_classifies_application_errors_separately_from_transport_failures(
             return "operation failed"
 
     class ErrorStub:
-        def ListFlows(self, request, **kwargs):  # noqa: N802
+        def GetCatalog(self, request, **kwargs):  # noqa: N802
             raise RpcFailure()
 
     provider._stub = ErrorStub()
@@ -626,7 +627,7 @@ def test_read_trace_success_records_reachability_without_healing_update_stream()
     try:
         detail = provider.hydrate_trace("run-trace-health", "agent")
         assert detail is not None
-        assert detail.trace_body == {"complete": True}
+        assert detail.trace_body == {"complete": True, "steps": []}
         assert provider.operator_reachable is True
         assert provider.stream_state is StreamState.FAILED
         assert provider.stream_error == "UNAVAILABLE: live updates interrupted"
@@ -689,7 +690,7 @@ def test_trace_cache_evicts_oldest_bodies_across_unique_run_node_keys():
         for run_id in runs:
             detail = provider.hydrate_trace(run_id, "agent")
             assert detail is not None
-            assert detail.trace_body == {}
+            assert detail.trace_body == {"steps": []}
             assert provider._retained_detail_count <= 2
             assert provider._retained_detail_bytes <= 4
             assert len(provider._detail_cache_usage) <= 2
@@ -996,12 +997,12 @@ def test_unary_completion_after_close_cannot_overwrite_terminal_health(status):
             return "late application error"
 
     class BlockingStub:
-        def ListFlows(self, request, **kwargs):  # noqa: N802
+        def GetCatalog(self, request, **kwargs):  # noqa: N802
             entered.set()
             assert release.wait(timeout=1.0)
             if status is not None:
                 raise RpcFailure()
-            return pb.FlowList()
+            return pb.CatalogSnapshotMsg()
 
     def invoke() -> None:
         try:
@@ -1055,7 +1056,7 @@ def test_idle_accepted_stream_reaches_live_after_metadata_handshake():
             raise StopIteration
 
     class IdleStub:
-        def StreamRunUpdates(self, request, *, metadata):  # noqa: N802
+        def StreamOperatorUpdates(self, request, *, metadata):  # noqa: N802
             return IdleStream()
 
     provider._stub = IdleStub()
@@ -1133,7 +1134,7 @@ def test_post_header_stream_failures_preserve_exponential_reconnect_backoff():
             raise Unavailable()
 
     class FailingStub:
-        def StreamRunUpdates(self, request, *, metadata):  # noqa: N802
+        def StreamOperatorUpdates(self, request, *, metadata):  # noqa: N802
             return AcceptedThenUnavailable()
 
     provider._stream_stop = RecordingStop()
@@ -1174,9 +1175,9 @@ def test_duplicate_only_streams_do_not_reset_reconnect_backoff_or_cursor():
                 self.stopped = True
             return self.stopped
 
-    duplicate = pb.RunUpdateEnvelope(
+    duplicate = pb.OperatorUpdateEnvelope(
         operator_instance_id="operator-1",
-        update=pb.RunUpdate(
+        update=pb.OperatorUpdate(
             sequence=7,
             run_created=pb.RunCreated(
                 summary=pb.RunSummaryMsg(
@@ -1199,7 +1200,7 @@ def test_duplicate_only_streams_do_not_reset_reconnect_backoff_or_cursor():
             raise Unavailable()
 
     class DuplicateStub:
-        def StreamRunUpdates(self, request, *, metadata):  # noqa: N802
+        def StreamOperatorUpdates(self, request, *, metadata):  # noqa: N802
             requests.append((request.operator_instance_id, request.after_sequence))
             return DuplicateThenUnavailable()
 
@@ -1248,9 +1249,9 @@ def test_authoritative_stream_progress_resets_reconnect_backoff():
             return ()
 
         def __iter__(self):
-            yield pb.RunUpdateEnvelope(
+            yield pb.OperatorUpdateEnvelope(
                 operator_instance_id="operator-1",
-                update=pb.RunUpdate(
+                update=pb.OperatorUpdate(
                     sequence=1,
                     run_created=pb.RunCreated(
                         summary=pb.RunSummaryMsg(
@@ -1269,7 +1270,7 @@ def test_authoritative_stream_progress_resets_reconnect_backoff():
         def __init__(self):
             self.calls = 0
 
-        def StreamRunUpdates(self, request, *, metadata):  # noqa: N802
+        def StreamOperatorUpdates(self, request, *, metadata):  # noqa: N802
             self.calls += 1
             if self.calls == 1:
                 raise Unavailable()
@@ -1315,7 +1316,7 @@ def test_stream_reconnect_transitions_through_replay_to_live():
         def __init__(self):
             self.calls = 0
 
-        def StreamRunUpdates(self, request, *, metadata):  # noqa: N802
+        def StreamOperatorUpdates(self, request, *, metadata):  # noqa: N802
             self.calls += 1
             observed.append(provider.stream_state)
             if self.calls == 1:
@@ -1328,9 +1329,9 @@ def test_stream_reconnect_transitions_through_replay_to_live():
 
                 def __iter__(self):
                     observed.append(provider.stream_state)
-                    yield pb.RunUpdateEnvelope(
+                    yield pb.OperatorUpdateEnvelope(
                         operator_instance_id="operator-1",
-                        update=pb.RunUpdate(
+                        update=pb.OperatorUpdate(
                             sequence=1,
                             run_created=pb.RunCreated(
                                 summary=pb.RunSummaryMsg(
@@ -1542,9 +1543,13 @@ def test_default_reset_loader_retries_and_builds_bounded_authoritative_baseline(
                 runs=[run_summary_to_proto(summaries[1])],
             )
 
-        def ListFlows(self, request, **kwargs):  # noqa: N802
+        def GetCatalog(self, request, **kwargs):  # noqa: N802
             self.list_flows_calls += 1
-            return pb.FlowList(flows=[workflow_info_to_proto(workflow)])
+            return pb.CatalogSnapshotMsg(
+                operator_instance_id="operator-new",
+                as_of_sequence=3,
+                workflows=[workflow_info_to_proto(workflow)],
+            )
 
         def GetRunSnapshot(self, request, **kwargs):  # noqa: N802
             self.snapshot_calls.append(request.run_id)
@@ -1571,7 +1576,7 @@ def test_default_reset_loader_retries_and_builds_bounded_authoritative_baseline(
     assert baseline.generation == 7
     assert baseline.operator_instance_id == "operator-new"
     assert baseline.as_of_sequence == 3
-    assert [item.selector for item in baseline.workflows] == [workflow.selector]
+    assert [item.selector for item in baseline.catalog.workflows] == [workflow.selector]
     assert [run.run_id for run in baseline.runs_by_workflow[workflow.selector]] == [
         "run_1",
         "run_2",
@@ -1615,8 +1620,12 @@ def test_default_reset_loader_uses_immutable_snapshot_while_updates_continue():
             self.summary_calls = 0
             self.snapshot_requests = []
 
-        def ListFlows(self, request, **kwargs):  # noqa: N802
-            return pb.FlowList(flows=[workflow_info_to_proto(workflow)])
+        def GetCatalog(self, request, **kwargs):  # noqa: N802
+            return pb.CatalogSnapshotMsg(
+                operator_instance_id="operator-live",
+                as_of_sequence=self.current_sequence,
+                workflows=[workflow_info_to_proto(workflow)],
+            )
 
         def ListRunSummaries(self, request, **kwargs):  # noqa: N802
             self.summary_calls += 1
@@ -1662,7 +1671,7 @@ def test_restart_reset_rejects_stale_generation_and_rebinds_update_epoch():
             generation=notice.generation,
             operator_instance_id="operator-restarted",
             as_of_sequence=3,
-            workflows=(),
+            catalog=CatalogSnapshot(workflows=()),
             runs_by_workflow={},
         )
 
@@ -1676,9 +1685,9 @@ def test_restart_reset_rejects_stale_generation_and_rebinds_update_epoch():
     release = threading.Event()
     received = []
 
-    reset_envelope = pb.RunUpdateEnvelope(
+    reset_envelope = pb.OperatorUpdateEnvelope(
         operator_instance_id="operator-restarted",
-        update=pb.RunUpdate(
+        update=pb.OperatorUpdate(
             sequence=2,
             run_created=pb.RunCreated(
                 summary=pb.RunSummaryMsg(
@@ -1697,9 +1706,9 @@ def test_restart_reset_rejects_stale_generation_and_rebinds_update_epoch():
             return ()
 
         def __iter__(self):
-            yield pb.RunUpdateEnvelope(
+            yield pb.OperatorUpdateEnvelope(
                 operator_instance_id="operator-restarted",
-                update=pb.RunUpdate(
+                update=pb.OperatorUpdate(
                     sequence=4,
                     run_created=pb.RunCreated(
                         summary=pb.RunSummaryMsg(
@@ -1719,7 +1728,7 @@ def test_restart_reset_rejects_stale_generation_and_rebinds_update_epoch():
         def __init__(self):
             self.calls = 0
 
-        def StreamRunUpdates(self, request, *, metadata):  # noqa: N802
+        def StreamOperatorUpdates(self, request, *, metadata):  # noqa: N802
             self.calls += 1
             assert metadata is None
             if self.calls == 1:
@@ -1797,7 +1806,7 @@ def test_reset_acknowledgement_requires_exact_validated_baseline(
         generation=notice.generation,
         operator_instance_id="operator-restarted",
         as_of_sequence=3,
-        workflows=(),
+        catalog=CatalogSnapshot(workflows=()),
         runs_by_workflow={},
     )
     provider = GrpcStateProvider(
@@ -1848,13 +1857,13 @@ def test_update_epoch_change_requires_reset_at_equal_or_higher_sequence(
     reset_observed = threading.Event()
 
     class RestartedStub:
-        def StreamRunUpdates(self, request, *, metadata):  # noqa: N802
+        def StreamOperatorUpdates(self, request, *, metadata):  # noqa: N802
             assert request.operator_instance_id == "operator-original"
             assert request.after_sequence == 99
             assert metadata is None
-            yield pb.RunUpdateEnvelope(
+            yield pb.OperatorUpdateEnvelope(
                 operator_instance_id="operator-restarted",
-                update=pb.RunUpdate(
+                update=pb.OperatorUpdate(
                     sequence=observed_sequence,
                     run_created=pb.RunCreated(
                         summary=pb.RunSummaryMsg(
@@ -1898,14 +1907,14 @@ def test_client_skips_duplicate_update_sequence_without_epoch_reset():
     received = []
 
     class DuplicateFirstStub:
-        def StreamRunUpdates(self, request, *, metadata):  # noqa: N802
+        def StreamOperatorUpdates(self, request, *, metadata):  # noqa: N802
             assert request.operator_instance_id == "operator-1"
             assert request.after_sequence == 99
             assert metadata is None
             for sequence, run_id in ((99, "duplicate"), (100, "run_live")):
-                yield pb.RunUpdateEnvelope(
+                yield pb.OperatorUpdateEnvelope(
                     operator_instance_id="operator-1",
-                    update=pb.RunUpdate(
+                    update=pb.OperatorUpdate(
                         sequence=sequence,
                         run_created=pb.RunCreated(
                             summary=pb.RunSummaryMsg(
@@ -1944,7 +1953,7 @@ def test_concurrent_start_stream_calls_start_one_stream_thread():
             self.calls = 0
             self.thread_ids = set()
 
-        def StreamRunUpdates(self, request, *, metadata):  # noqa: N802
+        def StreamOperatorUpdates(self, request, *, metadata):  # noqa: N802
             self.calls += 1
             self.thread_ids.add(threading.get_ident())
 
@@ -2003,7 +2012,7 @@ def test_concurrent_close_and_stream_start_leave_no_live_thread_or_calls():
             self.calls = 0
             self.post_close_calls = 0
 
-        def StreamRunUpdates(self, request, *, metadata):  # noqa: N802
+        def StreamOperatorUpdates(self, request, *, metadata):  # noqa: N802
             self.calls += 1
             if close_returned.is_set():
                 self.post_close_calls += 1
@@ -2053,7 +2062,7 @@ def test_client_close_stops_reconnect_thread_and_prevents_new_calls():
         def __init__(self):
             self.calls = 0
 
-        def StreamRunUpdates(self, request, *, metadata):  # noqa: N802
+        def StreamOperatorUpdates(self, request, *, metadata):  # noqa: N802
             self.calls += 1
             called.set()
             raise Unavailable()
@@ -2086,9 +2095,9 @@ def test_canonical_client_requests_include_cached_legacy_name():
             self.start_request = None
             self.list_request = None
 
-        def ListFlows(self, request, **kwargs):  # noqa: N802
-            return pb.FlowList(
-                flows=[
+        def GetCatalog(self, request, **kwargs):  # noqa: N802
+            return pb.CatalogSnapshotMsg(
+                workflows=[
                     pb.FlowInfoMsg(
                         name="Daily report",
                         display_name="Daily report",
@@ -2133,9 +2142,9 @@ def test_unary_client_calls_pass_finite_timeout():
             assert timeout is not None
             assert 0 < timeout < float("inf")
 
-        def ListFlows(self, request, *, timeout, **kwargs):  # noqa: N802
+        def GetCatalog(self, request, *, timeout, **kwargs):  # noqa: N802
             self._capture("list", timeout)
-            return pb.FlowList()
+            return pb.CatalogSnapshotMsg()
 
         def StartRun(self, request, *, timeout, **kwargs):  # noqa: N802
             self._capture("start", timeout)

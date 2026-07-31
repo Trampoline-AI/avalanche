@@ -7,20 +7,23 @@ from pathlib import Path, PureWindowsPath
 from .models import (
     AgentEventAppended,
     AgentEventDescriptor,
+    CatalogReplaced,
+    CatalogSnapshot,
     LogAppended,
     LogLevel,
     LogRecordDescriptor,
     NodeSnapshot,
     NodeStatus,
     NodeStatusChanged,
+    OperatorUpdate,
+    OperatorUpdateEnvelope,
     ResetRequired,
     RunCreated,
     RunSnapshot,
     RunStatus,
     RunStatusChanged,
     RunSummary,
-    RunUpdate,
-    RunUpdateEnvelope,
+    ScanTargetInfo,
     TraceDescriptor,
     TraceFinalized,
     WorkflowDiscoveryDiagnostic,
@@ -103,6 +106,46 @@ def discovery_diagnostic_from_proto(
         path=msg.path,
         kind=msg.kind,
         message=msg.message,
+    )
+
+
+def scan_target_to_proto(target: ScanTargetInfo) -> pb.ScanTargetMsg:
+    return pb.ScanTargetMsg(
+        alias=target.alias,
+        target_path=target.target_path,
+        kind=target.kind,
+    )
+
+
+def scan_target_from_proto(msg: pb.ScanTargetMsg) -> ScanTargetInfo:
+    if msg.kind not in {"file", "directory"}:
+        raise ValueError(f"Unknown scan target kind: {msg.kind}")
+    return ScanTargetInfo(
+        alias=msg.alias,
+        target_path=msg.target_path,
+        kind=msg.kind,
+    )
+
+
+def catalog_snapshot_to_proto(catalog: CatalogSnapshot) -> pb.CatalogSnapshotMsg:
+    return pb.CatalogSnapshotMsg(
+        revision=catalog.revision,
+        operator_instance_id=catalog.operator_instance_id,
+        as_of_sequence=catalog.as_of_sequence,
+        workflows=[workflow_info_to_proto(item) for item in catalog.workflows],
+        scan_targets=[scan_target_to_proto(item) for item in catalog.scan_targets],
+        diagnostics=[discovery_diagnostic_to_proto(item) for item in catalog.diagnostics],
+    )
+
+
+def catalog_snapshot_from_proto(msg: pb.CatalogSnapshotMsg) -> CatalogSnapshot:
+    return CatalogSnapshot(
+        revision=msg.revision,
+        workflows=tuple(workflow_info_from_proto(item) for item in msg.workflows),
+        operator_instance_id=msg.operator_instance_id,
+        as_of_sequence=msg.as_of_sequence,
+        scan_targets=tuple(scan_target_from_proto(item) for item in msg.scan_targets),
+        diagnostics=tuple(discovery_diagnostic_from_proto(item) for item in msg.diagnostics),
     )
 
 
@@ -301,8 +344,8 @@ def agent_event_descriptor_from_proto(
     )
 
 
-def run_update_to_proto(update: RunUpdate) -> pb.RunUpdate:
-    message = pb.RunUpdate(sequence=update.sequence)
+def operator_update_to_proto(update: OperatorUpdate) -> pb.OperatorUpdate:
+    message = pb.OperatorUpdate(sequence=update.sequence)
     change = update.change
     if isinstance(change, RunCreated):
         message.run_created.CopyFrom(
@@ -357,12 +400,16 @@ def run_update_to_proto(update: RunUpdate) -> pb.RunUpdate:
                 trace=trace_descriptor_to_proto(change.trace),
             )
         )
+    elif isinstance(change, CatalogReplaced):
+        message.catalog_replaced.CopyFrom(
+            pb.CatalogReplaced(catalog=catalog_snapshot_to_proto(change.catalog))
+        )
     else:
-        raise TypeError(f"Unsupported run update change: {type(change).__name__}")
+        raise TypeError(f"Unsupported operator update change: {type(change).__name__}")
     return message
 
 
-def run_update_from_proto(msg: pb.RunUpdate) -> RunUpdate:
+def operator_update_from_proto(msg: pb.OperatorUpdate) -> OperatorUpdate:
     change_name = msg.WhichOneof("change")
     if change_name == "run_created":
         change = RunCreated(
@@ -410,15 +457,21 @@ def run_update_from_proto(msg: pb.RunUpdate) -> RunUpdate:
             node_id=item.node_id,
             trace=trace_descriptor_from_proto(item.trace),
         )
+    elif change_name == "catalog_replaced":
+        change = CatalogReplaced(
+            catalog=catalog_snapshot_from_proto(msg.catalog_replaced.catalog)
+        )
     else:
-        raise ValueError("run update is missing a change")
-    return RunUpdate(sequence=msg.sequence, change=change)
+        raise ValueError("operator update is missing a change")
+    return OperatorUpdate(sequence=msg.sequence, change=change)
 
 
-def run_update_envelope_to_proto(envelope: RunUpdateEnvelope) -> pb.RunUpdateEnvelope:
-    message = pb.RunUpdateEnvelope(operator_instance_id=envelope.operator_instance_id)
+def operator_update_envelope_to_proto(
+    envelope: OperatorUpdateEnvelope,
+) -> pb.OperatorUpdateEnvelope:
+    message = pb.OperatorUpdateEnvelope(operator_instance_id=envelope.operator_instance_id)
     if envelope.update is not None:
-        message.update.CopyFrom(run_update_to_proto(envelope.update))
+        message.update.CopyFrom(operator_update_to_proto(envelope.update))
     elif envelope.reset_required is not None:
         message.reset_required.CopyFrom(
             pb.ResetRequired(
@@ -429,22 +482,24 @@ def run_update_envelope_to_proto(envelope: RunUpdateEnvelope) -> pb.RunUpdateEnv
     return message
 
 
-def run_update_envelope_from_proto(msg: pb.RunUpdateEnvelope) -> RunUpdateEnvelope:
+def operator_update_envelope_from_proto(
+    msg: pb.OperatorUpdateEnvelope,
+) -> OperatorUpdateEnvelope:
     payload = msg.WhichOneof("payload")
     if payload == "update":
-        return RunUpdateEnvelope(
+        return OperatorUpdateEnvelope(
             operator_instance_id=msg.operator_instance_id,
-            update=run_update_from_proto(msg.update),
+            update=operator_update_from_proto(msg.update),
         )
     if payload == "reset_required":
-        return RunUpdateEnvelope(
+        return OperatorUpdateEnvelope(
             operator_instance_id=msg.operator_instance_id,
             reset_required=ResetRequired(
                 history_floor=msg.reset_required.history_floor,
                 latest_sequence=msg.reset_required.latest_sequence,
             ),
         )
-    raise ValueError("run update envelope is missing a payload")
+    raise ValueError("operator update envelope is missing a payload")
 
 
 def _relative_source_file(info: WorkflowInfo) -> str:

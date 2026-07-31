@@ -32,6 +32,9 @@ from .models import (
     AgentEventDescriptor,
     AgentEventDetailAppended,
     AgentEventPage,
+    CatalogReplaced,
+    CatalogSnapshot,
+    CatalogView,
     DetailUpdate,
     FinalizedTrace,
     LogAppended,
@@ -44,6 +47,8 @@ from .models import (
     NodeState,
     NodeStatus,
     NodeStatusChanged,
+    OperatorUpdate,
+    OperatorUpdateEnvelope,
     ResetRequired,
     RunCreated,
     RunSnapshot,
@@ -52,8 +57,6 @@ from .models import (
     RunStatusChanged,
     RunSummary,
     RunSummaryPage,
-    RunUpdate,
-    RunUpdateEnvelope,
     SequencedLogEntry,
     TraceDescriptor,
     TraceFinalized,
@@ -167,7 +170,7 @@ class _RunNotifications:
     run_callbacks: tuple[tuple[Callable[[RunState], None], RunState], ...]
     log_callbacks: tuple[tuple[Callable[[LogEntry], None], LogEntry], ...]
     detail_callbacks: tuple[tuple[Callable[[DetailUpdate], None], DetailUpdate], ...]
-    update_subscribers: tuple[tuple[queue.Queue, tuple[RunUpdateEnvelope, ...]], ...]
+    update_subscribers: tuple[tuple[queue.Queue, tuple[OperatorUpdateEnvelope, ...]], ...]
     ready: threading.Event
     delivered: threading.Event
 
@@ -321,7 +324,7 @@ class Operator:
         self._update_subscribers: list[queue.Queue] = []
         self._operator_instance_id = uuid4().hex
         self._sequence = 0
-        self._stream_history: deque[RunUpdate] = deque(maxlen=stream_history_capacity)
+        self._stream_history: deque[OperatorUpdate] = deque(maxlen=stream_history_capacity)
         self._structural_baseline_capacity = structural_baseline_capacity
         self._structural_baselines: OrderedDict[int, _StructuralBaseline] = OrderedDict()
         self._lock = threading.RLock()
@@ -369,8 +372,13 @@ class Operator:
         with self._lock:
             return self._sequence
 
-    def list_workflows(self) -> list[WorkflowInfo]:
-        workflows = self._registry.list_workflows()
+    def get_catalog(self) -> CatalogSnapshot:
+        """Return one complete, revisioned current-workflow catalog."""
+        with self._lock:
+            return self._catalog_snapshot(self._registry.view, self._sequence)
+
+    def _catalog_snapshot(self, view: CatalogView, as_of_sequence: int) -> CatalogSnapshot:
+        workflows = self._registry.list_workflows(view)
         for info in workflows:
             route = next(
                 (
@@ -388,10 +396,20 @@ class Operator:
                 nxt = self._scheduler.next_run_time(info.cron)
                 info.next_run_at = nxt.timestamp() if nxt else None
                 info.last_run_at = self._scheduler.last_triggered(info.workflow_id)
-        return workflows
+        return CatalogSnapshot(
+            revision=view.revision,
+            operator_instance_id=self._operator_instance_id,
+            as_of_sequence=as_of_sequence,
+            workflows=tuple(workflows),
+            scan_targets=view.scan_targets,
+            diagnostics=view.diagnostics,
+        )
+
+    def list_workflows(self) -> list[WorkflowInfo]:
+        return list(self.get_catalog().workflows)
 
     def list_diagnostics(self):
-        return self._registry.list_diagnostics()
+        return list(self.get_catalog().diagnostics)
 
     def list_runs(self, workflow_selector: str) -> list[RunState]:
         with self._lock:
@@ -1107,7 +1125,7 @@ class Operator:
     def start_stream(self) -> None:
         """In-process callbacks are already live once registered."""
 
-    def subscribe_run_updates(
+    def subscribe_operator_updates(
         self, operator_instance_id: str = "", after_sequence: int = 0
     ) -> queue.Queue:
         """Atomically replay retained updates or require a structural reset."""
@@ -1133,7 +1151,7 @@ class Operator:
 
             for update in replay:
                 subscription.put_nowait(
-                    RunUpdateEnvelope(
+                    OperatorUpdateEnvelope(
                         operator_instance_id=self._operator_instance_id,
                         update=update,
                     )
@@ -1148,9 +1166,9 @@ class Operator:
         )
         return history_floor, latest_sequence
 
-    def _update_reset_locked(self) -> RunUpdateEnvelope:
+    def _update_reset_locked(self) -> OperatorUpdateEnvelope:
         history_floor, latest_sequence = self._history_bounds_locked()
-        return RunUpdateEnvelope(
+        return OperatorUpdateEnvelope(
             operator_instance_id=self._operator_instance_id,
             reset_required=ResetRequired(
                 history_floor=history_floor,
@@ -1158,7 +1176,7 @@ class Operator:
             ),
         )
 
-    def unsubscribe_run_updates(self, subscription: queue.Queue) -> None:
+    def unsubscribe_operator_updates(self, subscription: queue.Queue) -> None:
         with self._lock:
             self._update_subscribers = [
                 item for item in self._update_subscribers if item is not subscription
@@ -1331,13 +1349,10 @@ class Operator:
         # Otherwise an old cron can resolve newly-published same-ID source in the
         # small window between these two operations.
         with self._scheduler.reconciliation_boundary():
-            try:
-                view = self._registry.rescan(validate=routes_for)
-            except ValueError as exc:
-                logging.getLogger(__name__).warning("Webhook catalog refresh rejected: %s", exc)
-                return
+            view = self._registry.rescan(validate=routes_for)
             self._scheduler.reconcile(view.by_id.values())
             self._reconcile_webhooks(view.by_id.values())
+        self._publish_catalog(view)
 
     def _reconcile_webhooks(self, descriptors) -> None:
         routes = routes_for(tuple(descriptors))
@@ -2164,14 +2179,14 @@ class Operator:
         updates = []
         for change in changes:
             self._sequence += 1
-            update = RunUpdate(sequence=self._sequence, change=change)
+            update = OperatorUpdate(sequence=self._sequence, change=change)
             self._stream_history.append(update)
             updates.append(update)
         if self._sequence != publication_sequence:
             raise RuntimeError("Run publication produced an inconsistent update batch")
 
         envelopes = tuple(
-            RunUpdateEnvelope(
+            OperatorUpdateEnvelope(
                 operator_instance_id=self._operator_instance_id,
                 update=update,
             )
@@ -2239,6 +2254,33 @@ class Operator:
             )
         self._wait_for_notifications(notifications)
 
+    def _publish_catalog(self, view: CatalogView) -> None:
+        with self._lock:
+            self._sequence += 1
+            catalog = self._catalog_snapshot(view, self._sequence)
+            update = OperatorUpdate(
+                sequence=self._sequence,
+                change=CatalogReplaced(catalog=catalog),
+            )
+            self._stream_history.append(update)
+            envelope = OperatorUpdateEnvelope(
+                operator_instance_id=self._operator_instance_id,
+                update=update,
+            )
+            notifications = _RunNotifications(
+                sequence=self._sequence,
+                run_callbacks=(),
+                detail_callbacks=(),
+                log_callbacks=(),
+                update_subscribers=tuple(
+                    (subscription, (envelope,)) for subscription in self._update_subscribers
+                ),
+                ready=threading.Event(),
+                delivered=threading.Event(),
+            )
+            self._notification_queue.put_nowait(notifications)
+        self._wait_for_notifications(notifications)
+
     def _wait_for_notifications(self, notifications: _RunNotifications) -> None:
         notifications.ready.set()
         if threading.current_thread() is self._notification_thread:
@@ -2278,7 +2320,7 @@ class Operator:
     def _deliver_update_batch(
         self,
         subscription: queue.Queue,
-        envelopes: tuple[RunUpdateEnvelope, ...],
+        envelopes: tuple[OperatorUpdateEnvelope, ...],
     ) -> None:
         with self._lock:
             if subscription not in self._update_subscribers:

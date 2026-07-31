@@ -10,6 +10,7 @@ from typing import Callable
 from uuid import uuid4
 
 from .models import (
+    CatalogSnapshot,
     DetailUpdate,
     LogDetailAppended,
     LogEntry,
@@ -562,6 +563,7 @@ class MockStateProvider:
             self._workflows[AGENT_TRACE_WORKFLOW.selector] = AGENT_TRACE_WORKFLOW
         self._runs: dict[str, RunState] = {}
         self._run_callbacks: list[Callable[[RunState], None]] = []
+        self._catalog_callbacks: list[Callable[[CatalogSnapshot], None]] = []
         self._log_callbacks: list[Callable[[LogEntry], None]] = []
         self._detail_callbacks: list[Callable[[DetailUpdate], None]] = []
         self._stream_reset_callbacks: list[Callable[[StreamResetNotice], None]] = []
@@ -837,8 +839,17 @@ class MockStateProvider:
                         ns.ended_at = time.monotonic()
             self._notify_run(run)
 
+    def get_catalog(self) -> CatalogSnapshot:
+        return CatalogSnapshot(
+            operator_instance_id=self.operator_instance_id,
+            workflows=tuple(self.list_workflows()),
+        )
+
     def on_run_update(self, callback: Callable[[RunState], None]) -> None:
         self._run_callbacks.append(callback)
+
+    def on_catalog_update(self, callback: Callable[[CatalogSnapshot], None]) -> None:
+        self._catalog_callbacks.append(callback)
 
     def on_log(self, callback: Callable[[LogEntry], None]) -> None:
         self._log_callbacks.append(callback)
@@ -853,15 +864,15 @@ class MockStateProvider:
         self._stream_reset_callbacks.append(callback)
 
     def load_reset_baseline(self, notice: StreamResetNotice) -> ResetBaseline:
-        workflows = tuple(self.list_workflows())
+        catalog = self.get_catalog()
         return ResetBaseline(
             generation=notice.generation,
             operator_instance_id=self.operator_instance_id,
             as_of_sequence=0,
-            workflows=workflows,
+            catalog=catalog,
             runs_by_workflow={
                 workflow.selector: tuple(self.list_runs(workflow.selector))
-                for workflow in workflows
+                for workflow in catalog.workflows
             },
         )
 

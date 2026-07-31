@@ -18,12 +18,11 @@ from avalanche.runtime import File
 from ._grpc import _BOUNDED_MESSAGE_OPTIONS
 from .convert import (
     agent_event_descriptor_to_proto,
-    discovery_diagnostic_to_proto,
+    catalog_snapshot_to_proto,
     log_record_descriptor_to_proto,
+    operator_update_envelope_to_proto,
     run_snapshot_to_proto,
     run_summary_to_proto,
-    run_update_envelope_to_proto,
-    workflow_info_to_proto,
 )
 from .operator import (
     InvalidRunIdError,
@@ -50,14 +49,8 @@ class OperatorServicer(pb_grpc.OperatorServiceServicer):
     def __init__(self, operator: Operator) -> None:
         self._op = operator
 
-    def ListFlows(self, request, context):  # noqa: N802
-        workflows = self._op.list_workflows()
-        return pb.FlowList(
-            flows=[workflow_info_to_proto(p) for p in workflows],
-            diagnostics=[
-                discovery_diagnostic_to_proto(item) for item in self._op.list_diagnostics()
-            ],
-        )
+    def GetCatalog(self, request, context):  # noqa: N802
+        return catalog_snapshot_to_proto(self._op.get_catalog())
 
     def StartRun(self, request, context):  # noqa: N802
         try:
@@ -237,9 +230,9 @@ class OperatorServicer(pb_grpc.OperatorServiceServicer):
                 eof=offset + len(chunk) == len(data),
             )
 
-    def StreamRunUpdates(self, request, context):  # noqa: N802
-        """Replay typed updates for one operator epoch, or require a reset."""
-        subscription = self._op.subscribe_run_updates(
+    def StreamOperatorUpdates(self, request, context):  # noqa: N802
+        """Replay typed operator updates for one epoch, or require a reset."""
+        subscription = self._op.subscribe_operator_updates(
             request.operator_instance_id,
             request.after_sequence,
         )
@@ -250,11 +243,11 @@ class OperatorServicer(pb_grpc.OperatorServiceServicer):
                     envelope = subscription.get(timeout=1.0)
                 except queue.Empty:
                     continue
-                yield run_update_envelope_to_proto(envelope)
+                yield operator_update_envelope_to_proto(envelope)
                 if envelope.reset_required is not None:
                     return
         finally:
-            self._op.unsubscribe_run_updates(subscription)
+            self._op.unsubscribe_operator_updates(subscription)
 
 
 def serve(

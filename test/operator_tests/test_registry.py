@@ -274,7 +274,7 @@ class TestWorkflowRegistry:
         assert registry.get_builder(descriptors[0].workflow_id)().name == "left_build"
         assert registry.get_builder(descriptors[1].workflow_id)().name == "right_build"
 
-    def test_refresh_invalid_file_removes_current_descriptor(self, tmp_path):
+    def test_refresh_invalid_file_retains_current_descriptor(self, tmp_path):
         workflow_file = tmp_path / "flow.py"
         workflow_file.write_text(
             "import avalanche as ava\n"
@@ -289,10 +289,10 @@ class TestWorkflowRegistry:
         workflow_file.write_text("this is not valid Python !!!\n")
         registry.rescan()
 
-        assert registry.descriptors() == ()
+        assert [item.workflow_id for item in registry.descriptors()] == ["flow.py::scheduled"]
         assert registry.list_diagnostics()[0].kind == "import_error"
 
-    def test_discovery_timeout_installs_empty_current_view(self, tmp_path):
+    def test_discovery_timeout_retains_current_view(self, tmp_path):
         workflow_file = tmp_path / "flow.py"
         workflow_file.write_text(
             "import avalanche as ava\n"
@@ -300,7 +300,7 @@ class TestWorkflowRegistry:
             "def scheduled():\n"
             "    return None\n"
         )
-        registry = WorkflowRegistry(discovery_timeout=2.0)
+        registry = WorkflowRegistry(discovery_timeout=5.0)
         registry.scan([str(workflow_file)])
         assert registry.descriptors()
 
@@ -310,7 +310,7 @@ class TestWorkflowRegistry:
         registry.rescan()
 
         assert time.monotonic() - started < 2.0
-        assert registry.descriptors() == ()
+        assert [item.workflow_id for item in registry.descriptors()] == ["flow.py::scheduled"]
         assert "exceeded 0.2s" in registry.list_diagnostics()[0].message
 
     def test_discovery_stdout_and_delayed_background_output_do_not_corrupt_result(
@@ -395,7 +395,7 @@ class TestWorkflowRegistry:
 
         assert tuple(first.view.by_id) == tuple(second.view.by_id)
 
-    def test_duplicate_canonical_ids_are_rejected(self, monkeypatch):
+    def test_duplicate_canonical_ids_publish_invalid_catalog_diagnostic(self, monkeypatch):
         from avalanche.operator.models import WorkflowDescriptor, WorkflowLocator
 
         descriptor = WorkflowDescriptor(
@@ -411,8 +411,10 @@ class TestWorkflowRegistry:
             "runtime.operator.registry.discover",
             lambda roots, timeout: ((descriptor, descriptor), ()),
         )
-        with pytest.raises(ValueError, match="Duplicate canonical workflow ID"):
-            WorkflowRegistry().scan(["root=/tmp"])
+        registry = WorkflowRegistry()
+        registry.scan(["root=/tmp"])
+        assert registry.descriptors() == ()
+        assert [item.kind for item in registry.list_diagnostics()] == ["invalid_catalog"]
 
     def test_sequential_package_scans_isolate_identical_module_names(self, tmp_path):
         first = tmp_path / "first"

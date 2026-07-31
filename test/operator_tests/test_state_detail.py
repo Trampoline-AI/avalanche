@@ -12,7 +12,7 @@ import pytest
 
 from avalanche.operator import Operator
 from avalanche.operator.client import GrpcStateProvider, StreamState
-from avalanche.operator.convert import run_update_envelope_to_proto
+from avalanche.operator.convert import operator_update_envelope_to_proto
 from avalanche.operator.models import (
     AgentEvent,
     AgentEventDetailAppended,
@@ -20,10 +20,10 @@ from avalanche.operator.models import (
     LogEntry,
     LogLevel,
     NodeState,
+    OperatorUpdateEnvelope,
     RunState,
     RunStatus,
     RunStatusChanged,
-    RunUpdateEnvelope,
     SequencedLogEntry,
 )
 from avalanche.operator.server import TRACE_CHUNK_BYTES, serve
@@ -422,7 +422,7 @@ def test_start_run_publication_blocks_pagination_until_creation_is_revisioned():
     start_errors = []
     reader_done = threading.Event()
     page_holder = []
-    subscription = operator.subscribe_run_updates()
+    subscription = operator.subscribe_operator_updates()
     operator.block_next_publication()
 
     def start_run() -> None:
@@ -463,7 +463,7 @@ def test_start_run_publication_blocks_pagination_until_creation_is_revisioned():
         starter.join(timeout=1)
         if reader.ident is not None:
             reader.join(timeout=1)
-        operator.unsubscribe_run_updates(subscription)
+        operator.unsubscribe_operator_updates(subscription)
         operator.close()
 
 
@@ -529,7 +529,7 @@ def test_agent_detail_and_watermarks_become_visible_in_one_transaction():
 def test_concurrent_publishers_dispatch_detail_callbacks_and_updates_in_order():
     operator = _OrderedDeliveryOperator(watch=False, schedule=False)
     run = _add_run(operator, "run-ordered")
-    subscription = operator.subscribe_run_updates(
+    subscription = operator.subscribe_operator_updates(
         operator.operator_instance_id, operator.current_sequence
     )
     first_callback_entered = threading.Event()
@@ -604,7 +604,7 @@ def test_concurrent_publishers_dispatch_detail_callbacks_and_updates_in_order():
             publisher_n.join(timeout=1)
         if publisher_n1.ident is not None:
             publisher_n1.join(timeout=1)
-        operator.unsubscribe_run_updates(subscription)
+        operator.unsubscribe_operator_updates(subscription)
         operator.close()
     assert not operator._notification_thread.is_alive()
 
@@ -612,7 +612,7 @@ def test_concurrent_publishers_dispatch_detail_callbacks_and_updates_in_order():
 def test_close_keeps_dispatcher_alive_for_notification_from_delayed_drain():
     operator = Operator(watch=False, schedule=False, cancel_grace=0)
     run = _add_run(operator, "run-delayed-close")
-    subscription = operator.subscribe_run_updates(
+    subscription = operator.subscribe_operator_updates(
         operator.operator_instance_id, operator.current_sequence
     )
     callback_statuses = []
@@ -670,7 +670,7 @@ def test_close_keeps_dispatcher_alive_for_notification_from_delayed_drain():
         release_drain.set()
         if drain.ident is not None:
             drain.join(timeout=1)
-        operator.unsubscribe_run_updates(subscription)
+        operator.unsubscribe_operator_updates(subscription)
         operator.close()
 
 
@@ -876,8 +876,8 @@ def test_max_log_and_large_agent_event_use_bounded_live_and_hydration_transport(
         ]
 
         for update in operator._stream_history:
-            envelope_message = run_update_envelope_to_proto(
-                RunUpdateEnvelope(
+            envelope_message = operator_update_envelope_to_proto(
+                OperatorUpdateEnvelope(
                     operator_instance_id=operator.operator_instance_id,
                     update=update,
                 )
