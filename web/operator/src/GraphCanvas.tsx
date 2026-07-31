@@ -197,9 +197,11 @@ export function GraphCanvas({
           status: runtimeNode?.status,
           error: runtimeNode?.error,
           duration: runtimeNode ? elapsed(runtimeNode) : undefined,
-          declaration: workflow
-            ? parseAgentDeclaration(workflow.agentMetadataJson[nodeId])
-            : undefined,
+          declaration: parseAgentDeclaration(
+            runTopology
+              ? runTopology.agentMetadataJson[nodeId]
+              : workflow?.agentMetadataJson[nodeId],
+          ),
           onOpen: () => onOpenNode(nodeId),
         },
       };
@@ -221,7 +223,7 @@ export function GraphCanvas({
       }
     }
     return { nodes, edges };
-  }, [onOpenNode, runNodes, topology, workflow]);
+  }, [onOpenNode, runNodes, runTopology, topology, workflow]);
 
   return (
     <ReactFlow

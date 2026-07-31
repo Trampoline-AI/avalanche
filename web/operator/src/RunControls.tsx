@@ -48,6 +48,13 @@ interface RunControlsProps {
   onCancel: (runId: string) => Promise<void>;
 }
 
+export function parseRunInput(draft: string): Record<string, unknown> {
+  const parsed: unknown = JSON.parse(draft);
+  if (!isUnknownRecord(parsed)) throw new Error("Run input must be a JSON object");
+  return parsed;
+}
+
+
 export function RunControls({
   workflow,
   run,
@@ -66,9 +73,7 @@ export function RunControls({
     let input: Record<string, unknown> | undefined;
     if (showInput) {
       try {
-        const parsed: unknown = JSON.parse(draft);
-        if (!isUnknownRecord(parsed)) throw new Error("Run input must be a JSON object");
-        input = parsed;
+        input = parseRunInput(draft);
       } catch (reason) {
         setError(reason instanceof Error ? reason.message : "Run input is invalid JSON");
         return;
