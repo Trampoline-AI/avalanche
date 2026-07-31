@@ -2,6 +2,18 @@
 
 ## Unreleased
 
+### Operator web interface
+
+- Added an opt-in local React operator interface (`ava operator --web`) with
+  workflow discovery, live DAG replacement, immutable historical run canvases,
+  launch/cancel controls, logs, and demand-loaded agent evidence.
+- Added a same-process binary gRPC-Web listener and packaged browser assets.
+  Loopback remains the default; non-loopback binding requires the explicit
+  `--web-trusted-proxy` acknowledgement.
+- Run topology now retains versioned agent declaration metadata, and bounded
+  trace descriptors expose stable PredictRLM header, usage, and telemetry
+  metadata without embedding complete trace bodies in structural snapshots.
+
 ### Operator transport
 
 - Operator streams now replay bounded, typed run updates under an instance epoch

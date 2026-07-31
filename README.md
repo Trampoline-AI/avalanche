@@ -378,6 +378,23 @@ ava operator --flows path/to/flows --port 7433
 ava tui --connect localhost:7433
 ```
 
+For a browser interface backed by the same operator, enable the loopback web
+listener:
+
+```bash
+ava operator --flows path/to/flows --web
+# Open http://127.0.0.1:7435
+```
+
+The browser shows the live workflow catalog, current definitions, immutable
+per-run topology, run controls, logs, and retained agent trace evidence. Source
+changes replace only the current-definition canvas; earlier runs keep the
+topology and agent declaration metadata captured when they started. The browser
+listener is loopback-only by default. `--web-trusted-proxy` permits a
+non-loopback bind only when a trusted, authenticated proxy supplies the missing
+security boundary.
+
+
 The TUI is a client of the operator; it does not import or execute workflow files
 itself. To explore the interface without an operator, start mock mode:
 

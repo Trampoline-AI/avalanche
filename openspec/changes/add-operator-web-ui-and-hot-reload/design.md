@@ -22,7 +22,7 @@ The gRPC protocol currently separates catalog listing from a stream of run-only 
 
 ### Retain a topology snapshot with each run
 
-Introduce a frozen workflow-topology value containing only node ID order, adjacency graph, node types, and display names. Construct it from the worker's `prepared` event, not the current catalog descriptor: the worker event represents what that run actually loaded and executed. Store it on the in-memory run record and include it in the structural run snapshot and transport representation.
+Introduce a frozen workflow-topology value containing node ID order, adjacency graph, node types, display names, and serialized agent declaration metadata needed to interpret recorded invocation values. Construct it from the worker's `prepared` event, not the current catalog descriptor: the worker event represents what that run actually loaded and executed. Store it on the in-memory run record and include it in the structural run snapshot and transport representation.
 
 `RunState.nodes` remains execution state keyed by node ID. The topology snapshot is the rendering and identity layer. A run view joins the two; it never reads the current `WorkflowInfo` to supply missing nodes or edges.
 
@@ -105,7 +105,7 @@ Run cards retain the same structural edges but prioritize execution status, dura
 
 ### Retain bounded agent invocation inputs and outputs
 
-PredictRLM `run.started` evidence contains actual invocation inputs, but Avalanche currently projects only their field names. Preserve supported input values in that existing event, matching the terminal outputs already projected from `run.succeeded`. The run inspector reads both through existing agent-event and hydrated-trace detail paths and presents separate Inputs and Output views using current declaration metadata only as labels.
+PredictRLM `run.started` evidence contains actual invocation inputs, but Avalanche currently projects only their field names. Preserve supported input values in that existing event, matching the terminal outputs already projected from `run.succeeded`. The run inspector reads both through existing agent-event and hydrated-trace detail paths and presents separate Inputs and Output views using declaration metadata retained with that run's topology only as labels.
 
 This is agent-invocation evidence, not generic DAG-node value capture. Recursively project JSON-shaped values and declared model values into the ordinary `inputs` and `outputs` structures. At this projection boundary, encode an actual `predict_rlm.File` as a tagged JSON value containing its non-empty host path; lists and nested structures retain those tagged values in place. The browser's generic value renderer recognizes the tag and gives that value path-specific presentation. There is no parallel file-reference event or index.
 
