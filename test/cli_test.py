@@ -74,6 +74,38 @@ def test_ava_operator_delegates_to_runtime_operator_with_flows(monkeypatch):
     ]
 
 
+def test_ava_operator_delegates_web_listener_configuration(monkeypatch):
+    from ava_cli import app
+
+    calls = []
+    monkeypatch.setattr(app, "_operator_main", lambda argv: calls.append(argv) or 0)
+
+    assert (
+        app.main(
+            [
+                "operator",
+                "--flows",
+                "examples",
+                "--web",
+                "--web-host",
+                "0.0.0.0",
+                "--web-port",
+                "17778",
+                "--web-trusted-proxy",
+            ]
+        )
+        == 0
+    )
+    assert calls[0][-6:] == [
+        "--web",
+        "--web-host",
+        "0.0.0.0",
+        "--web-port",
+        "17778",
+        "--web-trusted-proxy",
+    ]
+
+
 def test_ava_operator_rejects_old_workflows_flag():
     from ava_cli import app
 

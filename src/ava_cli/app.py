@@ -69,6 +69,21 @@ def _build_parser() -> argparse.ArgumentParser:
     operator.add_argument(
         "--webhook-port", type=int, default=7434, help="loopback webhook HTTP port"
     )
+    operator.add_argument("--web", action="store_true", help="serve the local browser UI")
+    operator.add_argument(
+        "--web-host",
+        default="127.0.0.1",
+        help="browser UI listen host (default: loopback)",
+    )
+    operator.add_argument("--web-port", type=int, default=7435, help="browser UI HTTP port")
+    operator.add_argument(
+        "--web-trusted-proxy",
+        action="store_true",
+        help=(
+            "confirm non-loopback browser traffic is protected by an external trusted "
+            "and authenticated boundary"
+        ),
+    )
     operator.add_argument("--ray", action="store_true", help="use the Ray executor")
     operator.set_defaults(handler=_run_operator)
 
@@ -216,6 +231,18 @@ def _run_operator(args: argparse.Namespace) -> int:
         "--webhook-port",
         str(args.webhook_port),
     ]
+    if args.web:
+        runtime_args.extend(
+            [
+                "--web",
+                "--web-host",
+                args.web_host,
+                "--web-port",
+                str(args.web_port),
+            ]
+        )
+    if args.web_trusted_proxy:
+        runtime_args.append("--web-trusted-proxy")
     if args.ray:
         runtime_args.append("--ray")
     return _operator_main(runtime_args)
