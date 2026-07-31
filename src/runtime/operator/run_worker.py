@@ -24,6 +24,7 @@ from avalanche.dag import Workflow
 from ..executor import Executor, LocalExecutor, RayExecutor
 from .hooks import RunHooks
 from .models import display_name_from_id
+from .registry import agent_metadata_for_workflow
 from .result_store import (
     ResultPublicationCancelledError,
     detach_transferred_bundle_descriptor,
@@ -334,6 +335,7 @@ def _workflow_metadata(workflow: Workflow) -> dict[str, Any]:
             node_id: workflow.nodes[node_id].node.node_type.value for node_id in node_ids
         },
         "display_names": {node_id: display_name_from_id(node_id) for node_id in node_ids},
+        "agent_metadata_json": agent_metadata_for_workflow(workflow, node_ids),
     }
 
 

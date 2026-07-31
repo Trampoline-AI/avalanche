@@ -114,6 +114,7 @@ message WorkflowTopologyMsg {
   map<string, NodeEdges> graph = 2;
   map<string, string> node_types = 3;
   map<string, string> display_names = 4;
+  map<string, string> agent_metadata_json = 5;
 }
 
 message FlowInfoMsg {
@@ -185,6 +186,18 @@ message RunSummaryMsg {
   uint64 revision = 10;
 }
 
+message TraceHeaderMsg {
+  string status = 1;
+  string model = 2;
+  optional string sub_model = 3;
+  uint64 iterations = 4;
+  uint64 max_iterations = 5;
+  uint64 duration_ms = 6;
+  string usage_json = 7;
+  optional string telemetry_json = 8;
+}
+
+
 message TraceDescriptorMsg {
   string status = 1;
   uint64 revision = 2;
@@ -193,6 +206,7 @@ message TraceDescriptorMsg {
   uint64 event_count = 5;
   uint64 size_bytes = 6;
   uint64 latest_event_sequence = 7;
+  TraceHeaderMsg header = 8;
 }
 
 message NodeSnapshotMsg {

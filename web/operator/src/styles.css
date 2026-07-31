@@ -148,6 +148,10 @@ h1, h2, h3, p { margin-top: 0; }
 .field-detail strong, .field-detail code { display: block; font-size: 10px; }
 .field-detail code { color: #79837f; font-size: 8px; margin-top: 2px; }
 .field-detail p { color: #78817d; font-size: 9px; margin: 4px 0 0; }
+.declared-fields { display: flex; flex-wrap: wrap; gap: 5px; margin-bottom: 10px; }
+.declared-fields > small { width: 100%; color: #69736e; font-size: 8px; text-transform: uppercase; }
+.declared-fields > span { display: inline-flex; gap: 5px; padding: 4px 6px; border: 1px solid var(--line); background: #111516; font-size: 9px; }
+.declared-fields code { color: #77837d; }
 .json-block { padding: 11px; background: #101415; border: 1px solid var(--line); border-radius: 4px; overflow: auto; color: #aab5af; font-size: 9px; white-space: pre-wrap; }
 .metric-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
 .metric-grid > div { background: #111516; border: 1px solid var(--line); padding: 10px; }

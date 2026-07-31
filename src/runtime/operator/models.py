@@ -49,6 +49,7 @@ class WorkflowTopology:
     graph: tuple[tuple[str, tuple[str, ...]], ...] = ()
     node_types: tuple[tuple[str, str], ...] = ()
     display_names: tuple[tuple[str, str], ...] = ()
+    agent_metadata_json: tuple[tuple[str, str], ...] = ()
 
 
 @dataclass
@@ -101,6 +102,20 @@ class RunState:
 
 
 @dataclass(frozen=True)
+class TraceHeader:
+    """RunTrace metadata retained separately from iteration and evidence bodies."""
+
+    status: str
+    model: str
+    sub_model: str | None
+    iterations: int
+    max_iterations: int
+    duration_ms: int
+    usage_json: str
+    telemetry_json: str | None = None
+
+
+@dataclass(frozen=True)
 class TraceDescriptor:
     """Location metadata for agent detail stored outside structural run state."""
 
@@ -111,6 +126,7 @@ class TraceDescriptor:
     event_count: int = 0
     size_bytes: int = 0
     latest_event_sequence: int = 0
+    header: TraceHeader | None = None
 
 
 @dataclass(frozen=True)
@@ -288,20 +304,6 @@ class FinalizedTrace:
 
     revision: int
     data: bytes
-
-
-@dataclass(frozen=True)
-class TraceHeader:
-    """RunTrace metadata retained separately from iteration and evidence bodies."""
-
-    status: str
-    model: str
-    sub_model: str | None
-    iterations: int
-    max_iterations: int
-    duration_ms: int
-    usage_json: str
-    telemetry_json: str | None = None
 
 
 @dataclass(frozen=True)
