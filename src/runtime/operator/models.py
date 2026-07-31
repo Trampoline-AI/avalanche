@@ -41,6 +41,16 @@ class LogEntry:
     message: str
 
 
+@dataclass(frozen=True)
+class WorkflowTopology:
+    """Immutable rendering metadata captured from one prepared workflow."""
+
+    node_ids: tuple[str, ...] = ()
+    graph: tuple[tuple[str, tuple[str, ...]], ...] = ()
+    node_types: tuple[tuple[str, str], ...] = ()
+    display_names: tuple[tuple[str, str], ...] = ()
+
+
 @dataclass
 class NodeState:
     node_id: str
@@ -49,6 +59,7 @@ class NodeState:
     status: NodeStatus = NodeStatus.PENDING
     started_at: float | None = None
     ended_at: float | None = None
+    error: str | None = None
     agent_trace_json: str | None = None
     trace: TraceDescriptor | None = None
     revision: int = 0
@@ -74,6 +85,7 @@ class RunState:
     triggered_by: str = "manual"  # "manual" | "scheduled"
     workflow_id: str = ""
     workflow_display_name: str = ""
+    topology: WorkflowTopology = field(default_factory=WorkflowTopology)
     operator_instance_id: str = ""
     created_sequence: int = 0
     revision: int = 0
@@ -123,6 +135,7 @@ class NodeSnapshot:
     status: NodeStatus = NodeStatus.PENDING
     started_at: float | None = None
     ended_at: float | None = None
+    error: str | None = None
     trace: TraceDescriptor | None = None
     revision: int = 0
     event_page_token: str = ""
@@ -154,6 +167,7 @@ class RunSnapshot:
     nodes: tuple[NodeSnapshot, ...] = ()
     latest_log_sequence: int = 0
     log_page_token: str = ""
+    topology: WorkflowTopology = field(default_factory=WorkflowTopology)
 
 
 @dataclass(frozen=True)
@@ -173,6 +187,12 @@ class AgentEvent:
     event_sequence: int
     event_json: str
     size_bytes: int = 0
+    event_kind: str = ""
+    iteration: int | None = None
+    duration_ms: int | None = None
+    error: bool = False
+    tool_count: int = 0
+    predict_count: int = 0
 
 
 @dataclass(frozen=True)
@@ -216,12 +236,18 @@ class LogRecordDescriptor:
 
 @dataclass(frozen=True)
 class AgentEventDescriptor:
-    """Bounded identity and availability metadata for an agent event body."""
+    """Bounded identity, summary, and availability metadata for an agent event body."""
 
     invocation_id: str
     event_sequence: int
     size_bytes: int
     body_token: str
+    event_kind: str = ""
+    iteration: int | None = None
+    duration_ms: int | None = None
+    error: bool = False
+    tool_count: int = 0
+    predict_count: int = 0
 
 
 @dataclass(frozen=True)
@@ -265,9 +291,24 @@ class FinalizedTrace:
 
 
 @dataclass(frozen=True)
+class TraceHeader:
+    """RunTrace metadata retained separately from iteration and evidence bodies."""
+
+    status: str
+    model: str
+    sub_model: str | None
+    iterations: int
+    max_iterations: int
+    duration_ms: int
+    usage_json: str
+    telemetry_json: str | None = None
+
+
+@dataclass(frozen=True)
 class RunCreated:
     summary: RunSummary
     nodes: tuple[NodeSnapshot, ...] = ()
+    topology: WorkflowTopology = field(default_factory=WorkflowTopology)
 
 
 @dataclass(frozen=True)
@@ -286,6 +327,7 @@ class NodeStatusChanged:
     status: NodeStatus
     started_at: float | None = None
     ended_at: float | None = None
+    error: str | None = None
     revision: int = 0
 
 

@@ -747,6 +747,12 @@ class GrpcStateProvider:
                         event_sequence=descriptor.event_sequence,
                         event_json=event_json,
                         size_bytes=descriptor.size_bytes,
+                        event_kind=descriptor.event_kind,
+                        iteration=descriptor.iteration,
+                        duration_ms=descriptor.duration_ms,
+                        error=descriptor.error,
+                        tool_count=descriptor.tool_count,
+                        predict_count=descriptor.predict_count,
                     )
                 )
                 cursor = descriptor.event_sequence
@@ -1717,6 +1723,12 @@ class GrpcStateProvider:
                     descriptor.body_token,
                     descriptor.size_bytes,
                 ).decode(),
+                event_kind=descriptor.event_kind,
+                iteration=descriptor.iteration,
+                duration_ms=descriptor.duration_ms,
+                error=descriptor.error,
+                tool_count=descriptor.tool_count,
+                predict_count=descriptor.predict_count,
                 size_bytes=descriptor.size_bytes,
             )
         with self._state_lock:
@@ -1797,6 +1809,7 @@ class GrpcStateProvider:
                     node.status = change.status
                     node.started_at = change.started_at
                     node.ended_at = change.ended_at
+                    node.error = change.error
                     node.revision = change.revision
                     run.nodes = dict(current.nodes)
                     run.nodes[change.node_id] = node
@@ -2053,6 +2066,7 @@ def _run_from_created(operator_instance_id: str, created: RunCreated) -> RunStat
         triggered_by=summary.triggered_by,
         workflow_id=summary.workflow_id,
         workflow_display_name=summary.workflow_display_name,
+        topology=created.topology,
         operator_instance_id=operator_instance_id,
         created_sequence=summary.created_sequence,
         revision=summary.revision,
@@ -2066,6 +2080,7 @@ def _run_from_created(operator_instance_id: str, created: RunCreated) -> RunStat
             status=item.status,
             started_at=item.started_at,
             ended_at=item.ended_at,
+            error=item.error,
             trace=item.trace,
             revision=item.revision,
             event_page_token=item.event_page_token,
@@ -2079,7 +2094,11 @@ def _run_from_snapshot(snapshot: RunSnapshot) -> RunState:
     """Materialize the authoritative structural baseline used by the reducer."""
     run = _run_from_created(
         snapshot.operator_instance_id,
-        RunCreated(summary=snapshot.summary, nodes=snapshot.nodes),
+        RunCreated(
+            summary=snapshot.summary,
+            nodes=snapshot.nodes,
+            topology=snapshot.topology,
+        ),
     )
     run.latest_log_sequence = snapshot.latest_log_sequence
     run.details_hydrated = False
@@ -2124,17 +2143,43 @@ def _materialize_agent_trace_json(
     status: str,
     trace_body: dict[str, Any] | None,
 ) -> str:
+    reconstructed = deepcopy(trace_body) if trace_body is not None else None
+    if reconstructed is not None:
+        steps = []
+        evidence_events = []
+        for event in events:
+            if not isinstance(event, dict):
+                continue
+            event_kind = event.get("event_kind")
+            data = event.get("data")
+            if event_kind == "iteration.recorded" and isinstance(data, dict):
+                step = data.get("step")
+                if isinstance(step, dict):
+                    steps.append(step)
+            evidence_events.append(
+                {
+                    "sequence": event.get("sequence"),
+                    "kind": event_kind,
+                    "timestamp_ns": event.get("timestamp_ns"),
+                    "data": data if isinstance(data, dict) else {},
+                }
+            )
+        reconstructed["steps"] = steps
+        evidence = reconstructed.get("evidence")
+        if isinstance(evidence, dict):
+            evidence["events"] = evidence_events
+
     envelope: dict[str, Any] = {
         "schema_version": 1,
         "status": status,
         "run_id": None,
         "events": events,
-        "trace": trace_body,
+        "trace": reconstructed,
         "error": None,
     }
-    if trace_body is not None:
-        envelope["status"] = str(trace_body.get("status") or status)
-        evidence = trace_body.get("evidence")
+    if reconstructed is not None:
+        envelope["status"] = str(reconstructed.get("status") or status)
+        evidence = reconstructed.get("evidence")
         if isinstance(evidence, dict):
             envelope["run_id"] = evidence.get("run_id")
     return json.dumps(envelope, default=str)

@@ -5,6 +5,8 @@ from runtime.operator.convert import (
     agent_event_descriptor_to_proto,
     log_record_descriptor_from_proto,
     log_record_descriptor_to_proto,
+    node_snapshot_from_proto,
+    node_snapshot_to_proto,
     run_snapshot_from_proto,
     run_snapshot_to_proto,
 )
@@ -18,6 +20,7 @@ from runtime.operator.models import (
     RunStatus,
     RunSummary,
     TraceDescriptor,
+    WorkflowTopology,
 )
 from runtime.operator.operator import Operator
 from runtime.operator.proto import operator_pb2 as pb
@@ -35,6 +38,7 @@ def test_structural_snapshot_contract_excludes_detail_bodies():
         "nodes",
         "latest_log_sequence",
         "log_page_token",
+        "topology",
     }
     assert "logs" not in snapshot_fields
     assert "agent_trace_json" not in node_fields
@@ -93,6 +97,12 @@ def test_snapshot_detail_cursor_and_descriptor_roundtrip():
         ),
         latest_log_sequence=22,
         log_page_token="logs-token",
+        topology=WorkflowTopology(
+            node_ids=("agent_1",),
+            graph=(("agent_1", ()),),
+            node_types=(("agent_1", "step"),),
+            display_names=(("agent_1", "Agent"),),
+        ),
     )
 
     assert run_snapshot_from_proto(run_snapshot_to_proto(snapshot)) == snapshot
@@ -112,7 +122,21 @@ def test_detail_records_expose_only_bounded_metadata():
         event_sequence=7,
         size_bytes=5_000_000,
         body_token="opaque-event-token",
+        event_kind="iteration.recorded",
+        iteration=3,
+        duration_ms=1250,
+        error=True,
+        tool_count=2,
+        predict_count=4,
     )
+    failed = NodeSnapshot(
+        node_id="failed",
+        name="Failed",
+        node_type="step",
+        status=NodeStatus.FAILED,
+        error="invalid customer record",
+    )
+    assert node_snapshot_from_proto(node_snapshot_to_proto(failed)) == failed
 
     assert log_record_descriptor_from_proto(log_record_descriptor_to_proto(log)) == log
     assert agent_event_descriptor_from_proto(agent_event_descriptor_to_proto(event)) == event

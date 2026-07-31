@@ -58,6 +58,7 @@ from .models import (
     TraceDescriptor,
     TraceFinalized,
     WorkflowInfo,
+    WorkflowTopology,
 )
 from .registry import AmbiguousWorkflow, WorkflowRegistry
 from .result_store import (
@@ -690,6 +691,7 @@ class Operator:
                 status=node.status,
                 started_at=node.started_at,
                 ended_at=node.ended_at,
+                error=node.error,
                 trace=self._trace_descriptors.get((run.run_id, node.node_id)),
                 revision=self._node_revisions.get(
                     (run.run_id, node.node_id),
@@ -718,6 +720,7 @@ class Operator:
                 run_id=run.run_id,
                 through_sequence=latest_log_sequence,
             ),
+            topology=run.topology,
         )
 
     def _current_log_page_token_locked(self, run_id: str) -> dict[str, Any]:
@@ -811,6 +814,12 @@ class Operator:
                 node_id=node_id,
                 sequence=item.event_sequence,
             ),
+            event_kind=item.event_kind,
+            iteration=item.iteration,
+            duration_ms=item.duration_ms,
+            error=item.error,
+            tool_count=item.tool_count,
+            predict_count=item.predict_count,
         )
 
     def _capture_run_detail_locked(self, run: RunState) -> _RunDetailCapture:
@@ -1369,15 +1378,29 @@ class Operator:
         prepared: dict[str, Any],
     ) -> RunState:
         display_name = prepared.get("display_name") or catalog_display_name
+        node_ids = tuple(prepared["node_ids"])
+        topology = WorkflowTopology(
+            node_ids=node_ids,
+            graph=tuple(
+                (node_id, tuple(prepared["graph"].get(node_id, ()))) for node_id in node_ids
+            ),
+            node_types=tuple(
+                (node_id, prepared["node_types"][node_id]) for node_id in node_ids
+            ),
+            display_names=tuple(
+                (node_id, prepared["display_names"][node_id]) for node_id in node_ids
+            ),
+        )
         run = RunState(
             run_id=run_id,
             flow_name=display_name,
             workflow_id=workflow_id,
             workflow_display_name=display_name,
+            topology=topology,
             status=RunStatus.PENDING,
             triggered_by=triggered_by,
         )
-        for node_id in prepared["node_ids"]:
+        for node_id in node_ids:
             run.nodes[node_id] = NodeState(
                 node_id=node_id,
                 name=prepared["display_names"][node_id],
@@ -1539,6 +1562,7 @@ class Operator:
                             node.started_at = event["timestamp"]
                         else:
                             node.ended_at = event["timestamp"]
+                            node.error = event["error"] if status == NodeStatus.FAILED else None
                         changed_node_ids = (node.node_id,)
                         status_node_ids = changed_node_ids
                         mutated = True
@@ -1722,11 +1746,21 @@ class Operator:
                 raise _CoordinatorProtocolError(
                     f"agent event exceeds {self._max_agent_event_bytes} byte limit"
                 )
+            iteration = data.get("iteration")
+            duration_ms = data.get("duration_ms")
+            tool_count = data.get("tool_count")
+            predict_count = data.get("predict_count")
             projected_agent_event = AgentEvent(
                 invocation_id=invocation_id,
                 event_sequence=len(projected_events) + 1,
                 event_json=event_json,
                 size_bytes=event_size,
+                event_kind=event_kind,
+                iteration=iteration if isinstance(iteration, int) else None,
+                duration_ms=duration_ms if isinstance(duration_ms, int) else None,
+                error=bool(data.get("error")),
+                tool_count=tool_count if isinstance(tool_count, int) else 0,
+                predict_count=predict_count if isinstance(predict_count, int) else 0,
             )
             detail = []
             if data.get("iteration") is not None:
@@ -1754,14 +1788,24 @@ class Operator:
             if not isinstance(trace, dict):
                 return None
             _validate_agent_detail_depth(trace)
+            trace_header = {
+                name: value
+                for name, value in trace.items()
+                if name not in {"steps", "evidence"}
+            }
+            evidence = trace.get("evidence")
+            if isinstance(evidence, dict):
+                trace_header["evidence"] = {
+                    name: value for name, value in evidence.items() if name != "events"
+                }
             finalized_trace = json.dumps(
-                trace,
+                trace_header,
                 default=str,
                 separators=(",", ":"),
             ).encode()
             if len(finalized_trace) > self._max_trace_body_bytes:
                 raise _CoordinatorProtocolError(
-                    f"agent trace exceeds {self._max_trace_body_bytes} byte limit"
+                    f"agent trace header exceeds {self._max_trace_body_bytes} byte limit"
                 )
             versions = self._trace_bodies.get(key, {})
             if (
@@ -1772,7 +1816,6 @@ class Operator:
                 return None
             status = str(trace.get("status") or "unavailable")[:80]
             error = None
-            evidence = trace.get("evidence")
             descriptor = TraceDescriptor(
                 status=status,
                 revision=previous_descriptor.revision,
@@ -2062,7 +2105,9 @@ class Operator:
                 summary=summary,
                 as_of_sequence=publication_sequence,
             )
-            changes.append(RunCreated(summary=summary, nodes=snapshot.nodes))
+            changes.append(
+                RunCreated(summary=summary, nodes=snapshot.nodes, topology=snapshot.topology)
+            )
         else:
             if summary_changed:
                 changes.append(
@@ -2084,6 +2129,7 @@ class Operator:
                         started_at=node.started_at,
                         ended_at=node.ended_at,
                         revision=publication_sequence,
+                        error=node.error,
                     )
                 )
             if log_entry is not None:
@@ -2418,6 +2464,28 @@ def _materialize_run_detail(capture: _RunDetailCapture) -> RunState:
                 decoded = None
             if isinstance(decoded, dict):
                 trace = decoded
+                steps = []
+                evidence_events = []
+                for projected in projected_events:
+                    data = projected.get("data")
+                    if (
+                        projected.get("event_kind") == "iteration.recorded"
+                        and isinstance(data, dict)
+                        and isinstance(data.get("step"), dict)
+                    ):
+                        steps.append(data["step"])
+                    evidence_events.append(
+                        {
+                            "sequence": projected.get("sequence"),
+                            "kind": projected.get("event_kind"),
+                            "timestamp_ns": projected.get("timestamp_ns"),
+                            "data": data if isinstance(data, dict) else {},
+                        }
+                    )
+                trace["steps"] = steps
+                evidence = trace.get("evidence")
+                if isinstance(evidence, dict):
+                    evidence["events"] = evidence_events
         envelope = {
             "schema_version": 1,
             "invocation_id": capture.trace_invocation_ids.get(node_id) or None,

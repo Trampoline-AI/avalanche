@@ -25,6 +25,7 @@ from .models import (
     TraceFinalized,
     WorkflowDiscoveryDiagnostic,
     WorkflowInfo,
+    WorkflowTopology,
 )
 from .proto import operator_pb2 as pb
 
@@ -105,6 +106,25 @@ def discovery_diagnostic_from_proto(
     )
 
 
+def workflow_topology_to_proto(topology: WorkflowTopology) -> pb.WorkflowTopologyMsg:
+    return pb.WorkflowTopologyMsg(
+        node_ids=topology.node_ids,
+        graph={parent: pb.NodeEdges(children=children) for parent, children in topology.graph},
+        node_types=dict(topology.node_types),
+        display_names=dict(topology.display_names),
+    )
+
+
+def workflow_topology_from_proto(msg: pb.WorkflowTopologyMsg) -> WorkflowTopology:
+    node_ids = tuple(msg.node_ids)
+    return WorkflowTopology(
+        node_ids=node_ids,
+        graph=tuple((node_id, tuple(msg.graph[node_id].children)) for node_id in node_ids),
+        node_types=tuple((node_id, msg.node_types[node_id]) for node_id in node_ids),
+        display_names=tuple((node_id, msg.display_names[node_id]) for node_id in node_ids),
+    )
+
+
 def trace_descriptor_to_proto(descriptor: TraceDescriptor) -> pb.TraceDescriptorMsg:
     return pb.TraceDescriptorMsg(
         status=descriptor.status,
@@ -142,6 +162,8 @@ def node_snapshot_to_proto(node: NodeSnapshot) -> pb.NodeSnapshotMsg:
     if node.trace is not None:
         message.trace.CopyFrom(trace_descriptor_to_proto(node.trace))
     message.event_page_token = node.event_page_token
+    if node.error is not None:
+        message.error = node.error
     return message
 
 
@@ -153,6 +175,7 @@ def node_snapshot_from_proto(msg: pb.NodeSnapshotMsg) -> NodeSnapshot:
         status=NodeStatus(msg.status),
         started_at=msg.started_at if msg.started_at else None,
         ended_at=msg.ended_at if msg.ended_at else None,
+        error=msg.error if msg.HasField("error") else None,
         trace=trace_descriptor_from_proto(msg.trace) if msg.HasField("trace") else None,
         revision=msg.revision,
         event_page_token=msg.event_page_token,
@@ -197,6 +220,7 @@ def run_snapshot_to_proto(snapshot: RunSnapshot) -> pb.RunSnapshotMsg:
         nodes=[node_snapshot_to_proto(node) for node in snapshot.nodes],
         latest_log_sequence=snapshot.latest_log_sequence,
         log_page_token=snapshot.log_page_token,
+        topology=workflow_topology_to_proto(snapshot.topology),
     )
 
 
@@ -208,6 +232,7 @@ def run_snapshot_from_proto(msg: pb.RunSnapshotMsg) -> RunSnapshot:
         nodes=tuple(node_snapshot_from_proto(node) for node in msg.nodes),
         latest_log_sequence=msg.latest_log_sequence,
         log_page_token=msg.log_page_token,
+        topology=workflow_topology_from_proto(msg.topology),
     )
 
 
@@ -242,12 +267,21 @@ def log_record_descriptor_from_proto(
 def agent_event_descriptor_to_proto(
     event: AgentEventDescriptor,
 ) -> pb.AgentEventDescriptorMsg:
-    return pb.AgentEventDescriptorMsg(
+    message = pb.AgentEventDescriptorMsg(
         invocation_id=event.invocation_id,
         event_sequence=event.event_sequence,
         size_bytes=event.size_bytes,
         body_token=event.body_token,
+        event_kind=event.event_kind,
+        error=event.error,
+        tool_count=event.tool_count,
+        predict_count=event.predict_count,
     )
+    if event.iteration is not None:
+        message.iteration = event.iteration
+    if event.duration_ms is not None:
+        message.duration_ms = event.duration_ms
+    return message
 
 
 def agent_event_descriptor_from_proto(
@@ -258,6 +292,12 @@ def agent_event_descriptor_from_proto(
         event_sequence=msg.event_sequence,
         size_bytes=msg.size_bytes,
         body_token=msg.body_token,
+        event_kind=msg.event_kind,
+        iteration=msg.iteration if msg.HasField("iteration") else None,
+        duration_ms=msg.duration_ms if msg.HasField("duration_ms") else None,
+        error=msg.error,
+        tool_count=msg.tool_count,
+        predict_count=msg.predict_count,
     )
 
 
@@ -269,6 +309,7 @@ def run_update_to_proto(update: RunUpdate) -> pb.RunUpdate:
             pb.RunCreated(
                 summary=run_summary_to_proto(change.summary),
                 nodes=[node_snapshot_to_proto(node) for node in change.nodes],
+                topology=workflow_topology_to_proto(change.topology),
             )
         )
     elif isinstance(change, RunStatusChanged):
@@ -282,16 +323,17 @@ def run_update_to_proto(update: RunUpdate) -> pb.RunUpdate:
             )
         )
     elif isinstance(change, NodeStatusChanged):
-        message.node_status_changed.CopyFrom(
-            pb.NodeStatusChanged(
-                run_id=change.run_id,
-                node_id=change.node_id,
-                status=change.status.value,
-                started_at=change.started_at or 0.0,
-                ended_at=change.ended_at or 0.0,
-                revision=change.revision,
-            )
+        changed = pb.NodeStatusChanged(
+            run_id=change.run_id,
+            node_id=change.node_id,
+            status=change.status.value,
+            started_at=change.started_at or 0.0,
+            ended_at=change.ended_at or 0.0,
+            revision=change.revision,
         )
+        if change.error is not None:
+            changed.error = change.error
+        message.node_status_changed.CopyFrom(changed)
     elif isinstance(change, LogAppended):
         message.log_appended.CopyFrom(
             pb.LogAppended(
@@ -326,6 +368,7 @@ def run_update_from_proto(msg: pb.RunUpdate) -> RunUpdate:
         change = RunCreated(
             summary=run_summary_from_proto(msg.run_created.summary),
             nodes=tuple(node_snapshot_from_proto(node) for node in msg.run_created.nodes),
+            topology=workflow_topology_from_proto(msg.run_created.topology),
         )
     elif change_name == "run_status_changed":
         item = msg.run_status_changed
@@ -344,6 +387,7 @@ def run_update_from_proto(msg: pb.RunUpdate) -> RunUpdate:
             status=NodeStatus(item.status),
             started_at=item.started_at if item.started_at else None,
             ended_at=item.ended_at if item.ended_at else None,
+            error=item.error if item.HasField("error") else None,
             revision=item.revision,
         )
     elif change_name == "log_appended":
