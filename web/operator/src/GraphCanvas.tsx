@@ -49,6 +49,7 @@ interface CardData extends Record<string, unknown> {
 }
 
 
+
 function fields(value: unknown): FieldMetadata[] {
   if (!Array.isArray(value)) return [];
   return value.flatMap((item) => {
@@ -138,7 +139,33 @@ const WorkflowNodeCard = memo(({ data }: NodeProps<Node<CardData>>) => (
 ));
 WorkflowNodeCard.displayName = "WorkflowNodeCard";
 
-function positions(topology: TopologyView): Record<string, { x: number; y: number }> {
+const NODE_TYPES = { workflow: WorkflowNodeCard };
+const FIT_VIEW_OPTIONS = { padding: 0.24 };
+
+
+function elapsed(node: NodeSnapshotMsg): string | undefined {
+  if (!node.startedAt) return undefined;
+  const end = node.endedAt || Date.now() / 1000;
+  const seconds = Math.max(0, end - node.startedAt);
+  return seconds < 60 ? `${seconds.toFixed(1)}s` : `${Math.floor(seconds / 60)}m`;
+}
+
+function invocationIdentity(nodeId: string, label: string): string {
+  const suffix = nodeId.startsWith(`${label}_`) ? nodeId.slice(label.length + 1) : "";
+  return suffix && /^\d+$/.test(suffix) ? `#${suffix}` : nodeId;
+}
+
+type TopologyView = Pick<
+  WorkflowTopologyMsg,
+  "nodeIds" | "graph" | "nodeTypes" | "displayNames"
+>;
+
+interface GraphLayout {
+  edges: Edge[];
+  positions: Record<string, { x: number; y: number }>;
+}
+
+function createGraphLayout(topology: Pick<TopologyView, "nodeIds" | "graph">): GraphLayout {
   const incoming = Object.fromEntries(topology.nodeIds.map((nodeId) => [nodeId, 0]));
   for (const edges of Object.values(topology.graph)) {
     for (const child of edges.children) incoming[child] = (incoming[child] ?? 0) + 1;
@@ -159,7 +186,7 @@ function positions(topology: TopologyView): Record<string, { x: number; y: numbe
     const depth = depths[nodeId] ?? 0;
     (rows[depth] ??= []).push(nodeId);
   }
-  return Object.fromEntries(
+  const positions = Object.fromEntries(
     Object.entries(rows).flatMap(([depth, nodeIds]) =>
       nodeIds.map((nodeId, row) => [
         nodeId,
@@ -167,24 +194,24 @@ function positions(topology: TopologyView): Record<string, { x: number; y: numbe
       ]),
     ),
   );
+  const seen = new Set<string>();
+  const edges: Edge[] = [];
+  for (const [source, children] of Object.entries(topology.graph)) {
+    for (const target of children.children) {
+      const id = `${source}->${target}`;
+      if (seen.has(id)) continue;
+      seen.add(id);
+      edges.push({
+        id,
+        source,
+        target,
+        markerEnd: { type: MarkerType.ArrowClosed },
+        className: "dag-edge",
+      });
+    }
+  }
+  return { edges, positions };
 }
-
-function elapsed(node: NodeSnapshotMsg): string | undefined {
-  if (!node.startedAt) return undefined;
-  const end = node.endedAt || Date.now() / 1000;
-  const seconds = Math.max(0, end - node.startedAt);
-  return seconds < 60 ? `${seconds.toFixed(1)}s` : `${Math.floor(seconds / 60)}m`;
-}
-
-function invocationIdentity(nodeId: string, label: string): string {
-  const suffix = nodeId.startsWith(`${label}_`) ? nodeId.slice(label.length + 1) : "";
-  return suffix && /^\d+$/.test(suffix) ? `#${suffix}` : nodeId;
-}
-
-type TopologyView = Pick<
-  WorkflowTopologyMsg,
-  "nodeIds" | "graph" | "nodeTypes" | "displayNames"
->;
 
 interface GraphCanvasProps {
   workflow?: FlowInfoMsg;
@@ -193,7 +220,7 @@ interface GraphCanvasProps {
   onOpenNode: (nodeId: string) => void;
 }
 
-export function GraphCanvas({
+function GraphCanvasView({
   workflow,
   runTopology,
   runNodes = [],
@@ -209,9 +236,24 @@ export function GraphCanvas({
       displayNames: workflow.displayNames,
     };
   }, [runTopology, workflow]);
-  const graph = useMemo(() => {
-    if (!topology) return { nodes: [], edges: [] };
-    const layout = positions(topology);
+  const topologyNodeIds = topology?.nodeIds;
+  const topologyGraph = topology?.graph;
+  const layout = useMemo(
+    () =>
+      topologyNodeIds && topologyGraph
+        ? createGraphLayout({ nodeIds: topologyNodeIds, graph: topologyGraph })
+        : { edges: [], positions: {} },
+    [topologyGraph, topologyNodeIds],
+  );
+  const openCallbacks = useMemo(
+    () =>
+      Object.fromEntries(
+        (topologyNodeIds ?? []).map((nodeId) => [nodeId, () => onOpenNode(nodeId)]),
+      ),
+    [onOpenNode, topologyNodeIds],
+  );
+  const nodes = useMemo(() => {
+    if (!topology) return [];
     const runtimeNodes = Object.fromEntries(runNodes.map((node) => [node.nodeId, node]));
     const labels = Object.fromEntries(
       topology.nodeIds.map((nodeId) => [
@@ -228,7 +270,7 @@ export function GraphCanvas({
       return {
         id: nodeId,
         type: "workflow",
-        position: layout[nodeId],
+        position: layout.positions[nodeId],
         data: {
           label: labels[nodeId],
           identity:
@@ -242,36 +284,20 @@ export function GraphCanvas({
           declaration: runTopology
             ? parseAgentFieldSchemas(runTopology.agentFieldSchemasJson[nodeId])
             : parseAgentDeclaration(workflow?.agentMetadataJson[nodeId]),
-          onOpen: () => onOpenNode(nodeId),
+          onOpen: openCallbacks[nodeId],
         },
       };
     });
-    const seen = new Set<string>();
-    const edges: Edge[] = [];
-    for (const [source, children] of Object.entries(topology.graph)) {
-      for (const target of children.children) {
-        const id = `${source}->${target}`;
-        if (seen.has(id)) continue;
-        seen.add(id);
-        edges.push({
-          id,
-          source,
-          target,
-          markerEnd: { type: MarkerType.ArrowClosed },
-          className: "dag-edge",
-        });
-      }
-    }
-    return { nodes, edges };
-  }, [onOpenNode, runNodes, runTopology, topology, workflow]);
+    return nodes;
+  }, [layout.positions, openCallbacks, runNodes, runTopology, topology, workflow]);
 
   return (
     <ReactFlow
-      nodes={graph.nodes}
-      edges={graph.edges}
-      nodeTypes={{ workflow: WorkflowNodeCard }}
+      nodes={nodes}
+      edges={layout.edges}
+      nodeTypes={NODE_TYPES}
       fitView
-      fitViewOptions={{ padding: 0.24 }}
+      fitViewOptions={FIT_VIEW_OPTIONS}
       minZoom={0.25}
       maxZoom={1.8}
       nodesDraggable={false}
@@ -284,3 +310,33 @@ export function GraphCanvas({
     </ReactFlow>
   );
 }
+
+function sameRunNodeState(
+  left: readonly NodeSnapshotMsg[] | undefined,
+  right: readonly NodeSnapshotMsg[] | undefined,
+) {
+  if (left === right) return true;
+  if ((left?.length ?? 0) !== (right?.length ?? 0)) return false;
+  return (left ?? []).every((node, index) => {
+    const other = right?.[index];
+    return (
+      other !== undefined &&
+      node.nodeId === other.nodeId &&
+      node.name === other.name &&
+      node.nodeType === other.nodeType &&
+      node.status === other.status &&
+      node.error === other.error &&
+      node.startedAt === other.startedAt &&
+      node.endedAt === other.endedAt
+    );
+  });
+}
+
+export const GraphCanvas = memo(
+  GraphCanvasView,
+  (left, right) =>
+    left.workflow === right.workflow &&
+    left.runTopology === right.runTopology &&
+    left.onOpenNode === right.onOpenNode &&
+    sameRunNodeState(left.runNodes, right.runNodes),
+);
