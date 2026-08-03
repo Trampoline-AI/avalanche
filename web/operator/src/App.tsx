@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 
 import type { OperatorApi } from "./api";
 import { Explorer, type Selection } from "./Explorer";
@@ -12,6 +12,7 @@ export function App({ api }: { api: OperatorApi }) {
   const [selection, setSelection] = useState<Selection>();
   const [inspectedNode, setInspectedNode] = useState<string>();
   const [explorerOpen, setExplorerOpen] = useState(false);
+  const previousSelectedRunId = useRef(state.selectedRunId);
 
   useEffect(() => {
     const workflows = state.catalog?.workflows ?? [];
@@ -33,6 +34,40 @@ export function App({ api }: { api: OperatorApi }) {
       void selectRun(undefined);
     }
   }, [selectRun, selection, state.catalog]);
+
+  useEffect(() => {
+    const priorSelectedRunId = previousSelectedRunId.current;
+    previousSelectedRunId.current = state.selectedRunId;
+    if (
+      selection?.kind !== "run" ||
+      state.selectedRunId !== undefined ||
+      state.selectedRunStatus !== "idle" ||
+      priorSelectedRunId !== selection.runId
+    ) {
+      return;
+    }
+
+    if (state.runs[selection.runId]) {
+      void selectRun(selection.runId);
+      return;
+    }
+
+    const workflows = state.catalog?.workflows ?? [];
+    const workflow =
+      workflows.find((item) => item.workflowId === selection.workflowId) ?? workflows[0];
+    setSelection(
+      workflow ? { kind: "workflow", workflowId: workflow.workflowId } : undefined,
+    );
+    setInspectedNode(undefined);
+    void selectRun(undefined);
+  }, [
+    selectRun,
+    selection,
+    state.catalog,
+    state.runs,
+    state.selectedRunId,
+    state.selectedRunStatus,
+  ]);
 
   useEffect(
     () => () => {

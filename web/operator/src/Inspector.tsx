@@ -86,21 +86,33 @@ function boundDescriptors<T>(
   sequence: (record: T) => string,
   retention: DescriptorRetention,
   selectedSequence?: string,
+  retainedSequences: Iterable<string> = [],
 ): T[] {
   const merged = [...recordsBySequence.values()].sort((left, right) =>
     compareSequence(sequence(left), sequence(right)),
   );
   if (merged.length <= DESCRIPTOR_WINDOW_SIZE) return merged;
 
+  const retained = new Set(retainedSequences);
+  if (selectedSequence) retained.add(selectedSequence);
+  const retainedRecords: T[] = [];
+  const availableRecords: T[] = [];
+  for (const record of merged) {
+    (retained.has(sequence(record)) ? retainedRecords : availableRecords).push(record);
+  }
   const records =
-    retention === "newer"
-      ? merged.slice(-DESCRIPTOR_WINDOW_SIZE)
-      : merged.slice(0, DESCRIPTOR_WINDOW_SIZE);
+    retainedRecords.length >= DESCRIPTOR_WINDOW_SIZE
+      ? retainedRecords.slice(-DESCRIPTOR_WINDOW_SIZE)
+      : [
+          ...(retention === "newer"
+            ? availableRecords.slice(-(DESCRIPTOR_WINDOW_SIZE - retainedRecords.length))
+            : availableRecords.slice(0, DESCRIPTOR_WINDOW_SIZE - retainedRecords.length)),
+          ...retainedRecords,
+        ].sort((left, right) => compareSequence(sequence(left), sequence(right)));
   if (selectedSequence && !records.some((record) => sequence(record) === selectedSequence)) {
     const selected = recordsBySequence.get(selectedSequence);
     if (selected) {
-      if (retention === "newer") records.shift();
-      else records.pop();
+      records.shift();
       records.push(selected);
       records.sort((left, right) => compareSequence(sequence(left), sequence(right)));
     }
@@ -416,13 +428,18 @@ export function Inspector({
     selectedLog?.scope === descriptorScope ? selectedLog : undefined;
   const combinedEvents = useMemo(() => {
     const bySequence = new Map<string, AgentEventDescriptorMsg>();
+    const liveSequences = new Set<string>();
     for (const event of eventPage.records) bySequence.set(event.eventSequence, event);
-    for (const event of liveEvents) bySequence.set(event.eventSequence, event);
+    for (const event of liveEvents) {
+      bySequence.set(event.eventSequence, event);
+      liveSequences.add(event.eventSequence);
+    }
     return boundDescriptors(
       bySequence,
       (event) => event.eventSequence,
       eventPageOrder === DescriptorPageOrder.FORWARD ? "newer" : "older",
       selectedEventSequence,
+      liveSequences,
     );
   }, [eventPage.records, eventPageOrder, liveEvents, selectedEventSequence]);
   const turns = useMemo(
@@ -431,17 +448,22 @@ export function Inspector({
   );
   const combinedLogs = useMemo(() => {
     const bySequence = new Map<string, LogRecordDescriptorMsg>();
+    const liveSequences = new Set<string>();
     for (const entry of logPage.records) {
       if (entry.nodeId === nodeId) bySequence.set(entry.sequence, entry);
     }
     for (const entry of liveLogs) {
-      if (entry.nodeId === nodeId) bySequence.set(entry.sequence, entry);
+      if (entry.nodeId === nodeId) {
+        bySequence.set(entry.sequence, entry);
+        liveSequences.add(entry.sequence);
+      }
     }
     return boundDescriptors(
       bySequence,
       (entry) => entry.sequence,
       "older",
       selectedLogSelection?.sequence,
+      liveSequences,
     ).sort((left, right) => compareSequence(right.sequence, left.sequence));
   }, [liveLogs, logPage.records, nodeId, selectedLogSelection?.sequence]);
   const traceUsage = useMemo<unknown>(() => {

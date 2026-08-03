@@ -56,13 +56,13 @@
 
 ## 7. Large-run performance remediation
 
-- [ ] 7.1 Add an atomic latest selected-run snapshot RPC and immutable forward/newest-first log and agent-event pagination contracts, including node-filtered logs and epoch-correct detail tokens.
-- [ ] 7.2 Implement operator, native gRPC, gRPC-Web, and Python-client support for the new snapshot and paging contracts without changing exact retained-baseline semantics.
-- [ ] 7.3 Replace browser page-draining APIs with cancellable single-page methods, summary-only baseline hydration, one demand-loaded selected snapshot, and distinct JSON/text detail readers.
-- [ ] 7.4 Bound ordered browser update batching, pending queues, live descriptor tails, and repair watermarks while preserving reset and exact sequence reconciliation.
-- [ ] 7.5 Migrate App and Explorer to summary-backed navigation and cancellable selected-run snapshot loading without browser-owned lifecycle state.
-- [ ] 7.6 Make inspector hydration active-tab-only, generation-scoped, cancellable, incrementally paged, node-filtered, and virtualized; isolate Trace following from Inputs, Output, and Logs.
-- [ ] 7.7 Make parsed detail caching byte-bounded and render large nested values through accessible collapsed, depth-limited, and chunked expansion.
-- [ ] 7.8 Contain Explorer and graph rerenders so unrelated log, event, and detail updates do not rebuild navigation or graph layout.
-- [ ] 7.9 Add deterministic high-volume protocol, state, inspector, DOM-bound, cancellation, decoding, and browser performance regression coverage.
-- [ ] 7.10 Run focused and aggregate Python, TUI, browser build/test/benchmark, smoke, and real-browser large-run verification.
+- [x] 7.1 Add an atomic latest selected-run snapshot RPC and immutable forward/newest-first log and agent-event pagination contracts, including node-filtered logs and epoch-correct detail tokens.
+- [x] 7.2 Implement operator, native gRPC, gRPC-Web, and Python-client support for the new snapshot and paging contracts without changing exact retained-baseline semantics.
+- [x] 7.3 Replace browser page-draining APIs with cancellable single-page methods, summary-only baseline hydration, one demand-loaded selected snapshot, and distinct JSON/text detail readers.
+- [x] 7.4 Bound ordered browser update batching, pending queues, live descriptor tails, and repair watermarks while preserving reset and exact sequence reconciliation.
+- [x] 7.5 Migrate App and Explorer to summary-backed navigation and cancellable selected-run snapshot loading without browser-owned lifecycle state.
+- [x] 7.6 Make inspector hydration active-tab-only, generation-scoped, cancellable, incrementally paged, node-filtered, and virtualized; isolate Trace following from Inputs, Output, and Logs.
+- [x] 7.7 Make parsed detail caching byte-bounded and render large nested values through accessible collapsed, depth-limited, and chunked expansion.
+- [x] 7.8 Contain Explorer and graph rerenders so unrelated log, event, and detail updates do not rebuild navigation or graph layout.
+- [x] 7.9 Add deterministic high-volume protocol, state, inspector, DOM-bound, cancellation, decoding, and browser performance regression coverage.
+- [x] 7.10 Run focused and aggregate Python, TUI, browser build/test/benchmark, smoke, and real-browser large-run verification.
