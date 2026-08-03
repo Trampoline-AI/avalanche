@@ -6,6 +6,8 @@ import { OperatorServiceClient } from "./generated/operator.client";
 import type {
   AgentEventDescriptorMsg,
   CatalogSnapshotMsg,
+  ListAgentEventsRequest,
+  ListLogsRequest,
   LogRecordDescriptorMsg,
   OperatorUpdateEnvelope,
   RunSnapshotMsg,
@@ -15,16 +17,59 @@ import type {
 export interface StructuralBaseline {
   catalog: CatalogSnapshotMsg;
   asOfSequence: string;
-  runs: RunSnapshotMsg[];
+  runs: RunSummaryMsg[];
+}
+
+export interface LogPageRequest extends ListLogsRequest {
+  expectedOperatorInstanceId: string;
+  expectedAsOfSequence: string;
+}
+
+export interface AgentEventPageRequest extends ListAgentEventsRequest {
+  expectedOperatorInstanceId: string;
+  expectedAsOfSequence: string;
+  expectedRunId: string;
+  expectedNodeId: string;
+}
+
+export interface LogDescriptorPage {
+  operatorInstanceId: string;
+  asOfSequence: string;
+  records: LogRecordDescriptorMsg[];
+  nextPageToken: string;
+  nextCursor: string;
+}
+
+export interface AgentEventDescriptorPage {
+  operatorInstanceId: string;
+  asOfSequence: string;
+  runId: string;
+  nodeId: string;
+  records: AgentEventDescriptorMsg[];
+  nextPageToken: string;
+  nextCursor: string;
 }
 
 export interface OperatorApi {
-  getCatalog(): Promise<CatalogSnapshotMsg>;
-  loadBaseline(): Promise<StructuralBaseline>;
-  streamUpdates(operatorInstanceId: string, afterSequence: string): AsyncIterable<OperatorUpdateEnvelope>;
-  listAgentEvents(snapshot: RunSnapshotMsg, nodeId: string): Promise<AgentEventDescriptorMsg[]>;
-  listLogs(snapshot: RunSnapshotMsg): Promise<LogRecordDescriptorMsg[]>;
-  readDetail(bodyToken: string): Promise<unknown>;
+  getCatalog(signal?: AbortSignal): Promise<CatalogSnapshotMsg>;
+  loadBaseline(signal?: AbortSignal): Promise<StructuralBaseline>;
+  getLatestRunSnapshot(
+    runId: string,
+    operatorInstanceId: string,
+    signal?: AbortSignal,
+  ): Promise<RunSnapshotMsg>;
+  streamUpdates(
+    operatorInstanceId: string,
+    afterSequence: string,
+    signal?: AbortSignal,
+  ): AsyncIterable<OperatorUpdateEnvelope>;
+  listLogPage(request: LogPageRequest, signal?: AbortSignal): Promise<LogDescriptorPage>;
+  listAgentEventPage(
+    request: AgentEventPageRequest,
+    signal?: AbortSignal,
+  ): Promise<AgentEventDescriptorPage>;
+  readJsonDetail(bodyToken: string, signal?: AbortSignal): Promise<unknown>;
+  readTextDetail(bodyToken: string, signal?: AbortSignal): Promise<string>;
   startRun(workflowSelector: string, input?: Record<string, unknown>): Promise<string>;
   cancelRun(runId: string): Promise<void>;
 }
@@ -32,27 +77,42 @@ export interface OperatorApi {
 export class GrpcWebOperatorApi implements OperatorApi {
   readonly client: OperatorServiceClient;
 
-  constructor(baseUrl = window.location.origin) {
-    const transport = new GrpcWebFetchTransport({ baseUrl, format: "binary" });
-    this.client = new OperatorServiceClient(transport);
+  constructor(
+    baseUrl = window.location.origin,
+    client?: OperatorServiceClient,
+  ) {
+    this.client =
+      client ??
+      new OperatorServiceClient(new GrpcWebFetchTransport({ baseUrl, format: "binary" }));
   }
 
-  async getCatalog(): Promise<CatalogSnapshotMsg> {
-    return (await this.client.getCatalog({}).response);
+  async getCatalog(signal?: AbortSignal): Promise<CatalogSnapshotMsg> {
+    return await this.client.getCatalog(
+      {},
+      signal ? { abort: signal } : undefined,
+    ).response;
   }
 
-  async loadBaseline(): Promise<StructuralBaseline> {
-    const catalog = await this.getCatalog();
-    const summaries: RunSummaryMsg[] = [];
+  async loadBaseline(signal?: AbortSignal): Promise<StructuralBaseline> {
+    const catalog = await this.getCatalog(signal);
+    const runs: RunSummaryMsg[] = [];
+    const seenPageTokens = new Set<string>();
     let pageToken = "";
     let operatorInstanceId = "";
     let asOfSequence = "0";
     do {
-      const page = await this.client.listRunSummaries({
-        workflowSelector: "",
-        pageSize: 100,
-        pageToken,
-      }).response;
+      if (seenPageTokens.has(pageToken)) {
+        throw new Error("Run summary pagination made no progress");
+      }
+      seenPageTokens.add(pageToken);
+      const page = await this.client.listRunSummaries(
+        {
+          workflowSelector: "",
+          pageSize: 100,
+          pageToken,
+        },
+        signal ? { abort: signal } : undefined,
+      ).response;
       if (!operatorInstanceId) {
         operatorInstanceId = page.operatorInstanceId;
         asOfSequence = page.asOfSequence;
@@ -62,21 +122,11 @@ export class GrpcWebOperatorApi implements OperatorApi {
       ) {
         throw new Error("Run baseline changed while loading pages");
       }
-      summaries.push(...page.runs);
+      runs.push(...page.runs);
       pageToken = page.nextPageToken;
     } while (pageToken);
 
-    const runs = await Promise.all(
-      summaries.map(
-        async (summary) =>
-          await this.client.getRunSnapshot({
-            runId: summary.runId,
-            operatorInstanceId,
-            asOfSequence,
-          }).response,
-      ),
-    );
-    const confirmedCatalog = await this.getCatalog();
+    const confirmedCatalog = await this.getCatalog(signal);
     if (
       catalog.operatorInstanceId !== operatorInstanceId ||
       confirmedCatalog.operatorInstanceId !== operatorInstanceId ||
@@ -89,73 +139,133 @@ export class GrpcWebOperatorApi implements OperatorApi {
     return { catalog, asOfSequence, runs };
   }
 
+  async getLatestRunSnapshot(
+    runId: string,
+    operatorInstanceId: string,
+    signal?: AbortSignal,
+  ): Promise<RunSnapshotMsg> {
+    return await this.client.getLatestRunSnapshot(
+      { runId, operatorInstanceId },
+      signal ? { abort: signal } : undefined,
+    ).response;
+  }
+
   streamUpdates(
     operatorInstanceId: string,
     afterSequence: string,
+    signal?: AbortSignal,
   ): AsyncIterable<OperatorUpdateEnvelope> {
-    return this.client.streamOperatorUpdates({ operatorInstanceId, afterSequence }).responses;
+    return this.client.streamOperatorUpdates(
+      { operatorInstanceId, afterSequence },
+      signal ? { abort: signal } : undefined,
+    ).responses;
   }
 
-  async listAgentEvents(
-    snapshot: RunSnapshotMsg,
-    nodeId: string,
-  ): Promise<AgentEventDescriptorMsg[]> {
-    const node = snapshot.nodes.find((item) => item.nodeId === nodeId);
-    if (!node?.eventPageToken) return [];
-    const events: AgentEventDescriptorMsg[] = [];
-    let pageToken = node.eventPageToken;
-    let afterEventSequence = "0";
-    do {
-      const page = await this.client.listAgentEvents({
-        pageToken,
-        afterEventSequence,
-        pageSize: 100,
-        beforeEventSequence: "0",
-        order: DescriptorPageOrder.FORWARD,
-      }).response;
-      events.push(...page.events);
-      if (page.events.length) {
-        afterEventSequence = page.events.at(-1)!.eventSequence;
-      }
-      pageToken = page.nextPageToken;
-    } while (pageToken);
-    return events;
-  }
-
-  async listLogs(snapshot: RunSnapshotMsg): Promise<LogRecordDescriptorMsg[]> {
-    if (!snapshot.logPageToken) return [];
-    const logs: LogRecordDescriptorMsg[] = [];
-    let pageToken = snapshot.logPageToken;
-    let afterSequence = "0";
-    do {
-      const page = await this.client.listLogs({
-        pageToken,
-        afterSequence,
-        pageSize: 100,
-        beforeSequence: "0",
-        nodeId: "",
-        order: DescriptorPageOrder.FORWARD,
-      }).response;
-      logs.push(...page.logs);
-      if (page.logs.length) afterSequence = page.logs.at(-1)!.sequence;
-      pageToken = page.nextPageToken;
-    } while (pageToken);
-    return logs;
-  }
-
-  async readDetail(bodyToken: string): Promise<unknown> {
-    const chunks: Uint8Array[] = [];
-    for await (const chunk of this.client.readDetail({ bodyToken }).responses) {
-      chunks.push(chunk.data);
+  async listLogPage(
+    request: LogPageRequest,
+    signal?: AbortSignal,
+  ): Promise<LogDescriptorPage> {
+    const {
+      expectedOperatorInstanceId,
+      expectedAsOfSequence,
+      ...rpcRequest
+    } = request;
+    const page = await this.client.listLogs(
+      rpcRequest,
+      signal ? { abort: signal } : undefined,
+    ).response;
+    if (
+      page.operatorInstanceId !== expectedOperatorInstanceId ||
+      page.asOfSequence !== expectedAsOfSequence
+    ) {
+      throw new Error("Log page does not belong to the selected run snapshot");
     }
-    const length = chunks.reduce((total, chunk) => total + chunk.length, 0);
-    const body = new Uint8Array(length);
-    let offset = 0;
-    for (const chunk of chunks) {
-      body.set(chunk, offset);
-      offset += chunk.length;
+    const currentCursor =
+      request.order === DescriptorPageOrder.NEWEST_FIRST
+        ? request.beforeSequence
+        : request.afterSequence;
+    const nextCursor = page.logs.at(-1)?.sequence ?? currentCursor;
+    assertPageProgress(
+      request.pageToken,
+      page.nextPageToken,
+      currentCursor,
+      nextCursor,
+      request.order,
+      page.logs.length,
+      "Log",
+    );
+    return {
+      operatorInstanceId: page.operatorInstanceId,
+      asOfSequence: page.asOfSequence,
+      records: page.logs,
+      nextPageToken: page.nextPageToken,
+      nextCursor,
+    };
+  }
+
+  async listAgentEventPage(
+    request: AgentEventPageRequest,
+    signal?: AbortSignal,
+  ): Promise<AgentEventDescriptorPage> {
+    const {
+      expectedOperatorInstanceId,
+      expectedAsOfSequence,
+      expectedRunId,
+      expectedNodeId,
+      ...rpcRequest
+    } = request;
+    const page = await this.client.listAgentEvents(
+      rpcRequest,
+      signal ? { abort: signal } : undefined,
+    ).response;
+    if (
+      page.operatorInstanceId !== expectedOperatorInstanceId ||
+      page.asOfSequence !== expectedAsOfSequence ||
+      page.runId !== expectedRunId ||
+      page.nodeId !== expectedNodeId
+    ) {
+      throw new Error("Agent event page does not belong to the selected node snapshot");
     }
-    return JSON.parse(new TextDecoder().decode(body));
+    const currentCursor =
+      request.order === DescriptorPageOrder.NEWEST_FIRST
+        ? request.beforeEventSequence
+        : request.afterEventSequence;
+    const nextCursor = page.events.at(-1)?.eventSequence ?? currentCursor;
+    assertPageProgress(
+      request.pageToken,
+      page.nextPageToken,
+      currentCursor,
+      nextCursor,
+      request.order,
+      page.events.length,
+      "Agent event",
+    );
+    return {
+      operatorInstanceId: page.operatorInstanceId,
+      asOfSequence: page.asOfSequence,
+      runId: page.runId,
+      nodeId: page.nodeId,
+      records: page.events,
+      nextPageToken: page.nextPageToken,
+      nextCursor,
+    };
+  }
+
+  async readJsonDetail(bodyToken: string, signal?: AbortSignal): Promise<unknown> {
+    return JSON.parse(await this.readTextDetail(bodyToken, signal));
+  }
+
+  async readTextDetail(bodyToken: string, signal?: AbortSignal): Promise<string> {
+    const decoder = new TextDecoder();
+    const decoded: string[] = [];
+    for await (const chunk of this.client.readDetail(
+      { bodyToken },
+      signal ? { abort: signal } : undefined,
+    ).responses) {
+      decoded.push(decoder.decode(chunk.data, { stream: true }));
+    }
+    decoded.push(decoder.decode());
+    return decoded.join("");
   }
 
   async startRun(
@@ -175,5 +285,30 @@ export class GrpcWebOperatorApi implements OperatorApi {
 
   async cancelRun(runId: string): Promise<void> {
     await this.client.cancelRun({ runId }).response;
+  }
+}
+
+
+function assertPageProgress(
+  pageToken: string,
+  nextPageToken: string,
+  currentCursor: string,
+  nextCursor: string,
+  order: DescriptorPageOrder,
+  recordCount: number,
+  kind: string,
+): void {
+  if (!nextPageToken) return;
+  if (
+    nextPageToken === pageToken ||
+    recordCount === 0 ||
+    nextCursor === currentCursor ||
+    (order === DescriptorPageOrder.FORWARD &&
+      BigInt(nextCursor) <= BigInt(currentCursor)) ||
+    (order === DescriptorPageOrder.NEWEST_FIRST &&
+      currentCursor !== "0" &&
+      BigInt(nextCursor) >= BigInt(currentCursor))
+  ) {
+    throw new Error(`${kind} pagination made no progress`);
   }
 }

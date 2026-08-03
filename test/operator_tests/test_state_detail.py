@@ -11,7 +11,7 @@ import grpc
 import pytest
 
 from avalanche.operator import Operator
-from avalanche.operator.client import GrpcStateProvider, StreamState
+from avalanche.operator.client import GrpcStateProvider, OperatorCallError, StreamState
 from avalanche.operator.convert import operator_update_envelope_to_proto
 from avalanche.operator.models import (
     AgentEvent,
@@ -27,6 +27,7 @@ from avalanche.operator.models import (
     SequencedLogEntry,
 )
 from avalanche.operator.server import TRACE_CHUNK_BYTES, serve
+from runtime.operator.operator import _decode_transport_token, _encode_transport_token
 from runtime.operator.proto import operator_pb2 as pb
 from runtime.operator.proto import operator_pb2_grpc as pb_grpc
 from runtime.operator.scheduler import Scheduler
@@ -199,6 +200,50 @@ def test_structural_snapshot_excludes_detail_bodies_while_explicit_read_material
         operator.close()
 
 
+def test_latest_run_snapshot_client_is_typed_and_rejects_a_stale_operator_epoch():
+    stale_operator = Operator(watch=False, schedule=False)
+    stale_operator_instance_id = stale_operator.operator_instance_id
+    stale_operator.close()
+    operator = Operator(watch=False, schedule=False)
+    server = None
+    provider = None
+    try:
+        run = _add_run(operator, "run-latest")
+        port = _unused_port()
+        server = serve(operator, port=port, block=False)
+        provider = GrpcStateProvider(f"localhost:{port}")
+
+        initial = provider.get_latest_run_snapshot(
+            run.run_id,
+            operator.operator_instance_id,
+        )
+        operator._apply_event(
+            run.run_id,
+            _event_handle(),
+            {"type": "running", "timestamp": 1.0},
+        )
+        latest = provider.get_latest_run_snapshot(
+            run.run_id,
+            operator.operator_instance_id,
+        )
+
+        assert initial.summary.run_id == run.run_id
+        assert initial.summary.status is RunStatus.PENDING
+        assert latest.operator_instance_id == operator.operator_instance_id
+        assert latest.as_of_sequence > initial.as_of_sequence
+        assert latest.summary.status is RunStatus.RUNNING
+
+        with pytest.raises(OperatorCallError) as error:
+            provider.get_latest_run_snapshot(run.run_id, stale_operator_instance_id)
+        assert error.value.status is grpc.StatusCode.FAILED_PRECONDITION
+    finally:
+        if provider is not None:
+            provider.close()
+        if server is not None:
+            server.stop(grace=0).wait()
+        operator.close()
+
+
 def test_log_and_agent_event_pagination_use_exclusive_deduplicating_cursors():
     operator = Operator(watch=False, schedule=False)
     try:
@@ -238,6 +283,301 @@ def test_log_and_agent_event_pagination_use_exclusive_deduplicating_cursors():
         assert first_events.next_page_token
         assert [item.event_sequence for item in second_events.events] == [2]
         assert not second_events.next_page_token
+    finally:
+        operator.close()
+
+
+def test_exact_node_log_pages_use_the_append_only_node_index():
+    class CountingLogs(list):
+        def __init__(self, entries):
+            super().__init__(entries)
+            self.item_reads = 0
+
+        def __getitem__(self, index):
+            if isinstance(index, int):
+                self.item_reads += 1
+            return super().__getitem__(index)
+
+    operator = Operator(watch=False, schedule=False)
+    try:
+        run = _add_run(operator, "run-sparse-logs")
+        timestamp = datetime.now()
+        target_entry = LogEntry(
+            timestamp=timestamp,
+            level=LogLevel.INFO,
+            node_id="agent_1",
+            message="",
+        )
+        other_entry = LogEntry(
+            timestamp=timestamp,
+            level=LogLevel.INFO,
+            node_id="other",
+            message="",
+        )
+        with operator._lock:
+            for sequence in range(1, 100_001):
+                entry = (
+                    target_entry
+                    if sequence == 50_000 or sequence == 100_000
+                    else other_entry
+                )
+                operator._append_log_unchecked_locked(run, entry, 0)
+            counted_logs = CountingLogs(operator._logs[run.run_id])
+            operator._logs[run.run_id] = counted_logs
+
+        missing = operator.list_logs(
+            run.run_id,
+            page_size=1,
+            node_id="missing",
+        )
+        assert missing.logs == ()
+        assert counted_logs.item_reads <= 1
+
+        first = operator.list_logs(
+            run.run_id,
+            page_size=1,
+            node_id="agent_1",
+        )
+        second = operator.list_logs(
+            page_token=first.next_page_token,
+            after_sequence=first.logs[-1].sequence,
+            page_size=1,
+            node_id="agent_1",
+        )
+        newest = operator.list_logs(
+            run.run_id,
+            page_size=2,
+            node_id="agent_1",
+            order=pb.DESCRIPTOR_PAGE_ORDER_NEWEST_FIRST,
+        )
+
+        assert [item.sequence for item in first.logs] == [50_000]
+        assert [item.sequence for item in second.logs] == [100_000]
+        assert [item.sequence for item in newest.logs] == [100_000, 50_000]
+        assert counted_logs.item_reads <= 8
+    finally:
+        operator.close()
+
+
+def test_failed_run_publication_discards_its_log_sequence_index():
+    class FailingPublicationOperator(Operator):
+        def _publish_run_locked(self, run, *args, **kwargs):
+            self._log_sequences_by_node[run.run_id] = {"agent_1": [1]}
+            raise RuntimeError("publication failed")
+
+    fixture = Path(__file__).parents[1] / "fixtures" / "sample_workflows.py"
+    operator = FailingPublicationOperator(
+        workflow_paths=[str(fixture)],
+        watch=False,
+        schedule=False,
+    )
+    try:
+        with pytest.raises(RuntimeError, match="publication failed"):
+            operator.start_run("simple_workflow", run_id="run-failed-publication")
+
+        assert "run-failed-publication" not in operator._log_sequences_by_node
+    finally:
+        operator.close()
+
+
+def test_newest_first_pages_reconstruct_filtered_snapshot_without_duplicates():
+    operator = Operator(watch=False, schedule=False)
+    try:
+        run = _add_run(operator, "run-newest")
+        with operator._lock:
+            run.nodes["agent_2"] = NodeState(
+                node_id="agent_2",
+                name="Other",
+                node_type="step",
+            )
+        for sequence in range(1, 6):
+            operator._apply_event(
+                run.run_id,
+                _event_handle(),
+                {
+                    "type": "log",
+                    "timestamp": float(sequence),
+                    "level": logging.INFO,
+                    "node_id": "agent_1" if sequence % 2 else "agent_2",
+                    "message": f"log-{sequence}",
+                },
+            )
+            operator._apply_event(
+                run.run_id,
+                _event_handle(),
+                _evidence(sequence),
+            )
+
+        snapshot = operator.get_latest_run_snapshot(
+            run.run_id,
+            operator_instance_id=operator.operator_instance_id,
+        )
+        assert snapshot is not None
+        operator._apply_event(
+            run.run_id,
+            _event_handle(),
+            {
+                "type": "log",
+                "timestamp": 100.0,
+                "level": logging.INFO,
+                "node_id": "agent_1",
+                "message": "after-snapshot",
+            },
+        )
+        operator._apply_event(run.run_id, _event_handle(), _evidence(6))
+
+        forward_logs = operator.list_logs(
+            page_token=snapshot.log_page_token,
+            page_size=100,
+            node_id="agent_1",
+        )
+        newest_log_sequences = []
+        newest_log_descriptors = []
+        token = snapshot.log_page_token
+        before_sequence = 0
+        while token:
+            page = operator.list_logs(
+                page_token=token,
+                page_size=2,
+                before_sequence=before_sequence,
+                node_id="agent_1",
+                order=pb.DESCRIPTOR_PAGE_ORDER_NEWEST_FIRST,
+            )
+            newest_log_sequences.extend(item.sequence for item in page.logs)
+            newest_log_descriptors.extend(page.logs)
+            before_sequence = page.logs[-1].sequence if page.logs else 0
+            token = page.next_page_token
+
+        forward_events = operator.list_agent_events(
+            page_token=snapshot.nodes[0].event_page_token,
+            page_size=100,
+        )
+        newest_event_sequences = []
+        token = snapshot.nodes[0].event_page_token
+        before_event_sequence = 0
+        while token:
+            page = operator.list_agent_events(
+                page_token=token,
+                page_size=2,
+                before_event_sequence=before_event_sequence,
+                order=pb.DESCRIPTOR_PAGE_ORDER_NEWEST_FIRST,
+            )
+            newest_event_sequences.extend(
+                item.event_sequence for item in page.events
+            )
+            before_event_sequence = (
+                page.events[-1].event_sequence if page.events else 0
+            )
+            token = page.next_page_token
+
+        forward_log_sequences = [item.sequence for item in forward_logs.logs]
+        forward_event_sequences = [
+            item.event_sequence for item in forward_events.events
+        ]
+        assert newest_log_sequences[::-1] == forward_log_sequences
+        assert newest_event_sequences[::-1] == forward_event_sequences
+        assert len(newest_log_sequences) == len(set(newest_log_sequences))
+        assert len(newest_event_sequences) == len(set(newest_event_sequences))
+        assert {item.node_id for item in newest_log_descriptors} == {"agent_1"}
+        assert all(
+            sequence <= snapshot.latest_log_sequence
+            for sequence in newest_log_sequences
+        )
+        bodies = []
+        for descriptor in newest_log_descriptors:
+            body_token = _decode_transport_token(
+                descriptor.body_token,
+                "log-body",
+            )
+            assert body_token["as_of_sequence"] == snapshot.as_of_sequence
+            bodies.append(operator.read_detail(descriptor.body_token))
+        assert b"after-snapshot" not in bodies
+    finally:
+        operator.close()
+
+
+def test_detail_continuations_reject_cursor_filter_and_direction_changes():
+    operator = Operator(watch=False, schedule=False)
+    try:
+        run = _add_run(operator, "run-cursors")
+        for sequence in range(1, 4):
+            operator._apply_event(
+                run.run_id,
+                _event_handle(),
+                {
+                    "type": "log",
+                    "timestamp": float(sequence),
+                    "level": logging.INFO,
+                    "node_id": "agent_1",
+                    "message": f"log-{sequence}",
+                },
+            )
+            operator._apply_event(run.run_id, _event_handle(), _evidence(sequence))
+        snapshot = operator.get_latest_run_snapshot(
+            run.run_id,
+            operator_instance_id=operator.operator_instance_id,
+        )
+        assert snapshot is not None
+
+        first_log_page = operator.list_logs(
+            page_token=snapshot.log_page_token,
+            page_size=1,
+            node_id="agent_1",
+        )
+        assert first_log_page.next_page_token
+        with pytest.raises(ValueError, match="cursor"):
+            operator.list_logs(
+                page_token=first_log_page.next_page_token,
+                after_sequence=first_log_page.logs[-1].sequence + 1,
+                page_size=1,
+                node_id="agent_1",
+            )
+        with pytest.raises(ValueError, match="filter"):
+            operator.list_logs(
+                page_token=first_log_page.next_page_token,
+                after_sequence=first_log_page.logs[-1].sequence,
+                page_size=1,
+                node_id="agent_2",
+            )
+
+        newest_log_page = operator.list_logs(
+            page_token=snapshot.log_page_token,
+            page_size=1,
+            node_id="agent_1",
+            order=pb.DESCRIPTOR_PAGE_ORDER_NEWEST_FIRST,
+        )
+        assert newest_log_page.next_page_token
+        with pytest.raises(ValueError, match="order"):
+            operator.list_logs(
+                page_token=newest_log_page.next_page_token,
+                page_size=1,
+                node_id="agent_1",
+            )
+
+        first_event_page = operator.list_agent_events(
+            page_token=snapshot.nodes[0].event_page_token,
+            page_size=1,
+        )
+        assert first_event_page.next_page_token
+        with pytest.raises(ValueError, match="cursor"):
+            operator.list_agent_events(
+                page_token=first_event_page.next_page_token,
+                after_event_sequence=first_event_page.events[-1].event_sequence + 1,
+                page_size=1,
+            )
+
+        decoded = _decode_transport_token(
+            first_event_page.next_page_token,
+            "events",
+        )
+        decoded["future_token_field"] = {"version": 2}
+        compatible_token = _encode_transport_token(**decoded)
+        compatible_page = operator.list_agent_events(
+            page_token=compatible_token,
+            after_event_sequence=first_event_page.events[-1].event_sequence,
+            page_size=1,
+        )
+        assert compatible_page.events
     finally:
         operator.close()
 
@@ -482,14 +822,18 @@ def test_agent_detail_and_watermarks_become_visible_in_one_transaction():
             apply_errors.append(exc)
 
     def read_detail() -> None:
-        page = operator.list_run_summaries()
-        observed["snapshot"] = operator.get_run_snapshot(
+        snapshot = operator.get_latest_run_snapshot(
             run.run_id,
-            operator_instance_id=page.operator_instance_id,
-            as_of_sequence=page.as_of_sequence,
+            operator_instance_id=operator.operator_instance_id,
         )
-        observed["logs"] = operator.list_logs(run.run_id)
-        observed["events"] = operator.list_agent_events(run.run_id, "agent_1")
+        observed["snapshot"] = snapshot
+        assert snapshot is not None
+        observed["logs"] = operator.list_logs(
+            page_token=snapshot.log_page_token,
+        )
+        observed["events"] = operator.list_agent_events(
+            page_token=snapshot.nodes[0].event_page_token,
+        )
         reader_done.set()
 
     publisher = threading.Thread(target=apply_event)

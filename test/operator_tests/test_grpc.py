@@ -44,6 +44,7 @@ from avalanche.runtime import File
 from runtime.operator._grpc import MAX_GRPC_MESSAGE_BYTES
 from runtime.operator.client import _DetailHydrationRaceError, _run_from_snapshot
 from runtime.operator.proto import operator_pb2 as pb
+from runtime.operator.proto import operator_pb2_grpc as pb_grpc
 from runtime.operator.results import (
     MAX_ATTACHMENT_MEDIA_TYPE_LENGTH,
     MAX_ATTACHMENT_NAME_LENGTH,
@@ -116,6 +117,83 @@ def test_result_file_wire_preserves_empty_metadata_presence():
     assert empty.HasField("media_type")
     assert empty.name == ""
     assert empty.media_type == ""
+
+
+def test_latest_run_snapshot_client_returns_typed_snapshot_without_mutating_baseline():
+    latest = RunSnapshot(
+        operator_instance_id="operator-1",
+        as_of_sequence=8,
+        summary=RunSummary(
+            run_id="run-selected",
+            flow_name="flow",
+            workflow_id="flow",
+            workflow_display_name="flow",
+            status=RunStatus.RUNNING,
+            created_sequence=2,
+            revision=8,
+        ),
+    )
+
+    class LatestSnapshotStub:
+        def __init__(self):
+            self.request = None
+
+        def GetLatestRunSnapshot(self, request, **kwargs):  # noqa: N802
+            self.request = request
+            return run_snapshot_to_proto(latest)
+
+    provider = GrpcStateProvider("localhost:1")
+    stub = LatestSnapshotStub()
+    provider._stub = stub
+    retained = RunState(
+        run_id="run-retained",
+        flow_name="flow",
+        operator_instance_id="operator-1",
+    )
+    provider._install_structural_baseline("operator-1", 4, {retained.run_id: retained})
+    try:
+        snapshot = provider.get_latest_run_snapshot("run-selected", "operator-1")
+    finally:
+        provider.close()
+
+    assert isinstance(snapshot, RunSnapshot)
+    assert snapshot == latest
+    assert stub.request.run_id == "run-selected"
+    assert stub.request.operator_instance_id == "operator-1"
+    assert provider._cursor.operator_instance_id == "operator-1"
+    assert provider._cursor.sequence == 4
+    assert set(provider._runs_by_id) == {"run-retained"}
+
+
+def test_latest_run_snapshot_client_preserves_operator_epoch_failure():
+    class EpochFailure(grpc.RpcError):
+        def code(self):
+            return grpc.StatusCode.FAILED_PRECONDITION
+
+        def details(self):
+            return "operator instance changed"
+
+    class RestartedStub:
+        def __init__(self):
+            self.request = None
+
+        def GetLatestRunSnapshot(self, request, **kwargs):  # noqa: N802
+            self.request = request
+            raise EpochFailure()
+
+    provider = GrpcStateProvider("localhost:1")
+    stub = RestartedStub()
+    provider._stub = stub
+    try:
+        with pytest.raises(OperatorCallError) as error:
+            provider.get_latest_run_snapshot("run-selected", "operator-old")
+    finally:
+        provider.close()
+
+    assert error.value.status is grpc.StatusCode.FAILED_PRECONDITION
+    assert error.value.details == "operator instance changed"
+    assert stub.request.run_id == "run-selected"
+    assert stub.request.operator_instance_id == "operator-old"
 
 
 def test_grpc_envelope_includes_bounded_worst_case_metadata_headroom():
@@ -819,6 +897,9 @@ def test_multi_page_detail_hydration_fails_before_unbounded_or_partial_publicati
             )
 
         def ListLogs(self, request, **kwargs):  # noqa: N802
+            assert request.before_sequence == 0
+            assert request.node_id == ""
+            assert request.order == pb.DESCRIPTOR_PAGE_ORDER_FORWARD
             sequence = request.after_sequence + 1
             return pb.LogPage(
                 operator_instance_id="operator-1",
@@ -837,6 +918,8 @@ def test_multi_page_detail_hydration_fails_before_unbounded_or_partial_publicati
             )
 
         def ListAgentEvents(self, request, **kwargs):  # noqa: N802
+            assert request.before_event_sequence == 0
+            assert request.order == pb.DESCRIPTOR_PAGE_ORDER_FORWARD
             sequence = request.after_event_sequence + 1
             return pb.AgentEventPage(
                 operator_instance_id="operator-1",
@@ -2162,6 +2245,18 @@ def test_unary_client_calls_pass_finite_timeout():
                 ),
             )
 
+        def GetLatestRunSnapshot(self, request, *, timeout, **kwargs):  # noqa: N802
+            self._capture("latest", timeout)
+            return pb.RunSnapshotMsg(
+                operator_instance_id=request.operator_instance_id,
+                as_of_sequence=2,
+                summary=pb.RunSummaryMsg(
+                    run_id=request.run_id,
+                    flow_name="flow",
+                    status="running",
+                ),
+            )
+
         def ListRunSummaries(self, request, *, timeout, **kwargs):  # noqa: N802
             self._capture("cursor" if request.page_size == 1 else "runs", timeout)
             return pb.RunSummaryPage(
@@ -2179,6 +2274,7 @@ def test_unary_client_calls_pass_finite_timeout():
         provider.list_workflows()
         provider.start_run("flow")
         provider.get_run("run_1")
+        provider.get_latest_run_snapshot("run_1", "operator-1")
         provider.list_runs("flow")
         provider.cancel_run("run_1")
     finally:
@@ -2189,6 +2285,7 @@ def test_unary_client_calls_pass_finite_timeout():
         ("start", 3.5),
         ("cursor", 3.5),
         ("get", 3.5),
+        ("latest", 3.5),
         ("runs", 3.5),
         ("cancel", 3.5),
     ]
@@ -2468,6 +2565,152 @@ def _seed_hydration_run(operator, run_id: str) -> RunState:
     return run
 
 
+def test_grpc_latest_snapshot_and_newest_pages_preserve_status_contract():
+    operator = Operator([], watch=False, schedule=False)
+    server = None
+    channel = None
+    try:
+        run = _seed_hydration_run(operator, "run-latest-page")
+        baseline = operator.list_run_summaries(page_size=10)
+        retained = operator.get_run_snapshot(
+            run.run_id,
+            operator_instance_id=baseline.operator_instance_id,
+            as_of_sequence=baseline.as_of_sequence,
+        )
+        assert retained is not None
+        operator._apply_event(
+            run.run_id,
+            _event_handle(),
+            {"type": "running", "timestamp": 1.0},
+        )
+
+        port = _unused_port()
+        server = serve(operator, port=port, block=False)
+        channel = grpc.insecure_channel(f"localhost:{port}")
+        grpc.channel_ready_future(channel).result(timeout=5)
+        stub = pb_grpc.OperatorServiceStub(channel)
+
+        latest = stub.GetLatestRunSnapshot(
+            pb.GetLatestRunSnapshotRequest(
+                run_id=run.run_id,
+                operator_instance_id=operator.operator_instance_id,
+            )
+        )
+        exact = stub.GetRunSnapshot(
+            pb.GetRunSnapshotRequest(
+                run_id=run.run_id,
+                operator_instance_id=baseline.operator_instance_id,
+                as_of_sequence=baseline.as_of_sequence,
+            )
+        )
+        assert latest.as_of_sequence > exact.as_of_sequence
+        assert latest.summary.status == RunStatus.RUNNING.value
+        assert exact.summary.status == retained.summary.status.value
+
+        class CountingLogs(list):
+            def __init__(self, entries):
+                super().__init__(entries)
+                self.item_reads = 0
+
+            def __getitem__(self, index):
+                if isinstance(index, int):
+                    self.item_reads += 1
+                return super().__getitem__(index)
+
+        with operator._lock:
+            counted_logs = CountingLogs(operator._logs[run.run_id])
+            operator._logs[run.run_id] = counted_logs
+
+        first_logs = stub.ListLogs(
+            pb.ListLogsRequest(
+                page_token=latest.log_page_token,
+                page_size=2,
+                node_id="agent-1",
+                order=pb.DESCRIPTOR_PAGE_ORDER_NEWEST_FIRST,
+            )
+        )
+        assert [item.sequence for item in first_logs.logs] == sorted(
+            (item.sequence for item in first_logs.logs),
+            reverse=True,
+        )
+        assert first_logs.next_page_token
+        second_logs = stub.ListLogs(
+            pb.ListLogsRequest(
+                page_token=first_logs.next_page_token,
+                page_size=2,
+                before_sequence=first_logs.logs[-1].sequence,
+                node_id="agent-1",
+                order=pb.DESCRIPTOR_PAGE_ORDER_NEWEST_FIRST,
+            )
+        )
+        assert {
+            item.sequence for item in first_logs.logs
+        }.isdisjoint(item.sequence for item in second_logs.logs)
+        reads_before_missing_page = counted_logs.item_reads
+        missing_logs = stub.ListLogs(
+            pb.ListLogsRequest(
+                page_token=latest.log_page_token,
+                page_size=2,
+                node_id="missing-agent",
+                order=pb.DESCRIPTOR_PAGE_ORDER_NEWEST_FIRST,
+            )
+        )
+        assert list(missing_logs.logs) == []
+        assert counted_logs.item_reads == reads_before_missing_page
+
+        first_events = stub.ListAgentEvents(
+            pb.ListAgentEventsRequest(
+                page_token=latest.nodes[0].event_page_token,
+                page_size=2,
+                order=pb.DESCRIPTOR_PAGE_ORDER_NEWEST_FIRST,
+            )
+        )
+        assert [item.event_sequence for item in first_events.events] == sorted(
+            (item.event_sequence for item in first_events.events),
+            reverse=True,
+        )
+
+        with pytest.raises(grpc.RpcError) as cursor_error:
+            stub.ListLogs(
+                pb.ListLogsRequest(
+                    page_token=first_logs.next_page_token,
+                    page_size=2,
+                    before_sequence=first_logs.logs[-1].sequence - 1,
+                    node_id="agent-1",
+                    order=pb.DESCRIPTOR_PAGE_ORDER_NEWEST_FIRST,
+                )
+            )
+        assert cursor_error.value.code() is grpc.StatusCode.INVALID_ARGUMENT
+
+        with pytest.raises(grpc.RpcError) as stale_error:
+            stub.GetLatestRunSnapshot(
+                pb.GetLatestRunSnapshotRequest(
+                    run_id=run.run_id,
+                    operator_instance_id="stale-operator",
+                )
+            )
+        assert stale_error.value.code() is grpc.StatusCode.FAILED_PRECONDITION
+
+        with pytest.raises(grpc.RpcError) as missing_error:
+            stub.GetLatestRunSnapshot(
+                pb.GetLatestRunSnapshotRequest(
+                    run_id="missing-run",
+                    operator_instance_id=operator.operator_instance_id,
+                )
+            )
+        assert missing_error.value.code() is grpc.StatusCode.NOT_FOUND
+
+        with pytest.raises(grpc.RpcError) as token_error:
+            stub.ListLogs(pb.ListLogsRequest(page_token="not-a-token"))
+        assert token_error.value.code() is grpc.StatusCode.INVALID_ARGUMENT
+    finally:
+        if channel is not None:
+            channel.close()
+        if server is not None:
+            server.stop(grace=0).wait()
+        operator.close()
+
+
 def test_grpc_lazily_hydrates_paged_details_and_chunked_trace(
     monkeypatch,
 ):
@@ -2496,10 +2739,15 @@ def test_grpc_lazily_hydrates_paged_details_and_chunked_trace(
                 return getattr(delegate, name)
 
             def ListLogs(self, request, **kwargs):  # noqa: N802
+                assert request.before_sequence == 0
+                assert request.node_id == ""
+                assert request.order == pb.DESCRIPTOR_PAGE_ORDER_FORWARD
                 self.log_cursors.append(request.after_sequence)
                 return delegate.ListLogs(request, **kwargs)
 
             def ListAgentEvents(self, request, **kwargs):  # noqa: N802
+                assert request.before_event_sequence == 0
+                assert request.order == pb.DESCRIPTOR_PAGE_ORDER_FORWARD
                 self.event_cursors.append(request.after_event_sequence)
                 return delegate.ListAgentEvents(request, **kwargs)
 

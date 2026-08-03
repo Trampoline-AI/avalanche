@@ -400,6 +400,21 @@ class GrpcStateProvider:
                 f"client {item_name} exceed the configured pagination item limit",
             )
 
+    def get_latest_run_snapshot(
+        self,
+        run_id: str,
+        operator_instance_id: str,
+    ) -> RunSnapshot:
+        """Fetch one latest structural snapshot pinned to an operator epoch."""
+        response = self._call(
+            self._stub.GetLatestRunSnapshot,
+            pb.GetLatestRunSnapshotRequest(
+                run_id=run_id,
+                operator_instance_id=operator_instance_id,
+            ),
+        )
+        return run_snapshot_from_proto(response)
+
     def get_run(self, run_id: str) -> RunState | None:
         """Fetch one pinned structural snapshot and lazily hydrate its details."""
         last_race: _DetailHydrationRaceError | None = None
@@ -668,6 +683,9 @@ class GrpcStateProvider:
                     page_token=token,
                     after_sequence=cursor,
                     page_size=DETAIL_HYDRATION_PAGE_SIZE,
+                    before_sequence=0,
+                    node_id="",
+                    order=pb.DESCRIPTOR_PAGE_ORDER_FORWARD,
                 ),
             )
             self._validate_detail_page(
@@ -726,6 +744,8 @@ class GrpcStateProvider:
                     page_token=token,
                     after_event_sequence=cursor,
                     page_size=DETAIL_HYDRATION_PAGE_SIZE,
+                    before_event_sequence=0,
+                    order=pb.DESCRIPTOR_PAGE_ORDER_FORWARD,
                 ),
             )
             self._validate_detail_page(
