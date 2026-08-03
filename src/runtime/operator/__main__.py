@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import logging
 from collections.abc import Sequence
 
 
@@ -46,7 +47,19 @@ def main(argv: Sequence[str] | None = None) -> int:
             "and authenticated boundary"
         ),
     )
+    parser.add_argument(
+        "--log-level",
+        type=str.upper,
+        choices=("DEBUG", "INFO", "WARNING", "ERROR"),
+        default="WARNING",
+        help="terminal log level (default: WARNING)",
+    )
     args = parser.parse_args(list(argv) if argv is not None else None)
+    logging.basicConfig(
+        level=getattr(logging, args.log_level),
+        format="%(asctime)s %(levelname)s %(name)s: %(message)s",
+        force=True,
+    )
 
     if args.ray:
         print("Executor: Ray")

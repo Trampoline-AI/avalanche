@@ -66,3 +66,9 @@
 - [x] 7.8 Contain Explorer and graph rerenders so unrelated log, event, and detail updates do not rebuild navigation or graph layout.
 - [x] 7.9 Add deterministic high-volume protocol, state, inspector, DOM-bound, cancellation, decoding, and browser performance regression coverage.
 - [x] 7.10 Run focused and aggregate Python, TUI, browser build/test/benchmark, smoke, and real-browser large-run verification.
+
+## 8. Operator lifecycle logging
+
+- [x] 8.1 Add and forward a validated `--log-level` option for `ava operator`, configure runtime CLI logging before service startup, and preserve library caller logging ownership.
+- [x] 8.2 Log source-watcher startup/shutdown and reload attempt, success, unchanged, and failed outcomes with catalog revision and bounded diagnostic context at appropriate levels.
+- [x] 8.3 Add focused CLI and watcher regression coverage, update user-facing operator guidance, and run the relevant lint and test gates.

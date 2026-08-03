@@ -386,6 +386,11 @@ ava operator --flows path/to/flows --web
 # Open http://127.0.0.1:7435
 ```
 
+Add `--log-level INFO` to either operator launch command to show listener startup,
+source-watcher startup and shutdown, changed files, successful catalog revision
+transitions, unchanged rescans, and reload failures. The default is `WARNING`;
+accepted levels are `DEBUG`, `INFO`, `WARNING`, and `ERROR`.
+
 The browser shows the live workflow catalog, current definitions, immutable
 per-run topology, run controls, logs, and retained agent trace evidence. Source
 changes replace only the current-definition canvas; earlier runs keep their

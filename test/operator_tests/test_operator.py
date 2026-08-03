@@ -20,6 +20,7 @@ from avalanche.operator.models import (
     RunState,
     RunStatus,
     RunStatusChanged,
+    WorkflowDiscoveryDiagnostic,
 )
 from avalanche.operator.operator import (
     MAX_RUN_ID_BYTES,
@@ -27,12 +28,14 @@ from avalanche.operator.operator import (
     RunAlreadyExistsError,
 )
 from avalanche.operator.scheduler import Scheduler
+from runtime.operator import operator as operator_module
 from runtime.operator.run_worker import (
     _import_isolated_ray,
     _QueueStream,
     _with_local_node_observers,
     _with_ray_node_observers,
 )
+from runtime.operator.webhooks import WebhookRoute
 
 FIXTURES_DIR = os.path.join(os.path.dirname(os.path.dirname(__file__)), "fixtures")
 
@@ -196,7 +199,7 @@ class TestOperatorLifecycle:
         runs = op.list_runs("nonexistent")
         assert len(runs) == 0
 
-    def test_refresh_unchanged_catalog_does_not_publish_update(self, tmp_path):
+    def test_refresh_unchanged_catalog_does_not_publish_update(self, tmp_path, caplog):
         workflow_file = tmp_path / "flow.py"
         workflow_file.write_text(
             "import avalanche as ava\n"
@@ -212,15 +215,17 @@ class TestOperatorLifecycle:
         try:
             initial = operator.get_catalog()
 
+            caplog.set_level("INFO", logger="runtime.operator.operator")
             operator._refresh_workflows()
 
             current = operator.get_catalog()
             assert current.revision == initial.revision
             assert current.as_of_sequence == initial.as_of_sequence
+            assert "Workflow reload unchanged" in caplog.text
         finally:
             operator.close()
 
-    def test_refresh_invalid_file_retains_descriptor_and_schedule(self, tmp_path):
+    def test_refresh_invalid_file_retains_descriptor_and_schedule(self, tmp_path, caplog):
         workflow_file = tmp_path / "scheduled.py"
         workflow_file.write_text(
             "import avalanche as ava\n"
@@ -235,6 +240,7 @@ class TestOperatorLifecycle:
         assert len(operator._scheduler.list_schedules()) == 1
 
         workflow_file.write_text("invalid Python !!!\n")
+        caplog.set_level("INFO", logger="runtime.operator.operator")
         operator._refresh_workflows()
 
         assert [item.workflow_id for item in operator.list_workflows()] == [
@@ -242,6 +248,83 @@ class TestOperatorLifecycle:
         ]
         assert len(operator._scheduler.list_schedules()) == 1
         assert [item.kind for item in operator.list_diagnostics()] == ["import_error"]
+        assert "Workflow reload failed; retaining catalog revision" in caplog.text
+        assert "import_error" in caplog.text
+
+    def test_reload_diagnostic_summary_bounds_complete_rendered_text(self):
+        diagnostic = WorkflowDiscoveryDiagnostic(
+            path="/" + ("nested/" * 1_000),
+            kind="invalid_catalog",
+            message="invalid catalog",
+        )
+
+        summary = operator_module._summarize_reload_diagnostics((diagnostic,))
+
+        assert len(summary) == operator_module._RELOAD_LOG_SUMMARY_LIMIT
+        assert summary.endswith("...")
+
+    def test_refresh_reconciliation_failure_rolls_back_and_can_retry(
+        self,
+        tmp_path,
+        monkeypatch,
+        caplog,
+    ):
+        workflow_file = tmp_path / "flow.py"
+        workflow_file.write_text(
+            "import avalanche as ava\n"
+            "@ava.workflow\n"
+            "def flow():\n"
+            "    return None\n"
+        )
+        operator = Operator(
+            workflow_paths=[str(workflow_file)],
+            webhook_port=0,
+            schedule=False,
+            watch=False,
+        )
+        previous = operator._registry.view
+        real_reconcile = operator._webhooks.reconcile
+        reject_candidate = True
+
+        def reconcile(routes: dict[str, WebhookRoute]) -> None:
+            nonlocal reject_candidate
+            if routes and reject_candidate:
+                reject_candidate = False
+                raise OSError("occupied " + ("port" * 1_000))
+            real_reconcile(routes)
+
+        monkeypatch.setattr(operator._webhooks, "reconcile", reconcile)
+        caplog.set_level("INFO", logger="runtime.operator.operator")
+        try:
+            workflow_file.write_text(
+                "import avalanche as ava\n"
+                "@ava.workflow(webhook=True)\n"
+                "def flow():\n"
+                "    return None\n"
+            )
+            operator._refresh_workflows()
+
+            assert operator._registry.view is previous
+            assert "Workflow reload reconciliation failed" in caplog.text
+            failure_record = next(
+                record
+                for record in caplog.records
+                if "reconciliation failed" in record.getMessage()
+            )
+            assert len(failure_record.getMessage()) < 2_200
+
+            workflow_file.write_text(
+                "import avalanche as ava\n"
+                "@ava.workflow(cron='5 * * * *', webhook=True)\n"
+                "def flow():\n"
+                "    return None\n"
+            )
+            operator._refresh_workflows()
+
+            assert operator.get_catalog().revision == previous.revision + 1
+            assert "Workflow reload succeeded" in caplog.text
+        finally:
+            operator.close()
 
     @pytest.mark.parametrize(
         "factory",

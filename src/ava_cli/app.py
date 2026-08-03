@@ -84,6 +84,13 @@ def _build_parser() -> argparse.ArgumentParser:
             "and authenticated boundary"
         ),
     )
+    operator.add_argument(
+        "--log-level",
+        type=str.upper,
+        choices=("DEBUG", "INFO", "WARNING", "ERROR"),
+        default="WARNING",
+        help="terminal log level (default: WARNING)",
+    )
     operator.add_argument("--ray", action="store_true", help="use the Ray executor")
     operator.set_defaults(handler=_run_operator)
 
@@ -230,6 +237,8 @@ def _run_operator(args: argparse.Namespace) -> int:
         str(args.port),
         "--webhook-port",
         str(args.webhook_port),
+        "--log-level",
+        args.log_level,
     ]
     if args.web:
         runtime_args.extend(

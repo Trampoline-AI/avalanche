@@ -61,6 +61,7 @@ from .models import (
     TraceDescriptor,
     TraceFinalized,
     TraceHeader,
+    WorkflowDiscoveryDiagnostic,
     WorkflowInfo,
     WorkflowTopology,
 )
@@ -104,6 +105,9 @@ MAX_AGENT_EVENT_BYTES = 8 * 1024 * 1024
 MAX_TRACE_BODY_BYTES = 32 * 1024 * 1024
 MAX_NODE_DETAIL_BYTES = 64 * 1024 * 1024
 MAX_RUN_LOG_BYTES = 16 * 1024 * 1024
+_RELOAD_LOG_DIAGNOSTIC_LIMIT = 5
+_RELOAD_LOG_MESSAGE_LIMIT = 500
+_RELOAD_LOG_SUMMARY_LIMIT = 2_000
 MAX_RUN_LOG_ENTRIES = 100_000
 MAX_RUN_DETAIL_BYTES = 128 * 1024 * 1024
 MAX_AGENT_DETAIL_DEPTH = 64
@@ -201,6 +205,26 @@ class _RunDetailCapture:
     trace_bodies: Mapping[str, bytes]
     trace_errors: Mapping[str, str | None]
     trace_invocation_ids: Mapping[str, str]
+
+
+def _bound_reload_log_text(text: str) -> str:
+    if len(text) <= _RELOAD_LOG_SUMMARY_LIMIT:
+        return text
+    return text[: _RELOAD_LOG_SUMMARY_LIMIT - 3] + "..."
+
+
+def _summarize_reload_diagnostics(
+    diagnostics: tuple[WorkflowDiscoveryDiagnostic, ...],
+) -> str:
+    summaries = [
+        f"{diagnostic.kind} {diagnostic.path}: "
+        f"{diagnostic.message[:_RELOAD_LOG_MESSAGE_LIMIT]}"
+        for diagnostic in diagnostics[:_RELOAD_LOG_DIAGNOSTIC_LIMIT]
+    ]
+    omitted = len(diagnostics) - len(summaries)
+    if omitted:
+        summaries.append(f"{omitted} additional diagnostic(s)")
+    return _bound_reload_log_text("; ".join(summaries))
 
 
 class Operator:
@@ -1468,6 +1492,8 @@ class Operator:
         if threading.current_thread() is not notification_thread:
             notification_thread.join(timeout=2.0)
 
+
+
     def _start_watcher(self) -> None:
         self._watcher_thread = threading.Thread(
             target=self._watch_loop, name="avalanche-watcher", daemon=True
@@ -1484,34 +1510,74 @@ class Operator:
         locators = tuple(descriptor.locator for descriptor in self._registry.descriptors())
         source_roots = resolve_watch_roots(self._registry.configured_roots, locators)
         watch_dirs = tuple(str(path) for path in source_roots)
-        for changes in watch(
-            *watch_dirs,
-            stop_event=self._watcher_stop,
-            watch_filter=lambda _, path: is_source_path_included(path, source_roots),
-            rust_timeout=50,
-            yield_on_timeout=True,
-        ):
-            self._watcher_ready.set()
-            if not changes:
-                continue
-            changed_files = [path for _, path in changes]
-            logging.getLogger(__name__).info(
-                "Workflow files changed: %s, re-scanning...", changed_files
-            )
-            self._refresh_workflows()
+        logger.info("Workflow watcher started: roots=%s", watch_dirs)
+        try:
+            for changes in watch(
+                *watch_dirs,
+                stop_event=self._watcher_stop,
+                watch_filter=lambda _, path: is_source_path_included(path, source_roots),
+                rust_timeout=50,
+                yield_on_timeout=True,
+            ):
+                self._watcher_ready.set()
+                if not changes:
+                    continue
+                changed_files = tuple(sorted(path for _, path in changes))
+                self._refresh_workflows(changed_files)
+        finally:
+            logger.info("Workflow watcher stopped")
 
-    def _refresh_workflows(self) -> None:
+    def _refresh_workflows(self, changed_files: tuple[str, ...] = ()) -> None:
         previous = self._registry.view
+        logger.info(
+            "Workflow reload started: revision=%d changed_files=%s",
+            previous.revision,
+            changed_files,
+        )
         # Publishing descriptors and replacing schedules are one logical update.
         # Otherwise an old cron can resolve newly-published same-ID source in the
         # small window between these two operations.
         with self._scheduler.reconciliation_boundary():
             view = self._registry.rescan(validate=routes_for)
+            failed_diagnostics = tuple(
+                diagnostic for diagnostic in view.diagnostics if diagnostic.kind != "skipped"
+            )
+            if failed_diagnostics:
+                logger.warning(
+                    "Workflow reload failed; retaining catalog revision %d: %s",
+                    previous.revision,
+                    _summarize_reload_diagnostics(failed_diagnostics),
+                )
             if view is previous:
+                if not failed_diagnostics:
+                    logger.info(
+                        "Workflow reload unchanged: revision=%d",
+                        previous.revision,
+                    )
                 return
-            self._scheduler.reconcile(view.by_id.values())
-            self._reconcile_webhooks(view.by_id.values())
+            try:
+                self._scheduler.reconcile(view.by_id.values())
+                self._reconcile_webhooks(view.by_id.values())
+            except OSError as exc:
+                self._registry.restore_view(view, previous)
+                self._scheduler.reconcile(previous.by_id.values())
+                self._reconcile_webhooks(previous.by_id.values())
+                error = _bound_reload_log_text(f"{type(exc).__name__}: {exc}")
+                logger.warning(
+                    "Workflow reload reconciliation failed; retaining catalog "
+                    "revision %d: %s",
+                    previous.revision,
+                    error,
+                )
+                return
         self._publish_catalog(view)
+        if not failed_diagnostics:
+            logger.info(
+                "Workflow reload succeeded: revision=%d->%d workflows=%d",
+                previous.revision,
+                view.revision,
+                len(view.by_id),
+            )
 
     def _reconcile_webhooks(self, descriptors) -> None:
         routes = routes_for(tuple(descriptors))

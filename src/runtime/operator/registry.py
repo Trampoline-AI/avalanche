@@ -147,6 +147,13 @@ class WorkflowRegistry:
         with self._lock:
             return self._view
 
+    def restore_view(self, rejected: CatalogView, previous: CatalogView) -> None:
+        """Restore the last valid view after downstream reconciliation rejects a candidate."""
+        with self._lock:
+            if self._view is not rejected:
+                raise RuntimeError("Workflow catalog changed before candidate rollback")
+            self._view = previous
+
     @property
     def configured_roots(self) -> tuple[ConfiguredRoot, ...]:
         """Return the normalized workflow roots used by the current catalog."""

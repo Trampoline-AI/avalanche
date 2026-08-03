@@ -817,7 +817,7 @@ def test_running_cancellation_kills_sigterm_ignoring_coordinator(tmp_path):
         operator.close()
 
 
-def test_watcher_refreshes_resource_derived_cron(tmp_path):
+def test_watcher_refreshes_resource_derived_cron(tmp_path, caplog):
     config = tmp_path / "schedule.json"
     config.write_text('{"cron": "1 * * * *"}')
     workflow = tmp_path / "flow.py"
@@ -830,6 +830,7 @@ def test_watcher_refreshes_resource_derived_cron(tmp_path):
         "def flow():\n"
         "    return None\n"
     )
+    caplog.set_level("INFO", logger="runtime.operator.operator")
     operator = Operator([str(tmp_path)], watch=True, schedule=False)
     try:
         assert operator.list_workflows()[0].cron == "1 * * * *"
@@ -843,6 +844,10 @@ def test_watcher_refreshes_resource_derived_cron(tmp_path):
             raise AssertionError("resource change did not refresh workflow cron")
     finally:
         operator.close()
+    assert "Workflow watcher started" in caplog.text
+    assert "Workflow reload started" in caplog.text
+    assert "Workflow reload succeeded" in caplog.text
+    assert "Workflow watcher stopped" in caplog.text
 
 
 def test_watcher_refreshes_cron_imported_from_live_package_root(tmp_path):
