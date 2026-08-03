@@ -3,6 +3,7 @@ from __future__ import annotations
 import hashlib
 import importlib.util
 import json
+import logging
 import stat
 import threading
 import tomllib
@@ -69,9 +70,49 @@ def test_ava_operator_delegates_to_runtime_operator_with_flows(monkeypatch):
             "17777",
             "--webhook-port",
             "7434",
+            "--log-level",
+            "WARNING",
             "--ray",
         ]
     ]
+
+
+def test_ava_operator_forwards_case_insensitive_log_level(monkeypatch):
+    from ava_cli import app
+
+    calls = []
+    monkeypatch.setattr(app, "_operator_main", lambda argv: calls.append(argv) or 0)
+
+    assert app.main(["operator", "--flows", "examples", "--log-level", "info"]) == 0
+    assert calls[0][-2:] == ["--log-level", "INFO"]
+
+
+def test_runtime_operator_configures_logging_before_serve(monkeypatch):
+    import runtime.operator as runtime_operator
+    from runtime.operator import __main__ as operator_main
+
+    lifecycle = []
+    monkeypatch.setattr(
+        operator_main.logging,
+        "basicConfig",
+        lambda **kwargs: lifecycle.append(("logging", kwargs)),
+    )
+    monkeypatch.setattr(
+        runtime_operator,
+        "serve",
+        lambda flows, **kwargs: lifecycle.append(("serve", (flows, kwargs))),
+    )
+
+    assert operator_main.main(["--flows", "examples", "--log-level", "info"]) == 0
+    assert lifecycle[0] == (
+        "logging",
+        {
+            "level": logging.INFO,
+            "format": "%(asctime)s %(levelname)s %(name)s: %(message)s",
+            "force": True,
+        },
+    )
+    assert lifecycle[1][0] == "serve"
 
 
 def test_ava_operator_delegates_web_listener_configuration(monkeypatch):

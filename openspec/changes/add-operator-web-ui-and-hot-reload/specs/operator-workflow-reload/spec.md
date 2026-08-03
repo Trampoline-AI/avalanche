@@ -31,3 +31,29 @@ A catalog reload SHALL affect workflow selection and runs started after the relo
 #### Scenario: Reload while a run is active
 - **WHEN** a workflow is reloaded while one of its runs is active
 - **THEN** the active run continues against its recorded workflow definition and later workflow views show the reloaded definition
+
+### Requirement: Expose configurable reload lifecycle logs
+
+The operator CLI SHALL accept `--log-level` with `DEBUG`, `INFO`, `WARNING`, and
+`ERROR` levels and SHALL default to `WARNING`. The selected level SHALL configure
+terminal logging before operator services start. At `INFO`, the source watcher SHALL
+log watcher startup and shutdown, each detected reload attempt, successful catalog
+replacement with its revision transition, and unchanged reload results. A failed
+reload SHALL emit a `WARNING` with its structured discovery diagnostic summary while
+the last valid catalog remains active.
+
+#### Scenario: Operator starts with informational logging
+- **WHEN** a user starts `ava operator` with `--log-level INFO`
+- **THEN** operator service startup and hot-reload lifecycle messages are visible in the terminal
+
+#### Scenario: Reload changes the catalog
+- **WHEN** a watched source change produces a valid catalog replacement
+- **THEN** the operator logs the reload attempt and successful old-to-new catalog revision transition
+
+#### Scenario: Reload has no effective change
+- **WHEN** a watched source change produces catalog content identical to the current catalog
+- **THEN** the operator logs that the reload completed without an effective catalog change
+
+#### Scenario: Reload fails
+- **WHEN** a watched source change produces discovery or catalog validation diagnostics
+- **THEN** the operator logs a warning summarizing the failure and continues serving the last valid catalog

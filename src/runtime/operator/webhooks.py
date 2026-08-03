@@ -74,9 +74,9 @@ class WebhookServer:
 
     def reconcile(self, routes: dict[str, WebhookRoute]) -> None:
         with self._lock:
-            self._routes = dict(routes)
             if routes and self._server is None:
                 self._start_locked()
+            self._routes = dict(routes)
 
     def close(self) -> None:
         with self._lock:

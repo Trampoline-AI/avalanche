@@ -124,6 +124,11 @@ To run them separately, start the operator in one terminal:
 uv run ava operator --flows examples --port 7433
 ```
 
+Operator terminal logging defaults to `WARNING`. Add `--log-level INFO` to see
+service and source-watcher startup, each hot-reload attempt, successful revision
+transitions, unchanged rescans, reload failures, and watcher shutdown. The flag
+also works with the `python -m avalanche.operator` entry point.
+
 Start a discovered flow from another terminal with the CLI:
 
 ```bash

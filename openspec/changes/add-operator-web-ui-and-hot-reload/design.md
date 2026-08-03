@@ -160,6 +160,19 @@ generation-scoped and cancellable. Only the active tab requests or renders detai
 log navigators are virtualized, parsed detail caching is bounded by entries and bytes, and
 nested values expand in bounded groups rather than recursively mounting the complete body.
 
+### Configure CLI logging and report reload outcomes
+
+Add `--log-level` to `ava operator` and the runtime operator entrypoint with
+`DEBUG`, `INFO`, `WARNING`, and `ERROR` choices and a `WARNING` default matching
+the current effective threshold. Configure logging at the runtime CLI boundary
+before services start; library callers retain ownership of their logging setup.
+
+Use `INFO` for watcher startup/shutdown, detected changes, successful revision
+transitions, and unchanged rescans. Use `WARNING` when discovery or catalog
+validation fails, including bounded structured diagnostic context while preserving
+the last valid catalog. Reload outcome logs supplement rather than replace catalog
+diagnostics and `CatalogReplaced` events consumed by clients.
+
 ## Risks / Trade-offs
 
 - Full catalog replacements make reload behavior simple and correct but transmit more data than diffs. Local workflow catalogs are expected to be small; a later scale constraint can justify an explicitly versioned diff protocol.

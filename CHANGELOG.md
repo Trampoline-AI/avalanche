@@ -20,6 +20,8 @@
 - Large-run hydration is now summary-first, cancellable, incrementally paged, and
   bounded across browser queues, descriptor windows, detail caches, and virtualized
   DOM rendering. `make web-bench` covers 10,000 retained runs in real Chromium.
+- Added `ava operator --log-level` and explicit source-watcher and hot-reload
+  lifecycle logs for successful, unchanged, and failed catalog refreshes.
 
 ### Operator transport
 
