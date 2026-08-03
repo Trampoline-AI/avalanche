@@ -7,7 +7,10 @@
     "build": "tsc --noEmit -p tsconfig.app.json && tsc --noEmit -p tsconfig.node.json && vite build",
     "dev": "vite",
     "generate": "uv run python -m grpc_tools.protoc -I../../src/runtime/operator/proto --plugin=protoc-gen-ts=./node_modules/.bin/protoc-gen-ts --ts_out=src/generated --ts_opt=long_type_string ../../src/runtime/operator/proto/operator.proto",
-    "test": "vitest run"
+    "benchmark": "pnpm run benchmark:unit && pnpm run benchmark:browser",
+    "benchmark:unit": "vitest run src/operator.large-run.benchmark.test.tsx --maxWorkers=1 --minWorkers=1 --no-file-parallelism",
+    "benchmark:browser": "node scripts/operator-large-run-browser-benchmark.mjs",
+    "test": "vitest run --maxWorkers=1 --minWorkers=1 --no-file-parallelism --exclude src/operator.large-run.benchmark.test.tsx"
   },
   "dependencies": {
     "@codemirror/lang-json": "^6.0.2",

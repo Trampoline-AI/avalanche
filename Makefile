@@ -1,4 +1,4 @@
-.PHONY: test test-cov test-cov-html lint format precommit-check check smoke-test tui-bench proto brand install clean
+.PHONY: test test-cov test-cov-html lint format precommit-check check smoke-test tui-bench proto brand install clean web-bench
 
 # Run tests with every supported executor/storage extra installed.
 test:
@@ -54,6 +54,10 @@ web-build:
 # Run browser projection and component tests.
 web-test:
 	cd web/operator && pnpm test
+
+# Run the Vitest volume gate followed by the Node-managed real-Chromium virtualizer gate.
+web-bench:
+	cd web/operator && pnpm benchmark
 
 # Build checked-in brand image artifacts from the Three.js source HTML.
 brand:

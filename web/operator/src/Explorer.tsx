@@ -32,6 +32,7 @@ interface WorkflowBranchProps {
   workflow: FlowInfoMsg;
   runs: RunSummaryMsg[];
   scrollElement: HTMLElement | null;
+  contentLayoutRevision: number;
   selection?: Selection;
   onSelect: (selection: Selection) => void;
 }
@@ -56,6 +57,7 @@ const WorkflowBranch = memo(function WorkflowBranch({
   workflow,
   runs,
   scrollElement,
+  contentLayoutRevision,
   selection,
   onSelect,
 }: WorkflowBranchProps) {
@@ -74,19 +76,10 @@ const WorkflowBranch = memo(function WorkflowBranch({
 
   useLayoutEffect(() => {
     if (!expanded || !runList.current || !scrollElement) return;
-    const listElement = runList.current;
-    const updateScrollMargin = () => {
-      const listRect = listElement.getBoundingClientRect();
-      const scrollRect = scrollElement.getBoundingClientRect();
-      setScrollMargin(listRect.top - scrollRect.top + scrollElement.scrollTop);
-    };
-    updateScrollMargin();
-    if (typeof ResizeObserver === "undefined") return;
-    const observer = new ResizeObserver(updateScrollMargin);
-    observer.observe(listElement.closest(".workflow-list") ?? listElement);
-    observer.observe(scrollElement);
-    return () => observer.disconnect();
-  }, [expanded, runs.length, scrollElement]);
+    const listRect = runList.current.getBoundingClientRect();
+    const scrollRect = scrollElement.getBoundingClientRect();
+    setScrollMargin(listRect.top - scrollRect.top + scrollElement.scrollTop);
+  }, [contentLayoutRevision, expanded, runs.length, scrollElement]);
 
 
   return (
@@ -134,6 +127,8 @@ const WorkflowBranch = memo(function WorkflowBranch({
                     data-index={virtualRow.index}
                     key={summary.runId}
                     role="listitem"
+                    aria-setsize={runs.length}
+                    aria-posinset={virtualRow.index + 1}
                     style={{
                       height: virtualRow.size,
                       transform: `translateY(${virtualRow.start - scrollMargin}px)`,
@@ -181,6 +176,7 @@ const WorkflowBranch = memo(function WorkflowBranch({
   left.workflow === right.workflow &&
   left.scrollElement === right.scrollElement &&
   left.onSelect === right.onSelect &&
+  left.contentLayoutRevision === right.contentLayoutRevision &&
   sameRuns(left.runs, right.runs) &&
   branchSelection(left.selection, left.workflow.workflowId) ===
     branchSelection(right.selection, right.workflow.workflowId),
@@ -197,6 +193,8 @@ function compareNewestRun(left: RunSummaryMsg, right: RunSummaryMsg) {
 function ExplorerView({ catalog, runs, selection, onSelect }: ExplorerProps) {
   const [collapsedTargets, setCollapsedTargets] = useState<Record<string, true>>({});
   const [scrollElement, setScrollElement] = useState<HTMLElement | null>(null);
+  const [contentElement, setContentElement] = useState<HTMLDivElement | null>(null);
+  const [contentLayoutRevision, setContentLayoutRevision] = useState(0);
   const targets = useMemo(() => {
     if (!catalog) return [];
     return catalog.scanTargets.length
@@ -228,6 +226,14 @@ function ExplorerView({ catalog, runs, selection, onSelect }: ExplorerProps) {
     for (const summaries of Object.values(grouped)) summaries.sort(compareNewestRun);
     return grouped;
   }, [runs]);
+  useLayoutEffect(() => {
+    if (!contentElement || typeof ResizeObserver === "undefined") return;
+    const observer = new ResizeObserver(() => {
+      setContentLayoutRevision((revision) => revision + 1);
+    });
+    observer.observe(contentElement);
+    return () => observer.disconnect();
+  }, [contentElement]);
   if (!catalog) {
     return (
       <aside id="operator-explorer" className="explorer skeleton" aria-label="Explorer">
@@ -261,7 +267,7 @@ function ExplorerView({ catalog, runs, selection, onSelect }: ExplorerProps) {
           ))}
         </details>
       )}
-      <div className="target-list">
+      <div className="target-list" ref={setContentElement}>
         {targets.map((target) => {
           const workflows = workflowsByTarget[target.alias] ?? [];
           const collapsed = Boolean(collapsedTargets[target.alias]);
@@ -294,6 +300,7 @@ function ExplorerView({ catalog, runs, selection, onSelect }: ExplorerProps) {
                       workflow={workflow}
                       runs={runsByWorkflow[workflow.workflowId] ?? EMPTY_RUNS}
                       scrollElement={scrollElement}
+                      contentLayoutRevision={contentLayoutRevision}
                       selection={selection}
                       onSelect={onSelect}
                     />
