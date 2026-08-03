@@ -7,13 +7,26 @@ import type {
   LogRecordDescriptorMsg,
   OperatorUpdateEnvelope,
   RunSnapshotMsg,
+  RunSummaryMsg,
 } from "./generated/operator";
+
+const MAX_PENDING_ENVELOPES = 1024;
+const MAX_ENVELOPES_PER_FRAME = 256;
+const MAX_LIVE_DESCRIPTORS = 256;
+
+export type SelectedRunStatus = "idle" | "loading" | "ready" | "error";
 
 export interface OperatorProjection {
   catalog?: CatalogSnapshotMsg;
-  runs: Record<string, RunSnapshotMsg>;
+  runs: Record<string, RunSummaryMsg>;
+  selectedRunId?: string;
+  selectedRun?: RunSnapshotMsg;
+  selectedRunStatus: SelectedRunStatus;
+  selectedRunError?: string;
   liveEvents: Record<string, AgentEventDescriptorMsg[]>;
   liveLogs: Record<string, LogRecordDescriptorMsg[]>;
+  liveEventRepairWatermarks: Record<string, string>;
+  liveLogRepairWatermarks: Record<string, string>;
   operatorInstanceId: string;
   sequence: string;
   connection: "connecting" | "live" | "reconnecting";
@@ -23,44 +36,86 @@ export interface OperatorProjection {
 
 type ProjectionAction =
   | { type: "baseline"; baseline: StructuralBaseline }
-  | { type: "envelope"; envelope: OperatorUpdateEnvelope }
+  | { type: "envelopes"; envelopes: OperatorUpdateEnvelope[] }
   | { type: "connection"; connection: OperatorProjection["connection"]; error?: string }
-  | { type: "action"; action?: OperatorProjection["action"] };
+  | { type: "action"; action?: OperatorProjection["action"] }
+  | { type: "selectionLoading"; runId: string }
+  | { type: "selectionReady"; runId: string; snapshot: RunSnapshotMsg }
+  | { type: "selectionError"; runId: string; error: string }
+  | { type: "selectionCleared" };
 
 export const emptyProjection: OperatorProjection = {
   runs: {},
+  selectedRunStatus: "idle",
   liveEvents: {},
   liveLogs: {},
+  liveEventRepairWatermarks: {},
+  liveLogRepairWatermarks: {},
   operatorInstanceId: "",
   sequence: "0",
   connection: "connecting",
 };
 
-export function projectionReducer(
-  state: OperatorProjection,
-  action: ProjectionAction,
-): OperatorProjection {
-  if (action.type === "baseline") {
-    const runs = Object.fromEntries(
-      action.baseline.runs
-        .filter((run) => run.summary)
-        .map((run) => [run.summary!.runId, run]),
-    );
-    return {
-      ...emptyProjection,
-      catalog: action.baseline.catalog,
-      runs,
-      operatorInstanceId: action.baseline.catalog.operatorInstanceId,
-      sequence: action.baseline.asOfSequence,
-      connection: "live",
-    };
-  }
-  if (action.type === "connection") {
-    return { ...state, connection: action.connection, error: action.error };
-  }
-  if (action.type === "action") return { ...state, action: action.action };
+interface BoundedAppend<T> {
+  items: T[];
+  droppedThrough?: string;
+}
 
-  const { envelope } = action;
+function appendBounded<T>(
+  current: T[],
+  item: T,
+  sequenceOf: (value: T) => string,
+): BoundedAppend<T> {
+  const sequence = BigInt(sequenceOf(item));
+  if (current.some((value) => BigInt(sequenceOf(value)) === sequence)) return { items: current };
+
+  let insertion = current.length;
+  while (insertion > 0 && BigInt(sequenceOf(current[insertion - 1])) > sequence) insertion -= 1;
+  const ordered = [...current.slice(0, insertion), item, ...current.slice(insertion)];
+  if (ordered.length <= MAX_LIVE_DESCRIPTORS) return { items: ordered };
+
+  const dropped = ordered.length - MAX_LIVE_DESCRIPTORS;
+  return {
+    items: ordered.slice(dropped),
+    droppedThrough: sequenceOf(ordered[dropped - 1]),
+  };
+}
+
+function laterWatermark(current: string | undefined, candidate: string): string {
+  return current === undefined || BigInt(candidate) > BigInt(current) ? candidate : current;
+}
+
+function snapshotCanCommit(
+  state: OperatorProjection,
+  runId: string,
+  snapshot: RunSnapshotMsg,
+): boolean {
+  if (
+    snapshot.operatorInstanceId !== state.operatorInstanceId ||
+    snapshot.summary?.runId !== runId ||
+    BigInt(snapshot.asOfSequence) < BigInt(state.sequence)
+  ) {
+    return false;
+  }
+  const projectedSummary = state.runs[runId];
+  return (
+    projectedSummary === undefined ||
+    BigInt(snapshot.summary.revision) >= BigInt(projectedSummary.revision)
+  );
+}
+
+function withoutRunBuckets<T>(
+  buckets: Record<string, T>,
+  runId: string,
+): Record<string, T> {
+  const prefix = `${runId}:`;
+  return Object.fromEntries(Object.entries(buckets).filter(([key]) => !key.startsWith(prefix)));
+}
+
+function applyEnvelope(
+  state: OperatorProjection,
+  envelope: OperatorUpdateEnvelope,
+): OperatorProjection {
   if (envelope.operatorInstanceId !== state.operatorInstanceId) {
     throw new Error("Operator epoch changed");
   }
@@ -71,6 +126,7 @@ export function projectionReducer(
   if (BigInt(update.sequence) !== BigInt(state.sequence) + 1n) {
     throw new Error(`Operator update gap after sequence ${state.sequence}`);
   }
+
   const next: OperatorProjection = { ...state, sequence: update.sequence, error: undefined };
   const change = update.change;
   if (change.oneofKind === "catalogReplaced") {
@@ -79,20 +135,10 @@ export function projectionReducer(
   }
   if (change.oneofKind === "runCreated" && change.runCreated.summary) {
     const summary = change.runCreated.summary;
-    next.runs = {
-      ...state.runs,
-      [summary.runId]: {
-        operatorInstanceId: state.operatorInstanceId,
-        asOfSequence: update.sequence,
-        summary,
-        nodes: change.runCreated.nodes,
-        latestLogSequence: "0",
-        logPageToken: "",
-        topology: change.runCreated.topology,
-      },
-    };
+    next.runs = { ...state.runs, [summary.runId]: summary };
     return next;
   }
+
   const runId =
     change.oneofKind === "runStatusChanged"
       ? change.runStatusChanged.runId
@@ -105,128 +151,433 @@ export function projectionReducer(
             : change.oneofKind === "traceFinalized"
               ? change.traceFinalized.runId
               : "";
-  const run = state.runs[runId];
-  if (!run) throw new Error(`Operator update referenced unknown run ${runId}`);
+  const selectedSnapshot = state.selectedRunId === runId ? state.selectedRun : undefined;
+  const selected =
+    selectedSnapshot && BigInt(update.sequence) > BigInt(selectedSnapshot.asOfSequence)
+      ? selectedSnapshot
+      : undefined;
 
-  if (change.oneofKind === "runStatusChanged" && run.summary) {
-    next.runs = {
-      ...state.runs,
-      [runId]: {
-        ...run,
-        summary: {
-          ...run.summary,
-          status: change.runStatusChanged.status,
-          startedAt: change.runStatusChanged.startedAt,
-          endedAt: change.runStatusChanged.endedAt,
-          revision: change.runStatusChanged.revision,
+  if (change.oneofKind === "runStatusChanged") {
+    const changed = change.runStatusChanged;
+    const summary = state.runs[runId];
+    if (summary) {
+      next.runs = {
+        ...state.runs,
+        [runId]: {
+          ...summary,
+          status: changed.status,
+          startedAt: changed.startedAt,
+          endedAt: changed.endedAt,
+          revision: changed.revision,
         },
-      },
-    };
-  } else if (change.oneofKind === "nodeStatusChanged") {
+      };
+    }
+    if (selected?.summary) {
+      next.selectedRun = {
+        ...selected,
+        summary: {
+          ...selected.summary,
+          status: changed.status,
+          startedAt: changed.startedAt,
+          endedAt: changed.endedAt,
+          revision: changed.revision,
+        },
+      };
+    }
+  } else if (change.oneofKind === "nodeStatusChanged" && selected) {
     const changed = change.nodeStatusChanged;
-    next.runs = {
-      ...state.runs,
-      [runId]: {
-        ...run,
-        nodes: run.nodes.map((node) =>
-          node.nodeId === changed.nodeId
-            ? {
-                ...node,
-                status: changed.status,
-                startedAt: changed.startedAt,
-                endedAt: changed.endedAt,
-                revision: changed.revision,
-                error: changed.error,
-              }
-            : node,
-        ),
-      },
-    };
-  } else if (change.oneofKind === "logAppended" && change.logAppended.log) {
-    next.liveLogs = {
-      ...state.liveLogs,
-      [runId]: [...(state.liveLogs[runId] ?? []), change.logAppended.log],
+    next.selectedRun = {
+      ...selected,
+      nodes: selected.nodes.map((node) =>
+        node.nodeId === changed.nodeId
+          ? {
+              ...node,
+              status: changed.status,
+              startedAt: changed.startedAt,
+              endedAt: changed.endedAt,
+              revision: changed.revision,
+              error: changed.error,
+            }
+          : node,
+      ),
     };
   } else if (
+    change.oneofKind === "logAppended" &&
+    state.selectedRunId === runId &&
+    (selectedSnapshot === undefined ||
+      BigInt(update.sequence) > BigInt(selectedSnapshot.asOfSequence)) &&
+    change.logAppended.log
+  ) {
+    const log = change.logAppended.log;
+    const key = `${runId}:${log.nodeId}`;
+    const appended = appendBounded(state.liveLogs[key] ?? [], log, (value) => value.sequence);
+    if (appended.items !== state.liveLogs[key]) {
+      next.liveLogs = { ...state.liveLogs, [key]: appended.items };
+    }
+    if (appended.droppedThrough !== undefined) {
+      next.liveLogRepairWatermarks = {
+        ...state.liveLogRepairWatermarks,
+        [key]: laterWatermark(state.liveLogRepairWatermarks[key], appended.droppedThrough),
+      };
+    }
+  } else if (
     change.oneofKind === "agentEventAppended" &&
+    state.selectedRunId === runId &&
+    (selectedSnapshot === undefined ||
+      BigInt(update.sequence) > BigInt(selectedSnapshot.asOfSequence)) &&
     change.agentEventAppended.event
   ) {
+    const event = change.agentEventAppended.event;
     const key = `${runId}:${change.agentEventAppended.nodeId}`;
-    next.liveEvents = {
-      ...state.liveEvents,
-      [key]: [...(state.liveEvents[key] ?? []), change.agentEventAppended.event],
-    };
-  } else if (change.oneofKind === "traceFinalized" && change.traceFinalized.trace) {
-    next.runs = {
-      ...state.runs,
-      [runId]: {
-        ...run,
-        nodes: run.nodes.map((node) =>
-          node.nodeId === change.traceFinalized.nodeId
-            ? { ...node, trace: change.traceFinalized.trace }
-            : node,
-        ),
-      },
+    const appended = appendBounded(
+      state.liveEvents[key] ?? [],
+      event,
+      (value) => value.eventSequence,
+    );
+    if (appended.items !== state.liveEvents[key]) {
+      next.liveEvents = { ...state.liveEvents, [key]: appended.items };
+    }
+    if (appended.droppedThrough !== undefined) {
+      next.liveEventRepairWatermarks = {
+        ...state.liveEventRepairWatermarks,
+        [key]: laterWatermark(state.liveEventRepairWatermarks[key], appended.droppedThrough),
+      };
+    }
+  } else if (change.oneofKind === "traceFinalized" && selected && change.traceFinalized.trace) {
+    next.selectedRun = {
+      ...selected,
+      nodes: selected.nodes.map((node) =>
+        node.nodeId === change.traceFinalized.nodeId
+          ? { ...node, trace: change.traceFinalized.trace }
+          : node,
+      ),
     };
   }
   return next;
 }
 
+export function projectionReducer(
+  state: OperatorProjection,
+  action: ProjectionAction,
+): OperatorProjection {
+  if (action.type === "baseline") {
+    return {
+      ...emptyProjection,
+      catalog: action.baseline.catalog,
+      runs: Object.fromEntries(action.baseline.runs.map((run) => [run.runId, run])),
+      operatorInstanceId: action.baseline.catalog.operatorInstanceId,
+      sequence: action.baseline.asOfSequence,
+      connection: "live",
+    };
+  }
+  if (action.type === "connection") {
+    return { ...state, connection: action.connection, error: action.error };
+  }
+  if (action.type === "action") return { ...state, action: action.action };
+  if (action.type === "selectionLoading") {
+    return {
+      ...state,
+      selectedRunId: action.runId,
+      selectedRun: undefined,
+      selectedRunStatus: "loading",
+      selectedRunError: undefined,
+      liveEvents: {},
+      liveLogs: {},
+      liveEventRepairWatermarks: {},
+      liveLogRepairWatermarks: {},
+    };
+  }
+  if (action.type === "selectionReady") {
+    if (
+      state.selectedRunId !== action.runId ||
+      !snapshotCanCommit(state, action.runId, action.snapshot)
+    ) {
+      return state;
+    }
+    return {
+      ...state,
+      selectedRunId: action.runId,
+      selectedRun: action.snapshot,
+      selectedRunStatus: "ready",
+      selectedRunError: undefined,
+      liveEvents: withoutRunBuckets(state.liveEvents, action.runId),
+      liveLogs: withoutRunBuckets(state.liveLogs, action.runId),
+      liveEventRepairWatermarks: withoutRunBuckets(
+        state.liveEventRepairWatermarks,
+        action.runId,
+      ),
+      liveLogRepairWatermarks: withoutRunBuckets(
+        state.liveLogRepairWatermarks,
+        action.runId,
+      ),
+    };
+  }
+  if (action.type === "selectionError") {
+    return {
+      ...state,
+      selectedRunId: action.runId,
+      selectedRun: undefined,
+      selectedRunStatus: "error",
+      selectedRunError: action.error,
+    };
+  }
+  if (action.type === "selectionCleared") {
+    return {
+      ...state,
+      selectedRunId: undefined,
+      selectedRun: undefined,
+      selectedRunStatus: "idle",
+      selectedRunError: undefined,
+      liveEvents: {},
+      liveLogs: {},
+      liveEventRepairWatermarks: {},
+      liveLogRepairWatermarks: {},
+    };
+  }
+
+  let next = state;
+  for (const envelope of action.envelopes) next = applyEnvelope(next, envelope);
+  return next;
+}
 
 export function useOperatorProjection(api: OperatorApi) {
   const [state, dispatch] = useReducer(projectionReducer, emptyProjection);
-  const generation = useRef(0);
+  const stateRef = useRef(state);
+  stateRef.current = state;
+  const projectionCursor = useRef({
+    operatorInstanceId: state.operatorInstanceId,
+    sequence: state.sequence,
+  });
+  if (
+    projectionCursor.current.operatorInstanceId !== state.operatorInstanceId ||
+    BigInt(state.sequence) > BigInt(projectionCursor.current.sequence)
+  ) {
+    projectionCursor.current = {
+      operatorInstanceId: state.operatorInstanceId,
+      sequence: state.sequence,
+    };
+  }
 
-  const reconcile = useCallback(async () => {
-    const baseline = await api.loadBaseline();
-    dispatch({ type: "baseline", baseline });
-    return baseline;
-  }, [api]);
+  const cycleController = useRef<AbortController | undefined>(undefined);
+  const selectionController = useRef<AbortController | undefined>(undefined);
+  const selectionGeneration = useRef(0);
+  const pendingFrame = useRef<number | undefined>(undefined);
+  const retryTimer = useRef<number | undefined>(undefined);
+  const wakeRetry = useRef<(() => void) | undefined>(undefined);
+
+  const abortSelection = useCallback(() => {
+    selectionGeneration.current += 1;
+    selectionController.current?.abort();
+    selectionController.current = undefined;
+  }, []);
+
+  const reconcile = useCallback(() => {
+    cycleController.current?.abort();
+    wakeRetry.current?.();
+  }, []);
 
   useEffect(() => {
-    const currentGeneration = ++generation.current;
-    let stopped = false;
+    const lifecycle = new AbortController();
+    let retryMilliseconds = 250;
+
+    const waitForRetry = (milliseconds: number) =>
+      new Promise<void>((resolve) => {
+        const finish = () => {
+          if (retryTimer.current !== undefined) window.clearTimeout(retryTimer.current);
+          retryTimer.current = undefined;
+          if (wakeRetry.current === finish) wakeRetry.current = undefined;
+          resolve();
+        };
+        wakeRetry.current = finish;
+        retryTimer.current = window.setTimeout(finish, milliseconds);
+      });
+
     const run = async () => {
-      let retryMilliseconds = 250;
-      while (!stopped && generation.current === currentGeneration) {
+      while (!lifecycle.signal.aborted) {
+        const cycle = new AbortController();
+        cycleController.current = cycle;
+        let pending: OperatorUpdateEnvelope[] = [];
+        let retryAfterCycle = 0;
+
+        const clearPending = () => {
+          pending = [];
+          if (pendingFrame.current !== undefined) {
+            window.cancelAnimationFrame(pendingFrame.current);
+            pendingFrame.current = undefined;
+          }
+        };
+        const scheduleFrame = () => {
+          if (pendingFrame.current !== undefined || cycle.signal.aborted) return;
+          pendingFrame.current = window.requestAnimationFrame(() => {
+            pendingFrame.current = undefined;
+            if (cycle.signal.aborted) {
+              pending = [];
+              return;
+            }
+            const envelopes = pending.splice(0, MAX_ENVELOPES_PER_FRAME);
+            if (envelopes.length > 0) {
+              const latest = envelopes[envelopes.length - 1];
+              if (latest.payload.oneofKind === "update") {
+                projectionCursor.current = {
+                  operatorInstanceId: latest.operatorInstanceId,
+                  sequence: latest.payload.update.sequence,
+                };
+              }
+              dispatch({ type: "envelopes", envelopes });
+            }
+            if (pending.length > 0) scheduleFrame();
+          });
+        };
+
         try {
           dispatch({ type: "connection", connection: "connecting" });
-          const baseline = await api.loadBaseline();
-          if (stopped) return;
+          const baseline = await api.loadBaseline(cycle.signal);
+          if (cycle.signal.aborted || lifecycle.signal.aborted) continue;
+          abortSelection();
+          projectionCursor.current = {
+            operatorInstanceId: baseline.catalog.operatorInstanceId,
+            sequence: baseline.asOfSequence,
+          };
           dispatch({ type: "baseline", baseline });
           retryMilliseconds = 250;
-          let sequence = baseline.asOfSequence;
+
+          let expectedSequence = baseline.asOfSequence;
           for await (const envelope of api.streamUpdates(
             baseline.catalog.operatorInstanceId,
-            sequence,
+            expectedSequence,
+            cycle.signal,
           )) {
-            if (stopped) return;
-            if (envelope.payload.oneofKind !== "update") break;
-            if (BigInt(envelope.payload.update.sequence) !== BigInt(sequence) + 1n) break;
-            dispatch({ type: "envelope", envelope });
-            sequence = envelope.payload.update.sequence;
+            if (cycle.signal.aborted || lifecycle.signal.aborted) break;
+            if (
+              envelope.operatorInstanceId !== baseline.catalog.operatorInstanceId ||
+              envelope.payload.oneofKind !== "update" ||
+              BigInt(envelope.payload.update.sequence) !== BigInt(expectedSequence) + 1n ||
+              pending.length >= MAX_PENDING_ENVELOPES
+            ) {
+              cycle.abort();
+              break;
+            }
+            pending.push(envelope);
+            expectedSequence = envelope.payload.update.sequence;
+            scheduleFrame();
           }
-          dispatch({ type: "connection", connection: "reconnecting" });
+          clearPending();
+          if (!lifecycle.signal.aborted) {
+            dispatch({ type: "connection", connection: "reconnecting" });
+          }
         } catch (error) {
-          if (stopped) return;
-          dispatch({
-            type: "connection",
-            connection: "reconnecting",
-            error: error instanceof Error ? error.message : "Operator connection failed",
-          });
-          const { promise, resolve } = Promise.withResolvers<void>();
-          window.setTimeout(resolve, retryMilliseconds);
-          await promise;
-          retryMilliseconds = Math.min(retryMilliseconds * 2, 4000);
+          clearPending();
+          if (!lifecycle.signal.aborted && !cycle.signal.aborted) {
+            dispatch({
+              type: "connection",
+              connection: "reconnecting",
+              error: error instanceof Error ? error.message : "Operator connection failed",
+            });
+            retryAfterCycle = retryMilliseconds;
+            retryMilliseconds = Math.min(retryMilliseconds * 2, 4000);
+          }
+        } finally {
+          clearPending();
+          cycle.abort();
+          if (cycleController.current === cycle) cycleController.current = undefined;
+        }
+
+        if (retryAfterCycle > 0 && !lifecycle.signal.aborted) {
+          await waitForRetry(retryAfterCycle);
         }
       }
     };
+
     void run();
     return () => {
-      stopped = true;
-      generation.current += 1;
+      lifecycle.abort();
+      cycleController.current?.abort();
+      if (pendingFrame.current !== undefined) {
+        window.cancelAnimationFrame(pendingFrame.current);
+        pendingFrame.current = undefined;
+      }
+      wakeRetry.current?.();
+      abortSelection();
     };
-  }, [api]);
+  }, [abortSelection, api]);
+
+  const loadSelectedRun = useCallback(
+    async (runId: string, showLoading: boolean) => {
+      abortSelection();
+      const generation = selectionGeneration.current;
+      const controller = new AbortController();
+      selectionController.current = controller;
+      const operatorInstanceId = stateRef.current.operatorInstanceId;
+      if (showLoading) dispatch({ type: "selectionLoading", runId });
+      try {
+        while (!controller.signal.aborted && selectionGeneration.current === generation) {
+          const snapshot = await api.getLatestRunSnapshot(
+            runId,
+            operatorInstanceId,
+            controller.signal,
+          );
+          if (
+            controller.signal.aborted ||
+            selectionGeneration.current !== generation ||
+            stateRef.current.operatorInstanceId !== operatorInstanceId
+          ) {
+            return;
+          }
+          if (
+            projectionCursor.current.operatorInstanceId !== operatorInstanceId ||
+            BigInt(snapshot.asOfSequence) < BigInt(projectionCursor.current.sequence)
+          ) {
+            continue;
+          }
+          if (!snapshotCanCommit(stateRef.current, runId, snapshot)) continue;
+          dispatch({ type: "selectionReady", runId, snapshot });
+          return;
+        }
+      } catch (error) {
+        if (controller.signal.aborted || selectionGeneration.current !== generation) return;
+        if (showLoading) {
+          dispatch({
+            type: "selectionError",
+            runId,
+            error: error instanceof Error ? error.message : "Run snapshot failed",
+          });
+        }
+      } finally {
+        if (selectionGeneration.current === generation) selectionController.current = undefined;
+      }
+    },
+    [abortSelection, api],
+  );
+
+  const selectRun = useCallback(
+    async (runId?: string) => {
+      if (runId === undefined) {
+        abortSelection();
+        dispatch({ type: "selectionCleared" });
+        return;
+      }
+      await loadSelectedRun(runId, true);
+    },
+    [abortSelection, loadSelectedRun],
+  );
+
+  const selectedRunId = state.selectedRunId;
+  const repairWatermark =
+    selectedRunId && state.selectedRunStatus === "ready"
+      ? [
+          ...Object.entries(state.liveEventRepairWatermarks),
+          ...Object.entries(state.liveLogRepairWatermarks),
+        ]
+          .filter(([key]) => key.startsWith(`${selectedRunId}:`))
+          .sort(([left], [right]) => left.localeCompare(right))
+          .map(([key, watermark]) => `${key}:${watermark}`)
+          .join("|")
+      : "";
+
+  useEffect(() => {
+    if (!selectedRunId || !repairWatermark) return;
+    void loadSelectedRun(selectedRunId, false);
+  }, [loadSelectedRun, repairWatermark, selectedRunId]);
 
   const startRun = useCallback(
     async (workflowSelector: string, input?: Record<string, unknown>) => {
@@ -252,5 +603,5 @@ export function useOperatorProjection(api: OperatorApi) {
     [api],
   );
 
-  return { state, reconcile, startRun, cancelRun };
+  return { state, reconcile, startRun, cancelRun, selectRun };
 }

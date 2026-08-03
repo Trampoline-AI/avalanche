@@ -133,6 +133,18 @@ class OperatorServicer(pb_grpc.OperatorServiceServicer):
             context.abort(grpc.StatusCode.NOT_FOUND, f"Run {request.run_id} not found")
         return run_snapshot_to_proto(snapshot)
 
+    def GetLatestRunSnapshot(self, request, context):  # noqa: N802
+        try:
+            snapshot = self._op.get_latest_run_snapshot(
+                request.run_id,
+                operator_instance_id=request.operator_instance_id,
+            )
+        except StructuralBaselineUnavailableError as exc:
+            context.abort(grpc.StatusCode.FAILED_PRECONDITION, str(exc))
+        if snapshot is None:
+            context.abort(grpc.StatusCode.NOT_FOUND, f"Run {request.run_id} not found")
+        return run_snapshot_to_proto(snapshot)
+
     def ListLogs(self, request, context):  # noqa: N802
         if not request.page_token:
             context.abort(
@@ -144,6 +156,9 @@ class OperatorServicer(pb_grpc.OperatorServiceServicer):
                 page_token=request.page_token,
                 after_sequence=request.after_sequence,
                 page_size=request.page_size,
+                before_sequence=request.before_sequence,
+                node_id=request.node_id,
+                order=request.order,
             )
         except StructuralBaselineUnavailableError as exc:
             context.abort(grpc.StatusCode.FAILED_PRECONDITION, str(exc))
@@ -169,6 +184,8 @@ class OperatorServicer(pb_grpc.OperatorServiceServicer):
                 page_token=request.page_token,
                 after_event_sequence=request.after_event_sequence,
                 page_size=request.page_size,
+                before_event_sequence=request.before_event_sequence,
+                order=request.order,
             )
         except StructuralBaselineUnavailableError as exc:
             context.abort(grpc.StatusCode.FAILED_PRECONDITION, str(exc))

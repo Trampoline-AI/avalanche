@@ -48,6 +48,10 @@ _RPC_METHODS = MappingProxyType(
         "GetRunResult": _RpcMethod(pb.GetRunRequest, pb.RunResultMsg),
         "ListRunSummaries": _RpcMethod(pb.ListRunSummariesRequest, pb.RunSummaryPage),
         "GetRunSnapshot": _RpcMethod(pb.GetRunSnapshotRequest, pb.RunSnapshotMsg),
+        "GetLatestRunSnapshot": _RpcMethod(
+            pb.GetLatestRunSnapshotRequest,
+            pb.RunSnapshotMsg,
+        ),
         "ListLogs": _RpcMethod(pb.ListLogsRequest, pb.LogPage),
         "ListAgentEvents": _RpcMethod(pb.ListAgentEventsRequest, pb.AgentEventPage),
         "ReadTrace": _RpcMethod(pb.ReadTraceRequest, pb.TraceChunk, server_streaming=True),

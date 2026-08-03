@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 
 import type { OperatorApi } from "./api";
 import { Explorer, type Selection } from "./Explorer";
@@ -8,7 +8,7 @@ import { RunControls } from "./RunControls";
 import { useOperatorProjection } from "./state";
 
 export function App({ api }: { api: OperatorApi }) {
-  const { state, startRun, cancelRun } = useOperatorProjection(api);
+  const { state, startRun, cancelRun, selectRun } = useOperatorProjection(api);
   const [selection, setSelection] = useState<Selection>();
   const [inspectedNode, setInspectedNode] = useState<string>();
   const [explorerOpen, setExplorerOpen] = useState(false);
@@ -16,7 +16,11 @@ export function App({ api }: { api: OperatorApi }) {
   useEffect(() => {
     const workflows = state.catalog?.workflows ?? [];
     if (!workflows.length) {
-      setSelection(undefined);
+      if (selection) {
+        setSelection(undefined);
+        setInspectedNode(undefined);
+        void selectRun(undefined);
+      }
       return;
     }
     if (!selection) {
@@ -25,32 +29,44 @@ export function App({ api }: { api: OperatorApi }) {
     }
     if (!workflows.some((workflow) => workflow.workflowId === selection.workflowId)) {
       setSelection({ kind: "workflow", workflowId: workflows[0].workflowId });
+      setInspectedNode(undefined);
+      void selectRun(undefined);
     }
-  }, [selection, state.catalog]);
+  }, [selectRun, selection, state.catalog]);
+
+  useEffect(
+    () => () => {
+      void selectRun(undefined);
+    },
+    [selectRun],
+  );
 
   const workflow = state.catalog?.workflows.find(
     (item) => item.workflowId === selection?.workflowId,
   );
-  const run = selection?.kind === "run" ? state.runs[selection.runId] : undefined;
-  const latestRun = useMemo(
-    () =>
-      Object.values(state.runs)
-        .filter((item) => item.summary?.workflowId === workflow?.workflowId)
-        .sort(
-          (left, right) =>
-            Number(right.summary!.createdSequence) - Number(left.summary!.createdSequence),
-        )[0],
-    [state.runs, workflow?.workflowId],
-  );
+  const historical = selection?.kind === "run";
+  const runSummary = historical ? state.runs[selection.runId] : undefined;
+  const run =
+    historical &&
+    state.selectedRunId === selection.runId &&
+    state.selectedRunStatus === "ready" &&
+    state.selectedRun?.summary?.runId === selection.runId
+      ? state.selectedRun
+      : undefined;
   const openNode = useCallback((nodeId: string) => setInspectedNode(nodeId), []);
-  const select = useCallback((next: Selection) => {
-    setSelection(next);
-    setInspectedNode(undefined);
-    setExplorerOpen(false);
-  }, []);
+  const closeNode = useCallback(() => setInspectedNode(undefined), []);
+  const select = useCallback(
+    (next: Selection) => {
+      setSelection(next);
+      setInspectedNode(undefined);
+      setExplorerOpen(false);
+      void selectRun(next.kind === "run" ? next.runId : undefined);
+    },
+    [selectRun],
+  );
 
-  const selectedRun = run ?? (selection?.kind === "workflow" ? latestRun : undefined);
-  const liveEventKey = run && inspectedNode ? `${run.summary?.runId}:${inspectedNode}` : "";
+  const liveDescriptorKey =
+    historical && inspectedNode ? `${selection.runId}:${inspectedNode}` : "";
 
   return (
     <div className={`app-shell ${explorerOpen ? "explorer-open" : ""}`}>
@@ -67,7 +83,7 @@ export function App({ api }: { api: OperatorApi }) {
         <div className="breadcrumb">
           <span>{workflow?.rootAlias || "Local operator"}</span>
           {workflow && <><i>/</i><strong>{workflow.displayName}</strong></>}
-          {run?.summary && <><i>/</i><strong>{run.summary.runId}</strong></>}
+          {historical && <><i>/</i><strong>{selection.runId}</strong></>}
         </div>
         <div className={`connection connection-${state.connection}`}>
           <span />
@@ -85,7 +101,7 @@ export function App({ api }: { api: OperatorApi }) {
         </button>
       </header>
       {state.error && <div className="connection-error">{state.error}</div>}
-      <main className={`workspace ${inspectedNode ? "with-inspector" : ""}`}>
+      <main className={`workspace ${inspectedNode && (!historical || run) ? "with-inspector" : ""}`}>
         <Explorer
           catalog={state.catalog}
           runs={state.runs}
@@ -96,33 +112,62 @@ export function App({ api }: { api: OperatorApi }) {
           <header className="view-header">
             <div>
               <span className="eyebrow">
-                {run ? "Historical run" : "Current definition"}
+                {historical ? "Historical run" : "Current definition"}
               </span>
-              <h1>{run?.summary?.runId || workflow?.displayName || "Operator"}</h1>
+              <h1>{historical ? selection.runId : workflow?.displayName || "Operator"}</h1>
               <p>
-                {run
-                  ? `Recorded topology · ${run.summary?.status ?? "unknown"}`
+                {historical
+                  ? `Recorded topology · ${runSummary?.status ?? "unknown"}`
                   : workflow
                     ? `${workflow.nodeIds.length} nodes · ${workflow.relativeFile}`
                     : "Waiting for a workflow catalog"}
               </p>
             </div>
             <RunControls
-              workflow={!run ? workflow : undefined}
-              run={run ?? selectedRun}
+              workflow={!historical ? workflow : undefined}
+              run={run}
               pending={state.action}
               onStart={startRun}
               onCancel={cancelRun}
             />
           </header>
-          <div className={run ? "canvas run-canvas" : "canvas blueprint-canvas"}>
-            {workflow || run?.topology ? (
-              <GraphCanvas
-                workflow={run ? undefined : workflow}
-                runTopology={run?.topology}
-                runNodes={run?.nodes}
-                onOpenNode={openNode}
-              />
+          <div className={historical ? "canvas run-canvas" : "canvas blueprint-canvas"}>
+            {historical ? (
+              run ? (
+                <>
+                  <GraphCanvas
+                    runTopology={run.topology}
+                    runNodes={run.nodes}
+                    onOpenNode={openNode}
+                  />
+                  <div className="historical-badge">
+                    <span>Immutable run snapshot</span>
+                    Current workflow changes do not alter this canvas
+                  </div>
+                </>
+              ) : state.selectedRunId === selection.runId &&
+                state.selectedRunStatus === "loading" ? (
+                <div className="empty-state" role="status">
+                  <span>◇</span>
+                  <h2>Loading run snapshot</h2>
+                  <p>Retrieving the retained topology and execution state.</p>
+                </div>
+              ) : state.selectedRunId === selection.runId &&
+                state.selectedRunStatus === "error" ? (
+                <div className="empty-state" role="alert">
+                  <span>!</span>
+                  <h2>Run snapshot unavailable</h2>
+                  <p>{state.selectedRunError || "The selected run could not be loaded."}</p>
+                </div>
+              ) : (
+                <div className="empty-state">
+                  <span>◇</span>
+                  <h2>No run snapshot</h2>
+                  <p>Select the run again to load its retained topology.</p>
+                </div>
+              )
+            ) : workflow ? (
+              <GraphCanvas workflow={workflow} onOpenNode={openNode} />
             ) : (
               <div className="empty-state">
                 <span>◇</span>
@@ -130,23 +175,17 @@ export function App({ api }: { api: OperatorApi }) {
                 <p>Catalog changes will appear here as the operator scans configured targets.</p>
               </div>
             )}
-            {run && (
-              <div className="historical-badge">
-                <span>Immutable run snapshot</span>
-                Current workflow changes do not alter this canvas
-              </div>
-            )}
           </div>
         </section>
-        {inspectedNode && (
+        {inspectedNode && (!historical || run) && (
           <Inspector
             api={api}
             workflow={workflow}
             run={run}
             nodeId={inspectedNode}
-            liveEvents={state.liveEvents[liveEventKey]}
-            liveLogs={run?.summary ? state.liveLogs[run.summary.runId] : undefined}
-            onClose={() => setInspectedNode(undefined)}
+            liveEvents={state.liveEvents[liveDescriptorKey]}
+            liveLogs={historical ? state.liveLogs[liveDescriptorKey] : undefined}
+            onClose={closeNode}
           />
         )}
       </main>

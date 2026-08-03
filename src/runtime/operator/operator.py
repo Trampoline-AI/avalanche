@@ -94,6 +94,8 @@ DEFAULT_RESULT_RETENTION_SECONDS = 24 * 60 * 60
 _PROCESS_GROUP_POLL_INTERVAL_SECONDS = 0.02
 DETAIL_PAGE_SIZE = 100
 MAX_DETAIL_PAGE_SIZE = 500
+_DESCRIPTOR_PAGE_ORDER_FORWARD = 0
+_DESCRIPTOR_PAGE_ORDER_NEWEST_FIRST = 1
 STRUCTURAL_BASELINE_CAPACITY = 8
 SUBSCRIBER_QUEUE_CAPACITY = 256
 MAX_RUN_ID_BYTES = 256
@@ -309,6 +311,7 @@ class Operator:
         self._run_revisions: dict[str, int] = {}
         self._node_revisions: dict[tuple[str, str], int] = {}
         self._logs: dict[str, list[SequencedLogEntry]] = {}
+        self._log_sequences_by_node: dict[str, dict[str, list[int]]] = {}
         self._agent_events: dict[tuple[str, str], list[AgentEvent]] = {}
         self._trace_descriptors: dict[tuple[str, str], TraceDescriptor] = {}
         self._trace_bodies: dict[tuple[str, str], dict[int, bytes]] = {}
@@ -498,6 +501,28 @@ class Operator:
             baseline = self._retained_structural_baseline_locked(as_of_sequence)
             return baseline.snapshots.get(run_id)
 
+    def get_latest_run_snapshot(
+        self,
+        run_id: str,
+        *,
+        operator_instance_id: str,
+    ) -> RunSnapshot | None:
+        """Return the latest structural run and detail watermarks atomically."""
+        with self._lock:
+            if operator_instance_id != self._operator_instance_id:
+                raise StructuralBaselineUnavailableError(
+                    "Operator instance changed; restart snapshot synchronization"
+                )
+            run = self._runs.get(run_id)
+            if run is None:
+                return None
+            as_of_sequence = self._sequence
+            return self._run_snapshot_locked(
+                run,
+                summary=self._run_summary_locked(run),
+                as_of_sequence=as_of_sequence,
+            )
+
     def list_logs(
         self,
         run_id: str = "",
@@ -505,9 +530,23 @@ class Operator:
         page_token: str = "",
         after_sequence: int = 0,
         page_size: int = 0,
+        before_sequence: int = 0,
+        node_id: str = "",
+        order: int = _DESCRIPTOR_PAGE_ORDER_FORWARD,
     ) -> LogPage:
         """Return a byte-bounded page of immutable log body descriptors."""
         size = _bounded_page_size(page_size)
+        order = _validated_descriptor_page_order(order)
+        after_sequence = _validated_descriptor_cursor(
+            after_sequence, "after_sequence"
+        )
+        before_sequence = _validated_descriptor_cursor(
+            before_sequence, "before_sequence"
+        )
+        if order == _DESCRIPTOR_PAGE_ORDER_FORWARD and before_sequence:
+            raise ValueError("before_sequence is only valid for newest-first pages")
+        if order == _DESCRIPTOR_PAGE_ORDER_NEWEST_FIRST and after_sequence:
+            raise ValueError("after_sequence is only valid for forward pages")
         with self._lock:
             token = (
                 _decode_transport_token(page_token, "logs")
@@ -517,20 +556,77 @@ class Operator:
             self._validate_transport_token_locked(token)
             run_id = token["run_id"]
             through_sequence = token["through_sequence"]
-            cursor = token.get("cursor", after_sequence)
+            if "cursor" in token:
+                if token["order"] != order:
+                    raise ValueError("Page order does not match the continuation token")
+                if token["node_id"] != node_id:
+                    raise ValueError("Log node filter does not match the continuation token")
+                requested_cursor = (
+                    after_sequence
+                    if order == _DESCRIPTOR_PAGE_ORDER_FORWARD
+                    else before_sequence
+                )
+                if requested_cursor and requested_cursor != token["cursor"]:
+                    raise ValueError("Page cursor does not match the continuation token")
+                cursor = token["cursor"]
+            else:
+                cursor = (
+                    after_sequence
+                    if order == _DESCRIPTOR_PAGE_ORDER_FORWARD
+                    else before_sequence or through_sequence + 1
+                )
             logs = self._logs.get(run_id)
             if logs is None and run_id not in self._runs:
                 raise KeyError(run_id)
             logs = logs or []
-            start = min(cursor, len(logs))
-            stop = min(start + size + 1, through_sequence, len(logs))
-            candidates = logs[start:stop]
-            descriptors = [self._log_descriptor_locked(run_id, item) for item in candidates]
+            candidates: list[SequencedLogEntry]
+            if node_id:
+                run_node_sequences = self._log_sequences_by_node.get(run_id)
+                node_sequences = (
+                    ()
+                    if run_node_sequences is None
+                    else run_node_sequences.get(node_id, ())
+                )
+                if order == _DESCRIPTOR_PAGE_ORDER_FORWARD:
+                    start = bisect_right(node_sequences, cursor)
+                    stop = bisect_right(node_sequences, through_sequence)
+                    selected_sequences = node_sequences[
+                        start : min(start + size + 1, stop)
+                    ]
+                else:
+                    stop = bisect_right(
+                        node_sequences,
+                        min(cursor - 1, through_sequence),
+                    )
+                    start = max(0, stop - size - 1)
+                    selected_sequences = reversed(node_sequences[start:stop])
+                candidates = [logs[sequence - 1] for sequence in selected_sequences]
+            elif order == _DESCRIPTOR_PAGE_ORDER_FORWARD:
+                start = min(cursor, len(logs))
+                stop = min(start + size + 1, through_sequence, len(logs))
+                candidates = logs[start:stop]
+            else:
+                start = min(cursor - 1, through_sequence, len(logs)) - 1
+                stop = max(-1, start - size - 1)
+                candidates = [logs[index] for index in range(start, stop, -1)]
+            descriptors = [
+                self._log_descriptor_locked(
+                    run_id,
+                    item,
+                    as_of_sequence=token["as_of_sequence"],
+                )
+                for item in candidates
+            ]
             selected = _take_bounded_descriptors(descriptors, size)
             next_page_token = ""
-            if selected and selected[-1].sequence < through_sequence:
+            if selected and len(selected) < len(descriptors):
                 next_page_token = _encode_transport_token(
-                    **{**token, "cursor": selected[-1].sequence}
+                    **{
+                        **token,
+                        "node_id": node_id,
+                        "order": order,
+                        "cursor": selected[-1].sequence,
+                    }
                 )
             return LogPage(
                 operator_instance_id=self._operator_instance_id,
@@ -547,9 +643,26 @@ class Operator:
         page_token: str = "",
         after_event_sequence: int = 0,
         page_size: int = 0,
+        before_event_sequence: int = 0,
+        order: int = _DESCRIPTOR_PAGE_ORDER_FORWARD,
     ) -> AgentEventPage:
         """Return a byte-bounded page of immutable event body descriptors."""
         size = _bounded_page_size(page_size)
+        order = _validated_descriptor_page_order(order)
+        after_event_sequence = _validated_descriptor_cursor(
+            after_event_sequence, "after_event_sequence"
+        )
+        before_event_sequence = _validated_descriptor_cursor(
+            before_event_sequence, "before_event_sequence"
+        )
+        if order == _DESCRIPTOR_PAGE_ORDER_FORWARD and before_event_sequence:
+            raise ValueError(
+                "before_event_sequence is only valid for newest-first pages"
+            )
+        if order == _DESCRIPTOR_PAGE_ORDER_NEWEST_FIRST and after_event_sequence:
+            raise ValueError(
+                "after_event_sequence is only valid for forward pages"
+            )
         with self._lock:
             token = (
                 _decode_transport_token(page_token, "events")
@@ -560,30 +673,66 @@ class Operator:
             run_id = token["run_id"]
             node_id = token["node_id"]
             through_sequence = token["through_sequence"]
-            cursor = token.get("cursor", after_event_sequence)
+            if "cursor" in token:
+                if token["order"] != order:
+                    raise ValueError("Page order does not match the continuation token")
+                requested_cursor = (
+                    after_event_sequence
+                    if order == _DESCRIPTOR_PAGE_ORDER_FORWARD
+                    else before_event_sequence
+                )
+                if requested_cursor and requested_cursor != token["cursor"]:
+                    raise ValueError("Page cursor does not match the continuation token")
+                cursor = token["cursor"]
+            else:
+                cursor = (
+                    after_event_sequence
+                    if order == _DESCRIPTOR_PAGE_ORDER_FORWARD
+                    else before_event_sequence or through_sequence + 1
+                )
             run = self._runs.get(run_id)
             if run is None:
                 raise KeyError(run_id)
             if node_id not in run.nodes:
                 raise KeyError(node_id)
             events = self._agent_events.get((run_id, node_id), [])
-            start = bisect_right(
-                events,
-                cursor,
-                key=lambda item: item.event_sequence,
-            )
-            stop = min(start + size + 1, len(events))
-            candidates = events[start:stop]
+            if order == _DESCRIPTOR_PAGE_ORDER_FORWARD:
+                start = bisect_right(
+                    events,
+                    cursor,
+                    key=lambda item: item.event_sequence,
+                )
+                stop = min(start + size + 1, len(events))
+                candidates = [
+                    item
+                    for item in events[start:stop]
+                    if item.event_sequence <= through_sequence
+                ]
+            else:
+                upper = bisect_right(
+                    events,
+                    min(cursor - 1, through_sequence),
+                    key=lambda item: item.event_sequence,
+                )
+                candidates = list(reversed(events[max(0, upper - size - 1) : upper]))
             descriptors = [
-                self._agent_event_descriptor_locked(run_id, node_id, item)
+                self._agent_event_descriptor_locked(
+                    run_id,
+                    node_id,
+                    item,
+                    as_of_sequence=token["as_of_sequence"],
+                )
                 for item in candidates
-                if item.event_sequence <= through_sequence
             ]
             selected = _take_bounded_descriptors(descriptors, size)
             next_page_token = ""
-            if selected and selected[-1].event_sequence < through_sequence:
+            if selected and len(selected) < len(descriptors):
                 next_page_token = _encode_transport_token(
-                    **{**token, "cursor": selected[-1].event_sequence}
+                    **{
+                        **token,
+                        "order": order,
+                        "cursor": selected[-1].event_sequence,
+                    }
                 )
             return AgentEventPage(
                 operator_instance_id=self._operator_instance_id,
@@ -792,13 +941,15 @@ class Operator:
         if run is None:
             raise KeyError(run_id)
         node_id = token.get("node_id")
-        if node_id is not None and node_id not in run.nodes:
+        if node_id and node_id not in run.nodes:
             raise KeyError(node_id)
 
     def _log_descriptor_locked(
         self,
         run_id: str,
         item: SequencedLogEntry,
+        *,
+        as_of_sequence: int,
     ) -> LogRecordDescriptor:
         return LogRecordDescriptor(
             sequence=item.sequence,
@@ -809,7 +960,7 @@ class Operator:
             body_token=_encode_transport_token(
                 kind="log-body",
                 operator_instance_id=self._operator_instance_id,
-                as_of_sequence=self._sequence,
+                as_of_sequence=as_of_sequence,
                 run_id=run_id,
                 sequence=item.sequence,
             ),
@@ -820,6 +971,8 @@ class Operator:
         run_id: str,
         node_id: str,
         item: AgentEvent,
+        *,
+        as_of_sequence: int,
     ) -> AgentEventDescriptor:
         return AgentEventDescriptor(
             invocation_id=item.invocation_id,
@@ -828,7 +981,7 @@ class Operator:
             body_token=_encode_transport_token(
                 kind="event-body",
                 operator_instance_id=self._operator_instance_id,
-                as_of_sequence=self._sequence,
+                as_of_sequence=as_of_sequence,
                 run_id=run_id,
                 node_id=node_id,
                 sequence=item.event_sequence,
@@ -1044,6 +1197,7 @@ class Operator:
             # Reserve the ID before releasing the lock so concurrent callers
             # cannot create a second coordinator with the same caller-owned ID.
             self._active_runs[run_id] = handle
+            self._log_sequences_by_node.pop(run_id, None)
         try:
             with self._lock:
                 if self._closed:
@@ -1085,6 +1239,7 @@ class Operator:
             _teardown_process_group(process, windows_job)
             with self._lock:
                 self._runs.pop(run_id, None)
+                self._log_sequences_by_node.pop(run_id, None)
                 self._stored_results.pop(run_id, None)
                 self._active_runs.pop(run_id, None)
             self._result_store.discard(result_bundle)
@@ -1949,13 +2104,16 @@ class Operator:
         size_bytes: int,
     ) -> None:
         logs = self._logs.setdefault(run.run_id, [])
+        sequence = len(logs) + 1
         logs.append(
             SequencedLogEntry(
-                sequence=len(logs) + 1,
+                sequence=sequence,
                 entry=deepcopy(entry),
                 size_bytes=size_bytes,
             )
         )
+        node_sequences = self._log_sequences_by_node.setdefault(run.run_id, {})
+        node_sequences.setdefault(entry.node_id, []).append(sequence)
         self._run_log_bytes[run.run_id] = self._run_log_bytes.get(run.run_id, 0) + size_bytes
         self._run_detail_bytes[run.run_id] = (
             self._run_detail_bytes.get(run.run_id, 0) + size_bytes
@@ -2163,7 +2321,11 @@ class Operator:
                 changes.append(
                     LogAppended(
                         run_id=run.run_id,
-                        log=self._log_descriptor_locked(run.run_id, log_item),
+                        log=self._log_descriptor_locked(
+                            run.run_id,
+                            log_item,
+                            as_of_sequence=publication_sequence,
+                        ),
                     )
                 )
             for node_id, event in agent_events.items():
@@ -2175,6 +2337,7 @@ class Operator:
                             run.run_id,
                             node_id,
                             event,
+                            as_of_sequence=publication_sequence,
                         ),
                     )
                 )
@@ -2353,6 +2516,21 @@ def _bounded_page_size(page_size: int) -> int:
     return min(page_size or DETAIL_PAGE_SIZE, MAX_DETAIL_PAGE_SIZE)
 
 
+def _validated_descriptor_page_order(order: int) -> int:
+    if type(order) is not int or order not in {
+        _DESCRIPTOR_PAGE_ORDER_FORWARD,
+        _DESCRIPTOR_PAGE_ORDER_NEWEST_FIRST,
+    }:
+        raise ValueError("Invalid descriptor page order")
+    return order
+
+
+def _validated_descriptor_cursor(cursor: int, field_name: str) -> int:
+    if type(cursor) is not int or cursor < 0:
+        raise ValueError(f"{field_name} must be a non-negative integer")
+    return cursor
+
+
 def _encode_page_token(
     *,
     operator_instance_id: str,
@@ -2429,13 +2607,30 @@ def _decode_transport_token(
         or type(value.get("run_id")) is not str
     ):
         raise ValueError("Invalid detail token")
+    if value["as_of_sequence"] < 0:
+        raise ValueError("Invalid detail token")
     if value["kind"] in {"logs", "events"}:
-        if type(value.get("through_sequence")) is not int:
+        if (
+            type(value.get("through_sequence")) is not int
+            or value["through_sequence"] < 0
+        ):
             raise ValueError("Invalid detail token")
-        if "cursor" in value and type(value["cursor"]) is not int:
-            raise ValueError("Invalid detail token")
+        if "cursor" in value:
+            if (
+                type(value["cursor"]) is not int
+                or value["cursor"] < 0
+                or type(value.get("order")) is not int
+                or value["order"]
+                not in {
+                    _DESCRIPTOR_PAGE_ORDER_FORWARD,
+                    _DESCRIPTOR_PAGE_ORDER_NEWEST_FIRST,
+                }
+            ):
+                raise ValueError("Invalid detail token")
+            if value["kind"] == "logs" and type(value.get("node_id")) is not str:
+                raise ValueError("Invalid detail token")
     else:
-        if type(value.get("sequence")) is not int:
+        if type(value.get("sequence")) is not int or value["sequence"] < 1:
             raise ValueError("Invalid detail token")
     if value["kind"] in {"events", "event-body"} and type(value.get("node_id")) is not str:
         raise ValueError("Invalid detail token")
