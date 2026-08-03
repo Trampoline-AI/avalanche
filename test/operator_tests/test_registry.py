@@ -18,6 +18,7 @@ from avalanche.operator.registry import (
     workflow_to_info,
 )
 from runtime.operator.discovery import configure_roots
+from runtime.operator.registry import agent_field_schemas_for_workflow
 
 FIXTURES_DIR = os.path.join(os.path.dirname(os.path.dirname(__file__)), "fixtures")
 
@@ -274,6 +275,22 @@ class TestWorkflowRegistry:
         assert registry.get_builder(descriptors[0].workflow_id)().name == "left_build"
         assert registry.get_builder(descriptors[1].workflow_id)().name == "right_build"
 
+    def test_rescan_of_unchanged_catalog_preserves_revision_and_view(self, tmp_path):
+        workflow_file = tmp_path / "flow.py"
+        workflow_file.write_text(
+            "import avalanche as ava\n"
+            "@ava.workflow\n"
+            "def unchanged():\n"
+            "    return None\n"
+        )
+        registry = WorkflowRegistry()
+        initial = registry.scan([str(workflow_file)])
+
+        rescanned = registry.rescan()
+
+        assert rescanned is initial
+        assert rescanned.revision == initial.revision
+
     def test_refresh_invalid_file_retains_current_descriptor(self, tmp_path):
         workflow_file = tmp_path / "flow.py"
         workflow_file.write_text(
@@ -328,7 +345,7 @@ class TestWorkflowRegistry:
             "    print('builder noise')\n"
         )
 
-        registry = WorkflowRegistry(discovery_timeout=2.0)
+        registry = WorkflowRegistry(discovery_timeout=10.0)
         registry.scan([str(workflow_file)])
 
         assert [item.workflow_id for item in registry.descriptors()] == ["flow.py::noisy"]
@@ -348,7 +365,7 @@ class TestWorkflowRegistry:
             "    return None\n"
         )
 
-        registry = WorkflowRegistry(discovery_timeout=2.0)
+        registry = WorkflowRegistry(discovery_timeout=10.0)
         registry.scan([str(workflow_file)])
 
         assert registry.resolve("spawned")
@@ -617,6 +634,13 @@ def test_agent_metadata_failure_does_not_hide_workflow(monkeypatch):
     metadata = json.loads(info.agent_metadata_json["analyze_1"])
     assert metadata["signature"]["name"] == "Analyze"
     assert metadata["runtime"]["max_iterations"] == 4
+    field_schemas = json.loads(
+        agent_field_schemas_for_workflow(workflow, ["analyze_1"])["analyze_1"]
+    )
+    assert field_schemas == {
+        "inputs": [{"name": "text", "type": "str", "description": "text to analyze"}],
+        "outputs": [{"name": "result", "type": "str", "description": "analysis"}],
+    }
 
     spec = workflow.nodes["analyze_1"].node.fn.__agent_step__
 

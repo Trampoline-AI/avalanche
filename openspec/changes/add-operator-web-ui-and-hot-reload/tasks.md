@@ -7,6 +7,8 @@
 - [x] 1.5 Preserve bounded structured agent invocation inputs and terminal outputs in existing evidence, encode nested PredictRLM `File` values as tagged paths, and verify input, output, list, unsupported, over-limit, and worker-to-operator behavior.
 - [x] 1.6 Retain bounded worker-provided node failure messages in node state, snapshots, live updates, protocol conversion, and run inspection with focused regression coverage.
 - [x] 1.7 Decompose exportable `RunTrace` into a lightweight header, paginated rich event/turn descriptors, and complete on-demand `IterationStep` bodies; migrate TUI hydration away from monolithic `ReadTrace` and verify semantic coverage and bounded reads.
+- [x] 1.8 Replace retained run declaration metadata with input/output field schemas containing only names, types, and descriptions; keep full declarations in the current catalog.
+- [x] 1.9 Update topology transport and browser parsing for the schema-only projection, with regression coverage proving instructions and execution configuration are absent.
 
 ## 2. Atomic catalog reload and live updates
 
@@ -40,3 +42,14 @@
 
 - [x] 5.1 Run focused operator, protocol, TUI-client, adapter, and browser test suites; add an end-to-end local operator reload scenario.
 - [x] 5.2 Update local development and operator documentation with web UI launch, loopback exposure, reload semantics, and the distinction between workflow and run views.
+
+## 6. Dogfood remediation
+
+- [x] 6.1 Prevent unchanged watched sources or semantically unchanged discovery results from advancing the catalog revision or publishing replacement updates, with focused watcher and operator regression coverage.
+- [x] 6.2 Make the healthy desktop workspace and workflow canvas consume the available viewport instead of collapsing to content height.
+- [x] 6.3 Preserve Explorer workflow/run navigation, selected-view titles, primary controls, and bounded pannable canvases at 375 CSS pixels and wider.
+- [x] 6.4 Give the CodeMirror workflow-input editor a descriptive accessible name and add an accessibility regression assertion.
+- [x] 6.5 Update secondary metadata colors to meet WCAG 2.2 Level AA contrast in populated workflow and run views.
+- [x] 6.6 Give repeated node invocations distinct visible labels and accessible names derived from stable node identity.
+- [x] 6.7 Correct the retained-output empty-state grammar.
+- [x] 6.8 Add browser regression coverage for desktop sizing, narrow navigation and canvas bounds, repeated invocation identity, accessible input naming, empty-state copy, and automated contrast checks.

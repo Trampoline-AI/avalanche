@@ -409,6 +409,14 @@ class _AgentStepSpec:
             tools=self.tools,
         )
 
+    def field_schema_metadata(self) -> dict[str, list[dict[str, str]]]:
+        """Serialize only the declared invocation field schemas."""
+        signature = resolve_signature(self.signature, name=self.step_name)
+        return {
+            "inputs": _serialize_signature_fields(signature.input_fields, type_key="type"),
+            "outputs": _serialize_signature_fields(signature.output_fields, type_key="type"),
+        }
+
     def declaration_metadata(
         self, workflow_defaults: Mapping[str, Any] | None = None
     ) -> dict[str, Any]:
@@ -478,7 +486,9 @@ _OMITTED_RUNTIME_KEYS = frozenset(
 _SECRET_KEY_PARTS = ("api_key", "auth", "credential", "password", "secret", "token")
 
 
-def _serialize_signature_fields(fields: Mapping[str, Any]) -> list[dict[str, str]]:
+def _serialize_signature_fields(
+    fields: Mapping[str, Any], *, type_key: str = "annotation"
+) -> list[dict[str, str]]:
     serialized = []
     for name, field in fields.items():
         extra = getattr(field, "json_schema_extra", None)
@@ -488,7 +498,7 @@ def _serialize_signature_fields(fields: Mapping[str, Any]) -> list[dict[str, str
         serialized.append(
             {
                 "name": name,
-                "annotation": _annotation_name(getattr(field, "annotation", Any)),
+                type_key: _annotation_name(getattr(field, "annotation", Any)),
                 "description": description if isinstance(description, str) else "",
             }
         )

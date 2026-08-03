@@ -24,10 +24,13 @@ interface FieldMetadata {
   description?: string;
 }
 
-export interface AgentDeclaration {
-  instructions: string;
+export interface AgentFieldSchemas {
   inputs: FieldMetadata[];
   outputs: FieldMetadata[];
+}
+
+export interface AgentDeclaration extends AgentFieldSchemas {
+  instructions: string;
   model?: unknown;
   runtime?: unknown;
   skills?: unknown;
@@ -37,10 +40,11 @@ export interface AgentDeclaration {
 interface CardData extends Record<string, unknown> {
   label: string;
   nodeType: string;
+  identity?: string;
   status?: string;
   error?: string;
   duration?: string;
-  declaration?: AgentDeclaration;
+  declaration?: AgentFieldSchemas;
   onOpen: () => void;
 }
 
@@ -81,16 +85,31 @@ export function parseAgentDeclaration(raw: string | undefined): AgentDeclaration
   }
 }
 
+export function parseAgentFieldSchemas(raw: string | undefined): AgentFieldSchemas | undefined {
+  if (!raw) return undefined;
+  try {
+    const metadata: unknown = JSON.parse(raw);
+    if (!isUnknownRecord(metadata)) return undefined;
+    return {
+      inputs: fields(metadata.inputs),
+      outputs: fields(metadata.outputs),
+    };
+  } catch {
+    return undefined;
+  }
+}
+
 const WorkflowNodeCard = memo(({ data }: NodeProps<Node<CardData>>) => (
   <button
     type="button"
     className={`node-card ${data.status ? `status-${data.status}` : "blueprint"}`}
     onClick={data.onOpen}
-    aria-label={`Inspect ${data.label}`}
+    aria-label={`Inspect ${data.label}${data.identity ? ` ${data.identity}` : ""}`}
   >
     <Handle type="target" position={Position.Left} isConnectable={false} />
     <span className="node-kicker">{data.nodeType}</span>
     <strong>{data.label}</strong>
+    {data.identity && <span className="node-identity">{data.identity}</span>}
     {data.status && <span className="node-status">{data.status}</span>}
     {data.duration && <span className="node-duration">{data.duration}</span>}
     {data.error && <span className="node-error">{data.error}</span>}
@@ -119,7 +138,7 @@ const WorkflowNodeCard = memo(({ data }: NodeProps<Node<CardData>>) => (
 ));
 WorkflowNodeCard.displayName = "WorkflowNodeCard";
 
-function positions(topology: WorkflowTopologyMsg): Record<string, { x: number; y: number }> {
+function positions(topology: TopologyView): Record<string, { x: number; y: number }> {
   const incoming = Object.fromEntries(topology.nodeIds.map((nodeId) => [nodeId, 0]));
   for (const edges of Object.values(topology.graph)) {
     for (const child of edges.children) incoming[child] = (incoming[child] ?? 0) + 1;
@@ -157,6 +176,16 @@ function elapsed(node: NodeSnapshotMsg): string | undefined {
   return seconds < 60 ? `${seconds.toFixed(1)}s` : `${Math.floor(seconds / 60)}m`;
 }
 
+function invocationIdentity(nodeId: string, label: string): string {
+  const suffix = nodeId.startsWith(`${label}_`) ? nodeId.slice(label.length + 1) : "";
+  return suffix && /^\d+$/.test(suffix) ? `#${suffix}` : nodeId;
+}
+
+type TopologyView = Pick<
+  WorkflowTopologyMsg,
+  "nodeIds" | "graph" | "nodeTypes" | "displayNames"
+>;
+
 interface GraphCanvasProps {
   workflow?: FlowInfoMsg;
   runTopology?: WorkflowTopologyMsg;
@@ -170,7 +199,7 @@ export function GraphCanvas({
   runNodes = [],
   onOpenNode,
 }: GraphCanvasProps) {
-  const topology = useMemo<WorkflowTopologyMsg | undefined>(() => {
+  const topology = useMemo<TopologyView | undefined>(() => {
     if (runTopology) return runTopology;
     if (!workflow) return undefined;
     return {
@@ -178,13 +207,22 @@ export function GraphCanvas({
       graph: workflow.graph,
       nodeTypes: workflow.nodeTypes,
       displayNames: workflow.displayNames,
-      agentMetadataJson: workflow.agentMetadataJson,
     };
   }, [runTopology, workflow]);
   const graph = useMemo(() => {
     if (!topology) return { nodes: [], edges: [] };
     const layout = positions(topology);
     const runtimeNodes = Object.fromEntries(runNodes.map((node) => [node.nodeId, node]));
+    const labels = Object.fromEntries(
+      topology.nodeIds.map((nodeId) => [
+        nodeId,
+        topology.displayNames[nodeId] || runtimeNodes[nodeId]?.name || nodeId,
+      ]),
+    );
+    const labelCounts = Object.values(labels).reduce<Record<string, number>>(
+      (counts, label) => ({ ...counts, [label]: (counts[label] ?? 0) + 1 }),
+      {},
+    );
     const nodes: Node<CardData>[] = topology.nodeIds.map((nodeId) => {
       const runtimeNode = runtimeNodes[nodeId];
       return {
@@ -192,16 +230,18 @@ export function GraphCanvas({
         type: "workflow",
         position: layout[nodeId],
         data: {
-          label: topology.displayNames[nodeId] || runtimeNode?.name || nodeId,
+          label: labels[nodeId],
+          identity:
+            labelCounts[labels[nodeId]] > 1
+              ? invocationIdentity(nodeId, labels[nodeId])
+              : undefined,
           nodeType: topology.nodeTypes[nodeId] || runtimeNode?.nodeType || "step",
           status: runtimeNode?.status,
           error: runtimeNode?.error,
           duration: runtimeNode ? elapsed(runtimeNode) : undefined,
-          declaration: parseAgentDeclaration(
-            runTopology
-              ? runTopology.agentMetadataJson[nodeId]
-              : workflow?.agentMetadataJson[nodeId],
-          ),
+          declaration: runTopology
+            ? parseAgentFieldSchemas(runTopology.agentFieldSchemasJson[nodeId])
+            : parseAgentDeclaration(workflow?.agentMetadataJson[nodeId]),
           onOpen: () => onOpenNode(nodeId),
         },
       };

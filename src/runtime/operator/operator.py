@@ -1346,11 +1346,14 @@ class Operator:
             self._refresh_workflows()
 
     def _refresh_workflows(self) -> None:
+        previous = self._registry.view
         # Publishing descriptors and replacing schedules are one logical update.
         # Otherwise an old cron can resolve newly-published same-ID source in the
         # small window between these two operations.
         with self._scheduler.reconciliation_boundary():
             view = self._registry.rescan(validate=routes_for)
+            if view is previous:
+                return
             self._scheduler.reconcile(view.by_id.values())
             self._reconcile_webhooks(view.by_id.values())
         self._publish_catalog(view)
@@ -1406,10 +1409,10 @@ class Operator:
             display_names=tuple(
                 (node_id, prepared["display_names"][node_id]) for node_id in node_ids
             ),
-            agent_metadata_json=tuple(
-                (node_id, prepared["agent_metadata_json"][node_id])
+            agent_field_schemas_json=tuple(
+                (node_id, prepared["agent_field_schemas_json"][node_id])
                 for node_id in node_ids
-                if node_id in prepared["agent_metadata_json"]
+                if node_id in prepared["agent_field_schemas_json"]
             ),
         )
         run = RunState(
@@ -2578,6 +2581,8 @@ _MAX_EVENT_NODES = 10_000
 _MAX_EVENT_EDGES = 100_000
 _MAX_EVENT_FIELD_LENGTH = 4096
 _MAX_EVENT_MESSAGE_LENGTH = 65_536
+_MAX_EVENT_AGENT_FIELD_SCHEMA_BYTES = 1024 * 1024
+_MAX_EVENT_AGENT_FIELD_SCHEMAS_TOTAL_BYTES = 16 * 1024 * 1024
 _MAX_EVENT_TRACEBACK_LENGTH = 262_144
 _MAX_EVENT_TIMESTAMP_MAGNITUDE = 10**12
 
@@ -2689,7 +2694,7 @@ def _validate_preparation_event(event: object) -> str:
                 "node_types",
                 "display_names",
                 "display_name",
-                "agent_metadata_json",
+                "agent_field_schemas_json",
             },
         )
         node_ids = _required_field(event, "node_ids")
@@ -2707,7 +2712,9 @@ def _validate_preparation_event(event: object) -> str:
         _graph_mapping(event, "graph")
         node_types = _string_mapping(event, "node_types")
         display_names = _string_mapping(event, "display_names")
-        agent_metadata_json = _string_mapping(event, "agent_metadata_json")
+        agent_field_schemas_json = _agent_field_schema_mapping(
+            event, "agent_field_schemas_json"
+        )
         for node_id in node_ids:
             if node_id not in node_types:
                 raise _CoordinatorProtocolError(
@@ -2717,11 +2724,11 @@ def _validate_preparation_event(event: object) -> str:
                 raise _CoordinatorProtocolError(
                     f"field 'display_names' is missing node {_bounded_ascii(node_id)}"
                 )
-        unknown_agent_nodes = set(agent_metadata_json).difference(node_ids)
+        unknown_agent_nodes = set(agent_field_schemas_json).difference(node_ids)
         if unknown_agent_nodes:
             unknown = min(unknown_agent_nodes)
             raise _CoordinatorProtocolError(
-                f"field 'agent_metadata_json' references unknown node "
+                f"field 'agent_field_schemas_json' references unknown node "
                 f"{_bounded_ascii(unknown)}"
             )
         display_name = event.get("display_name")
@@ -2886,7 +2893,12 @@ def _timestamp_field(event: dict[str, Any], field: str) -> float | int:
     raise _CoordinatorProtocolError(f"field {field!r} must be a bounded finite number")
 
 
-def _string_mapping(event: dict[str, Any], field: str) -> Mapping[str, str]:
+def _string_mapping(
+    event: dict[str, Any],
+    field: str,
+    *,
+    maximum_value_length: int | None = _MAX_EVENT_FIELD_LENGTH,
+) -> Mapping[str, str]:
     value = _required_field(event, field)
     if (
         type(value) is not dict
@@ -2895,11 +2907,60 @@ def _string_mapping(event: dict[str, Any], field: str) -> Mapping[str, str]:
             type(key) is not str
             or type(item) is not str
             or len(key) > _MAX_EVENT_FIELD_LENGTH
-            or len(item) > _MAX_EVENT_FIELD_LENGTH
+            or (maximum_value_length is not None and len(item) > maximum_value_length)
             for key, item in value.items()
         )
     ):
-        raise _CoordinatorProtocolError(f"field {field!r} must map strings to strings")
+        raise _CoordinatorProtocolError(f"field {field!r} must map bounded strings to strings")
+    return value
+
+
+def _agent_field_schema_mapping(event: dict[str, Any], field: str) -> Mapping[str, str]:
+    value = _string_mapping(event, field, maximum_value_length=None)
+    total_bytes = 0
+    for schema_json in value.values():
+        try:
+            encoded_size = len(schema_json.encode("utf-8"))
+            schema = json.loads(schema_json)
+        except (UnicodeEncodeError, json.JSONDecodeError) as exc:
+            raise _CoordinatorProtocolError(
+                f"field {field!r} values must be UTF-8 JSON objects"
+            ) from exc
+        if encoded_size > _MAX_EVENT_AGENT_FIELD_SCHEMA_BYTES:
+            raise _CoordinatorProtocolError(
+                f"field {field!r} values must not exceed "
+                f"{_MAX_EVENT_AGENT_FIELD_SCHEMA_BYTES} UTF-8 bytes"
+            )
+        total_bytes += encoded_size
+        if type(schema) is not dict or set(schema) != {"inputs", "outputs"}:
+            raise _CoordinatorProtocolError(
+                f"field {field!r} values must contain only input and output schemas"
+            )
+        for schemas in schema.values():
+            if type(schemas) is not list or len(schemas) > _MAX_EVENT_NODES:
+                raise _CoordinatorProtocolError(
+                    f"field {field!r} inputs and outputs must be bounded lists"
+                )
+            if any(
+                type(item) is not dict
+                or set(item) != {"name", "type", "description"}
+                or type(item["name"]) is not str
+                or not item["name"]
+                or len(item["name"]) > _MAX_EVENT_FIELD_LENGTH
+                or type(item["type"]) is not str
+                or len(item["type"]) > _MAX_EVENT_FIELD_LENGTH
+                or type(item["description"]) is not str
+                or len(item["description"]) > _MAX_EVENT_MESSAGE_LENGTH
+                for item in schemas
+            ):
+                raise _CoordinatorProtocolError(
+                    f"field {field!r} contains an invalid invocation field schema"
+                )
+    if total_bytes > _MAX_EVENT_AGENT_FIELD_SCHEMAS_TOTAL_BYTES:
+        raise _CoordinatorProtocolError(
+            f"field {field!r} must not exceed "
+            f"{_MAX_EVENT_AGENT_FIELD_SCHEMAS_TOTAL_BYTES} total UTF-8 bytes"
+        )
     return value
 
 

@@ -20,6 +20,10 @@ The operator SHALL replace the current workflow catalog only with one complete, 
 - **WHEN** a watched source change cannot produce a valid replacement catalog
 - **THEN** the operator retains the last valid catalog and exposes the discovery diagnostic without publishing a partial catalog
 
+#### Scenario: Watched sources remain unchanged
+- **WHEN** no watched workflow source or effective catalog content has changed
+- **THEN** the operator retains the current catalog revision and does not publish a replacement catalog update
+
 ### Requirement: Isolate runs from later catalog revisions
 
 A catalog reload SHALL affect workflow selection and runs started after the reload. It SHALL NOT mutate the recorded definition or execution state of an existing run.

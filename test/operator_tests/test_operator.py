@@ -196,6 +196,30 @@ class TestOperatorLifecycle:
         runs = op.list_runs("nonexistent")
         assert len(runs) == 0
 
+    def test_refresh_unchanged_catalog_does_not_publish_update(self, tmp_path):
+        workflow_file = tmp_path / "flow.py"
+        workflow_file.write_text(
+            "import avalanche as ava\n"
+            "@ava.workflow\n"
+            "def unchanged():\n"
+            "    return None\n"
+        )
+        operator = Operator(
+            workflow_paths=[str(workflow_file)],
+            schedule=False,
+            watch=False,
+        )
+        try:
+            initial = operator.get_catalog()
+
+            operator._refresh_workflows()
+
+            current = operator.get_catalog()
+            assert current.revision == initial.revision
+            assert current.as_of_sequence == initial.as_of_sequence
+        finally:
+            operator.close()
+
     def test_refresh_invalid_file_retains_descriptor_and_schedule(self, tmp_path):
         workflow_file = tmp_path / "scheduled.py"
         workflow_file.write_text(
@@ -902,7 +926,10 @@ def test_prepared_run_retains_immutable_topology_after_source_metadata_changes()
         "graph": {"source_1": ["step_1"], "step_1": []},
         "node_types": {"source_1": "source", "step_1": "step"},
         "display_names": {"source_1": "Source", "step_1": "Step"},
-        "agent_metadata_json": {"step_1": '{"signature":{"name":"Analyze"}}'},
+        "agent_field_schemas_json": {
+            "step_1": '{"inputs":[{"name":"question","type":"str","description":""}],'
+            '"outputs":[]}'
+        },
     }
 
     run = Operator._run_from_prepared(
@@ -915,11 +942,13 @@ def test_prepared_run_retains_immutable_topology_after_source_metadata_changes()
     prepared["node_ids"].append("new_1")
     prepared["graph"]["source_1"] = ["new_1"]
     prepared["display_names"]["step_1"] = "Changed"
-    prepared["agent_metadata_json"]["step_1"] = '{"signature":{"name":"Changed"}}'
+    prepared["agent_field_schemas_json"]["step_1"] = '{"inputs":[],"outputs":[]}'
 
     assert run.topology.node_ids == ("source_1", "step_1")
     assert run.topology.graph == (("source_1", ("step_1",)), ("step_1", ()))
     assert dict(run.topology.display_names) == {"source_1": "Source", "step_1": "Step"}
-    assert dict(run.topology.agent_metadata_json) == {
-        "step_1": '{"signature":{"name":"Analyze"}}'
+    assert dict(run.topology.agent_field_schemas_json) == {
+        "step_1": (
+            '{"inputs":[{"name":"question","type":"str","description":""}],"outputs":[]}'
+        )
     }

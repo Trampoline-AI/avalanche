@@ -113,7 +113,10 @@ def test_snapshot_detail_cursor_and_descriptor_roundtrip():
             graph=(("agent_1", ()),),
             node_types=(("agent_1", "step"),),
             display_names=(("agent_1", "Agent"),),
-            agent_metadata_json=(("agent_1", '{"signature":{"name":"Analyze"}}'),),
+            agent_field_schemas_json=(
+                ("agent_1", '{"inputs":[],"outputs":[{"name":"answer","type":"str",'
+                '"description":""}]}'),
+            ),
         ),
     )
 

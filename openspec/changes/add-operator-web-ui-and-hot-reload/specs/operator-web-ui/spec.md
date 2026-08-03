@@ -144,3 +144,42 @@ The web UI listener SHALL default to loopback-only access. Enabling non-loopback
 #### Scenario: Default launch
 - **WHEN** a user starts the operator web UI without an explicit listener host
 - **THEN** the UI is reachable only through a loopback address
+
+### Requirement: Preserve navigation and controls on narrow viewports
+
+The web UI SHALL retain access to workflow and run navigation, the selected view's
+identity, and its primary controls at viewport widths of 375 CSS pixels or greater.
+The workflow and run canvases SHALL remain bounded by the visible workspace rather
+than forcing primary content beyond the document viewport.
+
+#### Scenario: User opens the operator on a narrow viewport
+- **WHEN** the browser viewport is 375 CSS pixels wide
+- **THEN** the user can access the Explorer hierarchy, select workflows and retained runs, read the selected view title, and use its primary controls without horizontal document scrolling
+
+#### Scenario: User opens a workflow graph on a narrow viewport
+- **WHEN** a current workflow or historical run canvas is displayed at 375 CSS pixels wide
+- **THEN** the canvas remains inside the visible workspace and the user can pan and zoom the graph
+
+### Requirement: Expose accessible controls and readable text
+
+The web UI SHALL provide an accessible name for every interactive control and input.
+Text and meaningful graphical labels SHALL meet WCAG 2.2 Level AA minimum contrast
+requirements in their rendered states.
+
+#### Scenario: User opens the JSON input editor
+- **WHEN** the schema-blind JSON input editor is visible
+- **THEN** assistive technology identifies it by a descriptive workflow-input name
+
+#### Scenario: Secondary workflow metadata is displayed
+- **WHEN** connection, catalog, workflow, run, or node metadata is rendered
+- **THEN** its foreground and background colors meet WCAG 2.2 Level AA minimum contrast
+
+### Requirement: Distinguish repeated node invocations
+
+The current-workflow and historical-run canvases SHALL expose a distinct visible and
+accessible identity for each node, including when several nodes invoke the same
+declared function or agent.
+
+#### Scenario: A workflow invokes the same declaration more than once
+- **WHEN** two or more nodes have the same display name
+- **THEN** each node card remains distinguishable by a stable invocation identity in both its visible label and accessible name

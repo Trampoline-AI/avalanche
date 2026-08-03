@@ -156,7 +156,7 @@ def workflow_topology_to_proto(topology: WorkflowTopology) -> pb.WorkflowTopolog
         graph={parent: pb.NodeEdges(children=children) for parent, children in topology.graph},
         node_types=dict(topology.node_types),
         display_names=dict(topology.display_names),
-        agent_metadata_json=dict(topology.agent_metadata_json),
+        agent_field_schemas_json=dict(topology.agent_field_schemas_json),
     )
 
 
@@ -167,10 +167,10 @@ def workflow_topology_from_proto(msg: pb.WorkflowTopologyMsg) -> WorkflowTopolog
         graph=tuple((node_id, tuple(msg.graph[node_id].children)) for node_id in node_ids),
         node_types=tuple((node_id, msg.node_types[node_id]) for node_id in node_ids),
         display_names=tuple((node_id, msg.display_names[node_id]) for node_id in node_ids),
-        agent_metadata_json=tuple(
-            (node_id, msg.agent_metadata_json[node_id])
+        agent_field_schemas_json=tuple(
+            (node_id, msg.agent_field_schemas_json[node_id])
             for node_id in node_ids
-            if node_id in msg.agent_metadata_json
+            if node_id in msg.agent_field_schemas_json
         ),
     )
 

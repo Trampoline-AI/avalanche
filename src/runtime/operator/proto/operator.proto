@@ -114,7 +114,7 @@ message WorkflowTopologyMsg {
   map<string, NodeEdges> graph = 2;
   map<string, string> node_types = 3;
   map<string, string> display_names = 4;
-  map<string, string> agent_metadata_json = 5;
+  map<string, string> agent_field_schemas_json = 5;
 }
 
 message FlowInfoMsg {

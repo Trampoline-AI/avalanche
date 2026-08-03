@@ -388,9 +388,10 @@ ava operator --flows path/to/flows --web
 
 The browser shows the live workflow catalog, current definitions, immutable
 per-run topology, run controls, logs, and retained agent trace evidence. Source
-changes replace only the current-definition canvas; earlier runs keep the
-topology and agent declaration metadata captured when they started. The browser
-listener is loopback-only by default. `--web-trusted-proxy` permits a
+changes replace only the current-definition canvas; earlier runs keep their
+topology and agent input/output field schemas without retaining instruction
+bodies or execution configuration. The browser listener is loopback-only by
+default. `--web-trusted-proxy` permits a
 non-loopback bind only when a trusted, authenticated proxy supplies the missing
 security boundary.
 
