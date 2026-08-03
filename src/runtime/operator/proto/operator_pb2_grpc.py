@@ -70,6 +70,11 @@ class OperatorServiceStub(object):
                 request_serializer=operator__pb2.GetRunSnapshotRequest.SerializeToString,
                 response_deserializer=operator__pb2.RunSnapshotMsg.FromString,
                 _registered_method=True)
+        self.GetLatestRunSnapshot = channel.unary_unary(
+                '/avalanche.operator.OperatorService/GetLatestRunSnapshot',
+                request_serializer=operator__pb2.GetLatestRunSnapshotRequest.SerializeToString,
+                response_deserializer=operator__pb2.RunSnapshotMsg.FromString,
+                _registered_method=True)
         self.ListLogs = channel.unary_unary(
                 '/avalanche.operator.OperatorService/ListLogs',
                 request_serializer=operator__pb2.ListLogsRequest.SerializeToString,
@@ -142,6 +147,12 @@ class OperatorServiceServicer(object):
         context.set_details('Method not implemented!')
         raise NotImplementedError('Method not implemented!')
 
+    def GetLatestRunSnapshot(self, request, context):
+        """Missing associated documentation comment in .proto file."""
+        context.set_code(grpc.StatusCode.UNIMPLEMENTED)
+        context.set_details('Method not implemented!')
+        raise NotImplementedError('Method not implemented!')
+
     def ListLogs(self, request, context):
         """Missing associated documentation comment in .proto file."""
         context.set_code(grpc.StatusCode.UNIMPLEMENTED)
@@ -203,6 +214,11 @@ def add_OperatorServiceServicer_to_server(servicer, server):
             'GetRunSnapshot': grpc.unary_unary_rpc_method_handler(
                     servicer.GetRunSnapshot,
                     request_deserializer=operator__pb2.GetRunSnapshotRequest.FromString,
+                    response_serializer=operator__pb2.RunSnapshotMsg.SerializeToString,
+            ),
+            'GetLatestRunSnapshot': grpc.unary_unary_rpc_method_handler(
+                    servicer.GetLatestRunSnapshot,
+                    request_deserializer=operator__pb2.GetLatestRunSnapshotRequest.FromString,
                     response_serializer=operator__pb2.RunSnapshotMsg.SerializeToString,
             ),
             'ListLogs': grpc.unary_unary_rpc_method_handler(
@@ -398,6 +414,33 @@ class OperatorService(object):
             target,
             '/avalanche.operator.OperatorService/GetRunSnapshot',
             operator__pb2.GetRunSnapshotRequest.SerializeToString,
+            operator__pb2.RunSnapshotMsg.FromString,
+            options,
+            channel_credentials,
+            insecure,
+            call_credentials,
+            compression,
+            wait_for_ready,
+            timeout,
+            metadata,
+            _registered_method=True)
+
+    @staticmethod
+    def GetLatestRunSnapshot(request,
+            target,
+            options=(),
+            channel_credentials=None,
+            call_credentials=None,
+            insecure=False,
+            compression=None,
+            wait_for_ready=None,
+            timeout=None,
+            metadata=None):
+        return grpc.experimental.unary_unary(
+            request,
+            target,
+            '/avalanche.operator.OperatorService/GetLatestRunSnapshot',
+            operator__pb2.GetLatestRunSnapshotRequest.SerializeToString,
             operator__pb2.RunSnapshotMsg.FromString,
             options,
             channel_credentials,

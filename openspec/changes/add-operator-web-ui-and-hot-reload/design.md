@@ -132,6 +132,34 @@ Extend `AgentEventDescriptor` with the summary fields needed to build a navigato
 
 The browser virtualizes descriptor rows and keeps a small bounded LRU of hydrated bodies. Following the live turn is the default; selecting another turn pauses following. Inputs and terminal outputs remain separate views. The web client does not call monolithic `ReadTrace`; migrate the TUI to the same descriptor/detail path so complete trace bodies are not duplicated solely for compatibility.
 
+### Preserve paging through the browser boundary
+
+Keep exact `GetRunSnapshot` retrieval for retained structural baselines and Python/TUI
+reconciliation. Add a separate latest-run snapshot operation for browser selection so one
+atomic response supplies the selected run's topology, node state, descriptor watermarks, and
+fresh page tokens without hydrating other runs.
+
+Log and agent-event requests retain forward lower-bound cursors for incremental Python/TUI
+hydration and add newest-first upper-bound cursors for interactive inspection. Log pages may
+bind an exact node filter. Opaque continuation and body tokens bind their operator instance,
+run, optional node, structural sequence, direction, filter, high-water mark, and cursor.
+Continuation fields are immutable: conflicting request fields fail instead of silently
+restarting a page walk.
+
+### Bound browser projections and rendering work
+
+The browser baseline retains the catalog and paged run summaries, then demand-loads at most
+the selected run snapshot. Ordered update envelopes enter a bounded queue and are reduced in
+contiguous frame-sized batches. Queue overflow, epoch change, sequence gaps, or server reset
+all trigger authoritative reconciliation; the browser never drops an arbitrary structural
+update and continues.
+
+Live log and event descriptors use bounded run/node tails with repair watermarks. Crossing a
+discarded range refreshes the selected snapshot before paging. Inspector tab state is
+generation-scoped and cancellable. Only the active tab requests or renders detail. Trace and
+log navigators are virtualized, parsed detail caching is bounded by entries and bytes, and
+nested values expand in bounded groups rather than recursively mounting the complete body.
+
 ## Risks / Trade-offs
 
 - Full catalog replacements make reload behavior simple and correct but transmit more data than diffs. Local workflow catalogs are expected to be small; a later scale constraint can justify an explicitly versioned diff protocol.

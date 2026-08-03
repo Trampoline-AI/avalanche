@@ -134,6 +134,19 @@ export interface GetRunSnapshotRequest {
     asOfSequence: string;
 }
 /**
+ * @generated from protobuf message avalanche.operator.GetLatestRunSnapshotRequest
+ */
+export interface GetLatestRunSnapshotRequest {
+    /**
+     * @generated from protobuf field: string run_id = 1
+     */
+    runId: string;
+    /**
+     * @generated from protobuf field: string operator_instance_id = 2
+     */
+    operatorInstanceId: string;
+}
+/**
  * Page tokens are opaque bearer references issued by GetRunSnapshot. The current
  * loopback transport does not sign them; authenticated deployments must sign or
  * tenant-bind tokens and reauthorize the referenced run on every use.
@@ -142,13 +155,13 @@ export interface GetRunSnapshotRequest {
  */
 export interface ListLogsRequest {
     /**
-     * Required snapshot-issued token. after_sequence is relative to this snapshot.
+     * Required snapshot-issued token. Cursors and filters are relative to this snapshot.
      *
      * @generated from protobuf field: string page_token = 1
      */
     pageToken: string;
     /**
-     * Exclusive log cursor within the snapshot identified by page_token.
+     * Exclusive lower log bound for forward and incremental hydration.
      *
      * @generated from protobuf field: uint64 after_sequence = 2
      */
@@ -157,19 +170,35 @@ export interface ListLogsRequest {
      * @generated from protobuf field: uint32 page_size = 3
      */
     pageSize: number;
+    /**
+     * Exclusive upper log bound for newest-first hydration; zero starts at the snapshot end.
+     *
+     * @generated from protobuf field: uint64 before_sequence = 4
+     */
+    beforeSequence: string;
+    /**
+     * Optional exact node filter. Continuation tokens bind this filter.
+     *
+     * @generated from protobuf field: string node_id = 5
+     */
+    nodeId: string;
+    /**
+     * @generated from protobuf field: avalanche.operator.DescriptorPageOrder order = 6
+     */
+    order: DescriptorPageOrder;
 }
 /**
  * @generated from protobuf message avalanche.operator.ListAgentEventsRequest
  */
 export interface ListAgentEventsRequest {
     /**
-     * Required snapshot-issued token. after_event_sequence is relative to this snapshot.
+     * Required snapshot-issued token. Cursors are relative to this snapshot.
      *
      * @generated from protobuf field: string page_token = 1
      */
     pageToken: string;
     /**
-     * Exclusive event cursor within the snapshot identified by page_token.
+     * Exclusive lower event bound for forward and incremental hydration.
      *
      * @generated from protobuf field: uint64 after_event_sequence = 2
      */
@@ -178,6 +207,16 @@ export interface ListAgentEventsRequest {
      * @generated from protobuf field: uint32 page_size = 3
      */
     pageSize: number;
+    /**
+     * Exclusive upper event bound for newest-first hydration; zero starts at the snapshot end.
+     *
+     * @generated from protobuf field: uint64 before_event_sequence = 4
+     */
+    beforeEventSequence: string;
+    /**
+     * @generated from protobuf field: avalanche.operator.DescriptorPageOrder order = 5
+     */
+    order: DescriptorPageOrder;
 }
 /**
  * @generated from protobuf message avalanche.operator.ReadTraceRequest
@@ -1064,6 +1103,19 @@ export interface OperatorUpdateEnvelope {
         oneofKind: undefined;
     };
 }
+/**
+ * @generated from protobuf enum avalanche.operator.DescriptorPageOrder
+ */
+export enum DescriptorPageOrder {
+    /**
+     * @generated from protobuf enum value: DESCRIPTOR_PAGE_ORDER_FORWARD = 0;
+     */
+    FORWARD = 0,
+    /**
+     * @generated from protobuf enum value: DESCRIPTOR_PAGE_ORDER_NEWEST_FIRST = 1;
+     */
+    NEWEST_FIRST = 1
+}
 // @generated message type with reflection information, may provide speed optimized methods
 class Empty$Type extends MessageType<Empty> {
     constructor() {
@@ -1536,12 +1588,70 @@ class GetRunSnapshotRequest$Type extends MessageType<GetRunSnapshotRequest> {
  */
 export const GetRunSnapshotRequest = new GetRunSnapshotRequest$Type();
 // @generated message type with reflection information, may provide speed optimized methods
+class GetLatestRunSnapshotRequest$Type extends MessageType<GetLatestRunSnapshotRequest> {
+    constructor() {
+        super("avalanche.operator.GetLatestRunSnapshotRequest", [
+            { no: 1, name: "run_id", kind: "scalar", T: 9 /*ScalarType.STRING*/ },
+            { no: 2, name: "operator_instance_id", kind: "scalar", T: 9 /*ScalarType.STRING*/ }
+        ]);
+    }
+    create(value?: PartialMessage<GetLatestRunSnapshotRequest>): GetLatestRunSnapshotRequest {
+        const message = globalThis.Object.create((this.messagePrototype!));
+        message.runId = "";
+        message.operatorInstanceId = "";
+        if (value !== undefined)
+            reflectionMergePartial<GetLatestRunSnapshotRequest>(this, message, value);
+        return message;
+    }
+    internalBinaryRead(reader: IBinaryReader, length: number, options: BinaryReadOptions, target?: GetLatestRunSnapshotRequest): GetLatestRunSnapshotRequest {
+        let message = target ?? this.create(), end = reader.pos + length;
+        while (reader.pos < end) {
+            let [fieldNo, wireType] = reader.tag();
+            switch (fieldNo) {
+                case /* string run_id */ 1:
+                    message.runId = reader.string();
+                    break;
+                case /* string operator_instance_id */ 2:
+                    message.operatorInstanceId = reader.string();
+                    break;
+                default:
+                    let u = options.readUnknownField;
+                    if (u === "throw")
+                        throw new globalThis.Error(`Unknown field ${fieldNo} (wire type ${wireType}) for ${this.typeName}`);
+                    let d = reader.skip(wireType);
+                    if (u !== false)
+                        (u === true ? UnknownFieldHandler.onRead : u)(this.typeName, message, fieldNo, wireType, d);
+            }
+        }
+        return message;
+    }
+    internalBinaryWrite(message: GetLatestRunSnapshotRequest, writer: IBinaryWriter, options: BinaryWriteOptions): IBinaryWriter {
+        /* string run_id = 1; */
+        if (message.runId !== "")
+            writer.tag(1, WireType.LengthDelimited).string(message.runId);
+        /* string operator_instance_id = 2; */
+        if (message.operatorInstanceId !== "")
+            writer.tag(2, WireType.LengthDelimited).string(message.operatorInstanceId);
+        let u = options.writeUnknownFields;
+        if (u !== false)
+            (u == true ? UnknownFieldHandler.onWrite : u)(this.typeName, message, writer);
+        return writer;
+    }
+}
+/**
+ * @generated MessageType for protobuf message avalanche.operator.GetLatestRunSnapshotRequest
+ */
+export const GetLatestRunSnapshotRequest = new GetLatestRunSnapshotRequest$Type();
+// @generated message type with reflection information, may provide speed optimized methods
 class ListLogsRequest$Type extends MessageType<ListLogsRequest> {
     constructor() {
         super("avalanche.operator.ListLogsRequest", [
             { no: 1, name: "page_token", kind: "scalar", T: 9 /*ScalarType.STRING*/ },
             { no: 2, name: "after_sequence", kind: "scalar", T: 4 /*ScalarType.UINT64*/ },
-            { no: 3, name: "page_size", kind: "scalar", T: 13 /*ScalarType.UINT32*/ }
+            { no: 3, name: "page_size", kind: "scalar", T: 13 /*ScalarType.UINT32*/ },
+            { no: 4, name: "before_sequence", kind: "scalar", T: 4 /*ScalarType.UINT64*/ },
+            { no: 5, name: "node_id", kind: "scalar", T: 9 /*ScalarType.STRING*/ },
+            { no: 6, name: "order", kind: "enum", T: () => ["avalanche.operator.DescriptorPageOrder", DescriptorPageOrder, "DESCRIPTOR_PAGE_ORDER_"] }
         ]);
     }
     create(value?: PartialMessage<ListLogsRequest>): ListLogsRequest {
@@ -1549,6 +1659,9 @@ class ListLogsRequest$Type extends MessageType<ListLogsRequest> {
         message.pageToken = "";
         message.afterSequence = "0";
         message.pageSize = 0;
+        message.beforeSequence = "0";
+        message.nodeId = "";
+        message.order = 0;
         if (value !== undefined)
             reflectionMergePartial<ListLogsRequest>(this, message, value);
         return message;
@@ -1566,6 +1679,15 @@ class ListLogsRequest$Type extends MessageType<ListLogsRequest> {
                     break;
                 case /* uint32 page_size */ 3:
                     message.pageSize = reader.uint32();
+                    break;
+                case /* uint64 before_sequence */ 4:
+                    message.beforeSequence = reader.uint64().toString();
+                    break;
+                case /* string node_id */ 5:
+                    message.nodeId = reader.string();
+                    break;
+                case /* avalanche.operator.DescriptorPageOrder order */ 6:
+                    message.order = reader.int32();
                     break;
                 default:
                     let u = options.readUnknownField;
@@ -1588,6 +1710,15 @@ class ListLogsRequest$Type extends MessageType<ListLogsRequest> {
         /* uint32 page_size = 3; */
         if (message.pageSize !== 0)
             writer.tag(3, WireType.Varint).uint32(message.pageSize);
+        /* uint64 before_sequence = 4; */
+        if (message.beforeSequence !== "0")
+            writer.tag(4, WireType.Varint).uint64(message.beforeSequence);
+        /* string node_id = 5; */
+        if (message.nodeId !== "")
+            writer.tag(5, WireType.LengthDelimited).string(message.nodeId);
+        /* avalanche.operator.DescriptorPageOrder order = 6; */
+        if (message.order !== 0)
+            writer.tag(6, WireType.Varint).int32(message.order);
         let u = options.writeUnknownFields;
         if (u !== false)
             (u == true ? UnknownFieldHandler.onWrite : u)(this.typeName, message, writer);
@@ -1604,7 +1735,9 @@ class ListAgentEventsRequest$Type extends MessageType<ListAgentEventsRequest> {
         super("avalanche.operator.ListAgentEventsRequest", [
             { no: 1, name: "page_token", kind: "scalar", T: 9 /*ScalarType.STRING*/ },
             { no: 2, name: "after_event_sequence", kind: "scalar", T: 4 /*ScalarType.UINT64*/ },
-            { no: 3, name: "page_size", kind: "scalar", T: 13 /*ScalarType.UINT32*/ }
+            { no: 3, name: "page_size", kind: "scalar", T: 13 /*ScalarType.UINT32*/ },
+            { no: 4, name: "before_event_sequence", kind: "scalar", T: 4 /*ScalarType.UINT64*/ },
+            { no: 5, name: "order", kind: "enum", T: () => ["avalanche.operator.DescriptorPageOrder", DescriptorPageOrder, "DESCRIPTOR_PAGE_ORDER_"] }
         ]);
     }
     create(value?: PartialMessage<ListAgentEventsRequest>): ListAgentEventsRequest {
@@ -1612,6 +1745,8 @@ class ListAgentEventsRequest$Type extends MessageType<ListAgentEventsRequest> {
         message.pageToken = "";
         message.afterEventSequence = "0";
         message.pageSize = 0;
+        message.beforeEventSequence = "0";
+        message.order = 0;
         if (value !== undefined)
             reflectionMergePartial<ListAgentEventsRequest>(this, message, value);
         return message;
@@ -1629,6 +1764,12 @@ class ListAgentEventsRequest$Type extends MessageType<ListAgentEventsRequest> {
                     break;
                 case /* uint32 page_size */ 3:
                     message.pageSize = reader.uint32();
+                    break;
+                case /* uint64 before_event_sequence */ 4:
+                    message.beforeEventSequence = reader.uint64().toString();
+                    break;
+                case /* avalanche.operator.DescriptorPageOrder order */ 5:
+                    message.order = reader.int32();
                     break;
                 default:
                     let u = options.readUnknownField;
@@ -1651,6 +1792,12 @@ class ListAgentEventsRequest$Type extends MessageType<ListAgentEventsRequest> {
         /* uint32 page_size = 3; */
         if (message.pageSize !== 0)
             writer.tag(3, WireType.Varint).uint32(message.pageSize);
+        /* uint64 before_event_sequence = 4; */
+        if (message.beforeEventSequence !== "0")
+            writer.tag(4, WireType.Varint).uint64(message.beforeEventSequence);
+        /* avalanche.operator.DescriptorPageOrder order = 5; */
+        if (message.order !== 0)
+            writer.tag(5, WireType.Varint).int32(message.order);
         let u = options.writeUnknownFields;
         if (u !== false)
             (u == true ? UnknownFieldHandler.onWrite : u)(this.typeName, message, writer);
@@ -4440,6 +4587,7 @@ export const OperatorService = new ServiceType("avalanche.operator.OperatorServi
     { name: "GetRunResult", options: {}, I: GetRunRequest, O: RunResultMsg },
     { name: "ListRunSummaries", options: {}, I: ListRunSummariesRequest, O: RunSummaryPage },
     { name: "GetRunSnapshot", options: {}, I: GetRunSnapshotRequest, O: RunSnapshotMsg },
+    { name: "GetLatestRunSnapshot", options: {}, I: GetLatestRunSnapshotRequest, O: RunSnapshotMsg },
     { name: "ListLogs", options: {}, I: ListLogsRequest, O: LogPage },
     { name: "ListAgentEvents", options: {}, I: ListAgentEventsRequest, O: AgentEventPage },
     { name: "ReadTrace", serverStreaming: true, options: {}, I: ReadTraceRequest, O: TraceChunk },

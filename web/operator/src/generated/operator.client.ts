@@ -15,6 +15,7 @@ import type { AgentEventPage } from "./operator";
 import type { ListAgentEventsRequest } from "./operator";
 import type { LogPage } from "./operator";
 import type { ListLogsRequest } from "./operator";
+import type { GetLatestRunSnapshotRequest } from "./operator";
 import type { RunSnapshotMsg } from "./operator";
 import type { GetRunSnapshotRequest } from "./operator";
 import type { RunSummaryPage } from "./operator";
@@ -63,6 +64,10 @@ export interface IOperatorServiceClient {
      * @generated from protobuf rpc: GetRunSnapshot
      */
     getRunSnapshot(input: GetRunSnapshotRequest, options?: RpcOptions): UnaryCall<GetRunSnapshotRequest, RunSnapshotMsg>;
+    /**
+     * @generated from protobuf rpc: GetLatestRunSnapshot
+     */
+    getLatestRunSnapshot(input: GetLatestRunSnapshotRequest, options?: RpcOptions): UnaryCall<GetLatestRunSnapshotRequest, RunSnapshotMsg>;
     /**
      * @generated from protobuf rpc: ListLogs
      */
@@ -142,38 +147,45 @@ export class OperatorServiceClient implements IOperatorServiceClient, ServiceInf
         return stackIntercept<GetRunSnapshotRequest, RunSnapshotMsg>("unary", this._transport, method, opt, input);
     }
     /**
+     * @generated from protobuf rpc: GetLatestRunSnapshot
+     */
+    getLatestRunSnapshot(input: GetLatestRunSnapshotRequest, options?: RpcOptions): UnaryCall<GetLatestRunSnapshotRequest, RunSnapshotMsg> {
+        const method = this.methods[6], opt = this._transport.mergeOptions(options);
+        return stackIntercept<GetLatestRunSnapshotRequest, RunSnapshotMsg>("unary", this._transport, method, opt, input);
+    }
+    /**
      * @generated from protobuf rpc: ListLogs
      */
     listLogs(input: ListLogsRequest, options?: RpcOptions): UnaryCall<ListLogsRequest, LogPage> {
-        const method = this.methods[6], opt = this._transport.mergeOptions(options);
+        const method = this.methods[7], opt = this._transport.mergeOptions(options);
         return stackIntercept<ListLogsRequest, LogPage>("unary", this._transport, method, opt, input);
     }
     /**
      * @generated from protobuf rpc: ListAgentEvents
      */
     listAgentEvents(input: ListAgentEventsRequest, options?: RpcOptions): UnaryCall<ListAgentEventsRequest, AgentEventPage> {
-        const method = this.methods[7], opt = this._transport.mergeOptions(options);
+        const method = this.methods[8], opt = this._transport.mergeOptions(options);
         return stackIntercept<ListAgentEventsRequest, AgentEventPage>("unary", this._transport, method, opt, input);
     }
     /**
      * @generated from protobuf rpc: ReadTrace
      */
     readTrace(input: ReadTraceRequest, options?: RpcOptions): ServerStreamingCall<ReadTraceRequest, TraceChunk> {
-        const method = this.methods[8], opt = this._transport.mergeOptions(options);
+        const method = this.methods[9], opt = this._transport.mergeOptions(options);
         return stackIntercept<ReadTraceRequest, TraceChunk>("serverStreaming", this._transport, method, opt, input);
     }
     /**
      * @generated from protobuf rpc: ReadDetail
      */
     readDetail(input: ReadDetailRequest, options?: RpcOptions): ServerStreamingCall<ReadDetailRequest, DetailChunk> {
-        const method = this.methods[9], opt = this._transport.mergeOptions(options);
+        const method = this.methods[10], opt = this._transport.mergeOptions(options);
         return stackIntercept<ReadDetailRequest, DetailChunk>("serverStreaming", this._transport, method, opt, input);
     }
     /**
      * @generated from protobuf rpc: StreamOperatorUpdates
      */
     streamOperatorUpdates(input: StreamOperatorUpdatesRequest, options?: RpcOptions): ServerStreamingCall<StreamOperatorUpdatesRequest, OperatorUpdateEnvelope> {
-        const method = this.methods[10], opt = this._transport.mergeOptions(options);
+        const method = this.methods[11], opt = this._transport.mergeOptions(options);
         return stackIntercept<StreamOperatorUpdatesRequest, OperatorUpdateEnvelope>("serverStreaming", this._transport, method, opt, input);
     }
 }

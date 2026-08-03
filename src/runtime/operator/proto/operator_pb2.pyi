@@ -1,10 +1,18 @@
 from google.protobuf.internal import containers as _containers
+from google.protobuf.internal import enum_type_wrapper as _enum_type_wrapper
 from google.protobuf import descriptor as _descriptor
 from google.protobuf import message as _message
 from collections.abc import Iterable as _Iterable, Mapping as _Mapping
 from typing import ClassVar as _ClassVar, Optional as _Optional, Union as _Union
 
 DESCRIPTOR: _descriptor.FileDescriptor
+
+class DescriptorPageOrder(int, metaclass=_enum_type_wrapper.EnumTypeWrapper):
+    __slots__ = ()
+    DESCRIPTOR_PAGE_ORDER_FORWARD: _ClassVar[DescriptorPageOrder]
+    DESCRIPTOR_PAGE_ORDER_NEWEST_FIRST: _ClassVar[DescriptorPageOrder]
+DESCRIPTOR_PAGE_ORDER_FORWARD: DescriptorPageOrder
+DESCRIPTOR_PAGE_ORDER_NEWEST_FIRST: DescriptorPageOrder
 
 class Empty(_message.Message):
     __slots__ = ()
@@ -78,25 +86,43 @@ class GetRunSnapshotRequest(_message.Message):
     as_of_sequence: int
     def __init__(self, run_id: _Optional[str] = ..., operator_instance_id: _Optional[str] = ..., as_of_sequence: _Optional[int] = ...) -> None: ...
 
+class GetLatestRunSnapshotRequest(_message.Message):
+    __slots__ = ("run_id", "operator_instance_id")
+    RUN_ID_FIELD_NUMBER: _ClassVar[int]
+    OPERATOR_INSTANCE_ID_FIELD_NUMBER: _ClassVar[int]
+    run_id: str
+    operator_instance_id: str
+    def __init__(self, run_id: _Optional[str] = ..., operator_instance_id: _Optional[str] = ...) -> None: ...
+
 class ListLogsRequest(_message.Message):
-    __slots__ = ("page_token", "after_sequence", "page_size")
+    __slots__ = ("page_token", "after_sequence", "page_size", "before_sequence", "node_id", "order")
     PAGE_TOKEN_FIELD_NUMBER: _ClassVar[int]
     AFTER_SEQUENCE_FIELD_NUMBER: _ClassVar[int]
     PAGE_SIZE_FIELD_NUMBER: _ClassVar[int]
+    BEFORE_SEQUENCE_FIELD_NUMBER: _ClassVar[int]
+    NODE_ID_FIELD_NUMBER: _ClassVar[int]
+    ORDER_FIELD_NUMBER: _ClassVar[int]
     page_token: str
     after_sequence: int
     page_size: int
-    def __init__(self, page_token: _Optional[str] = ..., after_sequence: _Optional[int] = ..., page_size: _Optional[int] = ...) -> None: ...
+    before_sequence: int
+    node_id: str
+    order: DescriptorPageOrder
+    def __init__(self, page_token: _Optional[str] = ..., after_sequence: _Optional[int] = ..., page_size: _Optional[int] = ..., before_sequence: _Optional[int] = ..., node_id: _Optional[str] = ..., order: _Optional[_Union[DescriptorPageOrder, str]] = ...) -> None: ...
 
 class ListAgentEventsRequest(_message.Message):
-    __slots__ = ("page_token", "after_event_sequence", "page_size")
+    __slots__ = ("page_token", "after_event_sequence", "page_size", "before_event_sequence", "order")
     PAGE_TOKEN_FIELD_NUMBER: _ClassVar[int]
     AFTER_EVENT_SEQUENCE_FIELD_NUMBER: _ClassVar[int]
     PAGE_SIZE_FIELD_NUMBER: _ClassVar[int]
+    BEFORE_EVENT_SEQUENCE_FIELD_NUMBER: _ClassVar[int]
+    ORDER_FIELD_NUMBER: _ClassVar[int]
     page_token: str
     after_event_sequence: int
     page_size: int
-    def __init__(self, page_token: _Optional[str] = ..., after_event_sequence: _Optional[int] = ..., page_size: _Optional[int] = ...) -> None: ...
+    before_event_sequence: int
+    order: DescriptorPageOrder
+    def __init__(self, page_token: _Optional[str] = ..., after_event_sequence: _Optional[int] = ..., page_size: _Optional[int] = ..., before_event_sequence: _Optional[int] = ..., order: _Optional[_Union[DescriptorPageOrder, str]] = ...) -> None: ...
 
 class ReadTraceRequest(_message.Message):
     __slots__ = ("run_id", "node_id", "revision", "operator_instance_id")

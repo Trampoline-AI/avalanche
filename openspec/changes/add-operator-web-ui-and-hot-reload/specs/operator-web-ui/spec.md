@@ -183,3 +183,56 @@ declared function or agent.
 #### Scenario: A workflow invokes the same declaration more than once
 - **WHEN** two or more nodes have the same display name
 - **THEN** each node card remains distinguishable by a stable invocation identity in both its visible label and accessible name
+
+### Requirement: Bound large-run browser hydration
+
+The web UI SHALL preserve operator pagination instead of draining descriptor pages or
+hydrating every retained run snapshot. It SHALL load a run snapshot only for the selected
+run, request log and agent-event pages only for the active inspector tab, cancel superseded
+requests, and retain bounded descriptor and detail projections.
+
+#### Scenario: User opens a historical run
+- **WHEN** a user selects one retained run from a catalog containing many runs
+- **THEN** the browser requests one current snapshot for that run without requesting snapshots for the other retained runs
+
+#### Scenario: User opens a node overview
+- **WHEN** a user opens a run node and leaves the inspector on Overview
+- **THEN** the browser does not request log pages, agent-event pages, or detail bodies
+
+#### Scenario: User inspects a large log or trace history
+- **WHEN** the selected node has more descriptors than one page
+- **THEN** the active tab requests and renders one bounded page at a time and retrieves older pages only as the user navigates toward them
+
+### Requirement: Keep live browser projections bounded
+
+The web UI SHALL apply operator updates in exact sequence while bounding pending browser
+work and retained live descriptor tails. If it cannot preserve the ordered stream within
+those bounds, it SHALL discard the ephemeral projection and reconcile from an authoritative
+operator baseline rather than dropping arbitrary structural updates.
+
+#### Scenario: Live updates exceed the browser queue bound
+- **WHEN** ordered updates arrive faster than the browser can apply its bounded batches
+- **THEN** the browser stops the stale stream and reloads authoritative state before resuming
+
+#### Scenario: Live descriptors exceed a retained tail
+- **WHEN** a selected run or node publishes more live descriptors than the browser tail retains
+- **THEN** the browser records a repair watermark and refreshes authoritative snapshot tokens before paging across the discarded range
+
+### Requirement: Keep inspector rendering responsive
+
+The run inspector SHALL virtualize large descriptor navigators, render only its active tab,
+distinguish loading from empty and error states, decode log bodies as text, decode structured
+agent-event bodies as JSON, and render nested values through explicit bounded expansion.
+Trace following SHALL affect only the Trace tab.
+
+#### Scenario: User changes tabs during hydration
+- **WHEN** an earlier tab request completes after the user changes tab, node, or run
+- **THEN** the stale result does not replace the current inspector state
+
+#### Scenario: User views plain-text logs
+- **WHEN** a selected log body is not JSON
+- **THEN** the Logs tab presents its exact decoded text without reporting a JSON parse error
+
+#### Scenario: Retained value contains a large collection
+- **WHEN** an input, output, or trace detail contains a large nested collection
+- **THEN** the value starts collapsed and renders bounded child groups only after explicit expansion

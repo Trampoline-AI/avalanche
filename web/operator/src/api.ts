@@ -1,5 +1,7 @@
 import { GrpcWebFetchTransport } from "@protobuf-ts/grpcweb-transport";
 
+import { DescriptorPageOrder } from "./generated/operator";
+
 import { OperatorServiceClient } from "./generated/operator.client";
 import type {
   AgentEventDescriptorMsg,
@@ -108,6 +110,8 @@ export class GrpcWebOperatorApi implements OperatorApi {
         pageToken,
         afterEventSequence,
         pageSize: 100,
+        beforeEventSequence: "0",
+        order: DescriptorPageOrder.FORWARD,
       }).response;
       events.push(...page.events);
       if (page.events.length) {
@@ -128,6 +132,9 @@ export class GrpcWebOperatorApi implements OperatorApi {
         pageToken,
         afterSequence,
         pageSize: 100,
+        beforeSequence: "0",
+        nodeId: "",
+        order: DescriptorPageOrder.FORWARD,
       }).response;
       logs.push(...page.logs);
       if (page.logs.length) afterSequence = page.logs.at(-1)!.sequence;
