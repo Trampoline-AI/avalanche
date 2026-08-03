@@ -720,6 +720,71 @@ describe("Inspector", () => {
     expect(listAgentEventPage).toHaveBeenCalledTimes(2);
   });
 
+  it("retains newer live output after filling the newest-first historical window", async () => {
+    const output = (sequence: number): AgentEventDescriptorMsg => ({
+      ...turn(sequence),
+      bodyToken: `output-${sequence}`,
+      eventKind: "run.succeeded",
+    });
+    const listAgentEventPage = vi.fn<OperatorApi["listAgentEventPage"]>(async (request) => {
+      const upper =
+        request.beforeEventSequence === "0" ? 500 : Number(request.beforeEventSequence) - 1;
+      const lower = Math.max(1, upper - 99);
+      return {
+        operatorInstanceId: run.operatorInstanceId,
+        asOfSequence: run.asOfSequence,
+        runId: run.summary!.runId,
+        nodeId: "agent_1",
+        records: Array.from({ length: upper - lower + 1 }, (_, index) =>
+          output(upper - index),
+        ),
+        nextPageToken: lower === 1 ? "" : `events-${lower}`,
+        nextCursor: String(lower),
+      };
+    });
+    const operatorApi: OperatorApi = {
+      ...api(),
+      listAgentEventPage,
+      readJsonDetail: async (token) => ({ outputs: { answer: token } }),
+    };
+    const view = render(
+      <Inspector
+        api={operatorApi}
+        workflow={workflow}
+        run={run}
+        nodeId="agent_1"
+        onClose={() => undefined}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "output" }));
+    const outputSection = screen
+      .getByRole("heading", { name: "Terminal output" })
+      .closest("section")!;
+    await expandObjectValues(outputSection);
+    expect(await within(outputSection).findByText("output-500")).toBeInTheDocument();
+    for (let page = 2; page <= 5; page += 1) {
+      fireEvent.click(screen.getByRole("button", { name: "Load more events" }));
+      await waitFor(() => expect(listAgentEventPage).toHaveBeenCalledTimes(page));
+    }
+    expect(screen.queryByRole("button", { name: "Load more events" })).not.toBeInTheDocument();
+
+    view.rerender(
+      <Inspector
+        api={operatorApi}
+        workflow={workflow}
+        run={run}
+        nodeId="agent_1"
+        liveEvents={[output(601)]}
+        onClose={() => undefined}
+      />,
+    );
+
+    await expandObjectValues(outputSection);
+    expect(await within(outputSection).findByText("output-601")).toBeInTheDocument();
+    expect(listAgentEventPage).toHaveBeenCalledTimes(5);
+  });
+
   it("loads older logs once with the cursor, filters exactly, and bounds mounted rows", async () => {
     const firstPage = Array.from({ length: 100 }, (_, index) => log(121 - index));
     const secondPage = [log(22), ...Array.from({ length: 21 }, (_, index) => log(21 - index))];
@@ -783,7 +848,7 @@ describe("Inspector", () => {
     expect(listLogPage).toHaveBeenCalledTimes(2);
   });
 
-  it("caps event and log descriptor windows while retaining the selected edge record", async () => {
+  it("caps filled historical windows while retaining live tails and active selections", async () => {
     const listAgentEventPage = vi.fn<OperatorApi["listAgentEventPage"]>(async (request) => {
       const start = Number(request.afterEventSequence);
       const records = Array.from({ length: 100 }, (_, index) => turn(start + index + 1));
@@ -812,23 +877,22 @@ describe("Inspector", () => {
         nextCursor: String(lower),
       };
     });
+    const operatorApi: OperatorApi = {
+      ...api(),
+      listAgentEventPage,
+      listLogPage,
+      readJsonDetail: async (token) => token,
+      readTextDetail: async (token) => `selected ${token}`,
+    };
     const liveEvents = Array.from({ length: 256 }, (_, index) => turn(501 + index));
     const liveLogs = Array.from({ length: 256 }, (_, index) => log(601 + index));
 
     const view = render(
       <Inspector
-        api={{
-          ...api(),
-          listAgentEventPage,
-          listLogPage,
-          readJsonDetail: async (token) => ({ selected: token }),
-          readTextDetail: async (token) => `selected ${token}`,
-        }}
+        api={operatorApi}
         workflow={workflow}
         run={run}
         nodeId="agent_1"
-        liveEvents={liveEvents}
-        liveLogs={liveLogs}
         onClose={() => undefined}
       />,
     );
@@ -841,38 +905,56 @@ describe("Inspector", () => {
     fireEvent.click(firstTurn);
     for (let page = 2; page <= 5; page += 1) {
       fireEvent.click(screen.getByRole("button", { name: "Load more events" }));
-      await waitFor(() => {
-        expect(listAgentEventPage).toHaveBeenCalledTimes(page);
-        if (page < 5) {
-          expect(screen.getByRole("button", { name: "Load more events" })).not.toBeDisabled();
-        }
-      });
+      await waitFor(() => expect(listAgentEventPage).toHaveBeenCalledTimes(page));
     }
     await waitFor(() => expect(screen.getByText("500 complete turns")).toBeInTheDocument());
+
+    view.rerender(
+      <Inspector
+        api={operatorApi}
+        workflow={workflow}
+        run={run}
+        nodeId="agent_1"
+        liveEvents={liveEvents}
+        onClose={() => undefined}
+      />,
+    );
+
+    expect(screen.getByText("500 complete turns")).toBeInTheDocument();
     expect(firstTurn).toHaveClass("active");
     expect(screen.queryByRole("button", { name: /^Turn 257\b/ })).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Follow latest" }));
+    expect(await screen.findByText("turn-756")).toBeInTheDocument();
 
     fireEvent.click(screen.getByRole("button", { name: "logs" }));
-    const newestLog = await screen.findByText("#856");
-    fireEvent.click(newestLog.closest("button")!);
-    expect(await screen.findByText("selected log-856")).toBeInTheDocument();
+    const selectedHistoricalLog = await screen.findByText("#600");
+    fireEvent.click(selectedHistoricalLog.closest("button")!);
+    expect(await screen.findByText("selected log-600")).toBeInTheDocument();
     for (let page = 2; page <= 5; page += 1) {
       fireEvent.click(screen.getByRole("button", { name: "Load older logs" }));
-      await waitFor(() => {
-        expect(listLogPage).toHaveBeenCalledTimes(page);
-        if (page < 5) {
-          expect(screen.getByRole("button", { name: "Load older logs" })).not.toBeDisabled();
-        }
-      });
+      await waitFor(() => expect(listLogPage).toHaveBeenCalledTimes(page));
     }
+
+    view.rerender(
+      <Inspector
+        api={operatorApi}
+        workflow={workflow}
+        run={run}
+        nodeId="agent_1"
+        liveEvents={liveEvents}
+        liveLogs={[...liveLogs, log(999, "agent_10")]}
+        onClose={() => undefined}
+      />,
+    );
+
     await waitFor(() =>
       expect(view.container.querySelector<HTMLElement>(".log-list > div")?.style.height).toBe(
         `${500 * 64}px`,
       ),
     );
     expect(screen.getByText("#856")).toBeInTheDocument();
-    expect(screen.queryByText("#600")).not.toBeInTheDocument();
-    expect(screen.getByText("selected log-856")).toBeInTheDocument();
+    expect(screen.queryByText("#999")).not.toBeInTheDocument();
+    expect(screen.getByText("selected log-600")).toBeInTheDocument();
   }, 30_000);
 
   it("aborts a continuation on snapshot repair and suppresses its stale page", async () => {

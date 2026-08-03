@@ -529,6 +529,68 @@ describe("useOperatorProjection", () => {
     expect(result.current.state.selectedRun?.summary?.runId).toBe(secondSummary.runId);
   });
 
+  it("aborts a selected snapshot on baseline replacement and ignores its stale result", async () => {
+    const releaseReset = deferred<void>();
+    const stale = deferred<RunSnapshotMsg>();
+    const selectionSignals: AbortSignal[] = [];
+    const replacement: StructuralBaseline = {
+      catalog: CatalogSnapshotMsg.create({
+        ...baseline.catalog,
+        asOfSequence: "8",
+        revision: "2",
+      }),
+      asOfSequence: "8",
+      runs: [summary],
+    };
+    const loadBaseline = vi
+      .fn<(signal?: AbortSignal) => Promise<StructuralBaseline>>()
+      .mockResolvedValueOnce(baseline)
+      .mockResolvedValue(replacement);
+    let streamCount = 0;
+    const streamUpdates = vi.fn(
+      (_operatorInstanceId: string, _afterSequence: string, signal?: AbortSignal) => {
+        streamCount += 1;
+        if (streamCount > 1) return idleUpdates(signal);
+        return (async function* () {
+          await releaseReset.promise;
+          yield OperatorUpdateEnvelope.create({
+            operatorInstanceId: "operator-1",
+            payload: {
+              oneofKind: "resetRequired",
+              resetRequired: { historyFloor: "2", latestSequence: "8" },
+            },
+          });
+        })();
+      },
+    );
+    const api = createApi({
+      loadBaseline,
+      streamUpdates,
+      getLatestRunSnapshot: (_runId, _operatorInstanceId, signal) => {
+        if (signal) selectionSignals.push(signal);
+        return stale.promise;
+      },
+    });
+    const { result } = renderHook(() => useOperatorProjection(api));
+    await waitFor(() => expect(result.current.state.connection).toBe("live"));
+
+    act(() => {
+      void result.current.selectRun(summary.runId);
+    });
+    await waitFor(() => expect(selectionSignals).toHaveLength(1));
+    act(() => releaseReset.resolve());
+    await waitFor(() => expect(result.current.state.sequence).toBe("8"));
+
+    expect(selectionSignals[0].aborted).toBe(true);
+    expect(result.current.state.selectedRunStatus).toBe("idle");
+    act(() => stale.resolve(snapshotFor(summary)));
+    await act(async () => {
+      await stale.promise;
+    });
+    expect(result.current.state.selectedRunId).toBeUndefined();
+    expect(result.current.state.selectedRun).toBeUndefined();
+  });
+
   it("applies contiguous stream envelopes in frame batches of at most 256", async () => {
     const callbacks: FrameRequestCallback[] = [];
     let frameId = 0;

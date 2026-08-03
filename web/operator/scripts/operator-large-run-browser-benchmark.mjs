@@ -10,6 +10,7 @@ const DOM_ROW_LIMIT = 120;
 const RENDER_BUDGET_MS = 3_000;
 const INTERACTION_BUDGET_MS = 1_000;
 const VITE_START_BUDGET_MS = 10_000;
+const VITE_PROBE_BUDGET_MS = 500;
 const CHROMIUM_PROCESS_BUDGET_MS = 15_000;
 
 const operatorRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
@@ -45,20 +46,36 @@ async function findChromiumExecutable() {
 }
 
 async function waitForVite(url, server, stderr) {
-  const startedAt = performance.now();
-  while (performance.now() - startedAt < VITE_START_BUDGET_MS) {
+  const deadline = performance.now() + VITE_START_BUDGET_MS;
+  while (performance.now() < deadline) {
     if (server.exitCode !== null) {
       throw new Error(`Vite exited before serving the benchmark fixture: ${stderr()}`);
     }
+
+    const controller = new AbortController();
+    const timeout = setTimeout(
+      () => controller.abort(),
+      Math.min(VITE_PROBE_BUDGET_MS, deadline - performance.now()),
+    );
     try {
-      const response = await fetch(url);
+      const response = await fetch(url, { signal: controller.signal });
       if (response.ok) return;
     } catch {
-      // The socket is not listening yet.
+      // The socket may not be listening yet, or the readiness probe may have timed out.
+    } finally {
+      clearTimeout(timeout);
     }
-    await new Promise((resolvePromise) => setTimeout(resolvePromise, 50));
+
+    const remaining = deadline - performance.now();
+    if (remaining > 0) {
+      await new Promise((resolvePromise) => setTimeout(resolvePromise, Math.min(50, remaining)));
+    }
   }
-  throw new Error(`Vite did not start within ${VITE_START_BUDGET_MS}ms`);
+
+  const output = stderr().trim();
+  throw new Error(
+    `Vite did not start within ${VITE_START_BUDGET_MS}ms${output ? `:\n${output}` : ""}`,
+  );
 }
 
 function delay(milliseconds) {

@@ -207,6 +207,57 @@ describe("App", () => {
     expect(screen.queryByText(/Run graph/)).not.toBeInTheDocument();
     expect(screen.queryByText(/Inspector/)).not.toBeInTheDocument();
   });
+  it("reloads a surviving selected run once after baseline replacement", async () => {
+    projectionHarness.state.runs = { "run-1": summary };
+    const view = render(<App api={new GrpcWebOperatorApi("http://localhost")} />);
+    fireEvent.click(await screen.findByRole("button", { name: /run-1Created at sequence 2/ }));
+
+    projectionHarness.state.selectedRunId = "run-1";
+    projectionHarness.state.selectedRunStatus = "ready";
+    projectionHarness.state.selectedRun = selectedSnapshot("run-1", "Recorded node");
+    view.rerender(<App api={new GrpcWebOperatorApi("http://localhost")} />);
+    projectionHarness.selectRun.mockClear();
+
+    projectionHarness.state.runs = { "run-1": summary };
+    projectionHarness.state.selectedRunId = undefined;
+    projectionHarness.state.selectedRunStatus = "idle";
+    projectionHarness.state.selectedRun = undefined;
+    view.rerender(<App api={new GrpcWebOperatorApi("http://localhost")} />);
+
+    expect(projectionHarness.selectRun).toHaveBeenCalledTimes(1);
+    expect(projectionHarness.selectRun).toHaveBeenCalledWith("run-1");
+
+    view.rerender(<App api={new GrpcWebOperatorApi("http://localhost")} />);
+    expect(projectionHarness.selectRun).toHaveBeenCalledTimes(1);
+  });
+
+  it("falls back to the selected run's workflow when replacement omits its summary", async () => {
+    projectionHarness.state.runs = { "run-1": summary };
+    const view = render(<App api={new GrpcWebOperatorApi("http://localhost")} />);
+    fireEvent.click(await screen.findByRole("button", { name: /run-1Created at sequence 2/ }));
+
+    projectionHarness.state.selectedRunId = "run-1";
+    projectionHarness.state.selectedRunStatus = "ready";
+    projectionHarness.state.selectedRun = selectedSnapshot("run-1", "Recorded node");
+    view.rerender(<App api={new GrpcWebOperatorApi("http://localhost")} />);
+    fireEvent.click(screen.getByRole("button", { name: "Run graph Recorded node" }));
+    expect(screen.getByText("Inspector run-1")).toBeInTheDocument();
+    projectionHarness.selectRun.mockClear();
+
+    projectionHarness.state.runs = {};
+    projectionHarness.state.selectedRunId = undefined;
+    projectionHarness.state.selectedRunStatus = "idle";
+    projectionHarness.state.selectedRun = undefined;
+    view.rerender(<App api={new GrpcWebOperatorApi("http://localhost")} />);
+
+    expect(projectionHarness.selectRun).toHaveBeenCalledTimes(1);
+    expect(projectionHarness.selectRun).toHaveBeenCalledWith(undefined);
+    expect(screen.getByRole("heading", { name: "demo" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Workflow graph" })).toBeInTheDocument();
+    expect(screen.queryByText(/Inspector/)).not.toBeInTheDocument();
+    expect(view.container.querySelector(".breadcrumb")).not.toHaveTextContent("run-1");
+  });
+
   it("passes the selected run and node live-log tail to the inspector", async () => {
     projectionHarness.state.runs = { "run-1": summary };
     projectionHarness.state.liveLogs = {

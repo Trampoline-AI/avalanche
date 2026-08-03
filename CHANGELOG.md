@@ -17,6 +17,9 @@
 - Unchanged discovery results no longer advance catalog revisions, and the web UI
   retains workflow/run navigation on narrow viewports with accessible input and
   repeated-node labels plus WCAG AA secondary-text contrast.
+- Large-run hydration is now summary-first, cancellable, incrementally paged, and
+  bounded across browser queues, descriptor windows, detail caches, and virtualized
+  DOM rendering. `make web-bench` covers 10,000 retained runs in real Chromium.
 
 ### Operator transport
 
