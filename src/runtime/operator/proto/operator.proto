@@ -15,6 +15,7 @@ service OperatorService {
   rpc GetRunResult(GetRunRequest) returns (RunResultMsg);
   rpc ListRunSummaries(ListRunSummariesRequest) returns (RunSummaryPage);
   rpc GetRunSnapshot(GetRunSnapshotRequest) returns (RunSnapshotMsg);
+  rpc GetLatestRunSnapshot(GetLatestRunSnapshotRequest) returns (RunSnapshotMsg);
   rpc ListLogs(ListLogsRequest) returns (LogPage);
   rpc ListAgentEvents(ListAgentEventsRequest) returns (AgentEventPage);
   rpc ReadTrace(ReadTraceRequest) returns (stream TraceChunk);
@@ -68,23 +69,41 @@ message GetRunSnapshotRequest {
   uint64 as_of_sequence = 3;
 }
 
+message GetLatestRunSnapshotRequest {
+  string run_id = 1;
+  string operator_instance_id = 2;
+}
+
+enum DescriptorPageOrder {
+  DESCRIPTOR_PAGE_ORDER_FORWARD = 0;
+  DESCRIPTOR_PAGE_ORDER_NEWEST_FIRST = 1;
+}
+
 // Page tokens are opaque bearer references issued by GetRunSnapshot. The current
 // loopback transport does not sign them; authenticated deployments must sign or
 // tenant-bind tokens and reauthorize the referenced run on every use.
 message ListLogsRequest {
-  // Required snapshot-issued token. after_sequence is relative to this snapshot.
+  // Required snapshot-issued token. Cursors and filters are relative to this snapshot.
   string page_token = 1;
-  // Exclusive log cursor within the snapshot identified by page_token.
+  // Exclusive lower log bound for forward and incremental hydration.
   uint64 after_sequence = 2;
   uint32 page_size = 3;
+  // Exclusive upper log bound for newest-first hydration; zero starts at the snapshot end.
+  uint64 before_sequence = 4;
+  // Optional exact node filter. Continuation tokens bind this filter.
+  string node_id = 5;
+  DescriptorPageOrder order = 6;
 }
 
 message ListAgentEventsRequest {
-  // Required snapshot-issued token. after_event_sequence is relative to this snapshot.
+  // Required snapshot-issued token. Cursors are relative to this snapshot.
   string page_token = 1;
-  // Exclusive event cursor within the snapshot identified by page_token.
+  // Exclusive lower event bound for forward and incremental hydration.
   uint64 after_event_sequence = 2;
   uint32 page_size = 3;
+  // Exclusive upper event bound for newest-first hydration; zero starts at the snapshot end.
+  uint64 before_event_sequence = 4;
+  DescriptorPageOrder order = 5;
 }
 
 message ReadTraceRequest {

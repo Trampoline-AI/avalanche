@@ -10,6 +10,7 @@ The operator can rescan workflow source, but it does not expose catalog changes 
 - Preserve existing runs across workflow reloads; reloads affect catalog/current-workflow views and future runs, never rewrite a run's recorded topology.
 - Preserve bounded agent invocation inputs and outputs as structured evidence, including typed PredictRLM file values whose host paths receive file-specific presentation without copying or storing the files.
 - Define browser-facing transport and asset-serving behavior while retaining the operator's local-first, loopback-default security posture.
+- Keep large-run browser transport, live projections, inspector hydration, and rendering bounded so the web UI remains responsive under long agent traces and log histories.
 
 ## Capabilities
 
