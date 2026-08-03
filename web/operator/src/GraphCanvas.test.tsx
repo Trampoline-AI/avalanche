@@ -48,6 +48,13 @@ function metadata(field: string) {
   });
 }
 
+function fieldSchemas(field: string) {
+  return JSON.stringify({
+    inputs: [{ name: field, type: "str", description: "" }],
+    outputs: [],
+  });
+}
+
 const workflow = FlowInfoMsg.create({
   workflowId: "flow.py::demo",
   displayName: "Current",
@@ -80,7 +87,7 @@ describe("GraphCanvas", () => {
           graph: { agent: { children: [] } },
           nodeTypes: { agent: "step" },
           displayNames: { agent: "Recorded agent" },
-          agentMetadataJson: { agent: metadata("recorded_input") },
+          agentFieldSchemasJson: { agent: fieldSchemas("recorded_input") },
         })}
         runNodes={[
           NodeSnapshotMsg.create({
@@ -101,5 +108,29 @@ describe("GraphCanvas", () => {
     expect(screen.getByText("recorded failure")).toBeInTheDocument();
     expect(screen.queryByText("Store")).not.toBeInTheDocument();
     expect(screen.queryByText("current_input")).not.toBeInTheDocument();
+  });
+
+  it("distinguishes repeated invocations by stable node identity", () => {
+    render(
+      <GraphCanvas
+        workflow={FlowInfoMsg.create({
+          workflowId: "flow.py::repeated",
+          displayName: "Repeated",
+          nodeIds: ["repeat_1", "repeat_2"],
+          graph: {
+            repeat_1: { children: ["repeat_2"] },
+            repeat_2: { children: [] },
+          },
+          nodeTypes: { repeat_1: "step", repeat_2: "step" },
+          displayNames: { repeat_1: "repeat", repeat_2: "repeat" },
+        })}
+        onOpenNode={() => undefined}
+      />,
+    );
+
+    expect(screen.getByRole("button", { name: "Inspect repeat #1" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Inspect repeat #2" })).toBeInTheDocument();
+    expect(screen.getByText("#1")).toBeInTheDocument();
+    expect(screen.getByText("#2")).toBeInTheDocument();
   });
 });

@@ -260,9 +260,9 @@ export interface WorkflowTopologyMsg {
         [key: string]: string;
     };
     /**
-     * @generated from protobuf field: map<string, string> agent_metadata_json = 5
+     * @generated from protobuf field: map<string, string> agent_field_schemas_json = 5
      */
-    agentMetadataJson: {
+    agentFieldSchemasJson: {
         [key: string]: string;
     };
 }
@@ -1889,7 +1889,7 @@ class WorkflowTopologyMsg$Type extends MessageType<WorkflowTopologyMsg> {
             { no: 2, name: "graph", kind: "map", K: 9 /*ScalarType.STRING*/, V: { kind: "message", T: () => NodeEdges } },
             { no: 3, name: "node_types", kind: "map", K: 9 /*ScalarType.STRING*/, V: { kind: "scalar", T: 9 /*ScalarType.STRING*/ } },
             { no: 4, name: "display_names", kind: "map", K: 9 /*ScalarType.STRING*/, V: { kind: "scalar", T: 9 /*ScalarType.STRING*/ } },
-            { no: 5, name: "agent_metadata_json", kind: "map", K: 9 /*ScalarType.STRING*/, V: { kind: "scalar", T: 9 /*ScalarType.STRING*/ } }
+            { no: 5, name: "agent_field_schemas_json", kind: "map", K: 9 /*ScalarType.STRING*/, V: { kind: "scalar", T: 9 /*ScalarType.STRING*/ } }
         ]);
     }
     create(value?: PartialMessage<WorkflowTopologyMsg>): WorkflowTopologyMsg {
@@ -1898,7 +1898,7 @@ class WorkflowTopologyMsg$Type extends MessageType<WorkflowTopologyMsg> {
         message.graph = {};
         message.nodeTypes = {};
         message.displayNames = {};
-        message.agentMetadataJson = {};
+        message.agentFieldSchemasJson = {};
         if (value !== undefined)
             reflectionMergePartial<WorkflowTopologyMsg>(this, message, value);
         return message;
@@ -1920,8 +1920,8 @@ class WorkflowTopologyMsg$Type extends MessageType<WorkflowTopologyMsg> {
                 case /* map<string, string> display_names */ 4:
                     this.binaryReadMap4(message.displayNames, reader, options);
                     break;
-                case /* map<string, string> agent_metadata_json */ 5:
-                    this.binaryReadMap5(message.agentMetadataJson, reader, options);
+                case /* map<string, string> agent_field_schemas_json */ 5:
+                    this.binaryReadMap5(message.agentFieldSchemasJson, reader, options);
                     break;
                 default:
                     let u = options.readUnknownField;
@@ -1982,8 +1982,8 @@ class WorkflowTopologyMsg$Type extends MessageType<WorkflowTopologyMsg> {
         }
         map[key ?? ""] = val ?? "";
     }
-    private binaryReadMap5(map: WorkflowTopologyMsg["agentMetadataJson"], reader: IBinaryReader, options: BinaryReadOptions): void {
-        let len = reader.uint32(), end = reader.pos + len, key: keyof WorkflowTopologyMsg["agentMetadataJson"] | undefined, val: WorkflowTopologyMsg["agentMetadataJson"][any] | undefined;
+    private binaryReadMap5(map: WorkflowTopologyMsg["agentFieldSchemasJson"], reader: IBinaryReader, options: BinaryReadOptions): void {
+        let len = reader.uint32(), end = reader.pos + len, key: keyof WorkflowTopologyMsg["agentFieldSchemasJson"] | undefined, val: WorkflowTopologyMsg["agentFieldSchemasJson"][any] | undefined;
         while (reader.pos < end) {
             let [fieldNo, wireType] = reader.tag();
             switch (fieldNo) {
@@ -1993,7 +1993,7 @@ class WorkflowTopologyMsg$Type extends MessageType<WorkflowTopologyMsg> {
                 case 2:
                     val = reader.string();
                     break;
-                default: throw new globalThis.Error("unknown map entry field for avalanche.operator.WorkflowTopologyMsg.agent_metadata_json");
+                default: throw new globalThis.Error("unknown map entry field for avalanche.operator.WorkflowTopologyMsg.agent_field_schemas_json");
             }
         }
         map[key ?? ""] = val ?? "";
@@ -2015,9 +2015,9 @@ class WorkflowTopologyMsg$Type extends MessageType<WorkflowTopologyMsg> {
         /* map<string, string> display_names = 4; */
         for (let k of globalThis.Object.keys(message.displayNames))
             writer.tag(4, WireType.LengthDelimited).fork().tag(1, WireType.LengthDelimited).string(k).tag(2, WireType.LengthDelimited).string(message.displayNames[k]).join();
-        /* map<string, string> agent_metadata_json = 5; */
-        for (let k of globalThis.Object.keys(message.agentMetadataJson))
-            writer.tag(5, WireType.LengthDelimited).fork().tag(1, WireType.LengthDelimited).string(k).tag(2, WireType.LengthDelimited).string(message.agentMetadataJson[k]).join();
+        /* map<string, string> agent_field_schemas_json = 5; */
+        for (let k of globalThis.Object.keys(message.agentFieldSchemasJson))
+            writer.tag(5, WireType.LengthDelimited).fork().tag(1, WireType.LengthDelimited).string(k).tag(2, WireType.LengthDelimited).string(message.agentFieldSchemasJson[k]).join();
         let u = options.writeUnknownFields;
         if (u !== false)
             (u == true ? UnknownFieldHandler.onWrite : u)(this.typeName, message, writer);

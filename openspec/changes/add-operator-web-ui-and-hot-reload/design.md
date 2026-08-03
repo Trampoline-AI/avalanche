@@ -22,7 +22,7 @@ The gRPC protocol currently separates catalog listing from a stream of run-only 
 
 ### Retain a topology snapshot with each run
 
-Introduce a frozen workflow-topology value containing node ID order, adjacency graph, node types, display names, and serialized agent declaration metadata needed to interpret recorded invocation values. Construct it from the worker's `prepared` event, not the current catalog descriptor: the worker event represents what that run actually loaded and executed. Store it on the in-memory run record and include it in the structural run snapshot and transport representation.
+Introduce a frozen workflow-topology value containing node ID order, adjacency graph, node types, display names, and per-agent input/output field schemas needed to interpret recorded invocation values. Construct it from the worker's `prepared` event, not the current catalog descriptor: the worker event represents what that run actually loaded and executed. Store it on the in-memory run record and include it in the structural run snapshot and transport representation. The run projection serializes only each field's name, type, and description; full declaration metadata remains current-catalog state and is not copied into runs.
 
 `RunState.nodes` remains execution state keyed by node ID. The topology snapshot is the rendering and identity layer. A run view joins the two; it never reads the current `WorkflowInfo` to supply missing nodes or edges.
 
@@ -102,6 +102,19 @@ The Explorer groups current workflows and retained runs under their configured s
 Workflow cards place agent input and output field lists inside their own bounds. DAG edges represent dependency, not individual field bindings: each source-target pair renders at most one arrow. Opening an agent node presents readable instructions first, with model, runtime, skills, and tools as supporting declaration metadata.
 
 Run cards retain the same structural edges but prioritize execution status, duration, and failure state. They do not reuse current agent field declarations, which could be incorrect for a historical run.
+
+### Keep the browser surface responsive and accessible
+
+At 375 CSS pixels and wider, navigation remains available through either the persistent
+Explorer or a compact disclosure rather than being removed. The workspace and canvas
+use bounded, shrinkable layout tracks so the selected title, primary actions, and graph
+stay inside the document viewport; graph overflow is handled by canvas pan and zoom.
+
+CodeMirror receives a descriptive accessible name through its editor attributes.
+Secondary text colors use shared tokens that meet WCAG 2.2 Level AA contrast against
+their actual backgrounds. When multiple topology nodes share one declaration display
+name, cards append a stable invocation discriminator derived from retained node identity
+to both the visible label and accessible name.
 
 ### Retain bounded agent invocation inputs and outputs
 

@@ -131,7 +131,7 @@ class NodeEdges(_message.Message):
     def __init__(self, children: _Optional[_Iterable[str]] = ...) -> None: ...
 
 class WorkflowTopologyMsg(_message.Message):
-    __slots__ = ("node_ids", "graph", "node_types", "display_names", "agent_metadata_json")
+    __slots__ = ("node_ids", "graph", "node_types", "display_names", "agent_field_schemas_json")
     class GraphEntry(_message.Message):
         __slots__ = ("key", "value")
         KEY_FIELD_NUMBER: _ClassVar[int]
@@ -153,7 +153,7 @@ class WorkflowTopologyMsg(_message.Message):
         key: str
         value: str
         def __init__(self, key: _Optional[str] = ..., value: _Optional[str] = ...) -> None: ...
-    class AgentMetadataJsonEntry(_message.Message):
+    class AgentFieldSchemasJsonEntry(_message.Message):
         __slots__ = ("key", "value")
         KEY_FIELD_NUMBER: _ClassVar[int]
         VALUE_FIELD_NUMBER: _ClassVar[int]
@@ -164,13 +164,13 @@ class WorkflowTopologyMsg(_message.Message):
     GRAPH_FIELD_NUMBER: _ClassVar[int]
     NODE_TYPES_FIELD_NUMBER: _ClassVar[int]
     DISPLAY_NAMES_FIELD_NUMBER: _ClassVar[int]
-    AGENT_METADATA_JSON_FIELD_NUMBER: _ClassVar[int]
+    AGENT_FIELD_SCHEMAS_JSON_FIELD_NUMBER: _ClassVar[int]
     node_ids: _containers.RepeatedScalarFieldContainer[str]
     graph: _containers.MessageMap[str, NodeEdges]
     node_types: _containers.ScalarMap[str, str]
     display_names: _containers.ScalarMap[str, str]
-    agent_metadata_json: _containers.ScalarMap[str, str]
-    def __init__(self, node_ids: _Optional[_Iterable[str]] = ..., graph: _Optional[_Mapping[str, NodeEdges]] = ..., node_types: _Optional[_Mapping[str, str]] = ..., display_names: _Optional[_Mapping[str, str]] = ..., agent_metadata_json: _Optional[_Mapping[str, str]] = ...) -> None: ...
+    agent_field_schemas_json: _containers.ScalarMap[str, str]
+    def __init__(self, node_ids: _Optional[_Iterable[str]] = ..., graph: _Optional[_Mapping[str, NodeEdges]] = ..., node_types: _Optional[_Mapping[str, str]] = ..., display_names: _Optional[_Mapping[str, str]] = ..., agent_field_schemas_json: _Optional[_Mapping[str, str]] = ...) -> None: ...
 
 class FlowInfoMsg(_message.Message):
     __slots__ = ("name", "file_path", "node_ids", "graph", "node_types", "display_names", "cron", "next_run_at", "last_run_at", "workflow_id", "display_name", "root_alias", "relative_file", "builder_symbol", "agent_node_ids", "agent_metadata_json", "webhook_path", "webhook_url", "webhook_active")

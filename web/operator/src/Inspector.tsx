@@ -2,7 +2,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { useVirtualizer } from "@tanstack/react-virtual";
 
 import type { OperatorApi } from "./api";
-import { parseAgentDeclaration } from "./GraphCanvas";
+import { parseAgentDeclaration, parseAgentFieldSchemas } from "./GraphCanvas";
 import type {
   AgentEventDescriptorMsg,
   FlowInfoMsg,
@@ -56,10 +56,12 @@ export function Inspector({
   const detailCache = useRef(new Map<string, unknown>());
   const scrollParent = useRef<HTMLDivElement>(null);
   const node: NodeSnapshotMsg | undefined = run?.nodes.find((item) => item.nodeId === nodeId);
-  const declarationJson = run
-    ? run.topology?.agentMetadataJson[nodeId ?? ""]
-    : workflow?.agentMetadataJson[nodeId ?? ""];
-  const declaration = declarationJson ? parseAgentDeclaration(declarationJson) : undefined;
+  const workflowDeclaration = run
+    ? undefined
+    : parseAgentDeclaration(workflow?.agentMetadataJson[nodeId ?? ""]);
+  const runFieldSchemas = run
+    ? parseAgentFieldSchemas(run.topology?.agentFieldSchemasJson[nodeId ?? ""])
+    : undefined;
 
   useEffect(() => {
     setTab("overview");
@@ -111,7 +113,11 @@ export function Inspector({
     return telemetryJson ? JSON.parse(telemetryJson) : undefined;
   }, [node?.trace?.header?.telemetryJson]);
   const declaredFields =
-    tab === "inputs" ? declaration?.inputs : tab === "output" ? declaration?.outputs : undefined;
+    tab === "inputs"
+      ? runFieldSchemas?.inputs
+      : tab === "output"
+        ? runFieldSchemas?.outputs
+        : undefined;
   const virtualizer = useVirtualizer({
     count: turns.length,
     getScrollElement: () => scrollParent.current,
@@ -185,16 +191,18 @@ export function Inspector({
             ×
           </button>
         </header>
-        {declaration ? (
+        {workflowDeclaration ? (
           <div className="inspector-body declaration">
             <section>
               <h3>Instructions</h3>
-              <p className="instructions">{declaration.instructions || "No instructions"}</p>
+              <p className="instructions">
+                {workflowDeclaration.instructions || "No instructions"}
+              </p>
             </section>
             <section className="signature-columns">
               <div>
                 <h3>Inputs</h3>
-                {declaration.inputs.map((field) => (
+                {workflowDeclaration.inputs.map((field) => (
                   <div className="field-detail" key={field.name}>
                     <strong>{field.name}</strong>
                     <code>{field.type}</code>
@@ -204,7 +212,7 @@ export function Inspector({
               </div>
               <div>
                 <h3>Outputs</h3>
-                {declaration.outputs.map((field) => (
+                {workflowDeclaration.outputs.map((field) => (
                   <div className="field-detail" key={field.name}>
                     <strong>{field.name}</strong>
                     <code>{field.type}</code>
@@ -215,15 +223,20 @@ export function Inspector({
             </section>
             <section>
               <h3>Runtime</h3>
-              <JsonBlock value={declaration.runtime} />
+              <JsonBlock value={workflowDeclaration.runtime} />
             </section>
             <section>
               <h3>Models</h3>
-              <JsonBlock value={declaration.model} />
+              <JsonBlock value={workflowDeclaration.model} />
             </section>
             <section>
               <h3>Skills & tools</h3>
-              <JsonBlock value={{ skills: declaration.skills, tools: declaration.tools }} />
+              <JsonBlock
+                value={{
+                  skills: workflowDeclaration.skills,
+                  tools: workflowDeclaration.tools,
+                }}
+              />
             </section>
           </div>
         ) : (
@@ -333,7 +346,9 @@ export function Inspector({
             {selectedPayload && valueKey in selectedPayload ? (
               <ValueView value={selectedPayload[valueKey]} />
             ) : (
-              <p className="empty-copy">No retained {tab} are available.</p>
+              <p className="empty-copy">
+                No retained {tab} {tab === "output" ? "is" : "are"} available.
+              </p>
             )}
           </section>
         )}

@@ -11,6 +11,7 @@ export function App({ api }: { api: OperatorApi }) {
   const { state, startRun, cancelRun } = useOperatorProjection(api);
   const [selection, setSelection] = useState<Selection>();
   const [inspectedNode, setInspectedNode] = useState<string>();
+  const [explorerOpen, setExplorerOpen] = useState(false);
 
   useEffect(() => {
     const workflows = state.catalog?.workflows ?? [];
@@ -45,13 +46,14 @@ export function App({ api }: { api: OperatorApi }) {
   const select = useCallback((next: Selection) => {
     setSelection(next);
     setInspectedNode(undefined);
+    setExplorerOpen(false);
   }, []);
 
   const selectedRun = run ?? (selection?.kind === "workflow" ? latestRun : undefined);
   const liveEventKey = run && inspectedNode ? `${run.summary?.runId}:${inspectedNode}` : "";
 
   return (
-    <div className="app-shell">
+    <div className={`app-shell ${explorerOpen ? "explorer-open" : ""}`}>
       <header className="topbar">
         <div className="brand">
           <span className="brand-mark" aria-hidden="true">
@@ -72,6 +74,15 @@ export function App({ api }: { api: OperatorApi }) {
           {state.connection === "live" ? "Live" : state.connection}
           <small>seq {state.sequence}</small>
         </div>
+        <button
+          type="button"
+          className="explorer-toggle"
+          aria-controls="operator-explorer"
+          aria-expanded={explorerOpen}
+          onClick={() => setExplorerOpen((open) => !open)}
+        >
+          Explorer
+        </button>
       </header>
       {state.error && <div className="connection-error">{state.error}</div>}
       <main className={`workspace ${inspectedNode ? "with-inspector" : ""}`}>

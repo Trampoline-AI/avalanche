@@ -36,7 +36,7 @@ class AmbiguousWorkflow(KeyError):  # noqa: N818 - domain exception name is inte
 
 
 def agent_metadata_for_workflow(workflow: Workflow, node_ids: list[str]) -> dict[str, str]:
-    """Serialize stable agent declaration metadata for catalog and run projections."""
+    """Serialize stable agent declaration metadata for current-catalog projections."""
     metadata_by_node: dict[str, str] = {}
     for node_id in node_ids:
         spec = getattr(workflow.nodes[node_id].node.fn, "__agent_step__", None)
@@ -55,6 +55,24 @@ def agent_metadata_for_workflow(workflow: Workflow, node_ids: list[str]) -> dict
                 sort_keys=True,
             )
     return metadata_by_node
+
+
+def agent_field_schemas_for_workflow(
+    workflow: Workflow, node_ids: list[str]
+) -> dict[str, str]:
+    """Serialize only agent invocation field schemas for immutable run topology."""
+    schemas_by_node: dict[str, str] = {}
+    for node_id in node_ids:
+        spec = getattr(workflow.nodes[node_id].node.fn, "__agent_step__", None)
+        if spec is None:
+            continue
+        schemas_by_node[node_id] = json.dumps(
+            spec.field_schema_metadata(),
+            ensure_ascii=False,
+            separators=(",", ":"),
+            sort_keys=True,
+        )
+    return schemas_by_node
 
 
 def workflow_to_info(
@@ -205,8 +223,14 @@ class WorkflowRegistry:
         candidate_failed = any(item.kind != "skipped" for item in diagnostics_tuple)
         if candidate_failed:
             with self._lock:
+                current = self._view
+                if (
+                    current.scan_targets == scan_targets
+                    and current.diagnostics == diagnostics_tuple
+                ):
+                    return current
                 self._view = replace(
-                    self._view,
+                    current,
                     scan_targets=scan_targets,
                     diagnostics=diagnostics_tuple,
                 )
@@ -222,8 +246,16 @@ class WorkflowRegistry:
             for name, candidate_ids in short_names.items()
         }
         with self._lock:
+            current = self._view
+            if (
+                current.by_id == by_id
+                and current.short_names == frozen_short_names
+                and current.scan_targets == scan_targets
+                and current.diagnostics == diagnostics_tuple
+            ):
+                return current
             view = CatalogView(
-                revision=self._view.revision + 1,
+                revision=current.revision + 1,
                 by_id=MappingProxyType(by_id),
                 short_names=MappingProxyType(dict(sorted(frozen_short_names.items()))),
                 scan_targets=scan_targets,

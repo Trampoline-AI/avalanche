@@ -10,9 +10,13 @@
 - Added a same-process binary gRPC-Web listener and packaged browser assets.
   Loopback remains the default; non-loopback binding requires the explicit
   `--web-trusted-proxy` acknowledgement.
-- Run topology now retains versioned agent declaration metadata, and bounded
-  trace descriptors expose stable PredictRLM header, usage, and telemetry
-  metadata without embedding complete trace bodies in structural snapshots.
+- Run topology now retains only versioned agent input/output field schemas,
+  while bounded trace descriptors expose stable PredictRLM header, usage, and
+  telemetry metadata without embedding declaration instructions or complete
+  trace bodies in structural snapshots.
+- Unchanged discovery results no longer advance catalog revisions, and the web UI
+  retains workflow/run navigation on narrow viewports with accessible input and
+  repeated-node labels plus WCAG AA secondary-text contrast.
 
 ### Operator transport
 

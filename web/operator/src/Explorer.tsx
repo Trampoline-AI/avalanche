@@ -111,7 +111,7 @@ export function Explorer({ catalog, runs, selection, onSelect }: ExplorerProps) 
   const [collapsedTargets, setCollapsedTargets] = useState<Record<string, true>>({});
   if (!catalog) {
     return (
-      <aside className="explorer skeleton" aria-label="Explorer">
+      <aside id="operator-explorer" className="explorer skeleton" aria-label="Explorer">
         <div />
         <div />
         <div />
@@ -128,7 +128,7 @@ export function Explorer({ catalog, runs, selection, onSelect }: ExplorerProps) 
         },
       ];
   return (
-    <aside className="explorer" aria-label="Explorer">
+    <aside id="operator-explorer" className="explorer" aria-label="Explorer">
       <header>
         <span className="eyebrow">Navigator</span>
         <h2>Explorer</h2>

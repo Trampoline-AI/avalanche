@@ -49,7 +49,7 @@ class WorkflowTopology:
     graph: tuple[tuple[str, tuple[str, ...]], ...] = ()
     node_types: tuple[tuple[str, str], ...] = ()
     display_names: tuple[tuple[str, str], ...] = ()
-    agent_metadata_json: tuple[tuple[str, str], ...] = ()
+    agent_field_schemas_json: tuple[tuple[str, str], ...] = ()
 
 
 @dataclass

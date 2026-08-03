@@ -23,6 +23,9 @@ function JsonEditor({ value, onChange }: JsonEditorProps) {
           json(),
           keymap.of([]),
           EditorView.lineWrapping,
+          EditorView.contentAttributes.of({
+            "aria-label": "Workflow input JSON",
+          }),
           EditorView.theme({
             "&": { backgroundColor: "#ffffff", color: "#17211c" },
             ".cm-content": { caretColor: "#2563eb", minHeight: "110px" },

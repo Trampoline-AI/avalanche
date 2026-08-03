@@ -417,6 +417,33 @@ def test_malformed_preparation_event_rolls_back_start(
         operator.close()
 
 
+def test_preparation_event_accepts_only_agent_invocation_field_schemas():
+    field_schemas = (
+        '{"inputs":[{"name":"question","type":"str","description":"Question"}],'
+        '"outputs":[{"name":"answer","type":"str","description":"Answer"}]}'
+    )
+    event = {
+        "type": "prepared",
+        "node_ids": ["agent_1"],
+        "graph": {"agent_1": []},
+        "node_types": {"agent_1": "step"},
+        "display_names": {"agent_1": "Agent"},
+        "display_name": "Flow",
+        "agent_field_schemas_json": {"agent_1": field_schemas},
+    }
+
+    assert operator_module._validate_preparation_event(event) == "prepared"
+
+    event["agent_field_schemas_json"]["agent_1"] = (
+        '{"inputs":[],"outputs":[],"instructions":"must not be retained"}'
+    )
+    with pytest.raises(
+        operator_module._CoordinatorProtocolError,
+        match="must contain only input and output schemas",
+    ):
+        operator_module._validate_preparation_event(event)
+
+
 @pytest.mark.parametrize(
     "event",
     [

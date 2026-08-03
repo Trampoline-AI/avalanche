@@ -29,6 +29,11 @@ const declaration = JSON.stringify({
   },
 });
 
+const fieldSchemas = JSON.stringify({
+  inputs: [{ name: "question", type: "str", description: "Question to answer" }],
+  outputs: [{ name: "answer", type: "str", description: "Final answer" }],
+});
+
 const workflow: FlowInfoMsg = {
   name: "agent_flow",
   filePath: "agent_flow.py",
@@ -104,7 +109,7 @@ const run: RunSnapshotMsg = {
     graph: { agent_1: { children: [] } },
     nodeTypes: { agent_1: "step" },
     displayNames: { agent_1: "Agent" },
-    agentMetadataJson: { agent_1: declaration },
+    agentFieldSchemasJson: { agent_1: fieldSchemas },
   },
 };
 
@@ -186,6 +191,28 @@ describe("Inspector", () => {
     await waitFor(() =>
       expect(screen.getByText("/workspace/result.txt")).toBeInTheDocument(),
     );
+  });
+
+  it("uses grammatical empty-state copy for singular output", async () => {
+    const operatorApi = {
+      ...api(),
+      listAgentEvents: async () => [],
+    };
+    render(
+      <Inspector
+        api={operatorApi}
+        workflow={workflow}
+        run={run}
+        nodeId="agent_1"
+        onClose={() => undefined}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "output" }));
+
+    expect(
+      await screen.findByText("No retained output is available."),
+    ).toBeInTheDocument();
   });
 
   it("hydrates complete turns on demand and evicts the least recently used body", async () => {
