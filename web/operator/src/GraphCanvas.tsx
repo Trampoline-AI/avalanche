@@ -1,6 +1,17 @@
-import { memo, type ReactNode, useEffect, useMemo, useState } from "react";
+import {
+  memo,
+  type MouseEvent,
+  type ReactNode,
+  useCallback,
+  useEffect,
+  useMemo,
+  useState,
+} from "react";
+import { Check, X } from "lucide-react";
+
 import {
   Background,
+  BackgroundVariant,
   BaseEdge,
   Controls,
   Handle,
@@ -8,7 +19,9 @@ import {
   Panel,
   Position,
   ReactFlow,
+  useReactFlow,
   useStore,
+  useViewport,
   type Edge,
   type EdgeProps,
   type Node,
@@ -53,6 +66,7 @@ export interface AgentDeclaration extends AgentFieldSchemas {
 interface CardData extends Record<string, unknown> {
   label: string;
   nodeType: string;
+  isAgent: boolean;
   identity?: string;
   status?: string;
   error?: string;
@@ -145,15 +159,22 @@ export function parseAgentFieldSchemas(raw: string | undefined): AgentFieldSchem
   }
 }
 
+const NODE_DETAIL_ZOOM_THRESHOLD = 1.0;
+const FOCUSED_NODE_ZOOM = 1.2;
+
+
+
 const NodeDuration = memo(
   ({
     startedAt,
     endedAt,
     running,
+    compact,
   }: {
     startedAt: number;
     endedAt?: number;
     running: boolean;
+    compact: boolean;
   }) => {
     const [nowSeconds, setNowSeconds] = useState(() => Date.now() / 1000);
     useEffect(() => {
@@ -167,7 +188,7 @@ const NodeDuration = memo(
     }, [endedAt, running]);
     const end = endedAt || nowSeconds;
     return (
-      <span className="node-duration absolute top-4 right-0 font-mono text-[9px] text-muted">
+      <span className={`node-duration absolute font-mono text-muted transition-[font-size] duration-150 ease-out motion-reduce:transition-none ${compact ? "top-3 right-3 text-sm" : "top-4 right-4 text-[9px]"}`}>
         {Math.max(0, end - startedAt).toFixed(1)}s
       </span>
     );
@@ -176,17 +197,49 @@ const NodeDuration = memo(
 NodeDuration.displayName = "NodeDuration";
 
 const WorkflowNodeCard = memo(({ data }: NodeProps<Node<CardData>>) => {
+  const { screenToFlowPosition, setCenter } = useReactFlow();
+  const { zoom } = useViewport();
+  const isCompact = zoom < NODE_DETAIL_ZOOM_THRESHOLD;
+  const openAndFocusNode = useCallback(
+    (event: MouseEvent<HTMLButtonElement>) => {
+      const bounds = event.currentTarget.getBoundingClientRect();
+      const nodeCenter = screenToFlowPosition({
+        x: bounds.left + bounds.width / 2,
+        y: bounds.top + bounds.height / 2,
+      });
+      data.onOpen();
+      window.requestAnimationFrame(() => {
+        window.requestAnimationFrame(() => {
+          void setCenter(nodeCenter.x, nodeCenter.y, {
+            zoom: FOCUSED_NODE_ZOOM,
+            duration: 200,
+          });
+        });
+      });
+    },
+    [data.onOpen, screenToFlowPosition, setCenter],
+  );
+  const agentClass = data.isAgent
+    ? "node-agent before:pointer-events-none before:absolute before:inset-y-3 before:left-0 before:w-[3px] before:rounded-r-full before:bg-agent before:content-['']"
+    : "";
+  const statusColorClass =
+    data.status === "success"
+      ? "text-success"
+      : data.status === "failed"
+        ? "text-failed"
+        : "text-muted";
   const statusClass =
     data.status === "success"
-      ? "status-success border-[2px] border-success text-success font-bold"
+      ? "status-success"
       : data.status === "failed"
-        ? "status-failed border-[2px] border-failed bg-failed/10 text-failed font-bold"
+        ? "status-failed"
         : data.status === "running"
           ? "status-running animate-pulse border-[3px] border-acid ring-[5px] ring-[rgba(37,99,235,.22)] motion-reduce:animate-none motion-reduce:ring-3"
-          : "blueprint border-line hover:border-acid";
+          : "blueprint";
   return (
     <article
-      className={`node-card relative flex min-h-[130px] w-[360px] cursor-pointer flex-col items-stretch gap-2 rounded-xl border bg-panel p-4 text-left shadow-[0_8px_24px_rgba(25,39,32,.08)] transition-[border-color,box-shadow,transform] duration-150 ease-out hover:-translate-y-px hover:shadow-[0_10px_28px_rgba(25,39,32,.12)] motion-reduce:transition-none ${statusClass}`}
+      className={`node-card ${isCompact ? "node-card--compact min-h-[100px] justify-center gap-0 px-4 py-3" : "min-h-[130px] gap-2 p-4"} relative flex w-[360px] cursor-pointer flex-col items-stretch rounded-xl border border-line bg-panel text-left shadow-[0_8px_24px_rgba(25,39,32,.08)] transition-[border-color,box-shadow,transform] duration-150 ease-out hover:-translate-y-px hover:border-acid hover:shadow-[0_10px_28px_rgba(25,39,32,.12)] motion-reduce:transition-none ${agentClass} ${statusClass}`}
+      data-node-kind={data.isAgent ? "agent" : "standard"}
     >
       <Handle
         id="target-left"
@@ -205,25 +258,54 @@ const WorkflowNodeCard = memo(({ data }: NodeProps<Node<CardData>>) => {
       <button
         type="button"
         className="node-card-action absolute inset-0 z-[2] cursor-pointer rounded-[inherit] border-0 bg-transparent p-0 focus-visible:outline-3 focus-visible:outline-offset-3 focus-visible:outline-acid"
-        onClick={data.onOpen}
+        onClick={openAndFocusNode}
         aria-label={`Inspect ${data.label}${data.identity ? ` ${data.identity}` : ""}`}
       />
-      <header className="node-header relative flex min-h-10 flex-col items-start gap-1 pr-[76px]">
-        <span className="node-kicker font-mono text-[8px] tracking-[.12em] text-secondary uppercase">{data.nodeType}</span>
-        <strong className="node-title text-sm leading-tight">{data.label}</strong>
-        {data.identity && <span className="node-identity font-mono text-[9px] text-secondary">{data.identity}</span>}
-        {data.status && <span className="node-status absolute top-0 right-0 font-mono text-[8px] text-muted uppercase">{data.status}</span>}
-        {data.startedAt && (
-          <NodeDuration
-            startedAt={data.startedAt}
-            endedAt={data.endedAt}
-            running={data.status === "running"}
-          />
-        )}
+      <header
+        className={`node-header relative flex flex-col ${isCompact
+          ? "min-h-0 items-center justify-center gap-0 pr-0 text-center"
+          : "min-h-10 items-start gap-1 pr-[76px]"
+          }`}
+      >
+        <span className={`node-card-meta node-kicker font-mono text-[8px] tracking-[.12em] uppercase ${data.isAgent ? "text-agent" : "text-secondary"}`}>{data.isAgent ? "agent" : data.nodeType}</span>
+        <strong
+          className={`node-title ${isCompact ? "text-xl" : "text-sm"} leading-tight text-ink`}
+        >
+          {data.label}
+          {data.status === "success" && (
+            <Check
+              aria-hidden="true"
+              className={`node-status-icon ml-1 inline-block text-success transition-[width,height] duration-200 ease-out motion-reduce:transition-none ${isCompact ? "size-6 align-[-0.15em]" : "size-3 align-[-0.08em]"}`}
+              strokeWidth={2.5}
+            />
+          )}
+          {data.status === "failed" && (
+            <X
+              aria-hidden="true"
+              className={`node-status-icon ml-1 inline-block text-failed transition-[width,height] duration-200 ease-out motion-reduce:transition-none ${isCompact ? "size-6 align-[-0.15em]" : "size-3 align-[-0.08em]"}`}
+              strokeWidth={2.5}
+            />
+          )}
+        </strong>
+        {data.identity && <span className="node-card-meta node-identity font-mono text-[9px] text-secondary">{data.identity}</span>}
+        {data.status && <span className={`node-card-meta node-status absolute top-[19px] right-0 font-mono text-[8px] uppercase ${statusColorClass}`}>{data.status}</span>}
       </header>
-      {data.error && <span className="node-error max-h-10 overflow-hidden rounded bg-[#fff1f0] px-2 py-1 text-[9px] text-danger">{data.error}</span>}
+      {data.startedAt && (
+        <NodeDuration
+          startedAt={data.startedAt}
+          endedAt={data.endedAt}
+          running={data.status === "running"}
+          compact={isCompact}
+        />
+      )}
+      {data.error && <span className="node-card-meta node-error max-h-10 overflow-hidden rounded bg-[#fff1f0] px-2 py-1 text-[9px] text-danger">{data.error}</span>}
       {data.declaration && (
-        <div className="field-grid node-declaration grid min-h-[58px] grid-cols-[minmax(0,1fr)_minmax(0,1fr)] gap-6 overflow-hidden border-t border-line pt-2.5">
+        <div
+          className={`node-card-details field-grid grid grid-cols-[minmax(0,1fr)_minmax(0,1fr)] overflow-hidden ${isCompact
+            ? "min-h-0! max-h-0! gap-0! border-t-transparent! pt-0! opacity-0 pointer-events-none"
+            : "min-h-[58px] gap-6 border-t border-line pt-2.5"
+            }`}
+        >
           <section className="node-fields node-inputs min-w-0 overflow-hidden [&>small]:mb-1.5 [&>small]:block [&>small]:font-mono [&>small]:text-[7px] [&>small]:tracking-[.08em] [&>small]:text-muted [&>small]:uppercase" aria-label="Inputs">
             <small>Inputs</small>
             {data.declaration.inputs.length ? (
@@ -407,6 +489,7 @@ function GraphCanvasView({
   onClearNode,
   onOpenNode,
 }: GraphCanvasProps) {
+  const isCurrentWorkflow = workflow !== undefined && runTopology === undefined;
   const topology = useMemo<TopologyView | undefined>(() => {
     if (runTopology) return runTopology;
     if (!workflow) return undefined;
@@ -432,6 +515,15 @@ function GraphCanvasView({
         (topologyNodeIds ?? []).map((nodeId) => [nodeId, () => onOpenNode(nodeId)]),
       ),
     [onOpenNode, topologyNodeIds],
+  );
+  const agentNodeIds = useMemo(
+    () =>
+      new Set(
+        runTopology
+          ? Object.keys(runTopology.agentFieldSchemasJson)
+          : (workflow?.agentNodeIds ?? []),
+      ),
+    [runTopology, workflow],
   );
   const nodes = useMemo(() => {
     if (!topology) return [];
@@ -460,6 +552,7 @@ function GraphCanvasView({
               ? invocationIdentity(nodeId, labels[nodeId])
               : undefined,
           nodeType: topology.nodeTypes[nodeId] || runtimeNode?.nodeType || "step",
+          isAgent: agentNodeIds.has(nodeId),
           status: runtimeNode?.status,
           error: runtimeNode?.error,
           startedAt: runtimeNode?.startedAt || undefined,
@@ -472,7 +565,7 @@ function GraphCanvasView({
       };
     });
     return nodes;
-  }, [layout.positions, openCallbacks, runNodes, runTopology, selectedNodeId, topology, workflow]);
+  }, [agentNodeIds, layout.positions, openCallbacks, runNodes, runTopology, selectedNodeId, topology, workflow]);
 
   return (
     <ReactFlow
@@ -501,7 +594,12 @@ function GraphCanvasView({
           {bottomRightPanel}
         </Panel>
       )}
-      <Background color="rgba(255,255,255,.06)" gap={24} size={1} />
+      <Background
+        color={isCurrentWorkflow ? "#dfe4e1" : "rgba(255,255,255,.06)"}
+        variant={BackgroundVariant.Dots}
+        gap={isCurrentWorkflow ? 18 : 24}
+        size={isCurrentWorkflow ? 2.5 : 1}
+      />
       <Controls className="overflow-hidden rounded-lg border! border-line! bg-white! shadow-[0_4px_14px_rgba(20,31,26,.08)]! [&_.react-flow__controls-button]:border-b-line! [&_.react-flow__controls-button]:bg-white! [&_.react-flow__controls-button]:fill-secondary! [&_.react-flow__controls-button:hover]:bg-[#f1f4f2]!" showInteractive={false} />
     </ReactFlow>
   );

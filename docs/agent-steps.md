@@ -242,6 +242,10 @@ PredictRLM skills.
 
 Workflow-scoped defaults configure shared PredictRLM execution policy:
 
+Agent steps are quiet by default (`verbose=False`); set `verbose=True` on an
+individual `@ava.agent_step` or in `agent_defaults` when live PredictRLM trace
+output is needed.
+
 ```python
 @ava.workflow(
     input=PreparedInputs,
@@ -264,7 +268,8 @@ async def expensive_audit(..., *, agent: ava.Agent):
 Resolution order:
 
 ```text
-agent-step runtime kwargs > workflow agent_defaults > PredictRLM defaults
+agent-step runtime kwargs > workflow agent_defaults > Avalanche agent defaults >
+PredictRLM defaults
 ```
 
 Workflow defaults cannot configure `signature`, `skills`, or `tools`; those are

@@ -20,6 +20,20 @@
 - Workflow cards now show contained typed field lists while declarations remain in the inspector.
   Canvases retain depth-aware edge routing, live durations, stronger execution states, and `Run`
   labels.
+- Agent steps now use an explicit DAG-card label and accent, including historical
+  runs classified from their retained agent field schemas.
+- Successful and failed nodes retain their neutral borders; only their titles
+  and status labels use the corresponding outcome color.
+- The current workflow canvas uses React Flow's neutral dotted blueprint field;
+  historical run canvases retain their separate neutral presentation.
+- Run logs now render bounded ANSI SGR color and text-style sequences without
+  interpreting log content as HTML.
+- Starting a workflow now navigates directly to its retained run snapshot as
+  soon as the operator publishes the run ID.
+- Agent steps now default PredictRLM to quiet execution; workflows and
+  individual steps can explicitly opt into verbose trace logs.
+- Zoomed-out run nodes center their titles while preserving a larger,
+  card-corner duration label.
 - Explorer collapse and restore controls now stay at the pane edge, and Explorer and inspector
   panes are independently resizable. Retained inputs, outputs, and traces use bounded progressive
   JSON with content-sized key columns, while logs use a record-separated continuous-text view

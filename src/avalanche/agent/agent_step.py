@@ -34,6 +34,8 @@ _WORKFLOW_AGENT_DEFAULTS: ContextVar[Mapping[str, Any]] = ContextVar(
     "avalanche_agent_workflow_defaults", default={}
 )
 
+_AGENT_RUNTIME_DEFAULTS: Mapping[str, bool] = types.MappingProxyType({"verbose": False})
+
 
 class _AgentInvocationState:
     """Task-local evidence state for one agent invocation."""
@@ -404,7 +406,11 @@ class _AgentStepSpec:
         return Agent(
             signature=self.signature,
             step_name=self.step_name,
-            runtime_kwargs={**defaults, **self.runtime_kwargs},
+            runtime_kwargs={
+                **_AGENT_RUNTIME_DEFAULTS,
+                **defaults,
+                **self.runtime_kwargs,
+            },
             skills=self.skills,
             tools=self.tools,
         )
@@ -573,6 +579,7 @@ def _effective_runtime_metadata(
         if name not in {"self", "signature", "skills", "tools"}
         and parameter.default is not inspect.Parameter.empty
     }
+    effective.update(_AGENT_RUNTIME_DEFAULTS)
     effective.update(workflow_defaults)
     effective.update(step_overrides)
     serialized: dict[str, Any] = {}

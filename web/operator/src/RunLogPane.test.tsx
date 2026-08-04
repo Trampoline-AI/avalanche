@@ -143,6 +143,23 @@ describe("RunLogPane", () => {
     expect(onSelectNode).toHaveBeenCalledWith("fetch_1");
   });
 
+  it("renders ANSI styles in hydrated log bodies", async () => {
+    render(
+      <RunLogPane
+        api={operatorApi({
+          listLogPage: async () => page([log(1, "fetch")]),
+          readTextDetail: async () => "\u001B[1;31mfailed\u001B[0m",
+        })}
+        run={run}
+        onSelectNode={() => undefined}
+      />,
+    );
+
+    const pane = screen.getByRole("region", { name: "Run logs" });
+    const body = await within(pane).findByText("failed");
+    expect(body).toHaveStyle({ color: "rgb(196, 61, 54)", fontWeight: "700" });
+  });
+
   it("maps graph selection to the runtime log identity and cancels obsolete scope work", async () => {
     const requestSignals: AbortSignal[] = [];
     const listLogPage = vi.fn<OperatorApi["listLogPage"]>(async (request, signal) => {

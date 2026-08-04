@@ -397,7 +397,49 @@ class TestBodyfulAgentSteps:
 
         assert flow().run(executor=LocalExecutor()).result() == "ready for review"
         assert ava.agent_step is ava.agent.agent_step is ava.agent.step
-        assert captured["builds"][0]["runtime_kwargs"] == {"lm": "root-lm"}
+        assert captured["builds"][0]["runtime_kwargs"] == {"lm": "root-lm", "verbose": False}
+
+    def test_agent_step_runtime_kwargs_override_quiet_default(self, monkeypatch):
+        """An explicit step setting takes precedence over the quiet agent default."""
+        captured = install_fake(
+            monkeypatch,
+            lambda _inputs: SimpleNamespace(
+                summary=Summary(headline="about Ada", person_count=1),
+                note="ready",
+            ),
+        )
+
+        @ava.agent_step(SummarySignature, verbose=True)
+        async def summarize(person: Person, *, agent: ava.Agent) -> str:
+            return (await agent(person=person)).note
+
+        @ava.workflow
+        def flow():
+            return summarize(Person(id=1, name="Ada"))
+
+        assert flow().run(executor=LocalExecutor()).result() == "ready"
+        assert captured["builds"][0]["runtime_kwargs"]["verbose"] is True
+
+    def test_workflow_agent_defaults_override_quiet_default(self, monkeypatch):
+        """A workflow may opt all of its agent steps into verbose traces."""
+        captured = install_fake(
+            monkeypatch,
+            lambda _inputs: SimpleNamespace(
+                summary=Summary(headline="about Ada", person_count=1),
+                note="ready",
+            ),
+        )
+
+        @ava.agent_step(SummarySignature)
+        async def summarize(person: Person, *, agent: ava.Agent) -> str:
+            return (await agent(person=person)).note
+
+        @ava.workflow(agent_defaults={"verbose": True})
+        def flow():
+            return summarize(Person(id=1, name="Ada"))
+
+        assert flow().run(executor=LocalExecutor()).result() == "ready"
+        assert captured["builds"][0]["runtime_kwargs"]["verbose"] is True
 
     def test_decorator_capabilities_reach_predictor(self, monkeypatch):
         """Decorator capabilities reach the predictor constructed for the step."""
@@ -575,7 +617,7 @@ def test_agent_declaration_metadata_is_complete_static_and_redacted():
     ]
     assert metadata["runtime"]["max_iterations"] == 7
     assert metadata["runtime"]["debug"] is True
-    assert metadata["runtime"]["max_llm_calls"] == 50
+    assert metadata["runtime"]["verbose"] is False
     rendered = json.dumps(metadata)
     assert "secret" not in rendered
     assert metadata["models"] == {
