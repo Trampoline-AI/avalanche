@@ -11,6 +11,7 @@ import {
   useState,
 } from "react";
 
+import { AnsiText } from "./AnsiText";
 import type { OperatorApi } from "./api";
 import {
   boundDescriptors,
@@ -589,7 +590,7 @@ export function RunLogPane({
                         </span>
                       )}
                       <span className={`run-log-level font-bold uppercase ${entry.level === "error" || entry.level === "critical" ? `level-${entry.level} text-danger` : entry.level === "warning" ? "level-warning text-amber" : "text-secondary"}`}>{entry.level}</span>
-                      <pre>{body ?? (droppedTokens.current.has(entry.bodyToken) ? "[log body omitted]" : "Loading…")}</pre>
+                      <pre><AnsiText text={body ?? (droppedTokens.current.has(entry.bodyToken) ? "[log body omitted]" : "Loading…")} /></pre>
                     </article>
                   );
                 })}

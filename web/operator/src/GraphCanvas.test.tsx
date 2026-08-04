@@ -29,11 +29,15 @@ const graphMetrics = vi.hoisted(() => ({
   seenPositions: new WeakSet<object>(),
   nodeSets: [] as RenderedNode[][],
   edgeSets: [] as RenderedEdge[][],
+  zoom: 1,
+  screenToFlowPosition: vi.fn(() => ({ x: 420, y: 240 })),
+  setCenter: vi.fn(),
 }));
 
 vi.mock("@xyflow/react", () => {
   return {
     Background: () => null,
+    BackgroundVariant: { Dots: "dots" },
     Controls: () => null,
     Handle: ({
       id,
@@ -58,6 +62,11 @@ vi.mock("@xyflow/react", () => {
     MarkerType: { ArrowClosed: "arrow-closed" },
     Position: { Bottom: "bottom", Left: "left", Right: "right", Top: "top" },
     useStore: () => 0,
+    useViewport: () => ({ x: 0, y: 0, zoom: graphMetrics.zoom }),
+    useReactFlow: () => ({
+      screenToFlowPosition: graphMetrics.screenToFlowPosition,
+      setCenter: graphMetrics.setCenter,
+    }),
     ReactFlow: ({
       nodes,
       edges,
@@ -124,6 +133,7 @@ const workflow = FlowInfoMsg.create({
   nodeTypes: { agent: "step", store: "dest" },
   displayNames: { agent: "Current agent", store: "Store" },
   agentMetadataJson: { agent: metadata("current_input") },
+  agentNodeIds: ["agent"],
 });
 
 describe("GraphCanvas", () => {
@@ -133,6 +143,9 @@ describe("GraphCanvas", () => {
     graphMetrics.seenPositions = new WeakSet<object>();
     graphMetrics.nodeSets = [];
     graphMetrics.edgeSets = [];
+    graphMetrics.zoom = 1;
+    graphMetrics.screenToFlowPosition.mockClear();
+    graphMetrics.setCenter.mockClear();
   });
 
   afterEach(() => {
@@ -199,6 +212,14 @@ describe("GraphCanvas", () => {
     expect(screen.getByText("Store")).toBeInTheDocument();
     expect(screen.getByText("current_input")).toBeInTheDocument();
     expect(screen.getByTestId("edge-count")).toHaveTextContent("1");
+    const currentAgentCard = screen
+      .getByRole("button", { name: "Inspect Current agent" })
+      .closest("article");
+    expect(currentAgentCard).toHaveAttribute("data-node-kind", "agent");
+    expect(currentAgentCard?.querySelector(".node-kicker")).toHaveTextContent("agent");
+    expect(
+      screen.getByRole("button", { name: "Inspect Store" }).closest("article"),
+    ).toHaveAttribute("data-node-kind", "standard");
 
     view.rerender(
       <GraphCanvas
@@ -223,12 +244,25 @@ describe("GraphCanvas", () => {
         onOpenNode={() => undefined}
       />,
     );
+    const historicalAgentCard = screen
+      .getByRole("button", { name: "Inspect Recorded agent" })
+      .closest("article");
+    expect(historicalAgentCard).toHaveAttribute("data-node-kind", "agent");
+    expect(historicalAgentCard?.querySelector(".node-kicker")).toHaveTextContent("agent");
 
     expect(screen.getByText("Recorded agent")).toBeInTheDocument();
     expect(screen.getByText("recorded_input")).toBeInTheDocument();
     expect(screen.getByText("recorded failure")).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Inspect Recorded agent" }).closest(".node-card"))
       .toHaveClass("status-failed");
+    expect(historicalAgentCard).toHaveClass("before:bg-agent", "border-line");
+    expect(historicalAgentCard?.querySelector(".node-title")).toHaveClass("text-ink");
+    expect(historicalAgentCard?.querySelector(".node-status-icon")).toHaveClass(
+      "lucide-x",
+      "size-3",
+      "text-failed",
+    );
+    expect(screen.getByText("failed")).toHaveClass("text-failed");
     expect(screen.queryByText("Store")).not.toBeInTheDocument();
     expect(screen.queryByText("current_input")).not.toBeInTheDocument();
   });
@@ -264,6 +298,7 @@ describe("GraphCanvas", () => {
       graph: { agent: { children: [] } },
       nodeTypes: { agent: "step" },
       displayNames: { agent: "Recorded agent" },
+      agentFieldSchemasJson: { agent: fieldSchemas("input") },
     });
     const runningNode = NodeSnapshotMsg.create({
       nodeId: "agent",
@@ -310,6 +345,18 @@ describe("GraphCanvas", () => {
     );
 
     expect(screen.getByText("success")).toBeInTheDocument();
+    const successCard = screen
+      .getByRole("button", { name: "Inspect Recorded agent" })
+      .closest("article");
+    expect(successCard).toHaveClass("before:bg-agent", "border-line");
+    expect(successCard?.querySelector(".node-kicker")).toHaveClass("text-agent");
+    expect(successCard?.querySelector(".node-title")).toHaveClass("text-ink");
+    expect(successCard?.querySelector(".node-status-icon")).toHaveClass(
+      "lucide-check",
+      "size-3",
+      "text-success",
+    );
+    expect(screen.getByText("success")).toHaveClass("text-success");
     expect(graphMetrics.renderCount).toBe(2);
     expect(graphMetrics.layoutCount).toBe(1);
     expect(graphMetrics.nodeSets.at(-1)).not.toBe(initialNodes);
@@ -349,8 +396,20 @@ describe("GraphCanvas", () => {
     expect(screen.getByText("Store")).toBeInTheDocument();
     expect(graphMetrics.renderCount).toBe(4);
     expect(graphMetrics.layoutCount).toBe(2);
+    const requestAnimationFrame = vi
+      .spyOn(window, "requestAnimationFrame")
+      .mockImplementation((callback) => {
+        callback(0);
+        return 0;
+      });
     fireEvent.click(screen.getByRole("button", { name: "Inspect Renamed agent" }));
     expect(onOpenNode).toHaveBeenCalledWith("agent");
+    expect(graphMetrics.screenToFlowPosition).toHaveBeenCalledOnce();
+    expect(graphMetrics.setCenter).toHaveBeenCalledWith(420, 240, {
+      zoom: 1.2,
+      duration: 200,
+    });
+    requestAnimationFrame.mockRestore();
   });
 
   it("renders typed input and output lists without card instructions", () => {
@@ -446,6 +505,30 @@ describe("GraphCanvas", () => {
     expect(
       handles.find((handle) => handle.getAttribute("data-handle-id") === "source-right"),
     ).not.toHaveClass("node-handle-output");
+  });
+
+  it("uses fixed title sizes across the detail zoom threshold", () => {
+    graphMetrics.zoom = 0.99;
+    const view = render(
+      <GraphCanvas workflow={workflow} onOpenNode={() => undefined} />,
+    );
+
+    const compactCard = screen
+      .getByRole("button", { name: "Inspect Current agent" })
+      .closest(".node-card");
+    expect(compactCard).toHaveClass("node-card--compact");
+    expect(compactCard).toHaveClass("justify-center", "gap-0");
+    expect(compactCard?.querySelector(".node-card-details")).toBeInTheDocument();
+    expect(compactCard?.querySelector(".node-kicker")).toHaveClass("node-card-meta");
+    expect(compactCard?.querySelector(".node-title")).toHaveClass("text-xl");
+
+    graphMetrics.zoom = 1;
+    view.rerender(<GraphCanvas workflow={workflow} onOpenNode={() => undefined} />);
+    const expandedCard = screen
+      .getByRole("button", { name: "Inspect Current agent" })
+      .closest(".node-card");
+    expect(expandedCard).not.toHaveClass("node-card--compact");
+    expect(expandedCard?.querySelector(".node-title")).toHaveClass("text-sm");
   });
 
   it("deduplicates dependencies and selects right or bottom source handles by depth", () => {
@@ -552,6 +635,7 @@ describe("GraphCanvas", () => {
   it("updates running seconds without relayout and keeps completed seconds stable", () => {
     vi.useFakeTimers();
     vi.setSystemTime(10_000);
+    graphMetrics.zoom = 0.99;
     const topology = WorkflowTopologyMsg.create({
       nodeIds: ["agent"],
       graph: { agent: { children: [] } },
@@ -575,12 +659,22 @@ describe("GraphCanvas", () => {
     );
 
     expect(screen.getByText("5.0s")).toBeInTheDocument();
+    const compactDuration = screen.getByText("5.0s");
+    expect(compactDuration.parentElement).toHaveClass("node-card");
+    expect(compactDuration).toHaveClass(
+      "top-3",
+      "right-3",
+      "text-sm",
+      "transition-[font-size]",
+      "duration-150",
+    );
     expect(screen.getByRole("button", { name: "Inspect Timed agent" }).closest(".node-card"))
       .toHaveClass("status-running");
     act(() => vi.advanceTimersByTime(1_000));
     expect(screen.getByText("6.0s")).toBeInTheDocument();
     expect(graphMetrics.layoutCount).toBe(1);
 
+    graphMetrics.zoom = 1;
     view.rerender(
       <GraphCanvas
         runTopology={topology}
@@ -598,6 +692,7 @@ describe("GraphCanvas", () => {
       />,
     );
     expect(screen.getByText("2.0s")).toBeInTheDocument();
+    expect(screen.getByText("2.0s")).toHaveClass("top-4", "right-4", "text-[9px]");
     expect(screen.getByRole("button", { name: "Inspect Timed agent" }).closest(".node-card"))
       .toHaveClass("status-success");
     act(() => vi.advanceTimersByTime(5_000));

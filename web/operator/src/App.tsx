@@ -7,6 +7,7 @@ import {
   useRef,
   useState,
 } from "react";
+import { PanelLeftOpen } from "lucide-react";
 
 import type { OperatorApi } from "./api";
 import { Explorer, type Selection } from "./Explorer";
@@ -206,16 +207,26 @@ export function App({ api }: { api: OperatorApi }) {
     },
     [select, workflow],
   );
+  const startWorkflowRun = useCallback(
+    async (workflowSelector: string, input?: Record<string, unknown>) => {
+      const runId = await startRun(workflowSelector, input);
+      if (workflow) {
+        select({ kind: "run", workflowId: workflow.workflowId, runId });
+      }
+      return runId;
+    },
+    [select, startRun, workflow],
+  );
   const restoreButton = explorerCollapsed ? (
     <button
       type="button"
-      className="explorer-restore-button grid size-7 flex-none cursor-pointer place-items-center rounded-[7px] border border-line bg-white p-0 text-xl leading-none text-secondary hover:border-secondary hover:bg-[#f7f9f8] hover:text-ink focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-acid max-[700px]:hidden"
+      className="explorer-restore-button grid size-7 flex-none cursor-pointer place-items-center rounded-[7px] border border-line bg-white p-0 text-secondary hover:border-secondary hover:bg-[#f7f9f8] hover:text-ink focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-acid max-[700px]:hidden"
       aria-label="Restore Explorer"
       aria-controls="operator-explorer"
       aria-expanded="false"
       onClick={restoreExplorer}
     >
-      <span aria-hidden="true">›</span>
+      <PanelLeftOpen aria-hidden="true" className="size-4" strokeWidth={1.8} />
     </button>
   ) : undefined;
   const runListPanel = workflow ? (
@@ -238,7 +249,7 @@ export function App({ api }: { api: OperatorApi }) {
       workflow={!historical ? workflow : undefined}
       run={run}
       pending={state.action}
-      onStart={startRun}
+      onStart={startWorkflowRun}
       onCancel={cancelRun}
     />
   ) : undefined;
@@ -250,7 +261,7 @@ export function App({ api }: { api: OperatorApi }) {
     "--workspace-explorer-width": `${explorerWidth}px`,
     "--workspace-inspector-width": `${inspectorWidth}px`,
     "--workspace-explorer-column-width": explorerCollapsed ? "0px" : `${explorerWidth}px`,
-    "--workspace-explorer-divider-width": explorerCollapsed ? "0px" : "16px",
+    "--workspace-explorer-divider-width": "0px",
     "--workspace-inspector-column-width": inspectorOpen ? `${inspectorWidth}px` : "0px",
     "--workspace-inspector-divider-width": inspectorOpen ? "16px" : "0px",
   } as CSSProperties;
@@ -261,7 +272,7 @@ export function App({ api }: { api: OperatorApi }) {
         explorerCollapsed ? "explorer-collapsed" : ""
       }`}
     >
-      <header className="topbar z-10 grid min-h-[58px] grid-cols-[260px_minmax(0,1fr)_auto_auto] items-center border-b border-line bg-white px-5 shadow-[0_1px_2px_rgba(20,31,26,.04)] max-[1000px]:grid-cols-[210px_minmax(0,1fr)_auto_auto] max-[700px]:grid-cols-[auto_minmax(0,1fr)_auto] max-[700px]:gap-2 max-[700px]:px-2.5">
+      <header className="topbar relative z-10 grid min-h-[58px] grid-cols-[260px_minmax(0,1fr)_auto_auto] items-center border-b border-line bg-white px-5 shadow-[0_1px_2px_rgba(20,31,26,.04)] max-[1000px]:grid-cols-[210px_minmax(0,1fr)_auto_auto] max-[700px]:grid-cols-[auto_minmax(0,1fr)_auto] max-[700px]:gap-2 max-[700px]:px-2.5">
         <div className="brand flex items-center gap-[11px]">
           <span className="brand-mark grid size-[30px] place-items-center rounded-lg bg-acid text-white [font-weight:750]" aria-hidden="true">
             A
@@ -271,7 +282,7 @@ export function App({ api }: { api: OperatorApi }) {
             <span className="font-mono text-[11px] text-muted uppercase">Operator</span>
           </div>
         </div>
-        <div className="breadcrumb flex justify-center gap-[9px] text-xs text-muted max-[700px]:hidden [&_i]:opacity-40 [&_strong]:font-semibold [&_strong]:text-[#26322c]">
+        <div className="breadcrumb absolute left-1/2 flex -translate-x-1/2 justify-center gap-[9px] text-xs text-muted max-[700px]:hidden [&_i]:opacity-40 [&_strong]:font-semibold [&_strong]:text-[#26322c]">
           <span>{workflow?.rootAlias || "Local operator"}</span>
           {workflow && <><i>/</i><strong>{workflow.displayName}</strong></>}
           {historical && <><i>/</i><strong>{selection.runId}</strong></>}
@@ -305,7 +316,7 @@ export function App({ api }: { api: OperatorApi }) {
         />
         {!explorerCollapsed && (
           <WorkspaceDivider
-            className="workspace-explorer-divider col-start-2 max-[700px]:hidden"
+            className="workspace-explorer-divider col-start-2 z-[5] w-4 -translate-x-1/2 max-[700px]:hidden"
             label="Resize Explorer"
             controls="operator-explorer"
             value={explorerWidth}
@@ -316,7 +327,7 @@ export function App({ api }: { api: OperatorApi }) {
           />
         )}
         <section className="canvas-shell relative col-start-3 grid min-h-0 min-w-0 w-full grid-rows-[minmax(0,1fr)] overflow-hidden bg-[#f7f9f8] max-[700px]:col-start-1">
-          <div className={historical ? "canvas run-canvas relative flex min-h-0 min-w-0 w-full flex-col overflow-hidden bg-[radial-gradient(circle,#e1e4df_1px,transparent_1px),#fafaf8] bg-[length:24px_24px]" : "canvas blueprint-canvas relative min-h-0 min-w-0 w-full overflow-hidden bg-[radial-gradient(circle,#dce3df_1px,transparent_1px),#f7f9f8] bg-[length:24px_24px]"}>
+          <div className={historical ? "canvas run-canvas relative flex min-h-0 min-w-0 w-full flex-col overflow-hidden bg-[radial-gradient(circle,#e1e4df_1px,transparent_1px),#fafaf8] bg-[length:24px_24px]" : "canvas blueprint-canvas relative min-h-0 min-w-0 w-full overflow-hidden bg-white"}>
             {historical ? (
               run ? (
                 <>

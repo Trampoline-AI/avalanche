@@ -1,5 +1,5 @@
 import type { ReactNode } from "react";
-import { fireEvent, render, screen } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 vi.mock("@tanstack/react-virtual", () => ({
@@ -188,6 +188,17 @@ describe("App", () => {
 
     fireEvent.click(screen.getByRole("button", { name: "Run" }));
     expect(projectionHarness.startRun).toHaveBeenCalledWith("flow.py::demo", undefined);
+  });
+
+  it("selects the newly launched run", async () => {
+    render(<App api={new GrpcWebOperatorApi("http://localhost")} />);
+
+    fireEvent.click(screen.getByRole("button", { name: "Run" }));
+
+    await waitFor(() =>
+      expect(projectionHarness.startRun).toHaveBeenCalledWith("flow.py::demo", undefined),
+    );
+    await waitFor(() => expect(projectionHarness.selectRun).toHaveBeenCalledWith("run-1"));
   });
 
   it("collapses and restores the desktop Explorer independently of the narrow toggle", () => {
