@@ -112,6 +112,10 @@ function withoutRunBuckets<T>(
   return Object.fromEntries(Object.entries(buckets).filter(([key]) => !key.startsWith(prefix)));
 }
 
+function withoutKey<T>(buckets: Record<string, T>, key: string): Record<string, T> {
+  return Object.fromEntries(Object.entries(buckets).filter(([candidate]) => candidate !== key));
+}
+
 function applyEnvelope(
   state: OperatorProjection,
   envelope: OperatorUpdateEnvelope,
@@ -209,7 +213,7 @@ function applyEnvelope(
     change.logAppended.log
   ) {
     const log = change.logAppended.log;
-    const key = `${runId}:${log.nodeId}`;
+    const key = runId;
     const appended = appendBounded(state.liveLogs[key] ?? [], log, (value) => value.sequence);
     if (appended.items !== state.liveLogs[key]) {
       next.liveLogs = { ...state.liveLogs, [key]: appended.items };
@@ -301,15 +305,12 @@ export function projectionReducer(
       selectedRunStatus: "ready",
       selectedRunError: undefined,
       liveEvents: withoutRunBuckets(state.liveEvents, action.runId),
-      liveLogs: withoutRunBuckets(state.liveLogs, action.runId),
+      liveLogs: withoutKey(state.liveLogs, action.runId),
       liveEventRepairWatermarks: withoutRunBuckets(
         state.liveEventRepairWatermarks,
         action.runId,
       ),
-      liveLogRepairWatermarks: withoutRunBuckets(
-        state.liveLogRepairWatermarks,
-        action.runId,
-      ),
+      liveLogRepairWatermarks: withoutKey(state.liveLogRepairWatermarks, action.runId),
     };
   }
   if (action.type === "selectionError") {
@@ -565,13 +566,14 @@ export function useOperatorProjection(api: OperatorApi) {
   const repairWatermark =
     selectedRunId && state.selectedRunStatus === "ready"
       ? [
-          ...Object.entries(state.liveEventRepairWatermarks),
-          ...Object.entries(state.liveLogRepairWatermarks),
-        ]
-          .filter(([key]) => key.startsWith(`${selectedRunId}:`))
-          .sort(([left], [right]) => left.localeCompare(right))
-          .map(([key, watermark]) => `${key}:${watermark}`)
-          .join("|")
+          ...Object.entries(state.liveEventRepairWatermarks)
+            .filter(([key]) => key.startsWith(`${selectedRunId}:`))
+            .sort(([left], [right]) => left.localeCompare(right))
+            .map(([key, watermark]) => `${key}:${watermark}`),
+          ...(state.liveLogRepairWatermarks[selectedRunId]
+            ? [`${selectedRunId}:${state.liveLogRepairWatermarks[selectedRunId]}`]
+            : []),
+        ].join("|")
       : "";
 
   useEffect(() => {

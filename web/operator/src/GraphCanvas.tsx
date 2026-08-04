@@ -384,6 +384,8 @@ interface GraphCanvasProps {
   runNodes?: NodeSnapshotMsg[];
   topLeftPanel?: ReactNode;
   bottomRightPanel?: ReactNode;
+  selectedNodeId?: string;
+  onClearNode?: () => void;
   onOpenNode: (nodeId: string) => void;
 }
 
@@ -393,6 +395,8 @@ function GraphCanvasView({
   runNodes = [],
   topLeftPanel,
   bottomRightPanel,
+  selectedNodeId,
+  onClearNode,
   onOpenNode,
 }: GraphCanvasProps) {
   const topology = useMemo<TopologyView | undefined>(() => {
@@ -438,6 +442,7 @@ function GraphCanvasView({
       const runtimeNode = runtimeNodes[nodeId];
       return {
         id: nodeId,
+        selected: nodeId === selectedNodeId,
         type: "workflow",
         position: layout.positions[nodeId],
         data: {
@@ -459,7 +464,7 @@ function GraphCanvasView({
       };
     });
     return nodes;
-  }, [layout.positions, openCallbacks, runNodes, runTopology, topology, workflow]);
+  }, [layout.positions, openCallbacks, runNodes, runTopology, selectedNodeId, topology, workflow]);
 
   return (
     <ReactFlow
@@ -474,6 +479,7 @@ function GraphCanvasView({
       nodesDraggable={false}
       nodesConnectable={false}
       elementsSelectable
+      onPaneClick={onClearNode}
       proOptions={{ hideAttribution: true }}
     >
       {topLeftPanel && (
@@ -520,6 +526,8 @@ export const GraphCanvas = memo(
     left.runTopology === right.runTopology &&
     left.topLeftPanel === right.topLeftPanel &&
     left.bottomRightPanel === right.bottomRightPanel &&
+    left.selectedNodeId === right.selectedNodeId &&
+    left.onClearNode === right.onClearNode &&
     left.onOpenNode === right.onOpenNode &&
     sameRunNodeState(left.runNodes, right.runNodes),
 );

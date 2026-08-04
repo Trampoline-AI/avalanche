@@ -12,6 +12,7 @@ import type { OperatorApi } from "./api";
 import { Explorer, type Selection } from "./Explorer";
 import { GraphCanvas } from "./GraphCanvas";
 import { Inspector } from "./Inspector";
+import { RunLogPane } from "./RunLogPane";
 import { RunControls } from "./RunControls";
 import { RunListPanel } from "./RunListPanel";
 import { useOperatorProjection } from "./state";
@@ -242,7 +243,7 @@ export function App({ api }: { api: OperatorApi }) {
     />
   ) : undefined;
 
-  const liveDescriptorKey =
+  const liveEventDescriptorKey =
     historical && inspectedNode ? `${selection.runId}:${inspectedNode}` : "";
   const inspectorOpen = Boolean(inspectedNode && (!historical || run));
   const workspaceStyle = {
@@ -313,17 +314,28 @@ export function App({ api }: { api: OperatorApi }) {
             {historical ? (
               run ? (
                 <>
-                  <GraphCanvas
-                    runTopology={run.topology}
-                    runNodes={run.nodes}
-                    onOpenNode={openNode}
-                    topLeftPanel={runListPanel}
-                    bottomRightPanel={runControlsPanel}
-                  />
-                  <div className="historical-badge">
-                    <span>Immutable run snapshot</span>
-                    Current workflow changes do not alter this canvas
+                  <div className="run-graph-shell">
+                    <GraphCanvas
+                      runTopology={run.topology}
+                      runNodes={run.nodes}
+                      selectedNodeId={inspectedNode}
+                      onClearNode={closeNode}
+                      onOpenNode={openNode}
+                      topLeftPanel={runListPanel}
+                      bottomRightPanel={runControlsPanel}
+                    />
+                    <div className="historical-badge">
+                      <span>Immutable run snapshot</span>
+                      Current workflow changes do not alter this canvas
+                    </div>
                   </div>
+                  <RunLogPane
+                    api={api}
+                    run={run}
+                    nodeId={inspectedNode}
+                    liveLogs={state.liveLogs[selection.runId]}
+                    onSelectNode={openNode}
+                  />
                 </>
               ) : state.selectedRunId === selection.runId &&
                 state.selectedRunStatus === "loading" ? (
@@ -360,6 +372,8 @@ export function App({ api }: { api: OperatorApi }) {
                 workflow={workflow}
                 topLeftPanel={runListPanel}
                 bottomRightPanel={runControlsPanel}
+                selectedNodeId={inspectedNode}
+                onClearNode={closeNode}
                 onOpenNode={openNode}
               />
             ) : (
@@ -392,8 +406,7 @@ export function App({ api }: { api: OperatorApi }) {
                 workflow={workflow}
                 run={run}
                 nodeId={inspectedNode}
-                liveEvents={state.liveEvents[liveDescriptorKey]}
-                liveLogs={historical ? state.liveLogs[liveDescriptorKey] : undefined}
+                liveEvents={state.liveEvents[liveEventDescriptorKey]}
                 onClose={closeNode}
               />
             </div>

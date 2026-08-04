@@ -1,12 +1,20 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import type { OperatorApi } from "./api";
+import {
+  boundDescriptors,
+  DESCRIPTOR_PAGE_SIZE,
+  DETAIL_CACHE_MAX_BYTES,
+  type DescriptorPageState,
+  measuredByteCost,
+  mergeDescriptorPage,
+  SCROLL_LOAD_THRESHOLD_PX,
+} from "./detailProjection";
 import { parseAgentDeclaration, parseAgentFieldSchemas } from "./GraphCanvas";
 import {
   DescriptorPageOrder,
   type AgentEventDescriptorMsg,
   type FlowInfoMsg,
-  type LogRecordDescriptorMsg,
   type NodeSnapshotMsg,
   type RunSnapshotMsg,
 } from "./generated/operator";
@@ -20,19 +28,12 @@ interface InspectorProps {
   run?: RunSnapshotMsg;
   nodeId?: string;
   liveEvents?: AgentEventDescriptorMsg[];
-  liveLogs?: LogRecordDescriptorMsg[];
   onClose: () => void;
 }
 
-type RunTab = "overview" | "inputs" | "output" | "trace" | "logs";
-type DescriptorRetention = "older" | "newer";
-type DetailFormat = "json" | "text";
+type RunTab = "overview" | "inputs" | "output" | "trace";
+type DetailFormat = "json";
 
-interface DescriptorPageState<T> {
-  records: T[];
-  nextPageToken: string;
-  nextCursor: string;
-}
 
 interface ScopedResult<T> {
   key: string;
@@ -50,86 +51,15 @@ interface InputOutputState {
   error?: string;
 }
 
-const DESCRIPTOR_PAGE_SIZE = 100;
-const DESCRIPTOR_WINDOW_SIZE = 500;
 const DETAIL_CACHE_MAX_ENTRIES = 8;
-const DETAIL_CACHE_MAX_BYTES = 8 * 1024 * 1024;
-const LOG_DECODE_BATCH_SIZE = 20;
-const SCROLL_LOAD_THRESHOLD_PX = 96;
 
 const EMPTY_EVENTS: AgentEventDescriptorMsg[] = [];
-const EMPTY_LOGS: LogRecordDescriptorMsg[] = [];
 const EMPTY_EVENT_PAGE: DescriptorPageState<AgentEventDescriptorMsg> = {
   records: EMPTY_EVENTS,
   nextPageToken: "",
   nextCursor: "0",
 };
-const EMPTY_LOG_PAGE: DescriptorPageState<LogRecordDescriptorMsg> = {
-  records: EMPTY_LOGS,
-  nextPageToken: "",
-  nextCursor: "0",
-};
 
-function compareSequence(left: string, right: string) {
-  if (left.length !== right.length) return left.length - right.length;
-  return left < right ? -1 : left > right ? 1 : 0;
-}
-
-function boundDescriptors<T>(
-  recordsBySequence: Map<string, T>,
-  sequence: (record: T) => string,
-  retention: DescriptorRetention,
-  retainedSequences: Iterable<string> = [],
-): T[] {
-  const merged = [...recordsBySequence.values()].sort((left, right) =>
-    compareSequence(sequence(left), sequence(right)),
-  );
-  if (merged.length <= DESCRIPTOR_WINDOW_SIZE) return merged;
-
-  const retained = new Set(retainedSequences);
-  const retainedRecords: T[] = [];
-  const availableRecords: T[] = [];
-  for (const record of merged) {
-    (retained.has(sequence(record)) ? retainedRecords : availableRecords).push(record);
-  }
-  return [
-    ...(retention === "newer"
-      ? availableRecords.slice(-(DESCRIPTOR_WINDOW_SIZE - retainedRecords.length))
-      : availableRecords.slice(0, DESCRIPTOR_WINDOW_SIZE - retainedRecords.length)),
-    ...retainedRecords,
-  ]
-    .sort((left, right) => compareSequence(sequence(left), sequence(right)))
-    .slice(-DESCRIPTOR_WINDOW_SIZE);
-}
-
-function mergeDescriptorPage<T>(
-  current: DescriptorPageState<T>,
-  next: DescriptorPageState<T>,
-  sequence: (record: T) => string,
-  retention: DescriptorRetention,
-  retainedSequences: Iterable<string> = [],
-): DescriptorPageState<T> {
-  const recordsBySequence = new Map<string, T>();
-  for (const record of current.records) recordsBySequence.set(sequence(record), record);
-  for (const record of next.records) recordsBySequence.set(sequence(record), record);
-  return {
-    ...next,
-    records: boundDescriptors(recordsBySequence, sequence, retention, retainedSequences),
-  };
-}
-
-function measuredByteCost(value: unknown, reportedSize?: string) {
-  const reported = Number(reportedSize);
-  let measured = 0;
-  try {
-    const encoded =
-      typeof value === "string" ? value : JSON.stringify(value) ?? "";
-    measured = new TextEncoder().encode(encoded).byteLength;
-  } catch {
-    measured = DETAIL_CACHE_MAX_BYTES + 1;
-  }
-  return Math.max(Number.isFinite(reported) && reported > 0 ? reported : 0, measured);
-}
 
 function parseRetainedJson(value: string | undefined) {
   if (!value) return undefined;
@@ -164,60 +94,43 @@ export function Inspector({
   run,
   nodeId,
   liveEvents = EMPTY_EVENTS,
-  liveLogs = EMPTY_LOGS,
   onClose,
 }: InspectorProps) {
   const [tabSelection, setTabSelection] = useState<{ scope: string; tab: RunTab }>();
   const [eventPage, setEventPage] =
     useState<DescriptorPageState<AgentEventDescriptorMsg>>(EMPTY_EVENT_PAGE);
-  const [logPage, setLogPage] =
-    useState<DescriptorPageState<LogRecordDescriptorMsg>>(EMPTY_LOG_PAGE);
   const [eventPageScope, setEventPageScope] = useState<string>();
-  const [logPageScope, setLogPageScope] = useState<string>();
   const [pageError, setPageError] = useState<ScopedResult<string>>();
   const [pageLoading, setPageLoading] = useState(false);
   const [following, setFollowing] = useState(true);
-  const [logFollowing, setLogFollowing] = useState(true);
   const [cacheVersion, setCacheVersion] = useState(0);
   const [detailErrors, setDetailErrors] = useState<Record<string, string>>({});
   const [detailLoadingVersion, setDetailLoadingVersion] = useState(0);
   const [inputOutputState, setInputOutputState] = useState<InputOutputState>();
-  const [logBodies, setLogBodies] = useState<Map<string, string>>(() => new Map());
-  const [logDecodeError, setLogDecodeError] = useState<string>();
-  const [logDecodePending, setLogDecodePending] = useState(false);
-  const [logDecodeVersion, setLogDecodeVersion] = useState(0);
 
   const detailCache = useRef(new Map<string, DetailCacheEntry>());
   const detailLoading = useRef(new Set<string>());
   const detailControllers = useRef(new Set<AbortController>());
-  const droppedLogTokens = useRef(new Set<string>());
-  const logLoadingTokens = useRef(new Set<string>());
   const pageController = useRef<AbortController | null>(null);
   const pageRequestInFlight = useRef(false);
   const pageGeneration = useRef(0);
   const detailGeneration = useRef(0);
-  const tabRef = useRef<RunTab>("overview");
-  const logDecodeController = useRef<AbortController | null>(null);
-  const logDecodeActive = useRef(false);
-  const combinedLogsRef = useRef<LogRecordDescriptorMsg[]>([]);
   const traceScrollElement = useRef<HTMLDivElement>(null);
-  const logScrollElement = useRef<HTMLDivElement>(null);
+  const tabRef = useRef<RunTab>("overview");
 
   const node: NodeSnapshotMsg | undefined = run?.nodes.find((item) => item.nodeId === nodeId);
   const runId = run?.summary?.runId;
   const operatorInstanceId = run?.operatorInstanceId ?? "";
   const asOfSequence = run?.asOfSequence ?? "";
   const eventPageToken = node?.eventPageToken ?? "";
-  const logPageToken = run?.logPageToken ?? "";
   const hasRunNode = Boolean(run && node);
   const selectionScope = `${operatorInstanceId}\0${runId ?? ""}\0${nodeId ?? ""}`;
-  const descriptorScope = `${selectionScope}\0${asOfSequence}\0${eventPageToken}\0${logPageToken}`;
+  const descriptorScope = `${selectionScope}\0${asOfSequence}\0${eventPageToken}`;
   const tab = tabSelection?.scope === selectionScope ? tabSelection.tab : "overview";
   const pageKey = `${descriptorScope}\0${tab}`;
   const eventPageOrder =
     tab === "output" ? DescriptorPageOrder.NEWEST_FIRST : DescriptorPageOrder.FORWARD;
   const activeEventPage = eventPageScope === pageKey ? eventPage : EMPTY_EVENT_PAGE;
-  const activeLogPage = logPageScope === pageKey ? logPage : EMPTY_LOG_PAGE;
   const workflowDeclaration = run
     ? undefined
     : parseAgentDeclaration(workflow?.agentMetadataJson[nodeId ?? ""]);
@@ -231,9 +144,6 @@ export function Inspector({
     for (const controller of detailControllers.current) controller.abort();
     detailControllers.current.clear();
     detailLoading.current.clear();
-    logLoadingTokens.current.clear();
-    logDecodeController.current = null;
-    logDecodeActive.current = false;
   }, []);
 
   useEffect(
@@ -326,49 +236,6 @@ export function Inspector({
       });
   }
 
-  function loadOlderLogs() {
-    if (!activeLogPage.nextPageToken || !nodeId || pageRequestInFlight.current) return;
-    pageController.current?.abort();
-    const generation = ++pageGeneration.current;
-    const controller = new AbortController();
-    pageController.current = controller;
-    pageRequestInFlight.current = true;
-    setPageError(undefined);
-    setPageLoading(true);
-    setLogFollowing(false);
-    void api
-      .listLogPage(
-        {
-          pageToken: activeLogPage.nextPageToken,
-          afterSequence: "0",
-          beforeSequence: activeLogPage.nextCursor,
-          pageSize: DESCRIPTOR_PAGE_SIZE,
-          nodeId,
-          order: DescriptorPageOrder.NEWEST_FIRST,
-          expectedOperatorInstanceId: operatorInstanceId,
-          expectedAsOfSequence: asOfSequence,
-        },
-        controller.signal,
-      )
-      .then((page) => {
-        if (controller.signal.aborted || pageGeneration.current !== generation) return;
-        setLogPage((current) =>
-          mergeDescriptorPage(current, page, (entry) => entry.sequence, "older"),
-        );
-      })
-      .catch((error: unknown) => {
-        if (controller.signal.aborted || pageGeneration.current !== generation) return;
-        setPageError({
-          key: pageKey,
-          value: error instanceof Error ? error.message : "Logs unavailable",
-        });
-      })
-      .finally(() => {
-        if (controller.signal.aborted || pageGeneration.current !== generation) return;
-        pageRequestInFlight.current = false;
-        setPageLoading(false);
-      });
-  }
 
   useEffect(() => {
     setTabSelection({ scope: selectionScope, tab: "overview" });
@@ -380,27 +247,18 @@ export function Inspector({
     abortDetailHydration();
     pageGeneration.current += 1;
     setEventPage(EMPTY_EVENT_PAGE);
-    setLogPage(EMPTY_LOG_PAGE);
     setEventPageScope(undefined);
-    setLogPageScope(undefined);
     setPageError(undefined);
     setPageLoading(false);
     setFollowing(true);
-    setLogFollowing(true);
     setDetailErrors({});
     setInputOutputState(undefined);
-    setLogBodies(new Map());
-    setLogDecodeError(undefined);
-    setLogDecodePending(false);
     detailCache.current.clear();
     detailLoading.current.clear();
-    logLoadingTokens.current.clear();
-    droppedLogTokens.current.clear();
   }, [abortDetailHydration, api, descriptorScope]);
 
   useEffect(() => {
     abortDetailHydration();
-    setLogDecodePending(false);
     setDetailLoadingVersion((current) => current + 1);
   }, [abortDetailHydration, descriptorScope, tab]);
 
@@ -408,84 +266,46 @@ export function Inspector({
     pageController.current?.abort();
     pageRequestInFlight.current = false;
     const generation = ++pageGeneration.current;
+    setEventPage(EMPTY_EVENT_PAGE);
+    setEventPageScope(undefined);
     setPageError(undefined);
     setPageLoading(false);
     if (!hasRunNode || !nodeId || !runId || tab === "overview") return;
 
-    if (tab === "logs") {
-      setLogPage(EMPTY_LOG_PAGE);
-      setLogPageScope(undefined);
-    } else {
-      setEventPage(EMPTY_EVENT_PAGE);
-      setEventPageScope(undefined);
-    }
-
     const controller = new AbortController();
     pageController.current = controller;
-    pageRequestInFlight.current = true;
-    setPageLoading(true);
-    const request =
-      tab === "logs"
-        ? logPageToken
-          ? api.listLogPage(
-              {
-                pageToken: logPageToken,
-                afterSequence: "0",
-                beforeSequence: "0",
-                pageSize: DESCRIPTOR_PAGE_SIZE,
-                nodeId,
-                order: DescriptorPageOrder.NEWEST_FIRST,
-                expectedOperatorInstanceId: operatorInstanceId,
-                expectedAsOfSequence: asOfSequence,
-              },
-              controller.signal,
-            )
-          : undefined
-        : eventPageToken
-          ? api.listAgentEventPage(
-              {
-                pageToken: eventPageToken,
-                afterEventSequence: "0",
-                beforeEventSequence: "0",
-                pageSize: DESCRIPTOR_PAGE_SIZE,
-                order: eventPageOrder,
-                expectedOperatorInstanceId: operatorInstanceId,
-                expectedAsOfSequence: asOfSequence,
-                expectedRunId: runId,
-                expectedNodeId: nodeId,
-              },
-              controller.signal,
-            )
-          : undefined;
-    if (!request) {
-      if (tab === "logs") setLogPageScope(pageKey);
-      else setEventPageScope(pageKey);
-      setPageLoading(false);
-      pageRequestInFlight.current = false;
+    if (!eventPageToken) {
+      setEventPageScope(pageKey);
       return () => controller.abort();
     }
 
-    void request
+    pageRequestInFlight.current = true;
+    setPageLoading(true);
+    void api
+      .listAgentEventPage(
+        {
+          pageToken: eventPageToken,
+          afterEventSequence: "0",
+          beforeEventSequence: "0",
+          pageSize: DESCRIPTOR_PAGE_SIZE,
+          order: eventPageOrder,
+          expectedOperatorInstanceId: operatorInstanceId,
+          expectedAsOfSequence: asOfSequence,
+          expectedRunId: runId,
+          expectedNodeId: nodeId,
+        },
+        controller.signal,
+      )
       .then((page) => {
         if (controller.signal.aborted || pageGeneration.current !== generation) return;
-        if ("runId" in page) {
-          setEventPage(page);
-          setEventPageScope(pageKey);
-        } else {
-          setLogPage(page);
-          setLogPageScope(pageKey);
-        }
+        setEventPage(page);
+        setEventPageScope(pageKey);
       })
       .catch((error: unknown) => {
         if (controller.signal.aborted || pageGeneration.current !== generation) return;
         setPageError({
           key: pageKey,
-          value:
-            error instanceof Error
-              ? error.message
-              : tab === "logs"
-                ? "Logs unavailable"
-                : "Events unavailable",
+          value: error instanceof Error ? error.message : "Events unavailable",
         });
       })
       .finally(() => {
@@ -504,7 +324,6 @@ export function Inspector({
     eventPageOrder,
     eventPageToken,
     hasRunNode,
-    logPageToken,
     nodeId,
     operatorInstanceId,
     pageKey,
@@ -533,23 +352,6 @@ export function Inspector({
     [combinedEvents],
   );
 
-  const combinedLogs = useMemo(() => {
-    const bySequence = new Map<string, LogRecordDescriptorMsg>();
-    const liveSequences = new Set<string>();
-    for (const entry of activeLogPage.records) {
-      if (entry.nodeId === nodeId) bySequence.set(entry.sequence, entry);
-    }
-    for (const entry of liveLogs) {
-      if (entry.nodeId === nodeId) {
-        bySequence.set(entry.sequence, entry);
-        liveSequences.add(entry.sequence);
-      }
-    }
-    return boundDescriptors(bySequence, (entry) => entry.sequence, "older", liveSequences).sort(
-      (left, right) => compareSequence(left.sequence, right.sequence),
-    );
-  }, [liveLogs, activeLogPage.records, nodeId]);
-  combinedLogsRef.current = combinedLogs;
 
   const valueEvent = useMemo(() => {
     if (tab !== "inputs" && tab !== "output") return undefined;
@@ -709,139 +511,6 @@ export function Inspector({
     traceScrollElement.current.scrollTop = traceScrollElement.current.scrollHeight;
   }, [following, tab, turns.length]);
 
-  useEffect(() => {
-    if (tab !== "logs" || !combinedLogs.length || logDecodeActive.current) return;
-    const missing = combinedLogs
-      .filter(
-        (entry) =>
-          !logBodies.has(entry.bodyToken) &&
-          !logLoadingTokens.current.has(entry.bodyToken) &&
-          !droppedLogTokens.current.has(entry.bodyToken),
-      )
-      .slice(0, LOG_DECODE_BATCH_SIZE);
-    if (!missing.length) return;
-
-    const generation = detailGeneration.current;
-    const controller = new AbortController();
-    logDecodeController.current = controller;
-    logDecodeActive.current = true;
-    detailControllers.current.add(controller);
-    for (const entry of missing) logLoadingTokens.current.add(entry.bodyToken);
-    setLogDecodePending(true);
-    const requests = missing.map(async (entry) => {
-      try {
-        const body = await api.readTextDetail(entry.bodyToken, controller.signal);
-        return { entry, body };
-      } catch (error: unknown) {
-        return { entry, error };
-      }
-    });
-    void Promise.all(requests)
-      .then((results) => {
-        if (
-          controller.signal.aborted ||
-          detailGeneration.current !== generation ||
-          tabRef.current !== "logs"
-        ) return;
-        const failed = results.find((result) => "error" in result);
-        if (failed && "error" in failed) {
-          setLogDecodeError(
-            failed.error instanceof Error ? failed.error.message : "Log text unavailable",
-          );
-        }
-        let oversizedRecord = false;
-        setLogBodies((current) => {
-          const next = new Map(current);
-          for (const result of results) {
-            if (!("body" in result) || typeof result.body !== "string") {
-              droppedLogTokens.current.add(result.entry.bodyToken);
-              continue;
-            }
-            const byteCost = measuredByteCost(result.body, result.entry.sizeBytes);
-            if (byteCost > DETAIL_CACHE_MAX_BYTES) {
-              droppedLogTokens.current.add(result.entry.bodyToken);
-              oversizedRecord = true;
-              continue;
-            }
-            next.set(result.entry.bodyToken, result.body);
-          }
-          const retainedDescriptors = new Map(
-            combinedLogsRef.current.map((entry) => [entry.bodyToken, entry]),
-          );
-          for (const token of next.keys()) {
-            if (!retainedDescriptors.has(token)) next.delete(token);
-          }
-          for (const token of droppedLogTokens.current) {
-            if (!retainedDescriptors.has(token)) droppedLogTokens.current.delete(token);
-          }
-          let retainedBytes = 0;
-          for (const [token, body] of next) {
-            retainedBytes += measuredByteCost(body, retainedDescriptors.get(token)?.sizeBytes);
-          }
-          for (const entry of combinedLogsRef.current) {
-            if (retainedBytes <= DETAIL_CACHE_MAX_BYTES) break;
-            const body = next.get(entry.bodyToken);
-            if (body === undefined) continue;
-            next.delete(entry.bodyToken);
-            droppedLogTokens.current.add(entry.bodyToken);
-            retainedBytes -= measuredByteCost(body, entry.sizeBytes);
-          }
-          return next;
-        });
-        if (oversizedRecord) {
-          setLogDecodeError("A log record exceeds the browser detail limit.");
-        }
-      })
-      .finally(() => {
-        detailControllers.current.delete(controller);
-        for (const entry of missing) logLoadingTokens.current.delete(entry.bodyToken);
-        if (logDecodeController.current !== controller) return;
-        logDecodeController.current = null;
-        logDecodeActive.current = false;
-        if (
-          controller.signal.aborted ||
-          detailGeneration.current !== generation ||
-          tabRef.current !== "logs"
-        ) return;
-        setLogDecodePending(false);
-        setLogDecodeVersion((current) => current + 1);
-      });
-  }, [api, combinedLogs, descriptorScope, logBodies, logDecodeVersion, tab]);
-
-  const omittedLogRange = useMemo(() => {
-    let count = 0;
-    let firstSequence = "";
-    let lastSequence = "";
-    for (const entry of combinedLogs) {
-      if (!droppedLogTokens.current.has(entry.bodyToken)) break;
-      if (!firstSequence) firstSequence = entry.sequence;
-      lastSequence = entry.sequence;
-      count += 1;
-    }
-    return count ? { count, firstSequence, lastSequence } : undefined;
-  }, [combinedLogs, logBodies]);
-
-  const logText = useMemo(() => {
-    const decoded: string[] = [];
-    let hasPreviousBody = false;
-    let previousEndedWithNewline = true;
-    for (const entry of combinedLogs) {
-      const body = logBodies.get(entry.bodyToken);
-      if (body === undefined) continue;
-      if (hasPreviousBody && !previousEndedWithNewline && !body.startsWith("\n")) {
-        decoded.push("\n");
-      }
-      decoded.push(body);
-      hasPreviousBody = true;
-      previousEndedWithNewline = body.endsWith("\n");
-    }
-    return decoded.join("");
-  }, [combinedLogs, logBodies]);
-
-  useEffect(() => {
-    if (tab !== "logs" || !logFollowing || !logScrollElement.current) return;
-    logScrollElement.current.scrollTop = logScrollElement.current.scrollHeight;
-  }, [logFollowing, logText, tab]);
 
   if (!run && workflow && nodeId) {
     return (
@@ -963,7 +632,7 @@ export function Inspector({
         </button>
       </header>
       <nav className="inspector-tabs" aria-label="Run detail views">
-        {(["overview", "inputs", "output", "trace", "logs"] as RunTab[]).map((item) => (
+        {(["overview", "inputs", "output", "trace"] as RunTab[]).map((item) => (
           <button
             type="button"
             key={item}
@@ -1119,72 +788,6 @@ export function Inspector({
           </section>
         )}
 
-        {tab === "logs" && (
-          <section className="inspector-panel inspector-log-panel">
-            <div className="inspector-log-toolbar">
-              <div>
-                <h3>Node logs</h3>
-                <span>{combinedLogs.length} retained records</span>
-              </div>
-              <button
-                type="button"
-                className={logFollowing ? "toggle active" : "toggle"}
-                onClick={() => setLogFollowing((value) => !value)}
-              >
-                {logFollowing ? "Following live" : "Follow latest"}
-              </button>
-            </div>
-            {activePageError && <p className="inspector-error" role="alert">{activePageError}</p>}
-            {logDecodeError && <p className="inspector-error" role="alert">{logDecodeError}</p>}
-            {activeLogPage.nextPageToken && (
-              <button
-                type="button"
-                className="descriptor-page-action inspector-log-older-action"
-                disabled={pageLoading}
-                aria-busy={pageLoading}
-                onClick={loadOlderLogs}
-              >
-                {pageLoading ? "Loading older logs…" : "Load older logs"}
-              </button>
-            )}
-            <div
-              className="inspector-log-stream"
-              ref={logScrollElement}
-              onScroll={(event) => {
-                const element = event.currentTarget;
-                const distanceFromBottom = element.scrollHeight - element.scrollTop - element.clientHeight;
-                if (distanceFromBottom > SCROLL_LOAD_THRESHOLD_PX) setLogFollowing(false);
-                if (element.scrollTop <= SCROLL_LOAD_THRESHOLD_PX && activeLogPage.nextPageToken) {
-                  loadOlderLogs();
-                }
-              }}
-            >
-              {pageLoading && !combinedLogs.length ? (
-                <p className="inspector-loading" role="status">Loading retained logs…</p>
-              ) : !combinedLogs.length ? (
-                <p className="empty-copy">No retained logs are available for this node.</p>
-              ) : (
-                <>
-                  {omittedLogRange && (
-                    <p className="inspector-end-state">
-                      {omittedLogRange.count} earlier retained log{" "}
-                      {omittedLogRange.count === 1 ? "record" : "records"} omitted from the decoded
-                      window (sequences {omittedLogRange.firstSequence}–
-                      {omittedLogRange.lastSequence}).
-                    </p>
-                  )}
-                  <pre aria-label="Continuous node log stream">{logText}</pre>
-                </>
-              )}
-              {logDecodePending && (
-                <p className="inspector-loading" role="status">Decoding log text…</p>
-              )}
-            </div>
-            {!pageLoading && !activeLogPage.nextPageToken && combinedLogs.length > 0 && (
-              <p className="inspector-end-state">Start of retained logs</p>
-            )}
-          </section>
-        )}
       </div>
     </aside>
   );

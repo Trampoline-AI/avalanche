@@ -7,6 +7,7 @@ import { fileURLToPath } from "node:url";
 
 const RUN_COUNT = 10_000;
 const DOM_ROW_LIMIT = 120;
+const RUN_ROW_HEIGHT = 32;
 const RENDER_BUDGET_MS = 3_000;
 const INTERACTION_BUDGET_MS = 1_000;
 const VITE_START_BUDGET_MS = 10_000;
@@ -443,11 +444,12 @@ function browserBenchmarkFixture() {
   return `
 import React from "react";
 import { createRoot } from "react-dom/client";
-import { Explorer } from "/src/Explorer";
+import { RunListPanel } from "/src/RunListPanel";
 import "/src/styles.css";
 
 const RUN_COUNT = ${RUN_COUNT};
 const DOM_ROW_LIMIT = ${DOM_ROW_LIMIT};
+const RUN_ROW_HEIGHT = ${RUN_ROW_HEIGHT};
 const RENDER_BUDGET_MS = ${RENDER_BUDGET_MS};
 const INTERACTION_BUDGET_MS = ${INTERACTION_BUDGET_MS};
 const workflowId = "benchmark.py::large_run";
@@ -465,17 +467,6 @@ const summaries = Array.from({ length: RUN_COUNT }, (_, index) => {
   };
 });
 const runs = Object.fromEntries(summaries.map((summary) => [summary.runId, summary]));
-const catalog = {
-  revision: "1",
-  diagnostics: [],
-  scanTargets: [{ alias: "bench", targetPath: "/controlled/bench", kind: "directory" }],
-  workflows: [{
-    workflowId,
-    displayName: "Benchmark flow",
-    rootAlias: "bench",
-    relativeFile: "benchmark.py",
-  }],
-};
 
 async function until<T extends Element>(
   find: () => T | undefined,
@@ -491,7 +482,7 @@ async function until<T extends Element>(
   throw new Error(message);
 }
 function rows() {
-  return Array.from(document.querySelectorAll<HTMLElement>(".run-virtual-row"));
+  return Array.from(document.querySelectorAll<HTMLElement>(".run-list-row"));
 }
 function assertDomBound() {
   if (rows().length === 0 || rows().length > DOM_ROW_LIMIT) {
@@ -505,26 +496,27 @@ async function run() {
   let selectedRunId = "";
   const renderStartedAt = performance.now();
   createRoot(rootElement).render(
-    <Explorer
-      catalog={catalog}
+    <RunListPanel
+      workflowId={workflowId}
       runs={runs}
-      onSelect={(selection) => {
-        if (selection.kind === "run") selectedRunId = selection.runId;
+      onSelectRun={(runId) => {
+        selectedRunId = runId;
       }}
     />,
   );
-  const explorer = await until(
-    () => document.querySelector<HTMLElement>(".explorer") ?? undefined,
+  const panel = await until(
+    () => document.querySelector<HTMLElement>(".run-list-panel") ?? undefined,
     RENDER_BUDGET_MS,
-    "Explorer did not render",
+    "Run list panel did not render",
   );
   const virtualList = await until(
-    () => document.querySelector<HTMLElement>(".run-virtual-list") ?? undefined,
+    () => document.querySelector<HTMLElement>(".run-list-virtual") ?? undefined,
     RENDER_BUDGET_MS,
     "virtual run list did not render",
   );
   await until(
-    () => rows().some((row) => row.dataset.index === "0") ? virtualList : undefined,
+    () => Array.from(document.querySelectorAll<HTMLButtonElement>(".run-list-row"))
+      .some((row) => row.textContent?.includes("run-09999")) ? virtualList : undefined,
     RENDER_BUDGET_MS,
     "production virtualizer did not emit the initial visible range",
   );
@@ -532,16 +524,18 @@ async function run() {
   if (renderMs > RENDER_BUDGET_MS) {
     throw new Error("initial render exceeded " + RENDER_BUDGET_MS + "ms: " + renderMs);
   }
-  if (virtualList.getBoundingClientRect().height < RUN_COUNT * 44) {
+  if (virtualList.getBoundingClientRect().height < RUN_COUNT * RUN_ROW_HEIGHT) {
     throw new Error("virtual list did not retain deterministic 10k-row geometry");
   }
   assertDomBound();
+  const scrollElement = panel.querySelector<HTMLElement>(".run-list-scroll");
+  if (!scrollElement) throw new Error("run list scroll element missing");
 
   const interactionStartedAt = performance.now();
-  explorer.scrollTop = explorer.scrollHeight - explorer.clientHeight;
-  explorer.dispatchEvent(new Event("scroll"));
+  scrollElement.scrollTop = scrollElement.scrollHeight - scrollElement.clientHeight;
+  scrollElement.dispatchEvent(new Event("scroll"));
   const oldestRun = await until(
-    () => Array.from(document.querySelectorAll<HTMLButtonElement>(".run-select"))
+    () => Array.from(document.querySelectorAll<HTMLButtonElement>(".run-list-row"))
       .find((button) => button.textContent?.includes("run-00000")),
     INTERACTION_BUDGET_MS,
     "scroll did not render the oldest run",
@@ -551,9 +545,6 @@ async function run() {
     throw new Error(
       "scroll interaction exceeded " + INTERACTION_BUDGET_MS + "ms: " + interactionMs,
     );
-  }
-  if (!rows().some((row) => row.dataset.index === String(RUN_COUNT - 1))) {
-    throw new Error("scroll did not move the production virtualizer range");
   }
   assertDomBound();
   oldestRun.click();
@@ -614,8 +605,8 @@ async function main() {
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <style>
       html, body, #root { height: 100%; margin: 0; }
-      #root { width: 280px; }
-      .explorer { height: 800px; width: 280px; }
+      #root { width: 300px; }
+      .run-list-panel { height: 222px; width: 300px; }
     </style>
     <title>Operator real virtualizer benchmark</title>
   </head>

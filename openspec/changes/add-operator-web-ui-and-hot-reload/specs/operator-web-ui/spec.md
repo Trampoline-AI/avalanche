@@ -72,6 +72,38 @@ The web UI SHALL present a run view from the selected run's retained topology an
 - **WHEN** a run node fails with a retained error message
 - **THEN** the run view displays its failed status, elapsed time, and bounded error message
 
+### Requirement: Inspect complete run logs across steps
+
+The selected run view SHALL provide one canonical, collapsible, vertically resizable bottom log pane for retained and live logs. It SHALL open in an all-step scope, render timestamp, node identity, level, and message in authoritative run-wide sequence, and switch to an exact-node scope when a graph node is selected. Clearing node selection SHALL restore the all-step scope. The pane SHALL provide an explicit auto-scroll control that keeps new output visible at the bottom when enabled. The node inspector SHALL NOT provide a second log surface.
+
+#### Scenario: User opens a run with logs from several steps
+- **WHEN** the selected run contains interleaved logs from several nodes
+- **THEN** the log pane shows those records together in authoritative sequence and identifies the originating node on every record
+
+#### Scenario: User selects a run node
+- **WHEN** the user selects a node while viewing the run log pane
+- **THEN** the pane restarts bounded paging with that exact node filter and displays the selected node as its active scope
+
+#### Scenario: User clears run node selection
+- **WHEN** the user clears the selected node or closes its inspector
+- **THEN** the log pane restores the all-step scope from the selected run snapshot
+
+#### Scenario: User reads older output while logs arrive
+- **WHEN** the user scrolls away from the latest records while new live logs arrive
+- **THEN** the pane preserves the user's reading position, disables auto-scroll, and exposes an explicit action that jumps to the latest output and resumes following
+
+#### Scenario: User resizes the run log pane
+- **WHEN** the user drags the horizontal log-pane divider up or down
+- **THEN** the log pane grows or shrinks vertically within bounded run-view limits while the graph consumes the remaining space
+
+#### Scenario: User loads a large log history
+- **WHEN** the selected run or node contains more logs than one bounded page
+- **THEN** the pane loads the newest bounded page first, retrieves older pages on demand without moving the visible scroll anchor, and keeps descriptor and decoded-body retention bounded
+
+#### Scenario: User views a current workflow definition
+- **WHEN** no historical run is selected
+- **THEN** the workflow-definition canvas does not present a run log pane
+
 ### Requirement: Inspect agent invocation inputs and outputs
 
 The run view SHALL present the retained input and terminal output fields for an agent invocation separately from its trace timeline. It SHALL associate values with their declared signature field names, types, and descriptions when declaration metadata is available.
@@ -179,8 +211,8 @@ The web UI SHALL retain access to workflow and run navigation, the selected view
 and its primary controls at viewport widths of 375 CSS pixels or greater. The workflow and
 run canvases SHALL remain bounded by the visible workspace rather than forcing primary
 content beyond the document viewport. On desktop, the Explorer and run inspector SHALL be
-independently resizable, the Explorer SHALL be collapsible, and inspector content SHALL use
-the available pane height.
+independently resizable, the Explorer SHALL be collapsible, the selected run's log pane SHALL
+be vertically resizable and remain usable without covering primary run controls, and inspector content SHALL use the available pane height.
 
 #### Scenario: User opens the operator on a narrow viewport
 - **WHEN** the browser viewport is 375 CSS pixels wide
@@ -222,8 +254,9 @@ declared function or agent.
 
 The web UI SHALL preserve operator pagination instead of draining descriptor pages or
 hydrating every retained run snapshot. It SHALL load a run snapshot only for the selected
-run, request log and agent-event pages only for the active inspector tab, cancel superseded
-requests, and retain bounded descriptor and detail projections.
+run, request log pages only while that run's log pane is expanded, request agent-event pages
+only for the active inspector tab, cancel superseded requests, and retain bounded descriptor
+and detail projections.
 
 #### Scenario: User opens a run
 - **WHEN** a user selects one retained run from a catalog containing many runs
@@ -231,11 +264,11 @@ requests, and retain bounded descriptor and detail projections.
 
 #### Scenario: User opens a node overview
 - **WHEN** a user opens a run node and leaves the inspector on Overview
-- **THEN** the browser does not request log pages, agent-event pages, or detail bodies
+- **THEN** the browser requests no agent-event pages or detail bodies, and log requests remain governed only by the separate run log pane's expansion and scope
 
 #### Scenario: User inspects a large log or trace history
-- **WHEN** the selected node has more retained detail than one bounded response
-- **THEN** the active tab shows an immediate loading state and progressively retrieves additional bounded content as the user scrolls or expands it
+- **WHEN** the selected run log scope or selected-node trace contains more retained detail than one bounded response
+- **THEN** the active surface shows an immediate loading state and progressively retrieves additional bounded content as the user scrolls or expands it
 
 ### Requirement: Keep live browser projections bounded
 
@@ -248,27 +281,23 @@ operator baseline rather than dropping arbitrary structural updates.
 - **WHEN** ordered updates arrive faster than the browser can apply its bounded batches
 - **THEN** the browser stops the stale stream and reloads authoritative state before resuming
 
-#### Scenario: Live descriptors exceed a retained tail
-- **WHEN** a selected run or node publishes more live descriptors than the browser tail retains
-- **THEN** the browser records a repair watermark and refreshes authoritative snapshot tokens before paging across the discarded range
+#### Scenario: Live logs exceed the selected-run tail
+- **WHEN** the selected run publishes more live log descriptors than the browser tail retains
+- **THEN** the browser records a run-level repair watermark and refreshes authoritative snapshot tokens before paging across the discarded range
 
-### Requirement: Keep inspector rendering responsive
+### Requirement: Keep detail inspector rendering responsive
 
 The run inspector SHALL fill the available vertical pane, render only its active tab,
-distinguish loading from empty and error states, decode logs as text, and decode structured
-inputs, outputs, and traces into a normal hierarchical JSON explorer. Selecting an Inputs or
-Output tab SHALL load and present the complete retained value when it is within the declared
-detail limit; oversized content SHALL be progressively retrieved and rendered in bounded
-portions. Generic `Object` disclosure buttons and separate trace-turn selector panes SHALL
-not be used.
+distinguish loading from empty and error states, and decode structured inputs, outputs, and
+traces into a normal hierarchical JSON explorer. Selecting an Inputs or Output tab SHALL load
+and present the complete retained value when it is within the declared detail limit; oversized
+content SHALL be progressively retrieved and rendered in bounded portions. Generic `Object`
+disclosure buttons and separate trace-turn selector panes SHALL not be used.
 
 #### Scenario: User changes tabs during hydration
 - **WHEN** an earlier tab request completes after the user changes tab, node, or run
 - **THEN** the stale result does not replace the current inspector state
 
-#### Scenario: User views logs
-- **WHEN** decoded logs are available for the selected run or node
-- **THEN** the Logs tab renders them as a continuous, scrollable, monospaced log stream rather than separate cards or object controls
 
 #### Scenario: User views structured detail
 - **WHEN** retained input, output, or trace detail is JSON-shaped

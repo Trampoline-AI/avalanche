@@ -1,13 +1,12 @@
 import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 
-import type { AgentEventDescriptorPage, LogDescriptorPage, OperatorApi } from "./api";
+import type { AgentEventDescriptorPage, OperatorApi } from "./api";
 import {
   DescriptorPageOrder,
   type AgentEventDescriptorMsg,
   type CatalogSnapshotMsg,
   type FlowInfoMsg,
-  type LogRecordDescriptorMsg,
   type RunSnapshotMsg,
 } from "./generated/operator";
 import { Inspector } from "./Inspector";
@@ -127,16 +126,6 @@ function event(
   };
 }
 
-function log(sequence: number, nodeId = "agent_1"): LogRecordDescriptorMsg {
-  return {
-    sequence: String(sequence),
-    timestamp: sequence,
-    level: "info",
-    nodeId,
-    sizeBytes: "8",
-    bodyToken: `log-${sequence}`,
-  };
-}
 
 function eventPage(
   records: AgentEventDescriptorMsg[],
@@ -238,6 +227,7 @@ describe("Inspector", () => {
     expect(view.container.querySelector(".inspector-body")).toHaveClass("inspector-body-full");
     expect(view.container.querySelector(".inspector-overview")).toHaveClass("inspector-panel");
     expect(screen.queryByText("Revision")).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "logs" })).not.toBeInTheDocument();
   });
 
   it("shows immediate Inputs loading, cancels superseded detail, and renders the retained root directly", async () => {
@@ -428,14 +418,13 @@ describe("Inspector", () => {
     fireEvent.click(screen.getByRole("button", { name: "trace" }));
     expect(await screen.findByText("Loading retained trace…")).toBeInTheDocument();
     await waitFor(() => expect(pageSignal).toBeDefined());
-    fireEvent.click(screen.getByRole("button", { name: "logs" }));
+    fireEvent.click(screen.getByRole("button", { name: "overview" }));
     expect(pageSignal!.aborted).toBe(true);
 
     await act(async () => {
       pending.resolve(eventPage([event(99)]));
       await pending.promise;
     });
-    expect(screen.getByText("0 retained records")).toBeInTheDocument();
     expect(screen.queryByText("99 retained turns")).not.toBeInTheDocument();
   });
 
@@ -587,196 +576,6 @@ describe("Inspector", () => {
     expect(await screen.findByText("Unavailable · Turn detail exceeds the browser detail limit.")).toBeInTheDocument();
   });
 
-  it("renders exact decoded log bodies as one ordered stream and prepends older pages", async () => {
-    const listLogPage = vi.fn<OperatorApi["listLogPage"]>(async (request) => ({
-      operatorInstanceId: run.operatorInstanceId,
-      asOfSequence: run.asOfSequence,
-      records:
-        request.pageToken === "logs"
-          ? [log(3), log(99, "agent_2"), log(2)]
-          : [log(1)],
-      nextPageToken: request.pageToken === "logs" ? "logs-older" : "",
-      nextCursor: request.pageToken === "logs" ? "2" : "1",
-    }));
-    const readTextDetail = vi.fn(async (token: string) => token.replace("log-", "line-"));
-    const api = { ...operatorApi(), listLogPage, readTextDetail };
-    const view = render(
-      <Inspector api={api} workflow={workflow} run={run} nodeId="agent_1" onClose={() => undefined} />,
-    );
-
-    fireEvent.click(screen.getByRole("button", { name: "logs" }));
-    const stream = await screen.findByLabelText("Continuous node log stream");
-    await waitFor(() => expect(stream.textContent).toBe("line-2\nline-3"));
-    expect(view.container.querySelector(".log-row")).not.toBeInTheDocument();
-    expect(view.container.querySelector(".log-list")).not.toBeInTheDocument();
-    expect(readTextDetail).not.toHaveBeenCalledWith("log-99", expect.anything());
-
-    fireEvent.click(screen.getByRole("button", { name: "Load older logs" }));
-    await waitFor(() => expect(stream.textContent).toBe("line-1\nline-2\nline-3"));
-    expect(listLogPage).toHaveBeenLastCalledWith(
-      expect.objectContaining({
-        pageToken: "logs-older",
-        beforeSequence: "2",
-        nodeId: "agent_1",
-        order: DescriptorPageOrder.NEWEST_FIRST,
-      }),
-      expect.any(AbortSignal),
-    );
-
-    view.rerender(
-      <Inspector
-        api={api}
-        workflow={workflow}
-        run={run}
-        nodeId="agent_1"
-        liveLogs={[log(4), log(100, "agent_10")]}
-        onClose={() => undefined}
-      />,
-    );
-    await waitFor(() => expect(stream.textContent).toBe("line-1\nline-2\nline-3\nline-4"));
-    expect(readTextDetail).not.toHaveBeenCalledWith("log-100", expect.anything());
-  });
-
-  it("finishes an active decode batch before scheduling repeatedly appended live logs", async () => {
-    const oldBody = deferred<string>();
-    let oldSignal: AbortSignal | undefined;
-    const readTextDetail = vi.fn((token: string, signal?: AbortSignal) => {
-      if (token === "log-1") {
-        oldSignal ??= signal;
-        return oldBody.promise;
-      }
-      return Promise.resolve(`${token}\n`);
-    });
-    const api = {
-      ...operatorApi(),
-      listLogPage: async () => ({
-        operatorInstanceId: run.operatorInstanceId,
-        asOfSequence: run.asOfSequence,
-        records: [log(1)],
-        nextPageToken: "",
-        nextCursor: "1",
-      }),
-      readTextDetail,
-    };
-    const view = render(
-      <Inspector api={api} workflow={workflow} run={run} nodeId="agent_1" onClose={() => undefined} />,
-    );
-
-    fireEvent.click(screen.getByRole("button", { name: "logs" }));
-    const stream = await screen.findByLabelText("Continuous node log stream");
-    await waitFor(() => expect(oldSignal).toBeDefined());
-    view.rerender(
-      <Inspector
-        api={api}
-        workflow={workflow}
-        run={run}
-        nodeId="agent_1"
-        liveLogs={[log(2)]}
-        onClose={() => undefined}
-      />,
-    );
-    view.rerender(
-      <Inspector
-        api={api}
-        workflow={workflow}
-        run={run}
-        nodeId="agent_1"
-        liveLogs={[log(2), log(3)]}
-        onClose={() => undefined}
-      />,
-    );
-    view.rerender(
-      <Inspector
-        api={api}
-        workflow={workflow}
-        run={run}
-        nodeId="agent_1"
-        liveLogs={[log(2), log(3), log(4)]}
-        onClose={() => undefined}
-      />,
-    );
-    expect(oldSignal!.aborted).toBe(false);
-
-    await act(async () => {
-      oldBody.resolve("log-1\n");
-      await oldBody.promise;
-    });
-    await waitFor(() => expect(stream.textContent).toBe("log-1\nlog-2\nlog-3\nlog-4\n"));
-  });
-
-  it("renders a counted omitted range while retaining a contiguous byte-bounded log window", async () => {
-    const bodySize = 3 * 1024 * 1024;
-    const bodies = [
-      `one:${"a".repeat(bodySize)}`,
-      `two:${"b".repeat(bodySize)}`,
-      `three:${"c".repeat(bodySize)}`,
-    ];
-    const records = [log(1), log(2), log(3)].map((entry, index) => ({
-      ...entry,
-      sizeBytes: String(bodies[index].length),
-    }));
-    const readTextDetail = vi.fn(async (token: string) => bodies[Number(token.slice(4)) - 1]);
-    render(
-      <Inspector
-        api={{
-          ...operatorApi(),
-          listLogPage: async () => ({
-            operatorInstanceId: run.operatorInstanceId,
-            asOfSequence: run.asOfSequence,
-            records,
-            nextPageToken: "",
-            nextCursor: "1",
-          }),
-          readTextDetail,
-        }}
-        workflow={workflow}
-        run={run}
-        nodeId="agent_1"
-        onClose={() => undefined}
-      />,
-    );
-
-    fireEvent.click(screen.getByRole("button", { name: "logs" }));
-    const stream = await screen.findByLabelText("Continuous node log stream");
-    expect(
-      await screen.findByText(/1 earlier retained log record omitted from the decoded window/),
-    ).toHaveTextContent("sequences 1–1");
-    await waitFor(() => expect(readTextDetail).toHaveBeenCalledTimes(3));
-    const retainedText = stream.textContent ?? "";
-    expect(retainedText).toHaveLength(bodies[1].length + 1 + bodies[2].length);
-    expect(retainedText.startsWith("two:")).toBe(true);
-    expect(retainedText.slice(bodies[1].length, bodies[1].length + 7)).toBe("\nthree:");
-    expect(retainedText.endsWith("cccc")).toBe(true);
-    expect(screen.getByText("3 retained records")).toBeInTheDocument();
-  });
-
-  it("keeps explicit loading and error states for log pages and text decoding", async () => {
-    const pendingPage = deferred<LogDescriptorPage>();
-    const api = {
-      ...operatorApi(),
-      listLogPage: vi.fn(() => pendingPage.promise),
-      readTextDetail: vi.fn(async () => {
-        throw new Error("log body failed");
-      }),
-    };
-    render(
-      <Inspector api={api} workflow={workflow} run={run} nodeId="agent_1" onClose={() => undefined} />,
-    );
-
-    fireEvent.click(screen.getByRole("button", { name: "logs" }));
-    expect(await screen.findByText("Loading retained logs…")).toBeInTheDocument();
-    await act(async () => {
-      pendingPage.resolve({
-        operatorInstanceId: run.operatorInstanceId,
-        asOfSequence: run.asOfSequence,
-        records: [log(1)],
-        nextPageToken: "",
-        nextCursor: "1",
-      });
-      await pendingPage.promise;
-    });
-    expect(await screen.findByText("log body failed")).toHaveAttribute("role", "alert");
-  });
 
   it("surfaces bounded trace page failures without mounting a selector", async () => {
     render(

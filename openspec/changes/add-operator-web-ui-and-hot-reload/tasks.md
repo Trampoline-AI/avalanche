@@ -88,3 +88,13 @@
 - [x] 9.11 Use compact workflow cards with contained typed Inputs and Outputs lists and no card-level instruction excerpt.
 - [x] 9.12 Replace visible `Historical run` wording with `Run`.
 - [x] 9.13 Add focused browser regression coverage for progressive detail hydration, continuous logs, full-height and resizable panes, compact JSON key spacing, nested JSON layout, internal-only update sequences, live durations and node states, edge routing, endpoint appearance, typed field-list layout, absent card instructions, and Run wording.
+
+## 10. Run-wide web log pane
+
+- [x] 10.1 Extract the browser's bounded log paging, text-detail decoding, virtualization, and generation cancellation into one canonical selected-run log projection that supports all-step and exact-node scopes.
+- [x] 10.2 Replace per-node live-log buckets with one ordered, bounded selected-run tail and run-level repair watermark while keeping retained paging server-filtered.
+- [x] 10.3 Mount a collapsible bottom log pane on run views, connect graph selection and clearing to its scope, preserve reading position and explicit follow-latest behavior, and remove the duplicate node-inspector Logs tab.
+- [x] 10.4 Add focused reducer and run-log-pane coverage for run-wide ordering, exact-node identity mapping, bounded paging/decoding, cancellation, follow state, scope restoration, and Inspector log-surface removal.
+- [x] 10.5 Run the complete browser test suite, build the packaged browser assets, and smoke the aggregate, node-scoped, restored, and collapsed log views in a real browser.
+- [x] 10.6 Add an accessible horizontal drag divider that resizes the run log pane vertically within bounded canvas limits.
+- [x] 10.7 Add an explicit auto-scroll toggle that jumps to the latest record, follows new output while enabled, and pauses when the user scrolls away.

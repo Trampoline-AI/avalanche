@@ -85,15 +85,32 @@ vi.mock("./GraphCanvas", () => ({
 vi.mock("./Inspector", () => ({
   Inspector: ({
     run,
-    liveLogs,
+    onClose,
   }: {
     run?: { summary?: { runId: string } };
-    liveLogs?: { sequence: string }[];
+    onClose: () => void;
   }) => (
     <div>
       <span>{`Inspector ${run?.summary?.runId ?? "workflow"}`}</span>
-      <span>{`Live logs ${liveLogs?.map((log) => log.sequence).join(",") ?? "none"}`}</span>
+      <button type="button" onClick={onClose}>Close inspector</button>
     </div>
+  ),
+}));
+vi.mock("./RunLogPane", () => ({
+  RunLogPane: ({
+    nodeId,
+    liveLogs,
+    onSelectNode,
+  }: {
+    nodeId?: string;
+    liveLogs?: { sequence: string }[];
+    onSelectNode: (nodeId: string) => void;
+  }) => (
+    <section aria-label="Run logs">
+      <span>{`Log scope ${nodeId ?? "all"}`}</span>
+      <span>{`Live logs ${liveLogs?.map((log) => log.sequence).join(",") ?? "none"}`}</span>
+      <button type="button" onClick={() => onSelectNode("node-1")}>Select log node</button>
+    </section>
   ),
 }));
 vi.mock("./state", () => ({
@@ -346,7 +363,7 @@ describe("App", () => {
 
     projectionHarness.state.sequence = "93";
     projectionHarness.state.liveLogs = {
-      "run-1:node-1": [{ sequence: "92" }],
+      "run-1": [{ sequence: "92" }],
     };
     projectionHarness.state.liveEvents = {
       "run-1:node-1": [{ eventSequence: "93" }],
@@ -481,11 +498,10 @@ describe("App", () => {
     expect(view.container.querySelector(".breadcrumb")).not.toHaveTextContent("run-1");
   });
 
-  it("passes the selected run and node live-log tail to the inspector", async () => {
+  it("passes one run-wide live tail to the log pane and restores all-step scope", async () => {
     projectionHarness.state.runs = { "run-1": summary };
     projectionHarness.state.liveLogs = {
-      "run-1": [{ sequence: "wrong-bucket" }],
-      "run-1:node-1": [{ sequence: "17" }, { sequence: "18" }],
+      "run-1": [{ sequence: "17" }, { sequence: "18" }],
     };
     const view = render(<App api={new GrpcWebOperatorApi("http://localhost")} />);
     fireEvent.click(await screen.findByRole("button", { name: /run-1/ }));
@@ -494,9 +510,16 @@ describe("App", () => {
     projectionHarness.state.selectedRunStatus = "ready";
     projectionHarness.state.selectedRun = selectedSnapshot("run-1", "Recorded node");
     view.rerender(<App api={new GrpcWebOperatorApi("http://localhost")} />);
-    fireEvent.click(screen.getByRole("button", { name: "Run graph Recorded node" }));
 
     expect(screen.getByText("Live logs 17,18")).toBeInTheDocument();
+    expect(screen.getByText("Log scope all")).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Run graph Recorded node" }));
+    expect(screen.getByText("Log scope node-1")).toBeInTheDocument();
+    expect(screen.getByText("Inspector run-1")).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: "Close inspector" }));
+    expect(screen.getByText("Log scope all")).toBeInTheDocument();
+    expect(screen.queryByText("Inspector run-1")).not.toBeInTheDocument();
   });
 
 });
