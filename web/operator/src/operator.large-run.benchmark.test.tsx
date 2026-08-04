@@ -32,6 +32,7 @@ import {
   WorkflowTopologyMsg,
 } from "./generated/operator";
 import { Inspector } from "./Inspector";
+import { RunLogPane } from "./RunLogPane";
 import { useOperatorProjection } from "./state";
 
 const OPERATOR_ID = "benchmark-operator";
@@ -105,7 +106,7 @@ const selectedRun = RunSnapshotMsg.create({
   topology,
   nodes: catalog.workflows[0].nodeIds.map((nodeId) => ({
     nodeId,
-    name: `Benchmark ${nodeId}`,
+    name: nodeId,
     nodeType: "task",
     status: "success",
     startedAt: 1,
@@ -258,7 +259,7 @@ function ProjectionProbe({
       <output data-testid="run-count">{Object.keys(state.runs).length}</output>
       <output data-testid="projection-sequence">{state.sequence}</output>
       <output data-testid="live-log-count">
-        {state.liveLogs[`${RUN_ID}:${SELECTED_NODE}`]?.length ?? 0}
+        {state.liveLogs[RUN_ID]?.length ?? 0}
       </output>
       <output data-testid="live-event-count">
         {state.liveEvents[`${RUN_ID}:${SELECTED_NODE}`]?.length ?? 0}
@@ -578,22 +579,34 @@ describe("large retained-run browser benchmark", () => {
         expect(readJsonDetail.mock.calls.filter(([token]) => token === "event:2")).toHaveLength(2),
       );
 
-      fireEvent.click(screen.getByRole("button", { name: "logs" }));
+      const logPaneView = render(
+        <RunLogPane
+          api={api}
+          run={selectedRun}
+          nodeId={SELECTED_NODE}
+          onSelectNode={() => undefined}
+        />,
+      );
+      const logPane = await within(logPaneView.container).findByRole("region", {
+        name: "Run logs",
+      });
       await waitFor(() => expect(listLogPage).toHaveBeenCalledTimes(1));
       expect(listLogPage.mock.calls[0][0]).toMatchObject({
         pageSize: PAGE_SIZE,
         nodeId: SELECTED_NODE,
         order: DescriptorPageOrder.NEWEST_FIRST,
       });
-      const logStream = await screen.findByLabelText("Continuous node log stream");
-      await waitFor(() =>
-        expect(logStream.textContent).toBe(new Array(PAGE_SIZE).fill(decodedSplitText()).join("\n")),
-      );
-      expect(readTextDetail).toHaveBeenCalledTimes(PAGE_SIZE);
-      expect(document.querySelectorAll(".log-row")).toHaveLength(0);
-      expect(document.querySelectorAll(".inspector-log-stream pre")).toHaveLength(1);
+      await waitFor(() => expect(readTextDetail).toHaveBeenCalledTimes(PAGE_SIZE));
+      const initialLogRows = logPane.querySelectorAll(".run-log-row");
+      expect(initialLogRows).toHaveLength(PAGE_SIZE);
+      expect(
+        Array.from(initialLogRows).every(
+          (row) => row.querySelector("pre")?.textContent === decodedSplitText(),
+        ),
+      ).toBe(true);
+      expect(document.querySelector(".inspector-log-stream")).not.toBeInTheDocument();
 
-      fireEvent.click(screen.getByRole("button", { name: "Load older logs" }));
+      fireEvent.click(within(logPane).getByRole("button", { name: "Load older logs" }));
       await waitFor(() => expect(listLogPage).toHaveBeenCalledTimes(2));
       expect(listLogPage.mock.calls[1][0]).toMatchObject({
         pageToken: "logs:next",
@@ -602,12 +615,8 @@ describe("large retained-run browser benchmark", () => {
         nodeId: SELECTED_NODE,
         order: DescriptorPageOrder.NEWEST_FIRST,
       });
-      await waitFor(() =>
-        expect(logStream.textContent).toBe(
-          new Array(PAGE_SIZE * 2).fill(decodedSplitText()).join("\n"),
-        ),
-      );
-      expect(readTextDetail).toHaveBeenCalledTimes(PAGE_SIZE * 2);
+      await waitFor(() => expect(readTextDetail).toHaveBeenCalledTimes(PAGE_SIZE * 2));
+      expect(logPane.querySelectorAll(".run-log-row").length).toBeLessThanOrEqual(DOM_ROW_LIMIT);
       expect(listLogPage).toHaveBeenCalledTimes(2);
       expect(performance.now() - benchmarkStart).toBeLessThan(30_000);
     },

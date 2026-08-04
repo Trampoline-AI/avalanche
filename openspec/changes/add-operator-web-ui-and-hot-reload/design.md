@@ -11,6 +11,7 @@ The gRPC protocol currently separates catalog listing from a stream of run-only 
 - Publish complete, atomically replaceable current-catalog revisions to interactive clients.
 - Make current-workflow and recorded-run views independent but navigable from the same UI.
 - Preserve the existing local-first, loopback-default operator security model.
+- Give a selected run one canonical log surface that can alternate between all-step and exact-node views without eager history hydration.
 
 **Non-Goals:**
 - Editing workflow source or composing DAGs in the browser. Mutating a running workflow when its source changes.
@@ -135,6 +136,18 @@ Preserve the user-visible semantics of PredictRLM's exportable `RunTrace` withou
 Retain `AgentEventDescriptor` summary fields and paginated detail bodies as the bounded transport representation. The browser does not expose those descriptors as a separate turn selector. Instead, it projects the trace header, lifecycle events, and iteration bodies into one familiar hierarchical JSON explorer; expanding or scrolling into an unloaded portion demand-loads the necessary page and body, then inserts it in place. The complete turn body preserves reasoning, code, truncated and untruncated output, tool calls, predict-call groups/subcalls, LM finish metadata, and per-turn usage.
 
 The browser keeps descriptor pages and a small byte-bounded LRU of hydrated bodies, follows live additions without replacing the user's current expansion state, and never calls monolithic `ReadTrace`. Inputs and terminal outputs remain separate views. Migrate the TUI to the same descriptor/detail transport so complete trace bodies are not duplicated solely for compatibility.
+
+### Make a run-wide log dock the canonical log surface
+
+Mount one collapsible log dock below the historical-run canvas with a horizontally oriented drag divider that resizes the dock vertically. The dock opens in an all-step scope and renders timestamp, node identity, level, and message in the operator's authoritative run-wide log sequence. Selecting a graph node applies an exact-node scope; clearing graph selection restores all-step scope. Current-workflow views have no log dock because they have no run identity or snapshot token.
+
+Reuse the existing immutable log paging contract. An empty `node_id` requests the run-wide sequence and a populated `node_id` requests one node. Each scope starts from the selected snapshot's root log token, loads the newest bounded page first, and pages older descriptors on demand. Because continuation tokens bind their filter, changing scope cancels current work, discards that scope's continuation, and starts again from the root token. Body reads remain batched and byte-bounded. The browser never hydrates the complete history merely because the dock is visible.
+
+Move log paging, body decoding, virtualization, and follow state out of the node inspector into a dedicated run-log projection. Remove the inspector Logs tab so the browser has one pager, body cache, scroll position, and live-follow policy for a run. Keep agent-event and trace projections node-scoped.
+
+Retain one bounded live-log tail for the selected run rather than one tail per node. Log descriptors already carry node identity, so an exact-node view filters this ordered tail locally while retained paging remains server-filtered. Tail overflow records a run-level repair watermark and refreshes the selected snapshot before paging across discarded descriptors.
+
+Auto-scroll is enabled when the dock first opens and keeps the latest record visible as output arrives. User scrolling away from the end disables auto-scroll without losing records; an explicit toggle both restores the end position and resumes following, and can deliberately pause following. Loading older records preserves the visible scroll anchor, and live records do not pull a user away from older output.
 
 ### Preserve paging through the browser boundary
 

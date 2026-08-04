@@ -146,11 +146,11 @@ describe("projectionReducer", () => {
   it("installs summary-only baselines and clears selected ephemeral state", () => {
     const previous = {
       ...selectedState(),
-      liveLogs: { "run-1:fetch": [LogRecordDescriptorMsg.create({ sequence: "1" })] },
+      liveLogs: { "run-1": [LogRecordDescriptorMsg.create({ sequence: "1" })] },
       liveEvents: {
         "run-1:fetch": [AgentEventDescriptorMsg.create({ eventSequence: "1" })],
       },
-      liveLogRepairWatermarks: { "run-1:fetch": "1" },
+      liveLogRepairWatermarks: { "run-1": "1" },
       liveEventRepairWatermarks: { "run-1:fetch": "1" },
     };
 
@@ -272,7 +272,7 @@ describe("projectionReducer", () => {
     expect(state.liveEvents).toEqual({});
   });
 
-  it("orders and deduplicates live descriptor tails by run and node", () => {
+  it("orders and deduplicates one cross-step live descriptor tail per run", () => {
     const state = projectionReducer(selectedState(), {
       type: "envelopes",
       envelopes: [
@@ -294,20 +294,20 @@ describe("projectionReducer", () => {
           oneofKind: "logAppended",
           logAppended: {
             runId: summary.runId,
-            log: LogRecordDescriptorMsg.create({ sequence: "2", nodeId: "fetch" }),
+            log: LogRecordDescriptorMsg.create({ sequence: "2", nodeId: "validate" }),
           },
         }),
         envelope("5", {
           oneofKind: "logAppended",
           logAppended: {
             runId: summary.runId,
-            log: LogRecordDescriptorMsg.create({ sequence: "2", nodeId: "fetch" }),
+            log: LogRecordDescriptorMsg.create({ sequence: "2", nodeId: "validate" }),
           },
         }),
       ],
     });
 
-    expect(state.liveLogs["run-1:fetch"].map((entry) => entry.sequence)).toEqual([
+    expect(state.liveLogs["run-1"].map((entry) => entry.sequence)).toEqual([
       "1",
       "2",
       "3",
@@ -340,9 +340,9 @@ describe("projectionReducer", () => {
       envelopes: [...logEnvelopes, ...eventEnvelopes],
     });
 
-    expect(state.liveLogs["run-1:fetch"]).toHaveLength(256);
-    expect(state.liveLogs["run-1:fetch"][0].sequence).toBe("5");
-    expect(state.liveLogRepairWatermarks["run-1:fetch"]).toBe("4");
+    expect(state.liveLogs["run-1"]).toHaveLength(256);
+    expect(state.liveLogs["run-1"][0].sequence).toBe("5");
+    expect(state.liveLogRepairWatermarks["run-1"]).toBe("4");
     expect(state.liveEvents["run-1:fetch"]).toHaveLength(256);
     expect(state.liveEvents["run-1:fetch"][0].eventSequence).toBe("5");
     expect(state.liveEventRepairWatermarks["run-1:fetch"]).toBe("4");
@@ -372,13 +372,13 @@ describe("projectionReducer", () => {
     const previous = {
       ...selectedState(),
       liveLogs: {
-        "run-1:fetch": [LogRecordDescriptorMsg.create({ sequence: "2" })],
-        "run-2:fetch": [LogRecordDescriptorMsg.create({ sequence: "9" })],
+        "run-1": [LogRecordDescriptorMsg.create({ sequence: "2" })],
+        "run-2": [LogRecordDescriptorMsg.create({ sequence: "9" })],
       },
       liveEvents: {
         "run-1:fetch": [AgentEventDescriptorMsg.create({ eventSequence: "2" })],
       },
-      liveLogRepairWatermarks: { "run-1:fetch": "2", "run-2:fetch": "9" },
+      liveLogRepairWatermarks: { "run-1": "2", "run-2": "9" },
       liveEventRepairWatermarks: { "run-1:fetch": "2" },
     };
 
@@ -421,9 +421,9 @@ describe("projectionReducer", () => {
       eventPageToken: "events-r5",
     });
     expect(state.selectedRun?.logPageToken).toBe("logs-r5");
-    expect(state.liveLogs["run-1:fetch"]).toBeUndefined();
+    expect(state.liveLogs["run-1"]).toBeUndefined();
     expect(state.liveEvents["run-1:fetch"]).toBeUndefined();
-    expect(state.liveLogRepairWatermarks).toEqual({ "run-2:fetch": "9" });
+    expect(state.liveLogRepairWatermarks).toEqual({ "run-2": "9" });
     expect(state.liveEventRepairWatermarks).toEqual({});
   });
 
@@ -809,8 +809,8 @@ describe("useOperatorProjection", () => {
 
     act(() => startUpdates.resolve());
     await waitFor(() => expect(getLatestRunSnapshot).toHaveBeenCalledTimes(2));
-    expect(result.current.state.liveLogs["run-1:fetch"]).toHaveLength(256);
-    expect(result.current.state.liveLogRepairWatermarks["run-1:fetch"]).toBe("1");
+    expect(result.current.state.liveLogs["run-1"]).toHaveLength(256);
+    expect(result.current.state.liveLogRepairWatermarks["run-1"]).toBe("1");
 
     act(() =>
       repaired.resolve(
