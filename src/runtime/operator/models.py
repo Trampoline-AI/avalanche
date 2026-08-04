@@ -19,6 +19,7 @@ class NodeStatus(Enum):
 
 
 class RunStatus(Enum):
+    REQUESTING = "requesting"
     PENDING = "pending"
     RUNNING = "running"
     SUCCESS = "success"
@@ -50,6 +51,7 @@ class WorkflowTopology:
     node_types: tuple[tuple[str, str], ...] = ()
     display_names: tuple[tuple[str, str], ...] = ()
     agent_field_schemas_json: tuple[tuple[str, str], ...] = ()
+    agent_instruction_lines: tuple[tuple[str, str], ...] = ()
 
 
 @dataclass
@@ -79,6 +81,7 @@ class RunState:
     run_id: str
     flow_name: str
     status: RunStatus = RunStatus.PENDING
+    triggered_at: float | None = None
     started_at: float | None = None
     ended_at: float | None = None
     nodes: dict[str, NodeState] = field(default_factory=dict)
@@ -155,6 +158,7 @@ class NodeSnapshot:
     trace: TraceDescriptor | None = None
     revision: int = 0
     event_page_token: str = ""
+    running_elapsed_seconds: float | None = None
 
 
 @dataclass(frozen=True)
@@ -164,6 +168,7 @@ class RunSummary:
     run_id: str
     flow_name: str
     status: RunStatus = RunStatus.PENDING
+    triggered_at: float | None = None
     started_at: float | None = None
     ended_at: float | None = None
     triggered_by: str = "manual"
@@ -359,6 +364,7 @@ class NodeStatusChanged:
     ended_at: float | None = None
     error: str | None = None
     revision: int = 0
+    running_elapsed_seconds: float | None = None
 
 
 @dataclass(frozen=True)

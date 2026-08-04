@@ -24,7 +24,7 @@ from avalanche.dag import Workflow
 from ..executor import Executor, LocalExecutor, RayExecutor
 from .hooks import RunHooks
 from .models import display_name_from_id
-from .registry import agent_field_schemas_for_workflow
+from .registry import agent_field_schemas_for_workflow, agent_instruction_lines_for_workflow
 from .result_store import (
     ResultPublicationCancelledError,
     detach_transferred_bundle_descriptor,
@@ -336,6 +336,7 @@ def _workflow_metadata(workflow: Workflow) -> dict[str, Any]:
         },
         "display_names": {node_id: display_name_from_id(node_id) for node_id in node_ids},
         "agent_field_schemas_json": agent_field_schemas_for_workflow(workflow, node_ids),
+        "agent_instruction_lines": agent_instruction_lines_for_workflow(workflow, node_ids),
     }
 
 
@@ -364,12 +365,12 @@ def _install_log_capture(event_queue: Any) -> None:
     root = logging.getLogger()
     root.handlers.clear()
     root.addHandler(_QueueLogHandler(event_queue))
-    root.setLevel(logging.DEBUG)
+    root.setLevel(logging.INFO)
 
 
 class _QueueLogHandler(logging.Handler):
     def __init__(self, event_queue: Any, node_id: str | None = None) -> None:
-        super().__init__(logging.DEBUG)
+        super().__init__(logging.INFO)
         self._queue = event_queue
         self._node_id = node_id
 
@@ -556,7 +557,7 @@ def _with_ray_node_streams(
             old_level = root_logger.level
             handler = _QueueLogHandler(ray_log_queue, node_id)
             root_logger.addHandler(handler)
-            root_logger.setLevel(logging.DEBUG)
+            root_logger.setLevel(logging.INFO)
             sys.stdout, sys.stderr = stdout, stderr
             try:
                 return await fn(*args, **kwargs)
@@ -578,7 +579,7 @@ def _with_ray_node_streams(
         old_level = root_logger.level
         handler = _QueueLogHandler(ray_log_queue, node_id)
         root_logger.addHandler(handler)
-        root_logger.setLevel(logging.DEBUG)
+        root_logger.setLevel(logging.INFO)
         sys.stdout, sys.stderr = stdout, stderr
         try:
             return fn(*args, **kwargs)

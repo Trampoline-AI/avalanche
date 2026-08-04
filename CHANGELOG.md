@@ -28,12 +28,17 @@
   historical run canvases retain their separate neutral presentation.
 - Run logs now render bounded ANSI SGR color and text-style sequences without
   interpreting log content as HTML.
+- Node-scoped run logs now retain canonical node IDs, including repeated-node
+  suffixes, so selecting a log node preserves its filtered records.
 - Starting a workflow now navigates directly to its retained run snapshot as
   soon as the operator publishes the run ID.
 - Agent steps now default PredictRLM to quiet execution; workflows and
   individual steps can explicitly opt into verbose trace logs.
 - Zoomed-out run nodes center their titles while preserving a larger,
   card-corner duration label.
+- Failed DAG cards now show status only; inspect their retained logs for error detail.
+- Retained run canvases now include a `Current workflow` control that returns
+  directly to the live workflow view.
 - Explorer collapse and restore controls now stay at the pane edge, and Explorer and inspector
   panes are independently resizable. Retained inputs, outputs, and traces use bounded progressive
   JSON with content-sized key columns, while logs use a record-separated continuous-text view

@@ -18,6 +18,11 @@ import { RunControls } from "./RunControls";
 import { RunListPanel } from "./RunListPanel";
 import { useOperatorProjection } from "./state";
 
+const avalancheDiamond = new URL(
+  "../../../docs/assets/brand/avalanche-diamond-3d-1024.png",
+  import.meta.url,
+).href;
+
 const EXPLORER_MIN_WIDTH = 220;
 const EXPLORER_MAX_WIDTH = 420;
 const EXPLORER_DEFAULT_WIDTH = 280;
@@ -207,16 +212,10 @@ export function App({ api }: { api: OperatorApi }) {
     },
     [select, workflow],
   );
-  const startWorkflowRun = useCallback(
-    async (workflowSelector: string, input?: Record<string, unknown>) => {
-      const runId = await startRun(workflowSelector, input);
-      if (workflow) {
-        select({ kind: "run", workflowId: workflow.workflowId, runId });
-      }
-      return runId;
-    },
-    [select, startRun, workflow],
-  );
+  const viewCurrentWorkflow = useCallback(() => {
+    if (!workflow) return;
+    select({ kind: "workflow", workflowId: workflow.workflowId });
+  }, [select, workflow]);
   const restoreButton = explorerCollapsed ? (
     <button
       type="button"
@@ -240,17 +239,15 @@ export function App({ api }: { api: OperatorApi }) {
       />
     </>
   ) : undefined;
-  const runStatus = run?.summary?.status;
-  const showRunControls =
-    Boolean(workflow) &&
-    (!historical || runStatus === "pending" || runStatus === "running");
+  const showRunControls = Boolean(workflow) && (!historical || Boolean(run));
   const runControlsPanel = showRunControls ? (
     <RunControls
       workflow={!historical ? workflow : undefined}
       run={run}
       pending={state.action}
-      onStart={startWorkflowRun}
+      onStart={startRun}
       onCancel={cancelRun}
+      onViewWorkflow={historical ? viewCurrentWorkflow : undefined}
     />
   ) : undefined;
 
@@ -263,7 +260,7 @@ export function App({ api }: { api: OperatorApi }) {
     "--workspace-explorer-column-width": explorerCollapsed ? "0px" : `${explorerWidth}px`,
     "--workspace-explorer-divider-width": "0px",
     "--workspace-inspector-column-width": inspectorOpen ? `${inspectorWidth}px` : "0px",
-    "--workspace-inspector-divider-width": inspectorOpen ? "16px" : "0px",
+    "--workspace-inspector-divider-width": "0px",
   } as CSSProperties;
 
   return (
@@ -274,9 +271,11 @@ export function App({ api }: { api: OperatorApi }) {
     >
       <header className="topbar relative z-10 grid min-h-[58px] grid-cols-[260px_minmax(0,1fr)_auto_auto] items-center border-b border-line bg-white px-5 shadow-[0_1px_2px_rgba(20,31,26,.04)] max-[1000px]:grid-cols-[210px_minmax(0,1fr)_auto_auto] max-[700px]:grid-cols-[auto_minmax(0,1fr)_auto] max-[700px]:gap-2 max-[700px]:px-2.5">
         <div className="brand flex items-center gap-[11px]">
-          <span className="brand-mark grid size-[30px] place-items-center rounded-lg bg-acid text-white [font-weight:750]" aria-hidden="true">
-            A
-          </span>
+          <img
+            className="brand-mark size-[30px] object-contain"
+            src={avalancheDiamond}
+            alt=""
+          />
           <div className="flex items-baseline gap-[7px]">
             <strong className="text-[15px] tracking-[-0.02em]">Avalanche</strong>
             <span className="font-mono text-[11px] text-muted uppercase">Operator</span>
@@ -408,7 +407,7 @@ export function App({ api }: { api: OperatorApi }) {
         {inspectorOpen && (
           <>
             <WorkspaceDivider
-              className="workspace-inspector-divider col-start-4 max-[1000px]:fixed max-[1000px]:top-[58px] max-[1000px]:right-[min(var(--workspace-inspector-width),100vw)] max-[1000px]:bottom-0 max-[1000px]:z-[31] max-[1000px]:w-4 max-[700px]:hidden"
+              className="workspace-inspector-divider col-start-4 z-[5] w-4 -translate-x-1/2 max-[1000px]:fixed max-[1000px]:top-[58px] max-[1000px]:right-[calc(min(var(--workspace-inspector-width),100vw)-8px)] max-[1000px]:bottom-0 max-[1000px]:z-[31] max-[700px]:hidden"
               label="Resize Inspector"
               controls="operator-inspector"
               value={inspectorWidth}

@@ -62,6 +62,42 @@ class TestOperatorLifecycle:
         op = self._make_operator()
         run_id = op.start_run("simple_workflow")
         assert run_id.startswith("run_")
+        run = op.get_run(run_id)
+        assert run is not None
+        assert run.triggered_at is not None
+
+    def test_start_run_publishes_multiple_requesting_runs_before_preparation(self, monkeypatch):
+        op = self._make_operator()
+        release_preparation = threading.Event()
+        await_prepared = op._await_prepared
+
+        def delay_preparation(handle):
+            assert release_preparation.wait(timeout=5)
+            return await_prepared(handle)
+
+        monkeypatch.setattr(op, "_await_prepared", delay_preparation)
+        try:
+            first_run_id = op.start_run("simple_workflow")
+            second_run_id = op.start_run("simple_workflow")
+
+            assert op.get_run(first_run_id).status == RunStatus.REQUESTING
+            assert op.get_run(second_run_id).status == RunStatus.REQUESTING
+
+            release_preparation.set()
+            deadline = time.monotonic() + 10
+            while time.monotonic() < deadline:
+                statuses = [
+                    op.get_run(first_run_id).status,
+                    op.get_run(second_run_id).status,
+                ]
+                if statuses == [RunStatus.SUCCESS, RunStatus.SUCCESS]:
+                    break
+                time.sleep(0.05)
+
+            assert statuses == [RunStatus.SUCCESS, RunStatus.SUCCESS]
+        finally:
+            release_preparation.set()
+            op.close()
 
     def test_custom_run_id_reservation_rejects_sequential_duplicate(self):
         op = self._make_operator()
@@ -271,10 +307,7 @@ class TestOperatorLifecycle:
     ):
         workflow_file = tmp_path / "flow.py"
         workflow_file.write_text(
-            "import avalanche as ava\n"
-            "@ava.workflow\n"
-            "def flow():\n"
-            "    return None\n"
+            "import avalanche as ava\n" "@ava.workflow\n" "def flow():\n" "    return None\n"
         )
         operator = Operator(
             workflow_paths=[str(workflow_file)],
@@ -1002,6 +1035,28 @@ class TestAgentEvidenceTransport:
             operator.close()
 
 
+def test_running_snapshot_reports_server_elapsed_duration(monkeypatch):
+    operator = Operator([], watch=False, schedule=False)
+    run = RunState(run_id="run-1", flow_name="Flow")
+    run.nodes["agent_1"] = NodeState(
+        node_id="agent_1",
+        name="Agent",
+        node_type="step",
+        status=NodeStatus.RUNNING,
+        started_at=10.0,
+    )
+    monkeypatch.setattr(operator_module.time, "monotonic", lambda: 14.5)
+    try:
+        snapshot = operator._run_snapshot_locked(
+            run,
+            summary=operator._run_summary_locked(run),
+            as_of_sequence=1,
+        )
+        assert snapshot.nodes[0].running_elapsed_seconds == 4.5
+    finally:
+        operator.close()
+
+
 def test_prepared_run_retains_immutable_topology_after_source_metadata_changes():
     prepared = {
         "display_name": "Original",
@@ -1013,6 +1068,7 @@ def test_prepared_run_retains_immutable_topology_after_source_metadata_changes()
             "step_1": '{"inputs":[{"name":"question","type":"str","description":""}],'
             '"outputs":[]}'
         },
+        "agent_instruction_lines": {"step_1": "Original instruction."},
     }
 
     run = Operator._run_from_prepared(
@@ -1020,12 +1076,14 @@ def test_prepared_run_retains_immutable_topology_after_source_metadata_changes()
         "flow.py::original",
         "Original",
         "manual",
+        1.0,
         prepared,
     )
     prepared["node_ids"].append("new_1")
     prepared["graph"]["source_1"] = ["new_1"]
     prepared["display_names"]["step_1"] = "Changed"
     prepared["agent_field_schemas_json"]["step_1"] = '{"inputs":[],"outputs":[]}'
+    prepared["agent_instruction_lines"]["step_1"] = "Changed instruction."
 
     assert run.topology.node_ids == ("source_1", "step_1")
     assert run.topology.graph == (("source_1", ("step_1",)), ("step_1", ()))
@@ -1035,3 +1093,4 @@ def test_prepared_run_retains_immutable_topology_after_source_metadata_changes()
             '{"inputs":[{"name":"question","type":"str","description":""}],"outputs":[]}'
         )
     }
+    assert dict(run.topology.agent_instruction_lines) == {"step_1": "Original instruction."}

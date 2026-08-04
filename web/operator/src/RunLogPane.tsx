@@ -114,8 +114,7 @@ export function RunLogPane({
   const operatorInstanceId = run.operatorInstanceId;
   const asOfSequence = run.asOfSequence;
   const pageToken = run.logPageToken;
-  const selectedRunNode = run.nodes.find((candidate) => candidate.nodeId === nodeId);
-  const exactLogNodeId = selectedRunNode?.name ?? nodeId ?? "";
+  const exactLogNodeId = nodeId ?? "";
   const descriptorScope = `${operatorInstanceId}\0${runId}\0${asOfSequence}\0${pageToken}\0${exactLogNodeId}`;
   const activePage = pageScope === descriptorScope ? page : EMPTY_LOG_PAGE;
 
@@ -431,12 +430,18 @@ export function RunLogPane({
     overscan: LOG_ROW_OVERSCAN,
   });
   const nodeDisplayNames = run.topology?.displayNames ?? {};
-  const graphNodeByLogIdentity = useMemo(() => {
-    const nodes = new Map<string, (typeof run.nodes)[number] | undefined>();
+  const graphNodesByIdentity = useMemo(() => {
+    const byId = new Map<string, (typeof run.nodes)[number]>();
+    const byUniqueName = new Map<string, (typeof run.nodes)[number] | undefined>();
     for (const candidate of run.nodes) {
-      nodes.set(candidate.name, nodes.has(candidate.name) ? undefined : candidate);
+      byId.set(candidate.nodeId, candidate);
+      if (byUniqueName.has(candidate.name)) {
+        byUniqueName.set(candidate.name, undefined);
+      } else {
+        byUniqueName.set(candidate.name, candidate);
+      }
     }
-    return nodes;
+    return { byId, byUniqueName };
   }, [run.nodes]);
   const scopeLabel = nodeId
     ? nodeDisplayNames[nodeId] && nodeDisplayNames[nodeId] !== nodeId
@@ -527,7 +532,7 @@ export function RunLogPane({
         )}
       </header>
       {expanded && (
-        <div className="run-log-content grid min-h-0 min-w-0 grid-rows-[auto_auto_auto_minmax(0,1fr)_auto_auto] px-2.5 pt-[7px] pb-1.5" id="run-log-content">
+        <div className="run-log-content grid min-h-0 min-w-0 grid-rows-[auto_auto_auto_minmax(0,1fr)_auto]" id="run-log-content">
           {pageError && <p className="inspector-error mb-1.5 rounded-[7px] border border-danger px-2 py-1.5 text-[10px] text-danger [overflow-wrap:anywhere]" role="alert">{pageError}</p>}
           {decodeError && <p className="inspector-error mb-1.5 rounded-[7px] border border-danger px-2 py-1.5 text-[10px] text-danger [overflow-wrap:anywhere]" role="alert">{decodeError}</p>}
           {activePage.nextPageToken && (
@@ -542,7 +547,7 @@ export function RunLogPane({
             </button>
           )}
           <div
-            className="run-log-scroll min-h-0 min-w-0 overflow-auto rounded-md border border-line bg-[#fbfcfb] [&>.empty-copy]:m-3 [&>.inspector-loading]:m-3"
+            className="run-log-scroll min-h-0 min-w-0 overflow-auto [&>.empty-copy]:m-3 [&>.inspector-loading]:m-3"
             ref={scrollElement}
             onScroll={(event) => {
               const element = event.currentTarget;
@@ -564,7 +569,10 @@ export function RunLogPane({
                 {virtualizer.getVirtualItems().map((virtualRow) => {
                   const entry = combinedLogs[virtualRow.index];
                   const body = logBodies.get(entry.bodyToken);
-                  const graphNodeId = graphNodeByLogIdentity.get(entry.nodeId)?.nodeId;
+                  const graphNode =
+                    graphNodesByIdentity.byId.get(entry.nodeId) ??
+                    graphNodesByIdentity.byUniqueName.get(entry.nodeId);
+                  const graphNodeId = graphNode?.nodeId;
                   const nodeLabel = graphNodeId
                     ? nodeDisplayNames[graphNodeId] || entry.nodeId
                     : entry.nodeId;
@@ -598,9 +606,6 @@ export function RunLogPane({
             )}
           </div>
           {decodePending && <p className="inspector-loading run-log-decoding mt-[5px] text-[11px] text-muted italic" role="status">Decoding log text…</p>}
-          {!pageLoading && !activePage.nextPageToken && combinedLogs.length > 0 && (
-            <p className="inspector-end-state mt-[5px] text-center font-mono text-[8px] text-muted uppercase">Start of retained logs</p>
-          )}
         </div>
       )}
     </section>

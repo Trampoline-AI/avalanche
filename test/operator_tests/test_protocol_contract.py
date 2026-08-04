@@ -44,6 +44,7 @@ def test_structural_snapshot_contract_excludes_detail_bodies():
     assert "logs" not in snapshot_fields
     assert "agent_trace_json" not in node_fields
     assert "event_page_token" in node_fields
+    assert "running_elapsed_seconds" in node_fields
     assert "logs" not in summary_fields
     assert "trace" not in summary_fields
     snapshot_request_fields = pb.GetRunSnapshotRequest.DESCRIPTOR.fields_by_name
@@ -90,6 +91,7 @@ def test_snapshot_detail_cursor_and_descriptor_roundtrip():
             run_id="run-1",
             flow_name="example",
             status=RunStatus.RUNNING,
+            triggered_at=1_704_067_200.0,
             workflow_id="flow.py::example",
             workflow_display_name="Example",
             created_sequence=2,
@@ -100,9 +102,11 @@ def test_snapshot_detail_cursor_and_descriptor_roundtrip():
                 node_id="agent_1",
                 name="Agent",
                 node_type="step",
-                status=NodeStatus.SUCCESS,
+                status=NodeStatus.RUNNING,
                 trace=descriptor,
                 revision=17,
+                started_at=10.0,
+                running_elapsed_seconds=4.5,
                 event_page_token="events-token",
             ),
         ),
@@ -114,8 +118,11 @@ def test_snapshot_detail_cursor_and_descriptor_roundtrip():
             node_types=(("agent_1", "step"),),
             display_names=(("agent_1", "Agent"),),
             agent_field_schemas_json=(
-                ("agent_1", '{"inputs":[],"outputs":[{"name":"answer","type":"str",'
-                '"description":""}]}'),
+                (
+                    "agent_1",
+                    '{"inputs":[],"outputs":[{"name":"answer","type":"str",'
+                    '"description":""}]}',
+                ),
             ),
         ),
     )

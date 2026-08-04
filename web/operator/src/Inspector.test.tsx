@@ -60,6 +60,7 @@ const run: RunSnapshotMsg = {
     status: "success",
     startedAt: 10,
     endedAt: 11,
+    triggeredAt: 9,
     triggeredBy: "manual",
     workflowId: workflow.workflowId,
     workflowDisplayName: workflow.displayName,
@@ -105,6 +106,7 @@ const run: RunSnapshotMsg = {
     nodeTypes: { agent_1: "step" },
     displayNames: { agent_1: "Agent" },
     agentFieldSchemasJson: { agent_1: fieldSchemas },
+    agentInstructionLines: { agent_1: "Answer the question." },
   },
 };
 

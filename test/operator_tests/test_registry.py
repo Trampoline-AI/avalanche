@@ -18,7 +18,10 @@ from avalanche.operator.registry import (
     workflow_to_info,
 )
 from runtime.operator.discovery import configure_roots
-from runtime.operator.registry import agent_field_schemas_for_workflow
+from runtime.operator.registry import (
+    agent_field_schemas_for_workflow,
+    agent_instruction_lines_for_workflow,
+)
 
 FIXTURES_DIR = os.path.join(os.path.dirname(os.path.dirname(__file__)), "fixtures")
 
@@ -640,6 +643,9 @@ def test_agent_metadata_failure_does_not_hide_workflow(monkeypatch):
     assert field_schemas == {
         "inputs": [{"name": "text", "type": "str", "description": "text to analyze"}],
         "outputs": [{"name": "result", "type": "str", "description": "analysis"}],
+    }
+    assert agent_instruction_lines_for_workflow(workflow, ["analyze_1"]) == {
+        "analyze_1": "Analyze text."
     }
 
     spec = workflow.nodes["analyze_1"].node.fn.__agent_step__

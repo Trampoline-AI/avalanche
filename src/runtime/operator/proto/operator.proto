@@ -134,6 +134,7 @@ message WorkflowTopologyMsg {
   map<string, string> node_types = 3;
   map<string, string> display_names = 4;
   map<string, string> agent_field_schemas_json = 5;
+  map<string, string> agent_instruction_lines = 6;
 }
 
 message FlowInfoMsg {
@@ -203,6 +204,7 @@ message RunSummaryMsg {
   string workflow_display_name = 8;
   uint64 created_sequence = 9;
   uint64 revision = 10;
+  double triggered_at = 11;
 }
 
 message TraceHeaderMsg {
@@ -239,6 +241,7 @@ message NodeSnapshotMsg {
   uint64 revision = 8;
   string event_page_token = 9;
   optional string error = 10;
+  optional double running_elapsed_seconds = 11;
 }
 
 message RunSnapshotMsg {
@@ -331,6 +334,7 @@ message NodeStatusChanged {
   double ended_at = 5;
   uint64 revision = 6;
   optional string error = 7;
+  optional double running_elapsed_seconds = 8;
 }
 
 message LogAppended {

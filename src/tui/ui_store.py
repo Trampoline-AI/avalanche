@@ -422,6 +422,7 @@ class UIStore:
         if self.current_run is None:
             return "IDLE"
         return {
+            RunStatus.REQUESTING: "REQUESTING",
             RunStatus.RUNNING: "RUNNING",
             RunStatus.FAILED: "FAILED",
             RunStatus.SUCCESS: "DONE",

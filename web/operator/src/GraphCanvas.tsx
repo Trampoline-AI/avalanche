@@ -5,6 +5,7 @@ import {
   useCallback,
   useEffect,
   useMemo,
+  useRef,
   useState,
 } from "react";
 import { Check, X } from "lucide-react";
@@ -72,7 +73,9 @@ interface CardData extends Record<string, unknown> {
   error?: string;
   startedAt?: number;
   endedAt?: number;
+  runningElapsedSeconds?: number;
   declaration?: AgentFieldSchemas;
+  instructionLine?: string;
   onOpen: () => void;
 }
 
@@ -158,6 +161,12 @@ export function parseAgentFieldSchemas(raw: string | undefined): AgentFieldSchem
     return undefined;
   }
 }
+function firstInstructionLine(instructions: string | undefined): string | undefined {
+  const [firstLine] = instructions?.split(/\r?\n/, 1) ?? [];
+  const instructionLine = firstLine?.trim();
+  return instructionLine || undefined;
+}
+
 
 const NODE_DETAIL_ZOOM_THRESHOLD = 1.0;
 const FOCUSED_NODE_ZOOM = 1.2;
@@ -168,35 +177,58 @@ const NodeDuration = memo(
   ({
     startedAt,
     endedAt,
+    runningElapsedSeconds,
     running,
     compact,
   }: {
     startedAt: number;
     endedAt?: number;
     running: boolean;
+    runningElapsedSeconds: number;
     compact: boolean;
   }) => {
-    const [nowSeconds, setNowSeconds] = useState(() => Date.now() / 1000);
+    const [nowMs, setNowMs] = useState(() => performance.now());
+    const runningClock = useRef<
+      { startedAt: number; elapsedSeconds: number; receivedAtMs: number } | undefined
+    >(undefined);
+    const isRunning = running && endedAt === undefined;
+    if (
+      isRunning &&
+      (runningClock.current?.startedAt !== startedAt ||
+        runningClock.current.elapsedSeconds !== runningElapsedSeconds)
+    ) {
+      runningClock.current = {
+        startedAt,
+        elapsedSeconds: runningElapsedSeconds,
+        receivedAtMs: performance.now(),
+      };
+    }
     useEffect(() => {
-      if (!running || endedAt) return;
-      setNowSeconds(Date.now() / 1000);
-      const interval = window.setInterval(
-        () => setNowSeconds(Date.now() / 1000),
-        1_000,
-      );
+      if (!isRunning) return;
+      setNowMs(performance.now());
+      const interval = window.setInterval(() => setNowMs(performance.now()), 100);
       return () => window.clearInterval(interval);
-    }, [endedAt, running]);
-    const end = endedAt || nowSeconds;
+    }, [isRunning, runningElapsedSeconds, startedAt]);
+    const elapsedSeconds =
+      endedAt !== undefined
+        ? Math.max(0, endedAt - startedAt)
+        : isRunning
+          ? Math.max(
+              0,
+              (runningClock.current?.elapsedSeconds ?? runningElapsedSeconds) +
+                (nowMs - (runningClock.current?.receivedAtMs ?? nowMs)) / 1_000,
+            )
+          : 0;
     return (
       <span className={`node-duration absolute font-mono text-muted transition-[font-size] duration-150 ease-out motion-reduce:transition-none ${compact ? "top-3 right-3 text-sm" : "top-4 right-4 text-[9px]"}`}>
-        {Math.max(0, end - startedAt).toFixed(1)}s
+        {elapsedSeconds.toFixed(1)}s
       </span>
     );
   },
 );
 NodeDuration.displayName = "NodeDuration";
 
-const WorkflowNodeCard = memo(({ data }: NodeProps<Node<CardData>>) => {
+const WorkflowNodeCard = memo(({ data, selected }: NodeProps<Node<CardData>>) => {
   const { screenToFlowPosition, setCenter } = useReactFlow();
   const { zoom } = useViewport();
   const isCompact = zoom < NODE_DETAIL_ZOOM_THRESHOLD;
@@ -234,11 +266,11 @@ const WorkflowNodeCard = memo(({ data }: NodeProps<Node<CardData>>) => {
       : data.status === "failed"
         ? "status-failed"
         : data.status === "running"
-          ? "status-running animate-pulse border-[3px] border-acid ring-[5px] ring-[rgba(37,99,235,.22)] motion-reduce:animate-none motion-reduce:ring-3"
+          ? "status-running gradient-animate border-[3px]"
           : "blueprint";
   return (
     <article
-      className={`node-card ${isCompact ? "node-card--compact min-h-[100px] justify-center gap-0 px-4 py-3" : "min-h-[130px] gap-2 p-4"} relative flex w-[360px] cursor-pointer flex-col items-stretch rounded-xl border border-line bg-panel text-left shadow-[0_8px_24px_rgba(25,39,32,.08)] transition-[border-color,box-shadow,transform] duration-150 ease-out hover:-translate-y-px hover:border-acid hover:shadow-[0_10px_28px_rgba(25,39,32,.12)] motion-reduce:transition-none ${agentClass} ${statusClass}`}
+      className={`node-card ${isCompact ? "node-card--compact min-h-[100px] justify-center gap-0 px-4 py-3" : "min-h-[130px] gap-2 p-4"} relative flex w-[360px] cursor-pointer flex-col items-stretch rounded-xl border border-line bg-panel text-left shadow-[0_8px_24px_rgba(25,39,32,.08)] transition-[border-color,box-shadow,transform] duration-150 ease-out hover:-translate-y-px hover:border-acid hover:shadow-[0_10px_28px_rgba(25,39,32,.12)] motion-reduce:transition-none ${selected && data.status !== "running" ? "border-acid!" : ""} ${agentClass} ${statusClass}`}
       data-node-kind={data.isAgent ? "agent" : "standard"}
     >
       <Handle
@@ -264,12 +296,11 @@ const WorkflowNodeCard = memo(({ data }: NodeProps<Node<CardData>>) => {
       <header
         className={`node-header relative flex flex-col ${isCompact
           ? "min-h-0 items-center justify-center gap-0 pr-0 text-center"
-          : "min-h-10 items-start gap-1 pr-[76px]"
-          }`}
+          : "min-h-10 items-start gap-1"}`}
       >
         <span className={`node-card-meta node-kicker font-mono text-[8px] tracking-[.12em] uppercase ${data.isAgent ? "text-agent" : "text-secondary"}`}>{data.isAgent ? "agent" : data.nodeType}</span>
         <strong
-          className={`node-title ${isCompact ? "text-xl" : "text-sm"} leading-tight text-ink`}
+          className={`node-title block self-stretch ${isCompact ? "text-xl" : "pr-[76px] text-sm"} leading-tight text-ink`}
         >
           {data.label}
           {data.status === "success" && (
@@ -287,6 +318,14 @@ const WorkflowNodeCard = memo(({ data }: NodeProps<Node<CardData>>) => {
             />
           )}
         </strong>
+        {data.instructionLine && (
+          <span
+            className="node-card-meta node-instruction-line min-w-0 self-stretch overflow-hidden text-ellipsis line-clamp-2 font-mono text-[9px] leading-[1.35] text-secondary"
+            title={data.instructionLine}
+          >
+            {data.instructionLine}
+          </span>
+        )}
         {data.identity && <span className="node-card-meta node-identity font-mono text-[9px] text-secondary">{data.identity}</span>}
         {data.status && <span className={`node-card-meta node-status absolute top-[19px] right-0 font-mono text-[8px] uppercase ${statusColorClass}`}>{data.status}</span>}
       </header>
@@ -294,11 +333,11 @@ const WorkflowNodeCard = memo(({ data }: NodeProps<Node<CardData>>) => {
         <NodeDuration
           startedAt={data.startedAt}
           endedAt={data.endedAt}
+          runningElapsedSeconds={data.runningElapsedSeconds ?? 0}
           running={data.status === "running"}
           compact={isCompact}
         />
       )}
-      {data.error && <span className="node-card-meta node-error max-h-10 overflow-hidden rounded bg-[#fff1f0] px-2 py-1 text-[9px] text-danger">{data.error}</span>}
       {data.declaration && (
         <div
           className={`node-card-details field-grid grid grid-cols-[minmax(0,1fr)_minmax(0,1fr)] overflow-hidden ${isCompact
@@ -403,7 +442,7 @@ function invocationIdentity(nodeId: string, label: string): string {
 
 type TopologyView = Pick<
   WorkflowTopologyMsg,
-  "nodeIds" | "graph" | "nodeTypes" | "displayNames"
+  "nodeIds" | "graph" | "nodeTypes" | "displayNames" | "agentInstructionLines"
 >;
 
 interface GraphLayout {
@@ -498,6 +537,7 @@ function GraphCanvasView({
       graph: workflow.graph,
       nodeTypes: workflow.nodeTypes,
       displayNames: workflow.displayNames,
+      agentInstructionLines: {},
     };
   }, [runTopology, workflow]);
   const topologyNodeIds = topology?.nodeIds;
@@ -540,6 +580,15 @@ function GraphCanvasView({
     );
     const nodes: Node<CardData>[] = topology.nodeIds.map((nodeId) => {
       const runtimeNode = runtimeNodes[nodeId];
+      const agentDeclaration = runTopology
+        ? undefined
+        : parseAgentDeclaration(workflow?.agentMetadataJson[nodeId]);
+      const declaration = runTopology
+        ? parseAgentFieldSchemas(runTopology.agentFieldSchemasJson[nodeId])
+        : agentDeclaration;
+      const instructionLine = runTopology
+        ? runTopology.agentInstructionLines[nodeId] || undefined
+        : firstInstructionLine(agentDeclaration?.instructions);
       return {
         id: nodeId,
         selected: nodeId === selectedNodeId,
@@ -557,9 +606,9 @@ function GraphCanvasView({
           error: runtimeNode?.error,
           startedAt: runtimeNode?.startedAt || undefined,
           endedAt: runtimeNode?.endedAt || undefined,
-          declaration: runTopology
-            ? parseAgentFieldSchemas(runTopology.agentFieldSchemasJson[nodeId])
-            : parseAgentDeclaration(workflow?.agentMetadataJson[nodeId]),
+          runningElapsedSeconds: runtimeNode?.runningElapsedSeconds ?? 0,
+          declaration,
+          instructionLine,
           onOpen: openCallbacks[nodeId],
         },
       };
