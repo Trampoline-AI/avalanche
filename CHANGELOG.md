@@ -17,6 +17,13 @@
 - Unchanged discovery results no longer advance catalog revisions, and the web UI
   retains workflow/run navigation on narrow viewports with accessible input and
   repeated-node labels plus WCAG AA secondary-text contrast.
+- Workflow cards now show contained typed field lists while declarations remain in the inspector.
+  Canvases retain depth-aware edge routing, live durations, stronger execution states, and `Run`
+  labels.
+- Explorer collapse and restore controls now stay at the pane edge, and Explorer and inspector
+  panes are independently resizable. Retained inputs, outputs, and traces use bounded progressive
+  JSON with content-sized key columns, while logs use a record-separated continuous-text view
+  without hidden unbounded DOM.
 - Large-run hydration is now summary-first, cancellable, incrementally paged, and
   bounded across browser queues, descriptor windows, detail caches, and virtualized
   DOM rendering. `make web-bench` covers 10,000 retained runs in real Chromium.

@@ -1,12 +1,16 @@
-import { memo, useMemo } from "react";
+import { memo, type ReactNode, useEffect, useMemo, useState } from "react";
 import {
   Background,
+  BaseEdge,
   Controls,
   Handle,
   MarkerType,
+  Panel,
   Position,
   ReactFlow,
+  useStore,
   type Edge,
+  type EdgeProps,
   type Node,
   type NodeProps,
 } from "@xyflow/react";
@@ -23,6 +27,15 @@ interface FieldMetadata {
   type?: string;
   description?: string;
 }
+export interface SkillMetadata {
+  name: string;
+  instructions: string;
+}
+
+export interface ToolMetadata {
+  name: string;
+  description: string;
+}
 
 export interface AgentFieldSchemas {
   inputs: FieldMetadata[];
@@ -33,8 +46,8 @@ export interface AgentDeclaration extends AgentFieldSchemas {
   instructions: string;
   model?: unknown;
   runtime?: unknown;
-  skills?: unknown;
-  tools?: unknown;
+  skills: SkillMetadata[];
+  tools: ToolMetadata[];
 }
 
 interface CardData extends Record<string, unknown> {
@@ -43,12 +56,39 @@ interface CardData extends Record<string, unknown> {
   identity?: string;
   status?: string;
   error?: string;
-  duration?: string;
+  startedAt?: number;
+  endedAt?: number;
   declaration?: AgentFieldSchemas;
   onOpen: () => void;
 }
 
+function skills(value: unknown): SkillMetadata[] {
+  if (!Array.isArray(value)) return [];
+  return value.flatMap((item) =>
+    isUnknownRecord(item) && typeof item.name === "string"
+      ? [
+          {
+            name: item.name,
+            instructions: typeof item.instructions === "string" ? item.instructions : "",
+          },
+        ]
+      : [],
+  );
+}
 
+function tools(value: unknown): ToolMetadata[] {
+  if (!Array.isArray(value)) return [];
+  return value.flatMap((item) =>
+    isUnknownRecord(item) && typeof item.name === "string"
+      ? [
+          {
+            name: item.name,
+            description: typeof item.description === "string" ? item.description : "",
+          },
+        ]
+      : [],
+  );
+}
 
 function fields(value: unknown): FieldMetadata[] {
   if (!Array.isArray(value)) return [];
@@ -57,7 +97,12 @@ function fields(value: unknown): FieldMetadata[] {
     return [
       {
         name: item.name,
-        type: typeof item.type === "string" ? item.type : undefined,
+        type:
+          typeof item.type === "string"
+            ? item.type
+            : typeof item.annotation === "string"
+              ? item.annotation
+              : undefined,
         description:
           typeof item.description === "string" ? item.description : undefined,
       },
@@ -78,8 +123,8 @@ export function parseAgentDeclaration(raw: string | undefined): AgentDeclaration
       outputs: fields(signature.outputs),
       model: metadata.models,
       runtime: metadata.runtime,
-      skills: metadata.skills,
-      tools: metadata.tools,
+      skills: skills(metadata.skills),
+      tools: tools(metadata.tools),
     };
   } catch {
     return undefined;
@@ -100,55 +145,166 @@ export function parseAgentFieldSchemas(raw: string | undefined): AgentFieldSchem
   }
 }
 
-const WorkflowNodeCard = memo(({ data }: NodeProps<Node<CardData>>) => (
-  <button
-    type="button"
-    className={`node-card ${data.status ? `status-${data.status}` : "blueprint"}`}
-    onClick={data.onOpen}
-    aria-label={`Inspect ${data.label}${data.identity ? ` ${data.identity}` : ""}`}
-  >
-    <Handle type="target" position={Position.Left} isConnectable={false} />
-    <span className="node-kicker">{data.nodeType}</span>
-    <strong>{data.label}</strong>
-    {data.identity && <span className="node-identity">{data.identity}</span>}
-    {data.status && <span className="node-status">{data.status}</span>}
-    {data.duration && <span className="node-duration">{data.duration}</span>}
-    {data.error && <span className="node-error">{data.error}</span>}
-    {data.declaration && (
-      <span className="field-grid">
-        <span>
-          <small>Inputs</small>
-          {data.declaration.inputs.map((field) => (
-            <span className="field" key={`input-${field.name}`}>
-              {field.name}
-            </span>
-          ))}
-        </span>
-        <span>
-          <small>Outputs</small>
-          {data.declaration.outputs.map((field) => (
-            <span className="field" key={`output-${field.name}`}>
-              {field.name}
-            </span>
-          ))}
-        </span>
+const NodeDuration = memo(
+  ({
+    startedAt,
+    endedAt,
+    running,
+  }: {
+    startedAt: number;
+    endedAt?: number;
+    running: boolean;
+  }) => {
+    const [nowSeconds, setNowSeconds] = useState(() => Date.now() / 1000);
+    useEffect(() => {
+      if (!running || endedAt) return;
+      setNowSeconds(Date.now() / 1000);
+      const interval = window.setInterval(
+        () => setNowSeconds(Date.now() / 1000),
+        1_000,
+      );
+      return () => window.clearInterval(interval);
+    }, [endedAt, running]);
+    const end = endedAt || nowSeconds;
+    return (
+      <span className="node-duration">
+        {Math.max(0, end - startedAt).toFixed(1)}s
       </span>
-    )}
-    <Handle type="source" position={Position.Right} isConnectable={false} />
-  </button>
-));
+    );
+  },
+);
+NodeDuration.displayName = "NodeDuration";
+
+const WorkflowNodeCard = memo(({ data }: NodeProps<Node<CardData>>) => {
+  return (
+    <article
+      className={`node-card ${data.status ? `status-${data.status}` : "blueprint"}`}
+    >
+      <Handle
+        id="target-left"
+        className="node-handle"
+        type="target"
+        position={Position.Left}
+        isConnectable={false}
+      />
+      <Handle
+        id="target-bottom"
+        className="node-handle"
+        type="target"
+        position={Position.Bottom}
+        isConnectable={false}
+      />
+      <button
+        type="button"
+        className="node-card-action"
+        onClick={data.onOpen}
+        aria-label={`Inspect ${data.label}${data.identity ? ` ${data.identity}` : ""}`}
+      />
+      <header className="node-header">
+        <span className="node-kicker">{data.nodeType}</span>
+        <strong className="node-title">{data.label}</strong>
+        {data.identity && <span className="node-identity">{data.identity}</span>}
+        {data.status && <span className="node-status">{data.status}</span>}
+        {data.startedAt && (
+          <NodeDuration
+            startedAt={data.startedAt}
+            endedAt={data.endedAt}
+            running={data.status === "running"}
+          />
+        )}
+      </header>
+      {data.error && <span className="node-error">{data.error}</span>}
+      {data.declaration && (
+        <div className="field-grid node-declaration">
+          <section className="node-fields node-inputs" aria-label="Inputs">
+            <small>Inputs</small>
+            {data.declaration.inputs.length ? (
+              data.declaration.inputs.map((field) => (
+                <span className="field node-field" key={`input-${field.name}`}>
+                  <span className="node-field-name">{field.name}</span>
+                  {field.type && <code>{field.type}</code>}
+                </span>
+              ))
+            ) : (
+              <span className="node-field-empty">None</span>
+            )}
+          </section>
+          <section className="node-fields node-outputs" aria-label="Outputs">
+            <small>Outputs</small>
+            {data.declaration.outputs.length ? (
+              data.declaration.outputs.map((field) => (
+                <span className="field node-field" key={`output-${field.name}`}>
+                  <span className="node-field-name">{field.name}</span>
+                  {field.type && <code>{field.type}</code>}
+                </span>
+              ))
+            ) : (
+              <span className="node-field-empty">None</span>
+            )}
+          </section>
+        </div>
+      )}
+      <Handle
+        id="source-right"
+        className="node-handle"
+        type="source"
+        position={Position.Right}
+        isConnectable={false}
+      />
+      <Handle
+        id="source-bottom"
+        className="node-handle"
+        type="source"
+        position={Position.Bottom}
+        isConnectable={false}
+      />
+    </article>
+  );
+});
 WorkflowNodeCard.displayName = "WorkflowNodeCard";
 
+interface SkipEdgeData extends Record<string, unknown> {
+  lane: number;
+}
+
+type SkipEdge = Edge<SkipEdgeData, "skip">;
+
+const SKIP_EDGE_CLEARANCE = 56;
+const SKIP_EDGE_LANE_GAP = 32;
+
+const SkipEdge = memo(
+  ({
+    data,
+    markerEnd,
+    sourceX,
+    sourceY,
+    style,
+    targetX,
+    targetY,
+  }: EdgeProps<SkipEdge>) => {
+    const graphBottom = useStore((state) =>
+      Math.max(
+        ...Array.from(
+          state.nodeLookup.values(),
+          (node) => node.internals.positionAbsolute.y + (node.measured.height ?? 0),
+        ),
+      ),
+    );
+    if (data === undefined) {
+      throw new Error("Skip edge is missing its routing lane");
+    }
+    const routeY = graphBottom + SKIP_EDGE_CLEARANCE + data.lane * SKIP_EDGE_LANE_GAP;
+    const path = `M ${sourceX},${sourceY} L ${sourceX},${routeY} L ${targetX},${routeY} L ${targetX},${targetY}`;
+
+    return <BaseEdge path={path} markerEnd={markerEnd} style={style} />;
+  },
+);
+SkipEdge.displayName = "SkipEdge";
+
 const NODE_TYPES = { workflow: WorkflowNodeCard };
+const EDGE_TYPES = { skip: SkipEdge };
 const FIT_VIEW_OPTIONS = { padding: 0.24 };
 
-
-function elapsed(node: NodeSnapshotMsg): string | undefined {
-  if (!node.startedAt) return undefined;
-  const end = node.endedAt || Date.now() / 1000;
-  const seconds = Math.max(0, end - node.startedAt);
-  return seconds < 60 ? `${seconds.toFixed(1)}s` : `${Math.floor(seconds / 60)}m`;
-}
 
 function invocationIdentity(nodeId: string, label: string): string {
   const suffix = nodeId.startsWith(`${label}_`) ? nodeId.slice(label.length + 1) : "";
@@ -190,22 +346,31 @@ function createGraphLayout(topology: Pick<TopologyView, "nodeIds" | "graph">): G
     Object.entries(rows).flatMap(([depth, nodeIds]) =>
       nodeIds.map((nodeId, row) => [
         nodeId,
-        { x: Number(depth) * 330, y: row * 220 - ((nodeIds.length - 1) * 110) },
+        {
+          x: Number(depth) * 500,
+          y: row * 220 - ((nodeIds.length - 1) * 110),
+        },
       ]),
     ),
   );
   const seen = new Set<string>();
   const edges: Edge[] = [];
+  let skipEdgeLane = 0;
   for (const [source, children] of Object.entries(topology.graph)) {
     for (const target of children.children) {
       const id = `${source}->${target}`;
       if (seen.has(id)) continue;
       seen.add(id);
+      const isSkipEdge = depths[target] !== (depths[source] ?? 0) + 1;
       edges.push({
         id,
         source,
         target,
+        sourceHandle: isSkipEdge ? "source-bottom" : "source-right",
+        targetHandle: isSkipEdge ? "target-bottom" : "target-left",
         markerEnd: { type: MarkerType.ArrowClosed },
+        type: isSkipEdge ? "skip" : "step",
+        data: isSkipEdge ? { lane: skipEdgeLane++ } : undefined,
         className: "dag-edge",
       });
     }
@@ -217,6 +382,8 @@ interface GraphCanvasProps {
   workflow?: FlowInfoMsg;
   runTopology?: WorkflowTopologyMsg;
   runNodes?: NodeSnapshotMsg[];
+  topLeftPanel?: ReactNode;
+  bottomRightPanel?: ReactNode;
   onOpenNode: (nodeId: string) => void;
 }
 
@@ -224,6 +391,8 @@ function GraphCanvasView({
   workflow,
   runTopology,
   runNodes = [],
+  topLeftPanel,
+  bottomRightPanel,
   onOpenNode,
 }: GraphCanvasProps) {
   const topology = useMemo<TopologyView | undefined>(() => {
@@ -280,7 +449,8 @@ function GraphCanvasView({
           nodeType: topology.nodeTypes[nodeId] || runtimeNode?.nodeType || "step",
           status: runtimeNode?.status,
           error: runtimeNode?.error,
-          duration: runtimeNode ? elapsed(runtimeNode) : undefined,
+          startedAt: runtimeNode?.startedAt || undefined,
+          endedAt: runtimeNode?.endedAt || undefined,
           declaration: runTopology
             ? parseAgentFieldSchemas(runTopology.agentFieldSchemasJson[nodeId])
             : parseAgentDeclaration(workflow?.agentMetadataJson[nodeId]),
@@ -296,6 +466,7 @@ function GraphCanvasView({
       nodes={nodes}
       edges={layout.edges}
       nodeTypes={NODE_TYPES}
+      edgeTypes={EDGE_TYPES}
       fitView
       fitViewOptions={FIT_VIEW_OPTIONS}
       minZoom={0.25}
@@ -305,6 +476,16 @@ function GraphCanvasView({
       elementsSelectable
       proOptions={{ hideAttribution: true }}
     >
+      {topLeftPanel && (
+        <Panel position="top-left" className="dag-panel dag-runs-panel nodrag nopan nowheel">
+          {topLeftPanel}
+        </Panel>
+      )}
+      {bottomRightPanel && (
+        <Panel position="bottom-right" className="dag-panel dag-actions-panel nodrag nopan">
+          {bottomRightPanel}
+        </Panel>
+      )}
       <Background color="rgba(255,255,255,.06)" gap={24} size={1} />
       <Controls showInteractive={false} />
     </ReactFlow>
@@ -337,6 +518,8 @@ export const GraphCanvas = memo(
   (left, right) =>
     left.workflow === right.workflow &&
     left.runTopology === right.runTopology &&
+    left.topLeftPanel === right.topLeftPanel &&
+    left.bottomRightPanel === right.bottomRightPanel &&
     left.onOpenNode === right.onOpenNode &&
     sameRunNodeState(left.runNodes, right.runNodes),
 );

@@ -99,7 +99,10 @@ export function RunControls({
             disabled={pending?.kind === "start"}
             onClick={() => void start()}
           >
-            {pending?.kind === "start" ? "Requesting…" : "Run"}
+            <svg aria-hidden="true" viewBox="0 0 12 12">
+              <path d="M2.5 1.5 10 6l-7.5 4.5z" />
+            </svg>
+            <span>{pending?.kind === "start" ? "Requesting…" : "Run"}</span>
           </button>
           <button
             type="button"

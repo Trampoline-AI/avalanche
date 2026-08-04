@@ -1,17 +1,115 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import {
+  type CSSProperties,
+  type KeyboardEvent,
+  type PointerEvent,
+  useCallback,
+  useEffect,
+  useRef,
+  useState,
+} from "react";
 
 import type { OperatorApi } from "./api";
 import { Explorer, type Selection } from "./Explorer";
 import { GraphCanvas } from "./GraphCanvas";
 import { Inspector } from "./Inspector";
 import { RunControls } from "./RunControls";
+import { RunListPanel } from "./RunListPanel";
 import { useOperatorProjection } from "./state";
+
+const EXPLORER_MIN_WIDTH = 220;
+const EXPLORER_MAX_WIDTH = 420;
+const EXPLORER_DEFAULT_WIDTH = 280;
+const INSPECTOR_MIN_WIDTH = 320;
+const INSPECTOR_MAX_WIDTH = 640;
+const INSPECTOR_DEFAULT_WIDTH = 410;
+const PANEL_KEYBOARD_STEP = 16;
+
+interface WorkspaceDividerProps {
+  className: string;
+  label: string;
+  controls: string;
+  value: number;
+  min: number;
+  max: number;
+  pointerDirection: 1 | -1;
+  onChange: (value: number) => void;
+}
+
+
+function WorkspaceDivider({
+  className,
+  label,
+  controls,
+  value,
+  min,
+  max,
+  pointerDirection,
+  onChange,
+}: WorkspaceDividerProps) {
+  const dragStart = useRef<{ clientX: number; value: number } | undefined>(undefined);
+
+  const endDrag = (event: PointerEvent<HTMLDivElement>) => {
+    if (!dragStart.current) return;
+    if (event.currentTarget.hasPointerCapture?.(event.pointerId)) {
+      event.currentTarget.releasePointerCapture(event.pointerId);
+    }
+    dragStart.current = undefined;
+  };
+
+  const resizeWithKeyboard = (event: KeyboardEvent<HTMLDivElement>) => {
+    let next: number | undefined;
+    if (event.key === "ArrowLeft") {
+      next = value - PANEL_KEYBOARD_STEP * pointerDirection;
+    }
+    if (event.key === "ArrowRight") {
+      next = value + PANEL_KEYBOARD_STEP * pointerDirection;
+    }
+    if (event.key === "Home") next = min;
+    if (event.key === "End") next = max;
+    if (next === undefined) return;
+    event.preventDefault();
+    onChange(Math.min(max, Math.max(min, next)));
+  };
+
+  return (
+    <div
+      className={`workspace-divider ${className}`}
+      role="separator"
+      aria-label={label}
+      aria-controls={controls}
+      aria-orientation="vertical"
+      aria-valuemin={min}
+      aria-valuemax={max}
+      aria-valuenow={value}
+      aria-valuetext={`${value} pixels`}
+      tabIndex={0}
+      onKeyDown={resizeWithKeyboard}
+      onPointerDown={(event) => {
+        event.preventDefault();
+        dragStart.current = { clientX: event.clientX, value };
+        event.currentTarget.setPointerCapture?.(event.pointerId);
+      }}
+      onPointerMove={(event) => {
+        const start = dragStart.current;
+        if (!start) return;
+        const next =
+          start.value + (event.clientX - start.clientX) * pointerDirection;
+        onChange(Math.min(max, Math.max(min, next)));
+      }}
+      onPointerUp={endDrag}
+      onPointerCancel={endDrag}
+    />
+  );
+}
 
 export function App({ api }: { api: OperatorApi }) {
   const { state, startRun, cancelRun, selectRun } = useOperatorProjection(api);
   const [selection, setSelection] = useState<Selection>();
   const [inspectedNode, setInspectedNode] = useState<string>();
   const [explorerOpen, setExplorerOpen] = useState(false);
+  const [explorerCollapsed, setExplorerCollapsed] = useState(false);
+  const [explorerWidth, setExplorerWidth] = useState(EXPLORER_DEFAULT_WIDTH);
+  const [inspectorWidth, setInspectorWidth] = useState(INSPECTOR_DEFAULT_WIDTH);
   const previousSelectedRunId = useRef(state.selectedRunId);
 
   useEffect(() => {
@@ -80,7 +178,6 @@ export function App({ api }: { api: OperatorApi }) {
     (item) => item.workflowId === selection?.workflowId,
   );
   const historical = selection?.kind === "run";
-  const runSummary = historical ? state.runs[selection.runId] : undefined;
   const run =
     historical &&
     state.selectedRunId === selection.runId &&
@@ -90,6 +187,8 @@ export function App({ api }: { api: OperatorApi }) {
       : undefined;
   const openNode = useCallback((nodeId: string) => setInspectedNode(nodeId), []);
   const closeNode = useCallback(() => setInspectedNode(undefined), []);
+  const collapseExplorer = useCallback(() => setExplorerCollapsed(true), []);
+  const restoreExplorer = useCallback(() => setExplorerCollapsed(false), []);
   const select = useCallback(
     (next: Selection) => {
       setSelection(next);
@@ -99,12 +198,64 @@ export function App({ api }: { api: OperatorApi }) {
     },
     [selectRun],
   );
+  const selectWorkflowRun = useCallback(
+    (runId: string) => {
+      if (!workflow) return;
+      select({ kind: "run", workflowId: workflow.workflowId, runId });
+    },
+    [select, workflow],
+  );
+  const restoreButton = explorerCollapsed ? (
+    <button
+      type="button"
+      className="explorer-restore-button"
+      aria-label="Restore Explorer"
+      aria-controls="operator-explorer"
+      aria-expanded="false"
+      onClick={restoreExplorer}
+    >
+      <span aria-hidden="true">›</span>
+    </button>
+  ) : undefined;
+  const runListPanel = workflow ? (
+    <>
+      {restoreButton}
+      <RunListPanel
+        workflowId={workflow.workflowId}
+        runs={state.runs}
+        selectedRunId={historical ? selection.runId : undefined}
+        onSelectRun={selectWorkflowRun}
+      />
+    </>
+  ) : undefined;
+  const runStatus = run?.summary?.status;
+  const showRunControls =
+    Boolean(workflow) &&
+    (!historical || runStatus === "pending" || runStatus === "running");
+  const runControlsPanel = showRunControls ? (
+    <RunControls
+      workflow={!historical ? workflow : undefined}
+      run={run}
+      pending={state.action}
+      onStart={startRun}
+      onCancel={cancelRun}
+    />
+  ) : undefined;
 
   const liveDescriptorKey =
     historical && inspectedNode ? `${selection.runId}:${inspectedNode}` : "";
+  const inspectorOpen = Boolean(inspectedNode && (!historical || run));
+  const workspaceStyle = {
+    "--workspace-explorer-width": `${explorerWidth}px`,
+    "--workspace-inspector-width": `${inspectorWidth}px`,
+  } as CSSProperties;
 
   return (
-    <div className={`app-shell ${explorerOpen ? "explorer-open" : ""}`}>
+    <div
+      className={`app-shell ${explorerOpen ? "explorer-open" : ""} ${
+        explorerCollapsed ? "explorer-collapsed" : ""
+      }`}
+    >
       <header className="topbar">
         <div className="brand">
           <span className="brand-mark" aria-hidden="true">
@@ -123,7 +274,6 @@ export function App({ api }: { api: OperatorApi }) {
         <div className={`connection connection-${state.connection}`}>
           <span />
           {state.connection === "live" ? "Live" : state.connection}
-          <small>seq {state.sequence}</small>
         </div>
         <button
           type="button"
@@ -136,36 +286,29 @@ export function App({ api }: { api: OperatorApi }) {
         </button>
       </header>
       {state.error && <div className="connection-error">{state.error}</div>}
-      <main className={`workspace ${inspectedNode && (!historical || run) ? "with-inspector" : ""}`}>
+      <main
+        className={`workspace ${inspectorOpen ? "with-inspector" : ""}`}
+        style={workspaceStyle}
+      >
         <Explorer
           catalog={state.catalog}
-          runs={state.runs}
           selection={selection}
           onSelect={select}
+          onCollapse={collapseExplorer}
         />
+        {!explorerCollapsed && (
+          <WorkspaceDivider
+            className="workspace-explorer-divider"
+            label="Resize Explorer"
+            controls="operator-explorer"
+            value={explorerWidth}
+            min={EXPLORER_MIN_WIDTH}
+            max={EXPLORER_MAX_WIDTH}
+            pointerDirection={1}
+            onChange={setExplorerWidth}
+          />
+        )}
         <section className="canvas-shell">
-          <header className="view-header">
-            <div>
-              <span className="eyebrow">
-                {historical ? "Historical run" : "Current definition"}
-              </span>
-              <h1>{historical ? selection.runId : workflow?.displayName || "Operator"}</h1>
-              <p>
-                {historical
-                  ? `Recorded topology · ${runSummary?.status ?? "unknown"}`
-                  : workflow
-                    ? `${workflow.nodeIds.length} nodes · ${workflow.relativeFile}`
-                    : "Waiting for a workflow catalog"}
-              </p>
-            </div>
-            <RunControls
-              workflow={!historical ? workflow : undefined}
-              run={run}
-              pending={state.action}
-              onStart={startRun}
-              onCancel={cancelRun}
-            />
-          </header>
           <div className={historical ? "canvas run-canvas" : "canvas blueprint-canvas"}>
             {historical ? (
               run ? (
@@ -174,6 +317,8 @@ export function App({ api }: { api: OperatorApi }) {
                     runTopology={run.topology}
                     runNodes={run.nodes}
                     onOpenNode={openNode}
+                    topLeftPanel={runListPanel}
+                    bottomRightPanel={runControlsPanel}
                   />
                   <div className="historical-badge">
                     <span>Immutable run snapshot</span>
@@ -182,46 +327,77 @@ export function App({ api }: { api: OperatorApi }) {
                 </>
               ) : state.selectedRunId === selection.runId &&
                 state.selectedRunStatus === "loading" ? (
-                <div className="empty-state" role="status">
-                  <span>◇</span>
-                  <h2>Loading run snapshot</h2>
-                  <p>Retrieving the retained topology and execution state.</p>
-                </div>
+                <>
+                  {restoreButton}
+                  <div className="empty-state" role="status">
+                    <span>◇</span>
+                    <h2>Loading run snapshot</h2>
+                    <p>Retrieving the retained topology and execution state.</p>
+                  </div>
+                </>
               ) : state.selectedRunId === selection.runId &&
                 state.selectedRunStatus === "error" ? (
-                <div className="empty-state" role="alert">
-                  <span>!</span>
-                  <h2>Run snapshot unavailable</h2>
-                  <p>{state.selectedRunError || "The selected run could not be loaded."}</p>
-                </div>
+                <>
+                  {restoreButton}
+                  <div className="empty-state" role="alert">
+                    <span>!</span>
+                    <h2>Run snapshot unavailable</h2>
+                    <p>{state.selectedRunError || "The selected run could not be loaded."}</p>
+                  </div>
+                </>
               ) : (
-                <div className="empty-state">
-                  <span>◇</span>
-                  <h2>No run snapshot</h2>
-                  <p>Select the run again to load its retained topology.</p>
-                </div>
+                <>
+                  {restoreButton}
+                  <div className="empty-state">
+                    <span>◇</span>
+                    <h2>No run snapshot</h2>
+                    <p>Select the run again to load its retained topology.</p>
+                  </div>
+                </>
               )
             ) : workflow ? (
-              <GraphCanvas workflow={workflow} onOpenNode={openNode} />
+              <GraphCanvas
+                workflow={workflow}
+                topLeftPanel={runListPanel}
+                bottomRightPanel={runControlsPanel}
+                onOpenNode={openNode}
+              />
             ) : (
-              <div className="empty-state">
-                <span>◇</span>
-                <h2>No workflows discovered</h2>
-                <p>Catalog changes will appear here as the operator scans configured targets.</p>
-              </div>
+              <>
+                {restoreButton}
+                <div className="empty-state">
+                  <span>◇</span>
+                  <h2>No workflows discovered</h2>
+                  <p>Catalog changes will appear here as the operator scans configured targets.</p>
+                </div>
+              </>
             )}
           </div>
         </section>
-        {inspectedNode && (!historical || run) && (
-          <Inspector
-            api={api}
-            workflow={workflow}
-            run={run}
-            nodeId={inspectedNode}
-            liveEvents={state.liveEvents[liveDescriptorKey]}
-            liveLogs={historical ? state.liveLogs[liveDescriptorKey] : undefined}
-            onClose={closeNode}
-          />
+        {inspectorOpen && (
+          <>
+            <WorkspaceDivider
+              className="workspace-inspector-divider"
+              label="Resize Inspector"
+              controls="operator-inspector"
+              value={inspectorWidth}
+              min={INSPECTOR_MIN_WIDTH}
+              max={INSPECTOR_MAX_WIDTH}
+              pointerDirection={-1}
+              onChange={setInspectorWidth}
+            />
+            <div id="operator-inspector" className="workspace-inspector-pane">
+              <Inspector
+                api={api}
+                workflow={workflow}
+                run={run}
+                nodeId={inspectedNode}
+                liveEvents={state.liveEvents[liveDescriptorKey]}
+                liveLogs={historical ? state.liveLogs[liveDescriptorKey] : undefined}
+                onClose={closeNode}
+              />
+            </div>
+          </>
         )}
       </main>
     </div>

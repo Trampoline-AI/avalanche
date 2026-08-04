@@ -5,6 +5,14 @@ import { isUnknownRecord } from "./guards";
 interface ValueViewProps {
   value: unknown;
   depth?: number;
+  onExpand?: (value: unknown, path: ReadonlyArray<string | number>) => void;
+}
+
+interface CollectionProps {
+  value: unknown[] | Record<string, unknown>;
+  depth: number;
+  path: ReadonlyArray<string | number>;
+  onExpand?: ValueViewProps["onExpand"];
 }
 
 const CHILDREN_PER_GROUP = 100;
@@ -15,12 +23,23 @@ function plural(count: number, singular: string, pluralForm = `${singular}s`) {
   return count === 1 ? singular : pluralForm;
 }
 
-function countProperties(value: Record<string, unknown>) {
-  let count = 0;
+function ownEntries(value: Record<string, unknown>): Array<[string, unknown]> {
+  const entries: Array<[string, unknown]> = [];
   for (const key in value) {
-    if (Object.prototype.hasOwnProperty.call(value, key)) count += 1;
+    if (Object.prototype.hasOwnProperty.call(value, key)) entries.push([key, value[key]]);
   }
-  return count;
+  return entries;
+}
+
+function collectionCount(value: unknown[] | Record<string, unknown>) {
+  return Array.isArray(value) ? value.length : ownEntries(value).length;
+}
+
+function collectionSummary(value: unknown[] | Record<string, unknown>) {
+  const count = collectionCount(value);
+  return Array.isArray(value)
+    ? `[${count} ${plural(count, "item")}]`
+    : `{${count} ${plural(count, "property", "properties")}}`;
 }
 
 function LongString({ value }: { value: string }) {
@@ -28,12 +47,13 @@ function LongString({ value }: { value: string }) {
   const contentId = useId();
 
   return (
-    <span>
+    <span className="value-long-string">
       <span className="value-string" id={contentId}>
         {expanded ? value : `${value.slice(0, STRING_PREVIEW_LENGTH)}…`}
       </span>{" "}
       <button
         type="button"
+        className="value-string-action"
         aria-controls={contentId}
         aria-expanded={expanded}
         onClick={() => setExpanded((current) => !current)}
@@ -45,152 +65,24 @@ function LongString({ value }: { value: string }) {
 }
 
 function TruncatedCollection({
-  kind,
-  count,
+  value,
 }: {
-  kind: "Array" | "Object";
-  count: number;
+  value: unknown[] | Record<string, unknown>;
 }) {
-  const itemLabel =
-    kind === "Array"
-      ? plural(count, "item")
-      : plural(count, "property", "properties");
-  const summary = `${kind} (${count} ${itemLabel}). Deeper values are not shown (maximum depth ${MAX_DISCLOSURE_DEPTH}).`;
+  const count = collectionCount(value);
+  const itemLabel = Array.isArray(value)
+    ? plural(count, "item")
+    : plural(count, "property", "properties");
+  const summary = `${count} ${itemLabel}. Deeper values are not shown (maximum depth ${MAX_DISCLOSURE_DEPTH}).`;
 
   return (
     <span className="value-truncated" role="note" aria-label={summary}>
-      {summary}
+      {collectionSummary(value)} · maximum depth reached
     </span>
   );
 }
 
-function ArrayValue({ value, depth }: { value: unknown[]; depth: number }) {
-  const [expanded, setExpanded] = useState(false);
-  const [visibleCount, setVisibleCount] = useState(CHILDREN_PER_GROUP);
-  const contentId = useId();
-  const renderedCount = Math.min(visibleCount, value.length);
-  const groups = [];
-
-  if (expanded) {
-    for (let start = 0; start < renderedCount; start += CHILDREN_PER_GROUP) {
-      const end = Math.min(start + CHILDREN_PER_GROUP, renderedCount);
-      const children = [];
-      for (let index = start; index < end; index += 1) {
-        children.push(
-          <li key={`${depth}-${index}`}>
-            <ValueView value={value[index]} depth={depth + 1} />
-          </li>,
-        );
-      }
-      groups.push(
-        <ol className="value-list" start={start + 1} key={start}>
-          {children}
-        </ol>,
-      );
-    }
-  }
-
-  const remaining = value.length - renderedCount;
-  const nextCount = Math.min(CHILDREN_PER_GROUP, remaining);
-
-  return (
-    <div>
-      <button
-        type="button"
-        aria-controls={contentId}
-        aria-expanded={expanded}
-        onClick={() => setExpanded((current) => !current)}
-      >
-        Array ({value.length} {plural(value.length, "item")})
-      </button>
-      {expanded && (
-        <div id={contentId}>
-          {groups}
-          {remaining > 0 && (
-            <button
-              type="button"
-              aria-controls={contentId}
-              onClick={() => setVisibleCount((current) => current + CHILDREN_PER_GROUP)}
-            >
-              Show {nextCount} more {plural(nextCount, "item")}
-            </button>
-          )}
-        </div>
-      )}
-    </div>
-  );
-}
-
-function ObjectValue({
-  value,
-  depth,
-}: {
-  value: Record<string, unknown>;
-  depth: number;
-}) {
-  const [expanded, setExpanded] = useState(false);
-  const [visibleCount, setVisibleCount] = useState(CHILDREN_PER_GROUP);
-  const contentId = useId();
-  const propertyCount = countProperties(value);
-  const renderedCount = Math.min(visibleCount, propertyCount);
-  const groups: Array<Array<[string, unknown]>> = [];
-
-  if (expanded && renderedCount > 0) {
-    let seen = 0;
-    for (const key in value) {
-      if (!Object.prototype.hasOwnProperty.call(value, key)) continue;
-      if (seen >= renderedCount) break;
-      const groupIndex = Math.floor(seen / CHILDREN_PER_GROUP);
-      const group = groups[groupIndex] ?? [];
-      group.push([key, value[key]]);
-      groups[groupIndex] = group;
-      seen += 1;
-    }
-  }
-
-  const remaining = propertyCount - renderedCount;
-  const nextCount = Math.min(CHILDREN_PER_GROUP, remaining);
-
-  return (
-    <div>
-      <button
-        type="button"
-        aria-controls={contentId}
-        aria-expanded={expanded}
-        onClick={() => setExpanded((current) => !current)}
-      >
-        Object ({propertyCount} {plural(propertyCount, "property", "properties")})
-      </button>
-      {expanded && (
-        <div id={contentId}>
-          {groups.map((group, groupIndex) => (
-            <dl className="value-object" key={groupIndex}>
-              {group.map(([key, item]) => (
-                <div key={key}>
-                  <dt>{key}</dt>
-                  <dd>
-                    <ValueView value={item} depth={depth + 1} />
-                  </dd>
-                </div>
-              ))}
-            </dl>
-          ))}
-          {remaining > 0 && (
-            <button
-              type="button"
-              aria-controls={contentId}
-              onClick={() => setVisibleCount((current) => current + CHILDREN_PER_GROUP)}
-            >
-              Show {nextCount} more {plural(nextCount, "property", "properties")}
-            </button>
-          )}
-        </div>
-      )}
-    </div>
-  );
-}
-
-export function ValueView({ value, depth = 0 }: ValueViewProps) {
+function ScalarValue({ value }: { value: unknown }) {
   if (value === null) return <span className="value-null">null</span>;
   if (typeof value === "string") {
     return value.length > STRING_PREVIEW_LENGTH ? (
@@ -201,13 +93,6 @@ export function ValueView({ value, depth = 0 }: ValueViewProps) {
   }
   if (typeof value === "number" || typeof value === "boolean") {
     return <span className="value-scalar">{String(value)}</span>;
-  }
-  if (Array.isArray(value)) {
-    return depth >= MAX_DISCLOSURE_DEPTH ? (
-      <TruncatedCollection kind="Array" count={value.length} />
-    ) : (
-      <ArrayValue value={value} depth={depth} />
-    );
   }
   if (isUnknownRecord(value)) {
     if (value.kind === "predict_rlm_file" && typeof value.path === "string") {
@@ -224,10 +109,131 @@ export function ValueView({ value, depth = 0 }: ValueViewProps) {
     if (value.kind === "unavailable" && typeof value.reason === "string") {
       return <span className="value-unavailable">Unavailable · {value.reason}</span>;
     }
-    if (depth >= MAX_DISCLOSURE_DEPTH) {
-      return <TruncatedCollection kind="Object" count={countProperties(value)} />;
-    }
-    return <ObjectValue value={value} depth={depth} />;
   }
   return <span className="value-unavailable">Unavailable</span>;
+}
+
+
+function isCollection(value: unknown): value is unknown[] | Record<string, unknown> {
+  return (
+    Array.isArray(value) ||
+    (isUnknownRecord(value) &&
+      !(
+        (value.kind === "predict_rlm_file" && typeof value.path === "string") ||
+        (value.kind === "unavailable" && typeof value.reason === "string")
+      ))
+  );
+}
+
+function CollectionNode({
+  label,
+  value,
+  depth,
+  path,
+  onExpand,
+}: CollectionProps & { label: string }) {
+  const [expanded, setExpanded] = useState(false);
+  const contentId = useId();
+  const atDepthLimit = depth >= MAX_DISCLOSURE_DEPTH;
+
+  if (atDepthLimit) return <TruncatedCollection value={value} />;
+
+  return (
+    <div className="value-collection">
+      <button
+        type="button"
+        className="value-disclosure"
+        aria-controls={contentId}
+        aria-expanded={expanded}
+        aria-label={`${expanded ? "Collapse" : "Expand"} ${label}`}
+        onClick={() => {
+          if (!expanded) onExpand?.(value, path);
+          setExpanded((current) => !current);
+        }}
+      >
+        <span aria-hidden="true">{expanded ? "▾" : "▸"}</span>
+        <span>{collectionSummary(value)}</span>
+      </button>
+      {expanded && (
+        <div className="value-child-group" id={contentId} role="group">
+          <CollectionChildren
+            value={value}
+            depth={depth}
+            path={path}
+            onExpand={onExpand}
+          />
+        </div>
+      )}
+    </div>
+  );
+}
+
+function CollectionChildren({ value, depth, path, onExpand }: CollectionProps) {
+  const [visibleCount, setVisibleCount] = useState(CHILDREN_PER_GROUP);
+  const entries: Array<[string | number, unknown]> = Array.isArray(value)
+    ? value.slice(0, visibleCount).map((item, index) => [index, item])
+    : ownEntries(value).slice(0, visibleCount);
+  const count = collectionCount(value);
+  const remaining = count - entries.length;
+  const nextCount = Math.min(CHILDREN_PER_GROUP, remaining);
+
+  if (!count) {
+    return <span className="value-empty-collection">{Array.isArray(value) ? "[]" : "{}"}</span>;
+  }
+
+  return (
+    <>
+      <ul className="value-group" role="group">
+        {entries.map(([key, item]) => {
+          const childPath = [...path, key];
+          const nested = isCollection(item);
+          return (
+            <li
+              className="value-tree-item"
+              role="treeitem"
+              key={`${typeof key}:${String(key)}`}
+            >
+              <div className="value-row">
+                <span className="value-key">{Array.isArray(value) ? `[${key}]` : key}</span>
+                <span className="value-separator" aria-hidden="true">:</span>
+                <div className="value-content">
+                  {nested ? (
+                    <CollectionNode
+                      label={String(key)}
+                      value={item}
+                      depth={depth + 1}
+                      path={childPath}
+                      onExpand={onExpand}
+                    />
+                  ) : (
+                    <ScalarValue value={item} />
+                  )}
+                </div>
+              </div>
+            </li>
+          );
+        })}
+      </ul>
+      {remaining > 0 && (
+        <button
+          type="button"
+          className="value-more"
+          onClick={() => setVisibleCount((current) => current + CHILDREN_PER_GROUP)}
+        >
+          Show {nextCount} more {Array.isArray(value) ? plural(nextCount, "item") : plural(nextCount, "property", "properties")}
+        </button>
+      )}
+    </>
+  );
+}
+
+export function ValueView({ value, depth = 0, onExpand }: ValueViewProps) {
+  if (!isCollection(value)) return <ScalarValue value={value} />;
+  if (depth >= MAX_DISCLOSURE_DEPTH) return <TruncatedCollection value={value} />;
+
+  return (
+    <div className="value-tree" role="tree" aria-label="JSON value">
+      <CollectionChildren value={value} depth={depth} path={[]} onExpand={onExpand} />
+    </div>
+  );
 }

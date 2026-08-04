@@ -1,14 +1,15 @@
+import type { ReactNode } from "react";
 import { fireEvent, render, screen } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 vi.mock("@tanstack/react-virtual", () => ({
   useVirtualizer: ({ count }: { count: number }) => ({
-    getTotalSize: () => count * 44,
+    getTotalSize: () => count * 32,
     getVirtualItems: () =>
       Array.from({ length: Math.min(count, 120) }, (_, index) => ({
         index,
-        size: 44,
-        start: index * 44,
+        size: 32,
+        start: index * 32,
       })),
   }),
 }));
@@ -63,14 +64,22 @@ const projectionHarness = vi.hoisted(() => ({
 vi.mock("./GraphCanvas", () => ({
   GraphCanvas: ({
     runTopology,
+    topLeftPanel,
+    bottomRightPanel,
     onOpenNode,
   }: {
     runTopology?: { displayNames: Record<string, string> };
+    topLeftPanel?: ReactNode;
+    bottomRightPanel?: ReactNode;
     onOpenNode: (nodeId: string) => void;
   }) => (
-    <button type="button" onClick={() => onOpenNode("node-1")}>
-      {runTopology ? `Run graph ${runTopology.displayNames["node-1"]}` : "Workflow graph"}
-    </button>
+    <div>
+      <div className="dag-runs-panel">{topLeftPanel}</div>
+      <button type="button" onClick={() => onOpenNode("node-1")}>
+        {runTopology ? `Run graph ${runTopology.displayNames["node-1"]}` : "Workflow graph"}
+      </button>
+      <div className="dag-actions-panel">{bottomRightPanel}</div>
+    </div>
   ),
 }));
 vi.mock("./Inspector", () => ({
@@ -127,6 +136,13 @@ describe("App", () => {
     projectionHarness.state.selectedRunError = undefined;
     projectionHarness.state.liveEvents = {};
     projectionHarness.state.liveLogs = {};
+    projectionHarness.state.catalog.revision = "1";
+    projectionHarness.state.sequence = "1";
+    Object.defineProperty(window, "innerWidth", {
+      configurable: true,
+      writable: true,
+      value: 1024,
+    });
     projectionHarness.state.liveEventRepairWatermarks = {};
     projectionHarness.state.liveLogRepairWatermarks = {};
     projectionHarness.selectRun.mockClear();
@@ -134,7 +150,8 @@ describe("App", () => {
     projectionHarness.cancelRun.mockClear();
   });
 
-  it("keeps Explorer available through the compact navigation toggle", () => {
+  it("keeps Explorer accessible through the narrow navigation toggle", () => {
+    window.innerWidth = 375;
     const { container } = render(
       <App api={new GrpcWebOperatorApi("http://localhost")} />,
     );
@@ -156,11 +173,217 @@ describe("App", () => {
     expect(projectionHarness.startRun).toHaveBeenCalledWith("flow.py::demo", undefined);
   });
 
+  it("collapses and restores the desktop Explorer independently of the narrow toggle", () => {
+    const { container } = render(
+      <App api={new GrpcWebOperatorApi("http://localhost")} />,
+    );
+    const toggle = screen.getByRole("button", { name: "Collapse Explorer" });
+    const explorer = screen.getByRole("complementary", { name: "Explorer" });
+    const narrowToggle = screen.getByRole("button", { name: "Explorer" });
+
+    expect(toggle).toHaveAttribute("aria-controls", "operator-explorer");
+    expect(toggle).toHaveAttribute("aria-expanded", "true");
+    expect(explorer).toContainElement(toggle);
+    expect(screen.getByRole("separator", { name: "Resize Explorer" })).toBeInTheDocument();
+
+    fireEvent.click(toggle);
+
+    expect(container.querySelector(".app-shell")).toHaveClass("explorer-collapsed");
+    const restore = screen.getByRole("button", { name: "Restore Explorer" });
+    expect(restore).toHaveAttribute("aria-expanded", "false");
+    expect(restore.closest(".dag-runs-panel")).not.toBeNull();
+    expect(narrowToggle).toHaveAttribute("aria-expanded", "false");
+    expect(
+      screen.queryByRole("separator", { name: "Resize Explorer" }),
+    ).not.toBeInTheDocument();
+    expect(screen.getByRole("complementary", { name: "Explorer" })).toBe(explorer);
+
+    fireEvent.click(restore);
+
+    expect(container.querySelector(".app-shell")).not.toHaveClass("explorer-collapsed");
+    expect(screen.getByRole("button", { name: "Collapse Explorer" })).toHaveAttribute(
+      "aria-expanded",
+      "true",
+    );
+    expect(explorer).toContainElement(
+      screen.getByRole("button", { name: "Collapse Explorer" }),
+    );
+    expect(screen.getByRole("separator", { name: "Resize Explorer" })).toBeInTheDocument();
+    expect(screen.getByRole("complementary", { name: "Explorer" })).toBe(explorer);
+  });
+
+  it("maps divider arrow keys to physical movement and intended pane widths", () => {
+    const { container } = render(
+      <App api={new GrpcWebOperatorApi("http://localhost")} />,
+    );
+    const workspace = container.querySelector<HTMLElement>(".workspace")!;
+    const explorerDivider = screen.getByRole("separator", {
+      name: "Resize Explorer",
+    });
+
+    expect(explorerDivider).toHaveAttribute("aria-valuenow", "280");
+    expect(explorerDivider).toHaveAttribute("aria-valuetext", "280 pixels");
+
+    fireEvent.keyDown(explorerDivider, { key: "ArrowLeft" });
+    expect(explorerDivider).toHaveAttribute("aria-valuenow", "264");
+    expect(workspace.style.getPropertyValue("--workspace-explorer-width")).toBe(
+      "264px",
+    );
+
+    fireEvent.keyDown(explorerDivider, { key: "ArrowRight" });
+    expect(explorerDivider).toHaveAttribute("aria-valuenow", "280");
+    expect(workspace.style.getPropertyValue("--workspace-explorer-width")).toBe(
+      "280px",
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "Workflow graph" }));
+    const inspectorDivider = screen.getByRole("separator", {
+      name: "Resize Inspector",
+    });
+
+    expect(inspectorDivider).toHaveAttribute("aria-valuenow", "410");
+    expect(inspectorDivider).toHaveAttribute("aria-valuetext", "410 pixels");
+
+    fireEvent.keyDown(inspectorDivider, { key: "ArrowLeft" });
+    expect(inspectorDivider).toHaveAttribute("aria-valuenow", "426");
+    expect(workspace.style.getPropertyValue("--workspace-inspector-width")).toBe(
+      "426px",
+    );
+
+    fireEvent.keyDown(inspectorDivider, { key: "ArrowRight" });
+    expect(inspectorDivider).toHaveAttribute("aria-valuenow", "410");
+    expect(workspace.style.getPropertyValue("--workspace-inspector-width")).toBe(
+      "410px",
+    );
+  });
+
+  it("clamps direction-aware divider keyboard resizing without changing Home or End", () => {
+    const { container } = render(
+      <App api={new GrpcWebOperatorApi("http://localhost")} />,
+    );
+    const workspace = container.querySelector<HTMLElement>(".workspace")!;
+    const explorerDivider = screen.getByRole("separator", {
+      name: "Resize Explorer",
+    });
+
+    expect(explorerDivider).toHaveAttribute("aria-orientation", "vertical");
+    expect(explorerDivider).toHaveAttribute("aria-controls", "operator-explorer");
+    expect(explorerDivider).toHaveAttribute("aria-valuemin", "220");
+    expect(explorerDivider).toHaveAttribute("aria-valuemax", "420");
+    fireEvent.keyDown(explorerDivider, { key: "Home" });
+    fireEvent.keyDown(explorerDivider, { key: "ArrowLeft" });
+    expect(explorerDivider).toHaveAttribute("aria-valuenow", "220");
+    expect(workspace.style.getPropertyValue("--workspace-explorer-width")).toBe(
+      "220px",
+    );
+    fireEvent.keyDown(explorerDivider, { key: "End" });
+    fireEvent.keyDown(explorerDivider, { key: "ArrowRight" });
+    expect(explorerDivider).toHaveAttribute("aria-valuenow", "420");
+    expect(workspace.style.getPropertyValue("--workspace-explorer-width")).toBe(
+      "420px",
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "Workflow graph" }));
+    const inspectorDivider = screen.getByRole("separator", {
+      name: "Resize Inspector",
+    });
+
+    expect(inspectorDivider).toHaveAttribute("aria-orientation", "vertical");
+    expect(inspectorDivider).toHaveAttribute("aria-controls", "operator-inspector");
+    expect(inspectorDivider).toHaveAttribute("aria-valuemin", "320");
+    expect(inspectorDivider).toHaveAttribute("aria-valuemax", "640");
+    fireEvent.keyDown(inspectorDivider, { key: "Home" });
+    fireEvent.keyDown(inspectorDivider, { key: "ArrowRight" });
+    expect(inspectorDivider).toHaveAttribute("aria-valuenow", "320");
+    expect(workspace.style.getPropertyValue("--workspace-inspector-width")).toBe(
+      "320px",
+    );
+    fireEvent.keyDown(inspectorDivider, { key: "End" });
+    fireEvent.keyDown(inspectorDivider, { key: "ArrowLeft" });
+    expect(inspectorDivider).toHaveAttribute("aria-valuenow", "640");
+    expect(workspace.style.getPropertyValue("--workspace-inspector-width")).toBe(
+      "640px",
+    );
+  });
+
+  it("keeps pointer resizing aligned with each divider direction", () => {
+    const { container } = render(
+      <App api={new GrpcWebOperatorApi("http://localhost")} />,
+    );
+    const workspace = container.querySelector<HTMLElement>(".workspace")!;
+    const explorerDivider = screen.getByRole("separator", {
+      name: "Resize Explorer",
+    });
+
+    fireEvent.pointerDown(explorerDivider, { pointerId: 1, clientX: 280 });
+    fireEvent.pointerMove(explorerDivider, { pointerId: 1, clientX: 344 });
+    fireEvent.pointerUp(explorerDivider, { pointerId: 1 });
+    expect(explorerDivider).toHaveAttribute("aria-valuenow", "344");
+    expect(workspace.style.getPropertyValue("--workspace-explorer-width")).toBe(
+      "344px",
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "Workflow graph" }));
+    const inspectorDivider = screen.getByRole("separator", {
+      name: "Resize Inspector",
+    });
+
+    fireEvent.pointerDown(inspectorDivider, { pointerId: 2, clientX: 700 });
+    fireEvent.pointerMove(inspectorDivider, { pointerId: 2, clientX: 636 });
+    fireEvent.pointerUp(inspectorDivider, { pointerId: 2 });
+    expect(inspectorDivider).toHaveAttribute("aria-valuenow", "474");
+    expect(workspace.style.getPropertyValue("--workspace-inspector-width")).toBe(
+      "474px",
+    );
+  });
+
+  it("keeps transport sequence internal while log and trace updates retain catalog revision", () => {
+    const view = render(<App api={new GrpcWebOperatorApi("http://localhost")} />);
+    const catalogRevision = screen.getByText("catalog r1");
+
+    expect(view.container).not.toHaveTextContent(/seq 1/i);
+    expect(view.container).not.toHaveTextContent(/sequence 1/i);
+
+    projectionHarness.state.sequence = "93";
+    projectionHarness.state.liveLogs = {
+      "run-1:node-1": [{ sequence: "92" }],
+    };
+    projectionHarness.state.liveEvents = {
+      "run-1:node-1": [{ eventSequence: "93" }],
+    };
+    view.rerender(<App api={new GrpcWebOperatorApi("http://localhost")} />);
+
+    expect(screen.getByText("catalog r1")).toBe(catalogRevision);
+    expect(view.container).not.toHaveTextContent(/seq 93/i);
+    expect(view.container).not.toHaveTextContent(/sequence 93/i);
+  });
+
+  it("removes the canvas header while preserving the retained snapshot explanation", async () => {
+    projectionHarness.state.runs = { "run-1": summary };
+    const view = render(<App api={new GrpcWebOperatorApi("http://localhost")} />);
+
+    fireEvent.click(await screen.findByRole("button", { name: /run-1/ }));
+
+    expect(view.container.querySelector(".view-header")).not.toBeInTheDocument();
+    expect(view.container).not.toHaveTextContent(/Historical run/i);
+
+    projectionHarness.state.selectedRunId = "run-1";
+    projectionHarness.state.selectedRunStatus = "ready";
+    projectionHarness.state.selectedRun = selectedSnapshot("run-1", "Recorded node");
+    view.rerender(<App api={new GrpcWebOperatorApi("http://localhost")} />);
+
+    expect(screen.getByText("Immutable run snapshot")).toBeInTheDocument();
+    expect(
+      screen.getByText("Current workflow changes do not alter this canvas"),
+    ).toBeInTheDocument();
+    expect(view.container).not.toHaveTextContent(/Historical run/i);
+  });
+
   it("navigates summary-only runs with one demand-load selection and clears it", async () => {
     projectionHarness.state.runs = { "run-1": summary };
     const view = render(<App api={new GrpcWebOperatorApi("http://localhost")} />);
 
-    fireEvent.click(await screen.findByRole("button", { name: /run-1Created at sequence 2/ }));
+    fireEvent.click(await screen.findByRole("button", { name: /run-1/ }));
 
     expect(projectionHarness.selectRun).toHaveBeenCalledTimes(1);
     expect(projectionHarness.selectRun).toHaveBeenCalledWith("run-1");
@@ -169,7 +392,7 @@ describe("App", () => {
     fireEvent.click(screen.getByRole("button", { name: /demoflow.py/ }));
     expect(projectionHarness.selectRun).toHaveBeenLastCalledWith(undefined);
 
-    fireEvent.click(screen.getByRole("button", { name: /run-1Created at sequence 2/ }));
+    fireEvent.click(screen.getByRole("button", { name: /run-1/ }));
     view.unmount();
     expect(projectionHarness.selectRun).toHaveBeenLastCalledWith(undefined);
   });
@@ -177,7 +400,7 @@ describe("App", () => {
   it("shows selected-run loading and error states without rendering stale snapshots", async () => {
     projectionHarness.state.runs = { "run-1": summary };
     const view = render(<App api={new GrpcWebOperatorApi("http://localhost")} />);
-    fireEvent.click(await screen.findByRole("button", { name: /run-1Created at sequence 2/ }));
+    fireEvent.click(await screen.findByRole("button", { name: /run-1/ }));
 
     projectionHarness.state.selectedRunId = "run-1";
     projectionHarness.state.selectedRunStatus = "loading";
@@ -210,7 +433,7 @@ describe("App", () => {
   it("reloads a surviving selected run once after baseline replacement", async () => {
     projectionHarness.state.runs = { "run-1": summary };
     const view = render(<App api={new GrpcWebOperatorApi("http://localhost")} />);
-    fireEvent.click(await screen.findByRole("button", { name: /run-1Created at sequence 2/ }));
+    fireEvent.click(await screen.findByRole("button", { name: /run-1/ }));
 
     projectionHarness.state.selectedRunId = "run-1";
     projectionHarness.state.selectedRunStatus = "ready";
@@ -234,7 +457,7 @@ describe("App", () => {
   it("falls back to the selected run's workflow when replacement omits its summary", async () => {
     projectionHarness.state.runs = { "run-1": summary };
     const view = render(<App api={new GrpcWebOperatorApi("http://localhost")} />);
-    fireEvent.click(await screen.findByRole("button", { name: /run-1Created at sequence 2/ }));
+    fireEvent.click(await screen.findByRole("button", { name: /run-1/ }));
 
     projectionHarness.state.selectedRunId = "run-1";
     projectionHarness.state.selectedRunStatus = "ready";
@@ -252,7 +475,7 @@ describe("App", () => {
 
     expect(projectionHarness.selectRun).toHaveBeenCalledTimes(1);
     expect(projectionHarness.selectRun).toHaveBeenCalledWith(undefined);
-    expect(screen.getByRole("heading", { name: "demo" })).toBeInTheDocument();
+    expect(view.container.querySelector(".view-header")).not.toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Workflow graph" })).toBeInTheDocument();
     expect(screen.queryByText(/Inspector/)).not.toBeInTheDocument();
     expect(view.container.querySelector(".breadcrumb")).not.toHaveTextContent("run-1");
@@ -265,7 +488,7 @@ describe("App", () => {
       "run-1:node-1": [{ sequence: "17" }, { sequence: "18" }],
     };
     const view = render(<App api={new GrpcWebOperatorApi("http://localhost")} />);
-    fireEvent.click(await screen.findByRole("button", { name: /run-1Created at sequence 2/ }));
+    fireEvent.click(await screen.findByRole("button", { name: /run-1/ }));
 
     projectionHarness.state.selectedRunId = "run-1";
     projectionHarness.state.selectedRunStatus = "ready";

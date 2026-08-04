@@ -9,7 +9,7 @@ The gRPC protocol currently separates catalog listing from a stream of run-only 
 **Goals:**
 - Establish one immutable, execution-derived topology for every run.
 - Publish complete, atomically replaceable current-catalog revisions to interactive clients.
-- Make current-workflow and historical-run views independent but navigable from the same UI.
+- Make current-workflow and recorded-run views independent but navigable from the same UI.
 - Preserve the existing local-first, loopback-default operator security model.
 
 **Non-Goals:**
@@ -86,7 +86,7 @@ Operator state ── ordered updates ──► ephemeral browser projections
                                           └─ in-flight start/cancel request
 ```
 
-Starting a run returns an identity but does not authorize the client to construct a local run record. Cancelling a run is likewise a request: both lifecycle displays reconcile only from operator updates. The browser persists neither run history nor artifact bodies; a catalog update cannot erase or morph a historical run projection.
+Starting a run returns an identity but does not authorize the client to construct a local run record. Cancelling a run is likewise a request: both lifecycle displays reconcile only from operator updates. The browser persists neither run history nor artifact bodies; a catalog update cannot erase or morph a recorded run projection.
 
 ### Keep workflow input advanced and schema-blind
 
@@ -97,18 +97,22 @@ Discovery does not publish a Pydantic/JSON schema in v1. The editor provides syn
 
 ### Structure the explorer and canvases by view semantics
 
-The Explorer groups current workflows and retained runs under their configured scan target. Selecting a workflow opens a blueprint-styled current-definition canvas; selecting a run opens a distinct execution canvas from that run's topology snapshot. The canvases are read-only and preserve pan/zoom state only ephemerally.
+The Explorer groups current workflows and retained runs under their configured scan target. Selecting a workflow opens a blueprint-styled current-definition canvas; selecting a run opens a distinct execution canvas from that run's topology snapshot. Visible UI labels use `Run` without a historical qualifier. The canvases are read-only and preserve pan/zoom state only ephemerally.
 
-Workflow cards place agent input and output field lists inside their own bounds. DAG edges represent dependency, not individual field bindings: each source-target pair renders at most one arrow. Opening an agent node presents readable instructions first, with model, runtime, skills, and tools as supporting declaration metadata.
+Workflow cards use a compact two-column layout with typed Inputs and Outputs lists contained inside the card. Cards do not render declaration instructions. Opening an agent node renders its full instructions as Markdown, with model and runtime as supporting declaration metadata; skills and tools use their declared content as formatted Markdown rather than exposing raw serialized objects.
 
-Run cards retain the same structural edges but prioritize execution status, duration, and failure state. They do not reuse current agent field declarations, which could be incorrect for a historical run.
+DAG edges represent dependency, not individual field bindings. Each source-target pair renders at most one arrow. Edges to the immediately following graph layer leave the source card's right edge; skip-layer dependencies leave its bottom edge. Arrow endpoints do not render interactive-looking handle circles.
+
+Run cards retain the recorded structural edges but prioritize execution status, elapsed duration, and failure state. Running durations use human-readable seconds and advance locally in real time between authoritative lifecycle updates. Active and completed states use thick, high-contrast borders; the active state adds a clear, reduced-motion-compatible animation. Run cards do not reuse current agent field declarations, which could be incorrect for that recorded run.
 
 ### Keep the browser surface responsive and accessible
 
 At 375 CSS pixels and wider, navigation remains available through either the persistent
-Explorer or a compact disclosure rather than being removed. The workspace and canvas
-use bounded, shrinkable layout tracks so the selected title, primary actions, and graph
-stay inside the document viewport; graph overflow is handled by canvas pan and zoom.
+Explorer or a compact disclosure rather than being removed. On desktop the Explorer is
+collapsible, both the Explorer and inspector have draggable width dividers, and the inspector
+body fills the available workspace height. The workspace and canvas use bounded, shrinkable
+layout tracks so the selected title, primary actions, graph, and inspector stay inside the
+document viewport; graph overflow is handled by canvas pan and zoom.
 
 CodeMirror receives a descriptive accessible name through its editor attributes.
 Secondary text colors use shared tokens that meet WCAG 2.2 Level AA contrast against
@@ -118,7 +122,7 @@ to both the visible label and accessible name.
 
 ### Retain bounded agent invocation inputs and outputs
 
-PredictRLM `run.started` evidence contains actual invocation inputs, but Avalanche currently projects only their field names. Preserve supported input values in that existing event, matching the terminal outputs already projected from `run.succeeded`. The run inspector reads both through existing agent-event and hydrated-trace detail paths and presents separate Inputs and Output views using declaration metadata retained with that run's topology only as labels.
+PredictRLM `run.started` evidence contains actual invocation inputs, but Avalanche currently projects only their field names. Preserve supported input values in that existing event, matching the terminal outputs already projected from `run.succeeded`. Selecting Inputs or Output shows an immediate loading state and hydrates the retained value as one coherent JSON view when it is within the detail limit; oversized values progressively load bounded portions in place. Declaration metadata retained with the run's topology supplies labels only.
 
 This is agent-invocation evidence, not generic DAG-node value capture. Recursively project JSON-shaped values and declared model values into the ordinary `inputs` and `outputs` structures. At this projection boundary, encode an actual `predict_rlm.File` as a tagged JSON value containing its non-empty host path; lists and nested structures retain those tagged values in place. The browser's generic value renderer recognizes the tag and gives that value path-specific presentation. There is no parallel file-reference event or index.
 
@@ -128,9 +132,9 @@ Unsupported or over-limit values are represented as unavailable and MUST NOT be 
 
 Preserve the user-visible semantics of PredictRLM's exportable `RunTrace` without transporting it as one monolithic JSON body. Store run-level trace fields as a lightweight header; expose lifecycle evidence through the existing paginated agent-event path; and retain each complete `IterationStep` as the detail body of its `iteration.recorded` event.
 
-Extend `AgentEventDescriptor` with the summary fields needed to build a navigator without reading its body: event kind and, for iteration events, iteration number, duration, error state, tool count, and predict count. `ListAgentEvents` pages these descriptors; the existing `ReadDetail` retrieves only a selected event/turn body. The complete turn body preserves reasoning, code, truncated and untruncated output, tool calls, predict-call groups/subcalls, LM finish metadata, and per-turn usage.
+Retain `AgentEventDescriptor` summary fields and paginated detail bodies as the bounded transport representation. The browser does not expose those descriptors as a separate turn selector. Instead, it projects the trace header, lifecycle events, and iteration bodies into one familiar hierarchical JSON explorer; expanding or scrolling into an unloaded portion demand-loads the necessary page and body, then inserts it in place. The complete turn body preserves reasoning, code, truncated and untruncated output, tool calls, predict-call groups/subcalls, LM finish metadata, and per-turn usage.
 
-The browser virtualizes descriptor rows and keeps a small bounded LRU of hydrated bodies. Following the live turn is the default; selecting another turn pauses following. Inputs and terminal outputs remain separate views. The web client does not call monolithic `ReadTrace`; migrate the TUI to the same descriptor/detail path so complete trace bodies are not duplicated solely for compatibility.
+The browser keeps descriptor pages and a small byte-bounded LRU of hydrated bodies, follows live additions without replacing the user's current expansion state, and never calls monolithic `ReadTrace`. Inputs and terminal outputs remain separate views. Migrate the TUI to the same descriptor/detail transport so complete trace bodies are not duplicated solely for compatibility.
 
 ### Preserve paging through the browser boundary
 
@@ -149,16 +153,22 @@ restarting a page walk.
 ### Bound browser projections and rendering work
 
 The browser baseline retains the catalog and paged run summaries, then demand-loads at most
-the selected run snapshot. Ordered update envelopes enter a bounded queue and are reduced in
-contiguous frame-sized batches. Queue overflow, epoch change, sequence gaps, or server reset
-all trigger authoritative reconciliation; the browser never drops an arbitrary structural
-update and continues.
+the selected run snapshot. Ordered update-envelope sequence remains an internal transport
+cursor used for exact replay and reconciliation; the UI displays catalog revision instead.
+Log and trace updates therefore advance the transport cursor without appearing to change the
+workflow catalog. Queue overflow, epoch change, sequence gaps, or server reset trigger
+authoritative reconciliation; the browser never drops an arbitrary structural update and
+continues.
 
 Live log and event descriptors use bounded run/node tails with repair watermarks. Crossing a
 discarded range refreshes the selected snapshot before paging. Inspector tab state is
-generation-scoped and cancellable. Only the active tab requests or renders detail. Trace and
-log navigators are virtualized, parsed detail caching is bounded by entries and bytes, and
-nested values expand in bounded groups rather than recursively mounting the complete body.
+generation-scoped and cancellable, and only the active tab requests or renders detail. Logs
+are progressively decoded into one continuous monospaced stream rather than per-record cards.
+Inputs, outputs, and traces share a hierarchical JSON explorer whose key columns fit their
+content up to a readable cap rather than reserving a fixed fraction of every row. Containers
+maintain readable value width through wrapping or pane-local overflow and never degrade deeply
+nested content into one-character-wide columns. Parsed detail caching remains bounded by entries
+and bytes, and expansion loads bounded groups instead of recursively mounting complete bodies.
 
 ### Configure CLI logging and report reload outcomes
 

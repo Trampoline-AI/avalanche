@@ -22,7 +22,8 @@
     "@tanstack/react-virtual": "^3.13.12",
     "@xyflow/react": "^12.9.2",
     "react": "^19.1.1",
-    "react-dom": "^19.1.1"
+    "react-dom": "^19.1.1",
+    "react-markdown": "^10.1.0"
   },
   "devDependencies": {
     "@protobuf-ts/plugin": "^2.11.1",

@@ -1,21 +1,7 @@
 import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
-const { scrollToIndex } = vi.hoisted(() => ({ scrollToIndex: vi.fn() }));
 
-
-vi.mock("@tanstack/react-virtual", () => ({
-  useVirtualizer: ({ count }: { count: number }) => ({
-    getTotalSize: () => count * 64,
-    getVirtualItems: () =>
-      Array.from({ length: Math.min(count, 120) }, (_, index) => ({
-        index,
-        start: index * 64,
-      })),
-    scrollToIndex,
-  }),
-}));
-
-import type { AgentEventDescriptorPage, OperatorApi } from "./api";
+import type { AgentEventDescriptorPage, LogDescriptorPage, OperatorApi } from "./api";
 import {
   DescriptorPageOrder,
   type AgentEventDescriptorMsg,
@@ -29,14 +15,19 @@ import { Inspector } from "./Inspector";
 const declaration = JSON.stringify({
   signature: {
     name: "Analyze",
-    inputs: [{ name: "question", type: "str", description: "Question to answer" }],
-    outputs: [{ name: "answer", type: "str", description: "Final answer" }],
+    instructions: "# Investigate\nUse **retained evidence**.",
+    inputs: [{ name: "question", annotation: "str", description: "Question to answer" }],
+    outputs: [{ name: "answer", annotation: "str", description: "Final answer" }],
   },
+  runtime: { timeout: 30 },
+  models: { main: "reasoning-model" },
+  skills: [{ name: "Research", instructions: "Search **carefully**." }],
+  tools: [{ name: "lookup", description: "Reads `trusted` sources." }],
 });
 
 const fieldSchemas = JSON.stringify({
-  inputs: [{ name: "question", type: "str", description: "Question to answer" }],
-  outputs: [{ name: "answer", type: "str", description: "Final answer" }],
+  inputs: [{ name: "question", annotation: "str", description: "Question to answer" }],
+  outputs: [{ name: "answer", annotation: "str", description: "Final answer" }],
 });
 
 const workflow: FlowInfoMsg = {
@@ -89,17 +80,17 @@ const run: RunSnapshotMsg = {
         revision: "4",
         available: true,
         complete: true,
-        eventCount: "1",
+        eventCount: "2",
         sizeBytes: "256",
-        latestEventSequence: "1",
+        latestEventSequence: "2",
         header: {
           status: "completed",
           model: "main-model",
           subModel: "sub-model",
-          iterations: "1",
+          iterations: "2",
           maxIterations: "4",
           durationMs: "125",
-          usageJson: '{"main":{"input_tokens":12}}',
+          usageJson: '{"input_tokens":12}',
           telemetryJson: '{"trace_id":"trace-1"}',
         },
       },
@@ -118,92 +109,20 @@ const run: RunSnapshotMsg = {
   },
 };
 
-function api(): OperatorApi {
-  const events: AgentEventDescriptorMsg[] = [
-    {
-      eventSequence: "1",
-      sizeBytes: "64",
-      bodyToken: "input-body",
-      invocationId: "invocation-1",
-      eventKind: "run.started",
-      toolCount: 0,
-      predictCount: 0,
-      error: false,
-    },
-    {
-      eventSequence: "2",
-      sizeBytes: "64",
-      bodyToken: "output-body",
-      invocationId: "invocation-1",
-      eventKind: "run.succeeded",
-      toolCount: 0,
-      predictCount: 0,
-      error: false,
-    },
-  ];
-  return {
-    getCatalog: async (): Promise<CatalogSnapshotMsg> => {
-      throw new Error("unused");
-    },
-    loadBaseline: async () => {
-      throw new Error("unused");
-    },
-    getLatestRunSnapshot: async () => run,
-    streamUpdates: async function* () {
-      return;
-    },
-    listAgentEventPage: async () => ({
-      operatorInstanceId: run.operatorInstanceId,
-      asOfSequence: run.asOfSequence,
-      runId: run.summary!.runId,
-      nodeId: "agent_1",
-      records: events,
-      nextPageToken: "",
-      nextCursor: events.at(-1)?.eventSequence ?? "0",
-    }),
-    listLogPage: async () => ({
-      operatorInstanceId: run.operatorInstanceId,
-      asOfSequence: run.asOfSequence,
-      records: [],
-      nextPageToken: "",
-      nextCursor: "0",
-    }),
-    readJsonDetail: async (bodyToken) =>
-      bodyToken === "input-body"
-        ? { inputs: { question: "Why?" } }
-        : {
-            outputs: {
-              answer: {
-                kind: "predict_rlm_file",
-                path: "/workspace/result.txt",
-              },
-            },
-          },
-    readTextDetail: async (bodyToken) => bodyToken,
-    startRun: async () => "unused",
-    cancelRun: async () => undefined,
-  };
-}
-
-function deferred<T>() {
-  let resolve!: (value: T) => void;
-  const promise = new Promise<T>((next) => {
-    resolve = next;
-  });
-  return { promise, resolve };
-}
-
-function turn(sequence: number): AgentEventDescriptorMsg {
+function event(
+  sequence: number,
+  kind: AgentEventDescriptorMsg["eventKind"] = "iteration.recorded",
+): AgentEventDescriptorMsg {
   return {
     eventSequence: String(sequence),
     sizeBytes: "64",
-    bodyToken: `turn-${sequence}`,
+    bodyToken: `event-${sequence}`,
     invocationId: "invocation-1",
-    eventKind: "iteration.recorded",
-    iteration: sequence,
-    durationMs: "10",
-    toolCount: 1,
-    predictCount: 1,
+    eventKind: kind,
+    iteration: kind === "iteration.recorded" ? sequence : undefined,
+    durationMs: kind === "iteration.recorded" ? "10" : undefined,
+    toolCount: kind === "iteration.recorded" ? 1 : 0,
+    predictCount: kind === "iteration.recorded" ? 1 : 0,
     error: false,
   };
 }
@@ -219,248 +138,92 @@ function log(sequence: number, nodeId = "agent_1"): LogRecordDescriptorMsg {
   };
 }
 
-async function expandObjectValues(container: HTMLElement) {
-  const objectName = /^Object \(\d+ (?:property|properties)\)$/;
-  const firstDisclosure = await within(container).findByRole("button", {
-    name: objectName,
-    expanded: false,
-  });
-  fireEvent.click(firstDisclosure);
+function eventPage(
+  records: AgentEventDescriptorMsg[],
+  nextPageToken = "",
+  nextCursor = records.at(-1)?.eventSequence ?? "0",
+): AgentEventDescriptorPage {
+  return {
+    operatorInstanceId: run.operatorInstanceId,
+    asOfSequence: run.asOfSequence,
+    runId: run.summary!.runId,
+    nodeId: "agent_1",
+    records,
+    nextPageToken,
+    nextCursor,
+  };
+}
 
-  let nestedDisclosure = within(container).queryAllByRole("button", {
-    name: objectName,
-    expanded: false,
-  })[0];
-  while (nestedDisclosure) {
-    fireEvent.click(nestedDisclosure);
-    nestedDisclosure = within(container).queryAllByRole("button", {
-      name: objectName,
-      expanded: false,
-    })[0];
-  }
+function operatorApi(): OperatorApi {
+  const events = [event(1, "run.started"), event(2, "run.succeeded")];
+  return {
+    getCatalog: async (): Promise<CatalogSnapshotMsg> => {
+      throw new Error("unused");
+    },
+    loadBaseline: async () => {
+      throw new Error("unused");
+    },
+    getLatestRunSnapshot: async () => run,
+    streamUpdates: async function* () {
+      return;
+    },
+    listAgentEventPage: async () => eventPage(events),
+    listLogPage: async () => ({
+      operatorInstanceId: run.operatorInstanceId,
+      asOfSequence: run.asOfSequence,
+      records: [],
+      nextPageToken: "",
+      nextCursor: "0",
+    }),
+    readJsonDetail: async (token) =>
+      token === "event-1"
+        ? { inputs: { question: "Why?" } }
+        : { outputs: { answer: "Because." } },
+    readTextDetail: async (token) => token,
+    startRun: async () => "unused",
+    cancelRun: async () => undefined,
+  };
+}
+
+function deferred<T>() {
+  let resolve!: (value: T) => void;
+  let reject!: (reason: unknown) => void;
+  const promise = new Promise<T>((next, fail) => {
+    resolve = next;
+    reject = fail;
+  });
+  return { promise, reject, resolve };
 }
 
 describe("Inspector", () => {
-  it("renders bounded trace metadata and versioned field associations", async () => {
-    render(
+  it("renders declaration instructions, skills, and tools as Markdown without object dumps", () => {
+    const view = render(
       <Inspector
-        api={api()}
+        api={operatorApi()}
         workflow={workflow}
-        run={run}
-        nodeId="agent_1"
-        onClose={() => undefined}
-      />,
-    );
-    expect(screen.getByRole("complementary", { name: "Run inspector" })).toBeInTheDocument();
-
-    expect(screen.getByText("main-model")).toBeInTheDocument();
-    const traceHeaderSection = screen
-      .getByRole("heading", { name: "Trace header" })
-      .closest("section")!;
-    const usage = within(traceHeaderSection)
-      .getByRole("heading", { name: "Usage" })
-      .parentElement!;
-    await expandObjectValues(usage);
-    expect(screen.getByText("12")).toBeInTheDocument();
-    const telemetry = within(traceHeaderSection)
-      .getByRole("heading", { name: "Telemetry" })
-      .parentElement!;
-    await expandObjectValues(telemetry);
-    expect(screen.getByText("trace-1")).toBeInTheDocument();
-
-    fireEvent.click(screen.getByRole("button", { name: "inputs" }));
-
-    expect(screen.getByText("Declared fields")).toBeInTheDocument();
-    expect(screen.getByText("question")).toBeInTheDocument();
-    const inputsSection = screen
-      .getByRole("heading", { name: "Invocation inputs" })
-      .closest("section")!;
-    await expandObjectValues(inputsSection);
-    await waitFor(() => expect(screen.getByText("Why?")).toBeInTheDocument());
-
-    fireEvent.click(screen.getByRole("button", { name: "output" }));
-    expect(screen.getByText("answer")).toBeInTheDocument();
-    const outputSection = screen
-      .getByRole("heading", { name: "Terminal output" })
-      .closest("section")!;
-    await expandObjectValues(outputSection);
-    await waitFor(() =>
-      expect(screen.getByText("/workspace/result.txt")).toBeInTheDocument(),
-    );
-  });
-
-  it("uses grammatical empty-state copy for singular output", async () => {
-    const operatorApi = {
-      ...api(),
-      listAgentEventPage: async () => ({
-        operatorInstanceId: run.operatorInstanceId,
-        asOfSequence: run.asOfSequence,
-        runId: run.summary!.runId,
-        nodeId: "agent_1",
-        records: [],
-        nextPageToken: "",
-        nextCursor: "0",
-      }),
-    };
-    render(
-      <Inspector
-        api={operatorApi}
-        workflow={workflow}
-        run={run}
         nodeId="agent_1"
         onClose={() => undefined}
       />,
     );
 
-    fireEvent.click(screen.getByRole("button", { name: "output" }));
-
-    expect(
-      await screen.findByText("No retained output is available."),
-    ).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: "Investigate" })).toBeInTheDocument();
+    expect(screen.getByText("retained evidence").tagName).toBe("STRONG");
+    expect(screen.getByText("Research")).toBeInTheDocument();
+    expect(screen.getByText("carefully").tagName).toBe("STRONG");
+    expect(screen.getByText("lookup")).toBeInTheDocument();
+    expect(screen.getByText("trusted").tagName).toBe("CODE");
+    expect(view.container).not.toHaveTextContent('"skills"');
+    expect(view.container.querySelector(".inspector-body-full")).toBeInTheDocument();
   });
 
-  it("hydrates complete turns on demand and evicts the least recently used body", async () => {
-    const events: AgentEventDescriptorMsg[] = Array.from({ length: 10 }, (_, index) => ({
-      eventSequence: String(index + 1),
-      sizeBytes: "64",
-      bodyToken: `turn-${index + 1}`,
-      invocationId: "invocation-1",
-      eventKind: "iteration.recorded",
-      iteration: index + 1,
-      durationMs: "10",
-      toolCount: 1,
-      predictCount: 1,
-      error: false,
-    }));
-    const readJsonDetail = vi.fn(async (token: string) => ({
-      reasoning: `reasoning-${token}`,
-      code: `code-${token}`,
-      output: `output-${token}`,
-      finish: { reason: "stop" },
-      usage: { input_tokens: 4 },
-      tool_calls: [{ name: "lookup" }],
-      predict_calls: [{ signature: "Answer" }],
-    }));
-    const operatorApi = {
-      ...api(),
-      listAgentEventPage: async () => ({
-        operatorInstanceId: run.operatorInstanceId,
-        asOfSequence: run.asOfSequence,
-        runId: run.summary!.runId,
-        nodeId: "agent_1",
-        records: events,
-        nextPageToken: "",
-        nextCursor: events.at(-1)!.eventSequence,
-      }),
-      readJsonDetail,
-    };
-    render(
+  it("keeps Overview hydration-free and gives the active panel the full-height classes", () => {
+    const api = operatorApi();
+    const listAgentEventPage = vi.fn(api.listAgentEventPage);
+    const listLogPage = vi.fn(api.listLogPage);
+    const readJsonDetail = vi.fn(api.readJsonDetail);
+    const view = render(
       <Inspector
-        api={operatorApi}
-        workflow={workflow}
-        run={run}
-        nodeId="agent_1"
-        onClose={() => undefined}
-      />,
-    );
-
-    fireEvent.click(screen.getByRole("button", { name: "trace" }));
-    const currentTraceSection = () =>
-      screen.getByRole("heading", { name: "RunTrace" }).closest("section")!;
-    await expandObjectValues(currentTraceSection());
-    await waitFor(() => expect(screen.getByText("reasoning-turn-10")).toBeInTheDocument());
-    fireEvent.click(screen.getByRole("button", { name: "Following live" }));
-
-    async function openTurn(turn: number) {
-      const turnLabel = await screen.findByText(new RegExp(`^Turn ${turn}$`));
-      const turnButton = turnLabel.closest("button");
-      if (!turnButton) throw new Error(`Turn ${turn} button is missing`);
-      fireEvent.click(turnButton);
-      await expandObjectValues(currentTraceSection());
-      await waitFor(() =>
-        expect(screen.getByText(`reasoning-turn-${turn}`)).toBeInTheDocument(),
-      );
-    }
-
-    for (let turn = 1; turn <= 7; turn += 1) await openTurn(turn);
-    await openTurn(10);
-    for (let turn = 8; turn <= 9; turn += 1) await openTurn(turn);
-
-    await openTurn(10);
-    await openTurn(1);
-
-    expect(readJsonDetail.mock.calls.filter(([token]) => token === "turn-10")).toHaveLength(1);
-    expect(readJsonDetail.mock.calls.filter(([token]) => token === "turn-1")).toHaveLength(2);
-  });
-
-  it("evicts detail bodies by descriptor bytes and bypasses an individually oversized body", async () => {
-    const twoMiB = String(2 * 1024 * 1024);
-    const events = Array.from({ length: 6 }, (_, index) => ({
-      ...turn(index + 1),
-      sizeBytes: index === 5 ? String(9 * 1024 * 1024) : twoMiB,
-    }));
-    const readJsonDetail = vi.fn(async (token: string) => ({ selected: token }));
-    render(
-      <Inspector
-        api={{
-          ...api(),
-          listAgentEventPage: async () => ({
-            operatorInstanceId: run.operatorInstanceId,
-            asOfSequence: run.asOfSequence,
-            runId: run.summary!.runId,
-            nodeId: "agent_1",
-            records: events,
-            nextPageToken: "",
-            nextCursor: "6",
-          }),
-          readJsonDetail,
-        }}
-        workflow={workflow}
-        run={run}
-        nodeId="agent_1"
-        onClose={() => undefined}
-      />,
-    );
-
-    fireEvent.click(screen.getByRole("button", { name: "trace" }));
-    await waitFor(() =>
-      expect(readJsonDetail.mock.calls.filter(([token]) => token === "turn-6")).toHaveLength(1),
-    );
-    fireEvent.click(screen.getByRole("button", { name: "Following live" }));
-
-    async function selectTurn(number: number, expectedReads = 1) {
-      fireEvent.click(screen.getByRole("button", { name: new RegExp(`Turn ${number}`) }));
-      await waitFor(() =>
-        expect(
-          readJsonDetail.mock.calls.filter(([token]) => token === `turn-${number}`),
-        ).toHaveLength(expectedReads),
-      );
-    }
-
-    for (let number = 1; number <= 5; number += 1) await selectTurn(number);
-    await selectTurn(1, 2);
-    await selectTurn(6, 2);
-
-    expect(readJsonDetail.mock.calls.filter(([token]) => token === "turn-1")).toHaveLength(2);
-    expect(readJsonDetail.mock.calls.filter(([token]) => token === "turn-6")).toHaveLength(2);
-  });
-
-  it("does not hydrate Overview and requests exactly one page for each active tab", async () => {
-    const baseApi = api();
-    const listAgentEventPage = vi.fn(baseApi.listAgentEventPage);
-    const listLogPage = vi.fn(baseApi.listLogPage);
-    const readJsonDetail = vi.fn(baseApi.readJsonDetail);
-    const readTextDetail = vi.fn(baseApi.readTextDetail);
-    const operatorApi: OperatorApi = {
-      ...baseApi,
-      listAgentEventPage,
-      listLogPage,
-      readJsonDetail,
-      readTextDetail,
-    };
-    render(
-      <Inspector
-        api={operatorApi}
+        api={{ ...api, listAgentEventPage, listLogPage, readJsonDetail }}
         workflow={workflow}
         run={run}
         nodeId="agent_1"
@@ -471,631 +234,26 @@ describe("Inspector", () => {
     expect(listAgentEventPage).not.toHaveBeenCalled();
     expect(listLogPage).not.toHaveBeenCalled();
     expect(readJsonDetail).not.toHaveBeenCalled();
-    expect(readTextDetail).not.toHaveBeenCalled();
-
-    fireEvent.click(screen.getByRole("button", { name: "inputs" }));
-    await waitFor(() => expect(listAgentEventPage).toHaveBeenCalledTimes(1));
-    expect(listAgentEventPage).toHaveBeenLastCalledWith(
-      {
-        pageToken: "events",
-        afterEventSequence: "0",
-        beforeEventSequence: "0",
-        pageSize: 100,
-        order: DescriptorPageOrder.FORWARD,
-        expectedOperatorInstanceId: "operator-1",
-        expectedAsOfSequence: "9",
-        expectedRunId: "run-1",
-        expectedNodeId: "agent_1",
-      },
-      expect.any(AbortSignal),
-    );
-
-    fireEvent.click(screen.getByRole("button", { name: "output" }));
-    await waitFor(() => expect(listAgentEventPage).toHaveBeenCalledTimes(2));
-    expect(listAgentEventPage).toHaveBeenLastCalledWith(
-      {
-        pageToken: "events",
-        afterEventSequence: "0",
-        beforeEventSequence: "0",
-        pageSize: 100,
-        order: DescriptorPageOrder.NEWEST_FIRST,
-        expectedOperatorInstanceId: "operator-1",
-        expectedAsOfSequence: "9",
-        expectedRunId: "run-1",
-        expectedNodeId: "agent_1",
-      },
-      expect.any(AbortSignal),
-    );
-    fireEvent.click(screen.getByRole("button", { name: "trace" }));
-    await waitFor(() => expect(listAgentEventPage).toHaveBeenCalledTimes(3));
-
-    fireEvent.click(screen.getByRole("button", { name: "logs" }));
-    await waitFor(() => expect(listLogPage).toHaveBeenCalledTimes(1));
-    expect(listAgentEventPage).toHaveBeenCalledTimes(3);
-    expect(listLogPage).toHaveBeenCalledWith(
-      {
-        pageToken: "logs",
-        afterSequence: "0",
-        beforeSequence: "0",
-        pageSize: 100,
-        nodeId: "agent_1",
-        order: DescriptorPageOrder.NEWEST_FIRST,
-        expectedOperatorInstanceId: "operator-1",
-        expectedAsOfSequence: "9",
-      },
-      expect.any(AbortSignal),
-    );
+    expect(view.container.querySelector(".inspector-run")).toHaveClass("inspector");
+    expect(view.container.querySelector(".inspector-body")).toHaveClass("inspector-body-full");
+    expect(view.container.querySelector(".inspector-overview")).toHaveClass("inspector-panel");
+    expect(screen.queryByText("Revision")).not.toBeInTheDocument();
   });
 
-  it("filters logs by exact node and decodes their bodies only as text", async () => {
-    const retainedLogs: LogRecordDescriptorMsg[] = [
-      {
-        sequence: "3",
-        timestamp: 3,
-        level: "info",
-        nodeId: "agent_2",
-        sizeBytes: "8",
-        bodyToken: "other-node",
-      },
-      {
-        sequence: "2",
-        timestamp: 2,
-        level: "info",
-        nodeId: "",
-        sizeBytes: "8",
-        bodyToken: "unscoped",
-      },
-      {
-        sequence: "1",
-        timestamp: 1,
-        level: "info",
-        nodeId: "agent_1",
-        sizeBytes: "24",
-        bodyToken: "plain-log",
-      },
-    ];
-    const readJsonDetail = vi.fn(api().readJsonDetail);
-    const readTextDetail = vi.fn(async () => "plain log: not JSON }");
-    const operatorApi: OperatorApi = {
-      ...api(),
-      listLogPage: async () => ({
-        operatorInstanceId: run.operatorInstanceId,
-        asOfSequence: run.asOfSequence,
-        records: retainedLogs,
-        nextPageToken: "older-logs",
-        nextCursor: "1",
-      }),
-      readJsonDetail,
-      readTextDetail,
-    };
-    render(
-      <Inspector
-        api={operatorApi}
-        workflow={workflow}
-        run={run}
-        nodeId="agent_1"
-        liveLogs={[retainedLogs[0], retainedLogs[1]]}
-        onClose={() => undefined}
-      />,
-    );
-
-    fireEvent.click(screen.getByRole("button", { name: "logs" }));
-    const retainedLog = await screen.findByText("#1");
-    expect(screen.queryByText("#2")).not.toBeInTheDocument();
-    expect(screen.queryByText("#3")).not.toBeInTheDocument();
-    fireEvent.click(retainedLog.closest("button")!);
-
-    expect(await screen.findByText("plain log: not JSON }")).toBeInTheDocument();
-    expect(readTextDetail).toHaveBeenCalledWith("plain-log", expect.any(AbortSignal));
-    expect(readJsonDetail).not.toHaveBeenCalled();
-  });
-
-  it("loads terminal output from the first newest page and continues below its exclusive cursor", async () => {
-    const terminal: AgentEventDescriptorMsg = {
-      eventSequence: "151",
-      sizeBytes: "64",
-      bodyToken: "terminal-output",
-      invocationId: "invocation-1",
-      eventKind: "run.succeeded",
-      toolCount: 0,
-      predictCount: 0,
-      error: false,
-    };
-    const priorEvents = Array.from({ length: 150 }, (_, index) => turn(index + 1));
-    const listAgentEventPage = vi.fn<OperatorApi["listAgentEventPage"]>(async (request) => ({
-      operatorInstanceId: run.operatorInstanceId,
-      asOfSequence: run.asOfSequence,
-      runId: run.summary!.runId,
-      nodeId: "agent_1",
-      records:
-        request.pageToken === "events"
-          ? [terminal, ...priorEvents.slice(51).reverse()]
-          : priorEvents.slice(0, 51).reverse(),
-      nextPageToken: request.pageToken === "events" ? "events-older" : "",
-      nextCursor: request.pageToken === "events" ? "52" : "1",
-    }));
-    const readJsonDetail = vi.fn(async () => ({
-      outputs: { answer: "terminal-on-first-page" },
-    }));
-    render(
-      <Inspector
-        api={{ ...api(), listAgentEventPage, readJsonDetail }}
-        workflow={workflow}
-        run={run}
-        nodeId="agent_1"
-        onClose={() => undefined}
-      />,
-    );
-
-    fireEvent.click(screen.getByRole("button", { name: "output" }));
-    const outputSection = screen
-      .getByRole("heading", { name: "Terminal output" })
-      .closest("section")!;
-    await expandObjectValues(outputSection);
-    expect(await screen.findByText("terminal-on-first-page")).toBeInTheDocument();
-    expect(listAgentEventPage).toHaveBeenNthCalledWith(
-      1,
-      expect.objectContaining({
-        afterEventSequence: "0",
-        beforeEventSequence: "0",
-        order: DescriptorPageOrder.NEWEST_FIRST,
-      }),
-      expect.any(AbortSignal),
-    );
-
-    fireEvent.click(screen.getByRole("button", { name: "Load more events" }));
-    await waitFor(() => expect(listAgentEventPage).toHaveBeenCalledTimes(2));
-    expect(listAgentEventPage).toHaveBeenLastCalledWith(
-      expect.objectContaining({
-        pageToken: "events-older",
-        afterEventSequence: "0",
-        beforeEventSequence: "52",
-        order: DescriptorPageOrder.NEWEST_FIRST,
-      }),
-      expect.any(AbortSignal),
-    );
-    expect(readJsonDetail).toHaveBeenCalledTimes(1);
-  });
-
-  it("loads one forward event page per action and appends it in deduplicated order", async () => {
-    const listAgentEventPage = vi.fn<OperatorApi["listAgentEventPage"]>(async (request) => {
-      const continuation = request.pageToken === "events-next";
-      return {
-        operatorInstanceId: run.operatorInstanceId,
-        asOfSequence: run.asOfSequence,
-        runId: run.summary!.runId,
-        nodeId: "agent_1",
-        records: continuation ? [turn(4), turn(2)] : [turn(3), turn(1), turn(2)],
-        nextPageToken: continuation ? "" : "events-next",
-        nextCursor: continuation ? "4" : "3",
-      };
-    });
-    render(
-      <Inspector
-        api={{ ...api(), listAgentEventPage }}
-        workflow={workflow}
-        run={run}
-        nodeId="agent_1"
-        liveEvents={[turn(3)]}
-        onClose={() => undefined}
-      />,
-    );
-
-    expect(listAgentEventPage).not.toHaveBeenCalled();
-    fireEvent.click(screen.getByRole("button", { name: "trace" }));
-    const loadMore = await screen.findByRole("button", { name: "Load more events" });
-    expect(listAgentEventPage).toHaveBeenCalledTimes(1);
-    expect(
-      screen
-        .getAllByRole("button")
-        .filter((button) => button.classList.contains("turn-row"))
-        .map((button) => button.querySelector("strong")?.textContent),
-    ).toEqual(["Turn 1", "Turn 2", "Turn 3"]);
-
-    fireEvent.click(loadMore);
-    await waitFor(() => expect(listAgentEventPage).toHaveBeenCalledTimes(2));
-    expect(listAgentEventPage).toHaveBeenLastCalledWith(
-      {
-        pageToken: "events-next",
-        afterEventSequence: "3",
-        beforeEventSequence: "0",
-        pageSize: 100,
-        order: DescriptorPageOrder.FORWARD,
-        expectedOperatorInstanceId: "operator-1",
-        expectedAsOfSequence: "9",
-        expectedRunId: "run-1",
-        expectedNodeId: "agent_1",
-      },
-      expect.any(AbortSignal),
-    );
-    await waitFor(() =>
-      expect(
-        screen
-          .getAllByRole("button")
-          .filter((button) => button.classList.contains("turn-row"))
-          .map((button) => button.querySelector("strong")?.textContent),
-      ).toEqual(["Turn 1", "Turn 2", "Turn 3", "Turn 4"]),
-    );
-    expect(screen.queryByRole("button", { name: "Load more events" })).not.toBeInTheDocument();
-    expect(listAgentEventPage).toHaveBeenCalledTimes(2);
-  });
-
-  it("retains newer live output after filling the newest-first historical window", async () => {
-    const output = (sequence: number): AgentEventDescriptorMsg => ({
-      ...turn(sequence),
-      bodyToken: `output-${sequence}`,
-      eventKind: "run.succeeded",
-    });
-    const listAgentEventPage = vi.fn<OperatorApi["listAgentEventPage"]>(async (request) => {
-      const upper =
-        request.beforeEventSequence === "0" ? 500 : Number(request.beforeEventSequence) - 1;
-      const lower = Math.max(1, upper - 99);
-      return {
-        operatorInstanceId: run.operatorInstanceId,
-        asOfSequence: run.asOfSequence,
-        runId: run.summary!.runId,
-        nodeId: "agent_1",
-        records: Array.from({ length: upper - lower + 1 }, (_, index) =>
-          output(upper - index),
-        ),
-        nextPageToken: lower === 1 ? "" : `events-${lower}`,
-        nextCursor: String(lower),
-      };
-    });
-    const operatorApi: OperatorApi = {
-      ...api(),
-      listAgentEventPage,
-      readJsonDetail: async (token) => ({ outputs: { answer: token } }),
-    };
-    const view = render(
-      <Inspector
-        api={operatorApi}
-        workflow={workflow}
-        run={run}
-        nodeId="agent_1"
-        onClose={() => undefined}
-      />,
-    );
-
-    fireEvent.click(screen.getByRole("button", { name: "output" }));
-    const outputSection = screen
-      .getByRole("heading", { name: "Terminal output" })
-      .closest("section")!;
-    await expandObjectValues(outputSection);
-    expect(await within(outputSection).findByText("output-500")).toBeInTheDocument();
-    for (let page = 2; page <= 5; page += 1) {
-      fireEvent.click(screen.getByRole("button", { name: "Load more events" }));
-      await waitFor(() => expect(listAgentEventPage).toHaveBeenCalledTimes(page));
-    }
-    expect(screen.queryByRole("button", { name: "Load more events" })).not.toBeInTheDocument();
-
-    view.rerender(
-      <Inspector
-        api={operatorApi}
-        workflow={workflow}
-        run={run}
-        nodeId="agent_1"
-        liveEvents={[output(601)]}
-        onClose={() => undefined}
-      />,
-    );
-
-    await expandObjectValues(outputSection);
-    expect(await within(outputSection).findByText("output-601")).toBeInTheDocument();
-    expect(listAgentEventPage).toHaveBeenCalledTimes(5);
-  });
-
-  it("loads older logs once with the cursor, filters exactly, and bounds mounted rows", async () => {
-    const firstPage = Array.from({ length: 100 }, (_, index) => log(121 - index));
-    const secondPage = [log(22), ...Array.from({ length: 21 }, (_, index) => log(21 - index))];
-    const listLogPage = vi.fn<OperatorApi["listLogPage"]>(async (request) => {
-      const continuation = request.pageToken === "logs-next";
-      return {
-        operatorInstanceId: run.operatorInstanceId,
-        asOfSequence: run.asOfSequence,
-        records: continuation
-          ? [log(1_000, "agent_10"), ...secondPage]
-          : [log(999, "agent_2"), ...firstPage],
-        nextPageToken: continuation ? "" : "logs-next",
-        nextCursor: continuation ? "1" : "22",
-      };
-    });
-    const view = render(
-      <Inspector
-        api={{ ...api(), listLogPage }}
-        workflow={workflow}
-        run={run}
-        nodeId="agent_1"
-        liveLogs={[log(121), log(998, "agent_10")]}
-        onClose={() => undefined}
-      />,
-    );
-
-    fireEvent.click(screen.getByRole("button", { name: "logs" }));
-    const loadOlder = await screen.findByRole("button", { name: "Load older logs" });
-    expect(listLogPage).toHaveBeenCalledTimes(1);
-    expect(view.container.querySelectorAll(".log-row")).toHaveLength(100);
-    expect(screen.queryByText("#999")).not.toBeInTheDocument();
-    expect(screen.queryByText("#998")).not.toBeInTheDocument();
-
-    fireEvent.click(loadOlder);
-    await waitFor(() => expect(listLogPage).toHaveBeenCalledTimes(2));
-    expect(listLogPage).toHaveBeenLastCalledWith(
-      {
-        pageToken: "logs-next",
-        afterSequence: "0",
-        beforeSequence: "22",
-        pageSize: 100,
-        nodeId: "agent_1",
-        order: DescriptorPageOrder.NEWEST_FIRST,
-        expectedOperatorInstanceId: "operator-1",
-        expectedAsOfSequence: "9",
-      },
-      expect.any(AbortSignal),
-    );
-    await waitFor(() => expect(view.container.querySelectorAll(".log-row")).toHaveLength(120));
-    const mountedSequences = [...view.container.querySelectorAll(".log-row")].map((row) =>
-      Number(row.textContent?.match(/#(\d+)/)?.[1]),
-    );
-    expect(mountedSequences).toEqual(
-      [...mountedSequences].sort((left, right) => right - left),
-    );
-    expect(new Set(mountedSequences).size).toBe(mountedSequences.length);
-    expect(mountedSequences[0]).toBe(121);
-    expect(mountedSequences.at(-1)).toBe(2);
-    expect(screen.queryByText("#1000")).not.toBeInTheDocument();
-    expect(screen.queryByRole("button", { name: "Load older logs" })).not.toBeInTheDocument();
-    expect(listLogPage).toHaveBeenCalledTimes(2);
-  });
-
-  it("caps filled historical windows while retaining live tails and active selections", async () => {
-    const listAgentEventPage = vi.fn<OperatorApi["listAgentEventPage"]>(async (request) => {
-      const start = Number(request.afterEventSequence);
-      const records = Array.from({ length: 100 }, (_, index) => turn(start + index + 1));
-      const nextCursor = records.at(-1)!.eventSequence;
-      return {
-        operatorInstanceId: run.operatorInstanceId,
-        asOfSequence: run.asOfSequence,
-        runId: run.summary!.runId,
-        nodeId: "agent_1",
-        records,
-        nextPageToken: nextCursor === "600" ? "" : `events-${nextCursor}`,
-        nextCursor,
-      };
-    });
-    const listLogPage = vi.fn<OperatorApi["listLogPage"]>(async (request) => {
-      const upper = request.beforeSequence === "0" ? 600 : Number(request.beforeSequence) - 1;
-      const lower = Math.max(1, upper - 99);
-      const records = Array.from({ length: upper - lower + 1 }, (_, index) =>
-        log(upper - index),
-      );
-      return {
-        operatorInstanceId: run.operatorInstanceId,
-        asOfSequence: run.asOfSequence,
-        records,
-        nextPageToken: lower === 1 ? "" : `logs-${lower}`,
-        nextCursor: String(lower),
-      };
-    });
-    const operatorApi: OperatorApi = {
-      ...api(),
-      listAgentEventPage,
-      listLogPage,
-      readJsonDetail: async (token) => token,
-      readTextDetail: async (token) => `selected ${token}`,
-    };
-    const liveEvents = Array.from({ length: 256 }, (_, index) => turn(501 + index));
-    const liveLogs = Array.from({ length: 256 }, (_, index) => log(601 + index));
-
-    const view = render(
-      <Inspector
-        api={operatorApi}
-        workflow={workflow}
-        run={run}
-        nodeId="agent_1"
-        onClose={() => undefined}
-      />,
-    );
-
-    fireEvent.click(screen.getByRole("button", { name: "trace" }));
-    const firstTurnLabel = await screen.findByText("Turn 1");
-    const firstTurn = firstTurnLabel.closest("button");
-    if (!firstTurn) throw new Error("Turn 1 button is missing");
-    fireEvent.click(screen.getByRole("button", { name: "Following live" }));
-    fireEvent.click(firstTurn);
-    for (let page = 2; page <= 5; page += 1) {
-      fireEvent.click(screen.getByRole("button", { name: "Load more events" }));
-      await waitFor(() => expect(listAgentEventPage).toHaveBeenCalledTimes(page));
-    }
-    await waitFor(() => expect(screen.getByText("500 complete turns")).toBeInTheDocument());
-
-    view.rerender(
-      <Inspector
-        api={operatorApi}
-        workflow={workflow}
-        run={run}
-        nodeId="agent_1"
-        liveEvents={liveEvents}
-        onClose={() => undefined}
-      />,
-    );
-
-    expect(screen.getByText("500 complete turns")).toBeInTheDocument();
-    expect(firstTurn).toHaveClass("active");
-    expect(screen.queryByRole("button", { name: /^Turn 257\b/ })).not.toBeInTheDocument();
-    fireEvent.click(screen.getByRole("button", { name: "Follow latest" }));
-    expect(await screen.findByText("turn-756")).toBeInTheDocument();
-
-    fireEvent.click(screen.getByRole("button", { name: "logs" }));
-    const selectedHistoricalLog = await screen.findByText("#600");
-    fireEvent.click(selectedHistoricalLog.closest("button")!);
-    expect(await screen.findByText("selected log-600")).toBeInTheDocument();
-    for (let page = 2; page <= 5; page += 1) {
-      fireEvent.click(screen.getByRole("button", { name: "Load older logs" }));
-      await waitFor(() => expect(listLogPage).toHaveBeenCalledTimes(page));
-    }
-
-    view.rerender(
-      <Inspector
-        api={operatorApi}
-        workflow={workflow}
-        run={run}
-        nodeId="agent_1"
-        liveEvents={liveEvents}
-        liveLogs={[...liveLogs, log(999, "agent_10")]}
-        onClose={() => undefined}
-      />,
-    );
-
-    await waitFor(() =>
-      expect(view.container.querySelector<HTMLElement>(".log-list > div")?.style.height).toBe(
-        `${500 * 64}px`,
-      ),
-    );
-    expect(screen.getByText("#856")).toBeInTheDocument();
-    expect(screen.queryByText("#999")).not.toBeInTheDocument();
-    expect(screen.getByText("selected log-600")).toBeInTheDocument();
-  }, 30_000);
-
-  it("aborts a continuation on snapshot repair and suppresses its stale page", async () => {
-    const pendingContinuation = deferred<AgentEventDescriptorPage>();
-    let continuationSignal: AbortSignal | undefined;
-    const listAgentEventPage = vi.fn<OperatorApi["listAgentEventPage"]>((request, signal) => {
-      if (request.pageToken === "events-next") {
-        continuationSignal = signal;
-        return pendingContinuation.promise;
-      }
-      const repaired = request.pageToken === "events-repaired";
-      return Promise.resolve({
-        operatorInstanceId: run.operatorInstanceId,
-        asOfSequence: repaired ? "10" : run.asOfSequence,
-        runId: run.summary!.runId,
-        nodeId: "agent_1",
-        records: [turn(repaired ? 7 : 1)],
-        nextPageToken: repaired ? "" : "events-next",
-        nextCursor: repaired ? "7" : "1",
-      });
-    });
-    const operatorApi = { ...api(), listAgentEventPage };
-    const view = render(
-      <Inspector
-        api={operatorApi}
-        workflow={workflow}
-        run={run}
-        nodeId="agent_1"
-        onClose={() => undefined}
-      />,
-    );
-
-    fireEvent.click(screen.getByRole("button", { name: "trace" }));
-    fireEvent.click(await screen.findByRole("button", { name: "Load more events" }));
-    await waitFor(() => expect(continuationSignal).toBeDefined());
-
-    const repairedRun: RunSnapshotMsg = {
-      ...run,
-      asOfSequence: "10",
-      nodes: run.nodes.map((item) => ({
-        ...item,
-        eventPageToken: item.nodeId === "agent_1" ? "events-repaired" : item.eventPageToken,
-      })),
-    };
-    view.rerender(
-      <Inspector
-        api={operatorApi}
-        workflow={workflow}
-        run={repairedRun}
-        nodeId="agent_1"
-        onClose={() => undefined}
-      />,
-    );
-    expect(continuationSignal!.aborted).toBe(true);
-    await waitFor(() => expect(screen.getByRole("button", { name: /Turn 7/ })).toBeInTheDocument());
-
-    await act(async () => {
-      pendingContinuation.resolve({
-        operatorInstanceId: run.operatorInstanceId,
-        asOfSequence: run.asOfSequence,
-        runId: run.summary!.runId,
-        nodeId: "agent_1",
-        records: [turn(99)],
-        nextPageToken: "",
-        nextCursor: "99",
-      });
-      await pendingContinuation.promise;
-    });
-    expect(screen.queryByRole("button", { name: /Turn 99/ })).not.toBeInTheDocument();
-    expect(screen.getByRole("button", { name: /Turn 7/ })).toBeInTheDocument();
-  });
-
-  it("aborts an inactive page and suppresses its stale completion", async () => {
-    const pendingPage = deferred<AgentEventDescriptorPage>();
-    let pageSignal: AbortSignal | undefined;
-    const operatorApi: OperatorApi = {
-      ...api(),
-      listAgentEventPage: (_request, signal) => {
-        pageSignal = signal;
-        return pendingPage.promise;
-      },
-    };
-    render(
-      <Inspector
-        api={operatorApi}
-        workflow={workflow}
-        run={run}
-        nodeId="agent_1"
-        onClose={() => undefined}
-      />,
-    );
-
-    fireEvent.click(screen.getByRole("button", { name: "trace" }));
-    await waitFor(() => expect(pageSignal).toBeDefined());
-    fireEvent.click(screen.getByRole("button", { name: "logs" }));
-    expect(pageSignal!.aborted).toBe(true);
-
-    await act(async () => {
-      pendingPage.resolve({
-        operatorInstanceId: run.operatorInstanceId,
-        asOfSequence: run.asOfSequence,
-        runId: run.summary!.runId,
-        nodeId: "agent_1",
-        records: [
-          {
-            eventSequence: "99",
-            sizeBytes: "8",
-            bodyToken: "stale-turn",
-            invocationId: "invocation-1",
-            eventKind: "iteration.recorded",
-            iteration: 99,
-            toolCount: 0,
-            predictCount: 0,
-            error: false,
-          },
-        ],
-        nextPageToken: "",
-        nextCursor: "99",
-      });
-      await pendingPage.promise;
-    });
-    expect(screen.queryByText("Turn 99")).not.toBeInTheDocument();
-  });
-
-  it("aborts superseded JSON detail and ignores its late value", async () => {
-    const pendingInput = deferred<unknown>();
+  it("shows immediate Inputs loading, cancels superseded detail, and renders the retained root directly", async () => {
+    const inputDetail = deferred<unknown>();
+    const outputDetail = deferred<unknown>();
     let inputSignal: AbortSignal | undefined;
     const readJsonDetail = vi.fn((token: string, signal?: AbortSignal) => {
-      if (token === "input-body") {
+      if (token === "event-1") {
         inputSignal = signal;
-        return pendingInput.promise;
+        return inputDetail.promise;
       }
-      return Promise.resolve({ outputs: { answer: "fresh output" } });
+      return outputDetail.promise;
     });
-    const operatorApi: OperatorApi = {
-      ...api(),
-      readJsonDetail,
-    };
     render(
       <Inspector
-        api={operatorApi}
+        api={{ ...operatorApi(), readJsonDetail }}
         workflow={workflow}
         run={run}
         nodeId="agent_1"
@@ -1104,153 +262,540 @@ describe("Inspector", () => {
     );
 
     fireEvent.click(screen.getByRole("button", { name: "inputs" }));
+    expect(screen.getByRole("status")).toHaveTextContent("Loading retained inputs");
     await waitFor(() => expect(inputSignal).toBeDefined());
+
     fireEvent.click(screen.getByRole("button", { name: "output" }));
     expect(inputSignal!.aborted).toBe(true);
-    const outputSection = screen
-      .getByRole("heading", { name: "Terminal output" })
-      .closest("section")!;
-    await expandObjectValues(outputSection);
-    expect(await screen.findByText("fresh output")).toBeInTheDocument();
+    expect(screen.getByRole("status")).toHaveTextContent("Loading retained output");
+    await act(async () => {
+      outputDetail.resolve({ outputs: { answer: "fresh output" } });
+      await outputDetail.promise;
+    });
+    const outputTree = await screen.findByRole("tree", { name: "JSON value" });
+    expect(within(outputTree).getByText("fresh output")).toBeInTheDocument();
+    expect(within(outputTree).getByText("answer")).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /Object/i })).not.toBeInTheDocument();
 
     await act(async () => {
-      pendingInput.resolve({ inputs: { question: "stale input" } });
-      await pendingInput.promise;
+      inputDetail.resolve({ inputs: { question: "stale input" } });
+      await inputDetail.promise;
     });
     expect(screen.queryByText("stale input")).not.toBeInTheDocument();
     expect(screen.getByText("fresh output")).toBeInTheDocument();
   });
 
-  it("keeps manual Trace following isolated while another tab is active", async () => {
-    const traceEvents: AgentEventDescriptorMsg[] = [
-      {
-        eventSequence: "1",
-        sizeBytes: "32",
-        bodyToken: "input-body",
-        invocationId: "invocation-1",
-        eventKind: "run.started",
-        toolCount: 0,
-        predictCount: 0,
-        error: false,
-      },
-      {
-        eventSequence: "2",
-        sizeBytes: "32",
-        bodyToken: "turn-1",
-        invocationId: "invocation-1",
-        eventKind: "iteration.recorded",
-        iteration: 1,
-        toolCount: 0,
-        predictCount: 0,
-        error: false,
-      },
-      {
-        eventSequence: "3",
-        sizeBytes: "32",
-        bodyToken: "turn-2",
-        invocationId: "invocation-1",
-        eventKind: "iteration.recorded",
-        iteration: 2,
-        toolCount: 0,
-        predictCount: 0,
-        error: false,
-      },
-    ];
-    const liveTurn: AgentEventDescriptorMsg = {
-      eventSequence: "4",
-      sizeBytes: "32",
-      bodyToken: "turn-3",
-      invocationId: "invocation-1",
-      eventKind: "iteration.recorded",
-      iteration: 3,
-      toolCount: 0,
-      predictCount: 0,
-      error: false,
-    };
-    const laterLiveTurn: AgentEventDescriptorMsg = {
-      ...liveTurn,
-      eventSequence: "5",
-      bodyToken: "turn-4",
-      iteration: 4,
-    };
-    const readJsonDetail = vi.fn(async (token: string) =>
-      token === "input-body"
-        ? { inputs: { question: "active input" } }
-        : { selected: token },
-    );
-    const operatorApi: OperatorApi = {
-      ...api(),
-      listAgentEventPage: async () => ({
-        operatorInstanceId: run.operatorInstanceId,
-        asOfSequence: run.asOfSequence,
-        runId: run.summary!.runId,
-        nodeId: "agent_1",
-        records: traceEvents,
-        nextPageToken: "",
-        nextCursor: "3",
-      }),
-      readJsonDetail,
-    };
-    scrollToIndex.mockClear();
-    const view = render(
+  it("renders the empty Inputs copy only after an authoritative empty page", async () => {
+    const api = operatorApi();
+    const readJsonDetail = vi.fn(api.readJsonDetail);
+    render(
       <Inspector
-        api={operatorApi}
+        api={{
+          ...api,
+          listAgentEventPage: async () => eventPage([]),
+          readJsonDetail,
+        }}
         workflow={workflow}
         run={run}
         nodeId="agent_1"
         onClose={() => undefined}
       />,
     );
-    fireEvent.click(screen.getByRole("button", { name: "trace" }));
-    const traceSection = screen
-      .getByRole("heading", { name: "RunTrace" })
-      .closest("section")!;
-    await expandObjectValues(traceSection);
-    expect(await screen.findByText("turn-2")).toBeInTheDocument();
-    await waitFor(() => expect(scrollToIndex).toHaveBeenLastCalledWith(1, { align: "end" }));
-    view.rerender(
-      <Inspector
-        api={operatorApi}
-        workflow={workflow}
-        run={run}
-        nodeId="agent_1"
-        liveEvents={[liveTurn]}
-        onClose={() => undefined}
-      />,
-    );
-    await waitFor(() => expect(scrollToIndex).toHaveBeenLastCalledWith(2, { align: "end" }));
-    scrollToIndex.mockClear();
-    fireEvent.click(screen.getByRole("button", { name: /Turn 1/ }));
-    await expandObjectValues(traceSection);
-    expect(await screen.findByText("turn-1")).toBeInTheDocument();
-    expect(scrollToIndex).not.toHaveBeenCalled();
-    scrollToIndex.mockClear();
 
     fireEvent.click(screen.getByRole("button", { name: "inputs" }));
-    const inputsSection = screen
-      .getByRole("heading", { name: "Invocation inputs" })
-      .closest("section")!;
-    await expandObjectValues(inputsSection);
-    expect(await screen.findByText("active input")).toBeInTheDocument();
-    view.rerender(
+    expect(screen.getByRole("status")).toHaveTextContent("Loading retained inputs");
+    expect(await screen.findByText("No retained inputs are available.")).toBeInTheDocument();
+    expect(screen.queryByRole("status")).not.toBeInTheDocument();
+    expect(readJsonDetail).not.toHaveBeenCalled();
+  });
+
+  it("retains the Inputs run.started event while forward paging exceeds the descriptor window", async () => {
+    const pages = Array.from({ length: 6 }, (_, pageIndex) =>
+      Array.from({ length: 100 }, (_, index) => {
+        const sequence = pageIndex * 100 + index + 1;
+        return event(sequence, sequence === 1 ? "run.started" : "iteration.recorded");
+      }),
+    );
+    const listAgentEventPage = vi.fn<OperatorApi["listAgentEventPage"]>(async (request) => {
+      const pageIndex =
+        request.pageToken === "events" ? 0 : Number(request.pageToken.replace("events-", "")) - 1;
+      return eventPage(
+        pages[pageIndex],
+        pageIndex < pages.length - 1 ? `events-${pageIndex + 2}` : "",
+        String((pageIndex + 1) * 100),
+      );
+    });
+    render(
       <Inspector
-        api={operatorApi}
+        api={{ ...operatorApi(), listAgentEventPage }}
         workflow={workflow}
         run={run}
         nodeId="agent_1"
-        liveEvents={[liveTurn, laterLiveTurn]}
         onClose={() => undefined}
       />,
     );
-    expect(scrollToIndex).not.toHaveBeenCalled();
-    expect(readJsonDetail.mock.calls.some(([token]) => token === "turn-4")).toBe(false);
+
+    fireEvent.click(screen.getByRole("button", { name: "inputs" }));
+    expect(await screen.findByText("Why?")).toBeInTheDocument();
+    for (let pageIndex = 1; pageIndex < pages.length; pageIndex += 1) {
+      fireEvent.click(screen.getByRole("button", { name: "Load more events" }));
+      await waitFor(() => expect(listAgentEventPage).toHaveBeenCalledTimes(pageIndex + 1));
+      if (pageIndex < pages.length - 1) {
+        await waitFor(() =>
+          expect(screen.getByRole("button", { name: "Load more events" })).toBeEnabled(),
+        );
+      }
+    }
+    expect(listAgentEventPage).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        afterEventSequence: "500",
+        beforeEventSequence: "0",
+        order: DescriptorPageOrder.FORWARD,
+      }),
+      expect.any(AbortSignal),
+    );
+    await waitFor(() =>
+      expect(screen.queryByRole("button", { name: "Load more events" })).not.toBeInTheDocument(),
+    );
+    expect(screen.getByText("Why?")).toBeInTheDocument();
+  });
+
+  it("retains the terminal Output value event while backward paging exceeds the descriptor window", async () => {
+    const pages = Array.from({ length: 6 }, (_, pageIndex) =>
+      Array.from({ length: 100 }, (_, index) => {
+        const sequence = 600 - pageIndex * 100 - index;
+        return event(sequence, sequence === 600 ? "run.succeeded" : "iteration.recorded");
+      }),
+    );
+    const listAgentEventPage = vi.fn<OperatorApi["listAgentEventPage"]>(async (request) => {
+      const pageIndex =
+        request.pageToken === "events" ? 0 : Number(request.pageToken.replace("events-", "")) - 1;
+      return eventPage(
+        pages[pageIndex],
+        pageIndex < pages.length - 1 ? `events-${pageIndex + 2}` : "",
+        String(501 - pageIndex * 100),
+      );
+    });
+    render(
+      <Inspector
+        api={{ ...operatorApi(), listAgentEventPage }}
+        workflow={workflow}
+        run={run}
+        nodeId="agent_1"
+        onClose={() => undefined}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "output" }));
+    expect(await screen.findByText("Because.")).toBeInTheDocument();
+    for (let pageIndex = 1; pageIndex < pages.length; pageIndex += 1) {
+      fireEvent.click(screen.getByRole("button", { name: "Load more events" }));
+      await waitFor(() => expect(listAgentEventPage).toHaveBeenCalledTimes(pageIndex + 1));
+      if (pageIndex < pages.length - 1) {
+        await waitFor(() =>
+          expect(screen.getByRole("button", { name: "Load more events" })).toBeEnabled(),
+        );
+      }
+    }
+    expect(listAgentEventPage).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        afterEventSequence: "0",
+        beforeEventSequence: "101",
+        order: DescriptorPageOrder.NEWEST_FIRST,
+      }),
+      expect.any(AbortSignal),
+    );
+    await waitFor(() =>
+      expect(screen.queryByRole("button", { name: "Load more events" })).not.toBeInTheDocument(),
+    );
+    expect(screen.getByText("Because.")).toBeInTheDocument();
+  });
+
+  it("cancels an inactive descriptor page and suppresses its late completion", async () => {
+    const pending = deferred<AgentEventDescriptorPage>();
+    let pageSignal: AbortSignal | undefined;
+    const api: OperatorApi = {
+      ...operatorApi(),
+      listAgentEventPage: (_request, signal) => {
+        pageSignal = signal;
+        return pending.promise;
+      },
+    };
+    render(
+      <Inspector api={api} workflow={workflow} run={run} nodeId="agent_1" onClose={() => undefined} />,
+    );
 
     fireEvent.click(screen.getByRole("button", { name: "trace" }));
-    await waitFor(() =>
-      expect(screen.getByRole("button", { name: /Turn 1/ })).toHaveClass("active"),
+    expect(await screen.findByText("Loading retained trace…")).toBeInTheDocument();
+    await waitFor(() => expect(pageSignal).toBeDefined());
+    fireEvent.click(screen.getByRole("button", { name: "logs" }));
+    expect(pageSignal!.aborted).toBe(true);
+
+    await act(async () => {
+      pending.resolve(eventPage([event(99)]));
+      await pending.promise;
+    });
+    expect(screen.getByText("0 retained records")).toBeInTheDocument();
+    expect(screen.queryByText("99 retained turns")).not.toBeInTheDocument();
+  });
+
+  it("projects trace header and progressively hydrated turns into one hierarchy", async () => {
+    const firstTurnBody = deferred<unknown>();
+    const listAgentEventPage = vi.fn<OperatorApi["listAgentEventPage"]>(async (request) =>
+      request.pageToken === "events"
+        ? eventPage([event(1), event(2)], "events-next", "2")
+        : eventPage([event(3)], "", "3"),
     );
-    expect(screen.getByRole("button", { name: "Follow latest" })).toBeInTheDocument();
-    expect(readJsonDetail.mock.calls.some(([token]) => token === "turn-4")).toBe(false);
-    expect(scrollToIndex).not.toHaveBeenCalled();
+    const readJsonDetail = vi.fn((token: string) =>
+      token === "event-1"
+        ? firstTurnBody.promise
+        : Promise.resolve({ reasoning: `reasoning-${token}`, output: `output-${token}` }),
+    );
+    const api = { ...operatorApi(), listAgentEventPage, readJsonDetail };
+    const view = render(
+      <Inspector
+        api={api}
+        workflow={workflow}
+        run={run}
+        nodeId="agent_1"
+        onClose={() => undefined}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "trace" }));
+    const trace = await screen.findByRole("heading", { name: "RunTrace" });
+    const panel = trace.closest("section")!;
+    expect(within(panel).getByText("main-model")).toBeInTheDocument();
+    fireEvent.click(within(panel).getByRole("button", { name: "Expand telemetry" }));
+    expect(within(panel).getByText("trace_id")).toBeInTheDocument();
+    expect(view.container.querySelector(".turn-list")).not.toBeInTheDocument();
+    expect(view.container.querySelector(".turn-row")).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /Turn 1/ })).not.toBeInTheDocument();
+
+    expect(await within(panel).findByText("2 retained turns")).toBeInTheDocument();
+    fireEvent.click(within(panel).getByRole("button", { name: "Expand turns" }));
+    await waitFor(() => expect(listAgentEventPage).toHaveBeenCalledTimes(2));
+    expect(listAgentEventPage).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        pageToken: "events-next",
+        afterEventSequence: "2",
+        beforeEventSequence: "0",
+        order: DescriptorPageOrder.FORWARD,
+      }),
+      expect.any(AbortSignal),
+    );
+    expect(await within(panel).findByRole("button", { name: "Expand 2" })).toBeInTheDocument();
+
+    fireEvent.click(within(panel).getByRole("button", { name: "Expand 0" }));
+    expect(await within(panel).findByText("Loading retained turn…")).toBeInTheDocument();
+    await act(async () => {
+      firstTurnBody.resolve({ reasoning: "reasoning-one", code: "print('one')" });
+      await firstTurnBody.promise;
+    });
+    expect(await within(panel).findByText("reasoning-one")).toBeInTheDocument();
+    expect(within(panel).getByRole("button", { name: "Collapse turns" })).toBeInTheDocument();
+
+    view.rerender(
+      <Inspector
+        api={api}
+        workflow={workflow}
+        run={run}
+        nodeId="agent_1"
+        liveEvents={[event(4)]}
+        onClose={() => undefined}
+      />,
+    );
+    expect(within(panel).getByRole("button", { name: "Collapse 0" })).toBeInTheDocument();
+    expect(within(panel).getByText("reasoning-one")).toBeInTheDocument();
+    expect(await within(panel).findByRole("button", { name: "Expand 3" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Following live" })).toBeInTheDocument();
+  });
+
+  it("aborts deferred trace detail hydration when the Inspector unmounts", async () => {
+    const turnDetail = deferred<unknown>();
+    let detailSignal: AbortSignal | undefined;
+    const readJsonDetail = vi.fn((_token: string, signal?: AbortSignal) => {
+      detailSignal = signal;
+      return turnDetail.promise;
+    });
+    const view = render(
+      <Inspector
+        api={{
+          ...operatorApi(),
+          listAgentEventPage: async () => eventPage([event(1)]),
+          readJsonDetail,
+        }}
+        workflow={workflow}
+        run={run}
+        nodeId="agent_1"
+        onClose={() => undefined}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "trace" }));
+    expect(await screen.findByText("1 retained turn")).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Expand turns" }));
+    fireEvent.click(screen.getByRole("button", { name: "Expand 0" }));
+    await waitFor(() => expect(detailSignal).toBeDefined());
+
+    view.unmount();
+    expect(detailSignal!.aborted).toBe(true);
+    await act(async () => {
+      turnDetail.resolve({ reasoning: "too late" });
+      await turnDetail.promise;
+    });
+    expect(readJsonDetail).toHaveBeenCalledTimes(1);
+  });
+
+  it("evicts trace bodies by reported bytes and rejects an individually oversized body", async () => {
+    const records = Array.from({ length: 6 }, (_, index) => ({
+      ...event(index + 1),
+      sizeBytes: index === 5 ? String(9 * 1024 * 1024) : String(2 * 1024 * 1024),
+    }));
+    const readJsonDetail = vi.fn(async (token: string) => ({ body: `body-${token}` }));
+    render(
+      <Inspector
+        api={{
+          ...operatorApi(),
+          listAgentEventPage: async () => eventPage(records),
+          readJsonDetail,
+        }}
+        workflow={workflow}
+        run={run}
+        nodeId="agent_1"
+        onClose={() => undefined}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "trace" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Expand turns" }));
+    for (let index = 0; index < 5; index += 1) {
+      fireEvent.click(screen.getByRole("button", { name: `Expand ${index}` }));
+      await waitFor(() =>
+        expect(readJsonDetail.mock.calls.filter(([token]) => token === `event-${index + 1}`)).toHaveLength(1),
+      );
+      expect(await screen.findByText(`body-event-${index + 1}`)).toBeInTheDocument();
+    }
+
+    fireEvent.click(screen.getByRole("button", { name: "Collapse 0" }));
+    fireEvent.click(screen.getByRole("button", { name: "Expand 0" }));
+    await waitFor(() =>
+      expect(readJsonDetail.mock.calls.filter(([token]) => token === "event-1")).toHaveLength(2),
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "Expand 5" }));
+    expect(await screen.findByText("Unavailable · Turn detail exceeds the browser detail limit.")).toBeInTheDocument();
+  });
+
+  it("renders exact decoded log bodies as one ordered stream and prepends older pages", async () => {
+    const listLogPage = vi.fn<OperatorApi["listLogPage"]>(async (request) => ({
+      operatorInstanceId: run.operatorInstanceId,
+      asOfSequence: run.asOfSequence,
+      records:
+        request.pageToken === "logs"
+          ? [log(3), log(99, "agent_2"), log(2)]
+          : [log(1)],
+      nextPageToken: request.pageToken === "logs" ? "logs-older" : "",
+      nextCursor: request.pageToken === "logs" ? "2" : "1",
+    }));
+    const readTextDetail = vi.fn(async (token: string) => token.replace("log-", "line-"));
+    const api = { ...operatorApi(), listLogPage, readTextDetail };
+    const view = render(
+      <Inspector api={api} workflow={workflow} run={run} nodeId="agent_1" onClose={() => undefined} />,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "logs" }));
+    const stream = await screen.findByLabelText("Continuous node log stream");
+    await waitFor(() => expect(stream.textContent).toBe("line-2\nline-3"));
+    expect(view.container.querySelector(".log-row")).not.toBeInTheDocument();
+    expect(view.container.querySelector(".log-list")).not.toBeInTheDocument();
+    expect(readTextDetail).not.toHaveBeenCalledWith("log-99", expect.anything());
+
+    fireEvent.click(screen.getByRole("button", { name: "Load older logs" }));
+    await waitFor(() => expect(stream.textContent).toBe("line-1\nline-2\nline-3"));
+    expect(listLogPage).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        pageToken: "logs-older",
+        beforeSequence: "2",
+        nodeId: "agent_1",
+        order: DescriptorPageOrder.NEWEST_FIRST,
+      }),
+      expect.any(AbortSignal),
+    );
+
+    view.rerender(
+      <Inspector
+        api={api}
+        workflow={workflow}
+        run={run}
+        nodeId="agent_1"
+        liveLogs={[log(4), log(100, "agent_10")]}
+        onClose={() => undefined}
+      />,
+    );
+    await waitFor(() => expect(stream.textContent).toBe("line-1\nline-2\nline-3\nline-4"));
+    expect(readTextDetail).not.toHaveBeenCalledWith("log-100", expect.anything());
+  });
+
+  it("finishes an active decode batch before scheduling repeatedly appended live logs", async () => {
+    const oldBody = deferred<string>();
+    let oldSignal: AbortSignal | undefined;
+    const readTextDetail = vi.fn((token: string, signal?: AbortSignal) => {
+      if (token === "log-1") {
+        oldSignal ??= signal;
+        return oldBody.promise;
+      }
+      return Promise.resolve(`${token}\n`);
+    });
+    const api = {
+      ...operatorApi(),
+      listLogPage: async () => ({
+        operatorInstanceId: run.operatorInstanceId,
+        asOfSequence: run.asOfSequence,
+        records: [log(1)],
+        nextPageToken: "",
+        nextCursor: "1",
+      }),
+      readTextDetail,
+    };
+    const view = render(
+      <Inspector api={api} workflow={workflow} run={run} nodeId="agent_1" onClose={() => undefined} />,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "logs" }));
+    const stream = await screen.findByLabelText("Continuous node log stream");
+    await waitFor(() => expect(oldSignal).toBeDefined());
+    view.rerender(
+      <Inspector
+        api={api}
+        workflow={workflow}
+        run={run}
+        nodeId="agent_1"
+        liveLogs={[log(2)]}
+        onClose={() => undefined}
+      />,
+    );
+    view.rerender(
+      <Inspector
+        api={api}
+        workflow={workflow}
+        run={run}
+        nodeId="agent_1"
+        liveLogs={[log(2), log(3)]}
+        onClose={() => undefined}
+      />,
+    );
+    view.rerender(
+      <Inspector
+        api={api}
+        workflow={workflow}
+        run={run}
+        nodeId="agent_1"
+        liveLogs={[log(2), log(3), log(4)]}
+        onClose={() => undefined}
+      />,
+    );
+    expect(oldSignal!.aborted).toBe(false);
+
+    await act(async () => {
+      oldBody.resolve("log-1\n");
+      await oldBody.promise;
+    });
+    await waitFor(() => expect(stream.textContent).toBe("log-1\nlog-2\nlog-3\nlog-4\n"));
+  });
+
+  it("renders a counted omitted range while retaining a contiguous byte-bounded log window", async () => {
+    const bodySize = 3 * 1024 * 1024;
+    const bodies = [
+      `one:${"a".repeat(bodySize)}`,
+      `two:${"b".repeat(bodySize)}`,
+      `three:${"c".repeat(bodySize)}`,
+    ];
+    const records = [log(1), log(2), log(3)].map((entry, index) => ({
+      ...entry,
+      sizeBytes: String(bodies[index].length),
+    }));
+    const readTextDetail = vi.fn(async (token: string) => bodies[Number(token.slice(4)) - 1]);
+    render(
+      <Inspector
+        api={{
+          ...operatorApi(),
+          listLogPage: async () => ({
+            operatorInstanceId: run.operatorInstanceId,
+            asOfSequence: run.asOfSequence,
+            records,
+            nextPageToken: "",
+            nextCursor: "1",
+          }),
+          readTextDetail,
+        }}
+        workflow={workflow}
+        run={run}
+        nodeId="agent_1"
+        onClose={() => undefined}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "logs" }));
+    const stream = await screen.findByLabelText("Continuous node log stream");
+    expect(
+      await screen.findByText(/1 earlier retained log record omitted from the decoded window/),
+    ).toHaveTextContent("sequences 1–1");
+    await waitFor(() => expect(readTextDetail).toHaveBeenCalledTimes(3));
+    const retainedText = stream.textContent ?? "";
+    expect(retainedText).toHaveLength(bodies[1].length + 1 + bodies[2].length);
+    expect(retainedText.startsWith("two:")).toBe(true);
+    expect(retainedText.slice(bodies[1].length, bodies[1].length + 7)).toBe("\nthree:");
+    expect(retainedText.endsWith("cccc")).toBe(true);
+    expect(screen.getByText("3 retained records")).toBeInTheDocument();
+  });
+
+  it("keeps explicit loading and error states for log pages and text decoding", async () => {
+    const pendingPage = deferred<LogDescriptorPage>();
+    const api = {
+      ...operatorApi(),
+      listLogPage: vi.fn(() => pendingPage.promise),
+      readTextDetail: vi.fn(async () => {
+        throw new Error("log body failed");
+      }),
+    };
+    render(
+      <Inspector api={api} workflow={workflow} run={run} nodeId="agent_1" onClose={() => undefined} />,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "logs" }));
+    expect(await screen.findByText("Loading retained logs…")).toBeInTheDocument();
+    await act(async () => {
+      pendingPage.resolve({
+        operatorInstanceId: run.operatorInstanceId,
+        asOfSequence: run.asOfSequence,
+        records: [log(1)],
+        nextPageToken: "",
+        nextCursor: "1",
+      });
+      await pendingPage.promise;
+    });
+    expect(await screen.findByText("log body failed")).toHaveAttribute("role", "alert");
+  });
+
+  it("surfaces bounded trace page failures without mounting a selector", async () => {
+    render(
+      <Inspector
+        api={{
+          ...operatorApi(),
+          listAgentEventPage: async () => {
+            throw new Error("trace page failed");
+          },
+        }}
+        workflow={workflow}
+        run={run}
+        nodeId="agent_1"
+        onClose={() => undefined}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "trace" }));
+    expect(await screen.findByRole("alert")).toHaveTextContent("trace page failed");
+    expect(document.querySelector(".turn-list")).not.toBeInTheDocument();
   });
 });
