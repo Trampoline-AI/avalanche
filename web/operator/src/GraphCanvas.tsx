@@ -167,7 +167,7 @@ const NodeDuration = memo(
     }, [endedAt, running]);
     const end = endedAt || nowSeconds;
     return (
-      <span className="node-duration">
+      <span className="node-duration absolute top-4 right-0 font-mono text-[9px] text-muted">
         {Math.max(0, end - startedAt).toFixed(1)}s
       </span>
     );
@@ -176,35 +176,43 @@ const NodeDuration = memo(
 NodeDuration.displayName = "NodeDuration";
 
 const WorkflowNodeCard = memo(({ data }: NodeProps<Node<CardData>>) => {
+  const statusClass =
+    data.status === "success"
+      ? "status-success border-[3px] border-mint"
+      : data.status === "failed"
+        ? "status-failed border-[3px] border-danger"
+        : data.status === "running"
+          ? "status-running animate-pulse border-[3px] border-acid ring-[5px] ring-[rgba(37,99,235,.22)] motion-reduce:animate-none motion-reduce:ring-3"
+          : "blueprint";
   return (
     <article
-      className={`node-card ${data.status ? `status-${data.status}` : "blueprint"}`}
+      className={`node-card relative flex min-h-[130px] w-[360px] cursor-pointer flex-col items-stretch gap-2 rounded-xl border border-line bg-panel p-4 text-left shadow-[0_8px_24px_rgba(25,39,32,.08)] transition-[border-color,box-shadow,transform] duration-150 ease-out hover:-translate-y-px hover:border-acid hover:shadow-[0_10px_28px_rgba(25,39,32,.12)] motion-reduce:transition-none ${statusClass}`}
     >
       <Handle
         id="target-left"
-        className="node-handle"
+        className="node-handle pointer-events-none size-px! min-h-0! min-w-0! border-0! bg-transparent! opacity-0"
         type="target"
         position={Position.Left}
         isConnectable={false}
       />
       <Handle
         id="target-bottom"
-        className="node-handle"
+        className="node-handle pointer-events-none size-px! min-h-0! min-w-0! border-0! bg-transparent! opacity-0"
         type="target"
         position={Position.Bottom}
         isConnectable={false}
       />
       <button
         type="button"
-        className="node-card-action"
+        className="node-card-action absolute inset-0 z-[2] cursor-pointer rounded-[inherit] border-0 bg-transparent p-0 focus-visible:outline-3 focus-visible:outline-offset-3 focus-visible:outline-acid"
         onClick={data.onOpen}
         aria-label={`Inspect ${data.label}${data.identity ? ` ${data.identity}` : ""}`}
       />
-      <header className="node-header">
-        <span className="node-kicker">{data.nodeType}</span>
-        <strong className="node-title">{data.label}</strong>
-        {data.identity && <span className="node-identity">{data.identity}</span>}
-        {data.status && <span className="node-status">{data.status}</span>}
+      <header className="node-header relative flex min-h-10 flex-col items-start gap-1 pr-[76px]">
+        <span className="node-kicker font-mono text-[8px] tracking-[.12em] text-secondary uppercase">{data.nodeType}</span>
+        <strong className="node-title text-sm leading-tight">{data.label}</strong>
+        {data.identity && <span className="node-identity font-mono text-[9px] text-secondary">{data.identity}</span>}
+        {data.status && <span className="node-status absolute top-0 right-0 font-mono text-[8px] text-muted uppercase">{data.status}</span>}
         {data.startedAt && (
           <NodeDuration
             startedAt={data.startedAt}
@@ -213,47 +221,47 @@ const WorkflowNodeCard = memo(({ data }: NodeProps<Node<CardData>>) => {
           />
         )}
       </header>
-      {data.error && <span className="node-error">{data.error}</span>}
+      {data.error && <span className="node-error max-h-10 overflow-hidden rounded bg-[#fff1f0] px-2 py-1 text-[9px] text-danger">{data.error}</span>}
       {data.declaration && (
-        <div className="field-grid node-declaration">
-          <section className="node-fields node-inputs" aria-label="Inputs">
+        <div className="field-grid node-declaration grid min-h-[58px] grid-cols-[minmax(0,1fr)_minmax(0,1fr)] gap-6 overflow-hidden border-t border-line pt-2.5">
+          <section className="node-fields node-inputs min-w-0 overflow-hidden [&>small]:mb-1.5 [&>small]:block [&>small]:font-mono [&>small]:text-[7px] [&>small]:tracking-[.08em] [&>small]:text-muted [&>small]:uppercase" aria-label="Inputs">
             <small>Inputs</small>
             {data.declaration.inputs.length ? (
               data.declaration.inputs.map((field) => (
-                <span className="field node-field" key={`input-${field.name}`}>
-                  <span className="node-field-name">{field.name}</span>
+                <span className="field node-field mt-[3px] flex min-h-3.5 min-w-0 items-start justify-start gap-1 font-mono text-[7px]/[1.35] text-[#36423c] [&>code]:min-w-0 [&>code]:[overflow-wrap:anywhere] [&>code]:text-[7px] [&>code]:text-muted" key={`input-${field.name}`}>
+                  <span className="node-field-name min-w-0 [overflow-wrap:anywhere]">{field.name}</span>
                   {field.type && <code>{field.type}</code>}
                 </span>
               ))
             ) : (
-              <span className="node-field-empty">None</span>
+              <span className="node-field-empty font-mono text-[7px] text-muted">None</span>
             )}
           </section>
-          <section className="node-fields node-outputs" aria-label="Outputs">
+          <section className="node-fields node-outputs min-w-0 overflow-hidden text-right [&>small]:mb-1.5 [&>small]:block [&>small]:font-mono [&>small]:text-[7px] [&>small]:tracking-[.08em] [&>small]:text-muted [&>small]:uppercase" aria-label="Outputs">
             <small>Outputs</small>
             {data.declaration.outputs.length ? (
               data.declaration.outputs.map((field) => (
-                <span className="field node-field" key={`output-${field.name}`}>
-                  <span className="node-field-name">{field.name}</span>
+                <span className="field node-field mt-[3px] flex min-h-3.5 min-w-0 items-start justify-end gap-1 font-mono text-[7px]/[1.35] text-[#36423c] [&>code]:min-w-0 [&>code]:[overflow-wrap:anywhere] [&>code]:text-[7px] [&>code]:text-muted" key={`output-${field.name}`}>
+                  <span className="node-field-name min-w-0 [overflow-wrap:anywhere]">{field.name}</span>
                   {field.type && <code>{field.type}</code>}
                 </span>
               ))
             ) : (
-              <span className="node-field-empty">None</span>
+              <span className="node-field-empty font-mono text-[7px] text-muted">None</span>
             )}
           </section>
         </div>
       )}
       <Handle
         id="source-right"
-        className="node-handle"
+        className="node-handle pointer-events-none size-px! min-h-0! min-w-0! border-0! bg-transparent! opacity-0"
         type="source"
         position={Position.Right}
         isConnectable={false}
       />
       <Handle
         id="source-bottom"
-        className="node-handle"
+        className="node-handle pointer-events-none size-px! min-h-0! min-w-0! border-0! bg-transparent! opacity-0"
         type="source"
         position={Position.Bottom}
         isConnectable={false}
@@ -468,6 +476,7 @@ function GraphCanvasView({
 
   return (
     <ReactFlow
+      className="[&_.react-flow__edge-path]:stroke-[#87938d] [&_.react-flow__edge-path]:[stroke-width:1.4] [&_.react-flow__arrowhead_polyline]:fill-[#87938d] [&_.react-flow__arrowhead_polyline]:stroke-[#87938d]"
       nodes={nodes}
       edges={layout.edges}
       nodeTypes={NODE_TYPES}
@@ -483,17 +492,17 @@ function GraphCanvasView({
       proOptions={{ hideAttribution: true }}
     >
       {topLeftPanel && (
-        <Panel position="top-left" className="dag-panel dag-runs-panel nodrag nopan nowheel">
+        <Panel position="top-left" className="dag-panel dag-runs-panel nodrag nopan nowheel m-3.5 flex items-start gap-2">
           {topLeftPanel}
         </Panel>
       )}
       {bottomRightPanel && (
-        <Panel position="bottom-right" className="dag-panel dag-actions-panel nodrag nopan">
+        <Panel position="bottom-right" className="dag-panel dag-actions-panel nodrag nopan m-3.5 rounded-[9px] border border-line bg-[rgba(255,255,255,.96)] p-[7px] shadow-[0_6px_20px_rgba(20,31,26,.1)]">
           {bottomRightPanel}
         </Panel>
       )}
       <Background color="rgba(255,255,255,.06)" gap={24} size={1} />
-      <Controls showInteractive={false} />
+      <Controls className="overflow-hidden rounded-lg border! border-line! bg-white! shadow-[0_4px_14px_rgba(20,31,26,.08)]! [&_.react-flow__controls-button]:border-b-line! [&_.react-flow__controls-button]:bg-white! [&_.react-flow__controls-button]:fill-secondary! [&_.react-flow__controls-button:hover]:bg-[#f1f4f2]!" showInteractive={false} />
     </ReactFlow>
   );
 }

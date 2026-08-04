@@ -74,7 +74,7 @@ function WorkspaceDivider({
 
   return (
     <div
-      className={`workspace-divider ${className}`}
+      className={`workspace-divider relative z-[4] min-h-0 min-w-0 cursor-col-resize touch-none bg-panel after:absolute after:inset-y-0 after:left-1/2 after:w-0.5 after:-translate-x-1/2 after:bg-line after:content-[''] after:transition-colors after:duration-150 hover:after:bg-acid focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-acid focus-visible:after:bg-acid ${className}`}
       role="separator"
       aria-label={label}
       aria-controls={controls}
@@ -209,7 +209,7 @@ export function App({ api }: { api: OperatorApi }) {
   const restoreButton = explorerCollapsed ? (
     <button
       type="button"
-      className="explorer-restore-button"
+      className="explorer-restore-button grid size-7 flex-none cursor-pointer place-items-center rounded-[7px] border border-line bg-white p-0 text-xl leading-none text-secondary hover:border-secondary hover:bg-[#f7f9f8] hover:text-ink focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-acid max-[700px]:hidden"
       aria-label="Restore Explorer"
       aria-controls="operator-explorer"
       aria-expanded="false"
@@ -249,36 +249,40 @@ export function App({ api }: { api: OperatorApi }) {
   const workspaceStyle = {
     "--workspace-explorer-width": `${explorerWidth}px`,
     "--workspace-inspector-width": `${inspectorWidth}px`,
+    "--workspace-explorer-column-width": explorerCollapsed ? "0px" : `${explorerWidth}px`,
+    "--workspace-explorer-divider-width": explorerCollapsed ? "0px" : "16px",
+    "--workspace-inspector-column-width": inspectorOpen ? `${inspectorWidth}px` : "0px",
+    "--workspace-inspector-divider-width": inspectorOpen ? "16px" : "0px",
   } as CSSProperties;
 
   return (
     <div
-      className={`app-shell ${explorerOpen ? "explorer-open" : ""} ${
+      className={`app-shell flex h-full flex-col ${explorerOpen ? "explorer-open" : ""} ${
         explorerCollapsed ? "explorer-collapsed" : ""
       }`}
     >
-      <header className="topbar">
-        <div className="brand">
-          <span className="brand-mark" aria-hidden="true">
+      <header className="topbar z-10 grid min-h-[58px] grid-cols-[260px_minmax(0,1fr)_auto_auto] items-center border-b border-line bg-white px-5 shadow-[0_1px_2px_rgba(20,31,26,.04)] max-[1000px]:grid-cols-[210px_minmax(0,1fr)_auto_auto] max-[700px]:grid-cols-[auto_minmax(0,1fr)_auto] max-[700px]:gap-2 max-[700px]:px-2.5">
+        <div className="brand flex items-center gap-[11px]">
+          <span className="brand-mark grid size-[30px] place-items-center rounded-lg bg-acid text-white [font-weight:750]" aria-hidden="true">
             A
           </span>
-          <div>
-            <strong>Avalanche</strong>
-            <span>Operator</span>
+          <div className="flex items-baseline gap-[7px]">
+            <strong className="text-[15px] tracking-[-0.02em]">Avalanche</strong>
+            <span className="font-mono text-[11px] text-muted uppercase">Operator</span>
           </div>
         </div>
-        <div className="breadcrumb">
+        <div className="breadcrumb flex justify-center gap-[9px] text-xs text-muted max-[700px]:hidden [&_i]:opacity-40 [&_strong]:font-semibold [&_strong]:text-[#26322c]">
           <span>{workflow?.rootAlias || "Local operator"}</span>
           {workflow && <><i>/</i><strong>{workflow.displayName}</strong></>}
           {historical && <><i>/</i><strong>{selection.runId}</strong></>}
         </div>
-        <div className={`connection connection-${state.connection}`}>
+        <div className={`connection flex items-center gap-2 font-mono text-[11px] capitalize [&>span]:size-[7px] [&>span]:rounded-full ${state.connection === "live" ? "[&>span]:bg-mint" : "[&>span]:bg-amber"} max-[700px]:justify-self-end connection-${state.connection}`}>
           <span />
           {state.connection === "live" ? "Live" : state.connection}
         </div>
         <button
           type="button"
-          className="explorer-toggle"
+          className="explorer-toggle hidden cursor-pointer rounded-[7px] border border-[#cbd2ce] bg-white px-[9px] py-[7px] text-[10px] max-[700px]:block"
           aria-controls="operator-explorer"
           aria-expanded={explorerOpen}
           onClick={() => setExplorerOpen((open) => !open)}
@@ -286,9 +290,9 @@ export function App({ api }: { api: OperatorApi }) {
           Explorer
         </button>
       </header>
-      {state.error && <div className="connection-error">{state.error}</div>}
+      {state.error && <div className="connection-error border-b border-[#efb9b5] bg-[#fff1f0] px-[18px] py-2 text-xs text-[#9d2923]">{state.error}</div>}
       <main
-        className={`workspace ${inspectorOpen ? "with-inspector" : ""}`}
+        className={`workspace grid min-h-0 w-full flex-1 overflow-hidden grid-cols-[var(--workspace-explorer-column-width)_var(--workspace-explorer-divider-width)_minmax(0,1fr)_var(--workspace-inspector-divider-width)_var(--workspace-inspector-column-width)] max-[1000px]:grid-cols-[var(--workspace-explorer-column-width)_var(--workspace-explorer-divider-width)_minmax(0,1fr)] max-[700px]:grid-cols-[minmax(0,1fr)] ${inspectorOpen ? "with-inspector" : ""}`}
         style={workspaceStyle}
       >
         <Explorer
@@ -296,10 +300,12 @@ export function App({ api }: { api: OperatorApi }) {
           selection={selection}
           onSelect={select}
           onCollapse={collapseExplorer}
+          open={explorerOpen}
+          collapsed={explorerCollapsed}
         />
         {!explorerCollapsed && (
           <WorkspaceDivider
-            className="workspace-explorer-divider"
+            className="workspace-explorer-divider col-start-2 max-[700px]:hidden"
             label="Resize Explorer"
             controls="operator-explorer"
             value={explorerWidth}
@@ -309,12 +315,12 @@ export function App({ api }: { api: OperatorApi }) {
             onChange={setExplorerWidth}
           />
         )}
-        <section className="canvas-shell">
-          <div className={historical ? "canvas run-canvas" : "canvas blueprint-canvas"}>
+        <section className="canvas-shell relative col-start-3 grid min-h-0 min-w-0 w-full grid-rows-[minmax(0,1fr)] overflow-hidden bg-[#f7f9f8] max-[700px]:col-start-1">
+          <div className={historical ? "canvas run-canvas relative flex min-h-0 min-w-0 w-full flex-col overflow-hidden bg-[radial-gradient(circle,#e1e4df_1px,transparent_1px),#fafaf8] bg-[length:24px_24px]" : "canvas blueprint-canvas relative min-h-0 min-w-0 w-full overflow-hidden bg-[radial-gradient(circle,#dce3df_1px,transparent_1px),#f7f9f8] bg-[length:24px_24px]"}>
             {historical ? (
               run ? (
                 <>
-                  <div className="run-graph-shell">
+                  <div className="run-graph-shell relative min-h-0 min-w-0 flex-[1_1_auto] overflow-hidden">
                     <GraphCanvas
                       runTopology={run.topology}
                       runNodes={run.nodes}
@@ -324,7 +330,7 @@ export function App({ api }: { api: OperatorApi }) {
                       topLeftPanel={runListPanel}
                       bottomRightPanel={runControlsPanel}
                     />
-                    <div className="historical-badge">
+                    <div className="historical-badge absolute top-[18px] right-[18px] z-[5] rounded-lg border border-[#dfc99e] bg-[rgba(255,252,245,.96)] px-3 py-[9px] text-[9px] text-[#766548] shadow-[0_4px_14px_rgba(54,44,25,.08)] [&>span]:mb-[3px] [&>span]:block [&>span]:font-mono [&>span]:text-[8px] [&>span]:text-amber [&>span]:uppercase">
                       <span>Immutable run snapshot</span>
                       Current workflow changes do not alter this canvas
                     </div>
@@ -341,7 +347,7 @@ export function App({ api }: { api: OperatorApi }) {
                 state.selectedRunStatus === "loading" ? (
                 <>
                   {restoreButton}
-                  <div className="empty-state" role="status">
+                  <div className="empty-state grid h-full place-content-center text-center text-[#6d7872] [&>span]:text-[40px] [&>span]:text-acid [&>h2]:my-2 [&>h2]:text-[#27332d] [&>p]:max-w-[390px] [&>p]:text-xs" role="status">
                     <span>◇</span>
                     <h2>Loading run snapshot</h2>
                     <p>Retrieving the retained topology and execution state.</p>
@@ -351,7 +357,7 @@ export function App({ api }: { api: OperatorApi }) {
                 state.selectedRunStatus === "error" ? (
                 <>
                   {restoreButton}
-                  <div className="empty-state" role="alert">
+                  <div className="empty-state grid h-full place-content-center text-center text-[#6d7872] [&>span]:text-[40px] [&>span]:text-acid [&>h2]:my-2 [&>h2]:text-[#27332d] [&>p]:max-w-[390px] [&>p]:text-xs" role="alert">
                     <span>!</span>
                     <h2>Run snapshot unavailable</h2>
                     <p>{state.selectedRunError || "The selected run could not be loaded."}</p>
@@ -360,7 +366,7 @@ export function App({ api }: { api: OperatorApi }) {
               ) : (
                 <>
                   {restoreButton}
-                  <div className="empty-state">
+                  <div className="empty-state grid h-full place-content-center text-center text-[#6d7872] [&>span]:text-[40px] [&>span]:text-acid [&>h2]:my-2 [&>h2]:text-[#27332d] [&>p]:max-w-[390px] [&>p]:text-xs">
                     <span>◇</span>
                     <h2>No run snapshot</h2>
                     <p>Select the run again to load its retained topology.</p>
@@ -379,7 +385,7 @@ export function App({ api }: { api: OperatorApi }) {
             ) : (
               <>
                 {restoreButton}
-                <div className="empty-state">
+                <div className="empty-state grid h-full place-content-center text-center text-[#6d7872] [&>span]:text-[40px] [&>span]:text-acid [&>h2]:my-2 [&>h2]:text-[#27332d] [&>p]:max-w-[390px] [&>p]:text-xs">
                   <span>◇</span>
                   <h2>No workflows discovered</h2>
                   <p>Catalog changes will appear here as the operator scans configured targets.</p>
@@ -391,7 +397,7 @@ export function App({ api }: { api: OperatorApi }) {
         {inspectorOpen && (
           <>
             <WorkspaceDivider
-              className="workspace-inspector-divider"
+              className="workspace-inspector-divider col-start-4 max-[1000px]:fixed max-[1000px]:top-[58px] max-[1000px]:right-[min(var(--workspace-inspector-width),100vw)] max-[1000px]:bottom-0 max-[1000px]:z-[31] max-[1000px]:w-4 max-[700px]:hidden"
               label="Resize Inspector"
               controls="operator-inspector"
               value={inspectorWidth}
@@ -400,7 +406,7 @@ export function App({ api }: { api: OperatorApi }) {
               pointerDirection={-1}
               onChange={setInspectorWidth}
             />
-            <div id="operator-inspector" className="workspace-inspector-pane">
+            <div id="operator-inspector" className="workspace-inspector-pane col-start-5 grid min-h-0 min-w-0 overflow-hidden max-[1000px]:contents">
               <Inspector
                 api={api}
                 workflow={workflow}

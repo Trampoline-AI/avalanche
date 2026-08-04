@@ -70,7 +70,7 @@ function MarkdownContent({
       {expandable && hasMore && (
         <button
           type="button"
-          className="descriptor-page-action inspector-markdown-more"
+          className="descriptor-page-action inspector-markdown-more cursor-pointer rounded-md border border-line bg-panel px-2 py-[5px] font-mono text-[8px] text-acid"
           onClick={() => setVisibleChunkCount((current) => current + 1)}
         >
           Show more

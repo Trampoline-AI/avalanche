@@ -445,7 +445,7 @@ function browserBenchmarkFixture() {
 import React from "react";
 import { createRoot } from "react-dom/client";
 import { RunListPanel } from "/src/RunListPanel";
-import "/src/styles.css";
+import "/src/tailwind.css";
 
 const RUN_COUNT = ${RUN_COUNT};
 const DOM_ROW_LIMIT = ${DOM_ROW_LIMIT};
@@ -496,13 +496,15 @@ async function run() {
   let selectedRunId = "";
   const renderStartedAt = performance.now();
   createRoot(rootElement).render(
-    <RunListPanel
-      workflowId={workflowId}
-      runs={runs}
-      onSelectRun={(runId) => {
-        selectedRunId = runId;
-      }}
-    />,
+    <div className="h-[222px] w-[300px] [&_.run-list-panel]:h-[222px]">
+      <RunListPanel
+        workflowId={workflowId}
+        runs={runs}
+        onSelectRun={(runId) => {
+          selectedRunId = runId;
+        }}
+      />
+    </div>,
   );
   const panel = await until(
     () => document.querySelector<HTMLElement>(".run-list-panel") ?? undefined,
@@ -599,19 +601,14 @@ async function main() {
     await writeFile(
       join(fixtureDirectory, "index.html"),
       `<!doctype html>
-<html lang="en">
+<html class="h-full" lang="en">
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <style>
-      html, body, #root { height: 100%; margin: 0; }
-      #root { width: 300px; }
-      .run-list-panel { height: 222px; width: 300px; }
-    </style>
     <title>Operator real virtualizer benchmark</title>
   </head>
-  <body>
-    <div id="root"></div>
+  <body class="m-0 h-full">
+    <div id="root" class="h-full w-[300px]"></div>
     <script type="module" src="./fixture.tsx"></script>
   </body>
 </html>
@@ -620,7 +617,8 @@ async function main() {
     await writeFile(join(fixtureDirectory, "fixture.tsx"), browserBenchmarkFixture());
     await writeFile(
       join(fixtureDirectory, "vite.benchmark.config.mjs"),
-      "export default { server: { hmr: false } };",
+      `import tailwindcss from "@tailwindcss/vite";
+export default { plugins: [tailwindcss()], server: { hmr: false } };`,
     );
 
     const port = 41_000 + (process.pid % 1_000);
