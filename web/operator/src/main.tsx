@@ -4,7 +4,7 @@ import { createRoot } from "react-dom/client";
 
 import { GrpcWebOperatorApi } from "./api";
 import { App } from "./App";
-import "./tailwind.css";
+import "./style.css";
 
 const root = document.getElementById("root");
 if (!root) throw new Error("Operator UI root element is missing");
