@@ -7,12 +7,12 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 // gate isolates projection, paging, cache, and mounted-row bounds from jsdom layout.
 vi.mock("@tanstack/react-virtual", () => ({
   useVirtualizer: ({ count }: { count: number }) => ({
-    getTotalSize: () => count * 44,
+    getTotalSize: () => count * 32,
     getVirtualItems: () =>
       Array.from({ length: Math.min(count, 120) }, (_, index) => ({
         index,
-        size: 44,
-        start: index * 44,
+        size: 32,
+        start: index * 32,
       })),
     scrollToIndex: () => undefined,
   }),
@@ -20,7 +20,7 @@ vi.mock("@tanstack/react-virtual", () => ({
 
 
 import type { OperatorApi, StructuralBaseline } from "./api";
-import { Explorer } from "./Explorer";
+import { RunListPanel } from "./RunListPanel";
 import {
   AgentEventDescriptorMsg,
   CatalogSnapshotMsg,
@@ -359,43 +359,27 @@ describe("large retained-run browser benchmark", () => {
       expect(Math.max(...frameDeltas)).toBeLessThanOrEqual(256);
       projectionView.unmount();
 
-      const onExplorerSelect = vi.fn();
-      const explorerRenderStart = performance.now();
-      const explorerView = render(
-        <Explorer
-          catalog={catalog}
+      const onSelectRun = vi.fn();
+      const runListRenderStart = performance.now();
+      const runListView = render(
+        <RunListPanel
+          workflowId={WORKFLOW_ID}
           runs={Object.fromEntries(runSummaries.map((item) => [item.runId, item]))}
-          selection={undefined}
-          onSelect={onExplorerSelect}
+          onSelectRun={onSelectRun}
         />,
       );
-      fireEvent.click(screen.getByRole("button", { name: "Collapse Benchmark flow" }));
-      fireEvent.click(screen.getByRole("button", { name: "Expand Benchmark flow" }));
-      const virtualRunList = await within(explorerView.container).findByRole("list", {
-        name: "Runs for Benchmark flow",
+      const virtualRunList = await within(runListView.container).findByRole("region", {
+        name: "Workflow runs",
       });
       const newestRun = await within(virtualRunList).findByRole("button", {
-        name: /run-09999Created at sequence 10000/,
+        name: /run-09999/,
       });
-      expect(virtualRunList.querySelectorAll(".run-select").length).toBeLessThanOrEqual(
+      expect(virtualRunList.querySelectorAll(".run-list-row").length).toBeLessThanOrEqual(
         DOM_ROW_LIMIT,
       );
-      const explorer = within(explorerView.container).getByRole("complementary", {
-        name: "Explorer",
-      });
-      expect(explorer.getBoundingClientRect()).toMatchObject({ height: 800, width: 280 });
-      expect(explorer.clientHeight).toBe(800);
-      expect(explorer.offsetHeight).toBe(800);
-      expect(explorer.ownerDocument.defaultView?.ResizeObserver).toBe(
-        globalThis.ResizeObserver,
-      );
-      expect(performance.now() - explorerRenderStart).toBeLessThan(UNIT_RENDER_BUDGET_MS);
+      expect(performance.now() - runListRenderStart).toBeLessThan(UNIT_RENDER_BUDGET_MS);
       fireEvent.click(newestRun);
-      expect(onExplorerSelect).toHaveBeenLastCalledWith({
-        kind: "run",
-        workflowId: WORKFLOW_ID,
-        runId: RUN_ID,
-      });
+      expect(onSelectRun).toHaveBeenLastCalledWith(RUN_ID);
 
     },
     30_000,
@@ -411,9 +395,6 @@ describe("large retained-run browser benchmark", () => {
       const freshOutput = deferred<unknown>();
       const largePayload = "x".repeat(LARGE_DETAIL_BYTES);
       const selectedLogs = logDescriptors.filter((entry) => entry.nodeId === SELECTED_NODE);
-      const selectedLogSequences = new Set(
-        selectedLogs.slice(-(PAGE_SIZE * 2)).map((entry) => entry.sequence),
-      );
       const listAgentEventPage = vi.fn<OperatorApi["listAgentEventPage"]>(async (request) => {
         if (request.order === DescriptorPageOrder.NEWEST_FIRST) {
           const upper =
@@ -529,19 +510,10 @@ describe("large retained-run browser benchmark", () => {
         freshOutput.resolve(outputDetail);
         await Promise.resolve();
       });
-      await waitFor(() =>
-        expect(
-          screen.queryByRole("button", {
-            name: "Object (2 properties)",
-            expanded: false,
-          }),
-        ).toBeInTheDocument(),
-      );
-      expect(screen.queryByText("fresh-detail")).not.toBeInTheDocument();
-      fireEvent.click(
-        screen.getByRole("button", { name: "Object (2 properties)", expanded: false }),
-      );
-      expect(screen.getByText("fresh-detail")).toBeInTheDocument();
+      const outputTree = await screen.findByRole("tree", { name: "JSON value" });
+      expect(within(outputTree).getByText("fresh-detail")).toBeInTheDocument();
+      expect(within(outputTree).getByText("freshMarker")).toBeInTheDocument();
+      expect(screen.queryByRole("button", { name: /Object/ })).not.toBeInTheDocument();
 
       const commitsBeforeStaleCompletion = inspectorCommits;
       await act(async () => {
@@ -553,20 +525,10 @@ describe("large retained-run browser benchmark", () => {
       expect(screen.getByText("fresh-detail")).toBeInTheDocument();
 
       fireEvent.click(screen.getByRole("button", { name: "inputs" }));
-      await waitFor(() =>
-        expect(
-          screen.queryByRole("button", {
-            name: "Object (1 property)",
-            expanded: false,
-          }),
-        ).toBeInTheDocument(),
-      );
+      const inputTree = await screen.findByRole("tree", { name: "JSON value" });
       expect(listAgentEventPage).toHaveBeenCalledTimes(3);
-      expect(screen.queryByText("stale-detail")).not.toBeInTheDocument();
-      fireEvent.click(
-        screen.getByRole("button", { name: "Object (1 property)", expanded: false }),
-      );
-      expect(screen.getByText("stale-detail")).toBeInTheDocument();
+      expect(within(inputTree).getByText("stale-detail")).toBeInTheDocument();
+      expect(screen.queryByRole("button", { name: /Object/ })).not.toBeInTheDocument();
 
       fireEvent.click(screen.getByRole("button", { name: "Load more events" }));
       await waitFor(() => {
@@ -583,47 +545,56 @@ describe("large retained-run browser benchmark", () => {
       });
 
       fireEvent.click(screen.getByRole("button", { name: "trace" }));
-      await waitFor(() =>
-        expect(readJsonDetail.mock.calls.some(([token]) => token === "event:100")).toBe(true),
-      );
+      expect(await screen.findByText("99 retained turns")).toBeInTheDocument();
+      expect(listAgentEventPage).toHaveBeenCalledTimes(5);
+      expect(listAgentEventPage.mock.calls[4][0]).toMatchObject({
+        pageToken: "events:0",
+        afterEventSequence: "0",
+        pageSize: PAGE_SIZE,
+        order: DescriptorPageOrder.FORWARD,
+        expectedNodeId: SELECTED_NODE,
+      });
+      fireEvent.click(screen.getByRole("button", { name: "Expand turns" }));
+      await waitFor(() => expect(listAgentEventPage).toHaveBeenCalledTimes(6));
+      expect(listAgentEventPage.mock.calls[5][0]).toMatchObject({
+        pageToken: "events:next",
+        afterEventSequence: String(PAGE_SIZE),
+        pageSize: PAGE_SIZE,
+        order: DescriptorPageOrder.FORWARD,
+        expectedNodeId: SELECTED_NODE,
+      });
       fireEvent.click(screen.getByRole("button", { name: "Following live" }));
-      for (let turn = 1; turn <= 5; turn += 1) {
-        const token = `event:${turn + 1}`;
-        const turnLabel = await screen.findByText(`Turn ${turn}`);
-        const turnButton = turnLabel.closest("button");
-        if (!turnButton) throw new Error(`Turn ${turn} button is missing`);
-        fireEvent.click(turnButton);
+      for (let turn = 0; turn < 5; turn += 1) {
+        const token = `event:${turn + 2}`;
+        fireEvent.click(await screen.findByRole("button", { name: `Expand ${turn}` }));
         await waitFor(() =>
           expect(readJsonDetail.mock.calls.filter(([called]) => called === token)).toHaveLength(1),
         );
+        expect(await screen.findByText(token)).toBeInTheDocument();
       }
-      const firstTurn = screen.getByText("Turn 1").closest("button");
-      if (!firstTurn) throw new Error("Turn 1 button is missing");
-      fireEvent.click(firstTurn);
+      fireEvent.click(screen.getByRole("button", { name: "Collapse 0" }));
+      fireEvent.click(screen.getByRole("button", { name: "Expand 0" }));
       await waitFor(() =>
         expect(readJsonDetail.mock.calls.filter(([token]) => token === "event:2")).toHaveLength(2),
       );
 
       fireEvent.click(screen.getByRole("button", { name: "logs" }));
-      await waitFor(() => {
-        expect(listLogPage).toHaveBeenCalledTimes(1);
-        expect(screen.queryAllByRole("button", { name: /#\d+/ }).length).toBeGreaterThan(0);
-      });
-      expect(listLogPage).toHaveBeenCalledTimes(1);
+      await waitFor(() => expect(listLogPage).toHaveBeenCalledTimes(1));
       expect(listLogPage.mock.calls[0][0]).toMatchObject({
         pageSize: PAGE_SIZE,
         nodeId: SELECTED_NODE,
         order: DescriptorPageOrder.NEWEST_FIRST,
       });
-      const logList = screen.getByRole("heading", { name: "Node logs" }).parentElement;
-      if (!logList) throw new Error("Node logs section missing");
-      expect(listLogPage).toHaveBeenCalledTimes(1);
+      const logStream = await screen.findByLabelText("Continuous node log stream");
+      await waitFor(() =>
+        expect(logStream.textContent).toBe(new Array(PAGE_SIZE).fill(decodedSplitText()).join("\n")),
+      );
+      expect(readTextDetail).toHaveBeenCalledTimes(PAGE_SIZE);
+      expect(document.querySelectorAll(".log-row")).toHaveLength(0);
+      expect(document.querySelectorAll(".inspector-log-stream pre")).toHaveLength(1);
+
       fireEvent.click(screen.getByRole("button", { name: "Load older logs" }));
-      await waitFor(() => {
-        expect(listLogPage).toHaveBeenCalledTimes(2);
-        expect(screen.getByRole("button", { name: "Load older logs" })).not.toBeDisabled();
-      });
-      expect(listLogPage).toHaveBeenCalledTimes(2);
+      await waitFor(() => expect(listLogPage).toHaveBeenCalledTimes(2));
       expect(listLogPage.mock.calls[1][0]).toMatchObject({
         pageToken: "logs:next",
         beforeSequence: selectedLogs.at(-PAGE_SIZE)?.sequence,
@@ -631,19 +602,13 @@ describe("large retained-run browser benchmark", () => {
         nodeId: SELECTED_NODE,
         order: DescriptorPageOrder.NEWEST_FIRST,
       });
-      const logRows = within(logList).getAllByRole("button", { name: /#\d+/ });
-      expect(logRows.length).toBeLessThanOrEqual(DOM_ROW_LIMIT);
-      for (const row of logRows) {
-        const sequence = row.textContent?.match(/#(\d+)/)?.[1];
-        expect(sequence && selectedLogSequences.has(sequence)).toBe(true);
-      }
-      expect(within(logList).queryByText("#1")).not.toBeInTheDocument();
-
-      fireEvent.click(logRows[0]);
       await waitFor(() =>
-        expect(screen.queryByText("plain text A😀B: not JSON }")).toBeInTheDocument(),
+        expect(logStream.textContent).toBe(
+          new Array(PAGE_SIZE * 2).fill(decodedSplitText()).join("\n"),
+        ),
       );
-      expect(readTextDetail).toHaveBeenCalledTimes(1);
+      expect(readTextDetail).toHaveBeenCalledTimes(PAGE_SIZE * 2);
+      expect(listLogPage).toHaveBeenCalledTimes(2);
       expect(performance.now() - benchmarkStart).toBeLessThan(30_000);
     },
     30_000,

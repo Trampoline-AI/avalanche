@@ -30,7 +30,7 @@
 
 - [x] 4.1 Implement ephemeral catalog and run projections from authoritative operator updates, with stream reconnection, reset reconciliation, and non-authoritative start/cancel request state.
 - [x] 4.2 Implement the scan-target Explorer with workflow/run hierarchy and workflow-versus-run navigation.
-- [x] 4.3 Implement the current-workflow blueprint canvas with pan/zoom, one dependency arrow per source-target pair, agent field lists inside cards, and declaration inspection.
+- [x] 4.3 Implement the current-workflow blueprint canvas with pan/zoom, one dependency arrow per source-target pair, typed agent field lists, and declaration inspection.
 - [x] 4.4 Implement the historical-run canvas with its topology snapshot, execution-focused node cards, status, duration, failure, logs, and a visible distinction from current workflow state.
 - [x] 4.5 Implement virtualized, paginated `RunTrace` inspection with header metadata, chronological turn summaries, selected complete turn details, live following, errors, and a bounded LRU detail cache.
 - [x] 4.6 Implement separate agent Inputs and Output views using retained invocation evidence and declaration field metadata.
@@ -72,3 +72,19 @@
 - [x] 8.1 Add and forward a validated `--log-level` option for `ava operator`, configure runtime CLI logging before service startup, and preserve library caller logging ownership.
 - [x] 8.2 Log source-watcher startup/shutdown and reload attempt, success, unchanged, and failed outcomes with catalog revision and bounded diagnostic context at appropriate levels.
 - [x] 8.3 Add focused CLI and watcher regression coverage, update user-facing operator guidance, and run the relevant lint and test gates.
+
+## 9. Workflow declaration presentation feedback
+
+- [x] 9.1 Show declared input and output types in contained current-workflow card lists, keep declaration instructions in the inspector, and render inspector skills and tools from their declared content as formatted Markdown instead of raw object dumps.
+- [x] 9.2 Add focused browser regression coverage for typed field lists, absence of card instructions, inspector Markdown instructions, and formatted skill and tool presentation.
+- [x] 9.3 Replace generic object disclosure buttons in Inputs and Output with coherent loading states and the shared hierarchical JSON explorer, progressively hydrating bounded portions for oversized values.
+- [x] 9.4 Replace per-record log cards with a continuous monospaced log stream and make active inspector content fill the available pane height.
+- [x] 9.5 Replace the trace turn-selector pane and object buttons with one progressively hydrated hierarchical JSON explorer backed by the existing paginated descriptors and bounded body cache.
+- [x] 9.6 Fix deeply nested JSON layout so key columns fit their content and long or nested values retain readable width through wrapping or pane-local overflow instead of collapsing into vertical one-character columns.
+- [x] 9.7 Make the Explorer collapsible and add independent draggable width controls for the Explorer and run inspector.
+- [x] 9.8 Keep ordered update sequence internal, display only catalog revision as workflow version metadata, and verify logs and trace events do not appear to advance the catalog.
+- [x] 9.9 Show running node duration in live-updating seconds and strengthen active and completed borders, including a clear reduced-motion-compatible running animation.
+- [x] 9.10 Route immediate-next-layer dependencies from card right edges, route skip-layer dependencies from card bottom edges, and remove interactive-looking endpoint circles.
+- [x] 9.11 Use compact workflow cards with contained typed Inputs and Outputs lists and no card-level instruction excerpt.
+- [x] 9.12 Replace visible `Historical run` wording with `Run`.
+- [x] 9.13 Add focused browser regression coverage for progressive detail hydration, continuous logs, full-height and resizable panes, compact JSON key spacing, nested JSON layout, internal-only update sequences, live durations and node states, edge routing, endpoint appearance, typed field-list layout, absent card instructions, and Run wording.

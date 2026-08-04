@@ -18,7 +18,7 @@ The web UI SHALL present a workflow view from the current operator catalog, incl
 
 ### Requirement: Navigate scanned workflows and runs
 
-The web UI SHALL organize the Explorer by each configured scan target. Each target SHALL contain its discovered workflows, and each workflow SHALL contain its retained runs. Selecting a workflow SHALL open its current workflow view; selecting a run SHALL open that run's historical execution view.
+The web UI SHALL organize the Explorer by each configured scan target. Each target SHALL contain its discovered workflows, and each workflow SHALL contain its retained runs. Selecting a workflow SHALL open its current workflow view; selecting a run SHALL open that run's execution view. Visible headings and controls SHALL use `Run` without a historical qualifier.
 
 #### Scenario: Multiple scan targets contain workflows
 - **WHEN** the operator is configured with multiple file or directory scan targets
@@ -34,21 +34,37 @@ The web UI SHALL organize the Explorer by each configured scan target. Each targ
 
 ### Requirement: Inspect the current workflow on a read-only canvas
 
-The current workflow view SHALL present its DAG on a pannable, zoomable, read-only canvas. Agent-node cards SHALL show their declared input and output fields inside the card. Each graph dependency SHALL render as at most one arrow between its source and target cards, regardless of the number of fields supplied across that dependency.
+The current workflow view SHALL present its DAG on a pannable, zoomable, read-only canvas. Agent-node cards SHALL show the names and declared types of their input and output fields in clear Inputs and Outputs lists inside the card. Cards SHALL NOT render declaration instructions. Each graph dependency SHALL render as at most one arrow between its source and target cards, regardless of the number of fields supplied across that dependency. The agent declaration inspector SHALL render instructions, skills, and tools as formatted Markdown and SHALL NOT display skills or tools as raw serialized objects.
 
 #### Scenario: Agent node has several fields from one parent
 - **WHEN** several declared fields of an agent node are supplied by the same upstream node
-- **THEN** the canvas renders one arrow between the two node cards and retains the field lists inside the target card
+- **THEN** the canvas renders one arrow between the two node cards and retains each field's name and declared type as a separate entry in the input list
 
 #### Scenario: User inspects an agent declaration
 - **WHEN** a user opens an agent node from the current workflow view
-- **THEN** the UI presents its instructions in a readable format together with its model, runtime, skill, and tool metadata
+- **THEN** the UI renders its instructions as Markdown, formats each skill and tool from its declared content as Markdown rather than an object dump, and presents model and runtime metadata
 
-### Requirement: Present historical run state
+#### Scenario: Dependency targets the immediately following graph layer
+- **WHEN** a node output is consumed by a node in the immediately following graph layer
+- **THEN** its arrow leaves from the right edge of the source card
+
+#### Scenario: Dependency skips one or more graph layers
+- **WHEN** a node output is consumed only by a node beyond the immediately following graph layer
+- **THEN** its arrow leaves from the bottom edge of the source card
+
+#### Scenario: Dependency arrows are displayed
+- **WHEN** the canvas renders incoming and outgoing dependency arrows
+- **THEN** arrow endpoints do not display interactive-looking handle circles
+
+#### Scenario: Workflow node card is viewed closely
+- **WHEN** a user zooms into a workflow node
+- **THEN** the compact card places typed Inputs and Outputs lists inside its body and its title near the top without rendering instruction content
+
+### Requirement: Present run state
 
 The web UI SHALL present a run view from the selected run's retained topology and execution data. It SHALL not render a run using the current workflow topology when the two differ.
 
-#### Scenario: Historical topology differs from current workflow
+#### Scenario: Recorded topology differs from current workflow
 - **WHEN** a user opens a run whose recorded topology differs from the current workflow catalog
 - **THEN** the run view displays the recorded topology and its node statuses, logs, and available details
 
@@ -83,31 +99,43 @@ The run view SHALL present the retained input and terminal output fields for an 
 
 ### Requirement: Inspect complete agent run traces on demand
 
-The run view SHALL make the retained exportable `RunTrace` information inspectable, including run-level status, models, iteration counts, duration, usage and telemetry metadata; every iteration's reasoning, code, outputs, finish metadata and usage; tool calls; predict subcalls; and lifecycle evidence. Inputs and terminal agent outputs SHALL remain separate views.
+The run view SHALL present retained exportable `RunTrace` information through a normal hierarchical JSON explorer rather than a separate turn-selector pane or generic HTML object buttons. The explorer SHALL expose run-level status, models, iteration counts, duration, usage and telemetry metadata; every iteration's reasoning, code, outputs, finish metadata and usage; tool calls; predict subcalls; and lifecycle evidence. Inputs and terminal agent outputs SHALL remain separate views.
 
-#### Scenario: User selects a trace turn
-- **WHEN** a user selects a trace turn
-- **THEN** the reader presents that iteration's retained reasoning, code, truncated and available full output, tool call arguments/results/errors, grouped predict-call inputs/outputs/errors, finish metadata, duration, and usage
+#### Scenario: User opens a trace
+- **WHEN** a user opens the Trace tab
+- **THEN** the tab presents the trace as an explorable JSON hierarchy without requiring the user to select turns from a separate scrollable navigator
 
-#### Scenario: User selects an earlier live turn
-- **WHEN** a user selects a completed earlier turn while an agent trace is live
-- **THEN** the reader presents that turn and stops automatically following the latest turn
-
-#### Scenario: Agent trace reports an error
-- **WHEN** a trace turn records an error
-- **THEN** the navigator visibly identifies that turn as failed
+#### Scenario: User expands trace content
+- **WHEN** the user expands an available trace object or collection
+- **THEN** the explorer loads and renders that portion in place without exposing a generic `Object` button
 
 #### Scenario: Trace contains many large turns
-- **WHEN** a user opens a large trace
-- **THEN** the web UI pages and virtualizes lightweight turn summaries, fetches only selected detail bodies, and keeps a bounded detail cache rather than hydrating the complete trace
+- **WHEN** a trace exceeds the browser's bounded detail limits
+- **THEN** the explorer progressively fetches and renders bounded portions while retaining an explicit loading state and without hydrating the complete trace at once
+
+#### Scenario: Agent trace reports an error
+- **WHEN** a trace records an error
+- **THEN** the JSON explorer visibly identifies the failed trace content
 
 ### Requirement: Provide live operator observability
 
-The web UI SHALL receive ordered operator updates and reconcile its state when its update history is no longer available. It SHALL surface current run status and node state as updates arrive.
+The web UI SHALL receive ordered operator updates and reconcile its state when its update history is no longer available. It SHALL surface current run status and node state as updates arrive. Running node cards SHALL show elapsed time in human-readable seconds and update it in real time. Transport update sequence numbers SHALL remain internal; user-facing version metadata SHALL show the catalog revision, which changes only when the effective workflow catalog changes.
 
 #### Scenario: Update replay is unavailable
 - **WHEN** the operator requires a client to reset its update stream
 - **THEN** the web UI reloads an authoritative catalog and run baseline before resuming live updates
+
+#### Scenario: Running node remains active
+- **WHEN** a node is running
+- **THEN** its elapsed duration advances in seconds at least once per second and is not displayed as a raw millisecond count
+
+#### Scenario: Logs or trace events arrive
+- **WHEN** new run logs or trace events advance the ordered transport stream without changing workflow source
+- **THEN** the displayed catalog revision does not change and no transport sequence counter is presented as a catalog version
+
+#### Scenario: Node state is visible on a zoomed canvas
+- **WHEN** a node is running or completed
+- **THEN** its state uses a clearly thicker and higher-contrast border than an idle node, and the running node has a visible activity animation that does not rely on color alone
 
 ### Requirement: Treat the operator as authoritative
 
@@ -145,20 +173,26 @@ The web UI listener SHALL default to loopback-only access. Enabling non-loopback
 - **WHEN** a user starts the operator web UI without an explicit listener host
 - **THEN** the UI is reachable only through a loopback address
 
-### Requirement: Preserve navigation and controls on narrow viewports
+### Requirement: Preserve navigation and controls across workspace sizes
 
-The web UI SHALL retain access to workflow and run navigation, the selected view's
-identity, and its primary controls at viewport widths of 375 CSS pixels or greater.
-The workflow and run canvases SHALL remain bounded by the visible workspace rather
-than forcing primary content beyond the document viewport.
+The web UI SHALL retain access to workflow and run navigation, the selected view's identity,
+and its primary controls at viewport widths of 375 CSS pixels or greater. The workflow and
+run canvases SHALL remain bounded by the visible workspace rather than forcing primary
+content beyond the document viewport. On desktop, the Explorer and run inspector SHALL be
+independently resizable, the Explorer SHALL be collapsible, and inspector content SHALL use
+the available pane height.
 
 #### Scenario: User opens the operator on a narrow viewport
 - **WHEN** the browser viewport is 375 CSS pixels wide
 - **THEN** the user can access the Explorer hierarchy, select workflows and retained runs, read the selected view title, and use its primary controls without horizontal document scrolling
 
 #### Scenario: User opens a workflow graph on a narrow viewport
-- **WHEN** a current workflow or historical run canvas is displayed at 375 CSS pixels wide
+- **WHEN** a current workflow or run canvas is displayed at 375 CSS pixels wide
 - **THEN** the canvas remains inside the visible workspace and the user can pan and zoom the graph
+
+#### Scenario: User adjusts the desktop workspace
+- **WHEN** the user collapses the Explorer or drags an Explorer or inspector divider
+- **THEN** the corresponding pane collapses or resizes while the canvas and inspector consume the remaining bounded workspace
 
 ### Requirement: Expose accessible controls and readable text
 
@@ -176,7 +210,7 @@ requirements in their rendered states.
 
 ### Requirement: Distinguish repeated node invocations
 
-The current-workflow and historical-run canvases SHALL expose a distinct visible and
+The current-workflow and run canvases SHALL expose a distinct visible and
 accessible identity for each node, including when several nodes invoke the same
 declared function or agent.
 
@@ -191,7 +225,7 @@ hydrating every retained run snapshot. It SHALL load a run snapshot only for the
 run, request log and agent-event pages only for the active inspector tab, cancel superseded
 requests, and retain bounded descriptor and detail projections.
 
-#### Scenario: User opens a historical run
+#### Scenario: User opens a run
 - **WHEN** a user selects one retained run from a catalog containing many runs
 - **THEN** the browser requests one current snapshot for that run without requesting snapshots for the other retained runs
 
@@ -200,8 +234,8 @@ requests, and retain bounded descriptor and detail projections.
 - **THEN** the browser does not request log pages, agent-event pages, or detail bodies
 
 #### Scenario: User inspects a large log or trace history
-- **WHEN** the selected node has more descriptors than one page
-- **THEN** the active tab requests and renders one bounded page at a time and retrieves older pages only as the user navigates toward them
+- **WHEN** the selected node has more retained detail than one bounded response
+- **THEN** the active tab shows an immediate loading state and progressively retrieves additional bounded content as the user scrolls or expands it
 
 ### Requirement: Keep live browser projections bounded
 
@@ -220,19 +254,26 @@ operator baseline rather than dropping arbitrary structural updates.
 
 ### Requirement: Keep inspector rendering responsive
 
-The run inspector SHALL virtualize large descriptor navigators, render only its active tab,
-distinguish loading from empty and error states, decode log bodies as text, decode structured
-agent-event bodies as JSON, and render nested values through explicit bounded expansion.
-Trace following SHALL affect only the Trace tab.
+The run inspector SHALL fill the available vertical pane, render only its active tab,
+distinguish loading from empty and error states, decode logs as text, and decode structured
+inputs, outputs, and traces into a normal hierarchical JSON explorer. Selecting an Inputs or
+Output tab SHALL load and present the complete retained value when it is within the declared
+detail limit; oversized content SHALL be progressively retrieved and rendered in bounded
+portions. Generic `Object` disclosure buttons and separate trace-turn selector panes SHALL
+not be used.
 
 #### Scenario: User changes tabs during hydration
 - **WHEN** an earlier tab request completes after the user changes tab, node, or run
 - **THEN** the stale result does not replace the current inspector state
 
-#### Scenario: User views plain-text logs
-- **WHEN** a selected log body is not JSON
-- **THEN** the Logs tab presents its exact decoded text without reporting a JSON parse error
+#### Scenario: User views logs
+- **WHEN** decoded logs are available for the selected run or node
+- **THEN** the Logs tab renders them as a continuous, scrollable, monospaced log stream rather than separate cards or object controls
 
-#### Scenario: Retained value contains a large collection
-- **WHEN** an input, output, or trace detail contains a large nested collection
-- **THEN** the value starts collapsed and renders bounded child groups only after explicit expansion
+#### Scenario: User views structured detail
+- **WHEN** retained input, output, or trace detail is JSON-shaped
+- **THEN** the active tab displays a familiar expandable JSON hierarchy rather than a generic HTML object button
+
+#### Scenario: Retained value is deeply nested
+- **WHEN** an input, output, or trace contains deeply nested objects or long values
+- **THEN** the JSON explorer sizes each key column to its content up to a readable cap, preserves value width through wrapping or pane-local overflow, and does not collapse content into a one-character-wide vertical column
