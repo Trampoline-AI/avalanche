@@ -67,11 +67,11 @@ function skills(value: unknown): SkillMetadata[] {
   return value.flatMap((item) =>
     isUnknownRecord(item) && typeof item.name === "string"
       ? [
-          {
-            name: item.name,
-            instructions: typeof item.instructions === "string" ? item.instructions : "",
-          },
-        ]
+        {
+          name: item.name,
+          instructions: typeof item.instructions === "string" ? item.instructions : "",
+        },
+      ]
       : [],
   );
 }
@@ -81,11 +81,11 @@ function tools(value: unknown): ToolMetadata[] {
   return value.flatMap((item) =>
     isUnknownRecord(item) && typeof item.name === "string"
       ? [
-          {
-            name: item.name,
-            description: typeof item.description === "string" ? item.description : "",
-          },
-        ]
+        {
+          name: item.name,
+          description: typeof item.description === "string" ? item.description : "",
+        },
+      ]
       : [],
   );
 }
@@ -178,15 +178,15 @@ NodeDuration.displayName = "NodeDuration";
 const WorkflowNodeCard = memo(({ data }: NodeProps<Node<CardData>>) => {
   const statusClass =
     data.status === "success"
-      ? "status-success border-[3px] border-mint"
+      ? "status-success border-[2px] border-success text-success font-bold"
       : data.status === "failed"
-        ? "status-failed border-[3px] border-danger"
+        ? "status-failed border-[2px] border-failed bg-failed/10 text-failed font-bold"
         : data.status === "running"
           ? "status-running animate-pulse border-[3px] border-acid ring-[5px] ring-[rgba(37,99,235,.22)] motion-reduce:animate-none motion-reduce:ring-3"
-          : "blueprint";
+          : "blueprint border-line hover:border-acid";
   return (
     <article
-      className={`node-card relative flex min-h-[130px] w-[360px] cursor-pointer flex-col items-stretch gap-2 rounded-xl border border-line bg-panel p-4 text-left shadow-[0_8px_24px_rgba(25,39,32,.08)] transition-[border-color,box-shadow,transform] duration-150 ease-out hover:-translate-y-px hover:border-acid hover:shadow-[0_10px_28px_rgba(25,39,32,.12)] motion-reduce:transition-none ${statusClass}`}
+      className={`node-card relative flex min-h-[130px] w-[360px] cursor-pointer flex-col items-stretch gap-2 rounded-xl border bg-panel p-4 text-left shadow-[0_8px_24px_rgba(25,39,32,.08)] transition-[border-color,box-shadow,transform] duration-150 ease-out hover:-translate-y-px hover:shadow-[0_10px_28px_rgba(25,39,32,.12)] motion-reduce:transition-none ${statusClass}`}
     >
       <Handle
         id="target-left"
