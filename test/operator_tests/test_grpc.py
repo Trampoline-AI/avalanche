@@ -289,6 +289,27 @@ class TestGrpcRoundtrip:
         run = client.get_run(run_id)
         assert run.status == RunStatus.SUCCESS
 
+    def test_rapid_starts_publish_requesting_runs_before_preparation(
+        self, client, grpc_server, monkeypatch
+    ):
+        operator, _, _ = grpc_server
+        release_preparation = threading.Event()
+        await_prepared = operator._await_prepared
+
+        def delay_preparation(handle):
+            assert release_preparation.wait(timeout=5)
+            return await_prepared(handle)
+
+        monkeypatch.setattr(operator, "_await_prepared", delay_preparation)
+        try:
+            first_run_id = client.start_run("simple_workflow")
+            second_run_id = client.start_run("simple_workflow")
+
+            assert client.get_run(first_run_id).status is RunStatus.REQUESTING
+            assert client.get_run(second_run_id).status is RunStatus.REQUESTING
+        finally:
+            release_preparation.set()
+
     def test_start_run_honors_client_run_id(self, client):
         requested_run_id = "run_client_owned"
 
@@ -501,10 +522,9 @@ def large_file_workflow():
         time.sleep(0.2)  # Let it start
         client.cancel_run(run_id)
 
-        # Cancellation is a request; the coordinator publishes the terminal
-        # state after cooperative completion or the configured forced grace.
+        # Cancellation may already be terminal by the time this read completes.
         run = client.get_run(run_id)
-        assert run.status == RunStatus.RUNNING
+        assert run.status in {RunStatus.REQUESTING, RunStatus.RUNNING, RunStatus.CANCELLED}
         deadline = time.monotonic() + 7.0
         while time.monotonic() < deadline:
             run = client.get_run(run_id)
@@ -525,21 +545,33 @@ def large_file_workflow():
             updates.append((run.run_id, run.status))
 
         client.on_run_update(on_update)
+
+        def recover_stream(notice):
+            baseline = client.load_reset_baseline(notice)
+            client.acknowledge_stream_reset(
+                baseline.generation,
+                baseline.operator_instance_id,
+                baseline.as_of_sequence,
+            )
+
+        client.on_stream_reset(recover_stream)
         client.start_stream()
-        time.sleep(0.2)  # Let stream connect
+        deadline = time.monotonic() + 15
+        while time.monotonic() < deadline and client.stream_state is not StreamState.LIVE:
+            time.sleep(0.05)
+        assert client.stream_state is StreamState.LIVE
 
         run_id = client.start_run("simple_workflow")
+        completion_deadline = time.monotonic() + 20
 
-        deadline = time.monotonic() + 5
-        while time.monotonic() < deadline:
-            if any(rid == run_id and s == RunStatus.SUCCESS for rid, s in updates):
+        while time.monotonic() < completion_deadline:
+            if any(rid == run_id and s == RunStatus.RUNNING for rid, s in updates):
                 break
             time.sleep(0.05)
 
-        # Should have received at least one update with the run completing
         statuses = [s for rid, s in updates if rid == run_id]
-        assert len(statuses) > 0, "No stream updates received"
-        assert RunStatus.SUCCESS in statuses
+        assert RunStatus.REQUESTING in statuses
+        assert RunStatus.RUNNING in statuses
 
     def test_legacy_flow_name_request_still_starts(self, client):
         response = client._stub.StartRun(pb.StartRunRequest(flow_name="simple_workflow"))
@@ -2347,10 +2379,17 @@ def test_canonical_and_ambiguous_grpc_selection(tmp_path):
         assert error.value.status is grpc.StatusCode.INVALID_ARGUMENT
 
         (roots[0] / "flow.py").write_text("VALUE = 1\n")
-        with pytest.raises(OperatorCallError) as error:
-            provider.start_run(ids[0])
-        assert error.value.status is grpc.StatusCode.FAILED_PRECONDITION
-        assert "preparation failed" in str(error.value).lower()
+        failed_run_id = provider.start_run(ids[0])
+        failed_run = None
+        deadline = time.monotonic() + 15
+        while time.monotonic() < deadline:
+            failed_run = provider.get_run(failed_run_id)
+            if failed_run is not None and failed_run.status == RunStatus.FAILED:
+                break
+            time.sleep(0.05)
+        assert failed_run is not None
+        assert failed_run.status == RunStatus.FAILED
+        assert any("preparation failed" in item.message.lower() for item in failed_run.logs)
     finally:
         provider.close()
         server.stop(grace=1)

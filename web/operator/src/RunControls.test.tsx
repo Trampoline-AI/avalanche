@@ -34,6 +34,40 @@ describe("RunControls", () => {
     await waitFor(() => expect(onCancel).toHaveBeenCalledWith("run-1"));
   });
 
+  it("keeps Run available while requests are pending", async () => {
+    const onStart = vi.fn(async () => "run-2");
+    render(
+      <RunControls
+        workflow={workflow}
+        pending={{ kind: "start", target: workflow.workflowId }}
+        onStart={onStart}
+        onCancel={async () => undefined}
+      />,
+    );
+
+    const runButton = screen.getByRole("button", { name: "Run" });
+    expect(runButton).toBeEnabled();
+    fireEvent.click(runButton);
+    fireEvent.click(runButton);
+    await waitFor(() => expect(onStart).toHaveBeenCalledTimes(2));
+  });
+
+  it("renders a return control for a historical run", () => {
+    const onViewWorkflow = vi.fn();
+    render(
+      <RunControls
+        run={running}
+        onStart={async () => "run-2"}
+        onCancel={async () => undefined}
+        onViewWorkflow={onViewWorkflow}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "Current workflow" }));
+    expect(onViewWorkflow).toHaveBeenCalledOnce();
+    expect(screen.queryByRole("button", { name: "Run" })).not.toBeInTheDocument();
+  });
+
   it("keeps the JSON editor closed by default and surfaces operator validation", async () => {
     const onStart = vi.fn(async () => {
       throw new Error("input.value is required");

@@ -49,6 +49,7 @@ interface RunControlsProps {
   pending?: { kind: "start" | "cancel"; target: string };
   onStart: (workflowSelector: string, input?: Record<string, unknown>) => Promise<string>;
   onCancel: (runId: string) => Promise<void>;
+  onViewWorkflow?: () => void;
 }
 
 export function parseRunInput(draft: string): Record<string, unknown> {
@@ -64,11 +65,15 @@ export function RunControls({
   pending,
   onStart,
   onCancel,
+  onViewWorkflow,
 }: RunControlsProps) {
   const [showInput, setShowInput] = useState(false);
   const [draft, setDraft] = useState("{}");
   const [error, setError] = useState<string>();
-  const active = run?.summary?.status === "pending" || run?.summary?.status === "running";
+  const active =
+    run?.summary?.status === "requesting" ||
+    run?.summary?.status === "pending" ||
+    run?.summary?.status === "running";
 
   const start = async () => {
     if (!workflow) return;
@@ -91,18 +96,30 @@ export function RunControls({
 
   return (
     <div className="run-controls relative flex items-center gap-2 max-[700px]:flex-wrap [&_button:disabled]:cursor-wait [&_button:disabled]:opacity-50">
+      {onViewWorkflow && (
+        <button
+          type="button"
+          className="workflow-view-button inline-flex cursor-pointer items-center gap-1.5 rounded-[7px] border border-line bg-white px-[11px] py-[7px] text-[10px] font-bold text-secondary hover:border-secondary hover:bg-[#f7f9f8] hover:text-ink [&_svg]:size-[11px]"
+          title="Leave this immutable run and view the current workflow"
+          onClick={onViewWorkflow}
+        >
+          <svg aria-hidden="true" viewBox="0 0 12 12" fill="none">
+            <path d="M5 2 1.5 6 5 10M2 6h8" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" />
+          </svg>
+          <span>Current workflow</span>
+        </button>
+      )}
       {workflow && (
         <>
           <button
             type="button"
             className="run-button inline-flex cursor-pointer items-center gap-1.5 rounded-[7px] border border-acid bg-acid px-[11px] py-[7px] text-[10px] font-bold text-white hover:border-[#1d4ed8] hover:bg-[#1d4ed8] [&_svg]:size-[11px] [&_svg]:fill-current"
-            disabled={pending?.kind === "start"}
             onClick={() => void start()}
           >
             <svg aria-hidden="true" viewBox="0 0 12 12">
               <path d="M2.5 1.5 10 6l-7.5 4.5z" />
             </svg>
-            <span>{pending?.kind === "start" ? "Requesting…" : "Run"}</span>
+            <span>Run</span>
           </button>
           <button
             type="button"

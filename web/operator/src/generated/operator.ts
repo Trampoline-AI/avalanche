@@ -304,6 +304,12 @@ export interface WorkflowTopologyMsg {
     agentFieldSchemasJson: {
         [key: string]: string;
     };
+    /**
+     * @generated from protobuf field: map<string, string> agent_instruction_lines = 6
+     */
+    agentInstructionLines: {
+        [key: string]: string;
+    };
 }
 /**
  * @generated from protobuf message avalanche.operator.FlowInfoMsg
@@ -539,6 +545,10 @@ export interface RunSummaryMsg {
      * @generated from protobuf field: uint64 revision = 10
      */
     revision: string;
+    /**
+     * @generated from protobuf field: double triggered_at = 11
+     */
+    triggeredAt: number;
 }
 /**
  * @generated from protobuf message avalanche.operator.TraceHeaderMsg
@@ -658,6 +668,10 @@ export interface NodeSnapshotMsg {
      * @generated from protobuf field: optional string error = 10
      */
     error?: string;
+    /**
+     * @generated from protobuf field: optional double running_elapsed_seconds = 11
+     */
+    runningElapsedSeconds?: number;
 }
 /**
  * @generated from protobuf message avalanche.operator.RunSnapshotMsg
@@ -949,6 +963,10 @@ export interface NodeStatusChanged {
      * @generated from protobuf field: optional string error = 7
      */
     error?: string;
+    /**
+     * @generated from protobuf field: optional double running_elapsed_seconds = 8
+     */
+    runningElapsedSeconds?: number;
 }
 /**
  * @generated from protobuf message avalanche.operator.LogAppended
@@ -2036,7 +2054,8 @@ class WorkflowTopologyMsg$Type extends MessageType<WorkflowTopologyMsg> {
             { no: 2, name: "graph", kind: "map", K: 9 /*ScalarType.STRING*/, V: { kind: "message", T: () => NodeEdges } },
             { no: 3, name: "node_types", kind: "map", K: 9 /*ScalarType.STRING*/, V: { kind: "scalar", T: 9 /*ScalarType.STRING*/ } },
             { no: 4, name: "display_names", kind: "map", K: 9 /*ScalarType.STRING*/, V: { kind: "scalar", T: 9 /*ScalarType.STRING*/ } },
-            { no: 5, name: "agent_field_schemas_json", kind: "map", K: 9 /*ScalarType.STRING*/, V: { kind: "scalar", T: 9 /*ScalarType.STRING*/ } }
+            { no: 5, name: "agent_field_schemas_json", kind: "map", K: 9 /*ScalarType.STRING*/, V: { kind: "scalar", T: 9 /*ScalarType.STRING*/ } },
+            { no: 6, name: "agent_instruction_lines", kind: "map", K: 9 /*ScalarType.STRING*/, V: { kind: "scalar", T: 9 /*ScalarType.STRING*/ } }
         ]);
     }
     create(value?: PartialMessage<WorkflowTopologyMsg>): WorkflowTopologyMsg {
@@ -2046,6 +2065,7 @@ class WorkflowTopologyMsg$Type extends MessageType<WorkflowTopologyMsg> {
         message.nodeTypes = {};
         message.displayNames = {};
         message.agentFieldSchemasJson = {};
+        message.agentInstructionLines = {};
         if (value !== undefined)
             reflectionMergePartial<WorkflowTopologyMsg>(this, message, value);
         return message;
@@ -2069,6 +2089,9 @@ class WorkflowTopologyMsg$Type extends MessageType<WorkflowTopologyMsg> {
                     break;
                 case /* map<string, string> agent_field_schemas_json */ 5:
                     this.binaryReadMap5(message.agentFieldSchemasJson, reader, options);
+                    break;
+                case /* map<string, string> agent_instruction_lines */ 6:
+                    this.binaryReadMap6(message.agentInstructionLines, reader, options);
                     break;
                 default:
                     let u = options.readUnknownField;
@@ -2145,6 +2168,22 @@ class WorkflowTopologyMsg$Type extends MessageType<WorkflowTopologyMsg> {
         }
         map[key ?? ""] = val ?? "";
     }
+    private binaryReadMap6(map: WorkflowTopologyMsg["agentInstructionLines"], reader: IBinaryReader, options: BinaryReadOptions): void {
+        let len = reader.uint32(), end = reader.pos + len, key: keyof WorkflowTopologyMsg["agentInstructionLines"] | undefined, val: WorkflowTopologyMsg["agentInstructionLines"][any] | undefined;
+        while (reader.pos < end) {
+            let [fieldNo, wireType] = reader.tag();
+            switch (fieldNo) {
+                case 1:
+                    key = reader.string();
+                    break;
+                case 2:
+                    val = reader.string();
+                    break;
+                default: throw new globalThis.Error("unknown map entry field for avalanche.operator.WorkflowTopologyMsg.agent_instruction_lines");
+            }
+        }
+        map[key ?? ""] = val ?? "";
+    }
     internalBinaryWrite(message: WorkflowTopologyMsg, writer: IBinaryWriter, options: BinaryWriteOptions): IBinaryWriter {
         /* repeated string node_ids = 1; */
         for (let i = 0; i < message.nodeIds.length; i++)
@@ -2165,6 +2204,9 @@ class WorkflowTopologyMsg$Type extends MessageType<WorkflowTopologyMsg> {
         /* map<string, string> agent_field_schemas_json = 5; */
         for (let k of globalThis.Object.keys(message.agentFieldSchemasJson))
             writer.tag(5, WireType.LengthDelimited).fork().tag(1, WireType.LengthDelimited).string(k).tag(2, WireType.LengthDelimited).string(message.agentFieldSchemasJson[k]).join();
+        /* map<string, string> agent_instruction_lines = 6; */
+        for (let k of globalThis.Object.keys(message.agentInstructionLines))
+            writer.tag(6, WireType.LengthDelimited).fork().tag(1, WireType.LengthDelimited).string(k).tag(2, WireType.LengthDelimited).string(message.agentInstructionLines[k]).join();
         let u = options.writeUnknownFields;
         if (u !== false)
             (u == true ? UnknownFieldHandler.onWrite : u)(this.typeName, message, writer);
@@ -2792,7 +2834,8 @@ class RunSummaryMsg$Type extends MessageType<RunSummaryMsg> {
             { no: 7, name: "workflow_id", kind: "scalar", T: 9 /*ScalarType.STRING*/ },
             { no: 8, name: "workflow_display_name", kind: "scalar", T: 9 /*ScalarType.STRING*/ },
             { no: 9, name: "created_sequence", kind: "scalar", T: 4 /*ScalarType.UINT64*/ },
-            { no: 10, name: "revision", kind: "scalar", T: 4 /*ScalarType.UINT64*/ }
+            { no: 10, name: "revision", kind: "scalar", T: 4 /*ScalarType.UINT64*/ },
+            { no: 11, name: "triggered_at", kind: "scalar", T: 1 /*ScalarType.DOUBLE*/ }
         ]);
     }
     create(value?: PartialMessage<RunSummaryMsg>): RunSummaryMsg {
@@ -2807,6 +2850,7 @@ class RunSummaryMsg$Type extends MessageType<RunSummaryMsg> {
         message.workflowDisplayName = "";
         message.createdSequence = "0";
         message.revision = "0";
+        message.triggeredAt = 0;
         if (value !== undefined)
             reflectionMergePartial<RunSummaryMsg>(this, message, value);
         return message;
@@ -2845,6 +2889,9 @@ class RunSummaryMsg$Type extends MessageType<RunSummaryMsg> {
                     break;
                 case /* uint64 revision */ 10:
                     message.revision = reader.uint64().toString();
+                    break;
+                case /* double triggered_at */ 11:
+                    message.triggeredAt = reader.double();
                     break;
                 default:
                     let u = options.readUnknownField;
@@ -2888,6 +2935,9 @@ class RunSummaryMsg$Type extends MessageType<RunSummaryMsg> {
         /* uint64 revision = 10; */
         if (message.revision !== "0")
             writer.tag(10, WireType.Varint).uint64(message.revision);
+        /* double triggered_at = 11; */
+        if (message.triggeredAt !== 0)
+            writer.tag(11, WireType.Bit64).double(message.triggeredAt);
         let u = options.writeUnknownFields;
         if (u !== false)
             (u == true ? UnknownFieldHandler.onWrite : u)(this.typeName, message, writer);
@@ -3114,7 +3164,8 @@ class NodeSnapshotMsg$Type extends MessageType<NodeSnapshotMsg> {
             { no: 7, name: "trace", kind: "message", T: () => TraceDescriptorMsg },
             { no: 8, name: "revision", kind: "scalar", T: 4 /*ScalarType.UINT64*/ },
             { no: 9, name: "event_page_token", kind: "scalar", T: 9 /*ScalarType.STRING*/ },
-            { no: 10, name: "error", kind: "scalar", opt: true, T: 9 /*ScalarType.STRING*/ }
+            { no: 10, name: "error", kind: "scalar", opt: true, T: 9 /*ScalarType.STRING*/ },
+            { no: 11, name: "running_elapsed_seconds", kind: "scalar", opt: true, T: 1 /*ScalarType.DOUBLE*/ }
         ]);
     }
     create(value?: PartialMessage<NodeSnapshotMsg>): NodeSnapshotMsg {
@@ -3166,6 +3217,9 @@ class NodeSnapshotMsg$Type extends MessageType<NodeSnapshotMsg> {
                 case /* optional string error */ 10:
                     message.error = reader.string();
                     break;
+                case /* optional double running_elapsed_seconds */ 11:
+                    message.runningElapsedSeconds = reader.double();
+                    break;
                 default:
                     let u = options.readUnknownField;
                     if (u === "throw")
@@ -3208,6 +3262,9 @@ class NodeSnapshotMsg$Type extends MessageType<NodeSnapshotMsg> {
         /* optional string error = 10; */
         if (message.error !== undefined)
             writer.tag(10, WireType.LengthDelimited).string(message.error);
+        /* optional double running_elapsed_seconds = 11; */
+        if (message.runningElapsedSeconds !== undefined)
+            writer.tag(11, WireType.Bit64).double(message.runningElapsedSeconds);
         let u = options.writeUnknownFields;
         if (u !== false)
             (u == true ? UnknownFieldHandler.onWrite : u)(this.typeName, message, writer);
@@ -4028,7 +4085,8 @@ class NodeStatusChanged$Type extends MessageType<NodeStatusChanged> {
             { no: 4, name: "started_at", kind: "scalar", T: 1 /*ScalarType.DOUBLE*/ },
             { no: 5, name: "ended_at", kind: "scalar", T: 1 /*ScalarType.DOUBLE*/ },
             { no: 6, name: "revision", kind: "scalar", T: 4 /*ScalarType.UINT64*/ },
-            { no: 7, name: "error", kind: "scalar", opt: true, T: 9 /*ScalarType.STRING*/ }
+            { no: 7, name: "error", kind: "scalar", opt: true, T: 9 /*ScalarType.STRING*/ },
+            { no: 8, name: "running_elapsed_seconds", kind: "scalar", opt: true, T: 1 /*ScalarType.DOUBLE*/ }
         ]);
     }
     create(value?: PartialMessage<NodeStatusChanged>): NodeStatusChanged {
@@ -4069,6 +4127,9 @@ class NodeStatusChanged$Type extends MessageType<NodeStatusChanged> {
                 case /* optional string error */ 7:
                     message.error = reader.string();
                     break;
+                case /* optional double running_elapsed_seconds */ 8:
+                    message.runningElapsedSeconds = reader.double();
+                    break;
                 default:
                     let u = options.readUnknownField;
                     if (u === "throw")
@@ -4102,6 +4163,9 @@ class NodeStatusChanged$Type extends MessageType<NodeStatusChanged> {
         /* optional string error = 7; */
         if (message.error !== undefined)
             writer.tag(7, WireType.LengthDelimited).string(message.error);
+        /* optional double running_elapsed_seconds = 8; */
+        if (message.runningElapsedSeconds !== undefined)
+            writer.tag(8, WireType.Bit64).double(message.runningElapsedSeconds);
         let u = options.writeUnknownFields;
         if (u !== false)
             (u == true ? UnknownFieldHandler.onWrite : u)(this.typeName, message, writer);

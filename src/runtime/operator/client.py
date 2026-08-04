@@ -2133,6 +2133,7 @@ def _run_from_created(operator_instance_id: str, created: RunCreated) -> RunStat
         flow_name=summary.flow_name,
         status=summary.status,
         started_at=summary.started_at,
+        triggered_at=summary.triggered_at,
         ended_at=summary.ended_at,
         triggered_by=summary.triggered_by,
         workflow_id=summary.workflow_id,

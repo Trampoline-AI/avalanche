@@ -57,9 +57,7 @@ def agent_metadata_for_workflow(workflow: Workflow, node_ids: list[str]) -> dict
     return metadata_by_node
 
 
-def agent_field_schemas_for_workflow(
-    workflow: Workflow, node_ids: list[str]
-) -> dict[str, str]:
+def agent_field_schemas_for_workflow(workflow: Workflow, node_ids: list[str]) -> dict[str, str]:
     """Serialize only agent invocation field schemas for immutable run topology."""
     schemas_by_node: dict[str, str] = {}
     for node_id in node_ids:
@@ -73,6 +71,21 @@ def agent_field_schemas_for_workflow(
             sort_keys=True,
         )
     return schemas_by_node
+
+
+def agent_instruction_lines_for_workflow(
+    workflow: Workflow, node_ids: list[str]
+) -> dict[str, str]:
+    """Serialize stable agent signature instruction summaries for a run topology."""
+    lines_by_node: dict[str, str] = {}
+    for node_id in node_ids:
+        spec = getattr(workflow.nodes[node_id].node.fn, "__agent_step__", None)
+        if spec is None:
+            continue
+        instruction_line = spec.signature_instruction_line()
+        if instruction_line:
+            lines_by_node[node_id] = instruction_line
+    return lines_by_node
 
 
 def workflow_to_info(

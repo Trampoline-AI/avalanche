@@ -19,6 +19,7 @@ from ..theme import (
     ICE_PURPLE,
     ICE_STEEL,
     ICE_TEAL,
+    ICE_WARN,
     SPINNER_FRAMES,
 )
 
@@ -26,6 +27,7 @@ _SELECTED_BG = Style(bgcolor="#2a4a6a")
 _HEADER_STYLE = Style(color=ICE_STEEL, bold=True)
 
 RUN_STATUS_STYLES: dict[RunStatus, Style] = {
+    RunStatus.REQUESTING: Style(color=ICE_WARN, bold=True),
     RunStatus.PENDING: Style(color=ICE_STEEL),
     RunStatus.RUNNING: Style(color=ICE_BRIGHT, bold=True),
     RunStatus.SUCCESS: Style(color=ICE_TEAL, bold=True),
@@ -34,6 +36,7 @@ RUN_STATUS_STYLES: dict[RunStatus, Style] = {
 }
 
 RUN_STATUS_ICONS: dict[RunStatus, str] = {
+    RunStatus.REQUESTING: "◌",
     RunStatus.PENDING: "○",
     RunStatus.RUNNING: "◐",
     RunStatus.SUCCESS: "✓",

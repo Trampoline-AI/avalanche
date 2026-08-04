@@ -23,6 +23,32 @@ from tui.dag_layout import DagNode
 from tui.widgets.log_panel import LogWidget
 
 
+def test_operator_forwards_info_not_debug_logs() -> None:
+    class Queue:
+        def __init__(self) -> None:
+            self.items: list[dict[str, object]] = []
+
+        def put(self, item: dict[str, object]) -> None:
+            self.items.append(item)
+
+    queue = Queue()
+    handler = _QueueLogHandler(queue)
+    logger = logging.getLogger("test.operator_capture")
+    old_level = logger.level
+    old_propagate = logger.propagate
+    logger.addHandler(handler)
+    logger.setLevel(logging.DEBUG)
+    logger.propagate = False
+    try:
+        logger.debug("debug detail")
+        logger.info("run started")
+    finally:
+        logger.removeHandler(handler)
+        logger.setLevel(old_level)
+        logger.propagate = old_propagate
+
+    assert [item["message"] for item in queue.items] == ["run started"]
+
 @pytest.mark.parametrize("backend", ["local", "ray"])
 def test_verbose_rlm_log_retains_agent_step_node_id(backend: str) -> None:
     class Queue:

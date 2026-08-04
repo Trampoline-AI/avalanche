@@ -97,7 +97,14 @@ def test_typed_update_envelopes_roundtrip_all_changes():
     changes = [
         _created().update.change,
         RunStatusChanged("run-1", RunStatus.RUNNING, started_at=1.0, revision=2),
-        NodeStatusChanged("run-1", "node-1", NodeStatus.SUCCESS, ended_at=2.0, revision=3),
+        NodeStatusChanged(
+            "run-1",
+            "node-1",
+            NodeStatus.RUNNING,
+            started_at=2.0,
+            running_elapsed_seconds=0.5,
+            revision=3,
+        ),
         LogAppended(
             "run-1",
             LogRecordDescriptor(

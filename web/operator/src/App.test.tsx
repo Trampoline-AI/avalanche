@@ -190,7 +190,7 @@ describe("App", () => {
     expect(projectionHarness.startRun).toHaveBeenCalledWith("flow.py::demo", undefined);
   });
 
-  it("selects the newly launched run", async () => {
+  it("starts a run without selecting it before preparation completes", async () => {
     render(<App api={new GrpcWebOperatorApi("http://localhost")} />);
 
     fireEvent.click(screen.getByRole("button", { name: "Run" }));
@@ -198,7 +198,7 @@ describe("App", () => {
     await waitFor(() =>
       expect(projectionHarness.startRun).toHaveBeenCalledWith("flow.py::demo", undefined),
     );
-    await waitFor(() => expect(projectionHarness.selectRun).toHaveBeenCalledWith("run-1"));
+    expect(projectionHarness.selectRun).not.toHaveBeenCalled();
   });
 
   it("collapses and restores the desktop Explorer independently of the narrow toggle", () => {
@@ -405,6 +405,11 @@ describe("App", () => {
       screen.getByText("Current workflow changes do not alter this canvas"),
     ).toBeInTheDocument();
     expect(view.container).not.toHaveTextContent(/Historical run/i);
+    projectionHarness.selectRun.mockClear();
+    fireEvent.click(screen.getByRole("button", { name: "Current workflow" }));
+    expect(projectionHarness.selectRun).toHaveBeenCalledWith(undefined);
+    expect(screen.getByRole("button", { name: "Workflow graph" })).toBeInTheDocument();
+    expect(screen.queryByText("Immutable run snapshot")).not.toBeInTheDocument();
   });
 
   it("navigates summary-only runs with one demand-load selection and clears it", async () => {

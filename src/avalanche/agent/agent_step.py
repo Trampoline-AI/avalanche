@@ -423,6 +423,15 @@ class _AgentStepSpec:
             "outputs": _serialize_signature_fields(signature.output_fields, type_key="type"),
         }
 
+    def signature_instruction_line(self) -> str:
+        """Return the first non-empty signature instruction line."""
+        signature = resolve_signature(self.signature, name=self.step_name)
+        instructions = str(getattr(signature, "instructions", "") or "")
+        return next(
+            (line.strip() for line in instructions.splitlines() if line.strip()),
+            "",
+        )
+
     def declaration_metadata(
         self, workflow_defaults: Mapping[str, Any] | None = None
     ) -> dict[str, Any]:

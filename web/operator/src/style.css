@@ -18,6 +18,43 @@
   --font-mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
 }
 
+@keyframes gradientRotate {
+  0% {
+    background-position: 100% 100%;
+  }
+
+  50% {
+    background-position: 50% 100%;
+  }
+
+  100% {
+    background-position: 100% 100%;
+  }
+}
+
+/* Animated gradient border for currently running workflow nodes. */
+
+.gradient-animate {
+  border-color: transparent !important;
+  background:
+    linear-gradient(var(--color-panel), var(--color-panel)) padding-box,
+    linear-gradient(
+      315deg,
+      hsl(163 100% 74%),
+      hsl(238 100% 63%) 68%,
+      hsl(163 100% 74%)
+    ) border-box !important;
+  background-size: 100% 100%, 200% 200% !important;
+  animation: gradientRotate 10s ease infinite;
+  transition: background 0.5s ease;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .gradient-animate {
+    animation: none;
+  }
+}
+
 @layer components {
   .node-card {
     transition:

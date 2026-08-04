@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { X } from "lucide-react";
 
 import type { OperatorApi } from "./api";
 import {
@@ -520,8 +521,8 @@ export function Inspector({
             <span className="eyebrow block font-mono text-[9px] tracking-[.16em] text-acid uppercase">Declaration</span>
             <h2 className="mt-1 mb-[5px] text-lg">{workflow.displayNames[nodeId] || nodeId}</h2>
           </div>
-          <button type="button" className="icon-button size-[30px] cursor-pointer rounded-[7px] border border-line bg-panel text-[19px] hover:border-secondary hover:bg-panel focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-acid" onClick={closeInspector} aria-label="Close">
-            ×
+          <button type="button" className="icon-button grid size-[30px] cursor-pointer place-items-center rounded-[7px] border border-line bg-panel p-0 text-secondary hover:border-secondary hover:bg-panel hover:text-ink focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-acid" onClick={closeInspector} aria-label="Close">
+            <X aria-hidden="true" className="size-4" strokeWidth={1.8} />
           </button>
         </header>
         {workflowDeclaration ? (
@@ -627,8 +628,8 @@ export function Inspector({
           <h2 className="mt-1 mb-[5px] text-lg">{node.name}</h2>
           <span className={`status-pill inline-flex rounded-full border bg-panel px-[7px] py-[3px] font-mono text-[8px] uppercase ${node.status === "failed" ? "status-failed border-danger text-danger" : node.status === "success" ? "status-success border-mint text-mint" : "border-line text-muted"}`}>{node.status}</span>
         </div>
-        <button type="button" className="icon-button size-[30px] cursor-pointer rounded-[7px] border border-line bg-panel text-[19px] hover:border-secondary hover:bg-panel focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-acid" onClick={closeInspector} aria-label="Close">
-          ×
+        <button type="button" className="icon-button grid size-[30px] cursor-pointer place-items-center rounded-[7px] border border-line bg-panel p-0 text-secondary hover:border-secondary hover:bg-panel hover:text-ink focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-acid" onClick={closeInspector} aria-label="Close">
+          <X aria-hidden="true" className="size-4" strokeWidth={1.8} />
         </button>
       </header>
       <nav className="inspector-tabs flex overflow-x-auto border-b border-line px-2.5" aria-label="Run detail views">

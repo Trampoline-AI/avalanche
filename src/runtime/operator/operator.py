@@ -159,6 +159,7 @@ class _RunHandle:
     result_bundle: PendingResultBundle
     publication_event: threading.Event
     drain_thread: threading.Thread | None = None
+    preparation_thread: threading.Thread | None = None
     success_quiesced: bool = False
 
 
@@ -561,12 +562,8 @@ class Operator:
         """Return a byte-bounded page of immutable log body descriptors."""
         size = _bounded_page_size(page_size)
         order = _validated_descriptor_page_order(order)
-        after_sequence = _validated_descriptor_cursor(
-            after_sequence, "after_sequence"
-        )
-        before_sequence = _validated_descriptor_cursor(
-            before_sequence, "before_sequence"
-        )
+        after_sequence = _validated_descriptor_cursor(after_sequence, "after_sequence")
+        before_sequence = _validated_descriptor_cursor(before_sequence, "before_sequence")
         if order == _DESCRIPTOR_PAGE_ORDER_FORWARD and before_sequence:
             raise ValueError("before_sequence is only valid for newest-first pages")
         if order == _DESCRIPTOR_PAGE_ORDER_NEWEST_FIRST and after_sequence:
@@ -607,16 +604,12 @@ class Operator:
             if node_id:
                 run_node_sequences = self._log_sequences_by_node.get(run_id)
                 node_sequences = (
-                    ()
-                    if run_node_sequences is None
-                    else run_node_sequences.get(node_id, ())
+                    () if run_node_sequences is None else run_node_sequences.get(node_id, ())
                 )
                 if order == _DESCRIPTOR_PAGE_ORDER_FORWARD:
                     start = bisect_right(node_sequences, cursor)
                     stop = bisect_right(node_sequences, through_sequence)
-                    selected_sequences = node_sequences[
-                        start : min(start + size + 1, stop)
-                    ]
+                    selected_sequences = node_sequences[start : min(start + size + 1, stop)]
                 else:
                     stop = bisect_right(
                         node_sequences,
@@ -680,13 +673,9 @@ class Operator:
             before_event_sequence, "before_event_sequence"
         )
         if order == _DESCRIPTOR_PAGE_ORDER_FORWARD and before_event_sequence:
-            raise ValueError(
-                "before_event_sequence is only valid for newest-first pages"
-            )
+            raise ValueError("before_event_sequence is only valid for newest-first pages")
         if order == _DESCRIPTOR_PAGE_ORDER_NEWEST_FIRST and after_event_sequence:
-            raise ValueError(
-                "after_event_sequence is only valid for forward pages"
-            )
+            raise ValueError("after_event_sequence is only valid for forward pages")
         with self._lock:
             token = (
                 _decode_transport_token(page_token, "events")
@@ -883,6 +872,9 @@ class Operator:
                 status=node.status,
                 started_at=node.started_at,
                 ended_at=node.ended_at,
+                running_elapsed_seconds=(
+                    node.elapsed if node.status is NodeStatus.RUNNING else None
+                ),
                 error=node.error,
                 trace=self._trace_descriptors.get((run.run_id, node.node_id)),
                 revision=self._node_revisions.get(
@@ -1101,6 +1093,7 @@ class Operator:
             run_id=run.run_id,
             flow_name=run.flow_name,
             status=run.status,
+            triggered_at=run.triggered_at,
             started_at=run.started_at,
             ended_at=run.ended_at,
             triggered_by=run.triggered_by,
@@ -1127,7 +1120,7 @@ class Operator:
             if run is None:
                 raise KeyError(run_id)
             status = run.status
-            if status in {RunStatus.PENDING, RunStatus.RUNNING}:
+            if status in {RunStatus.REQUESTING, RunStatus.PENDING, RunStatus.RUNNING}:
                 raise RunResultNotReadyError(f"Run {run_id} is not terminal")
             if status != RunStatus.SUCCESS:
                 raise RunResultUnavailableError(
@@ -1160,11 +1153,12 @@ class Operator:
         input: dict[str, Any] | None = None,
         context: dict[str, Any] | None = None,
     ) -> str:
-        """Synchronously prepare a live-source run before publishing its ID."""
+        """Publish a requesting run, then prepare it asynchronously."""
         if run_id is not None and not isinstance(run_id, str):
             raise InvalidRunIdError("run_id must be a string")
         if run_id and len(run_id.encode("utf-8")) > MAX_RUN_ID_BYTES:
             raise InvalidRunIdError(f"run_id exceeds {MAX_RUN_ID_BYTES}-byte UTF-8 limit")
+        triggered_at = time.time()
         descriptor, configured_root = self._registry.resolve_source(flow_name)
         import_root, workflow_relative_module_file = resolve_live_source(
             configured_root, descriptor.locator
@@ -1231,35 +1225,38 @@ class Operator:
                     raise RuntimeError("Run coordinator did not expose a process ID")
                 assign_process(windows_job, process.pid)
                 assignment_event.set()
-            prepared, buffered_events = self._await_prepared(handle)
-            run = self._run_from_prepared(
-                run_id,
-                descriptor.workflow_id,
-                descriptor.display_name,
-                triggered_by,
-                prepared,
-            )
-            drain = threading.Thread(
-                target=self._drain_run_events,
-                args=(run_id, handle, buffered_events),
-                name=f"avalanche-drain-{run_id}",
-                daemon=True,
-            )
-            with self._lock:
-                if self._closed:
-                    raise RuntimeError("Operator closed while preparing run")
-                handle.drain_thread = drain
-                drain.start()
+                run = RunState(
+                    run_id=run_id,
+                    flow_name=descriptor.display_name,
+                    status=RunStatus.REQUESTING,
+                    triggered_at=triggered_at,
+                    triggered_by=triggered_by,
+                    workflow_id=descriptor.workflow_id,
+                    workflow_display_name=descriptor.display_name,
+                )
                 self._runs[run_id] = run
                 notifications = self._publish_run_locked(run)
             self._wait_for_notifications(notifications)
-            handle.publication_event.set()
-            start_event.set()
+            preparation_thread = threading.Thread(
+                target=self._prepare_requested_run,
+                args=(
+                    run_id,
+                    descriptor.workflow_id,
+                    descriptor.display_name,
+                    triggered_by,
+                    triggered_at,
+                    handle,
+                ),
+                name=f"avalanche-prepare-{run_id}",
+                daemon=True,
+            )
+            handle.preparation_thread = preparation_thread
+            preparation_thread.start()
             return run_id
         except BaseException:
             cancel_event.set()
             handle.publication_event.set()
-            start_event.set()
+            handle.start_event.set()
             _teardown_process_group(process, windows_job)
             with self._lock:
                 self._runs.pop(run_id, None)
@@ -1269,6 +1266,94 @@ class Operator:
             self._result_store.discard(result_bundle)
             _close_event_queue(event_queue)
             raise
+
+    def _prepare_requested_run(
+        self,
+        run_id: str,
+        workflow_id: str,
+        catalog_display_name: str,
+        triggered_by: str,
+        triggered_at: float,
+        handle: _RunHandle,
+    ) -> None:
+        try:
+            prepared, buffered_events = self._await_prepared(handle)
+            prepared_run = self._run_from_prepared(
+                run_id,
+                workflow_id,
+                catalog_display_name,
+                triggered_by,
+                triggered_at,
+                prepared,
+            )
+            drain = threading.Thread(
+                target=self._drain_run_events,
+                args=(run_id, handle, buffered_events),
+                name=f"avalanche-drain-{run_id}",
+                daemon=True,
+            )
+            with self._lock:
+                run = self._runs.get(run_id)
+                if run is None:
+                    return
+                if self._closed:
+                    raise RuntimeError("Operator closed while preparing run")
+                run.flow_name = prepared_run.flow_name
+                run.workflow_display_name = prepared_run.workflow_display_name
+                run.topology = prepared_run.topology
+                run.nodes = prepared_run.nodes
+                if handle.cancel_event.is_set():
+                    run.status = RunStatus.CANCELLED
+                    run.ended_at = time.monotonic()
+                else:
+                    run.status = RunStatus.PENDING
+                handle.drain_thread = drain
+                notifications = self._publish_run_locked(run)
+            self._wait_for_notifications(notifications)
+            drain.start()
+            handle.publication_event.set()
+            handle.start_event.set()
+        except BaseException as exc:
+            self._finish_requested_preparation_failure(run_id, handle, exc)
+
+    def _finish_requested_preparation_failure(
+        self,
+        run_id: str,
+        handle: _RunHandle,
+        exc: BaseException,
+    ) -> None:
+        cancelled = handle.cancel_event.is_set()
+        entry = LogEntry(
+            timestamp=datetime.now(),
+            level=LogLevel.ERROR,
+            node_id="operator",
+            message=f"Workflow preparation failed: {exc}",
+        )
+        with self._lock:
+            run = self._runs.get(run_id)
+            if run is None or run.status in {
+                RunStatus.SUCCESS,
+                RunStatus.FAILED,
+                RunStatus.CANCELLED,
+            }:
+                notifications = None
+            else:
+                run.status = RunStatus.CANCELLED if cancelled else RunStatus.FAILED
+                run.ended_at = time.monotonic()
+                log_entry = None
+                if not cancelled:
+                    self._append_log_locked(run, entry)
+                    log_entry = entry
+                notifications = self._publish_run_locked(run, log_entry=log_entry)
+            self._active_runs.pop(run_id, None)
+        handle.cancel_event.set()
+        handle.publication_event.set()
+        handle.start_event.set()
+        _teardown_process_group(handle.process, handle.windows_job)
+        self._result_store.discard(handle.result_bundle)
+        _close_event_queue(handle.event_queue)
+        if notifications is not None:
+            self._wait_for_notifications(notifications)
 
     def cancel_run(self, run_id: str) -> None:
         with self._lock:
@@ -1280,7 +1365,11 @@ class Operator:
                 handle.start_event.set()
             else:
                 already_requested = True
-            if run is None or run.status not in (RunStatus.PENDING, RunStatus.RUNNING):
+            if run is None or run.status not in {
+                RunStatus.REQUESTING,
+                RunStatus.PENDING,
+                RunStatus.RUNNING,
+            }:
                 return
         if handle is not None and not already_requested:
             threading.Thread(
@@ -1390,6 +1479,10 @@ class Operator:
         delayed_drains = []
         drain_deadline = time.monotonic() + 2.0
         current_thread = threading.current_thread()
+        for _, handle in handles:
+            preparation = handle.preparation_thread
+            if preparation is not None and preparation is not current_thread:
+                preparation.join(timeout=max(0.0, drain_deadline - time.monotonic()))
         for run_id, handle in handles:
             drain = handle.drain_thread
             if drain is not None and drain is not current_thread:
@@ -1492,8 +1585,6 @@ class Operator:
         if threading.current_thread() is not notification_thread:
             notification_thread.join(timeout=2.0)
 
-
-
     def _start_watcher(self) -> None:
         self._watcher_thread = threading.Thread(
             target=self._watch_loop, name="avalanche-watcher", daemon=True
@@ -1593,6 +1684,8 @@ class Operator:
             try:
                 event = handle.event_queue.get(timeout=0.1)
             except queue.Empty:
+                if handle.cancel_event.is_set():
+                    raise RuntimeError("Run preparation cancelled")
                 if not handle.process.is_alive():
                     raise RuntimeError(
                         f"Run coordinator exited during preparation (exit code "
@@ -1615,6 +1708,7 @@ class Operator:
         workflow_id: str,
         catalog_display_name: str,
         triggered_by: str,
+        triggered_at: float,
         prepared: dict[str, Any],
     ) -> RunState:
         display_name = prepared.get("display_name") or catalog_display_name
@@ -1635,6 +1729,11 @@ class Operator:
                 for node_id in node_ids
                 if node_id in prepared["agent_field_schemas_json"]
             ),
+            agent_instruction_lines=tuple(
+                (node_id, prepared["agent_instruction_lines"][node_id])
+                for node_id in node_ids
+                if node_id in prepared["agent_instruction_lines"]
+            ),
         )
         run = RunState(
             run_id=run_id,
@@ -1644,6 +1743,7 @@ class Operator:
             topology=topology,
             status=RunStatus.PENDING,
             triggered_by=triggered_by,
+            triggered_at=triggered_at,
         )
         for node_id in node_ids:
             run.nodes[node_id] = NodeState(
@@ -1841,10 +1941,20 @@ class Operator:
                         RunStatus.CANCELLED,
                     }:
                         return False
+                    log_node_id = event["node_id"]
+                    if log_node_id not in run.nodes:
+                        matches = (
+                            node.node_id
+                            for node in run.nodes.values()
+                            if node.name == log_node_id
+                        )
+                        matched_node_id = next(matches, None)
+                        if matched_node_id is not None and next(matches, None) is None:
+                            log_node_id = matched_node_id
                     log_entry = LogEntry(
                         timestamp=datetime.fromtimestamp(event["timestamp"]),
                         level=_LEVEL_MAP.get(event["level"], LogLevel.INFO),
-                        node_id=event["node_id"],
+                        node_id=log_node_id,
                         message=event["message"],
                     )
                     self._append_log_locked(run, log_entry)
@@ -2378,6 +2488,9 @@ class Operator:
                         status=node.status,
                         started_at=node.started_at,
                         ended_at=node.ended_at,
+                        running_elapsed_seconds=(
+                            node.elapsed if node.status is NodeStatus.RUNNING else None
+                        ),
                         revision=publication_sequence,
                         error=node.error,
                     )
@@ -2676,10 +2789,7 @@ def _decode_transport_token(
     if value["as_of_sequence"] < 0:
         raise ValueError("Invalid detail token")
     if value["kind"] in {"logs", "events"}:
-        if (
-            type(value.get("through_sequence")) is not int
-            or value["through_sequence"] < 0
-        ):
+        if type(value.get("through_sequence")) is not int or value["through_sequence"] < 0:
             raise ValueError("Invalid detail token")
         if "cursor" in value:
             if (
@@ -2956,6 +3066,7 @@ def _validate_preparation_event(event: object) -> str:
                 "display_names",
                 "display_name",
                 "agent_field_schemas_json",
+                "agent_instruction_lines",
             },
         )
         node_ids = _required_field(event, "node_ids")
@@ -2976,6 +3087,7 @@ def _validate_preparation_event(event: object) -> str:
         agent_field_schemas_json = _agent_field_schema_mapping(
             event, "agent_field_schemas_json"
         )
+        agent_instruction_lines = _string_mapping(event, "agent_instruction_lines")
         for node_id in node_ids:
             if node_id not in node_types:
                 raise _CoordinatorProtocolError(
@@ -2990,6 +3102,13 @@ def _validate_preparation_event(event: object) -> str:
             unknown = min(unknown_agent_nodes)
             raise _CoordinatorProtocolError(
                 f"field 'agent_field_schemas_json' references unknown node "
+                f"{_bounded_ascii(unknown)}"
+            )
+        unknown_instruction_nodes = set(agent_instruction_lines).difference(node_ids)
+        if unknown_instruction_nodes:
+            unknown = min(unknown_instruction_nodes)
+            raise _CoordinatorProtocolError(
+                f"field 'agent_instruction_lines' references unknown node "
                 f"{_bounded_ascii(unknown)}"
             )
         display_name = event.get("display_name")

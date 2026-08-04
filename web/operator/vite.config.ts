@@ -24,6 +24,9 @@ export default defineConfig({
     },
   },
   server: {
+    fs: {
+      allow: ["../.."],
+    },
     port: 5173,
     proxy: {
       "/avalanche.operator.OperatorService": {

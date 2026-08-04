@@ -23,6 +23,7 @@ _SEP = " › "
 _SEP_STYLE = Style(color=ICE_STEEL)
 
 _STATUS_STYLES: dict[RunStatus, Style] = {
+    RunStatus.REQUESTING: Style(color=ICE_WARN, bold=True),
     RunStatus.PENDING: Style(color=ICE_STEEL),
     RunStatus.RUNNING: Style(color=ICE_BRIGHT, bold=True),
     RunStatus.SUCCESS: Style(color=ICE_TEAL, bold=True),
@@ -31,6 +32,7 @@ _STATUS_STYLES: dict[RunStatus, Style] = {
 }
 
 _STATUS_ICONS: dict[RunStatus, str] = {
+    RunStatus.REQUESTING: "◌",
     RunStatus.PENDING: "○",
     RunStatus.SUCCESS: "✓",
     RunStatus.FAILED: "✗",

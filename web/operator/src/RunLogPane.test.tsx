@@ -108,7 +108,7 @@ function deferred<T>() {
 describe("RunLogPane", () => {
   it("merges retained and live records into one ordered cross-step stream", async () => {
     const listLogPage = vi.fn<OperatorApi["listLogPage"]>(async () =>
-      page([log(2, "validate"), log(1, "fetch")]),
+      page([log(2, "validate_1"), log(1, "fetch_1")]),
     );
     const readTextDetail = vi.fn(async (token: string) => `body-${token}`);
     const onSelectNode = vi.fn();
@@ -116,7 +116,7 @@ describe("RunLogPane", () => {
       <RunLogPane
         api={operatorApi({ listLogPage, readTextDetail })}
         run={run}
-        liveLogs={[log(3, "fetch"), log(2, "validate", "live-2")]}
+        liveLogs={[log(3, "fetch_1"), log(2, "validate_1", "live-2")]}
         onSelectNode={onSelectNode}
       />,
     );
@@ -141,6 +141,7 @@ describe("RunLogPane", () => {
 
     fireEvent.click(within(rows[0]).getByRole("button", { name: /Fetch/ }));
     expect(onSelectNode).toHaveBeenCalledWith("fetch_1");
+    expect(within(pane).queryByText("Start of retained logs")).not.toBeInTheDocument();
   });
 
   it("renders ANSI styles in hydrated log bodies", async () => {
@@ -158,15 +159,16 @@ describe("RunLogPane", () => {
     const pane = screen.getByRole("region", { name: "Run logs" });
     const body = await within(pane).findByText("failed");
     expect(body).toHaveStyle({ color: "rgb(196, 61, 54)", fontWeight: "700" });
+    expect(within(pane).getByRole("button", { name: /Fetch/ })).toBeInTheDocument();
   });
 
-  it("maps graph selection to the runtime log identity and cancels obsolete scope work", async () => {
+  it("uses the canonical graph node ID for the log filter and cancels obsolete scope work", async () => {
     const requestSignals: AbortSignal[] = [];
     const listLogPage = vi.fn<OperatorApi["listLogPage"]>(async (request, signal) => {
       if (signal) requestSignals.push(signal);
-      return request.nodeId === "fetch"
-        ? page([log(1, "fetch")])
-        : page([log(1, "fetch"), log(2, "validate")]);
+      return request.nodeId === "fetch_1"
+        ? page([log(1, "fetch_1")])
+        : page([log(1, "fetch_1"), log(2, "validate_1")]);
     });
     const api = operatorApi({ listLogPage });
     const view = render(
@@ -174,7 +176,7 @@ describe("RunLogPane", () => {
         api={api}
         run={run}
         nodeId="fetch_1"
-        liveLogs={[log(3, "fetch"), log(4, "validate")]}
+        liveLogs={[log(3, "fetch_1"), log(4, "validate_1")]}
         onSelectNode={() => undefined}
       />,
     );
@@ -182,7 +184,7 @@ describe("RunLogPane", () => {
     expect(await screen.findByText("Fetch · fetch_1")).toBeInTheDocument();
     await waitFor(() => expect(screen.getAllByRole("article")).toHaveLength(2));
     expect(listLogPage).toHaveBeenLastCalledWith(
-      expect.objectContaining({ nodeId: "fetch" }),
+      expect.objectContaining({ nodeId: "fetch_1" }),
       expect.any(AbortSignal),
     );
 
@@ -190,7 +192,7 @@ describe("RunLogPane", () => {
       <RunLogPane
         api={api}
         run={run}
-        liveLogs={[log(3, "fetch"), log(4, "validate")]}
+        liveLogs={[log(3, "fetch_1"), log(4, "validate_1")]}
         onSelectNode={() => undefined}
       />,
     );

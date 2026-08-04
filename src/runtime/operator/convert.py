@@ -157,6 +157,7 @@ def workflow_topology_to_proto(topology: WorkflowTopology) -> pb.WorkflowTopolog
         node_types=dict(topology.node_types),
         display_names=dict(topology.display_names),
         agent_field_schemas_json=dict(topology.agent_field_schemas_json),
+        agent_instruction_lines=dict(topology.agent_instruction_lines),
     )
 
 
@@ -171,6 +172,11 @@ def workflow_topology_from_proto(msg: pb.WorkflowTopologyMsg) -> WorkflowTopolog
             (node_id, msg.agent_field_schemas_json[node_id])
             for node_id in node_ids
             if node_id in msg.agent_field_schemas_json
+        ),
+        agent_instruction_lines=tuple(
+            (node_id, msg.agent_instruction_lines[node_id])
+            for node_id in node_ids
+            if node_id in msg.agent_instruction_lines
         ),
     )
 
@@ -242,6 +248,8 @@ def node_snapshot_to_proto(node: NodeSnapshot) -> pb.NodeSnapshotMsg:
         ended_at=node.ended_at or 0.0,
         revision=node.revision,
     )
+    if node.running_elapsed_seconds is not None:
+        message.running_elapsed_seconds = node.running_elapsed_seconds
     if node.trace is not None:
         message.trace.CopyFrom(trace_descriptor_to_proto(node.trace))
     message.event_page_token = node.event_page_token
@@ -258,6 +266,9 @@ def node_snapshot_from_proto(msg: pb.NodeSnapshotMsg) -> NodeSnapshot:
         status=NodeStatus(msg.status),
         started_at=msg.started_at if msg.started_at else None,
         ended_at=msg.ended_at if msg.ended_at else None,
+        running_elapsed_seconds=(
+            msg.running_elapsed_seconds if msg.HasField("running_elapsed_seconds") else None
+        ),
         error=msg.error if msg.HasField("error") else None,
         trace=trace_descriptor_from_proto(msg.trace) if msg.HasField("trace") else None,
         revision=msg.revision,
@@ -270,6 +281,7 @@ def run_summary_to_proto(summary: RunSummary) -> pb.RunSummaryMsg:
         run_id=summary.run_id,
         flow_name=summary.flow_name,
         status=summary.status.value,
+        triggered_at=summary.triggered_at or 0.0,
         started_at=summary.started_at or 0.0,
         ended_at=summary.ended_at or 0.0,
         triggered_by=summary.triggered_by,
@@ -286,6 +298,7 @@ def run_summary_from_proto(msg: pb.RunSummaryMsg) -> RunSummary:
         flow_name=msg.flow_name,
         status=RunStatus(msg.status),
         started_at=msg.started_at if msg.started_at else None,
+        triggered_at=msg.triggered_at if msg.triggered_at else None,
         ended_at=msg.ended_at if msg.ended_at else None,
         triggered_by=msg.triggered_by or "manual",
         workflow_id=msg.workflow_id or msg.flow_name,
@@ -414,6 +427,8 @@ def operator_update_to_proto(update: OperatorUpdate) -> pb.OperatorUpdate:
             ended_at=change.ended_at or 0.0,
             revision=change.revision,
         )
+        if change.running_elapsed_seconds is not None:
+            changed.running_elapsed_seconds = change.running_elapsed_seconds
         if change.error is not None:
             changed.error = change.error
         message.node_status_changed.CopyFrom(changed)
@@ -475,6 +490,11 @@ def operator_update_from_proto(msg: pb.OperatorUpdate) -> OperatorUpdate:
             started_at=item.started_at if item.started_at else None,
             ended_at=item.ended_at if item.ended_at else None,
             error=item.error if item.HasField("error") else None,
+            running_elapsed_seconds=(
+                item.running_elapsed_seconds
+                if item.HasField("running_elapsed_seconds")
+                else None
+            ),
             revision=item.revision,
         )
     elif change_name == "log_appended":

@@ -5,6 +5,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 interface RenderedNode {
   id: string;
+  selected?: boolean;
   position: object;
   data: {
     onOpen: () => void;
@@ -74,7 +75,7 @@ vi.mock("@xyflow/react", () => {
     }: {
       nodes: RenderedNode[];
       edges: RenderedEdge[];
-      nodeTypes: Record<string, ComponentType<{ data: unknown }>>;
+      nodeTypes: Record<string, ComponentType<{ data: unknown; selected?: boolean }>>;
     }) => {
       graphMetrics.renderCount += 1;
       graphMetrics.nodeSets.push(nodes);
@@ -89,7 +90,7 @@ vi.mock("@xyflow/react", () => {
         <div>
           <span data-testid="edge-count">{edges.length}</span>
           {nodes.map((node) => (
-            <NodeComponent key={node.id} data={node.data} />
+            <NodeComponent key={node.id} data={node.data} selected={node.selected} />
           ))}
         </div>
       );
@@ -109,6 +110,7 @@ import {
 function metadata(field: string) {
   return JSON.stringify({
     signature: {
+      instructions: "Current instruction.\nSecond instruction line.",
       inputs: [{ name: field, type: "str" }],
       outputs: [],
     },
@@ -205,21 +207,31 @@ describe("GraphCanvas", () => {
 
   it("renders the current definition and keeps a historical run on recorded metadata", () => {
     const view = render(
-      <GraphCanvas workflow={workflow} onOpenNode={() => undefined} />,
+      <GraphCanvas workflow={workflow} selectedNodeId="agent" onOpenNode={() => undefined} />,
     );
 
     expect(screen.getByText("Current agent")).toBeInTheDocument();
     expect(screen.getByText("Store")).toBeInTheDocument();
     expect(screen.getByText("current_input")).toBeInTheDocument();
+    expect(screen.getByText("Current instruction.")).toHaveClass(
+      "node-instruction-line",
+      "self-stretch",
+      "overflow-hidden",
+      "line-clamp-2",
+    );
+    expect(screen.getByText("Current instruction.")).not.toHaveClass("whitespace-nowrap");
     expect(screen.getByTestId("edge-count")).toHaveTextContent("1");
     const currentAgentCard = screen
       .getByRole("button", { name: "Inspect Current agent" })
       .closest("article");
     expect(currentAgentCard).toHaveAttribute("data-node-kind", "agent");
-    expect(currentAgentCard?.querySelector(".node-kicker")).toHaveTextContent("agent");
+    expect(currentAgentCard).toHaveClass("border-acid!");
     expect(
       screen.getByRole("button", { name: "Inspect Store" }).closest("article"),
     ).toHaveAttribute("data-node-kind", "standard");
+    expect(screen.getByRole("button", { name: "Inspect Store" }).closest("article")).not.toHaveClass(
+      "border-acid!",
+    );
 
     view.rerender(
       <GraphCanvas
@@ -230,6 +242,7 @@ describe("GraphCanvas", () => {
           nodeTypes: { agent: "step" },
           displayNames: { agent: "Recorded agent" },
           agentFieldSchemasJson: { agent: fieldSchemas("recorded_input") },
+          agentInstructionLines: { agent: "Recorded instruction." },
         })}
         runNodes={[
           NodeSnapshotMsg.create({
@@ -252,7 +265,8 @@ describe("GraphCanvas", () => {
 
     expect(screen.getByText("Recorded agent")).toBeInTheDocument();
     expect(screen.getByText("recorded_input")).toBeInTheDocument();
-    expect(screen.getByText("recorded failure")).toBeInTheDocument();
+    expect(screen.getByText("Recorded instruction.")).toBeInTheDocument();
+    expect(screen.queryByText("recorded failure")).not.toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Inspect Recorded agent" }).closest(".node-card"))
       .toHaveClass("status-failed");
     expect(historicalAgentCard).toHaveClass("before:bg-agent", "border-line");
@@ -531,6 +545,36 @@ describe("GraphCanvas", () => {
     expect(expandedCard?.querySelector(".node-title")).toHaveClass("text-sm");
   });
 
+  it("keeps failed error messages out of DAG cards", () => {
+    graphMetrics.zoom = 0.99;
+    const topology = WorkflowTopologyMsg.create({
+      nodeIds: ["failed_step_1"],
+      graph: { failed_step_1: { children: [] } },
+      nodeTypes: { failed_step_1: "step" },
+      displayNames: { failed_step_1: "Failed step" },
+    });
+    render(
+      <GraphCanvas
+        runTopology={topology}
+        runNodes={[
+          NodeSnapshotMsg.create({
+            nodeId: "failed_step_1",
+            name: "Failed step",
+            nodeType: "step",
+            status: "failed",
+            error: "The retained log is the error detail surface.",
+          }),
+        ]}
+        onOpenNode={() => undefined}
+      />,
+    );
+
+    const card = screen.getByRole("button", { name: "Inspect Failed step" }).closest(".node-card");
+    expect(card).toHaveClass("status-failed", "node-card--compact");
+    expect(card).not.toHaveTextContent("The retained log is the error detail surface.");
+  });
+
+
   it("deduplicates dependencies and selects right or bottom source handles by depth", () => {
     render(
       <GraphCanvas
@@ -652,14 +696,15 @@ describe("GraphCanvas", () => {
             nodeType: "step",
             status: "running",
             startedAt: 5,
+            runningElapsedSeconds: 4.5,
           }),
         ]}
         onOpenNode={() => undefined}
       />,
     );
 
-    expect(screen.getByText("5.0s")).toBeInTheDocument();
-    const compactDuration = screen.getByText("5.0s");
+    expect(screen.getByText("4.5s")).toBeInTheDocument();
+    const compactDuration = screen.getByText("4.5s");
     expect(compactDuration.parentElement).toHaveClass("node-card");
     expect(compactDuration).toHaveClass(
       "top-3",
@@ -669,13 +714,36 @@ describe("GraphCanvas", () => {
       "duration-150",
     );
     expect(screen.getByRole("button", { name: "Inspect Timed agent" }).closest(".node-card"))
-      .toHaveClass("status-running");
-    act(() => vi.advanceTimersByTime(1_000));
-    expect(screen.getByText("6.0s")).toBeInTheDocument();
+      .toHaveClass("status-running", "gradient-animate");
+    act(() => vi.advanceTimersByTime(100));
+    expect(screen.getByText("4.6s")).toBeInTheDocument();
+    act(() => vi.advanceTimersByTime(900));
+    expect(screen.getByText("5.5s")).toBeInTheDocument();
     expect(graphMetrics.layoutCount).toBe(1);
+    view.unmount();
+    act(() => vi.advanceTimersByTime(7_000));
+    const reentered = render(
+      <GraphCanvas
+        runTopology={topology}
+        runNodes={[
+          NodeSnapshotMsg.create({
+            nodeId: "agent",
+            name: "Timed agent",
+            nodeType: "step",
+            status: "running",
+            startedAt: 5,
+            runningElapsedSeconds: 12.5,
+          }),
+        ]}
+        onOpenNode={() => undefined}
+      />,
+    );
+    expect(screen.getByText("12.5s")).toBeInTheDocument();
+    act(() => vi.advanceTimersByTime(100));
+    expect(screen.getByText("12.6s")).toBeInTheDocument();
 
     graphMetrics.zoom = 1;
-    view.rerender(
+    reentered.rerender(
       <GraphCanvas
         runTopology={topology}
         runNodes={[
@@ -697,7 +765,7 @@ describe("GraphCanvas", () => {
       .toHaveClass("status-success");
     act(() => vi.advanceTimersByTime(5_000));
     expect(screen.getByText("2.0s")).toBeInTheDocument();
-    expect(graphMetrics.layoutCount).toBe(1);
-    view.unmount();
+    expect(graphMetrics.layoutCount).toBe(2);
+    reentered.unmount();
   });
 });

@@ -956,7 +956,7 @@ class AvalancheApp(App):
         run = self.store.current_run
         return (
             run is not None
-            and run.status in {RunStatus.PENDING, RunStatus.RUNNING}
+            and run.status in {RunStatus.REQUESTING, RunStatus.PENDING, RunStatus.RUNNING}
             and run.run_id not in self._cancel_run_requests
         )
 
