@@ -48,20 +48,20 @@ export function RunListPanel({
   });
 
   return (
-    <section className="run-list-panel" aria-label="Workflow runs">
-      <header>
+    <section className="run-list-panel w-[300px] overflow-hidden rounded-[9px] border border-line bg-[rgba(255,255,255,.96)] shadow-[0_6px_20px_rgba(20,31,26,.1)]" aria-label="Workflow runs">
+      <header className="flex h-[30px] items-center justify-between border-b border-line px-[9px] [&_strong]:text-[10px] [&_span]:font-mono [&_span]:text-[8px] [&_span]:text-secondary">
         <strong>Runs</strong>
         <span>{workflowRuns.length}</span>
       </header>
       {workflowRuns.length ? (
-        <div className="run-list-scroll" ref={scrollElement}>
-          <div className="run-list-virtual" style={{ height: virtualizer.getTotalSize() }}>
+        <div className="run-list-scroll max-h-48 overflow-auto" ref={scrollElement}>
+          <div className="run-list-virtual relative w-full" style={{ height: virtualizer.getTotalSize() }}>
             {virtualizer.getVirtualItems().map((virtualRow) => {
               const summary = workflowRuns[virtualRow.index];
               return (
                 <button
                   type="button"
-                  className={`run-list-row ${selectedRunId === summary.runId ? "active" : ""}`}
+                  className={`run-list-row absolute top-0 left-0 grid w-full cursor-pointer grid-cols-[8px_minmax(0,1fr)_auto_38px] items-center gap-[7px] border-0 border-b border-[#eef1ef] bg-transparent px-[9px] text-left text-ink hover:bg-[#f4f6f5] [&_code]:overflow-hidden [&_code]:text-ellipsis [&_code]:whitespace-nowrap [&_code]:text-[9px] [&_code]:text-[#36423c] [&_time]:text-right [&_time]:font-mono [&_time]:text-[8px] [&_time]:text-secondary ${selectedRunId === summary.runId ? "active bg-[#edf3ff] shadow-[inset_2px_0_#2563eb]" : ""}`}
                   key={summary.runId}
                   onClick={() => onSelectRun(summary.runId)}
                   style={{
@@ -70,9 +70,9 @@ export function RunListPanel({
                   }}
                   aria-label={`${summary.runId}, ${summary.status}, ${runDuration(summary)}`}
                 >
-                  <span className={`run-status-dot status-${summary.status}`} aria-hidden="true" />
+                  <span className={`run-status-dot size-[7px] rounded-full ${summary.status === "success" ? "status-success bg-mint" : summary.status === "failed" ? "status-failed bg-danger" : summary.status === "running" ? "status-running bg-acid" : "bg-muted"}`} aria-hidden="true" />
                   <code title={summary.runId}>{summary.runId}</code>
-                  <span className={`run-status-text status-${summary.status}`}>
+                  <span className={`run-status-text text-[8px] capitalize ${summary.status === "success" ? "status-success text-mint" : summary.status === "failed" ? "status-failed text-danger" : summary.status === "running" ? "status-running text-acid" : ""}`}>
                     {summary.status}
                   </span>
                   <time>{runDuration(summary)}</time>
@@ -82,7 +82,7 @@ export function RunListPanel({
           </div>
         </div>
       ) : (
-        <span className="run-list-empty">No runs yet</span>
+        <span className="run-list-empty block p-2.5 font-mono text-[8px] text-secondary">No runs yet</span>
       )}
     </section>
   );

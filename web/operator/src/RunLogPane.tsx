@@ -450,13 +450,13 @@ export function RunLogPane({
   return (
     <section
       ref={paneElement}
-      className={expanded ? "run-log-pane expanded" : "run-log-pane"}
+      className={`run-log-pane relative z-[6] grid min-h-0 min-w-0 flex-[0_0_35px] grid-rows-[35px_minmax(0,1fr)] border-t border-line bg-[rgba(255,255,255,.98)] shadow-[0_-5px_18px_rgba(20,31,26,.08)] ${expanded ? "expanded min-h-[140px] max-h-[75%]" : ""}`}
       style={paneStyle}
       aria-label="Run logs"
     >
       {expanded && (
         <div
-          className="run-log-resizer"
+          className="run-log-resizer absolute -top-1 right-0 left-0 z-[2] h-[9px] cursor-ns-resize touch-none select-none after:absolute after:top-[3px] after:right-0 after:left-0 after:h-0.5 after:bg-line after:content-[''] after:transition-colors after:duration-150 hover:after:bg-acid focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-acid focus-visible:after:bg-acid"
           role="separator"
           aria-label="Resize logs"
           aria-controls="run-log-content"
@@ -490,25 +490,25 @@ export function RunLogPane({
           onPointerCancel={endResize}
         />
       )}
-      <header>
+      <header className="flex min-w-0 items-center gap-2.5 border-b border-line px-2.5">
         <button
           type="button"
-          className="run-log-collapse"
+          className="run-log-collapse flex min-w-0 cursor-pointer items-center gap-[7px] border-0 bg-transparent py-1 text-left text-ink focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-acid [&>span:first-child]:w-2.5 [&>span:first-child]:text-acid [&>strong]:text-[10px] [&>strong]:tracking-[.08em] [&>strong]:uppercase"
           aria-expanded={expanded}
           aria-controls="run-log-content"
           onClick={() => setExpanded((value) => !value)}
         >
           <span aria-hidden="true">{expanded ? "▾" : "▸"}</span>
           <strong>Logs</strong>
-          <span className="run-log-scope">{scopeLabel}</span>
+          <span className="run-log-scope truncate font-mono text-[9px] text-secondary">{scopeLabel}</span>
         </button>
-        <span className="run-log-count">
+        <span className="run-log-count ml-auto whitespace-nowrap font-mono text-[8px] text-muted">
           {combinedLogs.length} {combinedLogs.length === 1 ? "record" : "records"}
         </span>
         {expanded && (
           <button
             type="button"
-            className={following ? "toggle run-log-autoscroll active" : "toggle run-log-autoscroll"}
+            className={`toggle run-log-autoscroll inline-flex flex-none cursor-pointer items-center gap-[5px] rounded-full border bg-panel px-2 py-[5px] font-mono text-[8px] focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-acid [&>span]:text-xs [&>span]:leading-none [&>span]:text-acid ${following ? "active border-acid text-acid" : "border-line text-secondary"}`}
             aria-label="Auto-scroll logs"
             aria-pressed={following}
             title={following ? "Pause auto-scroll" : "Jump to latest logs and resume auto-scroll"}
@@ -526,13 +526,13 @@ export function RunLogPane({
         )}
       </header>
       {expanded && (
-        <div className="run-log-content" id="run-log-content">
-          {pageError && <p className="inspector-error" role="alert">{pageError}</p>}
-          {decodeError && <p className="inspector-error" role="alert">{decodeError}</p>}
+        <div className="run-log-content grid min-h-0 min-w-0 grid-rows-[auto_auto_auto_minmax(0,1fr)_auto_auto] px-2.5 pt-[7px] pb-1.5" id="run-log-content">
+          {pageError && <p className="inspector-error mb-1.5 rounded-[7px] border border-danger px-2 py-1.5 text-[10px] text-danger [overflow-wrap:anywhere]" role="alert">{pageError}</p>}
+          {decodeError && <p className="inspector-error mb-1.5 rounded-[7px] border border-danger px-2 py-1.5 text-[10px] text-danger [overflow-wrap:anywhere]" role="alert">{decodeError}</p>}
           {activePage.nextPageToken && (
             <button
               type="button"
-              className="descriptor-page-action run-log-older-action"
+              className="descriptor-page-action run-log-older-action mb-1.5 cursor-pointer justify-self-start rounded-md border border-line bg-panel px-2 py-[5px] font-mono text-[8px] text-acid disabled:cursor-wait disabled:text-muted"
               disabled={pageLoading}
               aria-busy={pageLoading}
               onClick={loadOlderLogs}
@@ -541,7 +541,7 @@ export function RunLogPane({
             </button>
           )}
           <div
-            className="run-log-scroll"
+            className="run-log-scroll min-h-0 min-w-0 overflow-auto rounded-md border border-line bg-[#fbfcfb] [&>.empty-copy]:m-3 [&>.inspector-loading]:m-3"
             ref={scrollElement}
             onScroll={(event) => {
               const element = event.currentTarget;
@@ -553,13 +553,13 @@ export function RunLogPane({
             }}
           >
             {pageLoading && !combinedLogs.length ? (
-              <p className="inspector-loading" role="status">Loading retained logs…</p>
+              <p className="inspector-loading text-[11px] text-muted italic" role="status">Loading retained logs…</p>
             ) : !combinedLogs.length ? (
-              <p className="empty-copy">
+              <p className="empty-copy text-[11px] text-muted">
                 {nodeId ? "No retained logs are available for this node." : "No retained logs are available for this run."}
               </p>
             ) : (
-              <div className="run-log-virtual" style={{ height: virtualizer.getTotalSize() }}>
+              <div className="run-log-virtual relative w-full" style={{ height: virtualizer.getTotalSize() }}>
                 {virtualizer.getVirtualItems().map((virtualRow) => {
                   const entry = combinedLogs[virtualRow.index];
                   const body = logBodies.get(entry.bodyToken);
@@ -569,7 +569,7 @@ export function RunLogPane({
                     : entry.nodeId;
                   return (
                     <article
-                      className="run-log-row"
+                      className="run-log-row absolute top-0 left-0 grid min-h-9 w-full grid-cols-[78px_minmax(120px,180px)_52px_minmax(12rem,1fr)] items-start gap-2 border-b border-[#edf0ee] bg-[#fbfcfb] px-[9px] py-1.5 font-mono text-[9px]/[1.45] text-secondary [&>time]:whitespace-nowrap [&>time]:text-muted [&>pre]:m-0 [&>pre]:min-w-0 [&>pre]:whitespace-pre-wrap [&>pre]:text-[#27332d] [&>pre]:[overflow-wrap:anywhere]"
                       key={entry.sequence}
                       data-index={virtualRow.index}
                       ref={virtualizer.measureElement}
@@ -579,16 +579,16 @@ export function RunLogPane({
                         {logTimestamp(entry.timestamp)}
                       </time>
                       {graphNodeId ? (
-                        <button type="button" className="run-log-node" onClick={() => onSelectNode(graphNodeId)}>
+                        <button type="button" className="run-log-node min-w-0 cursor-pointer border-0 bg-transparent p-0 text-left [font:inherit] text-acid focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-acid [&>strong]:block [&>strong]:truncate [&>code]:mt-0.5 [&>code]:block [&>code]:truncate [&>code]:text-[8px] [&>code]:text-muted" onClick={() => onSelectNode(graphNodeId)}>
                           <strong>{nodeLabel}</strong>
                           {nodeLabel !== entry.nodeId && <code>{graphNodeId}</code>}
                         </button>
                       ) : (
-                        <span className="run-log-node">
+                        <span className="run-log-node min-w-0 text-left [font:inherit] text-acid [&>strong]:block [&>strong]:truncate">
                           <strong>{nodeLabel}</strong>
                         </span>
                       )}
-                      <span className={`run-log-level level-${entry.level.toLowerCase()}`}>{entry.level}</span>
+                      <span className={`run-log-level font-bold uppercase ${entry.level === "error" || entry.level === "critical" ? `level-${entry.level} text-danger` : entry.level === "warning" ? "level-warning text-amber" : "text-secondary"}`}>{entry.level}</span>
                       <pre>{body ?? (droppedTokens.current.has(entry.bodyToken) ? "[log body omitted]" : "Loading…")}</pre>
                     </article>
                   );
@@ -596,9 +596,9 @@ export function RunLogPane({
               </div>
             )}
           </div>
-          {decodePending && <p className="inspector-loading run-log-decoding" role="status">Decoding log text…</p>}
+          {decodePending && <p className="inspector-loading run-log-decoding mt-[5px] text-[11px] text-muted italic" role="status">Decoding log text…</p>}
           {!pageLoading && !activePage.nextPageToken && combinedLogs.length > 0 && (
-            <p className="inspector-end-state">Start of retained logs</p>
+            <p className="inspector-end-state mt-[5px] text-center font-mono text-[8px] text-muted uppercase">Start of retained logs</p>
           )}
         </div>
       )}

@@ -40,7 +40,7 @@ function JsonEditor({ value, onChange }: JsonEditorProps) {
     });
     return () => view.destroy();
   }, []);
-  return <div className="json-editor" ref={parent} />;
+  return <div className="json-editor overflow-hidden rounded-[7px] border border-line text-[10px]" ref={parent} />;
 }
 
 interface RunControlsProps {
@@ -90,12 +90,12 @@ export function RunControls({
   };
 
   return (
-    <div className="run-controls">
+    <div className="run-controls relative flex items-center gap-2 max-[700px]:flex-wrap [&_button:disabled]:cursor-wait [&_button:disabled]:opacity-50">
       {workflow && (
         <>
           <button
             type="button"
-            className="run-button"
+            className="run-button inline-flex cursor-pointer items-center gap-1.5 rounded-[7px] border border-acid bg-acid px-[11px] py-[7px] text-[10px] font-bold text-white hover:border-[#1d4ed8] hover:bg-[#1d4ed8] [&_svg]:size-[11px] [&_svg]:fill-current"
             disabled={pending?.kind === "start"}
             onClick={() => void start()}
           >
@@ -106,7 +106,7 @@ export function RunControls({
           </button>
           <button
             type="button"
-            className={`input-toggle ${showInput ? "active" : ""}`}
+            className={`input-toggle cursor-pointer border-0 bg-transparent p-0.5 text-[9px] text-acid underline underline-offset-2 hover:text-[#1d4ed8] ${showInput ? "active text-[#1d4ed8]" : ""}`}
             onClick={() => setShowInput((value) => !value)}
           >
             {showInput ? "Hide JSON input" : "Add JSON input"}
@@ -116,7 +116,7 @@ export function RunControls({
       {active && run?.summary && (
         <button
           type="button"
-          className="cancel-button"
+          className="cancel-button cursor-pointer rounded-[7px] border border-[#e0a6a1] bg-white px-[11px] py-[7px] text-[10px] text-[#a92f29] hover:bg-[#fff3f2]"
           disabled={pending?.kind === "cancel"}
           onClick={() => {
             setError(undefined);
@@ -129,7 +129,7 @@ export function RunControls({
         </button>
       )}
       {showInput && workflow && (
-        <div className="input-popover">
+        <div className="input-popover absolute right-0 bottom-[43px] z-20 w-[390px] rounded-[9px] border border-[#cbd2ce] bg-white p-[13px] shadow-[0_18px_50px_rgba(20,31,26,.16)] max-[700px]:w-[calc(100vw-32px)] [&>div:first-child]:mb-[9px] [&>div:first-child]:flex [&>div:first-child]:justify-between [&_strong]:text-[11px] [&_span]:font-mono [&_span]:text-[8px] [&_span]:text-[#6d7872]">
           <div>
             <strong>Workflow input</strong>
             <span>Schema-blind JSON object</span>
@@ -137,7 +137,7 @@ export function RunControls({
           <JsonEditor value={draft} onChange={setDraft} />
         </div>
       )}
-      {error && <div className="action-error">{error}</div>}
+      {error && <div className={`action-error absolute right-0 z-[21] w-[390px] rounded-[7px] border border-[#efb9b5] bg-[#fff1f0] px-[18px] py-2 text-xs text-[#9d2923] max-[700px]:w-[calc(100vw-32px)] ${showInput ? "bottom-[205px]" : "bottom-11"}`}>{error}</div>}
     </div>
   );
 }
