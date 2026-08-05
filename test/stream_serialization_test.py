@@ -108,9 +108,7 @@ def test_lance_model_table_pickle_roundtrip_keeps_row_model(tmp_path):
 
 
 def test_stream_marker_pickle_roundtrip(file_backed_namespace):
-    stream = ava.Stream(
-        file_backed_namespace.records, key="pickle_stream", mode="append_scan"
-    )
+    stream = ava.Stream(file_backed_namespace.records, key="pickle_stream", mode="append_scan")
 
     restored = pickle.loads(pickle.dumps(stream))
 
@@ -162,7 +160,6 @@ def test_ray_executor_runs_table_backed_stream_step(tmp_path):
         num_cpus=2,
         ignore_reinit_error=True,
         include_dashboard=False,
-        runtime_env={"working_dir": None},
     )
 
     try:
@@ -172,7 +169,7 @@ def test_ray_executor_runs_table_backed_stream_step(tmp_path):
 
         @ava.step
         def consume(
-            df: pl.DataFrame = ava.Stream(ns.records, key="ray_scan", mode="append_scan")
+            df: pl.DataFrame = ava.Stream(ns.records, key="ray_scan", mode="append_scan"),
         ):
             return sorted(df["id"].to_list())
 
@@ -213,7 +210,6 @@ def test_ray_stream_passthrough_deferred_upstream_num_cpus_1(tmp_path):
         num_cpus=1,
         ignore_reinit_error=True,
         include_dashboard=False,
-        runtime_env={"working_dir": None},
     )
 
     try:
@@ -236,9 +232,7 @@ def test_ray_stream_passthrough_deferred_upstream_num_cpus_1(tmp_path):
         @ava.source(slug="produce")
         def produce(*, records=ns.records):
             ray.get(recorder.record.remote("produce_start"))
-            result = records.append(
-                pl.DataFrame({"id": [1, 2, 3], "value": ["a", "b", "c"]})
-            )
+            result = records.append(pl.DataFrame({"id": [1, 2, 3], "value": ["a", "b", "c"]}))
             ray.get(recorder.record.remote("produce_end"))
             return result
 
@@ -294,7 +288,6 @@ def test_ray_stream_deferred_upstream_is_a_scheduler_visible_dependency(tmp_path
         num_cpus=4,
         ignore_reinit_error=True,
         include_dashboard=False,
-        runtime_env={"working_dir": None},
     )
 
     orig_resolver = stream_mod._resolve_deferred_stream_upstream
@@ -398,7 +391,6 @@ def test_ray_multi_stream_same_consumer_uses_distinct_deferred_parents(tmp_path)
         num_cpus=4,
         ignore_reinit_error=True,
         include_dashboard=False,
-        runtime_env={"working_dir": None},
     )
 
     orig_resolver = stream_mod._resolve_deferred_stream_upstream
@@ -459,16 +451,12 @@ def test_ray_multi_stream_same_consumer_uses_distinct_deferred_parents(tmp_path)
 
         @ava.source(slug="produce-left")
         def produce_left(*, table=ns.left):
-            return table.append(
-                pl.DataFrame({"id": [1, 2], "value": ["left-a", "left-b"]})
-            )
+            return table.append(pl.DataFrame({"id": [1, 2], "value": ["left-a", "left-b"]}))
 
         @ava.source(slug="produce-right")
         def produce_right(*, table=ns.right):
             return table.append(
-                pl.DataFrame(
-                    {"id": [10, 11, 12], "value": ["right-a", "right-b", "right-c"]}
-                )
+                pl.DataFrame({"id": [10, 11, 12], "value": ["right-a", "right-b", "right-c"]})
             )
 
         @ava.step(slug="consume-both")
@@ -495,9 +483,7 @@ def test_ray_multi_stream_same_consumer_uses_distinct_deferred_parents(tmp_path)
         events = ray.get(recorder.events.remote())
 
         # Both deferred carriers must reference their own table identity.
-        table_identities = {
-            e["table_identity"] for e in events if "table_identity" in e
-        }
+        table_identities = {e["table_identity"] for e in events if "table_identity" in e}
         assert table_identities == {ns.left.identifier, ns.right.identifier}, events
 
         # Distinct hidden parent kwargs — no collision between the two Streams.
@@ -508,9 +494,7 @@ def test_ray_multi_stream_same_consumer_uses_distinct_deferred_parents(tmp_path)
         # Both resolved as genuine passthrough against distinct identities, so
         # neither silently fell back to a table read.
         resolved_identities = {
-            e["resolved_table_identity"]
-            for e in events
-            if "resolved_table_identity" in e
+            e["resolved_table_identity"] for e in events if "resolved_table_identity" in e
         }
         assert resolved_identities == {ns.left.identifier, ns.right.identifier}, events
     finally:
@@ -539,7 +523,6 @@ def test_ray_plain_python_arg_receives_public_append_result(tmp_path):
         num_cpus=1,
         ignore_reinit_error=True,
         include_dashboard=False,
-        runtime_env={"working_dir": None},
     )
 
     try:

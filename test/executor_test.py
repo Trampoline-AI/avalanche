@@ -122,8 +122,7 @@ class TestRayExecutor:
         ray.init(
             num_cpus=2,
             ignore_reinit_error=True,
-            include_dashboard=False,
-            runtime_env={"working_dir": None},  # Don't package working directory
+            include_dashboard=False,  # Don't package working directory
         )
 
         try:
@@ -161,7 +160,6 @@ class TestRayExecutor:
             num_cpus=2,
             ignore_reinit_error=True,
             include_dashboard=False,
-            runtime_env={"working_dir": None},
         )
 
         try:

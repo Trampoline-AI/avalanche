@@ -148,7 +148,6 @@ def model_executor(request: pytest.FixtureRequest) -> Iterator[ava.Executor]:
         num_cpus=2,
         ignore_reinit_error=True,
         include_dashboard=False,
-        runtime_env={"working_dir": None},
     )
     try:
         yield ava.RayExecutor()
@@ -223,9 +222,7 @@ def test_model_stream_table_backed_is_consistent_across_executors(
     )
 
 
-def test_model_stream_rerun_is_consistent_across_executors(
-    model_namespace, model_executor
-):
+def test_model_stream_rerun_is_consistent_across_executors(model_namespace, model_executor):
     namespace = model_namespace
 
     load_people = ava.source(slug="load-people")(append_rerun_people)

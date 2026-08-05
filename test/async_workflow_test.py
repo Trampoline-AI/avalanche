@@ -138,7 +138,6 @@ def test_ray_executor_resolves_async_step():
         num_cpus=2,
         ignore_reinit_error=True,
         include_dashboard=False,
-        runtime_env={"working_dir": None},
     )
 
     try:

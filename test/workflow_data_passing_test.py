@@ -244,7 +244,6 @@ class TestDataPassingBetweenTasks:
             num_cpus=2,
             ignore_reinit_error=True,
             include_dashboard=False,
-            runtime_env={"working_dir": None},
         )
 
         try:
@@ -294,7 +293,6 @@ class TestDataPassingBetweenTasks:
             num_cpus=2,
             ignore_reinit_error=True,
             include_dashboard=False,
-            runtime_env={"working_dir": None},
         )
 
         try:

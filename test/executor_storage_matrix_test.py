@@ -80,7 +80,6 @@ def executor(request: pytest.FixtureRequest) -> Iterator[ava.Executor]:
         num_cpus=4,
         ignore_reinit_error=True,
         include_dashboard=False,
-        runtime_env={"working_dir": None},
     )
     try:
         yield ava.RayExecutor()
@@ -122,9 +121,7 @@ def test_table_backed_stream_runs_on_executor_storage_matrix(matrix_namespace, e
     assert ava.ProgressStore(ns.left, key="matrix_table").get_cursor() == result.snapshot_id
 
 
-def test_passthrough_multistream_runs_on_executor_storage_matrix(
-    matrix_namespace, executor
-):
+def test_passthrough_multistream_runs_on_executor_storage_matrix(matrix_namespace, executor):
     ns = matrix_namespace
 
     @ava.source(slug="produce-left")
@@ -134,9 +131,7 @@ def test_passthrough_multistream_runs_on_executor_storage_matrix(
     @ava.source(slug="produce-right")
     def produce_right(*, table=ns.right):
         return table.append(
-            pl.DataFrame(
-                {"id": [10, 11, 12], "value": ["right-a", "right-b", "right-c"]}
-            )
+            pl.DataFrame({"id": [10, 11, 12], "value": ["right-a", "right-b", "right-c"]})
         )
 
     @ava.step(slug="consume-both")
