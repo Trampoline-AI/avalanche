@@ -49,8 +49,6 @@ npx skills add Trampoline-AI/avalanche
 Create and enter an empty directory, then bootstrap the workshop project:
 
 ```bash
-mkdir avalanche-workspace
-cd avalanche-workspace
 curl -fsSL https://raw.githubusercontent.com/Trampoline-AI/avalanche/main/init.sh | bash
 ```
 
@@ -60,6 +58,14 @@ an interactive terminal after it completes:
 ```bash
 bash scripts/configure-provider.sh
 ```
+
+Then finally, run the demo:
+
+```bash
+uv run ava operator --flows src/binary_converter/ --web
+```
+
+Avalanche comes with a built-in web ui that you can access once the operator has launched at http://127.0.0.1:7435 on your machine.
 
 
 ### Quick Example
