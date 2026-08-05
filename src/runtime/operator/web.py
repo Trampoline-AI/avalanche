@@ -17,7 +17,8 @@ from types import MappingProxyType
 from urllib.parse import unquote, urlsplit
 
 import grpc
-from google.protobuf.message import Message
+from google.protobuf import message_factory
+from google.protobuf.message import DecodeError, Message
 
 from .operator import Operator
 from .proto import operator_pb2 as pb
@@ -40,29 +41,21 @@ class _RpcMethod:
     server_streaming: bool = False
 
 
-_RPC_METHODS = MappingProxyType(
-    {
-        "GetCatalog": _RpcMethod(pb.Empty, pb.CatalogSnapshotMsg),
-        "StartRun": _RpcMethod(pb.StartRunRequest, pb.StartRunResponse),
-        "CancelRun": _RpcMethod(pb.CancelRunRequest, pb.Empty),
-        "GetRunResult": _RpcMethod(pb.GetRunRequest, pb.RunResultMsg),
-        "ListRunSummaries": _RpcMethod(pb.ListRunSummariesRequest, pb.RunSummaryPage),
-        "GetRunSnapshot": _RpcMethod(pb.GetRunSnapshotRequest, pb.RunSnapshotMsg),
-        "GetLatestRunSnapshot": _RpcMethod(
-            pb.GetLatestRunSnapshotRequest,
-            pb.RunSnapshotMsg,
-        ),
-        "ListLogs": _RpcMethod(pb.ListLogsRequest, pb.LogPage),
-        "ListAgentEvents": _RpcMethod(pb.ListAgentEventsRequest, pb.AgentEventPage),
-        "ReadTrace": _RpcMethod(pb.ReadTraceRequest, pb.TraceChunk, server_streaming=True),
-        "ReadDetail": _RpcMethod(pb.ReadDetailRequest, pb.DetailChunk, server_streaming=True),
-        "StreamOperatorUpdates": _RpcMethod(
-            pb.StreamOperatorUpdatesRequest,
-            pb.OperatorUpdateEnvelope,
-            server_streaming=True,
-        ),
-    }
-)
+def _rpc_methods() -> MappingProxyType[str, _RpcMethod]:
+    service = pb.DESCRIPTOR.services_by_name["OperatorService"]
+    return MappingProxyType(
+        {
+            descriptor.name: _RpcMethod(
+                request_type=message_factory.GetMessageClass(descriptor.input_type),
+                response_type=message_factory.GetMessageClass(descriptor.output_type),
+                server_streaming=descriptor.server_streaming,
+            )
+            for descriptor in service.methods
+        }
+    )
+
+
+_RPC_METHODS = _rpc_methods()
 
 
 class _WebRpcAbortError(Exception):
@@ -120,7 +113,7 @@ class _BrowserRequestHandler(BaseHTTPRequestHandler):
             return
         try:
             request = _decode_request(self.rfile.read(self._request_content_length()), method)
-        except ValueError as exc:
+        except (DecodeError, ValueError) as exc:
             self._send_grpc_error(grpc.StatusCode.INVALID_ARGUMENT, str(exc))
             return
         context = _WebRpcContext(self._request_is_active)
@@ -187,11 +180,19 @@ class _BrowserRequestHandler(BaseHTTPRequestHandler):
                     self._write_chunk(_data_frame(response))
             except _WebRpcAbortError as exc:
                 trailer = _trailer_frame(exc.code, exc.detail)
+            except (BrokenPipeError, ConnectionResetError):
+                return
+            except Exception:
+                logger.exception("Unhandled gRPC-Web stream failure")
+                trailer = _trailer_frame(grpc.StatusCode.INTERNAL, "internal operator error")
             else:
                 trailer = _trailer_frame(grpc.StatusCode.OK, "")
-            self._write_chunk(trailer)
-            self.wfile.write(b"0\r\n\r\n")
-            self.wfile.flush()
+            try:
+                self._write_chunk(trailer)
+                self.wfile.write(b"0\r\n\r\n")
+                self.wfile.flush()
+            except (BrokenPipeError, ConnectionResetError):
+                return
         finally:
             close = getattr(responses, "close", None)
             if close is not None:

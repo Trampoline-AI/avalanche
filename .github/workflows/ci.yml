@@ -18,6 +18,28 @@ jobs:
         env:
           PYTHONFAULTHANDLER: "1"
 
+  web:
+    name: Browser UI
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10.17.1
+      - run: uv sync --all-extras
+      - run: pnpm install --frozen-lockfile
+        working-directory: web/operator
+      - run: make web-proto
+      - run: make web-test
+      - run: make web-build
+      - uses: browser-actions/setup-chrome@v1
+        id: chrome
+      - run: make web-bench
+        env:
+          CHROME_BIN: ${{ steps.chrome.outputs.chrome-path }}
+      - run: git diff --exit-code -- src/runtime/operator/proto web/operator/src/generated src/runtime/operator/web_assets
+
   ray:
     name: Ray tests
     runs-on: ubuntu-latest

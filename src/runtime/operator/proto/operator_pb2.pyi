@@ -19,20 +19,18 @@ class Empty(_message.Message):
     def __init__(self) -> None: ...
 
 class StartRunRequest(_message.Message):
-    __slots__ = ("flow_name", "input_json", "context_json", "input_files", "run_id", "workflow_selector")
-    FLOW_NAME_FIELD_NUMBER: _ClassVar[int]
+    __slots__ = ("input_json", "context_json", "input_files", "run_id", "workflow_selector")
     INPUT_JSON_FIELD_NUMBER: _ClassVar[int]
     CONTEXT_JSON_FIELD_NUMBER: _ClassVar[int]
     INPUT_FILES_FIELD_NUMBER: _ClassVar[int]
     RUN_ID_FIELD_NUMBER: _ClassVar[int]
     WORKFLOW_SELECTOR_FIELD_NUMBER: _ClassVar[int]
-    flow_name: str
     input_json: str
     context_json: str
     input_files: _containers.RepeatedCompositeFieldContainer[FileAttachment]
     run_id: str
     workflow_selector: str
-    def __init__(self, flow_name: _Optional[str] = ..., input_json: _Optional[str] = ..., context_json: _Optional[str] = ..., input_files: _Optional[_Iterable[_Union[FileAttachment, _Mapping]]] = ..., run_id: _Optional[str] = ..., workflow_selector: _Optional[str] = ...) -> None: ...
+    def __init__(self, input_json: _Optional[str] = ..., context_json: _Optional[str] = ..., input_files: _Optional[_Iterable[_Union[FileAttachment, _Mapping]]] = ..., run_id: _Optional[str] = ..., workflow_selector: _Optional[str] = ...) -> None: ...
 
 class FileAttachment(_message.Message):
     __slots__ = ("field_name", "name", "content", "content_type", "sha256")

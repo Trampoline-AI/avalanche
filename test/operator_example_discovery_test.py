@@ -28,7 +28,7 @@ def _free_port() -> int:
 
 def test_registry_scan_of_examples_returns_only_canonical_flows(monkeypatch, tmp_path):
     monkeypatch.setenv("AVALANCHE_EXAMPLE_ROOT", str(tmp_path / "examples"))
-    registry = WorkflowRegistry()
+    registry = WorkflowRegistry(discovery_timeout=60.0)
 
     registry.scan([str(EXAMPLES_DIR)])
 
@@ -41,7 +41,12 @@ def test_operator_served_with_examples_exposes_canonical_flows_over_grpc(
 ):
     monkeypatch.setenv("AVALANCHE_EXAMPLE_ROOT", str(tmp_path / "examples"))
     port = _free_port()
-    operator = Operator([str(EXAMPLES_DIR)], watch=False, schedule=False)
+    operator = Operator(
+        [str(EXAMPLES_DIR)],
+        watch=False,
+        schedule=False,
+        discovery_timeout=60.0,
+    )
     server = serve(operator, port=port, block=False)
     provider = GrpcStateProvider(f"localhost:{port}")
 

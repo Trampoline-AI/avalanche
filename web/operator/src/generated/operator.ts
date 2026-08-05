@@ -23,10 +23,6 @@ export interface Empty {
  */
 export interface StartRunRequest {
     /**
-     * @generated from protobuf field: string flow_name = 1
-     */
-    flowName: string;
-    /**
      * @generated from protobuf field: string input_json = 2
      */
     inputJson: string;
@@ -1176,7 +1172,6 @@ export const Empty = new Empty$Type();
 class StartRunRequest$Type extends MessageType<StartRunRequest> {
     constructor() {
         super("avalanche.operator.StartRunRequest", [
-            { no: 1, name: "flow_name", kind: "scalar", T: 9 /*ScalarType.STRING*/ },
             { no: 2, name: "input_json", kind: "scalar", T: 9 /*ScalarType.STRING*/ },
             { no: 3, name: "context_json", kind: "scalar", T: 9 /*ScalarType.STRING*/ },
             { no: 4, name: "input_files", kind: "message", repeat: 2 /*RepeatType.UNPACKED*/, T: () => FileAttachment },
@@ -1186,7 +1181,6 @@ class StartRunRequest$Type extends MessageType<StartRunRequest> {
     }
     create(value?: PartialMessage<StartRunRequest>): StartRunRequest {
         const message = globalThis.Object.create((this.messagePrototype!));
-        message.flowName = "";
         message.inputJson = "";
         message.contextJson = "";
         message.inputFiles = [];
@@ -1201,9 +1195,6 @@ class StartRunRequest$Type extends MessageType<StartRunRequest> {
         while (reader.pos < end) {
             let [fieldNo, wireType] = reader.tag();
             switch (fieldNo) {
-                case /* string flow_name */ 1:
-                    message.flowName = reader.string();
-                    break;
                 case /* string input_json */ 2:
                     message.inputJson = reader.string();
                     break;
@@ -1231,9 +1222,6 @@ class StartRunRequest$Type extends MessageType<StartRunRequest> {
         return message;
     }
     internalBinaryWrite(message: StartRunRequest, writer: IBinaryWriter, options: BinaryWriteOptions): IBinaryWriter {
-        /* string flow_name = 1; */
-        if (message.flowName !== "")
-            writer.tag(1, WireType.LengthDelimited).string(message.flowName);
         /* string input_json = 2; */
         if (message.inputJson !== "")
             writer.tag(2, WireType.LengthDelimited).string(message.inputJson);

@@ -275,7 +275,6 @@ class GrpcStateProvider:
         self._pending_reset: StreamResetNotice | None = None
         self._validated_reset_baseline: ResetBaseline | None = None
         self._catalog = CatalogSnapshot()
-        self._legacy_names_by_workflow_id: dict[str, str] = {}
 
         # Operator reachability is independent from live-update stream health.
         self.operator_instance_id: str = ""
@@ -1237,9 +1236,7 @@ class GrpcStateProvider:
         input_files = [
             _file_attachment(field_name, value) for field_name, value in (files or {}).items()
         ]
-        flow_name = self._legacy_names_by_workflow_id.get(workflow_selector, workflow_selector)
         request = pb.StartRunRequest(
-            flow_name=flow_name,
             workflow_selector=workflow_selector,
             run_id=run_id or "",
             input_json=_json_payload(input),
@@ -1570,25 +1567,21 @@ class GrpcStateProvider:
             kwargs = {"timeout": min(2.0, self._unary_timeout)}
             if self._metadata is not None:
                 kwargs["metadata"] = self._metadata
-            resp = self._stub.GetCatalog(pb.Empty(), **kwargs)
-            self._cache_legacy_workflow_names(resp)
+            self._stub.GetCatalog(pb.Empty(), **kwargs)
             self._record_unary_success()
             return True
         except grpc.RpcError as e:
             self._record_unary_error(e)
             return False
 
-    def _cache_legacy_workflow_names(self, catalog: CatalogSnapshot) -> None:
-        self._legacy_names_by_workflow_id = {
-            (item.workflow_id or item.name): (item.name or item.display_name)
-            for item in catalog.workflows
-        }
 
     def _install_catalog_locked(self, catalog: CatalogSnapshot) -> None:
-        if catalog.revision < self._catalog.revision:
+        if (
+            catalog.operator_instance_id == self._catalog.operator_instance_id
+            and catalog.revision < self._catalog.revision
+        ):
             return
         self._catalog = deepcopy(catalog)
-        self._cache_legacy_workflow_names(catalog)
         self.discovery_diagnostics = list(catalog.diagnostics)
 
     def _stream_loop(self) -> None:

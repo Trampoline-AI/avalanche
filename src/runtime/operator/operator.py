@@ -1250,8 +1250,11 @@ class Operator:
                 name=f"avalanche-prepare-{run_id}",
                 daemon=True,
             )
-            handle.preparation_thread = preparation_thread
-            preparation_thread.start()
+            with self._lock:
+                if self._closed:
+                    raise RuntimeError("Operator closed while creating run")
+                handle.preparation_thread = preparation_thread
+                preparation_thread.start()
             return run_id
         except BaseException:
             cancel_event.set()
@@ -2869,8 +2872,11 @@ def _materialize_run_detail(capture: _RunDetailCapture) -> RunState:
     run = capture.run
     run.logs = [deepcopy(item.entry) for item in capture.logs]
     for node_id, node in run.nodes.items():
+        trace_invocation_id = capture.trace_invocation_ids.get(node_id)
         projected_events = []
         for event in capture.events.get(node_id, ()):
+            if trace_invocation_id and event.invocation_id != trace_invocation_id:
+                continue
             try:
                 projected = json.loads(event.event_json)
             except (TypeError, ValueError):
@@ -2912,7 +2918,7 @@ def _materialize_run_detail(capture: _RunDetailCapture) -> RunState:
                     evidence["events"] = evidence_events
         envelope = {
             "schema_version": 1,
-            "invocation_id": capture.trace_invocation_ids.get(node_id) or None,
+            "invocation_id": trace_invocation_id or None,
             "status": descriptor.status if descriptor is not None else "in_progress",
             "run_id": (
                 trace.get("evidence", {}).get("run_id")

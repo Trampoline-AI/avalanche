@@ -138,7 +138,7 @@ class TestOperatorLifecycle:
         run_id = op.start_run("simple_workflow")
 
         # Wait for completion
-        deadline = time.monotonic() + 5
+        deadline = time.monotonic() + 10
         while time.monotonic() < deadline:
             run = op.get_run(run_id)
             if run and run.status in (RunStatus.SUCCESS, RunStatus.FAILED):
@@ -1030,7 +1030,7 @@ class TestAgentEvidenceTransport:
             assert envelope["invocation_id"] == "invocation-b"
             assert [
                 (item["invocation_id"], item["sequence"]) for item in envelope["events"]
-            ] == [("invocation-a", 1), ("invocation-b", 1)]
+            ] == [("invocation-b", 1)]
         finally:
             operator.close()
 

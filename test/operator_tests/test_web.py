@@ -131,7 +131,7 @@ def test_browser_listener_serves_packaged_operator_application():
         assert response.status == 200
         assert response.getheader("Content-Type") == "text/html"
         assert b"<title>Avalanche Operator</title>" in body
-        assert b'<div id="root"></div>' in body
+        assert b'id="root"' in body
         connection.close()
     finally:
         server.close()

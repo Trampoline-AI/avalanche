@@ -28,7 +28,7 @@ service OperatorService {
 message Empty {}
 
 message StartRunRequest {
-  string flow_name = 1;
+  reserved 1;
   string input_json = 2;
   string context_json = 3;
   repeated FileAttachment input_files = 4;
