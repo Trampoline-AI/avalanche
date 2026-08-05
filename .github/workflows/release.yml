@@ -1,0 +1,56 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: Build distributions
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+      - name: Verify tag matches package version
+        env:
+          TAG: ${{ github.ref_name }}
+        run: |
+          uv run --no-project --with packaging python - <<'EOF'
+          import os, sys, tomllib
+          from packaging.version import Version
+
+          tag = os.environ["TAG"].removeprefix("v")
+          pkg = tomllib.load(open("pyproject.toml", "rb"))["project"]["version"]
+          if Version(tag) != Version(pkg):
+              print(f"::error::Tag v{tag} does not match pyproject version {pkg}")
+              sys.exit(1)
+          kind = "pre-release" if Version(pkg).is_prerelease else "release"
+          print(f"Tag v{tag} matches pyproject version ({kind})")
+          EOF
+      - name: Build sdist and wheel
+        run: uv build
+      - name: Upload distributions
+        uses: actions/upload-artifact@v4
+        with:
+          name: dist
+          path: dist/
+          if-no-files-found: error
+
+  publish:
+    name: Publish to PyPI
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      id-token: write
+    steps:
+      - name: Download distributions
+        uses: actions/download-artifact@v4
+        with:
+          name: dist
+          path: dist/
+      - name: Publish to PyPI
+        uses: pypa/gh-action-pypi-publish@release/v1
