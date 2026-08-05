@@ -656,7 +656,6 @@ def test_real_ray_materializes_on_worker_and_returns_deterministic_hidden_receip
         num_cpus=2,
         ignore_reinit_error=True,
         include_dashboard=False,
-        runtime_env={"working_dir": None},
     )
     try:
         driver_pid = os.getpid()
@@ -757,7 +756,6 @@ def test_real_ray_executor_owned_metadata_is_strictly_positional_only():
         ignore_reinit_error=True,
         include_dashboard=False,
         runtime_env={
-            "working_dir": None,
             "env_vars": {"PYTHONPATH": os.path.dirname(__file__)},
         },
     )
@@ -795,7 +793,6 @@ def test_real_ray_malformed_multi_returns_abort_before_finalize_and_teardown_onc
         ignore_reinit_error=True,
         include_dashboard=False,
         runtime_env={
-            "working_dir": None,
             "env_vars": {"PYTHONPATH": os.path.dirname(__file__)},
         },
     )

@@ -1,6 +1,5 @@
 """Tests for RunHooks — callbacks fired during Workflow.run()."""
 
-
 import threading
 from concurrent.futures import CancelledError
 
@@ -247,9 +246,7 @@ class TestRunHooks:
                     return value
                 if not value.has_value:
                     args = [self._resolve(arg) for arg in value.args]
-                    kwargs = {
-                        key: self._resolve(item) for key, item in value.kwargs.items()
-                    }
+                    kwargs = {key: self._resolve(item) for key, item in value.kwargs.items()}
                     value.value = value.fn(*args, **kwargs)
                     value.has_value = True
                 return value.value
@@ -259,12 +256,16 @@ class TestRunHooks:
 
         def run_workflow():
             try:
-                result["value"] = parallel_sources().run(
-                    executor=executor,
-                    hooks=RunHooks(
-                        on_node_success=lambda nid: events.append(("success", nid))
-                    ),
-                ).result()
+                result["value"] = (
+                    parallel_sources()
+                    .run(
+                        executor=executor,
+                        hooks=RunHooks(
+                            on_node_success=lambda nid: events.append(("success", nid))
+                        ),
+                    )
+                    .result()
+                )
             except Exception as exc:  # pragma: no cover - surfaced below
                 result["error"] = exc
 
@@ -301,7 +302,6 @@ class TestRunHooks:
             num_cpus=2,
             ignore_reinit_error=True,
             include_dashboard=False,
-            runtime_env={"working_dir": None},
         )
 
         try:

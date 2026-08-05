@@ -702,7 +702,6 @@ def test_real_ray_workspace_input_interstep_and_result_roundtrip(tmp_path):
         address="local",
         num_cpus=2,
         include_dashboard=False,
-        runtime_env={"working_dir": None},
     )
     try:
         result = (
@@ -758,7 +757,6 @@ def test_real_ray_sibling_workspaces_are_isolated_and_cleaned(tmp_path):
         address="local",
         num_cpus=2,
         include_dashboard=False,
-        runtime_env={"working_dir": None},
     )
     try:
         left_result, right_result = (

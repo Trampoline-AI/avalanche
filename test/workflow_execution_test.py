@@ -64,7 +64,6 @@ class TestWorkflowExecution:
             num_cpus=4,
             ignore_reinit_error=True,
             include_dashboard=False,
-            runtime_env={"working_dir": None},
         )
 
         try:
@@ -125,7 +124,6 @@ class TestWorkflowExecution:
             num_cpus=4,
             ignore_reinit_error=True,
             include_dashboard=False,
-            runtime_env={"working_dir": None},
         )
 
         try:
@@ -224,7 +222,6 @@ class TestFireAndForgetWorkflows:
             num_cpus=2,
             ignore_reinit_error=True,
             include_dashboard=False,
-            runtime_env={"working_dir": None},
         )
 
         try:

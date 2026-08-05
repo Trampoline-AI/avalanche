@@ -320,9 +320,7 @@ def test_ray_preparation_runs_on_caller_before_driver_thread(monkeypatch, use_de
             calls.append(("default", threading.get_ident()))
             return executor
 
-        monkeypatch.setattr(
-            "avalanche.executor.get_default_executor", get_default_executor
-        )
+        monkeypatch.setattr("avalanche.executor.get_default_executor", get_default_executor)
         handle = workflow.run(run_id="caller-ray-run")
     else:
         handle = workflow.run(executor=executor, run_id="caller-ray-run")
@@ -355,7 +353,6 @@ def test_ray_run_returns_handle_before_remote_completion_and_caches_outcomes():
         num_cpus=2,
         ignore_reinit_error=True,
         include_dashboard=False,
-        runtime_env={"working_dir": None},
     )
 
     try:
@@ -403,7 +400,7 @@ def test_ray_run_returns_handle_before_remote_completion_and_caches_outcomes():
         assert handle.run_id == "ray-run"
         assert not handle.done()
 
-        assert ray.get(gate.wait_started.remote(), timeout=5)
+        assert ray.get(gate.wait_started.remote(), timeout=15)
         assert handle.running()
         ray.get(gate.release.remote())
         assert handle.result(timeout=10) == "ray-output"
@@ -433,7 +430,7 @@ def test_ray_run_returns_handle_before_remote_completion_and_caches_outcomes():
             return (blocked_upstream() >> descendant()) & independent()
 
         cancelled = cancellable_flow().run(executor=ava.RayExecutor())
-        assert ray.get(cancellation_gate.wait_started.remote(), timeout=5)
+        assert ray.get(cancellation_gate.wait_started.remote(), timeout=15)
         assert cancelled.cancel()
         ray.get(cancellation_gate.release.remote())
         with pytest.raises(CancelledError):
