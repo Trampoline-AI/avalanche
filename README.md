@@ -46,12 +46,13 @@ npx skills add Trampoline-AI/avalanche
 
 ### Workshop project setup
 
-Create a project with editable local checkouts of Avalanche and PredictRLM:
+Create and enter an empty directory, then run the interactive bootstrapper:
 
 ```bash
-npx skills add https://github.com/Trampoline-AI/avalanche/tree/main/.agents/skills/avalanche-demo-init
+mkdir avalanche-workspace
+cd avalanche-workspace
+bash <(curl -fsSL https://raw.githubusercontent.com/Trampoline-AI/avalanche/main/init.sh)
 ```
-
 
 
 ### Quick Example
