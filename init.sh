@@ -9,12 +9,6 @@ readonly STARTER_WORKFLOW_NAME="binary_converter"
 
 workspace_root="$(pwd -P)"
 staging_root=""
-provider_name=""
-model=""
-credential_env=""
-needs_codex_lm=false
-needs_provider_configuration=false
-api_key=""
 
 fail() {
   printf 'error: %s\n' "$*" >&2
@@ -33,10 +27,6 @@ require_command() {
   command -v "$command" >/dev/null 2>&1 || fail "Missing required command: $command"
 }
 
-require_interactive_terminal() {
-  [[ -t 0 && -t 1 ]] || fail "Interactive setup requires a terminal. Run init.sh from an interactive shell."
-}
-
 require_empty_directory() {
   local entries=()
   shopt -s dotglob nullglob
@@ -44,6 +34,104 @@ require_empty_directory() {
   shopt -u dotglob nullglob
   ((${#entries[@]} == 0)) || fail "Current directory is not empty: $workspace_root
 Create and enter an empty directory, then rerun init.sh."
+}
+
+check_prerequisites() {
+  require_empty_directory
+  require_command git
+  require_command uv
+
+  printf 'Checking GitHub access...\n'
+  git ls-remote --exit-code "$AVALANCHE_REPOSITORY" HEAD >/dev/null 2>&1 ||
+    fail "Cannot reach the Avalanche repository on GitHub. Check network access."
+  git ls-remote --exit-code "$PREDICT_RLM_REPOSITORY" HEAD >/dev/null 2>&1 ||
+    fail "Cannot reach the PredictRLM repository on GitHub. Check network access."
+
+  printf 'Checking Python 3.11 availability through UV...\n'
+  uv python find 3.11 >/dev/null 2>&1 || uv python install 3.11
+
+  local parent
+  parent=$(dirname "$workspace_root")
+  staging_root=$(mktemp -d "$parent/.avalanche-init.XXXXXX") ||
+    fail "Cannot create a staging directory beside $workspace_root."
+}
+
+write_starter_flow() {
+  local flow_path="$staging_root/src/$STARTER_WORKFLOW_NAME/flow.py"
+  mkdir -p "$(dirname "$flow_path")"
+  cat >"$flow_path" <<'EOF'
+import random
+
+import avalanche as ava
+
+# Managed by scripts/configure-provider.sh. Do not place credentials here.
+STARTER_PROVIDER = "unconfigured"
+STARTER_MODEL = ""
+
+
+def starter_lm():
+    if STARTER_PROVIDER == "codex-lm":
+        from dspy_codex_lm import CodexLM
+
+        return CodexLM(model=STARTER_MODEL)
+    return STARTER_MODEL
+
+
+@ava.source
+def generate_binary() -> str:
+    length = random.randint(128, 256)
+    return "1" + "".join(random.choice("01") for _ in range(length - 1))
+
+
+@ava.agent_step(
+    ava.Signature("binary: str -> decimal: str"),
+    lm=starter_lm(),
+)
+async def convert_binary(binary: str, *, agent: ava.Agent) -> str:
+    return (await agent(binary=binary)).decimal
+
+
+@ava.dest
+def print_result(result: str) -> str:
+    print(result)
+    return result
+
+
+@ava.workflow
+def binary_converter():
+    return generate_binary() >> convert_binary() >> print_result()
+EOF
+}
+
+write_provider_configurator() {
+  local setup_path="$staging_root/scripts/configure-provider.sh"
+  mkdir -p "$(dirname "$setup_path")"
+  cat >"$setup_path" <<'EOF'
+#!/usr/bin/env bash
+# Configure the model provider for the workspace starter flow.
+set -Eeuo pipefail
+
+workspace_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)"
+flow_path="$workspace_root/src/binary_converter/flow.py"
+provider_name=""
+provider_key=""
+model=""
+credential_env=""
+api_key=""
+needs_codex_lm=false
+
+fail() {
+  printf 'error: %s\n' "$*" >&2
+  exit 1
+}
+
+require_command() {
+  local command=$1
+  command -v "$command" >/dev/null 2>&1 || fail "Missing required command: $command"
+}
+
+require_interactive_terminal() {
+  [[ -t 0 && -t 1 ]] || fail "Provider setup requires a terminal. Run bash scripts/configure-provider.sh from an interactive shell."
 }
 
 choose_option() {
@@ -82,49 +170,70 @@ choose_model() {
   done
 }
 
+choose_litellm_model() {
+  while true; do
+    read -r -p 'LiteLLM model string (for example, provider/model): ' model
+    [[ -n "$model" ]] && return
+    printf 'A LiteLLM model string is required.\n' >&2
+  done
+}
 
+choose_credential_env() {
+  while true; do
+    read -r -p 'Credential environment variable (leave blank if none is required): ' credential_env
+    [[ -z "$credential_env" || "$credential_env" =~ ^[A-Za-z_][A-Za-z0-9_]*$ ]] && return
+    printf 'Use a valid environment-variable name.\n' >&2
+  done
+}
 
 select_provider() {
   local choice
-  printf 'Avalanche demo workspace setup\n\n'
+  printf 'Avalanche provider setup\n\n'
   printf 'Choose a model provider:\n'
   printf '  1) CodexLM — ChatGPT/Codex subscription\n'
   printf '  2) OpenAI API\n'
   printf '  3) Anthropic API\n'
   printf '  4) Gemini API\n'
   printf '  5) Kimi (Moonshot AI) API\n'
-  printf '  6) Other LiteLLM-compatible API (configure later)\n'
+  printf '  6) Other LiteLLM-compatible API\n'
   choice=$(choose_option 'Selection [1-6]: ')
 
   case "$choice" in
   1)
     provider_name="CodexLM via ChatGPT/Codex subscription"
+    provider_key="codex-lm"
     model=$(choose_model 'Selection [1]: ' "gpt-5.6-terra")
     needs_codex_lm=true
     ;;
   2)
     provider_name="OpenAI API"
+    provider_key="litellm"
     model=$(choose_model 'Selection [1-4]: ' "openai/gpt-5.6-terra" "openai/gpt-5.6-sol" "openai/gpt-5.6-luna" "openai/gpt-5.5")
     credential_env="OPENAI_API_KEY"
     ;;
   3)
     provider_name="Anthropic API"
+    provider_key="litellm"
     model=$(choose_model 'Selection [1-3]: ' "anthropic/claude-sonnet-5" "anthropic/claude-opus-5" "anthropic/claude-haiku-4-5")
     credential_env="ANTHROPIC_API_KEY"
     ;;
   4)
     provider_name="Gemini API"
+    provider_key="litellm"
     model=$(choose_model 'Selection [1-4]: ' "gemini/gemini-2.5-pro" "gemini/gemini-2.0-flash" "gemini/gemini-3.5-flash" "gemini/gemini-3.6-flash")
     credential_env="GEMINI_API_KEY"
     ;;
   5)
     provider_name="Kimi (Moonshot AI) API"
+    provider_key="litellm"
     model=$(choose_model 'Selection [1-3]: ' "moonshot/kimi-k3" "moonshot/kimi-k2.7-code" "moonshot/kimi-k2.6")
     credential_env="MOONSHOT_API_KEY"
     ;;
   6)
     provider_name="Other LiteLLM-compatible API"
-    needs_provider_configuration=true
+    provider_key="litellm"
+    choose_litellm_model
+    choose_credential_env
     ;;
   esac
 }
@@ -136,167 +245,156 @@ collect_api_key() {
   while true; do
     read -r -s -p 'API key: ' api_key
     printf '\n'
-    [[ -n "$api_key" ]] && return 0
+    [[ -n "$api_key" ]] && return
     printf 'An API key is required for the selected provider.\n' >&2
   done
 }
 
-check_prerequisites() {
+write_flow_configuration() {
+  "$workspace_root/.venv/bin/python" - "$flow_path" "$provider_key" "$model" <<'PY'
+import json
+import re
+import sys
+from pathlib import Path
+
+flow_path = Path(sys.argv[1])
+provider, model = sys.argv[2:]
+text = flow_path.read_text()
+for name, value in (("STARTER_PROVIDER", provider), ("STARTER_MODEL", model)):
+    text, replacements = re.subn(
+        rf"^{name} = .*$",
+        f"{name} = {json.dumps(value)}",
+        text,
+        count=1,
+        flags=re.MULTILINE,
+    )
+    if replacements != 1:
+        raise RuntimeError(f"Cannot find the managed {name} setting in {flow_path}")
+flow_path.write_text(text)
+PY
+}
+
+write_api_key() {
+  local env_path="$workspace_root/.env"
+  local temporary_path
+  local line
+
+  temporary_path=$(mktemp "$workspace_root/.env.XXXXXX") ||
+    fail "Cannot create a temporary .env file."
+  if [[ -f "$env_path" ]]; then
+    while IFS= read -r line || [[ -n "$line" ]]; do
+      [[ "$line" == "$credential_env="* ]] || printf '%s\n' "$line" >>"$temporary_path"
+    done <"$env_path"
+  fi
+  printf '%s=%s\n' "$credential_env" "$api_key" >>"$temporary_path"
+  chmod 600 "$temporary_path"
+  mv "$temporary_path" "$env_path"
+  unset api_key
+}
+
+authenticate_codex() {
+  [[ "$needs_codex_lm" == true ]] || return 0
+
+  uv sync --no-dev --extra codex-lm --directory "$workspace_root"
+
+  local response
+  read -r -p 'Set up Codex subscription authentication now? [Y/n] ' response
+  case "$response" in
+  "" | y | Y | yes | YES)
+    require_command codex
+    "$workspace_root/.venv/bin/codex-lm" auth login default --device-auth
+    ;;
+  *)
+    printf 'CodexLM authentication skipped. Before running the flow, run:\n'
+    printf '  .venv/bin/codex-lm auth login default --device-auth\n'
+    ;;
+  esac
+}
+
+main() {
   require_interactive_terminal
-  require_empty_directory
-  require_command git
-  require_command uv
+  [[ -f "$flow_path" ]] || fail "Run this script from an initialized Avalanche workspace."
+  [[ -x "$workspace_root/.venv/bin/python" ]] || fail "The workspace virtual environment is missing. Rerun init.sh."
 
-  printf 'Checking GitHub access...\n'
-  git ls-remote --exit-code "$AVALANCHE_REPOSITORY" HEAD >/dev/null 2>&1 ||
-    fail "Cannot reach the Avalanche repository on GitHub. Check network access."
-  git ls-remote --exit-code "$PREDICT_RLM_REPOSITORY" HEAD >/dev/null 2>&1 ||
-    fail "Cannot reach the PredictRLM repository on GitHub. Check network access."
-
-  printf 'Checking Python 3.11 availability through UV...\n'
-  uv python find 3.11 >/dev/null 2>&1 || uv python install 3.11
-
-  local parent
-  parent=$(dirname "$workspace_root")
-  staging_root=$(mktemp -d "$parent/.avalanche-init.XXXXXX") ||
-    fail "Cannot create a staging directory beside $workspace_root."
-}
-
-write_starter_flow() {
-  local flow_path="$staging_root/src/$STARTER_WORKFLOW_NAME/flow.py"
-  mkdir -p "$(dirname "$flow_path")"
-
-  if [[ "$needs_codex_lm" == true ]]; then
-    cat >"$flow_path" <<EOF
-import random
-
-import avalanche as ava
-from dspy_codex_lm import CodexLM
-
-CODEX_LM = CodexLM(model="$model")
-
-
-@ava.source
-def generate_binary() -> str:
-    length = random.randint(128, 256)
-    return "1" + "".join(random.choice("01") for _ in range(length - 1))
-
-
-@ava.agent_step(
-    ava.Signature("binary: str -> decimal: str"),
-    lm=CODEX_LM,
-)
-async def convert_binary(binary: str, *, agent: ava.Agent) -> str:
-    return (await agent(binary=binary)).decimal
-
-
-@ava.dest
-def print_result(result: str) -> str:
-    print(result)
-    return result
-
-
-@ava.workflow
-def binary_converter():
-    return generate_binary() >> convert_binary() >> print_result()
-EOF
-    return
+  select_provider
+  collect_api_key
+  write_flow_configuration
+  if [[ -n "$credential_env" ]]; then
+    write_api_key
   fi
+  authenticate_codex
 
-  cat >"$flow_path" <<EOF
-import random
-
-import avalanche as ava
-
-@ava.source
-def generate_binary() -> str:
-    length = random.randint(128, 256)
-    return "1" + "".join(random.choice("01") for _ in range(length - 1))
-
-
-@ava.agent_step(
-    ava.Signature("binary: str -> decimal: str"),
-    lm="$model",
-)
-async def convert_binary(binary: str, *, agent: ava.Agent) -> str:
-    return (await agent(binary=binary)).decimal
-
-
-@ava.dest
-def print_result(result: str) -> str:
-    print(result)
-    return result
-
-
-@ava.workflow
-def binary_converter():
-    return generate_binary() >> convert_binary() >> print_result()
-EOF
+  printf '\nConfigured %s with %s.\n' "$provider_name" "$model"
+  if [[ -n "$credential_env" ]]; then
+    printf '.env contains %s and is ignored by Git.\n' "$credential_env"
+  fi
+  printf '\nStart the demo with:\n'
+  printf '  uv run ava operator --flows src/binary_converter/ --web\n'
 }
+
+main "$@"
+EOF
+  chmod 755 "$setup_path"
+}
+
 write_workspace_guidance() {
-  local credential_note
-  local starter_flow_note
-  if [[ "$needs_provider_configuration" == true ]]; then
-    starter_flow_note="\`src/binary_converter/flow.py\` is intentionally unconfigured."
-    credential_note=$'Before running:\n\n1. In `src/binary_converter/flow.py`, replace the empty `lm=""` field with the full LiteLLM model string, for example `provider/model`.\n2. In `.env`, add the API key using that provider’s required environment-variable name, for example `OPENAI_API_KEY=...`.\n\nBoth fields are intentionally empty until you choose a provider.'
-  elif [[ "$needs_codex_lm" == true ]]; then
-    starter_flow_note="\`src/binary_converter/flow.py\` uses the selected model \`$model\` through **$provider_name**."
-    credential_note="Complete CodexLM subscription authentication before operator execution."
-  else
-    starter_flow_note="\`src/binary_converter/flow.py\` uses the selected model \`$model\` through **$provider_name**."
-    credential_note="The selected API key is stored in .env and ignored by Git."
-  fi
-
-  cat >"$staging_root/AGENTS.md" <<EOF
+  cat >"$staging_root/AGENTS.md" <<'EOF'
 # Avalanche workflow workshop
 
 ## Purpose
 
 This repository is one UV workspace for a collection of Avalanche workflows.
-It was created by Avalanche's \`init.sh\` bootstrapper. The starter
-\`binary_converter\` is a real agentic workflow copied from the Avalanche README
+It was created by Avalanche's `init.sh` bootstrapper. The starter
+`binary_converter` is a real agentic workflow copied from the Avalanche README
 and statically checked during setup. For agent-assisted authoring, use the
-project-local Avalanche skill at \`.agent/skills/avalanche\`.
+project-local Avalanche skill at `.agent/skills/avalanche`.
 
-\`\`\`text
+```text
 src/
 ├── binary_converter/       # starter flow
 ├── research_assistant/     # future workflow
 └── document_reviewer/      # future workflow
-\`\`\`
+```
 
-Each direct child of \`src/\` is one workflow. Do not add a wrapper package such
-as \`src/avalanche_workflows/\`, and do not create a separate \`pyproject.toml\`,
+Each direct child of `src/` is one workflow. Do not add a wrapper package such
+as `src/avalanche_workflows/`, and do not create a separate `pyproject.toml`,
 virtual environment, or framework checkout for each workflow.
 
 ## Starter flow
 
-$starter_flow_note
+Before running the starter flow, configure its provider from an interactive
+terminal:
 
-$credential_note
+```bash
+bash scripts/configure-provider.sh
+```
+
+The script selects a model, stores an API key in the Git-ignored `.env` when
+needed, and handles the CodexLM optional dependency and authentication. Do not
+place credentials in `src/binary_converter/flow.py`.
 
 ## Execution boundary
 
 Flows execute through Avalanche's operator. This workspace contains flow
 declarations only. From the workspace root, start the starter flow with:
 
-\`\`\`bash
+```bash
 uv run ava operator --flows src/binary_converter/ --web
-\`\`\`
+```
 
 ## Editable framework checkouts
 
 The workspace intentionally uses local editable checkouts:
 
-\`\`\`text
+```text
 .trampoline-ai/
 ├── avalanche/       # Avalanche workflow runtime and authoring integration
 └── predict-rlm/     # PredictRLM agent runtime used by Avalanche agent steps
-\`\`\`
+```
 
-The outer workspace ignores \`.trampoline-ai/\`, but each child directory is an
+The outer workspace ignores `.trampoline-ai/`, but each child directory is an
 ordinary independent Git repository. The checkouts are not submodules. Their
-files are editable dependencies through \`pyproject.toml\`, so a change in either
+files are editable dependencies through `pyproject.toml`, so a change in either
 checkout is used by the next workspace Python invocation without publishing a
 package release.
 
@@ -327,20 +425,19 @@ that issue is linked and implementation was explicitly requested.
 ### Remote ownership
 
 Use a branch in the nested checkout. If the upstream remote is not writable,
-create or use a fork as \`origin\`, retain the official repository as \`upstream\`,
-push the branch to the fork, and open the pull request to \`upstream/main\`.
+create or use a fork as `origin`, retain the official repository as `upstream`,
+push the branch to the fork, and open the pull request to `upstream/main`.
 
 ## Git ownership
 
 - Commit workspace and workflow changes from this repository.
-- Commit Avalanche changes from \`.trampoline-ai/avalanche\`.
-- Commit PredictRLM changes from \`.trampoline-ai/predict-rlm\`.
+- Commit Avalanche changes from `.trampoline-ai/avalanche`.
+- Commit PredictRLM changes from `.trampoline-ai/predict-rlm`.
 
 Never mix those histories or commit nested-repository files into the outer
 workspace.
 EOF
 }
-
 
 initialize_workspace() {
   uv init --bare --name "$PROJECT_NAME" --python 3.11 --vcs git --no-workspace "$staging_root"
@@ -354,6 +451,9 @@ dependencies = [
     "predict-rlm",
 ]
 
+[project.optional-dependencies]
+codex-lm = ["predict-rlm[codex-lm]"]
+
 [tool.uv.sources]
 avalanche-ai = { path = ".trampoline-ai/avalanche", editable = true }
 predict-rlm = { path = ".trampoline-ai/predict-rlm", editable = true }
@@ -366,28 +466,15 @@ EOF
   cp -R "$authoring_skill" "$staging_root/.agent/skills/avalanche"
   printf '.trampoline-ai/\n' >>"$staging_root/.gitignore"
   printf '.env\n' >>"$staging_root/.gitignore"
-  if [[ "$needs_provider_configuration" == true ]]; then
-    cat >"$staging_root/.env" <<'EOF'
-# Add the API key required by the provider you choose, for example:
-# OPENAI_API_KEY=
+  cat >"$staging_root/.env" <<'EOF'
+# Managed by scripts/configure-provider.sh. Provider credentials are stored here.
 EOF
-  elif [[ -n "$credential_env" ]]; then
-    printf '%s=%s\n' "$credential_env" "$api_key" >"$staging_root/.env"
-    unset api_key
-  fi
+  chmod 600 "$staging_root/.env"
 
-  if [[ "$needs_codex_lm" == true ]]; then
-    cat >>"$staging_root/pyproject.toml" <<'EOF'
-
-[project.optional-dependencies]
-codex-lm = ["predict-rlm[codex-lm]"]
-EOF
-    uv sync --no-dev --extra codex-lm --directory "$staging_root"
-  else
-    uv sync --no-dev --directory "$staging_root"
-  fi
+  uv sync --no-dev --directory "$staging_root"
 
   write_starter_flow
+  write_provider_configurator
   write_workspace_guidance
 }
 
@@ -424,30 +511,12 @@ print(flow_path)
     .venv/bin/ava operator --help >/dev/null
     .venv/bin/ava run --help >/dev/null
     git check-ignore .trampoline-ai/avalanche/pyproject.toml >/dev/null
+    git check-ignore .env >/dev/null
     test -f .agent/skills/avalanche/SKILL.md
-    if [[ -n "$credential_env" ]]; then
-      test -f .env
-      git check-ignore .env >/dev/null
-    fi
     test -f AGENTS.md
+    test -x scripts/configure-provider.sh
+    bash -n scripts/configure-provider.sh
   )
-}
-
-authenticate_codex() {
-  [[ "$needs_codex_lm" == true ]] || return 0
-
-  local response
-  read -r -p 'Set up Codex subscription authentication now? [Y/n] ' response
-  case "$response" in
-  "" | y | Y | yes | YES)
-    require_command codex
-    "$staging_root/.venv/bin/codex-lm" auth login default --device-auth
-    ;;
-  *)
-    printf 'CodexLM authentication skipped. Before running the flow, run:\n'
-    printf '  .venv/bin/codex-lm auth login default --device-auth\n'
-    ;;
-  esac
 }
 
 commit_workspace() {
@@ -467,26 +536,17 @@ report_success() {
   predict_rlm_branch=$(git -C "$workspace_root/.trampoline-ai/predict-rlm" branch --show-current)
 
   printf '\nInitialized and verified %s\n' "$workspace_root"
-  printf 'Provider: %s\n' "$provider_name"
-  printf 'Model: %s\n' "$model"
+  printf 'Avalanche branch: %s\n' "$avalanche_branch"
+  printf 'PredictRLM branch: %s\n' "$predict_rlm_branch"
   printf 'Avalanche skill: %s\n' ".agent/skills/avalanche"
-
-  if [[ "$needs_provider_configuration" == true ]]; then
-    printf 'Provider setup is deferred. Set lm="" in src/binary_converter/flow.py and the provider API key in .env before running.\n'
-  elif [[ -n "$credential_env" ]]; then
-    printf '.env contains %s and is ignored by Git.\n' "$credential_env"
-  fi
-  printf '\nStart the demo with:\n'
-  printf '  uv run ava operator --flows src/binary_converter/ --web\n'
+  printf '\nConfigure a provider from an interactive terminal:\n'
+  printf '  bash scripts/configure-provider.sh\n'
 }
 
 main() {
   check_prerequisites
-  select_provider
-  collect_api_key
   initialize_workspace
   verify_workspace
-  authenticate_codex
   commit_workspace
   report_success
 }
