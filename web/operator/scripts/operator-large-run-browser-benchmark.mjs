@@ -445,7 +445,7 @@ function browserBenchmarkFixture() {
 import React from "react";
 import { createRoot } from "react-dom/client";
 import { RunListPanel } from "/src/RunListPanel";
-import "/src/tailwind.css";
+import "/src/style.css";
 
 const RUN_COUNT = ${RUN_COUNT};
 const DOM_ROW_LIMIT = ${DOM_ROW_LIMIT};
@@ -666,7 +666,10 @@ export default { plugins: [tailwindcss()], server: { hmr: false } };`,
       }
     }
   }
-  if (primaryError) throw primaryError;
+  if (primaryError) {
+    if (viteOutput) process.stderr.write(`Vite output:\n${viteOutput}\n`);
+    throw primaryError;
+  }
 }
 
 main().catch((error) => {

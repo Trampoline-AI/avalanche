@@ -33,7 +33,7 @@ jobs:
       - run: make web-proto
       - run: make web-test
       - run: make web-build
-      - uses: browser-actions/setup-chrome@v1
+      - uses: browser-actions/setup-chrome@v2
         id: chrome
       - run: make web-bench
         env:
