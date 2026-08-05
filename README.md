@@ -46,12 +46,19 @@ npx skills add Trampoline-AI/avalanche
 
 ### Workshop project setup
 
-Create and enter an empty directory, then run the interactive bootstrapper:
+Create and enter an empty directory, then bootstrap the workshop project:
 
 ```bash
 mkdir avalanche-workspace
 cd avalanche-workspace
-bash <(curl -fsSL https://raw.githubusercontent.com/Trampoline-AI/avalanche/main/init.sh)
+curl -fsSL https://raw.githubusercontent.com/Trampoline-AI/avalanche/main/init.sh | bash
+```
+
+The bootstrapper is non-interactive. Configure the starter flow's provider from
+an interactive terminal after it completes:
+
+```bash
+bash scripts/configure-provider.sh
 ```
 
 
