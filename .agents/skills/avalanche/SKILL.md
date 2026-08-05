@@ -48,8 +48,26 @@ before implementing its Avalanche wrapper.
 
 ## Design an agentic workflow
 
-Always begin with an outcome interview. Do not choose architecture until the
-user and agent agree on the workflow's goal, inputs, outputs, and success.
+Design has two user-alignment gates: agree on the outcome, then approve a
+concrete workflow plan. Do not implement, scaffold, or edit workflow code until
+the user explicitly approves the presented plan.
+
+### Deliver the workflow, not the requested outcome
+
+The deliverable is a working Avalanche workflow that can achieve the user's
+outcome when the user runs it. You are building that workflow—not performing
+the workflow's domain work for the user now.
+
+Do not independently research, analyze, transform, publish, notify, or otherwise
+act on the user's real inputs to produce the requested business result outside
+the constructed workflow. Use supplied materials to understand requirements and
+to define contracts. Exercise the requested behavior only by running the
+implemented Avalanche workflow for verification, using safe test inputs and
+destinations unless the user explicitly authorizes real side effects.
+
+This boundary remains after plan approval: implementation produces the workflow
+code, configuration, and verification evidence, not a one-off substitute for
+the workflow's eventual output.
 
 ### Step 1: Interview the user and align on the outcome
 
@@ -76,8 +94,8 @@ substitute architecture questions such as “How many agents?” for outcome
 questions. The user supplies domain intent; the agent owns the later workflow
 decomposition and implementation decisions.
 
-Before continuing, summarize the agreement in this form and have the user align
-on it:
+Before drafting a workflow plan, summarize the agreement in this form and have
+the user align on it:
 
 > Given **[authoritative inputs]**, the workflow will **[accomplish the goal]**
 > and produce **[specific outputs and destination]**. It succeeds when
@@ -224,6 +242,21 @@ Before implementation, verify:
 - one representative end-to-end scenario exercises the actual execution
   surface and terminal result.
 
+### Step 9: Present the workflow plan and obtain approval
+
+Turn the completed design into a user-facing proposal using the required
+workflow-plan format below. The plan is a proposal, not an implementation
+instruction: explain the selected stages, their dependencies, node types, and
+capabilities so the user can evaluate the design rather than infer it from
+code.
+
+End by asking for explicit approval to implement the proposed plan. Do not
+create project files, write node bodies, run scaffolding, or begin any other
+implementation activity until the user affirmatively approves it. A question,
+comment, or requested change is not approval; revise the plan and present it
+again. Once approved, implement the approved plan and surface any later change
+that would materially alter its goal, boundary, or topology.
+
 ## Examples: from a goal to agent steps
 
 Use these examples to calibrate logical task size. The numbered items are agent
@@ -334,18 +367,49 @@ boundary.
 
 ## Workflow plan output
 
-Before substantial implementation, produce:
+After completing the design analysis but before any implementation, present a
+workflow plan with every section below. Scale the detail to the workflow, but
+do not omit a section because the design appears simple.
 
-1. the user-aligned outcome statement, success criteria, inputs, outputs, side
-   effects, constraints, and approval points;
-2. a stage table with node name, node type, responsibility, typed input, typed
-   output, and why the boundary exists;
-3. the DAG, including parallel branches, fan-in, and earlier-stage references;
-4. complete Pydantic contracts for all workflow and stage boundaries;
-5. an RLM Steps 1–6 design for each `@ava.agent_step`;
-6. reusable Skill and host-tool contracts, with capabilities assigned per agent;
-7. persistence and execution-surface decisions;
-8. package/file layout and an end-to-end verification scenario.
+1. **Outcome agreement:** the aligned outcome statement, success criteria,
+   authoritative inputs, required outputs and destination, side effects,
+   constraints, and human approval points.
+2. **Stage plan:** a table with stage name, node type, responsibility,
+   authoritative typed input and source, typed output, required capabilities
+   (Skills, tools, permissions, or packages), and why this is a separate
+   boundary. State why each stage is deterministic or agentic; list explicit
+   non-goals where they prevent responsibility overlap.
+3. **Mermaid DAG:** render the proposed data-flow graph as a `mermaid` diagram.
+   Every node label must identify its stage name, node type, brief
+   responsibility, typed input, and typed output. Show data dependencies,
+   parallel branches, fan-in, earlier-stage references, and the terminal
+   destination. Use a legend or Mermaid classes so `@ava.source`, `@ava.step`,
+   `@ava.agent_step`, and `@ava.dest` remain distinguishable.
+4. **Contracts:** complete Pydantic contract sketches for the workflow input,
+   each meaningful handoff, and final result, including invariants and
+   incomplete/error states at boundaries.
+5. **Agent designs:** an RLM Steps 1–6 design for every `@ava.agent_step`,
+   including its bounded responsibility and completion condition.
+6. **Tools, Skills, packages, and integrations:** inventory every required
+   reusable Skill, host tool, Python package, and external integration. For
+   each, state its purpose, consuming stage or stages, and whether it already
+   exists, is installed as a dependency, or must be developed. Name required
+   packages and why they are needed. For a third-party API, specify the
+   service, operation, authentication/configuration boundary, client package or
+   protocol, typed tool inputs/outputs, and the adapter or tool that must be
+   built. Assign only the minimum needed capabilities to each agent stage and
+   surface missing prerequisites rather than hiding them in a generic prompt.
+7. **Operational decisions:** persistence and execution-surface choices, with
+   their rationale.
+8. **Implementation and proof:** package/file layout plus a representative
+   end-to-end verification scenario and the local operator/web-UI handoff. Name
+   the required `runtime` dependency, narrow flow file or clean flow directory,
+   operator launch command, expected UI endpoint, and browser check.
+
+End the proposal with a direct request for approval to implement it. Do not
+create or modify workflow implementation files, generate scaffolding, or begin
+implementation until the user explicitly approves the plan. If the user asks
+for changes, update and re-present the complete plan for approval.
 
 ## Build the designed workflow
 
@@ -358,6 +422,29 @@ Before substantial implementation, produce:
    expression, binding reusable `NodeFuture` values inline with `:=`.
 6. For table-backed flows, define and push the Iceberg or Lance namespace, then
    connect table and stream providers to the DAG.
+
+## Launch the local operator and hand off the web UI
+
+After an approved workflow implementation and its focused verification complete,
+launch the new flow through the local operator with the browser UI enabled:
+
+```bash
+uv run ava operator --flows <flow-file-or-clean-flow-directory> --web
+```
+
+Use a specific flow file or a clean flow-only directory; never use `--flows .`.
+Run the operator as a long-lived process, wait for it to report
+`Avalanche web UI: <endpoint>`, then open that exact endpoint in a browser and
+confirm the new workflow appears in the catalog. The default local endpoint is
+`http://127.0.0.1:7435`, but report the endpoint actually printed by the
+operator.
+
+In the final handoff, give the user the exact URL and explicitly tell them to
+open it in their browser. State that it is a local-development loopback service
+without built-in authentication. This operator launch and browser check are
+required even when the workflow's intended execution surface is embedded;
+they demonstrate that the new flow is discoverable and controllable through
+Avalanche's operator UI.
 
 ## Non-negotiable conventions
 
@@ -499,6 +586,10 @@ the workflow body's expression statement.
 - Every tool has a stable unique function name, typed arguments, a precise
   docstring, and a serializable return value.
 - Embedded execution reaches a real terminal result.
+- The completed workflow is discovered by a local operator launched with
+  `--web`, and the reported web UI endpoint is opened in a browser.
+- The user receives that exact local web UI URL and an explicit instruction to
+  open it in their browser.
 - Operator discovery, CLI input, and TUI connection are exercised when changed.
 - Iceberg or Lance namespaces are pushed and append/stream behavior is exercised
   when persistence is used.
