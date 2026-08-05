@@ -14,6 +14,10 @@ import type {
   RunSummaryMsg,
 } from "./generated/operator";
 
+const MAX_BASELINE_PAGES = 100;
+const MAX_BASELINE_SUMMARIES = 10_000;
+const MAX_BASELINE_BYTES = 8 * 1024 * 1024;
+
 export interface StructuralBaseline {
   catalog: CatalogSnapshotMsg;
   asOfSequence: string;
@@ -100,7 +104,11 @@ export class GrpcWebOperatorApi implements OperatorApi {
     let pageToken = "";
     let operatorInstanceId = "";
     let asOfSequence = "0";
+    let summaryBytes = 0;
     do {
+      if (seenPageTokens.size >= MAX_BASELINE_PAGES) {
+        throw new Error("Run baseline exceeds the page hydration budget");
+      }
       if (seenPageTokens.has(pageToken)) {
         throw new Error("Run summary pagination made no progress");
       }
@@ -122,7 +130,17 @@ export class GrpcWebOperatorApi implements OperatorApi {
       ) {
         throw new Error("Run baseline changed while loading pages");
       }
-      runs.push(...page.runs);
+      for (const summary of page.runs) {
+        const encodedBytes = new TextEncoder().encode(JSON.stringify(summary)).byteLength;
+        if (
+          runs.length >= MAX_BASELINE_SUMMARIES ||
+          summaryBytes + encodedBytes > MAX_BASELINE_BYTES
+        ) {
+          throw new Error("Run baseline exceeds the hydration budget");
+        }
+        runs.push(summary);
+        summaryBytes += encodedBytes;
+      }
       pageToken = page.nextPageToken;
     } while (pageToken);
 
@@ -273,7 +291,6 @@ export class GrpcWebOperatorApi implements OperatorApi {
     input?: Record<string, unknown>,
   ): Promise<string> {
     const response = await this.client.startRun({
-      flowName: "",
       workflowSelector,
       runId: "",
       inputJson: input === undefined ? "" : JSON.stringify(input),

@@ -82,20 +82,19 @@ def _wait_for_run_success(client, run_id):
 
 def test_start_run_wire_preserves_surviving_field_numbers():
     request = pb.StartRunRequest(
-        flow_name="input_workflow",
         run_id="run_01KCVST2FP4QC5NKZNN5NS0Z2W",
         workflow_selector="flows/input.py::input_workflow",
     )
 
     assert request.run_id == "run_01KCVST2FP4QC5NKZNN5NS0Z2W"
     assert request.workflow_selector == "flows/input.py::input_workflow"
-    assert pb.StartRunRequest.FLOW_NAME_FIELD_NUMBER == 1
     assert pb.StartRunRequest.INPUT_JSON_FIELD_NUMBER == 2
     assert pb.StartRunRequest.CONTEXT_JSON_FIELD_NUMBER == 3
     assert pb.StartRunRequest.INPUT_FILES_FIELD_NUMBER == 4
     assert pb.StartRunRequest.RUN_ID_FIELD_NUMBER == 6
     assert pb.StartRunRequest.WORKFLOW_SELECTOR_FIELD_NUMBER == 7
-    assert set(pb.StartRunRequest.DESCRIPTOR.fields_by_number) == {1, 2, 3, 4, 6, 7}
+    assert set(pb.StartRunRequest.DESCRIPTOR.fields_by_number) == {2, 3, 4, 6, 7}
+    assert "flow_name" not in pb.StartRunRequest.DESCRIPTOR.fields_by_name
     assert "S3FileReference" not in pb.DESCRIPTOR.message_types_by_name
 
     proto_source = Path(pb.__file__).with_name("operator.proto").read_text()
@@ -370,7 +369,7 @@ def lineage_context_workflow():
             run_id = "run_grpc_real"
             response = provider._stub.StartRun(
                 pb.StartRunRequest(
-                    flow_name="lineage_context_workflow",
+                    workflow_selector="lineage_context_workflow",
                     run_id=run_id,
                     context_json=json.dumps(
                         {
@@ -407,7 +406,7 @@ def lineage_context_workflow():
 
     def test_start_run_rejects_bad_file_metadata_before_response(self, client):
         start_request = pb.StartRunRequest(
-            flow_name="input_workflow",
+            workflow_selector="input_workflow",
             run_id="run_bad_inline_checksum",
             input_files=[
                 pb.FileAttachment(
@@ -573,8 +572,10 @@ def large_file_workflow():
         assert RunStatus.REQUESTING in statuses
         assert RunStatus.RUNNING in statuses
 
-    def test_legacy_flow_name_request_still_starts(self, client):
-        response = client._stub.StartRun(pb.StartRunRequest(flow_name="simple_workflow"))
+    def test_workflow_selector_request_starts(self, client):
+        response = client._stub.StartRun(
+            pb.StartRunRequest(workflow_selector="simple_workflow")
+        )
         assert response.run_id.startswith("run_")
 
 
@@ -2202,7 +2203,7 @@ def test_client_close_stops_reconnect_thread_and_prevents_new_calls():
     assert provider.stream_state is StreamState.STOPPED
 
 
-def test_canonical_client_requests_include_cached_legacy_name():
+def test_canonical_client_requests_use_workflow_selector():
     canonical_id = "root/reports/daily.py::build_report"
 
     class CapturingStub:
@@ -2239,7 +2240,6 @@ def test_canonical_client_requests_include_cached_legacy_name():
 
         assert provider.start_run(canonical_id) == "run_legacy"
         assert stub.start_request.workflow_selector == canonical_id
-        assert stub.start_request.flow_name == "Daily report"
 
         assert provider.list_runs(canonical_id) == []
         assert stub.list_request.workflow_selector == canonical_id

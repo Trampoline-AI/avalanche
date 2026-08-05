@@ -255,8 +255,7 @@ def test_current_and_later_runs_use_live_source(tmp_path, deferred):
         state_b = _wait_terminal(operator, run_b)
         assert state_a.status == RunStatus.SUCCESS
         assert state_b.status == RunStatus.SUCCESS
-        expected_a = 2 if deferred else 1
-        assert any(f"value={expected_a}" in entry.message for entry in state_a.logs)
+        assert any("value=2" in entry.message for entry in state_a.logs)
         assert any("value=2" in entry.message for entry in state_b.logs)
     finally:
         operator.close()
@@ -328,19 +327,19 @@ def test_concurrent_runs_have_isolated_module_globals(tmp_path):
         operator.close()
 
 
-def test_prepare_failure_does_not_publish_run(tmp_path):
+def test_prepare_failure_publishes_failed_run(tmp_path):
     workflow = _write_standalone(tmp_path)
     operator = Operator([str(workflow)], watch=False, schedule=False)
     try:
         workflow.write_text("this is invalid Python !!!\n")
-        with pytest.raises(RuntimeError, match="preparation failed"):
-            operator.start_run("flow")
-        assert operator._runs == {}
+        run = _wait_terminal(operator, operator.start_run("flow"))
+        assert run.status == RunStatus.FAILED
+        assert any("Workflow preparation failed" in entry.message for entry in run.logs)
     finally:
         operator.close()
 
 
-def test_builder_prepare_failure_does_not_publish_run(tmp_path):
+def test_builder_prepare_failure_publishes_failed_run(tmp_path):
     workflow = _write_standalone(tmp_path)
     operator = Operator([str(workflow)], watch=False, schedule=False)
     try:
@@ -350,9 +349,9 @@ def test_builder_prepare_failure_does_not_publish_run(tmp_path):
                 "def flow():\n    raise RuntimeError('build')",
             )
         )
-        with pytest.raises(RuntimeError, match="RuntimeError: build"):
-            operator.start_run("flow")
-        assert operator._runs == {}
+        run = _wait_terminal(operator, operator.start_run("flow"))
+        assert run.status == RunStatus.FAILED
+        assert any("RuntimeError: build" in entry.message for entry in run.logs)
     finally:
         operator.close()
 
@@ -408,9 +407,9 @@ def test_malformed_preparation_event_rolls_back_start(
         lambda process, _job: torn_down.append(process),
     )
     try:
-        with pytest.raises(RuntimeError, match=error_match):
-            operator.start_run("flow")
-        assert operator._runs == {}
+        run = _wait_terminal(operator, operator.start_run("flow"))
+        assert run.status == RunStatus.FAILED
+        assert any(error_match in entry.message for entry in run.logs)
         assert operator._active_runs == {}
         assert len(torn_down) == 1
     finally:
@@ -668,7 +667,7 @@ def test_cancel_request_is_non_terminal_until_coordinator_stops(tmp_path):
     updates = operator.subscribe_operator_updates()
     try:
         run_id = operator.start_run("flow")
-        deadline = time.monotonic() + 2
+        deadline = time.monotonic() + 8
         while operator.get_run(run_id).status != RunStatus.RUNNING:
             assert time.monotonic() < deadline
             time.sleep(0.01)
@@ -711,12 +710,19 @@ def test_slow_update_consumer_receives_ordered_descriptors_and_detail_bodies(tmp
         assert terminal.status == RunStatus.SUCCESS
 
         changes = []
-        while not subscription.empty():
-            changes.append(subscription.get_nowait().update.change)
-        statuses = [change.status for change in changes if isinstance(change, RunStatusChanged)]
+        deadline = time.monotonic() + 5
+        while True:
+            while not subscription.empty():
+                changes.append(subscription.get_nowait().update.change)
+            statuses = [
+                change.status for change in changes if isinstance(change, RunStatusChanged)
+            ]
+            if statuses and statuses[-1] == RunStatus.SUCCESS:
+                break
+            assert time.monotonic() < deadline
+            time.sleep(0.01)
         logs = [change for change in changes if isinstance(change, LogAppended)]
-        assert statuses[0] == RunStatus.RUNNING
-        assert statuses[-1] == RunStatus.SUCCESS
+        assert statuses[0] == RunStatus.PENDING
         assert [change.log.sequence for change in logs] == [1, 2]
         assert [
             detail.log.message.rsplit("] ", 1)[-1]
@@ -770,12 +776,19 @@ def test_preparation_timeout_kills_sigterm_ignoring_coordinator(tmp_path):
             "    return None\n"
         )
         started = time.monotonic()
-        with pytest.raises(TimeoutError, match="preparation exceeded"):
-            operator.start_run("flow")
+        run = _wait_terminal(operator, operator.start_run("flow"), timeout=8.0)
+        assert run.status == RunStatus.FAILED
         assert time.monotonic() - started < 8.0
+        assert any("preparation exceeded" in entry.message for entry in run.logs)
         pid = int(pid_file.read_text())
-        with pytest.raises(ProcessLookupError):
-            os.kill(pid, 0)
+        deadline = time.monotonic() + 3
+        while True:
+            try:
+                os.kill(pid, 0)
+            except ProcessLookupError:
+                break
+            assert time.monotonic() < deadline
+            time.sleep(0.03)
         assert operator._active_runs == {}
     finally:
         operator.close()
@@ -910,10 +923,11 @@ def test_close_owns_and_terminates_run_during_preparation(tmp_path):
         cancel_grace=0.1,
     )
     errors: list[BaseException] = []
+    run_ids: list[str] = []
 
     def start():
         try:
-            operator.start_run("flow")
+            run_ids.append(operator.start_run("flow"))
         except BaseException as exc:
             errors.append(exc)
 
@@ -927,8 +941,9 @@ def test_close_owns_and_terminates_run_during_preparation(tmp_path):
     operator.close()
     starter.join(timeout=3.0)
 
-    assert not starter.is_alive()
-    assert errors
+    assert errors == []
+    assert len(run_ids) == 1
+    assert _wait_terminal(operator, run_ids[0]).status == RunStatus.CANCELLED
     assert operator._active_runs == {}
 
 

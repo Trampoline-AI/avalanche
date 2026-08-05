@@ -416,7 +416,7 @@ only for the selected run. Control requests travel back through the provider.
 
 The operator exposes these main RPCs through `OperatorService`:
 
-- `ListFlows` returns discovered flows.
+- `GetCatalog` returns discovered workflows and scan-target metadata.
 - `StartRun` starts a new workflow run; caller-owned IDs are limited to 256
   UTF-8 bytes so retained summaries stay bounded.
 - `CancelRun` requests cancellation for a run.
@@ -429,7 +429,7 @@ The operator exposes these main RPCs through `OperatorService`:
   operator-assigned retention cursor; source-local event sequences remain in
   the fetched detail body.
 - `ReadTrace` and `ReadDetail` stream bounded chunks for immutable detail bodies.
-- `StreamRunUpdates` replays typed changes under an operator-instance epoch.
+- `StreamOperatorUpdates` replays typed changes under an operator-instance epoch.
   Stale cursors, restarts, and slow-consumer overflow require an explicit
   structural reset.
 

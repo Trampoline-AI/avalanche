@@ -790,7 +790,7 @@ def test_start_run_publication_blocks_pagination_until_creation_is_revisioned():
         assert not reader.is_alive()
         assert start_errors == []
         first = subscription.get(timeout=5)
-        assert first.update.change.summary.status == RunStatus.PENDING
+        assert first.update.change.summary.status == RunStatus.REQUESTING
 
         page = page_holder[0]
         summary = next(item for item in page.runs if item.run_id == "run-publishing")
@@ -981,6 +981,7 @@ def test_close_keeps_dispatcher_alive_for_notification_from_delayed_drain():
         start_event=threading.Event(),
         windows_job=None,
         drain_thread=drain,
+        preparation_thread=None,
         result_bundle=operator._result_store.prepare(),
         success_quiesced=False,
     )
@@ -1160,7 +1161,17 @@ def test_max_log_and_large_agent_event_use_bounded_live_and_hydration_transport(
             with live._state_lock:
                 live_logs = live._log_entries.get(run.run_id)
                 live_events = live._agent_events.get(key)
-            if matching and live_logs and live_events:
+            has_log_detail = any(
+                isinstance(detail, LogDetailAppended) and detail.log.message == large_log
+                for detail in details
+            )
+            has_agent_detail = any(
+                isinstance(detail, AgentEventDetailAppended)
+                and json.loads(detail.event.event_json)["data"]["payload"]
+                == large_event_payload
+                for detail in details
+            )
+            if matching and live_logs and live_events and has_log_detail and has_agent_detail:
                 latest = matching[-1]
                 break
             assert time.monotonic() < deadline

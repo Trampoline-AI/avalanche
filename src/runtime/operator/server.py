@@ -59,10 +59,9 @@ class OperatorServicer(pb_grpc.OperatorServiceServicer):
         except ValueError as exc:
             context.abort(grpc.StatusCode.INVALID_ARGUMENT, str(exc))
 
-        selector = request.workflow_selector or request.flow_name
         try:
             run_id = self._op.start_run(
-                selector,
+                request.workflow_selector,
                 run_id=request.run_id or None,
                 input=run_input,
                 context=run_context,
