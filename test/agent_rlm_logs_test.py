@@ -11,8 +11,8 @@ from types import SimpleNamespace
 import pytest
 
 import avalanche as ava
-from avalanche.operator import Operator
-from avalanche.operator.models import NodeState, NodeStatus, RunState, RunStatus
+from runtime.operator import Operator
+from runtime.operator.models import NodeState, NodeStatus, RunState, RunStatus
 from runtime.operator.run_worker import (
     _QueueLogHandler,
     _QueueStream,

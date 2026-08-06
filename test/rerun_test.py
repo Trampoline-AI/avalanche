@@ -49,8 +49,8 @@ from avalanche._testing.rerun_helpers import (
     lineage_split_pair as _lineage_split_pair,
 )
 from avalanche.iceberg import IcebergNs, IcebergNsConfig, IcebergTable
-from avalanche.operator.hooks import RunHooks
 from avalanche.types import LineagedResult, ParamContext
+from runtime.operator.hooks import RunHooks
 
 EXECUTOR_FACTORIES = [
     ava.LocalExecutor,

@@ -18,7 +18,7 @@ from avalanche.agent import (
     AgentStepExecutionError,
     capture_agent_evidence,
 )
-from avalanche.executor import LocalExecutor
+from runtime.executor import LocalExecutor
 
 agent_step_module = importlib.import_module("avalanche.agent.agent_step")
 

@@ -1,9 +1,9 @@
 # Agent steps: signatures, calls, skills, and tools
 
-Install the wheel with agent support using the environment's package manager:
+Install the standard wheel using the environment's package manager:
 
 ```bash
-python -m pip install "avalanche-ai[agent]"
+python -m pip install avalanche-ai
 ```
 
 `@ava.agent_step` wraps the PredictRLM runtime and injects a callable

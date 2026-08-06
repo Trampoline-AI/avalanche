@@ -4,12 +4,12 @@ from concurrent import futures
 
 import grpc
 
-from avalanche.operator.client import GrpcStateProvider
-from avalanche.tui import ConnectionAwareStateProvider
 from runtime.operator import client as client_module
 from runtime.operator._grpc import MAX_GRPC_MESSAGE_BYTES
+from runtime.operator.client import GrpcStateProvider
 from runtime.operator.proto import operator_pb2 as pb
 from runtime.operator.proto import operator_pb2_grpc as pb_grpc
+from tui import ConnectionAwareStateProvider
 
 
 def test_grpc_state_provider_sends_bearer_metadata() -> None:

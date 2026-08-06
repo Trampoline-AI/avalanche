@@ -59,6 +59,6 @@ uv build
 ## Optional Components
 
 The default development sync installs the dependencies needed for the current
-test suite. Optional package extras are `runtime`, `tui`, `ray`, `lance`, and
-`all`; document new optional dependencies in `pyproject.toml`, `README.md`, and
-`docs/getting-started.md` together.
+test suite. Optional package extras are `ray` and `lance`; document new optional
+dependencies in `pyproject.toml`, `README.md`, and `docs/getting-started.md`
+together.

@@ -105,11 +105,11 @@ belong to this process.
 
 ## Operator-managed execution
 
-Install runtime support and point discovery at a specific flow module, file, or
+Install Avalanche and point discovery at a specific flow module, file, or
 package so imports remain bounded:
 
 ```bash
-python -m pip install "avalanche-ai[runtime]"
+python -m pip install avalanche-ai
 ava operator --flows path/to/document_flow --port 7433
 ```
 
@@ -139,10 +139,10 @@ ava run document_flow --connect localhost:7433 \
 
 ## TUI execution
 
-Install TUI and runtime support, then connect to the operator:
+Install Avalanche, then connect the TUI to the operator:
 
 ```bash
-python -m pip install "avalanche-ai[runtime,tui]"
+python -m pip install avalanche-ai
 ava tui --connect localhost:7433
 ```
 
@@ -155,15 +155,9 @@ For the shortest local operator-plus-TUI path:
 ava dev --flows path/to/document_flow
 ```
 
-Module entry points are also available:
-
-```bash
-python -m avalanche.operator --flows path/to/document_flow --port 7433
-python -m avalanche.tui --connect localhost:7433
-```
 
 Use mock mode only for UI exploration:
 
 ```bash
-python -m avalanche.tui
+ava tui
 ```

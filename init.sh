@@ -447,7 +447,7 @@ name = "avalanche-workspace"
 version = "0.1.0"
 requires-python = ">=3.11,<3.14"
 dependencies = [
-    "avalanche-ai[all]",
+    "avalanche-ai",
     "predict-rlm",
 ]
 

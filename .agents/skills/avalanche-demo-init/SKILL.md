@@ -49,8 +49,8 @@ The initialized workspace has these properties:
 - it starts with the README's real `binary_converter` agent workflow;
 - `.trampoline-ai/avalanche` and `.trampoline-ai/predict-rlm` are ordinary,
   independent Git clones;
-- UV resolves both `avalanche-ai[all]` and `predict-rlm` from those editable
-  local paths;
+- UV resolves both `avalanche-ai` and `predict-rlm` from those editable local
+  paths;
 - the `avalanche` authoring skill is installed from the local Avalanche clone
   at project scope, never globally;
 - the starter contains only `flow.py` and is statically imported and checked

@@ -20,7 +20,6 @@ Preserve these boundaries. Do not pass live `Workflow` objects across operator o
 - `src/runtime/`: executor implementations and the operator runtime, including discovery, scheduling, workers, gRPC, and generated protobuf modules.
 - `src/tui/`: Textual application, widgets, DAG layout, mock provider, and `UIStore`.
 - `src/ava_cli/`: the `ava` command-line entry point.
-- `src/avalanche/operator/` and `src/avalanche/runtime/`: compatibility shims over optional runtime packages; retain clear optional-dependency errors.
 - `test/`: behavior and integration tests, with focused suites under `operator_tests/`, `storage/`, `iceberg/`, and `agent/`.
 - `examples/`: smoke-tested executable workflows covering DAGs, streams, cursors, and operator discovery.
 - `docs/`: architecture, API, execution-service, agent, and release guidance.
@@ -51,7 +50,7 @@ uv run python examples/complex_dag_pattern.py
 uv run ava dev --flows examples
 uv run ava operator --flows examples --port 7433
 uv run ava tui --connect localhost:7433
-uv run python -m avalanche.tui       # mock TUI
+uv run ava tui                            # mock TUI
 ```
 
 Avoid `--flows .`: operator discovery imports Python files recursively. Use a narrow file or directory.
@@ -109,7 +108,8 @@ Avoid `--flows .`: operator discovery imports Python files recursively. Use a na
 - Use **uv** for dependency management and command execution; keep `uv.lock` synchronized. Do not introduce pip/Poetry workflows.
 - Packaging uses Hatchling with a `src/` layout containing four import roots: `avalanche`, `ava_cli`, `runtime`, and `tui`.
 - The supported CLI is `ava`; do not document an `avalanche` command or unimplemented initialization flow.
-- Optional extras are `runtime`, `tui`, `ray`, `lance`, `s3`, `agent`, and `all`. When adding an extra, synchronize `pyproject.toml`, README, and getting-started documentation.
+- Optional extras are `ray` and `lance`. When adding an extra, synchronize
+  `pyproject.toml`, README, and getting-started documentation.
 - Ray tests require a local Ray runtime. Real-terminal TUI tests require the `tmux` executable. Operator integration uses local processes and gRPC ports.
 - Use `AVALANCHE_EXAMPLE_ROOT` to isolate example storage artifacts when needed.
 

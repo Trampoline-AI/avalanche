@@ -1240,7 +1240,7 @@ def test_ava_result_reports_unsupported_anchored_io_without_traceback(
 
 def test_ava_result_waits_for_success_before_retrieval(monkeypatch, tmp_path):
     from ava_cli import app
-    from avalanche.operator.models import RunStatus
+    from runtime.operator.models import RunStatus
 
     statuses = iter([RunStatus.RUNNING, RunStatus.SUCCESS])
 

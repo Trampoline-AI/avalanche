@@ -155,15 +155,10 @@ It does not own:
 - `src/tui/mock.py`
 - `src/tui/screens/`
 - `src/tui/widgets/`
-- `src/avalanche/tui/`
 - `src/runtime/operator/client.py`
-- `src/avalanche/operator/client.py`
 
-`src/runtime/operator/client.py` is listed here because `GrpcStateProvider` is
-operator-client code used by the TUI. The implementation lives in `src/tui`;
-`src/avalanche/tui` is a thin compatibility shim for `python -m avalanche.tui`,
-and `src/avalanche/operator` is a thin compatibility shim over `src/runtime/operator`.
-Both shims raise install-extra messages if the optional component is unavailable.
+`src/runtime/operator` contains both the operator client and control plane;
+`src/tui` contains the Textual client implementation.
 
 ## Operator
 
@@ -264,7 +259,6 @@ flow-only directory.
 - `src/runtime/operator/hooks.py`
 - `src/runtime/operator/convert.py`
 - `src/runtime/operator/proto/`
-- `src/avalanche/operator/`
 
 ## Executor
 
@@ -315,7 +309,6 @@ The operator connects to Ray; the TUI does not.
 ### Executor key files
 
 - `src/runtime/executor.py`
-- `src/avalanche/executor.py`
 - `src/avalanche/dag.py`
 - `src/avalanche/runtime/`
 - `src/runtime/operator/hooks.py`
@@ -447,7 +440,7 @@ Use this for UI development and visual exploration. No operator, gRPC server, or
 Ray cluster is required.
 
 ```bash
-uv run python -m avalanche.tui
+uv run ava tui
 ```
 
 This mode uses `MockStateProvider` and hardcoded demo workflows such as
@@ -460,15 +453,13 @@ Use this when you want the operator and TUI to control real discovered flows
 without Ray.
 
 ```bash
-uv run python -m avalanche.operator \
-  --flows examples \
-  --port 7433
+uv run ava operator --flows examples --port 7433
 ```
 
 In another terminal:
 
 ```bash
-uv run python -m avalanche.tui --connect localhost:7433
+uv run ava tui --connect localhost:7433
 ```
 
 ### Real operator mode with Ray execution
@@ -480,16 +471,13 @@ uv run ray start --head --node-ip-address=127.0.0.1 --port=6379
 ```
 
 ```bash
-RAY_ADDRESS=127.0.0.1:6379 uv run python -m avalanche.operator \
-  --flows examples \
-  --port 7433 \
-  --ray
+RAY_ADDRESS=127.0.0.1:6379 uv run ava operator --flows examples --port 7433 --ray
 ```
 
 In another terminal:
 
 ```bash
-uv run python -m avalanche.tui --connect localhost:7433
+uv run ava tui --connect localhost:7433
 ```
 
 If a Ray head is already running on `127.0.0.1:6379`, skip `ray start` and point
@@ -499,7 +487,7 @@ If a Ray head is already running on `127.0.0.1:6379`, skip `ray start` and point
 
 ### TUI startup
 
-1. `python -m avalanche.tui` calls `launch_tui()`.
+1. `ava tui` calls `launch_tui()`.
 2. Without `--connect`, the app uses the mock provider.
 3. With `--connect HOST:PORT`, the app creates a `GrpcStateProvider`.
 4. `AvalancheApp` initializes `UIStore` from the selected provider.
@@ -507,7 +495,7 @@ If a Ray head is already running on `127.0.0.1:6379`, skip `ray start` and point
 
 ### Operator startup
 
-1. `python -m avalanche.operator` parses `--flows`, `--port`, and `--ray`.
+1. `ava operator` parses `--flows`, `--port`, and `--ray`.
 2. Without `--ray`, the operator uses `LocalExecutor`.
 3. With `--ray`, the operator uses `RayExecutor`.
 4. `WorkflowRegistry` scans the configured flow files/directories.
@@ -539,15 +527,13 @@ Avoid scanning the repository root directly:
 
 ```bash
 # Avoid from repo root: imports too many arbitrary Python files.
-uv run python -m avalanche.operator --flows .
+uv run ava operator --flows .
 ```
 
 Prefer a specific flow file or a clean flow-only directory:
 
 ```bash
-uv run python -m avalanche.operator \
-  --flows examples \
-  --port 7433
+uv run ava operator --flows examples --port 7433
 ```
 
 ## Execution and Ray

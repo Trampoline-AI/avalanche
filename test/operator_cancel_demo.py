@@ -6,7 +6,7 @@ import time
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
 
-from avalanche.operator import Operator
+from runtime.operator import Operator
 
 FIXTURES = os.path.join(os.path.dirname(__file__), "fixtures")
 

@@ -11,16 +11,14 @@ import pytest
 
 import avalanche as ava
 from avalanche.dag import Workflow
-from avalanche.operator.models import WorkflowDiscoveryDiagnostic
-from avalanche.operator.registry import (
+from runtime.operator.discovery import configure_roots
+from runtime.operator.models import WorkflowDiscoveryDiagnostic
+from runtime.operator.registry import (
     AmbiguousWorkflow,
     WorkflowRegistry,
-    workflow_to_info,
-)
-from runtime.operator.discovery import configure_roots
-from runtime.operator.registry import (
     agent_field_schemas_for_workflow,
     agent_instruction_lines_for_workflow,
+    workflow_to_info,
 )
 
 FIXTURES_DIR = os.path.join(os.path.dirname(os.path.dirname(__file__)), "fixtures")
@@ -416,7 +414,7 @@ class TestWorkflowRegistry:
         assert tuple(first.view.by_id) == tuple(second.view.by_id)
 
     def test_duplicate_canonical_ids_publish_invalid_catalog_diagnostic(self, monkeypatch):
-        from avalanche.operator.models import WorkflowDescriptor, WorkflowLocator
+        from runtime.operator.models import WorkflowDescriptor, WorkflowLocator
 
         descriptor = WorkflowDescriptor(
             workflow_id="flow.py::build",

@@ -45,7 +45,7 @@ substantial agent-contract directories only when the workflow actually needs
 them. Do not create a `src/avalanche_workflows/` wrapper package, a nested
 `pyproject.toml`, per-workflow local framework clones, or embedded runners.
 
-The shared workspace installs `avalanche-ai[all]`. To start a flow from the
+The shared workspace installs `avalanche-ai`. To start a flow from the
 CLI, first start an operator, then invoke the flow through it:
 
 ```bash

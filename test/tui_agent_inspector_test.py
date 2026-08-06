@@ -9,12 +9,12 @@ import pytest
 from textual.app import App, ComposeResult
 from textual.binding import Binding
 
-from avalanche.tui.app import AvalancheApp
-from avalanche.tui.dag_layout import DagNode
-from avalanche.tui.mock import MockStateProvider
-from avalanche.tui.models import NodeState, NodeStatus, RunState, RunStatus, WorkflowInfo
-from avalanche.tui.ui_store import UIStore
-from avalanche.tui.widgets.agent_trace import (
+from tui.app import AvalancheApp
+from tui.dag_layout import DagNode
+from tui.mock import MockStateProvider
+from tui.models import NodeState, NodeStatus, RunState, RunStatus, WorkflowInfo
+from tui.ui_store import UIStore
+from tui.widgets.agent_trace import (
     AgentMetadataInspector,
     AgentOutputInspector,
     AgentTraceInspector,
@@ -358,7 +358,7 @@ async def test_virtual_body_cache_uses_content_tokens_and_renders_undeclared_out
     metadata["signature"]["outputs"] = metadata["signature"]["outputs"][:2]
     store.current_workflow.agent_metadata_json["agent"] = json.dumps(metadata)
     app = _InspectorHarness(store)
-    from avalanche.tui.widgets import agent_trace
+    from tui.widgets import agent_trace
 
     original_json = agent_trace._json
     calls: list[object] = []
@@ -463,7 +463,7 @@ async def test_collapsed_and_offscreen_bodies_are_never_formatted(
         calls.append(value)
         return "unexpected render"
 
-    monkeypatch.setattr("avalanche.tui.widgets.agent_trace._json", record_json)
+    monkeypatch.setattr("tui.widgets.agent_trace._json", record_json)
     async with app.run_test(size=(100, 20)):
         trace = app.query_one("#trace", AgentTraceInspector)
         assert "payload" not in trace.render().plain
@@ -528,7 +528,7 @@ def test_inspector_states_distinguish_delay_completion_and_malformed_data():
 
 
 def test_hydration_state_yields_to_installed_trace_body():
-    from avalanche.operator.models import TraceDescriptor
+    from runtime.operator.models import TraceDescriptor
 
     store = _store(steps=[], outputs={"summary": "ready"})
     node = store.current_run.nodes["agent"]

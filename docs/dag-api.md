@@ -7,8 +7,8 @@ Avalanche workflows are Python functions that declare a directed acyclic graph
 - `@ava.step` transforms data inside the flow. `@ava.transform` is an alias.
 - `@ava.dest` publishes, exports, or summarizes final results.
 - `@ava.workflow` captures task calls and dependencies into a runnable workflow.
-- `@ava.agent_step` / `@ava.agent.step` declare agent-backed ordinary steps
-  (optional `agent` extra); see [`agent-steps.md`](agent-steps.md).
+- `@ava.agent_step` / `@ava.agent.step` declare agent-backed ordinary steps; see
+  [`agent-steps.md`](agent-steps.md).
 
 Node functions may be regular `def` functions or `async def` coroutines.
 Workflow `.run(...)` starts execution and immediately returns an awaitable
@@ -355,8 +355,8 @@ For an operator-managed run, poll `get_run(run_id)` as usual and retrieve the
 successful terminal value separately:
 
 ```python
-from avalanche.operator.client import GrpcStateProvider
-from avalanche.operator.models import RunStatus
+from runtime.operator.client import GrpcStateProvider
+from runtime.operator.models import RunStatus
 
 client = GrpcStateProvider("localhost:7433")
 run_id = client.start_run("report_flow")

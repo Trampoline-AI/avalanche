@@ -19,8 +19,6 @@ from collections.abc import Sequence
 from pathlib import Path, PurePosixPath
 from uuid import uuid4
 
-_RUNTIME_OPTIONAL_MODULES = {"runtime", "grpc", "watchfiles", "croniter"}
-_TUI_OPTIONAL_MODULES = {"tui", "textual", "grpc"}
 _RENAME_NOREPLACE = 1
 _RENAME_EXCL = 0x00000004
 _STAGED_OUTPUT_NAME = "result"
@@ -297,16 +295,14 @@ def _get_webhook(args: argparse.Namespace) -> int:
 
 
 def _operator_main(argv: list[str]) -> int:
-    try:
-        from runtime.operator.__main__ import main as operator_main
-    except ModuleNotFoundError as exc:
-        _raise_optional_extra_error(exc, "operator", "runtime", _RUNTIME_OPTIONAL_MODULES)
+    from runtime.operator.__main__ import main as operator_main
+
     return operator_main(argv)
 
 
 def _run_flow(args: argparse.Namespace) -> int:
     provider = _make_provider(args.connect)
-    from avalanche.operator.client import OperatorCallError
+    from runtime.operator.client import OperatorCallError
 
     try:
         try:
@@ -1311,10 +1307,8 @@ def _run_tui(args: argparse.Namespace) -> int:
 
 
 def _launch_tui(argv: Sequence[str]) -> None:
-    try:
-        from tui import launch_tui
-    except ModuleNotFoundError as exc:
-        _raise_optional_extra_error(exc, "tui", "tui", _TUI_OPTIONAL_MODULES)
+    from tui import launch_tui
+
     launch_tui(list(argv))
 
 
@@ -1348,7 +1342,7 @@ def _start_operator_process(
     cmd = [
         sys.executable,
         "-m",
-        "avalanche.operator",
+        "runtime.operator",
         "--flows",
         *flows,
         "--port",
@@ -1360,10 +1354,8 @@ def _start_operator_process(
 
 
 def _make_provider(address: str):
-    try:
-        from avalanche.operator.client import GrpcStateProvider
-    except ModuleNotFoundError as exc:
-        _raise_optional_extra_error(exc, "operator", "runtime", _RUNTIME_OPTIONAL_MODULES)
+    from runtime.operator.client import GrpcStateProvider
+
     return GrpcStateProvider(address)
 
 
@@ -1433,18 +1425,3 @@ def _stop_operator_process(process: subprocess.Popen) -> None:
     except subprocess.TimeoutExpired:
         process.kill()
         process.wait(timeout=5)
-
-
-def _raise_optional_extra_error(
-    exc: ModuleNotFoundError,
-    component: str,
-    extra: str,
-    optional_names: set[str],
-) -> None:
-    if exc.name in optional_names:
-        raise ModuleNotFoundError(
-            f"avalanche.{component} is optional. Install it with `avalanche-ai[{extra}]` "
-            f"or run `uv sync --extra {extra}`.",
-            name=exc.name,
-        ) from exc
-    raise exc

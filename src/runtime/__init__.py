@@ -1,7 +1,6 @@
-"""Optional Avalanche runtime implementation.
+"""Avalanche runtime implementation.
 
-Contains the control plane (`operator`) and execution plane (`executor`). Public
-compatibility imports live under `avalanche.operator` and `avalanche.executor`.
+Contains the control plane (`operator`) and execution plane (`executor`).
 """
 
 from .executor import Executor, LocalExecutor, RayExecutor, get_default_executor

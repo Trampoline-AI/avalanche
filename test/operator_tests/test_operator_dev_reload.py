@@ -10,8 +10,9 @@ from typing import Any, cast
 
 import pytest
 
-from avalanche.operator import Operator
-from avalanche.operator.models import (
+from runtime.operator import Operator
+from runtime.operator import operator as operator_module
+from runtime.operator.models import (
     LogAppended,
     LogDetailAppended,
     LogLevel,
@@ -22,7 +23,6 @@ from avalanche.operator.models import (
     RunStatus,
     RunStatusChanged,
 )
-from runtime.operator import operator as operator_module
 from runtime.operator.source import is_source_path_included
 
 

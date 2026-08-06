@@ -1,6 +1,6 @@
 """Compatibility re-exports for shared operator/TUI state models."""
 
-from avalanche.operator.models import (
+from runtime.operator.models import (
     AgentEventDetailAppended,
     CatalogSnapshot,
     DetailUpdate,

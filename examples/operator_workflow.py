@@ -4,7 +4,7 @@ Run directly:
     uv run python examples/operator_workflow.py
 
 Run through the operator:
-    uv run python -m avalanche.operator --flows examples/operator_workflow.py
+    uv run ava operator --flows examples/operator_workflow.py
 """
 
 from __future__ import annotations

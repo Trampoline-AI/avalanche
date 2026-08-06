@@ -12,20 +12,24 @@ from types import SimpleNamespace
 import grpc
 import pytest
 
-from avalanche.operator import Operator
-from avalanche.operator.client import (
+from avalanche.runtime import File
+from runtime.operator import Operator
+from runtime.operator._grpc import MAX_GRPC_MESSAGE_BYTES
+from runtime.operator.client import (
     GrpcStateProvider,
     OperatorCallError,
     StaleResetAcknowledgementError,
     StreamState,
+    _DetailHydrationRaceError,
+    _run_from_snapshot,
 )
-from avalanche.operator.convert import (
+from runtime.operator.convert import (
     run_snapshot_to_proto,
     run_summary_to_proto,
     workflow_info_from_proto,
     workflow_info_to_proto,
 )
-from avalanche.operator.models import (
+from runtime.operator.models import (
     CatalogSnapshot,
     NodeSnapshot,
     NodeState,
@@ -39,10 +43,6 @@ from avalanche.operator.models import (
     TraceDescriptor,
     WorkflowInfo,
 )
-from avalanche.operator.server import serve
-from avalanche.runtime import File
-from runtime.operator._grpc import MAX_GRPC_MESSAGE_BYTES
-from runtime.operator.client import _DetailHydrationRaceError, _run_from_snapshot
 from runtime.operator.proto import operator_pb2 as pb
 from runtime.operator.proto import operator_pb2_grpc as pb_grpc
 from runtime.operator.results import (
@@ -51,6 +51,7 @@ from runtime.operator.results import (
     MAX_RESULT_ATTACHMENTS,
     MAX_RESULT_TOTAL_BYTES,
 )
+from runtime.operator.server import serve
 
 
 def _event_handle() -> SimpleNamespace:

@@ -4,7 +4,7 @@ import polars as pl
 import pytest
 
 from avalanche.dag import dest, source, step, workflow
-from avalanche.executor import LocalExecutor, RayExecutor
+from runtime.executor import LocalExecutor, RayExecutor
 
 
 class TestDataPassingBetweenTasks:

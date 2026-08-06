@@ -91,7 +91,7 @@ directly.
 The TUI also supports mock mode without an operator:
 
 ```bash
-uv run python -m avalanche.tui
+uv run ava tui
 ```
 
 ## Notes

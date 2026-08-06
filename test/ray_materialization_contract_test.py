@@ -39,8 +39,8 @@ from avalanche._testing.rerun_helpers import (
     RerunSelectorInput,
     positional_only_selector_consume,
 )
-from avalanche.operator.hooks import RunHooks
 from avalanche.types import AppendResult, AppendResultHandle, LineagedResult
+from runtime.operator.hooks import RunHooks
 
 _STATUS = object()  # sentinel marking a status-marker return slot
 

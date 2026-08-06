@@ -9,7 +9,7 @@ from collections.abc import Sequence
 
 def main(argv: Sequence[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
-        prog="python -m avalanche.operator",
+        prog="ava operator",
         description="Start the local Avalanche flow operator.",
     )
     parser.add_argument(

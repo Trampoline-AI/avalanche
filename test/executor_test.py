@@ -5,7 +5,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from avalanche.executor import LocalExecutor, RayExecutor, get_default_executor
+from runtime.executor import LocalExecutor, RayExecutor, get_default_executor
 
 
 class TestLocalExecutor:

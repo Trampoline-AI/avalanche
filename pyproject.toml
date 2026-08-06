@@ -1,6 +1,6 @@
 [project]
 name = "avalanche-ai"
-version = "0.1.0-alpha0"
+version = "0.1.0rc2"
 description = "Python toolkit for local data-flow experiments with Iceberg and Lance"
 authors = [{ name = "Gabriel Lesperance", email = "611342+glesperance@users.noreply.github.com" }]
 requires-python = "<3.14,>=3.11"
@@ -14,44 +14,26 @@ classifiers = [
     "Programming Language :: Python :: 3.13",
 ]
 dependencies = [
-    "pyiceberg[glue, pandas, pyarrow, s3fs, sql-sqlite]>=0.9,<0.11",
+    "croniter>=6.2.2",
     "dataframely>=1.13.0",
+    "grpcio>=1.75.1",
+    "predict-rlm>=0.8.0a",
     "pydantic>=2,<3",
+    "pyiceberg[glue, pandas, pyarrow, s3fs, sql-sqlite]>=0.9,<0.11",
     "python-ulid>=3.0.0",
+    "textual>=6.2.1",
+    "watchfiles>=1.1.1",
 ]
 
 [project.scripts]
 ava = "ava_cli:main"
 
 [project.optional-dependencies]
-runtime = [
-    "grpcio>=1.75.1",
-    "grpcio-tools>=1.75.1",
-    "watchfiles>=1.1.1",
-    "croniter>=6.2.2",
-]
-tui = [
-    "textual>=6.2.1",
-    "grpcio>=1.75.1",
-]
 ray = [
     "ray[default]>=2.50.0",
 ]
 lance = [
     "pylance>=0.24.0",
-]
-all = [
-    "croniter>=6.2.2",
-    "grpcio>=1.75.1",
-    "grpcio-tools>=1.75.1",
-    "pylance>=0.24.0",
-    "ray[default]>=2.50.0",
-    "predict-rlm>=0.8.0a",
-    "textual>=6.2.1",
-    "watchfiles>=1.1.1",
-]
-agent = [
-    "predict-rlm>=0.8.0a",
 ]
 
 [dependency-groups]

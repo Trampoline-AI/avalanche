@@ -9,7 +9,7 @@ The current team release candidate is `0.1.0-rc2`.
 
 - Python flow authoring with `@ava.source`, `@ava.step`, `@ava.dest`, and
   `@ava.workflow`.
-- Agent-backed workflow steps with the optional `agent` extra.
+- Agent-backed workflow steps through PredictRLM.
 - Local flow execution with `ava.LocalExecutor`.
 - Iceberg-backed and Lance-backed storage helpers.
 - Local Iceberg examples backed by PyIceberg's SQL SQLite catalog.
@@ -126,8 +126,7 @@ uv run ava operator --flows examples --port 7433
 
 Operator terminal logging defaults to `WARNING`. Add `--log-level INFO` to see
 service and source-watcher startup, each hot-reload attempt, successful revision
-transitions, unchanged rescans, reload failures, and watcher shutdown. The flag
-also works with the `python -m avalanche.operator` entry point.
+transitions, unchanged rescans, reload failures, and watcher shutdown.
 
 Start a discovered flow from another terminal with the CLI:
 
@@ -159,17 +158,10 @@ authenticated proxy.
 The TUI gets flows from the operator over gRPC. It does not import files from the
 examples directory directly.
 
-Module entry points are available if you need to bypass the `ava` wrapper:
-
-```bash
-uv run python -m avalanche.operator --flows examples --port 7433
-uv run python -m avalanche.tui --connect localhost:7433
-```
-
 For UI-only exploration, use mock mode:
 
 ```bash
-uv run python -m avalanche.tui
+uv run ava tui
 ```
 
 #### POST Body Intake
@@ -229,22 +221,20 @@ rather than a synchronous HTTP validation response.
 
 ## Optional Components
 
-`uv sync` installs the development dependency group used by the test suite.
-Package consumers can choose narrower extras:
+The standard installation includes the local operator, gRPC client and server,
+file watching, scheduling, Textual TUI, and agent-backed workflow steps through
+[PredictRLM](https://github.com/Trampoline-AI/predict-rlm). Two specialized
+package extras remain:
 
 | Extra | Use |
 | --- | --- |
-| `runtime` | operator gRPC server/client, file watching, and scheduling |
-| `tui` | Textual terminal UI |
 | `ray` | Ray executor support |
 | `lance` | Lance storage backend support |
-| `agent` | agent-backed workflow steps through [PredictRLM](https://github.com/Trampoline-AI/predict-rlm) |
-| `all` | all optional runtime components |
 
-For development, include extras with `uv sync --extra <name>`, for example:
+For development, include them with `uv sync --extra <name>`, for example:
 
 ```bash
-uv sync --extra runtime --extra tui
+uv sync --extra ray --extra lance
 ```
 
 ## Troubleshooting

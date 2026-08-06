@@ -7,12 +7,12 @@ from types import SimpleNamespace
 
 import pytest
 
-from avalanche.tui.app import AvalancheApp
-from avalanche.tui.dag_layout import render_dag_rich, workflow_to_layout
-from avalanche.tui.mock import MockStateProvider
-from avalanche.tui.models import NodeStatus, WorkflowInfo
-from avalanche.tui.theme import AGENT_CAPTION_STYLE
-from avalanche.tui.widgets.dag import DagWidget
+from tui.app import AvalancheApp
+from tui.dag_layout import render_dag_rich, workflow_to_layout
+from tui.mock import MockStateProvider
+from tui.models import NodeStatus, WorkflowInfo
+from tui.theme import AGENT_CAPTION_STYLE
+from tui.widgets.dag import DagWidget
 
 
 def _workflow_with_agent_step() -> WorkflowInfo:
