@@ -115,7 +115,7 @@ class TestLogger:
     def test_logger_as_default_parameter_in_workflow(self):
         """Test that Logger() works as a default parameter in workflow execution."""
         import avalanche as ava
-        from avalanche.executor import LocalExecutor
+        from runtime.executor import LocalExecutor
 
         @ava.step
         def process_with_logger(data, *, logger=Logger()):
@@ -143,7 +143,7 @@ class TestLogger:
     def test_logger_context_with_local_executor(self):
         """Test Logger context IDs with LocalExecutor."""
         import avalanche as ava
-        from avalanche.executor import LocalExecutor
+        from runtime.executor import LocalExecutor
 
         @ava.step
         def capture_context(data, *, logger=Logger()):

@@ -8,7 +8,7 @@ from typing import Any
 import pytest
 
 import avalanche as ava
-from avalanche.operator.hooks import RunHooks
+from runtime.operator.hooks import RunHooks
 
 
 @dataclass(frozen=True)

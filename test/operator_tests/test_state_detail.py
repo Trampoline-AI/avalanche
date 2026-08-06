@@ -10,10 +10,10 @@ from types import SimpleNamespace
 import grpc
 import pytest
 
-from avalanche.operator import Operator
-from avalanche.operator.client import GrpcStateProvider, OperatorCallError, StreamState
-from avalanche.operator.convert import operator_update_envelope_to_proto
-from avalanche.operator.models import (
+from runtime.operator import Operator
+from runtime.operator.client import GrpcStateProvider, OperatorCallError, StreamState
+from runtime.operator.convert import operator_update_envelope_to_proto
+from runtime.operator.models import (
     AgentEvent,
     AgentEventDetailAppended,
     LogDetailAppended,
@@ -26,11 +26,11 @@ from avalanche.operator.models import (
     RunStatusChanged,
     SequencedLogEntry,
 )
-from avalanche.operator.server import TRACE_CHUNK_BYTES, serve
 from runtime.operator.operator import _decode_transport_token, _encode_transport_token
 from runtime.operator.proto import operator_pb2 as pb
 from runtime.operator.proto import operator_pb2_grpc as pb_grpc
 from runtime.operator.scheduler import Scheduler
+from runtime.operator.server import TRACE_CHUNK_BYTES, serve
 
 
 def _event_handle() -> SimpleNamespace:

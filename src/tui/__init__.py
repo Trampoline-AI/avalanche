@@ -12,11 +12,11 @@ def launch_tui(
 ) -> None:
     """Launch the Avalanche TUI.
 
-    Usage: python -m avalanche.tui [--connect HOST:PORT] [flow[/node]]
+    Usage: ava tui [--connect HOST:PORT] [flow[/node]]
     Examples:
-        python -m avalanche.tui                          # mock mode
-        python -m avalanche.tui --connect localhost:7433  # real operator
-        python -m avalanche.tui ml_workflow
+        ava tui                          # mock mode
+        ava tui --connect localhost:7433  # real operator
+        ava tui ml_workflow
 
     An injected ``provider`` is caller-owned and is not closed by this function.
     It cannot be combined with ``--connect``.
@@ -25,16 +25,7 @@ def launch_tui(
     import sys
     from pathlib import Path
 
-    try:
-        from .app import AvalancheApp
-    except ModuleNotFoundError as exc:
-        if exc.name == "textual":
-            raise ModuleNotFoundError(
-                "avalanche.tui is optional. Install it with `avalanche-ai[tui]` "
-                "or run `uv sync --extra tui`.",
-                name="textual",
-            ) from exc
-        raise
+    from .app import AvalancheApp
 
     args = list(argv) if argv is not None else sys.argv[1:]
     connect_options = [
@@ -101,7 +92,7 @@ def launch_tui(
     owned_provider: StateProvider | None = None
     # Build provider
     if connect:
-        from avalanche.operator.client import GrpcStateProvider
+        from runtime.operator.client import GrpcStateProvider
 
         provider_kwargs = {}
         if token is not None:

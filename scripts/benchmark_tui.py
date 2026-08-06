@@ -13,8 +13,8 @@ from dataclasses import asdict, dataclass, replace
 from datetime import datetime
 from pathlib import Path
 
-from avalanche.tui.app import AvalancheApp
-from avalanche.tui.models import LogEntry, LogLevel
+from tui.app import AvalancheApp
+from tui.models import LogEntry, LogLevel
 
 
 @dataclass(frozen=True)

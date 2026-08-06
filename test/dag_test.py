@@ -14,7 +14,7 @@ from avalanche.dag import (
     transform,
     workflow,
 )
-from avalanche.executor import LocalExecutor
+from runtime.executor import LocalExecutor
 
 
 class TestNodeDecorators:

@@ -19,15 +19,15 @@ it through the Avalanche operator, and inspect every run from the terminal UI.
 Add avalanche to your project:
 
 ```bash
-uv add avalanche --all-extras
+uv add avalanche-ai
 ```
 
 ## Requirements
 
 - Python 3.11, 3.12, or 3.13.
-- Agent steps require the `agent` extra and credentials for the model provider
-configured through PredictRLM/DSPy.
-- The operator and connected TUI require the `runtime` and `tui` extras.
+- Agent steps require credentials for the model provider configured through
+  PredictRLM/DSPy.
+- The standard installation includes the operator, connected TUI, and agent support.
 - Ray and Lance support are optional and require their corresponding extras.
 
 
@@ -310,11 +310,7 @@ The TUI provides:
 - start, cancel, and rerun controls;
 - schedule visibility and control.
 
-Install the local control plane and TUI:
-
-```bash
-uv add "avalanche-ai[runtime,tui]"
-```
+The local control plane and TUI are included in the standard installation.
 
 The operator listens on `127.0.0.1` by default because its gRPC service does not
 provide built-in authentication. Binding another interface with `--host` is an
@@ -419,7 +415,7 @@ The TUI is a client of the operator; it does not import or execute workflow file
 itself. To explore the interface without an operator, start mock mode:
 
 ```bash
-python -m avalanche.tui
+ava tui
 ```
 
 
@@ -427,20 +423,16 @@ python -m avalanche.tui
 ## Optional components
 
 
-| Extra     | Purpose                                       |
-| --------- | --------------------------------------------- |
-| `agent`   | PredictRLM-backed agent steps                 |
-| `runtime` | Operator, gRPC, file watching, and scheduling |
-| `tui`     | Textual terminal UI                           |
-| `ray`     | Ray-backed workflow execution                 |
-| `lance`   | Lance storage backend                         |
-| `all`     | Every optional component above                |
+| Extra   | Purpose                       |
+| ------- | ----------------------------- |
+| `ray`   | Ray-backed workflow execution |
+| `lance` | Lance storage backend         |
 
 
-Extras can be combined:
+The remaining extras can be combined:
 
 ```bash
-uv add "avalanche-ai[agent,runtime,tui]"
+uv add "avalanche-ai[ray,lance]"
 ```
 
 

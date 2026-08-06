@@ -3,7 +3,7 @@ import tomllib
 from pathlib import Path
 
 
-def test_runtime_implementation_lives_in_optional_source_root():
+def test_runtime_implementation_lives_in_source_root():
     executor = importlib.import_module("runtime.executor")
     operator_models = importlib.import_module("runtime.operator.models")
 
@@ -17,38 +17,35 @@ def test_runtime_implementation_lives_in_optional_source_root():
     )
 
 
-def test_avalanche_runtime_compat_imports_delegate_to_runtime_source_package():
-    avalanche_executor = importlib.import_module("avalanche.executor")
+def test_root_executor_exports_delegate_to_runtime_source_package():
+    import avalanche as ava
+
     runtime_executor = importlib.import_module("runtime.executor")
-    avalanche_operator_models = importlib.import_module("avalanche.operator.models")
-    runtime_operator_models = importlib.import_module("runtime.operator.models")
 
-    assert avalanche_executor.LocalExecutor is runtime_executor.LocalExecutor
-    assert avalanche_operator_models.RunState is runtime_operator_models.RunState
+    assert ava.LocalExecutor is runtime_executor.LocalExecutor
+    assert ava.RayExecutor is runtime_executor.RayExecutor
 
 
-def test_existing_core_runtime_primitives_remain_on_avalanche_runtime():
+def test_public_runtime_primitives_remain_on_avalanche_runtime():
     core_runtime = importlib.import_module("avalanche.runtime")
 
     assert core_runtime.Cursor.__name__ == "Cursor"
     assert core_runtime.Stream.__name__ == "Stream"
 
 
-def test_packaging_includes_runtime_source_root_as_optional_extra():
+def test_packaging_includes_standard_runtime_dependencies():
     data = tomllib.loads(Path("pyproject.toml").read_text())
 
-    optional = data["project"]["optional-dependencies"]
-    assert "runtime" in optional
-    assert "tui" in optional
-    assert "all" in optional
-    assert any(dep.startswith("grpcio") for dep in optional["runtime"])
-    assert any(dep.startswith("watchfiles") for dep in optional["runtime"])
-    assert any(dep.startswith("textual") for dep in optional["tui"])
+    dependencies = data["project"]["dependencies"]
+    for name in ("croniter", "grpcio", "predict-rlm", "textual", "watchfiles"):
+        assert any(dep.startswith(name) for dep in dependencies)
 
-    core_deps = data["project"]["dependencies"]
-    assert not any(dep.startswith("grpcio") for dep in core_deps)
-    assert not any(dep.startswith("watchfiles") for dep in core_deps)
-    assert not any(dep.startswith("croniter") for dep in core_deps)
+    optional = data["project"]["optional-dependencies"]
+    assert set(optional) == {"lance", "ray"}
+
+    dev_dependencies = data["dependency-groups"]["dev"]
+    assert any(dep.startswith("grpcio-tools") for dep in dev_dependencies)
+    assert not any(dep.startswith("grpcio-tools") for dep in dependencies)
 
     wheel = data["tool"]["hatch"]["build"]["targets"]["wheel"]
     sdist = data["tool"]["hatch"]["build"]["targets"]["sdist"]

@@ -1,4 +1,4 @@
-"""Optional Avalanche agent integration."""
+"""Avalanche agent integration."""
 
 from __future__ import annotations
 
@@ -40,25 +40,13 @@ __all__ = [
 
 def __getattr__(name: str):
     if name == "skills":
-        try:
-            import predict_rlm.skills as value
-        except ImportError as exc:
-            raise ImportError(_INSTALL_HINT) from exc
+        import predict_rlm.skills as value
     elif name in {"Skill", "File"}:
-        try:
-            import predict_rlm
+        import predict_rlm
 
-            value = getattr(predict_rlm, name)
-        except ImportError as exc:
-            raise ImportError(_INSTALL_HINT) from exc
+        value = getattr(predict_rlm, name)
     else:
         raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
 
     globals()[name] = value
     return value
-
-
-_INSTALL_HINT = (
-    "Agent functionality requires the optional 'agent' dependency. "
-    "Install it with: pip install 'avalanche-ai[agent]'"
-)

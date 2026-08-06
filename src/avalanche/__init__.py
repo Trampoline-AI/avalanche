@@ -6,6 +6,9 @@ with local and distributed execution.
 """
 
 # DAG primitives
+# Execution engines
+from runtime.executor import Executor, LocalExecutor, RayExecutor, get_default_executor
+
 from .dag import Pipeline, Workflow, dest, pipeline, source, step, transform, workflow
 from .execution_services import (
     EXECUTION_SERVICES_V1,
@@ -14,9 +17,6 @@ from .execution_services import (
     ExecutionServicesSpec,
     ExecutionTaskSpec,
 )
-
-# Execution engines
-from .executor import Executor, LocalExecutor, RayExecutor, get_default_executor
 
 # Iceberg backend
 from .iceberg import (

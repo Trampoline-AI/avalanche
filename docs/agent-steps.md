@@ -10,11 +10,6 @@ Agent execution is implemented on top of
 constructs a PredictRLM predictor when the injected agent is first called, while
 the surrounding function remains an ordinary Avalanche step.
 
-Agent support is optional:
-
-```bash
-uv sync --extra agent
-```
 
 The public surface has two equivalent entry points:
 
@@ -23,8 +18,8 @@ ava.Signature is ava.agent.Signature
 ava.agent_step is ava.agent.step
 ```
 
-Use root aliases for typed signature classes and `ava.agent` for the optional
-agent integration namespace, skills, files, and inline signature factory.
+Use root aliases for typed signature classes and `ava.agent` for the agent
+integration namespace, skills, files, and inline signature factory.
 
 ## Quick start
 

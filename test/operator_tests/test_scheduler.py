@@ -2,9 +2,9 @@ import threading
 
 from croniter import croniter
 
-from avalanche.operator.models import CatalogView, WorkflowDescriptor, WorkflowLocator
-from avalanche.operator.scheduler import Scheduler
+from runtime.operator.models import CatalogView, WorkflowDescriptor, WorkflowLocator
 from runtime.operator.operator import Operator
+from runtime.operator.scheduler import Scheduler
 
 
 def _descriptor(workflow_id: str, cron: str | None = "* * * * *") -> WorkflowDescriptor:

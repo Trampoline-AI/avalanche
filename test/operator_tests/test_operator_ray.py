@@ -3,8 +3,8 @@ from pathlib import Path
 
 import pytest
 
-from avalanche.operator import Operator
-from avalanche.operator.models import RunStatus
+from runtime.operator import Operator
+from runtime.operator.models import RunStatus
 
 
 def _wait_terminal(operator: Operator, run_id: str, timeout: float = 30.0):

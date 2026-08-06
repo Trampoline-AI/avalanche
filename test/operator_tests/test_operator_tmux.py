@@ -19,9 +19,9 @@ import pytest
 TMUX = shutil.which("tmux")
 SESSION = "pytest-operator"
 FIXTURES = os.path.join(os.path.dirname(os.path.dirname(__file__)), "fixtures")
-OPERATOR_CMD = f"uv run python -m avalanche.operator --flows {FIXTURES}"
-TUI_CMD = "uv run python -m avalanche.tui --connect localhost:17434"
-OPERATOR_PORT_CMD = f"uv run python -m avalanche.operator --flows {FIXTURES} --port 17434"
+OPERATOR_CMD = f"uv run ava operator --flows {FIXTURES}"
+TUI_CMD = "uv run ava tui --connect localhost:17434"
+OPERATOR_PORT_CMD = f"uv run ava operator --flows {FIXTURES} --port 17434"
 
 
 def tmux_run(*args: str) -> str:
@@ -155,7 +155,7 @@ class TestOperatorTmux:
     def test_disconnect_modal_on_operator_kill(self, operator_session):
         """Kill operator, TUI should show disconnect modal."""
         subprocess.run(
-            "pkill -9 -f 'avalanche.operator.*17434' 2>/dev/null; "
+            "pkill -9 -f 'runtime.operator.*17434' 2>/dev/null; "
             "lsof -ti:17434 | xargs kill -9 2>/dev/null",
             shell=True, capture_output=True, timeout=5,
         )

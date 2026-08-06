@@ -29,14 +29,13 @@ from pydantic import (
     model_serializer,
 )
 
-from avalanche.operator import Operator
-from avalanche.operator.client import GrpcStateProvider
-from avalanche.operator.models import RunState, RunStatus
-from avalanche.operator.server import serve
 from avalanche.runtime import File
 from avalanche.workspace import Workspace
+from runtime.operator import Operator
 from runtime.operator import operator as operator_module
 from runtime.operator import result_store as result_store_module
+from runtime.operator.client import GrpcStateProvider
+from runtime.operator.models import RunState, RunStatus
 from runtime.operator.operator import RunResultUnavailableError
 from runtime.operator.result_store import (
     MAX_RESULT_MANIFEST_BYTES,
@@ -63,6 +62,7 @@ from runtime.operator.results import (
     decode_workflow_result,
     encode_workflow_result,
 )
+from runtime.operator.server import serve
 
 
 def _spawn_publish_with_transferred_descriptor(

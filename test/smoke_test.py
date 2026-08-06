@@ -85,10 +85,10 @@ assert BLOCKED.isdisjoint(sys.modules)
     )
 
 def test_operator_grpc_can_list_and_run_fixture_flow():
-    from avalanche.operator import Operator
-    from avalanche.operator.client import GrpcStateProvider
-    from avalanche.operator.models import RunStatus
-    from avalanche.operator.server import serve
+    from runtime.operator import Operator
+    from runtime.operator.client import GrpcStateProvider
+    from runtime.operator.models import RunStatus
+    from runtime.operator.server import serve
 
     port = _free_port()
     operator = Operator(
@@ -117,8 +117,8 @@ def test_operator_grpc_can_list_and_run_fixture_flow():
 
 @pytest.mark.asyncio
 async def test_tui_mounts_headlessly_with_mock_provider():
-    from avalanche.tui.app import AvalancheApp
-    from avalanche.tui.widgets.dag import DagWidget
+    from tui.app import AvalancheApp
+    from tui.widgets.dag import DagWidget
 
     app = AvalancheApp()
 

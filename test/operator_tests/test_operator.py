@@ -13,8 +13,9 @@ import pytest
 
 from avalanche import LocalExecutor, RayExecutor
 from avalanche._agent_evidence import emit_agent_evidence
-from avalanche.operator import Operator
-from avalanche.operator.models import (
+from runtime.operator import Operator
+from runtime.operator import operator as operator_module
+from runtime.operator.models import (
     NodeState,
     NodeStatus,
     RunState,
@@ -22,19 +23,18 @@ from avalanche.operator.models import (
     RunStatusChanged,
     WorkflowDiscoveryDiagnostic,
 )
-from avalanche.operator.operator import (
+from runtime.operator.operator import (
     MAX_RUN_ID_BYTES,
     InvalidRunIdError,
     RunAlreadyExistsError,
 )
-from avalanche.operator.scheduler import Scheduler
-from runtime.operator import operator as operator_module
 from runtime.operator.run_worker import (
     _import_isolated_ray,
     _QueueStream,
     _with_local_node_observers,
     _with_ray_node_observers,
 )
+from runtime.operator.scheduler import Scheduler
 from runtime.operator.webhooks import WebhookRoute
 
 FIXTURES_DIR = os.path.join(os.path.dirname(os.path.dirname(__file__)), "fixtures")

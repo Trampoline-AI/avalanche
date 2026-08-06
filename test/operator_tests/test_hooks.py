@@ -6,7 +6,7 @@ from concurrent.futures import CancelledError
 import pytest
 
 from avalanche import LocalExecutor, RayExecutor, dest, source, step, workflow
-from avalanche.operator.hooks import RunHooks
+from runtime.operator.hooks import RunHooks
 
 
 class TestRunHooks:

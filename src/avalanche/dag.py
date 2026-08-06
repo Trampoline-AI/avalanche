@@ -64,9 +64,10 @@ from .run_handle import RunHandle
 from .webhook import Webhook
 
 if TYPE_CHECKING:
+    from runtime.executor import Executor
+    from runtime.operator.hooks import RunHooks
+
     from .execution_services import ExecutionServicesSpec
-    from .executor import Executor
-    from .operator.hooks import RunHooks
 
 F = TypeVar("F", bound=Callable[..., Any])
 
@@ -2196,7 +2197,7 @@ class Workflow:
         """
         canonical_run_id = run_id if run_id is not None else str(ULID())
         handle: RunHandle[Any] = RunHandle(canonical_run_id)
-        from .executor import RayExecutor, get_default_executor
+        from runtime.executor import RayExecutor, get_default_executor
 
         resolved_executor = executor if executor is not None else get_default_executor()
         if isinstance(resolved_executor, RayExecutor):
@@ -2246,7 +2247,7 @@ class Workflow:
             Intermediate results stay as refs (zero-copy).
         """
         if executor is None:
-            from .executor import get_default_executor
+            from runtime.executor import get_default_executor
 
             executor = get_default_executor()
 

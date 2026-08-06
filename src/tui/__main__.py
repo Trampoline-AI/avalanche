@@ -1,4 +1,4 @@
-"""Allow running the optional TUI implementation package directly."""
+"""Allow running the TUI implementation package directly."""
 
 from . import launch_tui
 

@@ -13,19 +13,19 @@ from types import SimpleNamespace
 import grpc
 import pytest
 
-import avalanche.tui.ui_store as ui_store_module
-from avalanche.operator.client import (
+import tui.ui_store as ui_store_module
+from runtime.operator.client import (
     GrpcStateProvider,
     OperatorCallError,
     StaleResetAcknowledgementError,
     StreamState,
 )
-from avalanche.operator.convert import (
+from runtime.operator.convert import (
     run_snapshot_to_proto,
     run_summary_to_proto,
     workflow_info_to_proto,
 )
-from avalanche.operator.models import (
+from runtime.operator.models import (
     AgentEvent,
     AgentEventDetailAppended,
     LogDetailAppended,
@@ -34,7 +34,9 @@ from avalanche.operator.models import (
     TraceDescriptor,
     TraceDetail,
 )
-from avalanche.tui.dag_layout import (
+from runtime.operator.proto import operator_pb2 as pb
+from runtime.operator.proto import operator_pb2_grpc as pb_grpc
+from tui.dag_layout import (
     DagNode,
     ParGroup,
     build_nav_grid,
@@ -42,14 +44,14 @@ from avalanche.tui.dag_layout import (
     render_dag_rich,
     workflow_to_layout,
 )
-from avalanche.tui.mock import (
+from tui.mock import (
     ANALYTICS_WORKFLOW,
     INGEST_WORKFLOW,
     ML_WORKFLOW,
     ORDER_WORKFLOW,
     MockStateProvider,
 )
-from avalanche.tui.models import (
+from tui.models import (
     CatalogSnapshot,
     LogEntry,
     LogLevel,
@@ -61,13 +63,11 @@ from avalanche.tui.models import (
     StreamResetNotice,
     WorkflowInfo,
 )
-from avalanche.tui.state import get_operator_reachability, get_stream_state
-from avalanche.tui.ui_store import UIStore
-from avalanche.tui.widgets.run_history import RunHistoryWidget
-from avalanche.tui.widgets.sidebar import Sidebar
-from avalanche.tui.widgets.status_bar import StatusBar
-from runtime.operator.proto import operator_pb2 as pb
-from runtime.operator.proto import operator_pb2_grpc as pb_grpc
+from tui.state import get_operator_reachability, get_stream_state
+from tui.ui_store import UIStore
+from tui.widgets.run_history import RunHistoryWidget
+from tui.widgets.sidebar import Sidebar
+from tui.widgets.status_bar import StatusBar
 
 
 def _retry_hydration_workflow() -> WorkflowInfo:
@@ -209,8 +209,8 @@ async def _wait_for_current_run(app, updates: _SignalingQueue, timeout: float = 
 
 
 def test_connection_overlay_uses_public_label_and_error_state():
-    from avalanche.tui.app import AvalancheApp
-    from avalanche.tui.state import ConnectionAwareStateProvider
+    from tui.app import AvalancheApp
+    from tui.state import ConnectionAwareStateProvider
 
     delegate = MockStateProvider()
 
@@ -334,7 +334,7 @@ class _ApplicationErrorRefreshProvider(MockStateProvider):
 
 @pytest.mark.asyncio
 async def test_synchronous_stream_start_sees_every_callback_before_first_detail():
-    from avalanche.tui.app import AvalancheApp
+    from tui.app import AvalancheApp
 
     detail = LogDetailAppended(
         operator_instance_id="mock",
@@ -526,7 +526,7 @@ class TestRenderDag:
 
     def test_cross_fork_fanin_dedup_page_highlights(self):
         """page_highlights should appear exactly once in doc_processing layout."""
-        from avalanche.tui.mock import DOC_PROCESSING_WORKFLOW
+        from tui.mock import DOC_PROCESSING_WORKFLOW
 
         dag, nodes = workflow_to_layout(DOC_PROCESSING_WORKFLOW)
         ph_count = sum(1 for n in nodes if n.name == "page_highlights_1")
@@ -534,7 +534,7 @@ class TestRenderDag:
 
     def test_cross_fork_fanin_skip_edge_recorded(self):
         """push_to_cdn → page_highlights should be a skip edge after dedup."""
-        from avalanche.tui.mock import DOC_PROCESSING_WORKFLOW
+        from tui.mock import DOC_PROCESSING_WORKFLOW
 
         dag, nodes = workflow_to_layout(DOC_PROCESSING_WORKFLOW)
         assert (
@@ -663,7 +663,7 @@ class TestMockStateProvider:
 
 class TestUIStore:
     def test_deep_link_waits_for_workflow_before_selecting_same_named_node(self):
-        from avalanche.tui.app import AvalancheApp
+        from tui.app import AvalancheApp
 
         entered = [threading.Event(), threading.Event()]
         release = [threading.Event(), threading.Event()]
@@ -2766,7 +2766,7 @@ class TestUIStore:
             store.shutdown()
 
     def test_reset_baseline_rejects_delayed_current_run_poll(self):
-        from avalanche.tui.app import AvalancheApp
+        from tui.app import AvalancheApp
 
         poll_entered = threading.Event()
         release_poll = threading.Event()
@@ -2954,7 +2954,7 @@ class TestUIStore:
 
     @pytest.mark.asyncio
     async def test_ping_success_during_stream_failure_keeps_disconnect_overlay_hidden(self):
-        from avalanche.tui.app import AvalancheApp
+        from tui.app import AvalancheApp
 
         class HealthProvider(MockStateProvider):
             def __init__(self):
@@ -3601,8 +3601,8 @@ class TestLogTimestamps:
 
     @pytest.mark.asyncio
     async def test_log_panel_renders_datetime(self):
-        from avalanche.tui.app import AvalancheApp
-        from avalanche.tui.widgets.log_panel import LogWidget
+        from tui.app import AvalancheApp
+        from tui.widgets.log_panel import LogWidget
 
         app = AvalancheApp()
         async with app.run_test(size=(120, 40)) as pilot:
@@ -3637,8 +3637,8 @@ class TestVirtualizedLogs:
 
     @pytest.mark.asyncio
     async def test_equal_cardinality_snapshot_replacement_is_rendered(self):
-        from avalanche.tui.app import AvalancheApp
-        from avalanche.tui.widgets.log_panel import LogWidget
+        from tui.app import AvalancheApp
+        from tui.widgets.log_panel import LogWidget
 
         app = AvalancheApp()
         async with app.run_test(size=(120, 40)) as pilot:
@@ -3672,9 +3672,9 @@ class TestVirtualizedLogs:
 
     @pytest.mark.asyncio
     async def test_existing_rows_restyle_when_node_status_changes(self):
-        from avalanche.tui.app import AvalancheApp
-        from avalanche.tui.theme import STATUS_STYLES
-        from avalanche.tui.widgets.log_panel import LogWidget
+        from tui.app import AvalancheApp
+        from tui.theme import STATUS_STYLES
+        from tui.widgets.log_panel import LogWidget
 
         app = AvalancheApp()
         async with app.run_test(size=(120, 40)) as pilot:
@@ -3703,8 +3703,8 @@ class TestVirtualizedLogs:
 
     @pytest.mark.asyncio
     async def test_incremental_append_adds_exactly_one_row(self):
-        from avalanche.tui.app import AvalancheApp
-        from avalanche.tui.widgets.log_panel import LogWidget
+        from tui.app import AvalancheApp
+        from tui.widgets.log_panel import LogWidget
 
         app = AvalancheApp()
         async with app.run_test(size=(120, 40)) as pilot:
@@ -3729,8 +3729,8 @@ class TestVirtualizedLogs:
 
     @pytest.mark.asyncio
     async def test_equivalent_snapshot_and_append_retain_prefix_without_rebuild(self):
-        from avalanche.tui.app import AvalancheApp
-        from avalanche.tui.widgets.log_panel import LogWidget
+        from tui.app import AvalancheApp
+        from tui.widgets.log_panel import LogWidget
 
         app = AvalancheApp()
         async with app.run_test(size=(120, 40)) as pilot:
@@ -3789,7 +3789,7 @@ class TestInteractions:
     keyboard navigation works correctly through the full app."""
 
     async def _make_app(self):
-        from avalanche.tui.app import AvalancheApp
+        from tui.app import AvalancheApp
 
         return AvalancheApp()
 
@@ -4097,8 +4097,8 @@ class TestInteractions:
             assert log_header is not None
 
             # Verify the static render_header methods produce column headers
-            from avalanche.tui.widgets.log_panel import LogWidget
-            from avalanche.tui.widgets.run_history import RunHistoryWidget
+            from tui.widgets.log_panel import LogWidget
+            from tui.widgets.run_history import RunHistoryWidget
 
             assert "Run ID" in RunHistoryWidget.render_header().plain
             assert "Timestamp" in LogWidget.render_header().plain
@@ -4336,7 +4336,7 @@ class TestInteractions:
             MouseScrollUp,
         )
 
-        from avalanche.tui.app import AvalancheApp
+        from tui.app import AvalancheApp
 
         app = AvalancheApp(workflow="ml_workflow")
         async with app.run_test(size=(50, 15)) as pilot:
@@ -4465,7 +4465,7 @@ class TestInteractions:
 
     async def test_deep_link_workflow(self):
         """App should support starting with a specific workflow selected."""
-        from avalanche.tui.app import AvalancheApp
+        from tui.app import AvalancheApp
 
         app = AvalancheApp(workflow="ml_workflow")
         async with app.run_test(size=(120, 40)) as pilot:
@@ -4475,7 +4475,7 @@ class TestInteractions:
 
     async def test_deep_link_node_matches_display_name(self):
         """Deep-link node segment should accept the rendered display name."""
-        from avalanche.tui.app import AvalancheApp
+        from tui.app import AvalancheApp
 
         app = AvalancheApp(workflow="ml_workflow", node="export_onnx")
         async with app.run_test(size=(120, 40)) as pilot:
@@ -4486,7 +4486,7 @@ class TestInteractions:
 
     async def test_deep_link_node_renders_while_runs_are_still_loading(self):
         """Deep-link selection must not be hidden behind asynchronous run loading."""
-        from avalanche.tui.app import AvalancheApp
+        from tui.app import AvalancheApp
 
         delegate = MockStateProvider()
         catalog_entered = threading.Event()
@@ -4606,8 +4606,8 @@ class TestInteractions:
 
     async def test_focused_log_up_down_scrolls_log_content(self):
         """Up/down in the log pane should scroll the actual RichLog."""
-        from avalanche.tui.app import AvalancheApp
-        from avalanche.tui.widgets.log_panel import LogWidget
+        from tui.app import AvalancheApp
+        from tui.widgets.log_panel import LogWidget
 
         app = AvalancheApp()
         async with app.run_test(size=(80, 20)) as pilot:
@@ -4977,8 +4977,8 @@ def _trace_detail_from_run(run: RunState, node_id: str) -> TraceDetail:
 
 @pytest.mark.asyncio
 async def test_agent_trace_inspector_interactions_and_log_retention():
-    from avalanche.tui.app import AvalancheApp
-    from avalanche.tui.widgets.agent_trace import (
+    from tui.app import AvalancheApp
+    from tui.widgets.agent_trace import (
         AgentMetadataInspector,
         AgentOutputInspector,
         AgentTraceInspector,
@@ -5129,7 +5129,7 @@ async def test_agent_trace_inspector_interactions_and_log_retention():
 
 @pytest.mark.asyncio
 async def test_agent_inspector_navigation_scrolls_selected_output_into_view():
-    from avalanche.tui.app import AvalancheApp
+    from tui.app import AvalancheApp
 
     provider, envelope = _agent_trace_provider()
     outputs = {f"field_{index}": index for index in range(60)}
@@ -5158,7 +5158,7 @@ async def test_agent_inspector_navigation_scrolls_selected_output_into_view():
 
 @pytest.mark.asyncio
 async def test_open_trace_inspector_tracks_revisions_and_retries_hydration():
-    from avalanche.tui.app import AvalancheApp
+    from tui.app import AvalancheApp
 
     (
         provider,
@@ -5260,7 +5260,7 @@ async def test_open_trace_inspector_tracks_revisions_and_retries_hydration():
 
 @pytest.mark.asyncio
 async def test_delayed_trace_detail_rejects_stale_body_without_state_rollback():
-    from avalanche.tui.app import AvalancheApp
+    from tui.app import AvalancheApp
 
     (
         provider,
@@ -5381,7 +5381,7 @@ async def test_delayed_trace_detail_rejects_stale_body_without_state_rollback():
 
 @pytest.mark.asyncio
 async def test_trace_hydration_persistent_failure_uses_bounded_backoff():
-    from avalanche.tui.app import AvalancheApp
+    from tui.app import AvalancheApp
 
     provider, _, _, _, _, _ = _unhydrated_agent_trace_provider()
     clock = [0.0]
@@ -5439,7 +5439,7 @@ async def test_trace_hydration_persistent_failure_uses_bounded_backoff():
 
 @pytest.mark.asyncio
 async def test_trace_hydration_completion_during_navigation_allows_retry():
-    from avalanche.tui.app import AvalancheApp
+    from tui.app import AvalancheApp
 
     (
         provider,
@@ -5543,7 +5543,7 @@ async def test_trace_hydration_completion_during_navigation_allows_retry():
 
 @pytest.mark.asyncio
 async def test_trace_hydration_tab_cycles_bound_blocked_worker_and_keep_backoff():
-    from avalanche.tui.app import AvalancheApp
+    from tui.app import AvalancheApp
 
     provider, _, _, _, _, _ = _unhydrated_agent_trace_provider()
     clock = [100.0]
@@ -5626,7 +5626,7 @@ async def test_trace_hydration_tab_cycles_bound_blocked_worker_and_keep_backoff(
 
 @pytest.mark.asyncio
 async def test_trace_hydration_shutdown_closes_provider_and_joins_worker():
-    from avalanche.tui.app import AvalancheApp
+    from tui.app import AvalancheApp
 
     provider, _, _, _, _, _ = _unhydrated_agent_trace_provider()
     started = threading.Event()
@@ -5669,7 +5669,7 @@ async def test_trace_hydration_shutdown_closes_provider_and_joins_worker():
 
 @pytest.mark.asyncio
 async def test_app_does_not_close_launch_owned_provider_on_unmount():
-    from avalanche.tui.app import AvalancheApp
+    from tui.app import AvalancheApp
 
     provider = MockStateProvider()
     close_calls = 0
@@ -5689,8 +5689,8 @@ async def test_app_does_not_close_launch_owned_provider_on_unmount():
 
 @pytest.mark.asyncio
 async def test_agent_trace_inspector_renders_pending_failed_malformed_and_incomplete():
-    from avalanche.tui.app import AvalancheApp
-    from avalanche.tui.widgets.agent_trace import AgentMetadataInspector, AgentOutputInspector
+    from tui.app import AvalancheApp
+    from tui.widgets.agent_trace import AgentMetadataInspector, AgentOutputInspector
 
     provider, envelope = _agent_trace_provider()
     app = AvalancheApp(provider=provider, workflow="agent_flow", node="agent")

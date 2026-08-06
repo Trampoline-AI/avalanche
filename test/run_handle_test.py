@@ -7,7 +7,7 @@ from concurrent.futures import CancelledError, TimeoutError
 import pytest
 
 import avalanche as ava
-from avalanche.operator.hooks import RunHooks
+from runtime.operator.hooks import RunHooks
 
 
 def test_run_returns_active_handle_with_canonical_context_id():
@@ -320,7 +320,7 @@ def test_ray_preparation_runs_on_caller_before_driver_thread(monkeypatch, use_de
             calls.append(("default", threading.get_ident()))
             return executor
 
-        monkeypatch.setattr("avalanche.executor.get_default_executor", get_default_executor)
+        monkeypatch.setattr("runtime.executor.get_default_executor", get_default_executor)
         handle = workflow.run(run_id="caller-ray-run")
     else:
         handle = workflow.run(executor=executor, run_id="caller-ray-run")

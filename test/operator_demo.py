@@ -6,8 +6,8 @@ import time
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
 
-from avalanche.operator import Operator
-from avalanche.operator.models import RunStatus
+from runtime.operator import Operator
+from runtime.operator.models import RunStatus
 
 FIXTURES = os.path.join(os.path.dirname(__file__), "fixtures")
 

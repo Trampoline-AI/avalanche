@@ -212,41 +212,23 @@ name = "avalanche-ai"
 version = "0.1.0rc2"
 source = { editable = "." }
 dependencies = [
+    { name = "croniter" },
     { name = "dataframely" },
+    { name = "grpcio" },
+    { name = "predict-rlm" },
     { name = "pydantic" },
     { name = "pyiceberg", extra = ["glue", "pandas", "pyarrow", "s3fs", "sql-sqlite"] },
     { name = "python-ulid" },
-]
-
-[package.optional-dependencies]
-agent = [
-    { name = "predict-rlm" },
-]
-all = [
-    { name = "croniter" },
-    { name = "grpcio" },
-    { name = "grpcio-tools" },
-    { name = "predict-rlm" },
-    { name = "pylance" },
-    { name = "ray", extra = ["default"] },
     { name = "textual" },
     { name = "watchfiles" },
 ]
+
+[package.optional-dependencies]
 lance = [
     { name = "pylance" },
 ]
 ray = [
     { name = "ray", extra = ["default"] },
-]
-runtime = [
-    { name = "croniter" },
-    { name = "grpcio" },
-    { name = "grpcio-tools" },
-    { name = "watchfiles" },
-]
-tui = [
-    { name = "grpcio" },
-    { name = "textual" },
 ]
 
 [package.dev-dependencies]
@@ -276,29 +258,19 @@ examples = [
 
 [package.metadata]
 requires-dist = [
-    { name = "croniter", marker = "extra == 'all'", specifier = ">=6.2.2" },
-    { name = "croniter", marker = "extra == 'runtime'", specifier = ">=6.2.2" },
+    { name = "croniter", specifier = ">=6.2.2" },
     { name = "dataframely", specifier = ">=1.13.0" },
-    { name = "grpcio", marker = "extra == 'all'", specifier = ">=1.75.1" },
-    { name = "grpcio", marker = "extra == 'runtime'", specifier = ">=1.75.1" },
-    { name = "grpcio", marker = "extra == 'tui'", specifier = ">=1.75.1" },
-    { name = "grpcio-tools", marker = "extra == 'all'", specifier = ">=1.75.1" },
-    { name = "grpcio-tools", marker = "extra == 'runtime'", specifier = ">=1.75.1" },
-    { name = "predict-rlm", marker = "extra == 'agent'", specifier = ">=0.8.0a0" },
-    { name = "predict-rlm", marker = "extra == 'all'", specifier = ">=0.8.0a0" },
+    { name = "grpcio", specifier = ">=1.75.1" },
+    { name = "predict-rlm", specifier = ">=0.8.0a0" },
     { name = "pydantic", specifier = ">=2,<3" },
     { name = "pyiceberg", extras = ["glue", "pandas", "pyarrow", "s3fs", "sql-sqlite"], specifier = ">=0.9,<0.11" },
-    { name = "pylance", marker = "extra == 'all'", specifier = ">=0.24.0" },
     { name = "pylance", marker = "extra == 'lance'", specifier = ">=0.24.0" },
     { name = "python-ulid", specifier = ">=3.0.0" },
-    { name = "ray", extras = ["default"], marker = "extra == 'all'", specifier = ">=2.50.0" },
     { name = "ray", extras = ["default"], marker = "extra == 'ray'", specifier = ">=2.50.0" },
-    { name = "textual", marker = "extra == 'all'", specifier = ">=6.2.1" },
-    { name = "textual", marker = "extra == 'tui'", specifier = ">=6.2.1" },
-    { name = "watchfiles", marker = "extra == 'all'", specifier = ">=1.1.1" },
-    { name = "watchfiles", marker = "extra == 'runtime'", specifier = ">=1.1.1" },
+    { name = "textual", specifier = ">=6.2.1" },
+    { name = "watchfiles", specifier = ">=1.1.1" },
 ]
-provides-extras = ["runtime", "tui", "ray", "lance", "all", "agent"]
+provides-extras = ["ray", "lance"]
 
 [package.metadata.requires-dev]
 dev = [

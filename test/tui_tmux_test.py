@@ -20,7 +20,7 @@ import pytest
 
 TMUX = shutil.which("tmux")
 SESSION = "pytest-tui"
-TUI_CMD = "uv run python -m avalanche.tui"
+TUI_CMD = "uv run ava tui"
 
 
 def tmux(*args: str, input: str | None = None) -> str:
