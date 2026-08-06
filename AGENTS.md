@@ -123,6 +123,14 @@ Avoid `--flows .`: operator discovery imports Python files recursively. Use a na
 - Branch coverage is configured for `src/avalanche`; `make test-cov` reports missing lines. Do not treat a focused green test as proof for unrelated runtime, Ray, or tmux paths.
 - Run `make smoke-test` for changes affecting documented examples or the main user path, and `uv build` for metadata or entry-point changes.
 
+## Commit Messages
+
+- Every commit message MUST start with a lowercase category prefix followed by a
+  colon (`<prefix>:`). When a change concerns a specific repository area, include
+  that area as a lowercase scope (`<prefix>(<area>):`), for example
+  `feat(operator):` or `fix(tui):`. Use unscoped `dev:` for development tooling,
+  agent skills, and repository-wide contributor guidance.
+
 ## Pull Request Descriptions
 
 Every PR description must be self-contained and start with these sections in this order:
