@@ -11,13 +11,14 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
         prog="ava operator",
         description="Start the local Avalanche flow operator.",
+        allow_abbrev=False,
     )
     parser.add_argument(
         "--flows",
         nargs="+",
-        required=True,
+        default=["."],
         metavar="PATH",
-        help="flow file or directory to scan",
+        help="flow file or directory to scan (default: current directory)",
     )
     parser.add_argument("--port", type=int, default=7433, help="operator gRPC port")
     parser.add_argument(
@@ -32,21 +33,6 @@ def main(argv: Sequence[str] | None = None) -> int:
         "--webhook-port", type=int, default=7434, help="loopback webhook HTTP port"
     )
     parser.add_argument("--ray", action="store_true", help="use the Ray executor")
-    parser.add_argument("--web", action="store_true", help="serve the local browser UI")
-    parser.add_argument(
-        "--web-host",
-        default="127.0.0.1",
-        help="browser UI listen host (default: loopback)",
-    )
-    parser.add_argument("--web-port", type=int, default=7435, help="browser UI HTTP port")
-    parser.add_argument(
-        "--web-trusted-proxy",
-        action="store_true",
-        help=(
-            "confirm non-loopback browser traffic is protected by an external trusted "
-            "and authenticated boundary"
-        ),
-    )
     parser.add_argument(
         "--log-level",
         type=str.upper,
@@ -76,10 +62,6 @@ def main(argv: Sequence[str] | None = None) -> int:
         host=args.host,
         webhook_port=args.webhook_port,
         executor_backend="ray" if args.ray else "local",
-        web=args.web,
-        web_host=args.web_host,
-        web_port=args.web_port,
-        web_trusted_proxy=args.web_trusted_proxy,
     )
     return 0
 
