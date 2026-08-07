@@ -165,6 +165,22 @@ describe("App", () => {
     projectionHarness.selectRun.mockClear();
     projectionHarness.startRun.mockClear();
     projectionHarness.cancelRun.mockClear();
+    projectionHarness.state.connection = "live";
+  });
+
+  it("shows a full-screen connecting view until the operator is available", () => {
+    projectionHarness.state.connection = "reconnecting";
+
+    const { container } = render(
+      <App api={new GrpcWebOperatorApi("http://localhost")} operatorPort="17777" />,
+    );
+
+    expect(screen.getByRole("status")).toHaveTextContent("Reconnecting...");
+    expect(screen.getByText("No operator process found at port 17777")).toBeVisible();
+    expect(container.querySelector(".operator-connection-screen")).toHaveClass(
+      "min-h-screen",
+    );
+    expect(container.querySelector(".topbar")).not.toBeInTheDocument();
   });
 
   it("keeps Explorer accessible through the narrow navigation toggle", () => {

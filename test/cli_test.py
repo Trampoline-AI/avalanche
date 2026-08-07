@@ -4,7 +4,11 @@ import hashlib
 import importlib.util
 import json
 import logging
+import signal
+import socket
 import stat
+import subprocess
+import sys
 import threading
 import tomllib
 from pathlib import Path
@@ -243,6 +247,43 @@ def test_ava_web_starts_remote_browser_proxy_and_opens_browser(monkeypatch):
         "browser-opened:http://127.0.0.1:17778",
         "web-closed",
     ]
+
+
+def test_ava_web_exits_cleanly_after_interrupt():
+    with socket.socket() as target_socket:
+        target_socket.bind(("127.0.0.1", 0))
+        target_port = target_socket.getsockname()[1]
+        with socket.socket() as web_socket:
+            web_socket.bind(("127.0.0.1", 0))
+            web_port = web_socket.getsockname()[1]
+
+        process = subprocess.Popen(
+            [
+                sys.executable,
+                "-u",
+                "-m",
+                "ava_cli",
+                "web",
+                "--connect",
+                f"127.0.0.1:{target_port}",
+                "--port",
+                str(web_port),
+            ],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.DEVNULL,
+            text=True,
+        )
+        try:
+            assert process.stdout is not None
+            assert process.stdout.readline().startswith("Avalanche web UI:")
+
+            process.send_signal(signal.SIGINT)
+
+            assert process.wait(timeout=5) == 0
+        finally:
+            if process.poll() is None:
+                process.terminate()
+                process.wait(timeout=5)
 
 
 def test_ava_web_reports_browser_auto_open_failure_without_claiming_ui_failed(

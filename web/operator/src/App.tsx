@@ -7,7 +7,7 @@ import {
   useRef,
   useState,
 } from "react";
-import { PanelLeftOpen } from "lucide-react";
+import { LoaderCircle, PanelLeftOpen } from "lucide-react";
 
 import type { OperatorApi } from "./api";
 import { Explorer, type Selection } from "./Explorer";
@@ -109,7 +109,13 @@ function WorkspaceDivider({
   );
 }
 
-export function App({ api }: { api: OperatorApi }) {
+interface AppProps {
+  api: OperatorApi;
+  operatorPort?: string;
+}
+
+
+export function App({ api, operatorPort = "7433" }: AppProps) {
   const { state, startRun, cancelRun, selectRun } = useOperatorProjection(api);
   const [selection, setSelection] = useState<Selection>();
   const [inspectedNode, setInspectedNode] = useState<string>();
@@ -262,6 +268,31 @@ export function App({ api }: { api: OperatorApi }) {
     "--workspace-inspector-column-width": inspectorOpen ? `${inspectorWidth}px` : "0px",
     "--workspace-inspector-divider-width": "0px",
   } as CSSProperties;
+  if (state.connection !== "live") {
+    return (
+      <main
+        className="operator-connection-screen grid min-h-screen w-full place-items-center bg-canvas p-6 text-center"
+        role="status"
+        aria-live="polite"
+      >
+        <div className="grid justify-items-center gap-4">
+          <LoaderCircle
+            aria-hidden="true"
+            className="size-7 animate-spin text-acid motion-reduce:animate-none"
+          />
+          <div>
+            <h1 className="text-lg font-semibold tracking-[-0.02em] text-ink">
+              Reconnecting...
+            </h1>
+            <p className="mt-2 text-sm text-muted">
+              No operator process found at port {operatorPort}
+            </p>
+          </div>
+        </div>
+      </main>
+    );
+  }
+
 
   return (
     <div

@@ -132,7 +132,7 @@ def test_browser_listener_serves_assets_without_a_running_operator(tmp_path: Pat
 
 
 def test_browser_listener_serves_packaged_operator_application():
-    server = start_browser_server("127.0.0.1:7433", port=0)
+    server = start_browser_server("127.0.0.1:17777", port=0)
     try:
         connection = http.client.HTTPConnection(server.host, server.port, timeout=5)
         connection.request("GET", "/")
@@ -143,6 +143,7 @@ def test_browser_listener_serves_packaged_operator_application():
         assert response.getheader("Content-Type") == "text/html"
         assert b"<title>Avalanche Operator</title>" in body
         assert b'id="root"' in body
+        assert b'content="17777" data-avalanche-operator-port' in body
         connection.close()
     finally:
         server.close()
