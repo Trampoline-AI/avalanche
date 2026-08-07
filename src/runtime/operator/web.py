@@ -4,11 +4,10 @@ from __future__ import annotations
 
 import logging
 import mimetypes
-import select
 import socket
 import struct
 import threading
-from collections.abc import Callable, Iterator
+from collections.abc import Iterator
 from dataclasses import dataclass
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -20,9 +19,7 @@ import grpc
 from google.protobuf import message_factory
 from google.protobuf.message import DecodeError, Message
 
-from .operator import Operator
 from .proto import operator_pb2 as pb
-from .server import OperatorServicer
 
 logger = logging.getLogger(__name__)
 
@@ -58,37 +55,16 @@ def _rpc_methods() -> MappingProxyType[str, _RpcMethod]:
 _RPC_METHODS = _rpc_methods()
 
 
-class _WebRpcAbortError(Exception):
-    def __init__(self, code: grpc.StatusCode, detail: str) -> None:
-        super().__init__(detail)
-        self.code = code
-        self.detail = detail
-
-
-class _WebRpcContext:
-    def __init__(self, active: Callable[[], bool]) -> None:
-        self._active = active
-
-    def abort(self, code: grpc.StatusCode, detail: str) -> None:
-        raise _WebRpcAbortError(code, detail)
-
-    def is_active(self) -> bool:
-        return self._active()
-
-    def send_initial_metadata(self, metadata: tuple[()]) -> None:
-        del metadata
-
-
 class _BrowserHTTPServer(ThreadingHTTPServer):
     daemon_threads = True
 
     def __init__(
         self,
         server_address: tuple[str, int],
-        operator: Operator,
+        operator_address: str,
         asset_root: Path,
     ) -> None:
-        self.operator_servicer = OperatorServicer(operator)
+        self.channel = grpc.insecure_channel(operator_address)
         self.asset_root = asset_root
         self.stopping = threading.Event()
         super().__init__(server_address, _BrowserRequestHandler)
@@ -107,8 +83,7 @@ class _BrowserRequestHandler(BaseHTTPRequestHandler):
         if method is None or urlsplit(self.path).path != f"{_GRPC_SERVICE_PATH}{method_name}":
             self.send_error(HTTPStatus.NOT_FOUND)
             return
-        content_type = self.headers.get_content_type()
-        if content_type != _GRPC_WEB_CONTENT_TYPE:
+        if self.headers.get_content_type() != _GRPC_WEB_CONTENT_TYPE:
             self.send_error(HTTPStatus.UNSUPPORTED_MEDIA_TYPE)
             return
         try:
@@ -116,21 +91,18 @@ class _BrowserRequestHandler(BaseHTTPRequestHandler):
         except (DecodeError, ValueError) as exc:
             self._send_grpc_error(grpc.StatusCode.INVALID_ARGUMENT, str(exc))
             return
-        context = _WebRpcContext(self._request_is_active)
-        handler = getattr(self.server.operator_servicer, method_name)
         try:
-            result = handler(request, context)
             if method.server_streaming:
-                self._send_stream(iter(result))
+                self._send_stream(self._stream_remote(method_name, method, request))
             else:
-                self._send_unary(result)
-        except _WebRpcAbortError as exc:
-            self._send_grpc_error(exc.code, exc.detail)
+                self._send_unary(self._call_remote(method_name, method, request))
+        except grpc.RpcError as exc:
+            self._send_grpc_error(exc.code(), exc.details())
         except (BrokenPipeError, ConnectionResetError):
             return
         except Exception:
-            logger.exception("Unhandled gRPC-Web method failure: %s", method_name)
-            self._send_grpc_error(grpc.StatusCode.INTERNAL, "internal operator error")
+            logger.exception("Unhandled gRPC-Web proxy failure: %s", method_name)
+            self._send_grpc_error(grpc.StatusCode.INTERNAL, "internal proxy error")
 
     def do_OPTIONS(self) -> None:  # noqa: N802
         self.send_response(HTTPStatus.NO_CONTENT)
@@ -150,16 +122,26 @@ class _BrowserRequestHandler(BaseHTTPRequestHandler):
             raise ValueError(f"request body exceeds {_MAX_REQUEST_BYTES} byte limit")
         return length
 
-    def _request_is_active(self) -> bool:
-        if self.server.stopping.is_set():
-            return False
-        try:
-            readable, _, _ = select.select([self.connection], [], [], 0)
-            if not readable:
-                return True
-            return bool(self.connection.recv(1, socket.MSG_PEEK))
-        except OSError:
-            return False
+    def _call_remote(self, method_name: str, method: _RpcMethod, request: Message) -> Message:
+        call = self.server.channel.unary_unary(
+            f"{_GRPC_SERVICE_PATH}{method_name}",
+            request_serializer=_serialize_message,
+            response_deserializer=method.response_type.FromString,
+        )
+        return call(request)
+
+    def _stream_remote(
+        self,
+        method_name: str,
+        method: _RpcMethod,
+        request: Message,
+    ) -> Iterator[Message]:
+        call = self.server.channel.unary_stream(
+            f"{_GRPC_SERVICE_PATH}{method_name}",
+            request_serializer=_serialize_message,
+            response_deserializer=method.response_type.FromString,
+        )
+        return call(request)
 
     def _send_unary(self, response: Message) -> None:
         body = _data_frame(response) + _trailer_frame(grpc.StatusCode.OK, "")
@@ -178,13 +160,13 @@ class _BrowserRequestHandler(BaseHTTPRequestHandler):
             try:
                 for response in responses:
                     self._write_chunk(_data_frame(response))
-            except _WebRpcAbortError as exc:
-                trailer = _trailer_frame(exc.code, exc.detail)
+            except grpc.RpcError as exc:
+                trailer = _trailer_frame(exc.code(), exc.details())
             except (BrokenPipeError, ConnectionResetError):
                 return
             except Exception:
-                logger.exception("Unhandled gRPC-Web stream failure")
-                trailer = _trailer_frame(grpc.StatusCode.INTERNAL, "internal operator error")
+                logger.exception("Unhandled gRPC-Web stream proxy failure")
+                trailer = _trailer_frame(grpc.StatusCode.INTERNAL, "internal proxy error")
             else:
                 trailer = _trailer_frame(grpc.StatusCode.OK, "")
             try:
@@ -194,9 +176,8 @@ class _BrowserRequestHandler(BaseHTTPRequestHandler):
             except (BrokenPipeError, ConnectionResetError):
                 return
         finally:
-            close = getattr(responses, "close", None)
-            if close is not None:
-                close()
+            if isinstance(responses, grpc.Call):
+                responses.cancel()
 
     def _send_grpc_error(self, code: grpc.StatusCode, detail: str) -> None:
         if self.wfile.closed:
@@ -251,7 +232,7 @@ class _BrowserRequestHandler(BaseHTTPRequestHandler):
 
 
 class BrowserServer:
-    """Owned browser listener serving gRPC-Web and the compiled SPA."""
+    """Owned browser listener serving the SPA and proxying gRPC-Web to an operator."""
 
     def __init__(self, server: _BrowserHTTPServer, thread: threading.Thread) -> None:
         self._server = server
@@ -270,39 +251,48 @@ class BrowserServer:
         host = f"[{self.host}]" if ":" in self.host else self.host
         return f"http://{host}:{self.port}"
 
+    def wait(self) -> None:
+        self._thread.join()
+
     def close(self) -> None:
         if self._server.stopping.is_set():
             return
         self._server.stopping.set()
         self._server.shutdown()
         self._server.server_close()
+        self._server.channel.close()
         self._thread.join(timeout=2.0)
 
 
 def start_browser_server(
-    operator: Operator,
+    operator_address: str,
     *,
     host: str = DEFAULT_WEB_HOST,
     port: int = DEFAULT_WEB_PORT,
     asset_root: Path | None = None,
     trust_non_loopback: bool = False,
 ) -> BrowserServer:
-    """Start the loopback-default browser listener for one shared operator."""
+    """Start the loopback-default browser listener for a remote operator."""
     if not _is_loopback_host(host) and not trust_non_loopback:
         raise ValueError(
-            "Non-loopback web UI exposure requires --web-trusted-proxy and an external "
-            "trusted, authenticated boundary"
+            "Non-loopback web UI exposure requires ava web --trusted-proxy and an "
+            "external trusted, authenticated boundary"
         )
     root = (asset_root or Path(__file__).with_name("web_assets")).resolve()
-    server = _BrowserHTTPServer((host, port), operator, root)
+    server = _BrowserHTTPServer((host, port), operator_address, root)
     thread = threading.Thread(
         target=server.serve_forever,
         name="avalanche-browser-listener",
         daemon=True,
     )
     thread.start()
-    logger.info("Operator web UI listening on %s", BrowserServer(server, thread).endpoint)
-    return BrowserServer(server, thread)
+    browser_server = BrowserServer(server, thread)
+    logger.info(
+        "Browser UI listening on %s for operator %s",
+        browser_server.endpoint,
+        operator_address,
+    )
+    return browser_server
 
 
 def _decode_request(data: bytes, method: _RpcMethod) -> Message:
@@ -316,6 +306,10 @@ def _decode_request(data: bytes, method: _RpcMethod) -> Message:
     request = method.request_type()
     request.ParseFromString(data[_FRAME_HEADER_BYTES:])
     return request
+
+
+def _serialize_message(message: Message) -> bytes:
+    return message.SerializeToString()
 
 
 def _data_frame(message: Message) -> bytes:

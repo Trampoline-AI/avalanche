@@ -104,6 +104,16 @@ def test_ava_operator_delegates_to_runtime_operator_with_flows(monkeypatch):
     ]
 
 
+def test_ava_operator_defaults_flows_to_current_directory(monkeypatch):
+    from ava_cli import app
+
+    calls = []
+    monkeypatch.setattr(app, "_operator_main", lambda argv: calls.append(argv) or 0)
+
+    assert app.main(["operator"]) == 0
+    assert calls[0][:2] == ["--flows", "."]
+
+
 def test_ava_operator_forwards_case_insensitive_log_level(monkeypatch):
     from ava_cli import app
 
@@ -142,36 +152,135 @@ def test_runtime_operator_configures_logging_before_serve(monkeypatch):
     assert lifecycle[1][0] == "serve"
 
 
-def test_ava_operator_delegates_web_listener_configuration(monkeypatch):
-    from ava_cli import app
+def test_runtime_operator_defaults_flows_to_current_directory(monkeypatch):
+    import runtime.operator as runtime_operator
+    from runtime.operator import __main__ as operator_main
 
     calls = []
-    monkeypatch.setattr(app, "_operator_main", lambda argv: calls.append(argv) or 0)
+    monkeypatch.setattr(runtime_operator, "serve", lambda flows, **kwargs: calls.append(flows))
+
+    assert operator_main.main([]) == 0
+    assert calls == [["."]]
+
+
+def test_runtime_operator_reports_loaded_workflows(monkeypatch, capsys):
+    import runtime.operator as runtime_operator
+    from runtime.operator import server as operator_server
+
+    class FakeWorkflow:
+        def __init__(self, selector):
+            self.selector = selector
+
+    class FakeCatalog:
+        workflows = (FakeWorkflow("first"), FakeWorkflow("second"))
+
+    class FakeOperator:
+        def get_catalog(self):
+            return FakeCatalog()
+
+        def close(self):
+            pass
+
+    monkeypatch.setattr(runtime_operator, "Operator", lambda *args, **kwargs: FakeOperator())
+    monkeypatch.setattr(operator_server, "serve", lambda *args, **kwargs: None)
+
+    runtime_operator.serve(["examples"])
+
+    expected = "Workflow scan complete: 2 workflows loaded: first, second\n"
+    assert capsys.readouterr().out == expected
+
+
+def test_ava_web_starts_remote_browser_proxy_and_opens_browser(monkeypatch):
+    from ava_cli import app
+    from runtime.operator import web as operator_web
+
+    lifecycle = []
+
+    class FakeBrowserServer:
+        endpoint = "http://127.0.0.1:17778"
+
+        def wait(self):
+            raise KeyboardInterrupt
+
+        def close(self):
+            lifecycle.append("web-closed")
+
+    def fake_start_browser_server(address, **kwargs):
+        lifecycle.append(("web-started", address, kwargs))
+        return FakeBrowserServer()
+
+    monkeypatch.setattr(operator_web, "start_browser_server", fake_start_browser_server)
+    monkeypatch.setattr(
+        app.webbrowser,
+        "open",
+        lambda endpoint, *, new: lifecycle.append(f"browser-opened:{endpoint}") or True,
+    )
 
     assert (
         app.main(
             [
-                "operator",
-                "--flows",
-                "examples",
-                "--web",
-                "--web-host",
-                "0.0.0.0",
-                "--web-port",
+                "web",
+                "--connect",
+                "localhost:17777",
+                "--host",
+                "127.0.0.1",
+                "--port",
                 "17778",
-                "--web-trusted-proxy",
             ]
         )
         == 0
     )
-    assert calls[0][-6:] == [
-        "--web",
-        "--web-host",
-        "0.0.0.0",
-        "--web-port",
-        "17778",
-        "--web-trusted-proxy",
+    assert lifecycle == [
+        (
+            "web-started",
+            "localhost:17777",
+            {
+                "host": "127.0.0.1",
+                "port": 17778,
+                "trust_non_loopback": False,
+            },
+        ),
+        "browser-opened:http://127.0.0.1:17778",
+        "web-closed",
     ]
+
+
+def test_ava_web_reports_browser_auto_open_failure_without_claiming_ui_failed(
+    monkeypatch, capsys
+):
+    from ava_cli import app
+    from runtime.operator import web as operator_web
+
+    class FakeBrowserServer:
+        endpoint = "http://127.0.0.1:17778"
+
+        def wait(self):
+            raise KeyboardInterrupt
+
+        def close(self):
+            pass
+
+    monkeypatch.setattr(
+        operator_web,
+        "start_browser_server",
+        lambda *args, **kwargs: FakeBrowserServer(),
+    )
+    monkeypatch.setattr(app.webbrowser, "open", lambda endpoint, *, new: False)
+
+    assert app.main(["web"]) == 0
+    assert (
+        "Could not open a browser automatically; open http://127.0.0.1:17778 manually."
+        in capsys.readouterr().err
+    )
+
+
+def test_ava_operator_rejects_web_flag():
+    from ava_cli import app
+
+    with pytest.raises(SystemExit) as exc_info:
+        app.main(["operator", "--web"])
+
+    assert exc_info.value.code != 0
 
 
 def test_ava_operator_rejects_old_workflows_flag():
@@ -1395,7 +1504,7 @@ def test_ava_run_preserves_ambiguity_candidates_on_stderr(monkeypatch, capsys):
     assert "right/flow.py::shared" in error
 
 
-def test_ava_dev_starts_operator_waits_launches_tui_and_stops_operator(monkeypatch):
+def test_ava_dev_starts_web_without_waiting_for_operator_readiness(monkeypatch):
     from ava_cli import app
 
     events = []
@@ -1406,62 +1515,47 @@ def test_ava_dev_starts_operator_waits_launches_tui_and_stops_operator(monkeypat
 
         def wait(self, timeout=None):
             events.append(("wait", timeout))
+            return 0
 
         def kill(self):
             events.append("kill")
 
-    class FakeProvider:
-        def __init__(self):
-            self.pings = 0
-
-        def ping(self):
-            self.pings += 1
-            events.append(("ping", self.pings))
-            return self.pings == 2
-
-        def close(self):
-            events.append("close")
-
-    fake_provider = FakeProvider()
-
-    def fake_find_free_port():
-        return 18888
 
     def fake_start_operator_process(flows, port, use_ray):
         events.append(("start", flows, port, use_ray))
         return FakeProcess()
 
-    def fake_make_provider(address):
-        events.append(("provider", address))
-        return fake_provider
+    def fake_start_web_process(address):
+        events.append(("web", address))
+        return FakeProcess()
 
-    def fake_sleep(seconds):
-        events.append(("sleep", seconds))
 
-    def fake_launch_connected_tui(address):
-        events.append(("tui", address))
-
-    monkeypatch.setattr(app, "_find_free_port", fake_find_free_port)
     monkeypatch.setattr(app, "_start_operator_process", fake_start_operator_process)
-    monkeypatch.setattr(app, "_make_provider", fake_make_provider)
-    monkeypatch.setattr(app.time, "sleep", fake_sleep)
-    monkeypatch.setattr(app, "_launch_connected_tui", fake_launch_connected_tui)
+    monkeypatch.setattr(app, "_start_web_process", fake_start_web_process)
 
     assert app.main(["dev", "--flows", "examples", "--ray"]) == 0
     assert events == [
-        ("start", ["examples"], 18888, True),
-        ("provider", "localhost:18888"),
-        ("ping", 1),
-        ("sleep", 0.1),
-        ("ping", 2),
-        ("tui", "localhost:18888"),
-        "close",
+        ("start", ["examples"], 7433, True),
+        ("web", "127.0.0.1:7433"),
+        ("wait", None),
+        "terminate",
+        ("wait", 5),
         "terminate",
         ("wait", 5),
     ]
 
 
-def test_ava_dev_stops_operator_when_tui_raises(monkeypatch):
+def test_ava_dev_defaults_flows_to_current_directory(monkeypatch):
+    from ava_cli import app
+
+    calls = []
+    monkeypatch.setattr(app, "_run_dev", lambda args: calls.append(args.flows) or 0)
+
+    assert app.main(["dev"]) == 0
+    assert calls == [["."]]
+
+
+def test_ava_dev_stops_operator_when_wait_is_interrupted(monkeypatch):
     from ava_cli import app
 
     events = []
@@ -1472,31 +1566,28 @@ def test_ava_dev_stops_operator_when_tui_raises(monkeypatch):
 
         def wait(self, timeout=None):
             events.append(("wait", timeout))
+            if timeout is None:
+                raise KeyboardInterrupt
+            return 0
 
         def kill(self):
             events.append("kill")
 
-    class FakeProvider:
-        def ping(self):
-            return True
 
-        def close(self):
-            events.append("close")
-
-    monkeypatch.setattr(app, "_find_free_port", lambda: 18889)
     monkeypatch.setattr(
         app,
         "_start_operator_process",
         lambda flows, port, use_ray: FakeProcess(),
     )
-    monkeypatch.setattr(app, "_make_provider", lambda address: FakeProvider())
-
-    def fake_launch_connected_tui(address):
-        raise KeyboardInterrupt
-
-    monkeypatch.setattr(app, "_launch_connected_tui", fake_launch_connected_tui)
+    monkeypatch.setattr(app, "_start_web_process", lambda address: FakeProcess())
 
     with pytest.raises(KeyboardInterrupt):
         app.main(["dev", "--flows", "examples"])
 
-    assert events == ["close", "terminate", ("wait", 5)]
+    assert events == [
+        ("wait", None),
+        "terminate",
+        ("wait", 5),
+        "terminate",
+        ("wait", 5),
+    ]

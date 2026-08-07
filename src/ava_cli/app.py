@@ -10,11 +10,11 @@ import json
 import math
 import os
 import re
-import socket
 import stat
 import subprocess
 import sys
 import time
+import webbrowser
 from collections.abc import Sequence
 from importlib.resources import as_file, files
 from pathlib import Path, PurePosixPath
@@ -58,13 +58,14 @@ def _build_parser() -> argparse.ArgumentParser:
         "operator",
         help="start the local flow operator",
         description="Start the local Avalanche operator and discover flows from files.",
+        allow_abbrev=False,
     )
     operator.add_argument(
         "--flows",
         nargs="+",
-        required=True,
+        default=["."],
         metavar="PATH",
-        help="flow file or directory to scan",
+        help="flow file or directory to scan (default: current directory)",
     )
     operator.add_argument("--port", type=int, default=7433, help="operator gRPC port")
     operator.add_argument(
@@ -77,21 +78,6 @@ def _build_parser() -> argparse.ArgumentParser:
     )
     operator.add_argument(
         "--webhook-port", type=int, default=7434, help="loopback webhook HTTP port"
-    )
-    operator.add_argument("--web", action="store_true", help="serve the local browser UI")
-    operator.add_argument(
-        "--web-host",
-        default="127.0.0.1",
-        help="browser UI listen host (default: loopback)",
-    )
-    operator.add_argument("--web-port", type=int, default=7435, help="browser UI HTTP port")
-    operator.add_argument(
-        "--web-trusted-proxy",
-        action="store_true",
-        help=(
-            "confirm non-loopback browser traffic is protected by an external trusted "
-            "and authenticated boundary"
-        ),
     )
     operator.add_argument(
         "--log-level",
@@ -211,26 +197,40 @@ def _build_parser() -> argparse.ArgumentParser:
     tui.add_argument("--tls-ca-cert", metavar="PATH", help="TLS CA certificate")
     tui.set_defaults(handler=_run_tui)
 
+    web = subcommands.add_parser(
+        "web",
+        help="launch the local browser UI",
+        description="Launch the browser UI and proxy it to an Avalanche operator.",
+    )
+    web.add_argument(
+        "--connect",
+        default="localhost:7433",
+        metavar="HOST:PORT",
+        help="operator address",
+    )
+    web.add_argument("--host", default="127.0.0.1", help="browser UI listen host")
+    web.add_argument("--port", type=int, default=7435, help="browser UI HTTP port")
+    web.add_argument(
+        "--trusted-proxy",
+        action="store_true",
+        help="confirm non-loopback browser traffic is protected by a trusted proxy",
+    )
+    web.set_defaults(handler=_run_web)
+
     dev = subcommands.add_parser(
         "dev",
-        help="start a local operator and connected TUI",
-        description="Start a local operator, wait for readiness, then launch the TUI.",
+        help="start a local operator",
+        description="Start a local operator and wait until it stops.",
     )
     dev.add_argument(
         "--flows",
         nargs="+",
-        required=True,
+        default=["."],
         metavar="PATH",
-        help="flow file or directory to scan",
+        help="flow file or directory to scan (default: current directory)",
     )
-    dev.add_argument("--port", type=int, default=None, help="operator gRPC port")
+    dev.add_argument("--port", type=int, default=7433, help="operator gRPC port")
     dev.add_argument("--ray", action="store_true", help="use the Ray executor")
-    dev.add_argument(
-        "--readiness-timeout",
-        type=float,
-        default=10.0,
-        help="seconds to wait for operator readiness",
-    )
     dev.set_defaults(handler=_run_dev)
 
     return parser
@@ -261,21 +261,43 @@ def _run_operator(args: argparse.Namespace) -> int:
         "--log-level",
         args.log_level,
     ]
-    if args.web:
-        runtime_args.extend(
-            [
-                "--web",
-                "--web-host",
-                args.web_host,
-                "--web-port",
-                str(args.web_port),
-            ]
-        )
-    if args.web_trusted_proxy:
-        runtime_args.append("--web-trusted-proxy")
     if args.ray:
         runtime_args.append("--ray")
     return _operator_main(runtime_args)
+
+
+def _run_web(args: argparse.Namespace) -> int:
+    from runtime.operator.web import start_browser_server
+
+    server = start_browser_server(
+        args.connect,
+        host=args.host,
+        port=args.port,
+        trust_non_loopback=args.trusted_proxy,
+    )
+    print(f"Avalanche web UI: {server.endpoint}")
+    try:
+        try:
+            opened = webbrowser.open(server.endpoint, new=2)
+        except webbrowser.Error as exc:
+            print(
+                f"Could not open a browser automatically ({exc}); "
+                f"open {server.endpoint} manually.",
+                file=sys.stderr,
+            )
+        else:
+            if not opened:
+                print(
+                    f"Could not open a browser automatically; open {server.endpoint} manually.",
+                    file=sys.stderr,
+                )
+        try:
+            server.wait()
+        except KeyboardInterrupt:
+            return 0
+    finally:
+        server.close()
+    return 0
 
 
 def _webhook_record(workflow) -> dict[str, object]:
@@ -1336,25 +1358,16 @@ def _launch_tui(argv: Sequence[str]) -> None:
 
 
 def _run_dev(args: argparse.Namespace) -> int:
-    port = args.port if args.port is not None else _find_free_port()
-    process = _start_operator_process(args.flows, port, args.ray)
-    provider = None
+    port = args.port
+    operator_process = _start_operator_process(args.flows, port, args.ray)
+    web_process = None
     try:
-        address = f"localhost:{port}"
-        provider = _make_provider(address)
-        _wait_for_provider(provider, timeout=args.readiness_timeout)
-        _launch_connected_tui(address)
-        return 0
+        web_process = _start_web_process(f"127.0.0.1:{port}")
+        return operator_process.wait()
     finally:
-        if provider is not None:
-            provider.close()
-        _stop_operator_process(process)
-
-
-def _find_free_port() -> int:
-    with socket.socket() as sock:
-        sock.bind(("127.0.0.1", 0))
-        return sock.getsockname()[1]
+        if web_process is not None:
+            _stop_operator_process(web_process)
+        _stop_operator_process(operator_process)
 
 
 def _start_operator_process(
@@ -1374,6 +1387,10 @@ def _start_operator_process(
     if use_ray:
         cmd.append("--ray")
     return subprocess.Popen(cmd)
+
+
+def _start_web_process(address: str) -> subprocess.Popen:
+    return subprocess.Popen([sys.executable, "-m", "ava_cli", "web", "--connect", address])
 
 
 def _make_provider(address: str):
@@ -1425,20 +1442,8 @@ def _parse_workspace_inputs(values: list[str]):
     return workspaces
 
 
-def _wait_for_provider(provider, *, timeout: float) -> None:
-    deadline = time.monotonic() + timeout
-    while time.monotonic() < deadline:
-        if provider.ping():
-            return
-        time.sleep(0.1)
-    raise RuntimeError(
-        "Timed out waiting for Avalanche operator readiness. "
-        f"Last error: {getattr(provider, 'last_error', '')}"
-    )
 
 
-def _launch_connected_tui(address: str) -> None:
-    _launch_tui(["--connect", address])
 
 
 def _stop_operator_process(process: subprocess.Popen) -> None:

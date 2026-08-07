@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import http.client
+import socket
 import struct
 from pathlib import Path
 
@@ -10,10 +11,17 @@ import pytest
 
 from runtime.operator.operator import Operator
 from runtime.operator.proto import operator_pb2 as pb
+from runtime.operator.server import serve as serve_operator
 from runtime.operator.web import start_browser_server
 
 _SERVICE = "/avalanche.operator.OperatorService/"
 _CONTENT_TYPE = "application/grpc-web+proto"
+
+
+def _free_port() -> int:
+    with socket.socket() as sock:
+        sock.bind(("127.0.0.1", 0))
+        return sock.getsockname()[1]
 
 
 def _frame(message) -> bytes:
@@ -48,10 +56,12 @@ def _post(server, method: str, request) -> tuple[int, str, bytes]:
     return result
 
 
-def test_browser_listener_serves_unary_catalog_from_shared_operator(tmp_path: Path):
+def test_browser_listener_proxies_unary_catalog_from_remote_operator(tmp_path: Path):
     (tmp_path / "index.html").write_text("<main>Avalanche</main>")
     operator = Operator([], watch=False, schedule=False)
-    server = start_browser_server(operator, port=0, asset_root=tmp_path)
+    grpc_port = _free_port()
+    grpc_server = serve_operator(operator, port=grpc_port, block=False)
+    server = start_browser_server(f"127.0.0.1:{grpc_port}", port=0, asset_root=tmp_path)
     try:
         status, content_type, body = _post(server, "GetCatalog", pb.Empty())
         frames = _frames(body)
@@ -65,13 +75,16 @@ def test_browser_listener_serves_unary_catalog_from_shared_operator(tmp_path: Pa
         assert b"grpc-status: 0" in frames[1][1]
     finally:
         server.close()
+        grpc_server.stop(grace=0)
         operator.close()
 
 
-def test_browser_listener_delivers_stream_reset_as_grpc_web_frames(tmp_path: Path):
+def test_browser_listener_proxies_stream_reset_from_remote_operator(tmp_path: Path):
     (tmp_path / "index.html").write_text("<main>Avalanche</main>")
     operator = Operator([], watch=False, schedule=False)
-    server = start_browser_server(operator, port=0, asset_root=tmp_path)
+    grpc_port = _free_port()
+    grpc_server = serve_operator(operator, port=grpc_port, block=False)
+    server = start_browser_server(f"127.0.0.1:{grpc_port}", port=0, asset_root=tmp_path)
     try:
         status, _, body = _post(
             server,
@@ -91,16 +104,16 @@ def test_browser_listener_delivers_stream_reset_as_grpc_web_frames(tmp_path: Pat
         assert b"grpc-status: 0" in frames[-1][1]
     finally:
         server.close()
+        grpc_server.stop(grace=0)
         operator.close()
 
 
-def test_browser_listener_serves_assets_and_spa_routes(tmp_path: Path):
+def test_browser_listener_serves_assets_without_a_running_operator(tmp_path: Path):
     (tmp_path / "index.html").write_text("<main>Avalanche</main>")
     assets = tmp_path / "assets"
     assets.mkdir()
     (assets / "app.js").write_text("console.log('loaded')")
-    operator = Operator([], watch=False, schedule=False)
-    server = start_browser_server(operator, port=0, asset_root=tmp_path)
+    server = start_browser_server("127.0.0.1:7433", port=0, asset_root=tmp_path)
     try:
         connection = http.client.HTTPConnection(server.host, server.port, timeout=5)
         connection.request("GET", "/runs/run-1")
@@ -116,12 +129,10 @@ def test_browser_listener_serves_assets_and_spa_routes(tmp_path: Path):
         connection.close()
     finally:
         server.close()
-        operator.close()
 
 
 def test_browser_listener_serves_packaged_operator_application():
-    operator = Operator([], watch=False, schedule=False)
-    server = start_browser_server(operator, port=0)
+    server = start_browser_server("127.0.0.1:7433", port=0)
     try:
         connection = http.client.HTTPConnection(server.host, server.port, timeout=5)
         connection.request("GET", "/")
@@ -135,18 +146,13 @@ def test_browser_listener_serves_packaged_operator_application():
         connection.close()
     finally:
         server.close()
-        operator.close()
 
 
 def test_browser_listener_rejects_non_loopback_without_trusted_proxy(tmp_path: Path):
-    operator = Operator([], watch=False, schedule=False)
-    try:
-        with pytest.raises(ValueError, match="trusted, authenticated boundary"):
-            start_browser_server(
-                operator,
-                host="0.0.0.0",
-                port=0,
-                asset_root=tmp_path,
-            )
-    finally:
-        operator.close()
+    with pytest.raises(ValueError, match="trusted, authenticated boundary"):
+        start_browser_server(
+            "127.0.0.1:7433",
+            host="0.0.0.0",
+            port=0,
+            asset_root=tmp_path,
+        )

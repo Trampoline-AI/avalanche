@@ -27,35 +27,29 @@ __all__ = [
 ]
 
 
+def _report_workflow_scan(operator: Operator) -> None:
+    workflows = operator.get_catalog().workflows
+    if not workflows:
+        print("Workflow scan complete: 0 workflows loaded")
+        return
+    selectors = ", ".join(workflow.selector for workflow in workflows)
+    print(f"Workflow scan complete: {len(workflows)} workflows loaded: {selectors}")
+
+
 def serve(
     workflow_paths: list[str],
     port: int = 7433,
     *,
     host: str = "127.0.0.1",
     webhook_port: int = 7434,
-    web: bool = False,
-    web_host: str = "127.0.0.1",
-    web_port: int = 7435,
-    web_trusted_proxy: bool = False,
     **kwargs,
 ) -> None:
-    """Start the operator daemon with gRPC and optional browser listeners."""
+    """Start the local operator daemon."""
     from .server import serve as _serve
-    from .web import start_browser_server
 
     op = Operator(workflow_paths, webhook_port=webhook_port, **kwargs)
-    browser_server = None
+    _report_workflow_scan(op)
     try:
-        if web:
-            browser_server = start_browser_server(
-                op,
-                host=web_host,
-                port=web_port,
-                trust_non_loopback=web_trusted_proxy,
-            )
-            print(f"Avalanche web UI: {browser_server.endpoint}")
         _serve(op, port=port, block=True, host=host)
     finally:
-        if browser_server is not None:
-            browser_server.close()
         op.close()
