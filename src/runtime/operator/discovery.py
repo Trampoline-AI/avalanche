@@ -233,7 +233,20 @@ def _iter_files(root: ConfiguredRoot) -> list[Path]:
         return [root.target] if root.target.suffix == ".py" else []
     if not root.target.is_dir():
         return []
-    return [path for path in sorted(root.target.rglob("*.py")) if not path.name.startswith("_")]
+
+    candidates: list[Path] = []
+    for directory, subdirectories, file_names in os.walk(root.target):
+        subdirectories[:] = sorted(
+            name
+            for name in subdirectories
+            if not name.startswith(".") and name != "__pycache__"
+        )
+        candidates.extend(
+            Path(directory, name)
+            for name in file_names
+            if name.endswith(".py") and not name.startswith("_")
+        )
+    return sorted(candidates)
 
 
 def _package_module_name(file_path: Path) -> tuple[str, Path] | None:
