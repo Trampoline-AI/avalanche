@@ -1,5 +1,5 @@
-import { memo } from "react";
-import { PanelLeftClose } from "lucide-react";
+import { memo, useState } from "react";
+import { PanelLeftClose, X } from "lucide-react";
 
 import type { CatalogSnapshotMsg, FlowInfoMsg } from "./generated/operator";
 
@@ -42,7 +42,18 @@ const WorkflowRow = memo(function WorkflowRow({
   );
 });
 
+function diagnosticKey(catalog: CatalogSnapshotMsg): string {
+  return catalog.diagnostics
+    .filter((diagnostic) => diagnostic.kind !== "skipped")
+    .map((diagnostic) => `${diagnostic.kind}\u0000${diagnostic.path}\u0000${diagnostic.message}`)
+    .join("\u0001");
+}
+
 function ExplorerView({ catalog, selection, onSelect, onCollapse, open = false, collapsed = false }: ExplorerProps) {
+  const [dismissedDiagnosticKey, setDismissedDiagnosticKey] = useState<string>();
+  const visibleDiagnostics = catalog?.diagnostics.filter((diagnostic) => diagnostic.kind !== "skipped") ?? [];
+  const currentDiagnosticKey = catalog ? diagnosticKey(catalog) : "";
+  const diagnosticsDismissed = dismissedDiagnosticKey === currentDiagnosticKey;
   const collapseButton = onCollapse ? (
     <button
       type="button"
@@ -73,10 +84,18 @@ function ExplorerView({ catalog, selection, onSelect, onCollapse, open = false, 
         <span className="catalog-revision absolute right-[18px] bottom-[17px] font-mono text-[9px] text-secondary">catalog r{catalog.revision}</span>
         {collapseButton}
       </header>
-      {catalog.diagnostics.length > 0 && (
-        <details className="diagnostics mx-3 mb-3 rounded-lg border border-[#ead1a2] bg-[#fff8eb] p-[9px] text-[10px] [&>summary]:cursor-pointer [&>summary]:text-amber [&>div]:mt-[9px] [&>div]:border-t [&>div]:border-[#ead1a2] [&>div]:pt-2 [&_strong]:block [&_span]:block [&_span]:overflow-hidden [&_span]:text-ellipsis [&_span]:font-mono [&_span]:text-[8px] [&_span]:text-[#8b7655] [&_p]:mt-1 [&_p]:mb-0 [&_p]:text-[#735b37]" open>
-          <summary>{catalog.diagnostics.length} reload issue{catalog.diagnostics.length === 1 ? "" : "s"}</summary>
-          {catalog.diagnostics.map((diagnostic) => (
+      {visibleDiagnostics.length > 0 && !diagnosticsDismissed && (
+        <details className="diagnostics relative mx-3 mb-3 rounded-lg border border-[#ead1a2] bg-[#fff8eb] p-[9px] text-[10px] [&>summary]:cursor-pointer [&>summary]:pr-6 [&>summary]:text-amber [&>div]:mt-[9px] [&>div]:border-t [&>div]:border-[#ead1a2] [&>div]:pt-2 [&_strong]:block [&_span]:block [&_span]:overflow-hidden [&_span]:text-ellipsis [&_span]:font-mono [&_span]:text-[8px] [&_span]:text-[#8b7655] [&_p]:mt-1 [&_p]:mb-0 [&_p]:text-[#735b37]" open>
+          <summary>{visibleDiagnostics.length} reload issue{visibleDiagnostics.length === 1 ? "" : "s"}</summary>
+          <button
+            type="button"
+            className="absolute top-1.5 right-1.5 grid size-5 cursor-pointer place-items-center rounded text-amber hover:bg-[#f7e8c8] focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-amber"
+            aria-label="Dismiss reload issues"
+            onClick={() => setDismissedDiagnosticKey(currentDiagnosticKey)}
+          >
+            <X aria-hidden="true" className="size-3" strokeWidth={2} />
+          </button>
+          {visibleDiagnostics.map((diagnostic) => (
             <div key={`${diagnostic.path}-${diagnostic.kind}`}>
               <strong>{diagnostic.kind.replaceAll("_", " ")}</strong>
               <span>{diagnostic.path}</span>
