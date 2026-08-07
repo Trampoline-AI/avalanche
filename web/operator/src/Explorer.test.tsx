@@ -65,4 +65,44 @@ describe("Explorer", () => {
 
     expect(screen.getByText("No workflows scanned")).toBeInTheDocument();
   });
+
+  it("hides skipped diagnostics and dismisses the current reload notice", () => {
+    const onSelect = vi.fn();
+    const { rerender } = render(
+      <Explorer
+        catalog={CatalogSnapshotMsg.create({
+          revision: "5",
+          workflows: [orders],
+          diagnostics: [
+            {
+              kind: "skipped",
+              path: "helper.py",
+              message: "No workflows discovered in this file.",
+            },
+            { kind: "import_error", path: "flows.py", message: "SyntaxError: invalid syntax" },
+          ],
+        })}
+        onSelect={onSelect}
+      />,
+    );
+
+    expect(screen.getByText("1 reload issue")).toBeInTheDocument();
+    expect(screen.queryByText("No workflows discovered in this file.")).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: "Dismiss reload issues" }));
+    expect(screen.queryByText("1 reload issue")).not.toBeInTheDocument();
+
+    rerender(
+      <Explorer
+        catalog={CatalogSnapshotMsg.create({
+          revision: "5",
+          workflows: [orders],
+          diagnostics: [{ kind: "build_error", path: "flows.py", message: "ValueError: invalid flow" }],
+        })}
+        onSelect={onSelect}
+      />,
+    );
+    expect(screen.getByText("1 reload issue")).toBeInTheDocument();
+    expect(screen.getByText("build error")).toBeInTheDocument();
+  });
 });
