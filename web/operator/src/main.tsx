@@ -8,9 +8,14 @@ import "./style.css";
 
 const root = document.getElementById("root");
 if (!root) throw new Error("Operator UI root element is missing");
+const operatorPort = document.querySelector<HTMLMetaElement>(
+  "meta[data-avalanche-operator-port]",
+);
+if (operatorPort === null) throw new Error("Operator port metadata is missing");
+
 
 createRoot(root).render(
   <StrictMode>
-    <App api={new GrpcWebOperatorApi()} />
+    <App api={new GrpcWebOperatorApi()} operatorPort={operatorPort.content} />
   </StrictMode>,
 );

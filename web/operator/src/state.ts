@@ -431,6 +431,7 @@ export function useOperatorProjection(api: OperatorApi) {
         };
 
         try {
+          console.info("Connecting to Avalanche operator");
           dispatch({ type: "connection", connection: "connecting" });
           const baseline = await api.loadBaseline(cycle.signal);
           if (cycle.signal.aborted || lifecycle.signal.aborted) continue;
@@ -440,6 +441,7 @@ export function useOperatorProjection(api: OperatorApi) {
             sequence: baseline.asOfSequence,
           };
           dispatch({ type: "baseline", baseline });
+          console.info("Connected to Avalanche operator");
           retryMilliseconds = 250;
 
           let expectedSequence = baseline.asOfSequence;
@@ -464,6 +466,7 @@ export function useOperatorProjection(api: OperatorApi) {
           }
           clearPending();
           if (!lifecycle.signal.aborted) {
+            console.warn("Avalanche operator update stream ended; reconnecting");
             dispatch({ type: "connection", connection: "reconnecting" });
           }
         } catch (error) {
@@ -475,6 +478,10 @@ export function useOperatorProjection(api: OperatorApi) {
               error: error instanceof Error ? error.message : "Operator connection failed",
             });
             retryAfterCycle = retryMilliseconds;
+            console.warn(
+              `Unable to connect to Avalanche operator; retrying in ${retryAfterCycle} ms.`,
+              error,
+            );
             retryMilliseconds = Math.min(retryMilliseconds * 2, 4000);
           }
         } finally {

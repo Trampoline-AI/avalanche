@@ -291,10 +291,9 @@ def _run_web(args: argparse.Namespace) -> int:
                     f"Could not open a browser automatically; open {server.endpoint} manually.",
                     file=sys.stderr,
                 )
-        try:
-            server.wait()
-        except KeyboardInterrupt:
-            return 0
+        server.wait()
+    except KeyboardInterrupt:
+        return 0
     finally:
         server.close()
     return 0

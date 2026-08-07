@@ -492,6 +492,29 @@ describe("projectionReducer", () => {
 });
 
 describe("useOperatorProjection", () => {
+  it("logs failed connection retries and successful reconnection", async () => {
+    const failure = new Error("connection refused");
+    const loadBaseline = vi
+      .fn<(signal?: AbortSignal) => Promise<StructuralBaseline>>()
+      .mockRejectedValueOnce(failure)
+      .mockResolvedValue(baseline);
+    const api = createApi({ loadBaseline });
+    const info = vi.spyOn(console, "info").mockImplementation(() => undefined);
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    const { result, unmount } = renderHook(() => useOperatorProjection(api));
+
+    await waitFor(() => expect(result.current.state.connection).toBe("live"));
+
+    expect(info).toHaveBeenNthCalledWith(1, "Connecting to Avalanche operator");
+    expect(warn).toHaveBeenCalledWith(
+      "Unable to connect to Avalanche operator; retrying in 250 ms.",
+      failure,
+    );
+    expect(info).toHaveBeenLastCalledWith("Connected to Avalanche operator");
+
+    unmount();
+  });
+
   it("cancels a superseded selected snapshot and ignores its stale result", async () => {
     const first = deferred<RunSnapshotMsg>();
     const second = deferred<RunSnapshotMsg>();

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import logging
 import mimetypes
+import re
 import socket
 import struct
 import threading
@@ -29,6 +30,9 @@ _GRPC_WEB_CONTENT_TYPE = "application/grpc-web+proto"
 _GRPC_SERVICE_PATH = "/avalanche.operator.OperatorService/"
 _FRAME_HEADER_BYTES = 5
 _MAX_REQUEST_BYTES = 4 * 1024 * 1024
+_OPERATOR_PORT_META = re.compile(
+    rb'(<meta\b[^>]*\bcontent=")[^"]+("(?=[^>]*\bdata-avalanche-operator-port\b))'
+)
 
 
 @dataclass(frozen=True)
@@ -66,6 +70,7 @@ class _BrowserHTTPServer(ThreadingHTTPServer):
     ) -> None:
         self.channel = grpc.insecure_channel(operator_address)
         self.asset_root = asset_root
+        self.operator_port = _operator_port(operator_address)
         self.stopping = threading.Event()
         super().__init__(server_address, _BrowserRequestHandler)
 
@@ -215,6 +220,12 @@ class _BrowserRequestHandler(BaseHTTPRequestHandler):
             self.send_error(HTTPStatus.NOT_FOUND)
             return
         data = candidate.read_bytes()
+        if candidate.name == "index.html":
+            data = _OPERATOR_PORT_META.sub(
+                rb"\g<1>" + str(self.server.operator_port).encode() + rb"\g<2>",
+                data,
+                count=1,
+            )
         content_type = mimetypes.guess_type(candidate.name)[0] or "application/octet-stream"
         self.send_response(HTTPStatus.OK)
         self.send_header("Content-Type", content_type)
@@ -252,7 +263,8 @@ class BrowserServer:
         return f"http://{host}:{self.port}"
 
     def wait(self) -> None:
-        self._thread.join()
+        while self._thread.is_alive():
+            self._thread.join(timeout=0.1)
 
     def close(self) -> None:
         if self._server.stopping.is_set():
@@ -332,6 +344,16 @@ def _is_loopback_host(host: str) -> bool:
         return socket.gethostbyname(normalized).startswith("127.") or normalized == "::1"
     except OSError:
         return False
+
+
+def _operator_port(address: str) -> int:
+    try:
+        port = urlsplit(f"//{address}").port
+    except ValueError as exc:
+        raise ValueError("Operator address must use HOST:PORT") from exc
+    if port is None:
+        raise ValueError("Operator address must use HOST:PORT")
+    return port
 
 
 __all__ = [
