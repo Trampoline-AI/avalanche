@@ -21,9 +21,7 @@ CANONICAL_EXAMPLES = [
 def test_canonical_example_executes(example_path: Path, tmp_path: Path):
     env = os.environ.copy()
     env["AVALANCHE_EXAMPLE_ROOT"] = str(tmp_path / example_path.stem)
-    env["PYTHONPATH"] = os.pathsep.join(
-        [str(REPO_ROOT / "src"), env.get("PYTHONPATH", "")]
-    )
+    env["PYTHONPATH"] = os.pathsep.join([str(REPO_ROOT / "src"), env.get("PYTHONPATH", "")])
 
     result = subprocess.run(
         [sys.executable, str(REPO_ROOT / example_path)],

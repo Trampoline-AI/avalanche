@@ -123,9 +123,9 @@ class TestLogger:
             # This assertion runs under LocalExecutor; if it fails, workflow raises
             from avalanche.runtime.providers.logger import LoggerInstance
 
-            assert isinstance(logger, LoggerInstance), (
-                f"Expected LoggerInstance, got {type(logger)}"
-            )
+            assert isinstance(
+                logger, LoggerInstance
+            ), f"Expected LoggerInstance, got {type(logger)}"
             # Return type info to verify in main process
             return {"data": data, "logger_type": type(logger).__name__}
 
@@ -164,10 +164,7 @@ class TestLogger:
         assert context["run_id"] is not None
         assert len(context["run_id"]) == 26
         # ULID characters are 0-9 and A-Z (Crockford Base32)
-        assert all(
-            c in "0123456789ABCDEFGHJKMNPQRSTVWXYZ"
-            for c in context["run_id"]
-        )
+        assert all(c in "0123456789ABCDEFGHJKMNPQRSTVWXYZ" for c in context["run_id"])
 
         # Verify worker_id is "local" for LocalExecutor
         assert context["worker_id"] == "local"

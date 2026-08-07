@@ -15,8 +15,8 @@ ICE_STEEL = "#90c8e0"
 ICE_TEAL = "#60dce4"
 ICE_BRIGHT = "#b8f4ff"
 ICE_FROST = "#f0faff"
-ICE_WARN = "#f8d078"      # warm amber (stands out against cool palette)
-ICE_FAIL = "#f87898"      # bright rose-red
+ICE_WARN = "#f8d078"  # warm amber (stands out against cool palette)
+ICE_FAIL = "#f87898"  # bright rose-red
 
 # Colors for skip-edge connectors (distinct, muted pastels)
 SKIP_EDGE_COLORS = ["#e8b8e0", "#b8e0b8", "#e0d898", "#98d8e0", "#e0b8b8", "#b8b8f0"]

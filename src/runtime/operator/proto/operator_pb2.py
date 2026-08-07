@@ -4,159 +4,156 @@
 # source: operator.proto
 # Protobuf Python Version: 6.31.1
 """Generated protocol buffer code."""
+
 from google.protobuf import descriptor as _descriptor
 from google.protobuf import descriptor_pool as _descriptor_pool
 from google.protobuf import runtime_version as _runtime_version
 from google.protobuf import symbol_database as _symbol_database
 from google.protobuf.internal import builder as _builder
+
 _runtime_version.ValidateProtobufRuntimeVersion(
-    _runtime_version.Domain.PUBLIC,
-    6,
-    31,
-    1,
-    '',
-    'operator.proto'
+    _runtime_version.Domain.PUBLIC, 6, 31, 1, "", "operator.proto"
 )
 # @@protoc_insertion_point(imports)
 
 _sym_db = _symbol_database.Default()
 
 
-
-
-DESCRIPTOR = _descriptor_pool.Default().AddSerializedFile(b'\n\x0eoperator.proto\x12\x12\x61valanche.operator\"\x07\n\x05\x45mpty\"\xa5\x01\n\x0fStartRunRequest\x12\x12\n\ninput_json\x18\x02 \x01(\t\x12\x14\n\x0c\x63ontext_json\x18\x03 \x01(\t\x12\x37\n\x0binput_files\x18\x04 \x03(\x0b\x32\".avalanche.operator.FileAttachment\x12\x0e\n\x06run_id\x18\x06 \x01(\t\x12\x19\n\x11workflow_selector\x18\x07 \x01(\tJ\x04\x08\x01\x10\x02\"i\n\x0e\x46ileAttachment\x12\x12\n\nfield_name\x18\x01 \x01(\t\x12\x0c\n\x04name\x18\x02 \x01(\t\x12\x0f\n\x07\x63ontent\x18\x03 \x01(\x0c\x12\x14\n\x0c\x63ontent_type\x18\x04 \x01(\t\x12\x0e\n\x06sha256\x18\x05 \x01(\t\"\"\n\x10StartRunResponse\x12\x0e\n\x06run_id\x18\x01 \x01(\t\"\"\n\x10\x43\x61ncelRunRequest\x12\x0e\n\x06run_id\x18\x01 \x01(\t\"\x1f\n\rGetRunRequest\x12\x0e\n\x06run_id\x18\x01 \x01(\t\"[\n\x17ListRunSummariesRequest\x12\x19\n\x11workflow_selector\x18\x01 \x01(\t\x12\x11\n\tpage_size\x18\x02 \x01(\r\x12\x12\n\npage_token\x18\x03 \x01(\t\"]\n\x15GetRunSnapshotRequest\x12\x0e\n\x06run_id\x18\x01 \x01(\t\x12\x1c\n\x14operator_instance_id\x18\x02 \x01(\t\x12\x16\n\x0e\x61s_of_sequence\x18\x03 \x01(\x04\"K\n\x1bGetLatestRunSnapshotRequest\x12\x0e\n\x06run_id\x18\x01 \x01(\t\x12\x1c\n\x14operator_instance_id\x18\x02 \x01(\t\"\xb2\x01\n\x0fListLogsRequest\x12\x12\n\npage_token\x18\x01 \x01(\t\x12\x16\n\x0e\x61\x66ter_sequence\x18\x02 \x01(\x04\x12\x11\n\tpage_size\x18\x03 \x01(\r\x12\x17\n\x0f\x62\x65\x66ore_sequence\x18\x04 \x01(\x04\x12\x0f\n\x07node_id\x18\x05 \x01(\t\x12\x36\n\x05order\x18\x06 \x01(\x0e\x32\'.avalanche.operator.DescriptorPageOrder\"\xb4\x01\n\x16ListAgentEventsRequest\x12\x12\n\npage_token\x18\x01 \x01(\t\x12\x1c\n\x14\x61\x66ter_event_sequence\x18\x02 \x01(\x04\x12\x11\n\tpage_size\x18\x03 \x01(\r\x12\x1d\n\x15\x62\x65\x66ore_event_sequence\x18\x04 \x01(\x04\x12\x36\n\x05order\x18\x05 \x01(\x0e\x32\'.avalanche.operator.DescriptorPageOrder\"c\n\x10ReadTraceRequest\x12\x0e\n\x06run_id\x18\x01 \x01(\t\x12\x0f\n\x07node_id\x18\x02 \x01(\t\x12\x10\n\x08revision\x18\x03 \x01(\x04\x12\x1c\n\x14operator_instance_id\x18\x04 \x01(\t\"\'\n\x11ReadDetailRequest\x12\x12\n\nbody_token\x18\x01 \x01(\t\"T\n\x1cStreamOperatorUpdatesRequest\x12\x1c\n\x14operator_instance_id\x18\x01 \x01(\t\x12\x16\n\x0e\x61\x66ter_sequence\x18\x02 \x01(\x04\"\x1d\n\tNodeEdges\x12\x10\n\x08\x63hildren\x18\x01 \x03(\t\"\x83\x06\n\x13WorkflowTopologyMsg\x12\x10\n\x08node_ids\x18\x01 \x03(\t\x12\x41\n\x05graph\x18\x02 \x03(\x0b\x32\x32.avalanche.operator.WorkflowTopologyMsg.GraphEntry\x12J\n\nnode_types\x18\x03 \x03(\x0b\x32\x36.avalanche.operator.WorkflowTopologyMsg.NodeTypesEntry\x12P\n\rdisplay_names\x18\x04 \x03(\x0b\x32\x39.avalanche.operator.WorkflowTopologyMsg.DisplayNamesEntry\x12\x64\n\x18\x61gent_field_schemas_json\x18\x05 \x03(\x0b\x32\x42.avalanche.operator.WorkflowTopologyMsg.AgentFieldSchemasJsonEntry\x12\x63\n\x17\x61gent_instruction_lines\x18\x06 \x03(\x0b\x32\x42.avalanche.operator.WorkflowTopologyMsg.AgentInstructionLinesEntry\x1aK\n\nGraphEntry\x12\x0b\n\x03key\x18\x01 \x01(\t\x12,\n\x05value\x18\x02 \x01(\x0b\x32\x1d.avalanche.operator.NodeEdges:\x02\x38\x01\x1a\x30\n\x0eNodeTypesEntry\x12\x0b\n\x03key\x18\x01 \x01(\t\x12\r\n\x05value\x18\x02 \x01(\t:\x02\x38\x01\x1a\x33\n\x11\x44isplayNamesEntry\x12\x0b\n\x03key\x18\x01 \x01(\t\x12\r\n\x05value\x18\x02 \x01(\t:\x02\x38\x01\x1a<\n\x1a\x41gentFieldSchemasJsonEntry\x12\x0b\n\x03key\x18\x01 \x01(\t\x12\r\n\x05value\x18\x02 \x01(\t:\x02\x38\x01\x1a<\n\x1a\x41gentInstructionLinesEntry\x12\x0b\n\x03key\x18\x01 \x01(\t\x12\r\n\x05value\x18\x02 \x01(\t:\x02\x38\x01\"\xcd\x06\n\x0b\x46lowInfoMsg\x12\x0c\n\x04name\x18\x01 \x01(\t\x12\x11\n\tfile_path\x18\x02 \x01(\t\x12\x10\n\x08node_ids\x18\x03 \x03(\t\x12\x39\n\x05graph\x18\x04 \x03(\x0b\x32*.avalanche.operator.FlowInfoMsg.GraphEntry\x12\x42\n\nnode_types\x18\x05 \x03(\x0b\x32..avalanche.operator.FlowInfoMsg.NodeTypesEntry\x12H\n\rdisplay_names\x18\x06 \x03(\x0b\x32\x31.avalanche.operator.FlowInfoMsg.DisplayNamesEntry\x12\x0c\n\x04\x63ron\x18\x07 \x01(\t\x12\x13\n\x0bnext_run_at\x18\x08 \x01(\x01\x12\x13\n\x0blast_run_at\x18\t \x01(\x01\x12\x13\n\x0bworkflow_id\x18\n \x01(\t\x12\x14\n\x0c\x64isplay_name\x18\x0b \x01(\t\x12\x12\n\nroot_alias\x18\x0c \x01(\t\x12\x15\n\rrelative_file\x18\r \x01(\t\x12\x16\n\x0e\x62uilder_symbol\x18\x0e \x01(\t\x12\x16\n\x0e\x61gent_node_ids\x18\x0f \x03(\t\x12S\n\x13\x61gent_metadata_json\x18\x10 \x03(\x0b\x32\x36.avalanche.operator.FlowInfoMsg.AgentMetadataJsonEntry\x12\x14\n\x0cwebhook_path\x18\x11 \x01(\t\x12\x13\n\x0bwebhook_url\x18\x12 \x01(\t\x12\x16\n\x0ewebhook_active\x18\x13 \x01(\x08\x1aK\n\nGraphEntry\x12\x0b\n\x03key\x18\x01 \x01(\t\x12,\n\x05value\x18\x02 \x01(\x0b\x32\x1d.avalanche.operator.NodeEdges:\x02\x38\x01\x1a\x30\n\x0eNodeTypesEntry\x12\x0b\n\x03key\x18\x01 \x01(\t\x12\r\n\x05value\x18\x02 \x01(\t:\x02\x38\x01\x1a\x33\n\x11\x44isplayNamesEntry\x12\x0b\n\x03key\x18\x01 \x01(\t\x12\r\n\x05value\x18\x02 \x01(\t:\x02\x38\x01\x1a\x38\n\x16\x41gentMetadataJsonEntry\x12\x0b\n\x03key\x18\x01 \x01(\t\x12\r\n\x05value\x18\x02 \x01(\t:\x02\x38\x01\"E\n\x16\x44iscoveryDiagnosticMsg\x12\x0c\n\x04path\x18\x01 \x01(\t\x12\x0c\n\x04kind\x18\x02 \x01(\t\x12\x0f\n\x07message\x18\x03 \x01(\t\"A\n\rScanTargetMsg\x12\r\n\x05\x61lias\x18\x01 \x01(\t\x12\x13\n\x0btarget_path\x18\x02 \x01(\t\x12\x0c\n\x04kind\x18\x03 \x01(\t\"\x8a\x02\n\x12\x43\x61talogSnapshotMsg\x12\x1c\n\x14operator_instance_id\x18\x01 \x01(\t\x12\x16\n\x0e\x61s_of_sequence\x18\x02 \x01(\x04\x12\x10\n\x08revision\x18\x03 \x01(\x04\x12\x32\n\tworkflows\x18\x04 \x03(\x0b\x32\x1f.avalanche.operator.FlowInfoMsg\x12\x37\n\x0cscan_targets\x18\x05 \x03(\x0b\x32!.avalanche.operator.ScanTargetMsg\x12?\n\x0b\x64iagnostics\x18\x06 \x03(\x0b\x32*.avalanche.operator.DiscoveryDiagnosticMsg\"\x92\x01\n\x14ResultFileAttachment\x12\x15\n\rattachment_id\x18\x01 \x01(\t\x12\x11\n\x04name\x18\x02 \x01(\tH\x00\x88\x01\x01\x12\x0f\n\x07\x63ontent\x18\x03 \x01(\x0c\x12\x17\n\nmedia_type\x18\x04 \x01(\tH\x01\x88\x01\x01\x12\x0e\n\x06sha256\x18\x05 \x01(\tB\x07\n\x05_nameB\r\n\x0b_media_type\"[\n\x0cRunResultMsg\x12\x12\n\nvalue_json\x18\x01 \x01(\t\x12\x37\n\x05\x66iles\x18\x02 \x03(\x0b\x32(.avalanche.operator.ResultFileAttachment\"\xf4\x01\n\rRunSummaryMsg\x12\x0e\n\x06run_id\x18\x01 \x01(\t\x12\x11\n\tflow_name\x18\x02 \x01(\t\x12\x0e\n\x06status\x18\x03 \x01(\t\x12\x12\n\nstarted_at\x18\x04 \x01(\x01\x12\x10\n\x08\x65nded_at\x18\x05 \x01(\x01\x12\x14\n\x0ctriggered_by\x18\x06 \x01(\t\x12\x13\n\x0bworkflow_id\x18\x07 \x01(\t\x12\x1d\n\x15workflow_display_name\x18\x08 \x01(\t\x12\x18\n\x10\x63reated_sequence\x18\t \x01(\x04\x12\x10\n\x08revision\x18\n \x01(\x04\x12\x14\n\x0ctriggered_at\x18\x0b \x01(\x01\"\xda\x01\n\x0eTraceHeaderMsg\x12\x0e\n\x06status\x18\x01 \x01(\t\x12\r\n\x05model\x18\x02 \x01(\t\x12\x16\n\tsub_model\x18\x03 \x01(\tH\x00\x88\x01\x01\x12\x12\n\niterations\x18\x04 \x01(\x04\x12\x16\n\x0emax_iterations\x18\x05 \x01(\x04\x12\x13\n\x0b\x64uration_ms\x18\x06 \x01(\x04\x12\x12\n\nusage_json\x18\x07 \x01(\t\x12\x1b\n\x0etelemetry_json\x18\x08 \x01(\tH\x01\x88\x01\x01\x42\x0c\n\n_sub_modelB\x11\n\x0f_telemetry_json\"\xd7\x01\n\x12TraceDescriptorMsg\x12\x0e\n\x06status\x18\x01 \x01(\t\x12\x10\n\x08revision\x18\x02 \x01(\x04\x12\x11\n\tavailable\x18\x03 \x01(\x08\x12\x10\n\x08\x63omplete\x18\x04 \x01(\x08\x12\x13\n\x0b\x65vent_count\x18\x05 \x01(\x04\x12\x12\n\nsize_bytes\x18\x06 \x01(\x04\x12\x1d\n\x15latest_event_sequence\x18\x07 \x01(\x04\x12\x32\n\x06header\x18\x08 \x01(\x0b\x32\".avalanche.operator.TraceHeaderMsg\"\xbc\x02\n\x0fNodeSnapshotMsg\x12\x0f\n\x07node_id\x18\x01 \x01(\t\x12\x0c\n\x04name\x18\x02 \x01(\t\x12\x11\n\tnode_type\x18\x03 \x01(\t\x12\x0e\n\x06status\x18\x04 \x01(\t\x12\x12\n\nstarted_at\x18\x05 \x01(\x01\x12\x10\n\x08\x65nded_at\x18\x06 \x01(\x01\x12\x35\n\x05trace\x18\x07 \x01(\x0b\x32&.avalanche.operator.TraceDescriptorMsg\x12\x10\n\x08revision\x18\x08 \x01(\x04\x12\x18\n\x10\x65vent_page_token\x18\t \x01(\t\x12\x12\n\x05\x65rror\x18\n \x01(\tH\x00\x88\x01\x01\x12$\n\x17running_elapsed_seconds\x18\x0b \x01(\x01H\x01\x88\x01\x01\x42\x08\n\x06_errorB\x1a\n\x18_running_elapsed_seconds\"\x9e\x02\n\x0eRunSnapshotMsg\x12\x1c\n\x14operator_instance_id\x18\x01 \x01(\t\x12\x16\n\x0e\x61s_of_sequence\x18\x02 \x01(\x04\x12\x32\n\x07summary\x18\x03 \x01(\x0b\x32!.avalanche.operator.RunSummaryMsg\x12\x32\n\x05nodes\x18\x04 \x03(\x0b\x32#.avalanche.operator.NodeSnapshotMsg\x12\x1b\n\x13latest_log_sequence\x18\x05 \x01(\x04\x12\x16\n\x0elog_page_token\x18\x06 \x01(\t\x12\x39\n\x08topology\x18\x07 \x01(\x0b\x32\'.avalanche.operator.WorkflowTopologyMsg\"\x90\x01\n\x0eRunSummaryPage\x12\x1c\n\x14operator_instance_id\x18\x01 \x01(\t\x12\x16\n\x0e\x61s_of_sequence\x18\x02 \x01(\x04\x12/\n\x04runs\x18\x03 \x03(\x0b\x32!.avalanche.operator.RunSummaryMsg\x12\x17\n\x0fnext_page_token\x18\x04 \x01(\t\"\x85\x01\n\x16LogRecordDescriptorMsg\x12\x10\n\x08sequence\x18\x01 \x01(\x04\x12\x11\n\ttimestamp\x18\x02 \x01(\x01\x12\r\n\x05level\x18\x03 \x01(\t\x12\x0f\n\x07node_id\x18\x04 \x01(\t\x12\x12\n\nsize_bytes\x18\x05 \x01(\x04\x12\x12\n\nbody_token\x18\x06 \x01(\t\"\x92\x01\n\x07LogPage\x12\x1c\n\x14operator_instance_id\x18\x01 \x01(\t\x12\x16\n\x0e\x61s_of_sequence\x18\x02 \x01(\x04\x12\x38\n\x04logs\x18\x03 \x03(\x0b\x32*.avalanche.operator.LogRecordDescriptorMsg\x12\x17\n\x0fnext_page_token\x18\x04 \x01(\t\"\x8e\x02\n\x17\x41gentEventDescriptorMsg\x12\x16\n\x0e\x65vent_sequence\x18\x01 \x01(\x04\x12\x12\n\nsize_bytes\x18\x02 \x01(\x04\x12\x12\n\nbody_token\x18\x03 \x01(\t\x12\x15\n\rinvocation_id\x18\x04 \x01(\t\x12\x12\n\nevent_kind\x18\x05 \x01(\t\x12\x16\n\titeration\x18\x06 \x01(\rH\x00\x88\x01\x01\x12\x18\n\x0b\x64uration_ms\x18\x07 \x01(\x04H\x01\x88\x01\x01\x12\r\n\x05\x65rror\x18\x08 \x01(\x08\x12\x12\n\ntool_count\x18\t \x01(\r\x12\x15\n\rpredict_count\x18\n \x01(\rB\x0c\n\n_iterationB\x0e\n\x0c_duration_ms\"\xbd\x01\n\x0e\x41gentEventPage\x12\x1c\n\x14operator_instance_id\x18\x01 \x01(\t\x12\x16\n\x0e\x61s_of_sequence\x18\x02 \x01(\x04\x12\x0e\n\x06run_id\x18\x03 \x01(\t\x12\x0f\n\x07node_id\x18\x04 \x01(\t\x12;\n\x06\x65vents\x18\x05 \x03(\x0b\x32+.avalanche.operator.AgentEventDescriptorMsg\x12\x17\n\x0fnext_page_token\x18\x06 \x01(\t\"N\n\nTraceChunk\x12\x10\n\x08revision\x18\x01 \x01(\x04\x12\x13\n\x0b\x63hunk_index\x18\x02 \x01(\x04\x12\x0c\n\x04\x64\x61ta\x18\x03 \x01(\x0c\x12\x0b\n\x03\x65of\x18\x04 \x01(\x08\"=\n\x0b\x44\x65tailChunk\x12\x13\n\x0b\x63hunk_index\x18\x01 \x01(\x04\x12\x0c\n\x04\x64\x61ta\x18\x02 \x01(\x0c\x12\x0b\n\x03\x65of\x18\x03 \x01(\x08\"\xaf\x01\n\nRunCreated\x12\x32\n\x07summary\x18\x01 \x01(\x0b\x32!.avalanche.operator.RunSummaryMsg\x12\x32\n\x05nodes\x18\x02 \x03(\x0b\x32#.avalanche.operator.NodeSnapshotMsg\x12\x39\n\x08topology\x18\x03 \x01(\x0b\x32\'.avalanche.operator.WorkflowTopologyMsg\"j\n\x10RunStatusChanged\x12\x0e\n\x06run_id\x18\x01 \x01(\t\x12\x0e\n\x06status\x18\x02 \x01(\t\x12\x12\n\nstarted_at\x18\x03 \x01(\x01\x12\x10\n\x08\x65nded_at\x18\x04 \x01(\x01\x12\x10\n\x08revision\x18\x05 \x01(\x04\"\xdc\x01\n\x11NodeStatusChanged\x12\x0e\n\x06run_id\x18\x01 \x01(\t\x12\x0f\n\x07node_id\x18\x02 \x01(\t\x12\x0e\n\x06status\x18\x03 \x01(\t\x12\x12\n\nstarted_at\x18\x04 \x01(\x01\x12\x10\n\x08\x65nded_at\x18\x05 \x01(\x01\x12\x10\n\x08revision\x18\x06 \x01(\x04\x12\x12\n\x05\x65rror\x18\x07 \x01(\tH\x00\x88\x01\x01\x12$\n\x17running_elapsed_seconds\x18\x08 \x01(\x01H\x01\x88\x01\x01\x42\x08\n\x06_errorB\x1a\n\x18_running_elapsed_seconds\"V\n\x0bLogAppended\x12\x0e\n\x06run_id\x18\x01 \x01(\t\x12\x37\n\x03log\x18\x02 \x01(\x0b\x32*.avalanche.operator.LogRecordDescriptorMsg\"q\n\x12\x41gentEventAppended\x12\x0e\n\x06run_id\x18\x01 \x01(\t\x12\x0f\n\x07node_id\x18\x02 \x01(\t\x12:\n\x05\x65vent\x18\x03 \x01(\x0b\x32+.avalanche.operator.AgentEventDescriptorMsg\"h\n\x0eTraceFinalized\x12\x0e\n\x06run_id\x18\x01 \x01(\t\x12\x0f\n\x07node_id\x18\x02 \x01(\t\x12\x35\n\x05trace\x18\x03 \x01(\x0b\x32&.avalanche.operator.TraceDescriptorMsg\"J\n\x0f\x43\x61talogReplaced\x12\x37\n\x07\x63\x61talog\x18\x01 \x01(\x0b\x32&.avalanche.operator.CatalogSnapshotMsg\"\xee\x03\n\x0eOperatorUpdate\x12\x10\n\x08sequence\x18\x01 \x01(\x04\x12\x35\n\x0brun_created\x18\x02 \x01(\x0b\x32\x1e.avalanche.operator.RunCreatedH\x00\x12\x42\n\x12run_status_changed\x18\x03 \x01(\x0b\x32$.avalanche.operator.RunStatusChangedH\x00\x12\x44\n\x13node_status_changed\x18\x04 \x01(\x0b\x32%.avalanche.operator.NodeStatusChangedH\x00\x12\x37\n\x0clog_appended\x18\x05 \x01(\x0b\x32\x1f.avalanche.operator.LogAppendedH\x00\x12\x46\n\x14\x61gent_event_appended\x18\x06 \x01(\x0b\x32&.avalanche.operator.AgentEventAppendedH\x00\x12=\n\x0ftrace_finalized\x18\x07 \x01(\x0b\x32\".avalanche.operator.TraceFinalizedH\x00\x12?\n\x10\x63\x61talog_replaced\x18\x08 \x01(\x0b\x32#.avalanche.operator.CatalogReplacedH\x00\x42\x08\n\x06\x63hange\"?\n\rResetRequired\x12\x15\n\rhistory_floor\x18\x01 \x01(\x04\x12\x17\n\x0flatest_sequence\x18\x02 \x01(\x04\"\xb4\x01\n\x16OperatorUpdateEnvelope\x12\x1c\n\x14operator_instance_id\x18\x01 \x01(\t\x12\x34\n\x06update\x18\x02 \x01(\x0b\x32\".avalanche.operator.OperatorUpdateH\x00\x12;\n\x0ereset_required\x18\x03 \x01(\x0b\x32!.avalanche.operator.ResetRequiredH\x00\x42\t\n\x07payload*`\n\x13\x44\x65scriptorPageOrder\x12!\n\x1d\x44\x45SCRIPTOR_PAGE_ORDER_FORWARD\x10\x00\x12&\n\"DESCRIPTOR_PAGE_ORDER_NEWEST_FIRST\x10\x01\x32\xe6\x08\n\x0fOperatorService\x12O\n\nGetCatalog\x12\x19.avalanche.operator.Empty\x1a&.avalanche.operator.CatalogSnapshotMsg\x12U\n\x08StartRun\x12#.avalanche.operator.StartRunRequest\x1a$.avalanche.operator.StartRunResponse\x12L\n\tCancelRun\x12$.avalanche.operator.CancelRunRequest\x1a\x19.avalanche.operator.Empty\x12S\n\x0cGetRunResult\x12!.avalanche.operator.GetRunRequest\x1a .avalanche.operator.RunResultMsg\x12\x63\n\x10ListRunSummaries\x12+.avalanche.operator.ListRunSummariesRequest\x1a\".avalanche.operator.RunSummaryPage\x12_\n\x0eGetRunSnapshot\x12).avalanche.operator.GetRunSnapshotRequest\x1a\".avalanche.operator.RunSnapshotMsg\x12k\n\x14GetLatestRunSnapshot\x12/.avalanche.operator.GetLatestRunSnapshotRequest\x1a\".avalanche.operator.RunSnapshotMsg\x12L\n\x08ListLogs\x12#.avalanche.operator.ListLogsRequest\x1a\x1b.avalanche.operator.LogPage\x12\x61\n\x0fListAgentEvents\x12*.avalanche.operator.ListAgentEventsRequest\x1a\".avalanche.operator.AgentEventPage\x12S\n\tReadTrace\x12$.avalanche.operator.ReadTraceRequest\x1a\x1e.avalanche.operator.TraceChunk0\x01\x12V\n\nReadDetail\x12%.avalanche.operator.ReadDetailRequest\x1a\x1f.avalanche.operator.DetailChunk0\x01\x12w\n\x15StreamOperatorUpdates\x12\x30.avalanche.operator.StreamOperatorUpdatesRequest\x1a*.avalanche.operator.OperatorUpdateEnvelope0\x01\x62\x06proto3')
+DESCRIPTOR = _descriptor_pool.Default().AddSerializedFile(
+    b'\n\x0eoperator.proto\x12\x12\x61valanche.operator"\x07\n\x05\x45mpty"\xa5\x01\n\x0fStartRunRequest\x12\x12\n\ninput_json\x18\x02 \x01(\t\x12\x14\n\x0c\x63ontext_json\x18\x03 \x01(\t\x12\x37\n\x0binput_files\x18\x04 \x03(\x0b\x32".avalanche.operator.FileAttachment\x12\x0e\n\x06run_id\x18\x06 \x01(\t\x12\x19\n\x11workflow_selector\x18\x07 \x01(\tJ\x04\x08\x01\x10\x02"i\n\x0e\x46ileAttachment\x12\x12\n\nfield_name\x18\x01 \x01(\t\x12\x0c\n\x04name\x18\x02 \x01(\t\x12\x0f\n\x07\x63ontent\x18\x03 \x01(\x0c\x12\x14\n\x0c\x63ontent_type\x18\x04 \x01(\t\x12\x0e\n\x06sha256\x18\x05 \x01(\t""\n\x10StartRunResponse\x12\x0e\n\x06run_id\x18\x01 \x01(\t""\n\x10\x43\x61ncelRunRequest\x12\x0e\n\x06run_id\x18\x01 \x01(\t"\x1f\n\rGetRunRequest\x12\x0e\n\x06run_id\x18\x01 \x01(\t"[\n\x17ListRunSummariesRequest\x12\x19\n\x11workflow_selector\x18\x01 \x01(\t\x12\x11\n\tpage_size\x18\x02 \x01(\r\x12\x12\n\npage_token\x18\x03 \x01(\t"]\n\x15GetRunSnapshotRequest\x12\x0e\n\x06run_id\x18\x01 \x01(\t\x12\x1c\n\x14operator_instance_id\x18\x02 \x01(\t\x12\x16\n\x0e\x61s_of_sequence\x18\x03 \x01(\x04"K\n\x1bGetLatestRunSnapshotRequest\x12\x0e\n\x06run_id\x18\x01 \x01(\t\x12\x1c\n\x14operator_instance_id\x18\x02 \x01(\t"\xb2\x01\n\x0fListLogsRequest\x12\x12\n\npage_token\x18\x01 \x01(\t\x12\x16\n\x0e\x61\x66ter_sequence\x18\x02 \x01(\x04\x12\x11\n\tpage_size\x18\x03 \x01(\r\x12\x17\n\x0f\x62\x65\x66ore_sequence\x18\x04 \x01(\x04\x12\x0f\n\x07node_id\x18\x05 \x01(\t\x12\x36\n\x05order\x18\x06 \x01(\x0e\x32\'.avalanche.operator.DescriptorPageOrder"\xb4\x01\n\x16ListAgentEventsRequest\x12\x12\n\npage_token\x18\x01 \x01(\t\x12\x1c\n\x14\x61\x66ter_event_sequence\x18\x02 \x01(\x04\x12\x11\n\tpage_size\x18\x03 \x01(\r\x12\x1d\n\x15\x62\x65\x66ore_event_sequence\x18\x04 \x01(\x04\x12\x36\n\x05order\x18\x05 \x01(\x0e\x32\'.avalanche.operator.DescriptorPageOrder"c\n\x10ReadTraceRequest\x12\x0e\n\x06run_id\x18\x01 \x01(\t\x12\x0f\n\x07node_id\x18\x02 \x01(\t\x12\x10\n\x08revision\x18\x03 \x01(\x04\x12\x1c\n\x14operator_instance_id\x18\x04 \x01(\t"\'\n\x11ReadDetailRequest\x12\x12\n\nbody_token\x18\x01 \x01(\t"T\n\x1cStreamOperatorUpdatesRequest\x12\x1c\n\x14operator_instance_id\x18\x01 \x01(\t\x12\x16\n\x0e\x61\x66ter_sequence\x18\x02 \x01(\x04"\x1d\n\tNodeEdges\x12\x10\n\x08\x63hildren\x18\x01 \x03(\t"\x83\x06\n\x13WorkflowTopologyMsg\x12\x10\n\x08node_ids\x18\x01 \x03(\t\x12\x41\n\x05graph\x18\x02 \x03(\x0b\x32\x32.avalanche.operator.WorkflowTopologyMsg.GraphEntry\x12J\n\nnode_types\x18\x03 \x03(\x0b\x32\x36.avalanche.operator.WorkflowTopologyMsg.NodeTypesEntry\x12P\n\rdisplay_names\x18\x04 \x03(\x0b\x32\x39.avalanche.operator.WorkflowTopologyMsg.DisplayNamesEntry\x12\x64\n\x18\x61gent_field_schemas_json\x18\x05 \x03(\x0b\x32\x42.avalanche.operator.WorkflowTopologyMsg.AgentFieldSchemasJsonEntry\x12\x63\n\x17\x61gent_instruction_lines\x18\x06 \x03(\x0b\x32\x42.avalanche.operator.WorkflowTopologyMsg.AgentInstructionLinesEntry\x1aK\n\nGraphEntry\x12\x0b\n\x03key\x18\x01 \x01(\t\x12,\n\x05value\x18\x02 \x01(\x0b\x32\x1d.avalanche.operator.NodeEdges:\x02\x38\x01\x1a\x30\n\x0eNodeTypesEntry\x12\x0b\n\x03key\x18\x01 \x01(\t\x12\r\n\x05value\x18\x02 \x01(\t:\x02\x38\x01\x1a\x33\n\x11\x44isplayNamesEntry\x12\x0b\n\x03key\x18\x01 \x01(\t\x12\r\n\x05value\x18\x02 \x01(\t:\x02\x38\x01\x1a<\n\x1a\x41gentFieldSchemasJsonEntry\x12\x0b\n\x03key\x18\x01 \x01(\t\x12\r\n\x05value\x18\x02 \x01(\t:\x02\x38\x01\x1a<\n\x1a\x41gentInstructionLinesEntry\x12\x0b\n\x03key\x18\x01 \x01(\t\x12\r\n\x05value\x18\x02 \x01(\t:\x02\x38\x01"\xcd\x06\n\x0b\x46lowInfoMsg\x12\x0c\n\x04name\x18\x01 \x01(\t\x12\x11\n\tfile_path\x18\x02 \x01(\t\x12\x10\n\x08node_ids\x18\x03 \x03(\t\x12\x39\n\x05graph\x18\x04 \x03(\x0b\x32*.avalanche.operator.FlowInfoMsg.GraphEntry\x12\x42\n\nnode_types\x18\x05 \x03(\x0b\x32..avalanche.operator.FlowInfoMsg.NodeTypesEntry\x12H\n\rdisplay_names\x18\x06 \x03(\x0b\x32\x31.avalanche.operator.FlowInfoMsg.DisplayNamesEntry\x12\x0c\n\x04\x63ron\x18\x07 \x01(\t\x12\x13\n\x0bnext_run_at\x18\x08 \x01(\x01\x12\x13\n\x0blast_run_at\x18\t \x01(\x01\x12\x13\n\x0bworkflow_id\x18\n \x01(\t\x12\x14\n\x0c\x64isplay_name\x18\x0b \x01(\t\x12\x12\n\nroot_alias\x18\x0c \x01(\t\x12\x15\n\rrelative_file\x18\r \x01(\t\x12\x16\n\x0e\x62uilder_symbol\x18\x0e \x01(\t\x12\x16\n\x0e\x61gent_node_ids\x18\x0f \x03(\t\x12S\n\x13\x61gent_metadata_json\x18\x10 \x03(\x0b\x32\x36.avalanche.operator.FlowInfoMsg.AgentMetadataJsonEntry\x12\x14\n\x0cwebhook_path\x18\x11 \x01(\t\x12\x13\n\x0bwebhook_url\x18\x12 \x01(\t\x12\x16\n\x0ewebhook_active\x18\x13 \x01(\x08\x1aK\n\nGraphEntry\x12\x0b\n\x03key\x18\x01 \x01(\t\x12,\n\x05value\x18\x02 \x01(\x0b\x32\x1d.avalanche.operator.NodeEdges:\x02\x38\x01\x1a\x30\n\x0eNodeTypesEntry\x12\x0b\n\x03key\x18\x01 \x01(\t\x12\r\n\x05value\x18\x02 \x01(\t:\x02\x38\x01\x1a\x33\n\x11\x44isplayNamesEntry\x12\x0b\n\x03key\x18\x01 \x01(\t\x12\r\n\x05value\x18\x02 \x01(\t:\x02\x38\x01\x1a\x38\n\x16\x41gentMetadataJsonEntry\x12\x0b\n\x03key\x18\x01 \x01(\t\x12\r\n\x05value\x18\x02 \x01(\t:\x02\x38\x01"E\n\x16\x44iscoveryDiagnosticMsg\x12\x0c\n\x04path\x18\x01 \x01(\t\x12\x0c\n\x04kind\x18\x02 \x01(\t\x12\x0f\n\x07message\x18\x03 \x01(\t"A\n\rScanTargetMsg\x12\r\n\x05\x61lias\x18\x01 \x01(\t\x12\x13\n\x0btarget_path\x18\x02 \x01(\t\x12\x0c\n\x04kind\x18\x03 \x01(\t"\x8a\x02\n\x12\x43\x61talogSnapshotMsg\x12\x1c\n\x14operator_instance_id\x18\x01 \x01(\t\x12\x16\n\x0e\x61s_of_sequence\x18\x02 \x01(\x04\x12\x10\n\x08revision\x18\x03 \x01(\x04\x12\x32\n\tworkflows\x18\x04 \x03(\x0b\x32\x1f.avalanche.operator.FlowInfoMsg\x12\x37\n\x0cscan_targets\x18\x05 \x03(\x0b\x32!.avalanche.operator.ScanTargetMsg\x12?\n\x0b\x64iagnostics\x18\x06 \x03(\x0b\x32*.avalanche.operator.DiscoveryDiagnosticMsg"\x92\x01\n\x14ResultFileAttachment\x12\x15\n\rattachment_id\x18\x01 \x01(\t\x12\x11\n\x04name\x18\x02 \x01(\tH\x00\x88\x01\x01\x12\x0f\n\x07\x63ontent\x18\x03 \x01(\x0c\x12\x17\n\nmedia_type\x18\x04 \x01(\tH\x01\x88\x01\x01\x12\x0e\n\x06sha256\x18\x05 \x01(\tB\x07\n\x05_nameB\r\n\x0b_media_type"[\n\x0cRunResultMsg\x12\x12\n\nvalue_json\x18\x01 \x01(\t\x12\x37\n\x05\x66iles\x18\x02 \x03(\x0b\x32(.avalanche.operator.ResultFileAttachment"\xf4\x01\n\rRunSummaryMsg\x12\x0e\n\x06run_id\x18\x01 \x01(\t\x12\x11\n\tflow_name\x18\x02 \x01(\t\x12\x0e\n\x06status\x18\x03 \x01(\t\x12\x12\n\nstarted_at\x18\x04 \x01(\x01\x12\x10\n\x08\x65nded_at\x18\x05 \x01(\x01\x12\x14\n\x0ctriggered_by\x18\x06 \x01(\t\x12\x13\n\x0bworkflow_id\x18\x07 \x01(\t\x12\x1d\n\x15workflow_display_name\x18\x08 \x01(\t\x12\x18\n\x10\x63reated_sequence\x18\t \x01(\x04\x12\x10\n\x08revision\x18\n \x01(\x04\x12\x14\n\x0ctriggered_at\x18\x0b \x01(\x01"\xda\x01\n\x0eTraceHeaderMsg\x12\x0e\n\x06status\x18\x01 \x01(\t\x12\r\n\x05model\x18\x02 \x01(\t\x12\x16\n\tsub_model\x18\x03 \x01(\tH\x00\x88\x01\x01\x12\x12\n\niterations\x18\x04 \x01(\x04\x12\x16\n\x0emax_iterations\x18\x05 \x01(\x04\x12\x13\n\x0b\x64uration_ms\x18\x06 \x01(\x04\x12\x12\n\nusage_json\x18\x07 \x01(\t\x12\x1b\n\x0etelemetry_json\x18\x08 \x01(\tH\x01\x88\x01\x01\x42\x0c\n\n_sub_modelB\x11\n\x0f_telemetry_json"\xd7\x01\n\x12TraceDescriptorMsg\x12\x0e\n\x06status\x18\x01 \x01(\t\x12\x10\n\x08revision\x18\x02 \x01(\x04\x12\x11\n\tavailable\x18\x03 \x01(\x08\x12\x10\n\x08\x63omplete\x18\x04 \x01(\x08\x12\x13\n\x0b\x65vent_count\x18\x05 \x01(\x04\x12\x12\n\nsize_bytes\x18\x06 \x01(\x04\x12\x1d\n\x15latest_event_sequence\x18\x07 \x01(\x04\x12\x32\n\x06header\x18\x08 \x01(\x0b\x32".avalanche.operator.TraceHeaderMsg"\xbc\x02\n\x0fNodeSnapshotMsg\x12\x0f\n\x07node_id\x18\x01 \x01(\t\x12\x0c\n\x04name\x18\x02 \x01(\t\x12\x11\n\tnode_type\x18\x03 \x01(\t\x12\x0e\n\x06status\x18\x04 \x01(\t\x12\x12\n\nstarted_at\x18\x05 \x01(\x01\x12\x10\n\x08\x65nded_at\x18\x06 \x01(\x01\x12\x35\n\x05trace\x18\x07 \x01(\x0b\x32&.avalanche.operator.TraceDescriptorMsg\x12\x10\n\x08revision\x18\x08 \x01(\x04\x12\x18\n\x10\x65vent_page_token\x18\t \x01(\t\x12\x12\n\x05\x65rror\x18\n \x01(\tH\x00\x88\x01\x01\x12$\n\x17running_elapsed_seconds\x18\x0b \x01(\x01H\x01\x88\x01\x01\x42\x08\n\x06_errorB\x1a\n\x18_running_elapsed_seconds"\x9e\x02\n\x0eRunSnapshotMsg\x12\x1c\n\x14operator_instance_id\x18\x01 \x01(\t\x12\x16\n\x0e\x61s_of_sequence\x18\x02 \x01(\x04\x12\x32\n\x07summary\x18\x03 \x01(\x0b\x32!.avalanche.operator.RunSummaryMsg\x12\x32\n\x05nodes\x18\x04 \x03(\x0b\x32#.avalanche.operator.NodeSnapshotMsg\x12\x1b\n\x13latest_log_sequence\x18\x05 \x01(\x04\x12\x16\n\x0elog_page_token\x18\x06 \x01(\t\x12\x39\n\x08topology\x18\x07 \x01(\x0b\x32\'.avalanche.operator.WorkflowTopologyMsg"\x90\x01\n\x0eRunSummaryPage\x12\x1c\n\x14operator_instance_id\x18\x01 \x01(\t\x12\x16\n\x0e\x61s_of_sequence\x18\x02 \x01(\x04\x12/\n\x04runs\x18\x03 \x03(\x0b\x32!.avalanche.operator.RunSummaryMsg\x12\x17\n\x0fnext_page_token\x18\x04 \x01(\t"\x85\x01\n\x16LogRecordDescriptorMsg\x12\x10\n\x08sequence\x18\x01 \x01(\x04\x12\x11\n\ttimestamp\x18\x02 \x01(\x01\x12\r\n\x05level\x18\x03 \x01(\t\x12\x0f\n\x07node_id\x18\x04 \x01(\t\x12\x12\n\nsize_bytes\x18\x05 \x01(\x04\x12\x12\n\nbody_token\x18\x06 \x01(\t"\x92\x01\n\x07LogPage\x12\x1c\n\x14operator_instance_id\x18\x01 \x01(\t\x12\x16\n\x0e\x61s_of_sequence\x18\x02 \x01(\x04\x12\x38\n\x04logs\x18\x03 \x03(\x0b\x32*.avalanche.operator.LogRecordDescriptorMsg\x12\x17\n\x0fnext_page_token\x18\x04 \x01(\t"\x8e\x02\n\x17\x41gentEventDescriptorMsg\x12\x16\n\x0e\x65vent_sequence\x18\x01 \x01(\x04\x12\x12\n\nsize_bytes\x18\x02 \x01(\x04\x12\x12\n\nbody_token\x18\x03 \x01(\t\x12\x15\n\rinvocation_id\x18\x04 \x01(\t\x12\x12\n\nevent_kind\x18\x05 \x01(\t\x12\x16\n\titeration\x18\x06 \x01(\rH\x00\x88\x01\x01\x12\x18\n\x0b\x64uration_ms\x18\x07 \x01(\x04H\x01\x88\x01\x01\x12\r\n\x05\x65rror\x18\x08 \x01(\x08\x12\x12\n\ntool_count\x18\t \x01(\r\x12\x15\n\rpredict_count\x18\n \x01(\rB\x0c\n\n_iterationB\x0e\n\x0c_duration_ms"\xbd\x01\n\x0e\x41gentEventPage\x12\x1c\n\x14operator_instance_id\x18\x01 \x01(\t\x12\x16\n\x0e\x61s_of_sequence\x18\x02 \x01(\x04\x12\x0e\n\x06run_id\x18\x03 \x01(\t\x12\x0f\n\x07node_id\x18\x04 \x01(\t\x12;\n\x06\x65vents\x18\x05 \x03(\x0b\x32+.avalanche.operator.AgentEventDescriptorMsg\x12\x17\n\x0fnext_page_token\x18\x06 \x01(\t"N\n\nTraceChunk\x12\x10\n\x08revision\x18\x01 \x01(\x04\x12\x13\n\x0b\x63hunk_index\x18\x02 \x01(\x04\x12\x0c\n\x04\x64\x61ta\x18\x03 \x01(\x0c\x12\x0b\n\x03\x65of\x18\x04 \x01(\x08"=\n\x0b\x44\x65tailChunk\x12\x13\n\x0b\x63hunk_index\x18\x01 \x01(\x04\x12\x0c\n\x04\x64\x61ta\x18\x02 \x01(\x0c\x12\x0b\n\x03\x65of\x18\x03 \x01(\x08"\xaf\x01\n\nRunCreated\x12\x32\n\x07summary\x18\x01 \x01(\x0b\x32!.avalanche.operator.RunSummaryMsg\x12\x32\n\x05nodes\x18\x02 \x03(\x0b\x32#.avalanche.operator.NodeSnapshotMsg\x12\x39\n\x08topology\x18\x03 \x01(\x0b\x32\'.avalanche.operator.WorkflowTopologyMsg"j\n\x10RunStatusChanged\x12\x0e\n\x06run_id\x18\x01 \x01(\t\x12\x0e\n\x06status\x18\x02 \x01(\t\x12\x12\n\nstarted_at\x18\x03 \x01(\x01\x12\x10\n\x08\x65nded_at\x18\x04 \x01(\x01\x12\x10\n\x08revision\x18\x05 \x01(\x04"\xdc\x01\n\x11NodeStatusChanged\x12\x0e\n\x06run_id\x18\x01 \x01(\t\x12\x0f\n\x07node_id\x18\x02 \x01(\t\x12\x0e\n\x06status\x18\x03 \x01(\t\x12\x12\n\nstarted_at\x18\x04 \x01(\x01\x12\x10\n\x08\x65nded_at\x18\x05 \x01(\x01\x12\x10\n\x08revision\x18\x06 \x01(\x04\x12\x12\n\x05\x65rror\x18\x07 \x01(\tH\x00\x88\x01\x01\x12$\n\x17running_elapsed_seconds\x18\x08 \x01(\x01H\x01\x88\x01\x01\x42\x08\n\x06_errorB\x1a\n\x18_running_elapsed_seconds"V\n\x0bLogAppended\x12\x0e\n\x06run_id\x18\x01 \x01(\t\x12\x37\n\x03log\x18\x02 \x01(\x0b\x32*.avalanche.operator.LogRecordDescriptorMsg"q\n\x12\x41gentEventAppended\x12\x0e\n\x06run_id\x18\x01 \x01(\t\x12\x0f\n\x07node_id\x18\x02 \x01(\t\x12:\n\x05\x65vent\x18\x03 \x01(\x0b\x32+.avalanche.operator.AgentEventDescriptorMsg"h\n\x0eTraceFinalized\x12\x0e\n\x06run_id\x18\x01 \x01(\t\x12\x0f\n\x07node_id\x18\x02 \x01(\t\x12\x35\n\x05trace\x18\x03 \x01(\x0b\x32&.avalanche.operator.TraceDescriptorMsg"J\n\x0f\x43\x61talogReplaced\x12\x37\n\x07\x63\x61talog\x18\x01 \x01(\x0b\x32&.avalanche.operator.CatalogSnapshotMsg"\xee\x03\n\x0eOperatorUpdate\x12\x10\n\x08sequence\x18\x01 \x01(\x04\x12\x35\n\x0brun_created\x18\x02 \x01(\x0b\x32\x1e.avalanche.operator.RunCreatedH\x00\x12\x42\n\x12run_status_changed\x18\x03 \x01(\x0b\x32$.avalanche.operator.RunStatusChangedH\x00\x12\x44\n\x13node_status_changed\x18\x04 \x01(\x0b\x32%.avalanche.operator.NodeStatusChangedH\x00\x12\x37\n\x0clog_appended\x18\x05 \x01(\x0b\x32\x1f.avalanche.operator.LogAppendedH\x00\x12\x46\n\x14\x61gent_event_appended\x18\x06 \x01(\x0b\x32&.avalanche.operator.AgentEventAppendedH\x00\x12=\n\x0ftrace_finalized\x18\x07 \x01(\x0b\x32".avalanche.operator.TraceFinalizedH\x00\x12?\n\x10\x63\x61talog_replaced\x18\x08 \x01(\x0b\x32#.avalanche.operator.CatalogReplacedH\x00\x42\x08\n\x06\x63hange"?\n\rResetRequired\x12\x15\n\rhistory_floor\x18\x01 \x01(\x04\x12\x17\n\x0flatest_sequence\x18\x02 \x01(\x04"\xb4\x01\n\x16OperatorUpdateEnvelope\x12\x1c\n\x14operator_instance_id\x18\x01 \x01(\t\x12\x34\n\x06update\x18\x02 \x01(\x0b\x32".avalanche.operator.OperatorUpdateH\x00\x12;\n\x0ereset_required\x18\x03 \x01(\x0b\x32!.avalanche.operator.ResetRequiredH\x00\x42\t\n\x07payload*`\n\x13\x44\x65scriptorPageOrder\x12!\n\x1d\x44\x45SCRIPTOR_PAGE_ORDER_FORWARD\x10\x00\x12&\n"DESCRIPTOR_PAGE_ORDER_NEWEST_FIRST\x10\x01\x32\xe6\x08\n\x0fOperatorService\x12O\n\nGetCatalog\x12\x19.avalanche.operator.Empty\x1a&.avalanche.operator.CatalogSnapshotMsg\x12U\n\x08StartRun\x12#.avalanche.operator.StartRunRequest\x1a$.avalanche.operator.StartRunResponse\x12L\n\tCancelRun\x12$.avalanche.operator.CancelRunRequest\x1a\x19.avalanche.operator.Empty\x12S\n\x0cGetRunResult\x12!.avalanche.operator.GetRunRequest\x1a .avalanche.operator.RunResultMsg\x12\x63\n\x10ListRunSummaries\x12+.avalanche.operator.ListRunSummariesRequest\x1a".avalanche.operator.RunSummaryPage\x12_\n\x0eGetRunSnapshot\x12).avalanche.operator.GetRunSnapshotRequest\x1a".avalanche.operator.RunSnapshotMsg\x12k\n\x14GetLatestRunSnapshot\x12/.avalanche.operator.GetLatestRunSnapshotRequest\x1a".avalanche.operator.RunSnapshotMsg\x12L\n\x08ListLogs\x12#.avalanche.operator.ListLogsRequest\x1a\x1b.avalanche.operator.LogPage\x12\x61\n\x0fListAgentEvents\x12*.avalanche.operator.ListAgentEventsRequest\x1a".avalanche.operator.AgentEventPage\x12S\n\tReadTrace\x12$.avalanche.operator.ReadTraceRequest\x1a\x1e.avalanche.operator.TraceChunk0\x01\x12V\n\nReadDetail\x12%.avalanche.operator.ReadDetailRequest\x1a\x1f.avalanche.operator.DetailChunk0\x01\x12w\n\x15StreamOperatorUpdates\x12\x30.avalanche.operator.StreamOperatorUpdatesRequest\x1a*.avalanche.operator.OperatorUpdateEnvelope0\x01\x62\x06proto3'
+)
 
 _globals = globals()
 _builder.BuildMessageAndEnumDescriptors(DESCRIPTOR, _globals)
-_builder.BuildTopDescriptorsAndMessages(DESCRIPTOR, 'operator_pb2', _globals)
+_builder.BuildTopDescriptorsAndMessages(DESCRIPTOR, "operator_pb2", _globals)
 if not _descriptor._USE_C_DESCRIPTORS:
-  DESCRIPTOR._loaded_options = None
-  _globals['_WORKFLOWTOPOLOGYMSG_GRAPHENTRY']._loaded_options = None
-  _globals['_WORKFLOWTOPOLOGYMSG_GRAPHENTRY']._serialized_options = b'8\001'
-  _globals['_WORKFLOWTOPOLOGYMSG_NODETYPESENTRY']._loaded_options = None
-  _globals['_WORKFLOWTOPOLOGYMSG_NODETYPESENTRY']._serialized_options = b'8\001'
-  _globals['_WORKFLOWTOPOLOGYMSG_DISPLAYNAMESENTRY']._loaded_options = None
-  _globals['_WORKFLOWTOPOLOGYMSG_DISPLAYNAMESENTRY']._serialized_options = b'8\001'
-  _globals['_WORKFLOWTOPOLOGYMSG_AGENTFIELDSCHEMASJSONENTRY']._loaded_options = None
-  _globals['_WORKFLOWTOPOLOGYMSG_AGENTFIELDSCHEMASJSONENTRY']._serialized_options = b'8\001'
-  _globals['_WORKFLOWTOPOLOGYMSG_AGENTINSTRUCTIONLINESENTRY']._loaded_options = None
-  _globals['_WORKFLOWTOPOLOGYMSG_AGENTINSTRUCTIONLINESENTRY']._serialized_options = b'8\001'
-  _globals['_FLOWINFOMSG_GRAPHENTRY']._loaded_options = None
-  _globals['_FLOWINFOMSG_GRAPHENTRY']._serialized_options = b'8\001'
-  _globals['_FLOWINFOMSG_NODETYPESENTRY']._loaded_options = None
-  _globals['_FLOWINFOMSG_NODETYPESENTRY']._serialized_options = b'8\001'
-  _globals['_FLOWINFOMSG_DISPLAYNAMESENTRY']._loaded_options = None
-  _globals['_FLOWINFOMSG_DISPLAYNAMESENTRY']._serialized_options = b'8\001'
-  _globals['_FLOWINFOMSG_AGENTMETADATAJSONENTRY']._loaded_options = None
-  _globals['_FLOWINFOMSG_AGENTMETADATAJSONENTRY']._serialized_options = b'8\001'
-  _globals['_DESCRIPTORPAGEORDER']._serialized_start=7559
-  _globals['_DESCRIPTORPAGEORDER']._serialized_end=7655
-  _globals['_EMPTY']._serialized_start=38
-  _globals['_EMPTY']._serialized_end=45
-  _globals['_STARTRUNREQUEST']._serialized_start=48
-  _globals['_STARTRUNREQUEST']._serialized_end=213
-  _globals['_FILEATTACHMENT']._serialized_start=215
-  _globals['_FILEATTACHMENT']._serialized_end=320
-  _globals['_STARTRUNRESPONSE']._serialized_start=322
-  _globals['_STARTRUNRESPONSE']._serialized_end=356
-  _globals['_CANCELRUNREQUEST']._serialized_start=358
-  _globals['_CANCELRUNREQUEST']._serialized_end=392
-  _globals['_GETRUNREQUEST']._serialized_start=394
-  _globals['_GETRUNREQUEST']._serialized_end=425
-  _globals['_LISTRUNSUMMARIESREQUEST']._serialized_start=427
-  _globals['_LISTRUNSUMMARIESREQUEST']._serialized_end=518
-  _globals['_GETRUNSNAPSHOTREQUEST']._serialized_start=520
-  _globals['_GETRUNSNAPSHOTREQUEST']._serialized_end=613
-  _globals['_GETLATESTRUNSNAPSHOTREQUEST']._serialized_start=615
-  _globals['_GETLATESTRUNSNAPSHOTREQUEST']._serialized_end=690
-  _globals['_LISTLOGSREQUEST']._serialized_start=693
-  _globals['_LISTLOGSREQUEST']._serialized_end=871
-  _globals['_LISTAGENTEVENTSREQUEST']._serialized_start=874
-  _globals['_LISTAGENTEVENTSREQUEST']._serialized_end=1054
-  _globals['_READTRACEREQUEST']._serialized_start=1056
-  _globals['_READTRACEREQUEST']._serialized_end=1155
-  _globals['_READDETAILREQUEST']._serialized_start=1157
-  _globals['_READDETAILREQUEST']._serialized_end=1196
-  _globals['_STREAMOPERATORUPDATESREQUEST']._serialized_start=1198
-  _globals['_STREAMOPERATORUPDATESREQUEST']._serialized_end=1282
-  _globals['_NODEEDGES']._serialized_start=1284
-  _globals['_NODEEDGES']._serialized_end=1313
-  _globals['_WORKFLOWTOPOLOGYMSG']._serialized_start=1316
-  _globals['_WORKFLOWTOPOLOGYMSG']._serialized_end=2087
-  _globals['_WORKFLOWTOPOLOGYMSG_GRAPHENTRY']._serialized_start=1785
-  _globals['_WORKFLOWTOPOLOGYMSG_GRAPHENTRY']._serialized_end=1860
-  _globals['_WORKFLOWTOPOLOGYMSG_NODETYPESENTRY']._serialized_start=1862
-  _globals['_WORKFLOWTOPOLOGYMSG_NODETYPESENTRY']._serialized_end=1910
-  _globals['_WORKFLOWTOPOLOGYMSG_DISPLAYNAMESENTRY']._serialized_start=1912
-  _globals['_WORKFLOWTOPOLOGYMSG_DISPLAYNAMESENTRY']._serialized_end=1963
-  _globals['_WORKFLOWTOPOLOGYMSG_AGENTFIELDSCHEMASJSONENTRY']._serialized_start=1965
-  _globals['_WORKFLOWTOPOLOGYMSG_AGENTFIELDSCHEMASJSONENTRY']._serialized_end=2025
-  _globals['_WORKFLOWTOPOLOGYMSG_AGENTINSTRUCTIONLINESENTRY']._serialized_start=2027
-  _globals['_WORKFLOWTOPOLOGYMSG_AGENTINSTRUCTIONLINESENTRY']._serialized_end=2087
-  _globals['_FLOWINFOMSG']._serialized_start=2090
-  _globals['_FLOWINFOMSG']._serialized_end=2935
-  _globals['_FLOWINFOMSG_GRAPHENTRY']._serialized_start=1785
-  _globals['_FLOWINFOMSG_GRAPHENTRY']._serialized_end=1860
-  _globals['_FLOWINFOMSG_NODETYPESENTRY']._serialized_start=1862
-  _globals['_FLOWINFOMSG_NODETYPESENTRY']._serialized_end=1910
-  _globals['_FLOWINFOMSG_DISPLAYNAMESENTRY']._serialized_start=1912
-  _globals['_FLOWINFOMSG_DISPLAYNAMESENTRY']._serialized_end=1963
-  _globals['_FLOWINFOMSG_AGENTMETADATAJSONENTRY']._serialized_start=2879
-  _globals['_FLOWINFOMSG_AGENTMETADATAJSONENTRY']._serialized_end=2935
-  _globals['_DISCOVERYDIAGNOSTICMSG']._serialized_start=2937
-  _globals['_DISCOVERYDIAGNOSTICMSG']._serialized_end=3006
-  _globals['_SCANTARGETMSG']._serialized_start=3008
-  _globals['_SCANTARGETMSG']._serialized_end=3073
-  _globals['_CATALOGSNAPSHOTMSG']._serialized_start=3076
-  _globals['_CATALOGSNAPSHOTMSG']._serialized_end=3342
-  _globals['_RESULTFILEATTACHMENT']._serialized_start=3345
-  _globals['_RESULTFILEATTACHMENT']._serialized_end=3491
-  _globals['_RUNRESULTMSG']._serialized_start=3493
-  _globals['_RUNRESULTMSG']._serialized_end=3584
-  _globals['_RUNSUMMARYMSG']._serialized_start=3587
-  _globals['_RUNSUMMARYMSG']._serialized_end=3831
-  _globals['_TRACEHEADERMSG']._serialized_start=3834
-  _globals['_TRACEHEADERMSG']._serialized_end=4052
-  _globals['_TRACEDESCRIPTORMSG']._serialized_start=4055
-  _globals['_TRACEDESCRIPTORMSG']._serialized_end=4270
-  _globals['_NODESNAPSHOTMSG']._serialized_start=4273
-  _globals['_NODESNAPSHOTMSG']._serialized_end=4589
-  _globals['_RUNSNAPSHOTMSG']._serialized_start=4592
-  _globals['_RUNSNAPSHOTMSG']._serialized_end=4878
-  _globals['_RUNSUMMARYPAGE']._serialized_start=4881
-  _globals['_RUNSUMMARYPAGE']._serialized_end=5025
-  _globals['_LOGRECORDDESCRIPTORMSG']._serialized_start=5028
-  _globals['_LOGRECORDDESCRIPTORMSG']._serialized_end=5161
-  _globals['_LOGPAGE']._serialized_start=5164
-  _globals['_LOGPAGE']._serialized_end=5310
-  _globals['_AGENTEVENTDESCRIPTORMSG']._serialized_start=5313
-  _globals['_AGENTEVENTDESCRIPTORMSG']._serialized_end=5583
-  _globals['_AGENTEVENTPAGE']._serialized_start=5586
-  _globals['_AGENTEVENTPAGE']._serialized_end=5775
-  _globals['_TRACECHUNK']._serialized_start=5777
-  _globals['_TRACECHUNK']._serialized_end=5855
-  _globals['_DETAILCHUNK']._serialized_start=5857
-  _globals['_DETAILCHUNK']._serialized_end=5918
-  _globals['_RUNCREATED']._serialized_start=5921
-  _globals['_RUNCREATED']._serialized_end=6096
-  _globals['_RUNSTATUSCHANGED']._serialized_start=6098
-  _globals['_RUNSTATUSCHANGED']._serialized_end=6204
-  _globals['_NODESTATUSCHANGED']._serialized_start=6207
-  _globals['_NODESTATUSCHANGED']._serialized_end=6427
-  _globals['_LOGAPPENDED']._serialized_start=6429
-  _globals['_LOGAPPENDED']._serialized_end=6515
-  _globals['_AGENTEVENTAPPENDED']._serialized_start=6517
-  _globals['_AGENTEVENTAPPENDED']._serialized_end=6630
-  _globals['_TRACEFINALIZED']._serialized_start=6632
-  _globals['_TRACEFINALIZED']._serialized_end=6736
-  _globals['_CATALOGREPLACED']._serialized_start=6738
-  _globals['_CATALOGREPLACED']._serialized_end=6812
-  _globals['_OPERATORUPDATE']._serialized_start=6815
-  _globals['_OPERATORUPDATE']._serialized_end=7309
-  _globals['_RESETREQUIRED']._serialized_start=7311
-  _globals['_RESETREQUIRED']._serialized_end=7374
-  _globals['_OPERATORUPDATEENVELOPE']._serialized_start=7377
-  _globals['_OPERATORUPDATEENVELOPE']._serialized_end=7557
-  _globals['_OPERATORSERVICE']._serialized_start=7658
-  _globals['_OPERATORSERVICE']._serialized_end=8784
+    DESCRIPTOR._loaded_options = None
+    _globals["_WORKFLOWTOPOLOGYMSG_GRAPHENTRY"]._loaded_options = None
+    _globals["_WORKFLOWTOPOLOGYMSG_GRAPHENTRY"]._serialized_options = b"8\001"
+    _globals["_WORKFLOWTOPOLOGYMSG_NODETYPESENTRY"]._loaded_options = None
+    _globals["_WORKFLOWTOPOLOGYMSG_NODETYPESENTRY"]._serialized_options = b"8\001"
+    _globals["_WORKFLOWTOPOLOGYMSG_DISPLAYNAMESENTRY"]._loaded_options = None
+    _globals["_WORKFLOWTOPOLOGYMSG_DISPLAYNAMESENTRY"]._serialized_options = b"8\001"
+    _globals["_WORKFLOWTOPOLOGYMSG_AGENTFIELDSCHEMASJSONENTRY"]._loaded_options = None
+    _globals["_WORKFLOWTOPOLOGYMSG_AGENTFIELDSCHEMASJSONENTRY"]._serialized_options = b"8\001"
+    _globals["_WORKFLOWTOPOLOGYMSG_AGENTINSTRUCTIONLINESENTRY"]._loaded_options = None
+    _globals["_WORKFLOWTOPOLOGYMSG_AGENTINSTRUCTIONLINESENTRY"]._serialized_options = b"8\001"
+    _globals["_FLOWINFOMSG_GRAPHENTRY"]._loaded_options = None
+    _globals["_FLOWINFOMSG_GRAPHENTRY"]._serialized_options = b"8\001"
+    _globals["_FLOWINFOMSG_NODETYPESENTRY"]._loaded_options = None
+    _globals["_FLOWINFOMSG_NODETYPESENTRY"]._serialized_options = b"8\001"
+    _globals["_FLOWINFOMSG_DISPLAYNAMESENTRY"]._loaded_options = None
+    _globals["_FLOWINFOMSG_DISPLAYNAMESENTRY"]._serialized_options = b"8\001"
+    _globals["_FLOWINFOMSG_AGENTMETADATAJSONENTRY"]._loaded_options = None
+    _globals["_FLOWINFOMSG_AGENTMETADATAJSONENTRY"]._serialized_options = b"8\001"
+    _globals["_DESCRIPTORPAGEORDER"]._serialized_start = 7559
+    _globals["_DESCRIPTORPAGEORDER"]._serialized_end = 7655
+    _globals["_EMPTY"]._serialized_start = 38
+    _globals["_EMPTY"]._serialized_end = 45
+    _globals["_STARTRUNREQUEST"]._serialized_start = 48
+    _globals["_STARTRUNREQUEST"]._serialized_end = 213
+    _globals["_FILEATTACHMENT"]._serialized_start = 215
+    _globals["_FILEATTACHMENT"]._serialized_end = 320
+    _globals["_STARTRUNRESPONSE"]._serialized_start = 322
+    _globals["_STARTRUNRESPONSE"]._serialized_end = 356
+    _globals["_CANCELRUNREQUEST"]._serialized_start = 358
+    _globals["_CANCELRUNREQUEST"]._serialized_end = 392
+    _globals["_GETRUNREQUEST"]._serialized_start = 394
+    _globals["_GETRUNREQUEST"]._serialized_end = 425
+    _globals["_LISTRUNSUMMARIESREQUEST"]._serialized_start = 427
+    _globals["_LISTRUNSUMMARIESREQUEST"]._serialized_end = 518
+    _globals["_GETRUNSNAPSHOTREQUEST"]._serialized_start = 520
+    _globals["_GETRUNSNAPSHOTREQUEST"]._serialized_end = 613
+    _globals["_GETLATESTRUNSNAPSHOTREQUEST"]._serialized_start = 615
+    _globals["_GETLATESTRUNSNAPSHOTREQUEST"]._serialized_end = 690
+    _globals["_LISTLOGSREQUEST"]._serialized_start = 693
+    _globals["_LISTLOGSREQUEST"]._serialized_end = 871
+    _globals["_LISTAGENTEVENTSREQUEST"]._serialized_start = 874
+    _globals["_LISTAGENTEVENTSREQUEST"]._serialized_end = 1054
+    _globals["_READTRACEREQUEST"]._serialized_start = 1056
+    _globals["_READTRACEREQUEST"]._serialized_end = 1155
+    _globals["_READDETAILREQUEST"]._serialized_start = 1157
+    _globals["_READDETAILREQUEST"]._serialized_end = 1196
+    _globals["_STREAMOPERATORUPDATESREQUEST"]._serialized_start = 1198
+    _globals["_STREAMOPERATORUPDATESREQUEST"]._serialized_end = 1282
+    _globals["_NODEEDGES"]._serialized_start = 1284
+    _globals["_NODEEDGES"]._serialized_end = 1313
+    _globals["_WORKFLOWTOPOLOGYMSG"]._serialized_start = 1316
+    _globals["_WORKFLOWTOPOLOGYMSG"]._serialized_end = 2087
+    _globals["_WORKFLOWTOPOLOGYMSG_GRAPHENTRY"]._serialized_start = 1785
+    _globals["_WORKFLOWTOPOLOGYMSG_GRAPHENTRY"]._serialized_end = 1860
+    _globals["_WORKFLOWTOPOLOGYMSG_NODETYPESENTRY"]._serialized_start = 1862
+    _globals["_WORKFLOWTOPOLOGYMSG_NODETYPESENTRY"]._serialized_end = 1910
+    _globals["_WORKFLOWTOPOLOGYMSG_DISPLAYNAMESENTRY"]._serialized_start = 1912
+    _globals["_WORKFLOWTOPOLOGYMSG_DISPLAYNAMESENTRY"]._serialized_end = 1963
+    _globals["_WORKFLOWTOPOLOGYMSG_AGENTFIELDSCHEMASJSONENTRY"]._serialized_start = 1965
+    _globals["_WORKFLOWTOPOLOGYMSG_AGENTFIELDSCHEMASJSONENTRY"]._serialized_end = 2025
+    _globals["_WORKFLOWTOPOLOGYMSG_AGENTINSTRUCTIONLINESENTRY"]._serialized_start = 2027
+    _globals["_WORKFLOWTOPOLOGYMSG_AGENTINSTRUCTIONLINESENTRY"]._serialized_end = 2087
+    _globals["_FLOWINFOMSG"]._serialized_start = 2090
+    _globals["_FLOWINFOMSG"]._serialized_end = 2935
+    _globals["_FLOWINFOMSG_GRAPHENTRY"]._serialized_start = 1785
+    _globals["_FLOWINFOMSG_GRAPHENTRY"]._serialized_end = 1860
+    _globals["_FLOWINFOMSG_NODETYPESENTRY"]._serialized_start = 1862
+    _globals["_FLOWINFOMSG_NODETYPESENTRY"]._serialized_end = 1910
+    _globals["_FLOWINFOMSG_DISPLAYNAMESENTRY"]._serialized_start = 1912
+    _globals["_FLOWINFOMSG_DISPLAYNAMESENTRY"]._serialized_end = 1963
+    _globals["_FLOWINFOMSG_AGENTMETADATAJSONENTRY"]._serialized_start = 2879
+    _globals["_FLOWINFOMSG_AGENTMETADATAJSONENTRY"]._serialized_end = 2935
+    _globals["_DISCOVERYDIAGNOSTICMSG"]._serialized_start = 2937
+    _globals["_DISCOVERYDIAGNOSTICMSG"]._serialized_end = 3006
+    _globals["_SCANTARGETMSG"]._serialized_start = 3008
+    _globals["_SCANTARGETMSG"]._serialized_end = 3073
+    _globals["_CATALOGSNAPSHOTMSG"]._serialized_start = 3076
+    _globals["_CATALOGSNAPSHOTMSG"]._serialized_end = 3342
+    _globals["_RESULTFILEATTACHMENT"]._serialized_start = 3345
+    _globals["_RESULTFILEATTACHMENT"]._serialized_end = 3491
+    _globals["_RUNRESULTMSG"]._serialized_start = 3493
+    _globals["_RUNRESULTMSG"]._serialized_end = 3584
+    _globals["_RUNSUMMARYMSG"]._serialized_start = 3587
+    _globals["_RUNSUMMARYMSG"]._serialized_end = 3831
+    _globals["_TRACEHEADERMSG"]._serialized_start = 3834
+    _globals["_TRACEHEADERMSG"]._serialized_end = 4052
+    _globals["_TRACEDESCRIPTORMSG"]._serialized_start = 4055
+    _globals["_TRACEDESCRIPTORMSG"]._serialized_end = 4270
+    _globals["_NODESNAPSHOTMSG"]._serialized_start = 4273
+    _globals["_NODESNAPSHOTMSG"]._serialized_end = 4589
+    _globals["_RUNSNAPSHOTMSG"]._serialized_start = 4592
+    _globals["_RUNSNAPSHOTMSG"]._serialized_end = 4878
+    _globals["_RUNSUMMARYPAGE"]._serialized_start = 4881
+    _globals["_RUNSUMMARYPAGE"]._serialized_end = 5025
+    _globals["_LOGRECORDDESCRIPTORMSG"]._serialized_start = 5028
+    _globals["_LOGRECORDDESCRIPTORMSG"]._serialized_end = 5161
+    _globals["_LOGPAGE"]._serialized_start = 5164
+    _globals["_LOGPAGE"]._serialized_end = 5310
+    _globals["_AGENTEVENTDESCRIPTORMSG"]._serialized_start = 5313
+    _globals["_AGENTEVENTDESCRIPTORMSG"]._serialized_end = 5583
+    _globals["_AGENTEVENTPAGE"]._serialized_start = 5586
+    _globals["_AGENTEVENTPAGE"]._serialized_end = 5775
+    _globals["_TRACECHUNK"]._serialized_start = 5777
+    _globals["_TRACECHUNK"]._serialized_end = 5855
+    _globals["_DETAILCHUNK"]._serialized_start = 5857
+    _globals["_DETAILCHUNK"]._serialized_end = 5918
+    _globals["_RUNCREATED"]._serialized_start = 5921
+    _globals["_RUNCREATED"]._serialized_end = 6096
+    _globals["_RUNSTATUSCHANGED"]._serialized_start = 6098
+    _globals["_RUNSTATUSCHANGED"]._serialized_end = 6204
+    _globals["_NODESTATUSCHANGED"]._serialized_start = 6207
+    _globals["_NODESTATUSCHANGED"]._serialized_end = 6427
+    _globals["_LOGAPPENDED"]._serialized_start = 6429
+    _globals["_LOGAPPENDED"]._serialized_end = 6515
+    _globals["_AGENTEVENTAPPENDED"]._serialized_start = 6517
+    _globals["_AGENTEVENTAPPENDED"]._serialized_end = 6630
+    _globals["_TRACEFINALIZED"]._serialized_start = 6632
+    _globals["_TRACEFINALIZED"]._serialized_end = 6736
+    _globals["_CATALOGREPLACED"]._serialized_start = 6738
+    _globals["_CATALOGREPLACED"]._serialized_end = 6812
+    _globals["_OPERATORUPDATE"]._serialized_start = 6815
+    _globals["_OPERATORUPDATE"]._serialized_end = 7309
+    _globals["_RESETREQUIRED"]._serialized_start = 7311
+    _globals["_RESETREQUIRED"]._serialized_end = 7374
+    _globals["_OPERATORUPDATEENVELOPE"]._serialized_start = 7377
+    _globals["_OPERATORUPDATEENVELOPE"]._serialized_end = 7557
+    _globals["_OPERATORSERVICE"]._serialized_start = 7658
+    _globals["_OPERATORSERVICE"]._serialized_end = 8784
 # @@protoc_insertion_point(module_scope)

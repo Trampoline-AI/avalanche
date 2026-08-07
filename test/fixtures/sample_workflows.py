@@ -101,6 +101,7 @@ def simple_workflow():
 @source
 def slow_source(log=Logger()):
     import time
+
     log.info("Initializing source connection...")
     log.debug("Connection pool: max=5, idle=2, timeout=30s")
     log.debug("SSL handshake: TLS 1.3, cipher=AES-256-GCM")
@@ -124,6 +125,7 @@ def slow_source(log=Logger()):
 @step
 def slow_transform(data, log=Logger()):
     import time
+
     log.info("Starting transformation workflow...")
     log.debug("Input data: 3000 rows, estimated 735KB")
     for i in range(5):
@@ -152,9 +154,11 @@ def slow_workflow():
 
 # ── Complex workflow: order processing (no schedule, manual only) ────
 
+
 @source
 def fetch_orders(log=Logger()):
     import time
+
     log.info("Connecting to orders database...")
     log.debug("Using connection pool: orders-db-prod (us-east-1)")
     vendor_log.info("SELECT count(*) FROM orders WHERE status='new'")
@@ -183,6 +187,7 @@ def fetch_orders(log=Logger()):
 @source
 def fetch_inventory(log=Logger()):
     import time
+
     log.info("Connecting to inventory service...")
     log.debug("Service endpoint: https://inventory.internal:8443/api/v2")
     time.sleep(0.1)
@@ -265,8 +270,7 @@ def save_warehouse(data, log=Logger()):
         f"VALUES ('2026-04-02', {data.get('total')}, {data.get('count')})"
     )
     vendor_log.info(
-        "UPDATE daily_summary_latest SET total=350.00, count=2 "
-        "WHERE date='2026-04-02'"
+        "UPDATE daily_summary_latest SET total=350.00, count=2 " "WHERE date='2026-04-02'"
     )
     vendor_log.info("COMMIT")
     log.info("Warehouse write complete: 2 rows affected")

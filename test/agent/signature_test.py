@@ -1,4 +1,5 @@
 """Tests for class-style and dynamic Avalanche agent signatures."""
+
 from __future__ import annotations
 
 import dspy

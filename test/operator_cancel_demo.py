@@ -15,9 +15,7 @@ def main():
     op = Operator(workflow_paths=[FIXTURES])
 
     def on_update(run):
-        nodes = "  ".join(
-            f"{ns.name}={ns.status.value}" for ns in run.nodes.values()
-        )
+        nodes = "  ".join(f"{ns.name}={ns.status.value}" for ns in run.nodes.values())
         print(f"  [{run.status.value:>10}] {nodes}")
 
     op.on_run_update(on_update)

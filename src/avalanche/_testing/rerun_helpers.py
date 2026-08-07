@@ -39,9 +39,7 @@ def varargs_selector_consume(
 
 
 def rerun_rows(*values: str) -> pl.DataFrame:
-    return pl.DataFrame(
-        {"id": list(range(1, len(values) + 1)), "value": list(values)}
-    )
+    return pl.DataFrame({"id": list(range(1, len(values) + 1)), "value": list(values)})
 
 
 def lineage_load_data(*, source):

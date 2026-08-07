@@ -47,6 +47,7 @@ _STATUS_STYLES: dict[RunStatus, Style] = {
 @dataclass
 class _TreeItem:
     """A row in the flattened tree: either a folder or a workflow."""
+
     label: str
     depth: int
     is_folder: bool
@@ -112,19 +113,26 @@ class Sidebar(Static, can_focus=True):
 
         for folder_name in folders:
             folder_path = f"{path_prefix}/{folder_name}" if path_prefix else folder_name
-            self._flat_items.append(_TreeItem(
-                label=folder_name, depth=depth, is_folder=True, folder_path=folder_path,
-            ))
+            self._flat_items.append(
+                _TreeItem(
+                    label=folder_name,
+                    depth=depth,
+                    is_folder=True,
+                    folder_path=folder_path,
+                )
+            )
             if folder_path in expanded:
                 self._walk_tree(node[folder_name], depth + 1, folder_path, expanded)
 
         for _, workflow in workflows:
-            self._flat_items.append(_TreeItem(
-                label=workflow.rendered_name,
-                depth=depth,
-                is_folder=False,
-                workflow=workflow,
-            ))
+            self._flat_items.append(
+                _TreeItem(
+                    label=workflow.rendered_name,
+                    depth=depth,
+                    is_folder=False,
+                    workflow=workflow,
+                )
+            )
 
     def render(self) -> Text:
         self._rebuild_tree()

@@ -27,12 +27,11 @@ def test_package_imports_and_console_entrypoint_are_available():
     scripts = {entry.name: entry.value for entry in console_scripts}
     assert scripts["ava"] == "ava_cli:main"
 
+
 def test_core_root_star_import_excludes_lazy_agent_symbols():
     """Core root imports do not resolve optional agent-only packages."""
     source_root = REPO_ROOT / "src"
-    pythonpath = os.pathsep.join(
-        filter(None, (str(source_root), os.environ.get("PYTHONPATH")))
-    )
+    pythonpath = os.pathsep.join(filter(None, (str(source_root), os.environ.get("PYTHONPATH"))))
     script = """
 import importlib.abc
 import sys
@@ -83,6 +82,7 @@ assert BLOCKED.isdisjoint(sys.modules)
         f"stdout:\n{result.stdout}\n"
         f"stderr:\n{result.stderr}"
     )
+
 
 def test_operator_grpc_can_list_and_run_fixture_flow():
     from runtime.operator import Operator

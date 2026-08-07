@@ -49,6 +49,7 @@ def test_operator_forwards_info_not_debug_logs() -> None:
 
     assert [item["message"] for item in queue.items] == ["run started"]
 
+
 @pytest.mark.parametrize("backend", ["local", "ray"])
 def test_verbose_rlm_log_retains_agent_step_node_id(backend: str) -> None:
     class Queue:

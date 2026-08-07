@@ -152,8 +152,7 @@ class IcebergTable(StorageTable):
 
         if self._table is None or not isinstance(self._ns, IcebergNamespace):
             raise TypeError(
-                "Cannot pickle IcebergTable before namespace.push() binds it "
-                "to a catalog"
+                "Cannot pickle IcebergTable before namespace.push() binds it " "to a catalog"
             )
 
         catalog = self._ns.catalog

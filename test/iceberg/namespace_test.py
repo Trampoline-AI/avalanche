@@ -242,9 +242,7 @@ class TestIcebergNamespace:
         def concurrent_flow():
             return list_namespaces_concurrently()
 
-        handles = [
-            concurrent_flow().run(executor=ava.LocalExecutor()) for _ in range(7)
-        ]
+        handles = [concurrent_flow().run(executor=ava.LocalExecutor()) for _ in range(7)]
         barrier.wait(timeout=10)
         for handle in handles:
             assert (ns.name,) in handle.result(timeout=10)

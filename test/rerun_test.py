@@ -83,9 +83,7 @@ def rerun_ns(tmp_path):
 
 
 def _rows(*values: str) -> pl.DataFrame:
-    return pl.DataFrame(
-        {"id": list(range(1, len(values) + 1)), "value": list(values)}
-    )
+    return pl.DataFrame({"id": list(range(1, len(values) + 1)), "value": list(values)})
 
 
 def test_rerun_spec_is_public_and_validates_shape():
@@ -214,14 +212,24 @@ def test_rerun_scheduler_prunes_skipped_upstreams_on_executors(executor_factory)
 
     executor = executor_factory()
     try:
-        assert lazy_workflow().run(
-            executor=executor,
-            rerun=ava.Rerun(run_id="source_1", start=["middle"], mode="lazy"),
-        ).result() == "middle"
-        assert autorun_workflow().run(
-            executor=executor,
-            rerun=ava.Rerun(run_id="source_1", start=["middle"], mode="autorun"),
-        ).result() == "sink"
+        assert (
+            lazy_workflow()
+            .run(
+                executor=executor,
+                rerun=ava.Rerun(run_id="source_1", start=["middle"], mode="lazy"),
+            )
+            .result()
+            == "middle"
+        )
+        assert (
+            autorun_workflow()
+            .run(
+                executor=executor,
+                rerun=ava.Rerun(run_id="source_1", start=["middle"], mode="autorun"),
+            )
+            .result()
+            == "sink"
+        )
     finally:
         ray = getattr(executor, "ray", None)
         if ray is not None and ray.is_initialized():
@@ -312,9 +320,7 @@ def test_rerun_stream_reads_source_run_rows_and_bypasses_progress_store(rerun_ns
 
     @ava.step(slug="process-data")
     def process_data(
-        df: pl.DataFrame = ava.Stream(
-            ns.source, key="source_to_process", mode="append_scan"
-        ),
+        df: pl.DataFrame = ava.Stream(ns.source, key="source_to_process", mode="append_scan"),
         *,
         output=ns.output,
     ):
@@ -354,8 +360,7 @@ def test_rerun_stream_reads_source_run_rows_and_bypasses_progress_store(rerun_ns
     # Rerun mode is independent of snapshot progress state.
     assert ava.ProgressStore(ns.source, key="source_to_process").get_cursor() == cursor_before
     assert (
-        ava.ProgressStore(ns.source, key="source_to_process").list_pending()
-        == pending_before
+        ava.ProgressStore(ns.source, key="source_to_process").list_pending() == pending_before
     )
 
     output_rows = ns.output.read().sort(["_ava_run_id", "id"]).to_dicts()
@@ -946,9 +951,7 @@ def test_sparse_lazy_rerun_of_rerun_resolves_parent_run_rows(rerun_ns):
         *,
         output=ns.output,
     ):
-        output.append(
-            pl.DataFrame({"id": df["id"], "value": df["value"] + "-processed"})
-        )
+        output.append(pl.DataFrame({"id": df["id"], "value": df["value"] + "-processed"}))
         return df["value"].to_list()
 
     @ava.workflow
@@ -1050,19 +1053,23 @@ def test_rerun_lineage_vector_propagates_through_python_args(rerun_ns, executor_
     executor = executor_factory()
     try:
         assert wf().run(executor=executor, run_id="source_run").result() == "ok"
-        assert wf().run(
-            executor=executor,
-            run_id="rerun_run",
-            rerun=ava.Rerun(run_id="source_run", start=["process-data"], mode="autorun"),
-        ).result() == "ok"
+        assert (
+            wf()
+            .run(
+                executor=executor,
+                run_id="rerun_run",
+                rerun=ava.Rerun(run_id="source_run", start=["process-data"], mode="autorun"),
+            )
+            .result()
+            == "ok"
+        )
     finally:
         ray = getattr(executor, "ray", None)
         if ray is not None and ray.is_initialized():
             ray.shutdown()
 
-    sink_rows = (
-        ns.output.read()
-        .filter((pl.col("_ava_run_id") == "rerun_run") & (pl.col("_ava_node_slug") == "sink"))
+    sink_rows = ns.output.read().filter(
+        (pl.col("_ava_run_id") == "rerun_run") & (pl.col("_ava_node_slug") == "sink")
     )
     assert sink_rows.height == 1
     vector = json.loads(sink_rows["_ava_lineage_vector"].to_list()[0])
@@ -1234,19 +1241,22 @@ def test_lineage_survives_hook_replacement_without_exposing_envelope(
 
     def unwrap_result(node_id: str, value: Any) -> Any:
         hook_saw_envelope.append(isinstance(value, LineagedResult))
-        if isinstance(value, pl.DataFrame) and value["value"].to_list() == [
-            "alpha-processed"
-        ]:
+        if isinstance(value, pl.DataFrame) and value["value"].to_list() == ["alpha-processed"]:
             return pl.DataFrame({"id": [1], "value": ["hooked"]})
         return value
 
     executor = executor_factory()
     try:
-        assert wf().run(
-            executor=executor,
-            hooks=RunHooks(unwrap_result=unwrap_result),
-            run_id="source_run",
-        ).result() == "ok"
+        assert (
+            wf()
+            .run(
+                executor=executor,
+                hooks=RunHooks(unwrap_result=unwrap_result),
+                run_id="source_run",
+            )
+            .result()
+            == "ok"
+        )
     finally:
         ray = getattr(executor, "ray", None)
         if ray is not None and ray.is_initialized():

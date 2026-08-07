@@ -17,8 +17,6 @@ def test_tui_implementation_package_exports_application():
     assert app.AvalancheApp.__name__ == "AvalancheApp"
 
 
-
-
 def test_public_provider_contract_keeps_connection_state_optional():
     from tui import ConnectionAwareStateProvider, StateProvider
 

@@ -113,7 +113,6 @@ async def test_dag_toggle_retains_scroll_position() -> None:
         assert (dag_container.scroll_target_x, dag_container.scroll_target_y) == scroll_position
 
 
-
 @pytest.mark.asyncio
 @pytest.mark.parametrize(("toggle_key", "pane"), [("d", "dag"), ("l", "log")])
 async def test_restoring_hidden_active_pane_restores_fallback_focus(
