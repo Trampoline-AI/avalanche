@@ -35,6 +35,7 @@ def _table_identity(table: Any) -> str | None:
     """Best-effort stable identity for a storage table (Iceberg id / location)."""
     return getattr(table, "identifier", None) or getattr(table, "location", None) or None
 
+
 def _table_label(table: Any) -> str:
     """Human-readable table identity for model-stream errors."""
     identity = _table_identity(table)
@@ -231,9 +232,7 @@ class Stream(ParameterProvider, Generic[T]):
                    mode="append_scan")                        # backlog queue
         """
         if mode not in ("run_scoped", "append_scan"):
-            raise ValueError(
-                f"Stream mode must be 'run_scoped' or 'append_scan', got {mode!r}"
-            )
+            raise ValueError(f"Stream mode must be 'run_scoped' or 'append_scan', got {mode!r}")
         if mode == "append_scan" and key is None:
             raise ValueError("append_scan streams require key=...")
         if mode == "run_scoped" and key is not None:
@@ -304,9 +303,7 @@ class Stream(ParameterProvider, Generic[T]):
             )
         matching_slug = param_context.get_matching_node_slug()
         source_node_slugs = (
-            (matching_slug,)
-            if matching_slug
-            else tuple(param_context.upstream_node_slugs)
+            (matching_slug,) if matching_slug else tuple(param_context.upstream_node_slugs)
         )
 
         return (stream, upstream_data, source_node_slugs)
@@ -342,9 +339,7 @@ class Stream(ParameterProvider, Generic[T]):
                 parent_value = _MISSING_PARENT
                 if isinstance(upstream_data, DeferredStreamUpstream):
                     parent_value = kwargs.pop(upstream_data.parent_kwarg, _MISSING_PARENT)
-                upstream_data = _resolve_deferred_stream_upstream(
-                    upstream_data, parent_value
-                )
+                upstream_data = _resolve_deferred_stream_upstream(upstream_data, parent_value)
                 cm = consume_stream(
                     stream.table,
                     stream.key,
@@ -361,9 +356,7 @@ class Stream(ParameterProvider, Generic[T]):
                 for param_name, stream, source_node_slugs, cm in context_managers:
                     df = cm.__enter__()
                     entered_contexts.append(cm)
-                    resolved_streams[param_name] = stream._materialize(
-                        df, source_node_slugs
-                    )
+                    resolved_streams[param_name] = stream._materialize(df, source_node_slugs)
 
                 # Update kwargs with resolved streams
                 kwargs.update(resolved_streams)
@@ -401,6 +394,7 @@ class Stream(ParameterProvider, Generic[T]):
                 return result
 
         return stream_wrapper
+
 
 class ModelStream(Stream[ModelT], Generic[ModelT]):
     """Stream provider that injects validated pydantic row models."""
@@ -565,9 +559,7 @@ def consume_stream(
     from avalanche.runtime import get_current_run_context
 
     if mode not in ("run_scoped", "append_scan"):
-        raise ValueError(
-            f"Stream mode must be 'run_scoped' or 'append_scan', got {mode!r}"
-        )
+        raise ValueError(f"Stream mode must be 'run_scoped' or 'append_scan', got {mode!r}")
 
     context = get_current_run_context()
     active_rerun = rerun or (context.rerun if context is not None else None)
@@ -638,9 +630,7 @@ def consume_stream(
         return
 
     if mode != "append_scan":
-        raise ValueError(
-            f"Stream mode must be 'run_scoped' or 'append_scan', got {mode!r}"
-        )
+        raise ValueError(f"Stream mode must be 'run_scoped' or 'append_scan', got {mode!r}")
 
     if key is None:
         raise ValueError("append_scan streams require key=...")
@@ -739,9 +729,7 @@ def _lineage_scan_filter(run_id: str, node_slugs: tuple[str, ...] = ()) -> str:
     unique_slugs = tuple(dict.fromkeys(node_slugs))
     if not unique_slugs:
         return filter_expr
-    slug_expr = " OR ".join(
-        f"_ava_node_slug = {_sql_string(slug)}" for slug in unique_slugs
-    )
+    slug_expr = " OR ".join(f"_ava_node_slug = {_sql_string(slug)}" for slug in unique_slugs)
     return f"{filter_expr} AND ({slug_expr})"
 
 
@@ -817,9 +805,7 @@ def _unique_rerun_parent(df: pl.DataFrame, run_id: str) -> str | None:
     if "_ava_rerun_of" not in df.columns:
         return None
     parents = [
-        parent
-        for parent in df["_ava_rerun_of"].drop_nulls().unique().to_list()
-        if parent
+        parent for parent in df["_ava_rerun_of"].drop_nulls().unique().to_list() if parent
     ]
     if not parents:
         return None

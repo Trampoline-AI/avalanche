@@ -63,9 +63,7 @@ def test_ray_operator_uses_live_source_for_imports_logs_and_later_runs(tmp_path)
         first_id = operator.start_run("flow")
         first = _wait_terminal(operator, first_id)
         assert first.status == RunStatus.SUCCESS
-        assert {entry.node_id for entry in first.logs if "=1:1" in entry.message} == {
-            "read_1"
-        }
+        assert {entry.node_id for entry in first.logs if "=1:1" in entry.message} == {"read_1"}
         assert any("stdout=1:1" in entry.message for entry in first.logs)
         assert any("stderr=1:1" in entry.message for entry in first.logs)
         assert any("logger=1:1" in entry.message for entry in first.logs)
@@ -145,9 +143,7 @@ def _contains_source_payload(value, seen: set[int] | None = None) -> bool:
     seen.add(id(value))
     if isinstance(value, dict):
         return any(
-            _contains_source_payload(item, seen)
-            for pair in value.items()
-            for item in pair
+            _contains_source_payload(item, seen) for pair in value.items() for item in pair
         )
     if isinstance(value, (list, tuple, set, frozenset)):
         return any(_contains_source_payload(item, seen) for item in value)

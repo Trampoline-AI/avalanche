@@ -13,6 +13,7 @@ if TYPE_CHECKING:
 
         def transaction(self) -> Any: ...
 
+
 # Regex for valid cursor keys: snake_case
 # (starts with lowercase letter, contains only a-z, 0-9, _)
 _CURSOR_KEY_PATTERN = re.compile(r"^[a-z][a-z0-9_]*$")

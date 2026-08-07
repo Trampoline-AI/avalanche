@@ -1742,9 +1742,7 @@ def asynchronous_stream_output():
 
         assert run.status == RunStatus.SUCCESS
         assert operator.get_run_result(run_id) == "complete"
-        assert all(
-            entry.message != "background output after result" for entry in run.logs
-        )
+        assert all(entry.message != "background output after result" for entry in run.logs)
     finally:
         operator.close()
 

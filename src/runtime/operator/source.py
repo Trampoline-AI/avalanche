@@ -110,18 +110,12 @@ def resolve_live_source(
     return import_root, source_file.relative_to(import_root).as_posix()
 
 
-def is_source_path_included(
-    path: str | Path, source_roots: tuple[str | Path, ...]
-) -> bool:
+def is_source_path_included(path: str | Path, source_roots: tuple[str | Path, ...]) -> bool:
     """Return whether a changed path belongs to watched development source."""
     candidate = Path(path).resolve()
     roots = tuple(Path(root).resolve() for root in source_roots)
     containing_root = next(
-        (
-            root
-            for root in roots
-            if candidate == root or candidate.is_relative_to(root)
-        ),
+        (root for root in roots if candidate == root or candidate.is_relative_to(root)),
         None,
     )
     if containing_root is None:

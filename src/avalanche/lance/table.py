@@ -244,8 +244,7 @@ class LanceTable(Table):
         location = self.location
         if not location:
             raise TypeError(
-                "Cannot pickle LanceTable before namespace.push() binds it "
-                "to a location"
+                "Cannot pickle LanceTable before namespace.push() binds it " "to a location"
             )
         return (
             _reconnect_lance_table,

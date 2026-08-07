@@ -11,6 +11,7 @@ class DescriptorPageOrder(int, metaclass=_enum_type_wrapper.EnumTypeWrapper):
     __slots__ = ()
     DESCRIPTOR_PAGE_ORDER_FORWARD: _ClassVar[DescriptorPageOrder]
     DESCRIPTOR_PAGE_ORDER_NEWEST_FIRST: _ClassVar[DescriptorPageOrder]
+
 DESCRIPTOR_PAGE_ORDER_FORWARD: DescriptorPageOrder
 DESCRIPTOR_PAGE_ORDER_NEWEST_FIRST: DescriptorPageOrder
 
@@ -30,7 +31,14 @@ class StartRunRequest(_message.Message):
     input_files: _containers.RepeatedCompositeFieldContainer[FileAttachment]
     run_id: str
     workflow_selector: str
-    def __init__(self, input_json: _Optional[str] = ..., context_json: _Optional[str] = ..., input_files: _Optional[_Iterable[_Union[FileAttachment, _Mapping]]] = ..., run_id: _Optional[str] = ..., workflow_selector: _Optional[str] = ...) -> None: ...
+    def __init__(
+        self,
+        input_json: _Optional[str] = ...,
+        context_json: _Optional[str] = ...,
+        input_files: _Optional[_Iterable[_Union[FileAttachment, _Mapping]]] = ...,
+        run_id: _Optional[str] = ...,
+        workflow_selector: _Optional[str] = ...,
+    ) -> None: ...
 
 class FileAttachment(_message.Message):
     __slots__ = ("field_name", "name", "content", "content_type", "sha256")
@@ -44,7 +52,14 @@ class FileAttachment(_message.Message):
     content: bytes
     content_type: str
     sha256: str
-    def __init__(self, field_name: _Optional[str] = ..., name: _Optional[str] = ..., content: _Optional[bytes] = ..., content_type: _Optional[str] = ..., sha256: _Optional[str] = ...) -> None: ...
+    def __init__(
+        self,
+        field_name: _Optional[str] = ...,
+        name: _Optional[str] = ...,
+        content: _Optional[bytes] = ...,
+        content_type: _Optional[str] = ...,
+        sha256: _Optional[str] = ...,
+    ) -> None: ...
 
 class StartRunResponse(_message.Message):
     __slots__ = ("run_id",)
@@ -72,7 +87,12 @@ class ListRunSummariesRequest(_message.Message):
     workflow_selector: str
     page_size: int
     page_token: str
-    def __init__(self, workflow_selector: _Optional[str] = ..., page_size: _Optional[int] = ..., page_token: _Optional[str] = ...) -> None: ...
+    def __init__(
+        self,
+        workflow_selector: _Optional[str] = ...,
+        page_size: _Optional[int] = ...,
+        page_token: _Optional[str] = ...,
+    ) -> None: ...
 
 class GetRunSnapshotRequest(_message.Message):
     __slots__ = ("run_id", "operator_instance_id", "as_of_sequence")
@@ -82,7 +102,12 @@ class GetRunSnapshotRequest(_message.Message):
     run_id: str
     operator_instance_id: str
     as_of_sequence: int
-    def __init__(self, run_id: _Optional[str] = ..., operator_instance_id: _Optional[str] = ..., as_of_sequence: _Optional[int] = ...) -> None: ...
+    def __init__(
+        self,
+        run_id: _Optional[str] = ...,
+        operator_instance_id: _Optional[str] = ...,
+        as_of_sequence: _Optional[int] = ...,
+    ) -> None: ...
 
 class GetLatestRunSnapshotRequest(_message.Message):
     __slots__ = ("run_id", "operator_instance_id")
@@ -90,10 +115,19 @@ class GetLatestRunSnapshotRequest(_message.Message):
     OPERATOR_INSTANCE_ID_FIELD_NUMBER: _ClassVar[int]
     run_id: str
     operator_instance_id: str
-    def __init__(self, run_id: _Optional[str] = ..., operator_instance_id: _Optional[str] = ...) -> None: ...
+    def __init__(
+        self, run_id: _Optional[str] = ..., operator_instance_id: _Optional[str] = ...
+    ) -> None: ...
 
 class ListLogsRequest(_message.Message):
-    __slots__ = ("page_token", "after_sequence", "page_size", "before_sequence", "node_id", "order")
+    __slots__ = (
+        "page_token",
+        "after_sequence",
+        "page_size",
+        "before_sequence",
+        "node_id",
+        "order",
+    )
     PAGE_TOKEN_FIELD_NUMBER: _ClassVar[int]
     AFTER_SEQUENCE_FIELD_NUMBER: _ClassVar[int]
     PAGE_SIZE_FIELD_NUMBER: _ClassVar[int]
@@ -106,10 +140,24 @@ class ListLogsRequest(_message.Message):
     before_sequence: int
     node_id: str
     order: DescriptorPageOrder
-    def __init__(self, page_token: _Optional[str] = ..., after_sequence: _Optional[int] = ..., page_size: _Optional[int] = ..., before_sequence: _Optional[int] = ..., node_id: _Optional[str] = ..., order: _Optional[_Union[DescriptorPageOrder, str]] = ...) -> None: ...
+    def __init__(
+        self,
+        page_token: _Optional[str] = ...,
+        after_sequence: _Optional[int] = ...,
+        page_size: _Optional[int] = ...,
+        before_sequence: _Optional[int] = ...,
+        node_id: _Optional[str] = ...,
+        order: _Optional[_Union[DescriptorPageOrder, str]] = ...,
+    ) -> None: ...
 
 class ListAgentEventsRequest(_message.Message):
-    __slots__ = ("page_token", "after_event_sequence", "page_size", "before_event_sequence", "order")
+    __slots__ = (
+        "page_token",
+        "after_event_sequence",
+        "page_size",
+        "before_event_sequence",
+        "order",
+    )
     PAGE_TOKEN_FIELD_NUMBER: _ClassVar[int]
     AFTER_EVENT_SEQUENCE_FIELD_NUMBER: _ClassVar[int]
     PAGE_SIZE_FIELD_NUMBER: _ClassVar[int]
@@ -120,7 +168,14 @@ class ListAgentEventsRequest(_message.Message):
     page_size: int
     before_event_sequence: int
     order: DescriptorPageOrder
-    def __init__(self, page_token: _Optional[str] = ..., after_event_sequence: _Optional[int] = ..., page_size: _Optional[int] = ..., before_event_sequence: _Optional[int] = ..., order: _Optional[_Union[DescriptorPageOrder, str]] = ...) -> None: ...
+    def __init__(
+        self,
+        page_token: _Optional[str] = ...,
+        after_event_sequence: _Optional[int] = ...,
+        page_size: _Optional[int] = ...,
+        before_event_sequence: _Optional[int] = ...,
+        order: _Optional[_Union[DescriptorPageOrder, str]] = ...,
+    ) -> None: ...
 
 class ReadTraceRequest(_message.Message):
     __slots__ = ("run_id", "node_id", "revision", "operator_instance_id")
@@ -132,7 +187,13 @@ class ReadTraceRequest(_message.Message):
     node_id: str
     revision: int
     operator_instance_id: str
-    def __init__(self, run_id: _Optional[str] = ..., node_id: _Optional[str] = ..., revision: _Optional[int] = ..., operator_instance_id: _Optional[str] = ...) -> None: ...
+    def __init__(
+        self,
+        run_id: _Optional[str] = ...,
+        node_id: _Optional[str] = ...,
+        revision: _Optional[int] = ...,
+        operator_instance_id: _Optional[str] = ...,
+    ) -> None: ...
 
 class ReadDetailRequest(_message.Message):
     __slots__ = ("body_token",)
@@ -146,7 +207,9 @@ class StreamOperatorUpdatesRequest(_message.Message):
     AFTER_SEQUENCE_FIELD_NUMBER: _ClassVar[int]
     operator_instance_id: str
     after_sequence: int
-    def __init__(self, operator_instance_id: _Optional[str] = ..., after_sequence: _Optional[int] = ...) -> None: ...
+    def __init__(
+        self, operator_instance_id: _Optional[str] = ..., after_sequence: _Optional[int] = ...
+    ) -> None: ...
 
 class NodeEdges(_message.Message):
     __slots__ = ("children",)
@@ -155,14 +218,24 @@ class NodeEdges(_message.Message):
     def __init__(self, children: _Optional[_Iterable[str]] = ...) -> None: ...
 
 class WorkflowTopologyMsg(_message.Message):
-    __slots__ = ("node_ids", "graph", "node_types", "display_names", "agent_field_schemas_json", "agent_instruction_lines")
+    __slots__ = (
+        "node_ids",
+        "graph",
+        "node_types",
+        "display_names",
+        "agent_field_schemas_json",
+        "agent_instruction_lines",
+    )
     class GraphEntry(_message.Message):
         __slots__ = ("key", "value")
         KEY_FIELD_NUMBER: _ClassVar[int]
         VALUE_FIELD_NUMBER: _ClassVar[int]
         key: str
         value: NodeEdges
-        def __init__(self, key: _Optional[str] = ..., value: _Optional[_Union[NodeEdges, _Mapping]] = ...) -> None: ...
+        def __init__(
+            self, key: _Optional[str] = ..., value: _Optional[_Union[NodeEdges, _Mapping]] = ...
+        ) -> None: ...
+
     class NodeTypesEntry(_message.Message):
         __slots__ = ("key", "value")
         KEY_FIELD_NUMBER: _ClassVar[int]
@@ -170,6 +243,7 @@ class WorkflowTopologyMsg(_message.Message):
         key: str
         value: str
         def __init__(self, key: _Optional[str] = ..., value: _Optional[str] = ...) -> None: ...
+
     class DisplayNamesEntry(_message.Message):
         __slots__ = ("key", "value")
         KEY_FIELD_NUMBER: _ClassVar[int]
@@ -177,6 +251,7 @@ class WorkflowTopologyMsg(_message.Message):
         key: str
         value: str
         def __init__(self, key: _Optional[str] = ..., value: _Optional[str] = ...) -> None: ...
+
     class AgentFieldSchemasJsonEntry(_message.Message):
         __slots__ = ("key", "value")
         KEY_FIELD_NUMBER: _ClassVar[int]
@@ -184,6 +259,7 @@ class WorkflowTopologyMsg(_message.Message):
         key: str
         value: str
         def __init__(self, key: _Optional[str] = ..., value: _Optional[str] = ...) -> None: ...
+
     class AgentInstructionLinesEntry(_message.Message):
         __slots__ = ("key", "value")
         KEY_FIELD_NUMBER: _ClassVar[int]
@@ -191,6 +267,7 @@ class WorkflowTopologyMsg(_message.Message):
         key: str
         value: str
         def __init__(self, key: _Optional[str] = ..., value: _Optional[str] = ...) -> None: ...
+
     NODE_IDS_FIELD_NUMBER: _ClassVar[int]
     GRAPH_FIELD_NUMBER: _ClassVar[int]
     NODE_TYPES_FIELD_NUMBER: _ClassVar[int]
@@ -203,17 +280,48 @@ class WorkflowTopologyMsg(_message.Message):
     display_names: _containers.ScalarMap[str, str]
     agent_field_schemas_json: _containers.ScalarMap[str, str]
     agent_instruction_lines: _containers.ScalarMap[str, str]
-    def __init__(self, node_ids: _Optional[_Iterable[str]] = ..., graph: _Optional[_Mapping[str, NodeEdges]] = ..., node_types: _Optional[_Mapping[str, str]] = ..., display_names: _Optional[_Mapping[str, str]] = ..., agent_field_schemas_json: _Optional[_Mapping[str, str]] = ..., agent_instruction_lines: _Optional[_Mapping[str, str]] = ...) -> None: ...
+    def __init__(
+        self,
+        node_ids: _Optional[_Iterable[str]] = ...,
+        graph: _Optional[_Mapping[str, NodeEdges]] = ...,
+        node_types: _Optional[_Mapping[str, str]] = ...,
+        display_names: _Optional[_Mapping[str, str]] = ...,
+        agent_field_schemas_json: _Optional[_Mapping[str, str]] = ...,
+        agent_instruction_lines: _Optional[_Mapping[str, str]] = ...,
+    ) -> None: ...
 
 class FlowInfoMsg(_message.Message):
-    __slots__ = ("name", "file_path", "node_ids", "graph", "node_types", "display_names", "cron", "next_run_at", "last_run_at", "workflow_id", "display_name", "root_alias", "relative_file", "builder_symbol", "agent_node_ids", "agent_metadata_json", "webhook_path", "webhook_url", "webhook_active")
+    __slots__ = (
+        "name",
+        "file_path",
+        "node_ids",
+        "graph",
+        "node_types",
+        "display_names",
+        "cron",
+        "next_run_at",
+        "last_run_at",
+        "workflow_id",
+        "display_name",
+        "root_alias",
+        "relative_file",
+        "builder_symbol",
+        "agent_node_ids",
+        "agent_metadata_json",
+        "webhook_path",
+        "webhook_url",
+        "webhook_active",
+    )
     class GraphEntry(_message.Message):
         __slots__ = ("key", "value")
         KEY_FIELD_NUMBER: _ClassVar[int]
         VALUE_FIELD_NUMBER: _ClassVar[int]
         key: str
         value: NodeEdges
-        def __init__(self, key: _Optional[str] = ..., value: _Optional[_Union[NodeEdges, _Mapping]] = ...) -> None: ...
+        def __init__(
+            self, key: _Optional[str] = ..., value: _Optional[_Union[NodeEdges, _Mapping]] = ...
+        ) -> None: ...
+
     class NodeTypesEntry(_message.Message):
         __slots__ = ("key", "value")
         KEY_FIELD_NUMBER: _ClassVar[int]
@@ -221,6 +329,7 @@ class FlowInfoMsg(_message.Message):
         key: str
         value: str
         def __init__(self, key: _Optional[str] = ..., value: _Optional[str] = ...) -> None: ...
+
     class DisplayNamesEntry(_message.Message):
         __slots__ = ("key", "value")
         KEY_FIELD_NUMBER: _ClassVar[int]
@@ -228,6 +337,7 @@ class FlowInfoMsg(_message.Message):
         key: str
         value: str
         def __init__(self, key: _Optional[str] = ..., value: _Optional[str] = ...) -> None: ...
+
     class AgentMetadataJsonEntry(_message.Message):
         __slots__ = ("key", "value")
         KEY_FIELD_NUMBER: _ClassVar[int]
@@ -235,6 +345,7 @@ class FlowInfoMsg(_message.Message):
         key: str
         value: str
         def __init__(self, key: _Optional[str] = ..., value: _Optional[str] = ...) -> None: ...
+
     NAME_FIELD_NUMBER: _ClassVar[int]
     FILE_PATH_FIELD_NUMBER: _ClassVar[int]
     NODE_IDS_FIELD_NUMBER: _ClassVar[int]
@@ -273,7 +384,28 @@ class FlowInfoMsg(_message.Message):
     webhook_path: str
     webhook_url: str
     webhook_active: bool
-    def __init__(self, name: _Optional[str] = ..., file_path: _Optional[str] = ..., node_ids: _Optional[_Iterable[str]] = ..., graph: _Optional[_Mapping[str, NodeEdges]] = ..., node_types: _Optional[_Mapping[str, str]] = ..., display_names: _Optional[_Mapping[str, str]] = ..., cron: _Optional[str] = ..., next_run_at: _Optional[float] = ..., last_run_at: _Optional[float] = ..., workflow_id: _Optional[str] = ..., display_name: _Optional[str] = ..., root_alias: _Optional[str] = ..., relative_file: _Optional[str] = ..., builder_symbol: _Optional[str] = ..., agent_node_ids: _Optional[_Iterable[str]] = ..., agent_metadata_json: _Optional[_Mapping[str, str]] = ..., webhook_path: _Optional[str] = ..., webhook_url: _Optional[str] = ..., webhook_active: bool = ...) -> None: ...
+    def __init__(
+        self,
+        name: _Optional[str] = ...,
+        file_path: _Optional[str] = ...,
+        node_ids: _Optional[_Iterable[str]] = ...,
+        graph: _Optional[_Mapping[str, NodeEdges]] = ...,
+        node_types: _Optional[_Mapping[str, str]] = ...,
+        display_names: _Optional[_Mapping[str, str]] = ...,
+        cron: _Optional[str] = ...,
+        next_run_at: _Optional[float] = ...,
+        last_run_at: _Optional[float] = ...,
+        workflow_id: _Optional[str] = ...,
+        display_name: _Optional[str] = ...,
+        root_alias: _Optional[str] = ...,
+        relative_file: _Optional[str] = ...,
+        builder_symbol: _Optional[str] = ...,
+        agent_node_ids: _Optional[_Iterable[str]] = ...,
+        agent_metadata_json: _Optional[_Mapping[str, str]] = ...,
+        webhook_path: _Optional[str] = ...,
+        webhook_url: _Optional[str] = ...,
+        webhook_active: bool = ...,
+    ) -> None: ...
 
 class DiscoveryDiagnosticMsg(_message.Message):
     __slots__ = ("path", "kind", "message")
@@ -283,7 +415,12 @@ class DiscoveryDiagnosticMsg(_message.Message):
     path: str
     kind: str
     message: str
-    def __init__(self, path: _Optional[str] = ..., kind: _Optional[str] = ..., message: _Optional[str] = ...) -> None: ...
+    def __init__(
+        self,
+        path: _Optional[str] = ...,
+        kind: _Optional[str] = ...,
+        message: _Optional[str] = ...,
+    ) -> None: ...
 
 class ScanTargetMsg(_message.Message):
     __slots__ = ("alias", "target_path", "kind")
@@ -293,10 +430,22 @@ class ScanTargetMsg(_message.Message):
     alias: str
     target_path: str
     kind: str
-    def __init__(self, alias: _Optional[str] = ..., target_path: _Optional[str] = ..., kind: _Optional[str] = ...) -> None: ...
+    def __init__(
+        self,
+        alias: _Optional[str] = ...,
+        target_path: _Optional[str] = ...,
+        kind: _Optional[str] = ...,
+    ) -> None: ...
 
 class CatalogSnapshotMsg(_message.Message):
-    __slots__ = ("operator_instance_id", "as_of_sequence", "revision", "workflows", "scan_targets", "diagnostics")
+    __slots__ = (
+        "operator_instance_id",
+        "as_of_sequence",
+        "revision",
+        "workflows",
+        "scan_targets",
+        "diagnostics",
+    )
     OPERATOR_INSTANCE_ID_FIELD_NUMBER: _ClassVar[int]
     AS_OF_SEQUENCE_FIELD_NUMBER: _ClassVar[int]
     REVISION_FIELD_NUMBER: _ClassVar[int]
@@ -309,7 +458,15 @@ class CatalogSnapshotMsg(_message.Message):
     workflows: _containers.RepeatedCompositeFieldContainer[FlowInfoMsg]
     scan_targets: _containers.RepeatedCompositeFieldContainer[ScanTargetMsg]
     diagnostics: _containers.RepeatedCompositeFieldContainer[DiscoveryDiagnosticMsg]
-    def __init__(self, operator_instance_id: _Optional[str] = ..., as_of_sequence: _Optional[int] = ..., revision: _Optional[int] = ..., workflows: _Optional[_Iterable[_Union[FlowInfoMsg, _Mapping]]] = ..., scan_targets: _Optional[_Iterable[_Union[ScanTargetMsg, _Mapping]]] = ..., diagnostics: _Optional[_Iterable[_Union[DiscoveryDiagnosticMsg, _Mapping]]] = ...) -> None: ...
+    def __init__(
+        self,
+        operator_instance_id: _Optional[str] = ...,
+        as_of_sequence: _Optional[int] = ...,
+        revision: _Optional[int] = ...,
+        workflows: _Optional[_Iterable[_Union[FlowInfoMsg, _Mapping]]] = ...,
+        scan_targets: _Optional[_Iterable[_Union[ScanTargetMsg, _Mapping]]] = ...,
+        diagnostics: _Optional[_Iterable[_Union[DiscoveryDiagnosticMsg, _Mapping]]] = ...,
+    ) -> None: ...
 
 class ResultFileAttachment(_message.Message):
     __slots__ = ("attachment_id", "name", "content", "media_type", "sha256")
@@ -323,7 +480,14 @@ class ResultFileAttachment(_message.Message):
     content: bytes
     media_type: str
     sha256: str
-    def __init__(self, attachment_id: _Optional[str] = ..., name: _Optional[str] = ..., content: _Optional[bytes] = ..., media_type: _Optional[str] = ..., sha256: _Optional[str] = ...) -> None: ...
+    def __init__(
+        self,
+        attachment_id: _Optional[str] = ...,
+        name: _Optional[str] = ...,
+        content: _Optional[bytes] = ...,
+        media_type: _Optional[str] = ...,
+        sha256: _Optional[str] = ...,
+    ) -> None: ...
 
 class RunResultMsg(_message.Message):
     __slots__ = ("value_json", "files")
@@ -331,10 +495,26 @@ class RunResultMsg(_message.Message):
     FILES_FIELD_NUMBER: _ClassVar[int]
     value_json: str
     files: _containers.RepeatedCompositeFieldContainer[ResultFileAttachment]
-    def __init__(self, value_json: _Optional[str] = ..., files: _Optional[_Iterable[_Union[ResultFileAttachment, _Mapping]]] = ...) -> None: ...
+    def __init__(
+        self,
+        value_json: _Optional[str] = ...,
+        files: _Optional[_Iterable[_Union[ResultFileAttachment, _Mapping]]] = ...,
+    ) -> None: ...
 
 class RunSummaryMsg(_message.Message):
-    __slots__ = ("run_id", "flow_name", "status", "started_at", "ended_at", "triggered_by", "workflow_id", "workflow_display_name", "created_sequence", "revision", "triggered_at")
+    __slots__ = (
+        "run_id",
+        "flow_name",
+        "status",
+        "started_at",
+        "ended_at",
+        "triggered_by",
+        "workflow_id",
+        "workflow_display_name",
+        "created_sequence",
+        "revision",
+        "triggered_at",
+    )
     RUN_ID_FIELD_NUMBER: _ClassVar[int]
     FLOW_NAME_FIELD_NUMBER: _ClassVar[int]
     STATUS_FIELD_NUMBER: _ClassVar[int]
@@ -357,10 +537,32 @@ class RunSummaryMsg(_message.Message):
     created_sequence: int
     revision: int
     triggered_at: float
-    def __init__(self, run_id: _Optional[str] = ..., flow_name: _Optional[str] = ..., status: _Optional[str] = ..., started_at: _Optional[float] = ..., ended_at: _Optional[float] = ..., triggered_by: _Optional[str] = ..., workflow_id: _Optional[str] = ..., workflow_display_name: _Optional[str] = ..., created_sequence: _Optional[int] = ..., revision: _Optional[int] = ..., triggered_at: _Optional[float] = ...) -> None: ...
+    def __init__(
+        self,
+        run_id: _Optional[str] = ...,
+        flow_name: _Optional[str] = ...,
+        status: _Optional[str] = ...,
+        started_at: _Optional[float] = ...,
+        ended_at: _Optional[float] = ...,
+        triggered_by: _Optional[str] = ...,
+        workflow_id: _Optional[str] = ...,
+        workflow_display_name: _Optional[str] = ...,
+        created_sequence: _Optional[int] = ...,
+        revision: _Optional[int] = ...,
+        triggered_at: _Optional[float] = ...,
+    ) -> None: ...
 
 class TraceHeaderMsg(_message.Message):
-    __slots__ = ("status", "model", "sub_model", "iterations", "max_iterations", "duration_ms", "usage_json", "telemetry_json")
+    __slots__ = (
+        "status",
+        "model",
+        "sub_model",
+        "iterations",
+        "max_iterations",
+        "duration_ms",
+        "usage_json",
+        "telemetry_json",
+    )
     STATUS_FIELD_NUMBER: _ClassVar[int]
     MODEL_FIELD_NUMBER: _ClassVar[int]
     SUB_MODEL_FIELD_NUMBER: _ClassVar[int]
@@ -377,10 +579,29 @@ class TraceHeaderMsg(_message.Message):
     duration_ms: int
     usage_json: str
     telemetry_json: str
-    def __init__(self, status: _Optional[str] = ..., model: _Optional[str] = ..., sub_model: _Optional[str] = ..., iterations: _Optional[int] = ..., max_iterations: _Optional[int] = ..., duration_ms: _Optional[int] = ..., usage_json: _Optional[str] = ..., telemetry_json: _Optional[str] = ...) -> None: ...
+    def __init__(
+        self,
+        status: _Optional[str] = ...,
+        model: _Optional[str] = ...,
+        sub_model: _Optional[str] = ...,
+        iterations: _Optional[int] = ...,
+        max_iterations: _Optional[int] = ...,
+        duration_ms: _Optional[int] = ...,
+        usage_json: _Optional[str] = ...,
+        telemetry_json: _Optional[str] = ...,
+    ) -> None: ...
 
 class TraceDescriptorMsg(_message.Message):
-    __slots__ = ("status", "revision", "available", "complete", "event_count", "size_bytes", "latest_event_sequence", "header")
+    __slots__ = (
+        "status",
+        "revision",
+        "available",
+        "complete",
+        "event_count",
+        "size_bytes",
+        "latest_event_sequence",
+        "header",
+    )
     STATUS_FIELD_NUMBER: _ClassVar[int]
     REVISION_FIELD_NUMBER: _ClassVar[int]
     AVAILABLE_FIELD_NUMBER: _ClassVar[int]
@@ -397,10 +618,32 @@ class TraceDescriptorMsg(_message.Message):
     size_bytes: int
     latest_event_sequence: int
     header: TraceHeaderMsg
-    def __init__(self, status: _Optional[str] = ..., revision: _Optional[int] = ..., available: bool = ..., complete: bool = ..., event_count: _Optional[int] = ..., size_bytes: _Optional[int] = ..., latest_event_sequence: _Optional[int] = ..., header: _Optional[_Union[TraceHeaderMsg, _Mapping]] = ...) -> None: ...
+    def __init__(
+        self,
+        status: _Optional[str] = ...,
+        revision: _Optional[int] = ...,
+        available: bool = ...,
+        complete: bool = ...,
+        event_count: _Optional[int] = ...,
+        size_bytes: _Optional[int] = ...,
+        latest_event_sequence: _Optional[int] = ...,
+        header: _Optional[_Union[TraceHeaderMsg, _Mapping]] = ...,
+    ) -> None: ...
 
 class NodeSnapshotMsg(_message.Message):
-    __slots__ = ("node_id", "name", "node_type", "status", "started_at", "ended_at", "trace", "revision", "event_page_token", "error", "running_elapsed_seconds")
+    __slots__ = (
+        "node_id",
+        "name",
+        "node_type",
+        "status",
+        "started_at",
+        "ended_at",
+        "trace",
+        "revision",
+        "event_page_token",
+        "error",
+        "running_elapsed_seconds",
+    )
     NODE_ID_FIELD_NUMBER: _ClassVar[int]
     NAME_FIELD_NUMBER: _ClassVar[int]
     NODE_TYPE_FIELD_NUMBER: _ClassVar[int]
@@ -423,10 +666,31 @@ class NodeSnapshotMsg(_message.Message):
     event_page_token: str
     error: str
     running_elapsed_seconds: float
-    def __init__(self, node_id: _Optional[str] = ..., name: _Optional[str] = ..., node_type: _Optional[str] = ..., status: _Optional[str] = ..., started_at: _Optional[float] = ..., ended_at: _Optional[float] = ..., trace: _Optional[_Union[TraceDescriptorMsg, _Mapping]] = ..., revision: _Optional[int] = ..., event_page_token: _Optional[str] = ..., error: _Optional[str] = ..., running_elapsed_seconds: _Optional[float] = ...) -> None: ...
+    def __init__(
+        self,
+        node_id: _Optional[str] = ...,
+        name: _Optional[str] = ...,
+        node_type: _Optional[str] = ...,
+        status: _Optional[str] = ...,
+        started_at: _Optional[float] = ...,
+        ended_at: _Optional[float] = ...,
+        trace: _Optional[_Union[TraceDescriptorMsg, _Mapping]] = ...,
+        revision: _Optional[int] = ...,
+        event_page_token: _Optional[str] = ...,
+        error: _Optional[str] = ...,
+        running_elapsed_seconds: _Optional[float] = ...,
+    ) -> None: ...
 
 class RunSnapshotMsg(_message.Message):
-    __slots__ = ("operator_instance_id", "as_of_sequence", "summary", "nodes", "latest_log_sequence", "log_page_token", "topology")
+    __slots__ = (
+        "operator_instance_id",
+        "as_of_sequence",
+        "summary",
+        "nodes",
+        "latest_log_sequence",
+        "log_page_token",
+        "topology",
+    )
     OPERATOR_INSTANCE_ID_FIELD_NUMBER: _ClassVar[int]
     AS_OF_SEQUENCE_FIELD_NUMBER: _ClassVar[int]
     SUMMARY_FIELD_NUMBER: _ClassVar[int]
@@ -441,7 +705,16 @@ class RunSnapshotMsg(_message.Message):
     latest_log_sequence: int
     log_page_token: str
     topology: WorkflowTopologyMsg
-    def __init__(self, operator_instance_id: _Optional[str] = ..., as_of_sequence: _Optional[int] = ..., summary: _Optional[_Union[RunSummaryMsg, _Mapping]] = ..., nodes: _Optional[_Iterable[_Union[NodeSnapshotMsg, _Mapping]]] = ..., latest_log_sequence: _Optional[int] = ..., log_page_token: _Optional[str] = ..., topology: _Optional[_Union[WorkflowTopologyMsg, _Mapping]] = ...) -> None: ...
+    def __init__(
+        self,
+        operator_instance_id: _Optional[str] = ...,
+        as_of_sequence: _Optional[int] = ...,
+        summary: _Optional[_Union[RunSummaryMsg, _Mapping]] = ...,
+        nodes: _Optional[_Iterable[_Union[NodeSnapshotMsg, _Mapping]]] = ...,
+        latest_log_sequence: _Optional[int] = ...,
+        log_page_token: _Optional[str] = ...,
+        topology: _Optional[_Union[WorkflowTopologyMsg, _Mapping]] = ...,
+    ) -> None: ...
 
 class RunSummaryPage(_message.Message):
     __slots__ = ("operator_instance_id", "as_of_sequence", "runs", "next_page_token")
@@ -453,7 +726,13 @@ class RunSummaryPage(_message.Message):
     as_of_sequence: int
     runs: _containers.RepeatedCompositeFieldContainer[RunSummaryMsg]
     next_page_token: str
-    def __init__(self, operator_instance_id: _Optional[str] = ..., as_of_sequence: _Optional[int] = ..., runs: _Optional[_Iterable[_Union[RunSummaryMsg, _Mapping]]] = ..., next_page_token: _Optional[str] = ...) -> None: ...
+    def __init__(
+        self,
+        operator_instance_id: _Optional[str] = ...,
+        as_of_sequence: _Optional[int] = ...,
+        runs: _Optional[_Iterable[_Union[RunSummaryMsg, _Mapping]]] = ...,
+        next_page_token: _Optional[str] = ...,
+    ) -> None: ...
 
 class LogRecordDescriptorMsg(_message.Message):
     __slots__ = ("sequence", "timestamp", "level", "node_id", "size_bytes", "body_token")
@@ -469,7 +748,15 @@ class LogRecordDescriptorMsg(_message.Message):
     node_id: str
     size_bytes: int
     body_token: str
-    def __init__(self, sequence: _Optional[int] = ..., timestamp: _Optional[float] = ..., level: _Optional[str] = ..., node_id: _Optional[str] = ..., size_bytes: _Optional[int] = ..., body_token: _Optional[str] = ...) -> None: ...
+    def __init__(
+        self,
+        sequence: _Optional[int] = ...,
+        timestamp: _Optional[float] = ...,
+        level: _Optional[str] = ...,
+        node_id: _Optional[str] = ...,
+        size_bytes: _Optional[int] = ...,
+        body_token: _Optional[str] = ...,
+    ) -> None: ...
 
 class LogPage(_message.Message):
     __slots__ = ("operator_instance_id", "as_of_sequence", "logs", "next_page_token")
@@ -481,10 +768,27 @@ class LogPage(_message.Message):
     as_of_sequence: int
     logs: _containers.RepeatedCompositeFieldContainer[LogRecordDescriptorMsg]
     next_page_token: str
-    def __init__(self, operator_instance_id: _Optional[str] = ..., as_of_sequence: _Optional[int] = ..., logs: _Optional[_Iterable[_Union[LogRecordDescriptorMsg, _Mapping]]] = ..., next_page_token: _Optional[str] = ...) -> None: ...
+    def __init__(
+        self,
+        operator_instance_id: _Optional[str] = ...,
+        as_of_sequence: _Optional[int] = ...,
+        logs: _Optional[_Iterable[_Union[LogRecordDescriptorMsg, _Mapping]]] = ...,
+        next_page_token: _Optional[str] = ...,
+    ) -> None: ...
 
 class AgentEventDescriptorMsg(_message.Message):
-    __slots__ = ("event_sequence", "size_bytes", "body_token", "invocation_id", "event_kind", "iteration", "duration_ms", "error", "tool_count", "predict_count")
+    __slots__ = (
+        "event_sequence",
+        "size_bytes",
+        "body_token",
+        "invocation_id",
+        "event_kind",
+        "iteration",
+        "duration_ms",
+        "error",
+        "tool_count",
+        "predict_count",
+    )
     EVENT_SEQUENCE_FIELD_NUMBER: _ClassVar[int]
     SIZE_BYTES_FIELD_NUMBER: _ClassVar[int]
     BODY_TOKEN_FIELD_NUMBER: _ClassVar[int]
@@ -505,10 +809,29 @@ class AgentEventDescriptorMsg(_message.Message):
     error: bool
     tool_count: int
     predict_count: int
-    def __init__(self, event_sequence: _Optional[int] = ..., size_bytes: _Optional[int] = ..., body_token: _Optional[str] = ..., invocation_id: _Optional[str] = ..., event_kind: _Optional[str] = ..., iteration: _Optional[int] = ..., duration_ms: _Optional[int] = ..., error: bool = ..., tool_count: _Optional[int] = ..., predict_count: _Optional[int] = ...) -> None: ...
+    def __init__(
+        self,
+        event_sequence: _Optional[int] = ...,
+        size_bytes: _Optional[int] = ...,
+        body_token: _Optional[str] = ...,
+        invocation_id: _Optional[str] = ...,
+        event_kind: _Optional[str] = ...,
+        iteration: _Optional[int] = ...,
+        duration_ms: _Optional[int] = ...,
+        error: bool = ...,
+        tool_count: _Optional[int] = ...,
+        predict_count: _Optional[int] = ...,
+    ) -> None: ...
 
 class AgentEventPage(_message.Message):
-    __slots__ = ("operator_instance_id", "as_of_sequence", "run_id", "node_id", "events", "next_page_token")
+    __slots__ = (
+        "operator_instance_id",
+        "as_of_sequence",
+        "run_id",
+        "node_id",
+        "events",
+        "next_page_token",
+    )
     OPERATOR_INSTANCE_ID_FIELD_NUMBER: _ClassVar[int]
     AS_OF_SEQUENCE_FIELD_NUMBER: _ClassVar[int]
     RUN_ID_FIELD_NUMBER: _ClassVar[int]
@@ -521,7 +844,15 @@ class AgentEventPage(_message.Message):
     node_id: str
     events: _containers.RepeatedCompositeFieldContainer[AgentEventDescriptorMsg]
     next_page_token: str
-    def __init__(self, operator_instance_id: _Optional[str] = ..., as_of_sequence: _Optional[int] = ..., run_id: _Optional[str] = ..., node_id: _Optional[str] = ..., events: _Optional[_Iterable[_Union[AgentEventDescriptorMsg, _Mapping]]] = ..., next_page_token: _Optional[str] = ...) -> None: ...
+    def __init__(
+        self,
+        operator_instance_id: _Optional[str] = ...,
+        as_of_sequence: _Optional[int] = ...,
+        run_id: _Optional[str] = ...,
+        node_id: _Optional[str] = ...,
+        events: _Optional[_Iterable[_Union[AgentEventDescriptorMsg, _Mapping]]] = ...,
+        next_page_token: _Optional[str] = ...,
+    ) -> None: ...
 
 class TraceChunk(_message.Message):
     __slots__ = ("revision", "chunk_index", "data", "eof")
@@ -533,7 +864,13 @@ class TraceChunk(_message.Message):
     chunk_index: int
     data: bytes
     eof: bool
-    def __init__(self, revision: _Optional[int] = ..., chunk_index: _Optional[int] = ..., data: _Optional[bytes] = ..., eof: bool = ...) -> None: ...
+    def __init__(
+        self,
+        revision: _Optional[int] = ...,
+        chunk_index: _Optional[int] = ...,
+        data: _Optional[bytes] = ...,
+        eof: bool = ...,
+    ) -> None: ...
 
 class DetailChunk(_message.Message):
     __slots__ = ("chunk_index", "data", "eof")
@@ -543,7 +880,9 @@ class DetailChunk(_message.Message):
     chunk_index: int
     data: bytes
     eof: bool
-    def __init__(self, chunk_index: _Optional[int] = ..., data: _Optional[bytes] = ..., eof: bool = ...) -> None: ...
+    def __init__(
+        self, chunk_index: _Optional[int] = ..., data: _Optional[bytes] = ..., eof: bool = ...
+    ) -> None: ...
 
 class RunCreated(_message.Message):
     __slots__ = ("summary", "nodes", "topology")
@@ -553,7 +892,12 @@ class RunCreated(_message.Message):
     summary: RunSummaryMsg
     nodes: _containers.RepeatedCompositeFieldContainer[NodeSnapshotMsg]
     topology: WorkflowTopologyMsg
-    def __init__(self, summary: _Optional[_Union[RunSummaryMsg, _Mapping]] = ..., nodes: _Optional[_Iterable[_Union[NodeSnapshotMsg, _Mapping]]] = ..., topology: _Optional[_Union[WorkflowTopologyMsg, _Mapping]] = ...) -> None: ...
+    def __init__(
+        self,
+        summary: _Optional[_Union[RunSummaryMsg, _Mapping]] = ...,
+        nodes: _Optional[_Iterable[_Union[NodeSnapshotMsg, _Mapping]]] = ...,
+        topology: _Optional[_Union[WorkflowTopologyMsg, _Mapping]] = ...,
+    ) -> None: ...
 
 class RunStatusChanged(_message.Message):
     __slots__ = ("run_id", "status", "started_at", "ended_at", "revision")
@@ -567,10 +911,26 @@ class RunStatusChanged(_message.Message):
     started_at: float
     ended_at: float
     revision: int
-    def __init__(self, run_id: _Optional[str] = ..., status: _Optional[str] = ..., started_at: _Optional[float] = ..., ended_at: _Optional[float] = ..., revision: _Optional[int] = ...) -> None: ...
+    def __init__(
+        self,
+        run_id: _Optional[str] = ...,
+        status: _Optional[str] = ...,
+        started_at: _Optional[float] = ...,
+        ended_at: _Optional[float] = ...,
+        revision: _Optional[int] = ...,
+    ) -> None: ...
 
 class NodeStatusChanged(_message.Message):
-    __slots__ = ("run_id", "node_id", "status", "started_at", "ended_at", "revision", "error", "running_elapsed_seconds")
+    __slots__ = (
+        "run_id",
+        "node_id",
+        "status",
+        "started_at",
+        "ended_at",
+        "revision",
+        "error",
+        "running_elapsed_seconds",
+    )
     RUN_ID_FIELD_NUMBER: _ClassVar[int]
     NODE_ID_FIELD_NUMBER: _ClassVar[int]
     STATUS_FIELD_NUMBER: _ClassVar[int]
@@ -587,7 +947,17 @@ class NodeStatusChanged(_message.Message):
     revision: int
     error: str
     running_elapsed_seconds: float
-    def __init__(self, run_id: _Optional[str] = ..., node_id: _Optional[str] = ..., status: _Optional[str] = ..., started_at: _Optional[float] = ..., ended_at: _Optional[float] = ..., revision: _Optional[int] = ..., error: _Optional[str] = ..., running_elapsed_seconds: _Optional[float] = ...) -> None: ...
+    def __init__(
+        self,
+        run_id: _Optional[str] = ...,
+        node_id: _Optional[str] = ...,
+        status: _Optional[str] = ...,
+        started_at: _Optional[float] = ...,
+        ended_at: _Optional[float] = ...,
+        revision: _Optional[int] = ...,
+        error: _Optional[str] = ...,
+        running_elapsed_seconds: _Optional[float] = ...,
+    ) -> None: ...
 
 class LogAppended(_message.Message):
     __slots__ = ("run_id", "log")
@@ -595,7 +965,11 @@ class LogAppended(_message.Message):
     LOG_FIELD_NUMBER: _ClassVar[int]
     run_id: str
     log: LogRecordDescriptorMsg
-    def __init__(self, run_id: _Optional[str] = ..., log: _Optional[_Union[LogRecordDescriptorMsg, _Mapping]] = ...) -> None: ...
+    def __init__(
+        self,
+        run_id: _Optional[str] = ...,
+        log: _Optional[_Union[LogRecordDescriptorMsg, _Mapping]] = ...,
+    ) -> None: ...
 
 class AgentEventAppended(_message.Message):
     __slots__ = ("run_id", "node_id", "event")
@@ -605,7 +979,12 @@ class AgentEventAppended(_message.Message):
     run_id: str
     node_id: str
     event: AgentEventDescriptorMsg
-    def __init__(self, run_id: _Optional[str] = ..., node_id: _Optional[str] = ..., event: _Optional[_Union[AgentEventDescriptorMsg, _Mapping]] = ...) -> None: ...
+    def __init__(
+        self,
+        run_id: _Optional[str] = ...,
+        node_id: _Optional[str] = ...,
+        event: _Optional[_Union[AgentEventDescriptorMsg, _Mapping]] = ...,
+    ) -> None: ...
 
 class TraceFinalized(_message.Message):
     __slots__ = ("run_id", "node_id", "trace")
@@ -615,16 +994,32 @@ class TraceFinalized(_message.Message):
     run_id: str
     node_id: str
     trace: TraceDescriptorMsg
-    def __init__(self, run_id: _Optional[str] = ..., node_id: _Optional[str] = ..., trace: _Optional[_Union[TraceDescriptorMsg, _Mapping]] = ...) -> None: ...
+    def __init__(
+        self,
+        run_id: _Optional[str] = ...,
+        node_id: _Optional[str] = ...,
+        trace: _Optional[_Union[TraceDescriptorMsg, _Mapping]] = ...,
+    ) -> None: ...
 
 class CatalogReplaced(_message.Message):
     __slots__ = ("catalog",)
     CATALOG_FIELD_NUMBER: _ClassVar[int]
     catalog: CatalogSnapshotMsg
-    def __init__(self, catalog: _Optional[_Union[CatalogSnapshotMsg, _Mapping]] = ...) -> None: ...
+    def __init__(
+        self, catalog: _Optional[_Union[CatalogSnapshotMsg, _Mapping]] = ...
+    ) -> None: ...
 
 class OperatorUpdate(_message.Message):
-    __slots__ = ("sequence", "run_created", "run_status_changed", "node_status_changed", "log_appended", "agent_event_appended", "trace_finalized", "catalog_replaced")
+    __slots__ = (
+        "sequence",
+        "run_created",
+        "run_status_changed",
+        "node_status_changed",
+        "log_appended",
+        "agent_event_appended",
+        "trace_finalized",
+        "catalog_replaced",
+    )
     SEQUENCE_FIELD_NUMBER: _ClassVar[int]
     RUN_CREATED_FIELD_NUMBER: _ClassVar[int]
     RUN_STATUS_CHANGED_FIELD_NUMBER: _ClassVar[int]
@@ -641,7 +1036,17 @@ class OperatorUpdate(_message.Message):
     agent_event_appended: AgentEventAppended
     trace_finalized: TraceFinalized
     catalog_replaced: CatalogReplaced
-    def __init__(self, sequence: _Optional[int] = ..., run_created: _Optional[_Union[RunCreated, _Mapping]] = ..., run_status_changed: _Optional[_Union[RunStatusChanged, _Mapping]] = ..., node_status_changed: _Optional[_Union[NodeStatusChanged, _Mapping]] = ..., log_appended: _Optional[_Union[LogAppended, _Mapping]] = ..., agent_event_appended: _Optional[_Union[AgentEventAppended, _Mapping]] = ..., trace_finalized: _Optional[_Union[TraceFinalized, _Mapping]] = ..., catalog_replaced: _Optional[_Union[CatalogReplaced, _Mapping]] = ...) -> None: ...
+    def __init__(
+        self,
+        sequence: _Optional[int] = ...,
+        run_created: _Optional[_Union[RunCreated, _Mapping]] = ...,
+        run_status_changed: _Optional[_Union[RunStatusChanged, _Mapping]] = ...,
+        node_status_changed: _Optional[_Union[NodeStatusChanged, _Mapping]] = ...,
+        log_appended: _Optional[_Union[LogAppended, _Mapping]] = ...,
+        agent_event_appended: _Optional[_Union[AgentEventAppended, _Mapping]] = ...,
+        trace_finalized: _Optional[_Union[TraceFinalized, _Mapping]] = ...,
+        catalog_replaced: _Optional[_Union[CatalogReplaced, _Mapping]] = ...,
+    ) -> None: ...
 
 class ResetRequired(_message.Message):
     __slots__ = ("history_floor", "latest_sequence")
@@ -649,7 +1054,9 @@ class ResetRequired(_message.Message):
     LATEST_SEQUENCE_FIELD_NUMBER: _ClassVar[int]
     history_floor: int
     latest_sequence: int
-    def __init__(self, history_floor: _Optional[int] = ..., latest_sequence: _Optional[int] = ...) -> None: ...
+    def __init__(
+        self, history_floor: _Optional[int] = ..., latest_sequence: _Optional[int] = ...
+    ) -> None: ...
 
 class OperatorUpdateEnvelope(_message.Message):
     __slots__ = ("operator_instance_id", "update", "reset_required")
@@ -659,4 +1066,9 @@ class OperatorUpdateEnvelope(_message.Message):
     operator_instance_id: str
     update: OperatorUpdate
     reset_required: ResetRequired
-    def __init__(self, operator_instance_id: _Optional[str] = ..., update: _Optional[_Union[OperatorUpdate, _Mapping]] = ..., reset_required: _Optional[_Union[ResetRequired, _Mapping]] = ...) -> None: ...
+    def __init__(
+        self,
+        operator_instance_id: _Optional[str] = ...,
+        update: _Optional[_Union[OperatorUpdate, _Mapping]] = ...,
+        reset_required: _Optional[_Union[ResetRequired, _Mapping]] = ...,
+    ) -> None: ...

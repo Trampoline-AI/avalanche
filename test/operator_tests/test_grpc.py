@@ -2683,9 +2683,9 @@ def test_grpc_latest_snapshot_and_newest_pages_preserve_status_contract():
                 order=pb.DESCRIPTOR_PAGE_ORDER_NEWEST_FIRST,
             )
         )
-        assert {
-            item.sequence for item in first_logs.logs
-        }.isdisjoint(item.sequence for item in second_logs.logs)
+        assert {item.sequence for item in first_logs.logs}.isdisjoint(
+            item.sequence for item in second_logs.logs
+        )
         reads_before_missing_page = counted_logs.item_reads
         missing_logs = stub.ListLogs(
             pb.ListLogsRequest(

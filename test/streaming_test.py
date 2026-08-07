@@ -81,7 +81,7 @@ def test_stream_wrapper_does_not_double_exit():
 
         @ava.step
         def failing_step(
-            data: pl.DataFrame = ava.Stream(MagicMock(), key="test", mode="append_scan")
+            data: pl.DataFrame = ava.Stream(MagicMock(), key="test", mode="append_scan"),
         ):
             assert data["x"].to_list() == [1, 2, 3]
             raise ValueError("Intentional failure")

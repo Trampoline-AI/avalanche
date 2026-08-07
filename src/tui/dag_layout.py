@@ -77,6 +77,7 @@ def _topo_depth(graph: dict[str, list[str]], node_ids: list[str]) -> dict[str, i
         for child in children:
             parents_of[child].append(parent)
     depth: dict[str, int] = {}
+
     def _get_depth(nid: str) -> int:
         if nid in depth:
             return depth[nid]
@@ -84,13 +85,15 @@ def _topo_depth(graph: dict[str, list[str]], node_ids: list[str]) -> dict[str, i
         d = max((_get_depth(p) + 1 for p in pars), default=0)
         depth[nid] = d
         return d
+
     for nid in node_ids:
         _get_depth(nid)
     return depth
 
 
 def _extract_skip_edges(
-    graph: dict[str, list[str]], node_ids: list[str],
+    graph: dict[str, list[str]],
+    node_ids: list[str],
 ) -> tuple[dict[str, list[str]], list[tuple[str, str]]]:
     """Remove skip edges from the graph and return them separately.
 
@@ -116,8 +119,7 @@ def _extract_skip_edges(
                 # causes node duplication in the layout.)
                 other_kids = [c for c in children if c != child]
                 still_reachable = any(
-                    child in _reachable_between(ok, None, children_of)
-                    for ok in other_kids
+                    child in _reachable_between(ok, None, children_of) for ok in other_kids
                 )
                 if still_reachable:
                     skip_edges.append((parent, child))
@@ -131,7 +133,9 @@ def _extract_skip_edges(
 
 
 def _reachable_between(
-    start: str, stop: str | None, children_of: dict[str, list[str]],
+    start: str,
+    stop: str | None,
+    children_of: dict[str, list[str]],
 ) -> set[str]:
     """All nodes reachable from start via BFS, not crossing stop."""
     visited: set[str] = set()
@@ -262,9 +266,7 @@ def workflow_to_layout(info: WorkflowInfo) -> tuple[SeqGroup, list[DagNode]]:
 
         # Cross-fork fan-in dedup: nodes reachable from multiple branches
         # are assigned to the first owning branch, blocked in others.
-        branch_reachable = [
-            _reachable_between(k, effective_stop, children_of) for k in kids
-        ]
+        branch_reachable = [_reachable_between(k, effective_stop, children_of) for k in kids]
         node_owner: dict[str, int] = {}
         cross_nodes: set[str] = set()
         for bi, reachable in enumerate(branch_reachable):
@@ -274,16 +276,12 @@ def workflow_to_layout(info: WorkflowInfo) -> tuple[SeqGroup, list[DagNode]]:
                 else:
                     cross_nodes.add(n)
         # Only dedup partial convergence (not reachable from ALL branches)
-        cross_nodes = {
-            n for n in cross_nodes
-            if not all(n in br for br in branch_reachable)
-        }
+        cross_nodes = {n for n in cross_nodes if not all(n in br for br in branch_reachable)}
 
         branches = []
         for i, k in enumerate(kids):
             branch_blocked = blocked | frozenset(
-                n for n in cross_nodes
-                if node_owner.get(n) != i and n in branch_reachable[i]
+                n for n in cross_nodes if node_owner.get(n) != i and n in branch_reachable[i]
             )
             if k in branch_blocked:
                 skip_edges.append((nid, k))
@@ -447,7 +445,6 @@ def _collect_nodes(steps: list[DagNode | ParGroup]) -> list[DagNode]:
     return nodes
 
 
-
 def _anchor_rendered_nodes(lines: list[Text], steps: list[DagNode | ParGroup]) -> None:
     """Record each node occurrence's exact label and caption columns."""
     next_col_by_row: dict[int, int] = {}
@@ -485,10 +482,14 @@ def _reserve_drop_lanes(
         nonlocal next_gutter_column
         blocked_columns = blocked_from_row[min(start_row, len(lines))]
         for distance in range(33):
-            candidates = [preferred] if distance == 0 else [
-                preferred - distance,
-                preferred + distance,
-            ]
+            candidates = (
+                [preferred]
+                if distance == 0
+                else [
+                    preferred - distance,
+                    preferred + distance,
+                ]
+            )
             for col in candidates:
                 if (
                     col >= 0
@@ -557,7 +558,6 @@ def _append_routed_skip_edges(
     leader_intervals_by_row: dict[int, list[tuple[int, int]]] = {}
     scheduled_leaders: set[tuple[int, int, int]] = set()
 
-
     def _add_endpoint_leader(
         row: int,
         lane: int,
@@ -623,6 +623,7 @@ def _append_routed_skip_edges(
             for col, _, style in styled_glyphs:
                 line.stylize(style, col, col + 1)
 
+
 def _render_cross_track_skip_edges(
     lines: list[Text],
     skip_edges: list[tuple[str, str]],
@@ -670,7 +671,9 @@ def _duration_label(elapsed: float | None, status: NodeStatus) -> str:
 
 
 def plain_node_width(
-    node: DagNode, elapsed: float | None = None, status: NodeStatus = NodeStatus.PENDING,
+    node: DagNode,
+    elapsed: float | None = None,
+    status: NodeStatus = NodeStatus.PENDING,
 ) -> int:
     if node.virtual:
         return len(VIRTUAL_LABELS.get(node.name, node.name))
@@ -696,7 +699,8 @@ def measure_seq(
             total += 4  # " >> "
         if isinstance(step, DagNode):
             total += plain_node_width(
-                step, node_elapsed.get(step.name),
+                step,
+                node_elapsed.get(step.name),
                 statuses.get(step.name, NodeStatus.PENDING),
             )
         elif isinstance(step, ParGroup):
@@ -742,17 +746,14 @@ def append_node(
     dur = _duration_label(elapsed, status)
     if node is selected:
         sel = Style(bgcolor=ICE_STEEL, bold=True)
-        label = (
-            f" {m} {node.display_name} ({dur}) "
-            if dur
-            else f" {m} {node.display_name} "
-        )
+        label = f" {m} {node.display_name} ({dur}) " if dur else f" {m} {node.display_name} "
         text.append(label, Style(color=ICE_FROST) + sel)
     else:
         text.append(f" {m}", style)
         text.append(f" {node.display_name} ", Style(color=ICE_FROST))
         if dur:
             text.append(f"({dur}) ", DIM_STYLE)
+
 
 def append_node_caption(
     text: Text,
@@ -793,6 +794,7 @@ def append_seq(
             # Render the widest branch (same as what measure_par uses)
             widest = max(step.branches, key=lambda b: measure_seq(b, node_elapsed, statuses))
             append_seq(text, widest, statuses, frame, selected, node_elapsed)
+
 
 def append_seq_caption(
     text: Text,
@@ -839,7 +841,8 @@ def render_dag_rich(
             # Pass within-track skip edges (source AND target in this track)
             track_node_names = _collect_node_names(track_steps)
             track_skips = [
-                (s, d) for s, d in dag.skip_edges
+                (s, d)
+                for s, d in dag.skip_edges
                 if s in track_node_names and d in track_node_names
             ]
             track_dag = SeqGroup(steps=track_steps, skip_edges=track_skips)
@@ -847,7 +850,11 @@ def render_dag_rich(
                 all_lines.append(Text())  # blank separator between tracks
             track_offset = len(all_lines)
             track_lines = render_dag_rich(
-                track_dag, statuses, frame, selected, node_elapsed,
+                track_dag,
+                statuses,
+                frame,
+                selected,
+                node_elapsed,
             )
             for node in _collect_nodes(track_steps):
                 if node.render_row is not None:
@@ -857,11 +864,11 @@ def render_dag_rich(
             all_lines.extend(track_lines)
         # Render cross-track skip edge connectors
         cross_skips = [
-            (s, d) for s, d in dag.skip_edges
+            (s, d)
+            for s, d in dag.skip_edges
             if not (s in _collect_node_names(tracks[0]) and d in _collect_node_names(tracks[0]))
             or any(
-                s in _collect_node_names(t) and d not in _collect_node_names(t)
-                for t in tracks
+                s in _collect_node_names(t) and d not in _collect_node_names(t) for t in tracks
             )
         ]
         if cross_skips:
@@ -871,6 +878,7 @@ def render_dag_rich(
                 [node for track in tracks for node in _collect_nodes(track)],
             )
         return all_lines
+
     def _max_parallel(steps: list) -> int:
         """Recursively find the max number of parallel branches in any ParGroup."""
         m = 1
@@ -1084,7 +1092,6 @@ def render_dag_rich(
         line.append(pad)
         result.append(line)
     _anchor_rendered_nodes(result, dag.steps)
-
 
     # Draw routed dotted connectors for skip edges.
     # Each edge gets vertical drops through empty cells, then a horizontal

@@ -1574,7 +1574,6 @@ class GrpcStateProvider:
             self._record_unary_error(e)
             return False
 
-
     def _install_catalog_locked(self, catalog: CatalogSnapshot) -> None:
         if (
             catalog.operator_instance_id == self._catalog.operator_instance_id

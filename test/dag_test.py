@@ -781,6 +781,7 @@ class TestCycleDetection:
 
     def test_valid_dag_no_error(self):
         """A valid DAG should construct without error."""
+
         @source
         def load():
             pass

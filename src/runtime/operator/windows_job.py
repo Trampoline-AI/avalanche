@@ -96,9 +96,7 @@ def assign_process(job: WindowsJob | None, pid: int) -> None:
         if not process:
             raise ctypes.WinError(ctypes.get_last_error())
         try:
-            if not kernel32.AssignProcessToJobObject(
-                wintypes.HANDLE(job.handle), process
-            ):
+            if not kernel32.AssignProcessToJobObject(wintypes.HANDLE(job.handle), process):
                 raise ctypes.WinError(ctypes.get_last_error())
         finally:
             kernel32.CloseHandle(process)

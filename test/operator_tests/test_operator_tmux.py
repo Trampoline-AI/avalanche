@@ -27,7 +27,9 @@ OPERATOR_PORT_CMD = f"uv run ava operator --flows {FIXTURES} --port 17434"
 def tmux_run(*args: str) -> str:
     result = subprocess.run(
         ["tmux", *args],
-        capture_output=True, text=True, timeout=10,
+        capture_output=True,
+        text=True,
+        timeout=10,
     )
     return result.stdout
 
@@ -81,14 +83,24 @@ def operator_session():
         pytest.skip("tmux not installed")
 
     # Kill any leftover session
-    subprocess.run(["tmux", "kill-session", "-t", SESSION],
-                   capture_output=True, timeout=5)
+    subprocess.run(["tmux", "kill-session", "-t", SESSION], capture_output=True, timeout=5)
 
     # Create session with operator in pane 0
     subprocess.run(
-        ["tmux", "new-session", "-d", "-s", SESSION, "-x", "200", "-y", "50",
-         f"{OPERATOR_PORT_CMD}; sleep 30"],
-        check=True, timeout=10,
+        [
+            "tmux",
+            "new-session",
+            "-d",
+            "-s",
+            SESSION,
+            "-x",
+            "200",
+            "-y",
+            "50",
+            f"{OPERATOR_PORT_CMD}; sleep 30",
+        ],
+        check=True,
+        timeout=10,
         cwd=os.path.dirname(os.path.dirname(os.path.dirname(__file__))),
     )
 
@@ -97,21 +109,19 @@ def operator_session():
 
     # Split and start TUI in pane 1
     subprocess.run(
-        ["tmux", "split-window", "-h", "-t", SESSION,
-         f"{TUI_CMD}; sleep 30"],
-        check=True, timeout=10,
+        ["tmux", "split-window", "-h", "-t", SESSION, f"{TUI_CMD}; sleep 30"],
+        check=True,
+        timeout=10,
         cwd=os.path.dirname(os.path.dirname(os.path.dirname(__file__))),
     )
 
     # Wait for the TUI shell to render; workflow names may be hidden until the
     # explorer is opened.
-    assert wait_for_text("DAG", f"{SESSION}:.1", timeout=20), \
-        "TUI didn't render"
+    assert wait_for_text("DAG", f"{SESSION}:.1", timeout=20), "TUI didn't render"
 
     yield
 
-    subprocess.run(["tmux", "kill-session", "-t", SESSION],
-                   capture_output=True, timeout=5)
+    subprocess.run(["tmux", "kill-session", "-t", SESSION], capture_output=True, timeout=5)
 
 
 @pytest.mark.tmux
@@ -135,16 +145,18 @@ class TestOperatorTmux:
         """Press 'r' to run a workflow, verify nodes succeed."""
         send_keys(f"{SESSION}:.1", "Escape", "r")
         # Wait for run to complete — look for checkmark (✓) in the tasks pane
-        assert wait_for_text("✓", f"{SESSION}:.1", timeout=10), \
-            "Run didn't complete successfully"
+        assert wait_for_text(
+            "✓", f"{SESSION}:.1", timeout=10
+        ), "Run didn't complete successfully"
 
     def test_logs_appear_after_run(self, operator_session):
         """Logs from Logger() should stream to the TUI log panel."""
         send_keys(f"{SESSION}:.1", "Escape", "r")
         pane = f"{SESSION}:.1"
         log_markers = ("INFO", "DEBUG", "WARN", "Connecting", "complete", "Fetching")
-        assert wait_for_any_text(log_markers, pane, timeout=15), \
-            f"No log messages found in TUI output:\n{combined_text(pane)}"
+        assert wait_for_any_text(
+            log_markers, pane, timeout=15
+        ), f"No log messages found in TUI output:\n{combined_text(pane)}"
 
     def test_run_count_increments(self, operator_session):
         """Border title should show run count."""
@@ -157,15 +169,19 @@ class TestOperatorTmux:
         subprocess.run(
             "pkill -9 -f 'runtime.operator.*17434' 2>/dev/null; "
             "lsof -ti:17434 | xargs kill -9 2>/dev/null",
-            shell=True, capture_output=True, timeout=5,
+            shell=True,
+            capture_output=True,
+            timeout=5,
         )
-        assert wait_for_text("CONNECTION LOST", f"{SESSION}:.1", timeout=20), \
-            "Disconnect modal didn't appear"
+        assert wait_for_text(
+            "CONNECTION LOST", f"{SESSION}:.1", timeout=20
+        ), "Disconnect modal didn't appear"
 
     @pytest.mark.skip(reason="Depends on disconnect test")
     def test_reconnect_on_operator_restart(self, operator_session):
         """Restart operator, TUI should reconnect and hide modal."""
         tmux_run("send-keys", "-t", f"{SESSION}:.0", f"{OPERATOR_PORT_CMD}", "")
         tmux_run("send-keys", "-t", f"{SESSION}:.0", "Enter")
-        assert wait_for_text("simple_workflow", f"{SESSION}:.1", timeout=15), \
-            "TUI didn't reconnect"
+        assert wait_for_text(
+            "simple_workflow", f"{SESSION}:.1", timeout=15
+        ), "TUI didn't reconnect"

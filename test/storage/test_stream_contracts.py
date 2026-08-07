@@ -241,9 +241,7 @@ def test_async_stream_step_failure_remains_pending_for_retry(namespace):
 
     @ava.step
     async def failing_process(
-        df: pl.DataFrame = ava.Stream(
-            ns.records, key="async_failure_test", mode="append_scan"
-        ),
+        df: pl.DataFrame = ava.Stream(ns.records, key="async_failure_test", mode="append_scan"),
     ):
         await asyncio.sleep(0)
         assert df["value"].to_list() == ["async-test"]
@@ -279,9 +277,7 @@ def test_multiple_pending_snapshots_are_processed_atomically(table):
 
     processed: list[str] = []
     for _ in range(3):
-        with consume_stream(
-            table, key="atomic_processing_test", mode="append_scan"
-        ) as df:
+        with consume_stream(table, key="atomic_processing_test", mode="append_scan") as df:
             assert len(df) == 1
             processed.append(df["value"][0])
 

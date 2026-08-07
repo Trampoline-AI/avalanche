@@ -94,9 +94,7 @@ def _lineage_values(context: "RunContext | None") -> dict[str, Any]:
         "_ava_updated_at": updated_at,
         "_ava_run_id": context.run_id if context is not None else None,
         "_ava_rerun_of": (
-            context.rerun.run_id
-            if context is not None and context.rerun is not None
-            else None
+            context.rerun.run_id if context is not None and context.rerun is not None else None
         ),
         "_ava_workflow_name": context.workflow_name if context is not None else None,
         "_ava_node_id": context.node_id if context is not None else None,

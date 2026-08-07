@@ -115,9 +115,7 @@ class LogWidget(RichLog):
         logs = store.logs
         snapshot_replaced = store.current_run is not None and logs is not self._logs_ref
         replacement_changed = (
-            snapshot_replaced
-            and len(logs) == self._seen_log_count
-            and logs != self._logs_ref
+            snapshot_replaced and len(logs) == self._seen_log_count and logs != self._logs_ref
         )
 
         if (

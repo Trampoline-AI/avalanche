@@ -98,6 +98,7 @@ def test_bare_input_ref_resolves_to_run_input_instance():
     assert result.question == "hi"
     assert result.nested == NestedInput(value="deep")
 
+
 def test_bare_input_ref_resolves_keyword_to_run_input_instance():
     @ava.step
     def collect(payload: RunInput):

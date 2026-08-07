@@ -317,9 +317,7 @@ def test_exact_node_log_pages_use_the_append_only_node_index():
         with operator._lock:
             for sequence in range(1, 100_001):
                 entry = (
-                    target_entry
-                    if sequence == 50_000 or sequence == 100_000
-                    else other_entry
+                    target_entry if sequence == 50_000 or sequence == 100_000 else other_entry
                 )
                 operator._append_log_unchecked_locked(run, entry, 0)
             counted_logs = CountingLogs(operator._logs[run.run_id])
@@ -462,26 +460,19 @@ def test_newest_first_pages_reconstruct_filtered_snapshot_without_duplicates():
                 before_event_sequence=before_event_sequence,
                 order=pb.DESCRIPTOR_PAGE_ORDER_NEWEST_FIRST,
             )
-            newest_event_sequences.extend(
-                item.event_sequence for item in page.events
-            )
-            before_event_sequence = (
-                page.events[-1].event_sequence if page.events else 0
-            )
+            newest_event_sequences.extend(item.event_sequence for item in page.events)
+            before_event_sequence = page.events[-1].event_sequence if page.events else 0
             token = page.next_page_token
 
         forward_log_sequences = [item.sequence for item in forward_logs.logs]
-        forward_event_sequences = [
-            item.event_sequence for item in forward_events.events
-        ]
+        forward_event_sequences = [item.event_sequence for item in forward_events.events]
         assert newest_log_sequences[::-1] == forward_log_sequences
         assert newest_event_sequences[::-1] == forward_event_sequences
         assert len(newest_log_sequences) == len(set(newest_log_sequences))
         assert len(newest_event_sequences) == len(set(newest_event_sequences))
         assert {item.node_id for item in newest_log_descriptors} == {"agent_1"}
         assert all(
-            sequence <= snapshot.latest_log_sequence
-            for sequence in newest_log_sequences
+            sequence <= snapshot.latest_log_sequence for sequence in newest_log_sequences
         )
         bodies = []
         for descriptor in newest_log_descriptors:
