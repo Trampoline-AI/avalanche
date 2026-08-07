@@ -12,15 +12,20 @@ from pathlib import Path
 import pytest
 
 
-def test_pyproject_exposes_ava_console_script_and_cli_package():
+def test_pyproject_exposes_cli_console_script_aliases_and_package_data():
     data = tomllib.loads(Path("pyproject.toml").read_text())
 
-    assert data["project"]["scripts"] == {"ava": "ava_cli:main"}
+    assert data["project"]["scripts"] == {
+        "ava": "ava_cli:main",
+        "avalanche-ai": "ava_cli:main",
+    }
 
     wheel = data["tool"]["hatch"]["build"]["targets"]["wheel"]
     sdist = data["tool"]["hatch"]["build"]["targets"]["sdist"]
     assert "src/ava_cli" in wheel["include"]
     assert "src/ava_cli" in sdist["include"]
+    assert wheel["force-include"] == {"init.sh": "ava_cli/init.sh"}
+    assert sdist["force-include"] == {"init.sh": "init.sh"}
 
 
 def test_ava_cli_package_resolves_to_project_source():
@@ -31,7 +36,7 @@ def test_ava_cli_package_resolves_to_project_source():
     assert Path(spec.origin).resolve() == Path("src/ava_cli/__init__.py").resolve()
 
 
-def test_ava_help_lists_supported_commands_without_init_or_workflows(capsys):
+def test_ava_help_lists_supported_commands(capsys):
     from ava_cli import app
 
     with pytest.raises(SystemExit) as exc_info:
@@ -39,13 +44,35 @@ def test_ava_help_lists_supported_commands_without_init_or_workflows(capsys):
 
     assert exc_info.value.code == 0
     output = capsys.readouterr().out
+    assert "init" in output
     assert "operator" in output
     assert "run" in output
     assert "result" in output
     assert "tui" in output
     assert "dev" in output
-    assert "init" not in output
     assert "--" + "workflows" not in output
+
+
+@pytest.mark.parametrize(
+    ("argv", "script_args"),
+    [(["init"], []), (["init", "--editable-deps"], ["--editable-deps"])],
+)
+def test_ava_init_runs_bundled_bootstrapper(monkeypatch, argv, script_args):
+    from ava_cli import app
+
+    calls = []
+
+    class CompletedProcess:
+        returncode = 7
+
+    def fake_run(command, *, check):
+        calls.append((command, check))
+        return CompletedProcess()
+
+    monkeypatch.setattr(app.subprocess, "run", fake_run)
+
+    assert app.main(argv) == 7
+    assert calls == [(["bash", str(Path("init.sh").resolve()), *script_args], False)]
 
 
 def test_ava_operator_delegates_to_runtime_operator_with_flows(monkeypatch):

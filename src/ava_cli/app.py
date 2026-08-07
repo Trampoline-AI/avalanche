@@ -16,6 +16,7 @@ import subprocess
 import sys
 import time
 from collections.abc import Sequence
+from importlib.resources import as_file, files
 from pathlib import Path, PurePosixPath
 from uuid import uuid4
 
@@ -43,6 +44,16 @@ def _build_parser() -> argparse.ArgumentParser:
     )
     subcommands = parser.add_subparsers(dest="command", metavar="COMMAND")
 
+    init = subcommands.add_parser(
+        "init",
+        help="create a verified Avalanche demo workspace in the current empty directory",
+    )
+    init.add_argument(
+        "--editable-deps",
+        action="store_true",
+        help="clone Avalanche and PredictRLM as editable dependencies",
+    )
+    init.set_defaults(handler=_run_init)
     operator = subcommands.add_parser(
         "operator",
         help="start the local flow operator",
@@ -223,6 +234,18 @@ def _build_parser() -> argparse.ArgumentParser:
     dev.set_defaults(handler=_run_dev)
 
     return parser
+
+
+def _run_init(args: argparse.Namespace) -> int:
+    script = files("ava_cli").joinpath("init.sh")
+    if not script.is_file():
+        script = Path(__file__).parents[2] / "init.sh"
+    command = ["bash", str(script)]
+    if args.editable_deps:
+        command.append("--editable-deps")
+    with as_file(script) as script_path:
+        command[1] = str(script_path)
+        return subprocess.run(command, check=False).returncode
 
 
 def _run_operator(args: argparse.Namespace) -> int:

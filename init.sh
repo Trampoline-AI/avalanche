@@ -9,7 +9,7 @@ readonly STARTER_WORKFLOW_NAME="binary_converter"
 
 workspace_root="$(pwd -P)"
 staging_root=""
-
+use_editable_dependencies=false
 fail() {
   printf 'error: %s\n' "$*" >&2
   exit 1
@@ -36,16 +36,33 @@ require_empty_directory() {
 Create and enter an empty directory, then rerun init.sh."
 }
 
+parse_args() {
+  while (($#)); do
+    case "$1" in
+    --editable-deps) use_editable_dependencies=true ;;
+    -h | --help)
+      printf 'Usage: init.sh [--editable-deps]\n'
+      printf '  --editable-deps  clone Avalanche and PredictRLM as editable dependencies\n'
+      exit 0
+      ;;
+    *) fail "Unknown option: $1" ;;
+    esac
+    shift
+  done
+}
+
 check_prerequisites() {
   require_empty_directory
   require_command git
   require_command uv
 
-  printf 'Checking GitHub access...\n'
-  git ls-remote --exit-code "$AVALANCHE_REPOSITORY" HEAD >/dev/null 2>&1 ||
-    fail "Cannot reach the Avalanche repository on GitHub. Check network access."
-  git ls-remote --exit-code "$PREDICT_RLM_REPOSITORY" HEAD >/dev/null 2>&1 ||
-    fail "Cannot reach the PredictRLM repository on GitHub. Check network access."
+  if [[ "$use_editable_dependencies" == true ]]; then
+    printf 'Checking GitHub access for editable dependencies...\n'
+    git ls-remote --exit-code "$AVALANCHE_REPOSITORY" HEAD >/dev/null 2>&1 ||
+      fail "Cannot reach the Avalanche repository on GitHub. Check network access."
+    git ls-remote --exit-code "$PREDICT_RLM_REPOSITORY" HEAD >/dev/null 2>&1 ||
+      fail "Cannot reach the PredictRLM repository on GitHub. Check network access."
+  fi
 
   printf 'Checking Python 3.11 availability through UV...\n'
   uv python find 3.11 >/dev/null 2>&1 || uv python install 3.11
@@ -344,10 +361,7 @@ write_workspace_guidance() {
 ## Purpose
 
 This repository is one UV workspace for a collection of Avalanche workflows.
-It was created by Avalanche's `init.sh` bootstrapper. The starter
-`binary_converter` is a real agentic workflow copied from the Avalanche README
-and statically checked during setup. For agent-assisted authoring, use the
-project-local Avalanche skill at `.agent/skills/avalanche`.
+The `binary_converter` starter is a statically checked example flow.
 
 ```text
 src/
@@ -357,21 +371,19 @@ src/
 ```
 
 Each direct child of `src/` is one workflow. Do not add a wrapper package such
-as `src/avalanche_workflows/`, and do not create a separate `pyproject.toml`,
-virtual environment, or framework checkout for each workflow.
+as `src/avalanche_workflows/`, and do not create a separate `pyproject.toml` or
+virtual environment for each workflow.
 
 ## Starter flow
 
-Before running the starter flow, configure its provider from an interactive
-terminal:
+Reconfigure the model provider at any time with:
 
 ```bash
 bash scripts/configure-provider.sh
 ```
 
-The script selects a model, stores an API key in the Git-ignored `.env` when
-needed, and handles the CodexLM optional dependency and authentication. Do not
-place credentials in `src/binary_converter/flow.py`.
+The script stores API keys in the Git-ignored `.env` when needed. Do not place
+credentials in `src/binary_converter/flow.py`.
 
 ## Execution boundary
 
@@ -381,62 +393,26 @@ declarations only. From the workspace root, start the starter flow with:
 ```bash
 uv run ava operator --flows src/binary_converter/ --web
 ```
+EOF
+
+  if [[ "$use_editable_dependencies" == true ]]; then
+    cat >>"$staging_root/AGENTS.md" <<'EOF'
 
 ## Editable framework checkouts
 
-The workspace intentionally uses local editable checkouts:
-
-```text
-.trampoline-ai/
-├── avalanche/       # Avalanche workflow runtime and authoring integration
-└── predict-rlm/     # PredictRLM agent runtime used by Avalanche agent steps
-```
-
-The outer workspace ignores `.trampoline-ai/`, but each child directory is an
-ordinary independent Git repository. The checkouts are not submodules. Their
-files are editable dependencies through `pyproject.toml`, so a change in either
-checkout is used by the next workspace Python invocation without publishing a
-package release.
-
-## Framework contribution policy
-
-When a problem belongs in a local framework checkout, classify it before changing
-framework code.
-
-### Bugs: direct fix and pull request
-
-A bug is reproducible behavior that violates an existing contract, documented
-behavior, or established expectation. Work on the relevant local checkout:
-
-1. Identify whether the behavior belongs to Avalanche or PredictRLM.
-2. Reproduce it with a focused test or minimal command in that repository.
-3. Make the smallest correct fix and add or update behavior-level regression coverage.
-4. Run focused verification in that checkout.
-5. Commit from the affected nested repository, not from this outer workspace.
-6. Open a pull request against the corresponding upstream repository.
-
-### Missing features: issue first
-
-A missing capability, new API, changed behavior, or feature request is not a
-bug. File an upstream issue describing the user need, proposed behavior,
-constraints, and acceptance criteria. Create a feature pull request only when
-that issue is linked and implementation was explicitly requested.
-
-### Remote ownership
-
-Use a branch in the nested checkout. If the upstream remote is not writable,
-create or use a fork as `origin`, retain the official repository as `upstream`,
-push the branch to the fork, and open the pull request to `upstream/main`.
-
-## Git ownership
-
-- Commit workspace and workflow changes from this repository.
-- Commit Avalanche changes from `.trampoline-ai/avalanche`.
-- Commit PredictRLM changes from `.trampoline-ai/predict-rlm`.
-
-Never mix those histories or commit nested-repository files into the outer
-workspace.
+`.trampoline-ai/avalanche` and `.trampoline-ai/predict-rlm` are independent Git
+repositories and editable dependencies. Make framework changes in those
+checkouts and commit them from their own repositories.
 EOF
+  else
+    cat >>"$staging_root/AGENTS.md" <<'EOF'
+
+## Framework dependency
+
+`pyproject.toml` resolves the published `avalanche-ai` package. Use
+`uv lock --upgrade-package avalanche-ai` when you want to update it.
+EOF
+  fi
 }
 
 initialize_workspace() {
@@ -446,25 +422,46 @@ initialize_workspace() {
 name = "avalanche-workspace"
 version = "0.1.0"
 requires-python = ">=3.11,<3.14"
+EOF
+
+  if [[ "$use_editable_dependencies" == true ]]; then
+    cat >>"$staging_root/pyproject.toml" <<'EOF'
 dependencies = [
     "avalanche-ai",
     "predict-rlm",
 ]
+EOF
+  else
+    cat >>"$staging_root/pyproject.toml" <<'EOF'
+dependencies = [
+    "avalanche-ai",
+]
+EOF
+  fi
+
+  cat >>"$staging_root/pyproject.toml" <<'EOF'
 
 [project.optional-dependencies]
 codex-lm = ["predict-rlm[codex-lm]"]
+EOF
+
+  if [[ "$use_editable_dependencies" == true ]]; then
+    cat >>"$staging_root/pyproject.toml" <<'EOF'
 
 [tool.uv.sources]
 avalanche-ai = { path = ".trampoline-ai/avalanche", editable = true }
 predict-rlm = { path = ".trampoline-ai/predict-rlm", editable = true }
 EOF
-  git clone "$AVALANCHE_REPOSITORY" "$staging_root/.trampoline-ai/avalanche"
-  git clone "$PREDICT_RLM_REPOSITORY" "$staging_root/.trampoline-ai/predict-rlm"
-  local authoring_skill="$staging_root/.trampoline-ai/avalanche/.agents/skills/avalanche"
-  [[ -f "$authoring_skill/SKILL.md" ]] || fail "Avalanche authoring skill is missing from the cloned checkout."
-  mkdir -p "$staging_root/.agent/skills"
-  cp -R "$authoring_skill" "$staging_root/.agent/skills/avalanche"
-  printf '.trampoline-ai/\n' >>"$staging_root/.gitignore"
+    git clone "$AVALANCHE_REPOSITORY" "$staging_root/.trampoline-ai/avalanche"
+    git clone "$PREDICT_RLM_REPOSITORY" "$staging_root/.trampoline-ai/predict-rlm"
+    local authoring_skill="$staging_root/.trampoline-ai/avalanche/.agents/skills/avalanche"
+    [[ -f "$authoring_skill/SKILL.md" ]] ||
+      fail "Avalanche authoring skill is missing from the cloned checkout."
+    mkdir -p "$staging_root/.agent/skills"
+    cp -R "$authoring_skill" "$staging_root/.agent/skills/avalanche"
+    printf '.trampoline-ai/\n' >>"$staging_root/.gitignore"
+  fi
+
   printf '.env\n' >>"$staging_root/.gitignore"
   cat >"$staging_root/.env" <<'EOF'
 # Managed by scripts/configure-provider.sh. Provider credentials are stored here.
@@ -481,7 +478,10 @@ EOF
 verify_workspace() {
   (
     cd "$staging_root"
-    .venv/bin/python -B -c '
+    .venv/bin/python -B -c 'import avalanche; print(avalanche.__file__)'
+
+    if [[ "$use_editable_dependencies" == true ]]; then
+      .venv/bin/python -B -c '
 import avalanche
 import predict_rlm
 from pathlib import Path
@@ -494,6 +494,9 @@ for module, relative_checkout in checkouts:
         raise RuntimeError(f"{module.__name__} resolved outside editable checkout: {module_path}")
     print(module_path)
 '
+      git check-ignore .trampoline-ai/avalanche/pyproject.toml >/dev/null
+      test -f .agent/skills/avalanche/SKILL.md
+    fi
 
     .venv/bin/python -B -c '
 import importlib.util
@@ -510,9 +513,7 @@ print(flow_path)
 
     .venv/bin/ava operator --help >/dev/null
     .venv/bin/ava run --help >/dev/null
-    git check-ignore .trampoline-ai/avalanche/pyproject.toml >/dev/null
     git check-ignore .env >/dev/null
-    test -f .agent/skills/avalanche/SKILL.md
     test -f AGENTS.md
     test -x scripts/configure-provider.sh
     bash -n scripts/configure-provider.sh
@@ -530,25 +531,59 @@ commit_workspace() {
 }
 
 report_success() {
-  local avalanche_branch
-  local predict_rlm_branch
-  avalanche_branch=$(git -C "$workspace_root/.trampoline-ai/avalanche" branch --show-current)
-  predict_rlm_branch=$(git -C "$workspace_root/.trampoline-ai/predict-rlm" branch --show-current)
-
   printf '\nInitialized and verified %s\n' "$workspace_root"
-  printf 'Avalanche branch: %s\n' "$avalanche_branch"
-  printf 'PredictRLM branch: %s\n' "$predict_rlm_branch"
-  printf 'Avalanche skill: %s\n' ".agent/skills/avalanche"
-  printf '\nConfigure a provider from an interactive terminal:\n'
-  printf '  bash scripts/configure-provider.sh\n'
+
+  if [[ "$use_editable_dependencies" == true ]]; then
+    local avalanche_branch
+    local predict_rlm_branch
+    avalanche_branch=$(git -C "$workspace_root/.trampoline-ai/avalanche" branch --show-current)
+    predict_rlm_branch=$(git -C "$workspace_root/.trampoline-ai/predict-rlm" branch --show-current)
+    printf 'Avalanche branch: %s\n' "$avalanche_branch"
+    printf 'PredictRLM branch: %s\n' "$predict_rlm_branch"
+    printf 'Avalanche skill: %s\n' ".agent/skills/avalanche"
+  else
+    printf 'Avalanche dependency: published avalanche-ai\n'
+  fi
+}
+
+configure_provider() {
+  local response
+
+  if [[ ! -t 0 || ! -t 1 ]]; then
+    printf '\nConfigure a provider later from an interactive terminal:\n'
+    printf '  bash scripts/configure-provider.sh\n'
+    return
+  fi
+
+  while true; do
+    if ! read -r -p 'Configure a provider now? [Y/n] ' response; then
+      printf '\nProvider setup skipped. Run when ready:\n'
+      printf '  bash scripts/configure-provider.sh\n'
+      return
+    fi
+    case "$response" in
+    "" | y | Y | yes | YES)
+      bash "$workspace_root/scripts/configure-provider.sh"
+      return
+      ;;
+    n | N | no | NO)
+      printf '\nProvider setup skipped. Run when ready:\n'
+      printf '  bash scripts/configure-provider.sh\n'
+      return
+      ;;
+    *) printf 'Choose Y or n.\n' >&2 ;;
+    esac
+  done
 }
 
 main() {
+  parse_args "$@"
   check_prerequisites
   initialize_workspace
   verify_workspace
   commit_workspace
   report_success
+  configure_provider
 }
 
 main "$@"
