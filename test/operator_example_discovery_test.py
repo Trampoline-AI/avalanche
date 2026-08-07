@@ -35,6 +35,34 @@ def test_registry_scan_of_examples_returns_only_canonical_flows(monkeypatch, tmp
     assert sorted(flow.name for flow in registry.list_workflows()) == CANONICAL_FLOW_NAMES
 
 
+def test_directory_scan_ignores_hidden_directories(tmp_path):
+    visible_flow = tmp_path / "flow.py"
+    visible_flow.write_text(
+        """
+from avalanche import source, workflow
+
+
+@source
+def generate() -> int:
+    return 1
+
+
+@workflow
+def visible():
+    return generate()
+"""
+    )
+    hidden_flow = tmp_path / ".venv" / "site-packages" / "dependency.py"
+    hidden_flow.parent.mkdir(parents=True)
+    hidden_flow.write_text('raise RuntimeError("must not import virtual environment code")')
+
+    registry = WorkflowRegistry()
+    registry.scan([str(tmp_path)])
+
+    assert [workflow.name for workflow in registry.list_workflows()] == ["visible"]
+    assert registry.view.diagnostics == ()
+
+
 def test_operator_served_with_examples_exposes_canonical_flows_over_grpc(
     monkeypatch,
     tmp_path,
