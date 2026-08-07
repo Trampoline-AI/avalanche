@@ -27,6 +27,7 @@ dependencies = [
 
 [project.scripts]
 ava = "ava_cli:main"
+avalanche-ai = "ava_cli:main"
 
 [project.optional-dependencies]
 ray = [
@@ -101,6 +102,12 @@ include = ["src/avalanche", "src/ava_cli", "src/runtime", "src/tui"]
 
 [tool.hatch.build.targets.wheel]
 include = ["src/avalanche", "src/ava_cli", "src/runtime", "src/tui"]
+
+[tool.hatch.build.targets.wheel.force-include]
+"init.sh" = "ava_cli/init.sh"
+
+[tool.hatch.build.targets.sdist.force-include]
+"init.sh" = "init.sh"
 
 [tool.hatch.build.targets.wheel.sources]
 "src" = ""
