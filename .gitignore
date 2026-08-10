@@ -5,6 +5,9 @@ node_modules
 .pnp
 .pnp.js
 
+# TypeScript incremental build metadata
+*.tsbuildinfo
+
 # testing
 coverage
 
