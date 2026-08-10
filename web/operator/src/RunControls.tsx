@@ -149,7 +149,6 @@ export function RunControls({
         <div className="input-popover absolute right-0 bottom-[43px] z-20 w-[390px] rounded-[9px] border border-[#cbd2ce] bg-white p-[13px] shadow-[0_18px_50px_rgba(20,31,26,.16)] max-[700px]:w-[calc(100vw-32px)] [&>div:first-child]:mb-[9px] [&>div:first-child]:flex [&>div:first-child]:justify-between [&_strong]:text-[11px] [&_span]:font-mono [&_span]:text-[8px] [&_span]:text-[#6d7872]">
           <div>
             <strong>Workflow input</strong>
-            <span>Schema-blind JSON object</span>
           </div>
           <JsonEditor value={draft} onChange={setDraft} />
         </div>
