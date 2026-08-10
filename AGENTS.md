@@ -118,6 +118,15 @@ Avoid `--flows .`: operator discovery imports Python files recursively. Use a na
 - Pytest is the test framework. Async tests must use `@pytest.mark.asyncio`; strict asyncio mode is enabled.
 - Mark Ray tests with `@pytest.mark.ray` and gate optional packages with `pytest.importorskip`. Mark real-terminal tests with `@pytest.mark.tmux`.
 - Add behavior-level regression tests near the affected subsystem. Prefer `tmp_path`, explicit fakes/recording services, `pytest.raises`, and meaningful parametrized matrices over source-text or plumbing assertions.
+- Do not add standalone logging tests or assert exact log-message text. When
+  logging matters to an existing behavior contract, verify that logging occurs
+  within that behavior test without coupling the assertion to message wording.
+- Iterate with the smallest focused tests that cover the current feature or fix;
+  never use the full regression suite as the iteration loop.
+- After all focused tests are green, run the full regression suite once as the
+  final verification gate. If that gate finds a regression, return to the
+  focused failing tests and iterate there until they are green, then use the
+  full suite only for the next final verification attempt.
 - TUI behavior normally needs both headless Textual coverage (`test/tui_test.py`) and tmux coverage (`test/tui_tmux_test.py`) when terminal rendering, sizing, or input behavior changes.
 - CI installs all extras, runs Ruff, then separates ordinary tests (`not tmux and not ray`), Ray tests, and tmux tests into distinct jobs.
 - Branch coverage is configured for `src/avalanche`; `make test-cov` reports missing lines. Do not treat a focused green test as proof for unrelated runtime, Ray, or tmux paths.
