@@ -1632,7 +1632,11 @@ class Operator:
         # Otherwise an old cron can resolve newly-published same-ID source in the
         # small window between these two operations.
         with self._scheduler.reconciliation_boundary():
-            view = self._registry.rescan(validate=routes_for)
+            view = (
+                self._registry.rescan(changed_files, validate=routes_for)
+                if changed_files
+                else self._registry.rescan(validate=routes_for)
+            )
             failed_diagnostics = tuple(
                 diagnostic for diagnostic in view.diagnostics if diagnostic.kind != "skipped"
             )

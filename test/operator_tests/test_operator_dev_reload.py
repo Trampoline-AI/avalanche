@@ -831,6 +831,55 @@ def test_running_cancellation_kills_sigterm_ignoring_coordinator(tmp_path):
         operator.close()
 
 
+def test_watcher_only_reimports_workflows_affected_by_python_change(tmp_path):
+    source_root = tmp_path / "flows"
+    source_root.mkdir()
+    helper = source_root / "_schedule.py"
+    helper.write_text('CRON = "1 * * * *"\n')
+    dependent_counter = tmp_path / "dependent.txt"
+    unrelated_counter = tmp_path / "unrelated.txt"
+    (source_root / "dependent.py").write_text(
+        "from pathlib import Path\n"
+        "import avalanche as ava\n"
+        "from _schedule import CRON\n"
+        f"counter = Path({str(dependent_counter)!r})\n"
+        "count = int(counter.read_text()) if counter.exists() else 0\n"
+        "counter.write_text(str(count + 1))\n"
+        "@ava.workflow(cron=CRON)\n"
+        "def dependent():\n"
+        "    return None\n"
+    )
+    (source_root / "unrelated.py").write_text(
+        "from pathlib import Path\n"
+        "import avalanche as ava\n"
+        f"counter = Path({str(unrelated_counter)!r})\n"
+        "count = int(counter.read_text()) if counter.exists() else 0\n"
+        "counter.write_text(str(count + 1))\n"
+        "@ava.workflow\n"
+        "def unrelated():\n"
+        "    return None\n"
+    )
+    operator = Operator([str(source_root)], watch=True, schedule=False)
+    try:
+        assert dependent_counter.read_text() == "1"
+        assert unrelated_counter.read_text() == "1"
+
+        helper.write_text('CRON = "2 * * * *"\n')
+        deadline = time.monotonic() + 5.0
+        while time.monotonic() < deadline:
+            if operator._registry.resolve("dependent").cron == "2 * * * *":
+                break
+            time.sleep(0.05)
+        else:
+            raise AssertionError("dependent workflow did not reload")
+        time.sleep(0.2)
+
+        assert dependent_counter.read_text() == "2"
+        assert unrelated_counter.read_text() == "1"
+    finally:
+        operator.close()
+
+
 def test_watcher_refreshes_resource_derived_cron(tmp_path, caplog):
     config = tmp_path / "schedule.json"
     config.write_text('{"cron": "1 * * * *"}')
@@ -900,6 +949,9 @@ def test_watch_policy_includes_source_resources_and_excludes_generated_secrets(t
     assert is_source_path_included(source / "flow.py", (source,))
     assert is_source_path_included(source / "schedule.json", (source,))
     assert not is_source_path_included(source / "__pycache__" / "flow.pyc", (source,))
+    assert not is_source_path_included(
+        source / ".avalanche" / "cache" / "operator.json", (source,)
+    )
     assert not is_source_path_included(source / ".env.local", (source,))
     assert not is_source_path_included(source / "credentials.json", (source,))
     assert not is_source_path_included(tmp_path / "outside.py", (source,))
