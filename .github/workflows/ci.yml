@@ -32,13 +32,13 @@ jobs:
         working-directory: web/operator
       - run: make web-proto
       - run: make web-test
-      - run: make web-build
+      - run: make web-assets-check WEB_ASSETS_CHECK_CONTEXT=ci
       - uses: browser-actions/setup-chrome@v2
         id: chrome
       - run: make web-bench
         env:
           CHROME_BIN: ${{ steps.chrome.outputs.chrome-path }}
-      - run: git diff --exit-code -- src/runtime/operator/proto web/operator/src/generated src/runtime/operator/web_assets
+      - run: git diff --exit-code -- src/runtime/operator/proto web/operator/src/generated
 
   ray:
     name: Ray tests

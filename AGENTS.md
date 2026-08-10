@@ -31,6 +31,7 @@ Use repository commands rather than ad hoc tool invocations:
 
 ```bash
 uv sync --all-extras                 # install the complete development environment
+uv run pre-commit install            # enable repository commit hooks once per clone
 make lint                            # Ruff checks
 make format                          # Ruff fixes and formatting
 make test                            # full pytest suite with all extras
@@ -39,6 +40,7 @@ make smoke-test                      # bounded documented-user-path tests
 make test-cov                        # terminal branch coverage
 make test-cov-html                   # HTML coverage report
 make tui-bench                       # enforce TUI refresh budgets
+make web-assets-check                # rebuild and reject stale packaged web assets
 uv run pytest test/foo_test.py -q    # focused test while iterating
 uv build                             # required after packaging/entry-point changes
 ```
