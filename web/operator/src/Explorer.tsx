@@ -4,8 +4,7 @@ import { PanelLeftClose, X } from "lucide-react";
 import type { CatalogSnapshotMsg, FlowInfoMsg } from "./generated/operator";
 
 export type Selection =
-  | { kind: "workflow"; workflowId: string }
-  | { kind: "run"; workflowId: string; runId: string };
+  { kind: "workflow"; workflowId: string } | { kind: "run"; workflowId: string; runId: string };
 
 interface ExplorerProps {
   catalog?: CatalogSnapshotMsg;
@@ -45,13 +44,23 @@ const WorkflowRow = memo(function WorkflowRow({
 function diagnosticKey(catalog: CatalogSnapshotMsg): string {
   return catalog.diagnostics
     .filter((diagnostic) => diagnostic.kind !== "skipped")
-    .map((diagnostic) => `${diagnostic.kind}\u0000${diagnostic.path}\u0000${diagnostic.message}`)
+    .map(
+      (diagnostic) => `${diagnostic.kind}\u0000${diagnostic.path}\u0000${diagnostic.message}`,
+    )
     .join("\u0001");
 }
 
-function ExplorerView({ catalog, selection, onSelect, onCollapse, open = false, collapsed = false }: ExplorerProps) {
+function ExplorerView({
+  catalog,
+  selection,
+  onSelect,
+  onCollapse,
+  open = false,
+  collapsed = false,
+}: ExplorerProps) {
   const [dismissedDiagnosticKey, setDismissedDiagnosticKey] = useState<string>();
-  const visibleDiagnostics = catalog?.diagnostics.filter((diagnostic) => diagnostic.kind !== "skipped") ?? [];
+  const visibleDiagnostics =
+    catalog?.diagnostics.filter((diagnostic) => diagnostic.kind !== "skipped") ?? [];
   const currentDiagnosticKey = catalog ? diagnosticKey(catalog) : "";
   const diagnosticsDismissed = dismissedDiagnosticKey === currentDiagnosticKey;
   const collapseButton = onCollapse ? (
@@ -68,7 +77,11 @@ function ExplorerView({ catalog, selection, onSelect, onCollapse, open = false, 
   ) : null;
   if (!catalog) {
     return (
-      <aside id="operator-explorer" className={`explorer skeleton col-start-1 min-w-0 overflow-auto bg-panel p-5 max-[700px]:border-r max-[700px]:border-line max-[700px]:fixed max-[700px]:top-[58px] max-[700px]:bottom-0 max-[700px]:left-0 max-[700px]:z-[31] max-[700px]:w-[min(320px,100vw)] max-[700px]:shadow-[18px_0_45px_rgba(20,31,26,.16)] [&>div]:mb-[9px] [&>div]:h-[38px] [&>div]:animate-pulse [&>div]:rounded-[7px] [&>div]:bg-[#edf1ef] ${collapsed ? "invisible overflow-hidden border-r-0 max-[700px]:visible max-[700px]:overflow-auto max-[700px]:border-r" : ""} ${open ? "max-[700px]:block" : "max-[700px]:hidden"}`} aria-label="Explorer">
+      <aside
+        id="operator-explorer"
+        className={`explorer skeleton col-start-1 min-w-0 overflow-auto bg-panel p-5 max-[700px]:border-r max-[700px]:border-line max-[700px]:fixed max-[700px]:top-[58px] max-[700px]:bottom-0 max-[700px]:left-0 max-[700px]:z-[31] max-[700px]:w-[min(320px,100vw)] max-[700px]:shadow-[18px_0_45px_rgba(20,31,26,.16)] [&>div]:mb-[9px] [&>div]:h-[38px] [&>div]:animate-pulse [&>div]:rounded-[7px] [&>div]:bg-[#edf1ef] ${collapsed ? "invisible overflow-hidden border-r-0 max-[700px]:visible max-[700px]:overflow-auto max-[700px]:border-r" : ""} ${open ? "max-[700px]:block" : "max-[700px]:hidden"}`}
+        aria-label="Explorer"
+      >
         {collapseButton}
         <div />
         <div />
@@ -77,16 +90,29 @@ function ExplorerView({ catalog, selection, onSelect, onCollapse, open = false, 
     );
   }
   return (
-    <aside id="operator-explorer" className={`explorer col-start-1 min-w-0 overflow-auto bg-panel max-[700px]:border-r max-[700px]:border-line max-[700px]:fixed max-[700px]:top-[58px] max-[700px]:bottom-0 max-[700px]:left-0 max-[700px]:z-[31] max-[700px]:w-[min(320px,100vw)] max-[700px]:shadow-[18px_0_45px_rgba(20,31,26,.16)] ${collapsed ? "invisible overflow-hidden border-r-0 max-[700px]:visible max-[700px]:overflow-auto max-[700px]:border-r" : ""} ${open ? "max-[700px]:block" : "max-[700px]:hidden"}`} aria-label="Explorer">
+    <aside
+      id="operator-explorer"
+      className={`explorer col-start-1 min-w-0 overflow-auto bg-panel max-[700px]:border-r max-[700px]:border-line max-[700px]:fixed max-[700px]:top-[58px] max-[700px]:bottom-0 max-[700px]:left-0 max-[700px]:z-[31] max-[700px]:w-[min(320px,100vw)] max-[700px]:shadow-[18px_0_45px_rgba(20,31,26,.16)] ${collapsed ? "invisible overflow-hidden border-r-0 max-[700px]:visible max-[700px]:overflow-auto max-[700px]:border-r" : ""} ${open ? "max-[700px]:block" : "max-[700px]:hidden"}`}
+      aria-label="Explorer"
+    >
       <header className="relative px-[18px] pt-[22px] pb-3.5">
-        <span className="eyebrow block font-mono text-[9px] tracking-[.16em] text-acid uppercase">Navigator</span>
+        <span className="eyebrow block font-mono text-[9px] tracking-[.16em] text-acid uppercase">
+          Navigator
+        </span>
         <h2 className="mt-[5px] text-[17px]">Explorer</h2>
-        <span className="catalog-revision absolute right-[18px] bottom-[17px] font-mono text-[9px] text-secondary">catalog r{catalog.revision}</span>
+        <span className="catalog-revision absolute right-[18px] bottom-[17px] font-mono text-[9px] text-secondary">
+          catalog r{catalog.revision}
+        </span>
         {collapseButton}
       </header>
       {visibleDiagnostics.length > 0 && !diagnosticsDismissed && (
-        <details className="diagnostics relative mx-3 mb-3 rounded-lg border border-[#ead1a2] bg-[#fff8eb] p-[9px] text-[10px] [&>summary]:cursor-pointer [&>summary]:pr-6 [&>summary]:text-amber [&>div]:mt-[9px] [&>div]:border-t [&>div]:border-[#ead1a2] [&>div]:pt-2 [&_strong]:block [&_span]:block [&_span]:overflow-hidden [&_span]:text-ellipsis [&_span]:font-mono [&_span]:text-[8px] [&_span]:text-[#8b7655] [&_p]:mt-1 [&_p]:mb-0 [&_p]:text-[#735b37]" open>
-          <summary>{visibleDiagnostics.length} reload issue{visibleDiagnostics.length === 1 ? "" : "s"}</summary>
+        <details
+          className="diagnostics relative mx-3 mb-3 rounded-lg border border-[#ead1a2] bg-[#fff8eb] p-[9px] text-[10px] [&>summary]:cursor-pointer [&>summary]:pr-6 [&>summary]:text-amber [&>div]:mt-[9px] [&>div]:border-t [&>div]:border-[#ead1a2] [&>div]:pt-2 [&_strong]:block [&_span]:block [&_span]:overflow-hidden [&_span]:text-ellipsis [&_span]:font-mono [&_span]:text-[8px] [&_span]:text-[#8b7655] [&_p]:mt-1 [&_p]:mb-0 [&_p]:text-[#735b37]"
+          open
+        >
+          <summary>
+            {visibleDiagnostics.length} reload issue{visibleDiagnostics.length === 1 ? "" : "s"}
+          </summary>
           <button
             type="button"
             className="absolute top-1.5 right-1.5 grid size-5 cursor-pointer place-items-center rounded text-amber hover:bg-[#f7e8c8] focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-amber"
@@ -110,14 +136,15 @@ function ExplorerView({ catalog, selection, onSelect, onCollapse, open = false, 
             key={workflow.workflowId}
             workflow={workflow}
             selected={
-              selection?.kind === "workflow" &&
-              selection.workflowId === workflow.workflowId
+              selection?.kind === "workflow" && selection.workflowId === workflow.workflowId
             }
             onSelect={onSelect}
           />
         ))}
         {catalog.workflows.length === 0 && (
-          <span className="workflow-list-empty block px-2 py-2.5 font-mono text-[9px] text-secondary">No workflows scanned</span>
+          <span className="workflow-list-empty block px-2 py-2.5 font-mono text-[9px] text-secondary">
+            No workflows scanned
+          </span>
         )}
       </div>
     </aside>

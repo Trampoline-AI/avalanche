@@ -48,7 +48,10 @@ function LongString({ value }: { value: string }) {
 
   return (
     <span className="value-long-string inline">
-      <span className="value-string whitespace-pre-wrap text-mint [overflow-wrap:anywhere]" id={contentId}>
+      <span
+        className="value-string whitespace-pre-wrap text-mint [overflow-wrap:anywhere]"
+        id={contentId}
+      >
         {expanded ? value : `${value.slice(0, STRING_PREVIEW_LENGTH)}…`}
       </span>{" "}
       <button
@@ -64,11 +67,7 @@ function LongString({ value }: { value: string }) {
   );
 }
 
-function TruncatedCollection({
-  value,
-}: {
-  value: unknown[] | Record<string, unknown>;
-}) {
+function TruncatedCollection({ value }: { value: unknown[] | Record<string, unknown> }) {
   const count = collectionCount(value);
   const itemLabel = Array.isArray(value)
     ? plural(count, "item")
@@ -88,7 +87,9 @@ function ScalarValue({ value }: { value: unknown }) {
     return value.length > STRING_PREVIEW_LENGTH ? (
       <LongString value={value} />
     ) : (
-      <span className="value-string whitespace-pre-wrap text-mint [overflow-wrap:anywhere]">{value}</span>
+      <span className="value-string whitespace-pre-wrap text-mint [overflow-wrap:anywhere]">
+        {value}
+      </span>
     );
   }
   if (typeof value === "number" || typeof value === "boolean") {
@@ -97,7 +98,10 @@ function ScalarValue({ value }: { value: unknown }) {
   if (isUnknownRecord(value)) {
     if (value.kind === "predict_rlm_file" && typeof value.path === "string") {
       return (
-        <span className="file-value flex min-w-48 gap-[9px] rounded-[7px] border border-acid p-[9px] text-acid [&_small]:block [&_small]:text-[7px] [&_small]:text-muted [&_small]:uppercase [&_code]:mt-[3px] [&_code]:block [&_code]:whitespace-normal [&_code]:text-[9px] [&_code]:[overflow-wrap:anywhere]" title="Reported host path; contents are not copied">
+        <span
+          className="file-value flex min-w-48 gap-[9px] rounded-[7px] border border-acid p-[9px] text-acid [&_small]:block [&_small]:text-[7px] [&_small]:text-muted [&_small]:uppercase [&_code]:mt-[3px] [&_code]:block [&_code]:whitespace-normal [&_code]:text-[9px] [&_code]:[overflow-wrap:anywhere]"
+          title="Reported host path; contents are not copied"
+        >
           <span aria-hidden="true">↗</span>
           <span>
             <small>PredictRLM file</small>
@@ -107,12 +111,15 @@ function ScalarValue({ value }: { value: unknown }) {
       );
     }
     if (value.kind === "unavailable" && typeof value.reason === "string") {
-      return <span className="value-unavailable text-[9px] text-amber">Unavailable · {value.reason}</span>;
+      return (
+        <span className="value-unavailable text-[9px] text-amber">
+          Unavailable · {value.reason}
+        </span>
+      );
     }
   }
   return <span className="value-unavailable text-[9px] text-amber">Unavailable</span>;
 }
-
 
 function isCollection(value: unknown): value is unknown[] | Record<string, unknown> {
   return (
@@ -155,13 +162,12 @@ function CollectionNode({
         <span>{collectionSummary(value)}</span>
       </button>
       {expanded && (
-        <div className="value-child-group mt-[5px] min-w-80 border-l border-line pl-3" id={contentId} role="group">
-          <CollectionChildren
-            value={value}
-            depth={depth}
-            path={path}
-            onExpand={onExpand}
-          />
+        <div
+          className="value-child-group mt-[5px] min-w-80 border-l border-line pl-3"
+          id={contentId}
+          role="group"
+        >
+          <CollectionChildren value={value} depth={depth} path={path} onExpand={onExpand} />
         </div>
       )}
     </div>
@@ -178,7 +184,11 @@ function CollectionChildren({ value, depth, path, onExpand }: CollectionProps) {
   const nextCount = Math.min(CHILDREN_PER_GROUP, remaining);
 
   if (!count) {
-    return <span className="value-empty-collection text-muted">{Array.isArray(value) ? "[]" : "{}"}</span>;
+    return (
+      <span className="value-empty-collection text-muted">
+        {Array.isArray(value) ? "[]" : "{}"}
+      </span>
+    );
   }
 
   return (
@@ -194,8 +204,12 @@ function CollectionChildren({ value, depth, path, onExpand }: CollectionProps) {
               key={`${typeof key}:${String(key)}`}
             >
               <div className="value-row grid min-w-80 grid-cols-[fit-content(12rem)_.55rem_minmax(12rem,1fr)] items-start gap-x-0.5 py-[7px]">
-                <span className="value-key min-w-0 font-mono text-[9px]/[1.45] text-muted [overflow-wrap:anywhere]">{Array.isArray(value) ? `[${key}]` : key}</span>
-                <span className="value-separator text-center text-muted" aria-hidden="true">:</span>
+                <span className="value-key min-w-0 font-mono text-[9px]/[1.45] text-muted [overflow-wrap:anywhere]">
+                  {Array.isArray(value) ? `[${key}]` : key}
+                </span>
+                <span className="value-separator text-center text-muted" aria-hidden="true">
+                  :
+                </span>
                 <div className="value-content min-w-48 [overflow-wrap:anywhere]">
                   {nested ? (
                     <CollectionNode
@@ -220,7 +234,10 @@ function CollectionChildren({ value, depth, path, onExpand }: CollectionProps) {
           className="value-more my-2 cursor-pointer border-0 bg-transparent p-0 text-left font-mono text-[9px]/[1.45] text-acid"
           onClick={() => setVisibleCount((current) => current + CHILDREN_PER_GROUP)}
         >
-          Show {nextCount} more {Array.isArray(value) ? plural(nextCount, "item") : plural(nextCount, "property", "properties")}
+          Show {nextCount} more{" "}
+          {Array.isArray(value)
+            ? plural(nextCount, "item")
+            : plural(nextCount, "property", "properties")}
         </button>
       )}
     </>
@@ -232,7 +249,11 @@ export function ValueView({ value, depth = 0, onExpand }: ValueViewProps) {
   if (depth >= MAX_DISCLOSURE_DEPTH) return <TruncatedCollection value={value} />;
 
   return (
-    <div className="value-tree min-w-0 max-w-full overflow-x-auto text-[10px]" role="tree" aria-label="JSON value">
+    <div
+      className="value-tree min-w-0 max-w-full overflow-x-auto text-[10px]"
+      role="tree"
+      aria-label="JSON value"
+    >
       <CollectionChildren value={value} depth={depth} path={[]} onExpand={onExpand} />
     </div>
   );

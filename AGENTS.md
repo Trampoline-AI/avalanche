@@ -40,6 +40,9 @@ make smoke-test                      # bounded documented-user-path tests
 make test-cov                        # terminal branch coverage
 make test-cov-html                   # HTML coverage report
 make tui-bench                       # enforce TUI refresh budgets
+make web-lint                       # ESLint checks for the browser UI
+make web-format                     # format the browser UI with Prettier
+make web-format-check               # check browser formatting without changes
 make web-assets-check                # rebuild and reject stale packaged web assets
 uv run pytest test/foo_test.py -q    # focused test while iterating
 uv build                             # required after packaging/entry-point changes

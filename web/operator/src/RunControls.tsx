@@ -40,7 +40,12 @@ function JsonEditor({ value, onChange }: JsonEditorProps) {
     });
     return () => view.destroy();
   }, []);
-  return <div className="json-editor overflow-hidden rounded-[7px] border border-line text-[10px]" ref={parent} />;
+  return (
+    <div
+      className="json-editor overflow-hidden rounded-[7px] border border-line text-[10px]"
+      ref={parent}
+    />
+  );
 }
 
 interface RunControlsProps {
@@ -57,7 +62,6 @@ export function parseRunInput(draft: string): Record<string, unknown> {
   if (!isUnknownRecord(parsed)) throw new Error("Run input must be a JSON object");
   return parsed;
 }
-
 
 export function RunControls({
   workflow,
@@ -104,7 +108,13 @@ export function RunControls({
           onClick={onViewWorkflow}
         >
           <svg aria-hidden="true" viewBox="0 0 12 12" fill="none">
-            <path d="M5 2 1.5 6 5 10M2 6h8" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" />
+            <path
+              d="M5 2 1.5 6 5 10M2 6h8"
+              stroke="currentColor"
+              strokeWidth="1.5"
+              strokeLinecap="round"
+              strokeLinejoin="round"
+            />
           </svg>
           <span>Current workflow</span>
         </button>
@@ -153,7 +163,13 @@ export function RunControls({
           <JsonEditor value={draft} onChange={setDraft} />
         </div>
       )}
-      {error && <div className={`action-error absolute right-0 z-[21] w-[390px] rounded-[7px] border border-[#efb9b5] bg-[#fff1f0] px-[18px] py-2 text-xs text-[#9d2923] max-[700px]:w-[calc(100vw-32px)] ${showInput ? "bottom-[205px]" : "bottom-11"}`}>{error}</div>}
+      {error && (
+        <div
+          className={`action-error absolute right-0 z-[21] w-[390px] rounded-[7px] border border-[#efb9b5] bg-[#fff1f0] px-[18px] py-2 text-xs text-[#9d2923] max-[700px]:w-[calc(100vw-32px)] ${showInput ? "bottom-[205px]" : "bottom-11"}`}
+        >
+          {error}
+        </div>
+      )}
     </div>
   );
 }

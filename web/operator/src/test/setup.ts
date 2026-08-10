@@ -26,10 +26,7 @@ for (const [property, dimension] of [
   ["offsetWidth", "width"],
   ["offsetHeight", "height"],
 ] as const) {
-  const nativeDescriptor = Object.getOwnPropertyDescriptor(
-    HTMLElement.prototype,
-    property,
-  );
+  const nativeDescriptor = Object.getOwnPropertyDescriptor(HTMLElement.prototype, property);
   Object.defineProperty(HTMLElement.prototype, property, {
     configurable: true,
     get() {

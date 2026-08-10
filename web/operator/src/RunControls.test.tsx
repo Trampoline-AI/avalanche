@@ -17,18 +17,11 @@ describe("RunControls", () => {
     const onStart = vi.fn(async () => "run-2");
     const onCancel = vi.fn(async () => undefined);
     render(
-      <RunControls
-        workflow={workflow}
-        run={running}
-        onStart={onStart}
-        onCancel={onCancel}
-      />,
+      <RunControls workflow={workflow} run={running} onStart={onStart} onCancel={onCancel} />,
     );
 
     fireEvent.click(screen.getByRole("button", { name: "Run" }));
-    await waitFor(() =>
-      expect(onStart).toHaveBeenCalledWith("flows.py::orders", undefined),
-    );
+    await waitFor(() => expect(onStart).toHaveBeenCalledWith("flows.py::orders", undefined));
 
     fireEvent.click(screen.getByRole("button", { name: "Cancel run" }));
     await waitFor(() => expect(onCancel).toHaveBeenCalledWith("run-1"));
@@ -73,20 +66,14 @@ describe("RunControls", () => {
       throw new Error("input.value is required");
     });
     render(
-      <RunControls
-        workflow={workflow}
-        onStart={onStart}
-        onCancel={async () => undefined}
-      />,
+      <RunControls workflow={workflow} onStart={onStart} onCancel={async () => undefined} />,
     );
 
     fireEvent.click(screen.getByRole("button", { name: "Run" }));
 
     expect(await screen.findByText("input.value is required")).toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: "Add JSON input" }));
-    expect(
-      screen.getByRole("textbox", { name: "Workflow input JSON" }),
-    ).toBeInTheDocument();
+    expect(screen.getByRole("textbox", { name: "Workflow input JSON" })).toBeInTheDocument();
   });
 
   it("accepts an explicit JSON object and rejects non-object run input", () => {

@@ -128,7 +128,6 @@ function event(
   };
 }
 
-
 function eventPage(
   records: AgentEventDescriptorMsg[],
   nextPageToken = "",
@@ -310,7 +309,9 @@ describe("Inspector", () => {
     );
     const listAgentEventPage = vi.fn<OperatorApi["listAgentEventPage"]>(async (request) => {
       const pageIndex =
-        request.pageToken === "events" ? 0 : Number(request.pageToken.replace("events-", "")) - 1;
+        request.pageToken === "events"
+          ? 0
+          : Number(request.pageToken.replace("events-", "")) - 1;
       return eventPage(
         pages[pageIndex],
         pageIndex < pages.length - 1 ? `events-${pageIndex + 2}` : "",
@@ -347,7 +348,9 @@ describe("Inspector", () => {
       expect.any(AbortSignal),
     );
     await waitFor(() =>
-      expect(screen.queryByRole("button", { name: "Load more events" })).not.toBeInTheDocument(),
+      expect(
+        screen.queryByRole("button", { name: "Load more events" }),
+      ).not.toBeInTheDocument(),
     );
     expect(screen.getByText("Why?")).toBeInTheDocument();
   });
@@ -361,7 +364,9 @@ describe("Inspector", () => {
     );
     const listAgentEventPage = vi.fn<OperatorApi["listAgentEventPage"]>(async (request) => {
       const pageIndex =
-        request.pageToken === "events" ? 0 : Number(request.pageToken.replace("events-", "")) - 1;
+        request.pageToken === "events"
+          ? 0
+          : Number(request.pageToken.replace("events-", "")) - 1;
       return eventPage(
         pages[pageIndex],
         pageIndex < pages.length - 1 ? `events-${pageIndex + 2}` : "",
@@ -398,7 +403,9 @@ describe("Inspector", () => {
       expect.any(AbortSignal),
     );
     await waitFor(() =>
-      expect(screen.queryByRole("button", { name: "Load more events" })).not.toBeInTheDocument(),
+      expect(
+        screen.queryByRole("button", { name: "Load more events" }),
+      ).not.toBeInTheDocument(),
     );
     expect(screen.getByText("Because.")).toBeInTheDocument();
   });
@@ -414,7 +421,13 @@ describe("Inspector", () => {
       },
     };
     render(
-      <Inspector api={api} workflow={workflow} run={run} nodeId="agent_1" onClose={() => undefined} />,
+      <Inspector
+        api={api}
+        workflow={workflow}
+        run={run}
+        nodeId="agent_1"
+        onClose={() => undefined}
+      />,
     );
 
     fireEvent.click(screen.getByRole("button", { name: "trace" }));
@@ -563,7 +576,9 @@ describe("Inspector", () => {
     for (let index = 0; index < 5; index += 1) {
       fireEvent.click(screen.getByRole("button", { name: `Expand ${index}` }));
       await waitFor(() =>
-        expect(readJsonDetail.mock.calls.filter(([token]) => token === `event-${index + 1}`)).toHaveLength(1),
+        expect(
+          readJsonDetail.mock.calls.filter(([token]) => token === `event-${index + 1}`),
+        ).toHaveLength(1),
       );
       expect(await screen.findByText(`body-event-${index + 1}`)).toBeInTheDocument();
     }
@@ -571,13 +586,16 @@ describe("Inspector", () => {
     fireEvent.click(screen.getByRole("button", { name: "Collapse 0" }));
     fireEvent.click(screen.getByRole("button", { name: "Expand 0" }));
     await waitFor(() =>
-      expect(readJsonDetail.mock.calls.filter(([token]) => token === "event-1")).toHaveLength(2),
+      expect(readJsonDetail.mock.calls.filter(([token]) => token === "event-1")).toHaveLength(
+        2,
+      ),
     );
 
     fireEvent.click(screen.getByRole("button", { name: "Expand 5" }));
-    expect(await screen.findByText("Unavailable · Turn detail exceeds the browser detail limit.")).toBeInTheDocument();
+    expect(
+      await screen.findByText("Unavailable · Turn detail exceeds the browser detail limit."),
+    ).toBeInTheDocument();
   });
-
 
   it("surfaces bounded trace page failures without mounting a selector", async () => {
     render(

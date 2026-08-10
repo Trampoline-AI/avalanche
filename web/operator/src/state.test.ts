@@ -333,11 +333,7 @@ describe("projectionReducer", () => {
       ],
     });
 
-    expect(state.liveLogs["run-1"].map((entry) => entry.sequence)).toEqual([
-      "1",
-      "2",
-      "3",
-    ]);
+    expect(state.liveLogs["run-1"].map((entry) => entry.sequence)).toEqual(["1", "2", "3"]);
   });
 
   it("bounds live log and event tails and records repair watermarks", () => {
@@ -506,14 +502,17 @@ describe("projectionReducer", () => {
     });
 
     expect(() =>
-      projectionReducer(state, { type: "envelopes", envelopes: [envelope("2", undefined, "other")] }),
+      projectionReducer(state, {
+        type: "envelopes",
+        envelopes: [envelope("2", undefined, "other")],
+      }),
     ).toThrow("epoch changed");
     expect(() =>
       projectionReducer(state, { type: "envelopes", envelopes: [envelope("3")] }),
     ).toThrow("update gap");
-    expect(() =>
-      projectionReducer(state, { type: "envelopes", envelopes: [reset] }),
-    ).toThrow("structural reset");
+    expect(() => projectionReducer(state, { type: "envelopes", envelopes: [reset] })).toThrow(
+      "structural reset",
+    );
   });
 });
 

@@ -1,10 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 
-import {
-  GrpcWebOperatorApi,
-  type AgentEventPageRequest,
-  type LogPageRequest,
-} from "./api";
+import { GrpcWebOperatorApi, type AgentEventPageRequest, type LogPageRequest } from "./api";
 import type { OperatorServiceClient } from "./generated/operator.client";
 import {
   AgentEventDescriptorMsg,
@@ -201,9 +197,9 @@ describe("GrpcWebOperatorApi", () => {
     const streamOperatorUpdates = vi.fn(() => ({ responses }));
     const api = apiWith({ getLatestRunSnapshot, streamOperatorUpdates });
 
-    await expect(
-      api.getLatestRunSnapshot("run-1", "operator-1", signal),
-    ).resolves.toBe(snapshot);
+    await expect(api.getLatestRunSnapshot("run-1", "operator-1", signal)).resolves.toBe(
+      snapshot,
+    );
     expect(api.streamUpdates("operator-1", "9", signal)).toBe(responses);
     expect(getLatestRunSnapshot).toHaveBeenCalledWith(
       { runId: "run-1", operatorInstanceId: "operator-1" },

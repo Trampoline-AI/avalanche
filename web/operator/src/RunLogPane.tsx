@@ -506,7 +506,9 @@ export function RunLogPane({
         >
           <span aria-hidden="true">{expanded ? "▾" : "▸"}</span>
           <strong>Logs</strong>
-          <span className="run-log-scope truncate font-mono text-[9px] text-secondary">{scopeLabel}</span>
+          <span className="run-log-scope truncate font-mono text-[9px] text-secondary">
+            {scopeLabel}
+          </span>
         </button>
         <span className="run-log-count ml-auto whitespace-nowrap font-mono text-[8px] text-muted">
           {combinedLogs.length} {combinedLogs.length === 1 ? "record" : "records"}
@@ -517,7 +519,9 @@ export function RunLogPane({
             className={`toggle run-log-autoscroll inline-flex flex-none cursor-pointer items-center gap-[5px] rounded-full border bg-panel px-2 py-[5px] font-mono text-[8px] focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-acid [&>span]:text-xs [&>span]:leading-none [&>span]:text-acid ${following ? "active border-acid text-acid" : "border-line text-secondary"}`}
             aria-label="Auto-scroll logs"
             aria-pressed={following}
-            title={following ? "Pause auto-scroll" : "Jump to latest logs and resume auto-scroll"}
+            title={
+              following ? "Pause auto-scroll" : "Jump to latest logs and resume auto-scroll"
+            }
             onClick={() => {
               if (following) {
                 setFollowing(false);
@@ -532,9 +536,26 @@ export function RunLogPane({
         )}
       </header>
       {expanded && (
-        <div className="run-log-content grid min-h-0 min-w-0 grid-rows-[auto_auto_auto_minmax(0,1fr)_auto]" id="run-log-content">
-          {pageError && <p className="inspector-error mb-1.5 rounded-[7px] border border-danger px-2 py-1.5 text-[10px] text-danger [overflow-wrap:anywhere]" role="alert">{pageError}</p>}
-          {decodeError && <p className="inspector-error mb-1.5 rounded-[7px] border border-danger px-2 py-1.5 text-[10px] text-danger [overflow-wrap:anywhere]" role="alert">{decodeError}</p>}
+        <div
+          className="run-log-content grid min-h-0 min-w-0 grid-rows-[auto_auto_auto_minmax(0,1fr)_auto]"
+          id="run-log-content"
+        >
+          {pageError && (
+            <p
+              className="inspector-error mb-1.5 rounded-[7px] border border-danger px-2 py-1.5 text-[10px] text-danger [overflow-wrap:anywhere]"
+              role="alert"
+            >
+              {pageError}
+            </p>
+          )}
+          {decodeError && (
+            <p
+              className="inspector-error mb-1.5 rounded-[7px] border border-danger px-2 py-1.5 text-[10px] text-danger [overflow-wrap:anywhere]"
+              role="alert"
+            >
+              {decodeError}
+            </p>
+          )}
           {activePage.nextPageToken && (
             <button
               type="button"
@@ -551,7 +572,8 @@ export function RunLogPane({
             ref={scrollElement}
             onScroll={(event) => {
               const element = event.currentTarget;
-              const distanceFromBottom = element.scrollHeight - element.scrollTop - element.clientHeight;
+              const distanceFromBottom =
+                element.scrollHeight - element.scrollTop - element.clientHeight;
               if (distanceFromBottom > SCROLL_LOAD_THRESHOLD_PX) setFollowing(false);
               if (element.scrollTop <= SCROLL_LOAD_THRESHOLD_PX && activePage.nextPageToken) {
                 loadOlderLogs();
@@ -559,13 +581,20 @@ export function RunLogPane({
             }}
           >
             {pageLoading && !combinedLogs.length ? (
-              <p className="inspector-loading text-[11px] text-muted italic" role="status">Loading retained logs…</p>
+              <p className="inspector-loading text-[11px] text-muted italic" role="status">
+                Loading retained logs…
+              </p>
             ) : !combinedLogs.length ? (
               <p className="empty-copy text-[11px] text-muted">
-                {nodeId ? "No retained logs are available for this node." : "No retained logs are available for this run."}
+                {nodeId
+                  ? "No retained logs are available for this node."
+                  : "No retained logs are available for this run."}
               </p>
             ) : (
-              <div className="run-log-virtual relative w-full" style={{ height: virtualizer.getTotalSize() }}>
+              <div
+                className="run-log-virtual relative w-full"
+                style={{ height: virtualizer.getTotalSize() }}
+              >
                 {virtualizer.getVirtualItems().map((virtualRow) => {
                   const entry = combinedLogs[virtualRow.index];
                   const body = logBodies.get(entry.bodyToken);
@@ -588,7 +617,11 @@ export function RunLogPane({
                         {logTimestamp(entry.timestamp)}
                       </time>
                       {graphNodeId ? (
-                        <button type="button" className="run-log-node min-w-0 cursor-pointer border-0 bg-transparent p-0 text-left [font:inherit] text-acid focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-acid [&>strong]:block [&>strong]:truncate [&>code]:mt-0.5 [&>code]:block [&>code]:truncate [&>code]:text-[8px] [&>code]:text-muted" onClick={() => onSelectNode(graphNodeId)}>
+                        <button
+                          type="button"
+                          className="run-log-node min-w-0 cursor-pointer border-0 bg-transparent p-0 text-left [font:inherit] text-acid focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-acid [&>strong]:block [&>strong]:truncate [&>code]:mt-0.5 [&>code]:block [&>code]:truncate [&>code]:text-[8px] [&>code]:text-muted"
+                          onClick={() => onSelectNode(graphNodeId)}
+                        >
                           <strong>{nodeLabel}</strong>
                           {nodeLabel !== entry.nodeId && <code>{graphNodeId}</code>}
                         </button>
@@ -597,15 +630,35 @@ export function RunLogPane({
                           <strong>{nodeLabel}</strong>
                         </span>
                       )}
-                      <span className={`run-log-level font-bold uppercase ${entry.level === "error" || entry.level === "critical" ? `level-${entry.level} text-danger` : entry.level === "warning" ? "level-warning text-amber" : "text-secondary"}`}>{entry.level}</span>
-                      <pre><AnsiText text={body ?? (droppedTokens.current.has(entry.bodyToken) ? "[log body omitted]" : "Loading…")} /></pre>
+                      <span
+                        className={`run-log-level font-bold uppercase ${entry.level === "error" || entry.level === "critical" ? `level-${entry.level} text-danger` : entry.level === "warning" ? "level-warning text-amber" : "text-secondary"}`}
+                      >
+                        {entry.level}
+                      </span>
+                      <pre>
+                        <AnsiText
+                          text={
+                            body ??
+                            (droppedTokens.current.has(entry.bodyToken)
+                              ? "[log body omitted]"
+                              : "Loading…")
+                          }
+                        />
+                      </pre>
                     </article>
                   );
                 })}
               </div>
             )}
           </div>
-          {decodePending && <p className="inspector-loading run-log-decoding mt-[5px] text-[11px] text-muted italic" role="status">Decoding log text…</p>}
+          {decodePending && (
+            <p
+              className="inspector-loading run-log-decoding mt-[5px] text-[11px] text-muted italic"
+              role="status"
+            >
+              Decoding log text…
+            </p>
+          )}
         </div>
       )}
     </section>

@@ -13,7 +13,6 @@ const operatorPort = document.querySelector<HTMLMetaElement>(
 );
 if (operatorPort === null) throw new Error("Operator port metadata is missing");
 
-
 createRoot(root).render(
   <StrictMode>
     <App api={new GrpcWebOperatorApi()} operatorPort={operatorPort.content} />

@@ -42,7 +42,6 @@ interface WorkspaceDividerProps {
   onChange: (value: number) => void;
 }
 
-
 function WorkspaceDivider({
   className,
   label,
@@ -99,8 +98,7 @@ function WorkspaceDivider({
       onPointerMove={(event) => {
         const start = dragStart.current;
         if (!start) return;
-        const next =
-          start.value + (event.clientX - start.clientX) * pointerDirection;
+        const next = start.value + (event.clientX - start.clientX) * pointerDirection;
         onChange(Math.min(max, Math.max(min, next)));
       }}
       onPointerUp={endDrag}
@@ -113,7 +111,6 @@ interface AppProps {
   api: OperatorApi;
   operatorPort?: string;
 }
-
 
 export function App({ api, operatorPort = "7433" }: AppProps) {
   const { state, startRun, cancelRun, selectRun } = useOperatorProjection(api);
@@ -166,9 +163,7 @@ export function App({ api, operatorPort = "7433" }: AppProps) {
     const workflows = state.catalog?.workflows ?? [];
     const workflow =
       workflows.find((item) => item.workflowId === selection.workflowId) ?? workflows[0];
-    setSelection(
-      workflow ? { kind: "workflow", workflowId: workflow.workflowId } : undefined,
-    );
+    setSelection(workflow ? { kind: "workflow", workflowId: workflow.workflowId } : undefined);
     setInspectedNode(undefined);
     void selectRun(undefined);
   }, [
@@ -293,7 +288,6 @@ export function App({ api, operatorPort = "7433" }: AppProps) {
     );
   }
 
-
   return (
     <div
       className={`app-shell flex h-full flex-col ${explorerOpen ? "explorer-open" : ""} ${
@@ -314,10 +308,22 @@ export function App({ api, operatorPort = "7433" }: AppProps) {
         </div>
         <div className="breadcrumb absolute left-1/2 flex -translate-x-1/2 justify-center gap-[9px] text-xs text-muted max-[700px]:hidden [&_i]:opacity-40 [&_strong]:font-semibold [&_strong]:text-[#26322c]">
           <span>{workflow?.rootAlias || "Local operator"}</span>
-          {workflow && <><i>/</i><strong>{workflow.displayName}</strong></>}
-          {historical && <><i>/</i><strong>{selection.runId}</strong></>}
+          {workflow && (
+            <>
+              <i>/</i>
+              <strong>{workflow.displayName}</strong>
+            </>
+          )}
+          {historical && (
+            <>
+              <i>/</i>
+              <strong>{selection.runId}</strong>
+            </>
+          )}
         </div>
-        <div className={`connection flex items-center gap-2 font-mono text-[11px] capitalize [&>span]:size-[7px] [&>span]:rounded-full ${state.connection === "live" ? "[&>span]:bg-mint" : "[&>span]:bg-amber"} max-[700px]:justify-self-end connection-${state.connection}`}>
+        <div
+          className={`connection flex items-center gap-2 font-mono text-[11px] capitalize [&>span]:size-[7px] [&>span]:rounded-full ${state.connection === "live" ? "[&>span]:bg-mint" : "[&>span]:bg-amber"} max-[700px]:justify-self-end connection-${state.connection}`}
+        >
           <span />
           {state.connection === "live" ? "Live" : state.connection}
         </div>
@@ -331,7 +337,11 @@ export function App({ api, operatorPort = "7433" }: AppProps) {
           Explorer
         </button>
       </header>
-      {state.error && <div className="connection-error border-b border-[#efb9b5] bg-[#fff1f0] px-[18px] py-2 text-xs text-[#9d2923]">{state.error}</div>}
+      {state.error && (
+        <div className="connection-error border-b border-[#efb9b5] bg-[#fff1f0] px-[18px] py-2 text-xs text-[#9d2923]">
+          {state.error}
+        </div>
+      )}
       <main
         className={`workspace grid min-h-0 w-full flex-1 overflow-hidden grid-cols-[var(--workspace-explorer-column-width)_var(--workspace-explorer-divider-width)_minmax(0,1fr)_var(--workspace-inspector-divider-width)_var(--workspace-inspector-column-width)] max-[1000px]:grid-cols-[var(--workspace-explorer-column-width)_var(--workspace-explorer-divider-width)_minmax(0,1fr)] max-[700px]:grid-cols-[minmax(0,1fr)] ${inspectorOpen ? "with-inspector" : ""}`}
         style={workspaceStyle}
@@ -357,7 +367,13 @@ export function App({ api, operatorPort = "7433" }: AppProps) {
           />
         )}
         <section className="canvas-shell relative col-start-3 grid min-h-0 min-w-0 w-full grid-rows-[minmax(0,1fr)] overflow-hidden bg-[#f7f9f8] max-[700px]:col-start-1">
-          <div className={historical ? "canvas run-canvas relative flex min-h-0 min-w-0 w-full flex-col overflow-hidden bg-[radial-gradient(circle,#e1e4df_1px,transparent_1px),#fafaf8] bg-[length:24px_24px]" : "canvas blueprint-canvas relative min-h-0 min-w-0 w-full overflow-hidden bg-white"}>
+          <div
+            className={
+              historical
+                ? "canvas run-canvas relative flex min-h-0 min-w-0 w-full flex-col overflow-hidden bg-[radial-gradient(circle,#e1e4df_1px,transparent_1px),#fafaf8] bg-[length:24px_24px]"
+                : "canvas blueprint-canvas relative min-h-0 min-w-0 w-full overflow-hidden bg-white"
+            }
+          >
             {historical ? (
               run ? (
                 <>
@@ -388,7 +404,10 @@ export function App({ api, operatorPort = "7433" }: AppProps) {
                 state.selectedRunStatus === "loading" ? (
                 <>
                   {restoreButton}
-                  <div className="empty-state grid h-full place-content-center text-center text-[#6d7872] [&>span]:text-[40px] [&>span]:text-acid [&>h2]:my-2 [&>h2]:text-[#27332d] [&>p]:max-w-[390px] [&>p]:text-xs" role="status">
+                  <div
+                    className="empty-state grid h-full place-content-center text-center text-[#6d7872] [&>span]:text-[40px] [&>span]:text-acid [&>h2]:my-2 [&>h2]:text-[#27332d] [&>p]:max-w-[390px] [&>p]:text-xs"
+                    role="status"
+                  >
                     <span>◇</span>
                     <h2>Loading run snapshot</h2>
                     <p>Retrieving the retained topology and execution state.</p>
@@ -398,7 +417,10 @@ export function App({ api, operatorPort = "7433" }: AppProps) {
                 state.selectedRunStatus === "error" ? (
                 <>
                   {restoreButton}
-                  <div className="empty-state grid h-full place-content-center text-center text-[#6d7872] [&>span]:text-[40px] [&>span]:text-acid [&>h2]:my-2 [&>h2]:text-[#27332d] [&>p]:max-w-[390px] [&>p]:text-xs" role="alert">
+                  <div
+                    className="empty-state grid h-full place-content-center text-center text-[#6d7872] [&>span]:text-[40px] [&>span]:text-acid [&>h2]:my-2 [&>h2]:text-[#27332d] [&>p]:max-w-[390px] [&>p]:text-xs"
+                    role="alert"
+                  >
                     <span>!</span>
                     <h2>Run snapshot unavailable</h2>
                     <p>{state.selectedRunError || "The selected run could not be loaded."}</p>
@@ -429,7 +451,9 @@ export function App({ api, operatorPort = "7433" }: AppProps) {
                 <div className="empty-state grid h-full place-content-center text-center text-[#6d7872] [&>span]:text-[40px] [&>span]:text-acid [&>h2]:my-2 [&>h2]:text-[#27332d] [&>p]:max-w-[390px] [&>p]:text-xs">
                   <span>◇</span>
                   <h2>No workflows discovered</h2>
-                  <p>Catalog changes will appear here as the operator scans configured targets.</p>
+                  <p>
+                    Catalog changes will appear here as the operator scans configured targets.
+                  </p>
                 </div>
               </>
             )}
@@ -447,7 +471,10 @@ export function App({ api, operatorPort = "7433" }: AppProps) {
               pointerDirection={-1}
               onChange={setInspectorWidth}
             />
-            <div id="operator-inspector" className="workspace-inspector-pane col-start-5 grid min-h-0 min-w-0 overflow-hidden max-[1000px]:contents">
+            <div
+              id="operator-inspector"
+              className="workspace-inspector-pane col-start-5 grid min-h-0 min-w-0 overflow-hidden max-[1000px]:contents"
+            >
               <Inspector
                 api={api}
                 workflow={workflow}

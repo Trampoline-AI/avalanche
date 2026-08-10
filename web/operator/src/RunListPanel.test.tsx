@@ -48,8 +48,24 @@ describe("RunListPanel", () => {
         workflowId="flows.py::orders"
         runs={{
           older: run("run-older", "flows.py::orders", "2", "success", 10, 12.25, 1_704_067_200),
-          newer: run("run-newer", "flows.py::orders", "9007199254740993", "failed", 20, 21, 1_704_153_600),
-          unrelated: run("run-other", "flows.py::inventory", "3", "success", 1, 2, 1_704_067_200),
+          newer: run(
+            "run-newer",
+            "flows.py::orders",
+            "9007199254740993",
+            "failed",
+            20,
+            21,
+            1_704_153_600,
+          ),
+          unrelated: run(
+            "run-other",
+            "flows.py::inventory",
+            "3",
+            "success",
+            1,
+            2,
+            1_704_067_200,
+          ),
         }}
         selectedRunId="run-older"
         onSelectRun={vi.fn()}
@@ -66,10 +82,9 @@ describe("RunListPanel", () => {
     );
     expect(rows[1]).toHaveClass("active");
     expect(screen.getByText("2")).toBeInTheDocument();
-    expect(screen.getByText(RUN_TIMESTAMP_FORMAT.format(new Date(1_704_153_600_000)))).toHaveAttribute(
-      "dateTime",
-      "2024-01-02T00:00:00.000Z",
-    );
+    expect(
+      screen.getByText(RUN_TIMESTAMP_FORMAT.format(new Date(1_704_153_600_000))),
+    ).toHaveAttribute("dateTime", "2024-01-02T00:00:00.000Z");
   });
 
   it("renders requesting runs in amber", () => {
@@ -102,15 +117,7 @@ describe("RunListPanel", () => {
       <RunListPanel
         workflowId="flows.py::orders"
         runs={{
-          active: run(
-            "run-active",
-            "flows.py::orders",
-            "4",
-            "running",
-            10,
-            0,
-            0,
-          ),
+          active: run("run-active", "flows.py::orders", "4", "running", 10, 0, 0),
         }}
         onSelectRun={onSelectRun}
       />,

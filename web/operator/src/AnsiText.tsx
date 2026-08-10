@@ -155,9 +155,17 @@ function segments(text: string): AnsiSegment[] {
 }
 
 function styleFor(state: AnsiState): CSSProperties | undefined {
-  const foreground = state.inverse ? state.background ?? "#ffffff" : state.foreground;
-  const background = state.inverse ? state.foreground ?? "#17211c" : state.background;
-  if (!foreground && !background && !state.bold && !state.dim && !state.italic && !state.underline && !state.strikethrough) {
+  const foreground = state.inverse ? (state.background ?? "#ffffff") : state.foreground;
+  const background = state.inverse ? (state.foreground ?? "#17211c") : state.background;
+  if (
+    !foreground &&
+    !background &&
+    !state.bold &&
+    !state.dim &&
+    !state.italic &&
+    !state.underline &&
+    !state.strikethrough
+  ) {
     return undefined;
   }
   return {
@@ -166,15 +174,22 @@ function styleFor(state: AnsiState): CSSProperties | undefined {
     fontWeight: state.bold ? 700 : undefined,
     opacity: state.dim ? 0.7 : undefined,
     fontStyle: state.italic ? "italic" : undefined,
-    textDecoration: [state.underline ? "underline" : "", state.strikethrough ? "line-through" : ""]
-      .filter(Boolean)
-      .join(" ") || undefined,
+    textDecoration:
+      [state.underline ? "underline" : "", state.strikethrough ? "line-through" : ""]
+        .filter(Boolean)
+        .join(" ") || undefined,
   };
 }
 
 export function AnsiText({ text }: { text: string }): ReactNode {
   return segments(text).map((segment, index) => {
     const style = styleFor(segment.state);
-    return style ? <span key={index} style={style}>{segment.text}</span> : segment.text;
+    return style ? (
+      <span key={index} style={style}>
+        {segment.text}
+      </span>
+    ) : (
+      segment.text
+    );
   });
 }

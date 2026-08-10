@@ -50,8 +50,7 @@ function MarkdownContent({
   const visibleChunks = [];
   for (
     let chunkIndex = 0;
-    chunkIndex < visibleChunkCount &&
-    chunkIndex * sourceCharacterBudget < children.length;
+    chunkIndex < visibleChunkCount && chunkIndex * sourceCharacterBudget < children.length;
     chunkIndex += 1
   ) {
     const start = chunkIndex * sourceCharacterBudget;
@@ -81,9 +80,7 @@ function MarkdownContent({
 }
 
 function MarkdownSource(
-  props: Required<
-    Pick<MarkdownProps, "children" | "expandable" | "sourceCharacterBudget">
-  > &
+  props: Required<Pick<MarkdownProps, "children" | "expandable" | "sourceCharacterBudget">> &
     Pick<MarkdownProps, "className">,
 ) {
   return <MarkdownContent key={props.sourceCharacterBudget} {...props} />;
@@ -96,10 +93,7 @@ export function Markdown({
   sourceCharacterBudget = MARKDOWN_SOURCE_CHUNK_CHARACTERS,
 }: MarkdownProps) {
   const boundedSourceCharacterBudget = Number.isFinite(sourceCharacterBudget)
-    ? Math.min(
-        MARKDOWN_SOURCE_CHUNK_CHARACTERS,
-        Math.max(1, Math.floor(sourceCharacterBudget)),
-      )
+    ? Math.min(MARKDOWN_SOURCE_CHUNK_CHARACTERS, Math.max(1, Math.floor(sourceCharacterBudget)))
     : MARKDOWN_SOURCE_CHUNK_CHARACTERS;
   return (
     <MarkdownSource

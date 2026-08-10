@@ -61,9 +61,9 @@ export function mergeDescriptorPage<T>(
 
 export function measuredByteCost(value: unknown, reportedSize?: string) {
   const reported = Number(reportedSize);
-  let measured = 0;
+  let measured: number;
   try {
-    const encoded = typeof value === "string" ? value : JSON.stringify(value) ?? "";
+    const encoded = typeof value === "string" ? value : (JSON.stringify(value) ?? "");
     measured = new TextEncoder().encode(encoded).byteLength;
   } catch {
     measured = DETAIL_CACHE_MAX_BYTES + 1;

@@ -23,7 +23,6 @@ interface RenderedEdge {
   type?: string;
 }
 
-
 const graphMetrics = vi.hoisted(() => ({
   layoutCount: 0,
   renderCount: 0,
@@ -166,10 +165,7 @@ describe("GraphCanvas", () => {
       "THIRD_MARKER",
     ].join("\n\n");
     const view = render(
-      <Markdown
-        className="bounded-markdown"
-        sourceCharacterBudget={sourceCharacterBudget}
-      >
+      <Markdown className="bounded-markdown" sourceCharacterBudget={sourceCharacterBudget}>
         {source}
       </Markdown>,
     );
@@ -192,10 +188,7 @@ describe("GraphCanvas", () => {
 
     const replacement = `# Replacement\n\n${"R".repeat(sourceCharacterBudget)}\n\nRESET_TAIL`;
     view.rerender(
-      <Markdown
-        className="bounded-markdown"
-        sourceCharacterBudget={sourceCharacterBudget}
-      >
+      <Markdown className="bounded-markdown" sourceCharacterBudget={sourceCharacterBudget}>
         {replacement}
       </Markdown>,
     );
@@ -229,9 +222,9 @@ describe("GraphCanvas", () => {
     expect(
       screen.getByRole("button", { name: "Inspect Store" }).closest("article"),
     ).toHaveAttribute("data-node-kind", "standard");
-    expect(screen.getByRole("button", { name: "Inspect Store" }).closest("article")).not.toHaveClass(
-      "border-acid!",
-    );
+    expect(
+      screen.getByRole("button", { name: "Inspect Store" }).closest("article"),
+    ).not.toHaveClass("border-acid!");
 
     view.rerender(
       <GraphCanvas
@@ -267,8 +260,9 @@ describe("GraphCanvas", () => {
     expect(screen.getByText("recorded_input")).toBeInTheDocument();
     expect(screen.getByText("Recorded instruction.")).toBeInTheDocument();
     expect(screen.queryByText("recorded failure")).not.toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "Inspect Recorded agent" }).closest(".node-card"))
-      .toHaveClass("status-failed");
+    expect(
+      screen.getByRole("button", { name: "Inspect Recorded agent" }).closest(".node-card"),
+    ).toHaveClass("status-failed");
     expect(historicalAgentCard).toHaveClass("before:bg-agent", "border-line");
     expect(historicalAgentCard?.querySelector(".node-title")).toHaveClass("text-ink");
     expect(historicalAgentCard?.querySelector(".node-status-icon")).toHaveClass(
@@ -322,11 +316,7 @@ describe("GraphCanvas", () => {
       startedAt: 1,
     });
     const view = render(
-      <GraphCanvas
-        runTopology={topology}
-        runNodes={[runningNode]}
-        onOpenNode={onOpenNode}
-      />,
+      <GraphCanvas runTopology={topology} runNodes={[runningNode]} onOpenNode={onOpenNode} />,
     );
     const initialNodes = graphMetrics.nodeSets.at(-1);
     const initialPosition = initialNodes?.[0].position;
@@ -497,12 +487,8 @@ describe("GraphCanvas", () => {
     expect(screen.queryByRole("button", { name: "Show more" })).not.toBeInTheDocument();
 
     const parsed = parseAgentDeclaration(declaration);
-    expect(parsed?.skills).toEqual([
-      { name: "audit", instructions: "Check **every** field." },
-    ]);
-    expect(parsed?.tools).toEqual([
-      { name: "lookup", description: "Look up a record." },
-    ]);
+    expect(parsed?.skills).toEqual([{ name: "audit", instructions: "Check **every** field." }]);
+    expect(parsed?.tools).toEqual([{ name: "lookup", description: "Look up a record." }]);
 
     const handles = screen.getAllByTestId("graph-handle");
     expect(handles).toHaveLength(4);
@@ -523,9 +509,7 @@ describe("GraphCanvas", () => {
 
   it("uses fixed title sizes across the detail zoom threshold", () => {
     graphMetrics.zoom = 0.99;
-    const view = render(
-      <GraphCanvas workflow={workflow} onOpenNode={() => undefined} />,
-    );
+    const view = render(<GraphCanvas workflow={workflow} onOpenNode={() => undefined} />);
 
     const compactCard = screen
       .getByRole("button", { name: "Inspect Current agent" })
@@ -569,11 +553,12 @@ describe("GraphCanvas", () => {
       />,
     );
 
-    const card = screen.getByRole("button", { name: "Inspect Failed step" }).closest(".node-card");
+    const card = screen
+      .getByRole("button", { name: "Inspect Failed step" })
+      .closest(".node-card");
     expect(card).toHaveClass("status-failed", "node-card--compact");
     expect(card).not.toHaveTextContent("The retained log is the error detail surface.");
   });
-
 
   it("deduplicates dependencies and selects right or bottom source handles by depth", () => {
     render(
@@ -713,8 +698,9 @@ describe("GraphCanvas", () => {
       "transition-[font-size]",
       "duration-150",
     );
-    expect(screen.getByRole("button", { name: "Inspect Timed agent" }).closest(".node-card"))
-      .toHaveClass("status-running", "gradient-animate");
+    expect(
+      screen.getByRole("button", { name: "Inspect Timed agent" }).closest(".node-card"),
+    ).toHaveClass("status-running", "gradient-animate");
     act(() => vi.advanceTimersByTime(100));
     expect(screen.getByText("4.6s")).toBeInTheDocument();
     act(() => vi.advanceTimersByTime(900));
@@ -761,8 +747,9 @@ describe("GraphCanvas", () => {
     );
     expect(screen.getByText("2.0s")).toBeInTheDocument();
     expect(screen.getByText("2.0s")).toHaveClass("top-4", "right-4", "text-[9px]");
-    expect(screen.getByRole("button", { name: "Inspect Timed agent" }).closest(".node-card"))
-      .toHaveClass("status-success");
+    expect(
+      screen.getByRole("button", { name: "Inspect Timed agent" }).closest(".node-card"),
+    ).toHaveClass("status-success");
     act(() => vi.advanceTimersByTime(5_000));
     expect(screen.getByText("2.0s")).toBeInTheDocument();
     expect(graphMetrics.layoutCount).toBe(2);

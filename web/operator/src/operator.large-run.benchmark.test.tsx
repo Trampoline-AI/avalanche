@@ -1,4 +1,3 @@
-
 import { Profiler, useEffect } from "react";
 import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -17,7 +16,6 @@ vi.mock("@tanstack/react-virtual", () => ({
     scrollToIndex: () => undefined,
   }),
 }));
-
 
 import type { OperatorApi, StructuralBaseline } from "./api";
 import { RunListPanel } from "./RunListPanel";
@@ -68,9 +66,7 @@ const catalog = CatalogSnapshotMsg.create({
   operatorInstanceId: OPERATOR_ID,
   asOfSequence: "0",
   revision: "1",
-  scanTargets: [
-    { alias: "bench", targetPath: "/controlled/bench", kind: "directory" },
-  ],
+  scanTargets: [{ alias: "bench", targetPath: "/controlled/bench", kind: "directory" }],
   workflows: [
     {
       workflowId: WORKFLOW_ID,
@@ -78,8 +74,9 @@ const catalog = CatalogSnapshotMsg.create({
       rootAlias: "bench",
       relativeFile: "benchmark.py",
       builderSymbol: "large_run",
-      nodeIds: Array.from({ length: NODE_COUNT }, (_, index) =>
-        `node-${index.toString().padStart(3, "0")}`,
+      nodeIds: Array.from(
+        { length: NODE_COUNT },
+        (_, index) => `node-${index.toString().padStart(3, "0")}`,
       ),
       graph: {},
       nodeTypes: {},
@@ -93,7 +90,9 @@ const baseline: StructuralBaseline = { catalog, asOfSequence: "0", runs: runSumm
 
 const topology = WorkflowTopologyMsg.create({
   nodeIds: catalog.workflows[0].nodeIds,
-  graph: Object.fromEntries(catalog.workflows[0].nodeIds.map((nodeId) => [nodeId, { children: [] }])),
+  graph: Object.fromEntries(
+    catalog.workflows[0].nodeIds.map((nodeId) => [nodeId, { children: [] }]),
+  ),
   nodeTypes: Object.fromEntries(catalog.workflows[0].nodeIds.map((nodeId) => [nodeId, "task"])),
   displayNames: Object.fromEntries(
     catalog.workflows[0].nodeIds.map((nodeId) => [nodeId, `Benchmark ${nodeId}`]),
@@ -158,7 +157,6 @@ function deferred<T>() {
   return Promise.withResolvers<T>();
 }
 
-
 function untilAborted(signal?: AbortSignal) {
   const { promise, resolve } = Promise.withResolvers<void>();
   if (!signal || signal.aborted) {
@@ -187,8 +185,7 @@ class ManualFrameScheduler {
 
   async flushOne() {
     const entry = this.callbacks.entries().next().value as
-      | [number, FrameRequestCallback]
-      | undefined;
+      [number, FrameRequestCallback] | undefined;
     if (!entry) throw new Error("No scheduled animation frame");
     this.callbacks.delete(entry[0]);
     await act(async () => {
@@ -258,9 +255,7 @@ function ProjectionProbe({
       </button>
       <output data-testid="run-count">{Object.keys(state.runs).length}</output>
       <output data-testid="projection-sequence">{state.sequence}</output>
-      <output data-testid="live-log-count">
-        {state.liveLogs[RUN_ID]?.length ?? 0}
-      </output>
+      <output data-testid="live-log-count">{state.liveLogs[RUN_ID]?.length ?? 0}</output>
       <output data-testid="live-event-count">
         {state.liveEvents[`${RUN_ID}:${SELECTED_NODE}`]?.length ?? 0}
       </output>
@@ -273,354 +268,353 @@ function decodedSplitText() {
   const encoded = new TextEncoder().encode(expected);
   const splitAt = encoded.indexOf(0xf0) + 2;
   const decoder = new TextDecoder();
-  return decoder.decode(encoded.slice(0, splitAt), { stream: true }) + decoder.decode(encoded.slice(splitAt));
+  return (
+    decoder.decode(encoded.slice(0, splitAt), { stream: true }) +
+    decoder.decode(encoded.slice(splitAt))
+  );
 }
-
 
 afterEach(() => {
   vi.unstubAllGlobals();
 });
 
 describe("large retained-run browser benchmark", () => {
-  it(
-    "bounds summary DOM and frame-batches 1,000 ordered live envelopes",
-    async () => {
-      expect(runSummaries).toHaveLength(RUN_SUMMARY_COUNT);
-      const scheduler = new ManualFrameScheduler();
-      scheduler.install();
-      const startUpdates = deferred<void>();
-      let yieldedUpdates = 0;
-      const getLatestRunSnapshot = vi.fn(async () =>
-        RunSnapshotMsg.create({
-          ...selectedRun,
-          asOfSequence: String(yieldedUpdates),
-        }),
-      );
-      const api: OperatorApi = {
-        getCatalog: async () => catalog,
-        loadBaseline: vi.fn(async () => baseline),
-        getLatestRunSnapshot,
-        streamUpdates: async function* (_operatorInstanceId, _afterSequence, signal) {
-          await startUpdates.promise;
-          for (let sequence = 1; sequence <= ENVELOPE_COUNT; sequence += 1) {
-            yieldedUpdates += 1;
-            yield liveEnvelope(sequence);
-          }
-          await untilAborted(signal);
-        },
-        listLogPage: async () => {
-          throw new Error("unused");
-        },
-        listAgentEventPage: async () => {
-          throw new Error("unused");
-        },
-        readJsonDetail: async () => {
-          throw new Error("unused");
-        },
-        readTextDetail: async () => {
-          throw new Error("unused");
-        },
-        startRun: async () => RUN_ID,
-        cancelRun: async () => undefined,
-      };
-      const observedSequences: string[] = [];
-      const projectionView = render(
-        <ProjectionProbe api={api} observedSequences={observedSequences} />,
-      );
-
-      await waitFor(() =>
-        expect(screen.getByTestId("run-count")).toHaveTextContent(String(RUN_SUMMARY_COUNT)),
-      );
-      expect(getLatestRunSnapshot).not.toHaveBeenCalled();
-
-      fireEvent.click(screen.getByRole("button", { name: "Select benchmark run" }));
-      await waitFor(() => expect(getLatestRunSnapshot).toHaveBeenCalledTimes(1));
-      startUpdates.resolve();
-      await waitFor(() => expect(yieldedUpdates).toBe(ENVELOPE_COUNT));
-      await waitFor(() => expect(scheduler.callbacks.size).toBe(1));
-
-      expect(screen.getByTestId("projection-sequence")).toHaveTextContent("0");
-      while (scheduler.callbacks.size > 0) await scheduler.flushOne();
-
-      await waitFor(() =>
-        expect(screen.getByTestId("projection-sequence")).toHaveTextContent(
-          String(ENVELOPE_COUNT),
-        ),
-      );
-      expect(Number(screen.getByTestId("live-log-count").textContent)).toBeLessThanOrEqual(256);
-      expect(Number(screen.getByTestId("live-event-count").textContent)).toBeLessThanOrEqual(256);
-      const committedSequences = observedSequences
-        .map(Number)
-        .filter((value, index, values) => index === 0 || value !== values[index - 1]);
-      const frameDeltas = committedSequences
-        .slice(1)
-        .map((value, index) => value - committedSequences[index])
-        .filter((delta) => delta > 0);
-      expect(frameDeltas.length).toBeGreaterThan(1);
-      expect(Math.max(...frameDeltas)).toBeLessThanOrEqual(256);
-      projectionView.unmount();
-
-      const onSelectRun = vi.fn();
-      const runListRenderStart = performance.now();
-      const runListView = render(
-        <RunListPanel
-          workflowId={WORKFLOW_ID}
-          runs={Object.fromEntries(runSummaries.map((item) => [item.runId, item]))}
-          onSelectRun={onSelectRun}
-        />,
-      );
-      const virtualRunList = await within(runListView.container).findByRole("region", {
-        name: "Workflow runs",
-      });
-      const newestRun = await within(virtualRunList).findByRole("button", {
-        name: /run-09999/,
-      });
-      expect(virtualRunList.querySelectorAll(".run-list-row").length).toBeLessThanOrEqual(
-        DOM_ROW_LIMIT,
-      );
-      expect(performance.now() - runListRenderStart).toBeLessThan(UNIT_RENDER_BUDGET_MS);
-      fireEvent.click(newestRun);
-      expect(onSelectRun).toHaveBeenLastCalledWith(RUN_ID);
-
-    },
-    30_000,
-  );
-
-  it(
-    "pages controlled descriptor volumes and suppresses stale large details",
-    async () => {
-      expect(logDescriptors).toHaveLength(LOG_DESCRIPTOR_COUNT);
-      expect(new Set(logDescriptors.map((entry) => entry.nodeId)).size).toBe(NODE_COUNT);
-      expect(agentEvents).toHaveLength(AGENT_EVENT_COUNT);
-      const staleInput = deferred<unknown>();
-      const freshOutput = deferred<unknown>();
-      const largePayload = "x".repeat(LARGE_DETAIL_BYTES);
-      const selectedLogs = logDescriptors.filter((entry) => entry.nodeId === SELECTED_NODE);
-      const listAgentEventPage = vi.fn<OperatorApi["listAgentEventPage"]>(async (request) => {
-        if (request.order === DescriptorPageOrder.NEWEST_FIRST) {
-          const upper =
-            request.beforeEventSequence === "0"
-              ? agentEvents.length
-              : Number(request.beforeEventSequence) - 1;
-          const lower = Math.max(1, upper - request.pageSize + 1);
-          return {
-            operatorInstanceId: OPERATOR_ID,
-            asOfSequence: selectedRun.asOfSequence,
-            runId: RUN_ID,
-            nodeId: SELECTED_NODE,
-            records: agentEvents.slice(lower - 1, upper).reverse(),
-            nextPageToken: lower === 1 ? "" : "events:older",
-            nextCursor: String(lower),
-          };
+  it("bounds summary DOM and frame-batches 1,000 ordered live envelopes", async () => {
+    expect(runSummaries).toHaveLength(RUN_SUMMARY_COUNT);
+    const scheduler = new ManualFrameScheduler();
+    scheduler.install();
+    const startUpdates = deferred<void>();
+    let yieldedUpdates = 0;
+    const getLatestRunSnapshot = vi.fn(async () =>
+      RunSnapshotMsg.create({
+        ...selectedRun,
+        asOfSequence: String(yieldedUpdates),
+      }),
+    );
+    const api: OperatorApi = {
+      getCatalog: async () => catalog,
+      loadBaseline: vi.fn(async () => baseline),
+      getLatestRunSnapshot,
+      streamUpdates: async function* (_operatorInstanceId, _afterSequence, signal) {
+        await startUpdates.promise;
+        for (let sequence = 1; sequence <= ENVELOPE_COUNT; sequence += 1) {
+          yieldedUpdates += 1;
+          yield liveEnvelope(sequence);
         }
-        const start = Number(request.afterEventSequence);
-        const records = agentEvents.slice(start, start + request.pageSize);
+        await untilAborted(signal);
+      },
+      listLogPage: async () => {
+        throw new Error("unused");
+      },
+      listAgentEventPage: async () => {
+        throw new Error("unused");
+      },
+      readJsonDetail: async () => {
+        throw new Error("unused");
+      },
+      readTextDetail: async () => {
+        throw new Error("unused");
+      },
+      startRun: async () => RUN_ID,
+      cancelRun: async () => undefined,
+    };
+    const observedSequences: string[] = [];
+    const projectionView = render(
+      <ProjectionProbe api={api} observedSequences={observedSequences} />,
+    );
+
+    await waitFor(() =>
+      expect(screen.getByTestId("run-count")).toHaveTextContent(String(RUN_SUMMARY_COUNT)),
+    );
+    expect(getLatestRunSnapshot).not.toHaveBeenCalled();
+
+    fireEvent.click(screen.getByRole("button", { name: "Select benchmark run" }));
+    await waitFor(() => expect(getLatestRunSnapshot).toHaveBeenCalledTimes(1));
+    startUpdates.resolve();
+    await waitFor(() => expect(yieldedUpdates).toBe(ENVELOPE_COUNT));
+    await waitFor(() => expect(scheduler.callbacks.size).toBe(1));
+
+    expect(screen.getByTestId("projection-sequence")).toHaveTextContent("0");
+    while (scheduler.callbacks.size > 0) await scheduler.flushOne();
+
+    await waitFor(() =>
+      expect(screen.getByTestId("projection-sequence")).toHaveTextContent(
+        String(ENVELOPE_COUNT),
+      ),
+    );
+    expect(Number(screen.getByTestId("live-log-count").textContent)).toBeLessThanOrEqual(256);
+    expect(Number(screen.getByTestId("live-event-count").textContent)).toBeLessThanOrEqual(256);
+    const committedSequences = observedSequences
+      .map(Number)
+      .filter((value, index, values) => index === 0 || value !== values[index - 1]);
+    const frameDeltas = committedSequences
+      .slice(1)
+      .map((value, index) => value - committedSequences[index])
+      .filter((delta) => delta > 0);
+    expect(frameDeltas.length).toBeGreaterThan(1);
+    expect(Math.max(...frameDeltas)).toBeLessThanOrEqual(256);
+    projectionView.unmount();
+
+    const onSelectRun = vi.fn();
+    const runListRenderStart = performance.now();
+    const runListView = render(
+      <RunListPanel
+        workflowId={WORKFLOW_ID}
+        runs={Object.fromEntries(runSummaries.map((item) => [item.runId, item]))}
+        onSelectRun={onSelectRun}
+      />,
+    );
+    const virtualRunList = await within(runListView.container).findByRole("region", {
+      name: "Workflow runs",
+    });
+    const newestRun = await within(virtualRunList).findByRole("button", {
+      name: /run-09999/,
+    });
+    expect(virtualRunList.querySelectorAll(".run-list-row").length).toBeLessThanOrEqual(
+      DOM_ROW_LIMIT,
+    );
+    expect(performance.now() - runListRenderStart).toBeLessThan(UNIT_RENDER_BUDGET_MS);
+    fireEvent.click(newestRun);
+    expect(onSelectRun).toHaveBeenLastCalledWith(RUN_ID);
+  }, 30_000);
+
+  it("pages controlled descriptor volumes and suppresses stale large details", async () => {
+    expect(logDescriptors).toHaveLength(LOG_DESCRIPTOR_COUNT);
+    expect(new Set(logDescriptors.map((entry) => entry.nodeId)).size).toBe(NODE_COUNT);
+    expect(agentEvents).toHaveLength(AGENT_EVENT_COUNT);
+    const staleInput = deferred<unknown>();
+    const freshOutput = deferred<unknown>();
+    const largePayload = "x".repeat(LARGE_DETAIL_BYTES);
+    const selectedLogs = logDescriptors.filter((entry) => entry.nodeId === SELECTED_NODE);
+    const listAgentEventPage = vi.fn<OperatorApi["listAgentEventPage"]>(async (request) => {
+      if (request.order === DescriptorPageOrder.NEWEST_FIRST) {
+        const upper =
+          request.beforeEventSequence === "0"
+            ? agentEvents.length
+            : Number(request.beforeEventSequence) - 1;
+        const lower = Math.max(1, upper - request.pageSize + 1);
         return {
           operatorInstanceId: OPERATOR_ID,
           asOfSequence: selectedRun.asOfSequence,
           runId: RUN_ID,
           nodeId: SELECTED_NODE,
-          records,
-          nextPageToken: start + records.length >= agentEvents.length ? "" : "events:next",
-          nextCursor: records.at(-1)?.eventSequence ?? request.afterEventSequence,
+          records: agentEvents.slice(lower - 1, upper).reverse(),
+          nextPageToken: lower === 1 ? "" : "events:older",
+          nextCursor: String(lower),
         };
-      });
-      const listLogPage = vi.fn<OperatorApi["listLogPage"]>(async (request) => {
-        const end =
-          request.beforeSequence === "0"
-            ? selectedLogs.length
-            : selectedLogs.findIndex((entry) => entry.sequence === request.beforeSequence);
-        const records = selectedLogs
-          .slice(Math.max(0, end - request.pageSize), end)
-          .reverse();
-        return {
-          operatorInstanceId: OPERATOR_ID,
-          asOfSequence: selectedRun.asOfSequence,
-          records,
-          nextPageToken: end === selectedLogs.length ? "logs:next" : "logs:next-2",
-          nextCursor: records.at(-1)?.sequence ?? request.beforeSequence,
-        };
-      });
-      const readJsonDetail = vi.fn<OperatorApi["readJsonDetail"]>((bodyToken) => {
-        if (bodyToken === "detail:input") return staleInput.promise;
-        if (bodyToken === "detail:output") return freshOutput.promise;
-        return Promise.resolve({ event: bodyToken, payload: largePayload });
-      });
-      const readTextDetail = vi.fn<OperatorApi["readTextDetail"]>(async () => decodedSplitText());
-      const api: OperatorApi = {
-        getCatalog: async () => catalog,
-        loadBaseline: async () => baseline,
-        getLatestRunSnapshot: async () => selectedRun,
-        streamUpdates: async function* () {
-          return;
-        },
-        listAgentEventPage,
-        listLogPage,
-        readJsonDetail,
-        readTextDetail,
-        startRun: async () => RUN_ID,
-        cancelRun: async () => undefined,
-      };
-      let inspectorCommits = 0;
-      const benchmarkStart = performance.now();
-      render(
-        <Profiler id="large-inspector" onRender={() => { inspectorCommits += 1; }}>
-          <Inspector
-            api={api}
-            workflow={catalog.workflows[0]}
-            run={selectedRun}
-            nodeId={SELECTED_NODE}
-            onClose={() => undefined}
-          />
-        </Profiler>,
-      );
-
-      expect(listAgentEventPage).not.toHaveBeenCalled();
-      expect(listLogPage).not.toHaveBeenCalled();
-      expect(readJsonDetail).not.toHaveBeenCalled();
-      expect(readTextDetail).not.toHaveBeenCalled();
-
-      fireEvent.click(screen.getByRole("button", { name: "inputs" }));
-      await waitFor(() =>
-        expect(readJsonDetail.mock.calls.some(([token]) => token === "detail:input")).toBe(true),
-      );
-      expect(listAgentEventPage).toHaveBeenCalledTimes(1);
-      expect(listAgentEventPage.mock.calls[0][0]).toMatchObject({
-        pageToken: "events:0",
-        afterEventSequence: "0",
-        pageSize: PAGE_SIZE,
-        order: DescriptorPageOrder.FORWARD,
-        expectedNodeId: SELECTED_NODE,
-      });
-
-      fireEvent.click(screen.getByRole("button", { name: "output" }));
-      await waitFor(() =>
-        expect(readJsonDetail.mock.calls.some(([token]) => token === "detail:output")).toBe(true),
-      );
-      expect(listAgentEventPage).toHaveBeenCalledTimes(2);
-      expect(listAgentEventPage.mock.calls[1][0]).toMatchObject({
-        beforeEventSequence: "0",
-        order: DescriptorPageOrder.NEWEST_FIRST,
-        expectedNodeId: SELECTED_NODE,
-      });
-      const outputDetail = {
-        data: { outputs: { freshMarker: "fresh-detail", payload: largePayload } },
-      };
-      expect(JSON.stringify(outputDetail).length).toBeGreaterThanOrEqual(LARGE_DETAIL_BYTES);
-      await act(async () => {
-        freshOutput.resolve(outputDetail);
-        await Promise.resolve();
-      });
-      const outputTree = await screen.findByRole("tree", { name: "JSON value" });
-      expect(within(outputTree).getByText("fresh-detail")).toBeInTheDocument();
-      expect(within(outputTree).getByText("freshMarker")).toBeInTheDocument();
-      expect(screen.queryByRole("button", { name: /Object/ })).not.toBeInTheDocument();
-
-      const commitsBeforeStaleCompletion = inspectorCommits;
-      await act(async () => {
-        staleInput.resolve({ data: { inputs: { staleMarker: "stale-detail" } } });
-        await Promise.resolve();
-      });
-      expect(inspectorCommits).toBe(commitsBeforeStaleCompletion);
-      expect(screen.queryByText("stale-detail")).not.toBeInTheDocument();
-      expect(screen.getByText("fresh-detail")).toBeInTheDocument();
-
-      fireEvent.click(screen.getByRole("button", { name: "inputs" }));
-      const inputTree = await screen.findByRole("tree", { name: "JSON value" });
-      expect(listAgentEventPage).toHaveBeenCalledTimes(3);
-      expect(within(inputTree).getByText("stale-detail")).toBeInTheDocument();
-      expect(screen.queryByRole("button", { name: /Object/ })).not.toBeInTheDocument();
-
-      fireEvent.click(screen.getByRole("button", { name: "Load more events" }));
-      await waitFor(() => {
-        expect(listAgentEventPage).toHaveBeenCalledTimes(4);
-        expect(screen.getByRole("button", { name: "Load more events" })).not.toBeDisabled();
-      });
-      expect(listAgentEventPage).toHaveBeenCalledTimes(4);
-      expect(listAgentEventPage.mock.calls[3][0]).toMatchObject({
-        pageToken: "events:next",
-        afterEventSequence: String(PAGE_SIZE),
-        pageSize: PAGE_SIZE,
-        order: DescriptorPageOrder.FORWARD,
-        expectedNodeId: SELECTED_NODE,
-      });
-
-      fireEvent.click(screen.getByRole("button", { name: "trace" }));
-      expect(await screen.findByText("99 retained turns")).toBeInTheDocument();
-      expect(listAgentEventPage).toHaveBeenCalledTimes(5);
-      expect(listAgentEventPage.mock.calls[4][0]).toMatchObject({
-        pageToken: "events:0",
-        afterEventSequence: "0",
-        pageSize: PAGE_SIZE,
-        order: DescriptorPageOrder.FORWARD,
-        expectedNodeId: SELECTED_NODE,
-      });
-      fireEvent.click(screen.getByRole("button", { name: "Expand turns" }));
-      await waitFor(() => expect(listAgentEventPage).toHaveBeenCalledTimes(6));
-      expect(listAgentEventPage.mock.calls[5][0]).toMatchObject({
-        pageToken: "events:next",
-        afterEventSequence: String(PAGE_SIZE),
-        pageSize: PAGE_SIZE,
-        order: DescriptorPageOrder.FORWARD,
-        expectedNodeId: SELECTED_NODE,
-      });
-      fireEvent.click(screen.getByRole("button", { name: "Following live" }));
-      for (let turn = 0; turn < 5; turn += 1) {
-        const token = `event:${turn + 2}`;
-        fireEvent.click(await screen.findByRole("button", { name: `Expand ${turn}` }));
-        await waitFor(() =>
-          expect(readJsonDetail.mock.calls.filter(([called]) => called === token)).toHaveLength(1),
-        );
-        expect(await screen.findByText(token)).toBeInTheDocument();
       }
-      fireEvent.click(screen.getByRole("button", { name: "Collapse 0" }));
-      fireEvent.click(screen.getByRole("button", { name: "Expand 0" }));
-      await waitFor(() =>
-        expect(readJsonDetail.mock.calls.filter(([token]) => token === "event:2")).toHaveLength(2),
-      );
-
-      const logPaneView = render(
-        <RunLogPane
+      const start = Number(request.afterEventSequence);
+      const records = agentEvents.slice(start, start + request.pageSize);
+      return {
+        operatorInstanceId: OPERATOR_ID,
+        asOfSequence: selectedRun.asOfSequence,
+        runId: RUN_ID,
+        nodeId: SELECTED_NODE,
+        records,
+        nextPageToken: start + records.length >= agentEvents.length ? "" : "events:next",
+        nextCursor: records.at(-1)?.eventSequence ?? request.afterEventSequence,
+      };
+    });
+    const listLogPage = vi.fn<OperatorApi["listLogPage"]>(async (request) => {
+      const end =
+        request.beforeSequence === "0"
+          ? selectedLogs.length
+          : selectedLogs.findIndex((entry) => entry.sequence === request.beforeSequence);
+      const records = selectedLogs.slice(Math.max(0, end - request.pageSize), end).reverse();
+      return {
+        operatorInstanceId: OPERATOR_ID,
+        asOfSequence: selectedRun.asOfSequence,
+        records,
+        nextPageToken: end === selectedLogs.length ? "logs:next" : "logs:next-2",
+        nextCursor: records.at(-1)?.sequence ?? request.beforeSequence,
+      };
+    });
+    const readJsonDetail = vi.fn<OperatorApi["readJsonDetail"]>((bodyToken) => {
+      if (bodyToken === "detail:input") return staleInput.promise;
+      if (bodyToken === "detail:output") return freshOutput.promise;
+      return Promise.resolve({ event: bodyToken, payload: largePayload });
+    });
+    const readTextDetail = vi.fn<OperatorApi["readTextDetail"]>(async () => decodedSplitText());
+    const api: OperatorApi = {
+      getCatalog: async () => catalog,
+      loadBaseline: async () => baseline,
+      getLatestRunSnapshot: async () => selectedRun,
+      streamUpdates: async function* () {
+        return;
+      },
+      listAgentEventPage,
+      listLogPage,
+      readJsonDetail,
+      readTextDetail,
+      startRun: async () => RUN_ID,
+      cancelRun: async () => undefined,
+    };
+    let inspectorCommits = 0;
+    const benchmarkStart = performance.now();
+    render(
+      <Profiler
+        id="large-inspector"
+        onRender={() => {
+          inspectorCommits += 1;
+        }}
+      >
+        <Inspector
           api={api}
+          workflow={catalog.workflows[0]}
           run={selectedRun}
           nodeId={SELECTED_NODE}
-          onSelectNode={() => undefined}
-        />,
-      );
-      const logPane = await within(logPaneView.container).findByRole("region", {
-        name: "Run logs",
-      });
-      await waitFor(() => expect(listLogPage).toHaveBeenCalledTimes(1));
-      expect(listLogPage.mock.calls[0][0]).toMatchObject({
-        pageSize: PAGE_SIZE,
-        nodeId: SELECTED_NODE,
-        order: DescriptorPageOrder.NEWEST_FIRST,
-      });
-      await waitFor(() => expect(readTextDetail).toHaveBeenCalledTimes(PAGE_SIZE));
-      const initialLogRows = logPane.querySelectorAll(".run-log-row");
-      expect(initialLogRows).toHaveLength(PAGE_SIZE);
-      expect(
-        Array.from(initialLogRows).every(
-          (row) => row.querySelector("pre")?.textContent === decodedSplitText(),
+          onClose={() => undefined}
+        />
+      </Profiler>,
+    );
+
+    expect(listAgentEventPage).not.toHaveBeenCalled();
+    expect(listLogPage).not.toHaveBeenCalled();
+    expect(readJsonDetail).not.toHaveBeenCalled();
+    expect(readTextDetail).not.toHaveBeenCalled();
+
+    fireEvent.click(screen.getByRole("button", { name: "inputs" }));
+    await waitFor(() =>
+      expect(readJsonDetail.mock.calls.some(([token]) => token === "detail:input")).toBe(true),
+    );
+    expect(listAgentEventPage).toHaveBeenCalledTimes(1);
+    expect(listAgentEventPage.mock.calls[0][0]).toMatchObject({
+      pageToken: "events:0",
+      afterEventSequence: "0",
+      pageSize: PAGE_SIZE,
+      order: DescriptorPageOrder.FORWARD,
+      expectedNodeId: SELECTED_NODE,
+    });
+
+    fireEvent.click(screen.getByRole("button", { name: "output" }));
+    await waitFor(() =>
+      expect(readJsonDetail.mock.calls.some(([token]) => token === "detail:output")).toBe(true),
+    );
+    expect(listAgentEventPage).toHaveBeenCalledTimes(2);
+    expect(listAgentEventPage.mock.calls[1][0]).toMatchObject({
+      beforeEventSequence: "0",
+      order: DescriptorPageOrder.NEWEST_FIRST,
+      expectedNodeId: SELECTED_NODE,
+    });
+    const outputDetail = {
+      data: { outputs: { freshMarker: "fresh-detail", payload: largePayload } },
+    };
+    expect(JSON.stringify(outputDetail).length).toBeGreaterThanOrEqual(LARGE_DETAIL_BYTES);
+    await act(async () => {
+      freshOutput.resolve(outputDetail);
+      await Promise.resolve();
+    });
+    const outputTree = await screen.findByRole("tree", { name: "JSON value" });
+    expect(within(outputTree).getByText("fresh-detail")).toBeInTheDocument();
+    expect(within(outputTree).getByText("freshMarker")).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /Object/ })).not.toBeInTheDocument();
+
+    const commitsBeforeStaleCompletion = inspectorCommits;
+    await act(async () => {
+      staleInput.resolve({ data: { inputs: { staleMarker: "stale-detail" } } });
+      await Promise.resolve();
+    });
+    expect(inspectorCommits).toBe(commitsBeforeStaleCompletion);
+    expect(screen.queryByText("stale-detail")).not.toBeInTheDocument();
+    expect(screen.getByText("fresh-detail")).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: "inputs" }));
+    const inputTree = await screen.findByRole("tree", { name: "JSON value" });
+    expect(listAgentEventPage).toHaveBeenCalledTimes(3);
+    expect(within(inputTree).getByText("stale-detail")).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /Object/ })).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: "Load more events" }));
+    await waitFor(() => {
+      expect(listAgentEventPage).toHaveBeenCalledTimes(4);
+      expect(screen.getByRole("button", { name: "Load more events" })).not.toBeDisabled();
+    });
+    expect(listAgentEventPage).toHaveBeenCalledTimes(4);
+    expect(listAgentEventPage.mock.calls[3][0]).toMatchObject({
+      pageToken: "events:next",
+      afterEventSequence: String(PAGE_SIZE),
+      pageSize: PAGE_SIZE,
+      order: DescriptorPageOrder.FORWARD,
+      expectedNodeId: SELECTED_NODE,
+    });
+
+    fireEvent.click(screen.getByRole("button", { name: "trace" }));
+    expect(await screen.findByText("99 retained turns")).toBeInTheDocument();
+    expect(listAgentEventPage).toHaveBeenCalledTimes(5);
+    expect(listAgentEventPage.mock.calls[4][0]).toMatchObject({
+      pageToken: "events:0",
+      afterEventSequence: "0",
+      pageSize: PAGE_SIZE,
+      order: DescriptorPageOrder.FORWARD,
+      expectedNodeId: SELECTED_NODE,
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Expand turns" }));
+    await waitFor(() => expect(listAgentEventPage).toHaveBeenCalledTimes(6));
+    expect(listAgentEventPage.mock.calls[5][0]).toMatchObject({
+      pageToken: "events:next",
+      afterEventSequence: String(PAGE_SIZE),
+      pageSize: PAGE_SIZE,
+      order: DescriptorPageOrder.FORWARD,
+      expectedNodeId: SELECTED_NODE,
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Following live" }));
+    for (let turn = 0; turn < 5; turn += 1) {
+      const token = `event:${turn + 2}`;
+      fireEvent.click(await screen.findByRole("button", { name: `Expand ${turn}` }));
+      await waitFor(() =>
+        expect(readJsonDetail.mock.calls.filter(([called]) => called === token)).toHaveLength(
+          1,
         ),
-      ).toBe(true);
-      expect(document.querySelector(".inspector-log-stream")).not.toBeInTheDocument();
+      );
+      expect(await screen.findByText(token)).toBeInTheDocument();
+    }
+    fireEvent.click(screen.getByRole("button", { name: "Collapse 0" }));
+    fireEvent.click(screen.getByRole("button", { name: "Expand 0" }));
+    await waitFor(() =>
+      expect(readJsonDetail.mock.calls.filter(([token]) => token === "event:2")).toHaveLength(
+        2,
+      ),
+    );
 
-      fireEvent.click(within(logPane).getByRole("button", { name: "Load older logs" }));
-      await waitFor(() => expect(listLogPage).toHaveBeenCalledTimes(2));
-      expect(listLogPage.mock.calls[1][0]).toMatchObject({
-        pageToken: "logs:next",
-        beforeSequence: selectedLogs.at(-PAGE_SIZE)?.sequence,
-        pageSize: PAGE_SIZE,
-        nodeId: SELECTED_NODE,
-        order: DescriptorPageOrder.NEWEST_FIRST,
-      });
-      await waitFor(() => expect(readTextDetail).toHaveBeenCalledTimes(PAGE_SIZE * 2));
-      expect(logPane.querySelectorAll(".run-log-row").length).toBeLessThanOrEqual(DOM_ROW_LIMIT);
-      expect(listLogPage).toHaveBeenCalledTimes(2);
-      expect(performance.now() - benchmarkStart).toBeLessThan(30_000);
-    },
-    30_000,
-  );
+    const logPaneView = render(
+      <RunLogPane
+        api={api}
+        run={selectedRun}
+        nodeId={SELECTED_NODE}
+        onSelectNode={() => undefined}
+      />,
+    );
+    const logPane = await within(logPaneView.container).findByRole("region", {
+      name: "Run logs",
+    });
+    await waitFor(() => expect(listLogPage).toHaveBeenCalledTimes(1));
+    expect(listLogPage.mock.calls[0][0]).toMatchObject({
+      pageSize: PAGE_SIZE,
+      nodeId: SELECTED_NODE,
+      order: DescriptorPageOrder.NEWEST_FIRST,
+    });
+    await waitFor(() => expect(readTextDetail).toHaveBeenCalledTimes(PAGE_SIZE));
+    const initialLogRows = logPane.querySelectorAll(".run-log-row");
+    expect(initialLogRows).toHaveLength(PAGE_SIZE);
+    expect(
+      Array.from(initialLogRows).every(
+        (row) => row.querySelector("pre")?.textContent === decodedSplitText(),
+      ),
+    ).toBe(true);
+    expect(document.querySelector(".inspector-log-stream")).not.toBeInTheDocument();
 
+    fireEvent.click(within(logPane).getByRole("button", { name: "Load older logs" }));
+    await waitFor(() => expect(listLogPage).toHaveBeenCalledTimes(2));
+    expect(listLogPage.mock.calls[1][0]).toMatchObject({
+      pageToken: "logs:next",
+      beforeSequence: selectedLogs.at(-PAGE_SIZE)?.sequence,
+      pageSize: PAGE_SIZE,
+      nodeId: SELECTED_NODE,
+      order: DescriptorPageOrder.NEWEST_FIRST,
+    });
+    await waitFor(() => expect(readTextDetail).toHaveBeenCalledTimes(PAGE_SIZE * 2));
+    expect(logPane.querySelectorAll(".run-log-row").length).toBeLessThanOrEqual(DOM_ROW_LIMIT);
+    expect(listLogPage).toHaveBeenCalledTimes(2);
+    expect(performance.now() - benchmarkStart).toBeLessThan(30_000);
+  }, 30_000);
 });
