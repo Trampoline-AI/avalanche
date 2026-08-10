@@ -13,6 +13,8 @@ import type {
 const MAX_PENDING_ENVELOPES = 1024;
 const MAX_ENVELOPES_PER_FRAME = 256;
 const MAX_LIVE_DESCRIPTORS = 256;
+const INITIAL_RETRY_MILLISECONDS = 250;
+const MAX_RETRY_MILLISECONDS = 1000;
 
 export type SelectedRunStatus = "idle" | "loading" | "ready" | "error";
 
@@ -379,7 +381,7 @@ export function useOperatorProjection(api: OperatorApi) {
 
   useEffect(() => {
     const lifecycle = new AbortController();
-    let retryMilliseconds = 250;
+    let retryMilliseconds = INITIAL_RETRY_MILLISECONDS;
 
     const waitForRetry = (milliseconds: number) =>
       new Promise<void>((resolve) => {
@@ -442,7 +444,7 @@ export function useOperatorProjection(api: OperatorApi) {
           };
           dispatch({ type: "baseline", baseline });
           console.info("Connected to Avalanche operator");
-          retryMilliseconds = 250;
+          retryMilliseconds = INITIAL_RETRY_MILLISECONDS;
 
           let expectedSequence = baseline.asOfSequence;
           for await (const envelope of api.streamUpdates(
@@ -482,7 +484,10 @@ export function useOperatorProjection(api: OperatorApi) {
               `Unable to connect to Avalanche operator; retrying in ${retryAfterCycle} ms.`,
               error,
             );
-            retryMilliseconds = Math.min(retryMilliseconds * 2, 4000);
+            retryMilliseconds = Math.min(
+              retryMilliseconds * 2,
+              MAX_RETRY_MILLISECONDS,
+            );
           }
         } finally {
           clearPending();

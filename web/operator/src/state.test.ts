@@ -140,6 +140,7 @@ function deferred<T>() {
 
 afterEach(() => {
   vi.restoreAllMocks();
+  vi.useRealTimers();
 });
 
 describe("projectionReducer", () => {
@@ -492,25 +493,45 @@ describe("projectionReducer", () => {
 });
 
 describe("useOperatorProjection", () => {
-  it("logs failed connection retries and successful reconnection", async () => {
+  it("backs off failed connections up to one second and reconnects", async () => {
+    vi.useFakeTimers();
     const failure = new Error("connection refused");
     const loadBaseline = vi
       .fn<(signal?: AbortSignal) => Promise<StructuralBaseline>>()
       .mockRejectedValueOnce(failure)
+      .mockRejectedValueOnce(failure)
+      .mockRejectedValueOnce(failure)
+      .mockRejectedValueOnce(failure)
       .mockResolvedValue(baseline);
     const api = createApi({ loadBaseline });
-    const info = vi.spyOn(console, "info").mockImplementation(() => undefined);
-    const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    vi.spyOn(console, "info").mockImplementation(() => undefined);
+    vi.spyOn(console, "warn").mockImplementation(() => undefined);
     const { result, unmount } = renderHook(() => useOperatorProjection(api));
+    const advance = async (milliseconds: number) => {
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(milliseconds);
+      });
+    };
 
-    await waitFor(() => expect(result.current.state.connection).toBe("live"));
-
-    expect(info).toHaveBeenNthCalledWith(1, "Connecting to Avalanche operator");
-    expect(warn).toHaveBeenCalledWith(
-      "Unable to connect to Avalanche operator; retrying in 250 ms.",
-      failure,
-    );
-    expect(info).toHaveBeenLastCalledWith("Connected to Avalanche operator");
+    await advance(0);
+    expect(loadBaseline).toHaveBeenCalledTimes(1);
+    await advance(249);
+    expect(loadBaseline).toHaveBeenCalledTimes(1);
+    await advance(1);
+    expect(loadBaseline).toHaveBeenCalledTimes(2);
+    await advance(499);
+    expect(loadBaseline).toHaveBeenCalledTimes(2);
+    await advance(1);
+    expect(loadBaseline).toHaveBeenCalledTimes(3);
+    await advance(999);
+    expect(loadBaseline).toHaveBeenCalledTimes(3);
+    await advance(1);
+    expect(loadBaseline).toHaveBeenCalledTimes(4);
+    await advance(999);
+    expect(loadBaseline).toHaveBeenCalledTimes(4);
+    await advance(1);
+    expect(loadBaseline).toHaveBeenCalledTimes(5);
+    expect(result.current.state.connection).toBe("live");
 
     unmount();
   });
