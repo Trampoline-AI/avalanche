@@ -2,12 +2,14 @@
 
 from __future__ import annotations
 
+import os
 from pathlib import Path
 
 from .discovery import ConfiguredRoot
 from .models import WorkflowLocator
 
 _EXCLUDED_DIRS = {
+    ".avalanche",
     ".git",
     ".hg",
     ".mypy_cache",
@@ -95,6 +97,26 @@ def resolve_watch_roots(
             continue
         roots.append(candidate)
     return tuple(roots)
+
+
+def iter_source_paths(source_roots: tuple[str | Path, ...]) -> tuple[Path, ...]:
+    """Return watched source files while pruning generated and sensitive directories."""
+    paths: list[Path] = []
+    for source_root in source_roots:
+        root = Path(source_root).resolve()
+        if not root.is_dir():
+            continue
+        for directory, subdirectories, file_names in os.walk(root):
+            subdirectories[:] = sorted(
+                name for name in subdirectories if not _exclude_directory(name)
+            )
+            paths.extend(
+                candidate
+                for name in sorted(file_names)
+                if (candidate := Path(directory, name)).is_file()
+                and not _exclude_file(candidate.name)
+            )
+    return tuple(sorted(paths))
 
 
 def resolve_live_source(

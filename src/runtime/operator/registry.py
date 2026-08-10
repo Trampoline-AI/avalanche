@@ -3,15 +3,26 @@
 from __future__ import annotations
 
 import json
+import logging
 import threading
+import time
 from collections import defaultdict
 from dataclasses import replace
+from pathlib import Path
 from types import MappingProxyType
 from typing import Callable
 
 from avalanche.dag import Workflow
 
-from .discovery import ConfiguredRoot, configure_roots, discover, load_builder
+from .discovery import (
+    ConfiguredRoot,
+    FileDiscoveryResult,
+    candidate_files,
+    configure_roots,
+    discover_files,
+    load_builder,
+)
+from .discovery_cache import DiscoveryCache
 from .models import (
     CatalogView,
     ScanTargetInfo,
@@ -20,6 +31,9 @@ from .models import (
     WorkflowInfo,
     display_name_from_id,
 )
+from .source import resolve_watch_roots
+
+logger = logging.getLogger(__name__)
 
 
 class UnknownWorkflow(KeyError):  # noqa: N818 - domain exception name is intentional
@@ -147,13 +161,24 @@ def descriptor_to_info(descriptor: WorkflowDescriptor) -> WorkflowInfo:
 class WorkflowRegistry:
     """Atomic descriptor catalog plus a separate manual compatibility registry."""
 
-    def __init__(self, *, discovery_timeout: float = 15.0) -> None:
+    def __init__(
+        self,
+        *,
+        discovery_timeout: float = 15.0,
+        cache_dir: Path | None = None,
+    ) -> None:
         self._lock = threading.Lock()
         self._view = CatalogView()
         self._scan_paths: tuple[str, ...] = ()
         self._roots: tuple[ConfiguredRoot, ...] = ()
         self._manual: dict[str, tuple[Callable[[], Workflow], WorkflowInfo]] = {}
         self._discovery_timeout = discovery_timeout
+        self._cache_dir = cache_dir
+        self._cache: DiscoveryCache | None = None
+        self._discovery_files: dict[tuple[str, Path], FileDiscoveryResult] = {}
+        self._file_rollback: (
+            tuple[CatalogView, dict[tuple[str, Path], FileDiscoveryResult]] | None
+        ) = None
 
     @property
     def view(self) -> CatalogView:
@@ -166,6 +191,14 @@ class WorkflowRegistry:
             if self._view is not rejected:
                 raise RuntimeError("Workflow catalog changed before candidate rollback")
             self._view = previous
+            if self._file_rollback is not None and self._file_rollback[0] is rejected:
+                self._discovery_files = self._file_rollback[1]
+            self._file_rollback = None
+            files = tuple(self._discovery_files.values())
+            roots = self._roots
+            cache = self._cache
+        if cache is not None:
+            self._store_cache(cache, roots, files)
 
     @property
     def configured_roots(self) -> tuple[ConfiguredRoot, ...]:
@@ -180,23 +213,134 @@ class WorkflowRegistry:
         validate: Callable[[tuple[WorkflowDescriptor, ...]], object] | None = None,
     ) -> CatalogView:
         """Configure roots and atomically install one complete valid catalog."""
+        started = time.perf_counter()
         roots = configure_roots(paths)
+        cache = DiscoveryCache(roots, directory=self._cache_dir)
+        logger.info("Workflow discovery cache selected: path=%s", cache.path)
         with self._lock:
             self._scan_paths = tuple(paths)
             self._roots = roots
+            self._cache = cache
+        cached_files = cache.load()
+        if cached_files is not None:
+            view, accepted = self._install_files(roots, cached_files, (), validate=validate)
+            if accepted:
+                logger.info("Workflow discovery cache hit: path=%s", cache.path)
+                self._commit_files(view, cached_files)
+                self._log_scan_completed("cache", started, (), ())
+                return view
+        logger.info("Workflow discovery cache miss: path=%s", cache.path)
         return self._scan_roots(roots, validate=validate)
 
     def rescan(
         self,
+        changed_files: tuple[str, ...] = (),
         *,
         validate: Callable[[tuple[WorkflowDescriptor, ...]], object] | None = None,
     ) -> CatalogView:
-        """Refresh configured roots while preserving the last valid catalog."""
+        """Refresh affected configured sources while preserving the last valid catalog."""
         with self._lock:
             roots = self._roots
         if not roots:
             return self.view
-        return self._scan_roots(roots, validate=validate)
+        if not changed_files:
+            return self._scan_roots(roots, validate=validate)
+        if any(Path(path).suffix != ".py" for path in changed_files):
+            return self._scan_roots(roots, validate=validate)
+        return self._rescan_changed(roots, changed_files, validate=validate)
+
+    def _rescan_changed(
+        self,
+        roots: tuple[ConfiguredRoot, ...],
+        changed_files: tuple[str, ...],
+        *,
+        validate: Callable[[tuple[WorkflowDescriptor, ...]], object] | None,
+    ) -> CatalogView:
+        started = time.perf_counter()
+        changed_paths = {Path(path).resolve() for path in changed_files}
+        current_candidates = set(candidate_files(roots))
+        with self._lock:
+            known_files = dict(self._discovery_files)
+            cache = self._cache
+        known_keys = set(known_files)
+        added = current_candidates - known_keys
+        removed = known_keys - current_candidates
+        affected = {
+            key
+            for key in current_candidates
+            if key[1] in changed_paths
+            or (
+                key in known_files
+                and any(
+                    path.resolve() in changed_paths for path in known_files[key].dependencies
+                )
+            )
+        }
+        affected.update(added)
+
+        target_keys = tuple(sorted(affected, key=lambda item: (item[0], str(item[1]))))
+        target_paths = tuple(str(path) for _, path in target_keys)
+        logger.info(
+            "Workflow discovery scan started: mode=targeted files=%s",
+            target_paths,
+        )
+        previous_workflow_ids = {
+            descriptor.workflow_id
+            for key in target_keys
+            if key in known_files
+            for descriptor in known_files[key].descriptors
+        }
+        if not affected and not removed:
+            if cache is not None:
+                self._store_cache(cache, roots, tuple(known_files.values()))
+            self._log_scan_completed("targeted", started, target_paths, ())
+            return self.view
+
+        if affected:
+            discovered, diagnostics = discover_files(
+                roots,
+                targets=target_keys,
+                timeout=self._discovery_timeout,
+            )
+        else:
+            discovered, diagnostics = (), ()
+        discovered_by_key = {
+            (item.root_alias, item.source_path.resolve()): item for item in discovered
+        }
+        missing = affected - set(discovered_by_key)
+        if missing:
+            diagnostics += tuple(
+                WorkflowDiscoveryDiagnostic(
+                    path=str(path),
+                    kind="import_error",
+                    message="Targeted discovery did not return this candidate file.",
+                )
+                for _, path in sorted(missing, key=lambda item: (item[0], str(item[1])))
+            )
+        merged = {
+            key: result
+            for key, result in known_files.items()
+            if key not in affected and key not in removed
+        }
+        merged.update(discovered_by_key)
+        files = tuple(
+            merged[key] for key in sorted(merged, key=lambda item: (item[0], str(item[1])))
+        )
+        view, accepted = self._install_files(roots, files, diagnostics, validate=validate)
+        if accepted:
+            self._commit_files(view, files)
+        rescanned_workflow_ids = previous_workflow_ids | {
+            descriptor.workflow_id
+            for file_result in discovered
+            for descriptor in file_result.descriptors
+        }
+        self._log_scan_completed(
+            "targeted",
+            started,
+            target_paths,
+            tuple(sorted(rescanned_workflow_ids)),
+        )
+        return view
 
     def _scan_roots(
         self,
@@ -204,8 +348,67 @@ class WorkflowRegistry:
         *,
         validate: Callable[[tuple[WorkflowDescriptor, ...]], object] | None,
     ) -> CatalogView:
-        descriptors, diagnostics = discover(roots, timeout=self._discovery_timeout)
-        candidate_diagnostics = list(diagnostics)
+        started = time.perf_counter()
+        targets = candidate_files(roots)
+        target_paths = tuple(str(path) for _, path in targets)
+        logger.info(
+            "Workflow discovery scan started: mode=full files=%s",
+            target_paths,
+        )
+        with self._lock:
+            previous_workflow_ids = {
+                descriptor.workflow_id
+                for file_result in self._discovery_files.values()
+                for descriptor in file_result.descriptors
+            }
+        files, diagnostics = discover_files(roots, timeout=self._discovery_timeout)
+        view, accepted = self._install_files(roots, files, diagnostics, validate=validate)
+        if accepted:
+            self._commit_files(view, files)
+        rescanned_workflow_ids = previous_workflow_ids | {
+            descriptor.workflow_id
+            for file_result in files
+            for descriptor in file_result.descriptors
+        }
+        self._log_scan_completed(
+            "full",
+            started,
+            target_paths,
+            tuple(sorted(rescanned_workflow_ids)),
+        )
+        return view
+
+    @staticmethod
+    def _log_scan_completed(
+        mode: str,
+        started: float,
+        rescanned_files: tuple[str, ...],
+        rescanned_workflows: tuple[str, ...],
+    ) -> None:
+        logger.info(
+            "Workflow discovery scan completed: mode=%s duration_seconds=%.3f "
+            "rescanned_files=%s rescanned_workflows=%s",
+            mode,
+            time.perf_counter() - started,
+            rescanned_files,
+            rescanned_workflows,
+        )
+
+    def _install_files(
+        self,
+        roots: tuple[ConfiguredRoot, ...],
+        files: tuple[FileDiscoveryResult, ...],
+        diagnostics: tuple[WorkflowDiscoveryDiagnostic, ...],
+        *,
+        validate: Callable[[tuple[WorkflowDescriptor, ...]], object] | None,
+    ) -> tuple[CatalogView, bool]:
+        descriptors = tuple(
+            descriptor for file_result in files for descriptor in file_result.descriptors
+        )
+        candidate_diagnostics = [
+            diagnostic for file_result in files for diagnostic in file_result.diagnostics
+        ]
+        candidate_diagnostics.extend(diagnostics)
         try:
             if validate is not None:
                 validate(descriptors)
@@ -248,13 +451,13 @@ class WorkflowRegistry:
                     current.scan_targets == scan_targets
                     and current.diagnostics == diagnostics_tuple
                 ):
-                    return current
+                    return current, False
                 self._view = replace(
                     current,
                     scan_targets=scan_targets,
                     diagnostics=diagnostics_tuple,
                 )
-                return self._view
+                return self._view, False
 
         by_id = dict(sorted(by_id.items()))
         short_names: defaultdict[str, list[str]] = defaultdict(list)
@@ -273,7 +476,7 @@ class WorkflowRegistry:
                 and current.scan_targets == scan_targets
                 and current.diagnostics == diagnostics_tuple
             ):
-                return current
+                return current, True
             view = CatalogView(
                 revision=current.revision + 1,
                 by_id=MappingProxyType(by_id),
@@ -282,7 +485,37 @@ class WorkflowRegistry:
                 diagnostics=diagnostics_tuple,
             )
             self._view = view
-            return view
+            return view, True
+
+    def _commit_files(
+        self,
+        view: CatalogView,
+        files: tuple[FileDiscoveryResult, ...],
+    ) -> None:
+        file_map = {(item.root_alias, item.source_path.resolve()): item for item in files}
+        with self._lock:
+            previous_files = self._discovery_files
+            if view is not self._view:
+                raise RuntimeError("Workflow catalog changed before discovery files committed")
+            self._discovery_files = file_map
+            self._file_rollback = (view, previous_files)
+            cache = self._cache
+            roots = self._roots
+        if cache is not None:
+            self._store_cache(cache, roots, files)
+
+    @staticmethod
+    def _store_cache(
+        cache: DiscoveryCache,
+        roots: tuple[ConfiguredRoot, ...],
+        files: tuple[FileDiscoveryResult, ...],
+    ) -> None:
+        locators = tuple(
+            descriptor.locator
+            for file_result in files
+            for descriptor in file_result.descriptors
+        )
+        cache.store(files, resolve_watch_roots(roots, locators))
 
     def resolve(self, selector: str) -> WorkflowDescriptor:
         descriptor, _ = self.resolve_source(selector)

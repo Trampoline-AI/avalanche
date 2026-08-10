@@ -227,23 +227,28 @@ For each configured path:
 - if the path is a directory, the registry recursively scans `*.py` files;
 - private files whose names start with `_` are skipped during directory scans.
 
-For each scanned Python file, the registry:
+For each scanned Python file, a short-lived discovery process:
 
-1. builds a temporary import name from the file stem;
-2. removes any cached module with that temporary name;
-3. imports the file with `importlib.util.spec_from_file_location(...)`;
-4. ignores the file if import raises an exception;
-5. iterates over public module attributes;
-6. calls public zero-argument callables;
-7. keeps results that are instances of `Workflow`;
-8. converts each discovered workflow into a `WorkflowInfo` snapshot;
-9. stores the original callable as the builder used for future runs.
+1. imports the file using its normal package path when available;
+2. finds public functions marked by `@workflow`;
+3. calls those builders to construct their DAGs;
+4. validates schedules and converts each DAG into a serializable descriptor;
+5. records the local Python files imported while discovering that candidate.
 
-This means discovered flow functions must be safe to import and safe to call
-with no arguments. The callable should build and return a `Workflow` object; it
-should not perform expensive or irreversible work during discovery.
+The operator caches those descriptors and dependency paths under
+`.avalanche/cache/operator/`. A later startup reuses the cache when the Python
+environment and watched source-file metadata are unchanged. Hot reload uses the
+recorded imports to rediscover only changed workflow files and workflows that
+depend on a changed Python helper. Adding or deleting a Python file updates only
+that candidate. A non-Python source change triggers a complete rescan because
+ordinary Python code can read such resources without declaring them.
 
-Because directory scanning imports arbitrary Python files, avoid pointing
+The cache contains metadata only, never live `Workflow` objects or executable
+callables. Discovery still runs in an isolated process whenever source must be
+evaluated. Workflow modules and builders must therefore be safe to import and
+call, and should not perform expensive or irreversible discovery-time work.
+
+Because the first directory scan imports arbitrary Python files, avoid pointing
 `--flows` at the repository root. Prefer a specific flow file or a clean
 flow-only directory.
 
@@ -519,9 +524,10 @@ If a Ray head is already running on `127.0.0.1:6379`, skip `ray start` and point
 
 ## Flow discovery
 
-The operator discovers flows through `WorkflowRegistry.scan(paths)`. For each
-configured `.py` file, it imports the module and looks for public zero-argument
-callables that return a `Workflow` object.
+The operator discovers flows through `WorkflowRegistry.scan(paths)`. It imports
+configured Python candidates in an isolated process and invokes functions marked
+by `@workflow`. Unchanged descriptors are subsequently reused from the local
+discovery cache.
 
 Avoid scanning the repository root directly:
 

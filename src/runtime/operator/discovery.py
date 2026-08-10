@@ -37,6 +37,17 @@ class ConfiguredRoot:
     target: Path
 
 
+@dataclass(frozen=True)
+class FileDiscoveryResult:
+    """Serializable discovery output and local imports for one candidate file."""
+
+    root_alias: str
+    source_path: Path
+    descriptors: tuple[WorkflowDescriptor, ...]
+    diagnostics: tuple[WorkflowDiscoveryDiagnostic, ...]
+    dependencies: tuple[Path, ...]
+
+
 DEFAULT_DISCOVERY_TIMEOUT = 15.0
 _DISCOVERY_TERMINATE_GRACE = 1.0
 
@@ -72,12 +83,31 @@ def configure_roots(paths: list[str]) -> tuple[ConfiguredRoot, ...]:
 def discover(
     roots: tuple[ConfiguredRoot, ...], *, timeout: float = DEFAULT_DISCOVERY_TIMEOUT
 ) -> tuple[tuple[WorkflowDescriptor, ...], tuple[WorkflowDiscoveryDiagnostic, ...]]:
-    """Discover in a short-lived interpreter and return value-only results."""
+    """Discover every configured candidate in a short-lived interpreter."""
+    files, diagnostics = discover_files(roots, timeout=timeout)
+    return (
+        tuple(descriptor for file in files for descriptor in file.descriptors),
+        tuple(item for file in files for item in file.diagnostics) + diagnostics,
+    )
+
+
+def discover_files(
+    roots: tuple[ConfiguredRoot, ...],
+    *,
+    targets: tuple[tuple[str, Path], ...] | None = None,
+    timeout: float = DEFAULT_DISCOVERY_TIMEOUT,
+) -> tuple[tuple[FileDiscoveryResult, ...], tuple[WorkflowDiscoveryDiagnostic, ...]]:
+    """Discover selected candidate files and retain their local import dependencies."""
     payload = {
         "roots": [
             {"alias": root.alias, "path": str(root.path), "target": str(root.target)}
             for root in roots
-        ]
+        ],
+        "targets": (
+            [{"alias": alias, "path": str(path.resolve())} for alias, path in targets]
+            if targets is not None
+            else None
+        ),
     }
     if timeout <= 0:
         raise ValueError("Discovery timeout must be positive")
@@ -133,7 +163,21 @@ def discover(
             return (), (_discovery_failure(captured or "Discovery worker failed"),)
         try:
             result = json.loads(result_path.read_text())
-            descriptors = tuple(_descriptor_from_dict(item) for item in result["descriptors"])
+            files = tuple(
+                FileDiscoveryResult(
+                    root_alias=item["root_alias"],
+                    source_path=Path(item["source_path"]),
+                    descriptors=tuple(
+                        _descriptor_from_dict(descriptor) for descriptor in item["descriptors"]
+                    ),
+                    diagnostics=tuple(
+                        WorkflowDiscoveryDiagnostic(**diagnostic)
+                        for diagnostic in item["diagnostics"]
+                    ),
+                    dependencies=tuple(Path(path) for path in item["dependencies"]),
+                )
+                for item in result["files"]
+            )
             diagnostics = tuple(
                 WorkflowDiscoveryDiagnostic(**item) for item in result["diagnostics"]
             )
@@ -141,7 +185,7 @@ def discover(
             return (), (
                 _discovery_failure(f"Invalid discovery result: {_format_exception(exc)}"),
             )
-        return descriptors, diagnostics
+        return files, diagnostics
 
 
 def _terminate_discovery_process(
@@ -249,6 +293,13 @@ def _iter_files(root: ConfiguredRoot) -> list[Path]:
     return sorted(candidates)
 
 
+def candidate_files(roots: tuple[ConfiguredRoot, ...]) -> tuple[tuple[str, Path], ...]:
+    """Return every configured candidate with its root identity."""
+    return tuple(
+        (root.alias, file_path.resolve()) for root in roots for file_path in _iter_files(root)
+    )
+
+
 def _package_module_name(file_path: Path) -> tuple[str, Path] | None:
     parts = [file_path.stem]
     parent = file_path.parent
@@ -290,11 +341,9 @@ def _purge_modules_under(root: Path) -> None:
         module_file = getattr(module, "__file__", None)
         if module_file is None:
             continue
-        try:
-            if Path(module_file).resolve().is_relative_to(root):
-                sys.modules.pop(module_name, None)
-        except (OSError, RuntimeError):
-            continue
+        path = _module_path_under(module_file, (root,))
+        if path is not None:
+            sys.modules.pop(module_name, None)
 
 
 def _worker(payload: dict[str, Any]) -> dict[str, Any]:
@@ -304,28 +353,56 @@ def _worker(payload: dict[str, Any]) -> dict[str, Any]:
         )
         for item in payload["roots"]
     )
+    raw_targets = payload.get("targets")
+    targets = (
+        None
+        if raw_targets is None
+        else {(item["alias"], Path(item["path"]).resolve()) for item in raw_targets}
+    )
     multiple_roots = len(roots) > 1
-    descriptors: list[dict[str, Any]] = []
-    diagnostics: list[dict[str, str]] = []
+    files: list[dict[str, Any]] = []
     baseline_sys_path = tuple(sys.path)
+    source_roots = tuple(sorted({_configured_import_root(root) for root in roots}))
 
     for root in roots:
         for file_path in _iter_files(root):
-            _reset_discovery_import_state(roots, baseline_sys_path)
             resolved_file = file_path.resolve()
+            if targets is not None and (root.alias, resolved_file) not in targets:
+                continue
+            _reset_discovery_import_state(source_roots, baseline_sys_path)
+            file_descriptors: list[dict[str, Any]] = []
+            file_diagnostics: list[dict[str, str]] = []
             try:
                 relative_file = resolved_file.relative_to(root.path).as_posix()
             except ValueError:
-                diagnostics.append(
+                file_diagnostics.append(
                     _diagnostic(resolved_file, "import_error", "Path escapes root")
+                )
+                files.append(
+                    _file_result(
+                        root.alias,
+                        resolved_file,
+                        file_descriptors,
+                        file_diagnostics,
+                        (resolved_file,),
+                    )
                 )
                 continue
             try:
                 with redirect_stdout(StringIO()), redirect_stderr(StringIO()):
                     module = _import_file(resolved_file)
             except Exception as exc:
-                diagnostics.append(
+                file_diagnostics.append(
                     _diagnostic(resolved_file, "import_error", _format_exception(exc))
+                )
+                files.append(
+                    _file_result(
+                        root.alias,
+                        resolved_file,
+                        file_descriptors,
+                        file_diagnostics,
+                        _loaded_dependencies(source_roots, resolved_file),
+                    )
                 )
                 continue
 
@@ -344,7 +421,7 @@ def _worker(payload: dict[str, Any]) -> dict[str, Any]:
                     if not isinstance(workflow, Workflow):
                         raise TypeError("Marked builder did not return a Workflow")
                 except Exception as exc:
-                    diagnostics.append(
+                    file_diagnostics.append(
                         _diagnostic(resolved_file, "build_error", _format_exception(exc))
                     )
                     continue
@@ -352,7 +429,7 @@ def _worker(payload: dict[str, Any]) -> dict[str, Any]:
                     try:
                         croniter(workflow.cron)
                     except Exception as exc:
-                        diagnostics.append(
+                        file_diagnostics.append(
                             _diagnostic(
                                 resolved_file, "invalid_schedule", _format_exception(exc)
                             )
@@ -361,29 +438,95 @@ def _worker(payload: dict[str, Any]) -> dict[str, Any]:
                 workflow_id = f"{relative_file}::{symbol}"
                 if multiple_roots:
                     workflow_id = f"{root.alias}/{workflow_id}"
-                descriptors.append(
+                file_descriptors.append(
                     _descriptor_to_dict(
                         workflow_id, root.alias, relative_file, symbol, workflow
                     )
                 )
             if not found:
-                diagnostics.append(
+                file_diagnostics.append(
                     _diagnostic(
                         resolved_file,
                         "skipped",
                         "No workflows discovered in this file.",
                     )
                 )
-    return {"descriptors": descriptors, "diagnostics": diagnostics}
+            files.append(
+                _file_result(
+                    root.alias,
+                    resolved_file,
+                    file_descriptors,
+                    file_diagnostics,
+                    _loaded_dependencies(source_roots, resolved_file),
+                )
+            )
+    return {"files": files, "diagnostics": []}
+
+
+def _configured_import_root(root: ConfiguredRoot) -> Path:
+    target = root.target.resolve()
+    if target.is_dir():
+        package_marker = target / "__init__.py"
+        if not package_marker.is_file():
+            return root.path.resolve()
+        source = package_marker
+    else:
+        source = target
+    package = source.parent
+    top_package: Path | None = None
+    while (package / "__init__.py").is_file():
+        top_package = package
+        package = package.parent
+    return package.resolve() if top_package is not None else root.path.resolve()
+
+
+def _loaded_dependencies(source_roots: tuple[Path, ...], source_file: Path) -> tuple[Path, ...]:
+    dependencies = {source_file}
+    for module in tuple(sys.modules.values()):
+        module_file = getattr(module, "__file__", None)
+        if module_file is None:
+            continue
+        path = _module_path_under(module_file, source_roots)
+        if path is not None:
+            dependencies.add(path)
+    return tuple(sorted(dependencies))
+
+
+def _module_path_under(module_file: str, roots: tuple[Path, ...]) -> Path | None:
+    try:
+        path = Path(module_file)
+        if not path.is_absolute():
+            path = path.resolve()
+        if any(path == root or path.is_relative_to(root) for root in roots):
+            return path
+    except (OSError, RuntimeError):
+        return None
+    return None
+
+
+def _file_result(
+    root_alias: str,
+    source_path: Path,
+    descriptors: list[dict[str, Any]],
+    diagnostics: list[dict[str, str]],
+    dependencies: tuple[Path, ...],
+) -> dict[str, Any]:
+    return {
+        "root_alias": root_alias,
+        "source_path": str(source_path),
+        "descriptors": descriptors,
+        "diagnostics": diagnostics,
+        "dependencies": [str(path) for path in dependencies],
+    }
 
 
 def _reset_discovery_import_state(
-    roots: tuple[ConfiguredRoot, ...], baseline_sys_path: tuple[str, ...]
+    source_roots: tuple[Path, ...], baseline_sys_path: tuple[str, ...]
 ) -> None:
-    """Start every file from the same path and configured-root module state."""
+    """Start every file from the same path and local-source module state."""
     sys.path[:] = baseline_sys_path
-    for root in roots:
-        _purge_modules_under(root.path.resolve())
+    for root in source_roots:
+        _purge_modules_under(root)
     importlib.invalidate_caches()
 
 

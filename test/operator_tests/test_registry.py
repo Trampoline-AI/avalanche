@@ -11,7 +11,7 @@ import pytest
 
 import avalanche as ava
 from avalanche.dag import Workflow
-from runtime.operator.discovery import configure_roots
+from runtime.operator.discovery import FileDiscoveryResult, configure_roots
 from runtime.operator.models import WorkflowDiscoveryDiagnostic
 from runtime.operator.registry import (
     AmbiguousWorkflow,
@@ -413,7 +413,9 @@ class TestWorkflowRegistry:
 
         assert tuple(first.view.by_id) == tuple(second.view.by_id)
 
-    def test_duplicate_canonical_ids_publish_invalid_catalog_diagnostic(self, monkeypatch):
+    def test_duplicate_canonical_ids_publish_invalid_catalog_diagnostic(
+        self, monkeypatch, tmp_path
+    ):
         from runtime.operator.models import WorkflowDescriptor, WorkflowLocator
 
         descriptor = WorkflowDescriptor(
@@ -426,13 +428,242 @@ class TestWorkflowRegistry:
             display_names=(),
         )
         monkeypatch.setattr(
-            "runtime.operator.registry.discover",
-            lambda roots, timeout: ((descriptor, descriptor), ()),
+            "runtime.operator.registry.discover_files",
+            lambda roots, timeout: (
+                (
+                    FileDiscoveryResult(
+                        root_alias="root",
+                        source_path=tmp_path / "flow.py",
+                        descriptors=(descriptor, descriptor),
+                        diagnostics=(),
+                        dependencies=(tmp_path / "flow.py",),
+                    ),
+                ),
+                (),
+            ),
         )
-        registry = WorkflowRegistry()
-        registry.scan(["root=/tmp"])
+        registry = WorkflowRegistry(cache_dir=tmp_path / "cache")
+        registry.scan([f"root={tmp_path}"])
         assert registry.descriptors() == ()
         assert [item.kind for item in registry.list_diagnostics()] == ["invalid_catalog"]
+
+    def test_persistent_cache_skips_unchanged_workflow_imports(self, tmp_path):
+        counter = tmp_path / "imports.txt"
+        workflow_file = tmp_path / "flow.py"
+
+        def write_workflow(cron):
+            workflow_file.write_text(
+                "from pathlib import Path\n"
+                "import avalanche as ava\n"
+                f"counter = Path({str(counter)!r})\n"
+                "count = int(counter.read_text()) if counter.exists() else 0\n"
+                "counter.write_text(str(count + 1))\n"
+                f"@ava.workflow(cron={cron!r})\n"
+                "def cached_flow():\n"
+                "    return None\n"
+            )
+
+        cache_dir = tmp_path / "cache"
+        write_workflow("1 * * * *")
+        first = WorkflowRegistry(cache_dir=cache_dir)
+        first.scan([str(workflow_file)])
+        assert counter.read_text() == "1"
+        second = WorkflowRegistry(cache_dir=cache_dir)
+        second.scan([str(workflow_file)])
+        assert counter.read_text() == "1"
+        assert second.resolve("cached_flow").cron == "1 * * * *"
+
+        write_workflow("2 * * * *")
+        third = WorkflowRegistry(cache_dir=cache_dir)
+        third.scan([str(workflow_file)])
+        assert counter.read_text() == "2"
+        assert third.resolve("cached_flow").cron == "2 * * * *"
+
+    def test_persistent_cache_invalidates_when_resource_changes(self, tmp_path):
+        source_root = tmp_path / "flows"
+        source_root.mkdir()
+        schedule = source_root / "schedule.json"
+        schedule.write_text('{"cron": "1 * * * *"}')
+        counter = tmp_path / "imports.txt"
+        workflow_file = source_root / "flow.py"
+        workflow_file.write_text(
+            "import json\n"
+            "from pathlib import Path\n"
+            "import avalanche as ava\n"
+            f"schedule = Path({str(schedule)!r})\n"
+            f"counter = Path({str(counter)!r})\n"
+            "count = int(counter.read_text()) if counter.exists() else 0\n"
+            "counter.write_text(str(count + 1))\n"
+            "CRON = json.loads(schedule.read_text())['cron']\n"
+            "@ava.workflow(cron=CRON)\n"
+            "def resource_flow():\n"
+            "    return None\n"
+        )
+        cache_dir = tmp_path / "cache"
+        first = WorkflowRegistry(cache_dir=cache_dir)
+        first.scan([str(source_root)])
+        second = WorkflowRegistry(cache_dir=cache_dir)
+        second.scan([str(source_root)])
+        assert counter.read_text() == "1"
+
+        schedule.write_text('{"cron": "2 * * * *"}')
+        third = WorkflowRegistry(cache_dir=cache_dir)
+        third.scan([str(source_root)])
+
+        assert counter.read_text() == "2"
+        assert third.resolve("resource_flow").cron == "2 * * * *"
+
+    def test_helper_reload_only_imports_dependent_workflows(self, tmp_path):
+        source_root = tmp_path / "flows"
+        source_root.mkdir()
+        helper = source_root / "_schedule.py"
+        helper.write_text('CRON = "1 * * * *"\n')
+        dependent_counter = tmp_path / "dependent.txt"
+        unrelated_counter = tmp_path / "unrelated.txt"
+
+        def write_counted_workflow(path, name, counter, extra="", decorator="@ava.workflow"):
+            path.write_text(
+                "from pathlib import Path\n"
+                "import avalanche as ava\n"
+                f"{extra}"
+                f"counter = Path({str(counter)!r})\n"
+                "count = int(counter.read_text()) if counter.exists() else 0\n"
+                "counter.write_text(str(count + 1))\n"
+                f"{decorator}\n"
+                f"def {name}():\n"
+                "    return None\n"
+            )
+
+        write_counted_workflow(
+            source_root / "dependent.py",
+            "dependent",
+            dependent_counter,
+            extra="from _schedule import CRON\n",
+            decorator="@ava.workflow(cron=CRON)",
+        )
+        write_counted_workflow(
+            source_root / "unrelated.py",
+            "unrelated",
+            unrelated_counter,
+        )
+        registry = WorkflowRegistry(cache_dir=tmp_path / "cache")
+        registry.scan([str(source_root)])
+        assert dependent_counter.read_text() == "1"
+        assert unrelated_counter.read_text() == "1"
+
+        helper.write_text('CRON = "2 * * * *"\n')
+        registry.rescan((str(helper),))
+
+        assert registry.resolve("dependent").cron == "2 * * * *"
+        assert dependent_counter.read_text() == "2"
+        assert unrelated_counter.read_text() == "1"
+
+    def test_failed_helper_reload_retains_catalog_and_recovers(self, tmp_path):
+        source_root = tmp_path / "flows"
+        source_root.mkdir()
+        helper = source_root / "_schedule.py"
+        helper.write_text('CRON = "1 * * * *"\n')
+        unrelated_counter = tmp_path / "unrelated.txt"
+        (source_root / "dependent.py").write_text(
+            "import avalanche as ava\n"
+            "from _schedule import CRON\n"
+            "@ava.workflow(cron=CRON)\n"
+            "def dependent():\n"
+            "    return None\n"
+        )
+        (source_root / "unrelated.py").write_text(
+            "from pathlib import Path\n"
+            "import avalanche as ava\n"
+            f"counter = Path({str(unrelated_counter)!r})\n"
+            "count = int(counter.read_text()) if counter.exists() else 0\n"
+            "counter.write_text(str(count + 1))\n"
+            "@ava.workflow\n"
+            "def unrelated():\n"
+            "    return None\n"
+        )
+        registry = WorkflowRegistry(cache_dir=tmp_path / "cache")
+        registry.scan([str(source_root)])
+
+        helper.write_text("invalid Python !!!\n")
+        registry.rescan((str(helper),))
+        assert registry.resolve("dependent").cron == "1 * * * *"
+        assert [item.kind for item in registry.list_diagnostics()] == ["import_error"]
+        assert unrelated_counter.read_text() == "1"
+
+        helper.write_text('CRON = "2 * * * *"\n')
+        registry.rescan((str(helper),))
+        assert registry.resolve("dependent").cron == "2 * * * *"
+        assert registry.list_diagnostics() == []
+        assert unrelated_counter.read_text() == "1"
+
+    def test_added_and_deleted_workflow_do_not_reimport_unchanged_files(self, tmp_path):
+        source_root = tmp_path / "flows"
+        source_root.mkdir()
+        counter = tmp_path / "existing.txt"
+        existing = source_root / "existing.py"
+        existing.write_text(
+            "from pathlib import Path\n"
+            "import avalanche as ava\n"
+            f"counter = Path({str(counter)!r})\n"
+            "count = int(counter.read_text()) if counter.exists() else 0\n"
+            "counter.write_text(str(count + 1))\n"
+            "@ava.workflow\n"
+            "def existing():\n"
+            "    return None\n"
+        )
+        registry = WorkflowRegistry(cache_dir=tmp_path / "cache")
+        registry.scan([str(source_root)])
+        assert counter.read_text() == "1"
+
+        added = source_root / "added.py"
+        added.write_text(
+            "import avalanche as ava\n" "@ava.workflow\n" "def added():\n" "    return None\n"
+        )
+        registry.rescan((str(added),))
+        assert {item.display_name for item in registry.descriptors()} == {
+            "added",
+            "existing",
+        }
+        assert counter.read_text() == "1"
+
+        added.unlink()
+        registry.rescan((str(added),))
+        assert [item.display_name for item in registry.descriptors()] == ["existing"]
+        assert counter.read_text() == "1"
+
+    def test_non_python_resource_change_safely_rescans_all_workflows(self, tmp_path):
+        source_root = tmp_path / "flows"
+        source_root.mkdir()
+        schedule = source_root / "schedule.json"
+        schedule.write_text('{"cron": "1 * * * *"}')
+        counters = [tmp_path / "first.txt", tmp_path / "second.txt"]
+        for index, counter in enumerate(counters):
+            resource_import = (
+                "import json\n"
+                f"CRON = json.loads(Path({str(schedule)!r}).read_text())['cron']\n"
+                if index == 0
+                else "CRON = None\n"
+            )
+            (source_root / f"flow_{index}.py").write_text(
+                "from pathlib import Path\n"
+                "import avalanche as ava\n"
+                f"{resource_import}"
+                f"counter = Path({str(counter)!r})\n"
+                "count = int(counter.read_text()) if counter.exists() else 0\n"
+                "counter.write_text(str(count + 1))\n"
+                "@ava.workflow(cron=CRON)\n"
+                f"def flow_{index}():\n"
+                "    return None\n"
+            )
+        registry = WorkflowRegistry(cache_dir=tmp_path / "cache")
+        registry.scan([str(source_root)])
+        assert [counter.read_text() for counter in counters] == ["1", "1"]
+
+        schedule.write_text('{"cron": "2 * * * *"}')
+        registry.rescan((str(schedule),))
+
+        assert registry.resolve("flow_0").cron == "2 * * * *"
+        assert [counter.read_text() for counter in counters] == ["2", "2"]
 
     def test_sequential_package_scans_isolate_identical_module_names(self, tmp_path):
         first = tmp_path / "first"
