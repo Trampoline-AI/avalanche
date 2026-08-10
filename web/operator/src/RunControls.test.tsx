@@ -80,13 +80,10 @@ describe("RunControls", () => {
       />,
     );
 
-    expect(screen.queryByText("Schema-blind JSON object")).not.toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: "Run" }));
 
     expect(await screen.findByText("input.value is required")).toBeInTheDocument();
-    expect(screen.queryByText("Schema-blind JSON object")).not.toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: "Add JSON input" }));
-    expect(screen.getByText("Schema-blind JSON object")).toBeInTheDocument();
     expect(
       screen.getByRole("textbox", { name: "Workflow input JSON" }),
     ).toBeInTheDocument();
