@@ -29,6 +29,7 @@ from .models import (
     TraceHeader,
     WorkflowDiscoveryDiagnostic,
     WorkflowInfo,
+    WorkflowReloadStatus,
     WorkflowTopology,
 )
 from .proto import operator_pb2 as pb
@@ -459,6 +460,10 @@ def operator_update_to_proto(update: OperatorUpdate) -> pb.OperatorUpdate:
         message.catalog_replaced.CopyFrom(
             pb.CatalogReplaced(catalog=catalog_snapshot_to_proto(change.catalog))
         )
+    elif isinstance(change, WorkflowReloadStatus):
+        message.workflow_reload_status.CopyFrom(
+            pb.WorkflowReloadStatus(reloading=change.reloading)
+        )
     else:
         raise TypeError(f"Unsupported operator update change: {type(change).__name__}")
     return message
@@ -521,6 +526,8 @@ def operator_update_from_proto(msg: pb.OperatorUpdate) -> OperatorUpdate:
         change = CatalogReplaced(
             catalog=catalog_snapshot_from_proto(msg.catalog_replaced.catalog)
         )
+    elif change_name == "workflow_reload_status":
+        change = WorkflowReloadStatus(reloading=msg.workflow_reload_status.reloading)
     else:
         raise ValueError("operator update is missing a change")
     return OperatorUpdate(sequence=msg.sequence, change=change)

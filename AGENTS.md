@@ -123,6 +123,9 @@ Avoid `--flows .`: operator discovery imports Python files recursively. Use a na
 - Do not add standalone logging tests or assert exact log-message text. When
   logging matters to an existing behavior contract, verify that logging occurs
   within that behavior test without coupling the assertion to message wording.
+- Do not assert exact user-facing copy unless the wording itself is the behavior under
+  test. Prefer roles, visibility, state transitions, and accessible semantics; never
+  duplicate labels in tests merely to locate UI.
 - Iterate with the smallest focused tests that cover the current feature or fix;
   never use the full regression suite as the iteration loop.
 - After all focused tests are green, run the full regression suite once as the

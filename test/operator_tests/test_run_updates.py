@@ -45,6 +45,7 @@ from runtime.operator.models import (
     RunSummary,
     TraceDescriptor,
     TraceFinalized,
+    WorkflowReloadStatus,
 )
 from runtime.operator.operator import Operator
 from runtime.operator.proto import operator_pb2 as pb
@@ -133,6 +134,7 @@ def test_typed_update_envelopes_roundtrip_all_changes():
                 size_bytes=20,
             ),
         ),
+        WorkflowReloadStatus(reloading=True),
     ]
 
     for sequence, change in enumerate(changes, start=1):
@@ -375,6 +377,26 @@ def test_bounded_journal_retains_updates_not_run_state_snapshots():
         assert not any(contains_run_state(item) for item in operator._stream_history)
     finally:
         operator.close()
+
+
+def test_client_advances_past_workflow_reload_status():
+    provider = GrpcStateProvider("localhost:1")
+    try:
+        provider._apply_update_envelope(_created())
+        result = provider._apply_update_envelope(
+            OperatorUpdateEnvelope(
+                operator_instance_id="operator-1",
+                update=OperatorUpdate(
+                    sequence=2,
+                    change=WorkflowReloadStatus(reloading=True),
+                ),
+            )
+        )
+
+        assert result == (None, None)
+        assert provider._cursor.sequence == 2
+    finally:
+        provider.close()
 
 
 def test_client_applies_ordered_updates_and_ignores_duplicates():

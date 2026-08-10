@@ -22,6 +22,7 @@ from runtime.operator.models import (
     RunStatus,
     RunStatusChanged,
     WorkflowDiscoveryDiagnostic,
+    WorkflowReloadStatus,
 )
 from runtime.operator.operator import (
     MAX_RUN_ID_BYTES,
@@ -258,6 +259,41 @@ class TestOperatorLifecycle:
             assert current.revision == initial.revision
             assert current.as_of_sequence == initial.as_of_sequence
             assert "Workflow reload unchanged" in caplog.text
+        finally:
+            operator.close()
+
+    def test_refresh_publishes_reload_status_around_scan(self, tmp_path, monkeypatch):
+        workflow_file = tmp_path / "flow.py"
+        workflow_file.write_text(
+            "import avalanche as ava\n"
+            "@ava.workflow\n"
+            "def unchanged():\n"
+            "    return None\n"
+        )
+        operator = Operator(
+            workflow_paths=[str(workflow_file)],
+            schedule=False,
+            watch=False,
+        )
+        subscription = operator.subscribe_operator_updates(
+            operator.operator_instance_id,
+            operator.current_sequence,
+        )
+        real_rescan = operator._registry.rescan
+        observed_during_scan = []
+
+        def rescan(*args, **kwargs):
+            observed_during_scan.append(subscription.get(timeout=2.0).update.change)
+            return real_rescan(*args, **kwargs)
+
+        monkeypatch.setattr(operator._registry, "rescan", rescan)
+        try:
+            operator._refresh_workflows()
+            finished = subscription.get(timeout=2.0)
+
+            assert observed_during_scan == [WorkflowReloadStatus(reloading=True)]
+            assert finished.update is not None
+            assert finished.update.change == WorkflowReloadStatus(reloading=False)
         finally:
             operator.close()
 

@@ -340,6 +340,13 @@ class CatalogReplaced:
 
 
 @dataclass(frozen=True)
+class WorkflowReloadStatus:
+    """Whether the operator is rebuilding its workflow catalog."""
+
+    reloading: bool
+
+
+@dataclass(frozen=True)
 class RunCreated:
     summary: RunSummary
     nodes: tuple[NodeSnapshot, ...] = ()
@@ -395,7 +402,7 @@ RunUpdateChange = (
     | AgentEventAppended
     | TraceFinalized
 )
-OperatorUpdateChange = RunUpdateChange | CatalogReplaced
+OperatorUpdateChange = RunUpdateChange | CatalogReplaced | WorkflowReloadStatus
 
 
 @dataclass(frozen=True)

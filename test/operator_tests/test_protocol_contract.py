@@ -204,6 +204,7 @@ def test_run_update_is_a_sequenced_typed_change_record():
         "agent_event_appended": 6,
         "trace_finalized": 7,
         "catalog_replaced": 8,
+        "workflow_reload_status": 9,
     }
     assert [field.name for field in change_fields] == [
         "run_created",
@@ -213,6 +214,7 @@ def test_run_update_is_a_sequenced_typed_change_record():
         "agent_event_appended",
         "trace_finalized",
         "catalog_replaced",
+        "workflow_reload_status",
     ]
     assert "run" not in update_fields
     assert {name: field.number for name, field in envelope_fields.items()} == {
