@@ -1,0 +1,9 @@
+repos:
+  - repo: local
+    hooks:
+      - id: web-assets
+        name: Check packaged web assets
+        entry: make web-assets-check WEB_ASSETS_CHECK_CONTEXT=hook
+        language: system
+        pass_filenames: false
+        files: ^(web/operator/|docs/assets/brand/avalanche-diamond-3d-1024[.]png$)

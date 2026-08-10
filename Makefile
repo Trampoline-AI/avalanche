@@ -1,4 +1,4 @@
-.PHONY: test test-cov test-cov-html lint format precommit-check check smoke-test tui-bench proto brand install clean web-bench
+.PHONY: test test-cov test-cov-html lint format precommit-check check smoke-test tui-bench proto brand install clean web-assets-check web-bench
 
 # Run tests with every supported executor/storage extra installed.
 test:
@@ -50,6 +50,29 @@ web-proto:
 # Build the packaged browser interface.
 web-build:
 	cd web/operator && pnpm build
+
+# Rebuild the packaged browser interface and reject unstaged generated assets.
+web-assets-check: web-build
+	@if ! git diff --quiet -- src/runtime/operator/web_assets || \
+		test -n "$$(git ls-files --others --exclude-standard -- src/runtime/operator/web_assets)"; then \
+		printf '\n'; \
+		git status --short -- src/runtime/operator/web_assets; \
+		if test "$(WEB_ASSETS_CHECK_CONTEXT)" = "ci"; then \
+			printf '\nERROR: Packaged browser assets are stale.\n'; \
+			printf 'CI rebuilt them only for verification; files in this runner will be discarded.\n'; \
+			printf 'Rebuild and stage them on your branch with:\n'; \
+			printf '  make web-build\n'; \
+			printf '  git add -A src/runtime/operator/web_assets\n'; \
+			printf 'Then commit the generated files and push again.\n'; \
+		else \
+			printf '\nERROR: Packaged browser assets were stale and have now been rebuilt.\n'; \
+			printf 'The generated files above are now in your working tree.\n'; \
+			printf 'Include them with your web source changes by running:\n'; \
+			printf '  git add -A src/runtime/operator/web_assets\n'; \
+			printf 'Then retry your commit.\n'; \
+		fi; \
+		exit 1; \
+	fi
 
 # Run browser projection and component tests.
 web-test:

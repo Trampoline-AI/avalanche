@@ -57,6 +57,7 @@ dev = [
     "watchfiles>=1.1.1",
     "predict-rlm>=0.8.0",
     "marimo>=0.23.9,<0.24",
+    "pre-commit>=4,<5",
 ]
 examples = [
     "openpyxl>=3.1,<4",
