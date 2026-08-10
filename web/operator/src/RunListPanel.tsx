@@ -56,14 +56,20 @@ export function RunListPanel({
   });
 
   return (
-    <section className="run-list-panel w-[300px] overflow-hidden rounded-[9px] border border-line bg-[rgba(255,255,255,.96)] shadow-[0_6px_20px_rgba(20,31,26,.1)]" aria-label="Workflow runs">
+    <section
+      className="run-list-panel w-[300px] overflow-hidden rounded-[9px] border border-line bg-[rgba(255,255,255,.96)] shadow-[0_6px_20px_rgba(20,31,26,.1)]"
+      aria-label="Workflow runs"
+    >
       <header className="flex h-[30px] items-center justify-between border-b border-line px-[9px] [&_strong]:text-[10px] [&_span]:font-mono [&_span]:text-[8px] [&_span]:text-secondary">
         <strong>Runs</strong>
         <span>{workflowRuns.length}</span>
       </header>
       {workflowRuns.length ? (
         <div className="run-list-scroll max-h-48 overflow-auto" ref={scrollElement}>
-          <div className="run-list-virtual relative w-full" style={{ height: virtualizer.getTotalSize() }}>
+          <div
+            className="run-list-virtual relative w-full"
+            style={{ height: virtualizer.getTotalSize() }}
+          >
             {virtualizer.getVirtualItems().map((virtualRow) => {
               const summary = workflowRuns[virtualRow.index];
               const triggeredAt = runTriggeredAt(summary);
@@ -83,9 +89,14 @@ export function RunListPanel({
                       : "trigger time not recorded"
                   }`}
                 >
-                  <span className={`row-span-2 ${summary.status === "requesting" ? "bg-amber" : summary.status === "success" ? "status-success bg-mint" : summary.status === "failed" ? "status-failed bg-danger" : summary.status === "running" ? "status-running bg-acid" : "bg-muted"} size-[7px] rounded-full`} aria-hidden="true" />
+                  <span
+                    className={`row-span-2 ${summary.status === "requesting" ? "bg-amber" : summary.status === "success" ? "status-success bg-mint" : summary.status === "failed" ? "status-failed bg-danger" : summary.status === "running" ? "status-running bg-acid" : "bg-muted"} size-[7px] rounded-full`}
+                    aria-hidden="true"
+                  />
                   <code title={summary.runId}>{summary.runId}</code>
-                  <span className={`run-status-text text-[8px] capitalize ${summary.status === "requesting" ? "text-amber" : summary.status === "success" ? "status-success text-mint" : summary.status === "failed" ? "status-failed text-danger" : summary.status === "running" ? "status-running text-acid" : ""}`}>
+                  <span
+                    className={`run-status-text text-[8px] capitalize ${summary.status === "requesting" ? "text-amber" : summary.status === "success" ? "status-success text-mint" : summary.status === "failed" ? "status-failed text-danger" : summary.status === "running" ? "status-running text-acid" : ""}`}
+                  >
                     {summary.status}
                   </span>
                   <time className="run-duration text-right font-mono text-[8px] text-secondary">
@@ -105,7 +116,9 @@ export function RunListPanel({
           </div>
         </div>
       ) : (
-        <span className="run-list-empty block p-2.5 font-mono text-[8px] text-secondary">No runs yet</span>
+        <span className="run-list-empty block p-2.5 font-mono text-[8px] text-secondary">
+          No runs yet
+        </span>
       )}
     </section>
   );

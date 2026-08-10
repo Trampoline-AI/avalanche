@@ -97,7 +97,9 @@ describe("Explorer", () => {
         catalog={CatalogSnapshotMsg.create({
           revision: "5",
           workflows: [orders],
-          diagnostics: [{ kind: "build_error", path: "flows.py", message: "ValueError: invalid flow" }],
+          diagnostics: [
+            { kind: "build_error", path: "flows.py", message: "ValueError: invalid flow" },
+          ],
         })}
         onSelect={onSelect}
       />,

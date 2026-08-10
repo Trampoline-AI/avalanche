@@ -81,20 +81,14 @@ export interface OperatorApi {
 export class GrpcWebOperatorApi implements OperatorApi {
   readonly client: OperatorServiceClient;
 
-  constructor(
-    baseUrl = window.location.origin,
-    client?: OperatorServiceClient,
-  ) {
+  constructor(baseUrl = window.location.origin, client?: OperatorServiceClient) {
     this.client =
       client ??
       new OperatorServiceClient(new GrpcWebFetchTransport({ baseUrl, format: "binary" }));
   }
 
   async getCatalog(signal?: AbortSignal): Promise<CatalogSnapshotMsg> {
-    return await this.client.getCatalog(
-      {},
-      signal ? { abort: signal } : undefined,
-    ).response;
+    return await this.client.getCatalog({}, signal ? { abort: signal } : undefined).response;
   }
 
   async loadBaseline(signal?: AbortSignal): Promise<StructuralBaseline> {
@@ -179,19 +173,10 @@ export class GrpcWebOperatorApi implements OperatorApi {
     ).responses;
   }
 
-  async listLogPage(
-    request: LogPageRequest,
-    signal?: AbortSignal,
-  ): Promise<LogDescriptorPage> {
-    const {
-      expectedOperatorInstanceId,
-      expectedAsOfSequence,
-      ...rpcRequest
-    } = request;
-    const page = await this.client.listLogs(
-      rpcRequest,
-      signal ? { abort: signal } : undefined,
-    ).response;
+  async listLogPage(request: LogPageRequest, signal?: AbortSignal): Promise<LogDescriptorPage> {
+    const { expectedOperatorInstanceId, expectedAsOfSequence, ...rpcRequest } = request;
+    const page = await this.client.listLogs(rpcRequest, signal ? { abort: signal } : undefined)
+      .response;
     if (
       page.operatorInstanceId !== expectedOperatorInstanceId ||
       page.asOfSequence !== expectedAsOfSequence
@@ -286,10 +271,7 @@ export class GrpcWebOperatorApi implements OperatorApi {
     return decoded.join("");
   }
 
-  async startRun(
-    workflowSelector: string,
-    input?: Record<string, unknown>,
-  ): Promise<string> {
+  async startRun(workflowSelector: string, input?: Record<string, unknown>): Promise<string> {
     const response = await this.client.startRun({
       workflowSelector,
       runId: "",
@@ -305,7 +287,6 @@ export class GrpcWebOperatorApi implements OperatorApi {
   }
 }
 
-
 function assertPageProgress(
   pageToken: string,
   nextPageToken: string,
@@ -320,8 +301,7 @@ function assertPageProgress(
     nextPageToken === pageToken ||
     recordCount === 0 ||
     nextCursor === currentCursor ||
-    (order === DescriptorPageOrder.FORWARD &&
-      BigInt(nextCursor) <= BigInt(currentCursor)) ||
+    (order === DescriptorPageOrder.FORWARD && BigInt(nextCursor) <= BigInt(currentCursor)) ||
     (order === DescriptorPageOrder.NEWEST_FIRST &&
       currentCursor !== "0" &&
       BigInt(nextCursor) >= BigInt(currentCursor))

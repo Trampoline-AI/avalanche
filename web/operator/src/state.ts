@@ -71,7 +71,8 @@ function appendBounded<T>(
   sequenceOf: (value: T) => string,
 ): BoundedAppend<T> {
   const sequence = BigInt(sequenceOf(item));
-  if (current.some((value) => BigInt(sequenceOf(value)) === sequence)) return { items: current };
+  if (current.some((value) => BigInt(sequenceOf(value)) === sequence))
+    return { items: current };
 
   let insertion = current.length;
   while (insertion > 0 && BigInt(sequenceOf(current[insertion - 1])) > sequence) insertion -= 1;
@@ -108,10 +109,7 @@ function snapshotCanCommit(
   );
 }
 
-function withoutRunBuckets<T>(
-  buckets: Record<string, T>,
-  runId: string,
-): Record<string, T> {
+function withoutRunBuckets<T>(buckets: Record<string, T>, runId: string): Record<string, T> {
   const prefix = `${runId}:`;
   return Object.fromEntries(Object.entries(buckets).filter(([key]) => !key.startsWith(prefix)));
 }
@@ -490,10 +488,7 @@ export function useOperatorProjection(api: OperatorApi) {
               `Unable to connect to Avalanche operator; retrying in ${retryAfterCycle} ms.`,
               error,
             );
-            retryMilliseconds = Math.min(
-              retryMilliseconds * 2,
-              MAX_RETRY_MILLISECONDS,
-            );
+            retryMilliseconds = Math.min(retryMilliseconds * 2, MAX_RETRY_MILLISECONDS);
           }
         } finally {
           clearPending();

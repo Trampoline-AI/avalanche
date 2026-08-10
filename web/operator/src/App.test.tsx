@@ -93,7 +93,9 @@ vi.mock("./Inspector", () => ({
   }) => (
     <div>
       <span>{`Inspector ${run?.summary?.runId ?? "workflow"}`}</span>
-      <button type="button" onClick={onClose}>Close inspector</button>
+      <button type="button" onClick={onClose}>
+        Close inspector
+      </button>
     </div>
   ),
 }));
@@ -110,7 +112,9 @@ vi.mock("./RunLogPane", () => ({
     <section aria-label="Run logs">
       <span>{`Log scope ${nodeId ?? "all"}`}</span>
       <span>{`Live logs ${liveLogs?.map((log) => log.sequence).join(",") ?? "none"}`}</span>
-      <button type="button" onClick={() => onSelectNode("node-1")}>Select log node</button>
+      <button type="button" onClick={() => onSelectNode("node-1")}>
+        Select log node
+      </button>
     </section>
   ),
 }));
@@ -179,9 +183,7 @@ describe("App", () => {
 
     expect(screen.getByRole("status")).toHaveTextContent("Reconnecting...");
     expect(screen.getByText("No operator process found at port 17777")).toBeVisible();
-    expect(container.querySelector(".operator-connection-screen")).toHaveClass(
-      "min-h-screen",
-    );
+    expect(container.querySelector(".operator-connection-screen")).toHaveClass("min-h-screen");
     expect(container.querySelector(".topbar")).not.toBeInTheDocument();
   });
 
@@ -203,9 +205,7 @@ describe("App", () => {
 
   it("keeps Explorer accessible through the narrow navigation toggle", () => {
     window.innerWidth = 375;
-    const { container } = render(
-      <App api={new GrpcWebOperatorApi("http://localhost")} />,
-    );
+    const { container } = render(<App api={new GrpcWebOperatorApi("http://localhost")} />);
     const toggle = screen.getByRole("button", { name: "Explorer" });
 
     expect(toggle).toHaveAttribute("aria-controls", "operator-explorer");
@@ -236,9 +236,7 @@ describe("App", () => {
   });
 
   it("collapses and restores the desktop Explorer independently of the narrow toggle", () => {
-    const { container } = render(
-      <App api={new GrpcWebOperatorApi("http://localhost")} />,
-    );
+    const { container } = render(<App api={new GrpcWebOperatorApi("http://localhost")} />);
     const toggle = screen.getByRole("button", { name: "Collapse Explorer" });
     const explorer = screen.getByRole("complementary", { name: "Explorer" });
     const narrowToggle = screen.getByRole("button", { name: "Explorer" });
@@ -275,9 +273,7 @@ describe("App", () => {
   });
 
   it("maps divider arrow keys to physical movement and intended pane widths", () => {
-    const { container } = render(
-      <App api={new GrpcWebOperatorApi("http://localhost")} />,
-    );
+    const { container } = render(<App api={new GrpcWebOperatorApi("http://localhost")} />);
     const workspace = container.querySelector<HTMLElement>(".workspace")!;
     const explorerDivider = screen.getByRole("separator", {
       name: "Resize Explorer",
@@ -288,15 +284,11 @@ describe("App", () => {
 
     fireEvent.keyDown(explorerDivider, { key: "ArrowLeft" });
     expect(explorerDivider).toHaveAttribute("aria-valuenow", "264");
-    expect(workspace.style.getPropertyValue("--workspace-explorer-width")).toBe(
-      "264px",
-    );
+    expect(workspace.style.getPropertyValue("--workspace-explorer-width")).toBe("264px");
 
     fireEvent.keyDown(explorerDivider, { key: "ArrowRight" });
     expect(explorerDivider).toHaveAttribute("aria-valuenow", "280");
-    expect(workspace.style.getPropertyValue("--workspace-explorer-width")).toBe(
-      "280px",
-    );
+    expect(workspace.style.getPropertyValue("--workspace-explorer-width")).toBe("280px");
 
     fireEvent.click(screen.getByRole("button", { name: "Workflow graph" }));
     const inspectorDivider = screen.getByRole("separator", {
@@ -308,21 +300,15 @@ describe("App", () => {
 
     fireEvent.keyDown(inspectorDivider, { key: "ArrowLeft" });
     expect(inspectorDivider).toHaveAttribute("aria-valuenow", "426");
-    expect(workspace.style.getPropertyValue("--workspace-inspector-width")).toBe(
-      "426px",
-    );
+    expect(workspace.style.getPropertyValue("--workspace-inspector-width")).toBe("426px");
 
     fireEvent.keyDown(inspectorDivider, { key: "ArrowRight" });
     expect(inspectorDivider).toHaveAttribute("aria-valuenow", "410");
-    expect(workspace.style.getPropertyValue("--workspace-inspector-width")).toBe(
-      "410px",
-    );
+    expect(workspace.style.getPropertyValue("--workspace-inspector-width")).toBe("410px");
   });
 
   it("clamps direction-aware divider keyboard resizing without changing Home or End", () => {
-    const { container } = render(
-      <App api={new GrpcWebOperatorApi("http://localhost")} />,
-    );
+    const { container } = render(<App api={new GrpcWebOperatorApi("http://localhost")} />);
     const workspace = container.querySelector<HTMLElement>(".workspace")!;
     const explorerDivider = screen.getByRole("separator", {
       name: "Resize Explorer",
@@ -335,15 +321,11 @@ describe("App", () => {
     fireEvent.keyDown(explorerDivider, { key: "Home" });
     fireEvent.keyDown(explorerDivider, { key: "ArrowLeft" });
     expect(explorerDivider).toHaveAttribute("aria-valuenow", "220");
-    expect(workspace.style.getPropertyValue("--workspace-explorer-width")).toBe(
-      "220px",
-    );
+    expect(workspace.style.getPropertyValue("--workspace-explorer-width")).toBe("220px");
     fireEvent.keyDown(explorerDivider, { key: "End" });
     fireEvent.keyDown(explorerDivider, { key: "ArrowRight" });
     expect(explorerDivider).toHaveAttribute("aria-valuenow", "420");
-    expect(workspace.style.getPropertyValue("--workspace-explorer-width")).toBe(
-      "420px",
-    );
+    expect(workspace.style.getPropertyValue("--workspace-explorer-width")).toBe("420px");
 
     fireEvent.click(screen.getByRole("button", { name: "Workflow graph" }));
     const inspectorDivider = screen.getByRole("separator", {
@@ -357,21 +339,15 @@ describe("App", () => {
     fireEvent.keyDown(inspectorDivider, { key: "Home" });
     fireEvent.keyDown(inspectorDivider, { key: "ArrowRight" });
     expect(inspectorDivider).toHaveAttribute("aria-valuenow", "320");
-    expect(workspace.style.getPropertyValue("--workspace-inspector-width")).toBe(
-      "320px",
-    );
+    expect(workspace.style.getPropertyValue("--workspace-inspector-width")).toBe("320px");
     fireEvent.keyDown(inspectorDivider, { key: "End" });
     fireEvent.keyDown(inspectorDivider, { key: "ArrowLeft" });
     expect(inspectorDivider).toHaveAttribute("aria-valuenow", "640");
-    expect(workspace.style.getPropertyValue("--workspace-inspector-width")).toBe(
-      "640px",
-    );
+    expect(workspace.style.getPropertyValue("--workspace-inspector-width")).toBe("640px");
   });
 
   it("keeps pointer resizing aligned with each divider direction", () => {
-    const { container } = render(
-      <App api={new GrpcWebOperatorApi("http://localhost")} />,
-    );
+    const { container } = render(<App api={new GrpcWebOperatorApi("http://localhost")} />);
     const workspace = container.querySelector<HTMLElement>(".workspace")!;
     const explorerDivider = screen.getByRole("separator", {
       name: "Resize Explorer",
@@ -381,9 +357,7 @@ describe("App", () => {
     fireEvent.pointerMove(explorerDivider, { pointerId: 1, clientX: 344 });
     fireEvent.pointerUp(explorerDivider, { pointerId: 1 });
     expect(explorerDivider).toHaveAttribute("aria-valuenow", "344");
-    expect(workspace.style.getPropertyValue("--workspace-explorer-width")).toBe(
-      "344px",
-    );
+    expect(workspace.style.getPropertyValue("--workspace-explorer-width")).toBe("344px");
 
     fireEvent.click(screen.getByRole("button", { name: "Workflow graph" }));
     const inspectorDivider = screen.getByRole("separator", {
@@ -394,9 +368,7 @@ describe("App", () => {
     fireEvent.pointerMove(inspectorDivider, { pointerId: 2, clientX: 636 });
     fireEvent.pointerUp(inspectorDivider, { pointerId: 2 });
     expect(inspectorDivider).toHaveAttribute("aria-valuenow", "474");
-    expect(workspace.style.getPropertyValue("--workspace-inspector-width")).toBe(
-      "474px",
-    );
+    expect(workspace.style.getPropertyValue("--workspace-inspector-width")).toBe("474px");
   });
 
   it("keeps transport sequence internal while log and trace updates retain catalog revision", () => {
@@ -571,5 +543,4 @@ describe("App", () => {
     expect(screen.getByText("Log scope all")).toBeInTheDocument();
     expect(screen.queryByText("Inspector run-1")).not.toBeInTheDocument();
   });
-
 });

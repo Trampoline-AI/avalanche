@@ -42,10 +42,9 @@ describe("ValueView", () => {
     expect(screen.getByText("secret")).toBeInTheDocument();
     expect(screen.getByText("nested value")).toBeInTheDocument();
     expect(screen.queryByText("first item")).not.toBeInTheDocument();
-    expect(onExpand).toHaveBeenCalledWith(
-      expect.objectContaining({ secret: "nested value" }),
-      ["nested"],
-    );
+    expect(onExpand).toHaveBeenCalledWith(expect.objectContaining({ secret: "nested value" }), [
+      "nested",
+    ]);
   });
 
   it("reveals root collection children in deterministic groups of at most 100", () => {
@@ -91,13 +90,19 @@ describe("ValueView", () => {
   });
 
   it("keeps deep rows in pane-local overflow classes instead of narrow recursive columns", () => {
-    render(<ValueView value={{ deeply_nested_field_name: { next: { answer: "wide value" } } }} />);
+    render(
+      <ValueView value={{ deeply_nested_field_name: { next: { answer: "wide value" } } }} />,
+    );
 
     const tree = screen.getByRole("tree", { name: "JSON value" });
     expect(tree).toHaveClass("value-tree");
-    expect(screen.getByText("deeply_nested_field_name").closest(".value-row")).toBeInTheDocument();
+    expect(
+      screen.getByText("deeply_nested_field_name").closest(".value-row"),
+    ).toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: "Expand deeply_nested_field_name" }));
-    const nextContent = screen.getByRole("button", { name: "Expand next" }).closest(".value-content");
+    const nextContent = screen
+      .getByRole("button", { name: "Expand next" })
+      .closest(".value-content");
     expect(nextContent).toBeInTheDocument();
     expect(tree.querySelector(".value-child-group")).toBeInTheDocument();
   });

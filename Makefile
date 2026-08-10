@@ -1,4 +1,4 @@
-.PHONY: test test-cov test-cov-html lint format precommit-check check smoke-test tui-bench proto brand install clean web-assets-check web-bench
+.PHONY: test test-cov test-cov-html lint format precommit-check check smoke-test tui-bench proto brand install clean web-assets-check web-lint web-format web-format-check web-test web-bench
 
 # Run tests with every supported executor/storage extra installed.
 test:
@@ -73,6 +73,18 @@ web-assets-check: web-build
 		fi; \
 		exit 1; \
 	fi
+
+# Lint the browser TypeScript and React source.
+web-lint:
+	cd web/operator && pnpm lint
+
+# Format the browser source with Prettier.
+web-format:
+	cd web/operator && pnpm format
+
+# Check browser formatting without modifying files.
+web-format-check:
+	cd web/operator && pnpm format:check
 
 # Run browser projection and component tests.
 web-test:

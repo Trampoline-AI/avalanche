@@ -69,7 +69,9 @@ async function waitForVite(url, server, stderr) {
 
     const remaining = deadline - performance.now();
     if (remaining > 0) {
-      await new Promise((resolvePromise) => setTimeout(resolvePromise, Math.min(50, remaining)));
+      await new Promise((resolvePromise) =>
+        setTimeout(resolvePromise, Math.min(50, remaining)),
+      );
     }
   }
 
@@ -100,10 +102,7 @@ function signalProcessTree(child, signal) {
 }
 
 async function waitForClose(closed, milliseconds) {
-  return Promise.race([
-    closed.then(() => true),
-    delay(milliseconds).then(() => false),
-  ]);
+  return Promise.race([closed.then(() => true), delay(milliseconds).then(() => false)]);
 }
 
 async function terminateChromium(browser, closed, cdp) {
@@ -193,7 +192,9 @@ async function waitForDebuggerTarget(profilePath, browser, state, deadline) {
   }
   throw new Error(
     `Chromium did not expose a page DevTools target within ${CHROMIUM_PROCESS_BUDGET_MS}ms` +
-      (lastError ? `: ${lastError instanceof Error ? lastError.message : String(lastError)}` : "") +
+      (lastError
+        ? `: ${lastError instanceof Error ? lastError.message : String(lastError)}`
+        : "") +
       (state.stderr ? `\n${state.stderr}` : ""),
   );
 }
@@ -673,6 +674,8 @@ export default { plugins: [tailwindcss()], server: { hmr: false } };`,
 }
 
 main().catch((error) => {
-  process.stderr.write(`${error instanceof Error ? error.stack ?? error.message : String(error)}\n`);
+  process.stderr.write(
+    `${error instanceof Error ? (error.stack ?? error.message) : String(error)}\n`,
+  );
   process.exitCode = 1;
 });

@@ -74,7 +74,11 @@ function page(
 function operatorApi(overrides: Partial<OperatorApi> = {}): OperatorApi {
   const defaults: OperatorApi = {
     getCatalog: async () => CatalogSnapshotMsg.create(),
-    loadBaseline: async () => ({ catalog: CatalogSnapshotMsg.create(), asOfSequence: "0", runs: [] }),
+    loadBaseline: async () => ({
+      catalog: CatalogSnapshotMsg.create(),
+      asOfSequence: "0",
+      runs: [],
+    }),
     getLatestRunSnapshot: async () => run,
     streamUpdates: async function* () {
       return;
@@ -209,9 +213,7 @@ describe("RunLogPane", () => {
       return page([log(3, "fetch")], "older", "3");
     });
     const api = operatorApi({ listLogPage });
-    const view = render(
-      <RunLogPane api={api} run={run} onSelectNode={() => undefined} />,
-    );
+    const view = render(<RunLogPane api={api} run={run} onSelectNode={() => undefined} />);
 
     const loadOlder = await screen.findByRole("button", { name: "Load older logs" });
     await screen.findByText("body-log-3");
@@ -249,7 +251,12 @@ describe("RunLogPane", () => {
     expect(scroll!.scrollTop).toBe(700);
 
     view.rerender(
-      <RunLogPane api={api} run={run} liveLogs={[log(4, "validate")]} onSelectNode={() => undefined} />,
+      <RunLogPane
+        api={api}
+        run={run}
+        liveLogs={[log(4, "validate")]}
+        onSelectNode={() => undefined}
+      />,
     );
     await waitFor(() => expect(screen.getAllByRole("article")).toHaveLength(4));
     expect(scroll!.scrollTop).toBe(700);
@@ -274,9 +281,7 @@ describe("RunLogPane", () => {
   });
 
   it("resizes vertically from an accessible horizontal drag divider", () => {
-    const view = render(
-      <RunLogPane api={operatorApi()} run={run} onSelectNode={() => undefined} />,
-    );
+    render(<RunLogPane api={operatorApi()} run={run} onSelectNode={() => undefined} />);
     const pane = screen.getByRole("region", { name: "Run logs" });
     Object.defineProperty(pane.parentElement, "clientHeight", {
       configurable: true,
@@ -335,7 +340,8 @@ describe("RunLogPane", () => {
     render(
       <RunLogPane
         api={operatorApi({
-          listLogPage: async () => page(Array.from({ length: 25 }, (_, index) => log(index + 1, "fetch"))),
+          listLogPage: async () =>
+            page(Array.from({ length: 25 }, (_, index) => log(index + 1, "fetch"))),
           readTextDetail,
         })}
         run={run}

@@ -35,7 +35,6 @@ interface InspectorProps {
 type RunTab = "overview" | "inputs" | "output" | "trace";
 type DetailFormat = "json";
 
-
 interface ScopedResult<T> {
   key: string;
   value: T;
@@ -60,7 +59,6 @@ const EMPTY_EVENT_PAGE: DescriptorPageState<AgentEventDescriptorMsg> = {
   nextPageToken: "",
   nextCursor: "0",
 };
-
 
 function parseRetainedJson(value: string | undefined) {
   if (!value) return undefined;
@@ -175,8 +173,7 @@ export function Inspector({
       cachedBytes > DETAIL_CACHE_MAX_BYTES
     ) {
       const oldest = detailCache.current.entries().next().value as
-        | [string, DetailCacheEntry]
-        | undefined;
+        [string, DetailCacheEntry] | undefined;
       if (!oldest) break;
       detailCache.current.delete(oldest[0]);
       cachedBytes -= oldest[1].byteCost;
@@ -186,7 +183,8 @@ export function Inspector({
   }
 
   function loadMoreEvents() {
-    if (!activeEventPage.nextPageToken || !nodeId || !runId || pageRequestInFlight.current) return;
+    if (!activeEventPage.nextPageToken || !nodeId || !runId || pageRequestInFlight.current)
+      return;
     pageController.current?.abort();
     const generation = ++pageGeneration.current;
     const controller = new AbortController();
@@ -201,7 +199,9 @@ export function Inspector({
           afterEventSequence:
             eventPageOrder === DescriptorPageOrder.FORWARD ? activeEventPage.nextCursor : "0",
           beforeEventSequence:
-            eventPageOrder === DescriptorPageOrder.NEWEST_FIRST ? activeEventPage.nextCursor : "0",
+            eventPageOrder === DescriptorPageOrder.NEWEST_FIRST
+              ? activeEventPage.nextCursor
+              : "0",
           pageSize: DESCRIPTOR_PAGE_SIZE,
           order: eventPageOrder,
           expectedOperatorInstanceId: operatorInstanceId,
@@ -236,7 +236,6 @@ export function Inspector({
         setPageLoading(false);
       });
   }
-
 
   useEffect(() => {
     setTabSelection({ scope: selectionScope, tab: "overview" });
@@ -353,7 +352,6 @@ export function Inspector({
     [combinedEvents],
   );
 
-
   const valueEvent = useMemo(() => {
     if (tab !== "inputs" && tab !== "output") return undefined;
     const kind = tab === "inputs" ? "run.started" : "run.succeeded";
@@ -388,7 +386,8 @@ export function Inspector({
           controller.signal.aborted ||
           detailGeneration.current !== generation ||
           tabRef.current !== tab
-        ) return;
+        )
+          return;
         if (!storeCachedDetail(key, body, valueEvent.sizeBytes)) {
           setInputOutputState({
             key: valueDetailKey,
@@ -436,7 +435,8 @@ export function Inspector({
           controller.signal.aborted ||
           detailGeneration.current !== generation ||
           tabRef.current !== "trace"
-        ) return;
+        )
+          return;
         if (!storeCachedDetail(key, body, event.sizeBytes)) {
           setDetailErrors((current) => ({
             ...current,
@@ -512,16 +512,25 @@ export function Inspector({
     traceScrollElement.current.scrollTop = traceScrollElement.current.scrollHeight;
   }, [following, tab, turns.length]);
 
-
   if (!run && workflow && nodeId) {
     return (
-      <aside className="inspector inspector-declaration fixed top-[58px] right-0 bottom-0 z-30 grid h-full w-[min(var(--workspace-inspector-width),100vw)] min-h-0 min-w-0 grid-rows-[auto_minmax(0,1fr)] overflow-hidden border-l border-line bg-panel shadow-[-20px_0_50px_rgba(20,31,26,.14)] min-[1001px]:static min-[1001px]:z-auto min-[1001px]:w-auto min-[1001px]:shadow-none max-[700px]:w-screen" aria-label="Node declaration">
+      <aside
+        className="inspector inspector-declaration fixed top-[58px] right-0 bottom-0 z-30 grid h-full w-[min(var(--workspace-inspector-width),100vw)] min-h-0 min-w-0 grid-rows-[auto_minmax(0,1fr)] overflow-hidden border-l border-line bg-panel shadow-[-20px_0_50px_rgba(20,31,26,.14)] min-[1001px]:static min-[1001px]:z-auto min-[1001px]:w-auto min-[1001px]:shadow-none max-[700px]:w-screen"
+        aria-label="Node declaration"
+      >
         <header className="flex items-start justify-between border-b border-line px-5 pt-[19px] pb-3.5">
           <div>
-            <span className="eyebrow block font-mono text-[9px] tracking-[.16em] text-acid uppercase">Declaration</span>
+            <span className="eyebrow block font-mono text-[9px] tracking-[.16em] text-acid uppercase">
+              Declaration
+            </span>
             <h2 className="mt-1 mb-[5px] text-lg">{workflow.displayNames[nodeId] || nodeId}</h2>
           </div>
-          <button type="button" className="icon-button grid size-[30px] cursor-pointer place-items-center rounded-[7px] border border-line bg-panel p-0 text-secondary hover:border-secondary hover:bg-panel hover:text-ink focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-acid" onClick={closeInspector} aria-label="Close">
+          <button
+            type="button"
+            className="icon-button grid size-[30px] cursor-pointer place-items-center rounded-[7px] border border-line bg-panel p-0 text-secondary hover:border-secondary hover:bg-panel hover:text-ink focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-acid"
+            onClick={closeInspector}
+            aria-label="Close"
+          >
             <X aria-hidden="true" className="size-4" strokeWidth={1.8} />
           </button>
         </header>
@@ -537,7 +546,10 @@ export function Inspector({
               <div>
                 <h3>Inputs</h3>
                 {workflowDeclaration.inputs.map((field) => (
-                  <div className="field-detail border-t border-line py-2 [&_strong]:block [&_strong]:text-[10px] [&_code]:mt-0.5 [&_code]:block [&_code]:text-[8px] [&_code]:text-muted [&_code]:[overflow-wrap:anywhere] [&_p]:mt-1 [&_p]:mb-0 [&_p]:text-[9px] [&_p]:text-muted [&_p]:[overflow-wrap:anywhere]" key={field.name}>
+                  <div
+                    className="field-detail border-t border-line py-2 [&_strong]:block [&_strong]:text-[10px] [&_code]:mt-0.5 [&_code]:block [&_code]:text-[8px] [&_code]:text-muted [&_code]:[overflow-wrap:anywhere] [&_p]:mt-1 [&_p]:mb-0 [&_p]:text-[9px] [&_p]:text-muted [&_p]:[overflow-wrap:anywhere]"
+                    key={field.name}
+                  >
                     <strong>{field.name}</strong>
                     <code>{field.type}</code>
                     {field.description && <p>{field.description}</p>}
@@ -547,7 +559,10 @@ export function Inspector({
               <div>
                 <h3>Outputs</h3>
                 {workflowDeclaration.outputs.map((field) => (
-                  <div className="field-detail border-t border-line py-2 [&_strong]:block [&_strong]:text-[10px] [&_code]:mt-0.5 [&_code]:block [&_code]:text-[8px] [&_code]:text-muted [&_code]:[overflow-wrap:anywhere] [&_p]:mt-1 [&_p]:mb-0 [&_p]:text-[9px] [&_p]:text-muted [&_p]:[overflow-wrap:anywhere]" key={field.name}>
+                  <div
+                    className="field-detail border-t border-line py-2 [&_strong]:block [&_strong]:text-[10px] [&_code]:mt-0.5 [&_code]:block [&_code]:text-[8px] [&_code]:text-muted [&_code]:[overflow-wrap:anywhere] [&_p]:mt-1 [&_p]:mb-0 [&_p]:text-[9px] [&_p]:text-muted [&_p]:[overflow-wrap:anywhere]"
+                    key={field.name}
+                  >
                     <strong>{field.name}</strong>
                     <code>{field.type}</code>
                     {field.description && <p>{field.description}</p>}
@@ -567,18 +582,25 @@ export function Inspector({
                 <ValueView value={workflowDeclaration.model} />
               </section>
             )}
-            {(workflowDeclaration.skills.length > 0 || workflowDeclaration.tools.length > 0) && (
+            {(workflowDeclaration.skills.length > 0 ||
+              workflowDeclaration.tools.length > 0) && (
               <section className="inspector-declaration-resources grid gap-3">
                 <h3>Skills &amp; tools</h3>
                 {workflowDeclaration.skills.map((skill) => (
-                  <article className="inspector-declaration-resource min-w-0 border-t border-line pt-2 text-[10px] leading-[1.55] text-secondary [&>strong]:inline [&>span]:ml-1.5 [&>span]:font-mono [&>span]:text-[8px] [&>span]:text-muted [&>span]:uppercase [&>div]:mt-1.5 [&>div]:[overflow-wrap:anywhere] [&>div>:last-child]:mb-0" key={`skill-${skill.name}`}>
+                  <article
+                    className="inspector-declaration-resource min-w-0 border-t border-line pt-2 text-[10px] leading-[1.55] text-secondary [&>strong]:inline [&>span]:ml-1.5 [&>span]:font-mono [&>span]:text-[8px] [&>span]:text-muted [&>span]:uppercase [&>div]:mt-1.5 [&>div]:[overflow-wrap:anywhere] [&>div>:last-child]:mb-0"
+                    key={`skill-${skill.name}`}
+                  >
                     <strong>{skill.name}</strong>
                     <span>Skill</span>
                     <Markdown>{skill.instructions}</Markdown>
                   </article>
                 ))}
                 {workflowDeclaration.tools.map((tool) => (
-                  <article className="inspector-declaration-resource min-w-0 border-t border-line pt-2 text-[10px] leading-[1.55] text-secondary [&>strong]:inline [&>span]:ml-1.5 [&>span]:font-mono [&>span]:text-[8px] [&>span]:text-muted [&>span]:uppercase [&>div]:mt-1.5 [&>div]:[overflow-wrap:anywhere] [&>div>:last-child]:mb-0" key={`tool-${tool.name}`}>
+                  <article
+                    className="inspector-declaration-resource min-w-0 border-t border-line pt-2 text-[10px] leading-[1.55] text-secondary [&>strong]:inline [&>span]:ml-1.5 [&>span]:font-mono [&>span]:text-[8px] [&>span]:text-muted [&>span]:uppercase [&>div]:mt-1.5 [&>div]:[overflow-wrap:anywhere] [&>div>:last-child]:mb-0"
+                    key={`tool-${tool.name}`}
+                  >
                     <strong>{tool.name}</strong>
                     <span>Tool</span>
                     <Markdown>{tool.description}</Markdown>
@@ -588,7 +610,9 @@ export function Inspector({
             )}
           </div>
         ) : (
-          <p className="empty-copy text-[11px] text-muted">This node has no agent declaration metadata.</p>
+          <p className="empty-copy text-[11px] text-muted">
+            This node has no agent declaration metadata.
+          </p>
         )}
       </aside>
     );
@@ -621,18 +645,35 @@ export function Inspector({
     activeInputOutputState?.status === "error" ? activeInputOutputState.error : undefined;
 
   return (
-    <aside className="inspector inspector-run fixed top-[58px] right-0 bottom-0 z-30 grid h-full w-[min(var(--workspace-inspector-width),100vw)] min-h-0 min-w-0 grid-rows-[auto_auto_minmax(0,1fr)] overflow-hidden border-l border-line bg-panel shadow-[-20px_0_50px_rgba(20,31,26,.14)] min-[1001px]:static min-[1001px]:z-auto min-[1001px]:w-auto min-[1001px]:shadow-none max-[700px]:w-screen" aria-label="Run inspector">
+    <aside
+      className="inspector inspector-run fixed top-[58px] right-0 bottom-0 z-30 grid h-full w-[min(var(--workspace-inspector-width),100vw)] min-h-0 min-w-0 grid-rows-[auto_auto_minmax(0,1fr)] overflow-hidden border-l border-line bg-panel shadow-[-20px_0_50px_rgba(20,31,26,.14)] min-[1001px]:static min-[1001px]:z-auto min-[1001px]:w-auto min-[1001px]:shadow-none max-[700px]:w-screen"
+      aria-label="Run inspector"
+    >
       <header className="flex items-start justify-between border-b border-line px-5 pt-[19px] pb-3.5">
         <div>
-          <span className="eyebrow block font-mono text-[9px] tracking-[.16em] text-acid uppercase">Execution detail</span>
+          <span className="eyebrow block font-mono text-[9px] tracking-[.16em] text-acid uppercase">
+            Execution detail
+          </span>
           <h2 className="mt-1 mb-[5px] text-lg">{node.name}</h2>
-          <span className={`status-pill inline-flex rounded-full border bg-panel px-[7px] py-[3px] font-mono text-[8px] uppercase ${node.status === "failed" ? "status-failed border-danger text-danger" : node.status === "success" ? "status-success border-mint text-mint" : "border-line text-muted"}`}>{node.status}</span>
+          <span
+            className={`status-pill inline-flex rounded-full border bg-panel px-[7px] py-[3px] font-mono text-[8px] uppercase ${node.status === "failed" ? "status-failed border-danger text-danger" : node.status === "success" ? "status-success border-mint text-mint" : "border-line text-muted"}`}
+          >
+            {node.status}
+          </span>
         </div>
-        <button type="button" className="icon-button grid size-[30px] cursor-pointer place-items-center rounded-[7px] border border-line bg-panel p-0 text-secondary hover:border-secondary hover:bg-panel hover:text-ink focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-acid" onClick={closeInspector} aria-label="Close">
+        <button
+          type="button"
+          className="icon-button grid size-[30px] cursor-pointer place-items-center rounded-[7px] border border-line bg-panel p-0 text-secondary hover:border-secondary hover:bg-panel hover:text-ink focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-acid"
+          onClick={closeInspector}
+          aria-label="Close"
+        >
           <X aria-hidden="true" className="size-4" strokeWidth={1.8} />
         </button>
       </header>
-      <nav className="inspector-tabs flex overflow-x-auto border-b border-line px-2.5" aria-label="Run detail views">
+      <nav
+        className="inspector-tabs flex overflow-x-auto border-b border-line px-2.5"
+        aria-label="Run detail views"
+      >
         {(["overview", "inputs", "output", "trace"] as RunTab[]).map((item) => (
           <button
             type="button"
@@ -649,8 +690,14 @@ export function Inspector({
         {tab === "overview" && (
           <section className="inspector-panel inspector-overview min-h-full min-w-0">
             <div className="metric-grid grid grid-cols-2 gap-2 [&>div]:rounded-[7px] [&>div]:border [&>div]:border-line [&>div]:bg-panel [&>div]:p-2.5 [&_small]:block [&_small]:text-[7px] [&_small]:text-muted [&_small]:uppercase [&_strong]:mt-[5px] [&_strong]:block [&_strong]:text-[11px]">
-              <div><small>Status</small><strong>{node.status}</strong></div>
-              <div><small>Started</small><strong>{node.startedAt ? "yes" : "—"}</strong></div>
+              <div>
+                <small>Status</small>
+                <strong>{node.status}</strong>
+              </div>
+              <div>
+                <small>Started</small>
+                <strong>{node.startedAt ? "yes" : "—"}</strong>
+              </div>
               <div>
                 <small>Duration</small>
                 <strong>
@@ -660,7 +707,11 @@ export function Inspector({
                 </strong>
               </div>
             </div>
-            {node.error && <p className="node-failure rounded-[7px] border border-danger p-2.5 text-[10px] text-danger [overflow-wrap:anywhere]">{node.error}</p>}
+            {node.error && (
+              <p className="node-failure rounded-[7px] border border-danger p-2.5 text-[10px] text-danger [overflow-wrap:anywhere]">
+                {node.error}
+              </p>
+            )}
             {node.trace && (
               <section>
                 <h3>Trace summary</h3>
@@ -698,8 +749,22 @@ export function Inspector({
                 ))}
               </div>
             ) : null}
-            {activePageError && <p className="inspector-error rounded-[7px] border border-danger p-2.5 text-[10px] text-danger [overflow-wrap:anywhere]" role="alert">{activePageError}</p>}
-            {inputOutputError && <p className="inspector-error rounded-[7px] border border-danger p-2.5 text-[10px] text-danger [overflow-wrap:anywhere]" role="alert">{inputOutputError}</p>}
+            {activePageError && (
+              <p
+                className="inspector-error rounded-[7px] border border-danger p-2.5 text-[10px] text-danger [overflow-wrap:anywhere]"
+                role="alert"
+              >
+                {activePageError}
+              </p>
+            )}
+            {inputOutputError && (
+              <p
+                className="inspector-error rounded-[7px] border border-danger p-2.5 text-[10px] text-danger [overflow-wrap:anywhere]"
+                role="alert"
+              >
+                {inputOutputError}
+              </p>
+            )}
             {inputOutputLoading ? (
               <p className="inspector-loading text-[11px] text-muted italic" role="status">
                 Loading retained {tab === "inputs" ? "inputs" : "output"}…
@@ -730,7 +795,9 @@ export function Inspector({
             <div className="trace-toolbar flex items-center justify-between gap-2 [&_h3]:mt-0 [&_h3]:mb-[3px] [&_span]:font-mono [&_span]:text-[8px] [&_span]:text-muted">
               <div>
                 <h3>RunTrace</h3>
-                <span>{turns.length} retained {turns.length === 1 ? "turn" : "turns"}</span>
+                <span>
+                  {turns.length} retained {turns.length === 1 ? "turn" : "turns"}
+                </span>
               </div>
               <button
                 type="button"
@@ -740,18 +807,31 @@ export function Inspector({
                 {following ? "Following live" : "Follow latest"}
               </button>
             </div>
-            {activePageError && <p className="inspector-error rounded-[7px] border border-danger p-2.5 text-[10px] text-danger [overflow-wrap:anywhere]" role="alert">{activePageError}</p>}
+            {activePageError && (
+              <p
+                className="inspector-error rounded-[7px] border border-danger p-2.5 text-[10px] text-danger [overflow-wrap:anywhere]"
+                role="alert"
+              >
+                {activePageError}
+              </p>
+            )}
             {pageLoading && !combinedEvents.length && (
-              <p className="inspector-loading text-[11px] text-muted italic" role="status">Loading retained trace…</p>
+              <p className="inspector-loading text-[11px] text-muted italic" role="status">
+                Loading retained trace…
+              </p>
             )}
             <div
               className="inspector-trace-explorer min-h-48 min-w-0 flex-[1_1_auto] overflow-auto rounded-[7px] border border-line bg-panel p-2"
               ref={traceScrollElement}
               onScroll={(event) => {
                 const element = event.currentTarget;
-                const distanceFromBottom = element.scrollHeight - element.scrollTop - element.clientHeight;
+                const distanceFromBottom =
+                  element.scrollHeight - element.scrollTop - element.clientHeight;
                 if (distanceFromBottom > SCROLL_LOAD_THRESHOLD_PX) setFollowing(false);
-                if (distanceFromBottom <= SCROLL_LOAD_THRESHOLD_PX && activeEventPage.nextPageToken) {
+                if (
+                  distanceFromBottom <= SCROLL_LOAD_THRESHOLD_PX &&
+                  activeEventPage.nextPageToken
+                ) {
                   loadMoreEvents();
                 }
               }}
@@ -769,10 +849,14 @@ export function Inspector({
                 }}
               />
               {pageLoading && combinedEvents.length > 0 && (
-                <p className="inspector-loading text-[11px] text-muted italic" role="status">Loading more retained trace…</p>
+                <p className="inspector-loading text-[11px] text-muted italic" role="status">
+                  Loading more retained trace…
+                </p>
               )}
               {!pageLoading && !activeEventPage.nextPageToken && combinedEvents.length > 0 && (
-                <p className="inspector-end-state mt-2 text-center font-mono text-[8px] text-muted uppercase">End of retained trace</p>
+                <p className="inspector-end-state mt-2 text-center font-mono text-[8px] text-muted uppercase">
+                  End of retained trace
+                </p>
               )}
             </div>
             {activeEventPage.nextPageToken && (
@@ -788,7 +872,6 @@ export function Inspector({
             )}
           </section>
         )}
-
       </div>
     </aside>
   );

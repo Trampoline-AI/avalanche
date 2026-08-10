@@ -29,11 +29,7 @@ import {
   type NodeProps,
 } from "@xyflow/react";
 
-import type {
-  FlowInfoMsg,
-  NodeSnapshotMsg,
-  WorkflowTopologyMsg,
-} from "./generated/operator";
+import type { FlowInfoMsg, NodeSnapshotMsg, WorkflowTopologyMsg } from "./generated/operator";
 import { isUnknownRecord } from "./guards";
 
 interface FieldMetadata {
@@ -84,11 +80,11 @@ function skills(value: unknown): SkillMetadata[] {
   return value.flatMap((item) =>
     isUnknownRecord(item) && typeof item.name === "string"
       ? [
-        {
-          name: item.name,
-          instructions: typeof item.instructions === "string" ? item.instructions : "",
-        },
-      ]
+          {
+            name: item.name,
+            instructions: typeof item.instructions === "string" ? item.instructions : "",
+          },
+        ]
       : [],
   );
 }
@@ -98,11 +94,11 @@ function tools(value: unknown): ToolMetadata[] {
   return value.flatMap((item) =>
     isUnknownRecord(item) && typeof item.name === "string"
       ? [
-        {
-          name: item.name,
-          description: typeof item.description === "string" ? item.description : "",
-        },
-      ]
+          {
+            name: item.name,
+            description: typeof item.description === "string" ? item.description : "",
+          },
+        ]
       : [],
   );
 }
@@ -120,8 +116,7 @@ function fields(value: unknown): FieldMetadata[] {
             : typeof item.annotation === "string"
               ? item.annotation
               : undefined,
-        description:
-          typeof item.description === "string" ? item.description : undefined,
+        description: typeof item.description === "string" ? item.description : undefined,
       },
     ];
   });
@@ -134,8 +129,7 @@ export function parseAgentDeclaration(raw: string | undefined): AgentDeclaration
     if (!isUnknownRecord(metadata)) return undefined;
     const signature = isUnknownRecord(metadata.signature) ? metadata.signature : {};
     return {
-      instructions:
-        typeof signature.instructions === "string" ? signature.instructions : "",
+      instructions: typeof signature.instructions === "string" ? signature.instructions : "",
       inputs: fields(signature.inputs),
       outputs: fields(signature.outputs),
       model: metadata.models,
@@ -167,11 +161,8 @@ function firstInstructionLine(instructions: string | undefined): string | undefi
   return instructionLine || undefined;
 }
 
-
 const NODE_DETAIL_ZOOM_THRESHOLD = 1.0;
 const FOCUSED_NODE_ZOOM = 1.2;
-
-
 
 const NodeDuration = memo(
   ({
@@ -220,7 +211,9 @@ const NodeDuration = memo(
             )
           : 0;
     return (
-      <span className={`node-duration absolute font-mono text-muted transition-[font-size] duration-150 ease-out motion-reduce:transition-none ${compact ? "top-3 right-3 text-sm" : "top-4 right-4 text-[9px]"}`}>
+      <span
+        className={`node-duration absolute font-mono text-muted transition-[font-size] duration-150 ease-out motion-reduce:transition-none ${compact ? "top-3 right-3 text-sm" : "top-4 right-4 text-[9px]"}`}
+      >
         {elapsedSeconds.toFixed(1)}s
       </span>
     );
@@ -294,11 +287,17 @@ const WorkflowNodeCard = memo(({ data, selected }: NodeProps<Node<CardData>>) =>
         aria-label={`Inspect ${data.label}${data.identity ? ` ${data.identity}` : ""}`}
       />
       <header
-        className={`node-header relative flex flex-col ${isCompact
-          ? "min-h-0 items-center justify-center gap-0 pr-0 text-center"
-          : "min-h-10 items-start gap-1"}`}
+        className={`node-header relative flex flex-col ${
+          isCompact
+            ? "min-h-0 items-center justify-center gap-0 pr-0 text-center"
+            : "min-h-10 items-start gap-1"
+        }`}
       >
-        <span className={`node-card-meta node-kicker font-mono text-[8px] tracking-[.12em] uppercase ${data.isAgent ? "text-agent" : "text-secondary"}`}>{data.isAgent ? "agent" : data.nodeType}</span>
+        <span
+          className={`node-card-meta node-kicker font-mono text-[8px] tracking-[.12em] uppercase ${data.isAgent ? "text-agent" : "text-secondary"}`}
+        >
+          {data.isAgent ? "agent" : data.nodeType}
+        </span>
         <strong
           className={`node-title block self-stretch ${isCompact ? "text-xl" : "pr-[76px] text-sm"} leading-tight text-ink`}
         >
@@ -326,8 +325,18 @@ const WorkflowNodeCard = memo(({ data, selected }: NodeProps<Node<CardData>>) =>
             {data.instructionLine}
           </span>
         )}
-        {data.identity && <span className="node-card-meta node-identity font-mono text-[9px] text-secondary">{data.identity}</span>}
-        {data.status && <span className={`node-card-meta node-status absolute top-[19px] right-0 font-mono text-[8px] uppercase ${statusColorClass}`}>{data.status}</span>}
+        {data.identity && (
+          <span className="node-card-meta node-identity font-mono text-[9px] text-secondary">
+            {data.identity}
+          </span>
+        )}
+        {data.status && (
+          <span
+            className={`node-card-meta node-status absolute top-[19px] right-0 font-mono text-[8px] uppercase ${statusColorClass}`}
+          >
+            {data.status}
+          </span>
+        )}
       </header>
       {data.startedAt && (
         <NodeDuration
@@ -340,17 +349,26 @@ const WorkflowNodeCard = memo(({ data, selected }: NodeProps<Node<CardData>>) =>
       )}
       {data.declaration && (
         <div
-          className={`node-card-details field-grid grid grid-cols-[minmax(0,1fr)_minmax(0,1fr)] overflow-hidden ${isCompact
-            ? "min-h-0! max-h-0! gap-0! border-t-transparent! pt-0! opacity-0 pointer-events-none"
-            : "min-h-[58px] gap-6 border-t border-line pt-2.5"
-            }`}
+          className={`node-card-details field-grid grid grid-cols-[minmax(0,1fr)_minmax(0,1fr)] overflow-hidden ${
+            isCompact
+              ? "min-h-0! max-h-0! gap-0! border-t-transparent! pt-0! opacity-0 pointer-events-none"
+              : "min-h-[58px] gap-6 border-t border-line pt-2.5"
+          }`}
         >
-          <section className="node-fields node-inputs min-w-0 overflow-hidden [&>small]:mb-1.5 [&>small]:block [&>small]:font-mono [&>small]:text-[7px] [&>small]:tracking-[.08em] [&>small]:text-muted [&>small]:uppercase" aria-label="Inputs">
+          <section
+            className="node-fields node-inputs min-w-0 overflow-hidden [&>small]:mb-1.5 [&>small]:block [&>small]:font-mono [&>small]:text-[7px] [&>small]:tracking-[.08em] [&>small]:text-muted [&>small]:uppercase"
+            aria-label="Inputs"
+          >
             <small>Inputs</small>
             {data.declaration.inputs.length ? (
               data.declaration.inputs.map((field) => (
-                <span className="field node-field mt-[3px] flex min-h-3.5 min-w-0 items-start justify-start gap-1 font-mono text-[7px]/[1.35] text-[#36423c] [&>code]:min-w-0 [&>code]:[overflow-wrap:anywhere] [&>code]:text-[7px] [&>code]:text-muted" key={`input-${field.name}`}>
-                  <span className="node-field-name min-w-0 [overflow-wrap:anywhere]">{field.name}</span>
+                <span
+                  className="field node-field mt-[3px] flex min-h-3.5 min-w-0 items-start justify-start gap-1 font-mono text-[7px]/[1.35] text-[#36423c] [&>code]:min-w-0 [&>code]:[overflow-wrap:anywhere] [&>code]:text-[7px] [&>code]:text-muted"
+                  key={`input-${field.name}`}
+                >
+                  <span className="node-field-name min-w-0 [overflow-wrap:anywhere]">
+                    {field.name}
+                  </span>
                   {field.type && <code>{field.type}</code>}
                 </span>
               ))
@@ -358,12 +376,20 @@ const WorkflowNodeCard = memo(({ data, selected }: NodeProps<Node<CardData>>) =>
               <span className="node-field-empty font-mono text-[7px] text-muted">None</span>
             )}
           </section>
-          <section className="node-fields node-outputs min-w-0 overflow-hidden text-right [&>small]:mb-1.5 [&>small]:block [&>small]:font-mono [&>small]:text-[7px] [&>small]:tracking-[.08em] [&>small]:text-muted [&>small]:uppercase" aria-label="Outputs">
+          <section
+            className="node-fields node-outputs min-w-0 overflow-hidden text-right [&>small]:mb-1.5 [&>small]:block [&>small]:font-mono [&>small]:text-[7px] [&>small]:tracking-[.08em] [&>small]:text-muted [&>small]:uppercase"
+            aria-label="Outputs"
+          >
             <small>Outputs</small>
             {data.declaration.outputs.length ? (
               data.declaration.outputs.map((field) => (
-                <span className="field node-field mt-[3px] flex min-h-3.5 min-w-0 items-start justify-end gap-1 font-mono text-[7px]/[1.35] text-[#36423c] [&>code]:min-w-0 [&>code]:[overflow-wrap:anywhere] [&>code]:text-[7px] [&>code]:text-muted" key={`output-${field.name}`}>
-                  <span className="node-field-name min-w-0 [overflow-wrap:anywhere]">{field.name}</span>
+                <span
+                  className="field node-field mt-[3px] flex min-h-3.5 min-w-0 items-start justify-end gap-1 font-mono text-[7px]/[1.35] text-[#36423c] [&>code]:min-w-0 [&>code]:[overflow-wrap:anywhere] [&>code]:text-[7px] [&>code]:text-muted"
+                  key={`output-${field.name}`}
+                >
+                  <span className="node-field-name min-w-0 [overflow-wrap:anywhere]">
+                    {field.name}
+                  </span>
                   {field.type && <code>{field.type}</code>}
                 </span>
               ))
@@ -402,15 +428,7 @@ const SKIP_EDGE_CLEARANCE = 56;
 const SKIP_EDGE_LANE_GAP = 32;
 
 const SkipEdge = memo(
-  ({
-    data,
-    markerEnd,
-    sourceX,
-    sourceY,
-    style,
-    targetX,
-    targetY,
-  }: EdgeProps<SkipEdge>) => {
+  ({ data, markerEnd, sourceX, sourceY, style, targetX, targetY }: EdgeProps<SkipEdge>) => {
     const graphBottom = useStore((state) =>
       Math.max(
         ...Array.from(
@@ -433,7 +451,6 @@ SkipEdge.displayName = "SkipEdge";
 const NODE_TYPES = { workflow: WorkflowNodeCard };
 const EDGE_TYPES = { skip: SkipEdge };
 const FIT_VIEW_OPTIONS = { padding: 0.24 };
-
 
 function invocationIdentity(nodeId: string, label: string): string {
   const suffix = nodeId.startsWith(`${label}_`) ? nodeId.slice(label.length + 1) : "";
@@ -477,7 +494,7 @@ function createGraphLayout(topology: Pick<TopologyView, "nodeIds" | "graph">): G
         nodeId,
         {
           x: Number(depth) * 500,
-          y: row * 220 - ((nodeIds.length - 1) * 110),
+          y: row * 220 - (nodeIds.length - 1) * 110,
         },
       ]),
     ),
@@ -614,7 +631,16 @@ function GraphCanvasView({
       };
     });
     return nodes;
-  }, [agentNodeIds, layout.positions, openCallbacks, runNodes, runTopology, selectedNodeId, topology, workflow]);
+  }, [
+    agentNodeIds,
+    layout.positions,
+    openCallbacks,
+    runNodes,
+    runTopology,
+    selectedNodeId,
+    topology,
+    workflow,
+  ]);
 
   return (
     <ReactFlow
@@ -634,12 +660,18 @@ function GraphCanvasView({
       proOptions={{ hideAttribution: true }}
     >
       {topLeftPanel && (
-        <Panel position="top-left" className="dag-panel dag-runs-panel nodrag nopan nowheel m-3.5 flex items-start gap-2">
+        <Panel
+          position="top-left"
+          className="dag-panel dag-runs-panel nodrag nopan nowheel m-3.5 flex items-start gap-2"
+        >
           {topLeftPanel}
         </Panel>
       )}
       {bottomRightPanel && (
-        <Panel position="bottom-right" className="dag-panel dag-actions-panel nodrag nopan m-3.5 rounded-[9px] border border-line bg-[rgba(255,255,255,.96)] p-[7px] shadow-[0_6px_20px_rgba(20,31,26,.1)]">
+        <Panel
+          position="bottom-right"
+          className="dag-panel dag-actions-panel nodrag nopan m-3.5 rounded-[9px] border border-line bg-[rgba(255,255,255,.96)] p-[7px] shadow-[0_6px_20px_rgba(20,31,26,.1)]"
+        >
           {bottomRightPanel}
         </Panel>
       )}
@@ -649,7 +681,10 @@ function GraphCanvasView({
         gap={isCurrentWorkflow ? 18 : 24}
         size={isCurrentWorkflow ? 2.5 : 1}
       />
-      <Controls className="overflow-hidden rounded-lg border! border-line! bg-white! shadow-[0_4px_14px_rgba(20,31,26,.08)]! [&_.react-flow__controls-button]:border-b-line! [&_.react-flow__controls-button]:bg-white! [&_.react-flow__controls-button]:fill-secondary! [&_.react-flow__controls-button:hover]:bg-[#f1f4f2]!" showInteractive={false} />
+      <Controls
+        className="overflow-hidden rounded-lg border! border-line! bg-white! shadow-[0_4px_14px_rgba(20,31,26,.08)]! [&_.react-flow__controls-button]:border-b-line! [&_.react-flow__controls-button]:bg-white! [&_.react-flow__controls-button]:fill-secondary! [&_.react-flow__controls-button:hover]:bg-[#f1f4f2]!"
+        showInteractive={false}
+      />
     </ReactFlow>
   );
 }

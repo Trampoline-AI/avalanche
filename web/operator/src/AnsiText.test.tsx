@@ -5,7 +5,11 @@ import { AnsiText } from "./AnsiText";
 
 describe("AnsiText", () => {
   it("renders basic ANSI styles and resets them", () => {
-    render(<pre data-testid="ansi-output"><AnsiText text={"before \u001b[1;32msuccess\u001b[0m after"} /></pre>);
+    render(
+      <pre data-testid="ansi-output">
+        <AnsiText text={"before \u001b[1;32msuccess\u001b[0m after"} />
+      </pre>,
+    );
 
     expect(screen.getByText("success")).toHaveStyle({
       color: "rgb(22, 128, 93)",
