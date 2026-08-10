@@ -358,6 +358,10 @@ message CatalogReplaced {
   CatalogSnapshotMsg catalog = 1;
 }
 
+message WorkflowReloadStatus {
+  bool reloading = 1;
+}
+
 message OperatorUpdate {
   uint64 sequence = 1;
   oneof change {
@@ -368,6 +372,7 @@ message OperatorUpdate {
     AgentEventAppended agent_event_appended = 6;
     TraceFinalized trace_finalized = 7;
     CatalogReplaced catalog_replaced = 8;
+    WorkflowReloadStatus workflow_reload_status = 9;
   }
 }
 

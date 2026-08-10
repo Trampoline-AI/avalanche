@@ -460,6 +460,21 @@ export function App({ api, operatorPort = "7433" }: AppProps) {
           </>
         )}
       </main>
+      {state.workflowReloading && (
+        <div
+          className="workflow-reload-indicator pointer-events-none fixed inset-x-0 bottom-5 z-50 flex justify-center px-4"
+          role="status"
+          aria-live="polite"
+        >
+          <div className="flex items-center gap-2.5 rounded-lg border border-white/10 bg-[#1d2923] px-3.5 py-2.5 text-[11px] font-medium tracking-[-0.01em] text-white shadow-[0_10px_30px_rgba(15,25,20,.22)]">
+            <span className="relative flex size-2" aria-hidden="true">
+              <span className="absolute inline-flex size-full animate-ping rounded-full bg-acid opacity-60 motion-reduce:animate-none" />
+              <span className="relative inline-flex size-2 rounded-full bg-acid" />
+            </span>
+            Workflow change detected. Scanning...
+          </div>
+        </div>
+      )}
     </div>
   );
 }

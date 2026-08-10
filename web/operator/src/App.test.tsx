@@ -55,6 +55,7 @@ const projectionHarness = vi.hoisted(() => ({
     operatorInstanceId: "operator-1",
     sequence: "1",
     connection: "live",
+    workflowReloading: false,
   },
   selectRun: vi.fn(async (_runId?: string) => undefined),
   startRun: vi.fn(async () => "run-1"),
@@ -155,6 +156,7 @@ describe("App", () => {
     projectionHarness.state.liveLogs = {};
     projectionHarness.state.catalog.revision = "1";
     projectionHarness.state.sequence = "1";
+    projectionHarness.state.workflowReloading = false;
     Object.defineProperty(window, "innerWidth", {
       configurable: true,
       writable: true,
@@ -181,6 +183,22 @@ describe("App", () => {
       "min-h-screen",
     );
     expect(container.querySelector(".topbar")).not.toBeInTheDocument();
+  });
+
+  it("shows a bottom update card while workflows are reloading", () => {
+    const view = render(<App api={new GrpcWebOperatorApi("http://localhost")} />);
+    expect(screen.queryByRole("status")).not.toBeInTheDocument();
+
+    projectionHarness.state.workflowReloading = true;
+    view.rerender(<App api={new GrpcWebOperatorApi("http://localhost")} />);
+
+    const indicator = screen.getByRole("status");
+    expect(indicator).toBeVisible();
+    expect(indicator).toHaveClass("bottom-5");
+
+    projectionHarness.state.workflowReloading = false;
+    view.rerender(<App api={new GrpcWebOperatorApi("http://localhost")} />);
+    expect(screen.queryByRole("status")).not.toBeInTheDocument();
   });
 
   it("keeps Explorer accessible through the narrow navigation toggle", () => {

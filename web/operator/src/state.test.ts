@@ -144,6 +144,31 @@ afterEach(() => {
 });
 
 describe("projectionReducer", () => {
+  it("tracks workflow reload status updates", () => {
+    const state = projectionReducer(emptyProjection, { type: "baseline", baseline });
+    const reloading = projectionReducer(state, {
+      type: "envelopes",
+      envelopes: [
+        envelope("2", {
+          oneofKind: "workflowReloadStatus",
+          workflowReloadStatus: { reloading: true },
+        }),
+      ],
+    });
+    const finished = projectionReducer(reloading, {
+      type: "envelopes",
+      envelopes: [
+        envelope("3", {
+          oneofKind: "workflowReloadStatus",
+          workflowReloadStatus: { reloading: false },
+        }),
+      ],
+    });
+
+    expect(reloading.workflowReloading).toBe(true);
+    expect(finished.workflowReloading).toBe(false);
+  });
+
   it("installs summary-only baselines and clears selected ephemeral state", () => {
     const previous = {
       ...selectedState(),

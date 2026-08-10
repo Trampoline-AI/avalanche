@@ -53,6 +53,7 @@ from .models import (
     TraceFinalized,
     WorkflowDiscoveryDiagnostic,
     WorkflowInfo,
+    WorkflowReloadStatus,
 )
 from .proto import operator_pb2 as pb
 from .proto import operator_pb2_grpc as pb_grpc
@@ -1820,6 +1821,8 @@ class GrpcStateProvider:
             ):
                 raise _RunUpdateResetError("catalog update marker mismatch")
             self._install_catalog_locked(catalog)
+            run = None
+        elif isinstance(change, WorkflowReloadStatus):
             run = None
         elif isinstance(change, RunCreated):
             run = _run_from_created(envelope.operator_instance_id, change)

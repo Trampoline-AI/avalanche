@@ -32,6 +32,7 @@ export interface OperatorProjection {
   operatorInstanceId: string;
   sequence: string;
   connection: "connecting" | "live" | "reconnecting";
+  workflowReloading: boolean;
   error?: string;
   action?: { kind: "start" | "cancel"; target: string };
 }
@@ -56,6 +57,7 @@ export const emptyProjection: OperatorProjection = {
   operatorInstanceId: "",
   sequence: "0",
   connection: "connecting",
+  workflowReloading: false,
 };
 
 interface BoundedAppend<T> {
@@ -135,6 +137,10 @@ function applyEnvelope(
 
   const next: OperatorProjection = { ...state, sequence: update.sequence, error: undefined };
   const change = update.change;
+  if (change.oneofKind === "workflowReloadStatus") {
+    next.workflowReloading = change.workflowReloadStatus.reloading;
+    return next;
+  }
   if (change.oneofKind === "catalogReplaced") {
     if (change.catalogReplaced.catalog) next.catalog = change.catalogReplaced.catalog;
     return next;

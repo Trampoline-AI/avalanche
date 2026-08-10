@@ -1021,6 +1021,15 @@ export interface CatalogReplaced {
     catalog?: CatalogSnapshotMsg;
 }
 /**
+ * @generated from protobuf message avalanche.operator.WorkflowReloadStatus
+ */
+export interface WorkflowReloadStatus {
+    /**
+     * @generated from protobuf field: bool reloading = 1
+     */
+    reloading: boolean;
+}
+/**
  * @generated from protobuf message avalanche.operator.OperatorUpdate
  */
 export interface OperatorUpdate {
@@ -1073,6 +1082,12 @@ export interface OperatorUpdate {
          * @generated from protobuf field: avalanche.operator.CatalogReplaced catalog_replaced = 8
          */
         catalogReplaced: CatalogReplaced;
+    } | {
+        oneofKind: "workflowReloadStatus";
+        /**
+         * @generated from protobuf field: avalanche.operator.WorkflowReloadStatus workflow_reload_status = 9
+         */
+        workflowReloadStatus: WorkflowReloadStatus;
     } | {
         oneofKind: undefined;
     };
@@ -4389,6 +4404,53 @@ class CatalogReplaced$Type extends MessageType<CatalogReplaced> {
  */
 export const CatalogReplaced = new CatalogReplaced$Type();
 // @generated message type with reflection information, may provide speed optimized methods
+class WorkflowReloadStatus$Type extends MessageType<WorkflowReloadStatus> {
+    constructor() {
+        super("avalanche.operator.WorkflowReloadStatus", [
+            { no: 1, name: "reloading", kind: "scalar", T: 8 /*ScalarType.BOOL*/ }
+        ]);
+    }
+    create(value?: PartialMessage<WorkflowReloadStatus>): WorkflowReloadStatus {
+        const message = globalThis.Object.create((this.messagePrototype!));
+        message.reloading = false;
+        if (value !== undefined)
+            reflectionMergePartial<WorkflowReloadStatus>(this, message, value);
+        return message;
+    }
+    internalBinaryRead(reader: IBinaryReader, length: number, options: BinaryReadOptions, target?: WorkflowReloadStatus): WorkflowReloadStatus {
+        let message = target ?? this.create(), end = reader.pos + length;
+        while (reader.pos < end) {
+            let [fieldNo, wireType] = reader.tag();
+            switch (fieldNo) {
+                case /* bool reloading */ 1:
+                    message.reloading = reader.bool();
+                    break;
+                default:
+                    let u = options.readUnknownField;
+                    if (u === "throw")
+                        throw new globalThis.Error(`Unknown field ${fieldNo} (wire type ${wireType}) for ${this.typeName}`);
+                    let d = reader.skip(wireType);
+                    if (u !== false)
+                        (u === true ? UnknownFieldHandler.onRead : u)(this.typeName, message, fieldNo, wireType, d);
+            }
+        }
+        return message;
+    }
+    internalBinaryWrite(message: WorkflowReloadStatus, writer: IBinaryWriter, options: BinaryWriteOptions): IBinaryWriter {
+        /* bool reloading = 1; */
+        if (message.reloading !== false)
+            writer.tag(1, WireType.Varint).bool(message.reloading);
+        let u = options.writeUnknownFields;
+        if (u !== false)
+            (u == true ? UnknownFieldHandler.onWrite : u)(this.typeName, message, writer);
+        return writer;
+    }
+}
+/**
+ * @generated MessageType for protobuf message avalanche.operator.WorkflowReloadStatus
+ */
+export const WorkflowReloadStatus = new WorkflowReloadStatus$Type();
+// @generated message type with reflection information, may provide speed optimized methods
 class OperatorUpdate$Type extends MessageType<OperatorUpdate> {
     constructor() {
         super("avalanche.operator.OperatorUpdate", [
@@ -4399,7 +4461,8 @@ class OperatorUpdate$Type extends MessageType<OperatorUpdate> {
             { no: 5, name: "log_appended", kind: "message", oneof: "change", T: () => LogAppended },
             { no: 6, name: "agent_event_appended", kind: "message", oneof: "change", T: () => AgentEventAppended },
             { no: 7, name: "trace_finalized", kind: "message", oneof: "change", T: () => TraceFinalized },
-            { no: 8, name: "catalog_replaced", kind: "message", oneof: "change", T: () => CatalogReplaced }
+            { no: 8, name: "catalog_replaced", kind: "message", oneof: "change", T: () => CatalogReplaced },
+            { no: 9, name: "workflow_reload_status", kind: "message", oneof: "change", T: () => WorkflowReloadStatus }
         ]);
     }
     create(value?: PartialMessage<OperatorUpdate>): OperatorUpdate {
@@ -4460,6 +4523,12 @@ class OperatorUpdate$Type extends MessageType<OperatorUpdate> {
                         catalogReplaced: CatalogReplaced.internalBinaryRead(reader, reader.uint32(), options, (message.change as any).catalogReplaced)
                     };
                     break;
+                case /* avalanche.operator.WorkflowReloadStatus workflow_reload_status */ 9:
+                    message.change = {
+                        oneofKind: "workflowReloadStatus",
+                        workflowReloadStatus: WorkflowReloadStatus.internalBinaryRead(reader, reader.uint32(), options, (message.change as any).workflowReloadStatus)
+                    };
+                    break;
                 default:
                     let u = options.readUnknownField;
                     if (u === "throw")
@@ -4496,6 +4565,9 @@ class OperatorUpdate$Type extends MessageType<OperatorUpdate> {
         /* avalanche.operator.CatalogReplaced catalog_replaced = 8; */
         if (message.change.oneofKind === "catalogReplaced")
             CatalogReplaced.internalBinaryWrite(message.change.catalogReplaced, writer.tag(8, WireType.LengthDelimited).fork(), options).join();
+        /* avalanche.operator.WorkflowReloadStatus workflow_reload_status = 9; */
+        if (message.change.oneofKind === "workflowReloadStatus")
+            WorkflowReloadStatus.internalBinaryWrite(message.change.workflowReloadStatus, writer.tag(9, WireType.LengthDelimited).fork(), options).join();
         let u = options.writeUnknownFields;
         if (u !== false)
             (u == true ? UnknownFieldHandler.onWrite : u)(this.typeName, message, writer);

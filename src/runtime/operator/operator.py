@@ -63,6 +63,7 @@ from .models import (
     TraceHeader,
     WorkflowDiscoveryDiagnostic,
     WorkflowInfo,
+    WorkflowReloadStatus,
     WorkflowTopology,
 )
 from .registry import AmbiguousWorkflow, WorkflowRegistry
@@ -1622,6 +1623,13 @@ class Operator:
             logger.info("Workflow watcher stopped")
 
     def _refresh_workflows(self, changed_files: tuple[str, ...] = ()) -> None:
+        self._publish_workflow_reload_status(reloading=True)
+        try:
+            self._reload_workflow_catalog(changed_files)
+        finally:
+            self._publish_workflow_reload_status(reloading=False)
+
+    def _reload_workflow_catalog(self, changed_files: tuple[str, ...] = ()) -> None:
         previous = self._registry.view
         logger.info(
             "Workflow reload started: revision=%d changed_files=%s",
@@ -2621,6 +2629,32 @@ class Operator:
             update = OperatorUpdate(
                 sequence=self._sequence,
                 change=CatalogReplaced(catalog=catalog),
+            )
+            self._stream_history.append(update)
+            envelope = OperatorUpdateEnvelope(
+                operator_instance_id=self._operator_instance_id,
+                update=update,
+            )
+            notifications = _RunNotifications(
+                sequence=self._sequence,
+                run_callbacks=(),
+                detail_callbacks=(),
+                log_callbacks=(),
+                update_subscribers=tuple(
+                    (subscription, (envelope,)) for subscription in self._update_subscribers
+                ),
+                ready=threading.Event(),
+                delivered=threading.Event(),
+            )
+            self._notification_queue.put_nowait(notifications)
+        self._wait_for_notifications(notifications)
+
+    def _publish_workflow_reload_status(self, *, reloading: bool) -> None:
+        with self._lock:
+            self._sequence += 1
+            update = OperatorUpdate(
+                sequence=self._sequence,
+                change=WorkflowReloadStatus(reloading=reloading),
             )
             self._stream_history.append(update)
             envelope = OperatorUpdateEnvelope(
