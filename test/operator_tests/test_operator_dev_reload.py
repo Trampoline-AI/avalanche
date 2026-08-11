@@ -943,11 +943,11 @@ def test_watcher_refreshes_cron_imported_from_live_package_root(tmp_path):
         operator.close()
 
 
-def test_watch_policy_includes_source_resources_and_excludes_generated_secrets(tmp_path):
+def test_watch_policy_includes_python_sources_and_excludes_non_source_files(tmp_path):
     source = tmp_path / "source"
     source.mkdir()
     assert is_source_path_included(source / "flow.py", (source,))
-    assert is_source_path_included(source / "schedule.json", (source,))
+    assert not is_source_path_included(source / "schedule.json", (source,))
     assert not is_source_path_included(source / "__pycache__" / "flow.pyc", (source,))
     assert not is_source_path_included(
         source / ".avalanche" / "cache" / "operator.json", (source,)
