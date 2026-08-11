@@ -1,579 +1,428 @@
 # Architecture
 
-This document describes the implemented Avalanche architecture in this repository.
+Avalanche is a local-first system for defining typed Python workflow DAGs,
+executing them locally or through Ray, and controlling those runs through a
+local operator. The system has explicit authoring, execution, control-plane,
+and presentation boundaries. It does not provide production authentication,
+multi-tenancy, durable recovery, or a deployment control plane.
 
-## Bottom line
-
-Avalanche combines a Python flow runtime, an operator daemon, and a terminal UI.
-The TUI does not execute work directly. In operator-connected mode, the TUI talks
-to the operator over gRPC; the operator discovers flows, manages runs, and
-executes work through a pluggable executor such as `LocalExecutor` or
-`RayExecutor`.
-
-## Local development modes
-
-Avalanche exposes the same workflow runtime through two local development modes.
-
-### Embedded mode
+## System at a glance
 
 ```text
-Python flow program -> Workflow.run() -> RunHandle -> LocalExecutor or RayExecutor
+                         authoring and execution plane
+┌──────────────────────────────────────────────────────────────────────────┐
+│ Python workflow module                                                    │
+│  @workflow + @source/@step/@agent_step/@dest                              │
+│          │                                                                │
+│          ├── embedded: Workflow.run() → RunHandle → LocalExecutor/Ray     │
+│          │                                                                │
+│          └── operator: discovery worker → descriptor catalog              │
+└──────────┼───────────────────────────────────────────────────────────────┘
+           │ serializable descriptors and source locations
+           v
+┌──────────────────────────────────────────────────────────────────────────┐
+│ Local operator                                                           │
+│  WorkflowRegistry · discovery cache · Python source watcher · scheduler   │
+│  webhook ingress · gRPC server · bounded run/log/detail state             │
+│          │                                                                │
+│          ├── spawn one coordinator process per run                        │
+│          │       └── Workflow.run() → LocalExecutor or RayExecutor        │
+│          │                                                                │
+│          └── gRPC OperatorService                                         │
+└───────┬───────────────────────────────────────────────────────┬──────────┘
+        │ native gRPC                                            │ loopback HTTP +
+        │                                                        │ gRPC-Web proxy
+        v                                                        v
+┌─────────────────────┐                              ┌──────────────────────┐
+│ CLI and Textual TUI │                              │ Browser UI           │
+│ ava run/result/tui  │                              │ ava web / ava dev     │
+└─────────────────────┘                              └──────────────────────┘
 ```
 
-The program that declares the flow builds it and calls `Workflow.run()` directly.
-The call synchronously allocates the run ID and returns a process-local
-`RunHandle`; one named non-daemon driver thread executes the existing blocking
-driver. The program explicitly waits with `.result()` or `await`. Handle
-cancellation is cooperative between node submissions and does not interrupt an
-active thread or Ray task. No operator, gRPC service, CLI client, or connected
-TUI participates.
+The operator is the control plane. It owns discovery, run coordination,
+operator-visible state, result retention, scheduling, webhook routing, and
+updates. Executors are the execution plane. The browser UI and TUI are clients;
+neither imports workflow modules or executes user tasks itself.
 
-```bash
-uv run python examples/operator_workflow.py
-```
+## Local modes
 
-### Operator-managed mode
+### Embedded execution
 
-```text
-CLI or TUI -> gRPC -> Operator -> Workflow.run().result() -> LocalExecutor or RayExecutor
-```
-
-The operator runs separately, imports and discovers configured flow files, and
-owns run state, logs, cancellation, schedules, and file watching. The `ava run`
-command and connected TUI are control-plane clients. The TUI never executes the
-flow itself.
-
-```bash
-# Terminal 1
-uv run ava operator --flows examples --port 7433
-
-# Terminal 2: choose the CLI or TUI
-uv run ava run operator_demo_workflow --connect localhost:7433
-uv run ava tui --connect localhost:7433
-```
-
-`ava dev --flows examples` is a convenience form of operator-managed mode. It
-starts an operator subprocess and a connected TUI together. The operator still
-executes each discovered flow by calling the same `Workflow.run()` path used in
-embedded mode and explicitly waits on its handle. Operator state, logs, and
-control remain the externally managed run projection; the embedded handle is
-not a durable registry, persisted result, or recovery mechanism.
-
-## High-level component model
-
-```text
-TUI <> Runtime
-
-┌──────────────────────────────┐
-│ TUI                          │
-│ - AvalancheApp               │
-│ - UIStore                    │
-│ - screens/widgets            │
-│ - StateProvider              │
-│ - mock/gRPC providers        │
-│ - shared state model imports │
-└───────────────┬──────────────┘
-                ⇅ state API / gRPC
-                ⇅ start, cancel, list, stream
-┌───────────────┴──────────────┐
-│ Runtime                      │
-│ ┌──────────────────────────┐ │
-│ │ Operator                 │ │
-│ │ - CLI entrypoint         │ │
-│ │ - gRPC service           │ │
-│ │ - WorkflowRegistry       │ │
-│ │ - scheduler / watcher    │ │
-│ │ - run state / log capture│ │
-│ └────────────┬─────────────┘ │
-│              ⇅ executor API  │
-│              ⇅ submit/get    │
-│ ┌────────────┴─────────────┐ │
-│ │ Executor ∈ {Local, Ray}  │ │
-│ │ - Ray when selected      │ │
-│ │ - DAG runtime hooks      │ │
-│ └──────────────────────────┘ │
-└──────────────────────────────┘
-```
-
-The TUI is the frontend. The operator is the control plane, and the executor is
-the execution plane.
-
-## TUI
-
-```text
-TUI
-├── AvalancheApp
-│   └── Textual application lifecycle
-├── UIStore
-│   └── current flow, run, selection, sidebar, search, cache
-├── screens/
-│   ├── flow detail
-│   └── run detail
-├── widgets/
-│   ├── DAG view
-│   ├── sidebar
-│   ├── run history
-│   ├── log panel
-│   ├── schedule panel
-│   └── status/title bars
-├── StateProvider protocol
-│   ├── MockStateProvider
-│   └── GrpcStateProvider
-└── shared state model imports
-    ├── WorkflowInfo
-    ├── RunState
-    ├── NodeState
-    └── LogEntry
-```
-
-### TUI responsibilities
-
-The TUI provides the human control and observability surface.
-
-It owns:
-
-- terminal rendering;
-- flow and run navigation;
-- DAG visualization;
-- start/cancel user actions;
-- log and run-history display;
-- local UI state such as selection, focus, and search.
-
-It does not own:
-
-- real flow discovery;
-- real run execution;
-- Ray cluster management.
-
-### TUI key files
-
-- `src/tui/__main__.py`
-- `src/tui/app.py`
-- `src/tui/ui_store.py`
-- `src/tui/state.py`
-- `src/tui/models.py`
-- `src/tui/mock.py`
-- `src/tui/screens/`
-- `src/tui/widgets/`
-- `src/runtime/operator/client.py`
-
-`src/runtime/operator` contains both the operator client and control plane;
-`src/tui` contains the Textual client implementation.
-
-## Operator
-
-```text
-Operator
-├── CLI entrypoint
-│   └── parses --flows, --port, --ray
-├── gRPC service
-│   ├── ListFlows / StartRun / CancelRun
-│   ├── GetRunResult
-│   ├── ListRunSummaries / GetRunSnapshot
-│   ├── ListLogs / ListAgentEvents
-│   ├── ReadTrace / ReadDetail
-│   └── StreamRunUpdates
-├── Operator core
-│   ├── run lifecycle
-│   ├── node state tracking
-│   ├── cancellation
-│   ├── subscriber updates
-│   └── log capture
-├── WorkflowRegistry
-│   ├── file/directory scan
-│   ├── module import
-│   ├── Workflow detection
-│   └── WorkflowInfo snapshots
-├── scheduler
-│   └── cron-triggered runs
-├── file watcher
-│   └── rescan changed flow files
-└── conversion/proto layer
-    └── Python models ↔ protobuf messages
-```
-
-### Operator responsibilities
-
-The operator acts as the backend control plane for real flows.
-
-It owns:
-
-- scanning configured flow files/directories;
-- converting discovered DAGs into `WorkflowInfo` snapshots;
-- accepting start/cancel requests;
-- creating and tracking `RunState` and `NodeState`;
-- running flows in background threads;
-- attaching execution hooks;
-- capturing logs;
-- broadcasting run updates;
-- watching flow files for changes;
-- triggering cron-scheduled runs.
-
-It does not own:
-
-- terminal rendering;
-- user navigation state;
-- the internals of Ray cluster scheduling.
-
-### Flow scanning details
-
-Flow scanning is owned by `WorkflowRegistry`, which is created by the
-operator at startup. The operator passes the configured `--flows` paths into
-`WorkflowRegistry.scan(paths)`.
-
-For each configured path:
-
-- if the path is a `.py` file, the registry scans that file;
-- if the path is a directory, the registry recursively scans `*.py` files;
-- private files whose names start with `_` are skipped during directory scans.
-
-For each scanned Python file, a short-lived discovery process:
-
-1. imports the file using its normal package path when available;
-2. finds public functions marked by `@workflow`;
-3. calls those builders to construct their DAGs;
-4. validates schedules and converts each DAG into a serializable descriptor;
-5. records the local Python files imported while discovering that candidate.
-
-The operator caches those descriptors and dependency paths under
-`.avalanche/cache/operator/`. A later startup reuses the cache when the Python
-environment and watched source-file metadata are unchanged. Hot reload uses the
-recorded imports to rediscover only changed workflow files and workflows that
-depend on a changed Python helper. Adding or deleting a Python file updates only
-that candidate. A non-Python source change triggers a complete rescan because
-ordinary Python code can read such resources without declaring them.
-
-The cache contains metadata only, never live `Workflow` objects or executable
-callables. Discovery still runs in an isolated process whenever source must be
-evaluated. Workflow modules and builders must therefore be safe to import and
-call, and should not perform expensive or irreversible discovery-time work.
-
-Because the first directory scan imports arbitrary Python files, avoid pointing
-`--flows` at the repository root. Prefer a specific flow file or a clean
-flow-only directory.
-
-### Operator key files
-
-- `src/runtime/operator/__main__.py`
-- `src/runtime/operator/operator.py`
-- `src/runtime/operator/server.py`
-- `src/runtime/operator/models.py`
-- `src/runtime/operator/client.py`
-- `src/runtime/operator/registry.py`
-- `src/runtime/operator/scheduler.py`
-- `src/runtime/operator/hooks.py`
-- `src/runtime/operator/convert.py`
-- `src/runtime/operator/proto/`
-
-## Executor
-
-```text
-Executor ∈ {LocalExecutor, RayExecutor}
-├── interface
-│   ├── submit(fn, *args, **kwargs)
-│   ├── get(futures)
-│   └── shutdown()
-├── Ray cluster, only when RayExecutor is selected
-│   ├── head node
-│   ├── workers
-│   └── Ray dashboard
-└── DAG runtime integration
-    ├── dependency-aware task execution
-    └── operator hooks for status/log updates
-```
-
-### Executor responsibilities
-
-The executor owns the execution strategy for a workflow run.
-
-It owns:
-
-- submitting node functions;
-- materializing task results;
-- respecting DAG dependencies through the workflow runtime;
-- providing backend-specific execution behavior.
-
-Current implementations:
-
-- `LocalExecutor` for in-process execution;
-- `RayExecutor` for Ray-backed distributed execution.
-
-### Ray responsibility boundary
-
-Ray provides distributed compute when `RayExecutor` is selected.
-
-Ray owns:
-
-- Ray workers and object references;
-- remote task scheduling;
-- distributed result materialization;
-- Ray dashboard and cluster lifecycle, outside Avalanche's CLI.
-
-The operator connects to Ray; the TUI does not.
-
-### Executor key files
-
-- `src/runtime/executor.py`
-- `src/avalanche/dag.py`
-- `src/avalanche/runtime/`
-- `src/runtime/operator/hooks.py`
-
-## Execution services
-
-Execution services are an executor-owned worker lifecycle for platform-provided
-resources such as immutable input snapshots, task-local filesystems, output
-reservations, and commit receipts. They are separate from runtime providers such
-as `ava.Stream`: runtime providers inject task arguments from Avalanche-owned
-data systems, while execution services surround the entire user task.
-
-```text
-Workflow.run(execution_services=spec)
-  -> executor submits one service-managed task
-     -> probe -> negotiate -> open
-     -> materialize_input
-     -> user task
-     -> finalize -> receipt
-     -> teardown
-```
-
-The service request is immutable executor metadata. It must not carry credentials,
-user-facing storage URIs, absolute worker paths, open handles, actors, or affinity
-tokens. The provider acquires worker-local capabilities after scheduling. Input
-materialization may be eager or lazy; for example, a provider can return paths in
-an attempt-local filesystem whose bytes are fetched on first access.
-
-Local execution carries values directly. Ray execution returns user payloads, small
-service receipts, and status markers through separate object-reference channels. The
-driver observes statuses, while parent receipts remain worker-side dependencies of
-downstream service sessions. Fan-in follows the DAG without fetching intermediate
-payloads or receipts on the driver. `RunHandle` exposes only deterministically ordered
-terminal receipts.
-
-Any failure after `open` requests abort and then tears the session down exactly once.
-Cleanup errors are attached as notes instead of masking the primary failure. Providers
-may preserve explicit recovery state when destructive cleanup is unsafe. If an executor
-retries a task, the whole worker lifecycle starts again; Avalanche does not reuse an
-opened session. There is no fallback to ordinary execution when service negotiation or
-materialization fails.
-
-See [docs/execution-services.md](docs/execution-services.md) for the public
-protocol, provider contract, and workflow-author experience.
-
-## Cross-component boundaries
-
-### State provider boundary
-
-The TUI depends on the `StateProvider` protocol rather than on operator internals.
-The protocol is intentionally small:
+An application can build and run a workflow directly:
 
 ```python
-list_workflows() -> list[WorkflowInfo]
-list_runs(flow_name: str) -> list[RunState]
-get_run(run_id: str) -> RunState | None
-start_run(flow_name: str) -> str
-cancel_run(run_id: str) -> None
-on_run_update(callback) -> None
-on_log(callback) -> None
+run = workflow().run(executor=ava.LocalExecutor())
+result = run.result()
 ```
 
-This boundary allows the same TUI to run against:
+`Workflow.run()` returns a process-local, awaitable `RunHandle` immediately. A
+non-daemon driver thread schedules the DAG. `.result()` blocks in synchronous
+code; `await run` waits without blocking an event loop. Cancellation is
+cooperative: the driver stops submitting later work after cancellation, but it
+does not forcibly interrupt an active local function or Ray task.
 
-- the mock provider for local UI work;
-- the gRPC operator for real workflow control;
-- future providers, if needed.
+No operator, gRPC service, browser UI, or TUI participates in embedded mode.
+The handle is not a durable run registry or recovery mechanism.
 
-### Data model boundary
-
-`WorkflowInfo` is the serializable snapshot used by the TUI:
-
-- `name`
-- `file_path`
-- `node_ids`
-- `graph`
-- `node_types`
-- `display_names`
-- `cron`
-- schedule metadata such as `next_run_at` and `last_run_at`
-
-`RunState` captures live execution state:
-
-- `run_id`
-- `flow_name`
-- `status`
-- `started_at` / `ended_at`
-- per-node `NodeState`
-- `LogEntry` records
-- `triggered_by`
-
-The UI does not hold or mutate real DAG objects. It builds lightweight run state
-from paginated structural snapshots and typed updates. Logs, agent events, traces,
-and encoded detail bodies are fetched through bounded, on-demand RPCs and merged
-only for the selected run. Control requests travel back through the provider.
-
-### gRPC boundary
-
-The operator exposes these main RPCs through `OperatorService`:
-
-- `GetCatalog` returns discovered workflows and scan-target metadata.
-- `StartRun` starts a new workflow run; caller-owned IDs are limited to 256
-  UTF-8 bytes so retained summaries stay bounded.
-- `CancelRun` requests cancellation for a run.
-- `GetRunResult` returns the encoded result for a successful run.
-- `ListRunSummaries` pages lightweight runs from a retained structural baseline.
-- `GetRunSnapshot` returns one structural run snapshot pinned to an operator
-  instance and sequence.
-- `ListLogs` and `ListAgentEvents` page snapshot-pinned detail descriptors.
-  Agent event descriptors carry both the invocation identity and the
-  operator-assigned retention cursor; source-local event sequences remain in
-  the fetched detail body.
-- `ReadTrace` and `ReadDetail` stream bounded chunks for immutable detail bodies.
-- `StreamOperatorUpdates` replays typed changes under an operator-instance epoch.
-  Stale cursors, restarts, and slow-consumer overflow require an explicit
-  structural reset.
-
-This protocol replaces the previous `ListRuns`, `GetRun`, and `StreamUpdates`
-full-state RPCs. It is a breaking wire change: clients and servers must use
-protobuf bindings generated from the same transport contract.
-
-The default operator port is `7433`.
-
-## Runtime modes
-
-### Mock UI mode
-
-Use this for UI development and visual exploration. No operator, gRPC server, or
-Ray cluster is required.
-
-```bash
-uv run ava tui
-```
-
-This mode uses `MockStateProvider` and hardcoded demo workflows such as
-`order_workflow`, `analytics_workflow`, `ml_workflow`, `data_platform`, and
-`doc_processing`.
-
-### Real operator mode with local execution
-
-Use this when you want the operator and TUI to control real discovered flows
-without Ray.
-
-```bash
-uv run ava operator --flows examples --port 7433
-```
-
-In another terminal:
-
-```bash
-uv run ava tui --connect localhost:7433
-```
-
-### Real operator mode with Ray execution
-
-Use this when the operator should submit flow tasks to a Ray cluster.
-
-```bash
-uv run ray start --head --node-ip-address=127.0.0.1 --port=6379
-```
-
-```bash
-RAY_ADDRESS=127.0.0.1:6379 uv run ava operator --flows examples --port 7433 --ray
-```
-
-In another terminal:
-
-```bash
-uv run ava tui --connect localhost:7433
-```
-
-If a Ray head is already running on `127.0.0.1:6379`, skip `ray start` and point
-`RAY_ADDRESS` at the existing cluster.
-
-## Control flow
-
-### TUI startup
-
-1. `ava tui` calls `launch_tui()`.
-2. Without `--connect`, the app uses the mock provider.
-3. With `--connect HOST:PORT`, the app creates a `GrpcStateProvider`.
-4. `AvalancheApp` initializes `UIStore` from the selected provider.
-5. Widgets render state from `UIStore`.
-
-### Operator startup
-
-1. `ava operator` parses `--flows`, `--port`, and `--ray`.
-2. Without `--ray`, the operator uses `LocalExecutor`.
-3. With `--ray`, the operator uses `RayExecutor`.
-4. `WorkflowRegistry` scans the configured flow files/directories.
-5. The gRPC server exposes the operator on the configured port.
-6. The file watcher and scheduler run in background threads when flow paths
-   are configured.
-
-### Starting a run
-
-1. The user triggers a run in the TUI.
-2. The TUI calls `StateProvider.start_run(flow_name)`.
-3. In real mode, `GrpcStateProvider` sends `StartRun` to the operator.
-4. The operator looks up the workflow builder in `WorkflowRegistry`.
-5. The operator creates a `RunState` and `NodeState` entries for each node.
-6. Execution starts in a background thread.
-7. The selected executor runs DAG tasks.
-8. Hooks mark node start/success/failure and capture logs.
-9. The operator broadcasts run updates to subscribers.
-10. The TUI receives updates and refreshes the visible DAG, logs, and run
-    history.
-
-## Flow discovery
-
-The operator discovers flows through `WorkflowRegistry.scan(paths)`. It imports
-configured Python candidates in an isolated process and invokes functions marked
-by `@workflow`. Unchanged descriptors are subsequently reused from the local
-discovery cache.
-
-Avoid scanning the repository root directly:
-
-```bash
-# Avoid from repo root: imports too many arbitrary Python files.
-uv run ava operator --flows .
-```
-
-Prefer a specific flow file or a clean flow-only directory:
-
-```bash
-uv run ava operator --flows examples --port 7433
-```
-
-## Execution and Ray
-
-Ray is part of the execution plane, not the TUI plane.
-
-- Avalanche never calls Ray directly.
-- The operator creates an executor for each run.
-- `LocalExecutor` runs work locally.
-- `RayExecutor` wraps functions with `ray.remote(...)` when needed and resolves
-  results with `ray.get(...)`.
-- For Ray runs, operator log capture uses `ray.util.queue` so worker logs can be
-  streamed back into the run state.
-
-The local operator-connected path is:
+### Operator-managed execution
 
 ```text
-TUI -> GrpcStateProvider -> Operator -> RayExecutor -> Ray cluster
+CLI / browser UI / TUI
+        │
+        ▼
+   OperatorService (gRPC)
+        │
+        ▼
+  Operator parent process
+        │ spawn
+        ▼
+  Per-run coordinator process
+        │
+        ▼
+ Workflow.run() → selected executor
 ```
 
-## Current caveats
+Use the operator when flows need discovery, local lifecycle control, scheduled
+or webhook-triggered runs, observability, or a UI:
 
-- `--flows .` from the repository root is unsafe because discovery imports
-  arbitrary Python files; use a specific file or clean flow directory.
-- The `--ray` CLI flag selects `RayExecutor`, but Ray connection details are not
-  exposed as first-class CLI flags. Use `RAY_ADDRESS=...` to connect to an
-  existing Ray cluster.
-- The mock provider contains richer demo workflows than the currently
-  discoverable real workflow fixtures.
-- `WorkflowInfo` is a UI snapshot; backend-only details on the live `Workflow`
-  object are intentionally not exposed to the TUI.
+```bash
+# From the repository root
+uv run ava operator --flows examples --port 7433
+
+# In another terminal
+uv run ava web --connect localhost:7433
+# or
+uv run ava tui --connect localhost:7433
+```
+
+`ava dev --flows examples` is the browser-oriented convenience command. It
+starts an operator subprocess and a connected `ava web` subprocess; the browser
+UI listens on `http://127.0.0.1:7435` by default. It does not start the TUI.
+
+## Workflow authoring and runtime
+
+### DAG construction
+
+`@ava.workflow` runs its decorated Python function in a `ContextVar`-scoped
+construction context. Calls to decorated node functions create `NodeFuture`
+instances rather than execute user code. `>>` expresses dependency order and
+`&` groups independent branches. The resulting `Workflow` contains node
+instances, an adjacency graph, stable node slugs, declared input/context types,
+and optional scheduling, webhook, and agent-default metadata.
+
+The constructor validates that the graph is acyclic. A workflow body should
+describe graph edges; it should not do runtime I/O or invoke models directly.
+
+```text
+@workflow construction
+  source() >> (agent_a() & agent_b()) >> compose() >> publish()
+       │              │                    │            │
+       └────── DAG edges and NodeFutures ──┴────────────┘
+```
+
+### Runtime binding
+
+The driver schedules nodes topologically. It binds ordinary upstream values and
+resolves runtime-provided parameters at execution time. Providers cover run
+input and context, streams, cursors, logging, injected agents, and related
+runtime capabilities. Provider markers remain references during DAG
+construction; they are not eager values.
+
+A workflow can use plain deterministic nodes and `@ava.agent_step` nodes in the
+same DAG. An agent step is still an ordinary Avalanche node: Avalanche injects
+the keyword-only `ava.Agent`, the step calls it, then the step body validates,
+composes, and persists its own result. Agent execution is implemented through
+PredictRLM; the step's signature, skills, tools, and runtime model settings
+remain explicit declaration data.
+
+Workflow-level `agent_defaults` supply shared runtime settings such as `lm` and
+`sub_lm`. A value declared on an individual agent step wins over the workflow
+default, which wins over Avalanche and PredictRLM defaults. Signatures, skills,
+and tools stay step-local capabilities.
+
+### Executors
+
+`LocalExecutor` executes submitted node functions in the local coordinator
+process. `RayExecutor` submits work to Ray when selected. The DAG runtime, not
+the UI or operator parent, controls dependency order and binding. Ray object
+references remain distributed until a consumer needs materialization; the
+operator parent receives lifecycle events and encoded terminal results rather
+than live task objects.
+
+For an operator run, executor construction happens in the spawned coordinator:
+
+```text
+Operator parent
+  └── coordinator imports one workflow module and builds one Workflow
+        ├── LocalExecutor: local node execution with queue-backed observers
+        └── RayExecutor: Ray runtime environment + Ray log queue
+```
+
+The coordinator tears down its executor after a terminal outcome. The parent
+coordinates cancellation and process-group shutdown; it does not send a live
+`Workflow` object across the process boundary.
+
+### Storage and execution services
+
+Avalanche's storage boundary is backend-neutral. `Namespace` and `Table`
+define typed contracts; Iceberg and Lance implement their respective backends.
+Applications declare the namespace name, table schema, storage location, and
+catalog configuration. Avalanche does not impose a universal filesystem default
+for application catalogs.
+
+`ava.Stream` and `ava.Cursor` are runtime providers for workflow data flow.
+They are distinct from execution services. Execution services are an
+executor-owned task lifecycle around platform-provided resources:
+
+```text
+probe → negotiate → open → materialize_input → user task → finalize → teardown
+                                      │                         │
+                                      └──── abort on failure ────┘
+```
+
+The service request is serializable, immutable executor metadata. It must not
+contain credentials, live handles, or worker-affinity state. Terminal service
+receipts are exposed through the embedded `RunHandle`; they are separate from
+workflow payloads and operator result transport.
+
+The repository examples use a local-development convention, not an Avalanche
+storage default:
+
+```text
+.avalanche/cache/operator/                 discovery cache
+.avalanche/catalogs/<workflow>/<pid>/      example warehouses and SQLite catalogs
+.avalanche/outputs/<workflow>/<pid>/       generated example artifacts
+```
+
+## Operator control plane
+
+### Discovery catalog
+
+`WorkflowRegistry` receives configured `--flows` paths. A file target is one
+candidate; a directory target is recursively scanned for public `*.py` files.
+Private files beginning with `_` and hidden/generated directories are skipped.
+Each candidate is discovered in a short-lived process, which:
+
+1. imports the module through its normal package path when applicable;
+2. finds public functions marked with `@ava.workflow`;
+3. calls each builder to construct its DAG;
+4. validates workflow metadata, schedules, and webhook routes;
+5. produces serializable descriptors, topology, agent metadata, diagnostics,
+   and imported Python dependency paths.
+
+The operator stores descriptor cache documents under
+`./.avalanche/cache/operator/`, keyed by configured roots and invalidated by the
+Python environment and source metadata. The cache contains descriptors and
+paths, never live workflow callables.
+
+Discovery imports arbitrary configured source. Workflow modules and builders
+must be import-safe and side-effect-light. Do not scan a repository root unless
+it is deliberately a flow-only tree:
+
+```bash
+# Avoid from a repository root containing unrelated Python.
+uv run ava operator --flows .
+
+# Prefer a specific module or flow directory.
+uv run ava operator --flows examples
+```
+
+### Live reload and scheduled metadata
+
+The live watcher observes only non-excluded Python files below resolved import
+roots. A changed workflow module or imported Python helper triggers targeted
+discovery; adding or deleting a Python candidate updates the catalog without
+reimporting unrelated candidates.
+
+Live watching intentionally ignores non-Python changes. If a workflow reads an
+import-time resource such as JSON to define a cron expression, restart the
+operator after changing that resource. Startup cache validation is broader than
+the live Python watcher, so a restart re-evaluates changed local source
+metadata.
+
+The scheduler reconciles discovered `cron` declarations with the catalog. It
+starts runs through the same operator lifecycle as manual requests. Workflow
+descriptors can also declare webhook routes. When routes exist, the operator
+starts a loopback HTTP ingress on port `7434` by default; valid JSON POST bodies
+become workflow input and return an accepted run ID.
+
+### Run coordination
+
+The operator parent owns the authoritative local projection of each run:
+`RunState`, per-node `NodeState`, retained logs, agent-event descriptors, trace
+descriptors, update sequences, and a bounded structural baseline. It launches
+each run using the `spawn` multiprocessing context.
+
+```text
+1. Client calls StartRun.
+2. Parent resolves a catalog descriptor to import root + module path + builder symbol.
+3. Parent creates queue/events and a private result bundle, then spawns a coordinator.
+4. Coordinator imports the module, builds the workflow, and sends preparation metadata.
+5. Parent publishes REQUESTING then PENDING state and permits execution.
+6. Coordinator runs Workflow.run(...).result() with lifecycle hooks.
+7. Queue events update parent-side node/run state, logs, agent events, and traces.
+8. Coordinator publishes an encoded terminal result into the private bundle.
+9. Parent validates, retains, and serves that result until expiry or cleanup.
+```
+
+Preparation, runtime, and terminal events are serializable queue messages. The
+parent validates them before mutating its state. The coordinator forwards stdout,
+stderr, logging, and agent evidence through the event channel. For Ray runs, a
+Ray queue carries worker log events back to the coordinator and then the parent.
+
+Cancellation sets the child cancellation event and eventually tears down the
+owned process group. It remains cooperative at the workflow-node level, while
+the operator owns final process cleanup.
+
+### Results and retention
+
+A successful coordinator result is encoded into JSON plus separate `File`
+attachments. The parent-owned `ResultStore` stores it in a private local result
+bundle, validates the manifest and attachment limits, and exposes it through
+`GetRunResult`. `ava result RUN_ID --output-dir PATH` retrieves the result into
+a new caller-owned directory.
+
+This store is local, bounded, and retention-limited. It is not durable workflow
+state or crash recovery. Application-owned tables and output destinations remain
+outside it.
+
+## Transport and clients
+
+### gRPC operator contract
+
+`src/runtime/operator/proto/operator.proto` is the transport boundary. The
+operator exposes:
+
+- `GetCatalog` for workflows, scan targets, and diagnostics;
+- `StartRun`, `CancelRun`, and `GetRunResult` for control and terminal output;
+- `ListRunSummaries`, `GetRunSnapshot`, and `GetLatestRunSnapshot` for bounded
+  structural state;
+- `ListLogs`, `ListAgentEvents`, `ReadTrace`, and `ReadDetail` for on-demand
+  run detail;
+- `StreamOperatorUpdates` for sequenced catalog and run updates.
+
+Clients begin from an operator-instance ID and structural sequence. Update
+stream replay is bounded. An operator restart, stale cursor, or slow-consumer
+overflow requires a client to discard incremental assumptions and reload a fresh
+structural baseline. Detail pages and bodies are snapshot-pinned or token-bound;
+they are fetched only for the selected run/node rather than included in every
+update.
+
+The default ports are:
+
+| Endpoint | Default | Purpose |
+| --- | ---: | --- |
+| gRPC operator | `7433` | discovery, run control, snapshots, updates, results |
+| webhook ingress | `7434` | loopback JSON webhook routes when declared |
+| browser UI | `7435` | static browser UI and gRPC-Web proxy |
+
+### Browser UI
+
+The browser UI source lives in `web/operator/` and is built with Vite, React,
+and generated TypeScript protobuf bindings. Packaged static assets live in
+`src/runtime/operator/web_assets/`.
+
+`ava web` starts a loopback HTTP server that serves those assets and proxies
+browser gRPC-Web requests to the configured native gRPC operator. The browser
+does not receive a direct Python or gRPC channel to user workflow code.
+
+```text
+Browser SPA
+  ├── GetCatalog + paginated run-summary baseline
+  ├── StreamOperatorUpdates from the current sequence
+  ├── fetch selected snapshots, logs, agent events, and details on demand
+  └── StartRun / CancelRun actions
+          │ gRPC-Web
+          ▼
+ava web listener ── native gRPC ── OperatorService
+```
+
+The browser state layer checks operator instance IDs and sequence boundaries
+before merging data. A reset reloads the catalog and run baseline rather than
+attempting to merge incompatible state.
+Workflow reload status and discovery diagnostics are transport updates too, so
+the browser can show an in-progress reload and surface discovery failures
+without treating an old catalog as current.
+
+The HTTP listener defaults to loopback. Non-loopback exposure requires
+`--trusted-proxy`; Avalanche itself does not turn that flag into authentication
+or multi-tenant security.
+
+### Textual TUI
+
+The TUI remains a separate local client. `AvalancheApp` and `UIStore` own
+Textual rendering and mutable UI state. `GrpcStateProvider` maps the TUI's
+`StateProvider` boundary to the operator's gRPC contract. Worker threads enqueue
+updates for the Textual event loop; they do not mutate widgets directly.
+
+`ava tui` without `--connect` uses `MockStateProvider` for local UI work.
+`ava tui --connect localhost:7433` controls a real operator. The TUI does not
+perform workflow discovery, execute nodes, or manage Ray.
+
+### CLI
+
+The `ava` CLI is a thin front door:
+
+- `ava operator` starts the local operator;
+- `ava web` starts the browser listener and gRPC-Web proxy;
+- `ava dev` starts both;
+- `ava run` sends a run request, including JSON input/context and file or
+  workspace attachments;
+- `ava result` downloads a successful operator result;
+- `ava tui` starts the optional terminal client;
+- `ava webhooks list|get` inspects discovered local webhook routes.
+
+## Ownership boundaries and invariants
+
+| Boundary | Owner | Must not cross as a live object |
+| --- | --- | --- |
+| Workflow construction | author process | construction `ContextVar`, `NodeFuture` internals |
+| Embedded execution | calling process | process-local `RunHandle` |
+| Operator catalog | operator parent | live `Workflow` objects and imported modules |
+| Operator run | spawned coordinator | workflow/executor instances and worker-local capabilities |
+| Executor / Ray | executor and workers | Ray object references until materialization is required |
+| UI state | browser/TUI client | operator state mutation and workflow execution |
+| Result transport | result store + gRPC | arbitrary live Python values; results are encoded values + files |
+
+These boundaries prevent accidental eager materialization, process-unsound
+object sharing, and UI-owned execution.
+
+## Repository map
+
+| Area | Primary locations |
+| --- | --- |
+| Public DAG, runtime, storage, agent APIs | `src/avalanche/` |
+| Local and Ray executors | `src/runtime/executor.py` |
+| Operator lifecycle, registry, transport, worker | `src/runtime/operator/` |
+| Browser UI source | `web/operator/` |
+| Packaged browser assets | `src/runtime/operator/web_assets/` |
+| Textual TUI | `src/tui/` |
+| CLI | `src/ava_cli/` |
+| Runnable examples | `examples/` |
+| Behavior and integration tests | `test/` |
+
+## Current limits
+
+- Avalanche is intended for local development and experimentation.
+- The operator retains bounded local state; it does not provide durable recovery
+  across operator restarts.
+- Loopback defaults and the browser trusted-proxy acknowledgement are not a
+  production authentication model.
+- Source discovery imports configured Python and therefore requires narrow,
+  trusted flow paths.
+- Live reload follows Python source changes only; restart for non-Python
+  import-time configuration changes.
+- Ray is optional and only participates when `RayExecutor` is selected.
 
 ## Related documents
 
-- `README.md` for the shortest onboarding path.
-- `docs/getting-started.md` for the public getting-started guide.
-- `examples/README.md` for canonical runnable examples.
+- [README](README.md): installation, CLI use, providers, and examples.
+- [DAG API](docs/dag-api.md): graph construction, inputs, runtime providers,
+  reruns, and execution.
+- [Agent steps](docs/agent-steps.md): typed model contracts and runtime
+  configuration.
+- [Data model and storage API](docs/data-model-api.md): namespaces, tables,
+  schemas, and storage backends.
+- [Execution services](docs/execution-services.md): executor-owned worker
+  lifecycle services.
+- [Examples](examples/README.md): runnable local workflows.

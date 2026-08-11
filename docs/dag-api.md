@@ -1,59 +1,68 @@
 # DAG API
 
-Avalanche workflows are Python functions that declare a directed acyclic graph
-(DAG) of reusable task functions. The DAG API is intentionally small:
+Avalanche workflows are Python functions that declare a DAG of reusable nodes.
 
-- `@ava.source` ingests or creates data.
-- `@ava.step` transforms data inside the flow. `@ava.transform` is an alias.
-- `@ava.dest` publishes, exports, or summarizes final results.
-- `@ava.workflow` captures task calls and dependencies into a runnable workflow.
-- `@ava.agent_step` / `@ava.agent.step` declare agent-backed ordinary steps; see
-  [`agent-steps.md`](agent-steps.md).
+| Decorator | Use |
+| --- | --- |
+| `@ava.source` | Ingest or create data |
+| `@ava.step` | Transform data (`@ava.transform` is an alias) |
+| `@ava.dest` | Publish or summarize a result |
+| `@ava.workflow` | Build a runnable workflow |
+| `@ava.agent_step` / `@ava.agent.step` | Declare an agent-backed step; see [`agent-steps.md`](agent-steps.md) |
 
-Node functions may be regular `def` functions or `async def` coroutines.
-Workflow `.run(...)` starts execution and immediately returns an awaitable
-`ava.RunHandle`; Avalanche still resolves coroutine node bodies inside the
-selected executor before passing their results downstream.
-
-The body of a `@ava.workflow` function should stay declarative. It runs when the
-workflow is built, not once per row or once per input item. Put business logic in
-source, step, and destination functions.
+Node functions may be `def` or `async def`. Keep workflow bodies declarative:
+call nodes and connect their results there; put runtime work in nodes.
 
 ## Minimal workflow
 
 ```python
 import avalanche as ava
 
+
 @ava.source
 def load_documents() -> list[dict[str, object]]:
     return [{"doc_id": "guide", "tokens": 120}]
 
+
 @ava.step
 def chunk_documents(documents: list[dict[str, object]]) -> list[dict[str, object]]:
-    return [{"chunk_id": f"{doc['doc_id']}-1", "tokens": doc["tokens"]} for doc in documents]
+    return [
+        {"chunk_id": f"{document['doc_id']}-1", "tokens": document["tokens"]}
+        for document in documents
+    ]
+
 
 @ava.dest
 def publish_chunks(chunks: list[dict[str, object]]) -> int:
     return len(chunks)
 
+
 @ava.workflow
 def document_flow():
-    docs = load_documents()
-    chunks = chunk_documents(docs)
+    documents = load_documents()
+    chunks = chunk_documents(documents)
     return publish_chunks(chunks)
+
 
 result = document_flow().run(executor=ava.LocalExecutor()).result()
 ```
 
-Calling a node inside a workflow returns a deferred `NodeFuture`, not the runtime
-value. Passing a `NodeFuture` as an argument creates a dependency and passes the
-parent result to the child at execution time.
+Calls inside a workflow return deferred `NodeFuture` values. Passing one to a
+node creates a dependency; its result is supplied when the workflow runs.
 
-## Chaining with `>>`
+## Connect nodes
 
-For linear flows, `>>` is a compact way to express “run the next node after this
-one.” If the downstream node has no explicit positional arguments, Avalanche
-passes the upstream result as its first positional argument.
+Use normal arguments when names make the graph clear:
+
+```python
+@ava.workflow
+def document_flow():
+    return publish_chunks(chunk_documents(load_documents()))
+```
+
+Use `>>` for a linear pipeline. The upstream result becomes the first positional
+argument of the downstream node when that node has no explicit positional
+arguments.
 
 ```python
 @ava.workflow
@@ -61,122 +70,85 @@ def document_flow():
     return load_documents() >> chunk_documents() >> publish_chunks()
 ```
 
-This is equivalent to the explicit argument form above.
-
-## Parallel branches with `&`
-
-Use `&` to define branches that can run after the same predecessor and before a
-shared successor.
+Use `&` for branches and parenthesize every parallel group:
 
 ```python
 @ava.step
 def validate_chunks(chunks):
     return {"valid": True, "count": len(chunks)}
 
+
 @ava.step
 def build_index(chunks):
     return {"index_name": "local-index", "count": len(chunks)}
 
-@ava.step
-def summarize_chunks(chunks):
-    return {"chunks": len(chunks)}
 
 @ava.dest
-def publish_report(validation, index, summary):
-    return {"validation": validation, "index": index, "summary": summary}
+def publish_report(validation, index):
+    return {"validation": validation, "index": index}
+
 
 @ava.workflow
 def fanout_flow():
     return (
         load_documents()
         >> chunk_documents()
-        >> (validate_chunks() & build_index() & summarize_chunks())
+        >> (validate_chunks() & build_index())
         >> publish_report()
     )
 ```
 
-Always parenthesize parallel groups. Python parses `>>` before `&`, so
-unparenthesized expressions can build a different graph than intended.
+## Multiple outputs
 
-```python
-# Good: fan-out, then fan-in.
-load_documents() >> (validate_chunks() & build_index()) >> publish_report()
-
-# Ambiguous: parsed as (load_documents() >> validate_chunks()) & build_index().
-load_documents() >> validate_chunks() & build_index()
-```
-
-## Multi-return nodes
-
-Declare `num_returns` when a node returns multiple values that downstream nodes
-should address independently. Use indexing inside the workflow to select each
-return value.
+Set `num_returns` when downstream nodes need individual values from a tuple-like
+result, then index the returned future.
 
 ```python
 @ava.source(num_returns=2)
 def load_train_test():
     return train_rows(), test_rows()
 
-@ava.step
-def train_model(train_rows):
-    return {"model": "local-demo", "rows": len(train_rows)}
-
-@ava.step
-def evaluate_model(test_rows):
-    return {"rows": len(test_rows)}
 
 @ava.workflow
 def training_flow():
-    datasets = load_train_test()
-    model = train_model(datasets[0])
-    return evaluate_model(datasets[1])
+    train, test = load_train_test()
+    model = train_model(train)
+    return evaluate_model(model, test)
 ```
 
 ## Runtime providers
 
-Node parameters can use provider defaults such as `ava.Stream`, `ava.Cursor`, and
-`ava.Logger`. Providers are resolved at execution time.
+Provider defaults are resolved while a node executes. Common providers are
+`ava.Stream`, `ava.ModelStream`, `ava.Cursor`, and `ava.Logger`.
 
 ```python
 @ava.step
 def chunk_new_documents(
     _loaded: object = None,
-    docs = ava.Stream(ns.document),
+    documents=ava.Stream(ns.documents, key="documents_to_chunks", mode="append_scan"),
     *,
-    dest = ns.chunk,
+    destination=ns.chunks,
 ):
-    chunks = process_documents(docs)
-    return dest.append(chunks)
+    return destination.append(process_documents_to_chunks(documents))
 ```
 
-`ava.Stream(table)` injects one `polars.DataFrame` into the task parameter. It is
-run-scoped by default (reads the current run's rows via row lineage). For
-backlog/incremental draining use `ava.Stream(table, key="...", mode="append_scan")`,
-which claims one pending snapshot at a time. User code does not call `.read()` on
-the `Stream` object. `key` is only valid with `mode="append_scan"`.
+| Need | API |
+| --- | --- |
+| Rows written in this run | `ava.Stream(table)` |
+| Incremental table backlog | `ava.Stream(table, key="...", mode="append_scan")` |
+| Validated Pydantic rows | `ava.ModelStream.one(table)`, `.one_or_none(table)`, or `.all(table)` |
+| Manual table checkpoint | `ava.Cursor(table, key="...")` |
 
-A `NodeFuture` bound to a parameter configured with an upstream-consuming
-provider such as `ava.Stream` selects that exact upstream result while the
-selected parent result is live. The selector preserves the parameter name and
-any tuple index, so keyword order does not change the mapping and `split()[1]`
-selects only index 1 from a live single- or multi-return producer. Other
-positional Python arguments retain their logical parameter binding when the
-selector is removed from the eventual worker call.
+Do not call `.read()` on a `Stream` provider. See
+[`data-model-api.md`](data-model-api.md#streams-and-cursors) for table setup and
+stream behavior.
 
-`ava.Cursor(table, key=...)` stores manual checkpoint state in table metadata and
-is useful when a task needs custom progress control or coordination across
-multiple source tables.
+## Input and context
 
-## Run input and context
-
-Workflow builders stay zero-argument. Declare the runtime payload model on the
-workflow decorator, then receive input and runtime context in source, step, or
-destination functions by type annotation.
+Declare a Pydantic `ava.BaseInput` subclass on the workflow. Annotate node
+parameters with that type or `ava.RunContext` to receive them.
 
 ```python
-import avalanche as ava
-
-
 class DocumentInput(ava.BaseInput):
     value: int
     document: ava.File
@@ -184,49 +156,16 @@ class DocumentInput(ava.BaseInput):
 
 @ava.source
 def load_document(payload: DocumentInput, ctx: ava.RunContext) -> str:
-    local_text = payload.document.read_bytes().decode()
-    return f"{ctx.run_id}:{payload.value}:{local_text}"
+    return f"{ctx.run_id}:{payload.value}:{payload.document.read_bytes().decode()}"
 
 
 @ava.workflow(input=DocumentInput)
 def document_flow():
     return load_document()
-```
 
-Avalanche validates `input` at run start with Pydantic. Unknown fields are
-rejected by default. Annotated input and context parameters are injected by type
-and do not consume upstream data arguments.
 
-`ava.RunContext` is created by Avalanche for every run. It contains:
-
-- `run_id`: caller/operator-owned run id, or a generated ULID.
-- `workflow_name`: the decorated workflow name.
-- `executor_type`: `"local"` or `"ray"`.
-- `rerun`: optional `ava.Rerun` spec when this execution is a run-scoped
-  rerun of an earlier workflow run.
-- `node_id`: current node invocation id, such as `load_document_1`.
-- `node_name`: current node function name, such as `load_document`.
-- `node_slug`: stable rerun-addressable node id. Defaults to the function name
-  and can be set with `slug=` on `@ava.source`, `@ava.step`, or `@ava.dest`.
-- `lineage_vector`: internal row-lineage vector clock used by stream reruns.
-- `metadata`: optional caller/platform metadata as `dict[str, object]`.
-
-When a node writes to a default Iceberg or Lance table, Avalanche also uses this
-run context to populate row provenance columns such as `_ava_run_id`,
-`_ava_rerun_of`, `_ava_workflow_name`, `_ava_node_id`, `_ava_node_name`,
-`_ava_node_slug`, `_ava_lineage_vector`, and `_ava_ctx_metadata`. See
-[`data-model-api.md`](data-model-api.md#append-scan-and-read) for the table-side
-`row_lineage` option.
-
-The workflow author usually does not define a custom context type. If a caller
-needs to pass request metadata, put it under `RunContext.metadata`:
-
-Pass runtime values from Python with `.run(input=..., context=...)`:
-
-```python
 result = document_flow().run(
     executor=ava.LocalExecutor(),
-    run_id="run_123",  # optional caller-owned run identity
     input={
         "value": 41,
         "document": {"name": "doc.txt", "content": b"hello"},
@@ -235,88 +174,46 @@ result = document_flow().run(
 ).result()
 ```
 
-Advanced platform integrations may define a shared subclass of `ava.RunContext`
-when context fields should be required and typed, for example `org_id`,
-`project_id`, or `deployment_id`. Avalanche still owns and overwrites runtime
-fields such as `run_id`, `workflow_name`, `executor_type`, `rerun`, `node_id`,
-`node_name`, `node_slug`, and `lineage_vector`; callers cannot spoof them with
-`context` payloads.
+`RunContext` includes the run ID, workflow name, executor type, current node
+identity, rerun details, and optional caller metadata. `ava.File` carries file
+content. Use `ava.File.from_path(path)` when starting a run from Python.
 
-`ava.File` carries file content directly with a run request or terminal workflow
-result. Build one from a path with `ava.File.from_path(path)` or pass
-`{name, content, content_type}` in the input payload. `sha256` is computed when
-omitted and validated when supplied. Operator-managed transfers are subject to
-the finite gRPC envelope, and terminal results also use the stricter limits
-described below.
+Use `ava.Workspace` for a portable directory input or result:
 
-`ava.Workspace` is the corresponding portable recursive directory value. Create
-one with `ava.Workspace.from_path(path)` and declare it in `ava.BaseInput`, node
-parameters, or terminal results. During node execution `workspace.path` is an
-ordinary local directory. Avalanche transfers a deterministic manifest of safe
-relative paths, explicit directories, regular-file bytes, and SHA-256 digests;
-the original local path is never transferred. Changes made below `workspace.path`
-are captured automatically when the node returns. Each node invocation receives
-an isolated materialization, including local sibling nodes; its temporary tree
-is removed when that invocation succeeds or fails. Changes reach a downstream
-node only when the workspace is part of the upstream node's returned value.
-Outside user node execution, accessing `.path` raises without allocating a
-temporary directory. Terminal and pickled workspaces remain portable manifest
-values; pass one into another node invocation to obtain a new local `.path`.
+```python
+class ReportInput(ava.BaseInput):
+    workspace: ava.Workspace
 
-### File inputs from the CLI
 
-For an operator-managed run, keep ordinary input fields in `--input` and attach
-each top-level `ava.File` field with a repeatable `--file FIELD=PATH` option:
-
-```bash
-RUN_ID=$(
-  uv run ava run document_file_workflow \
-    --connect localhost:7433 \
-    --input '{"value": 41}' \
-    --file document=./doc.txt
-)
+workspace = ava.Workspace.from_path("./project")
 ```
 
-The CLI reads each path immediately with `ava.File.from_path()` and sends the
-file's bytes, basename, and SHA-256 digest. CLI file inputs have no media type;
-Python callers can set `content_type` explicitly. The operator reconstructs the
-`ava.File` and validates the complete `DocumentInput` model before starting the
-workflow. `--file` addresses top-level input fields only; use it more than once
-when the model declares multiple file fields:
+Inside a node, `workspace.path` is a local directory. Return the workspace from a
+node to pass its changed contents downstream.
+
+### CLI file and workspace inputs
+
+For an operator-managed run, send JSON fields with `--input` and attach top-level
+file or workspace fields separately:
 
 ```bash
-uv run ava run compare_documents \
-  --input '{"mode": "semantic"}' \
-  --file left=./before.pdf \
-  --file right=./after.pdf
-```
+uv run ava run document_file_workflow \
+  --connect localhost:7433 \
+  --input '{"value": 41}' \
+  --file document=./doc.txt
 
-A field may appear in either `--input` or `--file`, not both; the operator
-rejects that conflict as a duplicate input field. Missing paths, malformed JSON,
-and model-validation failures fail the command instead of starting a run. File
-content is bounded by the gRPC request envelope; `--file` does not pass a local
-path or filesystem capability to the operator or worker. This round trip uses
-the bundled
-[`examples/document_file_workflow.py`](../examples/document_file_workflow.py)
-flow definition.
-
-### Workspace inputs from the CLI
-
-Use repeatable `--workspace FIELD=DIR` for a top-level `ava.Workspace` field:
-
-```bash
 uv run ava run report_workspace \
+  --connect localhost:7433 \
   --workspace workspace=./project
 ```
 
-The CLI captures the directory at submission time. A workspace field cannot be
-repeated or also appear in `--input` or `--file`.
+Repeat `--file` for multiple file fields. A field may appear in only one of
+`--input`, `--file`, or `--workspace`.
 
-## Workflow results
+## Results
 
-A workflow may return the existing JSON scalar/container values, a Pydantic
-model, `ava.File`, or `ava.Workspace`. File and workspace values may also be
-nested in Pydantic models, lists, tuples, and string-keyed dictionaries:
+A workflow can return JSON-compatible values, a Pydantic model, `ava.File`, or
+`ava.Workspace`, including those values nested in models and containers.
 
 ```python
 from pydantic import BaseModel
@@ -331,112 +228,14 @@ class Report(BaseModel):
 def build_report() -> Report:
     return Report(
         summary="complete",
-        files=[
-            ava.File(
-                name="report.txt",
-                content=b"workflow output",
-                content_type="text/plain",
-            )
-        ],
+        files=[ava.File(name="report.txt", content=b"workflow output")],
     )
-
-
-@ava.workflow
-def report_flow():
-    return build_report()
 ```
 
-In embedded mode, `RunHandle.result()` returns the original Python value, so the
-example returns a `Report` containing `ava.File`; workspace result fields remain
-`ava.Workspace` manifest values whose `.path` is unavailable until a later node
-invocation.
+In embedded mode, `RunHandle.result()` returns the original Python value. For an
+operator run, wait for success and retrieve it with `GrpcStateProvider.get_run_result(run_id)`.
 
-For an operator-managed run, poll `get_run(run_id)` as usual and retrieve the
-successful terminal value separately:
-
-```python
-from runtime.operator.client import GrpcStateProvider
-from runtime.operator.models import RunStatus
-
-client = GrpcStateProvider("localhost:7433")
-run_id = client.start_run("report_flow")
-
-# Poll client.get_run(run_id) until it reaches RunStatus.SUCCESS.
-result = client.get_run_result(run_id)
-assert isinstance(result["files"][0], ava.File)
-```
-
-Remote Pydantic results decode from Pydantic JSON mode. Field and model
-serializers, serialization aliases, computed fields, and root models are
-honored. A serializer that replaces a `File` with JSON metadata remains JSON
-metadata; native `File` values that survive serialization become attachments,
-including non-UTF-8 content. JSON containers keep their list/tuple/dict shape,
-and every attachment marker is restored as `ava.File`. Workspace markers are
-restored as `ava.Workspace`.
-
-The worker atomically spools result JSON and attachments to a private pending
-directory. The parent transfers only a duplicate of its already-open,
-inode-bound pending-directory descriptor to the spawned coordinator; no
-result-bundle pathname crosses. After provisional-success quiescence, the
-parent uses anchored, no-follow operations to validate types, declared sizes
-and totals, exact bounded reads, the manifest, and SHA-256 digests. It then
-materializes those validated bytes into immutable in-process state owned by the
-result store and discards the provisional named bundle before making success
-visible. The accepted representation has no filesystem pathname or descriptor,
-so a same-user descendant that discovers and mutates its inherited pending
-namespace cannot change later retrievals.
-
-This in-memory `ava.File` result feature has hard limits: 4 MiB for the JSON
-value, 8 MiB for one attachment, 32 MiB for all attachment bytes, 32 MiB for
-value plus attachments, and 1,024 attachments. Attachment names are limited to
-1,024 characters, media types to 255 characters, encoded values to 100,000
-nodes and 100 nesting levels, and the private result manifest to 1 MiB. Every
-regular-file read and digest stops at its applicable maximum plus one byte.
-The gRPC send/receive envelope is a finite 48 MiB, leaving bounded room above
-the 32 MiB result maximum for protobuf fields and worst-case UTF-8 metadata.
-The result store retains at most 1,024 accepted results and 256 MiB of accepted
-value-and-attachment bytes in aggregate. A run whose acceptance would exceed
-either limit fails closed. The default result retention is 24 hours and can be
-configured with
-`Operator(result_retention_seconds=...)`; `None` retains results until
-`Operator.close()`. Accepted results are process-local retention, not durable
-storage: an operator restart loses them. Close and expiry release accepted
-memory; cancellation, failure, interrupted publication, and close discard
-provisional bundles. Under a configured result-storage directory, each process
-root holds a private ownership lock. When advisory file locking is available,
-startup reaps only unlocked, same-user roots with a valid implementation marker;
-live or tampered roots are left untouched. Without advisory locking, startup
-does not attempt crash-recovery reaping, so an uncleanly terminated process can
-leave provisional storage for manual removal. Normal `Operator.close()` remains
-deterministic.
-
-Result publication and CLI materialization require securely anchored
-directory-relative file operations. A platform without them fails before
-spooling or materializing result bytes with an actionable error; it never falls
-back to pathname check-then-open behavior.
-
-The result RPC carries one requested result with each file's name, media type,
-and SHA-256 digest. The receiver validates the digest before returning the
-value. The 8 MiB per-attachment, 32 MiB total-result, and 48 MiB gRPC-envelope
-ceilings apply end to end. Bounded result JSON, manifest, attachment-count, and
-metadata-string limits protect the control plane before parsing or allocation,
-and both gRPC endpoints enforce the same finite message ceiling.
-
-The operator binds `127.0.0.1` by default and has no built-in caller
-authentication. Loopback is only a local reachability and trust boundary: any
-local process may attempt to call the service. `--host` makes non-loopback
-exposure explicit, but secure remote deployment still requires an external
-authenticated boundary.
-
-Result retrieval is available only after terminal success. A nonterminal,
-failed, or cancelled run returns gRPC `FAILED_PRECONDITION`; an unknown run
-returns `NOT_FOUND`. This keeps existing run-state, failure, cancellation, and
-timeout behavior separate from successful payload delivery.
-
-### File results from the CLI
-
-`ava run` prints the run ID. Pass that ID to `ava result`; `--wait` polls until a
-nonterminal run reaches success, failure, cancellation, or the timeout:
+Download an operator result with the CLI:
 
 ```bash
 uv run ava result "$RUN_ID" \
@@ -446,181 +245,58 @@ uv run ava result "$RUN_ID" \
   --output-dir ./run-result
 ```
 
-Without `--wait`, retrieval succeeds only when the run has already completed
-successfully. Failed and cancelled runs have no downloadable successful result.
+The output directory must not already exist. The command writes result metadata
+and any file or workspace contents beneath it.
 
-The requested output directory must not already exist, and its parent must
-exist. In a private staging directory anchored in that parent, the CLI writes
-binary attachments under collision-resistant generated filenames, verifies
-every digest and the JSON metadata document, and syncs the files and
-directories. It then atomically renames the staged child name without replacing
-an existing destination, immediately opens the requested destination through the
-retained parent descriptor, and compares that identity to the retained staging
-descriptor. A mismatch fails the command and triggers bounded,
-descriptor-anchored cleanup. Original file names never control output paths,
-and only metadata is printed.
+## Run and cancel
 
-After success, the new directory has this shape:
-
-```text
-run-result/
-├── attachment-0001-<uuid>-report.pdf
-├── attachment-0002-<uuid>-summary.txt
-└── result-<uuid>.json
-```
-
-Names are generated; the optional sanitized suffix is only a human-readable
-hint from the original filename. The result JSON records `run_id`, the original
-scalar/container result shape with each file replaced by its metadata, a flat
-`files` list, and each attachment's relative `path`, original `name`,
-`media_type`, `sha256`, and `size`. The CLI prints the same document plus
-`metadata_path` to stdout, never binary content. Scalar-only results still
-produce the JSON document with an empty `files` list.
-
-Workspace result values are written as generated directories under the result
-directory, preserving their logical nested tree. Their metadata is included in
-the JSON document; the CLI never prints file contents. Before creating staging,
-the CLI rejects a complete result tree that would exceed its 2,048-entry cleanup
-budget or its cleanup depth of eight. Accepted workspace trees are materialized,
-rehashed, and recursively synced with only a bounded ancestor chain of directory
-descriptors open at once.
-
-The command verifies every digest and the metadata document before publishing
-the output directory. Any catchable retrieval, validation, write, sync, or
-publication failure returns nonzero and leaves the requested destination absent.
-
-This is a local CLI for a caller-owned output namespace. POSIX and macOS do not
-offer a portable rename-by-open-directory-descriptor operation or a no-replace
-rename conditioned on the source name still identifying a specific inode.
-Consequently, the CLI does not promise exact validated-source publication or
-zero transient exposure against a hostile concurrent process running as the
-same user. Such a process can substitute the staged name and briefly create a
-wrong requested destination before the immediate identity check detects and
-removes it; hostile same-user namespace concurrency is outside the threat model.
-Within the caller-owned namespace contract, descriptor-authenticated catchable
-state is cleaned with anchored operations, and catchable failures leave no
-requested destination. An interruption after the holding `mkdir` side effect
-but before descriptor acquisition can leave private empty holding residue:
-safe cleanup cannot distinguish the created directory from a same-name
-replacement, so it does not open, adopt, or remove that entry. The requested
-destination remains absent. `SIGKILL` can also leave private holding residue.
-
-## Execution
-
-Run a workflow by constructing it and calling `.run()` with an executor. The
-returned process-local handle exposes its identity immediately:
+`.run()` starts a workflow and returns an awaitable `ava.RunHandle` immediately.
 
 ```python
 run = document_flow().run(executor=ava.LocalExecutor())
 print(run.run_id)
 result = run.result()
+
+# In async code:
+result = await document_flow().run(executor=ava.LocalExecutor())
 ```
 
-`ava.LocalExecutor` runs locally. `ava.RayExecutor` is available when Ray support
-is installed and configured. In asynchronous code, use `result = await run`;
-cancelling that individual asyncio waiter does not cancel the workflow.
+Use `ava.LocalExecutor` for local execution. `ava.RayExecutor` is available when
+Ray support is installed. Call `run.cancel()` to request cooperative cancellation.
 
-`run.cancel()` requests cooperative cancellation. Avalanche observes it between
-node submissions and reports an observed request as terminal cancellation; an
-active Python thread or Ray task is allowed to finish. If completion or failure
-wins before cancellation is observed, that outcome remains authoritative. A
-`RunHandle` caches its terminal output or failure, but it is not a durable run
-registry and cannot recover state after process exit. Operator-managed runs own
-durable-facing status and control separately.
+For task-scoped platform resources, pass `ava.ExecutionServicesSpec`; see
+[Execution services](execution-services.md).
 
-Advanced platforms can pass an `ava.ExecutionServicesSpec` to materialize typed
-inputs and task-scoped resources inside the actual Local or Ray worker. Workflow
-task code still receives its declared `BaseInput`; platform lifecycle metadata
-travels separately from workflow outputs. See
-[Execution services](execution-services.md) for provider and workflow-author DX.
+## Rerun
 
-### Reruns
-
-Use `ava.Rerun` when you want to re-execute a previous workflow run from one or
-more node slugs. This is separate from ordinary failure retry: reruns are an
-explicit, append-only workflow operation keyed by a source `run_id` and stable
-node slugs.
-
-```python
-result = document_flow().run(
-    executor=ava.LocalExecutor(),
-    run_id="rerun_002",
-    rerun=ava.Rerun(
-        run_id="run_001",
-        start=["load_document"],
-        mode="autorun",
-    ),
-).result()
-```
-
-`Rerun.start` accepts one slug or a list of slugs. Slugs default to the decorated
-function name and can be set explicitly with `slug=`:
+Use `ava.Rerun` to run part of an earlier workflow again. Target stable node
+slugs; set `slug=` explicitly for nodes that must be rerun by name.
 
 ```python
 @ava.step(slug="chunk-docs")
-def chunk_documents(...): ...
+def chunk_documents(documents):
+    return documents
+
+
+result = document_flow().run(
+    executor=ava.LocalExecutor(),
+    run_id="rerun_002",
+    rerun=ava.Rerun(run_id="run_001", start=["chunk-docs"], mode="autorun"),
+).result()
 ```
 
-Repeated invocations of a node receive generated slugs `name`, `name_2`, and so
-on. Those suffixes depend on workflow construction order, so nodes targeted by
-production reruns should use an explicit `slug=`.
-
-`mode="autorun"` runs each start node and its downstream DAG closure.
-`mode="lazy"` runs only the listed start nodes; downstream state is left as-is.
-Lazy downstream staleness is accepted: Avalanche does not rewrite or mark
-existing downstream rows. Compare `_ava_lineage_vector` values when freshness
-matters. Lazy reruns support multiple start slugs for fanout cases. When a rerun
-skips an upstream node, the scheduled node should read skipped input through
-`ava.Stream` so Avalanche can replay source rows by lineage. Non-indexed `NodeFuture`
-selectors may select an `ava.Stream` parent when the node also has a
-runtime-injected `BaseInput` and ordinary Python parameters. Durable replay is
-keyed by `(run_id, node_slug)`, so it cannot distinguish tuple return slots when
-one producer writes both to the same table. A rerun that skips the producer while
-using an indexed Stream selector is therefore rejected. The same limitation
-applies when an unindexed true-multi-return parent is expanded into logical
-output slots and one of those slots binds to a Stream parameter. Include the
-producer in the rerun, or model its outputs as distinct source nodes. Explicit
-Python args from skipped `NodeFuture`s are still rejected when they are not
-bound to a Stream provider, because there is no live result to pass.
-
-If a workflow declares one or more `NodeFuture` returns, each return whose fetch
-target was pruned by rerun scheduling resolves to `None`. Scheduled declared
-returns keep their normal values, including their original tuple positions.
-
-Workflow inputs for reruns come from the current `.run(input=...)` call, not
-from the source run named by `Rerun.run_id`. If a workflow declares
-`@ava.workflow(input=MyInput)`, Avalanche validates the current run's `input`
-payload into `MyInput` and injects that object into node parameters annotated as
-`MyInput`. If `input` is omitted, `MyInput()` is constructed from model defaults.
-The source `Rerun.run_id` is used for skipped upstream data/lineage reads, such
-as `ava.Stream` rows; it does not restore the previous run's `BaseInput` values.
-To replay with identical parameters, pass the same input again. To rerun with
-new parameters, pass a new `input` payload.
-
-`ava.Rerun(deployment_id=...)` reserves the target-deployment selector for
-operators that route the same DAG spec to a specific deployed code version. The
-in-process Python API records the value in `RunContext.rerun`; it does not switch
-code versions by itself.
-
-When a local operator is running, start a discovered workflow over gRPC with
-`ava run`. JSON values go through `--input` and `--context`; files are attached
-to top-level input fields without base64-in-JSON:
-
-```bash
-uv run ava run document_flow --connect localhost:7433 \
-  --input '{"value": 41}' \
-  --context '{"metadata": {"request_id": "req_123"}}' \
-  --file document=./doc.txt
-```
+`mode="autorun"` runs each selected node and everything downstream.
+`mode="lazy"` runs only the selected nodes. Pass `input=` again when a rerun
+needs workflow input; it is not restored from the source run.
 
 ## Current caveats
 
-- Workflow functions should define edges only: avoid loops, conditionals with
-  runtime data, network calls, or data processing in the workflow body.
-- Task enable/disable modifiers such as `.skip()` or `.only()` are not part of
+- Workflow bodies define graph edges only; avoid runtime-data conditionals,
+  network calls, or data processing there.
+- Task enable/disable modifiers such as `.skip()` and `.only()` are not part of
   the current release-candidate API.
-- Operator/TUI discovery imports Python files. Use a specific flow file or a
-  clean flow-only directory rather than `--flows .` from the repository root.
+- Operator/TUI discovery imports Python files. Point `--flows` to a flow file or
+  dedicated flow directory, not the repository root.
 
 See [`examples/complex_dag_pattern.py`](../examples/complex_dag_pattern.py) for a
 runnable DAG example.
