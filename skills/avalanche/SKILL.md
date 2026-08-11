@@ -5,11 +5,11 @@ description: >-
   user describes an outcome that should become a typed multi-step workflow, or
   when creating an Avalanche flow or belt, choosing deterministic versus
   PredictRLM-backed agent steps, composing DAGs with >> and &, selecting
-  embedded/operator/TUI execution, or using Iceberg or Lance persistence.
+  embedded/operator/browser/TUI execution, or using Iceberg or Lance persistence.
 compatibility: >-
-  Requires Python 3.11+ and avalanche-ai; agent steps require the agent extra.
-  Includes a vendored copy of PredictRLM's RLM-design skill as a reference;
-  check its upstream source for updates when access is available.
+  Requires Python 3.11 through 3.13 and avalanche-ai. Agent steps are included
+  in the base package. Includes a vendored copy of PredictRLM's RLM-design skill
+  as a reference; check its upstream source for updates when access is available.
 metadata:
   author: Trampoline AI
   version: "1.0"
@@ -23,7 +23,8 @@ metadata:
 
 Avalanche turns a desired outcome into a typed, observable agentic workflow. A
 workflow combines deterministic Python nodes with PredictRLM-backed agent nodes
-inside one DAG, then runs it locally or through the operator and TUI. The main
+inside one DAG, then runs it locally or through the operator with the browser UI
+or TUI. The main
 design task is deciding where adaptive agent work belongs, what each stage
 promises, and how data and artifacts move between stages. Decorators and arrow
 syntax come after that design.
@@ -36,7 +37,7 @@ Load only what the task needs:
   [agent-steps.md](references/agent-steps.md). It loads the vendored original
   PredictRLM skill for the single-step design process, then covers the Avalanche
   integration surface.
-- First implementation example: [quick-start.md](references/quick-start.md).
+- Usage, local execution, and CLI flags: [usage.md](references/usage.md).
 - File layout and maintainability: [project-layout.md](references/project-layout.md).
 - Iceberg and Lance persistence: [storage.md](references/storage.md).
 
@@ -228,7 +229,10 @@ Choose the execution surface from the caller:
 - embedded execution for application code that starts a run and consumes its
   `RunHandle`;
 - operator/CLI execution for discovered flows run through the control plane;
-- the TUI when users need to launch, inspect, monitor, or control operator runs.
+- the browser UI for interactive local operator work; prefer it to the TUI unless
+  the user explicitly asks for terminal interaction;
+- the TUI only when the user requests terminal interaction; give them the
+  command to run in their own terminal rather than launching it from the agent.
 
 ### Step 8: Check feasibility and define proof
 
@@ -402,9 +406,9 @@ do not omit a section because the design appears simple.
 7. **Operational decisions:** persistence and execution-surface choices, with
    their rationale.
 8. **Implementation and proof:** package/file layout plus a representative
-   end-to-end verification scenario and the local operator/web-UI handoff. Name
-   the required `runtime` dependency, narrow flow file or clean flow directory,
-   operator launch command, expected UI endpoint, and browser check.
+   end-to-end verification scenario and, when requested, the local
+   operator/browser-UI handoff. Name the narrow flow file or clean flow
+   directory, chosen launch command, expected UI endpoint, and browser check.
 
 End the proposal with a direct request for approval to implement it. Do not
 create or modify workflow implementation files, generate scaffolding, or begin
@@ -423,28 +427,72 @@ for changes, update and re-present the complete plan for approval.
 6. For table-backed flows, define and push the Iceberg or Lance namespace, then
    connect table and stream providers to the DAG.
 
-## Launch the local operator and hand off the web UI
+## Run the local operator and browser UI
 
-After an approved workflow implementation and its focused verification complete,
-launch the new flow through the local operator with the browser UI enabled:
+Start local services only when the user asks to run, inspect, or verify a
+workflow through the operator. The browser UI is the normal interactive surface;
+the TUI is an optional terminal alternative.
+
+See more details in the usage reference [usage.md](references/usage.md)
+
+For the combined local path, use:
 
 ```bash
-uv run ava operator --flows <flow-file-or-clean-flow-directory> --web
+uv run ava dev --flows <flow-file-or-clean-flow-directory>
 ```
 
-Use a specific flow file or a clean flow-only directory; never use `--flows .`.
-Run the operator as a long-lived process, wait for it to report
-`Avalanche web UI: <endpoint>`, then open that exact endpoint in a browser and
-confirm the new workflow appears in the catalog. The default local endpoint is
-`http://127.0.0.1:7435`, but report the endpoint actually printed by the
-operator.
+`ava dev` starts the local operator and browser UI. Its flags are:
 
-In the final handoff, give the user the exact URL and explicitly tell them to
-open it in their browser. State that it is a local-development loopback service
-without built-in authentication. This operator launch and browser check are
-required even when the workflow's intended execution surface is embedded;
-they demonstrate that the new flow is discoverable and controllable through
-Avalanche's operator UI.
+- `--flows PATH [PATH ...]`: one or more flow files or directories to scan;
+- `--port PORT`: operator gRPC port, default `7433`;
+- `--web-port PORT`: browser UI HTTP port, default `7435`; it must differ from
+  `--port`;
+- `--ray`: use the Ray executor.
+
+Use a specific flow file or a clean flow-only directory; never use `--flows .`.
+
+For separate processes or a custom browser-listener host, start them in separate
+terminals:
+
+```bash
+uv run ava operator --flows <flow-file-or-clean-flow-directory> \
+  --host 127.0.0.1 --port 7433 --webhook-port 7434 --log-level WARNING
+uv run ava web --connect localhost:7433 --host 127.0.0.1 --port 7435
+```
+
+`ava operator` also accepts `--ray`. Its `--log-level` accepts `DEBUG`, `INFO`,
+`WARNING`, or `ERROR`. `ava web` connects with `--connect HOST:PORT`; use
+`--trusted-proxy` only for non-loopback traffic protected by a trusted,
+authenticated proxy.
+
+Start a discovered workflow with:
+
+```bash
+uv run ava run <workflow-selector> --connect localhost:7433 \
+  --input '<json-object>'
+```
+
+`ava run` also accepts `--context <json-object>`, repeated
+`--file FIELD=PATH`, and repeated `--workspace FIELD=DIR` for top-level input
+fields.
+
+## Hand off the TUI only on request
+
+Do not launch `uv run ava tui` from the agent or a background process. Its
+interactive terminal would not be available to the user. When the user asks for
+the TUI, ensure they have an already-running operator, then give them this
+command to run in another terminal:
+
+```bash
+uv run ava tui [flow[/node]] --connect localhost:7433
+```
+
+The TUI also supports `--token`, `--tls`, `--insecure`, and
+`--tls-ca-cert PATH` for its gRPC connection. `uv run ava tui` without
+`--connect` is mock mode for UI exploration only.
+
+When a browser UI is launched, report its actual local endpoint. Do not make
+operator or browser startup a mandatory handoff for an embedded workflow.
 
 ## Non-negotiable conventions
 
@@ -586,10 +634,14 @@ the workflow body's expression statement.
 - Every tool has a stable unique function name, typed arguments, a precise
   docstring, and a serializable return value.
 - Embedded execution reaches a real terminal result.
-- The completed workflow is discovered by a local operator launched with
-  `--web`, and the reported web UI endpoint is opened in a browser.
-- The user receives that exact local web UI URL and an explicit instruction to
-  open it in their browser.
-- Operator discovery, CLI input, and TUI connection are exercised when changed.
+- When the user requests operator or browser verification, the completed
+  workflow is discovered through `uv run ava dev` or the separate
+  `uv run ava operator` and `uv run ava web` commands, and the browser endpoint
+  is exercised.
+- When a browser UI is started, the user receives its exact local URL and an
+  explicit instruction to open it in a browser.
+- Operator discovery, CLI input, or browser UI is exercised only when it changes
+  or the user requests it. Hand off a requested TUI command to the user; do not
+  launch the TUI from the agent.
 - Iceberg or Lance namespaces are pushed and append/stream behavior is exercised
   when persistence is used.
