@@ -1617,29 +1617,44 @@ def test_ava_dev_starts_web_without_waiting_for_operator_readiness(monkeypatch):
         def kill(self):
             events.append("kill")
 
-
     def fake_start_operator_process(flows, port, use_ray):
         events.append(("start", flows, port, use_ray))
         return FakeProcess()
 
-    def fake_start_web_process(address):
-        events.append(("web", address))
+    def fake_start_web_process(address, port):
+        events.append(("web", address, port))
         return FakeProcess()
-
 
     monkeypatch.setattr(app, "_start_operator_process", fake_start_operator_process)
     monkeypatch.setattr(app, "_start_web_process", fake_start_web_process)
 
-    assert app.main(["dev", "--flows", "examples", "--ray"]) == 0
+    assert (
+        app.main(
+            ["dev", "--flows", "examples", "--ray", "--port", "8443", "--web-port", "8444"]
+        )
+        == 0
+    )
     assert events == [
-        ("start", ["examples"], 7433, True),
-        ("web", "127.0.0.1:7433"),
+        ("start", ["examples"], 8443, True),
+        ("web", "127.0.0.1:8443", 8444),
         ("wait", None),
         "terminate",
         ("wait", 5),
         "terminate",
         ("wait", 5),
     ]
+
+
+def test_ava_dev_rejects_colliding_operator_and_browser_ports(monkeypatch, capsys):
+    from ava_cli import app
+
+    monkeypatch.setattr(app, "_run_dev", lambda args: 0)
+
+    with pytest.raises(SystemExit) as exc_info:
+        app.main(["dev", "--port", "7435"])
+
+    assert exc_info.value.code == 2
+    assert "--port and --web-port must differ" in capsys.readouterr().err
 
 
 def test_ava_dev_defaults_flows_to_current_directory(monkeypatch):
@@ -1670,13 +1685,12 @@ def test_ava_dev_stops_operator_when_wait_is_interrupted(monkeypatch):
         def kill(self):
             events.append("kill")
 
-
     monkeypatch.setattr(
         app,
         "_start_operator_process",
         lambda flows, port, use_ray: FakeProcess(),
     )
-    monkeypatch.setattr(app, "_start_web_process", lambda address: FakeProcess())
+    monkeypatch.setattr(app, "_start_web_process", lambda address, port: FakeProcess())
 
     with pytest.raises(KeyboardInterrupt):
         app.main(["dev", "--flows", "examples"])
