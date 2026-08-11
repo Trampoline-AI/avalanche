@@ -114,7 +114,6 @@ trampoline_ai_transform
 .hermes/
 .avalanche/
 presentation_artifacts/
-examples/customer_feedback_review/artifacts/
 __marimo__
 
 .vite

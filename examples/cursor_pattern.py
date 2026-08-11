@@ -21,7 +21,7 @@ def example_root() -> Path:
     root = (
         Path(configured)
         if configured
-        else Path(".avalanche/examples/cursor_pattern") / str(os.getpid())
+        else Path(".avalanche/catalogs/cursor_workflow") / str(os.getpid())
     )
     root.mkdir(parents=True, exist_ok=True)
     return root

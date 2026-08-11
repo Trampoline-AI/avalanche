@@ -52,7 +52,12 @@ def _(Path, ast, importlib, load_dotenv, os):
     FEEDBACK_WORKBOOK_PATH = Path(__file__).with_name("feedback_workbook.xlsx")
     WORKFLOW_DAG_PATH = Path(__file__).with_name("workflowdag.jpg")
     WORKFLOW_NODE_TYPES_DAG_PATH = Path(__file__).with_name("workflowdag2.jpg")
-    ARTIFACT_ROOT = Path(__file__).with_name("artifacts") / "generated_review_pack"
+    _example_root = os.getenv("AVALANCHE_EXAMPLE_ROOT")
+    ARTIFACT_ROOT = (
+        Path(_example_root) / "customer_feedback_review"
+        if _example_root is not None
+        else Path(".avalanche/outputs/feedback_review") / str(os.getpid())
+    )
     WORKBOOK_OUTPUT_DIR = ARTIFACT_ROOT / "workbook"
     BRIEF_OUTPUT_DIR = ARTIFACT_ROOT / "brief"
 
