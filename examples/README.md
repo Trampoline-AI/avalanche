@@ -1,22 +1,26 @@
 # Avalanche Examples
 
-This directory contains the canonical examples. The canonical example scripts are
-covered by `test/example_smoke_test.py`.
+This directory contains the canonical examples. The standalone Python scripts
+are covered by `test/example_smoke_test.py`.
 
-Run examples from the repository root:
-
-```bash
-uv run python examples/<example_name>.py
-```
-
-By default, examples that need storage write under `.avalanche/examples/`. To
-redirect artifacts, set `AVALANCHE_EXAMPLE_ROOT`:
+Run the examples from this directory:
 
 ```bash
-AVALANCHE_EXAMPLE_ROOT=/path/to/tempdir uv run python examples/stream_pattern.py
+uv run ava dev
 ```
+
+This starts the local operator and browser UI. The operator discovers the
+workflows in `examples/`; select any discovered workflow in the UI to start a
+run.
 
 ## Canonical Examples
+
+### [`customer_feedback_review/`](customer_feedback_review/)
+
+Production-shaped agentic review workflow. It analyzes a customer-feedback
+workbook with parallel theme and risk agents, validates their reports
+deterministically, then publishes an Excel product review and Word executive
+brief. See its [README](customer_feedback_review/README.md) for the full flow.
 
 ### `complex_dag_pattern.py`
 
@@ -24,9 +28,6 @@ Simplest local flow execution path. It demonstrates the Python DAG API,
 explicit data passing, fan-out, fan-in, and `ava.LocalExecutor` without requiring
 Iceberg, Ray, the operator, or the TUI.
 
-```bash
-uv run python examples/complex_dag_pattern.py
-```
 
 ### `stream_pattern.py`
 
@@ -50,9 +51,6 @@ This example uses append-scan streams (`mode="append_scan"`): each consumer edge
 gets a unique Stream `key`, and the runtime injects a `polars.DataFrame` for the
 claimed snapshot. The default `ava.Stream(table)` is run-scoped and takes no key.
 
-```bash
-uv run python examples/stream_pattern.py
-```
 
 ### `cursor_pattern.py`
 
@@ -60,39 +58,11 @@ Manual checkpoint control for advanced incremental flows. It demonstrates a
 Cursor that tracks a source table snapshot while writing to a destination table,
 model-specific cursors, and a multi-table sync checkpoint.
 
-```bash
-uv run python examples/cursor_pattern.py
-```
 
 ### `operator_workflow.py`
 
-Flow file intended for the local operator and connected TUI path. It can also
-run directly with the local executor.
-
-```bash
-uv run python examples/operator_workflow.py
-```
-
-Start the operator against the canonical examples directory:
-
-```bash
-uv run ava operator --flows examples --port 7433
-```
-
-In another terminal, connect the TUI:
-
-```bash
-uv run ava tui --connect localhost:7433
-```
-
-The TUI consumes the operator's gRPC flow list; it does not import example files
-directly.
-
-The TUI also supports mock mode without an operator:
-
-```bash
-uv run ava tui
-```
+Flow file for the local operator and connected UI path. It is discovered along
+with the other examples when `uv run ava dev` runs from this directory.
 
 ## Notes
 
@@ -101,4 +71,4 @@ uv run ava tui
 - For backlog/queue streaming use `ava.Stream(table, key="...", mode="append_scan")`
   with one unique key per consumer edge. `key` is only valid with `append_scan`.
 - Local example artifacts are ignored by git through `.avalanche/`.
-- Only the examples listed here are part of the smoke-tested onboarding path.
+- The standalone scripts listed here are part of the smoke-tested onboarding path.
