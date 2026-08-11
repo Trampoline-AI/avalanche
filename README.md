@@ -296,11 +296,8 @@ def feedback_workflow():
 ```
 
 An `lm` or `sub_lm` passed to an individual agent step overrides the same
-workflow default. When neither is configured, Avalanche uses its own defaults,
-then PredictRLM's. Changing providers requires both a new provider-qualified
-model identifier and that provider's credentials. `agent_defaults` configures
-runtime options only; signatures, skills, and tools remain defined on each agent
-step.
+workflow default. `agent_defaults` configures runtime options only; signatures, skills, and
+tools remain defined on each agent step.
 
 ## Optional components
 
