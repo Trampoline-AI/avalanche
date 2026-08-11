@@ -106,5 +106,32 @@ describe("Explorer", () => {
     );
     expect(screen.getByText("1 reload issue")).toBeInTheDocument();
     expect(screen.getByText("build error")).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: "Dismiss reload issues" }));
+    rerender(
+      <Explorer
+        catalog={CatalogSnapshotMsg.create({
+          revision: "5",
+          workflows: [orders],
+          diagnostics: [],
+        })}
+        onSelect={onSelect}
+      />,
+    );
+    expect(screen.queryByText("1 reload issue")).not.toBeInTheDocument();
+
+    rerender(
+      <Explorer
+        catalog={CatalogSnapshotMsg.create({
+          revision: "5",
+          workflows: [orders],
+          diagnostics: [
+            { kind: "build_error", path: "flows.py", message: "ValueError: invalid flow" },
+          ],
+        })}
+        onSelect={onSelect}
+      />,
+    );
+    expect(screen.getByText("1 reload issue")).toBeInTheDocument();
   });
 });
