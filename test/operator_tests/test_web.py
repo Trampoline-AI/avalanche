@@ -5,6 +5,7 @@ from __future__ import annotations
 import http.client
 import socket
 import struct
+import time
 from pathlib import Path
 
 import pytest
@@ -22,6 +23,20 @@ def _free_port() -> int:
     with socket.socket() as sock:
         sock.bind(("127.0.0.1", 0))
         return sock.getsockname()[1]
+
+
+def _subscriber_count(operator: Operator) -> int:
+    with operator._lock:
+        return len(operator._update_subscribers)
+
+
+def _wait_for_subscriber_count(operator: Operator, expected: int, timeout: float = 3.0) -> bool:
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        if _subscriber_count(operator) == expected:
+            return True
+        time.sleep(0.01)
+    return _subscriber_count(operator) == expected
 
 
 def _frame(message) -> bytes:
@@ -102,6 +117,39 @@ def test_browser_listener_proxies_stream_reset_from_remote_operator(tmp_path: Pa
         assert envelope.HasField("reset_required")
         assert frames[-1][0] == 0x80
         assert b"grpc-status: 0" in frames[-1][1]
+    finally:
+        server.close()
+        grpc_server.stop(grace=0)
+        operator.close()
+
+
+def test_browser_listener_cancels_idle_stream_when_browser_disconnects(tmp_path: Path):
+    (tmp_path / "index.html").write_text("<main>Avalanche</main>")
+    operator = Operator([], watch=False, schedule=False)
+    grpc_port = _free_port()
+    grpc_server = serve_operator(operator, port=grpc_port, block=False)
+    server = start_browser_server(f"127.0.0.1:{grpc_port}", port=0, asset_root=tmp_path)
+    try:
+        connection = http.client.HTTPConnection(server.host, server.port, timeout=5)
+        try:
+            connection.request(
+                "POST",
+                f"{_SERVICE}StreamOperatorUpdates",
+                body=_frame(
+                    pb.StreamOperatorUpdatesRequest(
+                        operator_instance_id=operator.operator_instance_id,
+                        after_sequence=operator.current_sequence,
+                    )
+                ),
+                headers={"Content-Type": _CONTENT_TYPE},
+            )
+            response = connection.getresponse()
+            assert response.status == 200
+            assert _wait_for_subscriber_count(operator, 1)
+        finally:
+            connection.close()
+
+        assert _wait_for_subscriber_count(operator, 0)
     finally:
         server.close()
         grpc_server.stop(grace=0)

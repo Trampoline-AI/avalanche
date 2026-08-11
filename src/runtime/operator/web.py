@@ -5,6 +5,7 @@ from __future__ import annotations
 import logging
 import mimetypes
 import re
+import select
 import socket
 import struct
 import threading
@@ -30,6 +31,7 @@ _GRPC_WEB_CONTENT_TYPE = "application/grpc-web+proto"
 _GRPC_SERVICE_PATH = "/avalanche.operator.OperatorService/"
 _FRAME_HEADER_BYTES = 5
 _MAX_REQUEST_BYTES = 4 * 1024 * 1024
+_CLIENT_DISCONNECT_POLL_SECONDS = 0.1
 _OPERATOR_PORT_META = re.compile(
     rb'(<meta\b[^>]*\bcontent=")[^"]+("(?=[^>]*\bdata-avalanche-operator-port\b))'
 )
@@ -161,15 +163,31 @@ class _BrowserRequestHandler(BaseHTTPRequestHandler):
         self._send_grpc_headers()
         self.send_header("Transfer-Encoding", "chunked")
         self.end_headers()
+        call = responses if isinstance(responses, grpc.Call) else None
+        stream_complete = threading.Event() if call is not None else None
+        client_disconnected = threading.Event() if call is not None else None
+        monitor = None
+        if call is not None and stream_complete is not None and client_disconnected is not None:
+            monitor = threading.Thread(
+                target=_cancel_when_client_disconnects,
+                args=(self.connection, call, stream_complete, client_disconnected),
+                name="avalanche-browser-stream-monitor",
+                daemon=True,
+            )
+            monitor.start()
         try:
             try:
                 for response in responses:
                     self._write_chunk(_data_frame(response))
             except grpc.RpcError as exc:
+                if client_disconnected is not None and client_disconnected.is_set():
+                    return
                 trailer = _trailer_frame(exc.code(), exc.details())
             except (BrokenPipeError, ConnectionResetError):
                 return
             except Exception:
+                if client_disconnected is not None and client_disconnected.is_set():
+                    return
                 logger.exception("Unhandled gRPC-Web stream proxy failure")
                 trailer = _trailer_frame(grpc.StatusCode.INTERNAL, "internal proxy error")
             else:
@@ -181,8 +199,12 @@ class _BrowserRequestHandler(BaseHTTPRequestHandler):
             except (BrokenPipeError, ConnectionResetError):
                 return
         finally:
-            if isinstance(responses, grpc.Call):
-                responses.cancel()
+            if stream_complete is not None:
+                stream_complete.set()
+            if call is not None:
+                call.cancel()
+            if monitor is not None:
+                monitor.join()
 
     def _send_grpc_error(self, code: grpc.StatusCode, detail: str) -> None:
         if self.wfile.closed:
@@ -334,6 +356,34 @@ def _trailer_frame(code: grpc.StatusCode, detail: str) -> bytes:
     safe_detail = detail.replace("\r", " ").replace("\n", " ")
     payload = f"grpc-status: {status}\r\ngrpc-message: {safe_detail}\r\n".encode()
     return struct.pack(">BI", 0x80, len(payload)) + payload
+
+
+def _cancel_when_client_disconnects(
+    connection: socket.socket,
+    call: grpc.Call,
+    stream_complete: threading.Event,
+    client_disconnected: threading.Event,
+) -> None:
+    while not stream_complete.wait(_CLIENT_DISCONNECT_POLL_SECONDS):
+        if _client_disconnected(connection):
+            client_disconnected.set()
+            call.cancel()
+            return
+
+
+def _client_disconnected(connection: socket.socket) -> bool:
+    try:
+        readable, _, _ = select.select((connection,), (), (), 0)
+    except (OSError, ValueError):
+        return True
+    if not readable:
+        return False
+    try:
+        return connection.recv(1, socket.MSG_PEEK) == b""
+    except (BlockingIOError, InterruptedError, TimeoutError):
+        return False
+    except OSError:
+        return True
 
 
 def _is_loopback_host(host: str) -> bool:
