@@ -27,6 +27,7 @@ from .models import (
     WorkflowLocator,
     display_name_from_id,
 )
+from .source_policy import is_excluded_directory
 from .windows_job import WindowsJob, assign_process, close_job, create_kill_on_close_job
 
 
@@ -281,9 +282,7 @@ def _iter_files(root: ConfiguredRoot) -> list[Path]:
     candidates: list[Path] = []
     for directory, subdirectories, file_names in os.walk(root.target):
         subdirectories[:] = sorted(
-            name
-            for name in subdirectories
-            if not name.startswith(".") and name != "__pycache__"
+            name for name in subdirectories if not is_excluded_directory(name)
         )
         candidates.extend(
             Path(directory, name)

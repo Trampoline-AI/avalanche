@@ -35,7 +35,7 @@ def test_registry_scan_of_examples_returns_only_canonical_flows(monkeypatch, tmp
     assert sorted(flow.name for flow in registry.list_workflows()) == CANONICAL_FLOW_NAMES
 
 
-def test_directory_scan_ignores_hidden_directories(tmp_path):
+def test_directory_scan_ignores_excluded_directories(tmp_path):
     visible_flow = tmp_path / "flow.py"
     visible_flow.write_text(
         """
@@ -52,9 +52,12 @@ def visible():
     return generate()
 """
     )
-    hidden_flow = tmp_path / ".venv" / "site-packages" / "dependency.py"
-    hidden_flow.parent.mkdir(parents=True)
-    hidden_flow.write_text('raise RuntimeError("must not import virtual environment code")')
+    for directory_name in (".venv", "venv", "build", "node_modules"):
+        excluded_flow = tmp_path / directory_name / "dependency.py"
+        excluded_flow.parent.mkdir(parents=True)
+        excluded_flow.write_text(
+            'raise RuntimeError("must not import excluded directory code")'
+        )
 
     registry = WorkflowRegistry()
     registry.scan([str(tmp_path)])
