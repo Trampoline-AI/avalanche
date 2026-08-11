@@ -1,6 +1,3 @@
-<p align="center">
-  <img align="center" src="docs/assets/brand/avalanche-logo-3d.png" width="560px" alt="Avalanche logo" />
-</p>
 
 
 # Avalanche
@@ -14,61 +11,205 @@ it through the Avalanche operator, and inspect every run from the terminal UI.
 > experimentation. APIs and operational behavior may change before a stable  
 > release.
 
-## Installation
-
-Add avalanche to your project:
-
-```bash
-uv add avalanche-ai
-```
-
 ## Requirements
 
 - Python 3.11, 3.12, or 3.13.
-- Agent steps require credentials for the model provider configured through
-  PredictRLM/DSPy.
-- The standard installation includes the operator, connected TUI, and agent support.
-- Ray and Lance support are optional and require their corresponding extras.
-
-
+- A LLM provider API key or Codex subscription for agent steps.
+- uv (recommended, https://docs.astral.sh/uv/)
 
 ## Quickstart
 
-
-
-### With your coding agent
-
-Give your coding agent Avalanche's workflow-authoring skill:
+Move into an empty directory, then run this command to initialize a starter
+project with the Avalanche skill installed and an example workflow:
 
 ```bash
-npx skills add Trampoline-AI/avalanche
+uvx avalanche-ai init
 ```
 
-### Workshop project setup
-
-Create and enter an empty directory, then bootstrap the workshop project:
+Follow the instructions to set up your LLM provider. Then finally, run the demo:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/Trampoline-AI/avalanche/main/init.sh | bash
+uv run ava dev
 ```
 
-The bootstrapper is non-interactive. Configure the starter flow's provider from
-an interactive terminal after it completes:
+This starts the operator and opens the browser UI at `http://127.0.0.1:7435`.
+
+## Installation
+
+
+
+### Starter project
+
+We recommend starting with the default Avalanche project, which includes everything you need to get started quickly on your first workflow. Just create an empty directory, cd into it and run:
+
+```bash
+uvx avalanche-ai init
+```
+
+Follow the instruction to set up your LLM provider
+
+When run from an interactive terminal, the bootstrapper offers provider setup immediately. To change
+providers or credentials later in the starter project:
 
 ```bash
 bash scripts/configure-provider.sh
 ```
 
-Then finally, run the demo:
+
+
+### Existing project
+
+Avalanche is also usable as a project dependency.
+
+Add Avalanche to an existing project:
 
 ```bash
-uv run ava operator --flows src/binary_converter/ --web
+uv add avalanche-ai
 ```
 
-Avalanche comes with a built-in web ui that you can access once the operator has launched at http://127.0.0.1:7435 on your machine.
+Install the avalanche skill in the same project:
+
+```bash
+npx skills add Trampoline-AI/avalanche
+```
 
 
-### Quick Example
+
+### Local checkout dependencies
+
+To develop Avalanche and PredictRLM alongside a new workspace, initialize an
+empty directory with editable dependencies:
+
+```bash
+uvx avalanche-ai init --editable-deps
+```
+
+This clones both Trampoline AI projects into `.trampoline-ai/` and configures
+them as local editable dependencies, so changes to either checkout are used
+immediately by the workspace.
+
+## Usage
+
+
+
+### Creating a workflow
+
+Avalanche workflows chain deterministic `@ava.step` and agent-backed
+`@ava.agent_step` nodes inside an `@ava.workflow`.
+
+```python
+@ava.step
+def step1() -> str:
+    return "Hello world"
+```
+
+```python
+@ava.agent_step(ava.Signature("text: str -> completion: str"))
+async def step2(text: str, *, agent: ava.Agent) -> str:
+    return (await agent(text=text)).summary
+```
+
+```python
+@ava.workflow
+def feedback_workflow():
+    return step1() >> step2()
+```
+
+We recommend using the skill directly in order to have your agent align on a goal and build a workflow for you.
+
+Open your coding agent in the same project where you installed avalanche, then:
+
+```
+/avalanche <Describe your wanted outcome here>
+```
+
+for codex:
+
+```
+$avalanche <Describe your wanted outcome here>
+```
+
+### Running the operator and Web UI
+
+The operator scans your code for workflows, then loads and runs them:
+
+```bash
+uv run ava operator
+```
+
+The Web UI reflects the state of the oeprator:
+
+```bash
+uv run ava web
+```
+
+Start the operator and Web UI together:
+
+```bash
+uv run ava dev
+```
+
+You can pass `--flows` to `operator` or `dev` to point the operator scan to a certain file or directory:
+
+```bash
+uv run ava dev --flows ./flow.py
+```
+
+Otherwise, the scan defaults to the current working directory.
+
+
+Similarily, you can pass `--connect` to the Web UI to change the operator url to connect to:
+
+```bash
+uv run ava web --connect localhost:7433
+```
+
+The operator defaults to `127.0.0.1:7433` and the Web UI to
+`http://127.0.0.1:7435`.
+
+### Running a workflow
+
+Once you have the operator running, you can either start workflows directly in the web UI, or start runs from your command line in a different terminal:
+
+```bash
+uv run ava run <workflow_name>
+```
+
+
+
+### TUI
+
+Avalanche also ships with a Terminal UI, that you can launch on the operator:
+
+```bash
+uv run ava tui --connect localhost:7433
+```
+
+The operator defaults to port 7433.
+
+### Workflow inputs
+
+Avalanche supports passing inputs to workflows using the BaseInput class. You can learn more about it in . You can pass inputs directly in the Web UI using small JSON editor, or through the command line:
+
+```bash
+uv run ava run <workflow_name> --input '{"key": "value"}'
+```
+
+
+
+### Embedded workflows
+
+You can run a workflow directly from Python. `.run()` returns an awaitable `RunHandle`; call `.result()` to wait synchronously:
+
+```python
+run = feedback_workflow.run(executor=ava.LocalExecutor())
+print(run.run_id)
+result = run.result()
+```
+
+
+
+## Quick Example
 
 ```python
 import random
@@ -99,326 +240,67 @@ def binary_converter():
     return generate_binary() >> convert_binary() >> print_result()
 ```
 
-The handle is process-local and its non-daemon driver thread keeps the embedded
-process alive until the run finishes. `run.cancel()` requests cooperative
-cancellation between node submissions; it does not forcibly stop an active
-thread or Ray task. Durable run state remains an operator responsibility.
-Terminal values may contain `ava.File` or `ava.Workspace` directly or nested in
-supported Pydantic/list/tuple/dict results. Embedded `.result()` returns the
-original Python shape and portable file/workspace objects. A terminal
-`Workspace` carries its serializable manifest; its local `.path` exists only
-while Avalanche is executing user node code.
-
-Start with the simplest smoke-tested example:
-Run it through the local operator:
-
-```bash
-uv run ava dev --flows path/to/flow
-```
 
 
-## Real example agentic data transformation workflow
+## Examples
 
-This example is closer to what a real production avalanche workflow can look like. This workflow turns product feedback into prioritized work in a CRM. It loads a typed corpus, runs theme and risk analysis in parallel, synthesizes both reports, and pushes the resulting plan to an external system.
+The [`examples/`](examples/) directory contains runnable workflows. Start with
+the customer feedback review, a production-shaped agentic data-transformation
+workflow; the rest are focused pattern demos.
 
-Set the credential required by your model provider. For the model in this
-example:
+| Example | Description |
+| ------- | ----------- |
+| [Customer feedback review](examples/customer_feedback_review/) | End-to-end agentic workflow: parallel theme/risk analysis of a feedback workbook, deterministic reconciliation, and published Excel + Word review pack. |
+| [`complex_dag_pattern.py`](examples/complex_dag_pattern.py) | Local DAG API with explicit data passing, fan-out, and fan-in on `ava.LocalExecutor`. |
+| [`stream_pattern.py`](examples/stream_pattern.py) | Stream-based incremental processing with local Iceberg tables. |
+| [`cursor_pattern.py`](examples/cursor_pattern.py) | Manual checkpoint control with cursors for advanced incremental flows. |
+| [`document_file_workflow.py`](examples/document_file_workflow.py) | Typed `ava.File` inputs and outputs through a `BaseInput` workflow. |
+| [`operator_workflow.py`](examples/operator_workflow.py) | Flow file for the local operator and connected TUI path. |
 
-```bash
-OPENAI_API_KEY="..."
-ANTHROPIC_API_KEY="..."
-GEMINI_API_KEY="..."
-```
+See [`examples/README.md`](examples/README.md) for how to run each example.
 
-Define your steps:
+## LLM providers and models
+
+Avalanche sends agent-model requests through [LiteLLM](https://www.litellm.ai/).
+Any provider and model supported by LiteLLM is therefore supported by Avalanche.
+Configure the provider credentials as environment variables documented in
+[LiteLLM's provider guide](https://docs.litellm.ai/docs/providers); the process
+running the operator must have access to those variables.
+
+We select models on each `@ava.agent_step` with LiteLLM's provider-qualified
+model identifier. `lm` selects the main model and `sub_lm` selects the
+sub-model:
 
 ```python
-class Feedback(BaseModel):
-    area: str
-    message: str
-
-
-class FeedbackCorpus(BaseModel):
-    records: list[Feedback]
-
-
-@ava.source
-def load_corpus() -> FeedbackCorpus:
-    return warehouse.load_feedback()
-```
-
-```python
-class Theme(BaseModel):
-    name: str
-    evidence: list[str]
-
-
-class ThemeReport(BaseModel):
-    themes: list[Theme]
-
-
-class ExtractThemes(ava.Signature):
-    """Find recurring product needs and cite the feedback behind each one."""
-
-    corpus: FeedbackCorpus = ava.InputField(
-        desc="The complete product-feedback corpus to analyze."
-    )
-    report: ThemeReport = ava.OutputField(
-        desc="Recurring themes with the supporting feedback."
-    )
-
-
-@ava.agent_step(ExtractThemes, lm="openai/gpt-5.5")
-async def extract_themes(
-    corpus: FeedbackCorpus,
-    *,
-    agent: ava.Agent,
-) -> ThemeReport:
-    return (await agent(corpus=corpus)).report
-```
-
-```python
-class Risk(BaseModel):
-    issue: str
-    severity: Literal["low", "medium", "high"]
-    evidence: list[str]
-
-
-class RiskReport(BaseModel):
-    risks: list[Risk]
-
-
-class DetectRisks(ava.Signature):
-    """Find product or customer risks and grade their severity."""
-
-    corpus: FeedbackCorpus = ava.InputField(
-        desc="The complete product-feedback corpus to analyze."
-    )
-    report: RiskReport = ava.OutputField(
-        desc="Risks, severity, and the supporting feedback."
-    )
-
-
-@ava.agent_step(DetectRisks, lm="openai/gpt-5.5")
-async def detect_risks(
-    corpus: FeedbackCorpus,
-    *,
-    agent: ava.Agent,
-) -> RiskReport:
-    return (await agent(corpus=corpus)).report
-```
-
-```python
-class CrmProductSignal(BaseModel):
-    kind: Literal["risk", "theme"]
-    headline: str
-    evidence: list[str]
-
-
-class CrmProductSignalBatch(BaseModel):
-    signals: list[CrmProductSignal]
-
-
-@ava.step
-def compose_crm_product_signals(
-    themes: ThemeReport,
-    risks: RiskReport,
-) -> CrmProductSignalBatch:
-    return CrmProductSignalBatch(
-        signals=[
-            CrmProductSignal(
-                kind="risk",
-                headline=risk.issue,
-                evidence=risk.evidence,
-            )
-            for risk in risks.risks
-        ]
-        + [
-            CrmProductSignal(
-                kind="theme",
-                headline=theme.name,
-                evidence=theme.evidence,
-            )
-            for theme in themes.themes
-        ]
-    )
-```
-
-```python
-class CrmTask(BaseModel):
-    external_id: str
-    title: str
-
-
-class CrmSyncResult(BaseModel):
-    created: list[CrmTask]
-
-
-@ava.dest
-def push_to_crm(signals: CrmProductSignalBatch) -> CrmSyncResult:
-    return crm.create_product_signals(signals)
-```
-
-Then chain them in a workflow:
-
-```python
-@ava.workflow
-def feedback_triage():
-    return (
-        load_corpus()
-        >> (extract_themes() & detect_risks())
-        >> compose_crm_product_signals()
-        >> push_to_crm()
-    )
-```
-
-Run it through the local operator:
-
-```bash
-uv run ava dev --flows path/to/flow
-```
-
-The resulting graph has four execution stages:
-
-```text
-                         ┌─ extract_themes (agent) ─┐
-load_corpus (source) ────┤                          ├─ compose_crm_product_signals ──→ push_to_crm
-                         └─ detect_risks (agent) ───┘
-```
-
-Both analysis agents receive the same `FeedbackCorpus`. Avalanche runs them
-concurrently, then binds their `ThemeReport` and `RiskReport` outputs into the
-deterministic `compose_crm_product_signals` step in branch order. It maps the
-reports into the CRM request shape. `push_to_crm` is a typed destination standing
-in for a real service write and returns the external records it created.
-
-Change the `lm` value and provider credentials to use another model supported by  
-PredictRLM/DSPy. See [Agent steps](docs/agent-steps.md) for skills, tools,  
-multi-output signatures, runtime defaults, and larger typed contracts.
-
-## Terminal UI
-
-Avalanche includes a Textual TUI for observing and controlling operator-managed
-workflows from the terminal.
-
-The TUI provides:
-
-- workflow and run navigation;
-- live DAG status;
-- run history and node-level details;
-- searchable logs;
-- start, cancel, and rerun controls;
-- schedule visibility and control.
-
-The local control plane and TUI are included in the standard installation.
-
-The operator listens on `127.0.0.1` by default because its gRPC service does not
-provide built-in authentication. Binding another interface with `--host` is an
-explicit deployment choice and requires an external trusted and authenticated
-boundary. Loopback limits network reachability; it does not identify callers,
-and any process running as a local user may attempt to call the service.
-
-In another terminal, start a run with JSON fields and a top-level file input.
-`--file FIELD=PATH` reads and attaches the file bytes; it does not send the local
-path to the operator:
-
-```bash
-RUN_ID=$(
-  uv run ava run document_file_workflow \
-    --connect localhost:7433 \
-    --input '{"value": 41}' \
-    --file document=./doc.txt
+@ava.agent_step(
+    ExtractThemes,
+    lm="openai/gpt-5.6-terra",
+    sub_lm="gemini/gemini-3.5-flash",
 )
+async def extract_themes(..., *, agent: ava.Agent) -> ThemeReport:
+    ...
 ```
 
-This command targets the bundled
-[`document_file_workflow`](examples/document_file_workflow.py) example.
+When a workflow's agent steps share models, we set them once with
+`@ava.workflow(agent_defaults=...)`:
 
-Download the successful terminal result without printing binary bytes. `--wait`
-waits up to `--timeout` seconds for a nonterminal run:
-
-```bash
-uv run ava result "$RUN_ID" \
-  --connect localhost:7433 \
-  --wait \
-  --output-dir ./run-result
+```python
+@ava.workflow(
+    agent_defaults={
+        "lm": "openai/gpt-5.6-terra",
+        "sub_lm": "gemini/gemini-3.5-flash",
+    }
+)
+def feedback_workflow():
+    return extract_themes()
 ```
 
-The output directory must not already exist, and its parent directory must
-exist. The CLI writes and verifies the complete result in a private staging
-directory inside a retained, identity-pinned holding directory, syncs it, and
-atomically renames the staged name without replacing an existing destination.
-It immediately opens the requested destination through the retained parent
-descriptor and compares its identity to the retained staging descriptor.
-Substitution fails closed and triggers bounded, descriptor-anchored cleanup.
-The published directory contains collision-resistant attachment filenames and a
-generated `result-<uuid>.json` with the run ID, reconstructed result shape,
-original file metadata, relative paths, sizes, and SHA-256 digests. See
-[Run input and context](docs/dag-api.md#run-input-and-context) and
-[Workflow results](docs/dag-api.md#workflow-results) for the Python and CLI
-contracts, limits, and complete output layout.
-
-The output parent is a caller-owned local namespace. POSIX and macOS provide no
-portable operation that renames an open directory descriptor, or conditionally
-renames a source name only if it still identifies a specific inode. A hostile
-concurrent process running as the same user can therefore create a transient
-wrong destination before the CLI detects and removes it; that concurrency is
-outside this local CLI threat model. Descriptor-authenticated catchable state is
-cleaned, and catchable failures leave no requested destination. An interruption
-after the holding `mkdir` side effect but before descriptor acquisition can
-leave private empty holding residue: safe cleanup cannot distinguish the
-created directory from a same-name replacement, so it does not open, adopt, or
-remove that entry. The requested destination remains absent. An uncatchable
-termination such as `SIGKILL` can also leave private holding residue.
-
-Or connect the TUI and start runs interactively:
-Start the operator and connected TUI together:
-
-```bash
-ava dev --flows path/to/flows
-```
-
-Or run them separately:
-
-```bash
-# Terminal 1
-ava operator --flows path/to/flows --port 7433
-
-# Terminal 2
-ava tui --connect localhost:7433
-```
-
-For a browser interface backed by the same operator, enable the loopback web
-listener:
-
-```bash
-ava operator --flows path/to/flows --web
-# Open http://127.0.0.1:7435
-```
-
-Add `--log-level INFO` to either operator launch command to show listener startup,
-source-watcher startup and shutdown, changed files, successful catalog revision
-transitions, unchanged rescans, and reload failures. The default is `WARNING`;
-accepted levels are `DEBUG`, `INFO`, `WARNING`, and `ERROR`.
-
-The browser shows the live workflow catalog, current definitions, immutable
-per-run topology, run controls, logs, and retained agent trace evidence. Source
-changes replace only the current-definition canvas; earlier runs keep their
-topology and agent input/output field schemas without retaining instruction
-bodies or execution configuration. The browser listener is loopback-only by
-default. `--web-trusted-proxy` permits a
-non-loopback bind only when a trusted, authenticated proxy supplies the missing
-security boundary.
-
-
-The TUI is a client of the operator; it does not import or execute workflow files
-itself. To explore the interface without an operator, start mock mode:
-
-```bash
-ava tui
-```
-
-
+An `lm` or `sub_lm` passed to an individual agent step overrides the same
+workflow default. When neither is configured, Avalanche uses its own defaults,
+then PredictRLM's. Changing providers requires both a new provider-qualified
+model identifier and that provider's credentials. `agent_defaults` configures
+runtime options only; signatures, skills, and tools remain defined on each agent
+step.
 
 ## Optional components
 
@@ -439,7 +321,6 @@ uv add "avalanche-ai[ray,lance]"
 
 ## Documentation
 
-- [Getting started](docs/getting-started.md)
 - [DAG API](docs/dag-api.md)
 - [Agent steps](docs/agent-steps.md)
 - [Data model and storage API](docs/data-model-api.md)
@@ -449,14 +330,6 @@ uv add "avalanche-ai[ray,lance]"
 - [Changelog](CHANGELOG.md)
 
 
-
-## Project status
-
-Avalanche currently targets local development and experimentation. Production
-authentication, authorization, TLS, multitenancy, one-click deployment, and full
-durable operator recovery are not implemented. Point operator discovery at a
-specific workflow file or clean workflow directory rather than a repository root,
-because discovery imports Python modules.
 
 ## Contributing
 
