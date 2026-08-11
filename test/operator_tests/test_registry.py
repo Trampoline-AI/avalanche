@@ -12,6 +12,7 @@ import pytest
 import avalanche as ava
 from avalanche.dag import Workflow
 from runtime.operator.discovery import FileDiscoveryResult, configure_roots
+from runtime.operator.discovery_cache import DiscoveryCache
 from runtime.operator.models import WorkflowDiscoveryDiagnostic
 from runtime.operator.registry import (
     AmbiguousWorkflow,
@@ -478,6 +479,28 @@ class TestWorkflowRegistry:
         third.scan([str(workflow_file)])
         assert counter.read_text() == "2"
         assert third.resolve("cached_flow").cron == "2 * * * *"
+
+    def test_invalid_utf8_cache_is_rescanned(self, tmp_path):
+        workflow_file = tmp_path / "flow.py"
+        workflow_file.write_text(
+            "import avalanche as ava\n"
+            "@ava.workflow\n"
+            "def recovered_flow():\n"
+            "    return None\n"
+        )
+        cache_dir = tmp_path / "cache"
+        cache = DiscoveryCache(
+            configure_roots([str(workflow_file)]),
+            directory=cache_dir,
+        )
+        cache.path.parent.mkdir(parents=True)
+        cache.path.write_bytes(b"\xff")
+
+        registry = WorkflowRegistry(cache_dir=cache_dir)
+        registry.scan([str(workflow_file)])
+
+        assert [workflow.name for workflow in registry.list_workflows()] == ["recovered_flow"]
+        assert cache.load() is not None
 
     def test_persistent_cache_invalidates_when_resource_changes(self, tmp_path):
         source_root = tmp_path / "flows"

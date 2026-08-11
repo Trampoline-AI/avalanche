@@ -207,7 +207,7 @@ class DiscoveryCache:
                 return None
         except FileNotFoundError:
             return None
-        except (OSError, ValidationError) as exc:
+        except (OSError, UnicodeDecodeError, ValidationError) as exc:
             logger.warning(
                 "Ignoring unreadable workflow discovery cache %s: %s", self.path, exc
             )
