@@ -1317,7 +1317,6 @@ class GrpcStateProvider:
             catalog.operator_instance_id != marker[0]
             or confirmed_catalog.operator_instance_id != marker[0]
             or catalog.as_of_sequence > marker[1]
-            or confirmed_catalog.as_of_sequence < marker[1]
         ):
             raise _ResetBaselineMismatchError(
                 "workflow catalog does not span the run baseline high-water mark"
