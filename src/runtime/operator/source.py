@@ -133,7 +133,7 @@ def resolve_live_source(
 
 
 def is_source_path_included(path: str | Path, source_roots: tuple[str | Path, ...]) -> bool:
-    """Return whether a changed path belongs to watched development source."""
+    """Return whether a changed Python source belongs to watched development source."""
     candidate = Path(path).resolve()
     roots = tuple(Path(root).resolve() for root in source_roots)
     containing_root = next(
@@ -147,7 +147,7 @@ def is_source_path_included(path: str | Path, source_roots: tuple[str | Path, ..
         return False
     if any(_exclude_directory(part) for part in relative.parts[:-1]):
         return False
-    return not _exclude_file(relative.name)
+    return candidate.suffix == ".py" and not _exclude_file(relative.name)
 
 
 def _exclude_directory(name: str) -> bool:
