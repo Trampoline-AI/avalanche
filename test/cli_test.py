@@ -4,6 +4,7 @@ import hashlib
 import importlib.util
 import json
 import logging
+import os
 import signal
 import socket
 import stat
@@ -28,8 +29,14 @@ def test_pyproject_exposes_cli_console_script_aliases_and_package_data():
     sdist = data["tool"]["hatch"]["build"]["targets"]["sdist"]
     assert "src/ava_cli" in wheel["include"]
     assert "src/ava_cli" in sdist["include"]
-    assert wheel["force-include"] == {"init.sh": "ava_cli/init.sh"}
-    assert sdist["force-include"] == {"init.sh": "init.sh"}
+    assert wheel["force-include"] == {
+        "init.sh": "ava_cli/init.sh",
+        "skills/avalanche": "ava_cli/skills/avalanche",
+    }
+    assert sdist["force-include"] == {
+        "init.sh": "init.sh",
+        "skills/avalanche": "skills/avalanche",
+    }
 
 
 def test_ava_cli_package_resolves_to_project_source():
@@ -77,6 +84,55 @@ def test_ava_init_runs_bundled_bootstrapper(monkeypatch, argv, script_args):
 
     assert app.main(argv) == 7
     assert calls == [(["bash", str(Path("init.sh").resolve()), *script_args], False)]
+
+
+def test_default_bootstrap_installs_bundled_skill(tmp_path):
+    fake_bin = tmp_path / "bin"
+    fake_bin.mkdir()
+    fake_uv = fake_bin / "uv"
+    fake_uv.write_text(
+        """#!/bin/sh
+if [ "$1" = "sync" ]; then
+    shift
+    while [ "$#" -gt 0 ]; do
+        if [ "$1" = "--directory" ]; then
+            shift
+            directory=$1
+            break
+        fi
+        shift
+    done
+    mkdir -p "$directory/.venv/bin"
+    printf '#!/bin/sh\\nexit 0\\n' > "$directory/.venv/bin/python"
+    printf '#!/bin/sh\\nexit 0\\n' > "$directory/.venv/bin/ava"
+    chmod +x "$directory/.venv/bin/python" "$directory/.venv/bin/ava"
+fi
+""",
+        encoding="utf-8",
+    )
+    fake_git = fake_bin / "git"
+    fake_git.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+    fake_uv.chmod(0o755)
+    fake_git.chmod(0o755)
+    workspace_root = tmp_path / "workspace"
+    workspace_root.mkdir()
+
+    result = subprocess.run(
+        ["bash", str(Path("init.sh").resolve())],
+        cwd=workspace_root,
+        env={**os.environ, "PATH": f"{fake_bin}:{os.environ['PATH']}"},
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert (workspace_root / ".agent" / "skills" / "avalanche" / "SKILL.md").is_file()
+    workspace = tomllib.loads((workspace_root / "pyproject.toml").read_text())
+    assert workspace["project"]["dependencies"] == ["avalanche-ai", "predict-rlm"]
+    guidance = (workspace_root / "AGENTS.md").read_text()
+    assert "uv run ava dev --flows src/binary_converter/" in guidance
+    assert "ava operator --flows src/binary_converter/ --web" not in guidance
 
 
 def test_ava_operator_delegates_to_runtime_operator_with_flows(monkeypatch):

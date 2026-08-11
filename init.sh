@@ -9,6 +9,8 @@ readonly STARTER_WORKFLOW_NAME="binary_converter"
 
 workspace_root="$(pwd -P)"
 staging_root=""
+readonly SCRIPT_DIRECTORY="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)"
+readonly AVALANCHE_SKILL_SOURCE="$SCRIPT_DIRECTORY/skills/avalanche"
 use_editable_dependencies=false
 fail() {
   printf 'error: %s\n' "$*" >&2
@@ -346,7 +348,7 @@ main() {
     printf '.env contains %s and is ignored by Git.\n' "$credential_env"
   fi
   printf '\nStart the demo with:\n'
-  printf '  uv run ava operator --flows src/binary_converter/ --web\n'
+  printf '  uv run ava dev --flows src/binary_converter/\n'
 }
 
 main "$@"
@@ -391,7 +393,7 @@ Flows execute through Avalanche's operator. This workspace contains flow
 declarations only. From the workspace root, start the starter flow with:
 
 ```bash
-uv run ava operator --flows src/binary_converter/ --web
+uv run ava dev --flows src/binary_converter/
 ```
 EOF
 
@@ -435,6 +437,7 @@ EOF
     cat >>"$staging_root/pyproject.toml" <<'EOF'
 dependencies = [
     "avalanche-ai",
+    "predict-rlm",
 ]
 EOF
   fi
@@ -454,13 +457,12 @@ predict-rlm = { path = ".trampoline-ai/predict-rlm", editable = true }
 EOF
     git clone "$AVALANCHE_REPOSITORY" "$staging_root/.trampoline-ai/avalanche"
     git clone "$PREDICT_RLM_REPOSITORY" "$staging_root/.trampoline-ai/predict-rlm"
-    local authoring_skill="$staging_root/.trampoline-ai/avalanche/.agents/skills/avalanche"
-    [[ -f "$authoring_skill/SKILL.md" ]] ||
-      fail "Avalanche authoring skill is missing from the cloned checkout."
-    mkdir -p "$staging_root/.agent/skills"
-    cp -R "$authoring_skill" "$staging_root/.agent/skills/avalanche"
     printf '.trampoline-ai/\n' >>"$staging_root/.gitignore"
   fi
+  [[ -f "$AVALANCHE_SKILL_SOURCE/SKILL.md" ]] ||
+    fail "Bundled Avalanche authoring skill is missing: $AVALANCHE_SKILL_SOURCE"
+  mkdir -p "$staging_root/.agent/skills"
+  cp -R "$AVALANCHE_SKILL_SOURCE" "$staging_root/.agent/skills/avalanche"
 
   printf '.env\n' >>"$staging_root/.gitignore"
   cat >"$staging_root/.env" <<'EOF'
@@ -494,9 +496,8 @@ for module, relative_checkout in checkouts:
         raise RuntimeError(f"{module.__name__} resolved outside editable checkout: {module_path}")
     print(module_path)
 '
-      git check-ignore .trampoline-ai/avalanche/pyproject.toml >/dev/null
-      test -f .agent/skills/avalanche/SKILL.md
     fi
+    test -f .agent/skills/avalanche/SKILL.md
 
     .venv/bin/python -B -c '
 import importlib.util

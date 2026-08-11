@@ -4,12 +4,12 @@
 
 ### Operator web interface
 
-- Added an opt-in local React operator interface (`ava operator --web`) with
-  workflow discovery, live DAG replacement, immutable historical run canvases,
+- Added an opt-in local React operator interface (`ava web`) with workflow
+  discovery, live DAG replacement, immutable historical run canvases,
   launch/cancel controls, logs, and demand-loaded agent evidence.
-- Added a same-process binary gRPC-Web listener and packaged browser assets.
-  Loopback remains the default; non-loopback binding requires the explicit
-  `--web-trusted-proxy` acknowledgement.
+- Added a browser listener and packaged browser assets. Loopback remains the
+  default; non-loopback binding requires the explicit `--trusted-proxy`
+  acknowledgement.
 - Run topology now retains only versioned agent input/output field schemas,
   while bounded trace descriptors expose stable PredictRLM header, usage, and
   telemetry metadata without embedding declaration instructions or complete
@@ -124,11 +124,10 @@
   input into any node's arguments.
 - Fix: futures passed explicitly as keyword arguments are no longer re-bound
   implicitly by position.
-- See [docs/data-model-api.md](docs/data-model-api.md#pydantic-model-schemas).
-- New optional `agent` extra (`uv sync --extra agent`) with bodyful
-  `@ava.agent_step` / `@ava.agent.step` aliases. Steps receive a callable
-  `ava.Agent`, handle raw DSPy predictions in their own Python body, and
-  explicitly persist their results.
+- See [docs/data-model-api.md](docs/data-model-api.md#define-a-schema).
+- Added bodyful `@ava.agent_step` / `@ava.agent.step` aliases in the base
+  package. Steps receive a callable `ava.Agent`, handle raw DSPy predictions in
+  their own Python body, and explicitly persist their results.
 - `ava.Signature` is a subclassable native DSPy contract using
   `ava.InputField()` / `ava.OutputField()`. The identical
   `ava.agent.Signature` also builds inline string signatures; skills and tools
@@ -188,5 +187,4 @@ toolkit.
 ### Team handoff
 
 The official artifact for this release candidate is the Git repository. Start
-with `README.md`, then follow `docs/getting-started.md` and
-`docs/releases/internal-alpha-checklist.md`.
+with `README.md`.

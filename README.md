@@ -28,6 +28,11 @@ uvx avalanche-ai init
 
 Follow the instructions to set up your LLM provider. Then finally, run the demo:
 
+> [!WARNING]
+> `ava dev` without `--flows` scans every eligible Python file below the current
+> working directory. Run it only from a dedicated flow workspace; otherwise pass
+> a specific flow file or flow-only directory with `--flows`.
+
 ```bash
 uv run ava dev
 ```
@@ -189,7 +194,9 @@ The operator defaults to port 7433.
 
 ### Workflow inputs
 
-Avalanche supports passing inputs to workflows using the BaseInput class. You can learn more about it in . You can pass inputs directly in the Web UI using small JSON editor, or through the command line:
+Avalanche supports passing inputs to workflows using the BaseInput class. Learn more in
+[the DAG API's input and context guide](docs/dag-api.md#input-and-context). You can pass
+inputs directly in the Web UI using small JSON editor, or through the command line:
 
 ```bash
 uv run ava run <workflow_name> --input '{"key": "value"}'

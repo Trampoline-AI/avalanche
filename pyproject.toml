@@ -106,9 +106,11 @@ include = ["src/avalanche", "src/ava_cli", "src/runtime", "src/tui"]
 
 [tool.hatch.build.targets.wheel.force-include]
 "init.sh" = "ava_cli/init.sh"
+"skills/avalanche" = "ava_cli/skills/avalanche"
 
 [tool.hatch.build.targets.sdist.force-include]
 "init.sh" = "init.sh"
+"skills/avalanche" = "skills/avalanche"
 
 [tool.hatch.build.targets.wheel.sources]
 "src" = ""

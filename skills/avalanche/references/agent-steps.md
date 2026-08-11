@@ -1,9 +1,9 @@
 # Agent steps: signatures, calls, skills, and tools
 
-Install the standard wheel using the environment's package manager:
+Install the standard wheel in the target UV project:
 
 ```bash
-python -m pip install avalanche-ai
+uv add avalanche-ai
 ```
 
 `@ava.agent_step` wraps the PredictRLM runtime and injects a callable
