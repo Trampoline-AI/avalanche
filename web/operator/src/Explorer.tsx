@@ -1,4 +1,4 @@
-import { memo, useState } from "react";
+import { memo, useEffect, useState } from "react";
 import { PanelLeftClose, X } from "lucide-react";
 
 import type { CatalogSnapshotMsg, FlowInfoMsg } from "./generated/operator";
@@ -63,6 +63,12 @@ function ExplorerView({
     catalog?.diagnostics.filter((diagnostic) => diagnostic.kind !== "skipped") ?? [];
   const currentDiagnosticKey = catalog ? diagnosticKey(catalog) : "";
   const diagnosticsDismissed = dismissedDiagnosticKey === currentDiagnosticKey;
+
+  useEffect(() => {
+    if (!currentDiagnosticKey) {
+      setDismissedDiagnosticKey(undefined);
+    }
+  }, [currentDiagnosticKey]);
   const collapseButton = onCollapse ? (
     <button
       type="button"
