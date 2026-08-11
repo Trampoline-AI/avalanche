@@ -68,6 +68,7 @@ ns = ExampleNamespace(
 
 @ava.source
 def load_documents(*, docs=ns.document):
+    ns.push()
     rows = pl.DataFrame(
         {
             "doc_id": ["doc-10", "doc-20"],
@@ -196,7 +197,6 @@ def generate_embeddings(chunk_df: pl.DataFrame, *, model: str) -> pl.DataFrame:
 
 
 def _main() -> None:
-    ns.push()
     result = cursor_workflow().run(executor=ava.LocalExecutor()).result()
     print("Cursor example complete")
     print(result)

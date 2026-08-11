@@ -69,6 +69,7 @@ ns = ExampleNamespace(
 
 @ava.source
 def load_documents(*, docs=ns.document):
+    ns.push()
     rows = pl.DataFrame(
         {
             "doc_id": ["doc-1", "doc-2"],
@@ -85,9 +86,7 @@ def load_documents(*, docs=ns.document):
 @ava.step
 def chunk_documents(
     _loaded: object = None,
-    docs: pl.DataFrame = ava.Stream(
-        ns.document, key="documents_to_chunks", mode="append_scan"
-    ),
+    docs: pl.DataFrame = ava.Stream(ns.document, key="documents_to_chunks", mode="append_scan"),
     *,
     dest=ns.chunk,
 ):
@@ -98,9 +97,7 @@ def chunk_documents(
 @ava.step
 def embed_chunks(
     _chunked: object = None,
-    chunks: pl.DataFrame = ava.Stream(
-        ns.chunk, key="chunks_to_embeddings", mode="append_scan"
-    ),
+    chunks: pl.DataFrame = ava.Stream(ns.chunk, key="chunks_to_embeddings", mode="append_scan"),
     *,
     dest=ns.embedding,
 ):
@@ -156,7 +153,6 @@ def generate_embeddings(chunk_df: pl.DataFrame, *, model: str) -> pl.DataFrame:
 
 
 def _main() -> None:
-    ns.push()
     result = stream_workflow().run(executor=ava.LocalExecutor()).result()
     print("Stream example complete")
     print(result)
