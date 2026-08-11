@@ -131,10 +131,10 @@ def feedback_review():
     )
 ```
 
-We run the workflow through the local operator:
+We run the workflow with the dev command:
 
 ```bash
-uv run ava operator --flows examples/customer_feedback_review
+uv run ava dev --flows customer_feedback_review/flow.py
 ```
 
 The resulting graph has five execution stages:

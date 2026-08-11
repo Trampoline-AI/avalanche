@@ -60,5 +60,4 @@ uv build
 
 The default development sync installs the dependencies needed for the current
 test suite. Optional package extras are `ray` and `lance`; document new optional
-dependencies in `pyproject.toml`, `README.md`, and `docs/getting-started.md`
-together.
+dependencies in `pyproject.toml` and `README.md` together.
