@@ -137,13 +137,11 @@ We run the workflow with the dev command:
 uv run ava dev --flows customer_feedback_review/flow.py
 ```
 
-The resulting graph has five execution stages:
+The resulting graph has 5 execution stages, with 7 total nodes, 3 ava.step and 4 ava.agent_step:
 
-```text
-                            ┌─ extract_themes (agent) ─┐                         ┌─ build_review_workbook (agent) ─┐
-load_feedback_workbook ─────┤                          ├─ compose_product_review ┤                                 ├─ publish_review_pack
-      (source)              └─ detect_risks (agent) ───┘         (step)          └─ write_executive_brief (agent) ─┘        (dest)
-```
+<p align="center">
+  <img src="../../docs/assets/screenshots/customer_feedback_dag.png" alt="dag" />
+</p>
 
 Both analysis agents receive the same workbook `File`. Avalanche runs them
 concurrently, then binds their `ThemeReport` and `RiskReport` outputs into the
