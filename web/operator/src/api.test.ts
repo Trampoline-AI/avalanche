@@ -72,6 +72,32 @@ describe("GrpcWebOperatorApi", () => {
     expect(getLatestRunSnapshot).not.toHaveBeenCalled();
   });
 
+  it("accepts a stable catalog when non-catalog updates advance the run baseline", async () => {
+    const catalog = CatalogSnapshotMsg.create({
+      operatorInstanceId: "operator-1",
+      asOfSequence: "0",
+      revision: "3",
+    });
+    const summary = RunSummaryMsg.create({ runId: "run-1", revision: "2" });
+    const getCatalog = vi.fn(() => ({ response: Promise.resolve(catalog) }));
+    const listRunSummaries = vi.fn(() => ({
+      response: Promise.resolve(
+        RunSummaryPage.create({
+          operatorInstanceId: "operator-1",
+          asOfSequence: "2",
+          runs: [summary],
+        }),
+      ),
+    }));
+    const api = apiWith({ getCatalog, listRunSummaries });
+
+    await expect(api.loadBaseline()).resolves.toEqual({
+      catalog,
+      asOfSequence: "2",
+      runs: [summary],
+    });
+  });
+
   it("requests exactly one typed log and event page with filters, order, and cancellation", async () => {
     const signal = new AbortController().signal;
     const log = LogRecordDescriptorMsg.create({ sequence: "10", nodeId: "agent" });
