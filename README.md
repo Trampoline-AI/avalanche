@@ -106,7 +106,7 @@ def step1() -> str:
 ```python
 @ava.agent_step(ava.Signature("text: str -> completion: str"))
 async def step2(text: str, *, agent: ava.Agent) -> str:
-    return (await agent(text=text)).summary
+    return (await agent(text=text)).completion
 ```
 
 ```python
@@ -202,7 +202,7 @@ uv run ava run <workflow_name> --input '{"key": "value"}'
 You can run a workflow directly from Python. `.run()` returns an awaitable `RunHandle`; call `.result()` to wait synchronously:
 
 ```python
-run = feedback_workflow.run(executor=ava.LocalExecutor())
+run = feedback_workflow().run(executor=ava.LocalExecutor())
 print(run.run_id)
 result = run.result()
 ```
