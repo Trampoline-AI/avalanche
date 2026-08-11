@@ -77,7 +77,7 @@ from .result_store import (
 )
 from .results import EncodedWorkflowResult, decode_workflow_result
 from .run_worker import run_worker
-from .source import is_source_path_included, resolve_live_source, resolve_watch_roots
+from .source import is_watch_path_included, resolve_live_source, resolve_watch_roots
 from .webhooks import DEFAULT_WEBHOOK_PORT, WebhookServer, routes_for
 from .windows_job import WindowsJob, assign_process, close_job, create_kill_on_close_job
 
@@ -354,6 +354,7 @@ class Operator:
         self._update_subscribers: list[queue.Queue] = []
         self._operator_instance_id = uuid4().hex
         self._sequence = 0
+        self._catalog_sequence = 0
         self._stream_history: deque[OperatorUpdate] = deque(maxlen=stream_history_capacity)
         self._structural_baseline_capacity = structural_baseline_capacity
         self._structural_baselines: OrderedDict[int, _StructuralBaseline] = OrderedDict()
@@ -405,7 +406,7 @@ class Operator:
     def get_catalog(self) -> CatalogSnapshot:
         """Return one complete, revisioned current-workflow catalog."""
         with self._lock:
-            return self._catalog_snapshot(self._registry.view, self._sequence)
+            return self._catalog_snapshot(self._registry.view, self._catalog_sequence)
 
     def _catalog_snapshot(self, view: CatalogView, as_of_sequence: int) -> CatalogSnapshot:
         workflows = self._registry.list_workflows(view)
@@ -1610,7 +1611,7 @@ class Operator:
             for changes in watch(
                 *watch_dirs,
                 stop_event=self._watcher_stop,
-                watch_filter=lambda _, path: is_source_path_included(path, source_roots),
+                watch_filter=lambda _, path: is_watch_path_included(path, source_roots),
                 rust_timeout=50,
                 yield_on_timeout=True,
             ):
@@ -2625,7 +2626,8 @@ class Operator:
     def _publish_catalog(self, view: CatalogView) -> None:
         with self._lock:
             self._sequence += 1
-            catalog = self._catalog_snapshot(view, self._sequence)
+            self._catalog_sequence = self._sequence
+            catalog = self._catalog_snapshot(view, self._catalog_sequence)
             update = OperatorUpdate(
                 sequence=self._sequence,
                 change=CatalogReplaced(catalog=catalog),

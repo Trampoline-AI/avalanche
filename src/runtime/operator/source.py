@@ -134,6 +134,19 @@ def resolve_live_source(
 
 def is_source_path_included(path: str | Path, source_roots: tuple[str | Path, ...]) -> bool:
     """Return whether a changed Python source belongs to watched development source."""
+    included_path = _included_source_path(path, source_roots)
+    return included_path is not None and included_path[0].suffix == ".py"
+
+
+def is_watch_path_included(path: str | Path, source_roots: tuple[str | Path, ...]) -> bool:
+    """Return whether a source-root change should refresh workflow discovery."""
+    return _included_source_path(path, source_roots) is not None
+
+
+def _included_source_path(
+    path: str | Path, source_roots: tuple[str | Path, ...]
+) -> tuple[Path, Path] | None:
+    """Return a safe source-root path and its relative location."""
     candidate = Path(path).resolve()
     roots = tuple(Path(root).resolve() for root in source_roots)
     containing_root = next(
@@ -141,13 +154,13 @@ def is_source_path_included(path: str | Path, source_roots: tuple[str | Path, ..
         None,
     )
     if containing_root is None:
-        return False
+        return None
     relative = candidate.relative_to(containing_root)
-    if not relative.parts:
-        return False
-    if any(_exclude_directory(part) for part in relative.parts[:-1]):
-        return False
-    return candidate.suffix == ".py" and not _exclude_file(relative.name)
+    if not relative.parts or any(_exclude_directory(part) for part in relative.parts[:-1]):
+        return None
+    if _exclude_file(relative.name):
+        return None
+    return candidate, relative
 
 
 def _exclude_directory(name: str) -> bool:
