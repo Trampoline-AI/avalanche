@@ -31,6 +31,8 @@ _MAX_PARENT_IDENTITY_SCAN = 4096
 def main(argv: Sequence[str] | None = None) -> int:
     parser = _build_parser()
     args = parser.parse_args(list(argv) if argv is not None else None)
+    if args.command == "dev" and args.port == args.web_port:
+        parser.error("ava dev --port and --web-port must differ")
     if not hasattr(args, "handler"):
         parser.print_help()
         return 2
@@ -230,6 +232,7 @@ def _build_parser() -> argparse.ArgumentParser:
         help="flow file or directory to scan (default: current directory)",
     )
     dev.add_argument("--port", type=int, default=7433, help="operator gRPC port")
+    dev.add_argument("--web-port", type=int, default=7435, help="browser UI HTTP port")
     dev.add_argument("--ray", action="store_true", help="use the Ray executor")
     dev.set_defaults(handler=_run_dev)
 
@@ -1358,10 +1361,11 @@ def _launch_tui(argv: Sequence[str]) -> None:
 
 def _run_dev(args: argparse.Namespace) -> int:
     port = args.port
+    web_port = args.web_port
     operator_process = _start_operator_process(args.flows, port, args.ray)
     web_process = None
     try:
-        web_process = _start_web_process(f"127.0.0.1:{port}")
+        web_process = _start_web_process(f"127.0.0.1:{port}", web_port)
         return operator_process.wait()
     finally:
         if web_process is not None:
@@ -1388,8 +1392,10 @@ def _start_operator_process(
     return subprocess.Popen(cmd)
 
 
-def _start_web_process(address: str) -> subprocess.Popen:
-    return subprocess.Popen([sys.executable, "-m", "ava_cli", "web", "--connect", address])
+def _start_web_process(address: str, port: int) -> subprocess.Popen:
+    return subprocess.Popen(
+        [sys.executable, "-m", "ava_cli", "web", "--connect", address, "--port", str(port)]
+    )
 
 
 def _make_provider(address: str):
@@ -1439,10 +1445,6 @@ def _parse_workspace_inputs(values: list[str]):
             raise ValueError(f"Duplicate input field '{field}'")
         workspaces[field] = Workspace.from_path(Path(path))
     return workspaces
-
-
-
-
 
 
 def _stop_operator_process(process: subprocess.Popen) -> None:
