@@ -143,8 +143,7 @@ export class GrpcWebOperatorApi implements OperatorApi {
       catalog.operatorInstanceId !== operatorInstanceId ||
       confirmedCatalog.operatorInstanceId !== operatorInstanceId ||
       catalog.revision !== confirmedCatalog.revision ||
-      BigInt(catalog.asOfSequence) > BigInt(asOfSequence) ||
-      BigInt(confirmedCatalog.asOfSequence) < BigInt(asOfSequence)
+      BigInt(catalog.asOfSequence) > BigInt(asOfSequence)
     ) {
       throw new Error("Operator state changed while loading the browser baseline");
     }
