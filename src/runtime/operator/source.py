@@ -7,24 +7,8 @@ from pathlib import Path
 
 from .discovery import ConfiguredRoot
 from .models import WorkflowLocator
+from .source_policy import is_excluded_directory
 
-_EXCLUDED_DIRS = {
-    ".avalanche",
-    ".git",
-    ".hg",
-    ".mypy_cache",
-    ".nox",
-    ".pytest_cache",
-    ".ruff_cache",
-    ".svn",
-    ".tox",
-    ".venv",
-    "__pycache__",
-    "build",
-    "dist",
-    "node_modules",
-    "venv",
-}
 _CREDENTIAL_NAMES = {
     ".npmrc",
     ".netrc",
@@ -108,7 +92,7 @@ def iter_source_paths(source_roots: tuple[str | Path, ...]) -> tuple[Path, ...]:
             continue
         for directory, subdirectories, file_names in os.walk(root):
             subdirectories[:] = sorted(
-                name for name in subdirectories if not _exclude_directory(name)
+                name for name in subdirectories if not is_excluded_directory(name)
             )
             paths.extend(
                 candidate
@@ -156,16 +140,11 @@ def _included_source_path(
     if containing_root is None:
         return None
     relative = candidate.relative_to(containing_root)
-    if not relative.parts or any(_exclude_directory(part) for part in relative.parts[:-1]):
+    if not relative.parts or any(is_excluded_directory(part) for part in relative.parts[:-1]):
         return None
     if _exclude_file(relative.name):
         return None
     return candidate, relative
-
-
-def _exclude_directory(name: str) -> bool:
-    lowered = name.lower()
-    return lowered in _EXCLUDED_DIRS or lowered in {".aws", ".ssh"}
 
 
 def _exclude_file(name: str) -> bool:
