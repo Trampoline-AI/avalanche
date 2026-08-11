@@ -1,10 +1,23 @@
-
+<p align="center">
+  <img src="docs/assets/brand/avalanche-logo-3d.png" alt="Avalanche" width="600" />
+</p>
 
 # Avalanche
 
 Avalanche makes agents first-class steps in typed data pipelines. Compose  
 adaptive agent work with deterministic Python transformations in one DAG, run  
-it through the Avalanche operator, and inspect every run from the terminal UI.
+it through the Avalanche operator, and inspect every run from the web UI.
+
+<br>
+<p align="center">
+  <a href="https://github.com/Trampoline-AI/avalanche/actions/workflows/ci.yml"><img src="https://img.shields.io/github/actions/workflow/status/Trampoline-AI/avalanche/ci.yml?label=Tests" alt="Tests"></a>
+  <a href="https://pypi.org/project/avalanche-ai/"><img src="https://img.shields.io/pypi/v/avalanche-ai?color=blue" alt="PyPI"></a>
+  <a href="https://pypi.org/project/avalanche-ai/"><img src="https://img.shields.io/pypi/pyversions/avalanche-ai" alt="Python"></a>
+  <a href="https://discord.gg/BAkd288sGN"><img src="https://img.shields.io/badge/Discord-Join-5865F2?style=flat&logo=discord&logoColor=white" alt="Discord"></a>
+  <a href="https://github.com/Trampoline-AI/avalanche"><img src="https://img.shields.io/github/stars/Trampoline-AI/avalanche?cacheSeconds=3600" alt="GitHub stars"></a>
+  <br/>
+  crafted with ♥ in MTL · NYC · FLP<br/>by <a href="https://trampoline.ai">Trampoline AI</a>
+</p>
 
 > [!NOTE]  
 > Avalanche is an early release candidate intended for local development and  
@@ -27,11 +40,6 @@ uvx avalanche-ai init
 ```
 
 Follow the instructions to set up your LLM provider. Then finally, run the demo:
-
-> [!WARNING]
-> `ava dev` without `--flows` scans every eligible Python file below the current
-> working directory. Run it only from a dedicated flow workspace; otherwise pass
-> a specific flow file or flow-only directory with `--flows`.
 
 ```bash
 uv run ava dev
@@ -161,6 +169,11 @@ uv run ava dev --flows ./flow.py
 ```
 
 Otherwise, the scan defaults to the current working directory.
+
+> [!WARNING]
+> `ava dev` or `ava operator` without `--flows` scans every eligible Python file below the current
+> working directory. Run it only from a dedicated flow workspace; otherwise pass
+> a specific flow file or flow-only directory with `--flows`.
 
 
 Similarily, you can pass `--connect` to the Web UI to change the operator url to connect to:

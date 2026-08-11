@@ -5,8 +5,10 @@ READMEs, package pages, and social previews.
 
 ## Files
 
-- `avalanche-logo-3d.png` — transparent 3D lockup with diamond mark and
-  `avalanche.run` wordmark.
+- `avalanche-logo-3d.png` — white-background 3D lockup with diamond mark and
+  `avalanche.run` wordmark for dark page surfaces.
+- `avalanche-logo-3d_transparent.png` — transparent 3D lockup with diamond mark
+  and `avalanche.run` wordmark.
 - `avalanche-diamond-3d-1024.png` — transparent 1024×1024 standalone 3D
   diamond mark.
 - `source/avalanche-diamond-threejs-spin-with-wordmark.html` — interactive
@@ -35,6 +37,7 @@ application path, or `MAGICK=/path/to/magick` when `magick` is not on `PATH`.
 The command rebuilds the compiled PNGs from the checked-in Three.js source HTML:
 
 - `avalanche-logo-3d.png`
+- `avalanche-logo-3d_transparent.png`
 - `avalanche-diamond-3d-1024.png`
 
 ## Source

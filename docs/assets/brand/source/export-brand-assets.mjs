@@ -13,6 +13,7 @@ const sourceHtml = join(here, 'avalanche-diamond-threejs-spin-with-wordmark-expo
 
 const outputs = {
   logo: join(root, 'avalanche-logo-3d.png'),
+  transparentLogo: join(root, 'avalanche-logo-3d_transparent.png'),
   diamond1024: join(root, 'avalanche-diamond-3d-1024.png'),
 };
 
@@ -188,11 +189,7 @@ function writeDiamondHtml(tmpRoot) {
   return path;
 }
 
-function makeTransparentWithPadding(
-  raw,
-  out,
-  { erode = false, resizeContent = null, backgroundPadding = 0 } = {},
-) {
+function makeTransparentWithPadding(raw, out, { erode = false, resizeContent = null } = {}) {
   const cleaned = join(dirname(raw), `${out.split('/').pop()}.clean.png`);
   const mask = join(dirname(raw), `${out.split('/').pop()}.mask.png`);
 
@@ -205,12 +202,53 @@ function makeTransparentWithPadding(
 
   const args = [input, '-trim', '+repage'];
   if (resizeContent) args.push('-resize', `${resizeContent}!`);
-  args.push('-gravity', 'center');
-  if (backgroundPadding) {
-    args.push('-background', 'white', '-bordercolor', 'white', '-border', `${backgroundPadding}`);
-  }
-  args.push('-background', 'none', '-bordercolor', 'none', '-border', '144', '-depth', '8', out);
+  args.push(
+    '-gravity',
+    'center',
+    '-background',
+    'none',
+    '-bordercolor',
+    'none',
+    '-border',
+    '144',
+    '-depth',
+    '8',
+    out,
+  );
   run(magick, args);
+}
+
+function makeWhiteLogo(transparentLogo, out) {
+  run(magick, [
+    transparentLogo,
+    '-trim',
+    '+repage',
+    '-background',
+    'white',
+    '-alpha',
+    'remove',
+    '-resize',
+    '3537x1011',
+    '-gravity',
+    'center',
+    '-background',
+    'white',
+    '-extent',
+    '3537x1011',
+    '-bordercolor',
+    'white',
+    '-border',
+    '144',
+    '-background',
+    'none',
+    '-bordercolor',
+    'none',
+    '-border',
+    '144',
+    '-depth',
+    '8',
+    out,
+  ]);
 }
 
 function make1024Diamond(src, out) {
@@ -257,14 +295,15 @@ try {
     outPath: diamondRaw,
   });
 
-  makeTransparentWithPadding(logoRaw, outputs.logo, {
-    resizeContent: '3537x1011',
-    backgroundPadding: 144,
+  makeTransparentWithPadding(logoRaw, outputs.transparentLogo, {
+    resizeContent: '3825x1299',
   });
+  makeWhiteLogo(outputs.transparentLogo, outputs.logo);
   makeTransparentWithPadding(diamondRaw, diamondFull, { erode: true, resizeContent: '2600x3457' });
   make1024Diamond(diamondFull, outputs.diamond1024);
 
   console.log(`wrote ${outputs.logo}`);
+  console.log(`wrote ${outputs.transparentLogo}`);
   console.log(`wrote ${outputs.diamond1024}`);
 } finally {
   if (chromeProcess) {
