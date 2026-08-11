@@ -82,7 +82,7 @@ by `namespace.py`.
 Install the Lance extra in the environment that executes table operations:
 
 ```bash
-python -m pip install "avalanche-ai[lance]"
+uv add "avalanche-ai[lance]"
 ```
 
 ```python
