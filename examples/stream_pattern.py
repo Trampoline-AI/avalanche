@@ -22,7 +22,7 @@ def example_root() -> Path:
     root = (
         Path(configured)
         if configured
-        else Path(".avalanche/examples/stream_pattern") / str(os.getpid())
+        else Path(".avalanche/catalogs/stream_workflow") / str(os.getpid())
     )
     root.mkdir(parents=True, exist_ok=True)
     return root

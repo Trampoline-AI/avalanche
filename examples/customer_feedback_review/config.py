@@ -10,7 +10,7 @@ _example_root = os.getenv("AVALANCHE_EXAMPLE_ROOT")
 ARTIFACT_ROOT = (
     Path(_example_root) / "customer_feedback_review"
     if _example_root is not None
-    else PACKAGE_ROOT / "artifacts" / "generated_review_pack"
+    else Path(".avalanche/outputs/feedback_review") / str(os.getpid())
 )
 WORKBOOK_OUTPUT_DIR = ARTIFACT_ROOT / "workbook"
 BRIEF_OUTPUT_DIR = ARTIFACT_ROOT / "brief"
