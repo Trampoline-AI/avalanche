@@ -4,9 +4,7 @@
 
 # Avalanche
 
-Avalanche makes agents first-class steps in typed data pipelines. Compose  
-adaptive agent work with deterministic Python transformations in one DAG, run  
-it through the Avalanche operator, and inspect every run from the web UI.
+Avalanche makes agents first-class steps in typed data pipelines. Compose adaptive agent work with deterministic Python transformations in one DAG, run it through the Avalanche operator, and inspect every run from the web UI.
 
 <br>
 <p align="center">
@@ -19,10 +17,12 @@ it through the Avalanche operator, and inspect every run from the web UI.
   crafted with ♥ in MTL · NYC · FLP<br/>by <a href="https://trampoline.ai">Trampoline AI</a>
 </p>
 
+<p align="center">
+  <img src="docs/assets/screenshots/output-onlinegiftools-half.gif" alt="Avalanche workflow demo" width="100%" />
+</p>
+
 > [!NOTE]  
-> Avalanche is an early release candidate intended for local development and  
-> experimentation. APIs and operational behavior may change before a stable  
-> release.
+> Avalanche is an early release candidate intended for local development and experimentation. APIs and operational behavior may change before a stable release.
 
 ## Requirements
 
