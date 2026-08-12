@@ -1,6 +1,8 @@
 # Changelog
 
 ## Unreleased
+
+## 0.1.2
 ### Dependencies
 
 - Declare Protobuf as an Avalanche runtime dependency required by the operator's
