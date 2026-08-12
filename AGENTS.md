@@ -131,10 +131,10 @@ Avoid `--flows .`: operator discovery imports Python files recursively. Use a na
   duplicate labels in tests merely to locate UI.
 - Iterate with the smallest focused tests that cover the current feature or fix;
   never use the full regression suite as the iteration loop.
-- After all focused tests are green, run the full regression suite once as the
-  final verification gate. If that gate finds a regression, return to the
-  focused failing tests and iterate there until they are green, then use the
-  full suite only for the next final verification attempt.
+- `make test` is an exceptional validation gate, not a default final step. Do
+  not run it for ordinary bug fixes or new features; CI covers broad
+  regressions. Run it only for an explicitly requested or approved large-scale
+  refactor or migration.
 - TUI behavior normally needs both headless Textual coverage (`test/tui_test.py`) and tmux coverage (`test/tui_tmux_test.py`) when terminal rendering, sizing, or input behavior changes.
 - CI installs all extras, runs Ruff, then separates ordinary tests (`not tmux and not ray`), Ray tests, and tmux tests into distinct jobs.
 - Branch coverage is configured for `src/avalanche`; `make test-cov` reports missing lines. Do not treat a focused green test as proof for unrelated runtime, Ray, or tmux paths.
