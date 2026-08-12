@@ -209,13 +209,13 @@ wheels = [
 
 [[package]]
 name = "avalanche-ai"
-version = "0.1.0rc2"
+version = "0.1.0"
 source = { editable = "." }
 dependencies = [
     { name = "croniter" },
     { name = "dataframely" },
     { name = "grpcio" },
-    { name = "predict-rlm" },
+    { name = "predict-rlm", extra = ["codex-lm"] },
     { name = "pydantic" },
     { name = "pyiceberg", extra = ["glue", "pandas", "pyarrow", "s3fs", "sql-sqlite"] },
     { name = "python-ulid" },
@@ -263,7 +263,7 @@ requires-dist = [
     { name = "croniter", specifier = ">=6.2.2" },
     { name = "dataframely", specifier = ">=1.13.0" },
     { name = "grpcio", specifier = ">=1.75.1" },
-    { name = "predict-rlm", specifier = ">=0.8.0a0" },
+    { name = "predict-rlm", extras = ["codex-lm"], specifier = ">=0.8.0a0" },
     { name = "pydantic", specifier = ">=2,<3" },
     { name = "pyiceberg", extras = ["glue", "pandas", "pyarrow", "s3fs", "sql-sqlite"], specifier = ">=0.9,<0.11" },
     { name = "pylance", marker = "extra == 'lance'", specifier = ">=0.24.0" },
@@ -2442,6 +2442,13 @@ wheels = [
     { url = "https://files.pythonhosted.org/packages/ad/23/d51ef1ea493eeb6f42579fd2ab6d9fc613fb03add99967ee2747ec87073c/predict_rlm-0.8.0-py3-none-any.whl", hash = "sha256:304a2fc65fb60de3b20c8b9f845a02296274fb22757514e7892226dfa1c2f016", size = 334729, upload-time = "2026-08-05T20:58:09.895Z" },
 ]
 
+[package.optional-dependencies]
+codex-lm = [
+    { name = "litellm" },
+    { name = "openai" },
+    { name = "tenacity" },
+]
+
 [[package]]
 name = "prometheus-client"
 version = "0.23.1"
@@ -3576,11 +3583,11 @@ wheels = [
 
 [[package]]
 name = "tenacity"
-version = "8.5.0"
+version = "9.1.4"
 source = { registry = "https://pypi.org/simple" }
-sdist = { url = "https://files.pythonhosted.org/packages/a3/4d/6a19536c50b849338fcbe9290d562b52cbdcf30d8963d3588a68a4107df1/tenacity-8.5.0.tar.gz", hash = "sha256:8bc6c0c8a09b31e6cad13c47afbed1a567518250a9a171418582ed8d9c20ca78", size = 47309, upload-time = "2024-07-05T07:25:31.836Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/47/c6/ee486fd809e357697ee8a44d3d69222b344920433d3b6666ccd9b374630c/tenacity-9.1.4.tar.gz", hash = "sha256:adb31d4c263f2bd041081ab33b498309a57c77f9acf2db65aadf0898179cf93a", size = 49413, upload-time = "2026-02-07T10:45:33.841Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/d2/3f/8ba87d9e287b9d385a02a7114ddcef61b26f86411e121c9003eb509a1773/tenacity-8.5.0-py3-none-any.whl", hash = "sha256:b594c2a5945830c267ce6b79a166228323ed52718f30302c1359836112346687", size = 28165, upload-time = "2024-07-05T07:25:29.591Z" },
+    { url = "https://files.pythonhosted.org/packages/d7/c1/eb8f9debc45d3b7918a32ab756658a0904732f75e555402972246b0b8e71/tenacity-9.1.4-py3-none-any.whl", hash = "sha256:6095a360c919085f28c6527de529e76a06ad89b23659fa881ae0649b867a9d55", size = 28926, upload-time = "2026-02-07T10:45:32.24Z" },
 ]
 
 [[package]]
