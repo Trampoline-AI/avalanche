@@ -26,6 +26,7 @@ from typing import Any, Callable, Literal, TypeAlias
 from uuid import uuid4
 
 from ..executor import LocalExecutor, RayExecutor
+from .discovery import DEFAULT_DISCOVERY_TIMEOUT
 from .models import (
     AgentEvent,
     AgentEventAppended,
@@ -245,7 +246,7 @@ class Operator:
         ray_runtime_env: Mapping[str, Any] | None = None,
         ray_init_kwargs: Mapping[str, Any] | None = None,
         prepare_timeout: float = 15.0,
-        discovery_timeout: float = 15.0,
+        discovery_timeout: float = DEFAULT_DISCOVERY_TIMEOUT,
         cancel_grace: float = 5.0,
         stream_history_capacity: int = STREAM_HISTORY_CAPACITY,
         result_storage_directory: str | os.PathLike[str] | None = None,

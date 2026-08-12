@@ -7,6 +7,7 @@ import importlib
 import importlib.util
 import json
 import logging
+import math
 import os
 import subprocess
 import sys
@@ -52,8 +53,14 @@ class FileDiscoveryResult:
     dependencies: tuple[Path, ...]
 
 
-DEFAULT_DISCOVERY_TIMEOUT = 15.0
+DEFAULT_DISCOVERY_TIMEOUT = 60.0
 _DISCOVERY_TERMINATE_GRACE = 1.0
+
+
+def validate_discovery_timeout(timeout: float) -> None:
+    """Raise when a discovery timeout cannot bound one scan."""
+    if not math.isfinite(timeout) or timeout <= 0:
+        raise ValueError("Discovery timeout must be positive and finite")
 
 
 def configure_roots(paths: list[str]) -> tuple[ConfiguredRoot, ...]:
@@ -113,8 +120,7 @@ def discover_files(
             else None
         ),
     }
-    if timeout <= 0:
-        raise ValueError("Discovery timeout must be positive")
+    validate_discovery_timeout(timeout)
     with tempfile.TemporaryDirectory(prefix="avalanche-discovery-") as temp_dir:
         temp = Path(temp_dir)
         payload_path = temp / "request.json"

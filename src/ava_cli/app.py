@@ -20,6 +20,8 @@ from importlib.resources import as_file, files
 from pathlib import Path, PurePosixPath
 from uuid import uuid4
 
+from runtime.operator.discovery import DEFAULT_DISCOVERY_TIMEOUT, validate_discovery_timeout
+
 _RENAME_NOREPLACE = 1
 _RENAME_EXCL = 0x00000004
 _STAGED_OUTPUT_NAME = "result"
@@ -33,6 +35,11 @@ def main(argv: Sequence[str] | None = None) -> int:
     args = parser.parse_args(list(argv) if argv is not None else None)
     if args.command == "dev" and args.port == args.web_port:
         parser.error("ava dev --port and --web-port must differ")
+    if args.command in {"dev", "operator"}:
+        try:
+            validate_discovery_timeout(args.discovery_timeout)
+        except ValueError as exc:
+            parser.error(str(exc))
     if not hasattr(args, "handler"):
         parser.print_help()
         return 2
@@ -89,6 +96,13 @@ def _build_parser() -> argparse.ArgumentParser:
         help="terminal log level (default: WARNING)",
     )
     operator.add_argument("--ray", action="store_true", help="use the Ray executor")
+    operator.add_argument(
+        "--discovery-timeout",
+        type=float,
+        default=DEFAULT_DISCOVERY_TIMEOUT,
+        metavar="SECONDS",
+        help=f"maximum seconds for one discovery scan (default: {DEFAULT_DISCOVERY_TIMEOUT:g})",
+    )
     operator.set_defaults(handler=_run_operator)
 
     webhooks = subcommands.add_parser("webhooks", help="inspect local webhook routes")
@@ -234,6 +248,13 @@ def _build_parser() -> argparse.ArgumentParser:
     dev.add_argument("--port", type=int, default=7433, help="operator gRPC port")
     dev.add_argument("--web-port", type=int, default=7435, help="browser UI HTTP port")
     dev.add_argument("--ray", action="store_true", help="use the Ray executor")
+    dev.add_argument(
+        "--discovery-timeout",
+        type=float,
+        default=DEFAULT_DISCOVERY_TIMEOUT,
+        metavar="SECONDS",
+        help=f"maximum seconds for one discovery scan (default: {DEFAULT_DISCOVERY_TIMEOUT:g})",
+    )
     dev.set_defaults(handler=_run_dev)
 
     return parser
@@ -263,6 +284,8 @@ def _run_operator(args: argparse.Namespace) -> int:
         str(args.webhook_port),
         "--log-level",
         args.log_level,
+        "--discovery-timeout",
+        str(args.discovery_timeout),
     ]
     if args.ray:
         runtime_args.append("--ray")
@@ -1362,7 +1385,9 @@ def _launch_tui(argv: Sequence[str]) -> None:
 def _run_dev(args: argparse.Namespace) -> int:
     port = args.port
     web_port = args.web_port
-    operator_process = _start_operator_process(args.flows, port, args.ray)
+    operator_process = _start_operator_process(
+        args.flows, port, args.ray, args.discovery_timeout
+    )
     web_process = None
     try:
         web_process = _start_web_process(f"127.0.0.1:{port}", web_port)
@@ -1377,6 +1402,7 @@ def _start_operator_process(
     flows: list[str],
     port: int,
     use_ray: bool,
+    discovery_timeout: float,
 ) -> subprocess.Popen:
     cmd = [
         sys.executable,
@@ -1386,6 +1412,8 @@ def _start_operator_process(
         *flows,
         "--port",
         str(port),
+        "--discovery-timeout",
+        str(discovery_timeout),
     ]
     if use_ray:
         cmd.append("--ray")

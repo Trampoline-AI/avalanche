@@ -170,6 +170,9 @@ uv run ava dev --flows ./flow.py
 
 Otherwise, the scan defaults to the current working directory.
 
+Discovery allows 60 seconds per scan by default. Pass `--discovery-timeout SECONDS`
+to `ava operator` or `ava dev` to set a different positive, finite limit.
+
 > [!WARNING]
 > `ava dev` or `ava operator` without `--flows` scans every eligible Python file below the current
 > working directory. Run it only from a dedicated flow workspace; otherwise pass

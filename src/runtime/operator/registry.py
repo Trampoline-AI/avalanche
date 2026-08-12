@@ -15,12 +15,14 @@ from typing import Callable
 from avalanche.dag import Workflow
 
 from .discovery import (
+    DEFAULT_DISCOVERY_TIMEOUT,
     ConfiguredRoot,
     FileDiscoveryResult,
     candidate_files,
     configure_roots,
     discover_files,
     load_builder,
+    validate_discovery_timeout,
 )
 from .discovery_cache import DiscoveryCache
 from .models import (
@@ -164,9 +166,10 @@ class WorkflowRegistry:
     def __init__(
         self,
         *,
-        discovery_timeout: float = 15.0,
+        discovery_timeout: float = DEFAULT_DISCOVERY_TIMEOUT,
         cache_dir: Path | None = None,
     ) -> None:
+        validate_discovery_timeout(discovery_timeout)
         self._lock = threading.Lock()
         self._view = CatalogView()
         self._scan_paths: tuple[str, ...] = ()
