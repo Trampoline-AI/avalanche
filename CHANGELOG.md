@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 0.1.0
+
 ### Operator web interface
 
 - Added an opt-in local React operator interface (`ava web`) with workflow
