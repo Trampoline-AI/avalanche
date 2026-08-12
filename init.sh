@@ -478,8 +478,9 @@ EOF
 }
 
 verify_workspace() {
+  local root=$1
   (
-    cd "$staging_root"
+    cd "$root"
     .venv/bin/python -B -c 'import avalanche; print(avalanche.__file__)'
 
     if [[ "$use_editable_dependencies" == true ]]; then
@@ -529,6 +530,11 @@ commit_workspace() {
   mv "${contents[@]}" "$workspace_root/"
   rmdir "$staging_root"
   staging_root=""
+}
+
+rebuild_workspace_environment() {
+  # Virtual-environment entry points embed their installation path.
+  uv sync --reinstall --no-dev --directory "$workspace_root"
 }
 
 report_success() {
@@ -581,8 +587,10 @@ main() {
   parse_args "$@"
   check_prerequisites
   initialize_workspace
-  verify_workspace
+  verify_workspace "$staging_root"
   commit_workspace
+  rebuild_workspace_environment
+  verify_workspace "$workspace_root"
   report_success
   configure_provider
 }

@@ -103,8 +103,9 @@ if [ "$1" = "sync" ]; then
         shift
     done
     mkdir -p "$directory/.venv/bin"
-    printf '#!/bin/sh\\nexit 0\\n' > "$directory/.venv/bin/python"
-    printf '#!/bin/sh\\nexit 0\\n' > "$directory/.venv/bin/ava"
+    printf '#!/bin/sh\nexit 0\n' > "$directory/.venv/bin/python"
+    entrypoint="$directory/.venv/bin/ava"
+    printf '#!/bin/sh\n[ -x "%s/.venv/bin/python" ] || exit 1\n' "$directory" > "$entrypoint"
     chmod +x "$directory/.venv/bin/python" "$directory/.venv/bin/ava"
 fi
 """,
@@ -133,6 +134,9 @@ fi
     guidance = (workspace_root / "AGENTS.md").read_text()
     assert "uv run ava dev --flows src/binary_converter/" in guidance
     assert "ava operator --flows src/binary_converter/ --web" not in guidance
+
+    ava = workspace_root / ".venv" / "bin" / "ava"
+    assert subprocess.run([str(ava), "run", "--help"], check=False).returncode == 0
 
 
 def test_ava_operator_delegates_to_runtime_operator_with_flows(monkeypatch):
