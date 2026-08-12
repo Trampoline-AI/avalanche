@@ -57,6 +57,30 @@ EXECUTOR_FACTORIES = [
     pytest.param(ava.RayExecutor, marks=pytest.mark.ray),
 ]
 
+@pytest.fixture(scope="module")
+def _shared_ray_runtime():
+    ray = pytest.importorskip("ray")
+    owns_runtime = not ray.is_initialized()
+    if owns_runtime:
+        ray.init(num_cpus=2, include_dashboard=False)
+    try:
+        yield ray
+    finally:
+        if owns_runtime and ray.is_initialized():
+            ray.shutdown()
+
+
+@pytest.fixture(autouse=True)
+def _reuse_shared_ray_runtime_for_parametrized_contracts(request, monkeypatch):
+    if request.node.get_closest_marker("ray") is None:
+        return
+    ray = request.getfixturevalue("_shared_ray_runtime")
+
+    def defer_shutdown() -> None:
+        """Keep the module-owned runtime available to later contract cases."""
+
+    monkeypatch.setattr(ray, "shutdown", defer_shutdown)
+
 
 class RowSchema(dy.Schema):
     id = dy.Int64(nullable=False)

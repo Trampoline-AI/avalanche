@@ -58,6 +58,7 @@ dev = [
     "predict-rlm>=0.8.0",
     "marimo>=0.23.9,<0.24",
     "pre-commit>=4,<5",
+    "pytest-xdist>=3.6,<4",
 ]
 examples = [
     "openpyxl>=3.1,<4",

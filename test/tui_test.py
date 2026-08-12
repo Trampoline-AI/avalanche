@@ -4369,25 +4369,25 @@ class TestInteractions:
             dag_scroll._on_mouse_scroll_left(pointer_event(MouseScrollLeft))
             assert dag_scroll.scroll_target_x == 8
 
-            await pilot.pause(0.12)
+            await pilot.wait_for_animation()
             assert dag_scroll.scroll_x == pytest.approx(8)
 
             dag_scroll._on_mouse_scroll_down(pointer_event(MouseScrollDown))
             assert dag_scroll.scroll_target_y == 3
 
-            await pilot.pause(0.12)
+            await pilot.wait_for_animation()
             assert dag_scroll.scroll_y == pytest.approx(3)
 
             dag_scroll._on_mouse_scroll_down(pointer_event(MouseScrollDown, shift=True))
             assert dag_scroll.scroll_target_x == 16
 
-            await pilot.pause(0.12)
+            await pilot.wait_for_animation()
             assert dag_scroll.scroll_x == pytest.approx(16)
 
             dag_scroll._on_mouse_scroll_up(pointer_event(MouseScrollUp, ctrl=True))
             assert dag_scroll.scroll_target_x == 8
 
-            await pilot.pause(0.12)
+            await pilot.wait_for_animation()
             assert dag_scroll.scroll_x == pytest.approx(8)
 
             dag_scroll._scroll_to(x=0, y=0, animate=False)
@@ -5387,6 +5387,7 @@ async def test_trace_hydration_persistent_failure_uses_bounded_backoff():
     clock = [0.0]
     calls = []
     completed_attempts = []
+    completion_enqueued = threading.Event()
 
     def hydrate_trace(run_id, node_id):
         calls.append((run_id, node_id, clock[0]))
@@ -5399,41 +5400,47 @@ async def test_trace_hydration_persistent_failure_uses_bounded_backoff():
     app = AvalancheApp(provider=provider, workflow="agent_flow", node="agent")
     app._trace_hydration_now = lambda: clock[0]
     key = ("run-agent", "agent_1", 1)
+    enqueue_completion = app.store.enqueue_trace_hydration_completion
 
-    async def wait_for_retry(pilot, level, call_count, after_deadline):
-        for _ in range(40):
-            await pilot.pause()
-            retry = app._trace_hydration_retry.get(key)
-            if (
-                len(calls) == call_count
-                and len(completed_attempts) == call_count
-                and retry is not None
-                and retry[0] == level
-                and retry[1] > after_deadline
-            ):
-                return retry
-        raise AssertionError(f"retry level {level} was not observed")
+    def signal_completion(completion):
+        enqueue_completion(completion)
+        completion_enqueued.set()
+
+    app.store.enqueue_trace_hydration_completion = signal_completion
+
+    async def wait_for_retry(level, call_count, after_deadline):
+        assert await asyncio.to_thread(completion_enqueued.wait, 1)
+        completion_enqueued.clear()
+        app._tick()
+        retry = app._trace_hydration_retry.get(key)
+        assert (
+            len(calls) == call_count
+            and len(completed_attempts) == call_count
+            and retry is not None
+            and retry[0] == level
+            and retry[1] > after_deadline
+        ), f"retry level {level} was not observed"
+        return retry
 
     updates = _signal_background_updates(app.store)
     async with app.run_test(size=(100, 35)) as pilot:
         await pilot.pause()
         await _wait_for_current_run(app, updates)
         await pilot.press("enter")
-        retry = await wait_for_retry(pilot, 1, 1, clock[0])
+        retry = await wait_for_retry(1, 1, clock[0])
         assert retry == (1, 0.25)
 
-        for _ in range(20):
-            await pilot.pause()
+        app._tick()
         assert len(calls) == 1
 
         expected_levels = (2, 3, 4, 5, 5)
         for call_count, level in enumerate(expected_levels, start=2):
             clock[0] = app._trace_hydration_retry[key][1]
-            retry = await wait_for_retry(pilot, level, call_count, clock[0])
+            app._tick()
+            retry = await wait_for_retry(level, call_count, clock[0])
         assert retry[1] - clock[0] == 4.0
 
-        for _ in range(20):
-            await pilot.pause()
+        app._tick()
         assert len(calls) == 6
 
 
@@ -5581,18 +5588,10 @@ async def test_trace_hydration_tab_cycles_bound_blocked_worker_and_keep_backoff(
         await pilot.pause()
         await _wait_for_current_run(app, updates)
         await pilot.press("enter")
-        for _ in range(20):
-            if started.is_set():
-                break
-            await pilot.pause()
-        assert started.is_set()
+        assert await asyncio.to_thread(started.wait, 1)
 
         attempt = app._trace_hydration_attempts[key]
-        for _ in range(8):
-            await pilot.press("left")
-            await pilot.pause()
-            await pilot.press("right")
-            await pilot.pause()
+        await pilot.press(*(("left", "right") * 8))
 
         with lock:
             assert calls == 1
@@ -5604,22 +5603,14 @@ async def test_trace_hydration_tab_cycles_bound_blocked_worker_and_keep_backoff(
 
         release.set()
         await asyncio.to_thread(worker_done.wait)
-        retry = None
-        for _ in range(40):
-            await pilot.pause()
-            retry = app._trace_hydration_retry.get(key)
-            if retry is not None:
-                break
+        app._tick()
+        retry = app._trace_hydration_retry.get(key)
         assert retry == (1, 100.25)
         assert key not in app._trace_hydration_in_flight
         assert app._trace_hydration_attempts == {}
         assert attempt not in app._trace_hydration_superseded
 
-        await pilot.press("left")
-        await pilot.pause()
-        await pilot.press("right")
-        for _ in range(5):
-            await pilot.pause()
+        await pilot.press("left", "right")
         assert app._trace_hydration_retry[key] == retry
         assert calls == 1
 
