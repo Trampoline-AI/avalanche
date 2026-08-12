@@ -1,8 +1,12 @@
 .PHONY: test test-cov test-cov-html lint format precommit-check check smoke-test tui-bench proto brand install clean web-assets-check web-lint web-format web-format-check web-test web-bench
+PYTEST_WORKERS ?= 4
 
-# Run tests with every supported executor/storage extra installed.
+
+# Run ordinary tests concurrently; Ray and tmux own process-global resources.
 test:
-	uv run --all-extras pytest
+	uv run --all-extras pytest -n $(PYTEST_WORKERS) -m "not ray and not tmux"
+	uv run --all-extras pytest -m ray
+	uv run --all-extras pytest -m tmux
 
 # Run tests with coverage report
 test-cov:
