@@ -6,6 +6,8 @@ import hashlib
 import importlib
 import importlib.util
 import json
+import logging
+import math
 import os
 import subprocess
 import sys
@@ -27,8 +29,10 @@ from .models import (
     WorkflowLocator,
     display_name_from_id,
 )
-from .source_policy import is_excluded_directory
+from .source_policy import is_excluded_directory, is_path_in_excluded_directory
 from .windows_job import WindowsJob, assign_process, close_job, create_kill_on_close_job
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True)
@@ -49,8 +53,14 @@ class FileDiscoveryResult:
     dependencies: tuple[Path, ...]
 
 
-DEFAULT_DISCOVERY_TIMEOUT = 15.0
+DEFAULT_DISCOVERY_TIMEOUT = 60.0
 _DISCOVERY_TERMINATE_GRACE = 1.0
+
+
+def validate_discovery_timeout(timeout: float) -> None:
+    """Raise when a discovery timeout cannot bound one scan."""
+    if not math.isfinite(timeout) or timeout <= 0:
+        raise ValueError("Discovery timeout must be positive and finite")
 
 
 def configure_roots(paths: list[str]) -> tuple[ConfiguredRoot, ...]:
@@ -110,8 +120,7 @@ def discover_files(
             else None
         ),
     }
-    if timeout <= 0:
-        raise ValueError("Discovery timeout must be positive")
+    validate_discovery_timeout(timeout)
     with tempfile.TemporaryDirectory(prefix="avalanche-discovery-") as temp_dir:
         temp = Path(temp_dir)
         payload_path = temp / "request.json"
@@ -146,6 +155,11 @@ def discover_files(
                 try:
                     process.wait(timeout=timeout)
                 except subprocess.TimeoutExpired:
+                    logger.warning(
+                        "Workflow discovery timed out after %.1fs; "
+                        "incomplete scan results were discarded",
+                        timeout,
+                    )
                     return (), (_discovery_failure(f"Discovery exceeded {timeout:.1f}s"),)
                 finally:
                     _terminate_discovery_process(process, windows_job)
@@ -341,7 +355,7 @@ def _purge_modules_under(root: Path) -> None:
         if module_file is None:
             continue
         path = _module_path_under(module_file, (root,))
-        if path is not None:
+        if path is not None and not is_path_in_excluded_directory(path.relative_to(root)):
             sys.modules.pop(module_name, None)
 
 

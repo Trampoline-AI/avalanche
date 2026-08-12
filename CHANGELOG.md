@@ -2,6 +2,16 @@
 
 ## Unreleased
 
+### Operator discovery
+
+- Source discovery no longer unloads dependencies imported from excluded
+  directories such as a project-local `.venv`, avoiding duplicate native-module
+  load failures while scanning workflows.
+- `ava operator` and `ava dev` now accept `--discovery-timeout SECONDS` for one
+  discovery scan. The positive, finite limit defaults to 60 seconds, up from 15.
+- Discovery now logs a warning when its deadline expires and incomplete results
+  are discarded.
+
 ## 0.1.2
 ### Dependencies
 

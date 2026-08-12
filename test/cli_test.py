@@ -150,7 +150,21 @@ def test_ava_operator_delegates_to_runtime_operator_with_flows(monkeypatch):
 
     monkeypatch.setattr(app, "_operator_main", fake_operator_main)
 
-    assert app.main(["operator", "--flows", "examples", "--port", "17777", "--ray"]) == 0
+    assert (
+        app.main(
+            [
+                "operator",
+                "--flows",
+                "examples",
+                "--port",
+                "17777",
+                "--discovery-timeout",
+                "45",
+                "--ray",
+            ]
+        )
+        == 0
+    )
     assert calls == [
         [
             "--flows",
@@ -163,6 +177,8 @@ def test_ava_operator_delegates_to_runtime_operator_with_flows(monkeypatch):
             "7434",
             "--log-level",
             "WARNING",
+            "--discovery-timeout",
+            "45.0",
             "--ray",
         ]
     ]
@@ -176,6 +192,7 @@ def test_ava_operator_defaults_flows_to_current_directory(monkeypatch):
 
     assert app.main(["operator"]) == 0
     assert calls[0][:2] == ["--flows", "."]
+    assert calls[0][-2:] == ["--discovery-timeout", "60.0"]
 
 
 def test_ava_operator_forwards_case_insensitive_log_level(monkeypatch):
@@ -185,7 +202,7 @@ def test_ava_operator_forwards_case_insensitive_log_level(monkeypatch):
     monkeypatch.setattr(app, "_operator_main", lambda argv: calls.append(argv) or 0)
 
     assert app.main(["operator", "--flows", "examples", "--log-level", "info"]) == 0
-    assert calls[0][-2:] == ["--log-level", "INFO"]
+    assert calls[0][-4:] == ["--log-level", "INFO", "--discovery-timeout", "60.0"]
 
 
 def test_runtime_operator_configures_logging_before_serve(monkeypatch):
@@ -204,7 +221,12 @@ def test_runtime_operator_configures_logging_before_serve(monkeypatch):
         lambda flows, **kwargs: lifecycle.append(("serve", (flows, kwargs))),
     )
 
-    assert operator_main.main(["--flows", "examples", "--log-level", "info"]) == 0
+    assert (
+        operator_main.main(
+            ["--flows", "examples", "--log-level", "info", "--discovery-timeout", "45"]
+        )
+        == 0
+    )
     assert lifecycle[0] == (
         "logging",
         {
@@ -214,6 +236,7 @@ def test_runtime_operator_configures_logging_before_serve(monkeypatch):
         },
     )
     assert lifecycle[1][0] == "serve"
+    assert lifecycle[1][1][1]["discovery_timeout"] == 45.0
 
 
 def test_runtime_operator_defaults_flows_to_current_directory(monkeypatch):
@@ -221,10 +244,26 @@ def test_runtime_operator_defaults_flows_to_current_directory(monkeypatch):
     from runtime.operator import __main__ as operator_main
 
     calls = []
-    monkeypatch.setattr(runtime_operator, "serve", lambda flows, **kwargs: calls.append(flows))
+    monkeypatch.setattr(
+        runtime_operator,
+        "serve",
+        lambda flows, **kwargs: calls.append((flows, kwargs)),
+    )
 
     assert operator_main.main([]) == 0
-    assert calls == [["."]]
+    assert calls[0][0] == ["."]
+    assert calls[0][1]["discovery_timeout"] == 60.0
+
+
+@pytest.mark.parametrize("timeout", ("0", "nan", "inf"))
+def test_runtime_operator_rejects_invalid_discovery_timeout(capsys, timeout):
+    from runtime.operator import __main__ as operator_main
+
+    with pytest.raises(SystemExit) as exc_info:
+        operator_main.main(["--discovery-timeout", timeout])
+
+    assert exc_info.value.code == 2
+    assert "Discovery timeout must be positive and finite" in capsys.readouterr().err
 
 
 def test_runtime_operator_reports_loaded_workflows(monkeypatch, capsys):
@@ -1621,8 +1660,8 @@ def test_ava_dev_starts_web_without_waiting_for_operator_readiness(monkeypatch):
         def kill(self):
             events.append("kill")
 
-    def fake_start_operator_process(flows, port, use_ray):
-        events.append(("start", flows, port, use_ray))
+    def fake_start_operator_process(flows, port, use_ray, discovery_timeout):
+        events.append(("start", flows, port, use_ray, discovery_timeout))
         return FakeProcess()
 
     def fake_start_web_process(address, port):
@@ -1634,12 +1673,23 @@ def test_ava_dev_starts_web_without_waiting_for_operator_readiness(monkeypatch):
 
     assert (
         app.main(
-            ["dev", "--flows", "examples", "--ray", "--port", "8443", "--web-port", "8444"]
+            [
+                "dev",
+                "--flows",
+                "examples",
+                "--ray",
+                "--port",
+                "8443",
+                "--web-port",
+                "8444",
+                "--discovery-timeout",
+                "45",
+            ]
         )
         == 0
     )
     assert events == [
-        ("start", ["examples"], 8443, True),
+        ("start", ["examples"], 8443, True, 45.0),
         ("web", "127.0.0.1:8443", 8444),
         ("wait", None),
         "terminate",
@@ -1665,10 +1715,14 @@ def test_ava_dev_defaults_flows_to_current_directory(monkeypatch):
     from ava_cli import app
 
     calls = []
-    monkeypatch.setattr(app, "_run_dev", lambda args: calls.append(args.flows) or 0)
+    monkeypatch.setattr(
+        app,
+        "_run_dev",
+        lambda args: calls.append((args.flows, args.discovery_timeout)) or 0,
+    )
 
     assert app.main(["dev"]) == 0
-    assert calls == [["."]]
+    assert calls == [(["."], 60.0)]
 
 
 def test_ava_dev_stops_operator_when_wait_is_interrupted(monkeypatch):
@@ -1692,7 +1746,7 @@ def test_ava_dev_stops_operator_when_wait_is_interrupted(monkeypatch):
     monkeypatch.setattr(
         app,
         "_start_operator_process",
-        lambda flows, port, use_ray: FakeProcess(),
+        lambda flows, port, use_ray, discovery_timeout: FakeProcess(),
     )
     monkeypatch.setattr(app, "_start_web_process", lambda address, port: FakeProcess())
 

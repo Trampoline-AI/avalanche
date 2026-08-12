@@ -6,6 +6,8 @@ import argparse
 import logging
 from collections.abc import Sequence
 
+from .discovery import DEFAULT_DISCOVERY_TIMEOUT, validate_discovery_timeout
+
 
 def main(argv: Sequence[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
@@ -34,6 +36,13 @@ def main(argv: Sequence[str] | None = None) -> int:
     )
     parser.add_argument("--ray", action="store_true", help="use the Ray executor")
     parser.add_argument(
+        "--discovery-timeout",
+        type=float,
+        default=DEFAULT_DISCOVERY_TIMEOUT,
+        metavar="SECONDS",
+        help=f"maximum seconds for one discovery scan (default: {DEFAULT_DISCOVERY_TIMEOUT:g})",
+    )
+    parser.add_argument(
         "--log-level",
         type=str.upper,
         choices=("DEBUG", "INFO", "WARNING", "ERROR"),
@@ -41,6 +50,10 @@ def main(argv: Sequence[str] | None = None) -> int:
         help="terminal log level (default: WARNING)",
     )
     args = parser.parse_args(list(argv) if argv is not None else None)
+    try:
+        validate_discovery_timeout(args.discovery_timeout)
+    except ValueError as exc:
+        parser.error(str(exc))
     logging.basicConfig(
         level=getattr(logging, args.log_level),
         format="%(asctime)s %(levelname)s %(name)s: %(message)s",
@@ -61,6 +74,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         port=args.port,
         host=args.host,
         webhook_port=args.webhook_port,
+        discovery_timeout=args.discovery_timeout,
         executor_backend="ray" if args.ray else "local",
     )
     return 0

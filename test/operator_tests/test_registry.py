@@ -2,6 +2,7 @@
 
 import importlib
 import json
+import logging
 import os
 import signal
 import sys
@@ -11,7 +12,7 @@ import pytest
 
 import avalanche as ava
 from avalanche.dag import Workflow
-from runtime.operator.discovery import FileDiscoveryResult, configure_roots
+from runtime.operator.discovery import FileDiscoveryResult, _worker, configure_roots
 from runtime.operator.discovery_cache import DiscoveryCache
 from runtime.operator.models import WorkflowDiscoveryDiagnostic
 from runtime.operator.registry import (
@@ -104,6 +105,52 @@ class TestWorkflowRegistry:
                 message="RuntimeError: broken import",
             )
         ]
+
+    def test_scan_preserves_virtualenv_modules(self, tmp_path, monkeypatch):
+        project = tmp_path / "project"
+        virtualenv = project / ".venv"
+        module_name = "_avalanche_virtualenv_reload_guard"
+        guard_name = "AVALANCHE_VIRTUALENV_RELOAD_GUARD"
+        virtualenv.mkdir(parents=True)
+        (virtualenv / f"{module_name}.py").write_text(
+            "import os\n"
+            f"if os.environ.get({guard_name!r}):\n"
+            "    raise ImportError('cannot load module more than once per process')\n"
+            f"os.environ[{guard_name!r}] = 'loaded'\n"
+        )
+        (project / "flow.py").write_text(
+            f"import {module_name}\n"
+            "import avalanche as ava\n"
+            "\n"
+            "@ava.workflow\n"
+            "def workflow():\n"
+            "    return None\n"
+        )
+
+        monkeypatch.delenv(guard_name, raising=False)
+        monkeypatch.syspath_prepend(str(virtualenv))
+        sys.modules.pop(module_name, None)
+        try:
+            importlib.import_module(module_name)
+            result = _worker(
+                {
+                    "roots": [
+                        {
+                            "alias": "project",
+                            "path": str(project),
+                            "target": str(project),
+                        }
+                    ],
+                    "targets": None,
+                }
+            )
+            file_result = result["files"][0]
+            assert file_result["diagnostics"] == []
+            assert [descriptor["workflow_id"] for descriptor in file_result["descriptors"]] == [
+                "flow.py::workflow"
+            ]
+        finally:
+            sys.modules.pop(module_name, None)
 
     def test_scan_discovers_workflow_in_package_with_relative_imports(self, tmp_path):
         pkg = tmp_path / "my_pkg" / "my_belt"
@@ -311,7 +358,7 @@ class TestWorkflowRegistry:
         assert [item.workflow_id for item in registry.descriptors()] == ["flow.py::scheduled"]
         assert registry.list_diagnostics()[0].kind == "import_error"
 
-    def test_discovery_timeout_retains_current_view(self, tmp_path):
+    def test_discovery_timeout_retains_current_view(self, tmp_path, caplog):
         workflow_file = tmp_path / "flow.py"
         workflow_file.write_text(
             "import avalanche as ava\n"
@@ -323,6 +370,7 @@ class TestWorkflowRegistry:
         registry.scan([str(workflow_file)])
         assert registry.descriptors()
 
+        caplog.set_level(logging.WARNING, logger="runtime.operator.discovery")
         workflow_file.write_text("while True:\n    pass\n")
         registry._discovery_timeout = 0.2
         started = time.monotonic()
@@ -331,6 +379,15 @@ class TestWorkflowRegistry:
         assert time.monotonic() - started < 2.0
         assert [item.workflow_id for item in registry.descriptors()] == ["flow.py::scheduled"]
         assert "exceeded 0.2s" in registry.list_diagnostics()[0].message
+        timeout_warnings = [
+            record
+            for record in caplog.records
+            if (
+                record.name == "runtime.operator.discovery"
+                and record.levelno == logging.WARNING
+            )
+        ]
+        assert len(timeout_warnings) == 1
 
     def test_discovery_stdout_and_delayed_background_output_do_not_corrupt_result(
         self, tmp_path

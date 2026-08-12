@@ -7,7 +7,7 @@ from pathlib import Path
 
 from .discovery import ConfiguredRoot
 from .models import WorkflowLocator
-from .source_policy import is_excluded_directory
+from .source_policy import is_excluded_directory, is_path_in_excluded_directory
 
 _CREDENTIAL_NAMES = {
     ".npmrc",
@@ -140,7 +140,7 @@ def _included_source_path(
     if containing_root is None:
         return None
     relative = candidate.relative_to(containing_root)
-    if not relative.parts or any(is_excluded_directory(part) for part in relative.parts[:-1]):
+    if not relative.parts or is_path_in_excluded_directory(relative):
         return None
     if _exclude_file(relative.name):
         return None
