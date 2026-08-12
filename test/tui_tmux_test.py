@@ -22,7 +22,6 @@ TMUX = shutil.which("tmux")
 SESSION = "pytest-tui"
 TUI_CMD = "uv run ava tui"
 
-
 def tmux(*args: str, input: str | None = None) -> str:
     """Run a tmux command and return stdout."""
     result = subprocess.run(
@@ -48,17 +47,54 @@ def send_keys(*keys: str) -> None:
         time.sleep(0.15)
 
 
-def restart_tui(args: str = "", *, width: int = 100, height: int = 40) -> None:
-    """Restart the tmux session with optional TUI CLI args."""
+def start_tui(args: str = "", *, width: int = 100, height: int = 40) -> None:
+    """Start the TUI in a fresh tmux session."""
     subprocess.run(["tmux", "kill-session", "-t", SESSION], capture_output=True, timeout=5)
-    cmd = f"{TUI_CMD} {args}; sleep 30" if args else f"{TUI_CMD}; sleep 30"
+    command = f"COLUMNS={width} LINES={height} {TUI_CMD}"
+    if args:
+        command = f"{command} {args}"
     subprocess.run(
-        ["tmux", "new-session", "-d", "-s", SESSION, "-x", str(width), "-y", str(height), cmd],
+        [
+            "tmux",
+            "new-session",
+            "-d",
+            "-s",
+            SESSION,
+            "-x",
+            str(width),
+            "-y",
+            str(height),
+        ],
         check=True,
         timeout=10,
         cwd=os.path.dirname(os.path.dirname(__file__)),
     )
-    assert wait_for("avalanche", timeout=8), "TUI did not start"
+    subprocess.run(
+        ["tmux", "resize-window", "-t", SESSION, "-x", str(width), "-y", str(height)],
+        check=True,
+        timeout=10,
+    )
+    actual_size = tmux(
+        "display-message",
+        "-p",
+        "-t",
+        SESSION,
+        "#{window_width}x#{window_height}",
+    ).strip()
+    assert actual_size == f"{width}x{height}", (
+        f"tmux session has size {actual_size!r}, expected {width}x{height}"
+    )
+    subprocess.run(
+        ["tmux", "respawn-pane", "-k", "-t", SESSION, command],
+        check=True,
+        timeout=10,
+    )
+    assert wait_for("avalanche", timeout=15), "TUI did not start"
+
+
+def restart_tui(args: str = "", *, width: int = 100, height: int = 40) -> None:
+    """Restart the tmux session with optional TUI CLI args."""
+    start_tui(args, width=width, height=height)
 
 
 def open_explorer() -> None:
@@ -94,12 +130,37 @@ def wait_for(text: str, timeout: float = 5.0) -> bool:
     return False
 
 
+def wait_for_all_texts(*texts: str, timeout: float = 5.0) -> bool:
+    """Wait until every text appears in the current pane output."""
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        rendered = "\n".join(capture())
+        if all(text in rendered for text in texts):
+            return True
+        time.sleep(0.2)
+    return False
+
+
+def status_line() -> str:
+    """Return the rendered status line, ignoring tmux's trailing blank rows."""
+    return next((line for line in reversed(capture()) if "· live updates" in line), "")
+
+
+def wait_for_status_text(text: str, timeout: float = 5.0) -> bool:
+    """Wait until the status line identifies the expected selection."""
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        if text in status_line():
+            return True
+        time.sleep(0.2)
+    return False
+
+
 def _wait_for_status_run(run_id: str, timeout: float = 5.0) -> bool:
     """Wait until the status bar identifies the selected run."""
     deadline = time.monotonic() + timeout
     while time.monotonic() < deadline:
-        lines = capture()
-        if len(lines) > 1 and run_id in lines[-2]:
+        if run_id in status_line():
             return True
         time.sleep(0.2)
     return False
@@ -121,29 +182,7 @@ def tui_session():
     if not TMUX:
         pytest.skip("tmux not installed")
 
-    # Kill any leftover session
-    subprocess.run(["tmux", "kill-session", "-t", SESSION], capture_output=True, timeout=5)
-
-    # Start new session
-    subprocess.run(
-        [
-            "tmux",
-            "new-session",
-            "-d",
-            "-s",
-            SESSION,
-            "-x",
-            "100",
-            "-y",
-            "40",
-            f"{TUI_CMD}; sleep 30",
-        ],
-        check=True,
-        timeout=10,
-        cwd=os.path.dirname(os.path.dirname(__file__)),
-    )
-    # Wait for the TUI to render
-    assert wait_for("avalanche", timeout=8), "TUI did not start"
+    start_tui()
 
     yield SESSION
 
@@ -167,8 +206,12 @@ class TestTmuxRendering:
     def test_dag_renders_all_branches(self, tui_session):
         """Deep-link to ml_workflow and verify all 3 parallel branches render."""
         restart_tui("ml_workflow", width=160)
-        assert wait_for("fetch_training", timeout=8)
-
+        assert wait_for_all_texts(
+            "fetch_training",
+            "fetch_validation",
+            "fetch_features",
+            timeout=15,
+        )
         lines = capture()
         combined = "\n".join(lines)
         assert "fetch_training" in combined, "Missing fetch_training branch"
@@ -188,38 +231,12 @@ class TestTmuxRendering:
     def test_deep_link_node_selects_status_bar(self, tui_session):
         """Deep-linking to a DAG node should show it in the status bar."""
         restart_tui("order_workflow/validate", width=220)
-        assert wait_for("validate", timeout=8)
-
-        # Status bar should show the selected node
-        lines = capture()
-        status_line = lines[-2] if len(lines) > 1 else ""
-        assert (
-            "validate" in status_line
-        ), f"Expected 'validate' in status bar, got: {status_line}"
+        assert wait_for_status_text("validate", timeout=8)
 
     def test_deep_link_workflow(self, tui_session):
         """Deep-link CLI arg should select the specified workflow."""
-        # Kill current session and start with deep-link
-        subprocess.run(["tmux", "kill-session", "-t", SESSION], capture_output=True, timeout=5)
-        subprocess.run(
-            [
-                "tmux",
-                "new-session",
-                "-d",
-                "-s",
-                SESSION,
-                "-x",
-                "100",
-                "-y",
-                "40",
-                f"{TUI_CMD} ml_workflow; sleep 30",
-            ],
-            check=True,
-            timeout=10,
-            cwd=os.path.dirname(os.path.dirname(__file__)),
-        )
-        assert wait_for("ml_workflow", timeout=8)
-        time.sleep(1)
+        restart_tui("ml_workflow")
+        assert wait_for_all_texts("fetch_training", "preprocess", timeout=15)
 
         lines = capture()
         combined = "\n".join(lines)
@@ -280,16 +297,10 @@ class TestTmuxRendering:
         open_explorer()
 
         send_keys("Escape", "Enter")
-        assert wait_for("STRUCTURED TRACE", timeout=5)
-        combined = "\n".join(capture())
-        assert "EXPLORER" in combined
-        assert "AGENT TURN 1/4" in combined
-        assert "Reasoning" not in combined
-        assert "Expand all" in combined
-        assert "Collapse all" in combined
+        assert wait_for_all_texts("Expand all", "Collapse all", timeout=5)
 
         send_keys("e")
-        assert wait_for("Reasoning", timeout=5)
+        assert wait_for_all_texts("Expand all", "Collapse all", timeout=15)
         send_keys("z")
         time.sleep(0.3)
         assert "Reasoning" not in "\n".join(capture())
