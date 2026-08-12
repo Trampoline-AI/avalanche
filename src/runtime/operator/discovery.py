@@ -27,7 +27,7 @@ from .models import (
     WorkflowLocator,
     display_name_from_id,
 )
-from .source_policy import is_excluded_directory
+from .source_policy import is_excluded_directory, is_path_in_excluded_directory
 from .windows_job import WindowsJob, assign_process, close_job, create_kill_on_close_job
 
 
@@ -341,7 +341,7 @@ def _purge_modules_under(root: Path) -> None:
         if module_file is None:
             continue
         path = _module_path_under(module_file, (root,))
-        if path is not None:
+        if path is not None and not is_path_in_excluded_directory(path.relative_to(root)):
             sys.modules.pop(module_name, None)
 
 
