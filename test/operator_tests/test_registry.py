@@ -2,6 +2,7 @@
 
 import importlib
 import json
+import logging
 import os
 import signal
 import sys
@@ -357,7 +358,7 @@ class TestWorkflowRegistry:
         assert [item.workflow_id for item in registry.descriptors()] == ["flow.py::scheduled"]
         assert registry.list_diagnostics()[0].kind == "import_error"
 
-    def test_discovery_timeout_retains_current_view(self, tmp_path):
+    def test_discovery_timeout_retains_current_view(self, tmp_path, caplog):
         workflow_file = tmp_path / "flow.py"
         workflow_file.write_text(
             "import avalanche as ava\n"
@@ -369,6 +370,7 @@ class TestWorkflowRegistry:
         registry.scan([str(workflow_file)])
         assert registry.descriptors()
 
+        caplog.set_level(logging.WARNING, logger="runtime.operator.discovery")
         workflow_file.write_text("while True:\n    pass\n")
         registry._discovery_timeout = 0.2
         started = time.monotonic()
@@ -377,6 +379,15 @@ class TestWorkflowRegistry:
         assert time.monotonic() - started < 2.0
         assert [item.workflow_id for item in registry.descriptors()] == ["flow.py::scheduled"]
         assert "exceeded 0.2s" in registry.list_diagnostics()[0].message
+        timeout_warnings = [
+            record
+            for record in caplog.records
+            if (
+                record.name == "runtime.operator.discovery"
+                and record.levelno == logging.WARNING
+            )
+        ]
+        assert len(timeout_warnings) == 1
 
     def test_discovery_stdout_and_delayed_background_output_do_not_corrupt_result(
         self, tmp_path

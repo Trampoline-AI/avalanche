@@ -6,6 +6,7 @@ import hashlib
 import importlib
 import importlib.util
 import json
+import logging
 import os
 import subprocess
 import sys
@@ -29,6 +30,8 @@ from .models import (
 )
 from .source_policy import is_excluded_directory, is_path_in_excluded_directory
 from .windows_job import WindowsJob, assign_process, close_job, create_kill_on_close_job
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True)
@@ -146,6 +149,11 @@ def discover_files(
                 try:
                     process.wait(timeout=timeout)
                 except subprocess.TimeoutExpired:
+                    logger.warning(
+                        "Workflow discovery timed out after %.1fs; "
+                        "incomplete scan results were discarded",
+                        timeout,
+                    )
                     return (), (_discovery_failure(f"Discovery exceeded {timeout:.1f}s"),)
                 finally:
                     _terminate_discovery_process(process, windows_job)
