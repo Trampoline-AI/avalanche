@@ -2,6 +2,18 @@
 
 ## Unreleased
 
+## 0.1.1
+
+### Workspace initialization
+
+- `ava init` now rebuilds its virtual environment after moving a staged workspace
+  into its final location, so generated `ava` entry points use the final path.
+
+### Dependencies
+
+- Avalanche now installs PredictRLM's `codex-lm` extra by default, enabling Codex
+  LM support.
+
 ## 0.1.0
 
 ### Operator web interface
