@@ -1,6 +1,10 @@
 # Changelog
 
 ## Unreleased
+### Dependencies
+
+- Declare Protobuf as an Avalanche runtime dependency required by the operator's
+  generated gRPC bindings.
 
 ## 0.1.1
 

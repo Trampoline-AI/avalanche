@@ -37,7 +37,7 @@ def test_packaging_includes_standard_runtime_dependencies():
     data = tomllib.loads(Path("pyproject.toml").read_text())
 
     dependencies = data["project"]["dependencies"]
-    for name in ("croniter", "grpcio", "predict-rlm", "textual", "watchfiles"):
+    for name in ("croniter", "grpcio", "predict-rlm", "protobuf", "textual", "watchfiles"):
         assert any(dep.startswith(name) for dep in dependencies)
 
     optional = data["project"]["optional-dependencies"]
