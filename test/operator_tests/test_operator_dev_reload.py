@@ -733,7 +733,7 @@ def test_slow_update_consumer_receives_ordered_descriptors_and_detail_bodies(tmp
         operator.close()
 
 
-def test_close_boundedly_reaps_active_coordinator(tmp_path):
+def test_close_cancels_run_after_start_returns_id(tmp_path):
     workflow = _write_standalone(tmp_path, body="time.sleep(10)")
     operator = Operator(
         [str(workflow)],
@@ -957,7 +957,7 @@ def test_watch_policy_includes_python_sources_and_excludes_non_source_files(tmp_
     assert not is_source_path_included(tmp_path / "outside.py", (source,))
 
 
-def test_close_owns_and_terminates_run_during_preparation(tmp_path):
+def test_close_rejects_run_when_shutdown_precedes_preparation(tmp_path, monkeypatch):
     workflow = _write_standalone(tmp_path)
     workflow.write_text(
         workflow.read_text().replace(
@@ -974,6 +974,17 @@ def test_close_owns_and_terminates_run_during_preparation(tmp_path):
         schedule=False,
         cancel_grace=0.1,
     )
+    publication_delivered = threading.Event()
+    release_start = threading.Event()
+    original_wait_for_notifications = operator._wait_for_notifications
+
+    def pause_after_run_is_published(notifications):
+        original_wait_for_notifications(notifications)
+        publication_delivered.set()
+        if not release_start.wait(timeout=5):
+            raise TimeoutError("Timed out waiting to release run startup")
+
+    monkeypatch.setattr(operator, "_wait_for_notifications", pause_after_run_is_published)
     errors: list[BaseException] = []
     run_ids: list[str] = []
 
@@ -984,20 +995,26 @@ def test_close_owns_and_terminates_run_during_preparation(tmp_path):
             errors.append(exc)
 
     starter = threading.Thread(target=start)
-    starter.start()
-    deadline = time.monotonic() + 3.0
-    while time.monotonic() < deadline and not operator._active_runs:
-        time.sleep(0.01)
-    assert operator._active_runs
+    try:
+        starter.start()
+        assert publication_delivered.wait(timeout=5)
 
-    operator.close()
-    starter.join(timeout=3.0)
+        operator.close()
+        release_start.set()
+        starter.join(timeout=3)
 
-    assert errors == []
-    assert len(run_ids) == 1
-    assert _wait_terminal(operator, run_ids[0]).status == RunStatus.CANCELLED
-    assert operator._active_runs == {}
-
+        assert not starter.is_alive()
+        assert run_ids == []
+        assert len(errors) == 1
+        assert isinstance(errors[0], RuntimeError)
+        assert str(errors[0]) == "Operator closed while creating run"
+        assert operator._runs == {}
+        assert operator._active_runs == {}
+    finally:
+        release_start.set()
+        operator.close()
+        if starter.ident is not None:
+            starter.join(timeout=3)
 
 def test_run_queries_return_detached_snapshots(tmp_path):
     workflow = _write_standalone(tmp_path, body="log.info('finished')")
