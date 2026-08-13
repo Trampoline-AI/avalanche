@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 0.1.3
+
 ### Operator discovery
 
 - Source discovery no longer unloads dependencies imported from excluded
