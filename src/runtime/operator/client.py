@@ -488,9 +488,9 @@ class GrpcStateProvider:
             files = tuple(
                 ResultFileAttachment(
                     attachment_id=item.artifact_ref.artifact_id,
-                    name=item.name or None,
+                    name=item.name if item.HasField("name") else None,
                     content=self._read_artifact_body(item.artifact_ref),
-                    media_type=item.media_type or None,
+                    media_type=item.media_type if item.HasField("media_type") else None,
                     sha256=item.artifact_ref.sha256,
                 )
                 for item in response.files

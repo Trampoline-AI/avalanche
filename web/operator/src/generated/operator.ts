@@ -2045,13 +2045,13 @@ export interface ResultFileDescriptorV2 {
      */
     artifactRef?: RunOutputArtifactRefV2;
     /**
-     * @generated from protobuf field: string name = 2
+     * @generated from protobuf field: optional string name = 2
      */
-    name: string;
+    name?: string;
     /**
-     * @generated from protobuf field: string media_type = 3
+     * @generated from protobuf field: optional string media_type = 3
      */
-    mediaType: string;
+    mediaType?: string;
 }
 /**
  * @generated from protobuf message avalanche.operator.GetRunResultRequestV2
@@ -2096,13 +2096,13 @@ export interface RunOutputArtifactDescriptorV2 {
      */
     artifactRef?: RunOutputArtifactRefV2;
     /**
-     * @generated from protobuf field: string name = 2
+     * @generated from protobuf field: optional string name = 2
      */
-    name: string;
+    name?: string;
     /**
-     * @generated from protobuf field: string media_type = 3
+     * @generated from protobuf field: optional string media_type = 3
      */
-    mediaType: string;
+    mediaType?: string;
 }
 /**
  * @generated from protobuf message avalanche.operator.ListRunOutputArtifactsRequestV2
@@ -8515,14 +8515,12 @@ class ResultFileDescriptorV2$Type extends MessageType<ResultFileDescriptorV2> {
     constructor() {
         super("avalanche.operator.ResultFileDescriptorV2", [
             { no: 1, name: "artifact_ref", kind: "message", T: () => RunOutputArtifactRefV2 },
-            { no: 2, name: "name", kind: "scalar", T: 9 /*ScalarType.STRING*/ },
-            { no: 3, name: "media_type", kind: "scalar", T: 9 /*ScalarType.STRING*/ }
+            { no: 2, name: "name", kind: "scalar", opt: true, T: 9 /*ScalarType.STRING*/ },
+            { no: 3, name: "media_type", kind: "scalar", opt: true, T: 9 /*ScalarType.STRING*/ }
         ]);
     }
     create(value?: PartialMessage<ResultFileDescriptorV2>): ResultFileDescriptorV2 {
         const message = globalThis.Object.create((this.messagePrototype!));
-        message.name = "";
-        message.mediaType = "";
         if (value !== undefined)
             reflectionMergePartial<ResultFileDescriptorV2>(this, message, value);
         return message;
@@ -8535,10 +8533,10 @@ class ResultFileDescriptorV2$Type extends MessageType<ResultFileDescriptorV2> {
                 case /* avalanche.operator.RunOutputArtifactRefV2 artifact_ref */ 1:
                     message.artifactRef = RunOutputArtifactRefV2.internalBinaryRead(reader, reader.uint32(), options, message.artifactRef);
                     break;
-                case /* string name */ 2:
+                case /* optional string name */ 2:
                     message.name = reader.string();
                     break;
-                case /* string media_type */ 3:
+                case /* optional string media_type */ 3:
                     message.mediaType = reader.string();
                     break;
                 default:
@@ -8556,11 +8554,11 @@ class ResultFileDescriptorV2$Type extends MessageType<ResultFileDescriptorV2> {
         /* avalanche.operator.RunOutputArtifactRefV2 artifact_ref = 1; */
         if (message.artifactRef)
             RunOutputArtifactRefV2.internalBinaryWrite(message.artifactRef, writer.tag(1, WireType.LengthDelimited).fork(), options).join();
-        /* string name = 2; */
-        if (message.name !== "")
+        /* optional string name = 2; */
+        if (message.name !== undefined)
             writer.tag(2, WireType.LengthDelimited).string(message.name);
-        /* string media_type = 3; */
-        if (message.mediaType !== "")
+        /* optional string media_type = 3; */
+        if (message.mediaType !== undefined)
             writer.tag(3, WireType.LengthDelimited).string(message.mediaType);
         let u = options.writeUnknownFields;
         if (u !== false)
@@ -8700,14 +8698,12 @@ class RunOutputArtifactDescriptorV2$Type extends MessageType<RunOutputArtifactDe
     constructor() {
         super("avalanche.operator.RunOutputArtifactDescriptorV2", [
             { no: 1, name: "artifact_ref", kind: "message", T: () => RunOutputArtifactRefV2 },
-            { no: 2, name: "name", kind: "scalar", T: 9 /*ScalarType.STRING*/ },
-            { no: 3, name: "media_type", kind: "scalar", T: 9 /*ScalarType.STRING*/ }
+            { no: 2, name: "name", kind: "scalar", opt: true, T: 9 /*ScalarType.STRING*/ },
+            { no: 3, name: "media_type", kind: "scalar", opt: true, T: 9 /*ScalarType.STRING*/ }
         ]);
     }
     create(value?: PartialMessage<RunOutputArtifactDescriptorV2>): RunOutputArtifactDescriptorV2 {
         const message = globalThis.Object.create((this.messagePrototype!));
-        message.name = "";
-        message.mediaType = "";
         if (value !== undefined)
             reflectionMergePartial<RunOutputArtifactDescriptorV2>(this, message, value);
         return message;
@@ -8720,10 +8716,10 @@ class RunOutputArtifactDescriptorV2$Type extends MessageType<RunOutputArtifactDe
                 case /* avalanche.operator.RunOutputArtifactRefV2 artifact_ref */ 1:
                     message.artifactRef = RunOutputArtifactRefV2.internalBinaryRead(reader, reader.uint32(), options, message.artifactRef);
                     break;
-                case /* string name */ 2:
+                case /* optional string name */ 2:
                     message.name = reader.string();
                     break;
-                case /* string media_type */ 3:
+                case /* optional string media_type */ 3:
                     message.mediaType = reader.string();
                     break;
                 default:
@@ -8741,11 +8737,11 @@ class RunOutputArtifactDescriptorV2$Type extends MessageType<RunOutputArtifactDe
         /* avalanche.operator.RunOutputArtifactRefV2 artifact_ref = 1; */
         if (message.artifactRef)
             RunOutputArtifactRefV2.internalBinaryWrite(message.artifactRef, writer.tag(1, WireType.LengthDelimited).fork(), options).join();
-        /* string name = 2; */
-        if (message.name !== "")
+        /* optional string name = 2; */
+        if (message.name !== undefined)
             writer.tag(2, WireType.LengthDelimited).string(message.name);
-        /* string media_type = 3; */
-        if (message.mediaType !== "")
+        /* optional string media_type = 3; */
+        if (message.mediaType !== undefined)
             writer.tag(3, WireType.LengthDelimited).string(message.mediaType);
         let u = options.writeUnknownFields;
         if (u !== false)

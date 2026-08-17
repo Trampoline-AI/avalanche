@@ -355,6 +355,13 @@ class OperatorV2Servicer(pb_grpc.OperatorServiceV2Servicer):
         )
         return snapshot.summary.created_sequence if snapshot is not None else 0
 
+    @staticmethod
+    def _set_file_metadata(descriptor, item) -> None:
+        if item.name is not None:
+            descriptor.name = item.name
+        if item.media_type is not None:
+            descriptor.media_type = item.media_type
+
     def GetRunResult(self, request, context):  # noqa: N802
         payload = self._result_payload(request.run_id, context)
         run_sequence = self._run_sequence(request.run_id)
@@ -369,14 +376,19 @@ class OperatorV2Servicer(pb_grpc.OperatorServiceV2Servicer):
                 size_bytes=len(value_bytes),
             ),
             files=[
-                pb.ResultFileDescriptorV2(
-                    artifact_ref=self._artifact_ref(request.run_id, item, run_sequence),
-                    name=item.name or "",
-                    media_type=item.media_type or "",
-                )
+                self._result_file_descriptor(request.run_id, item, run_sequence)
                 for item in payload.files
             ],
         )
+
+    def _result_file_descriptor(
+        self, run_id: str, item, run_sequence: int
+    ) -> pb.ResultFileDescriptorV2:
+        descriptor = pb.ResultFileDescriptorV2(
+            artifact_ref=self._artifact_ref(run_id, item, run_sequence),
+        )
+        self._set_file_metadata(descriptor, item)
+        return descriptor
 
     def ListRunOutputArtifacts(self, request, context):  # noqa: N802
         payload = self._result_payload(request.run_id, context)
@@ -403,11 +415,7 @@ class OperatorV2Servicer(pb_grpc.OperatorServiceV2Servicer):
             run_id=request.run_id,
             scope_ref=self._scope(),
             artifacts=[
-                pb.RunOutputArtifactDescriptorV2(
-                    artifact_ref=self._artifact_ref(request.run_id, item, run_sequence),
-                    name=item.name or "",
-                    media_type=item.media_type or "",
-                )
+                self._artifact_descriptor(request.run_id, item, run_sequence)
                 for item in page
             ],
         )
@@ -416,6 +424,15 @@ class OperatorV2Servicer(pb_grpc.OperatorServiceV2Servicer):
                 self._continuation(stream, f"artifacts:{next_offset}", run_sequence)
             )
         return message
+
+    def _artifact_descriptor(
+        self, run_id: str, item, run_sequence: int
+    ) -> pb.RunOutputArtifactDescriptorV2:
+        descriptor = pb.RunOutputArtifactDescriptorV2(
+            artifact_ref=self._artifact_ref(run_id, item, run_sequence),
+        )
+        self._set_file_metadata(descriptor, item)
+        return descriptor
 
     def ReadRunOutputArtifact(self, request, context):  # noqa: N802
         artifact_ref = request.artifact_ref

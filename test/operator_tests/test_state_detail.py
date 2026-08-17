@@ -1543,7 +1543,7 @@ def test_read_trace_rejects_reused_identity_from_previous_operator_epoch():
                     pb.ReadActivityDetailRequestV2(detail_ref=stale_ref)
                 )
             )
-        assert error.value.code() == grpc.StatusCode.PERMISSION_DENIED
+        assert error.value.code() == grpc.StatusCode.FAILED_PRECONDITION
 
         detail_ref = pb.ActivityDetailRefV2(
             run_id="run-reused",

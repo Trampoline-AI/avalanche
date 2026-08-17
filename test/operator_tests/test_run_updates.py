@@ -14,9 +14,9 @@ from runtime.operator.client import (
     _DetailHydrationRaceError,
     _RunUpdateResetError,
 )
-from runtime.operator.convert import (
-    operator_update_envelope_from_proto,
-    operator_update_envelope_to_proto,
+from runtime.operator.convert_v2 import (
+    operator_update_envelope_from_v2,
+    update_envelope_to_v2,
 )
 from runtime.operator.models import (
     AgentEvent,
@@ -49,6 +49,16 @@ from runtime.operator.models import (
 )
 from runtime.operator.operator import Operator
 from runtime.operator.proto import operator_pb2 as pb
+
+
+def _scope(instance: str = "operator-1") -> pb.ScopeReferenceV2:
+    return pb.ScopeReferenceV2(reference=instance)
+
+
+def _cursor(sequence: int, *, stream: str = "operator-events") -> pb.LifecycleCursorV2:
+    return pb.LifecycleCursorV2(
+        stream=stream, stream_generation=1, source_sequence=sequence
+    )
 
 
 def _event_handle() -> SimpleNamespace:
@@ -143,7 +153,13 @@ def test_typed_update_envelopes_roundtrip_all_changes():
             update=OperatorUpdate(sequence=sequence, change=change),
         )
         assert (
-            operator_update_envelope_from_proto(operator_update_envelope_to_proto(envelope))
+            operator_update_envelope_from_v2(
+                update_envelope_to_v2(
+                    envelope,
+                    scope_ref=_scope(),
+                    cursor_for=_cursor,
+                )
+            )
             == envelope
         )
 
@@ -1066,15 +1082,15 @@ def test_client_reads_structural_state_from_state_detail_rpcs():
                 assert request.page_size == 1
                 assert request.workflow_selector == ""
             assert kwargs["timeout"] == provider._unary_timeout
-            return pb.RunSummaryPage(
-                operator_instance_id="operator-1",
-                as_of_sequence=4,
+            return pb.RunSummaryPageV2(
+                cursor=_cursor(4, stream="run-summaries"),
+                scope_ref=_scope(),
                 runs=[
-                    pb.RunSummaryMsg(
+                    pb.RunSummaryV2(
                         run_id="run-1",
-                        flow_name="flow",
+                        workflow_selector="flow.py::flow",
+                        workflow_display_name="flow",
                         status="running",
-                        workflow_id="flow.py::flow",
                         created_sequence=1,
                         revision=4,
                     )
@@ -1083,22 +1099,20 @@ def test_client_reads_structural_state_from_state_detail_rpcs():
 
         def GetRunSnapshot(self, request, **kwargs):  # noqa: N802
             assert request.run_id == "run-1"
-            assert request.operator_instance_id == "operator-1"
-            assert request.as_of_sequence == 4
             assert kwargs["timeout"] == provider._unary_timeout
-            return pb.RunSnapshotMsg(
-                operator_instance_id="operator-1",
-                as_of_sequence=4,
-                summary=pb.RunSummaryMsg(
+            return pb.RunSnapshotV2(
+                cursor=_cursor(4, stream="run:run-1"),
+                scope_ref=_scope(),
+                summary=pb.RunSummaryV2(
                     run_id="run-1",
-                    flow_name="flow",
+                    workflow_selector="flow.py::flow",
+                    workflow_display_name="flow",
                     status="running",
-                    workflow_id="flow.py::flow",
                     created_sequence=1,
                     revision=4,
                 ),
                 nodes=[
-                    pb.NodeSnapshotMsg(
+                    pb.NodeSnapshotV2(
                         node_id="node-1",
                         name="Node",
                         node_type="step",
@@ -1107,32 +1121,47 @@ def test_client_reads_structural_state_from_state_detail_rpcs():
                     )
                 ],
                 latest_log_sequence=2,
-                log_page_token="logs-token",
+                log_continuation=pb.ContinuationRefV2(
+                    scope_ref=_scope(),
+                    continuation_id="logs-token",
+                    cursor=_cursor(4, stream="run:run-1"),
+                ),
             )
 
-        def ListLogs(self, request, **kwargs):  # noqa: N802
-            assert request.page_token == "logs-token"
-            assert request.after_sequence == 0
-            return pb.LogPage(
-                operator_instance_id="operator-1",
-                as_of_sequence=4,
-                logs=[
-                    pb.LogRecordDescriptorMsg(
-                        sequence=sequence,
+        def ListRunActivity(self, request, **kwargs):  # noqa: N802
+            assert request.continuation.continuation_id == "logs-token"
+            assert request.run_id == "run-1"
+            assert request.node_id == ""
+            return pb.RunActivityPageV2(
+                cursor=_cursor(4, stream="activity:run-1:logs"),
+                run_id="run-1",
+                scope_ref=_scope(),
+                activities=[
+                    pb.RunActivityDescriptorV2(
+                        activity_id=f"log:{sequence}",
+                        run_sequence=sequence,
+                        kind="log",
                         timestamp=float(sequence),
                         level="INFO",
                         node_id="node-1",
                         size_bytes=5,
-                        body_token=f"log-{sequence}",
+                        detail_ref=pb.ActivityDetailRefV2(
+                            run_id="run-1",
+                            scope_ref=_scope(),
+                            activity_id=f"log:{sequence}",
+                            object_uri=f"local://detail/log-{sequence}",
+                            object_key=f"log-{sequence}",
+                            size_bytes=5,
+                        ),
                     )
                     for sequence in (1, 2)
                 ],
             )
 
-        def ReadDetail(self, request, **kwargs):  # noqa: N802
-            yield pb.DetailChunk(
+        def ReadActivityDetail(self, request, **kwargs):  # noqa: N802
+            yield pb.ActivityDetailChunkV2(
                 chunk_index=0,
-                data=request.body_token.encode(),
+                data=request.detail_ref.object_key.encode(),
                 eof=True,
             )
 
@@ -1166,19 +1195,20 @@ def test_get_run_does_not_report_absence_when_client_epoch_changes():
             list_started.set()
             if not release_list.wait(1):
                 raise RuntimeError("baseline barrier timed out")
-            return pb.RunSummaryPage(
-                operator_instance_id="snapshot-operator",
-                as_of_sequence=2,
+            return pb.RunSummaryPageV2(
+                cursor=_cursor(2, stream="run-summaries"),
+                scope_ref=_scope("snapshot-operator"),
             )
 
         def GetRunSnapshot(self, request, **kwargs):  # noqa: N802
             requests.append(request)
-            return pb.RunSnapshotMsg(
-                operator_instance_id=request.operator_instance_id,
-                as_of_sequence=request.as_of_sequence,
-                summary=pb.RunSummaryMsg(
+            return pb.RunSnapshotV2(
+                cursor=_cursor(2, stream=f"run:{request.run_id}"),
+                scope_ref=_scope("snapshot-operator"),
+                summary=pb.RunSummaryV2(
                     run_id=request.run_id,
-                    flow_name="flow",
+                    workflow_selector="flow",
+                    workflow_display_name="flow",
                     status="running",
                     created_sequence=1,
                     revision=1,
@@ -1211,10 +1241,7 @@ def test_get_run_does_not_report_absence_when_client_epoch_changes():
     assert len(errors) == 1
     assert isinstance(errors[0], _DetailHydrationRaceError)
     assert len(requests) == 3
-    assert all(
-        request.operator_instance_id == "snapshot-operator" and request.as_of_sequence == 2
-        for request in requests
-    )
+    assert all(request.run_id == "run-1" for request in requests)
     assert provider._cursor.operator_instance_id == "new-operator"
     assert provider._cursor.sequence == 3
 
@@ -1236,21 +1263,22 @@ def test_get_run_retries_when_pinned_baseline_expires():
 
         def ListRunSummaries(self, request, **kwargs):  # noqa: N802
             self.summary_calls += 1
-            return pb.RunSummaryPage(
-                operator_instance_id="operator-1",
-                as_of_sequence=self.summary_calls,
+            return pb.RunSummaryPageV2(
+                cursor=_cursor(self.summary_calls, stream="run-summaries"),
+                scope_ref=_scope(),
             )
 
         def GetRunSnapshot(self, request, **kwargs):  # noqa: N802
-            self.snapshot_sequences.append(request.as_of_sequence)
-            if request.as_of_sequence == 1:
+            self.snapshot_sequences.append(self.summary_calls)
+            if len(self.snapshot_sequences) == 1:
                 raise ExpiredBaseline()
-            return pb.RunSnapshotMsg(
-                operator_instance_id=request.operator_instance_id,
-                as_of_sequence=request.as_of_sequence,
-                summary=pb.RunSummaryMsg(
+            return pb.RunSnapshotV2(
+                cursor=_cursor(self.summary_calls, stream=f"run:{request.run_id}"),
+                scope_ref=_scope(),
+                summary=pb.RunSummaryV2(
                     run_id=request.run_id,
-                    flow_name="flow",
+                    workflow_selector="flow",
+                    workflow_display_name="flow",
                     status="running",
                     created_sequence=1,
                     revision=2,
@@ -1276,14 +1304,13 @@ def test_client_installs_authoritative_baseline_before_resuming_updates():
     class ExactSnapshotStub:
         def GetRunSnapshot(self, request, **kwargs):  # noqa: N802
             assert request.run_id == "run-1"
-            assert request.operator_instance_id == "operator-1"
-            assert request.as_of_sequence == 3
-            return pb.RunSnapshotMsg(
-                operator_instance_id="operator-1",
-                as_of_sequence=3,
-                summary=pb.RunSummaryMsg(
+            return pb.RunSnapshotV2(
+                cursor=_cursor(3, stream="run:run-1"),
+                scope_ref=_scope(),
+                summary=pb.RunSummaryV2(
                     run_id="run-1",
-                    flow_name="flow",
+                    workflow_selector="flow",
+                    workflow_display_name="flow",
                     status="success",
                     created_sequence=1,
                     revision=3,
@@ -1341,32 +1368,33 @@ def test_client_resets_baseline_and_resumes_after_operator_restart():
     class RestartedStub:
         stream_calls = 0
 
-        def StreamOperatorUpdates(self, request, *, metadata):  # noqa: N802
+        def WatchRunStatus(self, request, *, metadata):  # noqa: N802
             assert metadata is None
             self.stream_calls += 1
             if self.stream_calls == 1:
-                assert request.operator_instance_id == "old-operator"
-                assert request.after_sequence == 99
-                yield pb.OperatorUpdateEnvelope(
-                    operator_instance_id="new-operator",
-                    reset_required=pb.ResetRequired(
-                        history_floor=1,
-                        latest_sequence=2,
+                assert request.after_cursor.source_sequence == 99
+                yield pb.RunStatusEnvelopeV2(
+                    source_sequence=2,
+                    cursor=_cursor(2),
+                    scope_ref=_scope("new-operator"),
+                    reset_required=pb.ResetRequiredV2(
+                        history_floor=_cursor(1),
+                        latest_cursor=_cursor(2),
                     ),
                 )
                 return
-            assert request.operator_instance_id == "new-operator"
-            assert request.after_sequence == 2
-            yield pb.OperatorUpdateEnvelope(
-                operator_instance_id="new-operator",
-                update=pb.OperatorUpdate(
-                    sequence=3,
-                    run_status_changed=pb.RunStatusChanged(
+            assert request.after_cursor.source_sequence == 2
+            yield pb.RunStatusEnvelopeV2(
+                source_sequence=3,
+                cursor=_cursor(3),
+                scope_ref=_scope("new-operator"),
+                run_status_changed=pb.RunStatusChangedV2(
+                    summary=pb.RunSummaryV2(
                         run_id="run-1",
                         status="success",
                         ended_at=3.0,
                         revision=3,
-                    ),
+                    )
                 ),
             )
             provider._stream_stop.set()

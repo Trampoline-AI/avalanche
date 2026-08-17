@@ -7,6 +7,8 @@ import grpc
 from runtime.operator import client as client_module
 from runtime.operator._grpc import MAX_GRPC_MESSAGE_BYTES
 from runtime.operator.client import GrpcStateProvider
+from runtime.operator.convert_v2 import flow_list_to_v2
+from runtime.operator.models import CatalogSnapshot, WorkflowInfo
 from runtime.operator.proto import operator_pb2 as pb
 from runtime.operator.proto import operator_pb2_grpc as pb_grpc
 from tui import ConnectionAwareStateProvider
@@ -14,7 +16,7 @@ from tui import ConnectionAwareStateProvider
 
 def test_grpc_state_provider_sends_bearer_metadata() -> None:
     server = grpc.server(futures.ThreadPoolExecutor(max_workers=1))
-    pb_grpc.add_OperatorServiceServicer_to_server(AuthenticatedOperatorService(), server)
+    pb_grpc.add_OperatorServiceV2Servicer_to_server(AuthenticatedOperatorService(), server)
     port = server.add_insecure_port("127.0.0.1:0")
     server.start()
     provider = GrpcStateProvider(f"127.0.0.1:{port}", token="secret")
@@ -48,7 +50,9 @@ def test_grpc_state_provider_uses_secure_channel_when_tls_enabled(monkeypatch) -
 
     monkeypatch.setattr(client_module.grpc, "ssl_channel_credentials", fake_credentials)
     monkeypatch.setattr(client_module.grpc, "secure_channel", fake_secure_channel)
-    monkeypatch.setattr(client_module.pb_grpc, "OperatorServiceStub", lambda channel: object())
+    monkeypatch.setattr(
+        client_module.pb_grpc, "OperatorServiceV2Stub", lambda channel: object()
+    )
 
     provider = GrpcStateProvider("operator.example:443", tls=True, root_certificates=b"ca")
     assert isinstance(provider, ConnectionAwareStateProvider)
@@ -78,7 +82,9 @@ def test_grpc_state_provider_uses_bounded_insecure_channel_options(monkeypatch) 
         return FakeChannel()
 
     monkeypatch.setattr(client_module.grpc, "insecure_channel", fake_insecure_channel)
-    monkeypatch.setattr(client_module.pb_grpc, "OperatorServiceStub", lambda channel: object())
+    monkeypatch.setattr(
+        client_module.pb_grpc, "OperatorServiceV2Stub", lambda channel: object()
+    )
 
     provider = GrpcStateProvider("localhost:7433")
     provider.close()
@@ -90,9 +96,24 @@ def test_grpc_state_provider_uses_bounded_insecure_channel_options(monkeypatch) 
     }
 
 
-class AuthenticatedOperatorService(pb_grpc.OperatorServiceServicer):
-    def GetCatalog(self, request, context):  # noqa: N802
+class AuthenticatedOperatorService(pb_grpc.OperatorServiceV2Servicer):
+    def DiscoverFlows(self, request, context):  # noqa: N802
         authorization = dict(context.invocation_metadata()).get("authorization")
         if authorization != "Bearer secret":
             context.abort(grpc.StatusCode.UNAUTHENTICATED, "missing_bearer")
-        return pb.CatalogSnapshotMsg(workflows=[pb.FlowInfoMsg(name="demo-flow")])
+        return flow_list_to_v2(
+            CatalogSnapshot(
+                operator_instance_id="operator-auth",
+                workflows=(
+                    WorkflowInfo(
+                        name="demo-flow",
+                        file_path="demo.py",
+                        node_ids=[],
+                        graph={},
+                        node_types={},
+                    ),
+                ),
+            ),
+            cursor=pb.LifecycleCursorV2(stream="flows", stream_generation=1, source_sequence=0),
+            scope_ref=pb.ScopeReferenceV2(reference="operator-auth"),
+        )
