@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+### Operator transport
+
+- Added `OperatorServiceV2`, an additive native gRPC contract with generated
+  Python and TypeScript bindings.
+
 ## 0.1.3
 
 ### Operator discovery
