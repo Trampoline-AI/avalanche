@@ -28,7 +28,7 @@ logger = logging.getLogger(__name__)
 DEFAULT_WEB_HOST = "127.0.0.1"
 DEFAULT_WEB_PORT = 7435
 _GRPC_WEB_CONTENT_TYPE = "application/grpc-web+proto"
-_GRPC_SERVICE_PATH = "/avalanche.operator.OperatorService/"
+_GRPC_SERVICE_PATH = "/avalanche.operator.OperatorServiceV2/"
 _FRAME_HEADER_BYTES = 5
 _MAX_REQUEST_BYTES = 4 * 1024 * 1024
 _CLIENT_DISCONNECT_POLL_SECONDS = 0.1
@@ -45,7 +45,7 @@ class _RpcMethod:
 
 
 def _rpc_methods() -> MappingProxyType[str, _RpcMethod]:
-    service = pb.DESCRIPTOR.services_by_name["OperatorService"]
+    service = pb.DESCRIPTOR.services_by_name["OperatorServiceV2"]
     return MappingProxyType(
         {
             descriptor.name: _RpcMethod(

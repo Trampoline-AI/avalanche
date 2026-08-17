@@ -369,7 +369,7 @@ def lineage_context_workflow():
         try:
             run_id = "run_grpc_real"
             response = provider._stub.StartRun(
-                pb.StartRunRequest(
+                pb.StartRunRequestV2(
                     workflow_selector="lineage_context_workflow",
                     run_id=run_id,
                     context_json=json.dumps(
@@ -575,9 +575,11 @@ def large_file_workflow():
 
     def test_workflow_selector_request_starts(self, client):
         response = client._stub.StartRun(
-            pb.StartRunRequest(workflow_selector="simple_workflow")
+            pb.StartRunRequestV2(
+                workflow_selector="simple_workflow", run_id="run_selector_request"
+            )
         )
-        assert response.run_id.startswith("run_")
+        assert response.run_id == "run_selector_request"
 
 
 def test_proto_identity_roundtrip_and_absolute_path_redaction(tmp_path):
@@ -2445,6 +2447,11 @@ def test_blocking_server_closes_operator_in_finally(monkeypatch):
         "add_OperatorServiceServicer_to_server",
         lambda _servicer, _server: None,
     )
+    monkeypatch.setattr(
+        server_module.pb_grpc,
+        "add_OperatorServiceV2Servicer_to_server",
+        lambda _servicer, _server: None,
+    )
 
     assert server_module.serve(operator, port=0, block=True) is fake_server
     assert operator.closed
@@ -2493,6 +2500,11 @@ def test_server_setup_and_bind_failures_close_operator_storage(
         "add_OperatorServiceServicer_to_server",
         register,
     )
+    monkeypatch.setattr(
+        server_module.pb_grpc,
+        "add_OperatorServiceV2Servicer_to_server",
+        lambda _servicer, _server: None,
+    )
     operator = Operator(
         [],
         watch=False,
@@ -2531,6 +2543,11 @@ def test_server_non_loopback_binding_is_explicit_and_warned(monkeypatch, caplog)
     monkeypatch.setattr(
         server_module.pb_grpc,
         "add_OperatorServiceServicer_to_server",
+        lambda _servicer, _server: None,
+    )
+    monkeypatch.setattr(
+        server_module.pb_grpc,
+        "add_OperatorServiceV2Servicer_to_server",
         lambda _servicer, _server: None,
     )
 

@@ -1,7 +1,8 @@
-"""gRPC client that implements StateProvider for the TUI."""
+"""gRPC client that implements StateProvider for the TUI over OperatorServiceV2."""
 
 from __future__ import annotations
 
+import hashlib
 import json
 import math
 import threading
@@ -12,6 +13,7 @@ from dataclasses import dataclass, replace
 from enum import Enum
 from numbers import Real
 from typing import Any, Callable
+from uuid import uuid4
 
 import grpc
 from pydantic import BaseModel
@@ -20,13 +22,13 @@ from avalanche.runtime import File
 from avalanche.workspace import Workspace
 
 from ._grpc import _BOUNDED_MESSAGE_OPTIONS
-from .convert import (
-    agent_event_descriptor_from_proto,
-    catalog_snapshot_from_proto,
-    log_record_descriptor_from_proto,
-    operator_update_envelope_from_proto,
-    run_snapshot_from_proto,
-    run_summary_from_proto,
+from .convert_v2 import (
+    agent_event_descriptor_from_v2,
+    catalog_snapshot_from_v2,
+    log_record_descriptor_from_v2,
+    operator_update_envelope_from_v2,
+    run_snapshot_from_v2,
+    run_summary_from_v2,
 )
 from .models import (
     AgentEvent,
@@ -243,7 +245,7 @@ class GrpcStateProvider:
                 address,
                 options=_BOUNDED_MESSAGE_OPTIONS,
             )
-        self._stub = pb_grpc.OperatorServiceStub(self._channel)
+        self._stub = pb_grpc.OperatorServiceV2Stub(self._channel)
         self._run_callbacks: list[Callable[[RunState], None]] = []
         self._catalog_callbacks: list[Callable[[CatalogSnapshot], None]] = []
         self._log_callbacks: list[Callable[[LogEntry], None]] = []
@@ -343,7 +345,21 @@ class GrpcStateProvider:
         return operation_error
 
     def get_catalog(self) -> CatalogSnapshot:
-        catalog = catalog_snapshot_from_proto(self._call(self._stub.GetCatalog, pb.Empty()))
+        flows: list[pb.FlowInfoV2] = []
+        continuation: pb.ContinuationRefV2 | None = None
+        page_count = 0
+        while True:
+            page_count += 1
+            self._validate_page_accumulation(page_count, "flow pages")
+            request = pb.DiscoverFlowsRequestV2(page_size=1000)
+            if continuation is not None:
+                request.continuation.CopyFrom(continuation)
+            page = self._call(self._stub.DiscoverFlows, request)
+            flows.extend(page.flows)
+            if not page.next_page.continuation_id:
+                catalog = catalog_snapshot_from_v2(page, flows=flows)
+                break
+            continuation = page.next_page
         with self._state_lock:
             self._install_catalog_locked(catalog)
         return catalog
@@ -354,20 +370,19 @@ class GrpcStateProvider:
     def list_runs(self, workflow_selector: str) -> list[RunState]:
         """List lightweight run summaries without detail bodies."""
         runs: list[RunState] = []
-        page_token = ""
+        page_token: pb.ContinuationRefV2 | None = None
         seen_tokens: set[str] = set()
         page_count = 0
         while True:
             page_count += 1
             self._validate_page_accumulation(page_count, "run summary pages")
-            response = self._call(
-                self._stub.ListRunSummaries,
-                pb.ListRunSummariesRequest(
-                    workflow_selector=workflow_selector,
-                    page_size=1000,
-                    page_token=page_token,
-                ),
+            request = pb.ListRunSummariesRequestV2(
+                workflow_selector=workflow_selector,
+                page_size=1000,
             )
+            if page_token is not None:
+                request.continuation.CopyFrom(page_token)
+            response = self._call(self._stub.ListRunSummaries, request)
             if response is None:
                 return []
             for item in response.runs:
@@ -377,21 +392,21 @@ class GrpcStateProvider:
                 )
                 runs.append(
                     _run_from_summary(
-                        response.operator_instance_id,
-                        run_summary_from_proto(item),
+                        response.scope_ref.reference,
+                        run_summary_from_v2(item),
                     )
                 )
-            next_page_token = response.next_page_token
-            if not next_page_token:
+            next_page = response.next_page
+            if not next_page.continuation_id:
                 runs.sort(key=lambda run: (run.created_sequence, run.run_id))
                 return runs
-            if next_page_token in seen_tokens:
+            if next_page.continuation_id in seen_tokens:
                 raise OperatorCallError(
                     grpc.StatusCode.DATA_LOSS,
                     "run summary pagination repeated a page token",
                 )
-            seen_tokens.add(next_page_token)
-            page_token = next_page_token
+            seen_tokens.add(next_page.continuation_id)
+            page_token = next_page
 
     def _validate_page_accumulation(self, count: int, item_name: str) -> None:
         if count > self._max_paged_items:
@@ -407,13 +422,16 @@ class GrpcStateProvider:
     ) -> RunSnapshot:
         """Fetch one latest structural snapshot pinned to an operator epoch."""
         response = self._call(
-            self._stub.GetLatestRunSnapshot,
-            pb.GetLatestRunSnapshotRequest(
-                run_id=run_id,
-                operator_instance_id=operator_instance_id,
-            ),
+            self._stub.GetRunSnapshot,
+            pb.GetRunSnapshotRequestV2(run_id=run_id),
         )
-        return run_snapshot_from_proto(response)
+        snapshot = run_snapshot_from_v2(response)
+        if operator_instance_id and snapshot.operator_instance_id != operator_instance_id:
+            raise OperatorCallError(
+                grpc.StatusCode.FAILED_PRECONDITION,
+                "operator epoch changed while fetching the latest run snapshot",
+            )
+        return snapshot
 
     def get_run(self, run_id: str) -> RunState | None:
         """Fetch one pinned structural snapshot and lazily hydrate its details."""
@@ -464,22 +482,23 @@ class GrpcStateProvider:
             kwargs["metadata"] = self._metadata
         try:
             response = self._stub.GetRunResult(
-                pb.GetRunRequest(run_id=run_id),
+                pb.GetRunResultRequestV2(run_id=run_id),
                 **kwargs,
             )
-            _validate_wire_result_response(response)
+            files = tuple(
+                ResultFileAttachment(
+                    attachment_id=item.artifact_ref.artifact_id,
+                    name=item.name or None,
+                    content=self._read_artifact_body(item.artifact_ref),
+                    media_type=item.media_type or None,
+                    sha256=item.artifact_ref.sha256,
+                )
+                for item in response.files
+            )
+            _validate_wire_result_payload(response.value.value_json, files)
             payload = EncodedWorkflowResult(
-                value_json=response.value_json,
-                files=tuple(
-                    ResultFileAttachment(
-                        attachment_id=item.attachment_id,
-                        name=item.name if item.HasField("name") else None,
-                        content=bytes(item.content),
-                        media_type=(item.media_type if item.HasField("media_type") else None),
-                        sha256=item.sha256,
-                    )
-                    for item in response.files
-                ),
+                value_json=response.value.value_json,
+                files=files,
             )
             result = decode_workflow_result(payload)
         except grpc.RpcError as error:
@@ -510,11 +529,11 @@ class GrpcStateProvider:
         """Create one server-retained baseline and return its immutable cursor."""
         response = self._call(
             self._stub.ListRunSummaries,
-            pb.ListRunSummariesRequest(page_size=1),
+            pb.ListRunSummariesRequestV2(page_size=1),
         )
         return _StreamCursor(
-            operator_instance_id=response.operator_instance_id,
-            sequence=response.as_of_sequence,
+            operator_instance_id=response.scope_ref.reference,
+            sequence=response.cursor.source_sequence,
         )
 
     def _get_run_snapshot(
@@ -523,16 +542,45 @@ class GrpcStateProvider:
         operator_instance_id: str,
         as_of_sequence: int,
     ) -> RunSnapshot:
-        """Fetch one snapshot pinned to the loader-selected epoch and high-water."""
+        """Fetch the latest snapshot, rejecting a stale operator epoch."""
+        del as_of_sequence  # V2 snapshots are latest-view; epochs pin via scope.
         response = self._call(
             self._stub.GetRunSnapshot,
-            pb.GetRunSnapshotRequest(
-                run_id=run_id,
-                operator_instance_id=operator_instance_id,
-                as_of_sequence=as_of_sequence,
-            ),
+            pb.GetRunSnapshotRequestV2(run_id=run_id),
         )
-        return run_snapshot_from_proto(response)
+        snapshot = run_snapshot_from_v2(response)
+        if operator_instance_id and snapshot.operator_instance_id != operator_instance_id:
+            raise OperatorCallError(
+                grpc.StatusCode.FAILED_PRECONDITION,
+                "operator epoch changed while fetching a run snapshot",
+            )
+        return snapshot
+
+    def _read_artifact_body(self, artifact_ref: pb.RunOutputArtifactRefV2) -> bytes:
+        """Stream one result artifact body, verifying size and digest."""
+        chunks = self._stub.ReadRunOutputArtifact(
+            pb.ReadRunOutputArtifactRequestV2(artifact_ref=artifact_ref),
+            **self._detail_rpc_kwargs(),
+        )
+        try:
+            data = bytearray()
+            saw_eof = False
+            for expected_index, chunk in enumerate(chunks):
+                if saw_eof:
+                    self._cancel_detail_stream(chunks)
+                    raise ValueError("artifact stream continued after eof")
+                if chunk.chunk_index != expected_index:
+                    self._cancel_detail_stream(chunks)
+                    raise ValueError("artifact chunk identity changed")
+                data.extend(chunk.data)
+                saw_eof = chunk.eof
+        except grpc.RpcError:
+            raise
+        if not saw_eof or len(data) != artifact_ref.size_bytes:
+            raise ValueError("artifact body does not match its descriptor")
+        if hashlib.sha256(bytes(data)).hexdigest() != artifact_ref.sha256:
+            raise ValueError("artifact body digest does not match its descriptor")
+        return bytes(data)
 
     def _hydrate_run_snapshot(self, snapshot: RunSnapshot) -> RunState:
         """Hydrate append-only details without weakening the structural baseline."""
@@ -608,6 +656,7 @@ class GrpcStateProvider:
         if log_sequence < snapshot.latest_log_sequence:
             new_logs, log_sequence = self._read_log_pages(
                 snapshot.log_page_token,
+                run_id=run.run_id,
                 operator_instance_id=snapshot.operator_instance_id,
                 expected_as_of=detail_as_of,
                 after_sequence=log_sequence,
@@ -668,6 +717,7 @@ class GrpcStateProvider:
         self,
         page_token: str,
         *,
+        run_id: str,
         operator_instance_id: str,
         expected_as_of: int,
         after_sequence: int,
@@ -675,27 +725,28 @@ class GrpcStateProvider:
     ) -> tuple[list[SequencedLogEntry], int]:
         logs = []
         cursor = after_sequence
-        token = page_token
+        continuation: pb.ContinuationRefV2 | None = _v2_continuation(
+            operator_instance_id, page_token
+        )
         while True:
-            response = self._call(
-                self._stub.ListLogs,
-                pb.ListLogsRequest(
-                    page_token=token,
-                    after_sequence=cursor,
-                    page_size=DETAIL_HYDRATION_PAGE_SIZE,
-                    before_sequence=0,
-                    node_id="",
-                    order=pb.DESCRIPTOR_PAGE_ORDER_FORWARD,
-                ),
+            request = pb.ListRunActivityRequestV2(
+                run_id=run_id,
+                page_size=DETAIL_HYDRATION_PAGE_SIZE,
             )
+            if continuation is not None:
+                request.continuation.CopyFrom(continuation)
+            response = self._call(self._stub.ListRunActivity, request)
             self._validate_detail_page(
                 response,
                 operator_instance_id=operator_instance_id,
                 expected_as_of=expected_as_of,
             )
             page_had_items = False
-            for item in response.logs:
-                descriptor = log_record_descriptor_from_proto(item)
+            for item in response.activities:
+                descriptor = log_record_descriptor_from_v2(item)
+                if descriptor.sequence <= cursor:
+                    page_had_items = True
+                    continue
                 if descriptor.sequence != cursor + 1:
                     raise _DetailHydrationRaceError("log page is not contiguous")
                 budget.reserve(1, descriptor.size_bytes)
@@ -717,11 +768,11 @@ class GrpcStateProvider:
                 )
                 cursor = descriptor.sequence
                 page_had_items = True
-            token = response.next_page_token
-            if not token:
+            if not response.next_page.continuation_id:
                 return logs, cursor
             if not page_had_items:
                 raise _DetailHydrationRaceError("log pagination made no progress")
+            continuation = response.next_page
 
     def _read_agent_event_pages(
         self,
@@ -736,30 +787,31 @@ class GrpcStateProvider:
     ) -> tuple[list[AgentEvent], int]:
         events = []
         cursor = after_event_sequence
-        token = page_token
+        continuation: pb.ContinuationRefV2 | None = _v2_continuation(
+            operator_instance_id, page_token
+        )
         while True:
-            response = self._call(
-                self._stub.ListAgentEvents,
-                pb.ListAgentEventsRequest(
-                    page_token=token,
-                    after_event_sequence=cursor,
-                    page_size=DETAIL_HYDRATION_PAGE_SIZE,
-                    before_event_sequence=0,
-                    order=pb.DESCRIPTOR_PAGE_ORDER_FORWARD,
-                ),
+            request = pb.ListRunActivityRequestV2(
+                run_id=run_id,
+                node_id=node_id,
+                page_size=DETAIL_HYDRATION_PAGE_SIZE,
             )
+            if continuation is not None:
+                request.continuation.CopyFrom(continuation)
+            response = self._call(self._stub.ListRunActivity, request)
             self._validate_detail_page(
                 response,
                 operator_instance_id=operator_instance_id,
                 expected_as_of=expected_as_of,
             )
-            if response.run_id != run_id or response.node_id != node_id:
+            if response.run_id != run_id:
                 raise _DetailHydrationRaceError("agent page identity changed")
             page_had_items = False
-            for item in response.events:
-                descriptor = agent_event_descriptor_from_proto(item)
+            for item in response.activities:
+                descriptor = agent_event_descriptor_from_v2(item)
                 if descriptor.event_sequence <= cursor:
-                    raise _DetailHydrationRaceError("agent event sequence is not increasing")
+                    page_had_items = True
+                    continue
                 budget.reserve(1, descriptor.size_bytes)
                 event_json = self._read_detail_body(
                     descriptor.body_token,
@@ -781,11 +833,11 @@ class GrpcStateProvider:
                 )
                 cursor = descriptor.event_sequence
                 page_had_items = True
-            token = response.next_page_token
-            if not token:
+            if not response.next_page.continuation_id:
                 return events, cursor
             if not page_had_items:
                 raise _DetailHydrationRaceError("agent pagination made no progress")
+            continuation = response.next_page
 
     def _validate_detail_body_size(self, size_bytes: int) -> None:
         if size_bytes < 0 or size_bytes > self._max_detail_body_bytes:
@@ -934,8 +986,14 @@ class GrpcStateProvider:
     def _read_detail_body(self, body_token: str, size_bytes: int) -> bytes:
         self._validate_detail_body_size(size_bytes)
         try:
-            chunks = self._stub.ReadDetail(
-                pb.ReadDetailRequest(body_token=body_token),
+            chunks = self._stub.ReadActivityDetail(
+                pb.ReadActivityDetailRequestV2(
+                    detail_ref=pb.ActivityDetailRefV2(
+                        scope_ref=pb.ScopeReferenceV2(reference=self.operator_instance_id),
+                        object_uri=f"local://detail/{body_token}",
+                        object_key=body_token,
+                    )
+                ),
                 **self._detail_rpc_kwargs(),
             )
             data = bytearray()
@@ -972,11 +1030,11 @@ class GrpcStateProvider:
         operator_instance_id: str,
         expected_as_of: int,
     ) -> int:
-        if response.operator_instance_id != operator_instance_id:
+        if response.scope_ref.reference != operator_instance_id:
             raise _DetailHydrationRaceError("operator epoch changed during hydration")
-        if response.as_of_sequence != expected_as_of:
+        if response.cursor.source_sequence != expected_as_of:
             raise _DetailHydrationRaceError("detail high-water changed during hydration")
-        return response.as_of_sequence
+        return response.cursor.source_sequence
 
     def _commit_hydrated_run(
         self,
@@ -1162,12 +1220,16 @@ class GrpcStateProvider:
         budget.reserve_cache_key()
         budget.reserve(1, descriptor.size_bytes)
         try:
-            chunks = self._stub.ReadTrace(
-                pb.ReadTraceRequest(
-                    operator_instance_id=run.operator_instance_id,
-                    run_id=run_id,
-                    node_id=node_id,
-                    revision=descriptor.revision,
+            chunks = self._stub.ReadActivityDetail(
+                pb.ReadActivityDetailRequestV2(
+                    detail_ref=pb.ActivityDetailRefV2(
+                        run_id=run_id,
+                        scope_ref=pb.ScopeReferenceV2(reference=run.operator_instance_id),
+                        activity_id=f"trace:{node_id}:{descriptor.revision}",
+                        object_uri=(f"local://trace/{run_id}/{node_id}/{descriptor.revision}"),
+                        object_key=f"{run_id}/{node_id}/{descriptor.revision}",
+                        size_bytes=descriptor.size_bytes,
+                    )
                 ),
                 **self._detail_rpc_kwargs(),
             )
@@ -1177,7 +1239,7 @@ class GrpcStateProvider:
                 if saw_eof:
                     self._cancel_detail_stream(chunks)
                     raise _DetailHydrationRaceError("trace stream continued after eof")
-                if chunk.revision != descriptor.revision or chunk.chunk_index != expected_index:
+                if chunk.chunk_index != expected_index:
                     self._cancel_detail_stream(chunks)
                     raise _DetailHydrationRaceError("trace chunk identity changed")
                 if len(chunk.data) > descriptor.size_bytes - len(data):
@@ -1237,9 +1299,9 @@ class GrpcStateProvider:
         input_files = [
             _file_attachment(field_name, value) for field_name, value in (files or {}).items()
         ]
-        request = pb.StartRunRequest(
+        request = pb.StartRunRequestV2(
             workflow_selector=workflow_selector,
-            run_id=run_id or "",
+            run_id=run_id or f"run_{uuid4().hex[:8]}",
             input_json=_json_payload(input),
             context_json=_json_payload(context),
             input_files=input_files,
@@ -1248,7 +1310,7 @@ class GrpcStateProvider:
         return resp.run_id
 
     def cancel_run(self, run_id: str) -> None:
-        self._call(self._stub.CancelRun, pb.CancelRunRequest(run_id=run_id))
+        self._call(self._stub.CancelRun, pb.CancelRunRequestV2(run_id=run_id))
 
     def on_run_update(self, callback: Callable[[RunState], None]) -> None:
         self._run_callbacks.append(callback)
@@ -1335,7 +1397,7 @@ class GrpcStateProvider:
         self,
     ) -> tuple[tuple[str, int], list[RunSummary]]:
         summaries: list[RunSummary] = []
-        page_token = ""
+        page_token: pb.ContinuationRefV2 | None = None
         seen_tokens: set[str] = set()
         seen_run_ids: set[str] = set()
         marker: tuple[str, int] | None = None
@@ -1343,14 +1405,11 @@ class GrpcStateProvider:
         while True:
             page_count += 1
             self._validate_page_accumulation(page_count, "run summary pages")
-            page = self._call(
-                self._stub.ListRunSummaries,
-                pb.ListRunSummariesRequest(
-                    page_size=RESET_BASELINE_PAGE_SIZE,
-                    page_token=page_token,
-                ),
-            )
-            page_marker = (page.operator_instance_id, page.as_of_sequence)
+            request = pb.ListRunSummariesRequestV2(page_size=RESET_BASELINE_PAGE_SIZE)
+            if page_token is not None:
+                request.continuation.CopyFrom(page_token)
+            page = self._call(self._stub.ListRunSummaries, request)
+            page_marker = (page.scope_ref.reference, page.cursor.source_sequence)
             if marker is None:
                 if not page_marker[0]:
                     raise _ResetBaselineMismatchError(
@@ -1367,22 +1426,22 @@ class GrpcStateProvider:
                     len(summaries) + 1,
                     "run summaries",
                 )
-                summary = run_summary_from_proto(message)
+                summary = run_summary_from_v2(message)
                 if summary.run_id in seen_run_ids:
                     raise _ResetBaselineMismatchError(
                         f"run summary {summary.run_id!r} appeared on multiple pages"
                     )
                 seen_run_ids.add(summary.run_id)
                 summaries.append(summary)
-            next_page_token = page.next_page_token
-            if not next_page_token:
+            next_page = page.next_page
+            if not next_page.continuation_id:
                 return marker, summaries
-            if next_page_token in seen_tokens:
+            if next_page.continuation_id in seen_tokens:
                 raise _ResetBaselineMismatchError(
                     "run summary pagination repeated a page token"
                 )
-            seen_tokens.add(next_page_token)
-            page_token = next_page_token
+            seen_tokens.add(next_page.continuation_id)
+            page_token = next_page
 
     def _get_consistent_run_snapshot(
         self,
@@ -1391,28 +1450,16 @@ class GrpcStateProvider:
     ) -> RunSnapshot:
         message = self._call(
             self._stub.GetRunSnapshot,
-            pb.GetRunSnapshotRequest(
-                run_id=summary.run_id,
-                operator_instance_id=marker[0],
-                as_of_sequence=marker[1],
-            ),
+            pb.GetRunSnapshotRequestV2(run_id=summary.run_id),
         )
-        snapshot = run_snapshot_from_proto(message)
-        if (snapshot.operator_instance_id, snapshot.as_of_sequence) != marker:
+        snapshot = run_snapshot_from_v2(message)
+        if snapshot.operator_instance_id != marker[0]:
             raise _ResetBaselineMismatchError(
-                f"run snapshot {summary.run_id!r} crossed the baseline high-water"
+                f"run snapshot {summary.run_id!r} crossed the operator epoch"
             )
         if snapshot.summary != summary:
             raise _ResetBaselineMismatchError(
                 f"run snapshot {summary.run_id!r} changed after summary pagination"
-            )
-        if (
-            snapshot.summary.revision > marker[1]
-            or snapshot.latest_log_sequence > marker[1]
-            or any(node.revision > marker[1] for node in snapshot.nodes)
-        ):
-            raise _ResetBaselineMismatchError(
-                f"run snapshot {summary.run_id!r} exceeds the baseline high-water"
             )
         return snapshot
 
@@ -1567,7 +1614,7 @@ class GrpcStateProvider:
             kwargs = {"timeout": min(2.0, self._unary_timeout)}
             if self._metadata is not None:
                 kwargs["metadata"] = self._metadata
-            self._stub.GetCatalog(pb.Empty(), **kwargs)
+            self._stub.DiscoverFlows(pb.DiscoverFlowsRequestV2(page_size=1), **kwargs)
             self._record_unary_success()
             return True
         except grpc.RpcError as e:
@@ -1595,10 +1642,12 @@ class GrpcStateProvider:
                     self.stream_retry_count += 1
                 with self._state_lock:
                     cursor = self._cursor
-                stream = self._stub.StreamOperatorUpdates(
-                    pb.StreamOperatorUpdatesRequest(
-                        operator_instance_id=cursor.operator_instance_id,
-                        after_sequence=cursor.sequence,
+                stream = self._stub.WatchRunStatus(
+                    pb.WatchRunStatusRequestV2(
+                        after_cursor=pb.LifecycleCursorV2(
+                            stream="operator-events",
+                            source_sequence=cursor.sequence,
+                        )
                     ),
                     metadata=self._metadata,
                 )
@@ -1623,7 +1672,7 @@ class GrpcStateProvider:
                 for message in stream:
                     if self._stream_stop.is_set():
                         break
-                    envelope = operator_update_envelope_from_proto(message)
+                    envelope = operator_update_envelope_from_v2(message)
                     if not envelope.operator_instance_id:
                         raise RuntimeError(
                             "update envelope omitted its operator instance identifier"
@@ -2265,25 +2314,40 @@ def _json_payload_default(value: Any) -> Any:
     raise TypeError(f"Input JSON does not support {type(value).__name__}")
 
 
-def _file_attachment(field_name: str, value: File | bytes) -> pb.FileAttachment:
+def _file_attachment(field_name: str, value: File | bytes) -> pb.FileAttachmentV2:
     file = value if isinstance(value, File) else File(name=field_name, content=value)
-    return pb.FileAttachment(
+    return pb.FileAttachmentV2(
+        attachment_id=f"inline:{field_name}:{file.name or ''}",
         field_name=field_name,
         name=file.name or "",
-        content=file.content,
-        content_type=file.content_type or "",
+        media_type=file.content_type or "",
         sha256=file.sha256 or "",
+        size_bytes=len(file.content),
+        inline_bytes=file.content,
     )
 
 
-def _validate_wire_result_response(response: pb.RunResultMsg) -> None:
-    value_size = len(response.value_json.encode("utf-8"))
+def _v2_continuation(scope: str, token: str) -> pb.ContinuationRefV2 | None:
+    """Wrap one snapshot-issued page token in its scope-bound continuation."""
+    if not token:
+        return None
+    return pb.ContinuationRefV2(
+        scope_ref=pb.ScopeReferenceV2(reference=scope),
+        continuation_id=token,
+    )
+
+
+def _validate_wire_result_payload(
+    value_json: str,
+    files: tuple[ResultFileAttachment, ...],
+) -> None:
+    value_size = len(value_json.encode("utf-8"))
     if value_size > MAX_RESULT_VALUE_JSON_BYTES:
         raise ValueError(f"Workflow result JSON exceeds {MAX_RESULT_VALUE_JSON_BYTES} bytes")
-    if len(response.files) > MAX_RESULT_ATTACHMENTS:
+    if len(files) > MAX_RESULT_ATTACHMENTS:
         raise ValueError(f"Workflow result exceeds {MAX_RESULT_ATTACHMENTS} file attachments")
     total_attachment_bytes = 0
-    for item in response.files:
+    for item in files:
         size = len(item.content)
         if size > MAX_RESULT_ATTACHMENT_BYTES:
             raise ValueError(
