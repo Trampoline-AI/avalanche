@@ -28,7 +28,7 @@ multi-tenancy, durable recovery, or a deployment control plane.
 │          ├── spawn one coordinator process per run                        │
 │          │       └── Workflow.run() → LocalExecutor or RayExecutor        │
 │          │                                                                │
-│          └── gRPC OperatorService                                         │
+│          └── gRPC OperatorServiceV2                                       │
 └───────┬───────────────────────────────────────────────────────┬──────────┘
         │ native gRPC                                            │ loopback HTTP +
         │                                                        │ gRPC-Web proxy
@@ -70,7 +70,7 @@ The handle is not a durable run registry or recovery mechanism.
 CLI / browser UI / TUI
         │
         ▼
-   OperatorService (gRPC)
+   OperatorServiceV2 (gRPC)
         │
         ▼
   Operator parent process
@@ -291,22 +291,25 @@ outside it.
 ### gRPC operator contract
 
 `src/runtime/operator/proto/operator.proto` is the transport boundary. The
-operator exposes:
+operator exposes a single native service, `OperatorServiceV2`:
 
-- `GetCatalog` for workflows, scan targets, and diagnostics;
+- `DiscoverFlows` for workflows, topology, scan targets, and diagnostics;
 - `StartRun`, `CancelRun`, and `GetRunResult` for control and terminal output;
-- `ListRunSummaries`, `GetRunSnapshot`, and `GetLatestRunSnapshot` for bounded
-  structural state;
-- `ListLogs`, `ListAgentEvents`, `ReadTrace`, and `ReadDetail` for on-demand
-  run detail;
-- `StreamOperatorUpdates` for sequenced catalog and run updates.
+- `ListRunSummaries` and `GetRunSnapshot` for bounded structural state;
+- `ListRunActivity` and `ReadActivityDetail` for on-demand run detail (logs,
+  agent events, and traces share one activity model);
+- `ListRunOutputArtifacts` and `ReadRunOutputArtifact` for result file bodies;
+- `WatchRunStatus` for sequenced flow and run updates.
 
-Clients begin from an operator-instance ID and structural sequence. Update
-stream replay is bounded. An operator restart, stale cursor, or slow-consumer
-overflow requires a client to discard incremental assumptions and reload a fresh
-structural baseline. Detail pages and bodies are snapshot-pinned or token-bound;
-they are fetched only for the selected run/node rather than included in every
-update.
+Clients begin from a scope reference and a lifecycle cursor. Update stream
+replay is bounded. An operator restart, foreign stream generation, stale
+cursor, or slow-consumer overflow requires a client to discard incremental
+assumptions and reload a fresh structural baseline (`ResetRequiredV2`). Detail
+pages are continuation-bound and bodies are read through scope-bound object
+references; they are fetched only for the selected run/node rather than
+included in every update. `StartRun` requires a caller-supplied `run_id` as
+its idempotency key; local loopback operators accept inline attachment bodies
+and reject staged object URIs.
 
 The default ports are:
 
@@ -328,13 +331,13 @@ does not receive a direct Python or gRPC channel to user workflow code.
 
 ```text
 Browser SPA
-  ├── GetCatalog + paginated run-summary baseline
-  ├── StreamOperatorUpdates from the current sequence
+  ├── DiscoverFlows + paginated run-summary baseline
+  ├── WatchRunStatus from the current cursor
   ├── fetch selected snapshots, logs, agent events, and details on demand
   └── StartRun / CancelRun actions
           │ gRPC-Web
           ▼
-ava web listener ── native gRPC ── OperatorService
+ava web listener ── native gRPC ── OperatorServiceV2
 ```
 
 The browser state layer checks operator instance IDs and sequence boundaries

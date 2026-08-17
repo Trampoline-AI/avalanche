@@ -598,7 +598,7 @@ def catalog_snapshot_from_v2(
 def run_summary_from_v2(msg: pb.RunSummaryV2) -> RunSummary:
     return RunSummary(
         run_id=msg.run_id,
-        flow_name=msg.workflow_display_name,
+        flow_name=msg.workflow_selector.rsplit("::", 1)[-1] or msg.workflow_display_name,
         status=RunStatus(msg.status),
         started_at=msg.started_at or None,
         ended_at=msg.ended_at or None,

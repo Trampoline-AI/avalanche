@@ -753,6 +753,7 @@ class GrpcStateProvider:
                 message = self._read_detail_body(
                     descriptor.body_token,
                     descriptor.size_bytes,
+                    scope=operator_instance_id,
                 ).decode()
                 logs.append(
                     SequencedLogEntry(
@@ -816,6 +817,7 @@ class GrpcStateProvider:
                 event_json = self._read_detail_body(
                     descriptor.body_token,
                     descriptor.size_bytes,
+                    scope=operator_instance_id,
                 ).decode()
                 events.append(
                     AgentEvent(
@@ -983,13 +985,16 @@ class GrpcStateProvider:
         if callable(cancel):
             cancel()
 
-    def _read_detail_body(self, body_token: str, size_bytes: int) -> bytes:
+    def _read_detail_body(
+        self, body_token: str, size_bytes: int, *, scope: str | None = None
+    ) -> bytes:
         self._validate_detail_body_size(size_bytes)
+        reference = self.operator_instance_id if scope is None else scope
         try:
             chunks = self._stub.ReadActivityDetail(
                 pb.ReadActivityDetailRequestV2(
                     detail_ref=pb.ActivityDetailRefV2(
-                        scope_ref=pb.ScopeReferenceV2(reference=self.operator_instance_id),
+                        scope_ref=pb.ScopeReferenceV2(reference=reference),
                         object_uri=f"local://detail/{body_token}",
                         object_key=body_token,
                     )

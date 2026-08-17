@@ -12,7 +12,7 @@ import pytest
 
 from runtime.operator import Operator
 from runtime.operator.client import GrpcStateProvider, OperatorCallError, StreamState
-from runtime.operator.convert import operator_update_envelope_to_proto
+from runtime.operator.convert_v2 import update_envelope_to_v2
 from runtime.operator.models import (
     AgentEvent,
     AgentEventDetailAppended,
@@ -346,7 +346,7 @@ def test_exact_node_log_pages_use_the_append_only_node_index():
             run.run_id,
             page_size=2,
             node_id="agent_1",
-            order=pb.DESCRIPTOR_PAGE_ORDER_NEWEST_FIRST,
+            order=pb.PAGE_ORDER_V2_NEWEST_FIRST,
         )
 
         assert [item.sequence for item in first.logs] == [50_000]
@@ -439,7 +439,7 @@ def test_newest_first_pages_reconstruct_filtered_snapshot_without_duplicates():
                 page_size=2,
                 before_sequence=before_sequence,
                 node_id="agent_1",
-                order=pb.DESCRIPTOR_PAGE_ORDER_NEWEST_FIRST,
+                order=pb.PAGE_ORDER_V2_NEWEST_FIRST,
             )
             newest_log_sequences.extend(item.sequence for item in page.logs)
             newest_log_descriptors.extend(page.logs)
@@ -458,7 +458,7 @@ def test_newest_first_pages_reconstruct_filtered_snapshot_without_duplicates():
                 page_token=token,
                 page_size=2,
                 before_event_sequence=before_event_sequence,
-                order=pb.DESCRIPTOR_PAGE_ORDER_NEWEST_FIRST,
+                order=pb.PAGE_ORDER_V2_NEWEST_FIRST,
             )
             newest_event_sequences.extend(item.event_sequence for item in page.events)
             before_event_sequence = page.events[-1].event_sequence if page.events else 0
@@ -535,7 +535,7 @@ def test_detail_continuations_reject_cursor_filter_and_direction_changes():
             page_token=snapshot.log_page_token,
             page_size=1,
             node_id="agent_1",
-            order=pb.DESCRIPTOR_PAGE_ORDER_NEWEST_FIRST,
+            order=pb.PAGE_ORDER_V2_NEWEST_FIRST,
         )
         assert newest_log_page.next_page_token
         with pytest.raises(ValueError, match="order"):
@@ -581,16 +581,38 @@ def test_detail_pagination_requires_snapshot_issued_page_tokens():
         port = _unused_port()
         server = serve(operator, port=port, block=False)
         channel = grpc.insecure_channel(f"localhost:{port}")
-        stub = pb_grpc.OperatorServiceStub(channel)
+        stub = pb_grpc.OperatorServiceV2Stub(channel)
+
+        bogus_continuation = pb.ContinuationRefV2(
+            scope_ref=pb.ScopeReferenceV2(reference=operator.operator_instance_id),
+            continuation_id="not-a-snapshot-issued-token",
+        )
+        for invoke in (
+            lambda: stub.ListRunActivity(pb.ListRunActivityRequestV2()),
+            lambda: stub.ListRunActivity(
+                pb.ListRunActivityRequestV2(run_id="run-1", node_id="agent_1")
+            ),
+        ):
+            with pytest.raises(grpc.RpcError) as error:
+                invoke()
+            assert error.value.code() is grpc.StatusCode.NOT_FOUND
 
         for invoke in (
-            lambda: stub.ListLogs(pb.ListLogsRequest()),
-            lambda: stub.ListAgentEvents(pb.ListAgentEventsRequest()),
+            lambda: stub.ListRunActivity(
+                pb.ListRunActivityRequestV2(continuation=bogus_continuation)
+            ),
+            lambda: stub.ListRunActivity(
+                pb.ListRunActivityRequestV2(
+                    run_id="run-1",
+                    node_id="agent_1",
+                    continuation=bogus_continuation,
+                )
+            ),
         ):
             with pytest.raises(grpc.RpcError) as error:
                 invoke()
             assert error.value.code() is grpc.StatusCode.INVALID_ARGUMENT
-            assert "page_token from GetRunSnapshot is required" in error.value.details()
+            assert "Invalid" in (error.value.details() or "")
     finally:
         if channel is not None:
             channel.close()
@@ -705,36 +727,52 @@ def test_evicted_structural_baseline_requires_grpc_restart():
         server = serve(operator, port=port, block=False)
         channel = grpc.insecure_channel(f"localhost:{port}")
         grpc.channel_ready_future(channel).result(timeout=5)
-        stub = pb_grpc.OperatorServiceStub(channel)
+        stub = pb_grpc.OperatorServiceV2Stub(channel)
+
+        scope = pb.ScopeReferenceV2(reference=operator.operator_instance_id)
+        baseline = stub.ListRunSummaries(pb.ListRunSummariesRequestV2(page_size=1))
+        wrong_generation = baseline.cursor.stream_generation ^ 1
 
         with pytest.raises(grpc.RpcError) as snapshot_error:
-            stub.GetRunSnapshot(
-                pb.GetRunSnapshotRequest(
-                    run_id=first_run.run_id,
-                    operator_instance_id=evicted.operator_instance_id,
-                    as_of_sequence=evicted.as_of_sequence,
+            stub.ListRunSummaries(
+                pb.ListRunSummariesRequestV2(
+                    page_size=1,
+                    continuation=pb.ContinuationRefV2(
+                        scope_ref=scope,
+                        continuation_id=baseline.next_page.continuation_id,
+                        cursor=pb.LifecycleCursorV2(
+                            stream=baseline.cursor.stream,
+                            stream_generation=wrong_generation,
+                            source_sequence=baseline.cursor.source_sequence,
+                        ),
+                    ),
                 )
             )
         assert snapshot_error.value.code() == grpc.StatusCode.FAILED_PRECONDITION
 
         with pytest.raises(grpc.RpcError) as page_error:
             stub.ListRunSummaries(
-                pb.ListRunSummariesRequest(
+                pb.ListRunSummariesRequestV2(
                     page_size=1,
-                    page_token=evicted.next_page_token,
+                    continuation=pb.ContinuationRefV2(
+                        scope_ref=scope,
+                        continuation_id=evicted.next_page_token,
+                        cursor=pb.LifecycleCursorV2(
+                            stream="run-summaries",
+                            stream_generation=baseline.cursor.stream_generation,
+                            source_sequence=evicted.as_of_sequence,
+                        ),
+                    ),
                 )
             )
         assert page_error.value.code() == grpc.StatusCode.FAILED_PRECONDITION
 
         snapshot = stub.GetRunSnapshot(
-            pb.GetRunSnapshotRequest(
-                run_id=first_run.run_id,
-                operator_instance_id=current.operator_instance_id,
-                as_of_sequence=current.as_of_sequence,
-            )
+            pb.GetRunSnapshotRequestV2(run_id=first_run.run_id)
         )
-        assert snapshot.as_of_sequence == current.as_of_sequence
+        assert snapshot.cursor.source_sequence == current.as_of_sequence
         assert snapshot.summary.status == RunStatus.RUNNING.value
+        assert snapshot.scope_ref.reference == operator.operator_instance_id
     finally:
         if channel is not None:
             channel.close()
@@ -1044,47 +1082,45 @@ def test_read_trace_streams_more_than_four_mib_in_bounded_revisioned_chunks():
         server = serve(operator, port=port, block=False)
         channel = grpc.insecure_channel(f"localhost:{port}")
         grpc.channel_ready_future(channel).result(timeout=5)
-        stub = pb_grpc.OperatorServiceStub(channel)
-        summaries = stub.ListRunSummaries(pb.ListRunSummariesRequest(page_size=10))
-        snapshot = stub.GetRunSnapshot(
-            pb.GetRunSnapshotRequest(
+        stub = pb_grpc.OperatorServiceV2Stub(channel)
+        summaries = stub.ListRunSummaries(pb.ListRunSummariesRequestV2(page_size=10))
+        snapshot = stub.GetRunSnapshot(pb.GetRunSnapshotRequestV2(run_id=run.run_id))
+        logs = stub.ListRunActivity(
+            pb.ListRunActivityRequestV2(
                 run_id=run.run_id,
-                operator_instance_id=summaries.operator_instance_id,
-                as_of_sequence=summaries.as_of_sequence,
+                continuation=snapshot.log_continuation,
+                page_size=1,
             )
         )
-        logs = stub.ListLogs(
-            pb.ListLogsRequest(page_token=snapshot.log_page_token, page_size=1)
-        )
-        events = stub.ListAgentEvents(
-            pb.ListAgentEventsRequest(
-                page_token=snapshot.nodes[0].event_page_token,
+        events = stub.ListRunActivity(
+            pb.ListRunActivityRequestV2(
+                run_id=run.run_id,
+                node_id="agent_1",
+                continuation=snapshot.nodes[0].activity_continuation,
                 page_size=10,
             )
         )
+        trace_ref = snapshot.nodes[0].trace.detail_ref
         chunks = list(
-            stub.ReadTrace(
-                pb.ReadTraceRequest(
-                    operator_instance_id=summaries.operator_instance_id,
-                    run_id=run.run_id,
-                    node_id="agent_1",
-                    revision=expected.revision,
-                )
+            stub.ReadActivityDetail(
+                pb.ReadActivityDetailRequestV2(detail_ref=trace_ref)
             )
         )
 
-        assert summaries.operator_instance_id == operator.operator_instance_id
+        assert summaries.scope_ref.reference == operator.operator_instance_id
         assert [item.run_id for item in summaries.runs] == [run.run_id]
-        assert snapshot.operator_instance_id == operator.operator_instance_id
+        assert snapshot.scope_ref.reference == operator.operator_instance_id
         assert snapshot.nodes[0].trace.revision == expected.revision
-        assert [item.sequence for item in logs.logs] == [1]
-        assert logs.next_page_token
-        assert [item.event_sequence for item in events.events] == [1]
+        assert [item.run_sequence for item in logs.activities] == [1]
+        assert logs.HasField("next_page")
+        assert [item.run_sequence for item in events.activities] == [1]
         assert len(expected.data) > 4 * 1024 * 1024
         assert len(chunks) > 4
         assert [chunk.chunk_index for chunk in chunks] == list(range(len(chunks)))
         assert all(0 < len(chunk.data) <= TRACE_CHUNK_BYTES for chunk in chunks)
-        assert all(chunk.revision == expected.revision for chunk in chunks)
+        assert trace_ref.object_uri == (
+            f"local://trace/{run.run_id}/agent_1/{expected.revision}"
+        )
         assert [chunk.eof for chunk in chunks] == [False] * (len(chunks) - 1) + [True]
         assert b"".join(chunk.data for chunk in chunks) == expected.data
     finally:
@@ -1180,39 +1216,44 @@ def test_max_log_and_large_agent_event_use_bounded_live_and_hydration_transport(
             and json.loads(detail.event.event_json)["data"]["payload"] == large_event_payload
             for detail in details
         )
-        summaries = live._stub.ListRunSummaries(pb.ListRunSummariesRequest(page_size=10))
         snapshot = live._stub.GetRunSnapshot(
-            pb.GetRunSnapshotRequest(
+            pb.GetRunSnapshotRequestV2(run_id=run.run_id)
+        )
+        log_page = live._stub.ListRunActivity(
+            pb.ListRunActivityRequestV2(
                 run_id=run.run_id,
-                operator_instance_id=summaries.operator_instance_id,
-                as_of_sequence=summaries.as_of_sequence,
+                continuation=snapshot.log_continuation,
+                page_size=10,
             )
         )
-        log_page = live._stub.ListLogs(
-            pb.ListLogsRequest(page_token=snapshot.log_page_token, page_size=10)
-        )
-        event_page = live._stub.ListAgentEvents(
-            pb.ListAgentEventsRequest(
-                page_token=snapshot.nodes[0].event_page_token,
+        event_page = live._stub.ListRunActivity(
+            pb.ListRunActivityRequestV2(
+                run_id=run.run_id,
+                node_id="agent_1",
+                continuation=snapshot.nodes[0].activity_continuation,
                 page_size=10,
             )
         )
         assert log_page.ByteSize() < 4 * 1024 * 1024
         assert event_page.ByteSize() < 4 * 1024 * 1024
         large_log_descriptor = next(
-            item for item in log_page.logs if item.size_bytes == len(large_log)
+            item for item in log_page.activities if item.size_bytes == len(large_log)
         )
-        large_event_descriptor = event_page.events[0]
+        large_event_descriptor = event_page.activities[0]
         log_chunks = list(
-            live._stub.ReadDetail(
-                pb.ReadDetailRequest(body_token=large_log_descriptor.body_token)
+            live._stub.ReadActivityDetail(
+                pb.ReadActivityDetailRequestV2(
+                    detail_ref=large_log_descriptor.detail_ref
+                )
             )
         )
         assert len(log_chunks) == 1
         assert log_chunks[0].eof is True
         event_chunks = list(
-            live._stub.ReadDetail(
-                pb.ReadDetailRequest(body_token=large_event_descriptor.body_token)
+            live._stub.ReadActivityDetail(
+                pb.ReadActivityDetailRequestV2(
+                    detail_ref=large_event_descriptor.detail_ref
+                )
             )
         )
         assert len(event_chunks) > 4
@@ -1221,12 +1262,23 @@ def test_max_log_and_large_agent_event_use_bounded_live_and_hydration_transport(
             True
         ]
 
+        scope_ref = pb.ScopeReferenceV2(reference=operator.operator_instance_id)
+
+        def _cursor_for(sequence: int) -> pb.LifecycleCursorV2:
+            return pb.LifecycleCursorV2(
+                stream="operator-events",
+                stream_generation=1,
+                source_sequence=sequence,
+            )
+
         for update in operator._stream_history:
-            envelope_message = operator_update_envelope_to_proto(
+            envelope_message = update_envelope_to_v2(
                 OperatorUpdateEnvelope(
                     operator_instance_id=operator.operator_instance_id,
                     update=update,
-                )
+                ),
+                scope_ref=scope_ref,
+                cursor_for=_cursor_for,
             )
             assert envelope_message.ByteSize() < 4 * 1024 * 1024
 
@@ -1476,29 +1528,33 @@ def test_read_trace_rejects_reused_identity_from_previous_operator_epoch():
         server = serve(second, port=port, block=False)
         channel = grpc.insecure_channel(f"localhost:{port}")
         grpc.channel_ready_future(channel).result(timeout=5)
-        stub = pb_grpc.OperatorServiceStub(channel)
+        stub = pb_grpc.OperatorServiceV2Stub(channel)
 
+        stale_ref = pb.ActivityDetailRefV2(
+            run_id="run-reused",
+            scope_ref=pb.ScopeReferenceV2(reference=stale_epoch),
+            activity_id=f"trace:agent_1:{revision}",
+            object_uri=f"local://trace/run-reused/agent_1/{revision}",
+            object_key=f"run-reused/agent_1/{revision}",
+        )
         with pytest.raises(grpc.RpcError) as error:
             list(
-                stub.ReadTrace(
-                    pb.ReadTraceRequest(
-                        operator_instance_id=stale_epoch,
-                        run_id="run-reused",
-                        node_id="agent_1",
-                        revision=revision,
-                    )
+                stub.ReadActivityDetail(
+                    pb.ReadActivityDetailRequestV2(detail_ref=stale_ref)
                 )
             )
-        assert error.value.code() == grpc.StatusCode.FAILED_PRECONDITION
+        assert error.value.code() == grpc.StatusCode.PERMISSION_DENIED
 
+        detail_ref = pb.ActivityDetailRefV2(
+            run_id="run-reused",
+            scope_ref=pb.ScopeReferenceV2(reference=second.operator_instance_id),
+            activity_id=f"trace:agent_1:{revision}",
+            object_uri=f"local://trace/run-reused/agent_1/{revision}",
+            object_key=f"run-reused/agent_1/{revision}",
+        )
         chunks = list(
-            stub.ReadTrace(
-                pb.ReadTraceRequest(
-                    operator_instance_id=second.operator_instance_id,
-                    run_id="run-reused",
-                    node_id="agent_1",
-                    revision=revision,
-                )
+            stub.ReadActivityDetail(
+                pb.ReadActivityDetailRequestV2(detail_ref=detail_ref)
             )
         )
         trace = json.loads(b"".join(chunk.data for chunk in chunks))

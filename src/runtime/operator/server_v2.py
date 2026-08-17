@@ -80,8 +80,8 @@ class OperatorV2Servicer(pb_grpc.OperatorServiceV2Servicer):
         reference = scope_ref.reference
         if reference and reference != self._op.operator_instance_id:
             context.abort(
-                grpc.StatusCode.PERMISSION_DENIED,
-                "Scope reference does not match this operator's authorization scope",
+                grpc.StatusCode.FAILED_PRECONDITION,
+                "Scope reference is stale; rebaseline against the current operator scope",
             )
 
     def _validate_cursor(self, cursor: pb.LifecycleCursorV2, context) -> None:

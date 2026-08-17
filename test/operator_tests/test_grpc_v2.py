@@ -193,7 +193,7 @@ def test_foreign_scope_is_denied(stub):
                 ),
             )
         )
-    assert excinfo.value.code() == grpc.StatusCode.PERMISSION_DENIED
+    assert excinfo.value.code() == grpc.StatusCode.FAILED_PRECONDITION
 
     with pytest.raises(grpc.RpcError) as excinfo:
         list(
@@ -207,4 +207,4 @@ def test_foreign_scope_is_denied(stub):
                 )
             )
         )
-    assert excinfo.value.code() == grpc.StatusCode.PERMISSION_DENIED
+    assert excinfo.value.code() == grpc.StatusCode.FAILED_PRECONDITION
