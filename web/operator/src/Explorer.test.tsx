@@ -2,7 +2,7 @@ import { fireEvent, render, screen } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 
 import { Explorer } from "./Explorer";
-import { CatalogSnapshotMsg, FlowInfoMsg } from "./generated/operator";
+import { CatalogSnapshotMsg, FlowInfoMsg } from "./model";
 
 const orders = FlowInfoMsg.create({
   workflowId: "flows.py::orders",

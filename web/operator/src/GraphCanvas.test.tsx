@@ -104,7 +104,7 @@ import {
   NodeSnapshotMsg,
   TraceDescriptorMsg,
   WorkflowTopologyMsg,
-} from "./generated/operator";
+} from "./model";
 
 function metadata(field: string) {
   return JSON.stringify({

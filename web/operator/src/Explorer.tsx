@@ -1,7 +1,7 @@
 import { memo, useEffect, useState } from "react";
 import { PanelLeftClose, X } from "lucide-react";
 
-import type { CatalogSnapshotMsg, FlowInfoMsg } from "./generated/operator";
+import type { CatalogSnapshotMsg, FlowInfoMsg } from "./model";
 
 export type Selection =
   { kind: "workflow"; workflowId: string } | { kind: "run"; workflowId: string; runId: string };

@@ -1,7 +1,7 @@
 import { useVirtualizer } from "@tanstack/react-virtual";
 import { useMemo, useRef } from "react";
 
-import type { RunSummaryMsg } from "./generated/operator";
+import type { RunSummaryMsg } from "./model";
 
 const RUN_ROW_HEIGHT = 32;
 const RUN_ROW_OVERSCAN = 8;

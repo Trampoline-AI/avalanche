@@ -417,13 +417,13 @@ def lineage_context_workflow():
             op.close()
 
     def test_start_run_rejects_bad_file_metadata_before_response(self, client):
-        start_request = pb.StartRunRequest(
+        start_request = pb.StartRunRequestV2(
             workflow_selector="input_workflow",
             run_id="run_bad_inline_checksum",
             input_files=[
-                pb.FileAttachment(
+                pb.FileAttachmentV2(
                     field_name="document",
-                    content=b"contents",
+                    inline_bytes=b"contents",
                     sha256="0" * 64,
                 )
             ],
@@ -2394,11 +2394,6 @@ def test_blocking_server_closes_operator_in_finally(monkeypatch):
     monkeypatch.setattr(server_module.grpc, "server", fake_grpc_server)
     monkeypatch.setattr(
         server_module.pb_grpc,
-        "add_OperatorServiceServicer_to_server",
-        lambda _servicer, _server: None,
-    )
-    monkeypatch.setattr(
-        server_module.pb_grpc,
         "add_OperatorServiceV2Servicer_to_server",
         lambda _servicer, _server: None,
     )
@@ -2447,13 +2442,8 @@ def test_server_setup_and_bind_failures_close_operator_storage(
 
     monkeypatch.setattr(
         server_module.pb_grpc,
-        "add_OperatorServiceServicer_to_server",
-        register,
-    )
-    monkeypatch.setattr(
-        server_module.pb_grpc,
         "add_OperatorServiceV2Servicer_to_server",
-        lambda _servicer, _server: None,
+        register,
     )
     operator = Operator(
         [],
@@ -2489,11 +2479,6 @@ def test_server_non_loopback_binding_is_explicit_and_warned(monkeypatch, caplog)
         server_module.grpc,
         "server",
         lambda _executor, *, options: fake_server,
-    )
-    monkeypatch.setattr(
-        server_module.pb_grpc,
-        "add_OperatorServiceServicer_to_server",
-        lambda _servicer, _server: None,
     )
     monkeypatch.setattr(
         server_module.pb_grpc,

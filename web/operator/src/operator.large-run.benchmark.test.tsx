@@ -28,7 +28,7 @@ import {
   RunSnapshotMsg,
   RunSummaryMsg,
   WorkflowTopologyMsg,
-} from "./generated/operator";
+} from "./model";
 import { Inspector } from "./Inspector";
 import { RunLogPane } from "./RunLogPane";
 import { useOperatorProjection } from "./state";

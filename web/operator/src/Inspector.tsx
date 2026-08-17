@@ -18,7 +18,7 @@ import {
   type FlowInfoMsg,
   type NodeSnapshotMsg,
   type RunSnapshotMsg,
-} from "./generated/operator";
+} from "./model";
 import { isUnknownRecord } from "./guards";
 import { Markdown } from "./Markdown";
 import { ValueView } from "./ValueView";

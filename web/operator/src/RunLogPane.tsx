@@ -27,7 +27,7 @@ import {
   DescriptorPageOrder,
   type LogRecordDescriptorMsg,
   type RunSnapshotMsg,
-} from "./generated/operator";
+} from "./model";
 
 const LOG_DECODE_BATCH_SIZE = 20;
 const LOG_ROW_ESTIMATE_PX = 48;

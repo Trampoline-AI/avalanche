@@ -8,7 +8,7 @@ import type {
   OperatorUpdateEnvelope,
   RunSnapshotMsg,
   RunSummaryMsg,
-} from "./generated/operator";
+} from "./model";
 
 const MAX_PENDING_ENVELOPES = 1024;
 const MAX_ENVELOPES_PER_FRAME = 256;

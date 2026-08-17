@@ -178,7 +178,7 @@ class _DetailHydrationRaceError(RuntimeError):
 
 
 class GrpcStateProvider:
-    """StateProvider backed by a remote gRPC OperatorService.
+    """StateProvider backed by a remote gRPC OperatorServiceV2.
 
     Connects to an operator daemon and translates gRPC calls to the
     StateProvider interface that the TUI expects. Tracks connection

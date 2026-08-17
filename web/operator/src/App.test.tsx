@@ -124,7 +124,7 @@ vi.mock("./state", () => ({
 
 import { App } from "./App";
 import { GrpcWebOperatorApi } from "./api";
-import { RunSnapshotMsg, RunSummaryMsg, WorkflowTopologyMsg } from "./generated/operator";
+import { RunSnapshotMsg, RunSummaryMsg, WorkflowTopologyMsg } from "./model";
 
 const summary = RunSummaryMsg.create({
   runId: "run-1",

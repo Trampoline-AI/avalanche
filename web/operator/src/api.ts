@@ -1,33 +1,38 @@
 import { GrpcWebFetchTransport } from "@protobuf-ts/grpcweb-transport";
 
-import { DescriptorPageOrder, PageOrderV2 } from "./generated/operator";
+import { PageOrderV2 } from "./generated/operator";
+import { DescriptorPageOrder } from "./model";
 
-import { OperatorServiceV2Client } from "./generated/operator.client";
-import type { OperatorServiceClient } from "./generated/operator.client";
+import {
+  OperatorServiceV2Client,
+  type IOperatorServiceV2Client,
+} from "./generated/operator.client";
 import type {
   ActivityDetailRefV2,
-  AgentEventDescriptorMsg,
-  CatalogSnapshotMsg,
   ContinuationRefV2,
-  FlowInfoMsg,
   FlowInfoV2,
   FlowListV2,
   LifecycleCursorV2,
+  NodeSnapshotV2,
+  RunActivityDescriptorV2,
+  RunSnapshotV2,
+  RunStatusEnvelopeV2,
+  RunSummaryV2,
+  ScopeReferenceV2,
+} from "./generated/operator";
+import type {
+  AgentEventDescriptorMsg,
+  CatalogSnapshotMsg,
+  FlowInfoMsg,
   ListAgentEventsRequest,
   ListLogsRequest,
   LogRecordDescriptorMsg,
   NodeSnapshotMsg,
-  NodeSnapshotV2,
   OperatorUpdate,
   OperatorUpdateEnvelope,
-  RunActivityDescriptorV2,
   RunSnapshotMsg,
-  RunSnapshotV2,
-  RunStatusEnvelopeV2,
   RunSummaryMsg,
-  RunSummaryV2,
-  ScopeReferenceV2,
-} from "./generated/operator";
+} from "./model";
 
 const MAX_BASELINE_PAGES = 100;
 const MAX_BASELINE_SUMMARIES = 10_000;
@@ -101,7 +106,7 @@ interface RegisteredContinuation {
 }
 
 export class GrpcWebOperatorApi implements OperatorApi {
-  readonly client: OperatorServiceV2Client;
+  readonly client: IOperatorServiceV2Client;
 
   /**
    * V2 continuations, detail refs, and lifecycle cursors are rich objects,
@@ -116,10 +121,10 @@ export class GrpcWebOperatorApi implements OperatorApi {
 
   constructor(
     baseUrl = window.location.origin,
-    client?: OperatorServiceV2Client | OperatorServiceClient,
+    client?: IOperatorServiceV2Client,
   ) {
     this.client =
-      (client as OperatorServiceV2Client | undefined) ??
+      client ??
       new OperatorServiceV2Client(new GrpcWebFetchTransport({ baseUrl, format: "binary" }));
   }
 

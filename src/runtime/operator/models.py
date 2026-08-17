@@ -245,7 +245,7 @@ DetailUpdate = LogDetailAppended | AgentEventDetailAppended
 
 @dataclass(frozen=True)
 class LogRecordDescriptor:
-    """Bounded metadata for a log body fetched through ``ReadDetail``."""
+    """Bounded metadata for a log body fetched through ``ReadActivityDetail``."""
 
     sequence: int
     timestamp: datetime

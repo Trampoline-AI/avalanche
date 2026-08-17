@@ -21,7 +21,7 @@ import {
   DescriptorPageOrder,
   LogRecordDescriptorMsg,
   RunSnapshotMsg,
-} from "./generated/operator";
+} from "./model";
 import { RunLogPane } from "./RunLogPane";
 
 const run = RunSnapshotMsg.create({

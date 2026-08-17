@@ -8,7 +8,7 @@ import {
   type CatalogSnapshotMsg,
   type FlowInfoMsg,
   type RunSnapshotMsg,
-} from "./generated/operator";
+} from "./model";
 import { Inspector } from "./Inspector";
 
 const declaration = JSON.stringify({

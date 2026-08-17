@@ -14,7 +14,7 @@ import {
   RunSummaryMsg,
   TraceDescriptorMsg,
   WorkflowTopologyMsg,
-} from "./generated/operator";
+} from "./model";
 import { emptyProjection, projectionReducer, useOperatorProjection } from "./state";
 
 const workflow = FlowInfoMsg.create({
