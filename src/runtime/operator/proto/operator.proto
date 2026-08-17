@@ -23,6 +23,26 @@ service OperatorService {
   rpc StreamOperatorUpdates(StreamOperatorUpdatesRequest) returns (stream OperatorUpdateEnvelope);
 }
 
+// V2 is additive: legacy clients remain on OperatorService until they complete
+// their own migration. V2 requests derive their authorization scope from
+// transport metadata and use only V2 request and response messages.
+service OperatorServiceV2 {
+  rpc DiscoverFlows(DiscoverFlowsRequestV2) returns (FlowListV2);
+  rpc StartRun(StartRunRequestV2) returns (StartRunResponseV2);
+  rpc CancelRun(CancelRunRequestV2) returns (CancelRunResponseV2);
+  rpc ListRunSummaries(ListRunSummariesRequestV2) returns (RunSummaryPageV2);
+  rpc GetRunSnapshot(GetRunSnapshotRequestV2) returns (RunSnapshotV2);
+  rpc ListRunActivity(ListRunActivityRequestV2) returns (RunActivityPageV2);
+  rpc ReadActivityDetail(ReadActivityDetailRequestV2)
+      returns (stream ActivityDetailChunkV2);
+  rpc GetRunResult(GetRunResultRequestV2) returns (RunResultV2);
+  rpc ListRunOutputArtifacts(ListRunOutputArtifactsRequestV2)
+      returns (RunOutputArtifactPageV2);
+  rpc ReadRunOutputArtifact(ReadRunOutputArtifactRequestV2)
+      returns (stream RunOutputArtifactChunkV2);
+  rpc WatchRunStatus(WatchRunStatusRequestV2) returns (stream RunStatusEnvelopeV2);
+}
+
 // ── Request / Response ──────────────────────────────────
 
 message Empty {}
@@ -387,4 +407,294 @@ message OperatorUpdateEnvelope {
     OperatorUpdate update = 2;
     ResetRequired reset_required = 3;
   }
+}
+
+// ── V2 Request / Response ───────────────────────────────
+
+// An opaque reference issued by the server for the authenticated scope. It is
+// not an organization or project selector and must be revalidated by the
+// server against the caller's transport-derived scope before use.
+message ScopeReferenceV2 {
+  string reference = 1;
+}
+
+// A complete retained-stream position. Callers must preserve every field.
+// A server must fail closed (by requiring a reset or retry) rather than treat a
+// cursor from another stream, topology, generation, or retention window as a
+// valid progress position.
+message LifecycleCursorV2 {
+  string stream = 1;
+  string topology_fingerprint = 2;
+  uint64 stream_generation = 3;
+  uint64 retained_floor = 4;
+  uint64 source_sequence = 5;
+}
+
+// A server-issued page continuation bound to the authenticated scope and the
+// cursor used to materialize the page. The reference is not a legacy bearer
+// page token and is revalidated on every request.
+message ContinuationRefV2 {
+  ScopeReferenceV2 scope_ref = 1;
+  string continuation_id = 2;
+  LifecycleCursorV2 cursor = 3;
+}
+
+message DiscoverFlowsRequestV2 {
+  // Bounded by the server.
+  uint32 page_size = 1;
+  ContinuationRefV2 continuation = 2;
+}
+
+message FlowInfoV2 {
+  // This is the only selector a StartRunRequestV2 may use for this flow.
+  string workflow_selector = 1;
+  string display_name = 2;
+  string manifest_digest = 3;
+  repeated string node_ids = 4;
+}
+
+message DiscoveryDiagnosticV2 {
+  string path = 1;
+  string kind = 2;
+  string message = 3;
+}
+
+message FlowListV2 {
+  LifecycleCursorV2 cursor = 1;
+  repeated FlowInfoV2 flows = 2;
+  ContinuationRefV2 next_page = 3;
+  repeated DiscoveryDiagnosticV2 diagnostics = 4;
+}
+
+// Attachment metadata is bounded and verified by the server. Attachment
+// content is not embedded in this start request.
+message FileAttachmentV2 {
+  string attachment_id = 1;
+  string field_name = 2;
+  string name = 3;
+  string media_type = 4;
+  string object_uri = 5;
+  string object_key = 6;
+  string sha256 = 7;
+  uint64 size_bytes = 8;
+}
+
+message StartRunRequestV2 {
+  // Caller-supplied idempotency key. The server rejects an empty value.
+  string run_id = 1;
+  // Required exact workflow selection; no second flow-name selector exists.
+  string workflow_selector = 2;
+  // Required JSON input document, validated and bounded by the server.
+  string input_json = 3;
+  // Required JSON context document, validated and bounded by the server.
+  string context_json = 4;
+  repeated FileAttachmentV2 input_files = 5;
+}
+
+message StartRunResponseV2 {
+  string run_id = 1;
+}
+
+message CancelRunRequestV2 {
+  string run_id = 1;
+}
+
+message CancelRunResponseV2 {
+  string run_id = 1;
+}
+
+message RunSummaryV2 {
+  string run_id = 1;
+  string workflow_selector = 2;
+  string workflow_display_name = 3;
+  string status = 4;
+  double started_at = 5;
+  double ended_at = 6;
+  uint64 created_sequence = 7;
+  uint64 revision = 8;
+}
+
+message ListRunSummariesRequestV2 {
+  // Optional filter within the transport-authorized scope.
+  string workflow_selector = 1;
+  // Bounded by the server.
+  uint32 page_size = 2;
+  ContinuationRefV2 continuation = 3;
+}
+
+message RunSummaryPageV2 {
+  LifecycleCursorV2 cursor = 1;
+  repeated RunSummaryV2 runs = 2;
+  ContinuationRefV2 next_page = 3;
+}
+
+message GetRunSnapshotRequestV2 {
+  string run_id = 1;
+}
+
+message NodeSnapshotV2 {
+  string node_id = 1;
+  string name = 2;
+  string node_type = 3;
+  string status = 4;
+  double started_at = 5;
+  double ended_at = 6;
+  uint64 revision = 7;
+}
+
+// The cursor proves the exact fresh projection view used for this snapshot.
+message RunSnapshotV2 {
+  LifecycleCursorV2 cursor = 1;
+  RunSummaryV2 summary = 2;
+  repeated NodeSnapshotV2 nodes = 3;
+}
+
+// The immutable, scope-bound object body for an activity. Servers must
+// re-derive and verify this complete binding before streaming its bytes.
+message ActivityDetailRefV2 {
+  string run_id = 1;
+  ScopeReferenceV2 scope_ref = 2;
+  string activity_id = 3;
+  uint64 run_sequence = 4;
+  // Canonical object-store URI for the immutable body.
+  string object_uri = 5;
+  // Object key derived from the canonical URI.
+  string object_key = 6;
+  string sha256 = 7;
+  uint64 size_bytes = 8;
+}
+
+message RunActivityDescriptorV2 {
+  string activity_id = 1;
+  uint64 run_sequence = 2;
+  string kind = 3;
+  double timestamp = 4;
+  uint64 size_bytes = 5;
+  // Absent when this structural activity has no immutable body.
+  ActivityDetailRefV2 detail_ref = 6;
+}
+
+message ListRunActivityRequestV2 {
+  string run_id = 1;
+  // Bounded by the server.
+  uint32 page_size = 2;
+  ContinuationRefV2 continuation = 3;
+}
+
+message RunActivityPageV2 {
+  LifecycleCursorV2 cursor = 1;
+  string run_id = 2;
+  repeated RunActivityDescriptorV2 activities = 3;
+  ContinuationRefV2 next_page = 4;
+}
+
+// This request carries the complete descriptor, never an activity envelope or
+// a legacy body token.
+message ReadActivityDetailRequestV2 {
+  ActivityDetailRefV2 detail_ref = 1;
+}
+
+message ActivityDetailChunkV2 {
+  uint64 chunk_index = 1;
+  bytes data = 2;
+  bool eof = 3;
+}
+
+// An immutable, scope-bound result-file or output-artifact body. The server
+// verifies this descriptor before ReadRunOutputArtifact streams the body.
+message RunOutputArtifactRefV2 {
+  string run_id = 1;
+  ScopeReferenceV2 scope_ref = 2;
+  string artifact_id = 3;
+  uint64 run_sequence = 4;
+  string object_uri = 5;
+  string object_key = 6;
+  string sha256 = 7;
+  uint64 size_bytes = 8;
+}
+
+message ResultValueV2 {
+  // A bounded, verified JSON value; arbitrary file bodies are not embedded.
+  string value_json = 1;
+  string sha256 = 2;
+  uint64 size_bytes = 3;
+}
+
+message ResultFileDescriptorV2 {
+  RunOutputArtifactRefV2 artifact_ref = 1;
+  string name = 2;
+  string media_type = 3;
+}
+
+message GetRunResultRequestV2 {
+  string run_id = 1;
+}
+
+message RunResultV2 {
+  LifecycleCursorV2 cursor = 1;
+  string run_id = 2;
+  ResultValueV2 value = 3;
+  repeated ResultFileDescriptorV2 files = 4;
+}
+
+message RunOutputArtifactDescriptorV2 {
+  RunOutputArtifactRefV2 artifact_ref = 1;
+  string name = 2;
+  string media_type = 3;
+}
+
+message ListRunOutputArtifactsRequestV2 {
+  string run_id = 1;
+  // Bounded by the server.
+  uint32 page_size = 2;
+  ContinuationRefV2 continuation = 3;
+}
+
+message RunOutputArtifactPageV2 {
+  LifecycleCursorV2 cursor = 1;
+  string run_id = 2;
+  repeated RunOutputArtifactDescriptorV2 artifacts = 3;
+  ContinuationRefV2 next_page = 4;
+}
+
+message ReadRunOutputArtifactRequestV2 {
+  RunOutputArtifactRefV2 artifact_ref = 1;
+}
+
+message RunOutputArtifactChunkV2 {
+  uint64 chunk_index = 1;
+  bytes data = 2;
+  bool eof = 3;
+}
+
+message WatchRunStatusRequestV2 {
+  // Replay begins strictly after this complete cursor.
+  LifecycleCursorV2 after_cursor = 1;
+}
+
+message RunCreatedV2 {
+  RunSummaryV2 summary = 1;
+}
+
+message RunStatusChangedV2 {
+  RunSummaryV2 summary = 1;
+}
+
+// Clients must relist and rebaseline from latest_cursor. A server emits this
+// instead of returning stale or silently partial status history.
+message ResetRequiredV2 {
+  LifecycleCursorV2 history_floor = 1;
+  LifecycleCursorV2 latest_cursor = 2;
+}
+
+// Envelopes are ordered by source_sequence within the complete cursor identity.
+message RunStatusEnvelopeV2 {
+  uint64 source_sequence = 1;
+  oneof payload {
+    RunCreatedV2 run_created = 2;
+    RunStatusChangedV2 run_status_changed = 3;
+    ResetRequiredV2 reset_required = 4;
+  }
+  // Complete position for this exact source sequence; retain it to resume.
+  LifecycleCursorV2 cursor = 5;
 }
