@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 0.1.4
+
 ### Operator transport
 
 - Added `OperatorServiceV2`, an additive native gRPC contract with generated
