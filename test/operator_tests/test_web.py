@@ -138,13 +138,7 @@ def test_browser_listener_cancels_idle_stream_when_browser_disconnects(tmp_path:
             connection.request(
                 "POST",
                 f"{_SERVICE}WatchRunStatus",
-                body=_frame(
-                    pb.WatchRunStatusRequestV2(
-                        after_cursor=pb.LifecycleCursorV2(
-                            source_sequence=operator.current_sequence
-                        )
-                    )
-                ),
+                body=_frame(pb.WatchRunStatusRequestV2()),
                 headers={"Content-Type": _CONTENT_TYPE},
             )
             response = connection.getresponse()

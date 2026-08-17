@@ -612,7 +612,7 @@ def test_detail_pagination_requires_snapshot_issued_page_tokens():
             with pytest.raises(grpc.RpcError) as error:
                 invoke()
             assert error.value.code() is grpc.StatusCode.INVALID_ARGUMENT
-            assert "Invalid" in (error.value.details() or "")
+            assert "Cursor must include" in (error.value.details() or "")
     finally:
         if channel is not None:
             channel.close()
@@ -731,7 +731,9 @@ def test_evicted_structural_baseline_requires_grpc_restart():
 
         scope = pb.ScopeReferenceV2(reference=operator.operator_instance_id)
         baseline = stub.ListRunSummaries(pb.ListRunSummariesRequestV2(page_size=1))
-        wrong_generation = baseline.cursor.stream_generation ^ 1
+        wrong_generation_cursor = pb.LifecycleCursorV2()
+        wrong_generation_cursor.CopyFrom(baseline.cursor)
+        wrong_generation_cursor.stream_generation += 1
 
         with pytest.raises(grpc.RpcError) as snapshot_error:
             stub.ListRunSummaries(
@@ -740,15 +742,15 @@ def test_evicted_structural_baseline_requires_grpc_restart():
                     continuation=pb.ContinuationRefV2(
                         scope_ref=scope,
                         continuation_id=baseline.next_page.continuation_id,
-                        cursor=pb.LifecycleCursorV2(
-                            stream=baseline.cursor.stream,
-                            stream_generation=wrong_generation,
-                            source_sequence=baseline.cursor.source_sequence,
-                        ),
+                        cursor=wrong_generation_cursor,
                     ),
                 )
             )
         assert snapshot_error.value.code() == grpc.StatusCode.FAILED_PRECONDITION
+
+        evicted_cursor = pb.LifecycleCursorV2()
+        evicted_cursor.CopyFrom(baseline.cursor)
+        evicted_cursor.source_sequence = evicted.as_of_sequence
 
         with pytest.raises(grpc.RpcError) as page_error:
             stub.ListRunSummaries(
@@ -757,11 +759,7 @@ def test_evicted_structural_baseline_requires_grpc_restart():
                     continuation=pb.ContinuationRefV2(
                         scope_ref=scope,
                         continuation_id=evicted.next_page_token,
-                        cursor=pb.LifecycleCursorV2(
-                            stream="run-summaries",
-                            stream_generation=baseline.cursor.stream_generation,
-                            source_sequence=evicted.as_of_sequence,
-                        ),
+                        cursor=evicted_cursor,
                     ),
                 )
             )
@@ -1145,11 +1143,22 @@ def test_max_log_and_large_agent_event_use_bounded_live_and_hydration_transport(
         live.on_run_update(observed.append)
         details = []
         live.on_detail_update(details.append)
+
+        def recover_stream(notice) -> None:
+            baseline = live.load_reset_baseline(notice)
+            live.acknowledge_stream_reset(
+                baseline.generation,
+                baseline.operator_instance_id,
+                baseline.as_of_sequence,
+            )
+
+        live.on_stream_reset(recover_stream)
         live.start_stream()
         deadline = time.monotonic() + 5
         while live.stream_state is not StreamState.LIVE:
-            assert time.monotonic() < deadline
+            assert time.monotonic() < deadline, live.stream_error
             time.sleep(0.01)
+        assert live.get_run(run.run_id) is not None
 
         large_log = "L" * 65_536
         large_event_payload = "E" * (5 * 1024 * 1024 + 29)
@@ -1201,7 +1210,7 @@ def test_max_log_and_large_agent_event_use_bounded_live_and_hydration_transport(
             if matching and live_logs and live_events and has_log_detail and has_agent_detail:
                 latest = matching[-1]
                 break
-            assert time.monotonic() < deadline
+            assert time.monotonic() < deadline, live.stream_error
             time.sleep(0.01)
         assert latest.logs == []
         assert latest.nodes["agent_1"].agent_trace_json is None
@@ -1267,8 +1276,62 @@ def test_max_log_and_large_agent_event_use_bounded_live_and_hydration_transport(
         def _cursor_for(sequence: int) -> pb.LifecycleCursorV2:
             return pb.LifecycleCursorV2(
                 stream="operator-events",
+                topology_fingerprint="operator-events-topology",
                 stream_generation=1,
+                retained_floor=1,
                 source_sequence=sequence,
+            )
+
+        def _activity_continuation_for(
+            run_id: str,
+            node_id: str,
+            token: str,
+        ) -> pb.ContinuationRefV2:
+            return pb.ContinuationRefV2(
+                scope_ref=scope_ref,
+                continuation_id=token,
+                cursor=pb.LifecycleCursorV2(
+                    stream=f"activity:{run_id}:{node_id or 'logs'}",
+                    topology_fingerprint="activity-topology",
+                    stream_generation=1,
+                    retained_floor=1,
+                    source_sequence=1,
+                ),
+            )
+
+        def _body_detail_ref_for(
+            run_id: str,
+            activity_id: str,
+            body_token: str,
+            run_sequence: int,
+            size_bytes: int,
+        ) -> pb.ActivityDetailRefV2:
+            return pb.ActivityDetailRefV2(
+                run_id=run_id,
+                scope_ref=scope_ref,
+                activity_id=activity_id,
+                run_sequence=run_sequence,
+                object_uri=f"local://detail/{body_token}",
+                object_key=body_token,
+                sha256="0" * 64,
+                size_bytes=size_bytes,
+            )
+
+        def _trace_detail_ref_for(
+            run_id: str,
+            node_id: str,
+            trace,
+            run_sequence: int,
+        ) -> pb.ActivityDetailRefV2:
+            return pb.ActivityDetailRefV2(
+                run_id=run_id,
+                scope_ref=scope_ref,
+                activity_id=f"trace:{node_id}:{trace.revision}",
+                run_sequence=run_sequence,
+                object_uri=f"local://trace/{run_id}/{node_id}/{trace.revision}",
+                object_key=f"{run_id}/{node_id}/{trace.revision}",
+                sha256="0" * 64,
+                size_bytes=trace.size_bytes,
             )
 
         for update in operator._stream_history:
@@ -1279,6 +1342,16 @@ def test_max_log_and_large_agent_event_use_bounded_live_and_hydration_transport(
                 ),
                 scope_ref=scope_ref,
                 cursor_for=_cursor_for,
+                flow_cursor_for=lambda sequence, topology: pb.LifecycleCursorV2(
+                    stream="flows",
+                    topology_fingerprint=topology,
+                    stream_generation=1,
+                    retained_floor=1,
+                    source_sequence=sequence,
+                ),
+                activity_continuation_for=_activity_continuation_for,
+                body_detail_ref_for=_body_detail_ref_for,
+                trace_detail_ref_for=_trace_detail_ref_for,
             )
             assert envelope_message.ByteSize() < 4 * 1024 * 1024
 
@@ -1545,13 +1618,8 @@ def test_read_trace_rejects_reused_identity_from_previous_operator_epoch():
             )
         assert error.value.code() == grpc.StatusCode.FAILED_PRECONDITION
 
-        detail_ref = pb.ActivityDetailRefV2(
-            run_id="run-reused",
-            scope_ref=pb.ScopeReferenceV2(reference=second.operator_instance_id),
-            activity_id=f"trace:agent_1:{revision}",
-            object_uri=f"local://trace/run-reused/agent_1/{revision}",
-            object_key=f"run-reused/agent_1/{revision}",
-        )
+        snapshot = stub.GetRunSnapshot(pb.GetRunSnapshotRequestV2(run_id="run-reused"))
+        detail_ref = snapshot.nodes[0].trace.detail_ref
         chunks = list(
             stub.ReadActivityDetail(
                 pb.ReadActivityDetailRequestV2(detail_ref=detail_ref)

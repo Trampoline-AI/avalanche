@@ -404,6 +404,22 @@ class Operator:
         with self._lock:
             return self._sequence
 
+    def update_history_bounds(self) -> tuple[int, int]:
+        """Return the retained lifecycle update interval for V2 cursor validation."""
+        with self._lock:
+            return self._history_bounds_locked()
+
+    def retained_structural_floor(self) -> int:
+        """Return the oldest structural baseline that can still be continued."""
+        with self._lock:
+            self._materialize_structural_baseline_locked()
+            return next(iter(self._structural_baselines), self._sequence)
+
+    def has_retained_structural_baseline(self, as_of_sequence: int) -> bool:
+        """Whether one V2 structural continuation still has its exact baseline."""
+        with self._lock:
+            return as_of_sequence in self._structural_baselines
+
     def get_catalog(self) -> CatalogSnapshot:
         """Return one complete, revisioned current-workflow catalog."""
         with self._lock:

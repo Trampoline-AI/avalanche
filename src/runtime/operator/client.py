@@ -259,6 +259,7 @@ class GrpcStateProvider:
         self._reset_acknowledged.set()
         self._closed = False
         self._cursor = _StreamCursor()
+        self._event_cursor: pb.LifecycleCursorV2 | None = None
         self._runs_by_id: dict[str, RunState] = {}
         self._run_revisions: dict[str, int] = {}
         self._log_sequences: dict[str, int] = {}
@@ -269,6 +270,9 @@ class GrpcStateProvider:
         self._trace_revisions: dict[tuple[str, str], int] = {}
         self._hydrated_agent_nodes: set[tuple[str, str]] = set()
         self._hydrated_trace_revisions: dict[tuple[str, str], int] = {}
+        self._activity_continuations: dict[tuple[str, str, str], pb.ContinuationRefV2] = {}
+        self._detail_refs_by_key: dict[str, pb.ActivityDetailRefV2] = {}
+        self._trace_detail_refs: dict[tuple[str, str, int], pb.ActivityDetailRefV2] = {}
         self._agent_events: dict[tuple[str, str], list[Any]] = {}
         self._trace_bodies: dict[tuple[str, str], dict[str, Any]] = {}
         self._detail_cache_usage: OrderedDict[_DetailCacheKey, tuple[int, int]] = OrderedDict()
@@ -276,6 +280,7 @@ class GrpcStateProvider:
         self._retained_detail_bytes = 0
         self._reset_generation: int = 0
         self._pending_reset: StreamResetNotice | None = None
+        self._pending_event_cursor: pb.LifecycleCursorV2 | None = None
         self._validated_reset_baseline: ResetBaseline | None = None
         self._catalog = CatalogSnapshot()
 
@@ -425,6 +430,7 @@ class GrpcStateProvider:
             self._stub.GetRunSnapshot,
             pb.GetRunSnapshotRequestV2(run_id=run_id),
         )
+        self._remember_snapshot_bindings(response)
         snapshot = run_snapshot_from_v2(response)
         if operator_instance_id and snapshot.operator_instance_id != operator_instance_id:
             raise OperatorCallError(
@@ -485,6 +491,11 @@ class GrpcStateProvider:
                 pb.GetRunResultRequestV2(run_id=run_id),
                 **kwargs,
             )
+            value_bytes = response.value.value_json.encode("utf-8")
+            if len(value_bytes) != response.value.size_bytes:
+                raise ValueError("result value does not match its advertised size")
+            if hashlib.sha256(value_bytes).hexdigest() != response.value.sha256:
+                raise ValueError("result value does not match its advertised digest")
             files = tuple(
                 ResultFileAttachment(
                     attachment_id=item.artifact_ref.artifact_id,
@@ -548,6 +559,7 @@ class GrpcStateProvider:
             self._stub.GetRunSnapshot,
             pb.GetRunSnapshotRequestV2(run_id=run_id),
         )
+        self._remember_snapshot_bindings(response)
         snapshot = run_snapshot_from_v2(response)
         if operator_instance_id and snapshot.operator_instance_id != operator_instance_id:
             raise OperatorCallError(
@@ -725,8 +737,10 @@ class GrpcStateProvider:
     ) -> tuple[list[SequencedLogEntry], int]:
         logs = []
         cursor = after_sequence
-        continuation: pb.ContinuationRefV2 | None = _v2_continuation(
-            operator_instance_id, page_token
+        continuation: pb.ContinuationRefV2 | None = self._activity_continuation_for(
+            page_token,
+            run_id=run_id,
+            node_id="",
         )
         while True:
             request = pb.ListRunActivityRequestV2(
@@ -740,9 +754,13 @@ class GrpcStateProvider:
                 response,
                 operator_instance_id=operator_instance_id,
                 expected_as_of=expected_as_of,
+                expected_stream=f"activity:{run_id}:logs",
             )
+            if response.run_id != run_id:
+                raise _DetailHydrationRaceError("log page identity changed")
             page_had_items = False
             for item in response.activities:
+                self._remember_detail_reference(item.detail_ref)
                 descriptor = log_record_descriptor_from_v2(item)
                 if descriptor.sequence <= cursor:
                     page_had_items = True
@@ -773,7 +791,16 @@ class GrpcStateProvider:
                 return logs, cursor
             if not page_had_items:
                 raise _DetailHydrationRaceError("log pagination made no progress")
-            continuation = response.next_page
+            self._remember_activity_continuation(
+                response.next_page,
+                run_id=run_id,
+                node_id="",
+            )
+            continuation = self._activity_continuation_for(
+                response.next_page.continuation_id,
+                run_id=run_id,
+                node_id="",
+            )
 
     def _read_agent_event_pages(
         self,
@@ -788,8 +815,10 @@ class GrpcStateProvider:
     ) -> tuple[list[AgentEvent], int]:
         events = []
         cursor = after_event_sequence
-        continuation: pb.ContinuationRefV2 | None = _v2_continuation(
-            operator_instance_id, page_token
+        continuation: pb.ContinuationRefV2 | None = self._activity_continuation_for(
+            page_token,
+            run_id=run_id,
+            node_id=node_id,
         )
         while True:
             request = pb.ListRunActivityRequestV2(
@@ -804,11 +833,13 @@ class GrpcStateProvider:
                 response,
                 operator_instance_id=operator_instance_id,
                 expected_as_of=expected_as_of,
+                expected_stream=f"activity:{run_id}:{node_id}",
             )
             if response.run_id != run_id:
                 raise _DetailHydrationRaceError("agent page identity changed")
             page_had_items = False
             for item in response.activities:
+                self._remember_detail_reference(item.detail_ref)
                 descriptor = agent_event_descriptor_from_v2(item)
                 if descriptor.event_sequence <= cursor:
                     page_had_items = True
@@ -839,13 +870,239 @@ class GrpcStateProvider:
                 return events, cursor
             if not page_had_items:
                 raise _DetailHydrationRaceError("agent pagination made no progress")
-            continuation = response.next_page
+            self._remember_activity_continuation(
+                response.next_page,
+                run_id=run_id,
+                node_id=node_id,
+            )
+            continuation = self._activity_continuation_for(
+                response.next_page.continuation_id,
+                run_id=run_id,
+                node_id=node_id,
+            )
 
     def _validate_detail_body_size(self, size_bytes: int) -> None:
         if size_bytes < 0 or size_bytes > self._max_detail_body_bytes:
             raise _DetailHydrationRaceError(
                 "detail body exceeds the configured hydration byte limit"
             )
+
+    @staticmethod
+    def _copy_continuation(
+        continuation: pb.ContinuationRefV2,
+    ) -> pb.ContinuationRefV2:
+        copied = pb.ContinuationRefV2()
+        copied.CopyFrom(continuation)
+        return copied
+
+    @staticmethod
+    def _copy_detail_reference(
+        reference: pb.ActivityDetailRefV2,
+    ) -> pb.ActivityDetailRefV2:
+        copied = pb.ActivityDetailRefV2()
+        copied.CopyFrom(reference)
+        return copied
+
+    @staticmethod
+    def _copy_lifecycle_cursor(cursor: pb.LifecycleCursorV2) -> pb.LifecycleCursorV2:
+        copied = pb.LifecycleCursorV2()
+        copied.CopyFrom(cursor)
+        return copied
+
+    @staticmethod
+    def _has_complete_lifecycle_cursor(cursor: pb.LifecycleCursorV2) -> bool:
+        return bool(
+            cursor.stream
+            and cursor.topology_fingerprint
+            and cursor.stream_generation
+            and cursor.retained_floor
+        )
+
+    def _remember_activity_continuation(
+        self,
+        continuation: pb.ContinuationRefV2,
+        *,
+        run_id: str,
+        node_id: str,
+    ) -> None:
+        if not continuation.continuation_id:
+            return
+        expected_stream = f"activity:{run_id}:{node_id or 'logs'}"
+        if (
+            continuation.scope_ref.reference == ""
+            or continuation.cursor.stream != expected_stream
+            or not self._has_complete_lifecycle_cursor(continuation.cursor)
+        ):
+            raise _DetailHydrationRaceError("activity continuation is not a complete binding")
+        key = (run_id, node_id, continuation.continuation_id)
+        with self._state_lock:
+            existing = self._activity_continuations.get(key)
+            if existing is not None and (
+                not self._same_continuation(existing, continuation)
+                or existing.cursor.stream != expected_stream
+            ):
+                raise _DetailHydrationRaceError("activity continuation binding was replaced")
+            self._activity_continuations[key] = self._copy_continuation(continuation)
+
+    @staticmethod
+    def _same_continuation(
+        left: pb.ContinuationRefV2,
+        right: pb.ContinuationRefV2,
+    ) -> bool:
+        return (
+            left.scope_ref.reference == right.scope_ref.reference
+            and left.continuation_id == right.continuation_id
+            and left.cursor.stream == right.cursor.stream
+            and left.cursor.topology_fingerprint == right.cursor.topology_fingerprint
+            and left.cursor.stream_generation == right.cursor.stream_generation
+            and left.cursor.retained_floor == right.cursor.retained_floor
+            and left.cursor.source_sequence == right.cursor.source_sequence
+        )
+
+    @staticmethod
+    def _same_detail_reference(
+        left: pb.ActivityDetailRefV2,
+        right: pb.ActivityDetailRefV2,
+    ) -> bool:
+        return (
+            left.run_id == right.run_id
+            and left.scope_ref.reference == right.scope_ref.reference
+            and left.activity_id == right.activity_id
+            and left.run_sequence == right.run_sequence
+            and left.object_uri == right.object_uri
+            and left.object_key == right.object_key
+            and left.sha256 == right.sha256
+            and left.size_bytes == right.size_bytes
+        )
+
+    def _remember_detail_reference(self, reference: pb.ActivityDetailRefV2) -> None:
+        if (
+            not reference.run_id
+            or not reference.scope_ref.reference
+            or not reference.activity_id
+            or not reference.object_uri
+            or not reference.object_key
+            or len(reference.sha256) != 64
+            or reference.size_bytes > self._max_detail_body_bytes
+        ):
+            raise _DetailHydrationRaceError("activity detail reference is incomplete")
+        with self._state_lock:
+            existing = self._detail_refs_by_key.get(reference.object_key)
+            if existing is not None and not self._same_detail_reference(existing, reference):
+                raise _DetailHydrationRaceError(
+                    "activity detail reference binding was replaced"
+                )
+            self._detail_refs_by_key[reference.object_key] = self._copy_detail_reference(
+                reference
+            )
+
+    def _remember_trace_reference(
+        self,
+        reference: pb.ActivityDetailRefV2,
+        *,
+        node_id: str,
+        revision: int,
+    ) -> None:
+        self._remember_detail_reference(reference)
+        if reference.activity_id != f"trace:{node_id}:{revision}":
+            raise _DetailHydrationRaceError(
+                "trace detail reference does not match its descriptor"
+            )
+        with self._state_lock:
+            self._trace_detail_refs[(reference.run_id, node_id, revision)] = (
+                self._copy_detail_reference(reference)
+            )
+
+    def _remember_snapshot_bindings(self, response: pb.RunSnapshotV2) -> None:
+        run_id = response.summary.run_id
+        self._remember_activity_continuation(
+            response.log_continuation,
+            run_id=run_id,
+            node_id="",
+        )
+        for node in response.nodes:
+            self._remember_activity_continuation(
+                node.activity_continuation,
+                run_id=run_id,
+                node_id=node.node_id,
+            )
+            if node.trace is not None and node.trace.available:
+                self._remember_trace_reference(
+                    node.trace.detail_ref,
+                    node_id=node.node_id,
+                    revision=node.trace.revision,
+                )
+
+    def _remember_update_bindings(self, message: pb.RunStatusEnvelopeV2) -> None:
+        if (
+            message.cursor.stream != "operator-events"
+            or message.cursor.source_sequence != message.source_sequence
+            or not self._has_complete_lifecycle_cursor(message.cursor)
+        ):
+            raise _RunUpdateResetError("update cursor is not a complete event binding")
+        payload = message.WhichOneof("payload")
+        if payload == "run_created":
+            created = message.run_created
+            run_id = created.summary.run_id
+            for node in created.nodes:
+                self._remember_activity_continuation(
+                    node.activity_continuation,
+                    run_id=run_id,
+                    node_id=node.node_id,
+                )
+                if node.trace.available:
+                    self._remember_trace_reference(
+                        node.trace.detail_ref,
+                        node_id=node.node_id,
+                        revision=node.trace.revision,
+                    )
+        elif payload == "activity_appended":
+            activity = message.activity_appended.activity
+            if activity.kind in {"log", "agent_event"}:
+                self._remember_detail_reference(activity.detail_ref)
+            elif activity.kind == "trace" and activity.trace.available:
+                self._remember_trace_reference(
+                    activity.trace.detail_ref,
+                    node_id=activity.node_id,
+                    revision=activity.trace.revision,
+                )
+
+    def _activity_continuation_for(
+        self,
+        token: str,
+        *,
+        run_id: str,
+        node_id: str,
+    ) -> pb.ContinuationRefV2:
+        with self._state_lock:
+            continuation = self._activity_continuations.get((run_id, node_id, token))
+        if continuation is None:
+            raise _DetailHydrationRaceError("activity continuation is not server-issued")
+        expected_stream = f"activity:{run_id}:{node_id or 'logs'}"
+        if (
+            continuation.scope_ref.reference == ""
+            or continuation.cursor.stream != expected_stream
+            or not self._has_complete_lifecycle_cursor(continuation.cursor)
+        ):
+            raise _DetailHydrationRaceError("activity continuation does not bind its target")
+        return self._copy_continuation(continuation)
+
+    def _detail_reference_for(
+        self,
+        body_token: str,
+        size_bytes: int,
+        *,
+        scope: str | None,
+    ) -> pb.ActivityDetailRefV2:
+        with self._state_lock:
+            reference = self._detail_refs_by_key.get(body_token)
+        if reference is None:
+            raise _DetailHydrationRaceError("activity detail reference is not server-issued")
+        if reference.size_bytes != size_bytes:
+            raise _DetailHydrationRaceError("activity detail reference size changed")
+        if scope is not None and reference.scope_ref.reference != scope:
+            raise _DetailHydrationRaceError("activity detail reference scope changed")
+        return self._copy_detail_reference(reference)
 
     def _new_detail_budget(self) -> _DetailBudget:
         return _DetailBudget(
@@ -947,6 +1204,9 @@ class GrpcStateProvider:
             self._retained_detail_bytes += usage[1]
 
     def _clear_detail_caches_locked(self) -> None:
+        self._activity_continuations.clear()
+        self._detail_refs_by_key.clear()
+        self._trace_detail_refs.clear()
         self._log_sequences.clear()
         self._hydrated_log_runs.clear()
         self._log_entries.clear()
@@ -960,6 +1220,15 @@ class GrpcStateProvider:
         self._retained_detail_bytes = 0
 
     def _evict_run_detail_caches_locked(self, run_id: str) -> None:
+        for token, continuation in tuple(self._activity_continuations.items()):
+            if continuation.cursor.stream.startswith(f"activity:{run_id}:"):
+                del self._activity_continuations[token]
+        for object_key, reference in tuple(self._detail_refs_by_key.items()):
+            if reference.run_id == run_id:
+                del self._detail_refs_by_key[object_key]
+        for key in tuple(self._trace_detail_refs):
+            if key[0] == run_id:
+                del self._trace_detail_refs[key]
         cache_keys = {key for key in self._detail_cache_usage if key[1] == run_id}
         if run_id in self._log_entries or run_id in self._hydrated_log_runs:
             cache_keys.add(self._log_cache_key(run_id))
@@ -989,16 +1258,10 @@ class GrpcStateProvider:
         self, body_token: str, size_bytes: int, *, scope: str | None = None
     ) -> bytes:
         self._validate_detail_body_size(size_bytes)
-        reference = self.operator_instance_id if scope is None else scope
+        detail_ref = self._detail_reference_for(body_token, size_bytes, scope=scope)
         try:
             chunks = self._stub.ReadActivityDetail(
-                pb.ReadActivityDetailRequestV2(
-                    detail_ref=pb.ActivityDetailRefV2(
-                        scope_ref=pb.ScopeReferenceV2(reference=reference),
-                        object_uri=f"local://detail/{body_token}",
-                        object_key=body_token,
-                    )
-                ),
+                pb.ReadActivityDetailRequestV2(detail_ref=detail_ref),
                 **self._detail_rpc_kwargs(),
             )
             data = bytearray()
@@ -1020,7 +1283,10 @@ class GrpcStateProvider:
         self._record_unary_success()
         if not saw_eof or len(data) != size_bytes:
             raise _DetailHydrationRaceError("detail body does not match its descriptor")
-        return bytes(data)
+        resolved = bytes(data)
+        if hashlib.sha256(resolved).hexdigest() != detail_ref.sha256:
+            raise _DetailHydrationRaceError("detail body digest does not match its descriptor")
+        return resolved
 
     def _detail_rpc_kwargs(self) -> dict[str, Any]:
         kwargs: dict[str, Any] = {"timeout": self._unary_timeout}
@@ -1034,9 +1300,15 @@ class GrpcStateProvider:
         *,
         operator_instance_id: str,
         expected_as_of: int,
+        expected_stream: str,
     ) -> int:
         if response.scope_ref.reference != operator_instance_id:
             raise _DetailHydrationRaceError("operator epoch changed during hydration")
+        if (
+            response.cursor.stream != expected_stream
+            or not GrpcStateProvider._has_complete_lifecycle_cursor(response.cursor)
+        ):
+            raise _DetailHydrationRaceError("detail page cursor is not a complete binding")
         if response.cursor.source_sequence != expected_as_of:
             raise _DetailHydrationRaceError("detail high-water changed during hydration")
         return response.cursor.source_sequence
@@ -1224,17 +1496,27 @@ class GrpcStateProvider:
         budget = self._new_detail_budget()
         budget.reserve_cache_key()
         budget.reserve(1, descriptor.size_bytes)
+        with self._state_lock:
+            stored_detail_ref = self._trace_detail_refs.get(
+                (run_id, node_id, descriptor.revision)
+            )
+            detail_ref = (
+                self._copy_detail_reference(stored_detail_ref)
+                if stored_detail_ref is not None
+                else None
+            )
+        if detail_ref is None:
+            raise _DetailHydrationRaceError("trace detail reference is not server-issued")
+        if (
+            detail_ref.run_id != run_id
+            or detail_ref.scope_ref.reference != run.operator_instance_id
+            or detail_ref.size_bytes != descriptor.size_bytes
+        ):
+            raise _DetailHydrationRaceError("trace detail reference changed during hydration")
         try:
             chunks = self._stub.ReadActivityDetail(
                 pb.ReadActivityDetailRequestV2(
-                    detail_ref=pb.ActivityDetailRefV2(
-                        run_id=run_id,
-                        scope_ref=pb.ScopeReferenceV2(reference=run.operator_instance_id),
-                        activity_id=f"trace:{node_id}:{descriptor.revision}",
-                        object_uri=(f"local://trace/{run_id}/{node_id}/{descriptor.revision}"),
-                        object_key=f"{run_id}/{node_id}/{descriptor.revision}",
-                        size_bytes=descriptor.size_bytes,
-                    )
+                    detail_ref=self._copy_detail_reference(detail_ref)
                 ),
                 **self._detail_rpc_kwargs(),
             )
@@ -1257,6 +1539,8 @@ class GrpcStateProvider:
         self._record_unary_success()
         if not saw_eof or len(data) != descriptor.size_bytes:
             raise _DetailHydrationRaceError("trace body does not match its descriptor")
+        if hashlib.sha256(bytes(data)).hexdigest() != detail_ref.sha256:
+            raise _DetailHydrationRaceError("trace body digest does not match its descriptor")
         try:
             trace = json.loads(data)
         except (TypeError, ValueError) as error:
@@ -1457,6 +1741,7 @@ class GrpcStateProvider:
             self._stub.GetRunSnapshot,
             pb.GetRunSnapshotRequestV2(run_id=summary.run_id),
         )
+        self._remember_snapshot_bindings(message)
         snapshot = run_snapshot_from_v2(message)
         if snapshot.operator_instance_id != marker[0]:
             raise _ResetBaselineMismatchError(
@@ -1593,7 +1878,13 @@ class GrpcStateProvider:
                 reconciled_sequence,
                 runs,
             )
+            if self._pending_event_cursor is not None:
+                with self._state_lock:
+                    self._event_cursor = self._copy_lifecycle_cursor(
+                        self._pending_event_cursor
+                    )
             self._pending_reset = None
+            self._pending_event_cursor = None
             self._validated_reset_baseline = None
             self.stream_state = StreamState.LIVE
             self.stream_retry_count = 0
@@ -1646,14 +1937,16 @@ class GrpcStateProvider:
                         self.stream_state = StreamState.CONNECTING
                     self.stream_retry_count += 1
                 with self._state_lock:
-                    cursor = self._cursor
+                    event_cursor = (
+                        self._copy_lifecycle_cursor(self._event_cursor)
+                        if self._event_cursor is not None
+                        else None
+                    )
+                request = pb.WatchRunStatusRequestV2()
+                if event_cursor is not None:
+                    request.after_cursor.CopyFrom(event_cursor)
                 stream = self._stub.WatchRunStatus(
-                    pb.WatchRunStatusRequestV2(
-                        after_cursor=pb.LifecycleCursorV2(
-                            stream="operator-events",
-                            source_sequence=cursor.sequence,
-                        )
-                    ),
+                    request,
                     metadata=self._metadata,
                 )
                 with self._lifecycle_lock:
@@ -1677,6 +1970,7 @@ class GrpcStateProvider:
                 for message in stream:
                     if self._stream_stop.is_set():
                         break
+                    self._remember_update_bindings(message)
                     envelope = operator_update_envelope_from_v2(message)
                     if not envelope.operator_instance_id:
                         raise RuntimeError(
@@ -1699,17 +1993,22 @@ class GrpcStateProvider:
                         self._require_stream_reset(
                             envelope.operator_instance_id,
                             observed_sequence,
+                            event_cursor=message.cursor,
                         )
                         reconnect = True
                         break
 
                     try:
-                        run, detail = self._apply_update_envelope(envelope)
+                        run, detail = self._apply_update_envelope(
+                            envelope,
+                            event_cursor=message.cursor,
+                        )
                     except _RunUpdateResetError:
                         assert envelope.update is not None
                         self._require_stream_reset(
                             envelope.operator_instance_id,
                             envelope.update.sequence,
+                            event_cursor=message.cursor,
                         )
                         reconnect = True
                         break
@@ -1762,8 +2061,16 @@ class GrpcStateProvider:
         self,
         operator_instance_id: str,
         observed_sequence: int,
+        *,
+        event_cursor: pb.LifecycleCursorV2,
     ) -> None:
         """Block update consumption until the exact replacement baseline is installed."""
+        if (
+            event_cursor.stream != "operator-events"
+            or event_cursor.source_sequence != observed_sequence
+            or not self._has_complete_lifecycle_cursor(event_cursor)
+        ):
+            raise _RunUpdateResetError("reset cursor is not a complete event binding")
         with self._lifecycle_lock:
             self._reset_generation += 1
             notice = StreamResetNotice(
@@ -1773,6 +2080,7 @@ class GrpcStateProvider:
                 operator_instance_id=operator_instance_id,
             )
             self._pending_reset = notice
+            self._pending_event_cursor = self._copy_lifecycle_cursor(event_cursor)
             self._validated_reset_baseline = None
             self.stream_state = StreamState.RESET_REQUIRED
             self._reset_acknowledged.clear()
@@ -1787,7 +2095,10 @@ class GrpcStateProvider:
                 break
 
     def _apply_update_envelope(
-        self, envelope: OperatorUpdateEnvelope
+        self,
+        envelope: OperatorUpdateEnvelope,
+        *,
+        event_cursor: pb.LifecycleCursorV2 | None = None,
     ) -> tuple[RunState | None, DetailUpdate | None]:
         update = envelope.update
         with self._state_lock:
@@ -1829,6 +2140,7 @@ class GrpcStateProvider:
                 envelope,
                 log_detail=log_detail,
                 event_detail=event_detail,
+                event_cursor=event_cursor,
             )
             catalog = (
                 deepcopy(self._catalog)
@@ -1845,12 +2157,19 @@ class GrpcStateProvider:
         *,
         log_detail: LogEntry | None = None,
         event_detail: AgentEvent | None = None,
+        event_cursor: pb.LifecycleCursorV2 | None = None,
     ) -> tuple[RunState | None, DetailUpdate | None]:
         update = envelope.update
         if self._closed:
             return None, None
         if update is None:
             raise _RunUpdateResetError("update payload missing")
+        if event_cursor is not None and (
+            event_cursor.stream != "operator-events"
+            or event_cursor.source_sequence != update.sequence
+            or not self._has_complete_lifecycle_cursor(event_cursor)
+        ):
+            raise _RunUpdateResetError("update cursor is not a complete event binding")
         cursor = self._cursor
         operator_instance_id = cursor.operator_instance_id
         if operator_instance_id:
@@ -2032,6 +2351,8 @@ class GrpcStateProvider:
 
         self.operator_instance_id = operator_instance_id
         self._cursor = _StreamCursor(operator_instance_id, update.sequence)
+        if event_cursor is not None:
+            self._event_cursor = self._copy_lifecycle_cursor(event_cursor)
         return run, detail
 
     def _reload_structural_state(self) -> None:
@@ -2094,6 +2415,7 @@ class GrpcStateProvider:
             }
             self.operator_instance_id = operator_instance_id
             self._cursor = _StreamCursor(operator_instance_id, as_of_sequence)
+            self._event_cursor = None
 
     def _notify_catalog_callbacks(self, catalog: CatalogSnapshot) -> None:
         for callback in self._catalog_callbacks:

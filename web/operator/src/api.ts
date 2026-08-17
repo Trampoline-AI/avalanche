@@ -116,7 +116,7 @@ export class GrpcWebOperatorApi implements OperatorApi {
    */
   private readonly continuations = new Map<string, RegisteredContinuation>();
   private readonly detailRefs = new Map<string, ActivityDetailRefV2>();
-  private readonly cursorsBySequence = new Map<string, LifecycleCursorV2>();
+  private readonly eventCursorsBySequence = new Map<string, LifecycleCursorV2>();
   private scopeReference = "";
 
   constructor(
@@ -346,16 +346,10 @@ export class GrpcWebOperatorApi implements OperatorApi {
   }
 
   async readTextDetail(bodyToken: string, signal?: AbortSignal): Promise<string> {
-    const detailRef = this.detailRefs.get(bodyToken) ?? {
-      runId: "",
-      scopeRef: { reference: this.scopeReference },
-      activityId: "",
-      runSequence: "0",
-      objectUri: `local://detail/${bodyToken}`,
-      objectKey: bodyToken,
-      sha256: "",
-      sizeBytes: "0",
-    };
+    const detailRef = this.detailRefs.get(bodyToken);
+    if (!detailRef) {
+      throw new Error("Activity detail reference is not bound to a server-issued descriptor");
+    }
     const decoder = new TextDecoder();
     const decoded: string[] = [];
     for await (const chunk of this.client.readActivityDetail(
@@ -392,23 +386,17 @@ export class GrpcWebOperatorApi implements OperatorApi {
 
   private rememberCursor(cursor: LifecycleCursorV2 | undefined): string {
     if (!cursor) return "0";
-    this.cursorsBySequence.set(cursor.sourceSequence, cursor);
+    if (!this.isCompleteCursor(cursor)) {
+      throw new Error("Lifecycle cursor is incomplete");
+    }
+    if (cursor.stream === "operator-events") {
+      this.eventCursorsBySequence.set(cursor.sourceSequence, cursor);
+    }
     return cursor.sourceSequence;
   }
 
   private cursorForSequence(sequence: string): LifecycleCursorV2 | undefined {
-    const known = this.cursorsBySequence.get(sequence);
-    if (known) return known;
-    if (!sequence || sequence === "0") return undefined;
-    // Fallback for a sequence whose complete cursor was never observed: the
-    // server fails closed with resetRequired, which drives a re-baseline.
-    return {
-      stream: "",
-      topologyFingerprint: "",
-      streamGeneration: "0",
-      retainedFloor: "0",
-      sourceSequence: sequence,
-    };
+    return this.eventCursorsBySequence.get(sequence);
   }
 
   private registerContinuation(
@@ -417,6 +405,22 @@ export class GrpcWebOperatorApi implements OperatorApi {
     nodeId: string,
   ): string {
     if (!continuation || !continuation.continuationId) return "";
+    if (
+      !continuation.scopeRef?.reference ||
+      !continuation.cursor ||
+      !this.isCompleteCursor(continuation.cursor)
+    ) {
+      throw new Error("Continuation is not a complete server-issued binding");
+    }
+    const existing = this.continuations.get(continuation.continuationId);
+    if (
+      existing &&
+      (!this.sameContinuation(existing.continuation, continuation) ||
+        existing.runId !== runId ||
+        existing.nodeId !== nodeId)
+    ) {
+      throw new Error("Continuation binding was replaced by a different target");
+    }
     this.continuations.set(continuation.continuationId, { continuation, runId, nodeId });
     if (continuation.cursor) this.rememberCursor(continuation.cursor);
     return continuation.continuationId;
@@ -424,8 +428,56 @@ export class GrpcWebOperatorApi implements OperatorApi {
 
   private registerDetailRef(detailRef: ActivityDetailRefV2 | undefined): string {
     if (!detailRef || !detailRef.objectKey) return "";
+    if (
+      !detailRef.runId ||
+      !detailRef.scopeRef?.reference ||
+      !detailRef.activityId ||
+      !detailRef.objectUri ||
+      detailRef.sha256.length !== 64
+    ) {
+      throw new Error("Activity detail reference is not a complete immutable binding");
+    }
+    const existing = this.detailRefs.get(detailRef.objectKey);
+    if (existing && !this.sameDetailRef(existing, detailRef)) {
+      throw new Error("Activity detail reference binding was replaced");
+    }
     this.detailRefs.set(detailRef.objectKey, detailRef);
     return detailRef.objectKey;
+  }
+
+  private isCompleteCursor(cursor: LifecycleCursorV2): boolean {
+    return Boolean(
+      cursor.stream &&
+        cursor.topologyFingerprint &&
+        cursor.streamGeneration !== "0" &&
+        cursor.retainedFloor !== "0",
+    );
+  }
+
+  private sameContinuation(left: ContinuationRefV2, right: ContinuationRefV2): boolean {
+    if (!left.cursor || !right.cursor) return false;
+    return (
+      left.scopeRef?.reference === right.scopeRef?.reference &&
+      left.continuationId === right.continuationId &&
+      left.cursor.stream === right.cursor.stream &&
+      left.cursor.topologyFingerprint === right.cursor.topologyFingerprint &&
+      left.cursor.streamGeneration === right.cursor.streamGeneration &&
+      left.cursor.retainedFloor === right.cursor.retainedFloor &&
+      left.cursor.sourceSequence === right.cursor.sourceSequence
+    );
+  }
+
+  private sameDetailRef(left: ActivityDetailRefV2, right: ActivityDetailRefV2): boolean {
+    return (
+      left.runId === right.runId &&
+      left.scopeRef?.reference === right.scopeRef?.reference &&
+      left.activityId === right.activityId &&
+      left.runSequence === right.runSequence &&
+      left.objectUri === right.objectUri &&
+      left.objectKey === right.objectKey &&
+      left.sha256 === right.sha256 &&
+      left.sizeBytes === right.sizeBytes
+    );
   }
 
   private catalogFromFlowLists(pages: FlowListV2[]): CatalogSnapshotMsg {
@@ -651,7 +703,7 @@ function mapRunSummary(summary: RunSummaryV2): RunSummaryMsg {
     startedAt: summary.startedAt,
     endedAt: summary.endedAt,
     triggeredBy: summary.triggeredBy,
-    workflowId: "",
+    workflowId: summary.workflowSelector,
     workflowDisplayName: summary.workflowDisplayName,
     createdSequence: summary.createdSequence,
     revision: summary.revision,

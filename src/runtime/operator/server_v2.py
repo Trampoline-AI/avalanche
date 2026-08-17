@@ -10,6 +10,9 @@ from __future__ import annotations
 
 import hashlib
 import queue
+import threading
+from collections import OrderedDict
+from dataclasses import dataclass
 from typing import Any
 
 import grpc
@@ -41,11 +44,73 @@ from .operator import (
 from .proto import operator_pb2 as pb
 from .proto import operator_pb2_grpc as pb_grpc
 from .registry import AmbiguousWorkflow, UnknownWorkflow
+from .results import ResultFileAttachment
 from .server import TRACE_CHUNK_BYTES, _ambiguous_detail, _decode_json_object
 
 _FLOWS_STREAM = "flows"
 _RUN_SUMMARIES_STREAM = "run-summaries"
 _EVENTS_STREAM = "operator-events"
+_MAX_ISSUED_BINDINGS = 10_000
+_MAX_ISSUED_CURSORS = 20_000
+_ContinuationRegistryKey = tuple[
+    str,
+    str,
+    tuple[str, str, int, int, int],
+    str,
+    str,
+    str,
+    str,
+]
+
+
+@dataclass(frozen=True)
+class _ActivityDetailBinding:
+    """One local operator-memory body with immutable V2 identity fields."""
+
+    source_kind: str
+    run_id: str
+    activity_id: str
+    run_sequence: int
+    object_uri: str
+    object_key: str
+    size_bytes: int
+    body_token: str = ""
+    node_id: str = ""
+    trace_revision: int = 0
+
+
+@dataclass(frozen=True)
+class _RegisteredActivityDetail:
+    binding: _ActivityDetailBinding
+    reference: pb.ActivityDetailRefV2
+
+
+@dataclass(frozen=True)
+class _ArtifactBinding:
+    """One immutable result attachment owned by the local result store."""
+
+    run_id: str
+    artifact_id: str
+    run_sequence: int
+    object_uri: str
+    object_key: str
+
+
+@dataclass(frozen=True)
+class _RegisteredArtifact:
+    binding: _ArtifactBinding
+    reference: pb.RunOutputArtifactRefV2
+
+
+@dataclass(frozen=True)
+class _ContinuationBinding:
+    """The exact request target authorized by one server-issued continuation."""
+
+    reference: pb.ContinuationRefV2
+    run_id: str = ""
+    node_id: str = ""
+    category: str = ""
+    workflow_selector: str = ""
 
 
 class OperatorV2Servicer(pb_grpc.OperatorServiceV2Servicer):
@@ -53,13 +118,23 @@ class OperatorV2Servicer(pb_grpc.OperatorServiceV2Servicer):
 
     def __init__(self, operator: Operator) -> None:
         self._op = operator
+        self._binding_lock = threading.RLock()
+        self._issued_cursors: OrderedDict[
+            tuple[str, str, int, int, int], pb.LifecycleCursorV2
+        ] = OrderedDict()
+        self._continuations: OrderedDict[_ContinuationRegistryKey, _ContinuationBinding] = (
+            OrderedDict()
+        )
+        self._activity_details: OrderedDict[str, _RegisteredActivityDetail] = OrderedDict()
+        self._artifacts: OrderedDict[str, _RegisteredArtifact] = OrderedDict()
 
     @property
     def _generation(self) -> int:
-        return int.from_bytes(
+        generation = int.from_bytes(
             hashlib.sha256(self._op.operator_instance_id.encode("utf-8")).digest()[:8],
             "big",
         )
+        return generation or 1
 
     # ── Scope / cursor helpers ────────────────────────────
 
@@ -67,53 +142,599 @@ class OperatorV2Servicer(pb_grpc.OperatorServiceV2Servicer):
         return pb.ScopeReferenceV2(reference=self._op.operator_instance_id)
 
     def _cursor(
-        self, stream: str, source_sequence: int, *, topology_fingerprint: str = ""
+        self,
+        stream: str,
+        source_sequence: int,
+        *,
+        topology_fingerprint: str = "",
+        retained_floor: int | None = None,
     ) -> pb.LifecycleCursorV2:
-        return pb.LifecycleCursorV2(
+        """Issue one complete, locally retained V2 lifecycle cursor."""
+        cursor = pb.LifecycleCursorV2(
             stream=stream,
-            topology_fingerprint=topology_fingerprint,
+            topology_fingerprint=(
+                topology_fingerprint or self._stream_topology_fingerprint(stream)
+            ),
             stream_generation=self._generation,
+            retained_floor=(
+                self._retained_floor_for(stream, source_sequence)
+                if retained_floor is None
+                else retained_floor
+            ),
             source_sequence=source_sequence,
         )
+        self._remember_cursor(cursor)
+        return cursor
+
+    def _stream_topology_fingerprint(self, stream: str) -> str:
+        material = f"{self._op.operator_instance_id}:{stream}".encode("utf-8")
+        return hashlib.sha256(material).hexdigest()
+
+    def _retained_floor_for(self, stream: str, source_sequence: int) -> int:
+        if stream == _EVENTS_STREAM:
+            history_floor, _ = self._op.update_history_bounds()
+            return max(1, history_floor)
+        if stream == _RUN_SUMMARIES_STREAM:
+            return max(1, self._op.retained_structural_floor())
+        return max(1, source_sequence)
+
+    @staticmethod
+    def _cursor_identity(
+        cursor: pb.LifecycleCursorV2,
+    ) -> tuple[str, str, int, int, int]:
+        return (
+            cursor.stream,
+            cursor.topology_fingerprint,
+            cursor.stream_generation,
+            cursor.retained_floor,
+            cursor.source_sequence,
+        )
+
+    @staticmethod
+    def _copy_cursor(cursor: pb.LifecycleCursorV2) -> pb.LifecycleCursorV2:
+        copied = pb.LifecycleCursorV2()
+        copied.CopyFrom(cursor)
+        return copied
+
+    @staticmethod
+    def _copy_continuation(continuation: pb.ContinuationRefV2) -> pb.ContinuationRefV2:
+        copied = pb.ContinuationRefV2()
+        copied.CopyFrom(continuation)
+        return copied
+
+    @staticmethod
+    def _copy_activity_reference(
+        reference: pb.ActivityDetailRefV2,
+    ) -> pb.ActivityDetailRefV2:
+        copied = pb.ActivityDetailRefV2()
+        copied.CopyFrom(reference)
+        return copied
+
+    @staticmethod
+    def _copy_artifact_reference(
+        reference: pb.RunOutputArtifactRefV2,
+    ) -> pb.RunOutputArtifactRefV2:
+        copied = pb.RunOutputArtifactRefV2()
+        copied.CopyFrom(reference)
+        return copied
+
+    def _remember_cursor(self, cursor: pb.LifecycleCursorV2) -> None:
+        key = self._cursor_identity(cursor)
+        with self._binding_lock:
+            self._issued_cursors[key] = self._copy_cursor(cursor)
+            self._issued_cursors.move_to_end(key)
+            while len(self._issued_cursors) > _MAX_ISSUED_CURSORS:
+                self._issued_cursors.popitem(last=False)
 
     def _validate_scope(self, scope_ref: pb.ScopeReferenceV2, context) -> None:
         reference = scope_ref.reference
-        if reference and reference != self._op.operator_instance_id:
+        if reference != self._op.operator_instance_id:
             context.abort(
                 grpc.StatusCode.FAILED_PRECONDITION,
                 "Scope reference is stale; rebaseline against the current operator scope",
             )
 
-    def _validate_cursor(self, cursor: pb.LifecycleCursorV2, context) -> None:
-        if cursor.stream_generation not in (0, self._generation):
+    def _cursor_is_complete(self, cursor: pb.LifecycleCursorV2) -> bool:
+        return bool(
+            cursor.stream
+            and cursor.topology_fingerprint
+            and cursor.stream_generation
+            and cursor.retained_floor
+        )
+
+    def _cursor_is_within_retained_window(self, cursor: pb.LifecycleCursorV2) -> bool:
+        if cursor.retained_floor != self._retained_floor_for(
+            cursor.stream,
+            cursor.source_sequence,
+        ):
+            return False
+        if cursor.source_sequence > self._op.current_sequence:
+            return False
+        if cursor.stream == _EVENTS_STREAM:
+            history_floor, _ = self._op.update_history_bounds()
+            return cursor.source_sequence >= history_floor - 1
+        if cursor.stream == _RUN_SUMMARIES_STREAM:
+            return self._op.has_retained_structural_baseline(cursor.source_sequence)
+        if cursor.stream == _FLOWS_STREAM:
+            return cursor.source_sequence == self._op.get_catalog().as_of_sequence
+        return True
+
+    def _cursor_is_issued_for_stream(
+        self,
+        cursor: pb.LifecycleCursorV2,
+        expected_stream: str,
+    ) -> bool:
+        if not self._cursor_is_complete(cursor):
+            return False
+        if cursor.stream != expected_stream or cursor.stream_generation != self._generation:
+            return False
+        with self._binding_lock:
+            issued = self._issued_cursors.get(self._cursor_identity(cursor))
+        return issued is not None and self._cursor_is_within_retained_window(cursor)
+
+    def _validate_cursor(
+        self,
+        cursor: pb.LifecycleCursorV2,
+        context,
+        *,
+        expected_stream: str,
+    ) -> None:
+        if not self._cursor_is_complete(cursor):
+            context.abort(
+                grpc.StatusCode.INVALID_ARGUMENT,
+                "Cursor must include stream, topology, generation, and retained floor",
+            )
+        if cursor.stream != expected_stream:
+            context.abort(
+                grpc.StatusCode.FAILED_PRECONDITION,
+                "Cursor belongs to a different stream; rebaseline required",
+            )
+        if cursor.stream_generation != self._generation:
             context.abort(
                 grpc.StatusCode.FAILED_PRECONDITION,
                 "Cursor belongs to a different stream generation; rebaseline required",
             )
+        with self._binding_lock:
+            issued = self._issued_cursors.get(self._cursor_identity(cursor))
+        if issued is None:
+            context.abort(
+                grpc.StatusCode.FAILED_PRECONDITION,
+                "Cursor was not issued by this operator view; rebaseline required",
+            )
+        if not self._cursor_is_within_retained_window(cursor):
+            context.abort(
+                grpc.StatusCode.FAILED_PRECONDITION,
+                "Cursor is outside the retained replay window; rebaseline required",
+            )
 
-    def _continuation_token(self, continuation: pb.ContinuationRefV2, context) -> str:
+    @staticmethod
+    def _same_continuation(
+        left: pb.ContinuationRefV2,
+        right: pb.ContinuationRefV2,
+    ) -> bool:
+        return (
+            left.scope_ref.reference == right.scope_ref.reference
+            and left.continuation_id == right.continuation_id
+            and OperatorV2Servicer._cursor_identity(left.cursor)
+            == OperatorV2Servicer._cursor_identity(right.cursor)
+        )
+
+    def _continuation_registry_key(
+        self,
+        continuation: pb.ContinuationRefV2,
+        *,
+        run_id: str,
+        node_id: str,
+        category: str,
+        workflow_selector: str,
+    ) -> _ContinuationRegistryKey:
+        return (
+            continuation.scope_ref.reference,
+            continuation.continuation_id,
+            self._cursor_identity(continuation.cursor),
+            run_id,
+            node_id,
+            category,
+            workflow_selector,
+        )
+
+    def _continuation_token(
+        self,
+        continuation: pb.ContinuationRefV2,
+        context,
+        *,
+        stream: str,
+        run_id: str = "",
+        node_id: str = "",
+        category: str = "",
+        workflow_selector: str = "",
+    ) -> str:
         if not continuation.continuation_id:
             return ""
         self._validate_scope(continuation.scope_ref, context)
-        self._validate_cursor(continuation.cursor, context)
+        self._validate_cursor(continuation.cursor, context, expected_stream=stream)
+        key = self._continuation_registry_key(
+            continuation,
+            run_id=run_id,
+            node_id=node_id,
+            category=category,
+            workflow_selector=workflow_selector,
+        )
+        with self._binding_lock:
+            binding = self._continuations.get(key)
+        if binding is None or not self._same_continuation(continuation, binding.reference):
+            context.abort(
+                grpc.StatusCode.FAILED_PRECONDITION,
+                "Continuation was not issued by this operator view; rebaseline required",
+            )
+        if (
+            binding.run_id != run_id
+            or binding.node_id != node_id
+            or binding.category != category
+            or binding.workflow_selector != workflow_selector
+        ):
+            context.abort(
+                grpc.StatusCode.FAILED_PRECONDITION,
+                "Continuation does not bind the requested activity target; rebaseline required",
+            )
         return continuation.continuation_id
 
     def _continuation(
-        self, stream: str, token: str, source_sequence: int
+        self,
+        cursor: pb.LifecycleCursorV2,
+        token: str,
+        *,
+        run_id: str = "",
+        node_id: str = "",
+        category: str = "",
+        workflow_selector: str = "",
     ) -> pb.ContinuationRefV2 | None:
         if not token:
             return None
-        return pb.ContinuationRefV2(
+        continuation = pb.ContinuationRefV2(
             scope_ref=self._scope(),
             continuation_id=token,
-            cursor=self._cursor(stream, source_sequence),
+            cursor=cursor,
+        )
+        binding = _ContinuationBinding(
+            reference=self._copy_continuation(continuation),
+            run_id=run_id,
+            node_id=node_id,
+            category=category,
+            workflow_selector=workflow_selector,
+        )
+        key = self._continuation_registry_key(
+            continuation,
+            run_id=run_id,
+            node_id=node_id,
+            category=category,
+            workflow_selector=workflow_selector,
+        )
+        with self._binding_lock:
+            self._continuations[key] = binding
+            self._continuations.move_to_end(key)
+            while len(self._continuations) > _MAX_ISSUED_BINDINGS:
+                self._continuations.popitem(last=False)
+        return continuation
+
+    @staticmethod
+    def _activity_stream(run_id: str, node_id: str) -> str:
+        return f"activity:{run_id}:{node_id or 'logs'}"
+
+    def _activity_continuation(
+        self,
+        run_id: str,
+        node_id: str,
+        token: str,
+        source_sequence: int,
+    ) -> pb.ContinuationRefV2 | None:
+        stream = self._activity_stream(run_id, node_id)
+        return self._continuation(
+            self._cursor(stream, source_sequence),
+            token,
+            run_id=run_id,
+            node_id=node_id,
+            category="agent-events" if node_id else "logs",
+        )
+
+    @staticmethod
+    def _same_activity_reference(
+        left: pb.ActivityDetailRefV2,
+        right: pb.ActivityDetailRefV2,
+    ) -> bool:
+        return (
+            left.run_id == right.run_id
+            and left.scope_ref.reference == right.scope_ref.reference
+            and left.activity_id == right.activity_id
+            and left.run_sequence == right.run_sequence
+            and left.object_uri == right.object_uri
+            and left.object_key == right.object_key
+            and left.sha256 == right.sha256
+            and left.size_bytes == right.size_bytes
+        )
+
+    @staticmethod
+    def _same_artifact_reference(
+        left: pb.RunOutputArtifactRefV2,
+        right: pb.RunOutputArtifactRefV2,
+    ) -> bool:
+        return (
+            left.run_id == right.run_id
+            and left.scope_ref.reference == right.scope_ref.reference
+            and left.artifact_id == right.artifact_id
+            and left.run_sequence == right.run_sequence
+            and left.object_uri == right.object_uri
+            and left.object_key == right.object_key
+            and left.sha256 == right.sha256
+            and left.size_bytes == right.size_bytes
+        )
+
+    def _read_activity_binding(
+        self,
+        binding: _ActivityDetailBinding,
+        context,
+    ) -> bytes:
+        try:
+            if binding.source_kind == "detail":
+                return self._op.read_detail(binding.body_token)
+            if binding.source_kind == "trace":
+                return self._op.read_trace(
+                    binding.run_id,
+                    binding.node_id,
+                    operator_instance_id=self._op.operator_instance_id,
+                    revision=binding.trace_revision,
+                ).data
+        except StructuralBaselineUnavailableError as exc:
+            context.abort(grpc.StatusCode.FAILED_PRECONDITION, str(exc))
+        except KeyError:
+            context.abort(grpc.StatusCode.NOT_FOUND, "Detail body not found")
+        except ValueError as exc:
+            context.abort(grpc.StatusCode.INVALID_ARGUMENT, str(exc))
+        context.abort(grpc.StatusCode.INVALID_ARGUMENT, "Unknown activity detail binding")
+
+    def _canonical_activity_reference(
+        self,
+        binding: _ActivityDetailBinding,
+        data: bytes,
+    ) -> pb.ActivityDetailRefV2:
+        return pb.ActivityDetailRefV2(
+            run_id=binding.run_id,
+            scope_ref=self._scope(),
+            activity_id=binding.activity_id,
+            run_sequence=binding.run_sequence,
+            object_uri=binding.object_uri,
+            object_key=binding.object_key,
+            sha256=sha256_hex(data),
+            size_bytes=len(data),
+        )
+
+    def _register_activity_binding(
+        self,
+        binding: _ActivityDetailBinding,
+        context,
+    ) -> pb.ActivityDetailRefV2:
+        data = self._read_activity_binding(binding, context)
+        if len(data) != binding.size_bytes:
+            context.abort(
+                grpc.StatusCode.DATA_LOSS,
+                "Activity body size does not match its immutable descriptor",
+            )
+        reference = self._canonical_activity_reference(binding, data)
+        entry = _RegisteredActivityDetail(
+            binding=binding,
+            reference=self._copy_activity_reference(reference),
+        )
+        with self._binding_lock:
+            self._activity_details[reference.object_key] = entry
+            self._activity_details.move_to_end(reference.object_key)
+            while len(self._activity_details) > _MAX_ISSUED_BINDINGS:
+                self._activity_details.popitem(last=False)
+        return reference
+
+    def _body_detail_ref(
+        self,
+        run_id: str,
+        activity_id: str,
+        body_token: str,
+        run_sequence: int,
+        size_bytes: int,
+        context,
+    ) -> pb.ActivityDetailRefV2:
+        binding = _ActivityDetailBinding(
+            source_kind="detail",
+            run_id=run_id,
+            activity_id=activity_id,
+            run_sequence=run_sequence,
+            object_uri=f"{DETAIL_URI_SCHEME}{body_token}",
+            object_key=body_token,
+            size_bytes=size_bytes,
+            body_token=body_token,
+        )
+        return self._register_activity_binding(binding, context)
+
+    def _trace_detail_ref(
+        self,
+        run_id: str,
+        node_id: str,
+        trace_revision: int,
+        run_sequence: int,
+        size_bytes: int,
+        context,
+    ) -> pb.ActivityDetailRefV2:
+        object_key = f"{run_id}/{node_id}/{trace_revision}"
+        binding = _ActivityDetailBinding(
+            source_kind="trace",
+            run_id=run_id,
+            activity_id=f"trace:{node_id}:{trace_revision}",
+            run_sequence=run_sequence,
+            object_uri=f"{TRACE_URI_SCHEME}{object_key}",
+            object_key=object_key,
+            size_bytes=size_bytes,
+            node_id=node_id,
+            trace_revision=trace_revision,
+        )
+        return self._register_activity_binding(binding, context)
+
+    def _read_registered_activity_detail(
+        self,
+        detail_ref: pb.ActivityDetailRefV2,
+        context,
+    ) -> bytes:
+        self._validate_scope(detail_ref.scope_ref, context)
+        with self._binding_lock:
+            entry = self._activity_details.get(detail_ref.object_key)
+        if entry is None:
+            context.abort(
+                grpc.StatusCode.FAILED_PRECONDITION,
+                "Activity detail reference was not issued by this operator view",
+            )
+        data = self._read_activity_binding(entry.binding, context)
+        derived = self._canonical_activity_reference(entry.binding, data)
+        if not self._same_activity_reference(entry.reference, derived):
+            context.abort(
+                grpc.StatusCode.DATA_LOSS,
+                "Activity detail body no longer matches its immutable descriptor",
+            )
+        if not self._same_activity_reference(detail_ref, entry.reference):
+            context.abort(
+                grpc.StatusCode.INVALID_ARGUMENT,
+                "Activity detail reference does not match its immutable binding",
+            )
+        return data
+
+    def _canonical_artifact_reference(
+        self,
+        binding: _ArtifactBinding,
+        data: bytes,
+    ) -> pb.RunOutputArtifactRefV2:
+        return pb.RunOutputArtifactRefV2(
+            run_id=binding.run_id,
+            scope_ref=self._scope(),
+            artifact_id=binding.artifact_id,
+            run_sequence=binding.run_sequence,
+            object_uri=binding.object_uri,
+            object_key=binding.object_key,
+            sha256=sha256_hex(data),
+            size_bytes=len(data),
+        )
+
+    def _register_artifact(
+        self,
+        run_id: str,
+        item: ResultFileAttachment,
+        run_sequence: int,
+    ) -> pb.RunOutputArtifactRefV2:
+        object_key = f"{run_id}/{item.attachment_id}"
+        binding = _ArtifactBinding(
+            run_id=run_id,
+            artifact_id=item.attachment_id,
+            run_sequence=run_sequence,
+            object_uri=f"{RESULT_URI_SCHEME}{run_id}/{item.attachment_id}",
+            object_key=object_key,
+        )
+        reference = self._canonical_artifact_reference(binding, item.content)
+        entry = _RegisteredArtifact(
+            binding=binding,
+            reference=self._copy_artifact_reference(reference),
+        )
+        with self._binding_lock:
+            self._artifacts[reference.object_key] = entry
+            self._artifacts.move_to_end(reference.object_key)
+            while len(self._artifacts) > _MAX_ISSUED_BINDINGS:
+                self._artifacts.popitem(last=False)
+        return reference
+
+    def _artifact_bytes(self, binding: _ArtifactBinding, context) -> bytes:
+        payload = self._result_payload(binding.run_id, context)
+        for item in payload.files:
+            if item.attachment_id == binding.artifact_id:
+                return item.content
+        context.abort(
+            grpc.StatusCode.NOT_FOUND,
+            f"Artifact {binding.artifact_id} not found for run {binding.run_id}",
+        )
+
+    def _read_registered_artifact(
+        self,
+        artifact_ref: pb.RunOutputArtifactRefV2,
+        context,
+    ) -> bytes:
+        self._validate_scope(artifact_ref.scope_ref, context)
+        with self._binding_lock:
+            entry = self._artifacts.get(artifact_ref.object_key)
+        if entry is None:
+            context.abort(
+                grpc.StatusCode.FAILED_PRECONDITION,
+                "Artifact reference was not issued by this operator view",
+            )
+        data = self._artifact_bytes(entry.binding, context)
+        derived = self._canonical_artifact_reference(entry.binding, data)
+        if not self._same_artifact_reference(entry.reference, derived):
+            context.abort(
+                grpc.StatusCode.DATA_LOSS,
+                "Artifact body no longer matches its immutable descriptor",
+            )
+        if not self._same_artifact_reference(artifact_ref, entry.reference):
+            context.abort(
+                grpc.StatusCode.INVALID_ARGUMENT,
+                "Artifact reference does not match its immutable binding",
+            )
+        return data
+
+    def _run_snapshot_message(self, snapshot, context) -> pb.RunSnapshotV2:
+        run_id = snapshot.summary.run_id
+        source_sequence = snapshot.as_of_sequence
+        continuations = {
+            node.node_id: continuation
+            for node in snapshot.nodes
+            if (
+                continuation := self._activity_continuation(
+                    run_id,
+                    node.node_id,
+                    node.event_page_token,
+                    source_sequence,
+                )
+            )
+            is not None
+        }
+        return run_snapshot_to_v2(
+            snapshot,
+            cursor=self._cursor(f"run:{run_id}", source_sequence),
+            scope_ref=self._scope(),
+            trace_detail_ref_for=lambda trace_run_id, node_id, trace, run_sequence: (
+                self._trace_detail_ref(
+                    trace_run_id,
+                    node_id,
+                    trace.revision,
+                    run_sequence,
+                    trace.size_bytes,
+                    context,
+                )
+            ),
+            activity_continuations=continuations,
+            log_continuation=self._activity_continuation(
+                run_id,
+                "",
+                snapshot.log_page_token,
+                source_sequence,
+            ),
         )
 
     # ── Discovery ─────────────────────────────────────────
 
     def DiscoverFlows(self, request, context):  # noqa: N802
         catalog = self._op.get_catalog()
-        token = self._continuation_token(request.continuation, context)
+        cursor = self._cursor(
+            _FLOWS_STREAM,
+            catalog.as_of_sequence,
+            topology_fingerprint=str(catalog.revision),
+        )
+        token = self._continuation_token(
+            request.continuation,
+            context,
+            stream=_FLOWS_STREAM,
+            category="flows",
+        )
         offset = 0
         if token:
             if not token.startswith("flows:"):
@@ -127,17 +748,13 @@ class OperatorV2Servicer(pb_grpc.OperatorServiceV2Servicer):
         page = flows[offset : offset + size]
         next_offset = offset + len(page)
         next_page = (
-            self._continuation(_FLOWS_STREAM, f"flows:{next_offset}", catalog.as_of_sequence)
+            self._continuation(cursor, f"flows:{next_offset}", category="flows")
             if next_offset < len(flows)
             else None
         )
         return flow_list_to_v2(
             catalog,
-            cursor=self._cursor(
-                _FLOWS_STREAM,
-                catalog.as_of_sequence,
-                topology_fingerprint=str(catalog.revision),
-            ),
+            cursor=cursor,
             flows=[workflow_info_to_v2(info) for info in page],
             next_page=next_page,
             scope_ref=self._scope(),
@@ -176,13 +793,21 @@ class OperatorV2Servicer(pb_grpc.OperatorServiceV2Servicer):
             context.abort(grpc.StatusCode.FAILED_PRECONDITION, str(exc))
 
     def CancelRun(self, request, context):  # noqa: N802
+        if not request.run_id:
+            context.abort(grpc.StatusCode.INVALID_ARGUMENT, "run_id is required")
         self._op.cancel_run(request.run_id)
         return pb.CancelRunResponseV2(run_id=request.run_id)
 
     # ── Run projections ───────────────────────────────────
 
     def ListRunSummaries(self, request, context):  # noqa: N802
-        token = self._continuation_token(request.continuation, context)
+        token = self._continuation_token(
+            request.continuation,
+            context,
+            stream=_RUN_SUMMARIES_STREAM,
+            category="run-summaries",
+            workflow_selector=request.workflow_selector,
+        )
         try:
             page = self._op.list_run_summaries(
                 request.workflow_selector,
@@ -195,13 +820,17 @@ class OperatorV2Servicer(pb_grpc.OperatorServiceV2Servicer):
             context.abort(grpc.StatusCode.INVALID_ARGUMENT, _ambiguous_detail(exc))
         except ValueError as exc:
             context.abort(grpc.StatusCode.INVALID_ARGUMENT, str(exc))
+        cursor = self._cursor(_RUN_SUMMARIES_STREAM, page.as_of_sequence)
         message = pb.RunSummaryPageV2(
-            cursor=self._cursor(_RUN_SUMMARIES_STREAM, page.as_of_sequence),
+            cursor=cursor,
             runs=[run_summary_to_v2(item) for item in page.runs],
             scope_ref=self._scope(),
         )
         next_page = self._continuation(
-            _RUN_SUMMARIES_STREAM, page.next_page_token, page.as_of_sequence
+            cursor,
+            page.next_page_token,
+            category="run-summaries",
+            workflow_selector=request.workflow_selector,
         )
         if next_page is not None:
             message.next_page.CopyFrom(next_page)
@@ -217,18 +846,22 @@ class OperatorV2Servicer(pb_grpc.OperatorServiceV2Servicer):
             context.abort(grpc.StatusCode.FAILED_PRECONDITION, str(exc))
         if snapshot is None:
             context.abort(grpc.StatusCode.NOT_FOUND, f"Run {request.run_id} not found")
-        return run_snapshot_to_v2(
-            snapshot,
-            cursor=self._cursor(f"run:{request.run_id}", snapshot.as_of_sequence),
-            scope_ref=self._scope(),
-        )
+        return self._run_snapshot_message(snapshot, context)
 
     # ── Activity ──────────────────────────────────────────
 
     def ListRunActivity(self, request, context):  # noqa: N802
-        token = self._continuation_token(request.continuation, context)
         order = int(request.order)
-        stream = f"activity:{request.run_id}:{request.node_id or 'logs'}"
+        stream = self._activity_stream(request.run_id, request.node_id)
+        category = "agent-events" if request.node_id else "logs"
+        token = self._continuation_token(
+            request.continuation,
+            context,
+            stream=stream,
+            run_id=request.run_id,
+            node_id=request.node_id,
+            category=category,
+        )
         try:
             if request.node_id:
                 page = self._op.list_agent_events(
@@ -238,12 +871,24 @@ class OperatorV2Servicer(pb_grpc.OperatorServiceV2Servicer):
                     page_size=request.page_size,
                     order=order,
                 )
+                if page.run_id != request.run_id or page.node_id != request.node_id:
+                    context.abort(
+                        grpc.StatusCode.FAILED_PRECONDITION,
+                        "Activity continuation resolved to a different run or node",
+                    )
                 activities = [
                     agent_event_activity_to_v2(
                         item,
                         run_id=page.run_id,
                         node_id=page.node_id,
-                        scope_ref=self._scope(),
+                        detail_ref=self._body_detail_ref(
+                            page.run_id,
+                            f"agent:{page.node_id}:{item.event_sequence}",
+                            item.body_token,
+                            item.event_sequence,
+                            item.size_bytes,
+                            context,
+                        ),
                     )
                     for item in page.events
                 ]
@@ -255,7 +900,18 @@ class OperatorV2Servicer(pb_grpc.OperatorServiceV2Servicer):
                     order=order,
                 )
                 activities = [
-                    log_activity_to_v2(item, run_id=request.run_id, scope_ref=self._scope())
+                    log_activity_to_v2(
+                        item,
+                        run_id=request.run_id,
+                        detail_ref=self._body_detail_ref(
+                            request.run_id,
+                            f"log:{item.sequence}",
+                            item.body_token,
+                            item.sequence,
+                            item.size_bytes,
+                            context,
+                        ),
+                    )
                     for item in page.logs
                 ]
         except StructuralBaselineUnavailableError as exc:
@@ -264,65 +920,26 @@ class OperatorV2Servicer(pb_grpc.OperatorServiceV2Servicer):
             context.abort(grpc.StatusCode.NOT_FOUND, "Activity target not found")
         except ValueError as exc:
             context.abort(grpc.StatusCode.INVALID_ARGUMENT, str(exc))
+        cursor = self._cursor(stream, page.as_of_sequence)
         message = pb.RunActivityPageV2(
-            cursor=self._cursor(stream, page.as_of_sequence),
-            run_id=request.run_id,
+            cursor=cursor,
+            run_id=page.run_id if request.node_id else request.run_id,
             activities=activities,
             scope_ref=self._scope(),
         )
-        next_page = self._continuation(stream, page.next_page_token, page.as_of_sequence)
+        next_page = self._continuation(
+            cursor,
+            page.next_page_token,
+            run_id=request.run_id,
+            node_id=request.node_id,
+            category=category,
+        )
         if next_page is not None:
             message.next_page.CopyFrom(next_page)
         return message
 
     def ReadActivityDetail(self, request, context):  # noqa: N802
-        detail_ref = request.detail_ref
-        self._validate_scope(detail_ref.scope_ref, context)
-        uri = detail_ref.object_uri
-        if uri.startswith(DETAIL_URI_SCHEME):
-            body_token = uri[len(DETAIL_URI_SCHEME) :]
-            if body_token != detail_ref.object_key:
-                context.abort(
-                    grpc.StatusCode.INVALID_ARGUMENT,
-                    "Detail reference object key does not match its URI",
-                )
-            try:
-                data = self._op.read_detail(body_token)
-            except StructuralBaselineUnavailableError as exc:
-                context.abort(grpc.StatusCode.FAILED_PRECONDITION, str(exc))
-            except KeyError:
-                context.abort(grpc.StatusCode.NOT_FOUND, "Detail body not found")
-            except ValueError as exc:
-                context.abort(grpc.StatusCode.INVALID_ARGUMENT, str(exc))
-        elif uri.startswith(TRACE_URI_SCHEME):
-            parts = uri[len(TRACE_URI_SCHEME) :].split("/")
-            if len(parts) != 3 or parts[2] != detail_ref.object_key.split("/")[-1]:
-                context.abort(
-                    grpc.StatusCode.INVALID_ARGUMENT, "Trace reference does not match its URI"
-                )
-            run_id, node_id, revision_text = parts
-            if run_id != detail_ref.run_id:
-                context.abort(
-                    grpc.StatusCode.INVALID_ARGUMENT,
-                    "Trace reference run does not match its URI",
-                )
-            try:
-                trace = self._op.read_trace(
-                    run_id,
-                    node_id,
-                    operator_instance_id=self._op.operator_instance_id,
-                    revision=int(revision_text),
-                )
-            except StructuralBaselineUnavailableError as exc:
-                context.abort(grpc.StatusCode.FAILED_PRECONDITION, str(exc))
-            except KeyError:
-                context.abort(grpc.StatusCode.NOT_FOUND, "Trace body not found")
-            data = trace.data
-        else:
-            context.abort(
-                grpc.StatusCode.INVALID_ARGUMENT,
-                f"Unsupported activity detail URI scheme: {uri!r}",
-            )
+        data = self._read_registered_activity_detail(request.detail_ref, context)
         yield from _stream_chunks(data, pb.ActivityDetailChunkV2)
 
     # ── Results ───────────────────────────────────────────
@@ -336,18 +953,6 @@ class OperatorV2Servicer(pb_grpc.OperatorServiceV2Servicer):
             context.abort(grpc.StatusCode.FAILED_PRECONDITION, str(exc))
         except (OSError, RuntimeError, TypeError, ValueError) as exc:
             context.abort(grpc.StatusCode.DATA_LOSS, str(exc))
-
-    def _artifact_ref(self, run_id: str, item, run_sequence: int) -> pb.RunOutputArtifactRefV2:
-        return pb.RunOutputArtifactRefV2(
-            run_id=run_id,
-            scope_ref=self._scope(),
-            artifact_id=item.attachment_id,
-            run_sequence=run_sequence,
-            object_uri=f"{RESULT_URI_SCHEME}{run_id}/{item.attachment_id}",
-            object_key=item.attachment_id,
-            sha256=item.sha256,
-            size_bytes=len(item.content),
-        )
 
     def _run_sequence(self, run_id: str) -> int:
         snapshot = self._op.get_latest_run_snapshot(
@@ -382,10 +987,10 @@ class OperatorV2Servicer(pb_grpc.OperatorServiceV2Servicer):
         )
 
     def _result_file_descriptor(
-        self, run_id: str, item, run_sequence: int
+        self, run_id: str, item: ResultFileAttachment, run_sequence: int
     ) -> pb.ResultFileDescriptorV2:
         descriptor = pb.ResultFileDescriptorV2(
-            artifact_ref=self._artifact_ref(run_id, item, run_sequence),
+            artifact_ref=self._register_artifact(run_id, item, run_sequence),
         )
         self._set_file_metadata(descriptor, item)
         return descriptor
@@ -393,7 +998,14 @@ class OperatorV2Servicer(pb_grpc.OperatorServiceV2Servicer):
     def ListRunOutputArtifacts(self, request, context):  # noqa: N802
         payload = self._result_payload(request.run_id, context)
         run_sequence = self._run_sequence(request.run_id)
-        token = self._continuation_token(request.continuation, context)
+        stream = f"artifacts:{request.run_id}"
+        token = self._continuation_token(
+            request.continuation,
+            context,
+            stream=stream,
+            run_id=request.run_id,
+            category="artifacts",
+        )
         offset = 0
         if token:
             if not token.startswith("artifacts:"):
@@ -409,9 +1021,9 @@ class OperatorV2Servicer(pb_grpc.OperatorServiceV2Servicer):
         size = _bounded_page_size(request.page_size)
         page = payload.files[offset : offset + size]
         next_offset = offset + len(page)
-        stream = f"artifacts:{request.run_id}"
+        cursor = self._cursor(stream, run_sequence)
         message = pb.RunOutputArtifactPageV2(
-            cursor=self._cursor(stream, run_sequence),
+            cursor=cursor,
             run_id=request.run_id,
             scope_ref=self._scope(),
             artifacts=[
@@ -421,66 +1033,63 @@ class OperatorV2Servicer(pb_grpc.OperatorServiceV2Servicer):
         )
         if next_offset < len(payload.files):
             message.next_page.CopyFrom(
-                self._continuation(stream, f"artifacts:{next_offset}", run_sequence)
+                self._continuation(
+                    cursor,
+                    f"artifacts:{next_offset}",
+                    run_id=request.run_id,
+                    category="artifacts",
+                )
             )
         return message
 
     def _artifact_descriptor(
-        self, run_id: str, item, run_sequence: int
+        self, run_id: str, item: ResultFileAttachment, run_sequence: int
     ) -> pb.RunOutputArtifactDescriptorV2:
         descriptor = pb.RunOutputArtifactDescriptorV2(
-            artifact_ref=self._artifact_ref(run_id, item, run_sequence),
+            artifact_ref=self._register_artifact(run_id, item, run_sequence),
         )
         self._set_file_metadata(descriptor, item)
         return descriptor
 
     def ReadRunOutputArtifact(self, request, context):  # noqa: N802
-        artifact_ref = request.artifact_ref
-        self._validate_scope(artifact_ref.scope_ref, context)
-        uri = artifact_ref.object_uri
-        prefix = f"{RESULT_URI_SCHEME}{artifact_ref.run_id}/"
-        if not uri.startswith(prefix) or uri[len(prefix) :] != artifact_ref.artifact_id:
-            context.abort(
-                grpc.StatusCode.INVALID_ARGUMENT, "Artifact reference does not match its URI"
-            )
-        payload = self._result_payload(artifact_ref.run_id, context)
-        for item in payload.files:
-            if item.attachment_id == artifact_ref.artifact_id:
-                data = item.content
-                if sha256_hex(data) != artifact_ref.sha256:
-                    context.abort(grpc.StatusCode.DATA_LOSS, "Artifact content digest mismatch")
-                yield from _stream_chunks(data, pb.RunOutputArtifactChunkV2)
-                return
-        context.abort(
-            grpc.StatusCode.NOT_FOUND,
-            f"Artifact {artifact_ref.artifact_id} not found for run {artifact_ref.run_id}",
-        )
+        data = self._read_registered_artifact(request.artifact_ref, context)
+        yield from _stream_chunks(data, pb.RunOutputArtifactChunkV2)
 
     # ── Watch ─────────────────────────────────────────────
 
+    def _watch_reset_envelope(self) -> pb.RunStatusEnvelopeV2:
+        history_floor, latest_sequence = self._op.update_history_bounds()
+        history_cursor = self._cursor(
+            _EVENTS_STREAM,
+            history_floor,
+            retained_floor=max(1, history_floor),
+        )
+        latest_cursor = self._cursor(
+            _EVENTS_STREAM,
+            latest_sequence,
+            retained_floor=max(1, history_floor),
+        )
+        return pb.RunStatusEnvelopeV2(
+            source_sequence=latest_sequence,
+            reset_required=pb.ResetRequiredV2(
+                history_floor=history_cursor,
+                latest_cursor=latest_cursor,
+            ),
+            cursor=latest_cursor,
+            scope_ref=self._scope(),
+        )
+
     def WatchRunStatus(self, request, context):  # noqa: N802
-        after_cursor = request.after_cursor
-        foreign_generation = (
-            after_cursor.stream_generation
-            and after_cursor.stream_generation != self._generation
-        )
-        if foreign_generation:
-            envelope = pb.RunStatusEnvelopeV2(
-                reset_required=pb.ResetRequiredV2(
-                    history_floor=self._cursor(_EVENTS_STREAM, 0),
-                    latest_cursor=self._cursor(_EVENTS_STREAM, self._op.current_sequence),
-                )
-            )
-            envelope.source_sequence = self._op.current_sequence
-            envelope.cursor.CopyFrom(self._cursor(_EVENTS_STREAM, self._op.current_sequence))
-            envelope.scope_ref.CopyFrom(self._scope())
-            yield envelope
+        if not request.HasField("after_cursor"):
+            if self._op.current_sequence:
+                yield self._watch_reset_envelope()
+                return
+            after_sequence = 0
+        elif not self._cursor_is_issued_for_stream(request.after_cursor, _EVENTS_STREAM):
+            yield self._watch_reset_envelope()
             return
-        after_sequence = (
-            request.after_cursor.source_sequence
-            if request.HasField("after_cursor")
-            else self._op.current_sequence
-        )
+        else:
+            after_sequence = request.after_cursor.source_sequence
         subscription = self._op.subscribe_operator_updates(
             self._op.operator_instance_id, after_sequence
         )
@@ -491,11 +1100,54 @@ class OperatorV2Servicer(pb_grpc.OperatorServiceV2Servicer):
                     envelope = subscription.get(timeout=1.0)
                 except queue.Empty:
                     continue
-                yield update_envelope_to_v2(
+                update_sequence = (
+                    envelope.update.sequence
+                    if envelope.update is not None
+                    else envelope.reset_required.latest_sequence
+                )
+                message = update_envelope_to_v2(
                     envelope,
                     scope_ref=self._scope(),
                     cursor_for=lambda sequence: self._cursor(_EVENTS_STREAM, sequence),
+                    flow_cursor_for=(
+                        lambda sequence, topology: self._cursor(
+                            _FLOWS_STREAM,
+                            sequence,
+                            topology_fingerprint=topology,
+                        )
+                    ),
+                    activity_continuation_for=(
+                        lambda run_id, node_id, token: self._activity_continuation(
+                            run_id,
+                            node_id,
+                            token,
+                            update_sequence,
+                        )
+                    ),
+                    body_detail_ref_for=(
+                        lambda run_id, activity_id, body_token, run_sequence, size_bytes: (
+                            self._body_detail_ref(
+                                run_id,
+                                activity_id,
+                                body_token,
+                                run_sequence,
+                                size_bytes,
+                                context,
+                            )
+                        )
+                    ),
+                    trace_detail_ref_for=(
+                        lambda run_id, node_id, trace, _sequence: self._trace_detail_ref(
+                            run_id,
+                            node_id,
+                            trace.revision,
+                            trace.revision,
+                            trace.size_bytes,
+                            context,
+                        )
+                    ),
                 )
+                yield message
                 if envelope.reset_required is not None:
                     return
         finally:

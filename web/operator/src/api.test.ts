@@ -12,9 +12,11 @@ import {
   RunActivityDescriptorV2,
   RunActivityPageV2,
   RunSnapshotV2,
+  RunStatusEnvelopeV2,
   RunSummaryPageV2,
   RunSummaryV2,
   ScopeReferenceV2,
+  TraceDescriptorV2,
 } from "./generated/operator";
 import type { IOperatorServiceV2Client } from "./generated/operator.client";
 import {
@@ -41,7 +43,9 @@ function scope(reference = "operator-1") {
 function cursor(sourceSequence: string, stream = "run-summaries") {
   return LifecycleCursorV2.create({
     stream,
+    topologyFingerprint: `${stream}-topology`,
     streamGeneration: "1",
+    retainedFloor: "1",
     sourceSequence,
   });
 }
@@ -66,6 +70,8 @@ function detailRef(objectKey: string) {
     runSequence: "1",
     objectUri: `local://detail/${objectKey}`,
     objectKey,
+    sha256: "a".repeat(64),
+    sizeBytes: "0",
   });
 }
 
@@ -78,7 +84,12 @@ function detailStream(parts: Uint8Array[]) {
 describe("GrpcWebOperatorApi", () => {
   it("loads a summary-only baseline without requesting run snapshots", async () => {
     const signal = new AbortController().signal;
-    const summary = RunSummaryMsg.create({ runId: "run-1", revision: "2" });
+    const summary = RunSummaryMsg.create({
+      runId: "run-1",
+      flowName: "flows.py::orders",
+      workflowId: "flows.py::orders",
+      revision: "2",
+    });
     const discoverFlows = vi.fn(() => ({
       response: Promise.resolve(
         FlowListV2.create({ cursor: cursor("8", "flows"), scopeRef: scope() }),
@@ -89,7 +100,13 @@ describe("GrpcWebOperatorApi", () => {
         RunSummaryPageV2.create({
           cursor: cursor("8"),
           scopeRef: scope(),
-          runs: [RunSummaryV2.create({ runId: summary.runId, revision: summary.revision })],
+          runs: [
+            RunSummaryV2.create({
+              runId: summary.runId,
+              workflowSelector: summary.workflowId,
+              revision: summary.revision,
+            }),
+          ],
         }),
       ),
     }));
@@ -115,6 +132,50 @@ describe("GrpcWebOperatorApi", () => {
     expect(discoverFlows).toHaveBeenNthCalledWith(1, { pageSize: 200 }, { abort: signal });
     expect(discoverFlows).toHaveBeenNthCalledWith(2, { pageSize: 200 }, { abort: signal });
     expect(getRunSnapshot).not.toHaveBeenCalled();
+  });
+
+  it("preserves a V2 workflow selector on a live run-created summary", async () => {
+    const envelope = RunStatusEnvelopeV2.create({
+      sourceSequence: "9",
+      cursor: cursor("9", "operator-events"),
+      scopeRef: scope(),
+      payload: {
+        oneofKind: "runCreated",
+        runCreated: {
+          summary: RunSummaryV2.create({
+            runId: "run-live",
+            workflowSelector: "flows.py::orders",
+          }),
+          nodes: [],
+        },
+      },
+    });
+    const watchRunStatus = vi.fn(() => ({
+      responses: (async function* () {
+        yield envelope;
+      })(),
+    }));
+    const api = apiWith({ watchRunStatus });
+
+    const updates = [];
+    for await (const update of api.streamUpdates("operator-1", "0")) {
+      updates.push(update);
+    }
+
+    expect(updates).toMatchObject([
+      {
+        payload: {
+          update: {
+            change: {
+              runCreated: {
+                summary: { workflowId: "flows.py::orders" },
+              },
+            },
+          },
+        },
+      },
+    ]);
+    expect(watchRunStatus).toHaveBeenCalledWith({}, undefined);
   });
 
   it("accepts a stable catalog when non-catalog updates advance the run baseline", async () => {
@@ -326,9 +387,42 @@ describe("GrpcWebOperatorApi", () => {
     expect(updates).toEqual([]);
     expect(getRunSnapshot).toHaveBeenCalledWith({ runId: "run-1" }, { abort: signal });
     expect(watchRunStatus).toHaveBeenCalledWith(
-      { afterCursor: LifecycleCursorV2.create({ sourceSequence: "9" }) },
+      {},
       { abort: signal },
     );
+  });
+
+  it("does not let a flow cursor overwrite an event cursor with the same sequence", async () => {
+    const eventCursor = cursor("7", "operator-events");
+    const watchRunStatus = vi.fn(() => ({
+      responses: (async function* () {
+        yield RunStatusEnvelopeV2.create({
+          sourceSequence: "7",
+          cursor: eventCursor,
+          scopeRef: scope(),
+          payload: {
+            oneofKind: "flowListChanged",
+            flowListChanged: {
+              flowList: FlowListV2.create({
+                cursor: cursor("7", "flows"),
+                scopeRef: scope(),
+              }),
+            },
+          },
+        });
+      })(),
+    }));
+    const api = apiWith({ watchRunStatus });
+
+    for await (const update of api.streamUpdates("operator-1", "0")) {
+      expect(update).toBeDefined();
+    }
+    for await (const update of api.streamUpdates("operator-1", "7")) {
+      expect(update).toBeDefined();
+    }
+
+    expect(watchRunStatus).toHaveBeenNthCalledWith(1, {}, undefined);
+    expect(watchRunStatus).toHaveBeenNthCalledWith(2, { afterCursor: eventCursor }, undefined);
   });
 
   it("decodes UTF-8 across chunks and never JSON-parses plain log text", async () => {
@@ -349,7 +443,37 @@ describe("GrpcWebOperatorApi", () => {
             : detailStream([text.slice(0, 7), text.slice(7)]),
       }),
     );
-    const api = apiWith({ readActivityDetail });
+    const jsonRef = detailRef("json-body");
+    const textRef = detailRef("text-body");
+    const getRunSnapshot = vi.fn(() => ({
+      response: Promise.resolve(
+        RunSnapshotV2.create({
+          cursor: cursor("1", "run:run-1"),
+          scopeRef: scope(),
+          summary: RunSummaryV2.create({ runId: "run-1" }),
+          nodes: [
+            NodeSnapshotV2.create({
+              nodeId: "json",
+              trace: TraceDescriptorV2.create({
+                available: true,
+                revision: "1",
+                detailRef: jsonRef,
+              }),
+            }),
+            NodeSnapshotV2.create({
+              nodeId: "text",
+              trace: TraceDescriptorV2.create({
+                available: true,
+                revision: "1",
+                detailRef: textRef,
+              }),
+            }),
+          ],
+        }),
+      ),
+    }));
+    const api = apiWith({ readActivityDetail, getRunSnapshot });
+    await api.getLatestRunSnapshot("run-1", "operator-1", signal);
 
     await expect(api.readJsonDetail("json-body", signal)).resolves.toEqual({
       message: "A😀B",

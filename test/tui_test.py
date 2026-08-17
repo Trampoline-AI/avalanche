@@ -3022,7 +3022,11 @@ class TestUIStore:
 
         def _cursor(sequence: int) -> pb.LifecycleCursorV2:
             return pb.LifecycleCursorV2(
-                stream="operator-events", stream_generation=1, source_sequence=sequence
+                stream="operator-events",
+                topology_fingerprint="operator-events-topology",
+                stream_generation=1,
+                retained_floor=1,
+                source_sequence=sequence,
             )
 
         class RestartedStub:
@@ -3035,6 +3039,7 @@ class TestUIStore:
                         stream="flows",
                         topology_fingerprint="1",
                         stream_generation=1,
+                        retained_floor=1,
                         source_sequence=99,
                     ),
                     flows=[workflow_info_to_v2(stale_workflow)],
@@ -3067,7 +3072,7 @@ class TestUIStore:
                             ),
                         )
                     )
-                assert request.after_cursor.source_sequence == 3
+                assert request.after_cursor.source_sequence == 2
                 return LiveStream()
 
         def load_baseline(notice: StreamResetNotice) -> ResetBaseline:
@@ -3086,6 +3091,7 @@ class TestUIStore:
         )
         provider._stub = RestartedStub()
         provider._install_structural_baseline("operator-original", 99, {})
+        provider._event_cursor = _cursor(99)
         store = UIStore(provider)
         _apply_async_updates(store)
         store.current_run = stale
@@ -3166,7 +3172,11 @@ class TestUIStore:
 
         def _cursor(sequence: int) -> pb.LifecycleCursorV2:
             return pb.LifecycleCursorV2(
-                stream="operator-events", stream_generation=1, source_sequence=sequence
+                stream="operator-events",
+                topology_fingerprint="operator-events-topology",
+                stream_generation=1,
+                retained_floor=1,
+                source_sequence=sequence,
             )
 
         class RestartService(pb_grpc.OperatorServiceV2Servicer):
@@ -3203,6 +3213,7 @@ class TestUIStore:
                         stream="flows",
                         topology_fingerprint="1",
                         stream_generation=1,
+                        retained_floor=1,
                         source_sequence=self.baseline_sequence,
                     ),
                     flows=[workflow_info_to_v2(workflow)],
@@ -3211,7 +3222,10 @@ class TestUIStore:
 
             def WatchRunStatus(self, request, context):  # noqa: N802
                 context.send_initial_metadata(())
-                if request.after_cursor.source_sequence != self.baseline_sequence:
+                if request.after_cursor.source_sequence not in {
+                    self.stream_sequence,
+                    self.baseline_sequence,
+                }:
                     yield pb.RunStatusEnvelopeV2(
                         source_sequence=self.stream_sequence,
                         cursor=_cursor(self.stream_sequence),
@@ -3263,6 +3277,22 @@ class TestUIStore:
                     ),
                     cursor=_cursor(self.baseline_sequence),
                     scope_ref=pb.ScopeReferenceV2(reference=self.operator_id),
+                    trace_detail_ref_for=lambda run_id, node_id, trace, run_sequence: (
+                        pb.ActivityDetailRefV2(
+                            run_id=run_id,
+                            scope_ref=pb.ScopeReferenceV2(reference=self.operator_id),
+                            activity_id=f"trace:{node_id}:{trace.revision}",
+                            run_sequence=run_sequence,
+                            object_uri=(
+                                f"local://trace/{run_id}/{node_id}/{trace.revision}"
+                            ),
+                            object_key=f"{run_id}/{node_id}/{trace.revision}",
+                            sha256="0" * 64,
+                            size_bytes=trace.size_bytes,
+                        )
+                    ),
+                    activity_continuations={},
+                    log_continuation=None,
                 )
 
         with socket.socket() as sock:

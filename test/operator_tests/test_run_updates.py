@@ -1,4 +1,5 @@
 import dataclasses
+import hashlib
 import json
 import logging
 import threading
@@ -23,6 +24,7 @@ from runtime.operator.models import (
     AgentEventAppended,
     AgentEventDescriptor,
     AgentEventDetailAppended,
+    CatalogReplaced,
     CatalogSnapshot,
     LogAppended,
     LogDetailAppended,
@@ -57,7 +59,60 @@ def _scope(instance: str = "operator-1") -> pb.ScopeReferenceV2:
 
 def _cursor(sequence: int, *, stream: str = "operator-events") -> pb.LifecycleCursorV2:
     return pb.LifecycleCursorV2(
-        stream=stream, stream_generation=1, source_sequence=sequence
+        stream=stream,
+        topology_fingerprint=f"{stream}-topology",
+        stream_generation=1,
+        retained_floor=1,
+        source_sequence=sequence,
+    )
+
+
+def _activity_continuation(
+    run_id: str,
+    node_id: str,
+    token: str,
+) -> pb.ContinuationRefV2:
+    return pb.ContinuationRefV2(
+        scope_ref=_scope(),
+        continuation_id=token,
+        cursor=_cursor(1, stream=f"activity:{run_id}:{node_id or 'logs'}"),
+    )
+
+
+def _body_detail_ref(
+    run_id: str,
+    activity_id: str,
+    body_token: str,
+    run_sequence: int,
+    size_bytes: int,
+) -> pb.ActivityDetailRefV2:
+    return pb.ActivityDetailRefV2(
+        run_id=run_id,
+        scope_ref=_scope(),
+        activity_id=activity_id,
+        run_sequence=run_sequence,
+        object_uri=f"local://detail/{body_token}",
+        object_key=body_token,
+        sha256="0" * 64,
+        size_bytes=size_bytes,
+    )
+
+
+def _trace_detail_ref(
+    run_id: str,
+    node_id: str,
+    trace: TraceDescriptor,
+    run_sequence: int,
+) -> pb.ActivityDetailRefV2:
+    return pb.ActivityDetailRefV2(
+        run_id=run_id,
+        scope_ref=_scope(),
+        activity_id=f"trace:{node_id}:{trace.revision}",
+        run_sequence=run_sequence,
+        object_uri=f"local://trace/{run_id}/{node_id}/{trace.revision}",
+        object_key=f"{run_id}/{node_id}/{trace.revision}",
+        sha256="0" * 64,
+        size_bytes=trace.size_bytes,
     )
 
 
@@ -144,6 +199,13 @@ def test_typed_update_envelopes_roundtrip_all_changes():
                 size_bytes=20,
             ),
         ),
+        CatalogReplaced(
+            CatalogSnapshot(
+                operator_instance_id="operator-1",
+                as_of_sequence=7,
+                revision=11,
+            )
+        ),
         WorkflowReloadStatus(reloading=True),
     ]
 
@@ -152,16 +214,25 @@ def test_typed_update_envelopes_roundtrip_all_changes():
             operator_instance_id="operator-1",
             update=OperatorUpdate(sequence=sequence, change=change),
         )
-        assert (
-            operator_update_envelope_from_v2(
-                update_envelope_to_v2(
-                    envelope,
-                    scope_ref=_scope(),
-                    cursor_for=_cursor,
-                )
-            )
-            == envelope
+        message = update_envelope_to_v2(
+            envelope,
+            scope_ref=_scope(),
+            cursor_for=_cursor,
+            flow_cursor_for=lambda sequence, topology: pb.LifecycleCursorV2(
+                stream="flows",
+                topology_fingerprint=topology,
+                stream_generation=1,
+                retained_floor=1,
+                source_sequence=sequence,
+            ),
+            activity_continuation_for=_activity_continuation,
+            body_detail_ref_for=_body_detail_ref,
+            trace_detail_ref_for=_trace_detail_ref,
         )
+        if isinstance(change, CatalogReplaced):
+            assert message.flow_list_changed.flow_list.cursor.stream == "flows"
+            assert message.flow_list_changed.flow_list.cursor.topology_fingerprint == "11"
+        assert operator_update_envelope_from_v2(message) == envelope
 
 
 def test_operator_replays_typed_updates_in_order():
@@ -1121,10 +1192,10 @@ def test_client_reads_structural_state_from_state_detail_rpcs():
                     )
                 ],
                 latest_log_sequence=2,
-                log_continuation=pb.ContinuationRefV2(
-                    scope_ref=_scope(),
-                    continuation_id="logs-token",
-                    cursor=_cursor(4, stream="run:run-1"),
+                    log_continuation=pb.ContinuationRefV2(
+                        scope_ref=_scope(),
+                        continuation_id="logs-token",
+                        cursor=_cursor(4, stream="activity:run-1:logs"),
                 ),
             )
 
@@ -1146,12 +1217,16 @@ def test_client_reads_structural_state_from_state_detail_rpcs():
                         node_id="node-1",
                         size_bytes=5,
                         detail_ref=pb.ActivityDetailRefV2(
-                            run_id="run-1",
-                            scope_ref=_scope(),
-                            activity_id=f"log:{sequence}",
-                            object_uri=f"local://detail/log-{sequence}",
-                            object_key=f"log-{sequence}",
-                            size_bytes=5,
+                                run_id="run-1",
+                                scope_ref=_scope(),
+                                activity_id=f"log:{sequence}",
+                                run_sequence=sequence,
+                                object_uri=f"local://detail/log-{sequence}",
+                                object_key=f"log-{sequence}",
+                                sha256=hashlib.sha256(
+                                    f"log-{sequence}".encode()
+                                ).hexdigest(),
+                                size_bytes=5,
                         ),
                     )
                     for sequence in (1, 2)
@@ -1417,6 +1492,7 @@ def test_client_resets_baseline_and_resumes_after_operator_restart():
 
     provider._stub = RestartedStub()
     provider._install_structural_baseline("old-operator", 99, {})
+    provider._event_cursor = _cursor(99)
     provider._run_callbacks.append(lambda run: received.append((run.run_id, run.status)))
 
     def reconcile_reset(notice):

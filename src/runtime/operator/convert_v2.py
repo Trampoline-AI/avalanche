@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import hashlib
+from collections.abc import Callable, Mapping
 from datetime import datetime
 
 from .models import (
@@ -162,6 +163,7 @@ def trace_detail_ref_to_v2(
     descriptor: TraceDescriptor,
     run_sequence: int,
     scope_ref: pb.ScopeReferenceV2,
+    sha256: str,
 ) -> pb.ActivityDetailRefV2:
     """Bind one immutable trace body by run, node, and descriptor revision."""
     return pb.ActivityDetailRefV2(
@@ -171,6 +173,7 @@ def trace_detail_ref_to_v2(
         run_sequence=run_sequence,
         object_uri=f"{TRACE_URI_SCHEME}{run_id}/{node_id}/{descriptor.revision}",
         object_key=f"{run_id}/{node_id}/{descriptor.revision}",
+        sha256=sha256,
         size_bytes=descriptor.size_bytes,
     )
 
@@ -178,10 +181,7 @@ def trace_detail_ref_to_v2(
 def trace_descriptor_to_v2(
     descriptor: TraceDescriptor,
     *,
-    run_id: str = "",
-    node_id: str = "",
-    run_sequence: int = 0,
-    scope_ref: pb.ScopeReferenceV2 | None = None,
+    detail_ref: pb.ActivityDetailRefV2 | None = None,
 ) -> pb.TraceDescriptorV2:
     message = pb.TraceDescriptorV2(
         status=descriptor.status,
@@ -194,20 +194,18 @@ def trace_descriptor_to_v2(
     )
     if descriptor.header is not None:
         message.header.CopyFrom(trace_header_to_v2(descriptor.header))
-    if descriptor.available and scope_ref is not None:
-        message.detail_ref.CopyFrom(
-            trace_detail_ref_to_v2(run_id, node_id, descriptor, run_sequence, scope_ref)
-        )
+    if descriptor.available:
+        if detail_ref is None:
+            raise ValueError("available trace descriptor requires a canonical detail reference")
+        message.detail_ref.CopyFrom(detail_ref)
     return message
 
 
 def node_snapshot_to_v2(
     node: NodeSnapshot,
     *,
-    run_id: str = "",
-    run_sequence: int = 0,
-    scope_ref: pb.ScopeReferenceV2 | None = None,
-    cursor: pb.LifecycleCursorV2 | None = None,
+    trace_detail_ref: pb.ActivityDetailRefV2 | None = None,
+    activity_continuation: pb.ContinuationRefV2 | None = None,
 ) -> pb.NodeSnapshotV2:
     message = pb.NodeSnapshotV2(
         node_id=node.node_id,
@@ -223,23 +221,9 @@ def node_snapshot_to_v2(
     if node.error is not None:
         message.error = node.error
     if node.trace is not None:
-        message.trace.CopyFrom(
-            trace_descriptor_to_v2(
-                node.trace,
-                run_id=run_id,
-                node_id=node.node_id,
-                run_sequence=run_sequence,
-                scope_ref=scope_ref,
-            )
-        )
-    if node.event_page_token and scope_ref is not None and cursor is not None:
-        message.activity_continuation.CopyFrom(
-            pb.ContinuationRefV2(
-                scope_ref=scope_ref,
-                continuation_id=node.event_page_token,
-                cursor=cursor,
-            )
-        )
+        message.trace.CopyFrom(trace_descriptor_to_v2(node.trace, detail_ref=trace_detail_ref))
+    if activity_continuation is not None:
+        message.activity_continuation.CopyFrom(activity_continuation)
     return message
 
 
@@ -248,6 +232,11 @@ def run_snapshot_to_v2(
     *,
     cursor: pb.LifecycleCursorV2,
     scope_ref: pb.ScopeReferenceV2,
+    trace_detail_ref_for: Callable[
+        [str, str, TraceDescriptor, int], pb.ActivityDetailRefV2
+    ],
+    activity_continuations: Mapping[str, pb.ContinuationRefV2],
+    log_continuation: pb.ContinuationRefV2 | None,
 ) -> pb.RunSnapshotV2:
     return pb.RunSnapshotV2(
         cursor=cursor,
@@ -256,20 +245,23 @@ def run_snapshot_to_v2(
         nodes=[
             node_snapshot_to_v2(
                 node,
-                run_id=snapshot.summary.run_id,
-                run_sequence=snapshot.summary.created_sequence,
-                scope_ref=scope_ref,
-                cursor=cursor,
+                trace_detail_ref=(
+                    trace_detail_ref_for(
+                        snapshot.summary.run_id,
+                        node.node_id,
+                        node.trace,
+                        node.trace.revision,
+                    )
+                    if node.trace is not None and node.trace.available
+                    else None
+                ),
+                activity_continuation=activity_continuations.get(node.node_id),
             )
             for node in snapshot.nodes
         ],
         topology=workflow_topology_to_v2(snapshot.topology),
         latest_log_sequence=snapshot.latest_log_sequence,
-        log_continuation=pb.ContinuationRefV2(
-            scope_ref=scope_ref,
-            continuation_id=snapshot.log_page_token,
-            cursor=cursor,
-        ),
+        log_continuation=log_continuation,
     )
 
 
@@ -280,6 +272,7 @@ def body_detail_ref_to_v2(
     run_sequence: int,
     size_bytes: int,
     scope_ref: pb.ScopeReferenceV2,
+    sha256: str,
 ) -> pb.ActivityDetailRefV2:
     """Bind one retained detail body by its snapshot-issued token."""
     return pb.ActivityDetailRefV2(
@@ -289,6 +282,7 @@ def body_detail_ref_to_v2(
         run_sequence=run_sequence,
         object_uri=f"{DETAIL_URI_SCHEME}{body_token}",
         object_key=body_token,
+        sha256=sha256,
         size_bytes=size_bytes,
     )
 
@@ -297,7 +291,7 @@ def log_activity_to_v2(
     log: LogRecordDescriptor,
     *,
     run_id: str,
-    scope_ref: pb.ScopeReferenceV2,
+    detail_ref: pb.ActivityDetailRefV2,
 ) -> pb.RunActivityDescriptorV2:
     return pb.RunActivityDescriptorV2(
         activity_id=f"log:{log.sequence}",
@@ -305,14 +299,7 @@ def log_activity_to_v2(
         kind="log",
         timestamp=log.timestamp.timestamp(),
         size_bytes=log.size_bytes,
-        detail_ref=body_detail_ref_to_v2(
-            run_id,
-            f"log:{log.sequence}",
-            log.body_token,
-            log.sequence,
-            log.size_bytes,
-            scope_ref,
-        ),
+        detail_ref=detail_ref,
         node_id=log.node_id,
         level=log.level.value,
     )
@@ -323,7 +310,7 @@ def agent_event_activity_to_v2(
     *,
     run_id: str,
     node_id: str,
-    scope_ref: pb.ScopeReferenceV2,
+    detail_ref: pb.ActivityDetailRefV2,
 ) -> pb.RunActivityDescriptorV2:
     activity_id = f"agent:{node_id}:{event.event_sequence}"
     message = pb.RunActivityDescriptorV2(
@@ -331,14 +318,7 @@ def agent_event_activity_to_v2(
         run_sequence=event.event_sequence,
         kind="agent_event",
         size_bytes=event.size_bytes,
-        detail_ref=body_detail_ref_to_v2(
-            run_id,
-            activity_id,
-            event.body_token,
-            event.event_sequence,
-            event.size_bytes,
-            scope_ref,
-        ),
+        detail_ref=detail_ref,
         node_id=node_id,
         invocation_id=event.invocation_id,
         error=event.error,
@@ -358,27 +338,18 @@ def trace_activity_to_v2(
     *,
     run_id: str,
     node_id: str,
-    run_sequence: int,
-    scope_ref: pb.ScopeReferenceV2,
+    detail_ref: pb.ActivityDetailRefV2 | None,
 ) -> pb.RunActivityDescriptorV2:
     message = pb.RunActivityDescriptorV2(
         activity_id=f"trace:{node_id}:{trace.revision}",
-        run_sequence=run_sequence,
+        run_sequence=detail_ref.run_sequence if detail_ref is not None else 0,
         kind="trace",
         size_bytes=trace.size_bytes,
         node_id=node_id,
-        trace=trace_descriptor_to_v2(
-            trace,
-            run_id=run_id,
-            node_id=node_id,
-            run_sequence=run_sequence,
-            scope_ref=scope_ref,
-        ),
+        trace=trace_descriptor_to_v2(trace, detail_ref=detail_ref),
     )
-    if trace.available:
-        message.detail_ref.CopyFrom(
-            trace_detail_ref_to_v2(run_id, node_id, trace, run_sequence, scope_ref)
-        )
+    if detail_ref is not None:
+        message.detail_ref.CopyFrom(detail_ref)
     return message
 
 
@@ -386,7 +357,11 @@ def update_envelope_to_v2(
     envelope: OperatorUpdateEnvelope,
     *,
     scope_ref: pb.ScopeReferenceV2,
-    cursor_for,
+    cursor_for: Callable[[int], pb.LifecycleCursorV2],
+    flow_cursor_for: Callable[[int, str], pb.LifecycleCursorV2],
+    activity_continuation_for: Callable[[str, str, str], pb.ContinuationRefV2],
+    body_detail_ref_for: Callable[[str, str, str, int, int], pb.ActivityDetailRefV2],
+    trace_detail_ref_for: Callable[[str, str, TraceDescriptor, int], pb.ActivityDetailRefV2],
 ) -> pb.RunStatusEnvelopeV2:
     """Convert one operator update envelope; ``cursor_for`` maps sequence to cursor."""
     message = pb.RunStatusEnvelopeV2()
@@ -410,17 +385,31 @@ def update_envelope_to_v2(
     message.cursor.CopyFrom(cursor_for(update.sequence))
     message.scope_ref.CopyFrom(scope_ref)
     if isinstance(change, RunCreated):
-        created_cursor = cursor_for(update.sequence)
         message.run_created.CopyFrom(
             pb.RunCreatedV2(
                 summary=run_summary_to_v2(change.summary),
                 nodes=[
                     node_snapshot_to_v2(
                         node,
-                        run_id=change.summary.run_id,
-                        run_sequence=change.summary.created_sequence,
-                        scope_ref=scope_ref,
-                        cursor=created_cursor,
+                        trace_detail_ref=(
+                            trace_detail_ref_for(
+                                change.summary.run_id,
+                                node.node_id,
+                                node.trace,
+                                change.summary.created_sequence,
+                            )
+                            if node.trace is not None and node.trace.available
+                            else None
+                        ),
+                        activity_continuation=(
+                            activity_continuation_for(
+                                change.summary.run_id,
+                                node.node_id,
+                                node.event_page_token,
+                            )
+                            if node.event_page_token
+                            else None
+                        ),
                     )
                     for node in change.nodes
                 ],
@@ -455,8 +444,6 @@ def update_envelope_to_v2(
                         revision=change.revision,
                         running_elapsed_seconds=change.running_elapsed_seconds,
                     ),
-                    run_id=change.run_id,
-                    scope_ref=scope_ref,
                 ),
             )
         )
@@ -465,7 +452,15 @@ def update_envelope_to_v2(
             pb.ActivityAppendedV2(
                 run_id=change.run_id,
                 activity=log_activity_to_v2(
-                    change.log, run_id=change.run_id, scope_ref=scope_ref
+                    change.log,
+                    run_id=change.run_id,
+                    detail_ref=body_detail_ref_for(
+                        change.run_id,
+                        f"log:{change.log.sequence}",
+                        change.log.body_token,
+                        change.log.sequence,
+                        change.log.size_bytes,
+                    ),
                 ),
             )
         )
@@ -477,7 +472,13 @@ def update_envelope_to_v2(
                     change.event,
                     run_id=change.run_id,
                     node_id=change.node_id,
-                    scope_ref=scope_ref,
+                    detail_ref=body_detail_ref_for(
+                        change.run_id,
+                        f"agent:{change.node_id}:{change.event.event_sequence}",
+                        change.event.body_token,
+                        change.event.event_sequence,
+                        change.event.size_bytes,
+                    ),
                 ),
             )
         )
@@ -489,14 +490,22 @@ def update_envelope_to_v2(
                     change.trace,
                     run_id=change.run_id,
                     node_id=change.node_id,
-                    run_sequence=update.sequence,
-                    scope_ref=scope_ref,
+                    detail_ref=trace_detail_ref_for(
+                        change.run_id,
+                        change.node_id,
+                        change.trace,
+                        update.sequence,
+                    )
+                    if change.trace.available
+                    else None,
                 ),
             )
         )
     elif isinstance(change, CatalogReplaced):
-        catalog_cursor = cursor_for(update.sequence)
-        catalog_cursor.topology_fingerprint = str(change.catalog.revision)
+        catalog_cursor = flow_cursor_for(
+            change.catalog.as_of_sequence,
+            str(change.catalog.revision),
+        )
         message.flow_list_changed.CopyFrom(
             pb.FlowListChangedV2(
                 flow_list=flow_list_to_v2(

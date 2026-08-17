@@ -1,5 +1,6 @@
 """Tests for gRPC server + client roundtrip."""
 
+import hashlib
 import json
 import os
 import socket
@@ -59,7 +60,45 @@ def _scope(instance: str = "operator-1") -> pb.ScopeReferenceV2:
 
 def _cursor(sequence: int, *, stream: str = "operator-events") -> pb.LifecycleCursorV2:
     return pb.LifecycleCursorV2(
-        stream=stream, stream_generation=1, source_sequence=sequence
+        stream=stream,
+        topology_fingerprint="0" if stream == "flows" else f"{stream}-topology",
+        stream_generation=1,
+        retained_floor=1,
+        source_sequence=sequence,
+    )
+
+
+def _activity_continuation(
+    run_id: str,
+    node_id: str,
+    token: str,
+    *,
+    instance: str,
+) -> pb.ContinuationRefV2:
+    return pb.ContinuationRefV2(
+        scope_ref=_scope(instance),
+        continuation_id=token,
+        cursor=_cursor(1, stream=f"activity:{run_id}:{node_id or 'logs'}"),
+    )
+
+
+def _trace_detail_ref(
+    run_id: str,
+    node_id: str,
+    trace: TraceDescriptor,
+    run_sequence: int,
+    *,
+    instance: str,
+) -> pb.ActivityDetailRefV2:
+    return pb.ActivityDetailRefV2(
+        run_id=run_id,
+        scope_ref=_scope(instance),
+        activity_id=f"trace:{node_id}:{trace.revision}",
+        run_sequence=run_sequence,
+        object_uri=f"local://trace/{run_id}/{node_id}/{trace.revision}",
+        object_key=f"{run_id}/{node_id}/{trace.revision}",
+        sha256="0" * 64,
+        size_bytes=trace.size_bytes,
     )
 
 
@@ -70,6 +109,33 @@ def _snapshot_msg(snapshot: RunSnapshot, *, instance: str = "operator-1") -> pb.
             snapshot.as_of_sequence, stream=f"run:{snapshot.summary.run_id}"
         ),
         scope_ref=_scope(instance),
+        trace_detail_ref_for=lambda run_id, node_id, trace, run_sequence: _trace_detail_ref(
+            run_id,
+            node_id,
+            trace,
+            run_sequence,
+            instance=instance,
+        ),
+        activity_continuations={
+            node.node_id: _activity_continuation(
+                snapshot.summary.run_id,
+                node.node_id,
+                node.event_page_token,
+                instance=instance,
+            )
+            for node in snapshot.nodes
+            if node.event_page_token
+        },
+        log_continuation=(
+            _activity_continuation(
+                snapshot.summary.run_id,
+                "",
+                snapshot.log_page_token,
+                instance=instance,
+            )
+            if snapshot.log_page_token
+            else None
+        ),
     )
 
 
@@ -145,15 +211,7 @@ def test_latest_run_snapshot_client_returns_typed_snapshot_without_mutating_base
 
         def GetRunSnapshot(self, request, **kwargs):  # noqa: N802
             self.request = request
-            return run_snapshot_to_v2(
-                latest,
-                cursor=pb.LifecycleCursorV2(
-                    stream="run:run-selected",
-                    stream_generation=1,
-                    source_sequence=latest.as_of_sequence,
-                ),
-                scope_ref=pb.ScopeReferenceV2(reference="operator-1"),
-            )
+            return _snapshot_msg(latest)
 
     provider = GrpcStateProvider("localhost:1")
     stub = LatestSnapshotStub()
@@ -205,6 +263,32 @@ def test_latest_run_snapshot_client_preserves_operator_epoch_failure():
     assert error.value.status is grpc.StatusCode.FAILED_PRECONDITION
     assert error.value.details == "operator instance changed"
     assert stub.request.run_id == "run-selected"
+
+
+@pytest.mark.parametrize(
+    "value",
+    [
+        pb.ResultValueV2(
+            value_json="{}",
+            sha256=hashlib.sha256(b"{}").hexdigest(),
+            size_bytes=1,
+        ),
+        pb.ResultValueV2(value_json="{}", sha256="0" * 64, size_bytes=2),
+    ],
+)
+def test_get_run_result_rejects_tampered_v2_value_binding(value):
+    class ResultStub:
+        def GetRunResult(self, request, **kwargs):  # noqa: N802
+            assert request.run_id == "run-result"
+            return pb.RunResultV2(run_id="run-result", value=value)
+
+    provider = GrpcStateProvider("localhost:1")
+    provider._stub = ResultStub()
+    try:
+        with pytest.raises(ValueError, match="result value does not match"):
+            provider.get_run_result("run-result")
+    finally:
+        provider.close()
 
 
 def test_grpc_envelope_includes_bounded_worst_case_metadata_headroom():
@@ -716,6 +800,17 @@ def _trace_health_provider(stub) -> GrpcStateProvider:
     provider = GrpcStateProvider("localhost:1")
     provider._stub = stub
     provider._runs_by_id[run.run_id] = run
+    reference = pb.ActivityDetailRefV2(
+        run_id=run.run_id,
+        scope_ref=_scope("operator-1"),
+        activity_id="trace:agent:3",
+        run_sequence=run.created_sequence,
+        object_uri=f"local://trace/{run.run_id}/agent/3",
+        object_key=f"{run.run_id}/agent/3",
+        sha256=hashlib.sha256(trace_data).hexdigest(),
+        size_bytes=len(trace_data),
+    )
+    provider._trace_detail_refs[(run.run_id, "agent", descriptor.revision)] = reference
     provider.get_run = lambda run_id: run if run_id == run.run_id else None
     return provider
 
@@ -797,6 +892,18 @@ def test_trace_cache_evicts_oldest_bodies_across_unique_run_node_keys():
     )
     provider._stub = TraceStub()
     provider._install_structural_baseline("operator-1", 4, runs)
+    for run in runs.values():
+        reference = pb.ActivityDetailRefV2(
+            run_id=run.run_id,
+            scope_ref=_scope("operator-1"),
+            activity_id="trace:agent:4",
+            run_sequence=run.created_sequence,
+            object_uri=f"local://trace/{run.run_id}/agent/4",
+            object_key=f"{run.run_id}/agent/4",
+            sha256=hashlib.sha256(trace_data).hexdigest(),
+            size_bytes=len(trace_data),
+        )
+        provider._trace_detail_refs[(run.run_id, "agent", descriptor.revision)] = reference
     provider.get_run = lambda run_id: runs.get(run_id)
     try:
         for run_id in runs:
@@ -842,6 +949,16 @@ def test_detail_hydration_rejects_advertised_and_streamed_bytes_before_accumulat
     stub = DetailStub()
     provider = GrpcStateProvider("localhost:1", max_detail_body_bytes=4)
     provider._stub = stub
+    provider._detail_refs_by_key["token"] = pb.ActivityDetailRefV2(
+        run_id="run-1",
+        scope_ref=_scope("operator-1"),
+        activity_id="log:3",
+        run_sequence=3,
+        object_uri="local://detail/token",
+        object_key="token",
+        sha256="0" * 64,
+        size_bytes=3,
+    )
     try:
         with pytest.raises(_DetailHydrationRaceError, match="configured hydration"):
             provider._read_detail_body("token", 5)
@@ -853,6 +970,40 @@ def test_detail_hydration_rejects_advertised_and_streamed_bytes_before_accumulat
         assert stub.stream.cancelled is True
     finally:
         provider.close()
+
+
+def test_detail_reads_reuse_the_complete_server_issued_reference():
+    body = b"body"
+    reference = pb.ActivityDetailRefV2(
+        run_id="run-1",
+        scope_ref=_scope("operator-1"),
+        activity_id="log:3",
+        run_sequence=3,
+        object_uri="local://detail/token",
+        object_key="token",
+        sha256=hashlib.sha256(body).hexdigest(),
+        size_bytes=len(body),
+    )
+
+    class DetailStub:
+        def __init__(self):
+            self.reference: pb.ActivityDetailRefV2 | None = None
+
+        def ReadActivityDetail(self, request, **kwargs):  # noqa: N802
+            self.reference = pb.ActivityDetailRefV2()
+            self.reference.CopyFrom(request.detail_ref)
+            return iter([pb.ActivityDetailChunkV2(chunk_index=0, data=body, eof=True)])
+
+    provider = GrpcStateProvider("localhost:1")
+    stub = DetailStub()
+    provider._stub = stub
+    try:
+        provider._remember_detail_reference(reference)
+        assert provider._read_detail_body("token", len(body), scope="operator-1") == body
+    finally:
+        provider.close()
+
+    assert stub.reference == reference
 
 
 @pytest.mark.parametrize(
@@ -918,7 +1069,7 @@ def test_multi_page_detail_hydration_fails_before_unbounded_or_partial_publicati
                     pb.ContinuationRefV2(
                         scope_ref=_scope(),
                         continuation_id="events",
-                        cursor=_cursor(4, stream="run:run-1"),
+                        cursor=_cursor(4, stream="activity:run-1:node-1"),
                     )
                 )
             snapshot = pb.RunSnapshotV2(
@@ -940,7 +1091,7 @@ def test_multi_page_detail_hydration_fails_before_unbounded_or_partial_publicati
                     pb.ContinuationRefV2(
                         scope_ref=_scope(),
                         continuation_id="logs",
-                        cursor=_cursor(4, stream="run:run-1"),
+                        cursor=_cursor(4, stream="activity:run-1:logs"),
                     )
                 )
             return snapshot
@@ -966,8 +1117,10 @@ def test_multi_page_detail_hydration_fails_before_unbounded_or_partial_publicati
                         run_id="run-1",
                         scope_ref=_scope(),
                         activity_id=f"agent:node-1:{sequence}",
+                        run_sequence=sequence,
                         object_uri=f"local://detail/event-{sequence}",
                         object_key=f"event-{sequence}",
+                        sha256=hashlib.sha256(b"x").hexdigest(),
                         size_bytes=1,
                     ),
                 )
@@ -985,8 +1138,10 @@ def test_multi_page_detail_hydration_fails_before_unbounded_or_partial_publicati
                         run_id="run-1",
                         scope_ref=_scope(),
                         activity_id=f"log:{sequence}",
+                        run_sequence=sequence,
                         object_uri=f"local://detail/log-{sequence}",
                         object_key=f"log-{sequence}",
+                        sha256=hashlib.sha256(b"x").hexdigest(),
                         size_bytes=1,
                     ),
                 )
@@ -1003,7 +1158,10 @@ def test_multi_page_detail_hydration_fails_before_unbounded_or_partial_publicati
                         continuation_id=(
                             f"{'events' if request.node_id else 'logs'}-{sequence}"
                         ),
-                        cursor=_cursor(4, stream="activity"),
+                        cursor=_cursor(
+                            4,
+                            stream=f"activity:run-1:{request.node_id or 'logs'}",
+                        ),
                     )
                 )
             return page
@@ -1309,7 +1467,7 @@ def test_post_header_stream_failures_preserve_exponential_reconnect_backoff():
 def test_duplicate_only_streams_do_not_reset_reconnect_backoff_or_cursor():
     provider = GrpcStateProvider("localhost:1")
     delays = []
-    requests = []
+    requests: list[pb.LifecycleCursorV2] = []
 
     class Unavailable(grpc.RpcError):
         def code(self):
@@ -1346,10 +1504,13 @@ def test_duplicate_only_streams_do_not_reset_reconnect_backoff_or_cursor():
 
     class DuplicateStub:
         def WatchRunStatus(self, request, *, metadata):  # noqa: N802
-            requests.append(request.after_cursor.source_sequence)
+            cursor = pb.LifecycleCursorV2()
+            cursor.CopyFrom(request.after_cursor)
+            requests.append(cursor)
             return DuplicateThenUnavailable()
 
     provider._install_structural_baseline("operator-1", 7, {})
+    provider._event_cursor = _cursor(7)
     provider._stream_stop = RecordingStop()
     provider._stub = DuplicateStub()
     try:
@@ -1358,7 +1519,8 @@ def test_duplicate_only_streams_do_not_reset_reconnect_backoff_or_cursor():
         provider.close()
 
     assert delays == [2, 4, 8]
-    assert requests == [7] * 3
+    assert len(requests) == 3
+    assert all(request == _cursor(7) for request in requests)
     assert provider._cursor.sequence == 7
 
 
@@ -1839,7 +2001,7 @@ def test_restart_reset_rejects_stale_generation_and_rebinds_update_epoch():
             if self.calls == 1:
                 assert request.after_cursor.source_sequence == 99
                 return iter((reset_envelope,))
-            assert request.after_cursor.source_sequence == 3
+            assert request.after_cursor.source_sequence == 2
             return RestartedStream()
 
     def on_reset(notice):
@@ -1848,6 +2010,7 @@ def test_restart_reset_rejects_stale_generation_and_rebinds_update_epoch():
 
     provider._stub = RestartedStub()
     provider._install_structural_baseline("operator-original", 99, {})
+    provider._event_cursor = _cursor(99)
     provider.on_stream_reset(on_reset)
     provider._run_callbacks.append(lambda run: received.append(run.run_id))
     try:
@@ -1973,6 +2136,7 @@ def test_update_epoch_change_requires_reset_at_equal_or_higher_sequence(
 
     provider._stub = RestartedStub()
     provider._install_structural_baseline("operator-original", 99, {})
+    provider._event_cursor = _cursor(99)
     provider.on_stream_reset(on_reset)
     try:
         provider._ensure_stream()
@@ -2006,6 +2170,7 @@ def test_client_skips_duplicate_update_sequence_without_epoch_reset():
 
     provider._stub = DuplicateFirstStub()
     provider._install_structural_baseline("operator-1", 99, {})
+    provider._event_cursor = _cursor(99)
     provider._run_callbacks.append(lambda run: received.append(run.run_id))
     try:
         provider._stream_loop()
@@ -2847,10 +3012,10 @@ def test_detail_hydration_preserves_non_not_found_status(status):
                     revision=2,
                 ),
                 latest_log_sequence=1,
-                log_continuation=pb.ContinuationRefV2(
-                    scope_ref=_scope(),
-                    continuation_id="logs-token",
-                    cursor=_cursor(2, stream="run:run-1"),
+                    log_continuation=pb.ContinuationRefV2(
+                        scope_ref=_scope(),
+                        continuation_id="logs-token",
+                        cursor=_cursor(2, stream="activity:run-1:logs"),
                 ),
             )
 
@@ -2906,10 +3071,13 @@ def test_get_run_retries_from_fresh_cursor_after_hydration_restart():
                 ),
                 latest_log_sequence=1 if first_attempt else 0,
                 log_continuation=(
-                    pb.ContinuationRefV2(
-                        scope_ref=_scope(f"operator-{self.summary_calls}"),
-                        continuation_id="logs-token",
-                        cursor=_cursor(self.summary_calls, stream="run"),
+                        pb.ContinuationRefV2(
+                            scope_ref=_scope(f"operator-{self.summary_calls}"),
+                            continuation_id="logs-token",
+                            cursor=_cursor(
+                                self.summary_calls,
+                                stream="activity:run-1:logs",
+                            ),
                     )
                     if first_attempt
                     else pb.ContinuationRefV2()
