@@ -293,6 +293,13 @@ def serve(
             options=_BOUNDED_MESSAGE_OPTIONS,
         )
         pb_grpc.add_OperatorServiceServicer_to_server(OperatorServicer(operator), server)
+        # Imported here to keep the module dependency one-directional:
+        # server_v2 reuses helpers from this module.
+        from .server_v2 import OperatorV2Servicer
+
+        pb_grpc.add_OperatorServiceV2Servicer_to_server(
+            OperatorV2Servicer(operator), server
+        )
         listen_address = _listen_address(host, port)
         if not _is_loopback_host(host):
             logger.warning(

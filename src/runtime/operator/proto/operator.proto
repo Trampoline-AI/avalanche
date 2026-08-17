@@ -451,6 +451,17 @@ message FlowInfoV2 {
   string display_name = 2;
   string manifest_digest = 3;
   repeated string node_ids = 4;
+  string workflow_id = 5;
+  string file_path = 6;
+  WorkflowTopologyV2 topology = 7;
+  repeated string agent_node_ids = 8;
+  map<string, string> agent_metadata_json = 9;
+  string cron = 10;
+  double next_run_at = 11;
+  double last_run_at = 12;
+  string webhook_path = 13;
+  string webhook_url = 14;
+  bool webhook_active = 15;
 }
 
 message DiscoveryDiagnosticV2 {
@@ -464,10 +475,33 @@ message FlowListV2 {
   repeated FlowInfoV2 flows = 2;
   ContinuationRefV2 next_page = 3;
   repeated DiscoveryDiagnosticV2 diagnostics = 4;
+  repeated ScanTargetV2 scan_targets = 5;
+  // The authorization scope this list was materialized for.
+  ScopeReferenceV2 scope_ref = 6;
 }
 
-// Attachment metadata is bounded and verified by the server. Attachment
-// content is not embedded in this start request.
+message NodeEdgesV2 {
+  repeated string children = 1;
+}
+
+message WorkflowTopologyV2 {
+  repeated string node_ids = 1;
+  map<string, NodeEdgesV2> graph = 2;
+  map<string, string> node_types = 3;
+  map<string, string> display_names = 4;
+  map<string, string> agent_field_schemas_json = 5;
+  map<string, string> agent_instruction_lines = 6;
+}
+
+message ScanTargetV2 {
+  string alias = 1;
+  string target_path = 2;
+  string kind = 3;
+}
+
+// Attachment metadata is bounded and verified by the server. Remote
+// deployments stage content under object_uri/object_key; local loopback
+// operators may accept an inline body instead.
 message FileAttachmentV2 {
   string attachment_id = 1;
   string field_name = 2;
@@ -477,6 +511,8 @@ message FileAttachmentV2 {
   string object_key = 6;
   string sha256 = 7;
   uint64 size_bytes = 8;
+  // Loopback-only inline body; mutually exclusive with object_uri/object_key.
+  bytes inline_bytes = 9;
 }
 
 message StartRunRequestV2 {
@@ -512,6 +548,8 @@ message RunSummaryV2 {
   double ended_at = 6;
   uint64 created_sequence = 7;
   uint64 revision = 8;
+  string triggered_by = 9;
+  double triggered_at = 10;
 }
 
 message ListRunSummariesRequestV2 {
@@ -526,6 +564,7 @@ message RunSummaryPageV2 {
   LifecycleCursorV2 cursor = 1;
   repeated RunSummaryV2 runs = 2;
   ContinuationRefV2 next_page = 3;
+  ScopeReferenceV2 scope_ref = 4;
 }
 
 message GetRunSnapshotRequestV2 {
@@ -540,6 +579,35 @@ message NodeSnapshotV2 {
   double started_at = 5;
   double ended_at = 6;
   uint64 revision = 7;
+  optional string error = 8;
+  optional double running_elapsed_seconds = 9;
+  TraceDescriptorV2 trace = 10;
+  // Snapshot-pinned continuation for paging this node's agent-event activities.
+  ContinuationRefV2 activity_continuation = 11;
+}
+
+message TraceHeaderV2 {
+  string status = 1;
+  string model = 2;
+  optional string sub_model = 3;
+  uint64 iterations = 4;
+  uint64 max_iterations = 5;
+  uint64 duration_ms = 6;
+  string usage_json = 7;
+  optional string telemetry_json = 8;
+}
+
+message TraceDescriptorV2 {
+  string status = 1;
+  uint64 revision = 2;
+  bool available = 3;
+  bool complete = 4;
+  uint64 event_count = 5;
+  uint64 size_bytes = 6;
+  uint64 latest_event_sequence = 7;
+  TraceHeaderV2 header = 8;
+  // Server-issued reference for reading this trace body via ReadActivityDetail.
+  ActivityDetailRefV2 detail_ref = 9;
 }
 
 // The cursor proves the exact fresh projection view used for this snapshot.
@@ -547,6 +615,11 @@ message RunSnapshotV2 {
   LifecycleCursorV2 cursor = 1;
   RunSummaryV2 summary = 2;
   repeated NodeSnapshotV2 nodes = 3;
+  WorkflowTopologyV2 topology = 4;
+  ScopeReferenceV2 scope_ref = 5;
+  // High-water log mark and snapshot-pinned continuation for log activities.
+  uint64 latest_log_sequence = 6;
+  ContinuationRefV2 log_continuation = 7;
 }
 
 // The immutable, scope-bound object body for an activity. Servers must
@@ -567,11 +640,27 @@ message ActivityDetailRefV2 {
 message RunActivityDescriptorV2 {
   string activity_id = 1;
   uint64 run_sequence = 2;
+  // Activity kind: "log", "agent_event", or "trace".
   string kind = 3;
   double timestamp = 4;
   uint64 size_bytes = 5;
   // Absent when this structural activity has no immutable body.
   ActivityDetailRefV2 detail_ref = 6;
+  // Populated for kind=log and kind=agent_event; empty for structural kinds.
+  string node_id = 7;
+  // Log level; populated only for kind=log.
+  string level = 8;
+  // Agent invocation metadata; populated only for kind=agent_event.
+  string invocation_id = 9;
+  optional uint32 iteration = 10;
+  optional uint64 duration_ms = 11;
+  bool error = 12;
+  uint32 tool_count = 13;
+  uint32 predict_count = 14;
+  // Agent event kind; populated only for kind=agent_event.
+  string event_kind = 15;
+  // Full trace descriptor; populated only for kind=trace.
+  TraceDescriptorV2 trace = 16;
 }
 
 message ListRunActivityRequestV2 {
@@ -579,6 +668,15 @@ message ListRunActivityRequestV2 {
   // Bounded by the server.
   uint32 page_size = 2;
   ContinuationRefV2 continuation = 3;
+  // Empty lists run-wide log activities; set lists agent-event activities for
+  // exactly one node.
+  string node_id = 4;
+  PageOrderV2 order = 5;
+}
+
+enum PageOrderV2 {
+  PAGE_ORDER_V2_FORWARD = 0;
+  PAGE_ORDER_V2_NEWEST_FIRST = 1;
 }
 
 message RunActivityPageV2 {
@@ -586,6 +684,7 @@ message RunActivityPageV2 {
   string run_id = 2;
   repeated RunActivityDescriptorV2 activities = 3;
   ContinuationRefV2 next_page = 4;
+  ScopeReferenceV2 scope_ref = 5;
 }
 
 // This request carries the complete descriptor, never an activity envelope or
@@ -635,6 +734,7 @@ message RunResultV2 {
   string run_id = 2;
   ResultValueV2 value = 3;
   repeated ResultFileDescriptorV2 files = 4;
+  ScopeReferenceV2 scope_ref = 5;
 }
 
 message RunOutputArtifactDescriptorV2 {
@@ -655,6 +755,7 @@ message RunOutputArtifactPageV2 {
   string run_id = 2;
   repeated RunOutputArtifactDescriptorV2 artifacts = 3;
   ContinuationRefV2 next_page = 4;
+  ScopeReferenceV2 scope_ref = 5;
 }
 
 message ReadRunOutputArtifactRequestV2 {
@@ -674,10 +775,31 @@ message WatchRunStatusRequestV2 {
 
 message RunCreatedV2 {
   RunSummaryV2 summary = 1;
+  repeated NodeSnapshotV2 nodes = 2;
+  WorkflowTopologyV2 topology = 3;
 }
 
 message RunStatusChangedV2 {
   RunSummaryV2 summary = 1;
+}
+
+message NodeStatusChangedV2 {
+  string run_id = 1;
+  NodeSnapshotV2 node = 2;
+}
+
+message ActivityAppendedV2 {
+  string run_id = 1;
+  RunActivityDescriptorV2 activity = 2;
+}
+
+// Emitted when flow discovery reloads; replaces the flow list baseline.
+message FlowListChangedV2 {
+  FlowListV2 flow_list = 1;
+}
+
+message FlowReloadStatusV2 {
+  bool reloading = 1;
 }
 
 // Clients must relist and rebaseline from latest_cursor. A server emits this
@@ -694,7 +816,12 @@ message RunStatusEnvelopeV2 {
     RunCreatedV2 run_created = 2;
     RunStatusChangedV2 run_status_changed = 3;
     ResetRequiredV2 reset_required = 4;
+    NodeStatusChangedV2 node_status_changed = 6;
+    ActivityAppendedV2 activity_appended = 7;
+    FlowListChangedV2 flow_list_changed = 8;
+    FlowReloadStatusV2 flow_reload_status = 9;
   }
   // Complete position for this exact source sequence; retain it to resume.
   LifecycleCursorV2 cursor = 5;
+  ScopeReferenceV2 scope_ref = 10;
 }

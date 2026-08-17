@@ -508,6 +508,11 @@ def test_v2_cursors_and_resets_require_complete_bounded_replay_state():
         "run_status_changed": 3,
         "reset_required": 4,
         "cursor": 5,
+        "node_status_changed": 6,
+        "activity_appended": 7,
+        "flow_list_changed": 8,
+        "flow_reload_status": 9,
+        "scope_ref": 10,
     }
     assert status_fields["cursor"].message_type.name == "LifecycleCursorV2"
     assert status_fields["cursor"].containing_oneof is None
@@ -516,6 +521,10 @@ def test_v2_cursors_and_resets_require_complete_bounded_replay_state():
         "run_created",
         "run_status_changed",
         "reset_required",
+        "node_status_changed",
+        "activity_appended",
+        "flow_list_changed",
+        "flow_reload_status",
     ]
 
     complete_cursor = pb.LifecycleCursorV2(
