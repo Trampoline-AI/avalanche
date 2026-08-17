@@ -586,3 +586,514 @@ class OperatorService(object):
             timeout,
             metadata,
             _registered_method=True)
+
+
+class OperatorServiceV2Stub(object):
+    """V2 is additive: legacy clients remain on OperatorService until they complete
+    their own migration. V2 requests derive their authorization scope from
+    transport metadata and use only V2 request and response messages.
+    """
+
+    def __init__(self, channel):
+        """Constructor.
+
+        Args:
+            channel: A grpc.Channel.
+        """
+        self.DiscoverFlows = channel.unary_unary(
+                '/avalanche.operator.OperatorServiceV2/DiscoverFlows',
+                request_serializer=operator__pb2.DiscoverFlowsRequestV2.SerializeToString,
+                response_deserializer=operator__pb2.FlowListV2.FromString,
+                _registered_method=True)
+        self.StartRun = channel.unary_unary(
+                '/avalanche.operator.OperatorServiceV2/StartRun',
+                request_serializer=operator__pb2.StartRunRequestV2.SerializeToString,
+                response_deserializer=operator__pb2.StartRunResponseV2.FromString,
+                _registered_method=True)
+        self.CancelRun = channel.unary_unary(
+                '/avalanche.operator.OperatorServiceV2/CancelRun',
+                request_serializer=operator__pb2.CancelRunRequestV2.SerializeToString,
+                response_deserializer=operator__pb2.CancelRunResponseV2.FromString,
+                _registered_method=True)
+        self.ListRunSummaries = channel.unary_unary(
+                '/avalanche.operator.OperatorServiceV2/ListRunSummaries',
+                request_serializer=operator__pb2.ListRunSummariesRequestV2.SerializeToString,
+                response_deserializer=operator__pb2.RunSummaryPageV2.FromString,
+                _registered_method=True)
+        self.GetRunSnapshot = channel.unary_unary(
+                '/avalanche.operator.OperatorServiceV2/GetRunSnapshot',
+                request_serializer=operator__pb2.GetRunSnapshotRequestV2.SerializeToString,
+                response_deserializer=operator__pb2.RunSnapshotV2.FromString,
+                _registered_method=True)
+        self.ListRunActivity = channel.unary_unary(
+                '/avalanche.operator.OperatorServiceV2/ListRunActivity',
+                request_serializer=operator__pb2.ListRunActivityRequestV2.SerializeToString,
+                response_deserializer=operator__pb2.RunActivityPageV2.FromString,
+                _registered_method=True)
+        self.ReadActivityDetail = channel.unary_stream(
+                '/avalanche.operator.OperatorServiceV2/ReadActivityDetail',
+                request_serializer=operator__pb2.ReadActivityDetailRequestV2.SerializeToString,
+                response_deserializer=operator__pb2.ActivityDetailChunkV2.FromString,
+                _registered_method=True)
+        self.GetRunResult = channel.unary_unary(
+                '/avalanche.operator.OperatorServiceV2/GetRunResult',
+                request_serializer=operator__pb2.GetRunResultRequestV2.SerializeToString,
+                response_deserializer=operator__pb2.RunResultV2.FromString,
+                _registered_method=True)
+        self.ListRunOutputArtifacts = channel.unary_unary(
+                '/avalanche.operator.OperatorServiceV2/ListRunOutputArtifacts',
+                request_serializer=operator__pb2.ListRunOutputArtifactsRequestV2.SerializeToString,
+                response_deserializer=operator__pb2.RunOutputArtifactPageV2.FromString,
+                _registered_method=True)
+        self.ReadRunOutputArtifact = channel.unary_stream(
+                '/avalanche.operator.OperatorServiceV2/ReadRunOutputArtifact',
+                request_serializer=operator__pb2.ReadRunOutputArtifactRequestV2.SerializeToString,
+                response_deserializer=operator__pb2.RunOutputArtifactChunkV2.FromString,
+                _registered_method=True)
+        self.WatchRunStatus = channel.unary_stream(
+                '/avalanche.operator.OperatorServiceV2/WatchRunStatus',
+                request_serializer=operator__pb2.WatchRunStatusRequestV2.SerializeToString,
+                response_deserializer=operator__pb2.RunStatusEnvelopeV2.FromString,
+                _registered_method=True)
+
+
+class OperatorServiceV2Servicer(object):
+    """V2 is additive: legacy clients remain on OperatorService until they complete
+    their own migration. V2 requests derive their authorization scope from
+    transport metadata and use only V2 request and response messages.
+    """
+
+    def DiscoverFlows(self, request, context):
+        """Missing associated documentation comment in .proto file."""
+        context.set_code(grpc.StatusCode.UNIMPLEMENTED)
+        context.set_details('Method not implemented!')
+        raise NotImplementedError('Method not implemented!')
+
+    def StartRun(self, request, context):
+        """Missing associated documentation comment in .proto file."""
+        context.set_code(grpc.StatusCode.UNIMPLEMENTED)
+        context.set_details('Method not implemented!')
+        raise NotImplementedError('Method not implemented!')
+
+    def CancelRun(self, request, context):
+        """Missing associated documentation comment in .proto file."""
+        context.set_code(grpc.StatusCode.UNIMPLEMENTED)
+        context.set_details('Method not implemented!')
+        raise NotImplementedError('Method not implemented!')
+
+    def ListRunSummaries(self, request, context):
+        """Missing associated documentation comment in .proto file."""
+        context.set_code(grpc.StatusCode.UNIMPLEMENTED)
+        context.set_details('Method not implemented!')
+        raise NotImplementedError('Method not implemented!')
+
+    def GetRunSnapshot(self, request, context):
+        """Missing associated documentation comment in .proto file."""
+        context.set_code(grpc.StatusCode.UNIMPLEMENTED)
+        context.set_details('Method not implemented!')
+        raise NotImplementedError('Method not implemented!')
+
+    def ListRunActivity(self, request, context):
+        """Missing associated documentation comment in .proto file."""
+        context.set_code(grpc.StatusCode.UNIMPLEMENTED)
+        context.set_details('Method not implemented!')
+        raise NotImplementedError('Method not implemented!')
+
+    def ReadActivityDetail(self, request, context):
+        """Missing associated documentation comment in .proto file."""
+        context.set_code(grpc.StatusCode.UNIMPLEMENTED)
+        context.set_details('Method not implemented!')
+        raise NotImplementedError('Method not implemented!')
+
+    def GetRunResult(self, request, context):
+        """Missing associated documentation comment in .proto file."""
+        context.set_code(grpc.StatusCode.UNIMPLEMENTED)
+        context.set_details('Method not implemented!')
+        raise NotImplementedError('Method not implemented!')
+
+    def ListRunOutputArtifacts(self, request, context):
+        """Missing associated documentation comment in .proto file."""
+        context.set_code(grpc.StatusCode.UNIMPLEMENTED)
+        context.set_details('Method not implemented!')
+        raise NotImplementedError('Method not implemented!')
+
+    def ReadRunOutputArtifact(self, request, context):
+        """Missing associated documentation comment in .proto file."""
+        context.set_code(grpc.StatusCode.UNIMPLEMENTED)
+        context.set_details('Method not implemented!')
+        raise NotImplementedError('Method not implemented!')
+
+    def WatchRunStatus(self, request, context):
+        """Missing associated documentation comment in .proto file."""
+        context.set_code(grpc.StatusCode.UNIMPLEMENTED)
+        context.set_details('Method not implemented!')
+        raise NotImplementedError('Method not implemented!')
+
+
+def add_OperatorServiceV2Servicer_to_server(servicer, server):
+    rpc_method_handlers = {
+            'DiscoverFlows': grpc.unary_unary_rpc_method_handler(
+                    servicer.DiscoverFlows,
+                    request_deserializer=operator__pb2.DiscoverFlowsRequestV2.FromString,
+                    response_serializer=operator__pb2.FlowListV2.SerializeToString,
+            ),
+            'StartRun': grpc.unary_unary_rpc_method_handler(
+                    servicer.StartRun,
+                    request_deserializer=operator__pb2.StartRunRequestV2.FromString,
+                    response_serializer=operator__pb2.StartRunResponseV2.SerializeToString,
+            ),
+            'CancelRun': grpc.unary_unary_rpc_method_handler(
+                    servicer.CancelRun,
+                    request_deserializer=operator__pb2.CancelRunRequestV2.FromString,
+                    response_serializer=operator__pb2.CancelRunResponseV2.SerializeToString,
+            ),
+            'ListRunSummaries': grpc.unary_unary_rpc_method_handler(
+                    servicer.ListRunSummaries,
+                    request_deserializer=operator__pb2.ListRunSummariesRequestV2.FromString,
+                    response_serializer=operator__pb2.RunSummaryPageV2.SerializeToString,
+            ),
+            'GetRunSnapshot': grpc.unary_unary_rpc_method_handler(
+                    servicer.GetRunSnapshot,
+                    request_deserializer=operator__pb2.GetRunSnapshotRequestV2.FromString,
+                    response_serializer=operator__pb2.RunSnapshotV2.SerializeToString,
+            ),
+            'ListRunActivity': grpc.unary_unary_rpc_method_handler(
+                    servicer.ListRunActivity,
+                    request_deserializer=operator__pb2.ListRunActivityRequestV2.FromString,
+                    response_serializer=operator__pb2.RunActivityPageV2.SerializeToString,
+            ),
+            'ReadActivityDetail': grpc.unary_stream_rpc_method_handler(
+                    servicer.ReadActivityDetail,
+                    request_deserializer=operator__pb2.ReadActivityDetailRequestV2.FromString,
+                    response_serializer=operator__pb2.ActivityDetailChunkV2.SerializeToString,
+            ),
+            'GetRunResult': grpc.unary_unary_rpc_method_handler(
+                    servicer.GetRunResult,
+                    request_deserializer=operator__pb2.GetRunResultRequestV2.FromString,
+                    response_serializer=operator__pb2.RunResultV2.SerializeToString,
+            ),
+            'ListRunOutputArtifacts': grpc.unary_unary_rpc_method_handler(
+                    servicer.ListRunOutputArtifacts,
+                    request_deserializer=operator__pb2.ListRunOutputArtifactsRequestV2.FromString,
+                    response_serializer=operator__pb2.RunOutputArtifactPageV2.SerializeToString,
+            ),
+            'ReadRunOutputArtifact': grpc.unary_stream_rpc_method_handler(
+                    servicer.ReadRunOutputArtifact,
+                    request_deserializer=operator__pb2.ReadRunOutputArtifactRequestV2.FromString,
+                    response_serializer=operator__pb2.RunOutputArtifactChunkV2.SerializeToString,
+            ),
+            'WatchRunStatus': grpc.unary_stream_rpc_method_handler(
+                    servicer.WatchRunStatus,
+                    request_deserializer=operator__pb2.WatchRunStatusRequestV2.FromString,
+                    response_serializer=operator__pb2.RunStatusEnvelopeV2.SerializeToString,
+            ),
+    }
+    generic_handler = grpc.method_handlers_generic_handler(
+            'avalanche.operator.OperatorServiceV2', rpc_method_handlers)
+    server.add_generic_rpc_handlers((generic_handler,))
+    server.add_registered_method_handlers('avalanche.operator.OperatorServiceV2', rpc_method_handlers)
+
+
+ # This class is part of an EXPERIMENTAL API.
+class OperatorServiceV2(object):
+    """V2 is additive: legacy clients remain on OperatorService until they complete
+    their own migration. V2 requests derive their authorization scope from
+    transport metadata and use only V2 request and response messages.
+    """
+
+    @staticmethod
+    def DiscoverFlows(request,
+            target,
+            options=(),
+            channel_credentials=None,
+            call_credentials=None,
+            insecure=False,
+            compression=None,
+            wait_for_ready=None,
+            timeout=None,
+            metadata=None):
+        return grpc.experimental.unary_unary(
+            request,
+            target,
+            '/avalanche.operator.OperatorServiceV2/DiscoverFlows',
+            operator__pb2.DiscoverFlowsRequestV2.SerializeToString,
+            operator__pb2.FlowListV2.FromString,
+            options,
+            channel_credentials,
+            insecure,
+            call_credentials,
+            compression,
+            wait_for_ready,
+            timeout,
+            metadata,
+            _registered_method=True)
+
+    @staticmethod
+    def StartRun(request,
+            target,
+            options=(),
+            channel_credentials=None,
+            call_credentials=None,
+            insecure=False,
+            compression=None,
+            wait_for_ready=None,
+            timeout=None,
+            metadata=None):
+        return grpc.experimental.unary_unary(
+            request,
+            target,
+            '/avalanche.operator.OperatorServiceV2/StartRun',
+            operator__pb2.StartRunRequestV2.SerializeToString,
+            operator__pb2.StartRunResponseV2.FromString,
+            options,
+            channel_credentials,
+            insecure,
+            call_credentials,
+            compression,
+            wait_for_ready,
+            timeout,
+            metadata,
+            _registered_method=True)
+
+    @staticmethod
+    def CancelRun(request,
+            target,
+            options=(),
+            channel_credentials=None,
+            call_credentials=None,
+            insecure=False,
+            compression=None,
+            wait_for_ready=None,
+            timeout=None,
+            metadata=None):
+        return grpc.experimental.unary_unary(
+            request,
+            target,
+            '/avalanche.operator.OperatorServiceV2/CancelRun',
+            operator__pb2.CancelRunRequestV2.SerializeToString,
+            operator__pb2.CancelRunResponseV2.FromString,
+            options,
+            channel_credentials,
+            insecure,
+            call_credentials,
+            compression,
+            wait_for_ready,
+            timeout,
+            metadata,
+            _registered_method=True)
+
+    @staticmethod
+    def ListRunSummaries(request,
+            target,
+            options=(),
+            channel_credentials=None,
+            call_credentials=None,
+            insecure=False,
+            compression=None,
+            wait_for_ready=None,
+            timeout=None,
+            metadata=None):
+        return grpc.experimental.unary_unary(
+            request,
+            target,
+            '/avalanche.operator.OperatorServiceV2/ListRunSummaries',
+            operator__pb2.ListRunSummariesRequestV2.SerializeToString,
+            operator__pb2.RunSummaryPageV2.FromString,
+            options,
+            channel_credentials,
+            insecure,
+            call_credentials,
+            compression,
+            wait_for_ready,
+            timeout,
+            metadata,
+            _registered_method=True)
+
+    @staticmethod
+    def GetRunSnapshot(request,
+            target,
+            options=(),
+            channel_credentials=None,
+            call_credentials=None,
+            insecure=False,
+            compression=None,
+            wait_for_ready=None,
+            timeout=None,
+            metadata=None):
+        return grpc.experimental.unary_unary(
+            request,
+            target,
+            '/avalanche.operator.OperatorServiceV2/GetRunSnapshot',
+            operator__pb2.GetRunSnapshotRequestV2.SerializeToString,
+            operator__pb2.RunSnapshotV2.FromString,
+            options,
+            channel_credentials,
+            insecure,
+            call_credentials,
+            compression,
+            wait_for_ready,
+            timeout,
+            metadata,
+            _registered_method=True)
+
+    @staticmethod
+    def ListRunActivity(request,
+            target,
+            options=(),
+            channel_credentials=None,
+            call_credentials=None,
+            insecure=False,
+            compression=None,
+            wait_for_ready=None,
+            timeout=None,
+            metadata=None):
+        return grpc.experimental.unary_unary(
+            request,
+            target,
+            '/avalanche.operator.OperatorServiceV2/ListRunActivity',
+            operator__pb2.ListRunActivityRequestV2.SerializeToString,
+            operator__pb2.RunActivityPageV2.FromString,
+            options,
+            channel_credentials,
+            insecure,
+            call_credentials,
+            compression,
+            wait_for_ready,
+            timeout,
+            metadata,
+            _registered_method=True)
+
+    @staticmethod
+    def ReadActivityDetail(request,
+            target,
+            options=(),
+            channel_credentials=None,
+            call_credentials=None,
+            insecure=False,
+            compression=None,
+            wait_for_ready=None,
+            timeout=None,
+            metadata=None):
+        return grpc.experimental.unary_stream(
+            request,
+            target,
+            '/avalanche.operator.OperatorServiceV2/ReadActivityDetail',
+            operator__pb2.ReadActivityDetailRequestV2.SerializeToString,
+            operator__pb2.ActivityDetailChunkV2.FromString,
+            options,
+            channel_credentials,
+            insecure,
+            call_credentials,
+            compression,
+            wait_for_ready,
+            timeout,
+            metadata,
+            _registered_method=True)
+
+    @staticmethod
+    def GetRunResult(request,
+            target,
+            options=(),
+            channel_credentials=None,
+            call_credentials=None,
+            insecure=False,
+            compression=None,
+            wait_for_ready=None,
+            timeout=None,
+            metadata=None):
+        return grpc.experimental.unary_unary(
+            request,
+            target,
+            '/avalanche.operator.OperatorServiceV2/GetRunResult',
+            operator__pb2.GetRunResultRequestV2.SerializeToString,
+            operator__pb2.RunResultV2.FromString,
+            options,
+            channel_credentials,
+            insecure,
+            call_credentials,
+            compression,
+            wait_for_ready,
+            timeout,
+            metadata,
+            _registered_method=True)
+
+    @staticmethod
+    def ListRunOutputArtifacts(request,
+            target,
+            options=(),
+            channel_credentials=None,
+            call_credentials=None,
+            insecure=False,
+            compression=None,
+            wait_for_ready=None,
+            timeout=None,
+            metadata=None):
+        return grpc.experimental.unary_unary(
+            request,
+            target,
+            '/avalanche.operator.OperatorServiceV2/ListRunOutputArtifacts',
+            operator__pb2.ListRunOutputArtifactsRequestV2.SerializeToString,
+            operator__pb2.RunOutputArtifactPageV2.FromString,
+            options,
+            channel_credentials,
+            insecure,
+            call_credentials,
+            compression,
+            wait_for_ready,
+            timeout,
+            metadata,
+            _registered_method=True)
+
+    @staticmethod
+    def ReadRunOutputArtifact(request,
+            target,
+            options=(),
+            channel_credentials=None,
+            call_credentials=None,
+            insecure=False,
+            compression=None,
+            wait_for_ready=None,
+            timeout=None,
+            metadata=None):
+        return grpc.experimental.unary_stream(
+            request,
+            target,
+            '/avalanche.operator.OperatorServiceV2/ReadRunOutputArtifact',
+            operator__pb2.ReadRunOutputArtifactRequestV2.SerializeToString,
+            operator__pb2.RunOutputArtifactChunkV2.FromString,
+            options,
+            channel_credentials,
+            insecure,
+            call_credentials,
+            compression,
+            wait_for_ready,
+            timeout,
+            metadata,
+            _registered_method=True)
+
+    @staticmethod
+    def WatchRunStatus(request,
+            target,
+            options=(),
+            channel_credentials=None,
+            call_credentials=None,
+            insecure=False,
+            compression=None,
+            wait_for_ready=None,
+            timeout=None,
+            metadata=None):
+        return grpc.experimental.unary_stream(
+            request,
+            target,
+            '/avalanche.operator.OperatorServiceV2/WatchRunStatus',
+            operator__pb2.WatchRunStatusRequestV2.SerializeToString,
+            operator__pb2.RunStatusEnvelopeV2.FromString,
+            options,
+            channel_credentials,
+            insecure,
+            call_credentials,
+            compression,
+            wait_for_ready,
+            timeout,
+            metadata,
+            _registered_method=True)

@@ -668,3 +668,421 @@ class OperatorUpdateEnvelope(_message.Message):
     update: OperatorUpdate
     reset_required: ResetRequired
     def __init__(self, operator_instance_id: _Optional[str] = ..., update: _Optional[_Union[OperatorUpdate, _Mapping]] = ..., reset_required: _Optional[_Union[ResetRequired, _Mapping]] = ...) -> None: ...
+
+class ScopeReferenceV2(_message.Message):
+    __slots__ = ("reference",)
+    REFERENCE_FIELD_NUMBER: _ClassVar[int]
+    reference: str
+    def __init__(self, reference: _Optional[str] = ...) -> None: ...
+
+class LifecycleCursorV2(_message.Message):
+    __slots__ = ("stream", "topology_fingerprint", "stream_generation", "retained_floor", "source_sequence")
+    STREAM_FIELD_NUMBER: _ClassVar[int]
+    TOPOLOGY_FINGERPRINT_FIELD_NUMBER: _ClassVar[int]
+    STREAM_GENERATION_FIELD_NUMBER: _ClassVar[int]
+    RETAINED_FLOOR_FIELD_NUMBER: _ClassVar[int]
+    SOURCE_SEQUENCE_FIELD_NUMBER: _ClassVar[int]
+    stream: str
+    topology_fingerprint: str
+    stream_generation: int
+    retained_floor: int
+    source_sequence: int
+    def __init__(self, stream: _Optional[str] = ..., topology_fingerprint: _Optional[str] = ..., stream_generation: _Optional[int] = ..., retained_floor: _Optional[int] = ..., source_sequence: _Optional[int] = ...) -> None: ...
+
+class ContinuationRefV2(_message.Message):
+    __slots__ = ("scope_ref", "continuation_id", "cursor")
+    SCOPE_REF_FIELD_NUMBER: _ClassVar[int]
+    CONTINUATION_ID_FIELD_NUMBER: _ClassVar[int]
+    CURSOR_FIELD_NUMBER: _ClassVar[int]
+    scope_ref: ScopeReferenceV2
+    continuation_id: str
+    cursor: LifecycleCursorV2
+    def __init__(self, scope_ref: _Optional[_Union[ScopeReferenceV2, _Mapping]] = ..., continuation_id: _Optional[str] = ..., cursor: _Optional[_Union[LifecycleCursorV2, _Mapping]] = ...) -> None: ...
+
+class DiscoverFlowsRequestV2(_message.Message):
+    __slots__ = ("page_size", "continuation")
+    PAGE_SIZE_FIELD_NUMBER: _ClassVar[int]
+    CONTINUATION_FIELD_NUMBER: _ClassVar[int]
+    page_size: int
+    continuation: ContinuationRefV2
+    def __init__(self, page_size: _Optional[int] = ..., continuation: _Optional[_Union[ContinuationRefV2, _Mapping]] = ...) -> None: ...
+
+class FlowInfoV2(_message.Message):
+    __slots__ = ("workflow_selector", "display_name", "manifest_digest", "node_ids")
+    WORKFLOW_SELECTOR_FIELD_NUMBER: _ClassVar[int]
+    DISPLAY_NAME_FIELD_NUMBER: _ClassVar[int]
+    MANIFEST_DIGEST_FIELD_NUMBER: _ClassVar[int]
+    NODE_IDS_FIELD_NUMBER: _ClassVar[int]
+    workflow_selector: str
+    display_name: str
+    manifest_digest: str
+    node_ids: _containers.RepeatedScalarFieldContainer[str]
+    def __init__(self, workflow_selector: _Optional[str] = ..., display_name: _Optional[str] = ..., manifest_digest: _Optional[str] = ..., node_ids: _Optional[_Iterable[str]] = ...) -> None: ...
+
+class DiscoveryDiagnosticV2(_message.Message):
+    __slots__ = ("path", "kind", "message")
+    PATH_FIELD_NUMBER: _ClassVar[int]
+    KIND_FIELD_NUMBER: _ClassVar[int]
+    MESSAGE_FIELD_NUMBER: _ClassVar[int]
+    path: str
+    kind: str
+    message: str
+    def __init__(self, path: _Optional[str] = ..., kind: _Optional[str] = ..., message: _Optional[str] = ...) -> None: ...
+
+class FlowListV2(_message.Message):
+    __slots__ = ("cursor", "flows", "next_page", "diagnostics")
+    CURSOR_FIELD_NUMBER: _ClassVar[int]
+    FLOWS_FIELD_NUMBER: _ClassVar[int]
+    NEXT_PAGE_FIELD_NUMBER: _ClassVar[int]
+    DIAGNOSTICS_FIELD_NUMBER: _ClassVar[int]
+    cursor: LifecycleCursorV2
+    flows: _containers.RepeatedCompositeFieldContainer[FlowInfoV2]
+    next_page: ContinuationRefV2
+    diagnostics: _containers.RepeatedCompositeFieldContainer[DiscoveryDiagnosticV2]
+    def __init__(self, cursor: _Optional[_Union[LifecycleCursorV2, _Mapping]] = ..., flows: _Optional[_Iterable[_Union[FlowInfoV2, _Mapping]]] = ..., next_page: _Optional[_Union[ContinuationRefV2, _Mapping]] = ..., diagnostics: _Optional[_Iterable[_Union[DiscoveryDiagnosticV2, _Mapping]]] = ...) -> None: ...
+
+class FileAttachmentV2(_message.Message):
+    __slots__ = ("attachment_id", "field_name", "name", "media_type", "object_uri", "object_key", "sha256", "size_bytes")
+    ATTACHMENT_ID_FIELD_NUMBER: _ClassVar[int]
+    FIELD_NAME_FIELD_NUMBER: _ClassVar[int]
+    NAME_FIELD_NUMBER: _ClassVar[int]
+    MEDIA_TYPE_FIELD_NUMBER: _ClassVar[int]
+    OBJECT_URI_FIELD_NUMBER: _ClassVar[int]
+    OBJECT_KEY_FIELD_NUMBER: _ClassVar[int]
+    SHA256_FIELD_NUMBER: _ClassVar[int]
+    SIZE_BYTES_FIELD_NUMBER: _ClassVar[int]
+    attachment_id: str
+    field_name: str
+    name: str
+    media_type: str
+    object_uri: str
+    object_key: str
+    sha256: str
+    size_bytes: int
+    def __init__(self, attachment_id: _Optional[str] = ..., field_name: _Optional[str] = ..., name: _Optional[str] = ..., media_type: _Optional[str] = ..., object_uri: _Optional[str] = ..., object_key: _Optional[str] = ..., sha256: _Optional[str] = ..., size_bytes: _Optional[int] = ...) -> None: ...
+
+class StartRunRequestV2(_message.Message):
+    __slots__ = ("run_id", "workflow_selector", "input_json", "context_json", "input_files")
+    RUN_ID_FIELD_NUMBER: _ClassVar[int]
+    WORKFLOW_SELECTOR_FIELD_NUMBER: _ClassVar[int]
+    INPUT_JSON_FIELD_NUMBER: _ClassVar[int]
+    CONTEXT_JSON_FIELD_NUMBER: _ClassVar[int]
+    INPUT_FILES_FIELD_NUMBER: _ClassVar[int]
+    run_id: str
+    workflow_selector: str
+    input_json: str
+    context_json: str
+    input_files: _containers.RepeatedCompositeFieldContainer[FileAttachmentV2]
+    def __init__(self, run_id: _Optional[str] = ..., workflow_selector: _Optional[str] = ..., input_json: _Optional[str] = ..., context_json: _Optional[str] = ..., input_files: _Optional[_Iterable[_Union[FileAttachmentV2, _Mapping]]] = ...) -> None: ...
+
+class StartRunResponseV2(_message.Message):
+    __slots__ = ("run_id",)
+    RUN_ID_FIELD_NUMBER: _ClassVar[int]
+    run_id: str
+    def __init__(self, run_id: _Optional[str] = ...) -> None: ...
+
+class CancelRunRequestV2(_message.Message):
+    __slots__ = ("run_id",)
+    RUN_ID_FIELD_NUMBER: _ClassVar[int]
+    run_id: str
+    def __init__(self, run_id: _Optional[str] = ...) -> None: ...
+
+class CancelRunResponseV2(_message.Message):
+    __slots__ = ("run_id",)
+    RUN_ID_FIELD_NUMBER: _ClassVar[int]
+    run_id: str
+    def __init__(self, run_id: _Optional[str] = ...) -> None: ...
+
+class RunSummaryV2(_message.Message):
+    __slots__ = ("run_id", "workflow_selector", "workflow_display_name", "status", "started_at", "ended_at", "created_sequence", "revision")
+    RUN_ID_FIELD_NUMBER: _ClassVar[int]
+    WORKFLOW_SELECTOR_FIELD_NUMBER: _ClassVar[int]
+    WORKFLOW_DISPLAY_NAME_FIELD_NUMBER: _ClassVar[int]
+    STATUS_FIELD_NUMBER: _ClassVar[int]
+    STARTED_AT_FIELD_NUMBER: _ClassVar[int]
+    ENDED_AT_FIELD_NUMBER: _ClassVar[int]
+    CREATED_SEQUENCE_FIELD_NUMBER: _ClassVar[int]
+    REVISION_FIELD_NUMBER: _ClassVar[int]
+    run_id: str
+    workflow_selector: str
+    workflow_display_name: str
+    status: str
+    started_at: float
+    ended_at: float
+    created_sequence: int
+    revision: int
+    def __init__(self, run_id: _Optional[str] = ..., workflow_selector: _Optional[str] = ..., workflow_display_name: _Optional[str] = ..., status: _Optional[str] = ..., started_at: _Optional[float] = ..., ended_at: _Optional[float] = ..., created_sequence: _Optional[int] = ..., revision: _Optional[int] = ...) -> None: ...
+
+class ListRunSummariesRequestV2(_message.Message):
+    __slots__ = ("workflow_selector", "page_size", "continuation")
+    WORKFLOW_SELECTOR_FIELD_NUMBER: _ClassVar[int]
+    PAGE_SIZE_FIELD_NUMBER: _ClassVar[int]
+    CONTINUATION_FIELD_NUMBER: _ClassVar[int]
+    workflow_selector: str
+    page_size: int
+    continuation: ContinuationRefV2
+    def __init__(self, workflow_selector: _Optional[str] = ..., page_size: _Optional[int] = ..., continuation: _Optional[_Union[ContinuationRefV2, _Mapping]] = ...) -> None: ...
+
+class RunSummaryPageV2(_message.Message):
+    __slots__ = ("cursor", "runs", "next_page")
+    CURSOR_FIELD_NUMBER: _ClassVar[int]
+    RUNS_FIELD_NUMBER: _ClassVar[int]
+    NEXT_PAGE_FIELD_NUMBER: _ClassVar[int]
+    cursor: LifecycleCursorV2
+    runs: _containers.RepeatedCompositeFieldContainer[RunSummaryV2]
+    next_page: ContinuationRefV2
+    def __init__(self, cursor: _Optional[_Union[LifecycleCursorV2, _Mapping]] = ..., runs: _Optional[_Iterable[_Union[RunSummaryV2, _Mapping]]] = ..., next_page: _Optional[_Union[ContinuationRefV2, _Mapping]] = ...) -> None: ...
+
+class GetRunSnapshotRequestV2(_message.Message):
+    __slots__ = ("run_id",)
+    RUN_ID_FIELD_NUMBER: _ClassVar[int]
+    run_id: str
+    def __init__(self, run_id: _Optional[str] = ...) -> None: ...
+
+class NodeSnapshotV2(_message.Message):
+    __slots__ = ("node_id", "name", "node_type", "status", "started_at", "ended_at", "revision")
+    NODE_ID_FIELD_NUMBER: _ClassVar[int]
+    NAME_FIELD_NUMBER: _ClassVar[int]
+    NODE_TYPE_FIELD_NUMBER: _ClassVar[int]
+    STATUS_FIELD_NUMBER: _ClassVar[int]
+    STARTED_AT_FIELD_NUMBER: _ClassVar[int]
+    ENDED_AT_FIELD_NUMBER: _ClassVar[int]
+    REVISION_FIELD_NUMBER: _ClassVar[int]
+    node_id: str
+    name: str
+    node_type: str
+    status: str
+    started_at: float
+    ended_at: float
+    revision: int
+    def __init__(self, node_id: _Optional[str] = ..., name: _Optional[str] = ..., node_type: _Optional[str] = ..., status: _Optional[str] = ..., started_at: _Optional[float] = ..., ended_at: _Optional[float] = ..., revision: _Optional[int] = ...) -> None: ...
+
+class RunSnapshotV2(_message.Message):
+    __slots__ = ("cursor", "summary", "nodes")
+    CURSOR_FIELD_NUMBER: _ClassVar[int]
+    SUMMARY_FIELD_NUMBER: _ClassVar[int]
+    NODES_FIELD_NUMBER: _ClassVar[int]
+    cursor: LifecycleCursorV2
+    summary: RunSummaryV2
+    nodes: _containers.RepeatedCompositeFieldContainer[NodeSnapshotV2]
+    def __init__(self, cursor: _Optional[_Union[LifecycleCursorV2, _Mapping]] = ..., summary: _Optional[_Union[RunSummaryV2, _Mapping]] = ..., nodes: _Optional[_Iterable[_Union[NodeSnapshotV2, _Mapping]]] = ...) -> None: ...
+
+class ActivityDetailRefV2(_message.Message):
+    __slots__ = ("run_id", "scope_ref", "activity_id", "run_sequence", "object_uri", "object_key", "sha256", "size_bytes")
+    RUN_ID_FIELD_NUMBER: _ClassVar[int]
+    SCOPE_REF_FIELD_NUMBER: _ClassVar[int]
+    ACTIVITY_ID_FIELD_NUMBER: _ClassVar[int]
+    RUN_SEQUENCE_FIELD_NUMBER: _ClassVar[int]
+    OBJECT_URI_FIELD_NUMBER: _ClassVar[int]
+    OBJECT_KEY_FIELD_NUMBER: _ClassVar[int]
+    SHA256_FIELD_NUMBER: _ClassVar[int]
+    SIZE_BYTES_FIELD_NUMBER: _ClassVar[int]
+    run_id: str
+    scope_ref: ScopeReferenceV2
+    activity_id: str
+    run_sequence: int
+    object_uri: str
+    object_key: str
+    sha256: str
+    size_bytes: int
+    def __init__(self, run_id: _Optional[str] = ..., scope_ref: _Optional[_Union[ScopeReferenceV2, _Mapping]] = ..., activity_id: _Optional[str] = ..., run_sequence: _Optional[int] = ..., object_uri: _Optional[str] = ..., object_key: _Optional[str] = ..., sha256: _Optional[str] = ..., size_bytes: _Optional[int] = ...) -> None: ...
+
+class RunActivityDescriptorV2(_message.Message):
+    __slots__ = ("activity_id", "run_sequence", "kind", "timestamp", "size_bytes", "detail_ref")
+    ACTIVITY_ID_FIELD_NUMBER: _ClassVar[int]
+    RUN_SEQUENCE_FIELD_NUMBER: _ClassVar[int]
+    KIND_FIELD_NUMBER: _ClassVar[int]
+    TIMESTAMP_FIELD_NUMBER: _ClassVar[int]
+    SIZE_BYTES_FIELD_NUMBER: _ClassVar[int]
+    DETAIL_REF_FIELD_NUMBER: _ClassVar[int]
+    activity_id: str
+    run_sequence: int
+    kind: str
+    timestamp: float
+    size_bytes: int
+    detail_ref: ActivityDetailRefV2
+    def __init__(self, activity_id: _Optional[str] = ..., run_sequence: _Optional[int] = ..., kind: _Optional[str] = ..., timestamp: _Optional[float] = ..., size_bytes: _Optional[int] = ..., detail_ref: _Optional[_Union[ActivityDetailRefV2, _Mapping]] = ...) -> None: ...
+
+class ListRunActivityRequestV2(_message.Message):
+    __slots__ = ("run_id", "page_size", "continuation")
+    RUN_ID_FIELD_NUMBER: _ClassVar[int]
+    PAGE_SIZE_FIELD_NUMBER: _ClassVar[int]
+    CONTINUATION_FIELD_NUMBER: _ClassVar[int]
+    run_id: str
+    page_size: int
+    continuation: ContinuationRefV2
+    def __init__(self, run_id: _Optional[str] = ..., page_size: _Optional[int] = ..., continuation: _Optional[_Union[ContinuationRefV2, _Mapping]] = ...) -> None: ...
+
+class RunActivityPageV2(_message.Message):
+    __slots__ = ("cursor", "run_id", "activities", "next_page")
+    CURSOR_FIELD_NUMBER: _ClassVar[int]
+    RUN_ID_FIELD_NUMBER: _ClassVar[int]
+    ACTIVITIES_FIELD_NUMBER: _ClassVar[int]
+    NEXT_PAGE_FIELD_NUMBER: _ClassVar[int]
+    cursor: LifecycleCursorV2
+    run_id: str
+    activities: _containers.RepeatedCompositeFieldContainer[RunActivityDescriptorV2]
+    next_page: ContinuationRefV2
+    def __init__(self, cursor: _Optional[_Union[LifecycleCursorV2, _Mapping]] = ..., run_id: _Optional[str] = ..., activities: _Optional[_Iterable[_Union[RunActivityDescriptorV2, _Mapping]]] = ..., next_page: _Optional[_Union[ContinuationRefV2, _Mapping]] = ...) -> None: ...
+
+class ReadActivityDetailRequestV2(_message.Message):
+    __slots__ = ("detail_ref",)
+    DETAIL_REF_FIELD_NUMBER: _ClassVar[int]
+    detail_ref: ActivityDetailRefV2
+    def __init__(self, detail_ref: _Optional[_Union[ActivityDetailRefV2, _Mapping]] = ...) -> None: ...
+
+class ActivityDetailChunkV2(_message.Message):
+    __slots__ = ("chunk_index", "data", "eof")
+    CHUNK_INDEX_FIELD_NUMBER: _ClassVar[int]
+    DATA_FIELD_NUMBER: _ClassVar[int]
+    EOF_FIELD_NUMBER: _ClassVar[int]
+    chunk_index: int
+    data: bytes
+    eof: bool
+    def __init__(self, chunk_index: _Optional[int] = ..., data: _Optional[bytes] = ..., eof: bool = ...) -> None: ...
+
+class RunOutputArtifactRefV2(_message.Message):
+    __slots__ = ("run_id", "scope_ref", "artifact_id", "run_sequence", "object_uri", "object_key", "sha256", "size_bytes")
+    RUN_ID_FIELD_NUMBER: _ClassVar[int]
+    SCOPE_REF_FIELD_NUMBER: _ClassVar[int]
+    ARTIFACT_ID_FIELD_NUMBER: _ClassVar[int]
+    RUN_SEQUENCE_FIELD_NUMBER: _ClassVar[int]
+    OBJECT_URI_FIELD_NUMBER: _ClassVar[int]
+    OBJECT_KEY_FIELD_NUMBER: _ClassVar[int]
+    SHA256_FIELD_NUMBER: _ClassVar[int]
+    SIZE_BYTES_FIELD_NUMBER: _ClassVar[int]
+    run_id: str
+    scope_ref: ScopeReferenceV2
+    artifact_id: str
+    run_sequence: int
+    object_uri: str
+    object_key: str
+    sha256: str
+    size_bytes: int
+    def __init__(self, run_id: _Optional[str] = ..., scope_ref: _Optional[_Union[ScopeReferenceV2, _Mapping]] = ..., artifact_id: _Optional[str] = ..., run_sequence: _Optional[int] = ..., object_uri: _Optional[str] = ..., object_key: _Optional[str] = ..., sha256: _Optional[str] = ..., size_bytes: _Optional[int] = ...) -> None: ...
+
+class ResultValueV2(_message.Message):
+    __slots__ = ("value_json", "sha256", "size_bytes")
+    VALUE_JSON_FIELD_NUMBER: _ClassVar[int]
+    SHA256_FIELD_NUMBER: _ClassVar[int]
+    SIZE_BYTES_FIELD_NUMBER: _ClassVar[int]
+    value_json: str
+    sha256: str
+    size_bytes: int
+    def __init__(self, value_json: _Optional[str] = ..., sha256: _Optional[str] = ..., size_bytes: _Optional[int] = ...) -> None: ...
+
+class ResultFileDescriptorV2(_message.Message):
+    __slots__ = ("artifact_ref", "name", "media_type")
+    ARTIFACT_REF_FIELD_NUMBER: _ClassVar[int]
+    NAME_FIELD_NUMBER: _ClassVar[int]
+    MEDIA_TYPE_FIELD_NUMBER: _ClassVar[int]
+    artifact_ref: RunOutputArtifactRefV2
+    name: str
+    media_type: str
+    def __init__(self, artifact_ref: _Optional[_Union[RunOutputArtifactRefV2, _Mapping]] = ..., name: _Optional[str] = ..., media_type: _Optional[str] = ...) -> None: ...
+
+class GetRunResultRequestV2(_message.Message):
+    __slots__ = ("run_id",)
+    RUN_ID_FIELD_NUMBER: _ClassVar[int]
+    run_id: str
+    def __init__(self, run_id: _Optional[str] = ...) -> None: ...
+
+class RunResultV2(_message.Message):
+    __slots__ = ("cursor", "run_id", "value", "files")
+    CURSOR_FIELD_NUMBER: _ClassVar[int]
+    RUN_ID_FIELD_NUMBER: _ClassVar[int]
+    VALUE_FIELD_NUMBER: _ClassVar[int]
+    FILES_FIELD_NUMBER: _ClassVar[int]
+    cursor: LifecycleCursorV2
+    run_id: str
+    value: ResultValueV2
+    files: _containers.RepeatedCompositeFieldContainer[ResultFileDescriptorV2]
+    def __init__(self, cursor: _Optional[_Union[LifecycleCursorV2, _Mapping]] = ..., run_id: _Optional[str] = ..., value: _Optional[_Union[ResultValueV2, _Mapping]] = ..., files: _Optional[_Iterable[_Union[ResultFileDescriptorV2, _Mapping]]] = ...) -> None: ...
+
+class RunOutputArtifactDescriptorV2(_message.Message):
+    __slots__ = ("artifact_ref", "name", "media_type")
+    ARTIFACT_REF_FIELD_NUMBER: _ClassVar[int]
+    NAME_FIELD_NUMBER: _ClassVar[int]
+    MEDIA_TYPE_FIELD_NUMBER: _ClassVar[int]
+    artifact_ref: RunOutputArtifactRefV2
+    name: str
+    media_type: str
+    def __init__(self, artifact_ref: _Optional[_Union[RunOutputArtifactRefV2, _Mapping]] = ..., name: _Optional[str] = ..., media_type: _Optional[str] = ...) -> None: ...
+
+class ListRunOutputArtifactsRequestV2(_message.Message):
+    __slots__ = ("run_id", "page_size", "continuation")
+    RUN_ID_FIELD_NUMBER: _ClassVar[int]
+    PAGE_SIZE_FIELD_NUMBER: _ClassVar[int]
+    CONTINUATION_FIELD_NUMBER: _ClassVar[int]
+    run_id: str
+    page_size: int
+    continuation: ContinuationRefV2
+    def __init__(self, run_id: _Optional[str] = ..., page_size: _Optional[int] = ..., continuation: _Optional[_Union[ContinuationRefV2, _Mapping]] = ...) -> None: ...
+
+class RunOutputArtifactPageV2(_message.Message):
+    __slots__ = ("cursor", "run_id", "artifacts", "next_page")
+    CURSOR_FIELD_NUMBER: _ClassVar[int]
+    RUN_ID_FIELD_NUMBER: _ClassVar[int]
+    ARTIFACTS_FIELD_NUMBER: _ClassVar[int]
+    NEXT_PAGE_FIELD_NUMBER: _ClassVar[int]
+    cursor: LifecycleCursorV2
+    run_id: str
+    artifacts: _containers.RepeatedCompositeFieldContainer[RunOutputArtifactDescriptorV2]
+    next_page: ContinuationRefV2
+    def __init__(self, cursor: _Optional[_Union[LifecycleCursorV2, _Mapping]] = ..., run_id: _Optional[str] = ..., artifacts: _Optional[_Iterable[_Union[RunOutputArtifactDescriptorV2, _Mapping]]] = ..., next_page: _Optional[_Union[ContinuationRefV2, _Mapping]] = ...) -> None: ...
+
+class ReadRunOutputArtifactRequestV2(_message.Message):
+    __slots__ = ("artifact_ref",)
+    ARTIFACT_REF_FIELD_NUMBER: _ClassVar[int]
+    artifact_ref: RunOutputArtifactRefV2
+    def __init__(self, artifact_ref: _Optional[_Union[RunOutputArtifactRefV2, _Mapping]] = ...) -> None: ...
+
+class RunOutputArtifactChunkV2(_message.Message):
+    __slots__ = ("chunk_index", "data", "eof")
+    CHUNK_INDEX_FIELD_NUMBER: _ClassVar[int]
+    DATA_FIELD_NUMBER: _ClassVar[int]
+    EOF_FIELD_NUMBER: _ClassVar[int]
+    chunk_index: int
+    data: bytes
+    eof: bool
+    def __init__(self, chunk_index: _Optional[int] = ..., data: _Optional[bytes] = ..., eof: bool = ...) -> None: ...
+
+class WatchRunStatusRequestV2(_message.Message):
+    __slots__ = ("after_cursor",)
+    AFTER_CURSOR_FIELD_NUMBER: _ClassVar[int]
+    after_cursor: LifecycleCursorV2
+    def __init__(self, after_cursor: _Optional[_Union[LifecycleCursorV2, _Mapping]] = ...) -> None: ...
+
+class RunCreatedV2(_message.Message):
+    __slots__ = ("summary",)
+    SUMMARY_FIELD_NUMBER: _ClassVar[int]
+    summary: RunSummaryV2
+    def __init__(self, summary: _Optional[_Union[RunSummaryV2, _Mapping]] = ...) -> None: ...
+
+class RunStatusChangedV2(_message.Message):
+    __slots__ = ("summary",)
+    SUMMARY_FIELD_NUMBER: _ClassVar[int]
+    summary: RunSummaryV2
+    def __init__(self, summary: _Optional[_Union[RunSummaryV2, _Mapping]] = ...) -> None: ...
+
+class ResetRequiredV2(_message.Message):
+    __slots__ = ("history_floor", "latest_cursor")
+    HISTORY_FLOOR_FIELD_NUMBER: _ClassVar[int]
+    LATEST_CURSOR_FIELD_NUMBER: _ClassVar[int]
+    history_floor: LifecycleCursorV2
+    latest_cursor: LifecycleCursorV2
+    def __init__(self, history_floor: _Optional[_Union[LifecycleCursorV2, _Mapping]] = ..., latest_cursor: _Optional[_Union[LifecycleCursorV2, _Mapping]] = ...) -> None: ...
+
+class RunStatusEnvelopeV2(_message.Message):
+    __slots__ = ("source_sequence", "run_created", "run_status_changed", "reset_required", "cursor")
+    SOURCE_SEQUENCE_FIELD_NUMBER: _ClassVar[int]
+    RUN_CREATED_FIELD_NUMBER: _ClassVar[int]
+    RUN_STATUS_CHANGED_FIELD_NUMBER: _ClassVar[int]
+    RESET_REQUIRED_FIELD_NUMBER: _ClassVar[int]
+    CURSOR_FIELD_NUMBER: _ClassVar[int]
+    source_sequence: int
+    run_created: RunCreatedV2
+    run_status_changed: RunStatusChangedV2
+    reset_required: ResetRequiredV2
+    cursor: LifecycleCursorV2
+    def __init__(self, source_sequence: _Optional[int] = ..., run_created: _Optional[_Union[RunCreatedV2, _Mapping]] = ..., run_status_changed: _Optional[_Union[RunStatusChangedV2, _Mapping]] = ..., reset_required: _Optional[_Union[ResetRequiredV2, _Mapping]] = ..., cursor: _Optional[_Union[LifecycleCursorV2, _Mapping]] = ...) -> None: ...
