@@ -12,6 +12,7 @@ import grpc
 import pytest
 
 from avalanche.runtime import File
+from runtime.operator.client import GrpcStateProvider
 from runtime.operator.models import LogEntry, LogLevel, RunState, RunStatus, SequencedLogEntry
 from runtime.operator.operator import Operator
 from runtime.operator.proto import operator_pb2 as pb
@@ -177,6 +178,112 @@ def _watch_from_current(stub, operator: Operator):
     return stub.WatchRunStatus(
         pb.WatchRunStatusRequestV2(after_cursor=_initial_event_cursor(stub))
     )
+
+
+def test_client_transport_metadata_reaches_unary_and_watch_calls():
+    calls = []
+    provider = GrpcStateProvider(
+        "localhost:1",
+        token="secret",
+        metadata=[("X-Delta-Project", "project-1")],
+    )
+
+    class CapturingStub:
+        def DiscoverFlows(self, request, **kwargs):  # noqa: N802
+            calls.append(("unary", kwargs["metadata"]))
+            return pb.FlowListV2()
+
+        def WatchRunStatus(self, request, **kwargs):  # noqa: N802
+            calls.append(("watch", kwargs["metadata"]))
+            provider._stream_stop.set()
+            return iter(())
+
+    provider._stub = CapturingStub()
+    try:
+        assert provider.list_workflows() == []
+        assert provider.ping() is True
+        provider.start_stream()
+        assert provider._stream_thread is not None
+        provider._stream_thread.join(timeout=1)
+        assert not provider._stream_thread.is_alive()
+    finally:
+        provider.close()
+
+    expected_metadata = (
+        ("authorization", "Bearer secret"),
+        ("x-delta-project", "project-1"),
+    )
+    assert calls == [
+        ("unary", expected_metadata),
+        ("unary", expected_metadata),
+        ("watch", expected_metadata),
+    ]
+
+
+@pytest.mark.parametrize(
+    ("metadata", "error"),
+    [
+        ("not metadata", TypeError),
+        ([("x-scope",)], TypeError),
+        ([("x-scope", 1)], TypeError),
+        ([("x-scope", "one"), ("X-SCOPE", "two")], ValueError),
+        ([("Grpc-Timeout", "1")], ValueError),
+        ([("x-scope", "café")], ValueError),
+        ([("x-scope", "line\nbreak")], ValueError),
+        ([("authorization", "caller")], ValueError),
+    ],
+)
+def test_client_rejects_invalid_transport_metadata_before_rpc(metadata, error):
+    with pytest.raises(error):
+        GrpcStateProvider("localhost:1", token="secret", metadata=metadata)
+
+
+def test_client_run_id_factory_is_used_once_and_explicit_id_bypasses_it():
+    factory_calls = []
+
+    def run_id_factory():
+        factory_calls.append("called")
+        return "run_01J7V2CLIENTFACTORY"
+
+    class CapturingStub:
+        def __init__(self):
+            self.requests = []
+
+        def StartRun(self, request, **kwargs):  # noqa: N802
+            self.requests.append(request)
+            return pb.StartRunResponseV2(run_id=request.run_id)
+
+    provider = GrpcStateProvider("localhost:1", run_id_factory=run_id_factory)
+    stub = CapturingStub()
+    provider._stub = stub
+    try:
+        assert provider.start_run("simple_workflow") == "run_01J7V2CLIENTFACTORY"
+        assert provider.start_run("simple_workflow", run_id="run_explicit") == "run_explicit"
+    finally:
+        provider.close()
+
+    assert factory_calls == ["called"]
+    assert [request.run_id for request in stub.requests] == [
+        "run_01J7V2CLIENTFACTORY",
+        "run_explicit",
+    ]
+
+
+def test_client_default_run_id_keeps_run_hex_shape():
+    class CapturingStub:
+        def StartRun(self, request, **kwargs):  # noqa: N802
+            return pb.StartRunResponseV2(run_id=request.run_id)
+
+    provider = GrpcStateProvider("localhost:1")
+    provider._stub = CapturingStub()
+    try:
+        run_id = provider.start_run("simple_workflow")
+    finally:
+        provider.close()
+
+    assert run_id.startswith("run_")
+    assert len(run_id) == len("run_") + 8
+    assert all(character in "0123456789abcdef" for character in run_id[4:])
 
 
 def test_discover_flows_returns_enriched_flow_list(stub):

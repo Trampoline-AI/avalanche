@@ -6,6 +6,7 @@ import hashlib
 import json
 import math
 import threading
+import unicodedata
 from collections import OrderedDict
 from collections.abc import Mapping, Sequence
 from copy import deepcopy
@@ -81,6 +82,10 @@ DEFAULT_MAX_DETAIL_BODY_BYTES = 32 * 1024 * 1024
 DEFAULT_MAX_RETAINED_DETAIL_COUNT = 100_000
 DEFAULT_MAX_RETAINED_DETAIL_BYTES = 128 * 1024 * 1024
 DEFAULT_MAX_PAGED_ITEMS = 100_000
+MAX_TRANSPORT_METADATA_ENTRIES = 32
+MAX_TRANSPORT_METADATA_KEY_BYTES = 256
+MAX_TRANSPORT_METADATA_VALUE_BYTES = 8 * 1024
+MAX_TRANSPORT_METADATA_BYTES = 16 * 1024
 
 
 class StreamState(str, Enum):
@@ -190,6 +195,8 @@ class GrpcStateProvider:
         address: str = "localhost:7433",
         *,
         token: str | None = None,
+        metadata: Sequence[tuple[str, str]] | None = None,
+        run_id_factory: Callable[[], str] | None = None,
         tls: bool = False,
         root_certificates: bytes | None = None,
         private_key: bytes | None = None,
@@ -220,9 +227,15 @@ class GrpcStateProvider:
             max_retained_detail_bytes,
         )
         self._validate_positive_integer("max_paged_items", max_paged_items)
+        if run_id_factory is not None and not callable(run_id_factory):
+            raise TypeError("run_id_factory must be callable")
 
         self._address = address
-        self._metadata = (("authorization", f"Bearer {token}"),) if token else None
+        extra_metadata = self._validate_transport_metadata(metadata)
+        authorization = (("authorization", f"Bearer {token}"),) if token else ()
+        combined_metadata = authorization + extra_metadata
+        self._metadata = combined_metadata or None
+        self._run_id_factory = run_id_factory
         self._unary_timeout = float(unary_timeout)
         self._max_detail_body_bytes = max_detail_body_bytes
         self._max_retained_detail_count = max_retained_detail_count
@@ -301,6 +314,59 @@ class GrpcStateProvider:
         if value <= 0:
             raise ValueError(f"{name} must be positive")
 
+    @staticmethod
+    def _validate_transport_metadata(
+        metadata: Sequence[tuple[str, str]] | None,
+    ) -> tuple[tuple[str, str], ...]:
+        if metadata is None:
+            return ()
+        if not isinstance(metadata, (tuple, list)):
+            raise TypeError("metadata must be a tuple or list of string pairs")
+        if len(metadata) > MAX_TRANSPORT_METADATA_ENTRIES:
+            raise ValueError("metadata exceeds the configured entry count limit")
+
+        normalized: list[tuple[str, str]] = []
+        seen_keys: set[str] = set()
+        total_bytes = 0
+        for index, item in enumerate(metadata):
+            if not isinstance(item, (tuple, list)) or len(item) != 2:
+                raise TypeError(f"metadata[{index}] must be a key/value pair")
+            key, value = item
+            if not isinstance(key, str) or not isinstance(value, str):
+                raise TypeError(f"metadata[{index}] key and value must be strings")
+            if not key or not key.isascii():
+                raise ValueError(f"metadata[{index}] key must be nonempty ASCII")
+            normalized_key = key.lower()
+            if not all(
+                character.isascii() and (character.isalnum() or character in "-_.")
+                for character in normalized_key
+            ):
+                raise ValueError(f"metadata[{index}] key is not gRPC-safe")
+            if normalized_key.startswith("grpc-"):
+                raise ValueError(f"metadata[{index}] key uses the reserved grpc- prefix")
+            if normalized_key == "authorization":
+                raise ValueError("metadata must not supply authorization; use token")
+            if normalized_key in seen_keys:
+                raise ValueError(f"metadata contains duplicate key {normalized_key!r}")
+            if not value.isascii():
+                raise ValueError(f"metadata[{index}] value must be ASCII")
+            if any(unicodedata.category(character) == "Cc" for character in value):
+                raise ValueError(f"metadata[{index}] value contains a control character")
+
+            key_bytes = len(normalized_key.encode("ascii"))
+            value_bytes = len(value.encode("utf-8"))
+            if key_bytes > MAX_TRANSPORT_METADATA_KEY_BYTES:
+                raise ValueError(f"metadata[{index}] key exceeds the size limit")
+            if value_bytes > MAX_TRANSPORT_METADATA_VALUE_BYTES:
+                raise ValueError(f"metadata[{index}] value exceeds the size limit")
+            total_bytes += key_bytes + value_bytes
+            if total_bytes > MAX_TRANSPORT_METADATA_BYTES:
+                raise ValueError("metadata exceeds the configured byte limit")
+
+            seen_keys.add(normalized_key)
+            normalized.append((normalized_key, value))
+        return tuple(normalized)
+
     @property
     def connected(self) -> bool:
         """Whether the operator is reachable through unary RPCs."""
@@ -314,7 +380,7 @@ class GrpcStateProvider:
     def _call(self, fn, *args, **kwargs):
         """Run one unary gRPC operation or raise its explicit operation error."""
         kwargs.setdefault("timeout", self._unary_timeout)
-        if self._metadata is not None and "metadata" not in kwargs:
+        if self._metadata is not None:
             kwargs["metadata"] = self._metadata
         try:
             result = fn(*args, **kwargs)
@@ -1585,12 +1651,22 @@ class GrpcStateProvider:
         context: Mapping[str, Any] | BaseModel | None = None,
         files: Mapping[str, File | bytes] | None = None,
     ) -> str:
+        if run_id is not None:
+            request_run_id = run_id
+        elif self._run_id_factory is None:
+            request_run_id = f"run_{uuid4().hex[:8]}"
+        else:
+            request_run_id = self._run_id_factory()
+            if not isinstance(request_run_id, str):
+                raise TypeError("run_id_factory must return a string")
+            if not request_run_id:
+                raise ValueError("run_id_factory must return a nonempty string")
         input_files = [
             _file_attachment(field_name, value) for field_name, value in (files or {}).items()
         ]
         request = pb.StartRunRequestV2(
             workflow_selector=workflow_selector,
-            run_id=run_id or f"run_{uuid4().hex[:8]}",
+            run_id=request_run_id,
             input_json=_json_payload(input),
             context_json=_json_payload(context),
             input_files=input_files,
