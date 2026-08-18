@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+### Operator transport
+
+- Added a typed terminal-seal activity to V2 run updates and snapshots so clients
+  can replay, retain, and display the final run status and optional reason.
+
 ## 0.1.4
 
 ### Operator transport

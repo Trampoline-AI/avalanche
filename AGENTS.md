@@ -150,6 +150,9 @@ Avoid `--flows .`: operator discovery imports Python files recursively. Use a na
 
 ## Pull Request Descriptions
 
+Every PR MUST add an entry under `## Unreleased` in `CHANGELOG.md` describing
+its user-facing change.
+
 Every PR description must be self-contained and start with these sections in this order:
 
 ```markdown
