@@ -17,7 +17,6 @@ def test_operator_identity_is_stable_and_distinguishes_restarts():
         second.close()
 
 
-
 def test_v2_service_exposes_exact_native_job_contract():
     service = pb.DESCRIPTOR.services_by_name["OperatorServiceV2"]
     expected_methods = {
@@ -124,9 +123,7 @@ def test_v2_result_and_artifact_bodies_are_streamed_not_unary_content():
 
     for descriptor in unary_output_messages:
         assert all(
-            not (
-                field.name == "content" and field.type == FieldDescriptor.TYPE_BYTES
-            )
+            not (field.name == "content" and field.type == FieldDescriptor.TYPE_BYTES)
             for field in descriptor.fields
         )
 
@@ -153,13 +150,14 @@ def test_v2_cursors_and_resets_require_complete_bounded_replay_state():
         "stream": 1,
         "topology_fingerprint": 2,
         "stream_generation": 3,
-        "retained_floor": 4,
-        "source_sequence": 5,
+        "retained_floor_event_ulid": 4,
+        "event_ulid": 5,
     }
 
     watch_request_fields = pb.WatchRunStatusRequestV2.DESCRIPTOR.fields_by_name
     assert {name: field.number for name, field in watch_request_fields.items()} == {
         "after_cursor": 1,
+        "scope_ref": 2,
     }
     assert watch_request_fields["after_cursor"].message_type.name == "LifecycleCursorV2"
 
@@ -196,7 +194,7 @@ def test_v2_cursors_and_resets_require_complete_bounded_replay_state():
 
     status_fields = pb.RunStatusEnvelopeV2.DESCRIPTOR.fields_by_name
     assert {name: field.number for name, field in status_fields.items()} == {
-        "source_sequence": 1,
+        "event_ulid": 1,
         "run_created": 2,
         "run_status_changed": 3,
         "reset_required": 4,
@@ -224,17 +222,17 @@ def test_v2_cursors_and_resets_require_complete_bounded_replay_state():
         stream="run-status",
         topology_fingerprint="topology-1",
         stream_generation=4,
-        retained_floor=7,
-        source_sequence=11,
+        retained_floor_event_ulid="00000000000000000000000007",
+        event_ulid="0000000000000000000000000B",
     )
     for envelope in (
         pb.RunStatusEnvelopeV2(
-            source_sequence=complete_cursor.source_sequence,
+            event_ulid=complete_cursor.event_ulid,
             cursor=complete_cursor,
             run_created=pb.RunCreatedV2(summary=pb.RunSummaryV2(run_id="run-1")),
         ),
         pb.RunStatusEnvelopeV2(
-            source_sequence=complete_cursor.source_sequence,
+            event_ulid=complete_cursor.event_ulid,
             cursor=complete_cursor,
             run_status_changed=pb.RunStatusChangedV2(
                 summary=pb.RunSummaryV2(run_id="run-1", status="running")
@@ -242,7 +240,7 @@ def test_v2_cursors_and_resets_require_complete_bounded_replay_state():
         ),
     ):
         assert envelope.cursor == complete_cursor
-        assert envelope.cursor.source_sequence == envelope.source_sequence
+        assert envelope.cursor.event_ulid == envelope.event_ulid
         assert (
             pb.WatchRunStatusRequestV2(after_cursor=envelope.cursor).after_cursor
             == complete_cursor

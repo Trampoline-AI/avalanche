@@ -120,11 +120,11 @@ export function Inspector({
   const node: NodeSnapshotMsg | undefined = run?.nodes.find((item) => item.nodeId === nodeId);
   const runId = run?.summary?.runId;
   const operatorInstanceId = run?.operatorInstanceId ?? "";
-  const asOfSequence = run?.asOfSequence ?? "";
+  const asOfEventUlid = run?.asOfEventUlid ?? "";
   const eventPageToken = node?.eventPageToken ?? "";
   const hasRunNode = Boolean(run && node);
   const selectionScope = `${operatorInstanceId}\0${runId ?? ""}\0${nodeId ?? ""}`;
-  const descriptorScope = `${selectionScope}\0${asOfSequence}\0${eventPageToken}`;
+  const descriptorScope = `${selectionScope}\0${asOfEventUlid}\0${eventPageToken}`;
   const tab = tabSelection?.scope === selectionScope ? tabSelection.tab : "overview";
   const pageKey = `${descriptorScope}\0${tab}`;
   const eventPageOrder =
@@ -205,7 +205,7 @@ export function Inspector({
           pageSize: DESCRIPTOR_PAGE_SIZE,
           order: eventPageOrder,
           expectedOperatorInstanceId: operatorInstanceId,
-          expectedAsOfSequence: asOfSequence,
+          expectedAsOfEventUlid: asOfEventUlid,
           expectedRunId: runId,
           expectedNodeId: nodeId,
         },
@@ -290,7 +290,7 @@ export function Inspector({
           pageSize: DESCRIPTOR_PAGE_SIZE,
           order: eventPageOrder,
           expectedOperatorInstanceId: operatorInstanceId,
-          expectedAsOfSequence: asOfSequence,
+          expectedAsOfEventUlid: asOfEventUlid,
           expectedRunId: runId,
           expectedNodeId: nodeId,
         },
@@ -319,7 +319,7 @@ export function Inspector({
     };
   }, [
     api,
-    asOfSequence,
+    asOfEventUlid,
     descriptorScope,
     eventPageOrder,
     eventPageToken,

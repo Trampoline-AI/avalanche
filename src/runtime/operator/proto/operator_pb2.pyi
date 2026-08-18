@@ -21,18 +21,18 @@ class ScopeReferenceV2(_message.Message):
     def __init__(self, reference: _Optional[str] = ...) -> None: ...
 
 class LifecycleCursorV2(_message.Message):
-    __slots__ = ("stream", "topology_fingerprint", "stream_generation", "retained_floor", "source_sequence")
+    __slots__ = ("stream", "topology_fingerprint", "stream_generation", "retained_floor_event_ulid", "event_ulid")
     STREAM_FIELD_NUMBER: _ClassVar[int]
     TOPOLOGY_FINGERPRINT_FIELD_NUMBER: _ClassVar[int]
     STREAM_GENERATION_FIELD_NUMBER: _ClassVar[int]
-    RETAINED_FLOOR_FIELD_NUMBER: _ClassVar[int]
-    SOURCE_SEQUENCE_FIELD_NUMBER: _ClassVar[int]
+    RETAINED_FLOOR_EVENT_ULID_FIELD_NUMBER: _ClassVar[int]
+    EVENT_ULID_FIELD_NUMBER: _ClassVar[int]
     stream: str
     topology_fingerprint: str
     stream_generation: int
-    retained_floor: int
-    source_sequence: int
-    def __init__(self, stream: _Optional[str] = ..., topology_fingerprint: _Optional[str] = ..., stream_generation: _Optional[int] = ..., retained_floor: _Optional[int] = ..., source_sequence: _Optional[int] = ...) -> None: ...
+    retained_floor_event_ulid: str
+    event_ulid: str
+    def __init__(self, stream: _Optional[str] = ..., topology_fingerprint: _Optional[str] = ..., stream_generation: _Optional[int] = ..., retained_floor_event_ulid: _Optional[str] = ..., event_ulid: _Optional[str] = ...) -> None: ...
 
 class ContinuationRefV2(_message.Message):
     __slots__ = ("scope_ref", "continuation_id", "cursor")
@@ -104,20 +104,22 @@ class DiscoveryDiagnosticV2(_message.Message):
     def __init__(self, path: _Optional[str] = ..., kind: _Optional[str] = ..., message: _Optional[str] = ...) -> None: ...
 
 class FlowListV2(_message.Message):
-    __slots__ = ("cursor", "flows", "next_page", "diagnostics", "scan_targets", "scope_ref")
+    __slots__ = ("cursor", "flows", "next_page", "diagnostics", "scan_targets", "scope_ref", "revision")
     CURSOR_FIELD_NUMBER: _ClassVar[int]
     FLOWS_FIELD_NUMBER: _ClassVar[int]
     NEXT_PAGE_FIELD_NUMBER: _ClassVar[int]
     DIAGNOSTICS_FIELD_NUMBER: _ClassVar[int]
     SCAN_TARGETS_FIELD_NUMBER: _ClassVar[int]
     SCOPE_REF_FIELD_NUMBER: _ClassVar[int]
+    REVISION_FIELD_NUMBER: _ClassVar[int]
     cursor: LifecycleCursorV2
     flows: _containers.RepeatedCompositeFieldContainer[FlowInfoV2]
     next_page: ContinuationRefV2
     diagnostics: _containers.RepeatedCompositeFieldContainer[DiscoveryDiagnosticV2]
     scan_targets: _containers.RepeatedCompositeFieldContainer[ScanTargetV2]
     scope_ref: ScopeReferenceV2
-    def __init__(self, cursor: _Optional[_Union[LifecycleCursorV2, _Mapping]] = ..., flows: _Optional[_Iterable[_Union[FlowInfoV2, _Mapping]]] = ..., next_page: _Optional[_Union[ContinuationRefV2, _Mapping]] = ..., diagnostics: _Optional[_Iterable[_Union[DiscoveryDiagnosticV2, _Mapping]]] = ..., scan_targets: _Optional[_Iterable[_Union[ScanTargetV2, _Mapping]]] = ..., scope_ref: _Optional[_Union[ScopeReferenceV2, _Mapping]] = ...) -> None: ...
+    revision: int
+    def __init__(self, cursor: _Optional[_Union[LifecycleCursorV2, _Mapping]] = ..., flows: _Optional[_Iterable[_Union[FlowInfoV2, _Mapping]]] = ..., next_page: _Optional[_Union[ContinuationRefV2, _Mapping]] = ..., diagnostics: _Optional[_Iterable[_Union[DiscoveryDiagnosticV2, _Mapping]]] = ..., scan_targets: _Optional[_Iterable[_Union[ScanTargetV2, _Mapping]]] = ..., scope_ref: _Optional[_Union[ScopeReferenceV2, _Mapping]] = ..., revision: _Optional[int] = ...) -> None: ...
 
 class NodeEdgesV2(_message.Message):
     __slots__ = ("children",)
@@ -589,10 +591,12 @@ class RunOutputArtifactChunkV2(_message.Message):
     def __init__(self, chunk_index: _Optional[int] = ..., data: _Optional[bytes] = ..., eof: bool = ...) -> None: ...
 
 class WatchRunStatusRequestV2(_message.Message):
-    __slots__ = ("after_cursor",)
+    __slots__ = ("after_cursor", "scope_ref")
     AFTER_CURSOR_FIELD_NUMBER: _ClassVar[int]
+    SCOPE_REF_FIELD_NUMBER: _ClassVar[int]
     after_cursor: LifecycleCursorV2
-    def __init__(self, after_cursor: _Optional[_Union[LifecycleCursorV2, _Mapping]] = ...) -> None: ...
+    scope_ref: ScopeReferenceV2
+    def __init__(self, after_cursor: _Optional[_Union[LifecycleCursorV2, _Mapping]] = ..., scope_ref: _Optional[_Union[ScopeReferenceV2, _Mapping]] = ...) -> None: ...
 
 class RunCreatedV2(_message.Message):
     __slots__ = ("summary", "nodes", "topology")
@@ -647,8 +651,8 @@ class ResetRequiredV2(_message.Message):
     def __init__(self, history_floor: _Optional[_Union[LifecycleCursorV2, _Mapping]] = ..., latest_cursor: _Optional[_Union[LifecycleCursorV2, _Mapping]] = ...) -> None: ...
 
 class RunStatusEnvelopeV2(_message.Message):
-    __slots__ = ("source_sequence", "run_created", "run_status_changed", "reset_required", "node_status_changed", "activity_appended", "flow_list_changed", "flow_reload_status", "cursor", "scope_ref")
-    SOURCE_SEQUENCE_FIELD_NUMBER: _ClassVar[int]
+    __slots__ = ("event_ulid", "run_created", "run_status_changed", "reset_required", "node_status_changed", "activity_appended", "flow_list_changed", "flow_reload_status", "cursor", "scope_ref")
+    EVENT_ULID_FIELD_NUMBER: _ClassVar[int]
     RUN_CREATED_FIELD_NUMBER: _ClassVar[int]
     RUN_STATUS_CHANGED_FIELD_NUMBER: _ClassVar[int]
     RESET_REQUIRED_FIELD_NUMBER: _ClassVar[int]
@@ -658,7 +662,7 @@ class RunStatusEnvelopeV2(_message.Message):
     FLOW_RELOAD_STATUS_FIELD_NUMBER: _ClassVar[int]
     CURSOR_FIELD_NUMBER: _ClassVar[int]
     SCOPE_REF_FIELD_NUMBER: _ClassVar[int]
-    source_sequence: int
+    event_ulid: str
     run_created: RunCreatedV2
     run_status_changed: RunStatusChangedV2
     reset_required: ResetRequiredV2
@@ -668,4 +672,4 @@ class RunStatusEnvelopeV2(_message.Message):
     flow_reload_status: FlowReloadStatusV2
     cursor: LifecycleCursorV2
     scope_ref: ScopeReferenceV2
-    def __init__(self, source_sequence: _Optional[int] = ..., run_created: _Optional[_Union[RunCreatedV2, _Mapping]] = ..., run_status_changed: _Optional[_Union[RunStatusChangedV2, _Mapping]] = ..., reset_required: _Optional[_Union[ResetRequiredV2, _Mapping]] = ..., node_status_changed: _Optional[_Union[NodeStatusChangedV2, _Mapping]] = ..., activity_appended: _Optional[_Union[ActivityAppendedV2, _Mapping]] = ..., flow_list_changed: _Optional[_Union[FlowListChangedV2, _Mapping]] = ..., flow_reload_status: _Optional[_Union[FlowReloadStatusV2, _Mapping]] = ..., cursor: _Optional[_Union[LifecycleCursorV2, _Mapping]] = ..., scope_ref: _Optional[_Union[ScopeReferenceV2, _Mapping]] = ...) -> None: ...
+    def __init__(self, event_ulid: _Optional[str] = ..., run_created: _Optional[_Union[RunCreatedV2, _Mapping]] = ..., run_status_changed: _Optional[_Union[RunStatusChangedV2, _Mapping]] = ..., reset_required: _Optional[_Union[ResetRequiredV2, _Mapping]] = ..., node_status_changed: _Optional[_Union[NodeStatusChangedV2, _Mapping]] = ..., activity_appended: _Optional[_Union[ActivityAppendedV2, _Mapping]] = ..., flow_list_changed: _Optional[_Union[FlowListChangedV2, _Mapping]] = ..., flow_reload_status: _Optional[_Union[FlowReloadStatusV2, _Mapping]] = ..., cursor: _Optional[_Union[LifecycleCursorV2, _Mapping]] = ..., scope_ref: _Optional[_Union[ScopeReferenceV2, _Mapping]] = ...) -> None: ...

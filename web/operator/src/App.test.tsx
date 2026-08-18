@@ -18,7 +18,7 @@ const projectionHarness = vi.hoisted(() => ({
   state: {
     catalog: {
       operatorInstanceId: "operator-1",
-      asOfSequence: "1",
+      asOfEventUlid: "1",
       revision: "1",
       workflows: [
         {
@@ -138,7 +138,7 @@ const summary = RunSummaryMsg.create({
 function selectedSnapshot(runId: string, nodeName: string) {
   return RunSnapshotMsg.create({
     operatorInstanceId: "operator-1",
-    asOfSequence: "2",
+    asOfEventUlid: "2",
     summary: RunSummaryMsg.create({ ...summary, runId }),
     topology: WorkflowTopologyMsg.create({
       nodeIds: ["node-1"],

@@ -16,6 +16,7 @@ from dataclasses import dataclass
 from typing import Any
 
 import grpc
+from ulid import ULID
 
 from avalanche.runtime import File
 
@@ -47,15 +48,14 @@ from .registry import AmbiguousWorkflow, UnknownWorkflow
 from .results import ResultFileAttachment
 from .server import TRACE_CHUNK_BYTES, _ambiguous_detail, _decode_json_object
 
-_FLOWS_STREAM = "flows"
-_RUN_SUMMARIES_STREAM = "run-summaries"
 _EVENTS_STREAM = "operator-events"
 _MAX_ISSUED_BINDINGS = 10_000
 _MAX_ISSUED_CURSORS = 20_000
+_CursorIdentity = tuple[str, str, int, str, str]
 _ContinuationRegistryKey = tuple[
     str,
     str,
-    tuple[str, str, int, int, int],
+    _CursorIdentity,
     str,
     str,
     str,
@@ -119,9 +119,10 @@ class OperatorV2Servicer(pb_grpc.OperatorServiceV2Servicer):
     def __init__(self, operator: Operator) -> None:
         self._op = operator
         self._binding_lock = threading.RLock()
-        self._issued_cursors: OrderedDict[
-            tuple[str, str, int, int, int], pb.LifecycleCursorV2
-        ] = OrderedDict()
+        self._issued_cursors: OrderedDict[_CursorIdentity, pb.LifecycleCursorV2] = OrderedDict()
+        self._event_ulids_by_sequence: dict[int, str] = {}
+        self._sequences_by_event_ulid: dict[str, int] = {}
+        self._next_event_sequence = 0
         self._continuations: OrderedDict[_ContinuationRegistryKey, _ContinuationBinding] = (
             OrderedDict()
         )
@@ -143,51 +144,78 @@ class OperatorV2Servicer(pb_grpc.OperatorServiceV2Servicer):
 
     def _cursor(
         self,
-        stream: str,
-        source_sequence: int,
+        as_of_sequence: int,
         *,
-        topology_fingerprint: str = "",
-        retained_floor: int | None = None,
+        retained_floor_sequence: int | None = None,
     ) -> pb.LifecycleCursorV2:
         """Issue one complete, locally retained V2 lifecycle cursor."""
+        if retained_floor_sequence is None:
+            floor_sequence = min(
+                self._retained_floor_sequence_for(),
+                as_of_sequence,
+            )
+        else:
+            floor_sequence = retained_floor_sequence
         cursor = pb.LifecycleCursorV2(
-            stream=stream,
-            topology_fingerprint=(
-                topology_fingerprint or self._stream_topology_fingerprint(stream)
-            ),
+            stream=_EVENTS_STREAM,
+            topology_fingerprint=self._stream_topology_fingerprint(_EVENTS_STREAM),
             stream_generation=self._generation,
-            retained_floor=(
-                self._retained_floor_for(stream, source_sequence)
-                if retained_floor is None
-                else retained_floor
-            ),
-            source_sequence=source_sequence,
+            retained_floor_event_ulid=self._event_ulid_for_sequence(floor_sequence),
+            event_ulid=self._event_ulid_for_sequence(as_of_sequence),
         )
         self._remember_cursor(cursor)
         return cursor
+
+    def _event_ulid_for_sequence(self, sequence: int) -> str:
+        if isinstance(sequence, bool) or not isinstance(sequence, int) or sequence < 0:
+            raise ValueError("lifecycle sequence must be a non-negative integer")
+        with self._binding_lock:
+            while self._next_event_sequence <= sequence:
+                previous = self._event_ulids_by_sequence.get(self._next_event_sequence - 1)
+                candidate = str(ULID())
+                if previous is not None and candidate <= previous:
+                    candidate = str(ULID.from_int(int(ULID.from_str(previous)) + 1))
+                self._event_ulids_by_sequence[self._next_event_sequence] = candidate
+                self._sequences_by_event_ulid[candidate] = self._next_event_sequence
+                self._next_event_sequence += 1
+            return self._event_ulids_by_sequence[sequence]
+
+    def _sequence_for_event_ulid(self, event_ulid: str) -> int | None:
+        if not self._is_canonical_event_ulid(event_ulid):
+            return None
+        with self._binding_lock:
+            return self._sequences_by_event_ulid.get(event_ulid)
+
+    @staticmethod
+    def _is_canonical_event_ulid(event_ulid: str) -> bool:
+        if not event_ulid:
+            return False
+        try:
+            return str(ULID.from_str(event_ulid)) == event_ulid
+        except ValueError:
+            return False
 
     def _stream_topology_fingerprint(self, stream: str) -> str:
         material = f"{self._op.operator_instance_id}:{stream}".encode("utf-8")
         return hashlib.sha256(material).hexdigest()
 
-    def _retained_floor_for(self, stream: str, source_sequence: int) -> int:
-        if stream == _EVENTS_STREAM:
-            history_floor, _ = self._op.update_history_bounds()
-            return max(1, history_floor)
-        if stream == _RUN_SUMMARIES_STREAM:
-            return max(1, self._op.retained_structural_floor())
-        return max(1, source_sequence)
+    def _retained_floor_sequence_for(self) -> int:
+        history_floor, _ = self._op.update_history_bounds()
+        return max(0, history_floor)
+
+    def _expected_topology_fingerprint(self, stream: str) -> str:
+        return self._stream_topology_fingerprint(stream)
 
     @staticmethod
     def _cursor_identity(
         cursor: pb.LifecycleCursorV2,
-    ) -> tuple[str, str, int, int, int]:
+    ) -> _CursorIdentity:
         return (
             cursor.stream,
             cursor.topology_fingerprint,
             cursor.stream_generation,
-            cursor.retained_floor,
-            cursor.source_sequence,
+            cursor.retained_floor_event_ulid,
+            cursor.event_ulid,
         )
 
     @staticmethod
@@ -239,25 +267,24 @@ class OperatorV2Servicer(pb_grpc.OperatorServiceV2Servicer):
             cursor.stream
             and cursor.topology_fingerprint
             and cursor.stream_generation
-            and cursor.retained_floor
+            and self._is_canonical_event_ulid(cursor.retained_floor_event_ulid)
+            and self._is_canonical_event_ulid(cursor.event_ulid)
         )
 
     def _cursor_is_within_retained_window(self, cursor: pb.LifecycleCursorV2) -> bool:
-        if cursor.retained_floor != self._retained_floor_for(
-            cursor.stream,
-            cursor.source_sequence,
-        ):
+        sequence = self._sequence_for_event_ulid(cursor.event_ulid)
+        if sequence is None:
             return False
-        if cursor.source_sequence > self._op.current_sequence:
+        if cursor.topology_fingerprint != self._expected_topology_fingerprint(cursor.stream):
             return False
-        if cursor.stream == _EVENTS_STREAM:
-            history_floor, _ = self._op.update_history_bounds()
-            return cursor.source_sequence >= history_floor - 1
-        if cursor.stream == _RUN_SUMMARIES_STREAM:
-            return self._op.has_retained_structural_baseline(cursor.source_sequence)
-        if cursor.stream == _FLOWS_STREAM:
-            return cursor.source_sequence == self._op.get_catalog().as_of_sequence
-        return True
+        floor_sequence = self._retained_floor_sequence_for()
+        cursor_floor_sequence = self._sequence_for_event_ulid(cursor.retained_floor_event_ulid)
+        if cursor_floor_sequence is None or cursor_floor_sequence > floor_sequence:
+            return False
+        if sequence > self._op.current_sequence:
+            return False
+        history_floor, _ = self._op.update_history_bounds()
+        return sequence >= history_floor - 1
 
     def _cursor_is_issued_for_stream(
         self,
@@ -282,7 +309,7 @@ class OperatorV2Servicer(pb_grpc.OperatorServiceV2Servicer):
         if not self._cursor_is_complete(cursor):
             context.abort(
                 grpc.StatusCode.INVALID_ARGUMENT,
-                "Cursor must include stream, topology, generation, and retained floor",
+                "Cursor must include stream, topology, generation, and retained event ULIDs",
             )
         if cursor.stream != expected_stream:
             context.abort(
@@ -417,20 +444,15 @@ class OperatorV2Servicer(pb_grpc.OperatorServiceV2Servicer):
                 self._continuations.popitem(last=False)
         return continuation
 
-    @staticmethod
-    def _activity_stream(run_id: str, node_id: str) -> str:
-        return f"activity:{run_id}:{node_id or 'logs'}"
-
     def _activity_continuation(
         self,
         run_id: str,
         node_id: str,
         token: str,
-        source_sequence: int,
+        as_of_sequence: int,
     ) -> pb.ContinuationRefV2 | None:
-        stream = self._activity_stream(run_id, node_id)
         return self._continuation(
-            self._cursor(stream, source_sequence),
+            self._cursor(as_of_sequence),
             token,
             run_id=run_id,
             node_id=node_id,
@@ -683,7 +705,7 @@ class OperatorV2Servicer(pb_grpc.OperatorServiceV2Servicer):
 
     def _run_snapshot_message(self, snapshot, context) -> pb.RunSnapshotV2:
         run_id = snapshot.summary.run_id
-        source_sequence = snapshot.as_of_sequence
+        as_of_sequence = snapshot.as_of_sequence
         continuations = {
             node.node_id: continuation
             for node in snapshot.nodes
@@ -692,14 +714,14 @@ class OperatorV2Servicer(pb_grpc.OperatorServiceV2Servicer):
                     run_id,
                     node.node_id,
                     node.event_page_token,
-                    source_sequence,
+                    as_of_sequence,
                 )
             )
             is not None
         }
         return run_snapshot_to_v2(
             snapshot,
-            cursor=self._cursor(f"run:{run_id}", source_sequence),
+            cursor=self._cursor(as_of_sequence),
             scope_ref=self._scope(),
             trace_detail_ref_for=lambda trace_run_id, node_id, trace, run_sequence: (
                 self._trace_detail_ref(
@@ -716,7 +738,7 @@ class OperatorV2Servicer(pb_grpc.OperatorServiceV2Servicer):
                 run_id,
                 "",
                 snapshot.log_page_token,
-                source_sequence,
+                as_of_sequence,
             ),
         )
 
@@ -724,15 +746,11 @@ class OperatorV2Servicer(pb_grpc.OperatorServiceV2Servicer):
 
     def DiscoverFlows(self, request, context):  # noqa: N802
         catalog = self._op.get_catalog()
-        cursor = self._cursor(
-            _FLOWS_STREAM,
-            catalog.as_of_sequence,
-            topology_fingerprint=str(catalog.revision),
-        )
+        cursor = self._cursor(catalog.as_of_sequence)
         token = self._continuation_token(
             request.continuation,
             context,
-            stream=_FLOWS_STREAM,
+            stream=_EVENTS_STREAM,
             category="flows",
         )
         offset = 0
@@ -804,7 +822,7 @@ class OperatorV2Servicer(pb_grpc.OperatorServiceV2Servicer):
         token = self._continuation_token(
             request.continuation,
             context,
-            stream=_RUN_SUMMARIES_STREAM,
+            stream=_EVENTS_STREAM,
             category="run-summaries",
             workflow_selector=request.workflow_selector,
         )
@@ -820,7 +838,7 @@ class OperatorV2Servicer(pb_grpc.OperatorServiceV2Servicer):
             context.abort(grpc.StatusCode.INVALID_ARGUMENT, _ambiguous_detail(exc))
         except ValueError as exc:
             context.abort(grpc.StatusCode.INVALID_ARGUMENT, str(exc))
-        cursor = self._cursor(_RUN_SUMMARIES_STREAM, page.as_of_sequence)
+        cursor = self._cursor(page.as_of_sequence)
         message = pb.RunSummaryPageV2(
             cursor=cursor,
             runs=[run_summary_to_v2(item) for item in page.runs],
@@ -852,12 +870,11 @@ class OperatorV2Servicer(pb_grpc.OperatorServiceV2Servicer):
 
     def ListRunActivity(self, request, context):  # noqa: N802
         order = int(request.order)
-        stream = self._activity_stream(request.run_id, request.node_id)
         category = "agent-events" if request.node_id else "logs"
         token = self._continuation_token(
             request.continuation,
             context,
-            stream=stream,
+            stream=_EVENTS_STREAM,
             run_id=request.run_id,
             node_id=request.node_id,
             category=category,
@@ -920,7 +937,7 @@ class OperatorV2Servicer(pb_grpc.OperatorServiceV2Servicer):
             context.abort(grpc.StatusCode.NOT_FOUND, "Activity target not found")
         except ValueError as exc:
             context.abort(grpc.StatusCode.INVALID_ARGUMENT, str(exc))
-        cursor = self._cursor(stream, page.as_of_sequence)
+        cursor = self._cursor(page.as_of_sequence)
         message = pb.RunActivityPageV2(
             cursor=cursor,
             run_id=page.run_id if request.node_id else request.run_id,
@@ -972,7 +989,7 @@ class OperatorV2Servicer(pb_grpc.OperatorServiceV2Servicer):
         run_sequence = self._run_sequence(request.run_id)
         value_bytes = payload.value_json.encode("utf-8")
         return pb.RunResultV2(
-            cursor=self._cursor(f"run:{request.run_id}", run_sequence),
+            cursor=self._cursor(run_sequence),
             run_id=request.run_id,
             scope_ref=self._scope(),
             value=pb.ResultValueV2(
@@ -998,11 +1015,10 @@ class OperatorV2Servicer(pb_grpc.OperatorServiceV2Servicer):
     def ListRunOutputArtifacts(self, request, context):  # noqa: N802
         payload = self._result_payload(request.run_id, context)
         run_sequence = self._run_sequence(request.run_id)
-        stream = f"artifacts:{request.run_id}"
         token = self._continuation_token(
             request.continuation,
             context,
-            stream=stream,
+            stream=_EVENTS_STREAM,
             run_id=request.run_id,
             category="artifacts",
         )
@@ -1021,14 +1037,13 @@ class OperatorV2Servicer(pb_grpc.OperatorServiceV2Servicer):
         size = _bounded_page_size(request.page_size)
         page = payload.files[offset : offset + size]
         next_offset = offset + len(page)
-        cursor = self._cursor(stream, run_sequence)
+        cursor = self._cursor(run_sequence)
         message = pb.RunOutputArtifactPageV2(
             cursor=cursor,
             run_id=request.run_id,
             scope_ref=self._scope(),
             artifacts=[
-                self._artifact_descriptor(request.run_id, item, run_sequence)
-                for item in page
+                self._artifact_descriptor(request.run_id, item, run_sequence) for item in page
             ],
         )
         if next_offset < len(payload.files):
@@ -1060,17 +1075,15 @@ class OperatorV2Servicer(pb_grpc.OperatorServiceV2Servicer):
     def _watch_reset_envelope(self) -> pb.RunStatusEnvelopeV2:
         history_floor, latest_sequence = self._op.update_history_bounds()
         history_cursor = self._cursor(
-            _EVENTS_STREAM,
             history_floor,
-            retained_floor=max(1, history_floor),
+            retained_floor_sequence=max(0, history_floor),
         )
         latest_cursor = self._cursor(
-            _EVENTS_STREAM,
             latest_sequence,
-            retained_floor=max(1, history_floor),
+            retained_floor_sequence=max(0, history_floor),
         )
         return pb.RunStatusEnvelopeV2(
-            source_sequence=latest_sequence,
+            event_ulid=latest_cursor.event_ulid,
             reset_required=pb.ResetRequiredV2(
                 history_floor=history_cursor,
                 latest_cursor=latest_cursor,
@@ -1080,6 +1093,8 @@ class OperatorV2Servicer(pb_grpc.OperatorServiceV2Servicer):
         )
 
     def WatchRunStatus(self, request, context):  # noqa: N802
+        if request.HasField("scope_ref"):
+            self._validate_scope(request.scope_ref, context)
         if not request.HasField("after_cursor"):
             if self._op.current_sequence:
                 yield self._watch_reset_envelope()
@@ -1089,7 +1104,10 @@ class OperatorV2Servicer(pb_grpc.OperatorServiceV2Servicer):
             yield self._watch_reset_envelope()
             return
         else:
-            after_sequence = request.after_cursor.source_sequence
+            after_sequence = self._sequence_for_event_ulid(request.after_cursor.event_ulid)
+            if after_sequence is None:
+                yield self._watch_reset_envelope()
+                return
         subscription = self._op.subscribe_operator_updates(
             self._op.operator_instance_id, after_sequence
         )
@@ -1108,14 +1126,7 @@ class OperatorV2Servicer(pb_grpc.OperatorServiceV2Servicer):
                 message = update_envelope_to_v2(
                     envelope,
                     scope_ref=self._scope(),
-                    cursor_for=lambda sequence: self._cursor(_EVENTS_STREAM, sequence),
-                    flow_cursor_for=(
-                        lambda sequence, topology: self._cursor(
-                            _FLOWS_STREAM,
-                            sequence,
-                            topology_fingerprint=topology,
-                        )
-                    ),
+                    cursor_for=lambda sequence: self._cursor(sequence),
                     activity_continuation_for=(
                         lambda run_id, node_id, token: self._activity_continuation(
                             run_id,

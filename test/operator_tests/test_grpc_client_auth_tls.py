@@ -114,6 +114,12 @@ class AuthenticatedOperatorService(pb_grpc.OperatorServiceV2Servicer):
                     ),
                 ),
             ),
-            cursor=pb.LifecycleCursorV2(stream="flows", stream_generation=1, source_sequence=0),
+            cursor=pb.LifecycleCursorV2(
+                stream="flows",
+                topology_fingerprint="0",
+                stream_generation=1,
+                retained_floor_event_ulid="00000000000000000000000000",
+                event_ulid="00000000000000000000000000",
+            ),
             scope_ref=pb.ScopeReferenceV2(reference="operator-auth"),
         )

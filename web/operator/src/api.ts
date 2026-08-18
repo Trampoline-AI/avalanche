@@ -38,28 +38,29 @@ const MAX_BASELINE_PAGES = 100;
 const MAX_BASELINE_SUMMARIES = 10_000;
 const MAX_BASELINE_BYTES = 8 * 1024 * 1024;
 const MAX_CATALOG_PAGES = 100;
+const EVENT_ULID_PATTERN = /^[0-7][0-9A-HJKMNP-TV-Z]{25}$/;
 
 export interface StructuralBaseline {
   catalog: CatalogSnapshotMsg;
-  asOfSequence: string;
+  asOfEventUlid: string;
   runs: RunSummaryMsg[];
 }
 
 export interface LogPageRequest extends ListLogsRequest {
   expectedOperatorInstanceId: string;
-  expectedAsOfSequence: string;
+  expectedAsOfEventUlid: string;
 }
 
 export interface AgentEventPageRequest extends ListAgentEventsRequest {
   expectedOperatorInstanceId: string;
-  expectedAsOfSequence: string;
+  expectedAsOfEventUlid: string;
   expectedRunId: string;
   expectedNodeId: string;
 }
 
 export interface LogDescriptorPage {
   operatorInstanceId: string;
-  asOfSequence: string;
+  asOfEventUlid: string;
   records: LogRecordDescriptorMsg[];
   nextPageToken: string;
   nextCursor: string;
@@ -67,7 +68,7 @@ export interface LogDescriptorPage {
 
 export interface AgentEventDescriptorPage {
   operatorInstanceId: string;
-  asOfSequence: string;
+  asOfEventUlid: string;
   runId: string;
   nodeId: string;
   records: AgentEventDescriptorMsg[];
@@ -85,7 +86,7 @@ export interface OperatorApi {
   ): Promise<RunSnapshotMsg>;
   streamUpdates(
     operatorInstanceId: string,
-    afterSequence: string,
+    afterEventUlid: string,
     signal?: AbortSignal,
   ): AsyncIterable<OperatorUpdateEnvelope>;
   listLogPage(request: LogPageRequest, signal?: AbortSignal): Promise<LogDescriptorPage>;
@@ -116,13 +117,10 @@ export class GrpcWebOperatorApi implements OperatorApi {
    */
   private readonly continuations = new Map<string, RegisteredContinuation>();
   private readonly detailRefs = new Map<string, ActivityDetailRefV2>();
-  private readonly eventCursorsBySequence = new Map<string, LifecycleCursorV2>();
+  private readonly eventCursorsByUlid = new Map<string, LifecycleCursorV2>();
   private scopeReference = "";
 
-  constructor(
-    baseUrl = window.location.origin,
-    client?: IOperatorServiceV2Client,
-  ) {
+  constructor(baseUrl = window.location.origin, client?: IOperatorServiceV2Client) {
     this.client =
       client ??
       new OperatorServiceV2Client(new GrpcWebFetchTransport({ baseUrl, format: "binary" }));
@@ -151,7 +149,7 @@ export class GrpcWebOperatorApi implements OperatorApi {
     const seenContinuations = new Set<string>();
     let continuation: ContinuationRefV2 | undefined;
     let operatorInstanceId = "";
-    let asOfSequence = "0";
+    let asOfEventUlid = "";
     let summaryBytes = 0;
     do {
       if (seenContinuations.size >= MAX_BASELINE_PAGES) {
@@ -167,13 +165,13 @@ export class GrpcWebOperatorApi implements OperatorApi {
         : { workflowSelector: "", pageSize: 100 };
       const page = await this.client.listRunSummaries(request, options).response;
       const pageOperatorInstanceId = this.rememberScope(page.scopeRef);
-      const pageAsOfSequence = this.rememberCursor(page.cursor);
+      const pageAsOfEventUlid = this.rememberCursor(page.cursor);
       if (!operatorInstanceId) {
         operatorInstanceId = pageOperatorInstanceId;
-        asOfSequence = pageAsOfSequence;
+        asOfEventUlid = pageAsOfEventUlid;
       } else if (
         pageOperatorInstanceId !== operatorInstanceId ||
-        pageAsOfSequence !== asOfSequence
+        pageAsOfEventUlid !== asOfEventUlid
       ) {
         throw new Error("Run baseline changed while loading pages");
       }
@@ -196,11 +194,11 @@ export class GrpcWebOperatorApi implements OperatorApi {
       catalog.operatorInstanceId !== operatorInstanceId ||
       confirmedCatalog.operatorInstanceId !== operatorInstanceId ||
       catalog.revision !== confirmedCatalog.revision ||
-      BigInt(catalog.asOfSequence) > BigInt(asOfSequence)
+      catalog.asOfEventUlid > asOfEventUlid
     ) {
       throw new Error("Operator state changed while loading the browser baseline");
     }
-    return { catalog, asOfSequence, runs };
+    return { catalog, asOfEventUlid, runs };
   }
 
   async getLatestRunSnapshot(
@@ -221,19 +219,21 @@ export class GrpcWebOperatorApi implements OperatorApi {
 
   async *streamUpdates(
     operatorInstanceId: string,
-    afterSequence: string,
+    afterEventUlid: string,
     signal?: AbortSignal,
   ): AsyncIterable<OperatorUpdateEnvelope> {
-    const afterCursor = this.cursorForSequence(afterSequence);
-    const request = afterCursor ? { afterCursor } : {};
-    const call = this.client.watchRunStatus(
-      request,
-      signal ? { abort: signal } : undefined,
-    );
+    const afterCursor = this.cursorForEventUlid(afterEventUlid);
+    const request = {
+      ...(afterCursor ? { afterCursor } : {}),
+      ...(operatorInstanceId ? { scopeRef: { reference: operatorInstanceId } } : {}),
+    };
+    const call = this.client.watchRunStatus(request, signal ? { abort: signal } : undefined);
     for await (const envelope of call.responses) {
       const mapped = this.mapStatusEnvelope(envelope);
       if (!mapped) continue;
-      if (operatorInstanceId && mapped.operatorInstanceId !== operatorInstanceId) continue;
+      if (operatorInstanceId && mapped.operatorInstanceId !== operatorInstanceId) {
+        throw new Error("Update does not belong to the connected operator scope");
+      }
       yield mapped;
     }
   }
@@ -254,10 +254,10 @@ export class GrpcWebOperatorApi implements OperatorApi {
       signal ? { abort: signal } : undefined,
     ).response;
     const operatorInstanceId = this.rememberScope(page.scopeRef);
-    const asOfSequence = this.rememberCursor(page.cursor);
+    const asOfEventUlid = this.rememberCursor(page.cursor);
     if (
       operatorInstanceId !== request.expectedOperatorInstanceId ||
-      asOfSequence !== request.expectedAsOfSequence
+      asOfEventUlid !== request.expectedAsOfEventUlid
     ) {
       throw new Error("Log page does not belong to the selected run snapshot");
     }
@@ -279,7 +279,7 @@ export class GrpcWebOperatorApi implements OperatorApi {
     );
     return {
       operatorInstanceId,
-      asOfSequence,
+      asOfEventUlid,
       records,
       nextPageToken,
       nextCursor,
@@ -305,10 +305,10 @@ export class GrpcWebOperatorApi implements OperatorApi {
       signal ? { abort: signal } : undefined,
     ).response;
     const operatorInstanceId = this.rememberScope(page.scopeRef);
-    const asOfSequence = this.rememberCursor(page.cursor);
+    const asOfEventUlid = this.rememberCursor(page.cursor);
     if (
       operatorInstanceId !== request.expectedOperatorInstanceId ||
-      asOfSequence !== request.expectedAsOfSequence ||
+      asOfEventUlid !== request.expectedAsOfEventUlid ||
       page.runId !== request.expectedRunId ||
       entry.nodeId !== request.expectedNodeId
     ) {
@@ -332,7 +332,7 @@ export class GrpcWebOperatorApi implements OperatorApi {
     );
     return {
       operatorInstanceId,
-      asOfSequence,
+      asOfEventUlid,
       runId: page.runId,
       nodeId: entry.nodeId,
       records,
@@ -380,23 +380,24 @@ export class GrpcWebOperatorApi implements OperatorApi {
 
   private rememberScope(scopeRef: ScopeReferenceV2 | undefined): string {
     const reference = scopeRef?.reference ?? "";
+    if (reference && this.scopeReference && reference !== this.scopeReference) {
+      throw new Error("Response does not belong to the connected operator scope");
+    }
     if (reference) this.scopeReference = reference;
     return reference || this.scopeReference;
   }
 
   private rememberCursor(cursor: LifecycleCursorV2 | undefined): string {
-    if (!cursor) return "0";
+    if (!cursor) return "";
     if (!this.isCompleteCursor(cursor)) {
-      throw new Error("Lifecycle cursor is incomplete");
+      throw new Error("Lifecycle cursor is not a complete baseline binding");
     }
-    if (cursor.stream === "operator-events") {
-      this.eventCursorsBySequence.set(cursor.sourceSequence, cursor);
-    }
-    return cursor.sourceSequence;
+    this.eventCursorsByUlid.set(cursor.eventUlid, cursor);
+    return cursor.eventUlid;
   }
 
-  private cursorForSequence(sequence: string): LifecycleCursorV2 | undefined {
-    return this.eventCursorsBySequence.get(sequence);
+  private cursorForEventUlid(eventUlid: string): LifecycleCursorV2 | undefined {
+    return this.eventCursorsByUlid.get(eventUlid);
   }
 
   private registerContinuation(
@@ -448,9 +449,12 @@ export class GrpcWebOperatorApi implements OperatorApi {
   private isCompleteCursor(cursor: LifecycleCursorV2): boolean {
     return Boolean(
       cursor.stream &&
-        cursor.topologyFingerprint &&
-        cursor.streamGeneration !== "0" &&
-        cursor.retainedFloor !== "0",
+      cursor.stream === "operator-events" &&
+      cursor.topologyFingerprint &&
+      cursor.streamGeneration !== "0" &&
+      EVENT_ULID_PATTERN.test(cursor.retainedFloorEventUlid) &&
+      EVENT_ULID_PATTERN.test(cursor.eventUlid) &&
+      cursor.eventUlid >= cursor.retainedFloorEventUlid,
     );
   }
 
@@ -462,8 +466,8 @@ export class GrpcWebOperatorApi implements OperatorApi {
       left.cursor.stream === right.cursor.stream &&
       left.cursor.topologyFingerprint === right.cursor.topologyFingerprint &&
       left.cursor.streamGeneration === right.cursor.streamGeneration &&
-      left.cursor.retainedFloor === right.cursor.retainedFloor &&
-      left.cursor.sourceSequence === right.cursor.sourceSequence
+      left.cursor.retainedFloorEventUlid === right.cursor.retainedFloorEventUlid &&
+      left.cursor.eventUlid === right.cursor.eventUlid
     );
   }
 
@@ -485,20 +489,27 @@ export class GrpcWebOperatorApi implements OperatorApi {
     const scanTargets: CatalogSnapshotMsg["scanTargets"] = [];
     const diagnostics: CatalogSnapshotMsg["diagnostics"] = [];
     let operatorInstanceId = "";
-    let asOfSequence = "0";
+    let asOfEventUlid = "";
+    let revision = "";
     for (const page of pages) {
       flows.push(...page.flows);
       scanTargets.push(...page.scanTargets);
       diagnostics.push(...page.diagnostics);
       const reference = this.rememberScope(page.scopeRef);
       if (!operatorInstanceId) operatorInstanceId = reference;
-      const pageSequence = this.rememberCursor(page.cursor);
-      if (page.cursor) asOfSequence = pageSequence;
+      const pageEventUlid = this.rememberCursor(page.cursor);
+      if (page.cursor) asOfEventUlid = pageEventUlid;
+      if (page.revision !== "0") {
+        if (revision && page.revision !== revision) {
+          throw new Error("Flow catalog revision changed while loading pages");
+        }
+        revision = page.revision;
+      }
     }
     return {
       operatorInstanceId,
-      asOfSequence,
-      revision: catalogRevision(flows),
+      asOfEventUlid,
+      revision: revision || catalogRevision(flows),
       workflows: flows.map(mapFlowInfo),
       scanTargets,
       diagnostics,
@@ -509,7 +520,7 @@ export class GrpcWebOperatorApi implements OperatorApi {
     const runId = snapshot.summary?.runId ?? "";
     const mapped: RunSnapshotMsg = {
       operatorInstanceId: this.rememberScope(snapshot.scopeRef),
-      asOfSequence: this.rememberCursor(snapshot.cursor),
+      asOfEventUlid: this.rememberCursor(snapshot.cursor),
       nodes: snapshot.nodes.map((node) => this.mapNodeSnapshot(runId, node)),
       latestLogSequence: snapshot.latestLogSequence,
       logPageToken: this.registerContinuation(snapshot.logContinuation, runId, ""),
@@ -550,9 +561,7 @@ export class GrpcWebOperatorApi implements OperatorApi {
     };
   }
 
-  private mapAgentEventDescriptor(
-    activity: RunActivityDescriptorV2,
-  ): AgentEventDescriptorMsg {
+  private mapAgentEventDescriptor(activity: RunActivityDescriptorV2): AgentEventDescriptorMsg {
     const mapped: AgentEventDescriptorMsg = {
       eventSequence: activity.runSequence,
       sizeBytes: activity.sizeBytes,
@@ -570,11 +579,17 @@ export class GrpcWebOperatorApi implements OperatorApi {
 
   private mapStatusEnvelope(envelope: RunStatusEnvelopeV2): OperatorUpdateEnvelope | undefined {
     const operatorInstanceId = this.rememberScope(envelope.scopeRef);
-    const sequence = this.rememberCursor(envelope.cursor);
+    if (!operatorInstanceId) {
+      throw new Error("Update omitted its operator scope reference");
+    }
+    const eventUlid = this.rememberCursor(envelope.cursor);
+    if (envelope.eventUlid !== eventUlid) {
+      throw new Error("Update event ULID does not match its cursor");
+    }
     const payload = envelope.payload;
     const update = (change: OperatorUpdate["change"]): OperatorUpdateEnvelope => ({
       operatorInstanceId,
-      payload: { oneofKind: "update", update: { sequence, change } },
+      payload: { oneofKind: "update", update: { eventUlid, change } },
     });
     switch (payload.oneofKind) {
       case "runCreated": {
@@ -670,6 +685,17 @@ export class GrpcWebOperatorApi implements OperatorApi {
       }
       case "resetRequired": {
         const reset = payload.resetRequired;
+        if (
+          !reset.historyFloor ||
+          !reset.latestCursor ||
+          !this.isCompleteCursor(reset.historyFloor) ||
+          !this.isCompleteCursor(reset.latestCursor) ||
+          reset.latestCursor.eventUlid !== envelope.eventUlid ||
+          reset.latestCursor.eventUlid !== envelope.cursor?.eventUlid ||
+          reset.historyFloor.eventUlid > reset.latestCursor.eventUlid
+        ) {
+          throw new Error("Reset cursors are not a complete event binding");
+        }
         if (reset.historyFloor) this.rememberCursor(reset.historyFloor);
         if (reset.latestCursor) this.rememberCursor(reset.latestCursor);
         return {
@@ -677,8 +703,8 @@ export class GrpcWebOperatorApi implements OperatorApi {
           payload: {
             oneofKind: "resetRequired",
             resetRequired: {
-              historyFloor: reset.historyFloor?.sourceSequence ?? "0",
-              latestSequence: reset.latestCursor?.sourceSequence ?? "0",
+              historyFloorEventUlid: reset.historyFloor?.eventUlid ?? "",
+              latestEventUlid: reset.latestCursor?.eventUlid ?? "",
             },
           },
         };
@@ -736,13 +762,14 @@ function mapFlowInfo(flow: FlowInfoV2): FlowInfoMsg {
 }
 
 /**
- * V2 has no catalog revision counter; derive a deterministic content revision
- * from the flow selectors and manifest digests so equality holds across
- * unchanged DiscoverFlows responses.
+ * Preserve a deterministic fallback for older test doubles that omit the
+ * independent catalog revision field.
  */
 function catalogRevision(flows: FlowInfoV2[]): string {
   let hash = 0x811c9dc5;
-  const text = flows.map((flow) => `${flow.workflowSelector}=${flow.manifestDigest}`).join("\n");
+  const text = flows
+    .map((flow) => `${flow.workflowSelector}=${flow.manifestDigest}`)
+    .join("\n");
   for (let index = 0; index < text.length; index += 1) {
     hash ^= text.charCodeAt(index);
     hash = Math.imul(hash, 0x01000193);

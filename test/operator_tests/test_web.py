@@ -78,16 +78,14 @@ def test_browser_listener_proxies_unary_flow_list_from_remote_operator(tmp_path:
     grpc_server = serve_operator(operator, port=grpc_port, block=False)
     server = start_browser_server(f"127.0.0.1:{grpc_port}", port=0, asset_root=tmp_path)
     try:
-        status, content_type, body = _post(
-            server, "DiscoverFlows", pb.DiscoverFlowsRequestV2()
-        )
+        status, content_type, body = _post(server, "DiscoverFlows", pb.DiscoverFlowsRequestV2())
         frames = _frames(body)
         flow_list = pb.FlowListV2.FromString(frames[0][1])
 
         assert status == 200
         assert content_type == _CONTENT_TYPE
         assert flow_list.scope_ref.reference == operator.operator_instance_id
-        assert flow_list.cursor.source_sequence == operator.current_sequence
+        assert len(flow_list.cursor.event_ulid) == 26
         assert frames[1][0] == 0x80
         assert b"grpc-status: 0" in frames[1][1]
     finally:
@@ -108,7 +106,11 @@ def test_browser_listener_proxies_stream_reset_from_remote_operator(tmp_path: Pa
             "WatchRunStatus",
             pb.WatchRunStatusRequestV2(
                 after_cursor=pb.LifecycleCursorV2(
-                    stream_generation=42, source_sequence=1
+                    stream="operator-events",
+                    topology_fingerprint="foreign-topology",
+                    stream_generation=42,
+                    retained_floor_event_ulid="00000000000000000000000001",
+                    event_ulid="00000000000000000000000002",
                 )
             ),
         )

@@ -141,7 +141,9 @@ def _assert_complete_cursor(cursor: pb.LifecycleCursorV2) -> None:
     assert cursor.stream
     assert cursor.topology_fingerprint
     assert cursor.stream_generation
-    assert cursor.retained_floor
+    assert cursor.retained_floor_event_ulid
+    assert cursor.event_ulid
+    assert cursor.event_ulid >= cursor.retained_floor_event_ulid
 
 
 def _selector(stub) -> str:
@@ -289,7 +291,7 @@ def test_client_default_run_id_keeps_run_hex_shape():
 def test_discover_flows_returns_enriched_flow_list(stub):
     page = stub.DiscoverFlows(pb.DiscoverFlowsRequestV2())
 
-    assert page.cursor.stream == "flows"
+    assert page.cursor.stream == "operator-events"
     assert page.cursor.stream_generation != 0
     assert page.cursor.topology_fingerprint
     simple = next(f for f in page.flows if f.display_name == "simple_workflow")
@@ -397,7 +399,13 @@ def test_watch_run_status_streams_run_lifecycle(stub, v2_server):
 def test_watch_run_status_rejects_foreign_generation(stub):
     responses = stub.WatchRunStatus(
         pb.WatchRunStatusRequestV2(
-            after_cursor=pb.LifecycleCursorV2(stream_generation=123, source_sequence=1)
+            after_cursor=pb.LifecycleCursorV2(
+                stream="operator-events",
+                topology_fingerprint="foreign-topology",
+                stream_generation=123,
+                retained_floor_event_ulid="00000000000000000000000001",
+                event_ulid="00000000000000000000000002",
+            )
         )
     )
     envelope = next(responses)
@@ -533,7 +541,11 @@ def test_artifact_refs_are_immutable_and_reject_forged_bindings(contract_stub):
     forged.CopyFrom(reference)
     forged.size_bytes += 1
     with pytest.raises(grpc.RpcError) as excinfo:
-        list(service.ReadRunOutputArtifact(pb.ReadRunOutputArtifactRequestV2(artifact_ref=forged)))
+        list(
+            service.ReadRunOutputArtifact(
+                pb.ReadRunOutputArtifactRequestV2(artifact_ref=forged)
+            )
+        )
     assert excinfo.value.code() == grpc.StatusCode.INVALID_ARGUMENT
 
 
@@ -570,8 +582,8 @@ def test_watch_resumes_only_from_complete_server_issued_event_cursors(stub, v2_s
         "stream",
         "topology_fingerprint",
         "stream_generation",
-        "retained_floor",
-        "source_sequence",
+        "retained_floor_event_ulid",
+        "event_ulid",
     ):
         invalid = pb.LifecycleCursorV2()
         invalid.CopyFrom(issued)
@@ -581,10 +593,10 @@ def test_watch_resumes_only_from_complete_server_issued_event_cursors(stub, v2_s
             invalid.topology_fingerprint = "foreign-topology"
         elif field == "stream_generation":
             invalid.stream_generation += 1
-        elif field == "retained_floor":
-            invalid.retained_floor += 1
+        elif field == "retained_floor_event_ulid":
+            invalid.retained_floor_event_ulid = "0000000000000000000000000C"
         else:
-            invalid.source_sequence += 1_000_000
+            invalid.event_ulid = "0000000000000000000000000D"
         rejected = stub.WatchRunStatus(pb.WatchRunStatusRequestV2(after_cursor=invalid))
         reset = next(rejected)
         try:
@@ -610,7 +622,7 @@ def test_watch_resumes_only_from_complete_server_issued_event_cursors(stub, v2_s
     assert excinfo.value.code() == grpc.StatusCode.FAILED_PRECONDITION
 
 
-def test_watch_rejects_an_issued_cursor_after_its_retained_floor_advances(
+def test_watch_resumes_an_issued_cursor_after_its_retained_floor_advances(
     retained_cursor_stub,
 ):
     operator, service = retained_cursor_stub
@@ -618,10 +630,13 @@ def test_watch_rejects_an_issued_cursor_after_its_retained_floor_advances(
     issued = _initial_event_cursor(service)
 
     _seed_run_with_logs(operator, "retained-b", ("two",))
-    rejected = service.WatchRunStatus(pb.WatchRunStatusRequestV2(after_cursor=issued))
-    reset = next(rejected)
+    resumed = service.WatchRunStatus(pb.WatchRunStatusRequestV2(after_cursor=issued))
+    update = next(resumed)
     try:
-        assert reset.HasField("reset_required")
-        assert reset.reset_required.latest_cursor.retained_floor > issued.retained_floor
+        assert update.HasField("run_created")
+        assert update.run_created.summary.run_id == "retained-b"
+        assert update.event_ulid > issued.event_ulid
+        _assert_complete_cursor(update.cursor)
+        assert update.cursor.retained_floor_event_ulid > issued.retained_floor_event_ulid
     finally:
-        rejected.cancel()
+        resumed.cancel()

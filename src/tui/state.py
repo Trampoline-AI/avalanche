@@ -63,7 +63,7 @@ class StateProvider(Protocol):
         self,
         generation: int,
         operator_instance_id: str,
-        reconciled_sequence: int,
+        reconciled_event_ulid: str,
     ) -> None: ...
 
 

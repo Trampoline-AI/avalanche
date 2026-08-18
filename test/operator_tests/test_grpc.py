@@ -24,6 +24,7 @@ from runtime.operator.client import (
     _run_from_snapshot,
 )
 from runtime.operator.convert_v2 import (
+    operator_update_envelope_from_v2,
     run_snapshot_to_v2,
     run_summary_to_v2,
     workflow_info_from_v2,
@@ -35,6 +36,7 @@ from runtime.operator.models import (
     NodeState,
     NodeStatus,
     ResetBaseline,
+    ResetBaselineCursor,
     RunSnapshot,
     RunState,
     RunStatus,
@@ -58,13 +60,29 @@ def _scope(instance: str = "operator-1") -> pb.ScopeReferenceV2:
     return pb.ScopeReferenceV2(reference=instance)
 
 
+def _event_ulid(sequence: int) -> str:
+    return f"{sequence:026X}"
+
+
 def _cursor(sequence: int, *, stream: str = "operator-events") -> pb.LifecycleCursorV2:
+    del stream
+    stream = "operator-events"
     return pb.LifecycleCursorV2(
         stream=stream,
         topology_fingerprint="0" if stream == "flows" else f"{stream}-topology",
         stream_generation=1,
-        retained_floor=1,
-        source_sequence=sequence,
+        retained_floor_event_ulid=_event_ulid(0),
+        event_ulid=_event_ulid(sequence),
+    )
+
+
+def _baseline_cursor(sequence: int, *, retained_floor: int = 0) -> ResetBaselineCursor:
+    return ResetBaselineCursor(
+        stream="operator-events",
+        topology_fingerprint="operator-events-topology",
+        stream_generation=1,
+        retained_floor_event_ulid=_event_ulid(retained_floor),
+        event_ulid=_event_ulid(sequence),
     )
 
 
@@ -103,11 +121,12 @@ def _trace_detail_ref(
 
 
 def _snapshot_msg(snapshot: RunSnapshot, *, instance: str = "operator-1") -> pb.RunSnapshotV2:
+    cursor = _cursor(snapshot.as_of_sequence, stream=f"run:{snapshot.summary.run_id}")
+    if snapshot.as_of_event_ulid:
+        cursor.event_ulid = snapshot.as_of_event_ulid
     return run_snapshot_to_v2(
         snapshot,
-        cursor=_cursor(
-            snapshot.as_of_sequence, stream=f"run:{snapshot.summary.run_id}"
-        ),
+        cursor=cursor,
         scope_ref=_scope(instance),
         trace_detail_ref_for=lambda run_id, node_id, trace, run_sequence: _trace_detail_ref(
             run_id,
@@ -147,7 +166,7 @@ def _run_created_envelope(
     status: str = "running",
 ) -> pb.RunStatusEnvelopeV2:
     return pb.RunStatusEnvelopeV2(
-        source_sequence=sequence,
+        event_ulid=_event_ulid(sequence),
         cursor=_cursor(sequence),
         scope_ref=_scope(instance),
         run_created=pb.RunCreatedV2(
@@ -193,7 +212,8 @@ def _wait_for_run_success(client, run_id):
 def test_latest_run_snapshot_client_returns_typed_snapshot_without_mutating_baseline():
     latest = RunSnapshot(
         operator_instance_id="operator-1",
-        as_of_sequence=8,
+        as_of_sequence=0,
+        as_of_event_ulid=_event_ulid(8),
         summary=RunSummary(
             run_id="run-selected",
             flow_name="flow",
@@ -221,7 +241,9 @@ def test_latest_run_snapshot_client_returns_typed_snapshot_without_mutating_base
         flow_name="flow",
         operator_instance_id="operator-1",
     )
-    provider._install_structural_baseline("operator-1", 4, {retained.run_id: retained})
+    provider._install_structural_baseline(
+        "operator-1", _event_ulid(4), {retained.run_id: retained}
+    )
     try:
         snapshot = provider.get_latest_run_snapshot("run-selected", "operator-1")
     finally:
@@ -231,7 +253,7 @@ def test_latest_run_snapshot_client_returns_typed_snapshot_without_mutating_base
     assert snapshot == latest
     assert stub.request.run_id == "run-selected"
     assert provider._cursor.operator_instance_id == "operator-1"
-    assert provider._cursor.sequence == 4
+    assert provider._cursor.event_ulid == _event_ulid(4)
     assert set(provider._runs_by_id) == {"run-retained"}
 
 
@@ -646,7 +668,7 @@ def large_file_workflow():
             client.acknowledge_stream_reset(
                 baseline.generation,
                 baseline.operator_instance_id,
-                baseline.as_of_sequence,
+                baseline.as_of_event_ulid,
             )
 
         client.on_stream_reset(recover_stream)
@@ -891,7 +913,7 @@ def test_trace_cache_evicts_oldest_bodies_across_unique_run_node_keys():
         max_retained_detail_bytes=4,
     )
     provider._stub = TraceStub()
-    provider._install_structural_baseline("operator-1", 4, runs)
+    provider._install_structural_baseline("operator-1", _event_ulid(4), runs)
     for run in runs.values():
         reference = pb.ActivityDetailRefV2(
             run_id=run.run_id,
@@ -1492,7 +1514,7 @@ def test_duplicate_only_streams_do_not_reset_reconnect_backoff_or_cursor():
                 self.stopped = True
             return self.stopped
 
-    duplicate = _run_created_envelope(7, "duplicate")
+    duplicate = _run_created_envelope(99, "duplicate")
 
     class DuplicateThenUnavailable:
         def initial_metadata(self):
@@ -1509,8 +1531,9 @@ def test_duplicate_only_streams_do_not_reset_reconnect_backoff_or_cursor():
             requests.append(cursor)
             return DuplicateThenUnavailable()
 
-    provider._install_structural_baseline("operator-1", 7, {})
-    provider._event_cursor = _cursor(7)
+    provider._install_structural_baseline("operator-1", _event_ulid(99), {})
+    provider._event_cursor = _cursor(99)
+    provider._last_applied_update = operator_update_envelope_from_v2(duplicate).update
     provider._stream_stop = RecordingStop()
     provider._stub = DuplicateStub()
     try:
@@ -1520,8 +1543,78 @@ def test_duplicate_only_streams_do_not_reset_reconnect_backoff_or_cursor():
 
     assert delays == [2, 4, 8]
     assert len(requests) == 3
-    assert all(request == _cursor(7) for request in requests)
-    assert provider._cursor.sequence == 7
+    assert all(request == _cursor(99) for request in requests)
+    assert provider._cursor.event_ulid == _event_ulid(99)
+
+
+def test_client_accepts_a_monotonic_retention_floor_advance():
+    provider = GrpcStateProvider("localhost:1")
+    provider._install_structural_baseline("operator-1", _event_ulid(1), {})
+    provider._event_cursor = _cursor(1)
+    message = _run_created_envelope(2, "run-floor-advance")
+    message.cursor.retained_floor_event_ulid = _event_ulid(1)
+    try:
+        provider._apply_update_envelope(
+            operator_update_envelope_from_v2(message),
+            event_cursor=message.cursor,
+        )
+        assert provider._cursor.event_ulid == _event_ulid(2)
+        assert provider._event_cursor.retained_floor_event_ulid == _event_ulid(1)
+    finally:
+        provider.close()
+
+
+def test_watch_accepts_an_older_floor_while_replay_remains_retained():
+    operator = Operator(
+        [],
+        watch=False,
+        schedule=False,
+        stream_history_capacity=3,
+    )
+    server = None
+    channel = None
+    replay_stream = None
+    try:
+        for reloading in (False, True):
+            operator._publish_workflow_reload_status(reloading=reloading)
+        port = _unused_port()
+        server = serve(operator, port=port, block=False)
+        channel = grpc.insecure_channel(f"localhost:{port}")
+        grpc.channel_ready_future(channel).result(timeout=5)
+        stub = pb_grpc.OperatorServiceV2Stub(channel)
+
+        prior_cursor = stub.ListRunSummaries(pb.ListRunSummariesRequestV2(page_size=1)).cursor
+        for reloading in (False, True, False):
+            operator._publish_workflow_reload_status(reloading=reloading)
+
+        replay_stream = stub.WatchRunStatus(
+            pb.WatchRunStatusRequestV2(after_cursor=prior_cursor)
+        )
+        replayed = [next(replay_stream) for _ in range(3)]
+        assert replayed[0].event_ulid < replayed[1].event_ulid < replayed[2].event_ulid
+        assert all(
+            message.WhichOneof("payload") == "flow_reload_status" for message in replayed
+        )
+        assert replayed[0].cursor.retained_floor_event_ulid != (
+            prior_cursor.retained_floor_event_ulid
+        )
+        assert replayed[0].cursor.retained_floor_event_ulid > (
+            prior_cursor.retained_floor_event_ulid
+        )
+        replay_stream.cancel()
+        replay_stream = None
+
+        operator._publish_workflow_reload_status(reloading=True)
+        reset = next(stub.WatchRunStatus(pb.WatchRunStatusRequestV2(after_cursor=prior_cursor)))
+        assert reset.WhichOneof("payload") == "reset_required"
+    finally:
+        if replay_stream is not None:
+            replay_stream.cancel()
+        if channel is not None:
+            channel.close()
+        if server is not None:
+            server.stop(grace=0).wait()
+        operator.close()
 
 
 def test_authoritative_stream_progress_resets_reconnect_backoff():
@@ -1577,7 +1670,7 @@ def test_authoritative_stream_progress_resets_reconnect_backoff():
         provider.close()
 
     assert delays == [2, 1]
-    assert provider._cursor.sequence == 1
+    assert provider._cursor.event_ulid == _event_ulid(1)
 
 
 def test_stream_reconnect_transitions_through_replay_to_live():
@@ -1834,10 +1927,11 @@ def test_default_reset_loader_retries_and_builds_bounded_authoritative_baseline(
             self.list_flows_calls += 1
             return pb.FlowListV2(
                 cursor=pb.LifecycleCursorV2(
-                    stream="flows",
+                    stream="operator-events",
                     topology_fingerprint="1",
                     stream_generation=1,
-                    source_sequence=3,
+                    retained_floor_event_ulid=_event_ulid(0),
+                    event_ulid=_event_ulid(3),
                 ),
                 flows=[workflow_info_to_v2(workflow)],
                 scope_ref=_scope("operator-new"),
@@ -1856,8 +1950,8 @@ def test_default_reset_loader_retries_and_builds_bounded_authoritative_baseline(
         baseline = provider.load_reset_baseline(
             StreamResetNotice(
                 generation=7,
-                previous_sequence=99,
-                observed_sequence=2,
+                previous_event_ulid=_event_ulid(99),
+                observed_event_ulid=_event_ulid(2),
             )
         )
     finally:
@@ -1865,7 +1959,8 @@ def test_default_reset_loader_retries_and_builds_bounded_authoritative_baseline(
 
     assert baseline.generation == 7
     assert baseline.operator_instance_id == "operator-new"
-    assert baseline.as_of_sequence == 3
+    assert baseline.as_of_event_ulid == _event_ulid(3)
+    assert baseline.cursor == _baseline_cursor(3)
     assert [item.selector for item in baseline.catalog.workflows] == [workflow.selector]
     assert [run.run_id for run in baseline.runs_by_workflow[workflow.selector]] == [
         "run_1",
@@ -1913,10 +2008,11 @@ def test_default_reset_loader_uses_immutable_snapshot_while_updates_continue():
         def DiscoverFlows(self, request, **kwargs):  # noqa: N802
             return pb.FlowListV2(
                 cursor=pb.LifecycleCursorV2(
-                    stream="flows",
+                    stream="operator-events",
                     topology_fingerprint="1",
                     stream_generation=1,
-                    source_sequence=self.current_sequence,
+                    retained_floor_event_ulid=_event_ulid(0),
+                    event_ulid=_event_ulid(self.current_sequence),
                 ),
                 flows=[workflow_info_to_v2(workflow)],
                 scope_ref=_scope("operator-live"),
@@ -1944,14 +2040,14 @@ def test_default_reset_loader_uses_immutable_snapshot_while_updates_continue():
         baseline = provider.load_reset_baseline(
             StreamResetNotice(
                 generation=1,
-                previous_sequence=99,
-                observed_sequence=2,
+                previous_event_ulid=_event_ulid(99),
+                observed_event_ulid=_event_ulid(2),
             )
         )
     finally:
         provider.close()
 
-    assert baseline.as_of_sequence == 2
+    assert baseline.as_of_event_ulid == _event_ulid(2)
     assert stub.summary_calls == 1
     assert len(stub.snapshot_requests) == 1
     request = stub.snapshot_requests[0]
@@ -1963,9 +2059,10 @@ def test_restart_reset_rejects_stale_generation_and_rebinds_update_epoch():
         return ResetBaseline(
             generation=notice.generation,
             operator_instance_id="operator-restarted",
-            as_of_sequence=3,
+            as_of_event_ulid=_event_ulid(3),
             catalog=CatalogSnapshot(workflows=()),
             runs_by_workflow={},
+            cursor=_baseline_cursor(3),
         )
 
     provider = GrpcStateProvider(
@@ -1999,9 +2096,9 @@ def test_restart_reset_rejects_stale_generation_and_rebinds_update_epoch():
             self.calls += 1
             assert metadata is None
             if self.calls == 1:
-                assert request.after_cursor.source_sequence == 99
+                assert request.after_cursor.event_ulid == _event_ulid(99)
                 return iter((reset_envelope,))
-            assert request.after_cursor.source_sequence == 2
+            assert request.after_cursor.event_ulid == _event_ulid(3)
             return RestartedStream()
 
     def on_reset(notice):
@@ -2009,7 +2106,7 @@ def test_restart_reset_rejects_stale_generation_and_rebinds_update_epoch():
         reset_observed.set()
 
     provider._stub = RestartedStub()
-    provider._install_structural_baseline("operator-original", 99, {})
+    provider._install_structural_baseline("operator-original", _event_ulid(99), {})
     provider._event_cursor = _cursor(99)
     provider.on_stream_reset(on_reset)
     provider._run_callbacks.append(lambda run: received.append(run.run_id))
@@ -2019,31 +2116,33 @@ def test_restart_reset_rejects_stale_generation_and_rebinds_update_epoch():
         notice = reset_notices[0]
         assert notice == StreamResetNotice(
             generation=1,
-            previous_sequence=99,
-            observed_sequence=2,
+            previous_event_ulid=_event_ulid(99),
+            observed_event_ulid=_event_ulid(2),
             operator_instance_id="operator-restarted",
         )
         assert provider.stream_state is StreamState.RESET_REQUIRED
-        assert provider._cursor == provider._cursor.__class__("operator-original", 99)
+        assert provider._cursor == provider._cursor.__class__(
+            "operator-original", _event_ulid(99)
+        )
 
         baseline = provider.load_reset_baseline(notice)
         assert baseline.operator_instance_id == "operator-restarted"
-        assert baseline.as_of_sequence == 3
+        assert baseline.as_of_event_ulid == _event_ulid(3)
         with pytest.raises(StaleResetAcknowledgementError):
             provider.acknowledge_stream_reset(
                 generation=notice.generation + 1,
                 operator_instance_id="operator-restarted",
-                reconciled_sequence=3,
+                reconciled_event_ulid=_event_ulid(3),
             )
         provider.acknowledge_stream_reset(
             generation=notice.generation,
-            reconciled_sequence=3,
+            reconciled_event_ulid=_event_ulid(3),
             operator_instance_id="operator-restarted",
         )
         assert waiting.wait(timeout=1.0)
         assert provider.stream_state is StreamState.LIVE
         assert provider._cursor.operator_instance_id == "operator-restarted"
-        assert provider._cursor.sequence == 4
+        assert provider._cursor.event_ulid == _event_ulid(4)
         assert received == ["run_newer"]
     finally:
         provider._stream_stop.set()
@@ -2052,28 +2151,29 @@ def test_restart_reset_rejects_stale_generation_and_rebinds_update_epoch():
 
 
 @pytest.mark.parametrize(
-    ("operator_instance_id", "reconciled_sequence"),
+    ("operator_instance_id", "reconciled_event_ulid"),
     [
-        ("operator-other", 3),
-        ("operator-restarted", 2),
-        ("operator-restarted", 4),
+        ("operator-other", _event_ulid(3)),
+        ("operator-restarted", _event_ulid(2)),
+        ("operator-restarted", _event_ulid(4)),
     ],
 )
 def test_reset_acknowledgement_requires_exact_validated_baseline(
     operator_instance_id,
-    reconciled_sequence,
+    reconciled_event_ulid,
 ):
     notice = StreamResetNotice(
         generation=1,
-        previous_sequence=99,
-        observed_sequence=2,
+        previous_event_ulid=_event_ulid(99),
+        observed_event_ulid=_event_ulid(2),
     )
     expected = ResetBaseline(
         generation=notice.generation,
         operator_instance_id="operator-restarted",
-        as_of_sequence=3,
+        as_of_event_ulid=_event_ulid(3),
         catalog=CatalogSnapshot(workflows=()),
         runs_by_workflow={},
+        cursor=_baseline_cursor(3),
     )
     provider = GrpcStateProvider(
         "localhost:1",
@@ -2089,7 +2189,7 @@ def test_reset_acknowledgement_requires_exact_validated_baseline(
             provider.acknowledge_stream_reset(
                 generation=notice.generation,
                 operator_instance_id=expected.operator_instance_id,
-                reconciled_sequence=expected.as_of_sequence,
+                reconciled_event_ulid=expected.as_of_event_ulid,
             )
         assert provider.load_reset_baseline(notice) is expected
         with pytest.raises(
@@ -2099,7 +2199,7 @@ def test_reset_acknowledgement_requires_exact_validated_baseline(
             provider.acknowledge_stream_reset(
                 generation=notice.generation,
                 operator_instance_id=operator_instance_id,
-                reconciled_sequence=reconciled_sequence,
+                reconciled_event_ulid=reconciled_event_ulid,
             )
         assert provider._pending_reset is notice
         assert provider.stream_state is StreamState.RESET_REQUIRED
@@ -2107,16 +2207,16 @@ def test_reset_acknowledgement_requires_exact_validated_baseline(
         provider.acknowledge_stream_reset(
             generation=notice.generation,
             operator_instance_id=expected.operator_instance_id,
-            reconciled_sequence=expected.as_of_sequence,
+            reconciled_event_ulid=expected.as_of_event_ulid,
         )
         assert provider.stream_state is StreamState.LIVE
     finally:
         provider.close()
 
 
-@pytest.mark.parametrize("observed_sequence", [99, 100])
+@pytest.mark.parametrize("observed_event_ulid", [99, 100])
 def test_update_epoch_change_requires_reset_at_equal_or_higher_sequence(
-    observed_sequence,
+    observed_event_ulid,
 ):
     provider = GrpcStateProvider("localhost:1")
     reset_notices = []
@@ -2124,10 +2224,10 @@ def test_update_epoch_change_requires_reset_at_equal_or_higher_sequence(
 
     class RestartedStub:
         def WatchRunStatus(self, request, *, metadata):  # noqa: N802
-            assert request.after_cursor.source_sequence == 99
+            assert request.after_cursor.event_ulid == _event_ulid(99)
             assert metadata is None
             yield _run_created_envelope(
-                observed_sequence, "run-restarted", instance="operator-restarted"
+                observed_event_ulid, "run-restarted", instance="operator-restarted"
             )
 
     def on_reset(notice):
@@ -2135,7 +2235,7 @@ def test_update_epoch_change_requires_reset_at_equal_or_higher_sequence(
         reset_observed.set()
 
     provider._stub = RestartedStub()
-    provider._install_structural_baseline("operator-original", 99, {})
+    provider._install_structural_baseline("operator-original", _event_ulid(99), {})
     provider._event_cursor = _cursor(99)
     provider.on_stream_reset(on_reset)
     try:
@@ -2144,14 +2244,14 @@ def test_update_epoch_change_requires_reset_at_equal_or_higher_sequence(
         assert reset_notices == [
             StreamResetNotice(
                 generation=1,
-                previous_sequence=99,
-                observed_sequence=observed_sequence,
+                previous_event_ulid=_event_ulid(99),
+                observed_event_ulid=_event_ulid(observed_event_ulid),
                 operator_instance_id="operator-restarted",
             )
         ]
         assert provider.stream_state is StreamState.RESET_REQUIRED
         assert provider._cursor.operator_instance_id == "operator-original"
-        assert provider._cursor.sequence == 99
+        assert provider._cursor.event_ulid == _event_ulid(99)
     finally:
         provider.close()
 
@@ -2162,23 +2262,27 @@ def test_client_skips_duplicate_update_sequence_without_epoch_reset():
 
     class DuplicateFirstStub:
         def WatchRunStatus(self, request, *, metadata):  # noqa: N802
-            assert request.after_cursor.source_sequence == 99
+            assert request.after_cursor.event_ulid == _event_ulid(98)
             assert metadata is None
-            for sequence, run_id in ((99, "duplicate"), (100, "run_live")):
+            for sequence, run_id in (
+                (99, "duplicate"),
+                (99, "duplicate"),
+                (100, "run_live"),
+            ):
                 yield _run_created_envelope(sequence, run_id)
             provider._stream_stop.set()
 
     provider._stub = DuplicateFirstStub()
-    provider._install_structural_baseline("operator-1", 99, {})
-    provider._event_cursor = _cursor(99)
+    provider._install_structural_baseline("operator-1", _event_ulid(98), {})
+    provider._event_cursor = _cursor(98)
     provider._run_callbacks.append(lambda run: received.append(run.run_id))
     try:
         provider._stream_loop()
     finally:
         provider.close()
 
-    assert received == ["run_live"]
-    assert provider._cursor.sequence == 100
+    assert received == ["duplicate", "run_live"]
+    assert provider._cursor.event_ulid == _event_ulid(100)
 
 
 def test_concurrent_start_stream_calls_start_one_stream_thread():
@@ -2751,7 +2855,7 @@ def test_grpc_latest_snapshot_and_newest_pages_preserve_status_contract():
         assert latest.summary.status == RunStatus.RUNNING.value
         assert latest.scope_ref.reference == operator.operator_instance_id
         assert retained is not None
-        assert latest.cursor.source_sequence > retained.as_of_sequence
+        assert latest.cursor.event_ulid >= latest.cursor.retained_floor_event_ulid
 
         first_logs = stub.ListRunActivity(
             pb.ListRunActivityRequestV2(
@@ -2801,9 +2905,7 @@ def test_grpc_latest_snapshot_and_newest_pages_preserve_status_contract():
                 pb.ListRunActivityRequestV2(
                     run_id=run.run_id,
                     continuation=pb.ContinuationRefV2(
-                        scope_ref=pb.ScopeReferenceV2(
-                            reference=operator.operator_instance_id
-                        ),
+                        scope_ref=pb.ScopeReferenceV2(reference=operator.operator_instance_id),
                         continuation_id="not-a-token",
                     ),
                 )
@@ -2894,7 +2996,7 @@ def test_grpc_lazily_hydrates_paged_details_and_chunked_trace(
         )
         provider._install_structural_baseline(
             page.operator_instance_id,
-            page.as_of_sequence,
+            _event_ulid(page.as_of_sequence),
             {run.run_id: _run_from_snapshot(snapshot)},
         )
         assert not provider._runs_by_id[run.run_id].details_hydrated
@@ -2955,7 +3057,7 @@ def test_grpc_discards_hydration_after_epoch_reset(monkeypatch):
         reader = threading.Thread(target=read_run)
         reader.start()
         assert page_read.wait(2)
-        provider._install_structural_baseline("replacement-epoch", 0, {})
+        provider._install_structural_baseline("replacement-epoch", _event_ulid(0), {})
         release.set()
         reader.join(2)
         assert not reader.is_alive()
@@ -3012,10 +3114,10 @@ def test_detail_hydration_preserves_non_not_found_status(status):
                     revision=2,
                 ),
                 latest_log_sequence=1,
-                    log_continuation=pb.ContinuationRefV2(
-                        scope_ref=_scope(),
-                        continuation_id="logs-token",
-                        cursor=_cursor(2, stream="activity:run-1:logs"),
+                log_continuation=pb.ContinuationRefV2(
+                    scope_ref=_scope(),
+                    continuation_id="logs-token",
+                    cursor=_cursor(2, stream="activity:run-1:logs"),
                 ),
             )
 
@@ -3071,13 +3173,13 @@ def test_get_run_retries_from_fresh_cursor_after_hydration_restart():
                 ),
                 latest_log_sequence=1 if first_attempt else 0,
                 log_continuation=(
-                        pb.ContinuationRefV2(
-                            scope_ref=_scope(f"operator-{self.summary_calls}"),
-                            continuation_id="logs-token",
-                            cursor=_cursor(
-                                self.summary_calls,
-                                stream="activity:run-1:logs",
-                            ),
+                    pb.ContinuationRefV2(
+                        scope_ref=_scope(f"operator-{self.summary_calls}"),
+                        continuation_id="logs-token",
+                        cursor=_cursor(
+                            self.summary_calls,
+                            stream="activity:run-1:logs",
+                        ),
                     )
                     if first_attempt
                     else pb.ContinuationRefV2()
@@ -3181,7 +3283,7 @@ def test_unrelated_updates_do_not_invalidate_detail_page_tokens(monkeypatch):
             def ListRunActivity(self, request, **kwargs):  # noqa: N802
                 nonlocal updated
                 response = delegate.ListRunActivity(request, **kwargs)
-                page_sequences.append(response.cursor.source_sequence)
+                page_sequences.append(response.cursor.event_ulid)
                 if not updated:
                     updated = True
                     unrelated.status = RunStatus.RUNNING

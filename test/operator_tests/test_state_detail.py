@@ -230,7 +230,7 @@ def test_latest_run_snapshot_client_is_typed_and_rejects_a_stale_operator_epoch(
         assert initial.summary.run_id == run.run_id
         assert initial.summary.status is RunStatus.PENDING
         assert latest.operator_instance_id == operator.operator_instance_id
-        assert latest.as_of_sequence > initial.as_of_sequence
+        assert latest.as_of_event_ulid > initial.as_of_event_ulid
         assert latest.summary.status is RunStatus.RUNNING
 
         with pytest.raises(OperatorCallError) as error:
@@ -750,7 +750,7 @@ def test_evicted_structural_baseline_requires_grpc_restart():
 
         evicted_cursor = pb.LifecycleCursorV2()
         evicted_cursor.CopyFrom(baseline.cursor)
-        evicted_cursor.source_sequence = evicted.as_of_sequence
+        evicted_cursor.event_ulid = "00000000000000000000000001"
 
         with pytest.raises(grpc.RpcError) as page_error:
             stub.ListRunSummaries(
@@ -765,10 +765,8 @@ def test_evicted_structural_baseline_requires_grpc_restart():
             )
         assert page_error.value.code() == grpc.StatusCode.FAILED_PRECONDITION
 
-        snapshot = stub.GetRunSnapshot(
-            pb.GetRunSnapshotRequestV2(run_id=first_run.run_id)
-        )
-        assert snapshot.cursor.source_sequence == current.as_of_sequence
+        snapshot = stub.GetRunSnapshot(pb.GetRunSnapshotRequestV2(run_id=first_run.run_id))
+        assert len(snapshot.cursor.event_ulid) == 26
         assert snapshot.summary.status == RunStatus.RUNNING.value
         assert snapshot.scope_ref.reference == operator.operator_instance_id
     finally:
@@ -1100,9 +1098,7 @@ def test_read_trace_streams_more_than_four_mib_in_bounded_revisioned_chunks():
         )
         trace_ref = snapshot.nodes[0].trace.detail_ref
         chunks = list(
-            stub.ReadActivityDetail(
-                pb.ReadActivityDetailRequestV2(detail_ref=trace_ref)
-            )
+            stub.ReadActivityDetail(pb.ReadActivityDetailRequestV2(detail_ref=trace_ref))
         )
 
         assert summaries.scope_ref.reference == operator.operator_instance_id
@@ -1149,7 +1145,7 @@ def test_max_log_and_large_agent_event_use_bounded_live_and_hydration_transport(
             live.acknowledge_stream_reset(
                 baseline.generation,
                 baseline.operator_instance_id,
-                baseline.as_of_sequence,
+                baseline.as_of_event_ulid,
             )
 
         live.on_stream_reset(recover_stream)
@@ -1225,9 +1221,7 @@ def test_max_log_and_large_agent_event_use_bounded_live_and_hydration_transport(
             and json.loads(detail.event.event_json)["data"]["payload"] == large_event_payload
             for detail in details
         )
-        snapshot = live._stub.GetRunSnapshot(
-            pb.GetRunSnapshotRequestV2(run_id=run.run_id)
-        )
+        snapshot = live._stub.GetRunSnapshot(pb.GetRunSnapshotRequestV2(run_id=run.run_id))
         log_page = live._stub.ListRunActivity(
             pb.ListRunActivityRequestV2(
                 run_id=run.run_id,
@@ -1251,18 +1245,14 @@ def test_max_log_and_large_agent_event_use_bounded_live_and_hydration_transport(
         large_event_descriptor = event_page.activities[0]
         log_chunks = list(
             live._stub.ReadActivityDetail(
-                pb.ReadActivityDetailRequestV2(
-                    detail_ref=large_log_descriptor.detail_ref
-                )
+                pb.ReadActivityDetailRequestV2(detail_ref=large_log_descriptor.detail_ref)
             )
         )
         assert len(log_chunks) == 1
         assert log_chunks[0].eof is True
         event_chunks = list(
             live._stub.ReadActivityDetail(
-                pb.ReadActivityDetailRequestV2(
-                    detail_ref=large_event_descriptor.detail_ref
-                )
+                pb.ReadActivityDetailRequestV2(detail_ref=large_event_descriptor.detail_ref)
             )
         )
         assert len(event_chunks) > 4
@@ -1278,8 +1268,8 @@ def test_max_log_and_large_agent_event_use_bounded_live_and_hydration_transport(
                 stream="operator-events",
                 topology_fingerprint="operator-events-topology",
                 stream_generation=1,
-                retained_floor=1,
-                source_sequence=sequence,
+                retained_floor_event_ulid=f"{0:026X}",
+                event_ulid=f"{sequence:026X}",
             )
 
         def _activity_continuation_for(
@@ -1294,8 +1284,8 @@ def test_max_log_and_large_agent_event_use_bounded_live_and_hydration_transport(
                     stream=f"activity:{run_id}:{node_id or 'logs'}",
                     topology_fingerprint="activity-topology",
                     stream_generation=1,
-                    retained_floor=1,
-                    source_sequence=1,
+                    retained_floor_event_ulid=f"{0:026X}",
+                    event_ulid=f"{1:026X}",
                 ),
             )
 
@@ -1342,13 +1332,6 @@ def test_max_log_and_large_agent_event_use_bounded_live_and_hydration_transport(
                 ),
                 scope_ref=scope_ref,
                 cursor_for=_cursor_for,
-                flow_cursor_for=lambda sequence, topology: pb.LifecycleCursorV2(
-                    stream="flows",
-                    topology_fingerprint=topology,
-                    stream_generation=1,
-                    retained_floor=1,
-                    source_sequence=sequence,
-                ),
                 activity_continuation_for=_activity_continuation_for,
                 body_detail_ref_for=_body_detail_ref_for,
                 trace_detail_ref_for=_trace_detail_ref_for,
@@ -1611,19 +1594,13 @@ def test_read_trace_rejects_reused_identity_from_previous_operator_epoch():
             object_key=f"run-reused/agent_1/{revision}",
         )
         with pytest.raises(grpc.RpcError) as error:
-            list(
-                stub.ReadActivityDetail(
-                    pb.ReadActivityDetailRequestV2(detail_ref=stale_ref)
-                )
-            )
+            list(stub.ReadActivityDetail(pb.ReadActivityDetailRequestV2(detail_ref=stale_ref)))
         assert error.value.code() == grpc.StatusCode.FAILED_PRECONDITION
 
         snapshot = stub.GetRunSnapshot(pb.GetRunSnapshotRequestV2(run_id="run-reused"))
         detail_ref = snapshot.nodes[0].trace.detail_ref
         chunks = list(
-            stub.ReadActivityDetail(
-                pb.ReadActivityDetailRequestV2(detail_ref=detail_ref)
-            )
+            stub.ReadActivityDetail(pb.ReadActivityDetailRequestV2(detail_ref=detail_ref))
         )
         trace = json.loads(b"".join(chunk.data for chunk in chunks))
         assert trace["marker"] == "second"

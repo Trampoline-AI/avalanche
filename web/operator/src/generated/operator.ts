@@ -28,9 +28,9 @@ export interface ScopeReferenceV2 {
 }
 /**
  * A complete retained-stream position. Callers must preserve every field.
- * A server must fail closed (by requiring a reset or retry) rather than treat a
- * cursor from another stream, topology, generation, or retention window as a
- * valid progress position.
+ * Event ULIDs are server-issued opaque positions; a server must fail closed
+ * rather than treat a cursor from another stream, topology, epoch, or
+ * retention window as a valid progress position.
  *
  * @generated from protobuf message avalanche.operator.LifecycleCursorV2
  */
@@ -48,13 +48,13 @@ export interface LifecycleCursorV2 {
      */
     streamGeneration: string;
     /**
-     * @generated from protobuf field: uint64 retained_floor = 4
+     * @generated from protobuf field: string retained_floor_event_ulid = 4
      */
-    retainedFloor: string;
+    retainedFloorEventUlid: string;
     /**
-     * @generated from protobuf field: uint64 source_sequence = 5
+     * @generated from protobuf field: string event_ulid = 5
      */
-    sourceSequence: string;
+    eventUlid: string;
 }
 /**
  * A server-issued page continuation bound to the authenticated scope and the
@@ -208,6 +208,12 @@ export interface FlowListV2 {
      * @generated from protobuf field: avalanche.operator.ScopeReferenceV2 scope_ref = 6
      */
     scopeRef?: ScopeReferenceV2;
+    /**
+     * Domain revision of the catalog, independent of the baseline cursor.
+     *
+     * @generated from protobuf field: uint64 revision = 7
+     */
+    revision: string;
 }
 /**
  * @generated from protobuf message avalanche.operator.NodeEdgesV2
@@ -1063,6 +1069,12 @@ export interface WatchRunStatusRequestV2 {
      * @generated from protobuf field: avalanche.operator.LifecycleCursorV2 after_cursor = 1
      */
     afterCursor?: LifecycleCursorV2;
+    /**
+     * Optional scope echo; the server validates it before replaying any update.
+     *
+     * @generated from protobuf field: avalanche.operator.ScopeReferenceV2 scope_ref = 2
+     */
+    scopeRef?: ScopeReferenceV2;
 }
 /**
  * @generated from protobuf message avalanche.operator.RunCreatedV2
@@ -1153,15 +1165,17 @@ export interface ResetRequiredV2 {
     latestCursor?: LifecycleCursorV2;
 }
 /**
- * Envelopes are ordered by source_sequence within the complete cursor identity.
+ * Envelopes are ordered by server-issued event_ulid within the complete cursor
+ * identity. ULIDs need not be adjacent; clients accept only lexicographically
+ * later positions and ignore exact replays.
  *
  * @generated from protobuf message avalanche.operator.RunStatusEnvelopeV2
  */
 export interface RunStatusEnvelopeV2 {
     /**
-     * @generated from protobuf field: uint64 source_sequence = 1
+     * @generated from protobuf field: string event_ulid = 1
      */
-    sourceSequence: string;
+    eventUlid: string;
     /**
      * @generated from protobuf oneof: payload
      */
@@ -1211,7 +1225,7 @@ export interface RunStatusEnvelopeV2 {
         oneofKind: undefined;
     };
     /**
-     * Complete position for this exact source sequence; retain it to resume.
+     * Complete baseline position for this exact event; retain it to resume.
      *
      * @generated from protobuf field: avalanche.operator.LifecycleCursorV2 cursor = 5
      */
@@ -1288,8 +1302,8 @@ class LifecycleCursorV2$Type extends MessageType<LifecycleCursorV2> {
             { no: 1, name: "stream", kind: "scalar", T: 9 /*ScalarType.STRING*/ },
             { no: 2, name: "topology_fingerprint", kind: "scalar", T: 9 /*ScalarType.STRING*/ },
             { no: 3, name: "stream_generation", kind: "scalar", T: 4 /*ScalarType.UINT64*/ },
-            { no: 4, name: "retained_floor", kind: "scalar", T: 4 /*ScalarType.UINT64*/ },
-            { no: 5, name: "source_sequence", kind: "scalar", T: 4 /*ScalarType.UINT64*/ }
+            { no: 4, name: "retained_floor_event_ulid", kind: "scalar", T: 9 /*ScalarType.STRING*/ },
+            { no: 5, name: "event_ulid", kind: "scalar", T: 9 /*ScalarType.STRING*/ }
         ]);
     }
     create(value?: PartialMessage<LifecycleCursorV2>): LifecycleCursorV2 {
@@ -1297,8 +1311,8 @@ class LifecycleCursorV2$Type extends MessageType<LifecycleCursorV2> {
         message.stream = "";
         message.topologyFingerprint = "";
         message.streamGeneration = "0";
-        message.retainedFloor = "0";
-        message.sourceSequence = "0";
+        message.retainedFloorEventUlid = "";
+        message.eventUlid = "";
         if (value !== undefined)
             reflectionMergePartial<LifecycleCursorV2>(this, message, value);
         return message;
@@ -1317,11 +1331,11 @@ class LifecycleCursorV2$Type extends MessageType<LifecycleCursorV2> {
                 case /* uint64 stream_generation */ 3:
                     message.streamGeneration = reader.uint64().toString();
                     break;
-                case /* uint64 retained_floor */ 4:
-                    message.retainedFloor = reader.uint64().toString();
+                case /* string retained_floor_event_ulid */ 4:
+                    message.retainedFloorEventUlid = reader.string();
                     break;
-                case /* uint64 source_sequence */ 5:
-                    message.sourceSequence = reader.uint64().toString();
+                case /* string event_ulid */ 5:
+                    message.eventUlid = reader.string();
                     break;
                 default:
                     let u = options.readUnknownField;
@@ -1344,12 +1358,12 @@ class LifecycleCursorV2$Type extends MessageType<LifecycleCursorV2> {
         /* uint64 stream_generation = 3; */
         if (message.streamGeneration !== "0")
             writer.tag(3, WireType.Varint).uint64(message.streamGeneration);
-        /* uint64 retained_floor = 4; */
-        if (message.retainedFloor !== "0")
-            writer.tag(4, WireType.Varint).uint64(message.retainedFloor);
-        /* uint64 source_sequence = 5; */
-        if (message.sourceSequence !== "0")
-            writer.tag(5, WireType.Varint).uint64(message.sourceSequence);
+        /* string retained_floor_event_ulid = 4; */
+        if (message.retainedFloorEventUlid !== "")
+            writer.tag(4, WireType.LengthDelimited).string(message.retainedFloorEventUlid);
+        /* string event_ulid = 5; */
+        if (message.eventUlid !== "")
+            writer.tag(5, WireType.LengthDelimited).string(message.eventUlid);
         let u = options.writeUnknownFields;
         if (u !== false)
             (u == true ? UnknownFieldHandler.onWrite : u)(this.typeName, message, writer);
@@ -1721,7 +1735,8 @@ class FlowListV2$Type extends MessageType<FlowListV2> {
             { no: 3, name: "next_page", kind: "message", T: () => ContinuationRefV2 },
             { no: 4, name: "diagnostics", kind: "message", repeat: 2 /*RepeatType.UNPACKED*/, T: () => DiscoveryDiagnosticV2 },
             { no: 5, name: "scan_targets", kind: "message", repeat: 2 /*RepeatType.UNPACKED*/, T: () => ScanTargetV2 },
-            { no: 6, name: "scope_ref", kind: "message", T: () => ScopeReferenceV2 }
+            { no: 6, name: "scope_ref", kind: "message", T: () => ScopeReferenceV2 },
+            { no: 7, name: "revision", kind: "scalar", T: 4 /*ScalarType.UINT64*/ }
         ]);
     }
     create(value?: PartialMessage<FlowListV2>): FlowListV2 {
@@ -1729,6 +1744,7 @@ class FlowListV2$Type extends MessageType<FlowListV2> {
         message.flows = [];
         message.diagnostics = [];
         message.scanTargets = [];
+        message.revision = "0";
         if (value !== undefined)
             reflectionMergePartial<FlowListV2>(this, message, value);
         return message;
@@ -1755,6 +1771,9 @@ class FlowListV2$Type extends MessageType<FlowListV2> {
                     break;
                 case /* avalanche.operator.ScopeReferenceV2 scope_ref */ 6:
                     message.scopeRef = ScopeReferenceV2.internalBinaryRead(reader, reader.uint32(), options, message.scopeRef);
+                    break;
+                case /* uint64 revision */ 7:
+                    message.revision = reader.uint64().toString();
                     break;
                 default:
                     let u = options.readUnknownField;
@@ -1786,6 +1805,9 @@ class FlowListV2$Type extends MessageType<FlowListV2> {
         /* avalanche.operator.ScopeReferenceV2 scope_ref = 6; */
         if (message.scopeRef)
             ScopeReferenceV2.internalBinaryWrite(message.scopeRef, writer.tag(6, WireType.LengthDelimited).fork(), options).join();
+        /* uint64 revision = 7; */
+        if (message.revision !== "0")
+            writer.tag(7, WireType.Varint).uint64(message.revision);
         let u = options.writeUnknownFields;
         if (u !== false)
             (u == true ? UnknownFieldHandler.onWrite : u)(this.typeName, message, writer);
@@ -4314,7 +4336,8 @@ export const RunOutputArtifactChunkV2 = new RunOutputArtifactChunkV2$Type();
 class WatchRunStatusRequestV2$Type extends MessageType<WatchRunStatusRequestV2> {
     constructor() {
         super("avalanche.operator.WatchRunStatusRequestV2", [
-            { no: 1, name: "after_cursor", kind: "message", T: () => LifecycleCursorV2 }
+            { no: 1, name: "after_cursor", kind: "message", T: () => LifecycleCursorV2 },
+            { no: 2, name: "scope_ref", kind: "message", T: () => ScopeReferenceV2 }
         ]);
     }
     create(value?: PartialMessage<WatchRunStatusRequestV2>): WatchRunStatusRequestV2 {
@@ -4331,6 +4354,9 @@ class WatchRunStatusRequestV2$Type extends MessageType<WatchRunStatusRequestV2> 
                 case /* avalanche.operator.LifecycleCursorV2 after_cursor */ 1:
                     message.afterCursor = LifecycleCursorV2.internalBinaryRead(reader, reader.uint32(), options, message.afterCursor);
                     break;
+                case /* avalanche.operator.ScopeReferenceV2 scope_ref */ 2:
+                    message.scopeRef = ScopeReferenceV2.internalBinaryRead(reader, reader.uint32(), options, message.scopeRef);
+                    break;
                 default:
                     let u = options.readUnknownField;
                     if (u === "throw")
@@ -4346,6 +4372,9 @@ class WatchRunStatusRequestV2$Type extends MessageType<WatchRunStatusRequestV2> 
         /* avalanche.operator.LifecycleCursorV2 after_cursor = 1; */
         if (message.afterCursor)
             LifecycleCursorV2.internalBinaryWrite(message.afterCursor, writer.tag(1, WireType.LengthDelimited).fork(), options).join();
+        /* avalanche.operator.ScopeReferenceV2 scope_ref = 2; */
+        if (message.scopeRef)
+            ScopeReferenceV2.internalBinaryWrite(message.scopeRef, writer.tag(2, WireType.LengthDelimited).fork(), options).join();
         let u = options.writeUnknownFields;
         if (u !== false)
             (u == true ? UnknownFieldHandler.onWrite : u)(this.typeName, message, writer);
@@ -4721,7 +4750,7 @@ export const ResetRequiredV2 = new ResetRequiredV2$Type();
 class RunStatusEnvelopeV2$Type extends MessageType<RunStatusEnvelopeV2> {
     constructor() {
         super("avalanche.operator.RunStatusEnvelopeV2", [
-            { no: 1, name: "source_sequence", kind: "scalar", T: 4 /*ScalarType.UINT64*/ },
+            { no: 1, name: "event_ulid", kind: "scalar", T: 9 /*ScalarType.STRING*/ },
             { no: 2, name: "run_created", kind: "message", oneof: "payload", T: () => RunCreatedV2 },
             { no: 3, name: "run_status_changed", kind: "message", oneof: "payload", T: () => RunStatusChangedV2 },
             { no: 4, name: "reset_required", kind: "message", oneof: "payload", T: () => ResetRequiredV2 },
@@ -4735,7 +4764,7 @@ class RunStatusEnvelopeV2$Type extends MessageType<RunStatusEnvelopeV2> {
     }
     create(value?: PartialMessage<RunStatusEnvelopeV2>): RunStatusEnvelopeV2 {
         const message = globalThis.Object.create((this.messagePrototype!));
-        message.sourceSequence = "0";
+        message.eventUlid = "";
         message.payload = { oneofKind: undefined };
         if (value !== undefined)
             reflectionMergePartial<RunStatusEnvelopeV2>(this, message, value);
@@ -4746,8 +4775,8 @@ class RunStatusEnvelopeV2$Type extends MessageType<RunStatusEnvelopeV2> {
         while (reader.pos < end) {
             let [fieldNo, wireType] = reader.tag();
             switch (fieldNo) {
-                case /* uint64 source_sequence */ 1:
-                    message.sourceSequence = reader.uint64().toString();
+                case /* string event_ulid */ 1:
+                    message.eventUlid = reader.string();
                     break;
                 case /* avalanche.operator.RunCreatedV2 run_created */ 2:
                     message.payload = {
@@ -4809,9 +4838,9 @@ class RunStatusEnvelopeV2$Type extends MessageType<RunStatusEnvelopeV2> {
         return message;
     }
     internalBinaryWrite(message: RunStatusEnvelopeV2, writer: IBinaryWriter, options: BinaryWriteOptions): IBinaryWriter {
-        /* uint64 source_sequence = 1; */
-        if (message.sourceSequence !== "0")
-            writer.tag(1, WireType.Varint).uint64(message.sourceSequence);
+        /* string event_ulid = 1; */
+        if (message.eventUlid !== "")
+            writer.tag(1, WireType.LengthDelimited).string(message.eventUlid);
         /* avalanche.operator.RunCreatedV2 run_created = 2; */
         if (message.payload.oneofKind === "runCreated")
             RunCreatedV2.internalBinaryWrite(message.payload.runCreated, writer.tag(2, WireType.LengthDelimited).fork(), options).join();

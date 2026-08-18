@@ -37,15 +37,15 @@ message ScopeReferenceV2 {
 }
 
 // A complete retained-stream position. Callers must preserve every field.
-// A server must fail closed (by requiring a reset or retry) rather than treat a
-// cursor from another stream, topology, generation, or retention window as a
-// valid progress position.
+// Event ULIDs are server-issued opaque positions; a server must fail closed
+// rather than treat a cursor from another stream, topology, epoch, or
+// retention window as a valid progress position.
 message LifecycleCursorV2 {
   string stream = 1;
   string topology_fingerprint = 2;
   uint64 stream_generation = 3;
-  uint64 retained_floor = 4;
-  uint64 source_sequence = 5;
+  string retained_floor_event_ulid = 4;
+  string event_ulid = 5;
 }
 
 // A server-issued page continuation bound to the authenticated scope and the
@@ -96,6 +96,8 @@ message FlowListV2 {
   repeated ScanTargetV2 scan_targets = 5;
   // The authorization scope this list was materialized for.
   ScopeReferenceV2 scope_ref = 6;
+  // Domain revision of the catalog, independent of the baseline cursor.
+  uint64 revision = 7;
 }
 
 message NodeEdgesV2 {
@@ -389,6 +391,8 @@ message RunOutputArtifactChunkV2 {
 message WatchRunStatusRequestV2 {
   // Replay begins strictly after this complete cursor.
   LifecycleCursorV2 after_cursor = 1;
+  // Optional scope echo; the server validates it before replaying any update.
+  ScopeReferenceV2 scope_ref = 2;
 }
 
 message RunCreatedV2 {
@@ -427,9 +431,11 @@ message ResetRequiredV2 {
   LifecycleCursorV2 latest_cursor = 2;
 }
 
-// Envelopes are ordered by source_sequence within the complete cursor identity.
+// Envelopes are ordered by server-issued event_ulid within the complete cursor
+// identity. ULIDs need not be adjacent; clients accept only lexicographically
+// later positions and ignore exact replays.
 message RunStatusEnvelopeV2 {
-  uint64 source_sequence = 1;
+  string event_ulid = 1;
   oneof payload {
     RunCreatedV2 run_created = 2;
     RunStatusChangedV2 run_status_changed = 3;
@@ -439,7 +445,7 @@ message RunStatusEnvelopeV2 {
     FlowListChangedV2 flow_list_changed = 8;
     FlowReloadStatusV2 flow_reload_status = 9;
   }
-  // Complete position for this exact source sequence; retain it to resume.
+  // Complete baseline position for this exact event; retain it to resume.
   LifecycleCursorV2 cursor = 5;
   ScopeReferenceV2 scope_ref = 10;
 }

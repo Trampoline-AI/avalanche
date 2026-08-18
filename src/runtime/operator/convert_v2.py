@@ -113,6 +113,7 @@ def flow_list_to_v2(
 ) -> pb.FlowListV2:
     message = pb.FlowListV2(
         cursor=cursor,
+        revision=catalog.revision,
         flows=flows
         if flows is not None
         else [workflow_info_to_v2(w) for w in catalog.workflows],
@@ -232,9 +233,7 @@ def run_snapshot_to_v2(
     *,
     cursor: pb.LifecycleCursorV2,
     scope_ref: pb.ScopeReferenceV2,
-    trace_detail_ref_for: Callable[
-        [str, str, TraceDescriptor, int], pb.ActivityDetailRefV2
-    ],
+    trace_detail_ref_for: Callable[[str, str, TraceDescriptor, int], pb.ActivityDetailRefV2],
     activity_continuations: Mapping[str, pb.ContinuationRefV2],
     log_continuation: pb.ContinuationRefV2 | None,
 ) -> pb.RunSnapshotV2:
@@ -358,22 +357,23 @@ def update_envelope_to_v2(
     *,
     scope_ref: pb.ScopeReferenceV2,
     cursor_for: Callable[[int], pb.LifecycleCursorV2],
-    flow_cursor_for: Callable[[int, str], pb.LifecycleCursorV2],
     activity_continuation_for: Callable[[str, str, str], pb.ContinuationRefV2],
     body_detail_ref_for: Callable[[str, str, str, int, int], pb.ActivityDetailRefV2],
     trace_detail_ref_for: Callable[[str, str, TraceDescriptor, int], pb.ActivityDetailRefV2],
 ) -> pb.RunStatusEnvelopeV2:
-    """Convert one operator update envelope; ``cursor_for`` maps sequence to cursor."""
+    """Convert one operator update envelope with its complete event cursor."""
     message = pb.RunStatusEnvelopeV2()
     if envelope.reset_required is not None:
+        history_floor = cursor_for(envelope.reset_required.history_floor)
+        latest_cursor = cursor_for(envelope.reset_required.latest_sequence)
         message.reset_required.CopyFrom(
             pb.ResetRequiredV2(
-                history_floor=cursor_for(envelope.reset_required.history_floor),
-                latest_cursor=cursor_for(envelope.reset_required.latest_sequence),
+                history_floor=history_floor,
+                latest_cursor=latest_cursor,
             )
         )
-        message.cursor.CopyFrom(cursor_for(envelope.reset_required.latest_sequence))
-        message.source_sequence = envelope.reset_required.latest_sequence
+        message.cursor.CopyFrom(latest_cursor)
+        message.event_ulid = latest_cursor.event_ulid
         message.scope_ref.CopyFrom(scope_ref)
         return message
 
@@ -381,8 +381,9 @@ def update_envelope_to_v2(
     if update is None:
         raise ValueError("operator update envelope requires a payload")
     change = update.change
-    message.source_sequence = update.sequence
-    message.cursor.CopyFrom(cursor_for(update.sequence))
+    cursor = cursor_for(update.sequence)
+    message.event_ulid = cursor.event_ulid
+    message.cursor.CopyFrom(cursor)
     message.scope_ref.CopyFrom(scope_ref)
     if isinstance(change, RunCreated):
         message.run_created.CopyFrom(
@@ -502,10 +503,7 @@ def update_envelope_to_v2(
             )
         )
     elif isinstance(change, CatalogReplaced):
-        catalog_cursor = flow_cursor_for(
-            change.catalog.as_of_sequence,
-            str(change.catalog.revision),
-        )
+        catalog_cursor = cursor_for(change.catalog.as_of_sequence)
         message.flow_list_changed.CopyFrom(
             pb.FlowListChangedV2(
                 flow_list=flow_list_to_v2(
@@ -593,9 +591,9 @@ def catalog_snapshot_from_v2(
     flows: list[pb.FlowInfoV2] | None = None,
 ) -> CatalogSnapshot:
     return CatalogSnapshot(
-        revision=int(msg.cursor.topology_fingerprint or 0),
+        revision=msg.revision,
         operator_instance_id=msg.scope_ref.reference,
-        as_of_sequence=msg.cursor.source_sequence,
+        as_of_event_ulid=msg.cursor.event_ulid,
         workflows=tuple(
             workflow_info_from_v2(item) for item in (flows if flows is not None else msg.flows)
         ),
@@ -667,8 +665,9 @@ def node_snapshot_from_v2(msg: pb.NodeSnapshotV2) -> NodeSnapshot:
 def run_snapshot_from_v2(msg: pb.RunSnapshotV2) -> RunSnapshot:
     return RunSnapshot(
         operator_instance_id=msg.scope_ref.reference,
-        as_of_sequence=msg.cursor.source_sequence,
+        as_of_sequence=0,
         summary=run_summary_from_v2(msg.summary),
+        as_of_event_ulid=msg.cursor.event_ulid,
         nodes=tuple(node_snapshot_from_v2(node) for node in msg.nodes),
         latest_log_sequence=msg.latest_log_sequence,
         log_page_token=msg.log_continuation.continuation_id,
@@ -715,11 +714,11 @@ def operator_update_envelope_from_v2(
         return OperatorUpdateEnvelope(
             operator_instance_id=instance,
             reset_required=ResetRequired(
-                history_floor=msg.reset_required.history_floor.source_sequence,
-                latest_sequence=msg.reset_required.latest_cursor.source_sequence,
+                history_floor_event_ulid=msg.reset_required.history_floor.event_ulid,
+                latest_event_ulid=msg.reset_required.latest_cursor.event_ulid,
             ),
         )
-    sequence = msg.source_sequence
+    event_ulid = msg.event_ulid
     if payload == "run_created":
         created = msg.run_created
         change = RunCreated(
@@ -787,5 +786,5 @@ def operator_update_envelope_from_v2(
         raise ValueError(f"Unknown run status payload: {payload}")
     return OperatorUpdateEnvelope(
         operator_instance_id=instance,
-        update=OperatorUpdate(sequence=sequence, change=change),
+        update=OperatorUpdate(sequence=0, event_ulid=event_ulid, change=change),
     )

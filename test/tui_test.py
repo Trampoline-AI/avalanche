@@ -29,6 +29,7 @@ from runtime.operator.models import (
     AgentEvent,
     AgentEventDetailAppended,
     LogDetailAppended,
+    ResetBaselineCursor,
     RunSnapshot,
     RunSummary,
     TraceDescriptor,
@@ -68,6 +69,10 @@ from tui.ui_store import UIStore
 from tui.widgets.run_history import RunHistoryWidget
 from tui.widgets.sidebar import Sidebar
 from tui.widgets.status_bar import StatusBar
+
+
+def _event_ulid(sequence: int) -> str:
+    return f"{sequence:026X}"
 
 
 def _retry_hydration_workflow() -> WorkflowInfo:
@@ -299,7 +304,7 @@ class _ReachableStateProvider:
         self,
         generation: int,
         operator_instance_id: str,
-        reconciled_sequence: int,
+        reconciled_event_ulid: str,
     ) -> None:
         if self.stream_state != "reset_required":
             raise RuntimeError("stream reset is not required")
@@ -2106,7 +2111,7 @@ class TestUIStore:
             ResetBaseline(
                 generation=1,
                 operator_instance_id="operator-1",
-                as_of_sequence=2,
+                as_of_event_ulid=_event_ulid(2),
                 catalog=CatalogSnapshot(workflows=(workflow,)),
                 runs_by_workflow={workflow.selector: (reset_run,)},
             )
@@ -2244,7 +2249,7 @@ class TestUIStore:
             ResetBaseline(
                 generation=1,
                 operator_instance_id="operator-2",
-                as_of_sequence=2,
+                as_of_event_ulid=_event_ulid(2),
                 catalog=CatalogSnapshot(workflows=(workflow,)),
                 runs_by_workflow={workflow.selector: (reset_run,)},
             )
@@ -2670,7 +2675,7 @@ class TestUIStore:
                 return ResetBaseline(
                     generation=notice.generation,
                     operator_instance_id="operator-recovered",
-                    as_of_sequence=notice.observed_sequence,
+                    as_of_event_ulid=notice.observed_event_ulid,
                     catalog=CatalogSnapshot(workflows=(INGEST_WORKFLOW,)),
                     runs_by_workflow={INGEST_WORKFLOW.selector: ()},
                 )
@@ -2680,8 +2685,8 @@ class TestUIStore:
         store = UIStore(provider)
         notice = StreamResetNotice(
             generation=1,
-            previous_sequence=99,
-            observed_sequence=2,
+            previous_event_ulid=_event_ulid(99),
+            observed_event_ulid=_event_ulid(2),
         )
         try:
             store._on_stream_reset(notice)
@@ -2702,18 +2707,18 @@ class TestUIStore:
             store.shutdown()
 
     @pytest.mark.parametrize(
-        ("generation", "operator_instance_id", "as_of_sequence"),
+        ("generation", "operator_instance_id", "as_of_event_ulid"),
         [
-            (2, "operator-new", 2),
-            (1, "operator-wrong", 2),
-            (1, "operator-new", 1),
+            (2, "operator-new", _event_ulid(2)),
+            (1, "operator-wrong", _event_ulid(2)),
+            (1, "operator-new", _event_ulid(1)),
         ],
     )
     def test_reset_reconciliation_retries_invalid_baseline(
         self,
         generation,
         operator_instance_id,
-        as_of_sequence,
+        as_of_event_ulid,
     ):
         class InvalidThenValidProvider(MockStateProvider):
             def __init__(self):
@@ -2726,14 +2731,14 @@ class TestUIStore:
                     return ResetBaseline(
                         generation=generation,
                         operator_instance_id=operator_instance_id,
-                        as_of_sequence=as_of_sequence,
+                        as_of_event_ulid=as_of_event_ulid,
                         catalog=CatalogSnapshot(workflows=()),
                         runs_by_workflow={},
                     )
                 return ResetBaseline(
                     generation=notice.generation,
                     operator_instance_id=notice.operator_instance_id,
-                    as_of_sequence=notice.observed_sequence,
+                    as_of_event_ulid=notice.observed_event_ulid,
                     catalog=CatalogSnapshot(workflows=(INGEST_WORKFLOW,)),
                     runs_by_workflow={INGEST_WORKFLOW.selector: ()},
                 )
@@ -2743,8 +2748,8 @@ class TestUIStore:
         store = UIStore(provider)
         notice = StreamResetNotice(
             generation=1,
-            previous_sequence=99,
-            observed_sequence=2,
+            previous_event_ulid=_event_ulid(99),
+            observed_event_ulid=_event_ulid(2),
             operator_instance_id="operator-new",
         )
         try:
@@ -2801,7 +2806,7 @@ class TestUIStore:
                 ResetBaseline(
                     generation=1,
                     operator_instance_id="operator-1",
-                    as_of_sequence=2,
+                    as_of_event_ulid=_event_ulid(2),
                     catalog=CatalogSnapshot(workflows=(ORDER_WORKFLOW,)),
                     runs_by_workflow={ORDER_WORKFLOW.selector: (authoritative,)},
                 )
@@ -2845,7 +2850,7 @@ class TestUIStore:
             return ResetBaseline(
                 generation=notice.generation,
                 operator_instance_id="operator-restarted",
-                as_of_sequence=notice.observed_sequence,
+                as_of_event_ulid=notice.observed_event_ulid,
                 catalog=CatalogSnapshot(workflows=(ORDER_WORKFLOW,)),
                 runs_by_workflow={ORDER_WORKFLOW.selector: ()},
             )
@@ -2862,8 +2867,8 @@ class TestUIStore:
         store._on_stream_reset(
             StreamResetNotice(
                 generation=1,
-                previous_sequence=99,
-                observed_sequence=2,
+                previous_event_ulid=_event_ulid(99),
+                observed_event_ulid=_event_ulid(2),
             )
         )
         assert baseline_entered.wait(timeout=1.0)
@@ -3020,13 +3025,18 @@ class TestUIStore:
                 release.wait()
                 raise StopIteration
 
-        def _cursor(sequence: int) -> pb.LifecycleCursorV2:
+        def _cursor(
+            sequence: int,
+            stream: str = "operator-events",
+        ) -> pb.LifecycleCursorV2:
+            del stream
+            stream = "operator-events"
             return pb.LifecycleCursorV2(
-                stream="operator-events",
-                topology_fingerprint="operator-events-topology",
+                stream=stream,
+                topology_fingerprint=f"{stream}-topology",
                 stream_generation=1,
-                retained_floor=1,
-                source_sequence=sequence,
+                retained_floor_event_ulid=_event_ulid(1),
+                event_ulid=_event_ulid(sequence),
             )
 
         class RestartedStub:
@@ -3036,11 +3046,11 @@ class TestUIStore:
             def DiscoverFlows(self, request, **kwargs):  # noqa: N802
                 return pb.FlowListV2(
                     cursor=pb.LifecycleCursorV2(
-                        stream="flows",
+                        stream="operator-events",
                         topology_fingerprint="1",
                         stream_generation=1,
-                        retained_floor=1,
-                        source_sequence=99,
+                        retained_floor_event_ulid=_event_ulid(1),
+                        event_ulid=_event_ulid(99),
                     ),
                     flows=[workflow_info_to_v2(stale_workflow)],
                     scope_ref=pb.ScopeReferenceV2(reference="operator-original"),
@@ -3056,15 +3066,13 @@ class TestUIStore:
                 self.stream_calls += 1
                 assert metadata is None
                 if self.stream_calls == 1:
-                    assert request.after_cursor.source_sequence == 99
+                    assert request.after_cursor.event_ulid == _event_ulid(99)
                     return iter(
                         (
                             pb.RunStatusEnvelopeV2(
-                                source_sequence=2,
+                                event_ulid=_event_ulid(2),
                                 cursor=_cursor(2),
-                                scope_ref=pb.ScopeReferenceV2(
-                                    reference="operator-restarted"
-                                ),
+                                scope_ref=pb.ScopeReferenceV2(reference="operator-restarted"),
                                 reset_required=pb.ResetRequiredV2(
                                     history_floor=_cursor(1),
                                     latest_cursor=_cursor(2),
@@ -3072,7 +3080,7 @@ class TestUIStore:
                             ),
                         )
                     )
-                assert request.after_cursor.source_sequence == 2
+                assert request.after_cursor.event_ulid == _event_ulid(3)
                 return LiveStream()
 
         def load_baseline(notice: StreamResetNotice) -> ResetBaseline:
@@ -3080,9 +3088,16 @@ class TestUIStore:
             return ResetBaseline(
                 generation=notice.generation,
                 operator_instance_id="operator-restarted",
-                as_of_sequence=3,
+                as_of_event_ulid=_event_ulid(3),
                 catalog=CatalogSnapshot(workflows=(workflow,)),
                 runs_by_workflow={workflow.selector: (recovered,)},
+                cursor=ResetBaselineCursor(
+                    stream="operator-events",
+                    topology_fingerprint="operator-events-topology",
+                    stream_generation=1,
+                    retained_floor_event_ulid=_event_ulid(1),
+                    event_ulid=_event_ulid(3),
+                ),
             )
 
         provider = GrpcStateProvider(
@@ -3090,7 +3105,7 @@ class TestUIStore:
             reset_baseline_loader=load_baseline,
         )
         provider._stub = RestartedStub()
-        provider._install_structural_baseline("operator-original", 99, {})
+        provider._install_structural_baseline("operator-original", _event_ulid(99), {})
         provider._event_cursor = _cursor(99)
         store = UIStore(provider)
         _apply_async_updates(store)
@@ -3112,8 +3127,8 @@ class TestUIStore:
             assert notices == [
                 StreamResetNotice(
                     generation=1,
-                    previous_sequence=99,
-                    observed_sequence=2,
+                    previous_event_ulid=_event_ulid(99),
+                    observed_event_ulid=_event_ulid(2),
                     operator_instance_id="operator-restarted",
                 )
             ]
@@ -3123,12 +3138,12 @@ class TestUIStore:
             assert store.run_pinned is False
             assert provider.stream_state is StreamState.LIVE
             assert provider._cursor.operator_instance_id == "operator-restarted"
-            assert provider._cursor.sequence == 3
+            assert provider._cursor.event_ulid == _event_ulid(3)
             with pytest.raises(StaleResetAcknowledgementError):
                 provider.acknowledge_stream_reset(
                     generation=1,
                     operator_instance_id="operator-restarted",
-                    reconciled_sequence=3,
+                    reconciled_event_ulid=_event_ulid(3),
                 )
         finally:
             provider._stream_stop.set()
@@ -3170,13 +3185,18 @@ class TestUIStore:
             ),
         ]
 
-        def _cursor(sequence: int) -> pb.LifecycleCursorV2:
+        def _cursor(
+            sequence: int,
+            stream: str = "operator-events",
+        ) -> pb.LifecycleCursorV2:
+            del stream
+            stream = "operator-events"
             return pb.LifecycleCursorV2(
-                stream="operator-events",
-                topology_fingerprint="operator-events-topology",
+                stream=stream,
+                topology_fingerprint=f"{stream}-topology",
                 stream_generation=1,
-                retained_floor=1,
-                source_sequence=sequence,
+                retained_floor_event_ulid=_event_ulid(1),
+                event_ulid=_event_ulid(sequence),
             )
 
         class RestartService(pb_grpc.OperatorServiceV2Servicer):
@@ -3210,11 +3230,11 @@ class TestUIStore:
             def DiscoverFlows(self, request, context):  # noqa: N802
                 return pb.FlowListV2(
                     cursor=pb.LifecycleCursorV2(
-                        stream="flows",
+                        stream="operator-events",
                         topology_fingerprint="1",
                         stream_generation=1,
-                        retained_floor=1,
-                        source_sequence=self.baseline_sequence,
+                        retained_floor_event_ulid=_event_ulid(1),
+                        event_ulid=_event_ulid(self.baseline_sequence),
                     ),
                     flows=[workflow_info_to_v2(workflow)],
                     scope_ref=pb.ScopeReferenceV2(reference=self.operator_id),
@@ -3222,12 +3242,12 @@ class TestUIStore:
 
             def WatchRunStatus(self, request, context):  # noqa: N802
                 context.send_initial_metadata(())
-                if request.after_cursor.source_sequence not in {
-                    self.stream_sequence,
-                    self.baseline_sequence,
+                if request.after_cursor.event_ulid not in {
+                    _event_ulid(self.stream_sequence),
+                    _event_ulid(self.baseline_sequence),
                 }:
                     yield pb.RunStatusEnvelopeV2(
-                        source_sequence=self.stream_sequence,
+                        event_ulid=_event_ulid(self.stream_sequence),
                         cursor=_cursor(self.stream_sequence),
                         scope_ref=pb.ScopeReferenceV2(reference=self.operator_id),
                         reset_required=pb.ResetRequiredV2(
@@ -3250,7 +3270,7 @@ class TestUIStore:
                     else []
                 )
                 page = pb.RunSummaryPageV2(
-                    cursor=_cursor(self.baseline_sequence),
+                    cursor=_cursor(self.baseline_sequence, "run-summaries"),
                     scope_ref=pb.ScopeReferenceV2(reference=self.operator_id),
                     runs=runs,
                 )
@@ -3259,7 +3279,7 @@ class TestUIStore:
                         pb.ContinuationRefV2(
                             scope_ref=pb.ScopeReferenceV2(reference=self.operator_id),
                             continuation_id="page-2",
-                            cursor=_cursor(self.baseline_sequence),
+                            cursor=_cursor(self.baseline_sequence, "run-summaries"),
                         )
                     )
                 return page
@@ -3275,7 +3295,7 @@ class TestUIStore:
                         as_of_sequence=self.baseline_sequence,
                         summary=summary,
                     ),
-                    cursor=_cursor(self.baseline_sequence),
+                    cursor=_cursor(self.baseline_sequence, f"run:{request.run_id}"),
                     scope_ref=pb.ScopeReferenceV2(reference=self.operator_id),
                     trace_detail_ref_for=lambda run_id, node_id, trace, run_sequence: (
                         pb.ActivityDetailRefV2(
@@ -3283,9 +3303,7 @@ class TestUIStore:
                             scope_ref=pb.ScopeReferenceV2(reference=self.operator_id),
                             activity_id=f"trace:{node_id}:{trace.revision}",
                             run_sequence=run_sequence,
-                            object_uri=(
-                                f"local://trace/{run_id}/{node_id}/{trace.revision}"
-                            ),
+                            object_uri=(f"local://trace/{run_id}/{node_id}/{trace.revision}"),
                             object_key=f"{run_id}/{node_id}/{trace.revision}",
                             sha256="0" * 64,
                             size_bytes=trace.size_bytes,
@@ -3336,7 +3354,7 @@ class TestUIStore:
                     time.sleep(0.01)
                 assert old_service.stream_sent.is_set()
                 assert provider._cursor.operator_instance_id == "operator-old"
-                assert provider._cursor.sequence == 99
+                assert provider._cursor.event_ulid == _event_ulid(99)
 
                 old_service.release_stream.set()
                 old_server.stop(grace=0).wait()
@@ -3354,7 +3372,7 @@ class TestUIStore:
                 assert provider.stream_state is StreamState.LIVE
                 assert provider.operator_instance_id == "operator-new"
                 assert provider._cursor.operator_instance_id == "operator-new"
-                assert provider._cursor.sequence == 3
+                assert provider._cursor.event_ulid == _event_ulid(3)
                 assert app.store.current_run is not None
                 assert app.store.current_run.run_id == "run_live"
                 assert new_service.summary_tokens == ["", "page-2"]
