@@ -15,7 +15,7 @@ from runtime.operator.proto import operator_pb2 as pb
 from runtime.operator.server import serve as serve_operator
 from runtime.operator.web import start_browser_server
 
-_SERVICE = "/avalanche.operator.OperatorService/"
+_SERVICE = "/avalanche.operator.OperatorServiceV2/"
 _CONTENT_TYPE = "application/grpc-web+proto"
 
 
@@ -71,21 +71,21 @@ def _post(server, method: str, request) -> tuple[int, str, bytes]:
     return result
 
 
-def test_browser_listener_proxies_unary_catalog_from_remote_operator(tmp_path: Path):
+def test_browser_listener_proxies_unary_flow_list_from_remote_operator(tmp_path: Path):
     (tmp_path / "index.html").write_text("<main>Avalanche</main>")
     operator = Operator([], watch=False, schedule=False)
     grpc_port = _free_port()
     grpc_server = serve_operator(operator, port=grpc_port, block=False)
     server = start_browser_server(f"127.0.0.1:{grpc_port}", port=0, asset_root=tmp_path)
     try:
-        status, content_type, body = _post(server, "GetCatalog", pb.Empty())
+        status, content_type, body = _post(server, "DiscoverFlows", pb.DiscoverFlowsRequestV2())
         frames = _frames(body)
-        catalog = pb.CatalogSnapshotMsg.FromString(frames[0][1])
+        flow_list = pb.FlowListV2.FromString(frames[0][1])
 
         assert status == 200
         assert content_type == _CONTENT_TYPE
-        assert catalog.operator_instance_id == operator.operator_instance_id
-        assert catalog.as_of_sequence == operator.current_sequence
+        assert flow_list.scope_ref.reference == operator.operator_instance_id
+        assert len(flow_list.cursor.event_ulid) == 26
         assert frames[1][0] == 0x80
         assert b"grpc-status: 0" in frames[1][1]
     finally:
@@ -103,17 +103,22 @@ def test_browser_listener_proxies_stream_reset_from_remote_operator(tmp_path: Pa
     try:
         status, _, body = _post(
             server,
-            "StreamOperatorUpdates",
-            pb.StreamOperatorUpdatesRequest(
-                operator_instance_id="stale-operator",
-                after_sequence=42,
+            "WatchRunStatus",
+            pb.WatchRunStatusRequestV2(
+                after_cursor=pb.LifecycleCursorV2(
+                    stream="operator-events",
+                    topology_fingerprint="foreign-topology",
+                    stream_generation=42,
+                    retained_floor_event_ulid="00000000000000000000000001",
+                    event_ulid="00000000000000000000000002",
+                )
             ),
         )
         frames = _frames(body)
-        envelope = pb.OperatorUpdateEnvelope.FromString(frames[0][1])
+        envelope = pb.RunStatusEnvelopeV2.FromString(frames[0][1])
 
         assert status == 200
-        assert envelope.operator_instance_id == operator.operator_instance_id
+        assert envelope.scope_ref.reference == operator.operator_instance_id
         assert envelope.HasField("reset_required")
         assert frames[-1][0] == 0x80
         assert b"grpc-status: 0" in frames[-1][1]
@@ -134,13 +139,8 @@ def test_browser_listener_cancels_idle_stream_when_browser_disconnects(tmp_path:
         try:
             connection.request(
                 "POST",
-                f"{_SERVICE}StreamOperatorUpdates",
-                body=_frame(
-                    pb.StreamOperatorUpdatesRequest(
-                        operator_instance_id=operator.operator_instance_id,
-                        after_sequence=operator.current_sequence,
-                    )
-                ),
+                f"{_SERVICE}WatchRunStatus",
+                body=_frame(pb.WatchRunStatusRequestV2()),
                 headers={"Content-Type": _CONTENT_TYPE},
             )
             response = connection.getresponse()

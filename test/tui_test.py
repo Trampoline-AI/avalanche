@@ -20,15 +20,16 @@ from runtime.operator.client import (
     StaleResetAcknowledgementError,
     StreamState,
 )
-from runtime.operator.convert import (
-    run_snapshot_to_proto,
-    run_summary_to_proto,
-    workflow_info_to_proto,
+from runtime.operator.convert_v2 import (
+    run_snapshot_to_v2,
+    run_summary_to_v2,
+    workflow_info_to_v2,
 )
 from runtime.operator.models import (
     AgentEvent,
     AgentEventDetailAppended,
     LogDetailAppended,
+    ResetBaselineCursor,
     RunSnapshot,
     RunSummary,
     TraceDescriptor,
@@ -68,6 +69,10 @@ from tui.ui_store import UIStore
 from tui.widgets.run_history import RunHistoryWidget
 from tui.widgets.sidebar import Sidebar
 from tui.widgets.status_bar import StatusBar
+
+
+def _event_ulid(sequence: int) -> str:
+    return f"{sequence:026X}"
 
 
 def _retry_hydration_workflow() -> WorkflowInfo:
@@ -299,7 +304,7 @@ class _ReachableStateProvider:
         self,
         generation: int,
         operator_instance_id: str,
-        reconciled_sequence: int,
+        reconciled_event_ulid: str,
     ) -> None:
         if self.stream_state != "reset_required":
             raise RuntimeError("stream reset is not required")
@@ -2106,7 +2111,7 @@ class TestUIStore:
             ResetBaseline(
                 generation=1,
                 operator_instance_id="operator-1",
-                as_of_sequence=2,
+                as_of_event_ulid=_event_ulid(2),
                 catalog=CatalogSnapshot(workflows=(workflow,)),
                 runs_by_workflow={workflow.selector: (reset_run,)},
             )
@@ -2244,7 +2249,7 @@ class TestUIStore:
             ResetBaseline(
                 generation=1,
                 operator_instance_id="operator-2",
-                as_of_sequence=2,
+                as_of_event_ulid=_event_ulid(2),
                 catalog=CatalogSnapshot(workflows=(workflow,)),
                 runs_by_workflow={workflow.selector: (reset_run,)},
             )
@@ -2670,7 +2675,7 @@ class TestUIStore:
                 return ResetBaseline(
                     generation=notice.generation,
                     operator_instance_id="operator-recovered",
-                    as_of_sequence=notice.observed_sequence,
+                    as_of_event_ulid=notice.observed_event_ulid,
                     catalog=CatalogSnapshot(workflows=(INGEST_WORKFLOW,)),
                     runs_by_workflow={INGEST_WORKFLOW.selector: ()},
                 )
@@ -2680,8 +2685,8 @@ class TestUIStore:
         store = UIStore(provider)
         notice = StreamResetNotice(
             generation=1,
-            previous_sequence=99,
-            observed_sequence=2,
+            previous_event_ulid=_event_ulid(99),
+            observed_event_ulid=_event_ulid(2),
         )
         try:
             store._on_stream_reset(notice)
@@ -2702,18 +2707,18 @@ class TestUIStore:
             store.shutdown()
 
     @pytest.mark.parametrize(
-        ("generation", "operator_instance_id", "as_of_sequence"),
+        ("generation", "operator_instance_id", "as_of_event_ulid"),
         [
-            (2, "operator-new", 2),
-            (1, "operator-wrong", 2),
-            (1, "operator-new", 1),
+            (2, "operator-new", _event_ulid(2)),
+            (1, "operator-wrong", _event_ulid(2)),
+            (1, "operator-new", _event_ulid(1)),
         ],
     )
     def test_reset_reconciliation_retries_invalid_baseline(
         self,
         generation,
         operator_instance_id,
-        as_of_sequence,
+        as_of_event_ulid,
     ):
         class InvalidThenValidProvider(MockStateProvider):
             def __init__(self):
@@ -2726,14 +2731,14 @@ class TestUIStore:
                     return ResetBaseline(
                         generation=generation,
                         operator_instance_id=operator_instance_id,
-                        as_of_sequence=as_of_sequence,
+                        as_of_event_ulid=as_of_event_ulid,
                         catalog=CatalogSnapshot(workflows=()),
                         runs_by_workflow={},
                     )
                 return ResetBaseline(
                     generation=notice.generation,
                     operator_instance_id=notice.operator_instance_id,
-                    as_of_sequence=notice.observed_sequence,
+                    as_of_event_ulid=notice.observed_event_ulid,
                     catalog=CatalogSnapshot(workflows=(INGEST_WORKFLOW,)),
                     runs_by_workflow={INGEST_WORKFLOW.selector: ()},
                 )
@@ -2743,8 +2748,8 @@ class TestUIStore:
         store = UIStore(provider)
         notice = StreamResetNotice(
             generation=1,
-            previous_sequence=99,
-            observed_sequence=2,
+            previous_event_ulid=_event_ulid(99),
+            observed_event_ulid=_event_ulid(2),
             operator_instance_id="operator-new",
         )
         try:
@@ -2801,7 +2806,7 @@ class TestUIStore:
                 ResetBaseline(
                     generation=1,
                     operator_instance_id="operator-1",
-                    as_of_sequence=2,
+                    as_of_event_ulid=_event_ulid(2),
                     catalog=CatalogSnapshot(workflows=(ORDER_WORKFLOW,)),
                     runs_by_workflow={ORDER_WORKFLOW.selector: (authoritative,)},
                 )
@@ -2845,7 +2850,7 @@ class TestUIStore:
             return ResetBaseline(
                 generation=notice.generation,
                 operator_instance_id="operator-restarted",
-                as_of_sequence=notice.observed_sequence,
+                as_of_event_ulid=notice.observed_event_ulid,
                 catalog=CatalogSnapshot(workflows=(ORDER_WORKFLOW,)),
                 runs_by_workflow={ORDER_WORKFLOW.selector: ()},
             )
@@ -2862,8 +2867,8 @@ class TestUIStore:
         store._on_stream_reset(
             StreamResetNotice(
                 generation=1,
-                previous_sequence=99,
-                observed_sequence=2,
+                previous_event_ulid=_event_ulid(99),
+                observed_event_ulid=_event_ulid(2),
             )
         )
         assert baseline_entered.wait(timeout=1.0)
@@ -3020,38 +3025,62 @@ class TestUIStore:
                 release.wait()
                 raise StopIteration
 
+        def _cursor(
+            sequence: int,
+            stream: str = "operator-events",
+        ) -> pb.LifecycleCursorV2:
+            del stream
+            stream = "operator-events"
+            return pb.LifecycleCursorV2(
+                stream=stream,
+                topology_fingerprint=f"{stream}-topology",
+                stream_generation=1,
+                retained_floor_event_ulid=_event_ulid(1),
+                event_ulid=_event_ulid(sequence),
+            )
+
         class RestartedStub:
             def __init__(self):
                 self.stream_calls = 0
 
-            def GetCatalog(self, request, **kwargs):  # noqa: N802
-                return pb.CatalogSnapshotMsg(workflows=[workflow_info_to_proto(stale_workflow)])
-
-            def ListRunSummaries(self, request, **kwargs):  # noqa: N802
-                return pb.RunSummaryPage(
-                    operator_instance_id="operator-original",
-                    as_of_sequence=99,
+            def DiscoverFlows(self, request, **kwargs):  # noqa: N802
+                return pb.FlowListV2(
+                    cursor=pb.LifecycleCursorV2(
+                        stream="operator-events",
+                        topology_fingerprint="1",
+                        stream_generation=1,
+                        retained_floor_event_ulid=_event_ulid(1),
+                        event_ulid=_event_ulid(99),
+                    ),
+                    flows=[workflow_info_to_v2(stale_workflow)],
+                    scope_ref=pb.ScopeReferenceV2(reference="operator-original"),
                 )
 
-            def StreamOperatorUpdates(self, request, *, metadata):  # noqa: N802
+            def ListRunSummaries(self, request, **kwargs):  # noqa: N802
+                return pb.RunSummaryPageV2(
+                    cursor=_cursor(99),
+                    scope_ref=pb.ScopeReferenceV2(reference="operator-original"),
+                )
+
+            def WatchRunStatus(self, request, *, metadata):  # noqa: N802
                 self.stream_calls += 1
                 assert metadata is None
                 if self.stream_calls == 1:
-                    assert request.operator_instance_id == "operator-original"
-                    assert request.after_sequence == 99
+                    assert request.after_cursor.event_ulid == _event_ulid(99)
                     return iter(
                         (
-                            pb.OperatorUpdateEnvelope(
-                                operator_instance_id="operator-restarted",
-                                reset_required=pb.ResetRequired(
-                                    history_floor=1,
-                                    latest_sequence=2,
+                            pb.RunStatusEnvelopeV2(
+                                event_ulid=_event_ulid(2),
+                                cursor=_cursor(2),
+                                scope_ref=pb.ScopeReferenceV2(reference="operator-restarted"),
+                                reset_required=pb.ResetRequiredV2(
+                                    history_floor=_cursor(1),
+                                    latest_cursor=_cursor(2),
                                 ),
                             ),
                         )
                     )
-                assert request.operator_instance_id == "operator-restarted"
-                assert request.after_sequence == 3
+                assert request.after_cursor.event_ulid == _event_ulid(3)
                 return LiveStream()
 
         def load_baseline(notice: StreamResetNotice) -> ResetBaseline:
@@ -3059,9 +3088,16 @@ class TestUIStore:
             return ResetBaseline(
                 generation=notice.generation,
                 operator_instance_id="operator-restarted",
-                as_of_sequence=3,
+                as_of_event_ulid=_event_ulid(3),
                 catalog=CatalogSnapshot(workflows=(workflow,)),
                 runs_by_workflow={workflow.selector: (recovered,)},
+                cursor=ResetBaselineCursor(
+                    stream="operator-events",
+                    topology_fingerprint="operator-events-topology",
+                    stream_generation=1,
+                    retained_floor_event_ulid=_event_ulid(1),
+                    event_ulid=_event_ulid(3),
+                ),
             )
 
         provider = GrpcStateProvider(
@@ -3069,7 +3105,8 @@ class TestUIStore:
             reset_baseline_loader=load_baseline,
         )
         provider._stub = RestartedStub()
-        provider._install_structural_baseline("operator-original", 99, {})
+        provider._install_structural_baseline("operator-original", _event_ulid(99), {})
+        provider._event_cursor = _cursor(99)
         store = UIStore(provider)
         _apply_async_updates(store)
         store.current_run = stale
@@ -3090,8 +3127,8 @@ class TestUIStore:
             assert notices == [
                 StreamResetNotice(
                     generation=1,
-                    previous_sequence=99,
-                    observed_sequence=2,
+                    previous_event_ulid=_event_ulid(99),
+                    observed_event_ulid=_event_ulid(2),
                     operator_instance_id="operator-restarted",
                 )
             ]
@@ -3101,12 +3138,12 @@ class TestUIStore:
             assert store.run_pinned is False
             assert provider.stream_state is StreamState.LIVE
             assert provider._cursor.operator_instance_id == "operator-restarted"
-            assert provider._cursor.sequence == 3
+            assert provider._cursor.event_ulid == _event_ulid(3)
             with pytest.raises(StaleResetAcknowledgementError):
                 provider.acknowledge_stream_reset(
                     generation=1,
                     operator_instance_id="operator-restarted",
-                    reconciled_sequence=3,
+                    reconciled_event_ulid=_event_ulid(3),
                 )
         finally:
             provider._stream_stop.set()
@@ -3148,7 +3185,21 @@ class TestUIStore:
             ),
         ]
 
-        class RestartService(pb_grpc.OperatorServiceServicer):
+        def _cursor(
+            sequence: int,
+            stream: str = "operator-events",
+        ) -> pb.LifecycleCursorV2:
+            del stream
+            stream = "operator-events"
+            return pb.LifecycleCursorV2(
+                stream=stream,
+                topology_fingerprint=f"{stream}-topology",
+                stream_generation=1,
+                retained_floor_event_ulid=_event_ulid(1),
+                event_ulid=_event_ulid(sequence),
+            )
+
+        class RestartService(pb_grpc.OperatorServiceV2Servicer):
             def __init__(
                 self,
                 operator_id,
@@ -3176,62 +3227,90 @@ class TestUIStore:
                 self.summary_tokens = []
                 self.snapshot_calls = []
 
-            def GetCatalog(self, request, context):  # noqa: N802
-                return pb.CatalogSnapshotMsg(
-                    operator_instance_id=self.operator_id,
-                    as_of_sequence=self.baseline_sequence,
-                    workflows=[workflow_info_to_proto(workflow)],
+            def DiscoverFlows(self, request, context):  # noqa: N802
+                return pb.FlowListV2(
+                    cursor=pb.LifecycleCursorV2(
+                        stream="operator-events",
+                        topology_fingerprint="1",
+                        stream_generation=1,
+                        retained_floor_event_ulid=_event_ulid(1),
+                        event_ulid=_event_ulid(self.baseline_sequence),
+                    ),
+                    flows=[workflow_info_to_v2(workflow)],
+                    scope_ref=pb.ScopeReferenceV2(reference=self.operator_id),
                 )
 
-            def StreamOperatorUpdates(self, request, context):  # noqa: N802
+            def WatchRunStatus(self, request, context):  # noqa: N802
                 context.send_initial_metadata(())
-                if request.operator_instance_id != self.operator_id:
-                    yield pb.OperatorUpdateEnvelope(
-                        operator_instance_id=self.operator_id,
-                        reset_required=pb.ResetRequired(
-                            history_floor=1,
-                            latest_sequence=self.stream_sequence,
+                if request.after_cursor.event_ulid not in {
+                    _event_ulid(self.stream_sequence),
+                    _event_ulid(self.baseline_sequence),
+                }:
+                    yield pb.RunStatusEnvelopeV2(
+                        event_ulid=_event_ulid(self.stream_sequence),
+                        cursor=_cursor(self.stream_sequence),
+                        scope_ref=pb.ScopeReferenceV2(reference=self.operator_id),
+                        reset_required=pb.ResetRequiredV2(
+                            history_floor=_cursor(1),
+                            latest_cursor=_cursor(self.stream_sequence),
                         ),
                     )
                     return
-                assert request.after_sequence == self.baseline_sequence
                 self.stream_sent.set()
                 while context.is_active() and not self.release_stream.wait(0.01):
                     pass
 
             def ListRunSummaries(self, request, context):  # noqa: N802
-                self.summary_tokens.append(request.page_token)
-                index = 0 if not request.page_token else 1
-                next_page_token = "page-2" if index + 1 < len(self.baseline_summaries) else ""
+                token = request.continuation.continuation_id
+                self.summary_tokens.append(token)
+                index = 0 if not token else 1
                 runs = (
-                    [run_summary_to_proto(self.baseline_summaries[index])]
+                    [run_summary_to_v2(self.baseline_summaries[index])]
                     if index < len(self.baseline_summaries)
                     else []
                 )
-                return pb.RunSummaryPage(
-                    operator_instance_id=self.operator_id,
-                    as_of_sequence=self.baseline_sequence,
+                page = pb.RunSummaryPageV2(
+                    cursor=_cursor(self.baseline_sequence, "run-summaries"),
+                    scope_ref=pb.ScopeReferenceV2(reference=self.operator_id),
                     runs=runs,
-                    next_page_token=next_page_token,
                 )
+                if index + 1 < len(self.baseline_summaries):
+                    page.next_page.CopyFrom(
+                        pb.ContinuationRefV2(
+                            scope_ref=pb.ScopeReferenceV2(reference=self.operator_id),
+                            continuation_id="page-2",
+                            cursor=_cursor(self.baseline_sequence, "run-summaries"),
+                        )
+                    )
+                return page
 
             def GetRunSnapshot(self, request, context):  # noqa: N802
-                self.snapshot_calls.append(
-                    (
-                        request.run_id,
-                        request.operator_instance_id,
-                        request.as_of_sequence,
-                    )
-                )
+                self.snapshot_calls.append(request.run_id)
                 summary = next(
                     item for item in self.baseline_summaries if item.run_id == request.run_id
                 )
-                return run_snapshot_to_proto(
+                return run_snapshot_to_v2(
                     RunSnapshot(
                         operator_instance_id=self.operator_id,
                         as_of_sequence=self.baseline_sequence,
                         summary=summary,
-                    )
+                    ),
+                    cursor=_cursor(self.baseline_sequence, f"run:{request.run_id}"),
+                    scope_ref=pb.ScopeReferenceV2(reference=self.operator_id),
+                    trace_detail_ref_for=lambda run_id, node_id, trace, run_sequence: (
+                        pb.ActivityDetailRefV2(
+                            run_id=run_id,
+                            scope_ref=pb.ScopeReferenceV2(reference=self.operator_id),
+                            activity_id=f"trace:{node_id}:{trace.revision}",
+                            run_sequence=run_sequence,
+                            object_uri=(f"local://trace/{run_id}/{node_id}/{trace.revision}"),
+                            object_key=f"{run_id}/{node_id}/{trace.revision}",
+                            sha256="0" * 64,
+                            size_bytes=trace.size_bytes,
+                        )
+                    ),
+                    activity_continuations={},
+                    log_continuation=None,
                 )
 
         with socket.socket() as sock:
@@ -3241,7 +3320,7 @@ class TestUIStore:
 
         def start_server(service):
             server = grpc.server(ThreadPoolExecutor(max_workers=4))
-            pb_grpc.add_OperatorServiceServicer_to_server(service, server)
+            pb_grpc.add_OperatorServiceV2Servicer_to_server(service, server)
             assert server.add_insecure_port(address) == port
             server.start()
             return server
@@ -3275,7 +3354,7 @@ class TestUIStore:
                     time.sleep(0.01)
                 assert old_service.stream_sent.is_set()
                 assert provider._cursor.operator_instance_id == "operator-old"
-                assert provider._cursor.sequence == 99
+                assert provider._cursor.event_ulid == _event_ulid(99)
 
                 old_service.release_stream.set()
                 old_server.stop(grace=0).wait()
@@ -3293,14 +3372,11 @@ class TestUIStore:
                 assert provider.stream_state is StreamState.LIVE
                 assert provider.operator_instance_id == "operator-new"
                 assert provider._cursor.operator_instance_id == "operator-new"
-                assert provider._cursor.sequence == 3
+                assert provider._cursor.event_ulid == _event_ulid(3)
                 assert app.store.current_run is not None
                 assert app.store.current_run.run_id == "run_live"
                 assert new_service.summary_tokens == ["", "page-2"]
-                assert new_service.snapshot_calls == [
-                    ("run_recovered", "operator-new", 3),
-                    ("run_live", "operator-new", 3),
-                ]
+                assert new_service.snapshot_calls == ["run_recovered", "run_live"]
             finally:
                 provider.close()
 

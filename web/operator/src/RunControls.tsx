@@ -3,7 +3,7 @@ import { EditorState } from "@codemirror/state";
 import { EditorView, keymap } from "@codemirror/view";
 import { useEffect, useRef, useState } from "react";
 
-import type { FlowInfoMsg, RunSnapshotMsg } from "./generated/operator";
+import type { FlowInfoMsg, RunSnapshotMsg } from "./model";
 import { isUnknownRecord } from "./guards";
 
 interface JsonEditorProps {

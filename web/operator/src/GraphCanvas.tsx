@@ -29,7 +29,7 @@ import {
   type NodeProps,
 } from "@xyflow/react";
 
-import type { FlowInfoMsg, NodeSnapshotMsg, WorkflowTopologyMsg } from "./generated/operator";
+import type { FlowInfoMsg, NodeSnapshotMsg, WorkflowTopologyMsg } from "./model";
 import { isUnknownRecord } from "./guards";
 
 interface FieldMetadata {

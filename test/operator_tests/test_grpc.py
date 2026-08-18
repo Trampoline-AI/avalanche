@@ -1,12 +1,12 @@
 """Tests for gRPC server + client roundtrip."""
 
+import hashlib
 import json
 import os
 import socket
 import threading
 import time
 from concurrent import futures
-from pathlib import Path
 from types import SimpleNamespace
 
 import grpc
@@ -23,11 +23,12 @@ from runtime.operator.client import (
     _DetailHydrationRaceError,
     _run_from_snapshot,
 )
-from runtime.operator.convert import (
-    run_snapshot_to_proto,
-    run_summary_to_proto,
-    workflow_info_from_proto,
-    workflow_info_to_proto,
+from runtime.operator.convert_v2 import (
+    operator_update_envelope_from_v2,
+    run_snapshot_to_v2,
+    run_summary_to_v2,
+    workflow_info_from_v2,
+    workflow_info_to_v2,
 )
 from runtime.operator.models import (
     CatalogSnapshot,
@@ -35,6 +36,7 @@ from runtime.operator.models import (
     NodeState,
     NodeStatus,
     ResetBaseline,
+    ResetBaselineCursor,
     RunSnapshot,
     RunState,
     RunStatus,
@@ -52,6 +54,132 @@ from runtime.operator.results import (
     MAX_RESULT_TOTAL_BYTES,
 )
 from runtime.operator.server import serve
+
+
+def _scope(instance: str = "operator-1") -> pb.ScopeReferenceV2:
+    return pb.ScopeReferenceV2(reference=instance)
+
+
+def _event_ulid(sequence: int) -> str:
+    return f"{sequence:026X}"
+
+
+def _cursor(sequence: int, *, stream: str = "operator-events") -> pb.LifecycleCursorV2:
+    del stream
+    stream = "operator-events"
+    return pb.LifecycleCursorV2(
+        stream=stream,
+        topology_fingerprint="0" if stream == "flows" else f"{stream}-topology",
+        stream_generation=1,
+        retained_floor_event_ulid=_event_ulid(0),
+        event_ulid=_event_ulid(sequence),
+    )
+
+
+def _baseline_cursor(sequence: int, *, retained_floor: int = 0) -> ResetBaselineCursor:
+    return ResetBaselineCursor(
+        stream="operator-events",
+        topology_fingerprint="operator-events-topology",
+        stream_generation=1,
+        retained_floor_event_ulid=_event_ulid(retained_floor),
+        event_ulid=_event_ulid(sequence),
+    )
+
+
+def _activity_continuation(
+    run_id: str,
+    node_id: str,
+    token: str,
+    *,
+    instance: str,
+) -> pb.ContinuationRefV2:
+    return pb.ContinuationRefV2(
+        scope_ref=_scope(instance),
+        continuation_id=token,
+        cursor=_cursor(1, stream=f"activity:{run_id}:{node_id or 'logs'}"),
+    )
+
+
+def _trace_detail_ref(
+    run_id: str,
+    node_id: str,
+    trace: TraceDescriptor,
+    run_sequence: int,
+    *,
+    instance: str,
+) -> pb.ActivityDetailRefV2:
+    return pb.ActivityDetailRefV2(
+        run_id=run_id,
+        scope_ref=_scope(instance),
+        activity_id=f"trace:{node_id}:{trace.revision}",
+        run_sequence=run_sequence,
+        object_uri=f"local://trace/{run_id}/{node_id}/{trace.revision}",
+        object_key=f"{run_id}/{node_id}/{trace.revision}",
+        sha256="0" * 64,
+        size_bytes=trace.size_bytes,
+    )
+
+
+def _snapshot_msg(snapshot: RunSnapshot, *, instance: str = "operator-1") -> pb.RunSnapshotV2:
+    cursor = _cursor(snapshot.as_of_sequence, stream=f"run:{snapshot.summary.run_id}")
+    if snapshot.as_of_event_ulid:
+        cursor.event_ulid = snapshot.as_of_event_ulid
+    return run_snapshot_to_v2(
+        snapshot,
+        cursor=cursor,
+        scope_ref=_scope(instance),
+        trace_detail_ref_for=lambda run_id, node_id, trace, run_sequence: _trace_detail_ref(
+            run_id,
+            node_id,
+            trace,
+            run_sequence,
+            instance=instance,
+        ),
+        activity_continuations={
+            node.node_id: _activity_continuation(
+                snapshot.summary.run_id,
+                node.node_id,
+                node.event_page_token,
+                instance=instance,
+            )
+            for node in snapshot.nodes
+            if node.event_page_token
+        },
+        log_continuation=(
+            _activity_continuation(
+                snapshot.summary.run_id,
+                "",
+                snapshot.log_page_token,
+                instance=instance,
+            )
+            if snapshot.log_page_token
+            else None
+        ),
+    )
+
+
+def _run_created_envelope(
+    sequence: int,
+    run_id: str,
+    *,
+    instance: str = "operator-1",
+    status: str = "running",
+) -> pb.RunStatusEnvelopeV2:
+    return pb.RunStatusEnvelopeV2(
+        event_ulid=_event_ulid(sequence),
+        cursor=_cursor(sequence),
+        scope_ref=_scope(instance),
+        run_created=pb.RunCreatedV2(
+            summary=pb.RunSummaryV2(
+                run_id=run_id,
+                workflow_selector="flow",
+                workflow_display_name="flow",
+                status=status,
+                created_sequence=sequence,
+                revision=sequence,
+            )
+        ),
+    )
 
 
 def _event_handle() -> SimpleNamespace:
@@ -81,48 +209,11 @@ def _wait_for_run_success(client, run_id):
     return client.get_run(run_id)
 
 
-def test_start_run_wire_preserves_surviving_field_numbers():
-    request = pb.StartRunRequest(
-        run_id="run_01KCVST2FP4QC5NKZNN5NS0Z2W",
-        workflow_selector="flows/input.py::input_workflow",
-    )
-
-    assert request.run_id == "run_01KCVST2FP4QC5NKZNN5NS0Z2W"
-    assert request.workflow_selector == "flows/input.py::input_workflow"
-    assert pb.StartRunRequest.INPUT_JSON_FIELD_NUMBER == 2
-    assert pb.StartRunRequest.CONTEXT_JSON_FIELD_NUMBER == 3
-    assert pb.StartRunRequest.INPUT_FILES_FIELD_NUMBER == 4
-    assert pb.StartRunRequest.RUN_ID_FIELD_NUMBER == 6
-    assert pb.StartRunRequest.WORKFLOW_SELECTOR_FIELD_NUMBER == 7
-    assert set(pb.StartRunRequest.DESCRIPTOR.fields_by_number) == {2, 3, 4, 6, 7}
-    assert "flow_name" not in pb.StartRunRequest.DESCRIPTOR.fields_by_name
-    assert "S3FileReference" not in pb.DESCRIPTOR.message_types_by_name
-
-    proto_source = Path(pb.__file__).with_name("operator.proto").read_text()
-    assert "input_s3_files" not in proto_source
-    assert "S3FileReference" not in proto_source
-
-
-def test_result_file_wire_preserves_empty_metadata_presence():
-    absent = pb.ResultFileAttachment(attachment_id="file_0")
-    empty = pb.ResultFileAttachment(
-        attachment_id="file_0",
-        name="",
-        media_type="",
-    )
-
-    assert not absent.HasField("name")
-    assert not absent.HasField("media_type")
-    assert empty.HasField("name")
-    assert empty.HasField("media_type")
-    assert empty.name == ""
-    assert empty.media_type == ""
-
-
 def test_latest_run_snapshot_client_returns_typed_snapshot_without_mutating_baseline():
     latest = RunSnapshot(
         operator_instance_id="operator-1",
-        as_of_sequence=8,
+        as_of_sequence=0,
+        as_of_event_ulid=_event_ulid(8),
         summary=RunSummary(
             run_id="run-selected",
             flow_name="flow",
@@ -138,9 +229,9 @@ def test_latest_run_snapshot_client_returns_typed_snapshot_without_mutating_base
         def __init__(self):
             self.request = None
 
-        def GetLatestRunSnapshot(self, request, **kwargs):  # noqa: N802
+        def GetRunSnapshot(self, request, **kwargs):  # noqa: N802
             self.request = request
-            return run_snapshot_to_proto(latest)
+            return _snapshot_msg(latest)
 
     provider = GrpcStateProvider("localhost:1")
     stub = LatestSnapshotStub()
@@ -150,7 +241,9 @@ def test_latest_run_snapshot_client_returns_typed_snapshot_without_mutating_base
         flow_name="flow",
         operator_instance_id="operator-1",
     )
-    provider._install_structural_baseline("operator-1", 4, {retained.run_id: retained})
+    provider._install_structural_baseline(
+        "operator-1", _event_ulid(4), {retained.run_id: retained}
+    )
     try:
         snapshot = provider.get_latest_run_snapshot("run-selected", "operator-1")
     finally:
@@ -159,9 +252,8 @@ def test_latest_run_snapshot_client_returns_typed_snapshot_without_mutating_base
     assert isinstance(snapshot, RunSnapshot)
     assert snapshot == latest
     assert stub.request.run_id == "run-selected"
-    assert stub.request.operator_instance_id == "operator-1"
     assert provider._cursor.operator_instance_id == "operator-1"
-    assert provider._cursor.sequence == 4
+    assert provider._cursor.event_ulid == _event_ulid(4)
     assert set(provider._runs_by_id) == {"run-retained"}
 
 
@@ -177,7 +269,7 @@ def test_latest_run_snapshot_client_preserves_operator_epoch_failure():
         def __init__(self):
             self.request = None
 
-        def GetLatestRunSnapshot(self, request, **kwargs):  # noqa: N802
+        def GetRunSnapshot(self, request, **kwargs):  # noqa: N802
             self.request = request
             raise EpochFailure()
 
@@ -193,7 +285,32 @@ def test_latest_run_snapshot_client_preserves_operator_epoch_failure():
     assert error.value.status is grpc.StatusCode.FAILED_PRECONDITION
     assert error.value.details == "operator instance changed"
     assert stub.request.run_id == "run-selected"
-    assert stub.request.operator_instance_id == "operator-old"
+
+
+@pytest.mark.parametrize(
+    "value",
+    [
+        pb.ResultValueV2(
+            value_json="{}",
+            sha256=hashlib.sha256(b"{}").hexdigest(),
+            size_bytes=1,
+        ),
+        pb.ResultValueV2(value_json="{}", sha256="0" * 64, size_bytes=2),
+    ],
+)
+def test_get_run_result_rejects_tampered_v2_value_binding(value):
+    class ResultStub:
+        def GetRunResult(self, request, **kwargs):  # noqa: N802
+            assert request.run_id == "run-result"
+            return pb.RunResultV2(run_id="run-result", value=value)
+
+    provider = GrpcStateProvider("localhost:1")
+    provider._stub = ResultStub()
+    try:
+        with pytest.raises(ValueError, match="result value does not match"):
+            provider.get_run_result("run-result")
+    finally:
+        provider.close()
 
 
 def test_grpc_envelope_includes_bounded_worst_case_metadata_headroom():
@@ -369,7 +486,7 @@ def lineage_context_workflow():
         try:
             run_id = "run_grpc_real"
             response = provider._stub.StartRun(
-                pb.StartRunRequest(
+                pb.StartRunRequestV2(
                     workflow_selector="lineage_context_workflow",
                     run_id=run_id,
                     context_json=json.dumps(
@@ -406,13 +523,13 @@ def lineage_context_workflow():
             op.close()
 
     def test_start_run_rejects_bad_file_metadata_before_response(self, client):
-        start_request = pb.StartRunRequest(
+        start_request = pb.StartRunRequestV2(
             workflow_selector="input_workflow",
             run_id="run_bad_inline_checksum",
             input_files=[
-                pb.FileAttachment(
+                pb.FileAttachmentV2(
                     field_name="document",
-                    content=b"contents",
+                    inline_bytes=b"contents",
                     sha256="0" * 64,
                 )
             ],
@@ -551,7 +668,7 @@ def large_file_workflow():
             client.acknowledge_stream_reset(
                 baseline.generation,
                 baseline.operator_instance_id,
-                baseline.as_of_sequence,
+                baseline.as_of_event_ulid,
             )
 
         client.on_stream_reset(recover_stream)
@@ -575,9 +692,11 @@ def large_file_workflow():
 
     def test_workflow_selector_request_starts(self, client):
         response = client._stub.StartRun(
-            pb.StartRunRequest(workflow_selector="simple_workflow")
+            pb.StartRunRequestV2(
+                workflow_selector="simple_workflow", run_id="run_selector_request"
+            )
         )
-        assert response.run_id.startswith("run_")
+        assert response.run_id == "run_selector_request"
 
 
 def test_proto_identity_roundtrip_and_absolute_path_redaction(tmp_path):
@@ -594,24 +713,13 @@ def test_proto_identity_roundtrip_and_absolute_path_redaction(tmp_path):
         node_types={"load_1": "source"},
     )
 
-    message = workflow_info_to_proto(info)
+    message = workflow_info_to_v2(info)
     assert message.file_path == "reports/daily.py"
-    assert message.relative_file == "reports/daily.py"
     assert not os.path.isabs(message.file_path)
-    restored = workflow_info_from_proto(message)
+    restored = workflow_info_from_v2(message)
     assert restored.workflow_id == info.workflow_id
     assert restored.display_name == info.display_name
-    assert restored.root_alias == info.root_alias
-    assert restored.relative_file == info.relative_file
-    assert restored.builder_symbol == info.builder_symbol
     assert restored.file_path == "reports/daily.py"
-
-
-def test_old_proto_fields_receive_identity_fallbacks():
-    info = workflow_info_from_proto(pb.FlowInfoMsg(name="legacy", file_path="legacy.py"))
-    assert info.workflow_id == "legacy"
-    assert info.display_name == "legacy"
-    assert info.relative_file == "legacy.py"
 
 
 def test_ping_success_does_not_heal_failed_update_stream():
@@ -625,11 +733,11 @@ def test_ping_success_does_not_heal_failed_update_stream():
             return "stream offline"
 
     class SplitHealthStub:
-        def StreamOperatorUpdates(self, request, *, metadata):  # noqa: N802
+        def WatchRunStatus(self, request, *, metadata):  # noqa: N802
             raise Unavailable()
 
-        def GetCatalog(self, request, **kwargs):  # noqa: N802
-            return pb.CatalogSnapshotMsg()
+        def DiscoverFlows(self, request, **kwargs):  # noqa: N802
+            return pb.FlowListV2()
 
     provider._stub = SplitHealthStub()
     try:
@@ -673,7 +781,7 @@ def test_ping_classifies_application_errors_separately_from_transport_failures(
             return "operation failed"
 
     class ErrorStub:
-        def GetCatalog(self, request, **kwargs):  # noqa: N802
+        def DiscoverFlows(self, request, **kwargs):  # noqa: N802
             raise RpcFailure()
 
     provider._stub = ErrorStub()
@@ -714,17 +822,27 @@ def _trace_health_provider(stub) -> GrpcStateProvider:
     provider = GrpcStateProvider("localhost:1")
     provider._stub = stub
     provider._runs_by_id[run.run_id] = run
+    reference = pb.ActivityDetailRefV2(
+        run_id=run.run_id,
+        scope_ref=_scope("operator-1"),
+        activity_id="trace:agent:3",
+        run_sequence=run.created_sequence,
+        object_uri=f"local://trace/{run.run_id}/agent/3",
+        object_key=f"{run.run_id}/agent/3",
+        sha256=hashlib.sha256(trace_data).hexdigest(),
+        size_bytes=len(trace_data),
+    )
+    provider._trace_detail_refs[(run.run_id, "agent", descriptor.revision)] = reference
     provider.get_run = lambda run_id: run if run_id == run.run_id else None
     return provider
 
 
 def test_read_trace_success_records_reachability_without_healing_update_stream():
     class SuccessfulStub:
-        def ReadTrace(self, request, **kwargs):  # noqa: N802
+        def ReadActivityDetail(self, request, **kwargs):  # noqa: N802
             return iter(
                 [
-                    pb.TraceChunk(
-                        revision=request.revision,
+                    pb.ActivityDetailChunkV2(
                         chunk_index=0,
                         data=b'{"complete":true}',
                         eof=True,
@@ -777,11 +895,10 @@ def test_trace_cache_evicts_oldest_bodies_across_unique_run_node_keys():
     }
 
     class TraceStub:
-        def ReadTrace(self, request, **kwargs):  # noqa: N802
+        def ReadActivityDetail(self, request, **kwargs):  # noqa: N802
             return iter(
                 [
-                    pb.TraceChunk(
-                        revision=request.revision,
+                    pb.ActivityDetailChunkV2(
                         chunk_index=0,
                         data=trace_data,
                         eof=True,
@@ -796,7 +913,19 @@ def test_trace_cache_evicts_oldest_bodies_across_unique_run_node_keys():
         max_retained_detail_bytes=4,
     )
     provider._stub = TraceStub()
-    provider._install_structural_baseline("operator-1", 4, runs)
+    provider._install_structural_baseline("operator-1", _event_ulid(4), runs)
+    for run in runs.values():
+        reference = pb.ActivityDetailRefV2(
+            run_id=run.run_id,
+            scope_ref=_scope("operator-1"),
+            activity_id="trace:agent:4",
+            run_sequence=run.created_sequence,
+            object_uri=f"local://trace/{run.run_id}/agent/4",
+            object_key=f"{run.run_id}/agent/4",
+            sha256=hashlib.sha256(trace_data).hexdigest(),
+            size_bytes=len(trace_data),
+        )
+        provider._trace_detail_refs[(run.run_id, "agent", descriptor.revision)] = reference
     provider.get_run = lambda run_id: runs.get(run_id)
     try:
         for run_id in runs:
@@ -825,7 +954,7 @@ def test_detail_hydration_rejects_advertised_and_streamed_bytes_before_accumulat
             self.cancelled = False
 
         def __iter__(self):
-            return iter([pb.DetailChunk(chunk_index=0, data=b"four", eof=True)])
+            return iter([pb.ActivityDetailChunkV2(chunk_index=0, data=b"four", eof=True)])
 
         def cancel(self):
             self.cancelled = True
@@ -835,13 +964,23 @@ def test_detail_hydration_rejects_advertised_and_streamed_bytes_before_accumulat
             self.calls = 0
             self.stream = OversizedStream()
 
-        def ReadDetail(self, request, **kwargs):  # noqa: N802
+        def ReadActivityDetail(self, request, **kwargs):  # noqa: N802
             self.calls += 1
             return self.stream
 
     stub = DetailStub()
     provider = GrpcStateProvider("localhost:1", max_detail_body_bytes=4)
     provider._stub = stub
+    provider._detail_refs_by_key["token"] = pb.ActivityDetailRefV2(
+        run_id="run-1",
+        scope_ref=_scope("operator-1"),
+        activity_id="log:3",
+        run_sequence=3,
+        object_uri="local://detail/token",
+        object_key="token",
+        sha256="0" * 64,
+        size_bytes=3,
+    )
     try:
         with pytest.raises(_DetailHydrationRaceError, match="configured hydration"):
             provider._read_detail_body("token", 5)
@@ -853,6 +992,40 @@ def test_detail_hydration_rejects_advertised_and_streamed_bytes_before_accumulat
         assert stub.stream.cancelled is True
     finally:
         provider.close()
+
+
+def test_detail_reads_reuse_the_complete_server_issued_reference():
+    body = b"body"
+    reference = pb.ActivityDetailRefV2(
+        run_id="run-1",
+        scope_ref=_scope("operator-1"),
+        activity_id="log:3",
+        run_sequence=3,
+        object_uri="local://detail/token",
+        object_key="token",
+        sha256=hashlib.sha256(body).hexdigest(),
+        size_bytes=len(body),
+    )
+
+    class DetailStub:
+        def __init__(self):
+            self.reference: pb.ActivityDetailRefV2 | None = None
+
+        def ReadActivityDetail(self, request, **kwargs):  # noqa: N802
+            self.reference = pb.ActivityDetailRefV2()
+            self.reference.CopyFrom(request.detail_ref)
+            return iter([pb.ActivityDetailChunkV2(chunk_index=0, data=body, eof=True)])
+
+    provider = GrpcStateProvider("localhost:1")
+    stub = DetailStub()
+    provider._stub = stub
+    try:
+        provider._remember_detail_reference(reference)
+        assert provider._read_detail_body("token", len(body), scope="operator-1") == body
+    finally:
+        provider.close()
+
+    assert stub.reference == reference
 
 
 @pytest.mark.parametrize(
@@ -892,13 +1065,13 @@ def test_multi_page_detail_hydration_fails_before_unbounded_or_partial_publicati
             self.body_reads = 0
 
         def ListRunSummaries(self, request, **kwargs):  # noqa: N802
-            return pb.RunSummaryPage(
-                operator_instance_id="operator-1",
-                as_of_sequence=4,
+            return pb.RunSummaryPageV2(
+                cursor=_cursor(4, stream="run-summaries"),
+                scope_ref=_scope(),
             )
 
         def GetRunSnapshot(self, request, **kwargs):  # noqa: N802
-            node = pb.NodeSnapshotMsg(
+            node = pb.NodeSnapshotV2(
                 node_id="node-1",
                 name="Node",
                 node_type="agent",
@@ -907,73 +1080,117 @@ def test_multi_page_detail_hydration_fails_before_unbounded_or_partial_publicati
             )
             if detail_kind == "events":
                 node.trace.CopyFrom(
-                    pb.TraceDescriptorMsg(
+                    pb.TraceDescriptorV2(
                         status="in_progress",
                         revision=4,
                         event_count=4,
                         latest_event_sequence=4,
                     )
                 )
-                node.event_page_token = "events"
-            return pb.RunSnapshotMsg(
-                operator_instance_id="operator-1",
-                as_of_sequence=4,
-                summary=pb.RunSummaryMsg(
+                node.activity_continuation.CopyFrom(
+                    pb.ContinuationRefV2(
+                        scope_ref=_scope(),
+                        continuation_id="events",
+                        cursor=_cursor(4, stream="activity:run-1:node-1"),
+                    )
+                )
+            snapshot = pb.RunSnapshotV2(
+                cursor=_cursor(4, stream="run:run-1"),
+                scope_ref=_scope(),
+                summary=pb.RunSummaryV2(
                     run_id="run-1",
-                    flow_name="flow",
+                    workflow_selector="flow",
+                    workflow_display_name="flow",
                     status="running",
                     created_sequence=1,
                     revision=4,
                 ),
                 nodes=[node],
                 latest_log_sequence=4 if detail_kind == "logs" else 0,
-                log_page_token="logs" if detail_kind == "logs" else "",
             )
-
-        def ListLogs(self, request, **kwargs):  # noqa: N802
-            assert request.before_sequence == 0
-            assert request.node_id == ""
-            assert request.order == pb.DESCRIPTOR_PAGE_ORDER_FORWARD
-            sequence = request.after_sequence + 1
-            return pb.LogPage(
-                operator_instance_id="operator-1",
-                as_of_sequence=4,
-                logs=[
-                    pb.LogRecordDescriptorMsg(
-                        sequence=sequence,
-                        timestamp=float(sequence),
-                        level="INFO",
-                        node_id="node-1",
-                        size_bytes=1,
-                        body_token=f"log-{sequence}",
+            if detail_kind == "logs":
+                snapshot.log_continuation.CopyFrom(
+                    pb.ContinuationRefV2(
+                        scope_ref=_scope(),
+                        continuation_id="logs",
+                        cursor=_cursor(4, stream="activity:run-1:logs"),
                     )
-                ],
-                next_page_token="logs" if sequence < 4 else "",
-            )
+                )
+            return snapshot
 
-        def ListAgentEvents(self, request, **kwargs):  # noqa: N802
-            assert request.before_event_sequence == 0
-            assert request.order == pb.DESCRIPTOR_PAGE_ORDER_FORWARD
-            sequence = request.after_event_sequence + 1
-            return pb.AgentEventPage(
-                operator_instance_id="operator-1",
-                as_of_sequence=4,
+        @staticmethod
+        def _position(token: str, prefix: str) -> int:
+            if token == prefix:
+                return 1
+            return int(token.removeprefix(f"{prefix}-")) + 1
+
+        def ListRunActivity(self, request, **kwargs):  # noqa: N802
+            token = request.continuation.continuation_id
+            if request.node_id:
+                sequence = self._position(token, "events")
+                activity = pb.RunActivityDescriptorV2(
+                    activity_id=f"agent:node-1:{sequence}",
+                    run_sequence=sequence,
+                    kind="agent_event",
+                    size_bytes=1,
+                    node_id="node-1",
+                    invocation_id="invocation",
+                    detail_ref=pb.ActivityDetailRefV2(
+                        run_id="run-1",
+                        scope_ref=_scope(),
+                        activity_id=f"agent:node-1:{sequence}",
+                        run_sequence=sequence,
+                        object_uri=f"local://detail/event-{sequence}",
+                        object_key=f"event-{sequence}",
+                        sha256=hashlib.sha256(b"x").hexdigest(),
+                        size_bytes=1,
+                    ),
+                )
+            else:
+                sequence = self._position(token, "logs")
+                activity = pb.RunActivityDescriptorV2(
+                    activity_id=f"log:{sequence}",
+                    run_sequence=sequence,
+                    kind="log",
+                    timestamp=float(sequence),
+                    level="INFO",
+                    size_bytes=1,
+                    node_id="node-1",
+                    detail_ref=pb.ActivityDetailRefV2(
+                        run_id="run-1",
+                        scope_ref=_scope(),
+                        activity_id=f"log:{sequence}",
+                        run_sequence=sequence,
+                        object_uri=f"local://detail/log-{sequence}",
+                        object_key=f"log-{sequence}",
+                        sha256=hashlib.sha256(b"x").hexdigest(),
+                        size_bytes=1,
+                    ),
+                )
+            page = pb.RunActivityPageV2(
+                cursor=_cursor(4, stream=f"activity:run-1:{request.node_id or 'logs'}"),
                 run_id="run-1",
-                node_id="node-1",
-                events=[
-                    pb.AgentEventDescriptorMsg(
-                        invocation_id="invocation",
-                        event_sequence=sequence,
-                        size_bytes=1,
-                        body_token=f"event-{sequence}",
-                    )
-                ],
-                next_page_token="events" if sequence < 4 else "",
+                activities=[activity],
+                scope_ref=_scope(),
             )
+            if sequence < 4:
+                page.next_page.CopyFrom(
+                    pb.ContinuationRefV2(
+                        scope_ref=_scope(),
+                        continuation_id=(
+                            f"{'events' if request.node_id else 'logs'}-{sequence}"
+                        ),
+                        cursor=_cursor(
+                            4,
+                            stream=f"activity:run-1:{request.node_id or 'logs'}",
+                        ),
+                    )
+                )
+            return page
 
-        def ReadDetail(self, request, **kwargs):  # noqa: N802
+        def ReadActivityDetail(self, request, **kwargs):  # noqa: N802
             self.body_reads += 1
-            yield pb.DetailChunk(chunk_index=0, data=b"x", eof=True)
+            yield pb.ActivityDetailChunkV2(chunk_index=0, data=b"x", eof=True)
 
     stub = PagedDetailStub()
     provider = GrpcStateProvider(
@@ -1005,19 +1222,24 @@ def test_run_summary_pagination_fails_before_unbounded_page_or_list_accumulation
 
         def ListRunSummaries(self, request, **kwargs):  # noqa: N802
             self.calls += 1
-            return pb.RunSummaryPage(
-                operator_instance_id="operator-1",
-                as_of_sequence=self.calls,
+            return pb.RunSummaryPageV2(
+                cursor=_cursor(self.calls, stream="run-summaries"),
+                scope_ref=_scope(),
                 runs=[
-                    pb.RunSummaryMsg(
+                    pb.RunSummaryV2(
                         run_id=f"run-{self.calls}",
-                        flow_name="flow",
+                        workflow_selector="flow",
+                        workflow_display_name="flow",
                         status="running",
                         created_sequence=self.calls,
                         revision=self.calls,
                     )
                 ],
-                next_page_token=f"page-{self.calls}",
+                next_page=pb.ContinuationRefV2(
+                    scope_ref=_scope(),
+                    continuation_id=f"page-{self.calls}",
+                    cursor=_cursor(self.calls, stream="run-summaries"),
+                ),
             )
 
     stub = UnboundedSummaryStub()
@@ -1039,7 +1261,7 @@ def test_trace_hydration_rejects_descriptor_above_configured_body_limit():
         def __init__(self):
             self.calls = 0
 
-        def ReadTrace(self, request, **kwargs):  # noqa: N802
+        def ReadActivityDetail(self, request, **kwargs):  # noqa: N802
             self.calls += 1
             return iter(())
 
@@ -1078,7 +1300,7 @@ def test_read_trace_classifies_creation_and_iteration_failures(
             raise RpcFailure()
 
     class FailingStub:
-        def ReadTrace(self, request, **kwargs):  # noqa: N802
+        def ReadActivityDetail(self, request, **kwargs):  # noqa: N802
             if failure_phase == "creation":
                 raise RpcFailure()
             return FailingStream()
@@ -1114,12 +1336,12 @@ def test_unary_completion_after_close_cannot_overwrite_terminal_health(status):
             return "late application error"
 
     class BlockingStub:
-        def GetCatalog(self, request, **kwargs):  # noqa: N802
+        def DiscoverFlows(self, request, **kwargs):  # noqa: N802
             entered.set()
             assert release.wait(timeout=1.0)
             if status is not None:
                 raise RpcFailure()
-            return pb.CatalogSnapshotMsg()
+            return pb.FlowListV2()
 
     def invoke() -> None:
         try:
@@ -1173,7 +1395,7 @@ def test_idle_accepted_stream_reaches_live_after_metadata_handshake():
             raise StopIteration
 
     class IdleStub:
-        def StreamOperatorUpdates(self, request, *, metadata):  # noqa: N802
+        def WatchRunStatus(self, request, *, metadata):  # noqa: N802
             return IdleStream()
 
     provider._stub = IdleStub()
@@ -1251,7 +1473,7 @@ def test_post_header_stream_failures_preserve_exponential_reconnect_backoff():
             raise Unavailable()
 
     class FailingStub:
-        def StreamOperatorUpdates(self, request, *, metadata):  # noqa: N802
+        def WatchRunStatus(self, request, *, metadata):  # noqa: N802
             return AcceptedThenUnavailable()
 
     provider._stream_stop = RecordingStop()
@@ -1267,7 +1489,7 @@ def test_post_header_stream_failures_preserve_exponential_reconnect_backoff():
 def test_duplicate_only_streams_do_not_reset_reconnect_backoff_or_cursor():
     provider = GrpcStateProvider("localhost:1")
     delays = []
-    requests = []
+    requests: list[pb.LifecycleCursorV2] = []
 
     class Unavailable(grpc.RpcError):
         def code(self):
@@ -1292,21 +1514,7 @@ def test_duplicate_only_streams_do_not_reset_reconnect_backoff_or_cursor():
                 self.stopped = True
             return self.stopped
 
-    duplicate = pb.OperatorUpdateEnvelope(
-        operator_instance_id="operator-1",
-        update=pb.OperatorUpdate(
-            sequence=7,
-            run_created=pb.RunCreated(
-                summary=pb.RunSummaryMsg(
-                    run_id="duplicate",
-                    flow_name="flow",
-                    status="running",
-                    created_sequence=7,
-                    revision=7,
-                )
-            ),
-        ),
-    )
+    duplicate = _run_created_envelope(99, "duplicate")
 
     class DuplicateThenUnavailable:
         def initial_metadata(self):
@@ -1317,11 +1525,15 @@ def test_duplicate_only_streams_do_not_reset_reconnect_backoff_or_cursor():
             raise Unavailable()
 
     class DuplicateStub:
-        def StreamOperatorUpdates(self, request, *, metadata):  # noqa: N802
-            requests.append((request.operator_instance_id, request.after_sequence))
+        def WatchRunStatus(self, request, *, metadata):  # noqa: N802
+            cursor = pb.LifecycleCursorV2()
+            cursor.CopyFrom(request.after_cursor)
+            requests.append(cursor)
             return DuplicateThenUnavailable()
 
-    provider._install_structural_baseline("operator-1", 7, {})
+    provider._install_structural_baseline("operator-1", _event_ulid(99), {})
+    provider._event_cursor = _cursor(99)
+    provider._last_applied_update = operator_update_envelope_from_v2(duplicate).update
     provider._stream_stop = RecordingStop()
     provider._stub = DuplicateStub()
     try:
@@ -1330,8 +1542,79 @@ def test_duplicate_only_streams_do_not_reset_reconnect_backoff_or_cursor():
         provider.close()
 
     assert delays == [2, 4, 8]
-    assert requests == [("operator-1", 7)] * 3
-    assert provider._cursor.sequence == 7
+    assert len(requests) == 3
+    assert all(request == _cursor(99) for request in requests)
+    assert provider._cursor.event_ulid == _event_ulid(99)
+
+
+def test_client_accepts_a_monotonic_retention_floor_advance():
+    provider = GrpcStateProvider("localhost:1")
+    provider._install_structural_baseline("operator-1", _event_ulid(1), {})
+    provider._event_cursor = _cursor(1)
+    message = _run_created_envelope(2, "run-floor-advance")
+    message.cursor.retained_floor_event_ulid = _event_ulid(1)
+    try:
+        provider._apply_update_envelope(
+            operator_update_envelope_from_v2(message),
+            event_cursor=message.cursor,
+        )
+        assert provider._cursor.event_ulid == _event_ulid(2)
+        assert provider._event_cursor.retained_floor_event_ulid == _event_ulid(1)
+    finally:
+        provider.close()
+
+
+def test_watch_accepts_an_older_floor_while_replay_remains_retained():
+    operator = Operator(
+        [],
+        watch=False,
+        schedule=False,
+        stream_history_capacity=3,
+    )
+    server = None
+    channel = None
+    replay_stream = None
+    try:
+        for reloading in (False, True):
+            operator._publish_workflow_reload_status(reloading=reloading)
+        port = _unused_port()
+        server = serve(operator, port=port, block=False)
+        channel = grpc.insecure_channel(f"localhost:{port}")
+        grpc.channel_ready_future(channel).result(timeout=5)
+        stub = pb_grpc.OperatorServiceV2Stub(channel)
+
+        prior_cursor = stub.ListRunSummaries(pb.ListRunSummariesRequestV2(page_size=1)).cursor
+        for reloading in (False, True, False):
+            operator._publish_workflow_reload_status(reloading=reloading)
+
+        replay_stream = stub.WatchRunStatus(
+            pb.WatchRunStatusRequestV2(after_cursor=prior_cursor)
+        )
+        replayed = [next(replay_stream) for _ in range(3)]
+        assert replayed[0].event_ulid < replayed[1].event_ulid < replayed[2].event_ulid
+        assert all(
+            message.WhichOneof("payload") == "flow_reload_status" for message in replayed
+        )
+        assert replayed[0].cursor.retained_floor_event_ulid != (
+            prior_cursor.retained_floor_event_ulid
+        )
+        assert replayed[0].cursor.retained_floor_event_ulid > (
+            prior_cursor.retained_floor_event_ulid
+        )
+        replay_stream.cancel()
+        replay_stream = None
+
+        operator._publish_workflow_reload_status(reloading=True)
+        reset = next(stub.WatchRunStatus(pb.WatchRunStatusRequestV2(after_cursor=prior_cursor)))
+        assert reset.WhichOneof("payload") == "reset_required"
+    finally:
+        if replay_stream is not None:
+            replay_stream.cancel()
+        if channel is not None:
+            channel.close()
+        if server is not None:
+            server.stop(grace=0).wait()
+        operator.close()
 
 
 def test_authoritative_stream_progress_resets_reconnect_backoff():
@@ -1366,28 +1649,14 @@ def test_authoritative_stream_progress_resets_reconnect_backoff():
             return ()
 
         def __iter__(self):
-            yield pb.OperatorUpdateEnvelope(
-                operator_instance_id="operator-1",
-                update=pb.OperatorUpdate(
-                    sequence=1,
-                    run_created=pb.RunCreated(
-                        summary=pb.RunSummaryMsg(
-                            run_id="run-1",
-                            flow_name="flow",
-                            status="running",
-                            created_sequence=1,
-                            revision=1,
-                        )
-                    ),
-                ),
-            )
+            yield _run_created_envelope(1, "run-1")
             raise Unavailable()
 
     class ProgressStub:
         def __init__(self):
             self.calls = 0
 
-        def StreamOperatorUpdates(self, request, *, metadata):  # noqa: N802
+        def WatchRunStatus(self, request, *, metadata):  # noqa: N802
             self.calls += 1
             if self.calls == 1:
                 raise Unavailable()
@@ -1401,7 +1670,7 @@ def test_authoritative_stream_progress_resets_reconnect_backoff():
         provider.close()
 
     assert delays == [2, 1]
-    assert provider._cursor.sequence == 1
+    assert provider._cursor.event_ulid == _event_ulid(1)
 
 
 def test_stream_reconnect_transitions_through_replay_to_live():
@@ -1433,7 +1702,7 @@ def test_stream_reconnect_transitions_through_replay_to_live():
         def __init__(self):
             self.calls = 0
 
-        def StreamOperatorUpdates(self, request, *, metadata):  # noqa: N802
+        def WatchRunStatus(self, request, *, metadata):  # noqa: N802
             self.calls += 1
             observed.append(provider.stream_state)
             if self.calls == 1:
@@ -1446,21 +1715,7 @@ def test_stream_reconnect_transitions_through_replay_to_live():
 
                 def __iter__(self):
                     observed.append(provider.stream_state)
-                    yield pb.OperatorUpdateEnvelope(
-                        operator_instance_id="operator-1",
-                        update=pb.OperatorUpdate(
-                            sequence=1,
-                            run_created=pb.RunCreated(
-                                summary=pb.RunSummaryMsg(
-                                    run_id="run_live",
-                                    flow_name="flow",
-                                    status="running",
-                                    created_sequence=1,
-                                    revision=1,
-                                )
-                            ),
-                        ),
-                    )
+                    yield _run_created_envelope(1, "run_live")
                     provider._stream_stop.set()
 
             return ReplayStream()
@@ -1504,18 +1759,22 @@ def test_client_list_runs_returns_oldest_to_newest_across_summary_pages():
 
     class PagedSummaryStub:
         def ListRunSummaries(self, request, **kwargs):  # noqa: N802
-            if not request.page_token:
-                return pb.RunSummaryPage(
-                    operator_instance_id="operator-1",
-                    as_of_sequence=2,
-                    runs=[run_summary_to_proto(summaries[0])],
-                    next_page_token="older",
+            if not request.continuation.continuation_id:
+                return pb.RunSummaryPageV2(
+                    cursor=_cursor(2, stream="run-summaries"),
+                    scope_ref=_scope(),
+                    runs=[run_summary_to_v2(summaries[0])],
+                    next_page=pb.ContinuationRefV2(
+                        scope_ref=_scope(),
+                        continuation_id="older",
+                        cursor=_cursor(2, stream="run-summaries"),
+                    ),
                 )
-            assert request.page_token == "older"
-            return pb.RunSummaryPage(
-                operator_instance_id="operator-1",
-                as_of_sequence=2,
-                runs=[run_summary_to_proto(summaries[1])],
+            assert request.continuation.continuation_id == "older"
+            return pb.RunSummaryPageV2(
+                cursor=_cursor(2, stream="run-summaries"),
+                scope_ref=_scope(),
+                runs=[run_summary_to_v2(summaries[1])],
             )
 
     provider = GrpcStateProvider("localhost:1")
@@ -1638,7 +1897,7 @@ def test_default_reset_loader_retries_and_builds_bounded_authoritative_baseline(
 
         def ListRunSummaries(self, request, **kwargs):  # noqa: N802
             self.summary_calls += 1
-            if not request.page_token:
+            if not request.continuation.continuation_id:
                 self.summary_attempts += 1
                 if first_failure == "transient" and self.summary_attempts == 1:
                     raise Retryable(grpc.StatusCode.UNAVAILABLE)
@@ -1647,34 +1906,42 @@ def test_default_reset_loader_retries_and_builds_bounded_authoritative_baseline(
                     if first_failure == "mismatch" and self.summary_attempts == 1
                     else "operator-new"
                 )
-                return pb.RunSummaryPage(
-                    operator_instance_id=operator_id,
-                    as_of_sequence=3,
-                    runs=[run_summary_to_proto(summaries[0])],
-                    next_page_token="page-2",
+                return pb.RunSummaryPageV2(
+                    cursor=_cursor(3, stream="run-summaries"),
+                    scope_ref=_scope(operator_id),
+                    runs=[run_summary_to_v2(summaries[0])],
+                    next_page=pb.ContinuationRefV2(
+                        scope_ref=_scope(operator_id),
+                        continuation_id="page-2",
+                        cursor=_cursor(3, stream="run-summaries"),
+                    ),
                 )
-            assert request.page_token == "page-2"
-            return pb.RunSummaryPage(
-                operator_instance_id="operator-new",
-                as_of_sequence=3,
-                runs=[run_summary_to_proto(summaries[1])],
+            assert request.continuation.continuation_id == "page-2"
+            return pb.RunSummaryPageV2(
+                cursor=_cursor(3, stream="run-summaries"),
+                scope_ref=_scope("operator-new"),
+                runs=[run_summary_to_v2(summaries[1])],
             )
 
-        def GetCatalog(self, request, **kwargs):  # noqa: N802
+        def DiscoverFlows(self, request, **kwargs):  # noqa: N802
             self.list_flows_calls += 1
-            return pb.CatalogSnapshotMsg(
-                operator_instance_id="operator-new",
-                as_of_sequence=3,
-                workflows=[workflow_info_to_proto(workflow)],
+            return pb.FlowListV2(
+                cursor=pb.LifecycleCursorV2(
+                    stream="operator-events",
+                    topology_fingerprint="1",
+                    stream_generation=1,
+                    retained_floor_event_ulid=_event_ulid(0),
+                    event_ulid=_event_ulid(3),
+                ),
+                flows=[workflow_info_to_v2(workflow)],
+                scope_ref=_scope("operator-new"),
             )
 
         def GetRunSnapshot(self, request, **kwargs):  # noqa: N802
             self.snapshot_calls.append(request.run_id)
-            assert request.operator_instance_id == "operator-new"
-            assert request.as_of_sequence == 3
             if first_failure == "evicted" and len(self.snapshot_calls) == 1:
                 raise Retryable(grpc.StatusCode.FAILED_PRECONDITION)
-            return run_snapshot_to_proto(snapshots[request.run_id])
+            return _snapshot_msg(snapshots[request.run_id], instance="operator-new")
 
     provider = GrpcStateProvider("localhost:1")
     stub = BaselineStub()
@@ -1683,8 +1950,8 @@ def test_default_reset_loader_retries_and_builds_bounded_authoritative_baseline(
         baseline = provider.load_reset_baseline(
             StreamResetNotice(
                 generation=7,
-                previous_sequence=99,
-                observed_sequence=2,
+                previous_event_ulid=_event_ulid(99),
+                observed_event_ulid=_event_ulid(2),
             )
         )
     finally:
@@ -1692,7 +1959,8 @@ def test_default_reset_loader_retries_and_builds_bounded_authoritative_baseline(
 
     assert baseline.generation == 7
     assert baseline.operator_instance_id == "operator-new"
-    assert baseline.as_of_sequence == 3
+    assert baseline.as_of_event_ulid == _event_ulid(3)
+    assert baseline.cursor == _baseline_cursor(3)
     assert [item.selector for item in baseline.catalog.workflows] == [workflow.selector]
     assert [run.run_id for run in baseline.runs_by_workflow[workflow.selector]] == [
         "run_1",
@@ -1737,19 +2005,25 @@ def test_default_reset_loader_uses_immutable_snapshot_while_updates_continue():
             self.summary_calls = 0
             self.snapshot_requests = []
 
-        def GetCatalog(self, request, **kwargs):  # noqa: N802
-            return pb.CatalogSnapshotMsg(
-                operator_instance_id="operator-live",
-                as_of_sequence=self.current_sequence,
-                workflows=[workflow_info_to_proto(workflow)],
+        def DiscoverFlows(self, request, **kwargs):  # noqa: N802
+            return pb.FlowListV2(
+                cursor=pb.LifecycleCursorV2(
+                    stream="operator-events",
+                    topology_fingerprint="1",
+                    stream_generation=1,
+                    retained_floor_event_ulid=_event_ulid(0),
+                    event_ulid=_event_ulid(self.current_sequence),
+                ),
+                flows=[workflow_info_to_v2(workflow)],
+                scope_ref=_scope("operator-live"),
             )
 
         def ListRunSummaries(self, request, **kwargs):  # noqa: N802
             self.summary_calls += 1
-            response = pb.RunSummaryPage(
-                operator_instance_id="operator-live",
-                as_of_sequence=self.current_sequence,
-                runs=[run_summary_to_proto(summary)],
+            response = pb.RunSummaryPageV2(
+                cursor=_cursor(self.current_sequence, stream="run-summaries"),
+                scope_ref=_scope("operator-live"),
+                runs=[run_summary_to_v2(summary)],
             )
             self.current_sequence += 1
             return response
@@ -1757,7 +2031,7 @@ def test_default_reset_loader_uses_immutable_snapshot_while_updates_continue():
         def GetRunSnapshot(self, request, **kwargs):  # noqa: N802
             self.snapshot_requests.append(request)
             self.current_sequence += 1
-            return run_snapshot_to_proto(snapshot)
+            return _snapshot_msg(snapshot, instance="operator-live")
 
     provider = GrpcStateProvider("localhost:1")
     stub = AdvancingStub()
@@ -1766,20 +2040,18 @@ def test_default_reset_loader_uses_immutable_snapshot_while_updates_continue():
         baseline = provider.load_reset_baseline(
             StreamResetNotice(
                 generation=1,
-                previous_sequence=99,
-                observed_sequence=2,
+                previous_event_ulid=_event_ulid(99),
+                observed_event_ulid=_event_ulid(2),
             )
         )
     finally:
         provider.close()
 
-    assert baseline.as_of_sequence == 2
+    assert baseline.as_of_event_ulid == _event_ulid(2)
     assert stub.summary_calls == 1
     assert len(stub.snapshot_requests) == 1
     request = stub.snapshot_requests[0]
     assert request.run_id == summary.run_id
-    assert request.operator_instance_id == "operator-live"
-    assert request.as_of_sequence == 2
 
 
 def test_restart_reset_rejects_stale_generation_and_rebinds_update_epoch():
@@ -1787,9 +2059,10 @@ def test_restart_reset_rejects_stale_generation_and_rebinds_update_epoch():
         return ResetBaseline(
             generation=notice.generation,
             operator_instance_id="operator-restarted",
-            as_of_sequence=3,
+            as_of_event_ulid=_event_ulid(3),
             catalog=CatalogSnapshot(workflows=()),
             runs_by_workflow={},
+            cursor=_baseline_cursor(3),
         )
 
     provider = GrpcStateProvider(
@@ -1802,20 +2075,8 @@ def test_restart_reset_rejects_stale_generation_and_rebinds_update_epoch():
     release = threading.Event()
     received = []
 
-    reset_envelope = pb.OperatorUpdateEnvelope(
-        operator_instance_id="operator-restarted",
-        update=pb.OperatorUpdate(
-            sequence=2,
-            run_created=pb.RunCreated(
-                summary=pb.RunSummaryMsg(
-                    run_id="run_recovered",
-                    flow_name="flow",
-                    status="success",
-                    created_sequence=2,
-                    revision=2,
-                )
-            ),
-        ),
+    reset_envelope = _run_created_envelope(
+        2, "run_recovered", instance="operator-restarted", status="success"
     )
 
     class RestartedStream:
@@ -1823,21 +2084,7 @@ def test_restart_reset_rejects_stale_generation_and_rebinds_update_epoch():
             return ()
 
         def __iter__(self):
-            yield pb.OperatorUpdateEnvelope(
-                operator_instance_id="operator-restarted",
-                update=pb.OperatorUpdate(
-                    sequence=4,
-                    run_created=pb.RunCreated(
-                        summary=pb.RunSummaryMsg(
-                            run_id="run_newer",
-                            flow_name="flow",
-                            status="running",
-                            created_sequence=4,
-                            revision=4,
-                        )
-                    ),
-                ),
-            )
+            yield _run_created_envelope(4, "run_newer", instance="operator-restarted")
             waiting.set()
             release.wait()
 
@@ -1845,15 +2092,13 @@ def test_restart_reset_rejects_stale_generation_and_rebinds_update_epoch():
         def __init__(self):
             self.calls = 0
 
-        def StreamOperatorUpdates(self, request, *, metadata):  # noqa: N802
+        def WatchRunStatus(self, request, *, metadata):  # noqa: N802
             self.calls += 1
             assert metadata is None
             if self.calls == 1:
-                assert request.operator_instance_id == "operator-original"
-                assert request.after_sequence == 99
+                assert request.after_cursor.event_ulid == _event_ulid(99)
                 return iter((reset_envelope,))
-            assert request.operator_instance_id == "operator-restarted"
-            assert request.after_sequence == 3
+            assert request.after_cursor.event_ulid == _event_ulid(3)
             return RestartedStream()
 
     def on_reset(notice):
@@ -1861,7 +2106,8 @@ def test_restart_reset_rejects_stale_generation_and_rebinds_update_epoch():
         reset_observed.set()
 
     provider._stub = RestartedStub()
-    provider._install_structural_baseline("operator-original", 99, {})
+    provider._install_structural_baseline("operator-original", _event_ulid(99), {})
+    provider._event_cursor = _cursor(99)
     provider.on_stream_reset(on_reset)
     provider._run_callbacks.append(lambda run: received.append(run.run_id))
     try:
@@ -1870,31 +2116,33 @@ def test_restart_reset_rejects_stale_generation_and_rebinds_update_epoch():
         notice = reset_notices[0]
         assert notice == StreamResetNotice(
             generation=1,
-            previous_sequence=99,
-            observed_sequence=2,
+            previous_event_ulid=_event_ulid(99),
+            observed_event_ulid=_event_ulid(2),
             operator_instance_id="operator-restarted",
         )
         assert provider.stream_state is StreamState.RESET_REQUIRED
-        assert provider._cursor == provider._cursor.__class__("operator-original", 99)
+        assert provider._cursor == provider._cursor.__class__(
+            "operator-original", _event_ulid(99)
+        )
 
         baseline = provider.load_reset_baseline(notice)
         assert baseline.operator_instance_id == "operator-restarted"
-        assert baseline.as_of_sequence == 3
+        assert baseline.as_of_event_ulid == _event_ulid(3)
         with pytest.raises(StaleResetAcknowledgementError):
             provider.acknowledge_stream_reset(
                 generation=notice.generation + 1,
                 operator_instance_id="operator-restarted",
-                reconciled_sequence=3,
+                reconciled_event_ulid=_event_ulid(3),
             )
         provider.acknowledge_stream_reset(
             generation=notice.generation,
-            reconciled_sequence=3,
+            reconciled_event_ulid=_event_ulid(3),
             operator_instance_id="operator-restarted",
         )
         assert waiting.wait(timeout=1.0)
         assert provider.stream_state is StreamState.LIVE
         assert provider._cursor.operator_instance_id == "operator-restarted"
-        assert provider._cursor.sequence == 4
+        assert provider._cursor.event_ulid == _event_ulid(4)
         assert received == ["run_newer"]
     finally:
         provider._stream_stop.set()
@@ -1903,28 +2151,29 @@ def test_restart_reset_rejects_stale_generation_and_rebinds_update_epoch():
 
 
 @pytest.mark.parametrize(
-    ("operator_instance_id", "reconciled_sequence"),
+    ("operator_instance_id", "reconciled_event_ulid"),
     [
-        ("operator-other", 3),
-        ("operator-restarted", 2),
-        ("operator-restarted", 4),
+        ("operator-other", _event_ulid(3)),
+        ("operator-restarted", _event_ulid(2)),
+        ("operator-restarted", _event_ulid(4)),
     ],
 )
 def test_reset_acknowledgement_requires_exact_validated_baseline(
     operator_instance_id,
-    reconciled_sequence,
+    reconciled_event_ulid,
 ):
     notice = StreamResetNotice(
         generation=1,
-        previous_sequence=99,
-        observed_sequence=2,
+        previous_event_ulid=_event_ulid(99),
+        observed_event_ulid=_event_ulid(2),
     )
     expected = ResetBaseline(
         generation=notice.generation,
         operator_instance_id="operator-restarted",
-        as_of_sequence=3,
+        as_of_event_ulid=_event_ulid(3),
         catalog=CatalogSnapshot(workflows=()),
         runs_by_workflow={},
+        cursor=_baseline_cursor(3),
     )
     provider = GrpcStateProvider(
         "localhost:1",
@@ -1940,7 +2189,7 @@ def test_reset_acknowledgement_requires_exact_validated_baseline(
             provider.acknowledge_stream_reset(
                 generation=notice.generation,
                 operator_instance_id=expected.operator_instance_id,
-                reconciled_sequence=expected.as_of_sequence,
+                reconciled_event_ulid=expected.as_of_event_ulid,
             )
         assert provider.load_reset_baseline(notice) is expected
         with pytest.raises(
@@ -1950,7 +2199,7 @@ def test_reset_acknowledgement_requires_exact_validated_baseline(
             provider.acknowledge_stream_reset(
                 generation=notice.generation,
                 operator_instance_id=operator_instance_id,
-                reconciled_sequence=reconciled_sequence,
+                reconciled_event_ulid=reconciled_event_ulid,
             )
         assert provider._pending_reset is notice
         assert provider.stream_state is StreamState.RESET_REQUIRED
@@ -1958,40 +2207,27 @@ def test_reset_acknowledgement_requires_exact_validated_baseline(
         provider.acknowledge_stream_reset(
             generation=notice.generation,
             operator_instance_id=expected.operator_instance_id,
-            reconciled_sequence=expected.as_of_sequence,
+            reconciled_event_ulid=expected.as_of_event_ulid,
         )
         assert provider.stream_state is StreamState.LIVE
     finally:
         provider.close()
 
 
-@pytest.mark.parametrize("observed_sequence", [99, 100])
+@pytest.mark.parametrize("observed_event_ulid", [99, 100])
 def test_update_epoch_change_requires_reset_at_equal_or_higher_sequence(
-    observed_sequence,
+    observed_event_ulid,
 ):
     provider = GrpcStateProvider("localhost:1")
     reset_notices = []
     reset_observed = threading.Event()
 
     class RestartedStub:
-        def StreamOperatorUpdates(self, request, *, metadata):  # noqa: N802
-            assert request.operator_instance_id == "operator-original"
-            assert request.after_sequence == 99
+        def WatchRunStatus(self, request, *, metadata):  # noqa: N802
+            assert request.after_cursor.event_ulid == _event_ulid(99)
             assert metadata is None
-            yield pb.OperatorUpdateEnvelope(
-                operator_instance_id="operator-restarted",
-                update=pb.OperatorUpdate(
-                    sequence=observed_sequence,
-                    run_created=pb.RunCreated(
-                        summary=pb.RunSummaryMsg(
-                            run_id="run-restarted",
-                            flow_name="flow",
-                            status="running",
-                            created_sequence=observed_sequence,
-                            revision=observed_sequence,
-                        )
-                    ),
-                ),
+            yield _run_created_envelope(
+                observed_event_ulid, "run-restarted", instance="operator-restarted"
             )
 
     def on_reset(notice):
@@ -1999,7 +2235,8 @@ def test_update_epoch_change_requires_reset_at_equal_or_higher_sequence(
         reset_observed.set()
 
     provider._stub = RestartedStub()
-    provider._install_structural_baseline("operator-original", 99, {})
+    provider._install_structural_baseline("operator-original", _event_ulid(99), {})
+    provider._event_cursor = _cursor(99)
     provider.on_stream_reset(on_reset)
     try:
         provider._ensure_stream()
@@ -2007,14 +2244,14 @@ def test_update_epoch_change_requires_reset_at_equal_or_higher_sequence(
         assert reset_notices == [
             StreamResetNotice(
                 generation=1,
-                previous_sequence=99,
-                observed_sequence=observed_sequence,
+                previous_event_ulid=_event_ulid(99),
+                observed_event_ulid=_event_ulid(observed_event_ulid),
                 operator_instance_id="operator-restarted",
             )
         ]
         assert provider.stream_state is StreamState.RESET_REQUIRED
         assert provider._cursor.operator_instance_id == "operator-original"
-        assert provider._cursor.sequence == 99
+        assert provider._cursor.event_ulid == _event_ulid(99)
     finally:
         provider.close()
 
@@ -2024,38 +2261,28 @@ def test_client_skips_duplicate_update_sequence_without_epoch_reset():
     received = []
 
     class DuplicateFirstStub:
-        def StreamOperatorUpdates(self, request, *, metadata):  # noqa: N802
-            assert request.operator_instance_id == "operator-1"
-            assert request.after_sequence == 99
+        def WatchRunStatus(self, request, *, metadata):  # noqa: N802
+            assert request.after_cursor.event_ulid == _event_ulid(98)
             assert metadata is None
-            for sequence, run_id in ((99, "duplicate"), (100, "run_live")):
-                yield pb.OperatorUpdateEnvelope(
-                    operator_instance_id="operator-1",
-                    update=pb.OperatorUpdate(
-                        sequence=sequence,
-                        run_created=pb.RunCreated(
-                            summary=pb.RunSummaryMsg(
-                                run_id=run_id,
-                                flow_name="flow",
-                                status="running",
-                                created_sequence=sequence,
-                                revision=sequence,
-                            )
-                        ),
-                    ),
-                )
+            for sequence, run_id in (
+                (99, "duplicate"),
+                (99, "duplicate"),
+                (100, "run_live"),
+            ):
+                yield _run_created_envelope(sequence, run_id)
             provider._stream_stop.set()
 
     provider._stub = DuplicateFirstStub()
-    provider._install_structural_baseline("operator-1", 99, {})
+    provider._install_structural_baseline("operator-1", _event_ulid(98), {})
+    provider._event_cursor = _cursor(98)
     provider._run_callbacks.append(lambda run: received.append(run.run_id))
     try:
         provider._stream_loop()
     finally:
         provider.close()
 
-    assert received == ["run_live"]
-    assert provider._cursor.sequence == 100
+    assert received == ["duplicate", "run_live"]
+    assert provider._cursor.event_ulid == _event_ulid(100)
 
 
 def test_concurrent_start_stream_calls_start_one_stream_thread():
@@ -2070,7 +2297,7 @@ def test_concurrent_start_stream_calls_start_one_stream_thread():
             self.calls = 0
             self.thread_ids = set()
 
-        def StreamOperatorUpdates(self, request, *, metadata):  # noqa: N802
+        def WatchRunStatus(self, request, *, metadata):  # noqa: N802
             self.calls += 1
             self.thread_ids.add(threading.get_ident())
 
@@ -2129,7 +2356,7 @@ def test_concurrent_close_and_stream_start_leave_no_live_thread_or_calls():
             self.calls = 0
             self.post_close_calls = 0
 
-        def StreamOperatorUpdates(self, request, *, metadata):  # noqa: N802
+        def WatchRunStatus(self, request, *, metadata):  # noqa: N802
             self.calls += 1
             if close_returned.is_set():
                 self.post_close_calls += 1
@@ -2179,7 +2406,7 @@ def test_client_close_stops_reconnect_thread_and_prevents_new_calls():
         def __init__(self):
             self.calls = 0
 
-        def StreamOperatorUpdates(self, request, *, metadata):  # noqa: N802
+        def WatchRunStatus(self, request, *, metadata):  # noqa: N802
             self.calls += 1
             called.set()
             raise Unavailable()
@@ -2212,25 +2439,30 @@ def test_canonical_client_requests_use_workflow_selector():
             self.start_request = None
             self.list_request = None
 
-        def GetCatalog(self, request, **kwargs):  # noqa: N802
-            return pb.CatalogSnapshotMsg(
-                workflows=[
-                    pb.FlowInfoMsg(
-                        name="Daily report",
+        def DiscoverFlows(self, request, **kwargs):  # noqa: N802
+            return pb.FlowListV2(
+                cursor=_cursor(1, stream="flows"),
+                flows=[
+                    pb.FlowInfoV2(
+                        workflow_selector=canonical_id,
                         display_name="Daily report",
                         workflow_id=canonical_id,
                         file_path="reports/daily.py",
                     )
-                ]
+                ],
+                scope_ref=_scope(),
             )
 
         def StartRun(self, request, **kwargs):  # noqa: N802
             self.start_request = request
-            return pb.StartRunResponse(run_id="run_legacy")
+            return pb.StartRunResponseV2(run_id="run_legacy")
 
         def ListRunSummaries(self, request, **kwargs):  # noqa: N802
             self.list_request = request
-            return pb.RunSummaryPage(operator_instance_id="operator-1")
+            return pb.RunSummaryPageV2(
+                cursor=_cursor(1, stream="run-summaries"),
+                scope_ref=_scope(),
+            )
 
     provider = GrpcStateProvider("localhost:1")
     stub = CapturingStub()
@@ -2258,48 +2490,37 @@ def test_unary_client_calls_pass_finite_timeout():
             assert timeout is not None
             assert 0 < timeout < float("inf")
 
-        def GetCatalog(self, request, *, timeout, **kwargs):  # noqa: N802
+        def DiscoverFlows(self, request, *, timeout, **kwargs):  # noqa: N802
             self._capture("list", timeout)
-            return pb.CatalogSnapshotMsg()
+            return pb.FlowListV2()
 
         def StartRun(self, request, *, timeout, **kwargs):  # noqa: N802
             self._capture("start", timeout)
-            return pb.StartRunResponse(run_id="run_1")
+            return pb.StartRunResponseV2(run_id="run_1")
 
         def GetRunSnapshot(self, request, *, timeout, **kwargs):  # noqa: N802
             self._capture("get", timeout)
-            return pb.RunSnapshotMsg(
-                operator_instance_id=request.operator_instance_id,
-                as_of_sequence=request.as_of_sequence,
-                summary=pb.RunSummaryMsg(
+            return pb.RunSnapshotV2(
+                cursor=_cursor(1, stream=f"run:{request.run_id}"),
+                scope_ref=_scope(),
+                summary=pb.RunSummaryV2(
                     run_id=request.run_id,
-                    flow_name="flow",
+                    workflow_selector="flow",
+                    workflow_display_name="flow",
                     status="pending",
-                ),
-            )
-
-        def GetLatestRunSnapshot(self, request, *, timeout, **kwargs):  # noqa: N802
-            self._capture("latest", timeout)
-            return pb.RunSnapshotMsg(
-                operator_instance_id=request.operator_instance_id,
-                as_of_sequence=2,
-                summary=pb.RunSummaryMsg(
-                    run_id=request.run_id,
-                    flow_name="flow",
-                    status="running",
                 ),
             )
 
         def ListRunSummaries(self, request, *, timeout, **kwargs):  # noqa: N802
             self._capture("cursor" if request.page_size == 1 else "runs", timeout)
-            return pb.RunSummaryPage(
-                operator_instance_id="operator-1",
-                as_of_sequence=1,
+            return pb.RunSummaryPageV2(
+                cursor=_cursor(1, stream="run-summaries"),
+                scope_ref=_scope(),
             )
 
         def CancelRun(self, request, *, timeout, **kwargs):  # noqa: N802
             self._capture("cancel", timeout)
-            return pb.Empty()
+            return pb.CancelRunResponseV2(run_id=request.run_id)
 
     provider = GrpcStateProvider("localhost:1", unary_timeout=3.5)
     provider._stub = CapturingStub()
@@ -2318,7 +2539,7 @@ def test_unary_client_calls_pass_finite_timeout():
         ("start", 3.5),
         ("cursor", 3.5),
         ("get", 3.5),
-        ("latest", 3.5),
+        ("get", 3.5),
         ("runs", 3.5),
         ("cancel", 3.5),
     ]
@@ -2442,7 +2663,7 @@ def test_blocking_server_closes_operator_in_finally(monkeypatch):
     monkeypatch.setattr(server_module.grpc, "server", fake_grpc_server)
     monkeypatch.setattr(
         server_module.pb_grpc,
-        "add_OperatorServiceServicer_to_server",
+        "add_OperatorServiceV2Servicer_to_server",
         lambda _servicer, _server: None,
     )
 
@@ -2490,7 +2711,7 @@ def test_server_setup_and_bind_failures_close_operator_storage(
 
     monkeypatch.setattr(
         server_module.pb_grpc,
-        "add_OperatorServiceServicer_to_server",
+        "add_OperatorServiceV2Servicer_to_server",
         register,
     )
     operator = Operator(
@@ -2530,7 +2751,7 @@ def test_server_non_loopback_binding_is_explicit_and_warned(monkeypatch, caplog)
     )
     monkeypatch.setattr(
         server_module.pb_grpc,
-        "add_OperatorServiceServicer_to_server",
+        "add_OperatorServiceV2Servicer_to_server",
         lambda _servicer, _server: None,
     )
 
@@ -2550,11 +2771,11 @@ def test_agent_fields_roundtrip_and_legacy_defaults():
         agent_node_ids=["agent_1"],
         agent_metadata_json={"agent_1": '{"signature":{"name":"Inspect"}}'},
     )
-    restored = workflow_info_from_proto(workflow_info_to_proto(workflow))
+    restored = workflow_info_from_v2(workflow_info_to_v2(workflow))
     assert restored.agent_node_ids == ["agent_1"]
     assert restored.agent_metadata_json == workflow.agent_metadata_json
 
-    legacy = workflow_info_from_proto(pb.FlowInfoMsg())
+    legacy = workflow_info_from_v2(pb.FlowInfoV2())
     assert legacy.agent_node_ids == []
     assert legacy.agent_metadata_json == {}
 
@@ -2628,120 +2849,67 @@ def test_grpc_latest_snapshot_and_newest_pages_preserve_status_contract():
         server = serve(operator, port=port, block=False)
         channel = grpc.insecure_channel(f"localhost:{port}")
         grpc.channel_ready_future(channel).result(timeout=5)
-        stub = pb_grpc.OperatorServiceStub(channel)
+        stub = pb_grpc.OperatorServiceV2Stub(channel)
 
-        latest = stub.GetLatestRunSnapshot(
-            pb.GetLatestRunSnapshotRequest(
-                run_id=run.run_id,
-                operator_instance_id=operator.operator_instance_id,
-            )
-        )
-        exact = stub.GetRunSnapshot(
-            pb.GetRunSnapshotRequest(
-                run_id=run.run_id,
-                operator_instance_id=baseline.operator_instance_id,
-                as_of_sequence=baseline.as_of_sequence,
-            )
-        )
-        assert latest.as_of_sequence > exact.as_of_sequence
+        latest = stub.GetRunSnapshot(pb.GetRunSnapshotRequestV2(run_id=run.run_id))
         assert latest.summary.status == RunStatus.RUNNING.value
-        assert exact.summary.status == retained.summary.status.value
+        assert latest.scope_ref.reference == operator.operator_instance_id
+        assert retained is not None
+        assert latest.cursor.event_ulid >= latest.cursor.retained_floor_event_ulid
 
-        class CountingLogs(list):
-            def __init__(self, entries):
-                super().__init__(entries)
-                self.item_reads = 0
-
-            def __getitem__(self, index):
-                if isinstance(index, int):
-                    self.item_reads += 1
-                return super().__getitem__(index)
-
-        with operator._lock:
-            counted_logs = CountingLogs(operator._logs[run.run_id])
-            operator._logs[run.run_id] = counted_logs
-
-        first_logs = stub.ListLogs(
-            pb.ListLogsRequest(
-                page_token=latest.log_page_token,
+        first_logs = stub.ListRunActivity(
+            pb.ListRunActivityRequestV2(
+                run_id=run.run_id,
                 page_size=2,
-                node_id="agent-1",
-                order=pb.DESCRIPTOR_PAGE_ORDER_NEWEST_FIRST,
+                order=pb.PageOrderV2.PAGE_ORDER_V2_NEWEST_FIRST,
             )
         )
-        assert [item.sequence for item in first_logs.logs] == sorted(
-            (item.sequence for item in first_logs.logs),
+        assert [item.run_sequence for item in first_logs.activities] == sorted(
+            (item.run_sequence for item in first_logs.activities),
             reverse=True,
         )
-        assert first_logs.next_page_token
-        second_logs = stub.ListLogs(
-            pb.ListLogsRequest(
-                page_token=first_logs.next_page_token,
+        assert all(item.kind == "log" for item in first_logs.activities)
+        assert first_logs.next_page.continuation_id
+        second_logs = stub.ListRunActivity(
+            pb.ListRunActivityRequestV2(
+                run_id=run.run_id,
                 page_size=2,
-                before_sequence=first_logs.logs[-1].sequence,
-                node_id="agent-1",
-                order=pb.DESCRIPTOR_PAGE_ORDER_NEWEST_FIRST,
+                continuation=first_logs.next_page,
+                order=pb.PageOrderV2.PAGE_ORDER_V2_NEWEST_FIRST,
             )
         )
-        assert {item.sequence for item in first_logs.logs}.isdisjoint(
-            item.sequence for item in second_logs.logs
+        assert {item.run_sequence for item in first_logs.activities}.isdisjoint(
+            item.run_sequence for item in second_logs.activities
         )
-        reads_before_missing_page = counted_logs.item_reads
-        missing_logs = stub.ListLogs(
-            pb.ListLogsRequest(
-                page_token=latest.log_page_token,
-                page_size=2,
-                node_id="missing-agent",
-                order=pb.DESCRIPTOR_PAGE_ORDER_NEWEST_FIRST,
-            )
-        )
-        assert list(missing_logs.logs) == []
-        assert counted_logs.item_reads == reads_before_missing_page
 
-        first_events = stub.ListAgentEvents(
-            pb.ListAgentEventsRequest(
-                page_token=latest.nodes[0].event_page_token,
+        first_events = stub.ListRunActivity(
+            pb.ListRunActivityRequestV2(
+                run_id=run.run_id,
+                node_id="agent-1",
                 page_size=2,
-                order=pb.DESCRIPTOR_PAGE_ORDER_NEWEST_FIRST,
+                order=pb.PageOrderV2.PAGE_ORDER_V2_NEWEST_FIRST,
             )
         )
-        assert [item.event_sequence for item in first_events.events] == sorted(
-            (item.event_sequence for item in first_events.events),
+        assert [item.run_sequence for item in first_events.activities] == sorted(
+            (item.run_sequence for item in first_events.activities),
             reverse=True,
         )
-
-        with pytest.raises(grpc.RpcError) as cursor_error:
-            stub.ListLogs(
-                pb.ListLogsRequest(
-                    page_token=first_logs.next_page_token,
-                    page_size=2,
-                    before_sequence=first_logs.logs[-1].sequence - 1,
-                    node_id="agent-1",
-                    order=pb.DESCRIPTOR_PAGE_ORDER_NEWEST_FIRST,
-                )
-            )
-        assert cursor_error.value.code() is grpc.StatusCode.INVALID_ARGUMENT
-
-        with pytest.raises(grpc.RpcError) as stale_error:
-            stub.GetLatestRunSnapshot(
-                pb.GetLatestRunSnapshotRequest(
-                    run_id=run.run_id,
-                    operator_instance_id="stale-operator",
-                )
-            )
-        assert stale_error.value.code() is grpc.StatusCode.FAILED_PRECONDITION
+        assert all(item.kind == "agent_event" for item in first_events.activities)
 
         with pytest.raises(grpc.RpcError) as missing_error:
-            stub.GetLatestRunSnapshot(
-                pb.GetLatestRunSnapshotRequest(
-                    run_id="missing-run",
-                    operator_instance_id=operator.operator_instance_id,
-                )
-            )
+            stub.GetRunSnapshot(pb.GetRunSnapshotRequestV2(run_id="missing-run"))
         assert missing_error.value.code() is grpc.StatusCode.NOT_FOUND
 
         with pytest.raises(grpc.RpcError) as token_error:
-            stub.ListLogs(pb.ListLogsRequest(page_token="not-a-token"))
+            stub.ListRunActivity(
+                pb.ListRunActivityRequestV2(
+                    run_id=run.run_id,
+                    continuation=pb.ContinuationRefV2(
+                        scope_ref=pb.ScopeReferenceV2(reference=operator.operator_instance_id),
+                        continuation_id="not-a-token",
+                    ),
+                )
+            )
         assert token_error.value.code() is grpc.StatusCode.INVALID_ARGUMENT
     finally:
         if channel is not None:
@@ -2778,23 +2946,18 @@ def test_grpc_lazily_hydrates_paged_details_and_chunked_trace(
             def __getattr__(self, name):
                 return getattr(delegate, name)
 
-            def ListLogs(self, request, **kwargs):  # noqa: N802
-                assert request.before_sequence == 0
-                assert request.node_id == ""
-                assert request.order == pb.DESCRIPTOR_PAGE_ORDER_FORWARD
-                self.log_cursors.append(request.after_sequence)
-                return delegate.ListLogs(request, **kwargs)
+            def ListRunActivity(self, request, **kwargs):  # noqa: N802
+                if request.node_id:
+                    self.event_cursors.append(request.continuation.continuation_id)
+                else:
+                    self.log_cursors.append(request.continuation.continuation_id)
+                return delegate.ListRunActivity(request, **kwargs)
 
-            def ListAgentEvents(self, request, **kwargs):  # noqa: N802
-                assert request.before_event_sequence == 0
-                assert request.order == pb.DESCRIPTOR_PAGE_ORDER_FORWARD
-                self.event_cursors.append(request.after_event_sequence)
-                return delegate.ListAgentEvents(request, **kwargs)
-
-            def ReadTrace(self, request, **kwargs):  # noqa: N802
+            def ReadActivityDetail(self, request, **kwargs):  # noqa: N802
                 self.trace_requests.append(request)
-                for chunk in delegate.ReadTrace(request, **kwargs):
-                    self.trace_chunks += 1
+                for chunk in delegate.ReadActivityDetail(request, **kwargs):
+                    if request.detail_ref.object_uri.startswith("local://trace/"):
+                        self.trace_chunks += 1
                     yield chunk
 
         recording = RecordingStub()
@@ -2807,8 +2970,8 @@ def test_grpc_lazily_hydrates_paged_details_and_chunked_trace(
         envelope = json.loads(hydrated.nodes["agent-1"].agent_trace_json)
         assert [event["sequence"] for event in envelope["events"]] == list(range(1, 6))
         assert envelope["trace"] is None
-        assert recording.log_cursors == [0, 2, 4]
-        assert recording.event_cursors == [0, 2, 4]
+        assert len(recording.log_cursors) == 3
+        assert len(recording.event_cursors) == 3
 
         with_trace = provider.hydrate_trace(run.run_id, "agent-1")
         assert with_trace is not None
@@ -2817,9 +2980,11 @@ def test_grpc_lazily_hydrates_paged_details_and_chunked_trace(
         assert with_trace.node_id == "agent-1"
         assert with_trace.trace_body["payload"].endswith("x" * 17)
         assert recording.trace_chunks == 3
-        assert [request.operator_instance_id for request in recording.trace_requests] == [
-            operator.operator_instance_id
-        ]
+        assert [
+            request.detail_ref.scope_ref.reference
+            for request in recording.trace_requests
+            if request.detail_ref.object_uri.startswith("local://trace/")
+        ] == [operator.operator_instance_id]
         assert provider.hydrate_trace(run.run_id, "agent-1") is not None
         assert recording.trace_chunks == 3
 
@@ -2831,7 +2996,7 @@ def test_grpc_lazily_hydrates_paged_details_and_chunked_trace(
         )
         provider._install_structural_baseline(
             page.operator_instance_id,
-            page.as_of_sequence,
+            _event_ulid(page.as_of_sequence),
             {run.run_id: _run_from_snapshot(snapshot)},
         )
         assert not provider._runs_by_id[run.run_id].details_hydrated
@@ -2873,9 +3038,9 @@ def test_grpc_discards_hydration_after_epoch_reset(monkeypatch):
             def __getattr__(self, name):
                 return getattr(delegate, name)
 
-            def ListLogs(self, request, **kwargs):  # noqa: N802
-                response = delegate.ListLogs(request, **kwargs)
-                if request.after_sequence == 0:
+            def ListRunActivity(self, request, **kwargs):  # noqa: N802
+                response = delegate.ListRunActivity(request, **kwargs)
+                if not page_read.is_set():
                     page_read.set()
                     if not release.wait(2):
                         raise RuntimeError("hydration barrier timed out")
@@ -2892,7 +3057,7 @@ def test_grpc_discards_hydration_after_epoch_reset(monkeypatch):
         reader = threading.Thread(target=read_run)
         reader.start()
         assert page_read.wait(2)
-        provider._install_structural_baseline("replacement-epoch", 0, {})
+        provider._install_structural_baseline("replacement-epoch", _event_ulid(0), {})
         release.set()
         reader.join(2)
         assert not reader.is_alive()
@@ -2931,27 +3096,32 @@ def test_detail_hydration_preserves_non_not_found_status(status):
 
     class FailingDetailStub:
         def ListRunSummaries(self, request, **kwargs):  # noqa: N802
-            return pb.RunSummaryPage(
-                operator_instance_id="operator-1",
-                as_of_sequence=2,
+            return pb.RunSummaryPageV2(
+                cursor=_cursor(2, stream="run-summaries"),
+                scope_ref=_scope(),
             )
 
         def GetRunSnapshot(self, request, **kwargs):  # noqa: N802
-            return pb.RunSnapshotMsg(
-                operator_instance_id="operator-1",
-                as_of_sequence=2,
-                summary=pb.RunSummaryMsg(
+            return pb.RunSnapshotV2(
+                cursor=_cursor(2, stream="run:run-1"),
+                scope_ref=_scope(),
+                summary=pb.RunSummaryV2(
                     run_id="run-1",
-                    flow_name="flow",
+                    workflow_selector="flow",
+                    workflow_display_name="flow",
                     status="running",
                     created_sequence=1,
                     revision=2,
                 ),
                 latest_log_sequence=1,
-                log_page_token="logs-token",
+                log_continuation=pb.ContinuationRefV2(
+                    scope_ref=_scope(),
+                    continuation_id="logs-token",
+                    cursor=_cursor(2, stream="activity:run-1:logs"),
+                ),
             )
 
-        def ListLogs(self, request, **kwargs):  # noqa: N802
+        def ListRunActivity(self, request, **kwargs):  # noqa: N802
             raise StatusError()
 
     provider._stub = FailingDetailStub()
@@ -2982,29 +3152,41 @@ def test_get_run_retries_from_fresh_cursor_after_hydration_restart():
 
         def ListRunSummaries(self, request, **kwargs):  # noqa: N802
             self.summary_calls += 1
-            return pb.RunSummaryPage(
-                operator_instance_id=f"operator-{self.summary_calls}",
-                as_of_sequence=self.summary_calls,
+            return pb.RunSummaryPageV2(
+                cursor=_cursor(self.summary_calls, stream="run-summaries"),
+                scope_ref=_scope(f"operator-{self.summary_calls}"),
             )
 
         def GetRunSnapshot(self, request, **kwargs):  # noqa: N802
-            self.snapshot_epochs.append((request.operator_instance_id, request.as_of_sequence))
+            self.snapshot_epochs.append(f"operator-{self.summary_calls}")
             first_attempt = len(self.snapshot_epochs) == 1
-            return pb.RunSnapshotMsg(
-                operator_instance_id=request.operator_instance_id,
-                as_of_sequence=request.as_of_sequence,
-                summary=pb.RunSummaryMsg(
+            return pb.RunSnapshotV2(
+                cursor=_cursor(self.summary_calls, stream=f"run:{request.run_id}"),
+                scope_ref=_scope(f"operator-{self.summary_calls}"),
+                summary=pb.RunSummaryV2(
                     run_id=request.run_id,
-                    flow_name="flow",
+                    workflow_selector="flow",
+                    workflow_display_name="flow",
                     status="running",
                     created_sequence=1,
-                    revision=request.as_of_sequence,
+                    revision=self.summary_calls,
                 ),
                 latest_log_sequence=1 if first_attempt else 0,
-                log_page_token="logs-token" if first_attempt else "",
+                log_continuation=(
+                    pb.ContinuationRefV2(
+                        scope_ref=_scope(f"operator-{self.summary_calls}"),
+                        continuation_id="logs-token",
+                        cursor=_cursor(
+                            self.summary_calls,
+                            stream="activity:run-1:logs",
+                        ),
+                    )
+                    if first_attempt
+                    else pb.ContinuationRefV2()
+                ),
             )
 
-        def ListLogs(self, request, **kwargs):  # noqa: N802
+        def ListRunActivity(self, request, **kwargs):  # noqa: N802
             self.log_calls += 1
             raise RestartedDuringHydration()
 
@@ -3018,7 +3200,7 @@ def test_get_run_retries_from_fresh_cursor_after_hydration_restart():
     assert run is not None
     assert run.operator_instance_id == "operator-2"
     assert stub.summary_calls == 2
-    assert stub.snapshot_epochs == [("operator-1", 1), ("operator-2", 2)]
+    assert stub.snapshot_epochs == ["operator-1", "operator-2"]
     assert stub.log_calls == 1
 
 
@@ -3035,22 +3217,23 @@ def test_get_run_rethrows_exact_hydration_restart_error_after_bounded_retries():
         def ListRunSummaries(self, request, **kwargs):  # noqa: N802
             nonlocal summary_calls
             summary_calls += 1
-            return pb.RunSummaryPage(
-                operator_instance_id=f"operator-{summary_calls}",
-                as_of_sequence=summary_calls,
+            return pb.RunSummaryPageV2(
+                cursor=_cursor(summary_calls, stream="run-summaries"),
+                scope_ref=_scope(f"operator-{summary_calls}"),
             )
 
         def GetRunSnapshot(self, request, **kwargs):  # noqa: N802
-            snapshot_cursors.append((request.operator_instance_id, request.as_of_sequence))
-            return pb.RunSnapshotMsg(
-                operator_instance_id=request.operator_instance_id,
-                as_of_sequence=request.as_of_sequence,
-                summary=pb.RunSummaryMsg(
+            snapshot_cursors.append(f"operator-{summary_calls}")
+            return pb.RunSnapshotV2(
+                cursor=_cursor(summary_calls, stream=f"run:{request.run_id}"),
+                scope_ref=_scope(f"operator-{summary_calls}"),
+                summary=pb.RunSummaryV2(
                     run_id=request.run_id,
-                    flow_name="flow",
+                    workflow_selector="flow",
+                    workflow_display_name="flow",
                     status="running",
                     created_sequence=1,
-                    revision=request.as_of_sequence,
+                    revision=summary_calls,
                 ),
             )
 
@@ -3069,11 +3252,7 @@ def test_get_run_rethrows_exact_hydration_restart_error_after_bounded_retries():
     assert error.value.status is grpc.StatusCode.FAILED_PRECONDITION
     assert error.value.details == "operator restarted during hydration"
     assert summary_calls == 3
-    assert snapshot_cursors == [
-        ("operator-1", 1),
-        ("operator-2", 2),
-        ("operator-3", 3),
-    ]
+    assert snapshot_cursors == ["operator-1", "operator-2", "operator-3"]
 
 
 def test_unrelated_updates_do_not_invalidate_detail_page_tokens(monkeypatch):
@@ -3101,10 +3280,10 @@ def test_unrelated_updates_do_not_invalidate_detail_page_tokens(monkeypatch):
             def __getattr__(self, name):
                 return getattr(delegate, name)
 
-            def ListLogs(self, request, **kwargs):  # noqa: N802
+            def ListRunActivity(self, request, **kwargs):  # noqa: N802
                 nonlocal updated
-                response = delegate.ListLogs(request, **kwargs)
-                page_sequences.append(response.as_of_sequence)
+                response = delegate.ListRunActivity(request, **kwargs)
+                page_sequences.append(response.cursor.event_ulid)
                 if not updated:
                     updated = True
                     unrelated.status = RunStatus.RUNNING

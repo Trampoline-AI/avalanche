@@ -8,24 +8,8 @@ package avalanche.operator;
 
 // ── Service ─────────────────────────────────────────────
 
-service OperatorService {
-  rpc GetCatalog(Empty) returns (CatalogSnapshotMsg);
-  rpc StartRun(StartRunRequest) returns (StartRunResponse);
-  rpc CancelRun(CancelRunRequest) returns (Empty);
-  rpc GetRunResult(GetRunRequest) returns (RunResultMsg);
-  rpc ListRunSummaries(ListRunSummariesRequest) returns (RunSummaryPage);
-  rpc GetRunSnapshot(GetRunSnapshotRequest) returns (RunSnapshotMsg);
-  rpc GetLatestRunSnapshot(GetLatestRunSnapshotRequest) returns (RunSnapshotMsg);
-  rpc ListLogs(ListLogsRequest) returns (LogPage);
-  rpc ListAgentEvents(ListAgentEventsRequest) returns (AgentEventPage);
-  rpc ReadTrace(ReadTraceRequest) returns (stream TraceChunk);
-  rpc ReadDetail(ReadDetailRequest) returns (stream DetailChunk);
-  rpc StreamOperatorUpdates(StreamOperatorUpdatesRequest) returns (stream OperatorUpdateEnvelope);
-}
-
-// V2 is additive: legacy clients remain on OperatorService until they complete
-// their own migration. V2 requests derive their authorization scope from
-// transport metadata and use only V2 request and response messages.
+// V2 is the only served contract. Requests derive their authorization scope
+// from transport metadata and use only V2 request and response messages.
 service OperatorServiceV2 {
   rpc DiscoverFlows(DiscoverFlowsRequestV2) returns (FlowListV2);
   rpc StartRun(StartRunRequestV2) returns (StartRunResponseV2);
@@ -43,372 +27,6 @@ service OperatorServiceV2 {
   rpc WatchRunStatus(WatchRunStatusRequestV2) returns (stream RunStatusEnvelopeV2);
 }
 
-// ── Request / Response ──────────────────────────────────
-
-message Empty {}
-
-message StartRunRequest {
-  reserved 1;
-  string input_json = 2;
-  string context_json = 3;
-  repeated FileAttachment input_files = 4;
-  string run_id = 6;
-  string workflow_selector = 7;
-}
-
-message FileAttachment {
-  string field_name = 1;
-  string name = 2;
-  bytes content = 3;
-  string content_type = 4;
-  string sha256 = 5;
-}
-
-message StartRunResponse {
-  string run_id = 1;
-}
-
-message CancelRunRequest {
-  string run_id = 1;
-}
-
-message GetRunRequest {
-  string run_id = 1;
-}
-
-
-message ListRunSummariesRequest {
-  string workflow_selector = 1;
-  uint32 page_size = 2;
-  string page_token = 3;
-}
-
-message GetRunSnapshotRequest {
-  string run_id = 1;
-  string operator_instance_id = 2;
-  uint64 as_of_sequence = 3;
-}
-
-message GetLatestRunSnapshotRequest {
-  string run_id = 1;
-  string operator_instance_id = 2;
-}
-
-enum DescriptorPageOrder {
-  DESCRIPTOR_PAGE_ORDER_FORWARD = 0;
-  DESCRIPTOR_PAGE_ORDER_NEWEST_FIRST = 1;
-}
-
-// Page tokens are opaque bearer references issued by GetRunSnapshot. The current
-// loopback transport does not sign them; authenticated deployments must sign or
-// tenant-bind tokens and reauthorize the referenced run on every use.
-message ListLogsRequest {
-  // Required snapshot-issued token. Cursors and filters are relative to this snapshot.
-  string page_token = 1;
-  // Exclusive lower log bound for forward and incremental hydration.
-  uint64 after_sequence = 2;
-  uint32 page_size = 3;
-  // Exclusive upper log bound for newest-first hydration; zero starts at the snapshot end.
-  uint64 before_sequence = 4;
-  // Optional exact node filter. Continuation tokens bind this filter.
-  string node_id = 5;
-  DescriptorPageOrder order = 6;
-}
-
-message ListAgentEventsRequest {
-  // Required snapshot-issued token. Cursors are relative to this snapshot.
-  string page_token = 1;
-  // Exclusive lower event bound for forward and incremental hydration.
-  uint64 after_event_sequence = 2;
-  uint32 page_size = 3;
-  // Exclusive upper event bound for newest-first hydration; zero starts at the snapshot end.
-  uint64 before_event_sequence = 4;
-  DescriptorPageOrder order = 5;
-}
-
-message ReadTraceRequest {
-  string run_id = 1;
-  string node_id = 2;
-  uint64 revision = 3;
-  string operator_instance_id = 4;
-}
-
-message ReadDetailRequest {
-  string body_token = 1;
-}
-
-message StreamOperatorUpdatesRequest {
-  string operator_instance_id = 1;
-  uint64 after_sequence = 2;
-}
-
-// ── Data Messages ───────────────────────────────────────
-
-message NodeEdges {
-  repeated string children = 1;
-}
-
-message WorkflowTopologyMsg {
-  repeated string node_ids = 1;
-  map<string, NodeEdges> graph = 2;
-  map<string, string> node_types = 3;
-  map<string, string> display_names = 4;
-  map<string, string> agent_field_schemas_json = 5;
-  map<string, string> agent_instruction_lines = 6;
-}
-
-message FlowInfoMsg {
-  string name = 1;
-  string file_path = 2;
-  repeated string node_ids = 3;
-  map<string, NodeEdges> graph = 4;
-  map<string, string> node_types = 5;
-  map<string, string> display_names = 6;
-  string cron = 7;
-  double next_run_at = 8;
-  double last_run_at = 9;
-  string workflow_id = 10;
-  string display_name = 11;
-  string root_alias = 12;
-  string relative_file = 13;
-  string builder_symbol = 14;
-  repeated string agent_node_ids = 15;
-  map<string, string> agent_metadata_json = 16;
-  string webhook_path = 17;
-  string webhook_url = 18;
-  bool webhook_active = 19;
-}
-
-
-message DiscoveryDiagnosticMsg {
-  string path = 1;
-  string kind = 2;
-  string message = 3;
-}
-
-message ScanTargetMsg {
-  string alias = 1;
-  string target_path = 2;
-  string kind = 3;
-}
-message CatalogSnapshotMsg {
-  string operator_instance_id = 1;
-  uint64 as_of_sequence = 2;
-  uint64 revision = 3;
-  repeated FlowInfoMsg workflows = 4;
-  repeated ScanTargetMsg scan_targets = 5;
-  repeated DiscoveryDiagnosticMsg diagnostics = 6;
-}
-
-message ResultFileAttachment {
-  string attachment_id = 1;
-  optional string name = 2;
-  bytes content = 3;
-  optional string media_type = 4;
-  string sha256 = 5;
-}
-
-message RunResultMsg {
-  string value_json = 1;
-  repeated ResultFileAttachment files = 2;
-}
-
-message RunSummaryMsg {
-  string run_id = 1;
-  string flow_name = 2;
-  string status = 3;
-  double started_at = 4;
-  double ended_at = 5;
-  string triggered_by = 6;
-  string workflow_id = 7;
-  string workflow_display_name = 8;
-  uint64 created_sequence = 9;
-  uint64 revision = 10;
-  double triggered_at = 11;
-}
-
-message TraceHeaderMsg {
-  string status = 1;
-  string model = 2;
-  optional string sub_model = 3;
-  uint64 iterations = 4;
-  uint64 max_iterations = 5;
-  uint64 duration_ms = 6;
-  string usage_json = 7;
-  optional string telemetry_json = 8;
-}
-
-
-message TraceDescriptorMsg {
-  string status = 1;
-  uint64 revision = 2;
-  bool available = 3;
-  bool complete = 4;
-  uint64 event_count = 5;
-  uint64 size_bytes = 6;
-  uint64 latest_event_sequence = 7;
-  TraceHeaderMsg header = 8;
-}
-
-message NodeSnapshotMsg {
-  string node_id = 1;
-  string name = 2;
-  string node_type = 3;
-  string status = 4;
-  double started_at = 5;
-  double ended_at = 6;
-  TraceDescriptorMsg trace = 7;
-  uint64 revision = 8;
-  string event_page_token = 9;
-  optional string error = 10;
-  optional double running_elapsed_seconds = 11;
-}
-
-message RunSnapshotMsg {
-  string operator_instance_id = 1;
-  uint64 as_of_sequence = 2;
-  RunSummaryMsg summary = 3;
-  repeated NodeSnapshotMsg nodes = 4;
-  uint64 latest_log_sequence = 5;
-  string log_page_token = 6;
-  WorkflowTopologyMsg topology = 7;
-}
-
-message RunSummaryPage {
-  string operator_instance_id = 1;
-  uint64 as_of_sequence = 2;
-  repeated RunSummaryMsg runs = 3;
-  string next_page_token = 4;
-}
-
-message LogRecordDescriptorMsg {
-  uint64 sequence = 1;
-  double timestamp = 2;
-  string level = 3;
-  string node_id = 4;
-  uint64 size_bytes = 5;
-  string body_token = 6;
-}
-
-message LogPage {
-  string operator_instance_id = 1;
-  uint64 as_of_sequence = 2;
-  repeated LogRecordDescriptorMsg logs = 3;
-  string next_page_token = 4;
-}
-
-message AgentEventDescriptorMsg {
-  uint64 event_sequence = 1;
-  uint64 size_bytes = 2;
-  string body_token = 3;
-  string invocation_id = 4;
-  string event_kind = 5;
-  optional uint32 iteration = 6;
-  optional uint64 duration_ms = 7;
-  bool error = 8;
-  uint32 tool_count = 9;
-  uint32 predict_count = 10;
-}
-
-message AgentEventPage {
-  string operator_instance_id = 1;
-  uint64 as_of_sequence = 2;
-  string run_id = 3;
-  string node_id = 4;
-  repeated AgentEventDescriptorMsg events = 5;
-  string next_page_token = 6;
-}
-
-message TraceChunk {
-  uint64 revision = 1;
-  uint64 chunk_index = 2;
-  bytes data = 3;
-  bool eof = 4;
-}
-
-message DetailChunk {
-  uint64 chunk_index = 1;
-  bytes data = 2;
-  bool eof = 3;
-}
-
-message RunCreated {
-  RunSummaryMsg summary = 1;
-  repeated NodeSnapshotMsg nodes = 2;
-  WorkflowTopologyMsg topology = 3;
-}
-
-message RunStatusChanged {
-  string run_id = 1;
-  string status = 2;
-  double started_at = 3;
-  double ended_at = 4;
-  uint64 revision = 5;
-}
-
-message NodeStatusChanged {
-  string run_id = 1;
-  string node_id = 2;
-  string status = 3;
-  double started_at = 4;
-  double ended_at = 5;
-  uint64 revision = 6;
-  optional string error = 7;
-  optional double running_elapsed_seconds = 8;
-}
-
-message LogAppended {
-  string run_id = 1;
-  LogRecordDescriptorMsg log = 2;
-}
-
-message AgentEventAppended {
-  string run_id = 1;
-  string node_id = 2;
-  AgentEventDescriptorMsg event = 3;
-}
-
-message TraceFinalized {
-  string run_id = 1;
-  string node_id = 2;
-  TraceDescriptorMsg trace = 3;
-}
-
-message CatalogReplaced {
-  CatalogSnapshotMsg catalog = 1;
-}
-
-message WorkflowReloadStatus {
-  bool reloading = 1;
-}
-
-message OperatorUpdate {
-  uint64 sequence = 1;
-  oneof change {
-    RunCreated run_created = 2;
-    RunStatusChanged run_status_changed = 3;
-    NodeStatusChanged node_status_changed = 4;
-    LogAppended log_appended = 5;
-    AgentEventAppended agent_event_appended = 6;
-    TraceFinalized trace_finalized = 7;
-    CatalogReplaced catalog_replaced = 8;
-    WorkflowReloadStatus workflow_reload_status = 9;
-  }
-}
-
-message ResetRequired {
-  uint64 history_floor = 1;
-  uint64 latest_sequence = 2;
-}
-
-message OperatorUpdateEnvelope {
-  string operator_instance_id = 1;
-  oneof payload {
-    OperatorUpdate update = 2;
-    ResetRequired reset_required = 3;
-  }
-}
-
 // ── V2 Request / Response ───────────────────────────────
 
 // An opaque reference issued by the server for the authenticated scope. It is
@@ -419,15 +37,15 @@ message ScopeReferenceV2 {
 }
 
 // A complete retained-stream position. Callers must preserve every field.
-// A server must fail closed (by requiring a reset or retry) rather than treat a
-// cursor from another stream, topology, generation, or retention window as a
-// valid progress position.
+// Event ULIDs are server-issued opaque positions; a server must fail closed
+// rather than treat a cursor from another stream, topology, epoch, or
+// retention window as a valid progress position.
 message LifecycleCursorV2 {
   string stream = 1;
   string topology_fingerprint = 2;
   uint64 stream_generation = 3;
-  uint64 retained_floor = 4;
-  uint64 source_sequence = 5;
+  string retained_floor_event_ulid = 4;
+  string event_ulid = 5;
 }
 
 // A server-issued page continuation bound to the authenticated scope and the
@@ -451,6 +69,17 @@ message FlowInfoV2 {
   string display_name = 2;
   string manifest_digest = 3;
   repeated string node_ids = 4;
+  string workflow_id = 5;
+  string file_path = 6;
+  WorkflowTopologyV2 topology = 7;
+  repeated string agent_node_ids = 8;
+  map<string, string> agent_metadata_json = 9;
+  string cron = 10;
+  double next_run_at = 11;
+  double last_run_at = 12;
+  string webhook_path = 13;
+  string webhook_url = 14;
+  bool webhook_active = 15;
 }
 
 message DiscoveryDiagnosticV2 {
@@ -464,10 +93,35 @@ message FlowListV2 {
   repeated FlowInfoV2 flows = 2;
   ContinuationRefV2 next_page = 3;
   repeated DiscoveryDiagnosticV2 diagnostics = 4;
+  repeated ScanTargetV2 scan_targets = 5;
+  // The authorization scope this list was materialized for.
+  ScopeReferenceV2 scope_ref = 6;
+  // Domain revision of the catalog, independent of the baseline cursor.
+  uint64 revision = 7;
 }
 
-// Attachment metadata is bounded and verified by the server. Attachment
-// content is not embedded in this start request.
+message NodeEdgesV2 {
+  repeated string children = 1;
+}
+
+message WorkflowTopologyV2 {
+  repeated string node_ids = 1;
+  map<string, NodeEdgesV2> graph = 2;
+  map<string, string> node_types = 3;
+  map<string, string> display_names = 4;
+  map<string, string> agent_field_schemas_json = 5;
+  map<string, string> agent_instruction_lines = 6;
+}
+
+message ScanTargetV2 {
+  string alias = 1;
+  string target_path = 2;
+  string kind = 3;
+}
+
+// Attachment metadata is bounded and verified by the server. Remote
+// deployments stage content under object_uri/object_key; local loopback
+// operators may accept an inline body instead.
 message FileAttachmentV2 {
   string attachment_id = 1;
   string field_name = 2;
@@ -477,6 +131,8 @@ message FileAttachmentV2 {
   string object_key = 6;
   string sha256 = 7;
   uint64 size_bytes = 8;
+  // Loopback-only inline body; mutually exclusive with object_uri/object_key.
+  bytes inline_bytes = 9;
 }
 
 message StartRunRequestV2 {
@@ -512,6 +168,8 @@ message RunSummaryV2 {
   double ended_at = 6;
   uint64 created_sequence = 7;
   uint64 revision = 8;
+  string triggered_by = 9;
+  double triggered_at = 10;
 }
 
 message ListRunSummariesRequestV2 {
@@ -526,6 +184,7 @@ message RunSummaryPageV2 {
   LifecycleCursorV2 cursor = 1;
   repeated RunSummaryV2 runs = 2;
   ContinuationRefV2 next_page = 3;
+  ScopeReferenceV2 scope_ref = 4;
 }
 
 message GetRunSnapshotRequestV2 {
@@ -540,6 +199,35 @@ message NodeSnapshotV2 {
   double started_at = 5;
   double ended_at = 6;
   uint64 revision = 7;
+  optional string error = 8;
+  optional double running_elapsed_seconds = 9;
+  TraceDescriptorV2 trace = 10;
+  // Snapshot-pinned continuation for paging this node's agent-event activities.
+  ContinuationRefV2 activity_continuation = 11;
+}
+
+message TraceHeaderV2 {
+  string status = 1;
+  string model = 2;
+  optional string sub_model = 3;
+  uint64 iterations = 4;
+  uint64 max_iterations = 5;
+  uint64 duration_ms = 6;
+  string usage_json = 7;
+  optional string telemetry_json = 8;
+}
+
+message TraceDescriptorV2 {
+  string status = 1;
+  uint64 revision = 2;
+  bool available = 3;
+  bool complete = 4;
+  uint64 event_count = 5;
+  uint64 size_bytes = 6;
+  uint64 latest_event_sequence = 7;
+  TraceHeaderV2 header = 8;
+  // Server-issued reference for reading this trace body via ReadActivityDetail.
+  ActivityDetailRefV2 detail_ref = 9;
 }
 
 // The cursor proves the exact fresh projection view used for this snapshot.
@@ -547,6 +235,11 @@ message RunSnapshotV2 {
   LifecycleCursorV2 cursor = 1;
   RunSummaryV2 summary = 2;
   repeated NodeSnapshotV2 nodes = 3;
+  WorkflowTopologyV2 topology = 4;
+  ScopeReferenceV2 scope_ref = 5;
+  // High-water log mark and snapshot-pinned continuation for log activities.
+  uint64 latest_log_sequence = 6;
+  ContinuationRefV2 log_continuation = 7;
 }
 
 // The immutable, scope-bound object body for an activity. Servers must
@@ -567,11 +260,27 @@ message ActivityDetailRefV2 {
 message RunActivityDescriptorV2 {
   string activity_id = 1;
   uint64 run_sequence = 2;
+  // Activity kind: "log", "agent_event", or "trace".
   string kind = 3;
   double timestamp = 4;
   uint64 size_bytes = 5;
   // Absent when this structural activity has no immutable body.
   ActivityDetailRefV2 detail_ref = 6;
+  // Populated for kind=log and kind=agent_event; empty for structural kinds.
+  string node_id = 7;
+  // Log level; populated only for kind=log.
+  string level = 8;
+  // Agent invocation metadata; populated only for kind=agent_event.
+  string invocation_id = 9;
+  optional uint32 iteration = 10;
+  optional uint64 duration_ms = 11;
+  bool error = 12;
+  uint32 tool_count = 13;
+  uint32 predict_count = 14;
+  // Agent event kind; populated only for kind=agent_event.
+  string event_kind = 15;
+  // Full trace descriptor; populated only for kind=trace.
+  TraceDescriptorV2 trace = 16;
 }
 
 message ListRunActivityRequestV2 {
@@ -579,6 +288,15 @@ message ListRunActivityRequestV2 {
   // Bounded by the server.
   uint32 page_size = 2;
   ContinuationRefV2 continuation = 3;
+  // Empty lists run-wide log activities; set lists agent-event activities for
+  // exactly one node.
+  string node_id = 4;
+  PageOrderV2 order = 5;
+}
+
+enum PageOrderV2 {
+  PAGE_ORDER_V2_FORWARD = 0;
+  PAGE_ORDER_V2_NEWEST_FIRST = 1;
 }
 
 message RunActivityPageV2 {
@@ -586,6 +304,7 @@ message RunActivityPageV2 {
   string run_id = 2;
   repeated RunActivityDescriptorV2 activities = 3;
   ContinuationRefV2 next_page = 4;
+  ScopeReferenceV2 scope_ref = 5;
 }
 
 // This request carries the complete descriptor, never an activity envelope or
@@ -622,8 +341,8 @@ message ResultValueV2 {
 
 message ResultFileDescriptorV2 {
   RunOutputArtifactRefV2 artifact_ref = 1;
-  string name = 2;
-  string media_type = 3;
+  optional string name = 2;
+  optional string media_type = 3;
 }
 
 message GetRunResultRequestV2 {
@@ -635,12 +354,13 @@ message RunResultV2 {
   string run_id = 2;
   ResultValueV2 value = 3;
   repeated ResultFileDescriptorV2 files = 4;
+  ScopeReferenceV2 scope_ref = 5;
 }
 
 message RunOutputArtifactDescriptorV2 {
   RunOutputArtifactRefV2 artifact_ref = 1;
-  string name = 2;
-  string media_type = 3;
+  optional string name = 2;
+  optional string media_type = 3;
 }
 
 message ListRunOutputArtifactsRequestV2 {
@@ -655,6 +375,7 @@ message RunOutputArtifactPageV2 {
   string run_id = 2;
   repeated RunOutputArtifactDescriptorV2 artifacts = 3;
   ContinuationRefV2 next_page = 4;
+  ScopeReferenceV2 scope_ref = 5;
 }
 
 message ReadRunOutputArtifactRequestV2 {
@@ -670,14 +391,37 @@ message RunOutputArtifactChunkV2 {
 message WatchRunStatusRequestV2 {
   // Replay begins strictly after this complete cursor.
   LifecycleCursorV2 after_cursor = 1;
+  // Optional scope echo; the server validates it before replaying any update.
+  ScopeReferenceV2 scope_ref = 2;
 }
 
 message RunCreatedV2 {
   RunSummaryV2 summary = 1;
+  repeated NodeSnapshotV2 nodes = 2;
+  WorkflowTopologyV2 topology = 3;
 }
 
 message RunStatusChangedV2 {
   RunSummaryV2 summary = 1;
+}
+
+message NodeStatusChangedV2 {
+  string run_id = 1;
+  NodeSnapshotV2 node = 2;
+}
+
+message ActivityAppendedV2 {
+  string run_id = 1;
+  RunActivityDescriptorV2 activity = 2;
+}
+
+// Emitted when flow discovery reloads; replaces the flow list baseline.
+message FlowListChangedV2 {
+  FlowListV2 flow_list = 1;
+}
+
+message FlowReloadStatusV2 {
+  bool reloading = 1;
 }
 
 // Clients must relist and rebaseline from latest_cursor. A server emits this
@@ -687,14 +431,21 @@ message ResetRequiredV2 {
   LifecycleCursorV2 latest_cursor = 2;
 }
 
-// Envelopes are ordered by source_sequence within the complete cursor identity.
+// Envelopes are ordered by server-issued event_ulid within the complete cursor
+// identity. ULIDs need not be adjacent; clients accept only lexicographically
+// later positions and ignore exact replays.
 message RunStatusEnvelopeV2 {
-  uint64 source_sequence = 1;
+  string event_ulid = 1;
   oneof payload {
     RunCreatedV2 run_created = 2;
     RunStatusChangedV2 run_status_changed = 3;
     ResetRequiredV2 reset_required = 4;
+    NodeStatusChangedV2 node_status_changed = 6;
+    ActivityAppendedV2 activity_appended = 7;
+    FlowListChangedV2 flow_list_changed = 8;
+    FlowReloadStatusV2 flow_reload_status = 9;
   }
-  // Complete position for this exact source sequence; retain it to resume.
+  // Complete baseline position for this exact event; retain it to resume.
   LifecycleCursorV2 cursor = 5;
+  ScopeReferenceV2 scope_ref = 10;
 }

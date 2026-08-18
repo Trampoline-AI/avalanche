@@ -1299,11 +1299,15 @@ class UIStore:
             return "baseline generation mismatch"
         if (
             not baseline.operator_instance_id
+            or not baseline.as_of_event_ulid
             or (
                 notice.operator_instance_id
                 and baseline.operator_instance_id != notice.operator_instance_id
             )
-            or baseline.as_of_sequence < notice.observed_sequence
+            or (
+                notice.observed_event_ulid
+                and baseline.as_of_event_ulid < notice.observed_event_ulid
+            )
         ):
             return "invalid baseline identity or high-water"
         return ""
@@ -2370,7 +2374,7 @@ class UIStore:
                     self.provider.acknowledge_stream_reset(
                         notice.generation,
                         baseline.operator_instance_id,
-                        baseline.as_of_sequence,
+                        baseline.as_of_event_ulid,
                     )
                 except Exception as exc:
                     self.run_error = f"Live state reset failed: {exc}"

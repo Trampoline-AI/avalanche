@@ -868,7 +868,7 @@ class MockStateProvider:
         return ResetBaseline(
             generation=notice.generation,
             operator_instance_id=self.operator_instance_id,
-            as_of_sequence=0,
+            as_of_event_ulid=(notice.observed_event_ulid or "00000000000000000000000000"),
             catalog=catalog,
             runs_by_workflow={
                 workflow.selector: tuple(self.list_runs(workflow.selector))
@@ -880,7 +880,7 @@ class MockStateProvider:
         self,
         generation: int,
         operator_instance_id: str,
-        reconciled_sequence: int,
+        reconciled_event_ulid: str,
     ) -> None:
         if self.stream_state != "reset_required":
             raise RuntimeError("stream reset is not required")

@@ -1,7 +1,7 @@
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 
-import type { FlowInfoMsg, RunSnapshotMsg } from "./generated/operator";
+import type { FlowInfoMsg, RunSnapshotMsg } from "./model";
 import { parseRunInput, RunControls } from "./RunControls";
 
 const workflow = {

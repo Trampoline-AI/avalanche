@@ -14,8 +14,12 @@ import {
   RunSummaryMsg,
   TraceDescriptorMsg,
   WorkflowTopologyMsg,
-} from "./generated/operator";
+} from "./model";
 import { emptyProjection, projectionReducer, useOperatorProjection } from "./state";
+
+function eventUlid(sequence: number | string): string {
+  return Number(sequence).toString(16).toUpperCase().padStart(26, "0");
+}
 
 const workflow = FlowInfoMsg.create({
   name: "orders",
@@ -58,18 +62,18 @@ const topology = WorkflowTopologyMsg.create({
 const baseline: StructuralBaseline = {
   catalog: CatalogSnapshotMsg.create({
     operatorInstanceId: "operator-1",
-    asOfSequence: "1",
+    asOfEventUlid: eventUlid(1),
     revision: "1",
     workflows: [workflow],
   }),
-  asOfSequence: "1",
+  asOfEventUlid: eventUlid(1),
   runs: [summary],
 };
 
 function snapshotFor(run: RunSummaryMsg): RunSnapshotMsg {
   return RunSnapshotMsg.create({
     operatorInstanceId: "operator-1",
-    asOfSequence: "1",
+    asOfEventUlid: eventUlid(1),
     summary: run,
     nodes: [node],
     topology,
@@ -77,13 +81,13 @@ function snapshotFor(run: RunSummaryMsg): RunSnapshotMsg {
 }
 
 function envelope(
-  sequence: string,
+  sequence: number | string,
   change: OperatorUpdate["change"] = { oneofKind: undefined },
   operatorInstanceId = "operator-1",
 ): OperatorUpdateEnvelope {
   return OperatorUpdateEnvelope.create({
     operatorInstanceId,
-    payload: { oneofKind: "update", update: { sequence, change } },
+    payload: { oneofKind: "update", update: { eventUlid: eventUlid(sequence), change } },
   });
 }
 
@@ -378,7 +382,7 @@ describe("projectionReducer", () => {
     });
     const atomicSnapshot = RunSnapshotMsg.create({
       operatorInstanceId: "operator-1",
-      asOfSequence: "5",
+      asOfEventUlid: eventUlid(5),
       summary: atomicSummary,
       nodes: [
         NodeSnapshotMsg.create({
@@ -481,7 +485,7 @@ describe("projectionReducer", () => {
       runId: summary.runId,
       snapshot: RunSnapshotMsg.create({
         ...snapshotFor(summary),
-        asOfSequence: "2",
+        asOfEventUlid: eventUlid(2),
       }),
     });
 
@@ -497,7 +501,10 @@ describe("projectionReducer", () => {
       operatorInstanceId: "operator-1",
       payload: {
         oneofKind: "resetRequired",
-        resetRequired: { historyFloor: "2", latestSequence: "8" },
+        resetRequired: {
+          historyFloorEventUlid: eventUlid(2),
+          latestEventUlid: eventUlid(8),
+        },
       },
     });
 
@@ -509,10 +516,68 @@ describe("projectionReducer", () => {
     ).toThrow("epoch changed");
     expect(() =>
       projectionReducer(state, { type: "envelopes", envelopes: [envelope("3")] }),
-    ).toThrow("update gap");
+    ).not.toThrow();
     expect(() => projectionReducer(state, { type: "envelopes", envelopes: [reset] })).toThrow(
       "structural reset",
     );
+  });
+
+  it("rejects an unknown run update before advancing the projection cursor", () => {
+    const state = projectionReducer(emptyProjection, { type: "baseline", baseline });
+
+    expect(() =>
+      projectionReducer(state, {
+        type: "envelopes",
+        envelopes: [
+          envelope("2", {
+            oneofKind: "runStatusChanged",
+            runStatusChanged: {
+              runId: "run-missing",
+              status: "failed",
+              startedAt: 0,
+              endedAt: 0,
+              revision: "1",
+            },
+          }),
+        ],
+      }),
+    ).toThrow("unknown run");
+    expect(state.eventUlid).toBe(eventUlid(1));
+  });
+
+  it("keeps run creation and its following status update live", () => {
+    const created = RunSummaryMsg.create({
+      ...summary,
+      runId: "run-created",
+      status: "pending",
+      createdSequence: "2",
+      revision: "1",
+    });
+    const state = projectionReducer(
+      projectionReducer(emptyProjection, { type: "baseline", baseline }),
+      {
+        type: "envelopes",
+        envelopes: [
+          envelope("2", {
+            oneofKind: "runCreated",
+            runCreated: { summary: created, nodes: [], topology },
+          }),
+          envelope("3", {
+            oneofKind: "runStatusChanged",
+            runStatusChanged: {
+              runId: created.runId,
+              status: "success",
+              startedAt: 1,
+              endedAt: 2,
+              revision: "2",
+            },
+          }),
+        ],
+      },
+    );
+
+    expect(state.eventUlid).toBe(eventUlid(3));
+    expect(state.runs[created.runId]).toMatchObject({ status: "success", revision: "2" });
   });
 });
 
@@ -604,10 +669,10 @@ describe("useOperatorProjection", () => {
     const replacement: StructuralBaseline = {
       catalog: CatalogSnapshotMsg.create({
         ...baseline.catalog,
-        asOfSequence: "8",
+        asOfEventUlid: eventUlid(8),
         revision: "2",
       }),
-      asOfSequence: "8",
+      asOfEventUlid: eventUlid(8),
       runs: [summary],
     };
     const loadBaseline = vi
@@ -625,7 +690,10 @@ describe("useOperatorProjection", () => {
             operatorInstanceId: "operator-1",
             payload: {
               oneofKind: "resetRequired",
-              resetRequired: { historyFloor: "2", latestSequence: "8" },
+              resetRequired: {
+                historyFloorEventUlid: eventUlid(2),
+                latestEventUlid: eventUlid(8),
+              },
             },
           });
         })();
@@ -647,7 +715,7 @@ describe("useOperatorProjection", () => {
     });
     await waitFor(() => expect(selectionSignals).toHaveLength(1));
     act(() => releaseReset.resolve());
-    await waitFor(() => expect(result.current.state.sequence).toBe("8"));
+    await waitFor(() => expect(result.current.state.eventUlid).toBe(eventUlid(8)));
 
     expect(selectionSignals[0].aborted).toBe(true);
     expect(result.current.state.selectedRunStatus).toBe("idle");
@@ -685,13 +753,13 @@ describe("useOperatorProjection", () => {
     await waitFor(() => expect(produced).toBe(true));
     expect(callbacks).toHaveLength(1);
     act(() => callbacks.shift()?.(0));
-    expect(result.current.state.sequence).toBe("257");
+    expect(result.current.state.eventUlid).toBe(eventUlid(257));
     expect(callbacks).toHaveLength(1);
     act(() => callbacks.shift()?.(1));
-    expect(result.current.state.sequence).toBe("513");
+    expect(result.current.state.eventUlid).toBe(eventUlid(513));
     expect(callbacks).toHaveLength(1);
     act(() => callbacks.shift()?.(2));
-    expect(result.current.state.sequence).toBe("601");
+    expect(result.current.state.eventUlid).toBe(eventUlid(601));
     expect(callbacks).toHaveLength(0);
   });
 
@@ -703,10 +771,10 @@ describe("useOperatorProjection", () => {
     const replacement: StructuralBaseline = {
       catalog: CatalogSnapshotMsg.create({
         ...baseline.catalog,
-        asOfSequence: "2000",
+        asOfEventUlid: eventUlid(2000),
         revision: "2",
       }),
-      asOfSequence: "2000",
+      asOfEventUlid: eventUlid(2000),
       runs: [summary],
     };
     const loadBaseline = vi
@@ -730,7 +798,7 @@ describe("useOperatorProjection", () => {
     const api = createApi({ loadBaseline, streamUpdates });
     const { result } = renderHook(() => useOperatorProjection(api));
 
-    await waitFor(() => expect(result.current.state.sequence).toBe("2000"));
+    await waitFor(() => expect(result.current.state.eventUlid).toBe(eventUlid(2000)));
     expect(loadBaseline).toHaveBeenCalledTimes(2);
     expect(streamSignals[0].aborted).toBe(true);
     expect(cancelAnimationFrame).toHaveBeenCalled();
@@ -745,7 +813,23 @@ describe("useOperatorProjection", () => {
         operatorInstanceId: "operator-1",
         payload: {
           oneofKind: "resetRequired",
-          resetRequired: { historyFloor: "2", latestSequence: "8" },
+          resetRequired: {
+            historyFloorEventUlid: eventUlid(2),
+            latestEventUlid: eventUlid(8),
+          },
+        },
+      }),
+    ],
+    [
+      "unknown run status",
+      envelope("2", {
+        oneofKind: "runStatusChanged",
+        runStatusChanged: {
+          runId: "run-missing",
+          status: "failed",
+          startedAt: 0,
+          endedAt: 0,
+          revision: "1",
         },
       }),
     ],
@@ -753,10 +837,10 @@ describe("useOperatorProjection", () => {
     const replacement: StructuralBaseline = {
       catalog: CatalogSnapshotMsg.create({
         ...baseline.catalog,
-        asOfSequence: "8",
+        asOfEventUlid: eventUlid(8),
         revision: "2",
       }),
-      asOfSequence: "8",
+      asOfEventUlid: eventUlid(8),
       runs: [summary],
     };
     const loadBaseline = vi
@@ -778,7 +862,7 @@ describe("useOperatorProjection", () => {
     const api = createApi({ loadBaseline, streamUpdates });
     const { result } = renderHook(() => useOperatorProjection(api));
 
-    await waitFor(() => expect(result.current.state.sequence).toBe("8"));
+    await waitFor(() => expect(result.current.state.eventUlid).toBe(eventUlid(8)));
     expect(loadBaseline).toHaveBeenCalledTimes(2);
     expect(streamSignals[0].aborted).toBe(true);
   });
@@ -818,7 +902,7 @@ describe("useOperatorProjection", () => {
     });
     await waitFor(() => expect(getLatestRunSnapshot).toHaveBeenCalledTimes(1));
     act(() => releaseUpdate.resolve());
-    await waitFor(() => expect(result.current.state.sequence).toBe("2"));
+    await waitFor(() => expect(result.current.state.eventUlid).toBe(eventUlid(2)));
     act(() => stale.resolve(snapshotFor(summary)));
 
     await waitFor(() => expect(getLatestRunSnapshot).toHaveBeenCalledTimes(2));
@@ -829,7 +913,7 @@ describe("useOperatorProjection", () => {
       current.resolve(
         RunSnapshotMsg.create({
           ...snapshotFor(summary),
-          asOfSequence: "2",
+          asOfEventUlid: eventUlid(2),
           nodes: [NodeSnapshotMsg.create({ ...node, status: "complete", revision: "2" })],
         }),
       ),
@@ -884,7 +968,7 @@ describe("useOperatorProjection", () => {
       repaired.resolve(
         RunSnapshotMsg.create({
           ...snapshotFor(summary),
-          asOfSequence: "258",
+          asOfEventUlid: eventUlid(258),
           logPageToken: "logs-through-257",
         }),
       ),
@@ -957,7 +1041,7 @@ describe("useOperatorProjection", () => {
       replacement.resolve(
         RunSnapshotMsg.create({
           ...snapshotFor(summary),
-          asOfSequence: "259",
+          asOfEventUlid: eventUlid(259),
           logPageToken: "replacement-token",
         }),
       ),
@@ -969,7 +1053,7 @@ describe("useOperatorProjection", () => {
       obsolete.resolve(
         RunSnapshotMsg.create({
           ...snapshotFor(summary),
-          asOfSequence: "258",
+          asOfEventUlid: eventUlid(258),
           logPageToken: "obsolete-token",
         }),
       ),

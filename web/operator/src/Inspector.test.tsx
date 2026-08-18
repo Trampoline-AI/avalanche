@@ -8,7 +8,7 @@ import {
   type CatalogSnapshotMsg,
   type FlowInfoMsg,
   type RunSnapshotMsg,
-} from "./generated/operator";
+} from "./model";
 import { Inspector } from "./Inspector";
 
 const declaration = JSON.stringify({
@@ -53,7 +53,7 @@ const workflow: FlowInfoMsg = {
 
 const run: RunSnapshotMsg = {
   operatorInstanceId: "operator-1",
-  asOfSequence: "9",
+  asOfEventUlid: "9",
   summary: {
     runId: "run-1",
     flowName: "agent_flow",
@@ -135,7 +135,7 @@ function eventPage(
 ): AgentEventDescriptorPage {
   return {
     operatorInstanceId: run.operatorInstanceId,
-    asOfSequence: run.asOfSequence,
+    asOfEventUlid: run.asOfEventUlid,
     runId: run.summary!.runId,
     nodeId: "agent_1",
     records,
@@ -160,7 +160,7 @@ function operatorApi(): OperatorApi {
     listAgentEventPage: async () => eventPage(events),
     listLogPage: async () => ({
       operatorInstanceId: run.operatorInstanceId,
-      asOfSequence: run.asOfSequence,
+      asOfEventUlid: run.asOfEventUlid,
       records: [],
       nextPageToken: "",
       nextCursor: "0",

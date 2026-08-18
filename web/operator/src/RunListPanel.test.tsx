@@ -13,7 +13,7 @@ vi.mock("@tanstack/react-virtual", () => ({
   }),
 }));
 
-import { RunSummaryMsg } from "./generated/operator";
+import { RunSummaryMsg } from "./model";
 import { RunListPanel } from "./RunListPanel";
 
 function run(

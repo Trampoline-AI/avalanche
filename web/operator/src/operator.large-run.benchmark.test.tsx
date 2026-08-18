@@ -28,7 +28,7 @@ import {
   RunSnapshotMsg,
   RunSummaryMsg,
   WorkflowTopologyMsg,
-} from "./generated/operator";
+} from "./model";
 import { Inspector } from "./Inspector";
 import { RunLogPane } from "./RunLogPane";
 import { useOperatorProjection } from "./state";
@@ -48,6 +48,14 @@ const DOM_ROW_LIMIT = 120;
 const LARGE_DETAIL_BYTES = 2 * 1024 * 1024;
 const UNIT_RENDER_BUDGET_MS = 10_000;
 
+function eventUlid(sequence: number): string {
+  return sequence.toString(16).toUpperCase().padStart(26, "0");
+}
+
+function eventSequence(eventUlidValue: string): number {
+  return Number.parseInt(eventUlidValue, 16);
+}
+
 function summary(index: number) {
   return RunSummaryMsg.create({
     runId: `run-${index.toString().padStart(5, "0")}`,
@@ -64,7 +72,7 @@ function summary(index: number) {
 const runSummaries = Array.from({ length: RUN_SUMMARY_COUNT }, (_, index) => summary(index));
 const catalog = CatalogSnapshotMsg.create({
   operatorInstanceId: OPERATOR_ID,
-  asOfSequence: "0",
+  asOfEventUlid: eventUlid(0),
   revision: "1",
   scanTargets: [{ alias: "bench", targetPath: "/controlled/bench", kind: "directory" }],
   workflows: [
@@ -86,7 +94,11 @@ const catalog = CatalogSnapshotMsg.create({
     },
   ],
 });
-const baseline: StructuralBaseline = { catalog, asOfSequence: "0", runs: runSummaries };
+const baseline: StructuralBaseline = {
+  catalog,
+  asOfEventUlid: eventUlid(0),
+  runs: runSummaries,
+};
 
 const topology = WorkflowTopologyMsg.create({
   nodeIds: catalog.workflows[0].nodeIds,
@@ -100,7 +112,7 @@ const topology = WorkflowTopologyMsg.create({
 });
 const selectedRun = RunSnapshotMsg.create({
   operatorInstanceId: OPERATOR_ID,
-  asOfSequence: "0",
+  asOfEventUlid: eventUlid(0),
   summary: runSummaries.at(-1),
   topology,
   nodes: catalog.workflows[0].nodeIds.map((nodeId) => ({
@@ -231,7 +243,7 @@ function liveEnvelope(sequence: number) {
     operatorInstanceId: OPERATOR_ID,
     payload: {
       oneofKind: "update",
-      update: { sequence: String(sequence), change },
+      update: { eventUlid: eventUlid(sequence), change },
     },
   });
 }
@@ -246,15 +258,15 @@ function ProjectionProbe({
   const projection = useOperatorProjection(api);
   const { state } = projection;
   useEffect(() => {
-    observedSequences.push(state.sequence);
-  }, [observedSequences, state.sequence]);
+    observedSequences.push(state.eventUlid);
+  }, [observedSequences, state.eventUlid]);
   return (
     <section aria-label="Projection benchmark probe">
       <button type="button" onClick={() => void projection.selectRun(RUN_ID)}>
         Select benchmark run
       </button>
       <output data-testid="run-count">{Object.keys(state.runs).length}</output>
-      <output data-testid="projection-sequence">{state.sequence}</output>
+      <output data-testid="projection-event-ulid">{state.eventUlid}</output>
       <output data-testid="live-log-count">{state.liveLogs[RUN_ID]?.length ?? 0}</output>
       <output data-testid="live-event-count">
         {state.liveEvents[`${RUN_ID}:${SELECTED_NODE}`]?.length ?? 0}
@@ -288,7 +300,7 @@ describe("large retained-run browser benchmark", () => {
     const getLatestRunSnapshot = vi.fn(async () =>
       RunSnapshotMsg.create({
         ...selectedRun,
-        asOfSequence: String(yieldedUpdates),
+        asOfEventUlid: eventUlid(yieldedUpdates),
       }),
     );
     const api: OperatorApi = {
@@ -334,18 +346,18 @@ describe("large retained-run browser benchmark", () => {
     await waitFor(() => expect(yieldedUpdates).toBe(ENVELOPE_COUNT));
     await waitFor(() => expect(scheduler.callbacks.size).toBe(1));
 
-    expect(screen.getByTestId("projection-sequence")).toHaveTextContent("0");
+    expect(screen.getByTestId("projection-event-ulid")).toHaveTextContent(eventUlid(0));
     while (scheduler.callbacks.size > 0) await scheduler.flushOne();
 
     await waitFor(() =>
-      expect(screen.getByTestId("projection-sequence")).toHaveTextContent(
-        String(ENVELOPE_COUNT),
+      expect(screen.getByTestId("projection-event-ulid")).toHaveTextContent(
+        eventUlid(ENVELOPE_COUNT),
       ),
     );
     expect(Number(screen.getByTestId("live-log-count").textContent)).toBeLessThanOrEqual(256);
     expect(Number(screen.getByTestId("live-event-count").textContent)).toBeLessThanOrEqual(256);
     const committedSequences = observedSequences
-      .map(Number)
+      .map(eventSequence)
       .filter((value, index, values) => index === 0 || value !== values[index - 1]);
     const frameDeltas = committedSequences
       .slice(1)
@@ -395,7 +407,7 @@ describe("large retained-run browser benchmark", () => {
         const lower = Math.max(1, upper - request.pageSize + 1);
         return {
           operatorInstanceId: OPERATOR_ID,
-          asOfSequence: selectedRun.asOfSequence,
+          asOfEventUlid: selectedRun.asOfEventUlid,
           runId: RUN_ID,
           nodeId: SELECTED_NODE,
           records: agentEvents.slice(lower - 1, upper).reverse(),
@@ -407,7 +419,7 @@ describe("large retained-run browser benchmark", () => {
       const records = agentEvents.slice(start, start + request.pageSize);
       return {
         operatorInstanceId: OPERATOR_ID,
-        asOfSequence: selectedRun.asOfSequence,
+        asOfEventUlid: selectedRun.asOfEventUlid,
         runId: RUN_ID,
         nodeId: SELECTED_NODE,
         records,
@@ -423,7 +435,7 @@ describe("large retained-run browser benchmark", () => {
       const records = selectedLogs.slice(Math.max(0, end - request.pageSize), end).reverse();
       return {
         operatorInstanceId: OPERATOR_ID,
-        asOfSequence: selectedRun.asOfSequence,
+        asOfEventUlid: selectedRun.asOfEventUlid,
         records,
         nextPageToken: end === selectedLogs.length ? "logs:next" : "logs:next-2",
         nextCursor: records.at(-1)?.sequence ?? request.beforeSequence,

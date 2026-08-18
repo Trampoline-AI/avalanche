@@ -5,10 +5,11 @@ import type {
   AgentEventDescriptorMsg,
   CatalogSnapshotMsg,
   LogRecordDescriptorMsg,
+  OperatorUpdate,
   OperatorUpdateEnvelope,
   RunSnapshotMsg,
   RunSummaryMsg,
-} from "./generated/operator";
+} from "./model";
 
 const MAX_PENDING_ENVELOPES = 1024;
 const MAX_ENVELOPES_PER_FRAME = 256;
@@ -30,7 +31,8 @@ export interface OperatorProjection {
   liveEventRepairWatermarks: Record<string, string>;
   liveLogRepairWatermarks: Record<string, string>;
   operatorInstanceId: string;
-  sequence: string;
+  eventUlid: string;
+  lastUpdate?: OperatorUpdate;
   connection: "connecting" | "live" | "reconnecting";
   workflowReloading: boolean;
   error?: string;
@@ -55,7 +57,7 @@ export const emptyProjection: OperatorProjection = {
   liveEventRepairWatermarks: {},
   liveLogRepairWatermarks: {},
   operatorInstanceId: "",
-  sequence: "0",
+  eventUlid: "",
   connection: "connecting",
   workflowReloading: false,
 };
@@ -98,7 +100,7 @@ function snapshotCanCommit(
   if (
     snapshot.operatorInstanceId !== state.operatorInstanceId ||
     snapshot.summary?.runId !== runId ||
-    BigInt(snapshot.asOfSequence) < BigInt(state.sequence)
+    snapshot.asOfEventUlid < state.eventUlid
   ) {
     return false;
   }
@@ -118,6 +120,20 @@ function withoutKey<T>(buckets: Record<string, T>, key: string): Record<string, 
   return Object.fromEntries(Object.entries(buckets).filter(([candidate]) => candidate !== key));
 }
 
+function runIdForChange(change: OperatorUpdate["change"]): string {
+  return change.oneofKind === "runStatusChanged"
+    ? change.runStatusChanged.runId
+    : change.oneofKind === "nodeStatusChanged"
+      ? change.nodeStatusChanged.runId
+      : change.oneofKind === "logAppended"
+        ? change.logAppended.runId
+        : change.oneofKind === "agentEventAppended"
+          ? change.agentEventAppended.runId
+          : change.oneofKind === "traceFinalized"
+            ? change.traceFinalized.runId
+            : "";
+}
+
 function applyEnvelope(
   state: OperatorProjection,
   envelope: OperatorUpdateEnvelope,
@@ -129,11 +145,25 @@ function applyEnvelope(
     throw new Error("Operator requested a structural reset");
   }
   const update = envelope.payload.update;
-  if (BigInt(update.sequence) !== BigInt(state.sequence) + 1n) {
-    throw new Error(`Operator update gap after sequence ${state.sequence}`);
+  if (!update.eventUlid) {
+    throw new Error("Operator update omitted its event ULID");
+  }
+  if (update.eventUlid < state.eventUlid) {
+    throw new Error(`Operator event ULID moved backwards from ${state.eventUlid}`);
+  }
+  if (update.eventUlid === state.eventUlid) {
+    if (state.lastUpdate && JSON.stringify(state.lastUpdate) === JSON.stringify(update)) {
+      return state;
+    }
+    throw new Error("Operator replay reused an event ULID with different content");
   }
 
-  const next: OperatorProjection = { ...state, sequence: update.sequence, error: undefined };
+  const next: OperatorProjection = {
+    ...state,
+    eventUlid: update.eventUlid,
+    lastUpdate: update,
+    error: undefined,
+  };
   const change = update.change;
   if (change.oneofKind === "workflowReloadStatus") {
     next.workflowReloading = change.workflowReloadStatus.reloading;
@@ -149,21 +179,13 @@ function applyEnvelope(
     return next;
   }
 
-  const runId =
-    change.oneofKind === "runStatusChanged"
-      ? change.runStatusChanged.runId
-      : change.oneofKind === "nodeStatusChanged"
-        ? change.nodeStatusChanged.runId
-        : change.oneofKind === "logAppended"
-          ? change.logAppended.runId
-          : change.oneofKind === "agentEventAppended"
-            ? change.agentEventAppended.runId
-            : change.oneofKind === "traceFinalized"
-              ? change.traceFinalized.runId
-              : "";
+  const runId = runIdForChange(change);
+  if (runId && state.runs[runId] === undefined) {
+    throw new Error(`Operator update referenced unknown run ${runId}`);
+  }
   const selectedSnapshot = state.selectedRunId === runId ? state.selectedRun : undefined;
   const selected =
-    selectedSnapshot && BigInt(update.sequence) > BigInt(selectedSnapshot.asOfSequence)
+    selectedSnapshot && update.eventUlid > selectedSnapshot.asOfEventUlid
       ? selectedSnapshot
       : undefined;
 
@@ -214,8 +236,7 @@ function applyEnvelope(
   } else if (
     change.oneofKind === "logAppended" &&
     state.selectedRunId === runId &&
-    (selectedSnapshot === undefined ||
-      BigInt(update.sequence) > BigInt(selectedSnapshot.asOfSequence)) &&
+    (selectedSnapshot === undefined || update.eventUlid > selectedSnapshot.asOfEventUlid) &&
     change.logAppended.log
   ) {
     const log = change.logAppended.log;
@@ -233,8 +254,7 @@ function applyEnvelope(
   } else if (
     change.oneofKind === "agentEventAppended" &&
     state.selectedRunId === runId &&
-    (selectedSnapshot === undefined ||
-      BigInt(update.sequence) > BigInt(selectedSnapshot.asOfSequence)) &&
+    (selectedSnapshot === undefined || update.eventUlid > selectedSnapshot.asOfEventUlid) &&
     change.agentEventAppended.event
   ) {
     const event = change.agentEventAppended.event;
@@ -276,7 +296,7 @@ export function projectionReducer(
       catalog: action.baseline.catalog,
       runs: Object.fromEntries(action.baseline.runs.map((run) => [run.runId, run])),
       operatorInstanceId: action.baseline.catalog.operatorInstanceId,
-      sequence: action.baseline.asOfSequence,
+      eventUlid: action.baseline.asOfEventUlid,
       connection: "live",
     };
   }
@@ -353,15 +373,15 @@ export function useOperatorProjection(api: OperatorApi) {
   stateRef.current = state;
   const projectionCursor = useRef({
     operatorInstanceId: state.operatorInstanceId,
-    sequence: state.sequence,
+    eventUlid: state.eventUlid,
   });
   if (
     projectionCursor.current.operatorInstanceId !== state.operatorInstanceId ||
-    BigInt(state.sequence) > BigInt(projectionCursor.current.sequence)
+    state.eventUlid > projectionCursor.current.eventUlid
   ) {
     projectionCursor.current = {
       operatorInstanceId: state.operatorInstanceId,
-      sequence: state.sequence,
+      eventUlid: state.eventUlid,
     };
   }
 
@@ -404,6 +424,7 @@ export function useOperatorProjection(api: OperatorApi) {
         const cycle = new AbortController();
         cycleController.current = cycle;
         let pending: OperatorUpdateEnvelope[] = [];
+        let pendingProjection = stateRef.current;
         let retryAfterCycle = 0;
 
         const clearPending = () => {
@@ -427,7 +448,7 @@ export function useOperatorProjection(api: OperatorApi) {
               if (latest.payload.oneofKind === "update") {
                 projectionCursor.current = {
                   operatorInstanceId: latest.operatorInstanceId,
-                  sequence: latest.payload.update.sequence,
+                  eventUlid: latest.payload.update.eventUlid,
                 };
               }
               dispatch({ type: "envelopes", envelopes });
@@ -444,30 +465,40 @@ export function useOperatorProjection(api: OperatorApi) {
           abortSelection();
           projectionCursor.current = {
             operatorInstanceId: baseline.catalog.operatorInstanceId,
-            sequence: baseline.asOfSequence,
+            eventUlid: baseline.asOfEventUlid,
           };
+          pendingProjection = projectionReducer(pendingProjection, {
+            type: "baseline",
+            baseline,
+          });
           dispatch({ type: "baseline", baseline });
           console.info("Connected to Avalanche operator");
           retryMilliseconds = INITIAL_RETRY_MILLISECONDS;
 
-          let expectedSequence = baseline.asOfSequence;
+          let expectedEventUlid = baseline.asOfEventUlid;
           for await (const envelope of api.streamUpdates(
             baseline.catalog.operatorInstanceId,
-            expectedSequence,
+            expectedEventUlid,
             cycle.signal,
           )) {
             if (cycle.signal.aborted || lifecycle.signal.aborted) break;
             if (
               envelope.operatorInstanceId !== baseline.catalog.operatorInstanceId ||
               envelope.payload.oneofKind !== "update" ||
-              BigInt(envelope.payload.update.sequence) !== BigInt(expectedSequence) + 1n ||
+              envelope.payload.update.eventUlid < expectedEventUlid ||
               pending.length >= MAX_PENDING_ENVELOPES
             ) {
               cycle.abort();
               break;
             }
+            try {
+              pendingProjection = applyEnvelope(pendingProjection, envelope);
+            } catch {
+              cycle.abort();
+              break;
+            }
             pending.push(envelope);
-            expectedSequence = envelope.payload.update.sequence;
+            expectedEventUlid = envelope.payload.update.eventUlid;
             scheduleFrame();
           }
           clearPending();
@@ -539,7 +570,7 @@ export function useOperatorProjection(api: OperatorApi) {
           }
           if (
             projectionCursor.current.operatorInstanceId !== operatorInstanceId ||
-            BigInt(snapshot.asOfSequence) < BigInt(projectionCursor.current.sequence)
+            snapshot.asOfEventUlid < projectionCursor.current.eventUlid
           ) {
             continue;
           }

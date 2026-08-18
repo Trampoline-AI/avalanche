@@ -29,7 +29,7 @@ export default defineConfig({
     },
     port: 5173,
     proxy: {
-      "/avalanche.operator.OperatorService": {
+      "/avalanche.operator.OperatorServiceV2": {
         target: "http://127.0.0.1:7435",
       },
     },

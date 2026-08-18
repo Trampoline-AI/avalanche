@@ -1,130 +1,268 @@
 import { describe, expect, it, vi } from "vitest";
 
 import { GrpcWebOperatorApi, type AgentEventPageRequest, type LogPageRequest } from "./api";
-import type { OperatorServiceClient } from "./generated/operator.client";
+import {
+  ActivityDetailChunkV2,
+  ActivityDetailRefV2,
+  ContinuationRefV2,
+  FlowListV2,
+  LifecycleCursorV2,
+  NodeSnapshotV2,
+  PageOrderV2,
+  RunActivityDescriptorV2,
+  RunActivityPageV2,
+  RunSnapshotV2,
+  RunStatusEnvelopeV2,
+  RunSummaryPageV2,
+  RunSummaryV2,
+  ScopeReferenceV2,
+  TraceDescriptorV2,
+} from "./generated/operator";
+import type { IOperatorServiceV2Client } from "./generated/operator.client";
 import {
   AgentEventDescriptorMsg,
-  AgentEventPage,
-  CatalogSnapshotMsg,
   DescriptorPageOrder,
-  DetailChunk,
-  LogPage,
   LogRecordDescriptorMsg,
   RunSnapshotMsg,
   RunSummaryMsg,
-  RunSummaryPage,
-} from "./generated/operator";
+} from "./model";
 
-function apiWith(client: object): GrpcWebOperatorApi {
-  return new GrpcWebOperatorApi(
-    "http://operator.test",
-    client as unknown as OperatorServiceClient,
-  );
+type ClientOverrides = Partial<Record<keyof IOperatorServiceV2Client, unknown>>;
+
+function apiWith(client: ClientOverrides): GrpcWebOperatorApi {
+  return new GrpcWebOperatorApi("http://operator.test", client as IOperatorServiceV2Client);
 }
+
+function scope(reference = "operator-1") {
+  return ScopeReferenceV2.create({ reference });
+}
+
+function eventUlid(sequence: number): string {
+  return sequence.toString(16).toUpperCase().padStart(26, "0");
+}
+
+function cursor(sequence: number, _stream = "operator-events") {
+  const stream = "operator-events";
+  return LifecycleCursorV2.create({
+    stream,
+    topologyFingerprint: `${stream}-topology`,
+    streamGeneration: "1",
+    retainedFloorEventUlid: eventUlid(Math.min(sequence, 1)),
+    eventUlid: eventUlid(sequence),
+  });
+}
+
+function continuation(continuationId: string, sequence = 20, stream = "activity:run-1:logs") {
+  return ContinuationRefV2.create({
+    scopeRef: scope(),
+    continuationId,
+    cursor: cursor(sequence, stream),
+  });
+}
+
+function detailRef(objectKey: string) {
+  return ActivityDetailRefV2.create({
+    runId: "run-1",
+    scopeRef: scope(),
+    activityId: objectKey,
+    runSequence: "1",
+    objectUri: `local://detail/${objectKey}`,
+    objectKey,
+    sha256: "a".repeat(64),
+    sizeBytes: "0",
+  });
+}
+
 function detailStream(parts: Uint8Array[]) {
   return (async function* () {
-    for (const data of parts) yield DetailChunk.create({ data });
+    for (const data of parts) yield ActivityDetailChunkV2.create({ data });
   })();
 }
 
 describe("GrpcWebOperatorApi", () => {
   it("loads a summary-only baseline without requesting run snapshots", async () => {
     const signal = new AbortController().signal;
-    const catalog = CatalogSnapshotMsg.create({
-      operatorInstanceId: "operator-1",
-      asOfSequence: "8",
-      revision: "3",
+    const summary = RunSummaryMsg.create({
+      runId: "run-1",
+      flowName: "flows.py::orders",
+      workflowId: "flows.py::orders",
+      revision: "2",
     });
-    const summary = RunSummaryMsg.create({ runId: "run-1", revision: "2" });
-    const getCatalog = vi.fn(() => ({ response: Promise.resolve(catalog) }));
+    const discoverFlows = vi.fn(() => ({
+      response: Promise.resolve(
+        FlowListV2.create({ cursor: cursor(8, "flows"), scopeRef: scope() }),
+      ),
+    }));
     const listRunSummaries = vi.fn(() => ({
       response: Promise.resolve(
-        RunSummaryPage.create({
-          operatorInstanceId: "operator-1",
-          asOfSequence: "8",
-          runs: [summary],
+        RunSummaryPageV2.create({
+          cursor: cursor(8),
+          scopeRef: scope(),
+          runs: [
+            RunSummaryV2.create({
+              runId: summary.runId,
+              workflowSelector: summary.workflowId,
+              revision: summary.revision,
+            }),
+          ],
         }),
       ),
     }));
     const getRunSnapshot = vi.fn();
-    const getLatestRunSnapshot = vi.fn();
-    const api = apiWith({
-      getCatalog,
-      listRunSummaries,
-      getRunSnapshot,
-      getLatestRunSnapshot,
-    });
+    const api = apiWith({ discoverFlows, listRunSummaries, getRunSnapshot });
 
-    await expect(api.loadBaseline(signal)).resolves.toEqual({
-      catalog,
-      asOfSequence: "8",
-      runs: [summary],
+    const baseline = await api.loadBaseline(signal);
+
+    expect(baseline.catalog).toMatchObject({
+      operatorInstanceId: "operator-1",
+      asOfEventUlid: eventUlid(8),
+      workflows: [],
+      scanTargets: [],
+      diagnostics: [],
     });
+    expect(baseline.runs).toEqual([summary]);
     expect(listRunSummaries).toHaveBeenCalledOnce();
     expect(listRunSummaries).toHaveBeenCalledWith(
-      { workflowSelector: "", pageSize: 100, pageToken: "" },
+      { workflowSelector: "", pageSize: 100 },
       { abort: signal },
     );
-    expect(getCatalog).toHaveBeenCalledTimes(2);
-    expect(getCatalog).toHaveBeenNthCalledWith(1, {}, { abort: signal });
-    expect(getCatalog).toHaveBeenNthCalledWith(2, {}, { abort: signal });
+    expect(discoverFlows).toHaveBeenCalledTimes(2);
+    expect(discoverFlows).toHaveBeenNthCalledWith(1, { pageSize: 200 }, { abort: signal });
+    expect(discoverFlows).toHaveBeenNthCalledWith(2, { pageSize: 200 }, { abort: signal });
     expect(getRunSnapshot).not.toHaveBeenCalled();
-    expect(getLatestRunSnapshot).not.toHaveBeenCalled();
+  });
+
+  it("preserves a V2 workflow selector on a live run-created summary", async () => {
+    const envelope = RunStatusEnvelopeV2.create({
+      eventUlid: eventUlid(9),
+      cursor: cursor(9, "operator-events"),
+      scopeRef: scope(),
+      payload: {
+        oneofKind: "runCreated",
+        runCreated: {
+          summary: RunSummaryV2.create({
+            runId: "run-live",
+            workflowSelector: "flows.py::orders",
+          }),
+          nodes: [],
+        },
+      },
+    });
+    const watchRunStatus = vi.fn(() => ({
+      responses: (async function* () {
+        yield envelope;
+      })(),
+    }));
+    const api = apiWith({ watchRunStatus });
+
+    const updates = [];
+    for await (const update of api.streamUpdates("operator-1", eventUlid(0))) {
+      updates.push(update);
+    }
+
+    expect(updates).toMatchObject([
+      {
+        payload: {
+          update: {
+            change: {
+              runCreated: {
+                summary: { workflowId: "flows.py::orders" },
+              },
+            },
+          },
+        },
+      },
+    ]);
+    expect(watchRunStatus).toHaveBeenCalledWith(
+      { scopeRef: { reference: "operator-1" } },
+      undefined,
+    );
   });
 
   it("accepts a stable catalog when non-catalog updates advance the run baseline", async () => {
-    const catalog = CatalogSnapshotMsg.create({
-      operatorInstanceId: "operator-1",
-      asOfSequence: "0",
-      revision: "3",
-    });
     const summary = RunSummaryMsg.create({ runId: "run-1", revision: "2" });
-    const getCatalog = vi.fn(() => ({ response: Promise.resolve(catalog) }));
+    const discoverFlows = vi.fn(() => ({
+      response: Promise.resolve(
+        FlowListV2.create({ cursor: cursor(0, "flows"), scopeRef: scope() }),
+      ),
+    }));
     const listRunSummaries = vi.fn(() => ({
       response: Promise.resolve(
-        RunSummaryPage.create({
-          operatorInstanceId: "operator-1",
-          asOfSequence: "2",
-          runs: [summary],
+        RunSummaryPageV2.create({
+          cursor: cursor(2),
+          scopeRef: scope(),
+          runs: [RunSummaryV2.create({ runId: summary.runId, revision: summary.revision })],
         }),
       ),
     }));
-    const api = apiWith({ getCatalog, listRunSummaries });
+    const api = apiWith({ discoverFlows, listRunSummaries });
 
-    await expect(api.loadBaseline()).resolves.toEqual({
-      catalog,
-      asOfSequence: "2",
-      runs: [summary],
+    const baseline = await api.loadBaseline();
+
+    expect(baseline.catalog).toMatchObject({
+      operatorInstanceId: "operator-1",
+      asOfEventUlid: eventUlid(0),
     });
+    expect(baseline.asOfEventUlid).toBe(eventUlid(2));
+    expect(baseline.runs).toEqual([summary]);
   });
 
-  it("requests exactly one typed log and event page with filters, order, and cancellation", async () => {
+  it("requests exactly one typed activity page for logs and events", async () => {
     const signal = new AbortController().signal;
-    const log = LogRecordDescriptorMsg.create({ sequence: "10", nodeId: "agent" });
-    const event = AgentEventDescriptorMsg.create({ eventSequence: "3" });
-    const listLogs = vi.fn(() => ({
+    const log = LogRecordDescriptorMsg.create({
+      sequence: "10",
+      nodeId: "agent",
+      bodyToken: "log-body",
+    });
+    const event = AgentEventDescriptorMsg.create({
+      eventSequence: "3",
+      bodyToken: "event-body",
+    });
+    const logPage = continuation("log-page", 20, "activity:run-1:logs");
+    const eventPage = continuation("event-page", 20, "activity:run-1:agent");
+    const getRunSnapshot = vi.fn(() => ({
       response: Promise.resolve(
-        LogPage.create({
-          operatorInstanceId: "operator-1",
-          asOfSequence: "20",
-          logs: [log],
-          nextPageToken: "log-next",
+        RunSnapshotV2.create({
+          cursor: cursor(20, "run:run-1"),
+          scopeRef: scope(),
+          summary: RunSummaryV2.create({ runId: "run-1" }),
+          logContinuation: logPage,
+          nodes: [NodeSnapshotV2.create({ nodeId: "agent", activityContinuation: eventPage })],
         }),
       ),
     }));
-    const listAgentEvents = vi.fn(() => ({
+    const listRunActivity = vi.fn((request: { nodeId: string }) => ({
       response: Promise.resolve(
-        AgentEventPage.create({
-          operatorInstanceId: "operator-1",
-          asOfSequence: "20",
+        RunActivityPageV2.create({
+          cursor: cursor(20, request.nodeId ? "activity:run-1:agent" : "activity:run-1:logs"),
           runId: "run-1",
-          nodeId: "agent",
-          events: [event],
-          nextPageToken: "event-next",
+          scopeRef: scope(),
+          activities: [
+            request.nodeId
+              ? RunActivityDescriptorV2.create({
+                  runSequence: "3",
+                  kind: "agent_event",
+                  nodeId: "agent",
+                  detailRef: detailRef("event-body"),
+                })
+              : RunActivityDescriptorV2.create({
+                  runSequence: "10",
+                  kind: "log",
+                  nodeId: "agent",
+                  detailRef: detailRef("log-body"),
+                }),
+          ],
+          nextPage: continuation(
+            request.nodeId ? "event-next" : "log-next",
+            20,
+            request.nodeId ? "activity:run-1:agent" : "activity:run-1:logs",
+          ),
         }),
       ),
     }));
-    const api = apiWith({ listLogs, listAgentEvents });
+    const api = apiWith({ getRunSnapshot, listRunActivity });
+    await api.getLatestRunSnapshot("run-1", "operator-1");
+
     const logRequest: LogPageRequest = {
       pageToken: "log-page",
       afterSequence: "0",
@@ -133,7 +271,7 @@ describe("GrpcWebOperatorApi", () => {
       nodeId: "agent",
       order: DescriptorPageOrder.NEWEST_FIRST,
       expectedOperatorInstanceId: "operator-1",
-      expectedAsOfSequence: "20",
+      expectedAsOfEventUlid: eventUlid(20),
     };
     const eventRequest: AgentEventPageRequest = {
       pageToken: "event-page",
@@ -142,64 +280,87 @@ describe("GrpcWebOperatorApi", () => {
       pageSize: 30,
       order: DescriptorPageOrder.FORWARD,
       expectedOperatorInstanceId: "operator-1",
-      expectedAsOfSequence: "20",
+      expectedAsOfEventUlid: eventUlid(20),
       expectedRunId: "run-1",
       expectedNodeId: "agent",
     };
 
-    await expect(api.listLogPage(logRequest, signal)).resolves.toEqual({
+    await expect(api.listLogPage(logRequest, signal)).resolves.toMatchObject({
       operatorInstanceId: "operator-1",
-      asOfSequence: "20",
+      asOfEventUlid: eventUlid(20),
       records: [log],
       nextPageToken: "log-next",
       nextCursor: "10",
     });
-    await expect(api.listAgentEventPage(eventRequest, signal)).resolves.toEqual({
+    await expect(api.listAgentEventPage(eventRequest, signal)).resolves.toMatchObject({
       operatorInstanceId: "operator-1",
-      asOfSequence: "20",
+      asOfEventUlid: eventUlid(20),
       runId: "run-1",
       nodeId: "agent",
-      records: [event],
+      records: [
+        expect.objectContaining({
+          eventSequence: event.eventSequence,
+          sizeBytes: event.sizeBytes,
+          bodyToken: event.bodyToken,
+          invocationId: event.invocationId,
+          eventKind: event.eventKind,
+          error: event.error,
+          toolCount: event.toolCount,
+          predictCount: event.predictCount,
+        }),
+      ],
       nextPageToken: "event-next",
       nextCursor: "3",
     });
-    expect(listLogs).toHaveBeenCalledOnce();
-    expect(listLogs).toHaveBeenCalledWith(
+    expect(listRunActivity).toHaveBeenCalledTimes(2);
+    expect(listRunActivity).toHaveBeenNthCalledWith(
+      1,
       {
-        pageToken: "log-page",
-        afterSequence: "0",
-        beforeSequence: "11",
+        runId: "run-1",
         pageSize: 25,
-        nodeId: "agent",
-        order: DescriptorPageOrder.NEWEST_FIRST,
+        continuation: logPage,
+        nodeId: "",
+        order: PageOrderV2.NEWEST_FIRST,
       },
       { abort: signal },
     );
-    expect(listAgentEvents).toHaveBeenCalledOnce();
-    expect(listAgentEvents).toHaveBeenCalledWith(
+    expect(listRunActivity).toHaveBeenNthCalledWith(
+      2,
       {
-        pageToken: "event-page",
-        afterEventSequence: "2",
-        beforeEventSequence: "0",
+        runId: "run-1",
         pageSize: 30,
-        order: DescriptorPageOrder.FORWARD,
+        continuation: eventPage,
+        nodeId: "agent",
+        order: PageOrderV2.FORWARD,
       },
       { abort: signal },
     );
   });
 
   it("rejects a page that cannot advance its continuation", async () => {
-    const api = apiWith({
-      listLogs: vi.fn(() => ({
-        response: Promise.resolve(
-          LogPage.create({
-            operatorInstanceId: "operator-1",
-            asOfSequence: "20",
-            nextPageToken: "same-page",
-          }),
-        ),
-      })),
-    });
+    const samePage = continuation("same-page", 20, "activity:run-1:logs");
+    const getRunSnapshot = vi.fn(() => ({
+      response: Promise.resolve(
+        RunSnapshotV2.create({
+          cursor: cursor(20, "run:run-1"),
+          scopeRef: scope(),
+          summary: RunSummaryV2.create({ runId: "run-1" }),
+          logContinuation: samePage,
+        }),
+      ),
+    }));
+    const listRunActivity = vi.fn(() => ({
+      response: Promise.resolve(
+        RunActivityPageV2.create({
+          cursor: cursor(20, "activity:run-1:logs"),
+          runId: "run-1",
+          scopeRef: scope(),
+          nextPage: samePage,
+        }),
+      ),
+    }));
+    const api = apiWith({ getRunSnapshot, listRunActivity });
+    await api.getLatestRunSnapshot("run-1", "operator-1");
 
     await expect(
       api.listLogPage({
@@ -210,30 +371,73 @@ describe("GrpcWebOperatorApi", () => {
         nodeId: "",
         order: DescriptorPageOrder.FORWARD,
         expectedOperatorInstanceId: "operator-1",
-        expectedAsOfSequence: "20",
+        expectedAsOfEventUlid: eventUlid(20),
       }),
     ).rejects.toThrow("Log pagination made no progress");
   });
 
   it("propagates cancellation to latest snapshots and update streams", async () => {
     const signal = new AbortController().signal;
-    const snapshot = RunSnapshotMsg.create({ operatorInstanceId: "operator-1" });
-    const getLatestRunSnapshot = vi.fn(() => ({ response: Promise.resolve(snapshot) }));
-    const responses = detailStream([]);
-    const streamOperatorUpdates = vi.fn(() => ({ responses }));
-    const api = apiWith({ getLatestRunSnapshot, streamOperatorUpdates });
+    const snapshot = RunSnapshotV2.create({ scopeRef: scope() });
+    const getRunSnapshot = vi.fn(() => ({ response: Promise.resolve(snapshot) }));
+    const responses = (async function* () {})();
+    const watchRunStatus = vi.fn(() => ({ responses }));
+    const api = apiWith({ getRunSnapshot, watchRunStatus });
 
-    await expect(api.getLatestRunSnapshot("run-1", "operator-1", signal)).resolves.toBe(
-      snapshot,
+    await expect(api.getLatestRunSnapshot("run-1", "operator-1", signal)).resolves.toEqual(
+      RunSnapshotMsg.create({ operatorInstanceId: "operator-1" }),
     );
-    expect(api.streamUpdates("operator-1", "9", signal)).toBe(responses);
-    expect(getLatestRunSnapshot).toHaveBeenCalledWith(
-      { runId: "run-1", operatorInstanceId: "operator-1" },
+    const updates = [];
+    for await (const update of api.streamUpdates("operator-1", eventUlid(9), signal)) {
+      updates.push(update);
+    }
+
+    expect(updates).toEqual([]);
+    expect(getRunSnapshot).toHaveBeenCalledWith({ runId: "run-1" }, { abort: signal });
+    expect(watchRunStatus).toHaveBeenCalledWith(
+      { scopeRef: { reference: "operator-1" } },
       { abort: signal },
     );
-    expect(streamOperatorUpdates).toHaveBeenCalledWith(
-      { operatorInstanceId: "operator-1", afterSequence: "9" },
-      { abort: signal },
+  });
+
+  it("does not let a flow cursor overwrite an event cursor with the same sequence", async () => {
+    const eventCursor = cursor(7, "operator-events");
+    const watchRunStatus = vi.fn(() => ({
+      responses: (async function* () {
+        yield RunStatusEnvelopeV2.create({
+          eventUlid: eventUlid(7),
+          cursor: eventCursor,
+          scopeRef: scope(),
+          payload: {
+            oneofKind: "flowListChanged",
+            flowListChanged: {
+              flowList: FlowListV2.create({
+                cursor: cursor(7, "flows"),
+                scopeRef: scope(),
+              }),
+            },
+          },
+        });
+      })(),
+    }));
+    const api = apiWith({ watchRunStatus });
+
+    for await (const update of api.streamUpdates("operator-1", eventUlid(0))) {
+      expect(update).toBeDefined();
+    }
+    for await (const update of api.streamUpdates("operator-1", eventUlid(7))) {
+      expect(update).toBeDefined();
+    }
+
+    expect(watchRunStatus).toHaveBeenNthCalledWith(
+      1,
+      { scopeRef: { reference: "operator-1" } },
+      undefined,
+    );
+    expect(watchRunStatus).toHaveBeenNthCalledWith(
+      2,
+      { afterCursor: eventCursor, scopeRef: { reference: "operator-1" } },
+      undefined,
     );
   });
 
@@ -243,17 +447,49 @@ describe("GrpcWebOperatorApi", () => {
     const json = encoder.encode('{"message":"A😀B"}');
     const emojiStart = json.indexOf(0xf0);
     const text = encoder.encode("plain log: not JSON }");
-    const readDetail = vi.fn(({ bodyToken }: { bodyToken: string }) => ({
-      responses:
-        bodyToken === "json-body"
-          ? detailStream([
-              json.slice(0, emojiStart + 2),
-              json.slice(emojiStart + 2, emojiStart + 3),
-              json.slice(emojiStart + 3),
-            ])
-          : detailStream([text.slice(0, 7), text.slice(7)]),
+    const readActivityDetail = vi.fn(
+      ({ detailRef: reference }: { detailRef?: ActivityDetailRefV2 }) => ({
+        responses:
+          reference?.objectKey === "json-body"
+            ? detailStream([
+                json.slice(0, emojiStart + 2),
+                json.slice(emojiStart + 2, emojiStart + 3),
+                json.slice(emojiStart + 3),
+              ])
+            : detailStream([text.slice(0, 7), text.slice(7)]),
+      }),
+    );
+    const jsonRef = detailRef("json-body");
+    const textRef = detailRef("text-body");
+    const getRunSnapshot = vi.fn(() => ({
+      response: Promise.resolve(
+        RunSnapshotV2.create({
+          cursor: cursor(1, "run:run-1"),
+          scopeRef: scope(),
+          summary: RunSummaryV2.create({ runId: "run-1" }),
+          nodes: [
+            NodeSnapshotV2.create({
+              nodeId: "json",
+              trace: TraceDescriptorV2.create({
+                available: true,
+                revision: "1",
+                detailRef: jsonRef,
+              }),
+            }),
+            NodeSnapshotV2.create({
+              nodeId: "text",
+              trace: TraceDescriptorV2.create({
+                available: true,
+                revision: "1",
+                detailRef: textRef,
+              }),
+            }),
+          ],
+        }),
+      ),
     }));
-    const api = apiWith({ readDetail });
+    const api = apiWith({ readActivityDetail, getRunSnapshot });
+    await api.getLatestRunSnapshot("run-1", "operator-1", signal);
 
     await expect(api.readJsonDetail("json-body", signal)).resolves.toEqual({
       message: "A😀B",
@@ -261,15 +497,16 @@ describe("GrpcWebOperatorApi", () => {
     await expect(api.readTextDetail("text-body", signal)).resolves.toBe(
       "plain log: not JSON }",
     );
-    expect(readDetail).toHaveBeenNthCalledWith(
-      1,
-      { bodyToken: "json-body" },
-      { abort: signal },
-    );
-    expect(readDetail).toHaveBeenNthCalledWith(
-      2,
-      { bodyToken: "text-body" },
-      { abort: signal },
-    );
+    expect(readActivityDetail).toHaveBeenCalledTimes(2);
+    expect(readActivityDetail.mock.calls[0][0].detailRef).toMatchObject({
+      objectUri: "local://detail/json-body",
+      objectKey: "json-body",
+    });
+    expect(readActivityDetail.mock.calls[1][0].detailRef).toMatchObject({
+      objectUri: "local://detail/text-body",
+      objectKey: "text-body",
+    });
+    expect(readActivityDetail).toHaveBeenNthCalledWith(1, expect.anything(), { abort: signal });
+    expect(readActivityDetail).toHaveBeenNthCalledWith(2, expect.anything(), { abort: signal });
   });
 });

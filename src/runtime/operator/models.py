@@ -180,11 +180,12 @@ class RunSummary:
 
 @dataclass(frozen=True)
 class RunSnapshot:
-    """Structural run baseline tied to one operator instance and sequence."""
+    """Structural run baseline tied to one operator instance and event cursor."""
 
     operator_instance_id: str
     as_of_sequence: int
     summary: RunSummary
+    as_of_event_ulid: str = ""
     nodes: tuple[NodeSnapshot, ...] = ()
     latest_log_sequence: int = 0
     log_page_token: str = ""
@@ -245,7 +246,7 @@ DetailUpdate = LogDetailAppended | AgentEventDetailAppended
 
 @dataclass(frozen=True)
 class LogRecordDescriptor:
-    """Bounded metadata for a log body fetched through ``ReadDetail``."""
+    """Bounded metadata for a log body fetched through ``ReadActivityDetail``."""
 
     sequence: int
     timestamp: datetime
@@ -277,6 +278,7 @@ class RunSummaryPage:
 
     operator_instance_id: str
     as_of_sequence: int
+    as_of_event_ulid: str = ""
     runs: tuple[RunSummary, ...] = ()
     next_page_token: str = ""
 
@@ -287,6 +289,7 @@ class LogPage:
 
     operator_instance_id: str
     as_of_sequence: int
+    as_of_event_ulid: str = ""
     logs: tuple[LogRecordDescriptor, ...] = ()
     next_page_token: str = ""
 
@@ -299,6 +302,7 @@ class AgentEventPage:
     as_of_sequence: int
     run_id: str
     node_id: str
+    as_of_event_ulid: str = ""
     events: tuple[AgentEventDescriptor, ...] = ()
     next_page_token: str = ""
 
@@ -326,6 +330,7 @@ class CatalogSnapshot:
 
     operator_instance_id: str = ""
     as_of_sequence: int = 0
+    as_of_event_ulid: str = ""
     revision: int = 0
     workflows: tuple[WorkflowInfo, ...] = ()
     scan_targets: tuple[ScanTargetInfo, ...] = ()
@@ -409,12 +414,17 @@ OperatorUpdateChange = RunUpdateChange | CatalogReplaced | WorkflowReloadStatus
 class OperatorUpdate:
     sequence: int
     change: OperatorUpdateChange
+    event_ulid: str = ""
 
 
 @dataclass(frozen=True)
 class ResetRequired:
-    history_floor: int
-    latest_sequence: int
+    # These numeric values remain private operator retention indexes. V2
+    # conversion exposes the server-issued event ULIDs below instead.
+    history_floor: int = 0
+    latest_sequence: int = 0
+    history_floor_event_ulid: str = ""
+    latest_event_ulid: str = ""
 
 
 @dataclass(frozen=True)
@@ -474,9 +484,20 @@ class StreamResetNotice:
     """One client-local reset generation caused by a stream epoch change."""
 
     generation: int
-    previous_sequence: int
-    observed_sequence: int
+    previous_event_ulid: str
+    observed_event_ulid: str
     operator_instance_id: str = ""
+
+
+@dataclass(frozen=True)
+class ResetBaselineCursor:
+    """Complete server-issued lifecycle cursor for one reset baseline."""
+
+    stream: str
+    topology_fingerprint: str
+    stream_generation: int
+    retained_floor_event_ulid: str
+    event_ulid: str
 
 
 @dataclass(frozen=True)
@@ -485,9 +506,10 @@ class ResetBaseline:
 
     generation: int
     operator_instance_id: str
-    as_of_sequence: int
+    as_of_event_ulid: str
     catalog: CatalogSnapshot
     runs_by_workflow: Mapping[str, tuple[RunState, ...]]
+    cursor: ResetBaselineCursor | None = None
 
 
 @dataclass(frozen=True)

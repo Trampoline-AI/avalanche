@@ -21,12 +21,12 @@ import {
   DescriptorPageOrder,
   LogRecordDescriptorMsg,
   RunSnapshotMsg,
-} from "./generated/operator";
+} from "./model";
 import { RunLogPane } from "./RunLogPane";
 
 const run = RunSnapshotMsg.create({
   operatorInstanceId: "operator-1",
-  asOfSequence: "9",
+  asOfEventUlid: "9",
   summary: {
     runId: "run-1",
     workflowId: "flow.py::demo",
@@ -64,7 +64,7 @@ function page(
 ): LogDescriptorPage {
   return {
     operatorInstanceId: run.operatorInstanceId,
-    asOfSequence: run.asOfSequence,
+    asOfEventUlid: run.asOfEventUlid,
     records,
     nextPageToken,
     nextCursor,
@@ -76,7 +76,7 @@ function operatorApi(overrides: Partial<OperatorApi> = {}): OperatorApi {
     getCatalog: async () => CatalogSnapshotMsg.create(),
     loadBaseline: async () => ({
       catalog: CatalogSnapshotMsg.create(),
-      asOfSequence: "0",
+      asOfEventUlid: "0",
       runs: [],
     }),
     getLatestRunSnapshot: async () => run,
@@ -86,7 +86,7 @@ function operatorApi(overrides: Partial<OperatorApi> = {}): OperatorApi {
     listLogPage: async () => page([]),
     listAgentEventPage: async () => ({
       operatorInstanceId: run.operatorInstanceId,
-      asOfSequence: run.asOfSequence,
+      asOfEventUlid: run.asOfEventUlid,
       runId: "run-1",
       nodeId: "fetch_1",
       records: [],

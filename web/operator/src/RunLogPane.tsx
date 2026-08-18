@@ -23,11 +23,7 @@ import {
   mergeDescriptorPage,
   SCROLL_LOAD_THRESHOLD_PX,
 } from "./detailProjection";
-import {
-  DescriptorPageOrder,
-  type LogRecordDescriptorMsg,
-  type RunSnapshotMsg,
-} from "./generated/operator";
+import { DescriptorPageOrder, type LogRecordDescriptorMsg, type RunSnapshotMsg } from "./model";
 
 const LOG_DECODE_BATCH_SIZE = 20;
 const LOG_ROW_ESTIMATE_PX = 48;
@@ -112,10 +108,10 @@ export function RunLogPane({
 
   const runId = run.summary?.runId ?? "";
   const operatorInstanceId = run.operatorInstanceId;
-  const asOfSequence = run.asOfSequence;
+  const asOfEventUlid = run.asOfEventUlid;
   const pageToken = run.logPageToken;
   const exactLogNodeId = nodeId ?? "";
-  const descriptorScope = `${operatorInstanceId}\0${runId}\0${asOfSequence}\0${pageToken}\0${exactLogNodeId}`;
+  const descriptorScope = `${operatorInstanceId}\0${runId}\0${asOfEventUlid}\0${pageToken}\0${exactLogNodeId}`;
   const activePage = pageScope === descriptorScope ? page : EMPTY_LOG_PAGE;
 
   const abortDecoding = useCallback(() => {
@@ -181,7 +177,7 @@ export function RunLogPane({
           nodeId: exactLogNodeId,
           order: DescriptorPageOrder.NEWEST_FIRST,
           expectedOperatorInstanceId: operatorInstanceId,
-          expectedAsOfSequence: asOfSequence,
+          expectedAsOfEventUlid: asOfEventUlid,
         },
         controller.signal,
       )
@@ -206,7 +202,7 @@ export function RunLogPane({
   }, [
     abortDecoding,
     api,
-    asOfSequence,
+    asOfEventUlid,
     descriptorScope,
     exactLogNodeId,
     expanded,
@@ -261,7 +257,7 @@ export function RunLogPane({
           nodeId: exactLogNodeId,
           order: DescriptorPageOrder.NEWEST_FIRST,
           expectedOperatorInstanceId: operatorInstanceId,
-          expectedAsOfSequence: asOfSequence,
+          expectedAsOfEventUlid: asOfEventUlid,
         },
         controller.signal,
       )
@@ -285,7 +281,7 @@ export function RunLogPane({
     activePage.nextCursor,
     activePage.nextPageToken,
     api,
-    asOfSequence,
+    asOfEventUlid,
     exactLogNodeId,
     operatorInstanceId,
   ]);
