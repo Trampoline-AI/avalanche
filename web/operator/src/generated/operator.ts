@@ -615,6 +615,19 @@ export interface TraceDescriptorV2 {
     detailRef?: ActivityDetailRefV2;
 }
 /**
+ * @generated from protobuf message avalanche.operator.TerminalSealV2
+ */
+export interface TerminalSealV2 {
+    /**
+     * @generated from protobuf field: string terminal_status = 1
+     */
+    terminalStatus: string;
+    /**
+     * @generated from protobuf field: optional string reason = 2
+     */
+    reason?: string;
+}
+/**
  * The cursor proves the exact fresh projection view used for this snapshot.
  *
  * @generated from protobuf message avalanche.operator.RunSnapshotV2
@@ -650,6 +663,10 @@ export interface RunSnapshotV2 {
      * @generated from protobuf field: avalanche.operator.ContinuationRefV2 log_continuation = 7
      */
     logContinuation?: ContinuationRefV2;
+    /**
+     * @generated from protobuf field: avalanche.operator.RunActivityDescriptorV2 terminal_seal = 8
+     */
+    terminalSeal?: RunActivityDescriptorV2;
 }
 /**
  * The immutable, scope-bound object body for an activity. Servers must
@@ -708,7 +725,7 @@ export interface RunActivityDescriptorV2 {
      */
     runSequence: string;
     /**
-     * Activity kind: "log", "agent_event", or "trace".
+     * Activity kind: "log", "agent_event", "trace", or "terminal_seal".
      *
      * @generated from protobuf field: string kind = 3
      */
@@ -777,6 +794,10 @@ export interface RunActivityDescriptorV2 {
      * @generated from protobuf field: avalanche.operator.TraceDescriptorV2 trace = 16
      */
     trace?: TraceDescriptorV2;
+    /**
+     * @generated from protobuf field: avalanche.operator.TerminalSealV2 terminal_seal = 17
+     */
+    terminalSeal?: TerminalSealV2;
 }
 /**
  * @generated from protobuf message avalanche.operator.ListRunActivityRequestV2
@@ -3060,6 +3081,60 @@ class TraceDescriptorV2$Type extends MessageType<TraceDescriptorV2> {
  */
 export const TraceDescriptorV2 = new TraceDescriptorV2$Type();
 // @generated message type with reflection information, may provide speed optimized methods
+class TerminalSealV2$Type extends MessageType<TerminalSealV2> {
+    constructor() {
+        super("avalanche.operator.TerminalSealV2", [
+            { no: 1, name: "terminal_status", kind: "scalar", T: 9 /*ScalarType.STRING*/ },
+            { no: 2, name: "reason", kind: "scalar", opt: true, T: 9 /*ScalarType.STRING*/ }
+        ]);
+    }
+    create(value?: PartialMessage<TerminalSealV2>): TerminalSealV2 {
+        const message = globalThis.Object.create((this.messagePrototype!));
+        message.terminalStatus = "";
+        if (value !== undefined)
+            reflectionMergePartial<TerminalSealV2>(this, message, value);
+        return message;
+    }
+    internalBinaryRead(reader: IBinaryReader, length: number, options: BinaryReadOptions, target?: TerminalSealV2): TerminalSealV2 {
+        let message = target ?? this.create(), end = reader.pos + length;
+        while (reader.pos < end) {
+            let [fieldNo, wireType] = reader.tag();
+            switch (fieldNo) {
+                case /* string terminal_status */ 1:
+                    message.terminalStatus = reader.string();
+                    break;
+                case /* optional string reason */ 2:
+                    message.reason = reader.string();
+                    break;
+                default:
+                    let u = options.readUnknownField;
+                    if (u === "throw")
+                        throw new globalThis.Error(`Unknown field ${fieldNo} (wire type ${wireType}) for ${this.typeName}`);
+                    let d = reader.skip(wireType);
+                    if (u !== false)
+                        (u === true ? UnknownFieldHandler.onRead : u)(this.typeName, message, fieldNo, wireType, d);
+            }
+        }
+        return message;
+    }
+    internalBinaryWrite(message: TerminalSealV2, writer: IBinaryWriter, options: BinaryWriteOptions): IBinaryWriter {
+        /* string terminal_status = 1; */
+        if (message.terminalStatus !== "")
+            writer.tag(1, WireType.LengthDelimited).string(message.terminalStatus);
+        /* optional string reason = 2; */
+        if (message.reason !== undefined)
+            writer.tag(2, WireType.LengthDelimited).string(message.reason);
+        let u = options.writeUnknownFields;
+        if (u !== false)
+            (u == true ? UnknownFieldHandler.onWrite : u)(this.typeName, message, writer);
+        return writer;
+    }
+}
+/**
+ * @generated MessageType for protobuf message avalanche.operator.TerminalSealV2
+ */
+export const TerminalSealV2 = new TerminalSealV2$Type();
+// @generated message type with reflection information, may provide speed optimized methods
 class RunSnapshotV2$Type extends MessageType<RunSnapshotV2> {
     constructor() {
         super("avalanche.operator.RunSnapshotV2", [
@@ -3069,7 +3144,8 @@ class RunSnapshotV2$Type extends MessageType<RunSnapshotV2> {
             { no: 4, name: "topology", kind: "message", T: () => WorkflowTopologyV2 },
             { no: 5, name: "scope_ref", kind: "message", T: () => ScopeReferenceV2 },
             { no: 6, name: "latest_log_sequence", kind: "scalar", T: 4 /*ScalarType.UINT64*/ },
-            { no: 7, name: "log_continuation", kind: "message", T: () => ContinuationRefV2 }
+            { no: 7, name: "log_continuation", kind: "message", T: () => ContinuationRefV2 },
+            { no: 8, name: "terminal_seal", kind: "message", T: () => RunActivityDescriptorV2 }
         ]);
     }
     create(value?: PartialMessage<RunSnapshotV2>): RunSnapshotV2 {
@@ -3106,6 +3182,9 @@ class RunSnapshotV2$Type extends MessageType<RunSnapshotV2> {
                 case /* avalanche.operator.ContinuationRefV2 log_continuation */ 7:
                     message.logContinuation = ContinuationRefV2.internalBinaryRead(reader, reader.uint32(), options, message.logContinuation);
                     break;
+                case /* avalanche.operator.RunActivityDescriptorV2 terminal_seal */ 8:
+                    message.terminalSeal = RunActivityDescriptorV2.internalBinaryRead(reader, reader.uint32(), options, message.terminalSeal);
+                    break;
                 default:
                     let u = options.readUnknownField;
                     if (u === "throw")
@@ -3139,6 +3218,9 @@ class RunSnapshotV2$Type extends MessageType<RunSnapshotV2> {
         /* avalanche.operator.ContinuationRefV2 log_continuation = 7; */
         if (message.logContinuation)
             ContinuationRefV2.internalBinaryWrite(message.logContinuation, writer.tag(7, WireType.LengthDelimited).fork(), options).join();
+        /* avalanche.operator.RunActivityDescriptorV2 terminal_seal = 8; */
+        if (message.terminalSeal)
+            RunActivityDescriptorV2.internalBinaryWrite(message.terminalSeal, writer.tag(8, WireType.LengthDelimited).fork(), options).join();
         let u = options.writeUnknownFields;
         if (u !== false)
             (u == true ? UnknownFieldHandler.onWrite : u)(this.typeName, message, writer);
@@ -3270,7 +3352,8 @@ class RunActivityDescriptorV2$Type extends MessageType<RunActivityDescriptorV2> 
             { no: 13, name: "tool_count", kind: "scalar", T: 13 /*ScalarType.UINT32*/ },
             { no: 14, name: "predict_count", kind: "scalar", T: 13 /*ScalarType.UINT32*/ },
             { no: 15, name: "event_kind", kind: "scalar", T: 9 /*ScalarType.STRING*/ },
-            { no: 16, name: "trace", kind: "message", T: () => TraceDescriptorV2 }
+            { no: 16, name: "trace", kind: "message", T: () => TraceDescriptorV2 },
+            { no: 17, name: "terminal_seal", kind: "message", T: () => TerminalSealV2 }
         ]);
     }
     create(value?: PartialMessage<RunActivityDescriptorV2>): RunActivityDescriptorV2 {
@@ -3344,6 +3427,9 @@ class RunActivityDescriptorV2$Type extends MessageType<RunActivityDescriptorV2> 
                 case /* avalanche.operator.TraceDescriptorV2 trace */ 16:
                     message.trace = TraceDescriptorV2.internalBinaryRead(reader, reader.uint32(), options, message.trace);
                     break;
+                case /* avalanche.operator.TerminalSealV2 terminal_seal */ 17:
+                    message.terminalSeal = TerminalSealV2.internalBinaryRead(reader, reader.uint32(), options, message.terminalSeal);
+                    break;
                 default:
                     let u = options.readUnknownField;
                     if (u === "throw")
@@ -3404,6 +3490,9 @@ class RunActivityDescriptorV2$Type extends MessageType<RunActivityDescriptorV2> 
         /* avalanche.operator.TraceDescriptorV2 trace = 16; */
         if (message.trace)
             TraceDescriptorV2.internalBinaryWrite(message.trace, writer.tag(16, WireType.LengthDelimited).fork(), options).join();
+        /* avalanche.operator.TerminalSealV2 terminal_seal = 17; */
+        if (message.terminalSeal)
+            TerminalSealV2.internalBinaryWrite(message.terminalSeal, writer.tag(17, WireType.LengthDelimited).fork(), options).join();
         let u = options.writeUnknownFields;
         if (u !== false)
             (u == true ? UnknownFieldHandler.onWrite : u)(this.typeName, message, writer);

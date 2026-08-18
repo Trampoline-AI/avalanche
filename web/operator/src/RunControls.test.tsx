@@ -1,7 +1,7 @@
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 
-import type { FlowInfoMsg, RunSnapshotMsg } from "./model";
+import { TerminalSealMsg, type FlowInfoMsg, type RunSnapshotMsg } from "./model";
 import { parseRunInput, RunControls } from "./RunControls";
 
 const workflow = {
@@ -79,5 +79,29 @@ describe("RunControls", () => {
   it("accepts an explicit JSON object and rejects non-object run input", () => {
     expect(parseRunInput('{"value":7}')).toEqual({ value: 7 });
     expect(() => parseRunInput("[1,2,3]")).toThrow("Run input must be a JSON object");
+  });
+
+  it("renders structured terminal status and reason outside activity details", () => {
+    const sealed = {
+      ...running,
+      terminalSeal: TerminalSealMsg.create({
+        activityId: "terminal-seal-1",
+        runSequence: "4",
+        timestamp: 12,
+        terminalStatus: "failed",
+        reason: "execution failed",
+      }),
+    } as RunSnapshotMsg;
+    render(
+      <RunControls
+        run={sealed}
+        onStart={async () => "run-2"}
+        onCancel={async () => undefined}
+      />,
+    );
+
+    expect(screen.getByText("Terminal: failed")).toBeInTheDocument();
+    expect(screen.getByText("Reason: execution failed")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Cancel run" })).toBeInTheDocument();
   });
 });

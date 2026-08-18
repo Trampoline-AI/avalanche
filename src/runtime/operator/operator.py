@@ -59,6 +59,8 @@ from .models import (
     RunSummary,
     RunSummaryPage,
     SequencedLogEntry,
+    TerminalSealAppended,
+    TerminalSealDescriptor,
     TraceDescriptor,
     TraceFinalized,
     TraceHeader,
@@ -336,6 +338,7 @@ class Operator:
         self._result_leases: dict[str, int] = {}
         self._run_created_sequences: dict[str, int] = {}
         self._run_revisions: dict[str, int] = {}
+        self._run_activity_sequences: dict[str, int] = {}
         self._node_revisions: dict[tuple[str, str], int] = {}
         self._logs: dict[str, list[SequencedLogEntry]] = {}
         self._log_sequences_by_node: dict[str, dict[str, list[int]]] = {}
@@ -924,6 +927,7 @@ class Operator:
                 through_sequence=latest_log_sequence,
             ),
             topology=run.topology,
+            terminal_seal=run.terminal_seal,
         )
 
     def _current_log_page_token_locked(self, run_id: str) -> dict[str, Any]:
@@ -2450,9 +2454,33 @@ class Operator:
         trace_node_ids = tuple(dict.fromkeys(trace_node_ids))
         agent_events = agent_events or {}
         finalized_traces = finalized_traces or {}
+        activity_count = int(log_entry is not None) + len(agent_events) + len(trace_node_ids)
+        terminal_seal_appended = False
+        if (
+            run.status
+            in {
+                RunStatus.SUCCESS,
+                RunStatus.FAILED,
+                RunStatus.CANCELLED,
+            }
+            and run.terminal_seal is None
+        ):
+            terminal_sequence = self._run_activity_sequences.get(run.run_id, 0)
+            terminal_sequence += activity_count + 1
+            run.terminal_seal = TerminalSealDescriptor(
+                activity_id=f"terminal_seal:{run.run_id}:{terminal_sequence}",
+                run_sequence=terminal_sequence,
+                timestamp=datetime.now(),
+                terminal_status=run.status,
+            )
+            terminal_seal_appended = True
+        activity_count += int(terminal_seal_appended)
+        self._run_activity_sequences[run.run_id] = (
+            self._run_activity_sequences.get(run.run_id, 0) + activity_count
+        )
 
         if is_new:
-            update_count = 1
+            update_count = 1 + int(terminal_seal_appended)
         else:
             update_count = (
                 int(summary_changed)
@@ -2460,6 +2488,7 @@ class Operator:
                 + int(log_entry is not None)
                 + len(agent_events)
                 + len(trace_node_ids)
+                + int(terminal_seal_appended)
             )
             if update_count == 0:
                 summary_changed = True
@@ -2561,6 +2590,15 @@ class Operator:
                         trace=self._trace_descriptors[(run.run_id, node_id)],
                     )
                 )
+        if terminal_seal_appended:
+            if run.terminal_seal is None:
+                raise RuntimeError("terminal seal was not retained before publication")
+            changes.append(
+                TerminalSealAppended(
+                    run_id=run.run_id,
+                    seal=run.terminal_seal,
+                )
+            )
 
         updates = []
         for change in changes:

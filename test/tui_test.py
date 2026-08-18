@@ -21,6 +21,7 @@ from runtime.operator.client import (
     StreamState,
 )
 from runtime.operator.convert_v2 import (
+    run_snapshot_from_v2,
     run_snapshot_to_v2,
     run_summary_to_v2,
     workflow_info_to_v2,
@@ -32,6 +33,7 @@ from runtime.operator.models import (
     ResetBaselineCursor,
     RunSnapshot,
     RunSummary,
+    TerminalSealDescriptor,
     TraceDescriptor,
     TraceDetail,
 )
@@ -415,6 +417,38 @@ class TestModels:
     def test_run_state_elapsed(self):
         rs = RunState(run_id="r1", flow_name="p", started_at=time.monotonic() - 1.0)
         assert rs.elapsed >= 0.9
+
+    def test_run_snapshot_preserves_terminal_seal(self):
+        seal = TerminalSealDescriptor(
+            activity_id="terminal-seal-1",
+            run_sequence=3,
+            timestamp=datetime(2026, 7, 22, 12, 30),
+            terminal_status=RunStatus.SUCCESS,
+            reason="completed",
+        )
+        snapshot = RunSnapshot(
+            operator_instance_id="operator-1",
+            as_of_sequence=2,
+            as_of_event_ulid=_event_ulid(2),
+            summary=RunSummary(run_id="run-1", flow_name="flow"),
+            terminal_seal=seal,
+        )
+        message = run_snapshot_to_v2(
+            snapshot,
+            cursor=pb.LifecycleCursorV2(
+                stream="operator-events",
+                topology_fingerprint="topology",
+                stream_generation=1,
+                retained_floor_event_ulid=_event_ulid(0),
+                event_ulid=_event_ulid(2),
+            ),
+            scope_ref=pb.ScopeReferenceV2(reference="operator-1"),
+            trace_detail_ref_for=lambda *_: pb.ActivityDetailRefV2(),
+            activity_continuations={},
+            log_continuation=None,
+        )
+
+        assert run_snapshot_from_v2(message).terminal_seal == seal
 
     def test_workflow_info_fields(self):
         p = ORDER_WORKFLOW

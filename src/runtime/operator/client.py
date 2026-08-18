@@ -55,6 +55,7 @@ from .models import (
     RunSummary,
     SequencedLogEntry,
     StreamResetNotice,
+    TerminalSealAppended,
     TraceDetail,
     TraceFinalized,
     WorkflowDiscoveryDiagnostic,
@@ -1484,6 +1485,8 @@ class GrpcStateProvider:
                     raise _DetailHydrationRaceError("run identity changed during hydration")
                 if current.latest_log_sequence > hydrated.latest_log_sequence:
                     raise _DetailHydrationRaceError("logs advanced during hydration")
+                if current.terminal_seal != hydrated.terminal_seal:
+                    raise _DetailHydrationRaceError("terminal seal advanced during hydration")
                 for node_id, node in current.nodes.items():
                     descriptor = node.trace
                     hydrated_node = hydrated.nodes.get(node_id)
@@ -2160,7 +2163,7 @@ class GrpcStateProvider:
                         break
                     try:
                         self._remember_update_bindings(message)
-                    except _RunUpdateResetError:
+                    except (_DetailHydrationRaceError, _RunUpdateResetError):
                         with self._state_lock:
                             current_event_cursor = (
                                 self._copy_lifecycle_cursor(self._event_cursor)
@@ -2185,7 +2188,16 @@ class GrpcStateProvider:
                         )
                         reconnect = True
                         break
-                    envelope = operator_update_envelope_from_v2(message)
+                    try:
+                        envelope = operator_update_envelope_from_v2(message)
+                    except (AttributeError, OSError, OverflowError, TypeError, ValueError):
+                        self._require_stream_reset(
+                            message.scope_ref.reference,
+                            message.event_ulid,
+                            event_cursor=message.cursor,
+                        )
+                        reconnect = True
+                        break
                     if not envelope.operator_instance_id:
                         raise RuntimeError(
                             "update envelope omitted its operator instance identifier"
@@ -2600,6 +2612,13 @@ class GrpcStateProvider:
                     run.nodes[change.node_id] = node
                     self._evict_detail_cache_locked(self._trace_cache_key(*key))
                     self._trace_revisions[key] = change.trace.revision
+            elif isinstance(change, TerminalSealAppended):
+                if current.terminal_seal is None:
+                    run.terminal_seal = change.seal
+                elif current.terminal_seal == change.seal:
+                    run = None
+                else:
+                    raise _RunUpdateResetError("terminal seal changed after publication")
             else:
                 raise _RunUpdateResetError("unsupported update change")
 
@@ -2803,6 +2822,7 @@ def _run_from_snapshot(snapshot: RunSnapshot) -> RunState:
         ),
     )
     run.latest_log_sequence = snapshot.latest_log_sequence
+    run.terminal_seal = snapshot.terminal_seal
     run.details_hydrated = False
     return run
 

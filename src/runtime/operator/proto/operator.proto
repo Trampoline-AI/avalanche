@@ -230,6 +230,11 @@ message TraceDescriptorV2 {
   ActivityDetailRefV2 detail_ref = 9;
 }
 
+message TerminalSealV2 {
+  string terminal_status = 1;
+  optional string reason = 2;
+}
+
 // The cursor proves the exact fresh projection view used for this snapshot.
 message RunSnapshotV2 {
   LifecycleCursorV2 cursor = 1;
@@ -240,6 +245,7 @@ message RunSnapshotV2 {
   // High-water log mark and snapshot-pinned continuation for log activities.
   uint64 latest_log_sequence = 6;
   ContinuationRefV2 log_continuation = 7;
+  RunActivityDescriptorV2 terminal_seal = 8;
 }
 
 // The immutable, scope-bound object body for an activity. Servers must
@@ -260,7 +266,7 @@ message ActivityDetailRefV2 {
 message RunActivityDescriptorV2 {
   string activity_id = 1;
   uint64 run_sequence = 2;
-  // Activity kind: "log", "agent_event", or "trace".
+  // Activity kind: "log", "agent_event", "trace", or "terminal_seal".
   string kind = 3;
   double timestamp = 4;
   uint64 size_bytes = 5;
@@ -281,6 +287,7 @@ message RunActivityDescriptorV2 {
   string event_kind = 15;
   // Full trace descriptor; populated only for kind=trace.
   TraceDescriptorV2 trace = 16;
+  TerminalSealV2 terminal_seal = 17;
 }
 
 message ListRunActivityRequestV2 {

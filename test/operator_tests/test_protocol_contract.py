@@ -95,6 +95,41 @@ def test_v2_activity_detail_reference_is_complete_and_bound():
     assert chunk_fields["data"].type == FieldDescriptor.TYPE_BYTES
 
 
+def test_v2_terminal_seal_activity_preserves_descriptor_tags_and_snapshot_mirror():
+    seal_fields = pb.TerminalSealV2.DESCRIPTOR.fields_by_name
+    assert {name: field.number for name, field in seal_fields.items()} == {
+        "terminal_status": 1,
+        "reason": 2,
+    }
+    assert seal_fields["reason"].has_presence
+
+    activity_fields = pb.RunActivityDescriptorV2.DESCRIPTOR.fields_by_name
+    assert {name: field.number for name, field in activity_fields.items()} == {
+        "activity_id": 1,
+        "run_sequence": 2,
+        "kind": 3,
+        "timestamp": 4,
+        "size_bytes": 5,
+        "detail_ref": 6,
+        "node_id": 7,
+        "level": 8,
+        "invocation_id": 9,
+        "iteration": 10,
+        "duration_ms": 11,
+        "error": 12,
+        "tool_count": 13,
+        "predict_count": 14,
+        "event_kind": 15,
+        "trace": 16,
+        "terminal_seal": 17,
+    }
+    assert activity_fields["terminal_seal"].message_type.name == "TerminalSealV2"
+
+    snapshot_fields = pb.RunSnapshotV2.DESCRIPTOR.fields_by_name
+    assert snapshot_fields["terminal_seal"].number == 8
+    assert snapshot_fields["terminal_seal"].message_type.name == "RunActivityDescriptorV2"
+
+
 def test_v2_start_request_is_idempotent_and_uses_attachment_descriptors():
     start_fields = pb.StartRunRequestV2.DESCRIPTOR.fields_by_name
 

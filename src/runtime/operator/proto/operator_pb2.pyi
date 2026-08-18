@@ -362,8 +362,16 @@ class TraceDescriptorV2(_message.Message):
     detail_ref: ActivityDetailRefV2
     def __init__(self, status: _Optional[str] = ..., revision: _Optional[int] = ..., available: bool = ..., complete: bool = ..., event_count: _Optional[int] = ..., size_bytes: _Optional[int] = ..., latest_event_sequence: _Optional[int] = ..., header: _Optional[_Union[TraceHeaderV2, _Mapping]] = ..., detail_ref: _Optional[_Union[ActivityDetailRefV2, _Mapping]] = ...) -> None: ...
 
+class TerminalSealV2(_message.Message):
+    __slots__ = ("terminal_status", "reason")
+    TERMINAL_STATUS_FIELD_NUMBER: _ClassVar[int]
+    REASON_FIELD_NUMBER: _ClassVar[int]
+    terminal_status: str
+    reason: str
+    def __init__(self, terminal_status: _Optional[str] = ..., reason: _Optional[str] = ...) -> None: ...
+
 class RunSnapshotV2(_message.Message):
-    __slots__ = ("cursor", "summary", "nodes", "topology", "scope_ref", "latest_log_sequence", "log_continuation")
+    __slots__ = ("cursor", "summary", "nodes", "topology", "scope_ref", "latest_log_sequence", "log_continuation", "terminal_seal")
     CURSOR_FIELD_NUMBER: _ClassVar[int]
     SUMMARY_FIELD_NUMBER: _ClassVar[int]
     NODES_FIELD_NUMBER: _ClassVar[int]
@@ -371,6 +379,7 @@ class RunSnapshotV2(_message.Message):
     SCOPE_REF_FIELD_NUMBER: _ClassVar[int]
     LATEST_LOG_SEQUENCE_FIELD_NUMBER: _ClassVar[int]
     LOG_CONTINUATION_FIELD_NUMBER: _ClassVar[int]
+    TERMINAL_SEAL_FIELD_NUMBER: _ClassVar[int]
     cursor: LifecycleCursorV2
     summary: RunSummaryV2
     nodes: _containers.RepeatedCompositeFieldContainer[NodeSnapshotV2]
@@ -378,7 +387,8 @@ class RunSnapshotV2(_message.Message):
     scope_ref: ScopeReferenceV2
     latest_log_sequence: int
     log_continuation: ContinuationRefV2
-    def __init__(self, cursor: _Optional[_Union[LifecycleCursorV2, _Mapping]] = ..., summary: _Optional[_Union[RunSummaryV2, _Mapping]] = ..., nodes: _Optional[_Iterable[_Union[NodeSnapshotV2, _Mapping]]] = ..., topology: _Optional[_Union[WorkflowTopologyV2, _Mapping]] = ..., scope_ref: _Optional[_Union[ScopeReferenceV2, _Mapping]] = ..., latest_log_sequence: _Optional[int] = ..., log_continuation: _Optional[_Union[ContinuationRefV2, _Mapping]] = ...) -> None: ...
+    terminal_seal: RunActivityDescriptorV2
+    def __init__(self, cursor: _Optional[_Union[LifecycleCursorV2, _Mapping]] = ..., summary: _Optional[_Union[RunSummaryV2, _Mapping]] = ..., nodes: _Optional[_Iterable[_Union[NodeSnapshotV2, _Mapping]]] = ..., topology: _Optional[_Union[WorkflowTopologyV2, _Mapping]] = ..., scope_ref: _Optional[_Union[ScopeReferenceV2, _Mapping]] = ..., latest_log_sequence: _Optional[int] = ..., log_continuation: _Optional[_Union[ContinuationRefV2, _Mapping]] = ..., terminal_seal: _Optional[_Union[RunActivityDescriptorV2, _Mapping]] = ...) -> None: ...
 
 class ActivityDetailRefV2(_message.Message):
     __slots__ = ("run_id", "scope_ref", "activity_id", "run_sequence", "object_uri", "object_key", "sha256", "size_bytes")
@@ -401,7 +411,7 @@ class ActivityDetailRefV2(_message.Message):
     def __init__(self, run_id: _Optional[str] = ..., scope_ref: _Optional[_Union[ScopeReferenceV2, _Mapping]] = ..., activity_id: _Optional[str] = ..., run_sequence: _Optional[int] = ..., object_uri: _Optional[str] = ..., object_key: _Optional[str] = ..., sha256: _Optional[str] = ..., size_bytes: _Optional[int] = ...) -> None: ...
 
 class RunActivityDescriptorV2(_message.Message):
-    __slots__ = ("activity_id", "run_sequence", "kind", "timestamp", "size_bytes", "detail_ref", "node_id", "level", "invocation_id", "iteration", "duration_ms", "error", "tool_count", "predict_count", "event_kind", "trace")
+    __slots__ = ("activity_id", "run_sequence", "kind", "timestamp", "size_bytes", "detail_ref", "node_id", "level", "invocation_id", "iteration", "duration_ms", "error", "tool_count", "predict_count", "event_kind", "trace", "terminal_seal")
     ACTIVITY_ID_FIELD_NUMBER: _ClassVar[int]
     RUN_SEQUENCE_FIELD_NUMBER: _ClassVar[int]
     KIND_FIELD_NUMBER: _ClassVar[int]
@@ -418,6 +428,7 @@ class RunActivityDescriptorV2(_message.Message):
     PREDICT_COUNT_FIELD_NUMBER: _ClassVar[int]
     EVENT_KIND_FIELD_NUMBER: _ClassVar[int]
     TRACE_FIELD_NUMBER: _ClassVar[int]
+    TERMINAL_SEAL_FIELD_NUMBER: _ClassVar[int]
     activity_id: str
     run_sequence: int
     kind: str
@@ -434,7 +445,8 @@ class RunActivityDescriptorV2(_message.Message):
     predict_count: int
     event_kind: str
     trace: TraceDescriptorV2
-    def __init__(self, activity_id: _Optional[str] = ..., run_sequence: _Optional[int] = ..., kind: _Optional[str] = ..., timestamp: _Optional[float] = ..., size_bytes: _Optional[int] = ..., detail_ref: _Optional[_Union[ActivityDetailRefV2, _Mapping]] = ..., node_id: _Optional[str] = ..., level: _Optional[str] = ..., invocation_id: _Optional[str] = ..., iteration: _Optional[int] = ..., duration_ms: _Optional[int] = ..., error: bool = ..., tool_count: _Optional[int] = ..., predict_count: _Optional[int] = ..., event_kind: _Optional[str] = ..., trace: _Optional[_Union[TraceDescriptorV2, _Mapping]] = ...) -> None: ...
+    terminal_seal: TerminalSealV2
+    def __init__(self, activity_id: _Optional[str] = ..., run_sequence: _Optional[int] = ..., kind: _Optional[str] = ..., timestamp: _Optional[float] = ..., size_bytes: _Optional[int] = ..., detail_ref: _Optional[_Union[ActivityDetailRefV2, _Mapping]] = ..., node_id: _Optional[str] = ..., level: _Optional[str] = ..., invocation_id: _Optional[str] = ..., iteration: _Optional[int] = ..., duration_ms: _Optional[int] = ..., error: bool = ..., tool_count: _Optional[int] = ..., predict_count: _Optional[int] = ..., event_kind: _Optional[str] = ..., trace: _Optional[_Union[TraceDescriptorV2, _Mapping]] = ..., terminal_seal: _Optional[_Union[TerminalSealV2, _Mapping]] = ...) -> None: ...
 
 class ListRunActivityRequestV2(_message.Message):
     __slots__ = ("run_id", "page_size", "continuation", "node_id", "order")

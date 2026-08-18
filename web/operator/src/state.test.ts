@@ -12,6 +12,7 @@ import {
   OperatorUpdateEnvelope,
   RunSnapshotMsg,
   RunSummaryMsg,
+  TerminalSealMsg,
   TraceDescriptorMsg,
   WorkflowTopologyMsg,
 } from "./model";
@@ -241,6 +242,94 @@ describe("projectionReducer", () => {
       error: "source unavailable",
       trace: { status: "failed" },
     });
+  });
+
+  it("merges one terminal seal without changing run status and rejects conflicts", () => {
+    const seal = TerminalSealMsg.create({
+      activityId: "terminal-seal-1",
+      runSequence: "4",
+      timestamp: 12,
+      terminalStatus: "failed",
+      reason: "execution failed",
+    });
+    let state = selectedState();
+    state = projectionReducer(state, {
+      type: "envelopes",
+      envelopes: [
+        envelope("2", {
+          oneofKind: "terminalSealAppended",
+          terminalSealAppended: { runId: summary.runId, terminalSeal: seal },
+        }),
+      ],
+    });
+
+    expect(state.terminalSeals[summary.runId]).toEqual(seal);
+    expect(state.selectedRun?.terminalSeal).toEqual(seal);
+    expect(state.runs[summary.runId].status).toBe("running");
+    expect(state.selectedRun?.summary?.status).toBe("running");
+
+    const duplicate = projectionReducer(state, {
+      type: "envelopes",
+      envelopes: [
+        envelope("3", {
+          oneofKind: "terminalSealAppended",
+          terminalSealAppended: { runId: summary.runId, terminalSeal: seal },
+        }),
+      ],
+    });
+    expect(duplicate.terminalSeals).toBe(state.terminalSeals);
+    expect(duplicate.selectedRun).toBe(state.selectedRun);
+
+    expect(() =>
+      projectionReducer(duplicate, {
+        type: "envelopes",
+        envelopes: [
+          envelope("4", {
+            oneofKind: "terminalSealAppended",
+            terminalSealAppended: {
+              runId: summary.runId,
+              terminalSeal: TerminalSealMsg.create({ ...seal, reason: "changed" }),
+            },
+          }),
+        ],
+      }),
+    ).toThrow("Terminal seal conflict");
+  });
+
+  it("restores terminal seals from selected snapshots and clears them on baseline reset", () => {
+    const seal = TerminalSealMsg.create({
+      activityId: "terminal-seal-2",
+      runSequence: "5",
+      timestamp: 13,
+      terminalStatus: "cancelled",
+    });
+    let state = selectedState();
+    state = projectionReducer(state, {
+      type: "envelopes",
+      envelopes: [
+        envelope("2", {
+          oneofKind: "terminalSealAppended",
+          terminalSealAppended: { runId: summary.runId, terminalSeal: seal },
+        }),
+      ],
+    });
+    const restored = projectionReducer(state, {
+      type: "selectionReady",
+      runId: summary.runId,
+      snapshot: RunSnapshotMsg.create({
+        ...snapshotFor(summary),
+        asOfEventUlid: eventUlid(2),
+        terminalSeal: seal,
+      }),
+    });
+    expect(restored.terminalSeals).toEqual({ [summary.runId]: seal });
+    expect(restored.selectedRun?.terminalSeal).toEqual(seal);
+
+    const reset = projectionReducer(restored, {
+      type: "baseline",
+      baseline: { ...baseline, asOfEventUlid: eventUlid(3) },
+    });
+    expect(reset.terminalSeals).toEqual({});
   });
 
   it("ignores node, trace, log, and event detail for an unselected run", () => {

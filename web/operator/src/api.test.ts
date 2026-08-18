@@ -16,6 +16,7 @@ import {
   RunSummaryPageV2,
   RunSummaryV2,
   ScopeReferenceV2,
+  TerminalSealV2,
   TraceDescriptorV2,
 } from "./generated/operator";
 import type { IOperatorServiceV2Client } from "./generated/operator.client";
@@ -179,6 +180,114 @@ describe("GrpcWebOperatorApi", () => {
     );
   });
 
+  it("maps terminal seals in snapshots and structural activity updates", async () => {
+    const activity = RunActivityDescriptorV2.create({
+      activityId: "terminal-seal-1",
+      runSequence: "4",
+      kind: "terminal_seal",
+      timestamp: 12,
+      terminalSeal: TerminalSealV2.create({
+        terminalStatus: "failed",
+        reason: "execution failed",
+      }),
+    });
+    const getRunSnapshot = vi.fn(() => ({
+      response: Promise.resolve(
+        RunSnapshotV2.create({
+          cursor: cursor(12),
+          scopeRef: scope(),
+          summary: RunSummaryV2.create({ runId: "run-1", status: "failed" }),
+          terminalSeal: activity,
+        }),
+      ),
+    }));
+    const watchRunStatus = vi.fn(() => ({
+      responses: (async function* () {
+        yield RunStatusEnvelopeV2.create({
+          eventUlid: eventUlid(13),
+          cursor: cursor(13),
+          scopeRef: scope(),
+          payload: {
+            oneofKind: "activityAppended",
+            activityAppended: { runId: "run-1", activity },
+          },
+        });
+      })(),
+    }));
+    const api = apiWith({ getRunSnapshot, watchRunStatus });
+
+    await expect(api.getLatestRunSnapshot("run-1", "operator-1")).resolves.toMatchObject({
+      terminalSeal: {
+        activityId: "terminal-seal-1",
+        runSequence: "4",
+        timestamp: 12,
+        terminalStatus: "failed",
+        reason: "execution failed",
+      },
+    });
+
+    const updates = [];
+    for await (const update of api.streamUpdates("operator-1", eventUlid(12))) {
+      updates.push(update);
+    }
+    expect(updates).toMatchObject([
+      {
+        payload: {
+          update: {
+            change: {
+              terminalSealAppended: {
+                runId: "run-1",
+                terminalSeal: {
+                  activityId: "terminal-seal-1",
+                  terminalStatus: "failed",
+                  reason: "execution failed",
+                },
+              },
+            },
+          },
+        },
+      },
+    ]);
+  });
+
+  it("rejects missing and unknown activity kinds in the stream", async () => {
+    const envelopes = [
+      RunStatusEnvelopeV2.create({
+        eventUlid: eventUlid(2),
+        cursor: cursor(2),
+        scopeRef: scope(),
+        payload: {
+          oneofKind: "activityAppended",
+          activityAppended: {
+            runId: "run-1",
+            activity: RunActivityDescriptorV2.create({ kind: "unknown" }),
+          },
+        },
+      }),
+      RunStatusEnvelopeV2.create({
+        eventUlid: eventUlid(3),
+        cursor: cursor(3),
+        scopeRef: scope(),
+        payload: {
+          oneofKind: "activityAppended",
+          activityAppended: { runId: "run-1" },
+        },
+      }),
+    ];
+
+    for (const envelope of envelopes) {
+      const watchRunStatus = vi.fn(() => ({
+        responses: (async function* () {
+          yield envelope;
+        })(),
+      }));
+      const api = apiWith({ watchRunStatus });
+      await expect(
+        api.streamUpdates("operator-1", eventUlid(1))[Symbol.asyncIterator]().next(),
+      ).rejects.toThrow(/activity kind|run or descriptor/);
+    }
+  });
+
   it("accepts a stable catalog when non-catalog updates advance the run baseline", async () => {
     const summary = RunSummaryMsg.create({ runId: "run-1", revision: "2" });
     const discoverFlows = vi.fn(() => ({
@@ -335,6 +444,50 @@ describe("GrpcWebOperatorApi", () => {
       },
       { abort: signal },
     );
+  });
+
+  it("rejects a nonmatching activity kind in a page mapping", async () => {
+    const logPage = continuation("log-page", 20, "activity:run-1:logs");
+    const getRunSnapshot = vi.fn(() => ({
+      response: Promise.resolve(
+        RunSnapshotV2.create({
+          cursor: cursor(20),
+          scopeRef: scope(),
+          summary: RunSummaryV2.create({ runId: "run-1" }),
+          logContinuation: logPage,
+        }),
+      ),
+    }));
+    const listRunActivity = vi.fn(() => ({
+      response: Promise.resolve(
+        RunActivityPageV2.create({
+          cursor: cursor(20),
+          runId: "run-1",
+          scopeRef: scope(),
+          activities: [
+            RunActivityDescriptorV2.create({
+              kind: "agent_event",
+              detailRef: detailRef("event-body"),
+            }),
+          ],
+        }),
+      ),
+    }));
+    const api = apiWith({ getRunSnapshot, listRunActivity });
+    await api.getLatestRunSnapshot("run-1", "operator-1");
+
+    await expect(
+      api.listLogPage({
+        pageToken: "log-page",
+        afterSequence: "0",
+        beforeSequence: "0",
+        pageSize: 25,
+        nodeId: "",
+        order: DescriptorPageOrder.FORWARD,
+        expectedOperatorInstanceId: "operator-1",
+        expectedAsOfEventUlid: eventUlid(20),
+      }),
+    ).rejects.toThrow("Expected log activity");
   });
 
   it("rejects a page that cannot advance its continuation", async () => {
