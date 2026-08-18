@@ -22,6 +22,7 @@ from runtime.operator.models import (
     RunState,
     RunStatus,
     RunStatusChanged,
+    TerminalSealAppended,
 )
 from runtime.operator.source import is_source_path_included
 
@@ -528,9 +529,12 @@ def test_malformed_run_event_terminalizes_and_cleans_up(event):
     notifications = []
     while not updates.empty():
         notifications.append(updates.get_nowait().update.change)
-    assert len(notifications) == 1
-    assert isinstance(notifications[0], RunCreated)
+    assert [type(notification) for notification in notifications] == [
+        RunCreated,
+        TerminalSealAppended,
+    ]
     assert notifications[0].summary.status == RunStatus.FAILED
+    assert notifications[1].seal.terminal_status == RunStatus.FAILED
     assert run_id not in operator._active_runs
     assert handle.event_queue.closed
     operator.close()
@@ -689,8 +693,10 @@ def test_cancel_request_is_non_terminal_until_coordinator_stops(tmp_path):
             for index, change in enumerate(queued)
             if isinstance(change, RunStatusChanged) and change.status == RunStatus.CANCELLED
         ]
-        assert terminal_indexes == [len(queued) - 2]
-        assert queued[-1].status == NodeStatus.SKIPPED
+        assert terminal_indexes == [len(queued) - 3]
+        assert queued[-2].status == NodeStatus.SKIPPED
+        assert isinstance(queued[-1], TerminalSealAppended)
+        assert queued[-1].seal.terminal_status is RunStatus.CANCELLED
     finally:
         operator.close()
 
@@ -1015,6 +1021,7 @@ def test_close_rejects_run_when_shutdown_precedes_preparation(tmp_path, monkeypa
         operator.close()
         if starter.ident is not None:
             starter.join(timeout=3)
+
 
 def test_run_queries_return_detached_snapshots(tmp_path):
     workflow = _write_standalone(tmp_path, body="log.info('finished')")

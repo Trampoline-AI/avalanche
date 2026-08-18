@@ -21,6 +21,7 @@ from runtime.operator.models import (
     RunState,
     RunStatus,
     RunStatusChanged,
+    TerminalSealAppended,
     WorkflowDiscoveryDiagnostic,
     WorkflowReloadStatus,
 )
@@ -664,16 +665,28 @@ class TestOperatorSubscription:
             run.status = RunStatus.SUCCESS
             op._notify_run(run)
 
-            assert op.subscribe_operator_updates(op.operator_instance_id, 3).empty()
+            terminal_replay = op.subscribe_operator_updates(op.operator_instance_id, 3)
+            terminal_envelope = terminal_replay.get_nowait()
+            assert terminal_replay.empty()
+            assert terminal_envelope.update is not None
+            assert terminal_envelope.update.sequence == 4
+            assert isinstance(terminal_envelope.update.change, TerminalSealAppended)
+            assert terminal_envelope.update.change.seal.terminal_status is RunStatus.SUCCESS
+
             replay = op.subscribe_operator_updates(op.operator_instance_id, 1)
 
-            envelopes = [replay.get_nowait() for _ in range(2)]
-            assert [item.update.sequence for item in envelopes] == [2, 3]
-            assert [
-                item.update.change.status
-                for item in envelopes
-                if isinstance(item.update.change, RunStatusChanged)
-            ] == [RunStatus.RUNNING, RunStatus.SUCCESS]
+            envelopes = [replay.get_nowait() for _ in range(3)]
+            assert [item.update.sequence for item in envelopes] == [2, 3, 4]
+            assert [type(item.update.change) for item in envelopes] == [
+                RunStatusChanged,
+                RunStatusChanged,
+                TerminalSealAppended,
+            ]
+            assert [item.update.change.status for item in envelopes[:2]] == [
+                RunStatus.RUNNING,
+                RunStatus.SUCCESS,
+            ]
+            assert envelopes[2].update.change.seal.terminal_status is RunStatus.SUCCESS
             assert replay.empty()
         finally:
             op.close()
@@ -692,10 +705,10 @@ class TestOperatorSubscription:
             recovery = op.subscribe_operator_updates(op.operator_instance_id, 0)
             reset = recovery.get_nowait()
 
-            assert reset.reset_required.history_floor == 2
-            assert reset.reset_required.latest_sequence == 3
+            assert reset.reset_required.history_floor == 3
+            assert reset.reset_required.latest_sequence == 4
             assert recovery.empty()
-            assert [update.sequence for update in op._stream_history] == [2, 3]
+            assert [update.sequence for update in op._stream_history] == [3, 4]
         finally:
             op.close()
 

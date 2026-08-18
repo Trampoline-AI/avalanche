@@ -73,7 +73,7 @@ def contract_stub():
 
 @pytest.fixture
 def retained_cursor_stub():
-    operator = Operator([], schedule=False, watch=False, stream_history_capacity=1)
+    operator = Operator([], schedule=False, watch=False, stream_history_capacity=2)
     port = _unused_port()
     server = serve(operator, port=port, block=False)
     channel = grpc.insecure_channel(f"localhost:{port}")

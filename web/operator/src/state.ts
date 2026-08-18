@@ -9,6 +9,7 @@ import type {
   OperatorUpdateEnvelope,
   RunSnapshotMsg,
   RunSummaryMsg,
+  TerminalSealMsg,
 } from "./model";
 
 const MAX_PENDING_ENVELOPES = 1024;
@@ -26,6 +27,7 @@ export interface OperatorProjection {
   selectedRun?: RunSnapshotMsg;
   selectedRunStatus: SelectedRunStatus;
   selectedRunError?: string;
+  terminalSeals: Record<string, TerminalSealMsg>;
   liveEvents: Record<string, AgentEventDescriptorMsg[]>;
   liveLogs: Record<string, LogRecordDescriptorMsg[]>;
   liveEventRepairWatermarks: Record<string, string>;
@@ -52,6 +54,7 @@ type ProjectionAction =
 export const emptyProjection: OperatorProjection = {
   runs: {},
   selectedRunStatus: "idle",
+  terminalSeals: {},
   liveEvents: {},
   liveLogs: {},
   liveEventRepairWatermarks: {},
@@ -131,7 +134,19 @@ function runIdForChange(change: OperatorUpdate["change"]): string {
           ? change.agentEventAppended.runId
           : change.oneofKind === "traceFinalized"
             ? change.traceFinalized.runId
-            : "";
+            : change.oneofKind === "terminalSealAppended"
+              ? change.terminalSealAppended.runId
+              : "";
+}
+
+function sameTerminalSeal(left: TerminalSealMsg, right: TerminalSealMsg): boolean {
+  return (
+    left.activityId === right.activityId &&
+    left.runSequence === right.runSequence &&
+    left.timestamp === right.timestamp &&
+    left.terminalStatus === right.terminalStatus &&
+    left.reason === right.reason
+  );
 }
 
 function applyEnvelope(
@@ -233,6 +248,25 @@ function applyEnvelope(
           : node,
       ),
     };
+  } else if (change.oneofKind === "terminalSealAppended") {
+    const seal = change.terminalSealAppended.terminalSeal;
+    if (!seal) throw new Error("Terminal seal update omitted its typed seal");
+    const existing = state.terminalSeals[runId];
+    if (existing && !sameTerminalSeal(existing, seal)) {
+      throw new Error(`Terminal seal conflict for run ${runId}`);
+    }
+    if (
+      selectedSnapshot?.terminalSeal &&
+      !sameTerminalSeal(selectedSnapshot.terminalSeal, seal)
+    ) {
+      throw new Error(`Terminal seal conflicts with selected snapshot for run ${runId}`);
+    }
+    if (!existing) {
+      next.terminalSeals = { ...state.terminalSeals, [runId]: seal };
+    }
+    if (selected && !selected.terminalSeal) {
+      next.selectedRun = { ...selected, terminalSeal: seal };
+    }
   } else if (
     change.oneofKind === "logAppended" &&
     state.selectedRunId === runId &&
@@ -295,6 +329,7 @@ export function projectionReducer(
       ...emptyProjection,
       catalog: action.baseline.catalog,
       runs: Object.fromEntries(action.baseline.runs.map((run) => [run.runId, run])),
+      terminalSeals: {},
       operatorInstanceId: action.baseline.catalog.operatorInstanceId,
       eventUlid: action.baseline.asOfEventUlid,
       connection: "live",
@@ -324,10 +359,19 @@ export function projectionReducer(
     ) {
       return state;
     }
+    const terminalSeals = withoutKey(state.terminalSeals, action.runId);
+    if (action.snapshot.terminalSeal) {
+      const existing = state.terminalSeals[action.runId];
+      if (existing && !sameTerminalSeal(existing, action.snapshot.terminalSeal)) {
+        throw new Error(`Terminal seal conflicts with snapshot for run ${action.runId}`);
+      }
+      terminalSeals[action.runId] = action.snapshot.terminalSeal;
+    }
     return {
       ...state,
       selectedRunId: action.runId,
       selectedRun: action.snapshot,
+      terminalSeals,
       selectedRunStatus: "ready",
       selectedRunError: undefined,
       liveEvents: withoutRunBuckets(state.liveEvents, action.runId),

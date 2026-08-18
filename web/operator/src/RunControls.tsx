@@ -155,6 +155,19 @@ export function RunControls({
           {pending?.kind === "cancel" ? "Cancelling…" : "Cancel run"}
         </button>
       )}
+      {run?.terminalSeal && (
+        <div
+          className="terminal-seal flex items-center gap-1.5 rounded-[7px] border border-[#cbd2ce] bg-[#f6f8f7] px-[11px] py-[7px] text-[10px] text-secondary"
+          data-terminal-status={run.terminalSeal.terminalStatus}
+        >
+          <span className="terminal-seal-status font-bold">
+            Terminal: {run.terminalSeal.terminalStatus}
+          </span>
+          {run.terminalSeal.reason !== undefined && (
+            <span className="terminal-seal-reason">Reason: {run.terminalSeal.reason}</span>
+          )}
+        </div>
+      )}
       {showInput && workflow && (
         <div className="input-popover absolute right-0 bottom-[43px] z-20 w-[390px] rounded-[9px] border border-[#cbd2ce] bg-white p-[13px] shadow-[0_18px_50px_rgba(20,31,26,.16)] max-[700px]:w-[calc(100vw-32px)] [&>div:first-child]:mb-[9px] [&>div:first-child]:flex [&>div:first-child]:justify-between [&_strong]:text-[11px] [&_span]:font-mono [&_span]:text-[8px] [&_span]:text-[#6d7872]">
           <div>

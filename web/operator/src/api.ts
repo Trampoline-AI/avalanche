@@ -32,6 +32,7 @@ import type {
   OperatorUpdateEnvelope,
   RunSnapshotMsg,
   RunSummaryMsg,
+  TerminalSealMsg,
 } from "./model";
 
 const MAX_BASELINE_PAGES = 100;
@@ -527,6 +528,9 @@ export class GrpcWebOperatorApi implements OperatorApi {
     };
     if (snapshot.summary) mapped.summary = mapRunSummary(snapshot.summary);
     if (snapshot.topology) mapped.topology = snapshot.topology;
+    if (snapshot.terminalSeal) {
+      mapped.terminalSeal = this.mapTerminalSealDescriptor(snapshot.terminalSeal);
+    }
     return mapped;
   }
 
@@ -551,6 +555,12 @@ export class GrpcWebOperatorApi implements OperatorApi {
   }
 
   private mapLogDescriptor(activity: RunActivityDescriptorV2): LogRecordDescriptorMsg {
+    if (activity.kind !== "log") {
+      throw new Error(`Expected log activity, received ${activity.kind || "missing kind"}`);
+    }
+    if (!activity.detailRef) {
+      throw new Error("Log activity is missing its detail reference");
+    }
     return {
       sequence: activity.runSequence,
       timestamp: activity.timestamp,
@@ -562,6 +572,14 @@ export class GrpcWebOperatorApi implements OperatorApi {
   }
 
   private mapAgentEventDescriptor(activity: RunActivityDescriptorV2): AgentEventDescriptorMsg {
+    if (activity.kind !== "agent_event") {
+      throw new Error(
+        `Expected agent event activity, received ${activity.kind || "missing kind"}`,
+      );
+    }
+    if (!activity.detailRef) {
+      throw new Error("Agent event activity is missing its detail reference");
+    }
     const mapped: AgentEventDescriptorMsg = {
       eventSequence: activity.runSequence,
       sizeBytes: activity.sizeBytes,
@@ -575,6 +593,49 @@ export class GrpcWebOperatorApi implements OperatorApi {
     if (activity.iteration !== undefined) mapped.iteration = activity.iteration;
     if (activity.durationMs !== undefined) mapped.durationMs = activity.durationMs;
     return mapped;
+  }
+
+  private mapTerminalSealDescriptor(activity: RunActivityDescriptorV2): TerminalSealMsg {
+    if (activity.kind !== "terminal_seal") {
+      throw new Error(
+        `Expected terminal seal activity, received ${activity.kind || "missing kind"}`,
+      );
+    }
+    const seal = activity.terminalSeal;
+    let hasPositiveRunSequence: boolean;
+    try {
+      hasPositiveRunSequence = BigInt(activity.runSequence) > 0n;
+    } catch {
+      hasPositiveRunSequence = false;
+    }
+    if (
+      !activity.activityId ||
+      !hasPositiveRunSequence ||
+      !Number.isFinite(activity.timestamp) ||
+      activity.sizeBytes !== "0" ||
+      activity.detailRef ||
+      activity.nodeId ||
+      activity.level ||
+      activity.invocationId ||
+      activity.iteration !== undefined ||
+      activity.durationMs !== undefined ||
+      activity.error ||
+      activity.toolCount !== 0 ||
+      activity.predictCount !== 0 ||
+      activity.eventKind ||
+      activity.trace ||
+      !seal ||
+      !["success", "failed", "cancelled"].includes(seal.terminalStatus)
+    ) {
+      throw new Error("Terminal seal activity is not a complete typed descriptor");
+    }
+    return {
+      activityId: activity.activityId,
+      runSequence: activity.runSequence,
+      timestamp: activity.timestamp,
+      terminalStatus: seal.terminalStatus as TerminalSealMsg["terminalStatus"],
+      ...(seal.reason !== undefined ? { reason: seal.reason } : {}),
+    };
   }
 
   private mapStatusEnvelope(envelope: RunStatusEnvelopeV2): OperatorUpdateEnvelope | undefined {
@@ -638,7 +699,9 @@ export class GrpcWebOperatorApi implements OperatorApi {
       case "activityAppended": {
         const activity = payload.activityAppended.activity;
         const runId = payload.activityAppended.runId;
-        if (!activity) return undefined;
+        if (!activity || !runId) {
+          throw new Error("Activity update omitted its run or descriptor");
+        }
         if (activity.kind === "log") {
           return update({
             oneofKind: "logAppended",
@@ -656,17 +719,29 @@ export class GrpcWebOperatorApi implements OperatorApi {
           });
         }
         if (activity.kind === "trace") {
-          if (activity.trace?.detailRef) this.registerDetailRef(activity.trace.detailRef);
+          if (!activity.trace) {
+            throw new Error("Trace activity is missing its descriptor");
+          }
+          if (activity.trace.detailRef) this.registerDetailRef(activity.trace.detailRef);
           return update({
             oneofKind: "traceFinalized",
             traceFinalized: {
               runId,
               nodeId: activity.nodeId,
-              ...(activity.trace ? { trace: activity.trace } : {}),
+              trace: activity.trace,
             },
           });
         }
-        return undefined;
+        if (activity.kind === "terminal_seal") {
+          return update({
+            oneofKind: "terminalSealAppended",
+            terminalSealAppended: {
+              runId,
+              terminalSeal: this.mapTerminalSealDescriptor(activity),
+            },
+          });
+        }
+        throw new Error(`Unknown activity kind: ${activity.kind || "missing kind"}`);
       }
       case "flowListChanged": {
         const flowList = payload.flowListChanged.flowList;

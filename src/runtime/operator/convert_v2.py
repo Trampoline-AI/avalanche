@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import hashlib
+import math
 from collections.abc import Callable, Mapping
 from datetime import datetime
 
@@ -26,6 +27,8 @@ from .models import (
     RunStatusChanged,
     RunSummary,
     ScanTargetInfo,
+    TerminalSealAppended,
+    TerminalSealDescriptor,
     TraceDescriptor,
     TraceFinalized,
     TraceHeader,
@@ -39,6 +42,7 @@ from .proto import operator_pb2 as pb
 DETAIL_URI_SCHEME = "local://detail/"
 TRACE_URI_SCHEME = "local://trace/"
 RESULT_URI_SCHEME = "local://result/"
+_TERMINAL_SEAL_STATUSES = frozenset({RunStatus.SUCCESS, RunStatus.FAILED, RunStatus.CANCELLED})
 
 
 def sha256_hex(data: bytes) -> str:
@@ -202,6 +206,30 @@ def trace_descriptor_to_v2(
     return message
 
 
+def terminal_seal_descriptor_to_v2(
+    descriptor: TerminalSealDescriptor,
+) -> pb.RunActivityDescriptorV2:
+    if not descriptor.activity_id:
+        raise ValueError("terminal seal activity ID is required")
+    if descriptor.run_sequence <= 0:
+        raise ValueError("terminal seal run sequence must be positive")
+    if descriptor.terminal_status not in _TERMINAL_SEAL_STATUSES:
+        raise ValueError("terminal seal status must be terminal")
+    timestamp = descriptor.timestamp.timestamp()
+    if not math.isfinite(timestamp):
+        raise ValueError("terminal seal timestamp must be finite")
+    seal = pb.TerminalSealV2(terminal_status=descriptor.terminal_status.value)
+    if descriptor.reason is not None:
+        seal.reason = descriptor.reason
+    return pb.RunActivityDescriptorV2(
+        activity_id=descriptor.activity_id,
+        run_sequence=descriptor.run_sequence,
+        kind="terminal_seal",
+        timestamp=timestamp,
+        terminal_seal=seal,
+    )
+
+
 def node_snapshot_to_v2(
     node: NodeSnapshot,
     *,
@@ -237,7 +265,7 @@ def run_snapshot_to_v2(
     activity_continuations: Mapping[str, pb.ContinuationRefV2],
     log_continuation: pb.ContinuationRefV2 | None,
 ) -> pb.RunSnapshotV2:
-    return pb.RunSnapshotV2(
+    message = pb.RunSnapshotV2(
         cursor=cursor,
         scope_ref=scope_ref,
         summary=run_summary_to_v2(snapshot.summary),
@@ -262,6 +290,9 @@ def run_snapshot_to_v2(
         latest_log_sequence=snapshot.latest_log_sequence,
         log_continuation=log_continuation,
     )
+    if snapshot.terminal_seal is not None:
+        message.terminal_seal.CopyFrom(terminal_seal_descriptor_to_v2(snapshot.terminal_seal))
+    return message
 
 
 def body_detail_ref_to_v2(
@@ -502,6 +533,13 @@ def update_envelope_to_v2(
                 ),
             )
         )
+    elif isinstance(change, TerminalSealAppended):
+        message.activity_appended.CopyFrom(
+            pb.ActivityAppendedV2(
+                run_id=change.run_id,
+                activity=terminal_seal_descriptor_to_v2(change.seal),
+            )
+        )
     elif isinstance(change, CatalogReplaced):
         catalog_cursor = cursor_for(change.catalog.as_of_sequence)
         message.flow_list_changed.CopyFrom(
@@ -672,12 +710,62 @@ def run_snapshot_from_v2(msg: pb.RunSnapshotV2) -> RunSnapshot:
         latest_log_sequence=msg.latest_log_sequence,
         log_page_token=msg.log_continuation.continuation_id,
         topology=workflow_topology_from_v2(msg.topology),
+        terminal_seal=(
+            terminal_seal_descriptor_from_v2(msg.terminal_seal)
+            if msg.HasField("terminal_seal")
+            else None
+        ),
+    )
+
+
+def terminal_seal_descriptor_from_v2(
+    msg: pb.RunActivityDescriptorV2,
+) -> TerminalSealDescriptor:
+    if msg.kind != "terminal_seal":
+        raise ValueError("terminal seal descriptor has a non-terminal activity kind")
+    if not msg.activity_id:
+        raise ValueError("terminal seal activity ID is required")
+    if msg.run_sequence <= 0:
+        raise ValueError("terminal seal run sequence must be positive")
+    if not math.isfinite(msg.timestamp):
+        raise ValueError("terminal seal timestamp must be finite")
+    if msg.size_bytes or msg.node_id or msg.level or msg.invocation_id:
+        raise ValueError("terminal seal descriptor contains body or node fields")
+    if msg.HasField("detail_ref") or msg.HasField("iteration") or msg.HasField("duration_ms"):
+        raise ValueError("terminal seal descriptor contains an activity body reference")
+    if (
+        msg.error
+        or msg.tool_count
+        or msg.predict_count
+        or msg.event_kind
+        or msg.HasField("trace")
+    ):
+        raise ValueError("terminal seal descriptor contains non-seal activity fields")
+    if not msg.HasField("terminal_seal"):
+        raise ValueError("terminal seal activity is missing its typed seal")
+    terminal_seal = msg.terminal_seal
+    try:
+        status = RunStatus(terminal_seal.terminal_status)
+    except ValueError as exc:
+        raise ValueError("terminal seal status is not a supported terminal status") from exc
+    if status not in _TERMINAL_SEAL_STATUSES:
+        raise ValueError("terminal seal status must be terminal")
+    return TerminalSealDescriptor(
+        activity_id=msg.activity_id,
+        run_sequence=msg.run_sequence,
+        timestamp=datetime.fromtimestamp(msg.timestamp),
+        terminal_status=status,
+        reason=terminal_seal.reason if terminal_seal.HasField("reason") else None,
     )
 
 
 def log_record_descriptor_from_v2(
     msg: pb.RunActivityDescriptorV2,
 ) -> LogRecordDescriptor:
+    if msg.kind != "log":
+        raise ValueError("log descriptor has a non-log activity kind")
+    if not msg.HasField("detail_ref"):
+        raise ValueError("log activity is missing its detail reference")
     return LogRecordDescriptor(
         sequence=msg.run_sequence,
         timestamp=datetime.fromtimestamp(msg.timestamp),
@@ -691,6 +779,10 @@ def log_record_descriptor_from_v2(
 def agent_event_descriptor_from_v2(
     msg: pb.RunActivityDescriptorV2,
 ) -> AgentEventDescriptor:
+    if msg.kind != "agent_event":
+        raise ValueError("agent event descriptor has a non-agent activity kind")
+    if not msg.HasField("detail_ref"):
+        raise ValueError("agent event activity is missing its detail reference")
     return AgentEventDescriptor(
         invocation_id=msg.invocation_id,
         event_sequence=msg.run_sequence,
@@ -754,6 +846,10 @@ def operator_update_envelope_from_v2(
         )
     elif payload == "activity_appended":
         appended = msg.activity_appended
+        if not appended.run_id:
+            raise ValueError("activity update omitted its run ID")
+        if not appended.HasField("activity"):
+            raise ValueError("activity update omitted its descriptor")
         activity = appended.activity
         if activity.kind == "log":
             change = LogAppended(
@@ -767,10 +863,17 @@ def operator_update_envelope_from_v2(
                 event=agent_event_descriptor_from_v2(activity),
             )
         elif activity.kind == "trace":
+            if not activity.HasField("trace"):
+                raise ValueError("trace activity is missing its descriptor")
             change = TraceFinalized(
                 run_id=appended.run_id,
                 node_id=activity.node_id,
                 trace=trace_descriptor_from_v2(activity.trace),
+            )
+        elif activity.kind == "terminal_seal":
+            change = TerminalSealAppended(
+                run_id=appended.run_id,
+                seal=terminal_seal_descriptor_from_v2(activity),
             )
         else:
             raise ValueError(f"Unknown activity kind: {activity.kind}")

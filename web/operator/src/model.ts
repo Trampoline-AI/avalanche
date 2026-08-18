@@ -471,6 +471,44 @@ export const TraceDescriptorMsg = {
   },
 };
 
+export type TerminalSealStatus = "success" | "failed" | "cancelled";
+
+export interface TerminalSealMsg {
+  /**
+   * Existing activity descriptor identity.
+   */
+  activityId: string;
+  /**
+   * Per-run activity ordering, independent of the lifecycle event cursor.
+   */
+  runSequence: string;
+  /**
+   * Existing activity descriptor timestamp.
+   */
+  timestamp: number;
+  /**
+   * @generated from protobuf field: string terminal_status = 1
+   */
+  terminalStatus: TerminalSealStatus;
+  /**
+   * @generated from protobuf field: optional string reason = 2
+   */
+  reason?: string;
+}
+
+export const TerminalSealMsg = {
+  create(value: DeepPartial<TerminalSealMsg> = {}): TerminalSealMsg {
+    return {
+      activityId: "",
+      runSequence: "0",
+      timestamp: 0,
+      terminalStatus: "success",
+      reason: undefined,
+      ...value,
+    } as TerminalSealMsg;
+  },
+};
+
 export interface WorkflowTopologyMsg {
   /**
    * @generated from protobuf field: repeated string node_ids = 1
@@ -551,6 +589,10 @@ export interface RunSnapshotMsg {
    * @generated from protobuf field: avalanche.operator.WorkflowTopologyMsg topology = 7
    */
   topology?: WorkflowTopologyMsg;
+  /**
+   * Exact terminal activity descriptor mirrored by the server snapshot.
+   */
+  terminalSeal?: TerminalSealMsg;
 }
 
 export const RunSnapshotMsg = {
@@ -563,6 +605,7 @@ export const RunSnapshotMsg = {
       latestLogSequence: "0",
       logPageToken: "",
       topology: undefined,
+      terminalSeal: undefined,
       ...value,
     } as RunSnapshotMsg;
   },
@@ -992,6 +1035,17 @@ export const TraceFinalized = {
   },
 };
 
+export interface TerminalSealAppended {
+  runId: string;
+  terminalSeal?: TerminalSealMsg;
+}
+
+export const TerminalSealAppended = {
+  create(value: DeepPartial<TerminalSealAppended> = {}): TerminalSealAppended {
+    return { runId: "", terminalSeal: undefined, ...value } as TerminalSealAppended;
+  },
+};
+
 export interface CatalogReplaced {
   /**
    * @generated from protobuf field: avalanche.operator.CatalogSnapshotMsg catalog = 1
@@ -1085,6 +1139,10 @@ export interface OperatorUpdate {
          * @generated from protobuf field: avalanche.operator.TraceFinalized trace_finalized = 7
          */
         traceFinalized: TraceFinalized;
+      }
+    | {
+        oneofKind: "terminalSealAppended";
+        terminalSealAppended: TerminalSealAppended;
       }
     | {
         oneofKind: "catalogReplaced";

@@ -17,6 +17,8 @@ from runtime.operator.client import (
 )
 from runtime.operator.convert_v2 import (
     operator_update_envelope_from_v2,
+    run_snapshot_from_v2,
+    run_snapshot_to_v2,
     update_envelope_to_v2,
 )
 from runtime.operator.models import (
@@ -45,6 +47,8 @@ from runtime.operator.models import (
     RunStatus,
     RunStatusChanged,
     RunSummary,
+    TerminalSealAppended,
+    TerminalSealDescriptor,
     TraceDescriptor,
     TraceFinalized,
     WorkflowReloadStatus,
@@ -212,6 +216,16 @@ def test_typed_update_envelopes_roundtrip_all_changes():
                 size_bytes=20,
             ),
         ),
+        TerminalSealAppended(
+            "run-1",
+            TerminalSealDescriptor(
+                activity_id="terminal-seal-1",
+                run_sequence=7,
+                timestamp=datetime(2026, 7, 22),
+                terminal_status=RunStatus.FAILED,
+                reason="failed during execution",
+            ),
+        ),
         CatalogReplaced(
             CatalogSnapshot(
                 operator_instance_id="operator-1",
@@ -238,12 +252,27 @@ def test_typed_update_envelopes_roundtrip_all_changes():
         if isinstance(change, CatalogReplaced):
             assert message.flow_list_changed.flow_list.cursor.stream == "operator-events"
             assert message.flow_list_changed.flow_list.revision == 11
+        if isinstance(change, TerminalSealAppended):
+            activity = message.activity_appended.activity
+            assert activity.kind == "terminal_seal"
+            assert activity.activity_id == change.seal.activity_id
+            assert activity.run_sequence == change.seal.run_sequence
+            assert activity.timestamp == change.seal.timestamp.timestamp()
+            assert activity.size_bytes == 0
+            assert not activity.HasField("detail_ref")
+            assert not activity.node_id
+            assert not activity.HasField("trace")
+            assert activity.HasField("terminal_seal")
+            assert activity.terminal_seal.terminal_status == "failed"
+            assert activity.terminal_seal.reason == "failed during execution"
         roundtrip = operator_update_envelope_from_v2(message)
         assert roundtrip.operator_instance_id == envelope.operator_instance_id
         assert roundtrip.update is not None
         assert envelope.update is not None
         assert roundtrip.update.event_ulid == envelope.update.event_ulid
         assert type(roundtrip.update.change) is type(envelope.update.change)
+        if isinstance(roundtrip.update.change, TerminalSealAppended):
+            assert roundtrip.update.change.seal == change.seal
 
 
 def test_operator_replays_typed_updates_in_order():
@@ -348,8 +377,8 @@ def test_stale_cursor_and_epoch_explicitly_require_reset():
         cursor_reset = stale_cursor.get_nowait()
         assert cursor_reset.update is None
         assert cursor_reset.reset_required == ResetRequired(
-            history_floor=2,
-            latest_sequence=3,
+            history_floor=3,
+            latest_sequence=4,
         )
 
         stale_epoch = operator.subscribe_operator_updates("previous-operator", 3)
@@ -357,6 +386,32 @@ def test_stale_cursor_and_epoch_explicitly_require_reset():
         assert epoch_reset.operator_instance_id == operator.operator_instance_id
         assert epoch_reset.reset_required is not None
         assert stale_epoch.empty()
+    finally:
+        operator.close()
+
+
+def test_operator_publishes_terminal_seal_and_mirrors_it_in_snapshots():
+    operator = Operator([], watch=False, schedule=False)
+    run = RunState(run_id="run-1", flow_name="flow", status=RunStatus.SUCCESS)
+    operator._runs[run.run_id] = run
+    try:
+        operator._notify_run(run)
+
+        envelopes = _drain(
+            operator.subscribe_operator_updates(operator.operator_instance_id, 0)
+        )
+        assert [type(item.update.change) for item in envelopes] == [
+            RunCreated,
+            TerminalSealAppended,
+        ]
+        assert run.terminal_seal is not None
+        assert run.terminal_seal.terminal_status is RunStatus.SUCCESS
+        snapshot = operator.get_latest_run_snapshot(
+            run.run_id,
+            operator_instance_id=operator.operator_instance_id,
+        )
+        assert snapshot is not None
+        assert snapshot.terminal_seal == run.terminal_seal
     finally:
         operator.close()
 
@@ -678,6 +733,159 @@ def test_client_applies_ordered_updates_and_ignores_duplicates():
             )
     finally:
         provider.close()
+
+
+def test_client_applies_terminal_seal_independently_and_replays_idempotently():
+    provider = GrpcStateProvider("localhost:1")
+    seal = TerminalSealDescriptor(
+        activity_id="terminal-seal-1",
+        run_sequence=4,
+        timestamp=datetime(2026, 7, 22),
+        terminal_status=RunStatus.FAILED,
+        reason="execution failed",
+    )
+    first = OperatorUpdateEnvelope(
+        operator_instance_id="operator-1",
+        update=_operator_update(
+            sequence=2,
+            change=TerminalSealAppended("run-1", seal),
+        ),
+    )
+    try:
+        provider._apply_update_envelope(_created())
+        run, detail = provider._apply_update_envelope(first)
+        assert run is not None
+        assert detail is None
+        assert run.status is RunStatus.PENDING
+        assert run.terminal_seal == seal
+
+        assert provider._apply_update_envelope(first) == (None, None)
+        assert provider._cursor.event_ulid == _event_ulid(2)
+
+        later_duplicate = dataclasses.replace(
+            first,
+            update=dataclasses.replace(
+                first.update,
+                sequence=3,
+                event_ulid=_event_ulid(3),
+            ),
+        )
+        assert provider._apply_update_envelope(later_duplicate) == (None, None)
+        assert provider._cursor.event_ulid == _event_ulid(3)
+        assert provider._runs_by_id["run-1"].terminal_seal == seal
+
+        changed = dataclasses.replace(
+            first,
+            update=dataclasses.replace(
+                first.update,
+                sequence=4,
+                event_ulid=_event_ulid(4),
+                change=TerminalSealAppended(
+                    "run-1",
+                    dataclasses.replace(seal, reason="different failure"),
+                ),
+            ),
+        )
+        with pytest.raises(_RunUpdateResetError, match="terminal seal changed"):
+            provider._apply_update_envelope(changed)
+        assert provider._cursor.event_ulid == _event_ulid(3)
+
+        unknown_run = dataclasses.replace(
+            first,
+            update=dataclasses.replace(
+                first.update,
+                sequence=4,
+                event_ulid=_event_ulid(4),
+                change=TerminalSealAppended("missing-run", seal),
+            ),
+        )
+        with pytest.raises(_RunUpdateResetError, match="unknown run"):
+            provider._apply_update_envelope(unknown_run)
+    finally:
+        provider.close()
+
+
+@pytest.mark.parametrize(
+    ("kind", "expected_error"),
+    [("terminal_seal", "missing its typed seal"), ("unknown", "Unknown activity kind")],
+)
+def test_malformed_activity_conversion_is_fail_closed_and_stream_resets(kind, expected_error):
+    malformed = pb.RunStatusEnvelopeV2(
+        scope_ref=_scope(),
+        event_ulid=_event_ulid(2),
+        cursor=_cursor(2),
+        activity_appended=pb.ActivityAppendedV2(
+            run_id="run-1",
+            activity=pb.RunActivityDescriptorV2(
+                activity_id="terminal-seal-1",
+                run_sequence=1,
+                kind=kind,
+                timestamp=1.0,
+            ),
+        ),
+    )
+
+    with pytest.raises(ValueError, match=expected_error):
+        operator_update_envelope_from_v2(malformed)
+
+    provider = GrpcStateProvider("localhost:1")
+    resets = []
+
+    class MalformedActivityStub:
+        def WatchRunStatus(self, request, *, metadata):  # noqa: N802
+            yield malformed
+
+    provider._stub = MalformedActivityStub()
+
+    def require_reset(scope, observed, *, event_cursor):
+        resets.append((scope, observed, event_cursor))
+        provider._stream_stop.set()
+
+    provider._require_stream_reset = require_reset
+    try:
+        provider._stream_loop()
+    finally:
+        provider.close()
+
+    assert resets == [("operator-1", _event_ulid(2), malformed.cursor)]
+
+
+def test_terminal_seal_snapshot_roundtrip_preserves_exact_descriptor():
+    seal = TerminalSealDescriptor(
+        activity_id="terminal-seal-1",
+        run_sequence=8,
+        timestamp=datetime(2026, 7, 22, 12, 30),
+        terminal_status=RunStatus.CANCELLED,
+        reason="cancelled by user",
+    )
+    snapshot = RunSnapshot(
+        operator_instance_id="operator-1",
+        as_of_sequence=2,
+        as_of_event_ulid=_event_ulid(2),
+        summary=RunSummary(run_id="run-1", flow_name="flow"),
+        terminal_seal=seal,
+    )
+    message = run_snapshot_to_v2(
+        snapshot,
+        cursor=_cursor(2),
+        scope_ref=_scope(),
+        trace_detail_ref_for=lambda *_: pb.ActivityDetailRefV2(),
+        activity_continuations={},
+        log_continuation=None,
+    )
+
+    assert (
+        message.terminal_seal
+        == run_snapshot_to_v2(
+            snapshot,
+            cursor=_cursor(2),
+            scope_ref=_scope(),
+            trace_detail_ref_for=lambda *_: pb.ActivityDetailRefV2(),
+            activity_continuations={},
+            log_continuation=None,
+        ).terminal_seal
+    )
+    assert run_snapshot_from_v2(message).terminal_seal == seal
 
 
 def test_client_log_update_append_never_copies_cumulative_history():
@@ -1173,6 +1381,121 @@ def test_hydrated_run_rejects_body_when_trace_descriptor_advanced():
         retained = provider._runs_by_id["run-1"]
         assert retained.nodes["node-1"].trace.revision == 3
         assert provider._trace_bodies[key] == {"marker": "current"}
+    finally:
+        provider.close()
+
+
+def _commit_hydrated_terminal_seal(
+    provider: GrpcStateProvider,
+    *,
+    current_seal: TerminalSealDescriptor | None,
+    snapshot_seal: TerminalSealDescriptor | None,
+) -> RunState:
+    snapshot = RunSnapshot(
+        operator_instance_id="operator-1",
+        as_of_sequence=2,
+        as_of_event_ulid=_event_ulid(2),
+        summary=RunSummary(
+            run_id="run-1",
+            flow_name="flow",
+            created_sequence=1,
+            revision=2,
+        ),
+        terminal_seal=snapshot_seal,
+    )
+    hydrated = RunState(
+        run_id="run-1",
+        flow_name="flow",
+        operator_instance_id="operator-1",
+        created_sequence=1,
+        revision=2,
+        terminal_seal=snapshot_seal,
+    )
+    current = dataclasses.replace(hydrated, revision=3, terminal_seal=current_seal)
+    provider._install_structural_baseline("operator-1", _event_ulid(3), {"run-1": current})
+
+    return provider._commit_hydrated_run(
+        snapshot,
+        hydrated,
+        logs=[],
+        log_bytes=0,
+        starting_cursor=provider._cursor,
+        hydrated_agent_nodes=set(),
+        agent_sequences={},
+        agent_events={},
+        agent_event_bytes={},
+        trace_bodies={},
+        trace_body_bytes={},
+    )
+
+
+def test_hydrated_run_accepts_snapshot_newer_terminal_seal_and_retains_it():
+    provider = GrpcStateProvider("localhost:1")
+    snapshot_seal = TerminalSealDescriptor(
+        activity_id="terminal-seal-2",
+        run_sequence=2,
+        timestamp=datetime(2026, 8, 18),
+        terminal_status=RunStatus.SUCCESS,
+    )
+    try:
+        result = _commit_hydrated_terminal_seal(
+            provider,
+            current_seal=None,
+            snapshot_seal=snapshot_seal,
+        )
+
+        assert result.revision == 3
+        assert result.terminal_seal == snapshot_seal
+        assert provider._runs_by_id["run-1"].terminal_seal == snapshot_seal
+    finally:
+        provider.close()
+
+
+def test_hydrated_run_rejects_live_newer_terminal_seal():
+    provider = GrpcStateProvider("localhost:1")
+    current_seal = TerminalSealDescriptor(
+        activity_id="terminal-seal-3",
+        run_sequence=3,
+        timestamp=datetime(2026, 8, 18),
+        terminal_status=RunStatus.SUCCESS,
+    )
+    try:
+        with pytest.raises(_DetailHydrationRaceError, match="terminal seal advanced"):
+            _commit_hydrated_terminal_seal(
+                provider,
+                current_seal=current_seal,
+                snapshot_seal=None,
+            )
+
+        assert provider._runs_by_id["run-1"].terminal_seal == current_seal
+    finally:
+        provider.close()
+
+
+def test_hydrated_run_rejects_conflicting_terminal_seals():
+    provider = GrpcStateProvider("localhost:1")
+    current_seal = TerminalSealDescriptor(
+        activity_id="terminal-seal-3",
+        run_sequence=3,
+        timestamp=datetime(2026, 8, 18),
+        terminal_status=RunStatus.SUCCESS,
+    )
+    snapshot_seal = TerminalSealDescriptor(
+        activity_id="terminal-seal-2",
+        run_sequence=2,
+        timestamp=datetime(2026, 8, 18),
+        terminal_status=RunStatus.FAILED,
+        reason="conflicting outcome",
+    )
+    try:
+        with pytest.raises(_DetailHydrationRaceError, match="terminal seal advanced"):
+            _commit_hydrated_terminal_seal(
+                provider,
+                current_seal=current_seal,
+                snapshot_seal=snapshot_seal,
+            )
+
+        assert provider._runs_by_id["run-1"].terminal_seal == current_seal
     finally:
         provider.close()
 

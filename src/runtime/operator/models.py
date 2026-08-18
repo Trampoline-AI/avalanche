@@ -95,6 +95,7 @@ class RunState:
     revision: int = 0
     latest_log_sequence: int = 0
     details_hydrated: bool = True  # False only for summary-only list projections.
+    terminal_seal: TerminalSealDescriptor | None = None
 
     @property
     def elapsed(self) -> float | None:
@@ -130,6 +131,17 @@ class TraceDescriptor:
     size_bytes: int = 0
     latest_event_sequence: int = 0
     header: TraceHeader | None = None
+
+
+@dataclass(frozen=True)
+class TerminalSealDescriptor:
+    """Immutable terminal activity identity and typed terminal outcome."""
+
+    activity_id: str
+    run_sequence: int
+    timestamp: datetime
+    terminal_status: RunStatus
+    reason: str | None = None
 
 
 @dataclass(frozen=True)
@@ -190,6 +202,7 @@ class RunSnapshot:
     latest_log_sequence: int = 0
     log_page_token: str = ""
     topology: WorkflowTopology = field(default_factory=WorkflowTopology)
+    terminal_seal: TerminalSealDescriptor | None = None
 
 
 @dataclass(frozen=True)
@@ -399,6 +412,19 @@ class TraceFinalized:
     trace: TraceDescriptor
 
 
+@dataclass(frozen=True)
+class TerminalSealAppended:
+    """One structural terminal activity delivered outside status changes."""
+
+    run_id: str
+    seal: TerminalSealDescriptor
+
+    @property
+    def terminal_seal(self) -> TerminalSealDescriptor:
+        """Expose the wire-oriented name without duplicating state."""
+        return self.seal
+
+
 RunUpdateChange = (
     RunCreated
     | RunStatusChanged
@@ -406,6 +432,7 @@ RunUpdateChange = (
     | LogAppended
     | AgentEventAppended
     | TraceFinalized
+    | TerminalSealAppended
 )
 OperatorUpdateChange = RunUpdateChange | CatalogReplaced | WorkflowReloadStatus
 
