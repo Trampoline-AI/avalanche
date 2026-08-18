@@ -1485,7 +1485,10 @@ class GrpcStateProvider:
                     raise _DetailHydrationRaceError("run identity changed during hydration")
                 if current.latest_log_sequence > hydrated.latest_log_sequence:
                     raise _DetailHydrationRaceError("logs advanced during hydration")
-                if current.terminal_seal != hydrated.terminal_seal:
+                if (
+                    current.terminal_seal is not None
+                    and current.terminal_seal != hydrated.terminal_seal
+                ):
                     raise _DetailHydrationRaceError("terminal seal advanced during hydration")
                 for node_id, node in current.nodes.items():
                     descriptor = node.trace
@@ -1519,6 +1522,8 @@ class GrpcStateProvider:
                         )
                 structural = current if current.revision > hydrated.revision else hydrated
                 result = deepcopy(structural)
+                if result.terminal_seal is None:
+                    result.terminal_seal = hydrated.terminal_seal
             else:
                 result = hydrated
             result.logs = []

@@ -1385,6 +1385,121 @@ def test_hydrated_run_rejects_body_when_trace_descriptor_advanced():
         provider.close()
 
 
+def _commit_hydrated_terminal_seal(
+    provider: GrpcStateProvider,
+    *,
+    current_seal: TerminalSealDescriptor | None,
+    snapshot_seal: TerminalSealDescriptor | None,
+) -> RunState:
+    snapshot = RunSnapshot(
+        operator_instance_id="operator-1",
+        as_of_sequence=2,
+        as_of_event_ulid=_event_ulid(2),
+        summary=RunSummary(
+            run_id="run-1",
+            flow_name="flow",
+            created_sequence=1,
+            revision=2,
+        ),
+        terminal_seal=snapshot_seal,
+    )
+    hydrated = RunState(
+        run_id="run-1",
+        flow_name="flow",
+        operator_instance_id="operator-1",
+        created_sequence=1,
+        revision=2,
+        terminal_seal=snapshot_seal,
+    )
+    current = dataclasses.replace(hydrated, revision=3, terminal_seal=current_seal)
+    provider._install_structural_baseline("operator-1", _event_ulid(3), {"run-1": current})
+
+    return provider._commit_hydrated_run(
+        snapshot,
+        hydrated,
+        logs=[],
+        log_bytes=0,
+        starting_cursor=provider._cursor,
+        hydrated_agent_nodes=set(),
+        agent_sequences={},
+        agent_events={},
+        agent_event_bytes={},
+        trace_bodies={},
+        trace_body_bytes={},
+    )
+
+
+def test_hydrated_run_accepts_snapshot_newer_terminal_seal_and_retains_it():
+    provider = GrpcStateProvider("localhost:1")
+    snapshot_seal = TerminalSealDescriptor(
+        activity_id="terminal-seal-2",
+        run_sequence=2,
+        timestamp=datetime(2026, 8, 18),
+        terminal_status=RunStatus.SUCCESS,
+    )
+    try:
+        result = _commit_hydrated_terminal_seal(
+            provider,
+            current_seal=None,
+            snapshot_seal=snapshot_seal,
+        )
+
+        assert result.revision == 3
+        assert result.terminal_seal == snapshot_seal
+        assert provider._runs_by_id["run-1"].terminal_seal == snapshot_seal
+    finally:
+        provider.close()
+
+
+def test_hydrated_run_rejects_live_newer_terminal_seal():
+    provider = GrpcStateProvider("localhost:1")
+    current_seal = TerminalSealDescriptor(
+        activity_id="terminal-seal-3",
+        run_sequence=3,
+        timestamp=datetime(2026, 8, 18),
+        terminal_status=RunStatus.SUCCESS,
+    )
+    try:
+        with pytest.raises(_DetailHydrationRaceError, match="terminal seal advanced"):
+            _commit_hydrated_terminal_seal(
+                provider,
+                current_seal=current_seal,
+                snapshot_seal=None,
+            )
+
+        assert provider._runs_by_id["run-1"].terminal_seal == current_seal
+    finally:
+        provider.close()
+
+
+def test_hydrated_run_rejects_conflicting_terminal_seals():
+    provider = GrpcStateProvider("localhost:1")
+    current_seal = TerminalSealDescriptor(
+        activity_id="terminal-seal-3",
+        run_sequence=3,
+        timestamp=datetime(2026, 8, 18),
+        terminal_status=RunStatus.SUCCESS,
+    )
+    snapshot_seal = TerminalSealDescriptor(
+        activity_id="terminal-seal-2",
+        run_sequence=2,
+        timestamp=datetime(2026, 8, 18),
+        terminal_status=RunStatus.FAILED,
+        reason="conflicting outcome",
+    )
+    try:
+        with pytest.raises(_DetailHydrationRaceError, match="terminal seal advanced"):
+            _commit_hydrated_terminal_seal(
+                provider,
+                current_seal=current_seal,
+                snapshot_seal=snapshot_seal,
+            )
+
+        assert provider._runs_by_id["run-1"].terminal_seal == current_seal
+    finally:
+        provider.close()
+
+
 def test_client_reads_structural_state_from_state_detail_rpcs():
     provider = GrpcStateProvider("localhost:1")
 
