@@ -120,11 +120,17 @@ async function* idleUpdates(signal?: AbortSignal): AsyncIterable<OperatorUpdateE
 
 type ProjectionApi = Pick<
   OperatorApi,
-  "loadBaseline" | "getLatestRunSnapshot" | "streamUpdates" | "startRun" | "cancelRun"
+  | "getCatalog"
+  | "loadBaseline"
+  | "getLatestRunSnapshot"
+  | "streamUpdates"
+  | "startRun"
+  | "cancelRun"
 >;
 
 function createApi(overrides: Partial<ProjectionApi> = {}): OperatorApi {
   const defaults: ProjectionApi = {
+    getCatalog: async () => baseline.catalog,
     loadBaseline: async () => baseline,
     getLatestRunSnapshot: async (runId) =>
       snapshotFor(runId === secondSummary.runId ? secondSummary : summary),
@@ -149,6 +155,68 @@ afterEach(() => {
 });
 
 describe("projectionReducer", () => {
+  it("keeps the catalog until a matching reload baseline succeeds", () => {
+    const initial = projectionReducer(emptyProjection, { type: "baseline", baseline });
+    const notice = envelope("2", {
+      oneofKind: "catalogReloadRequired",
+      catalogReloadRequired: { deploymentId: "deployment-a" },
+    });
+    let state = projectionReducer(initial, { type: "envelopes", envelopes: [notice] });
+
+    expect(state.catalog).toBe(initial.catalog);
+    expect(state.catalogReloadDeploymentId).toBe("deployment-a");
+    expect(state.catalogReloadNoticeEventUlid).toBe(eventUlid(2));
+
+    state = projectionReducer(state, {
+      type: "envelopes",
+      envelopes: [
+        envelope("3", {
+          oneofKind: "catalogReloadRequired",
+          catalogReloadRequired: { deploymentId: "deployment-a" },
+        }),
+      ],
+    });
+    expect(state.catalog).toBe(initial.catalog);
+    expect(state.catalogReloadNoticeEventUlid).toBe(eventUlid(2));
+    expect(state.eventUlid).toBe(eventUlid(3));
+
+    const replacement = CatalogSnapshotMsg.create({
+      operatorInstanceId: "operator-1",
+      asOfEventUlid: eventUlid(3),
+      revision: "0",
+      workflows: [],
+    });
+    const stale = projectionReducer(state, {
+      type: "catalogReloaded",
+      operatorInstanceId: "operator-1",
+      eventUlid: eventUlid(2),
+      deploymentId: "deployment-b",
+      catalog: replacement,
+    });
+    expect(stale).toBe(state);
+
+    state = projectionReducer(state, {
+      type: "catalogReloaded",
+      operatorInstanceId: "operator-1",
+      eventUlid: eventUlid(2),
+      deploymentId: "deployment-a",
+      catalog: replacement,
+    });
+    expect(state.catalog).toBe(replacement);
+
+    expect(() =>
+      projectionReducer(initial, {
+        type: "envelopes",
+        envelopes: [
+          envelope("2", {
+            oneofKind: "catalogReloadRequired",
+            catalogReloadRequired: { deploymentId: "" },
+          }),
+        ],
+      }),
+    ).toThrow("deployment ID");
+  });
+
   it("tracks workflow reload status updates", () => {
     const state = projectionReducer(emptyProjection, { type: "baseline", baseline });
     const reloading = projectionReducer(state, {
@@ -671,6 +739,74 @@ describe("projectionReducer", () => {
 });
 
 describe("useOperatorProjection", () => {
+  it("reloads the catalog once for a new notice after the complete response arrives", async () => {
+    const reloadedCatalog = deferred<CatalogSnapshotMsg>();
+    const getCatalog = vi
+      .fn<ProjectionApi["getCatalog"]>()
+      .mockImplementation(() => reloadedCatalog.promise);
+    const api = createApi({
+      getCatalog,
+      streamUpdates: (_operatorInstanceId, _afterSequence, signal) =>
+        (async function* () {
+          yield envelope("2", {
+            oneofKind: "catalogReloadRequired",
+            catalogReloadRequired: { deploymentId: "deployment-a" },
+          });
+          yield envelope("3", {
+            oneofKind: "catalogReloadRequired",
+            catalogReloadRequired: { deploymentId: "deployment-a" },
+          });
+          yield* idleUpdates(signal);
+        })(),
+    });
+    const { result, unmount } = renderHook(() => useOperatorProjection(api));
+
+    await waitFor(() => expect(getCatalog).toHaveBeenCalledOnce());
+    await waitFor(() => expect(result.current.state.eventUlid).toBe(eventUlid(2)));
+    expect(result.current.state.catalog).toEqual(baseline.catalog);
+
+    act(() =>
+      reloadedCatalog.resolve(
+        CatalogSnapshotMsg.create({
+          operatorInstanceId: "operator-1",
+          asOfEventUlid: eventUlid(2),
+          revision: "0",
+          workflows: [],
+        }),
+      ),
+    );
+    await waitFor(() => expect(result.current.state.catalog?.revision).toBe("0"));
+    await waitFor(() => expect(result.current.state.eventUlid).toBe(eventUlid(3)));
+    expect(getCatalog).toHaveBeenCalledOnce();
+    unmount();
+  });
+
+  it("preserves the browser catalog when a reload page baseline is rejected", async () => {
+    const getCatalog = vi
+      .fn<ProjectionApi["getCatalog"]>()
+      .mockRejectedValue(new Error("Flow catalog changed while loading pages"));
+    const api = createApi({
+      getCatalog,
+      streamUpdates: (_operatorInstanceId, _afterSequence, signal) =>
+        (async function* () {
+          yield envelope("2", {
+            oneofKind: "catalogReloadRequired",
+            catalogReloadRequired: { deploymentId: "deployment-a" },
+          });
+          yield* idleUpdates(signal);
+        })(),
+    });
+    vi.spyOn(console, "info").mockImplementation(() => undefined);
+    vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    const { result, unmount } = renderHook(() => useOperatorProjection(api));
+
+    await waitFor(() => expect(getCatalog).toHaveBeenCalledOnce());
+    await waitFor(() => expect(result.current.state.connection).toBe("reconnecting"));
+    expect(result.current.state.catalog).toEqual(baseline.catalog);
+    expect(result.current.state.eventUlid).toBe(baseline.asOfEventUlid);
+    unmount();
+  });
+
   it("backs off failed connections up to one second and reconnects", async () => {
     vi.useFakeTimers();
     const failure = new Error("connection refused");

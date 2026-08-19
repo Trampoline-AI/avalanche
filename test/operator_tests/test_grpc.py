@@ -31,6 +31,7 @@ from runtime.operator.convert_v2 import (
     workflow_info_to_v2,
 )
 from runtime.operator.models import (
+    CatalogReloadRequired,
     CatalogSnapshot,
     NodeSnapshot,
     NodeState,
@@ -1341,7 +1342,7 @@ def test_unary_completion_after_close_cannot_overwrite_terminal_health(status):
             assert release.wait(timeout=1.0)
             if status is not None:
                 raise RpcFailure()
-            return pb.FlowListV2()
+            return pb.FlowListV2(cursor=_cursor(1), scope_ref=_scope())
 
     def invoke() -> None:
         try:
@@ -1615,6 +1616,92 @@ def test_watch_accepts_an_older_floor_while_replay_remains_retained():
         if server is not None:
             server.stop(grace=0).wait()
         operator.close()
+
+
+def test_catalog_reload_notice_discover_flows_cursor_covers_notice_for_provider():
+    operator = Operator([], watch=False, schedule=False)
+    server = None
+    provider = None
+    stream = None
+    try:
+        port = _unused_port()
+        server = serve(operator, port=port, block=False)
+        provider = GrpcStateProvider(f"localhost:{port}")
+        prior_cursor = provider._stub.DiscoverFlows(pb.DiscoverFlowsRequestV2()).cursor
+
+        operator.publish_update(CatalogReloadRequired(deployment_id="deployment-a"))
+        stream = provider._stub.WatchRunStatus(
+            pb.WatchRunStatusRequestV2(after_cursor=prior_cursor)
+        )
+        message = next(stream)
+
+        assert message.WhichOneof("payload") == "catalog_reload_required"
+        assert message.catalog_reload_required.deployment_id == "deployment-a"
+        assert message.scope_ref.reference == operator.operator_instance_id
+        assert message.cursor.stream == "operator-events"
+        assert message.cursor.event_ulid == message.event_ulid
+        provider._apply_update_envelope(
+            operator_update_envelope_from_v2(message),
+            event_cursor=message.cursor,
+        )
+        assert provider._catalog.operator_instance_id == operator.operator_instance_id
+        assert provider._catalog.as_of_event_ulid == message.event_ulid
+    finally:
+        if stream is not None:
+            stream.cancel()
+        if provider is not None:
+            provider.close()
+        if server is not None:
+            server.stop(grace=0).wait()
+        operator.close()
+
+
+@pytest.mark.parametrize("changed_field", ["scope", "cursor", "revision"])
+def test_provider_rejects_catalog_pages_that_change_baseline(changed_field):
+    initial_catalog = CatalogSnapshot(
+        operator_instance_id="operator-1",
+        as_of_event_ulid=_event_ulid(4),
+        revision=3,
+    )
+
+    class ChangingCatalogStub:
+        def __init__(self):
+            self.calls = 0
+
+        def DiscoverFlows(self, request, **kwargs):  # noqa: N802
+            del kwargs
+            self.calls += 1
+            if self.calls == 1:
+                assert not request.continuation.continuation_id
+                return pb.FlowListV2(
+                    cursor=_cursor(5),
+                    scope_ref=_scope(),
+                    revision=4,
+                    next_page=pb.ContinuationRefV2(
+                        scope_ref=_scope(),
+                        continuation_id="flows:1",
+                        cursor=_cursor(5),
+                    ),
+                )
+            assert request.continuation.continuation_id == "flows:1"
+            return pb.FlowListV2(
+                cursor=_cursor(6 if changed_field == "cursor" else 5),
+                scope_ref=_scope("operator-2" if changed_field == "scope" else "operator-1"),
+                revision=5 if changed_field == "revision" else 4,
+            )
+
+    provider = GrpcStateProvider("localhost:1")
+    stub = ChangingCatalogStub()
+    provider._stub = stub
+    provider._catalog = initial_catalog
+    try:
+        with pytest.raises(ValueError, match="scope, cursor, or revision"):
+            provider.get_catalog()
+    finally:
+        provider.close()
+
+    assert stub.calls == 2
+    assert provider._catalog == initial_catalog
 
 
 def test_authoritative_stream_progress_resets_reconnect_backoff():
@@ -2492,7 +2579,7 @@ def test_unary_client_calls_pass_finite_timeout():
 
         def DiscoverFlows(self, request, *, timeout, **kwargs):  # noqa: N802
             self._capture("list", timeout)
-            return pb.FlowListV2()
+            return pb.FlowListV2(cursor=_cursor(1), scope_ref=_scope())
 
         def StartRun(self, request, *, timeout, **kwargs):  # noqa: N802
             self._capture("start", timeout)

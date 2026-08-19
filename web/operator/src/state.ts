@@ -37,6 +37,8 @@ export interface OperatorProjection {
   lastUpdate?: OperatorUpdate;
   connection: "connecting" | "live" | "reconnecting";
   workflowReloading: boolean;
+  catalogReloadDeploymentId?: string;
+  catalogReloadNoticeEventUlid?: string;
   error?: string;
   action?: { kind: "start" | "cancel"; target: string };
 }
@@ -44,6 +46,13 @@ export interface OperatorProjection {
 type ProjectionAction =
   | { type: "baseline"; baseline: StructuralBaseline }
   | { type: "envelopes"; envelopes: OperatorUpdateEnvelope[] }
+  | {
+      type: "catalogReloaded";
+      operatorInstanceId: string;
+      eventUlid: string;
+      deploymentId: string;
+      catalog: CatalogSnapshotMsg;
+    }
   | { type: "connection"; connection: OperatorProjection["connection"]; error?: string }
   | { type: "action"; action?: OperatorProjection["action"] }
   | { type: "selectionLoading"; runId: string }
@@ -186,6 +195,17 @@ function applyEnvelope(
   }
   if (change.oneofKind === "catalogReplaced") {
     if (change.catalogReplaced.catalog) next.catalog = change.catalogReplaced.catalog;
+    return next;
+  }
+  if (change.oneofKind === "catalogReloadRequired") {
+    const deploymentId = change.catalogReloadRequired.deploymentId;
+    if (!deploymentId) {
+      throw new Error("Catalog reload notice omitted its deployment ID");
+    }
+    if (state.catalogReloadDeploymentId !== deploymentId) {
+      next.catalogReloadDeploymentId = deploymentId;
+      next.catalogReloadNoticeEventUlid = update.eventUlid;
+    }
     return next;
   }
   if (change.oneofKind === "runCreated" && change.runCreated.summary) {
@@ -335,6 +355,24 @@ export function projectionReducer(
       connection: "live",
     };
   }
+  if (action.type === "catalogReloaded") {
+    if (
+      !action.catalog.operatorInstanceId ||
+      !action.catalog.asOfEventUlid ||
+      action.catalog.operatorInstanceId !== action.operatorInstanceId ||
+      action.catalog.asOfEventUlid < action.eventUlid
+    ) {
+      throw new Error("Catalog reload baseline is not a complete current catalog");
+    }
+    if (
+      state.operatorInstanceId !== action.operatorInstanceId ||
+      state.catalogReloadDeploymentId !== action.deploymentId ||
+      state.catalogReloadNoticeEventUlid !== action.eventUlid
+    ) {
+      return state;
+    }
+    return { ...state, catalog: action.catalog };
+  }
   if (action.type === "connection") {
     return { ...state, connection: action.connection, error: action.error };
   }
@@ -468,11 +506,19 @@ export function useOperatorProjection(api: OperatorApi) {
         const cycle = new AbortController();
         cycleController.current = cycle;
         let pending: OperatorUpdateEnvelope[] = [];
+        let pendingCatalogReloads: Array<{
+          type: "catalogReloaded";
+          operatorInstanceId: string;
+          eventUlid: string;
+          deploymentId: string;
+          catalog: CatalogSnapshotMsg;
+        }> = [];
         let pendingProjection = stateRef.current;
         let retryAfterCycle = 0;
 
         const clearPending = () => {
           pending = [];
+          pendingCatalogReloads = [];
           if (pendingFrame.current !== undefined) {
             window.cancelAnimationFrame(pendingFrame.current);
             pendingFrame.current = undefined;
@@ -484,6 +530,7 @@ export function useOperatorProjection(api: OperatorApi) {
             pendingFrame.current = undefined;
             if (cycle.signal.aborted) {
               pending = [];
+              pendingCatalogReloads = [];
               return;
             }
             const envelopes = pending.splice(0, MAX_ENVELOPES_PER_FRAME);
@@ -497,7 +544,9 @@ export function useOperatorProjection(api: OperatorApi) {
               }
               dispatch({ type: "envelopes", envelopes });
             }
-            if (pending.length > 0) scheduleFrame();
+            const catalogReloads = pendingCatalogReloads.splice(0, MAX_ENVELOPES_PER_FRAME);
+            for (const catalogReloaded of catalogReloads) dispatch(catalogReloaded);
+            if (pending.length > 0 || pendingCatalogReloads.length > 0) scheduleFrame();
           });
         };
 
@@ -535,6 +584,7 @@ export function useOperatorProjection(api: OperatorApi) {
               cycle.abort();
               break;
             }
+            const previousCatalogReloadNotice = pendingProjection.catalogReloadNoticeEventUlid;
             try {
               pendingProjection = applyEnvelope(pendingProjection, envelope);
             } catch {
@@ -544,6 +594,26 @@ export function useOperatorProjection(api: OperatorApi) {
             pending.push(envelope);
             expectedEventUlid = envelope.payload.update.eventUlid;
             scheduleFrame();
+            const change = envelope.payload.update.change;
+            if (
+              change.oneofKind === "catalogReloadRequired" &&
+              previousCatalogReloadNotice !== pendingProjection.catalogReloadNoticeEventUlid &&
+              pendingProjection.catalogReloadNoticeEventUlid ===
+                envelope.payload.update.eventUlid
+            ) {
+              const catalog = await api.getCatalog(cycle.signal);
+              if (cycle.signal.aborted || lifecycle.signal.aborted) break;
+              const catalogReloaded: Extract<ProjectionAction, { type: "catalogReloaded" }> = {
+                type: "catalogReloaded",
+                operatorInstanceId: envelope.operatorInstanceId,
+                eventUlid: envelope.payload.update.eventUlid,
+                deploymentId: change.catalogReloadRequired.deploymentId,
+                catalog,
+              };
+              pendingProjection = projectionReducer(pendingProjection, catalogReloaded);
+              pendingCatalogReloads.push(catalogReloaded);
+              scheduleFrame();
+            }
           }
           clearPending();
           if (!lifecycle.signal.aborted) {

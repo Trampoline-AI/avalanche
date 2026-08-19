@@ -2919,6 +2919,52 @@ class TestUIStore:
         assert provider.operator_instance_id == "operator-restarted"
         assert provider.stream_state == "live"
 
+    def test_catalog_response_started_before_reload_cannot_overwrite_catalog(self):
+        catalog_entered = threading.Event()
+        catalog_release = threading.Event()
+
+        class BlockingCatalogProvider(MockStateProvider):
+            def __init__(self):
+                super().__init__()
+                self.block_catalog = False
+
+            def list_workflows(self):
+                if self.block_catalog:
+                    catalog_entered.set()
+                    catalog_release.wait()
+                    return [INGEST_WORKFLOW]
+                return super().list_workflows()
+
+        provider = BlockingCatalogProvider()
+        store = UIStore(provider)
+        _apply_async_updates(store)
+        updates = _signal_background_updates(store)
+        try:
+            provider.block_catalog = True
+            store._refresh_workflow_catalog()
+            assert catalog_entered.wait(timeout=1.0)
+
+            store.enqueue_catalog_update(
+                CatalogSnapshot(
+                    operator_instance_id="operator-1",
+                    as_of_event_ulid=_event_ulid(2),
+                    revision=0,
+                    workflows=(ORDER_WORKFLOW,),
+                )
+            )
+            assert updates.put_event.wait(timeout=1.0)
+            store._apply_background_updates()
+            assert store.workflows == [ORDER_WORKFLOW]
+
+            updates.put_event.clear()
+            catalog_release.set()
+            assert updates.put_event.wait(timeout=1.0)
+            store._apply_background_updates()
+            assert store.workflows == [ORDER_WORKFLOW]
+        finally:
+            catalog_release.set()
+            store.shutdown()
+
     @pytest.mark.parametrize("refresh", ["catalog", "runs", "statuses"])
     def test_application_error_refresh_preserves_authoritative_caches(self, refresh):
         provider = _ApplicationErrorRefreshProvider()

@@ -13,7 +13,15 @@ import pytest
 
 from avalanche.runtime import File
 from runtime.operator.client import GrpcStateProvider
-from runtime.operator.models import LogEntry, LogLevel, RunState, RunStatus, SequencedLogEntry
+from runtime.operator.models import (
+    LogEntry,
+    LogLevel,
+    RunState,
+    RunStatus,
+    SequencedLogEntry,
+    WorkflowDescriptor,
+    WorkflowLocator,
+)
 from runtime.operator.operator import Operator
 from runtime.operator.proto import operator_pb2 as pb
 from runtime.operator.proto import operator_pb2_grpc as pb_grpc
@@ -58,7 +66,7 @@ def stub(v2_server):
 
 @pytest.fixture
 def contract_stub():
-    operator = Operator([], schedule=False, watch=False)
+    operator = Operator([], schedule=False, watch=False, webhook_port=0)
     port = _unused_port()
     server = serve(operator, port=port, block=False)
     channel = grpc.insecure_channel(f"localhost:{port}")
@@ -193,7 +201,16 @@ def test_client_transport_metadata_reaches_unary_and_watch_calls():
     class CapturingStub:
         def DiscoverFlows(self, request, **kwargs):  # noqa: N802
             calls.append(("unary", kwargs["metadata"]))
-            return pb.FlowListV2()
+            return pb.FlowListV2(
+                cursor=pb.LifecycleCursorV2(
+                    stream="operator-events",
+                    topology_fingerprint="operator-events-topology",
+                    stream_generation=1,
+                    retained_floor_event_ulid="0" * 26,
+                    event_ulid="0" * 26,
+                ),
+                scope_ref=pb.ScopeReferenceV2(reference="operator-1"),
+            )
 
         def WatchRunStatus(self, request, **kwargs):  # noqa: N802
             calls.append(("watch", kwargs["metadata"]))
@@ -300,6 +317,87 @@ def test_discover_flows_returns_enriched_flow_list(stub):
     assert simple.topology.node_ids
     assert simple.cron == "*/5 * * * *"
     assert page.scan_targets
+
+
+def test_discover_flows_continuation_keeps_its_catalog_snapshot(contract_stub, monkeypatch):
+    from avalanche import Webhook, source, workflow
+
+    operator, service = contract_stub
+
+    @source
+    def alpha_source():
+        return "alpha"
+
+    @source
+    def beta_source():
+        return "beta"
+
+    @source
+    def omega_source():
+        return "omega"
+
+    @workflow
+    def alpha():
+        alpha_source()
+
+    @workflow
+    def beta():
+        beta_source()
+
+    @workflow(cron="* * * * *", webhook=Webhook(path="/omega"))
+    def omega():
+        omega_source()
+
+    operator._registry.register(alpha)
+    operator._registry.register(omega)
+    omega_descriptor = WorkflowDescriptor(
+        workflow_id="omega",
+        display_name="omega",
+        locator=WorkflowLocator("manual", "omega.py", "omega"),
+        node_ids=(),
+        graph=(),
+        node_types=(),
+        display_names=(),
+        cron="* * * * *",
+        webhook_path="/omega",
+        webhook_enabled=True,
+    )
+    operator._scheduler.reconcile((omega_descriptor,))
+    scheduled_runs = []
+    monkeypatch.setattr(
+        operator,
+        "start_run",
+        lambda workflow_id, *, triggered_by: scheduled_runs.append(
+            (workflow_id, triggered_by)
+        ),
+    )
+    first = service.DiscoverFlows(pb.DiscoverFlowsRequestV2(page_size=1))
+
+    assert [flow.workflow_selector for flow in first.flows] == ["alpha"]
+    assert first.next_page.continuation_id
+
+    operator._registry.register(beta)
+    operator._scheduler._check_schedules()
+    operator._reconcile_webhooks((omega_descriptor,))
+    operator._publish_catalog(operator._registry.view)
+    current = service.DiscoverFlows(pb.DiscoverFlowsRequestV2())
+    current_omega = next(flow for flow in current.flows if flow.workflow_selector == "omega")
+    assert scheduled_runs == [("omega", "scheduled")]
+    assert current_omega.last_run_at > 0
+    assert current_omega.webhook_active
+    assert current_omega.webhook_url
+
+    second = service.DiscoverFlows(
+        pb.DiscoverFlowsRequestV2(page_size=1, continuation=first.next_page)
+    )
+
+    assert [flow.workflow_selector for flow in second.flows] == ["omega"]
+    assert second.flows[0].last_run_at == 0
+    assert not second.flows[0].webhook_active
+    assert second.flows[0].webhook_url == ""
+    assert second.cursor == first.cursor
+    assert second.scope_ref == first.scope_ref
+    assert second.revision == first.revision
 
 
 def test_start_run_requires_idempotency_key(stub):

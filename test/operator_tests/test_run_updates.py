@@ -26,6 +26,7 @@ from runtime.operator.models import (
     AgentEventAppended,
     AgentEventDescriptor,
     AgentEventDetailAppended,
+    CatalogReloadRequired,
     CatalogReplaced,
     CatalogSnapshot,
     LogAppended,
@@ -233,6 +234,7 @@ def test_typed_update_envelopes_roundtrip_all_changes():
                 revision=11,
             )
         ),
+        CatalogReloadRequired(deployment_id="deployment-a"),
         WorkflowReloadStatus(reloading=True),
     ]
 
@@ -252,6 +254,8 @@ def test_typed_update_envelopes_roundtrip_all_changes():
         if isinstance(change, CatalogReplaced):
             assert message.flow_list_changed.flow_list.cursor.stream == "operator-events"
             assert message.flow_list_changed.flow_list.revision == 11
+        if isinstance(change, CatalogReloadRequired):
+            assert message.catalog_reload_required.deployment_id == "deployment-a"
         if isinstance(change, TerminalSealAppended):
             activity = message.activity_appended.activity
             assert activity.kind == "terminal_seal"
@@ -552,6 +556,80 @@ def test_client_advances_past_workflow_reload_status():
         provider.close()
 
 
+def test_client_reloads_catalog_once_for_new_deployment_notice():
+    provider = GrpcStateProvider("localhost:1")
+    catalog = CatalogSnapshot(
+        operator_instance_id="operator-1",
+        as_of_event_ulid=_event_ulid(2),
+        revision=1,
+    )
+    reads = []
+    received_catalogs = []
+
+    def read_catalog():
+        reads.append("catalog")
+        return catalog
+
+    provider._read_catalog = read_catalog
+    provider.on_catalog_update(received_catalogs.append)
+    try:
+        provider._apply_update_envelope(_created())
+        first = OperatorUpdateEnvelope(
+            operator_instance_id="operator-1",
+            update=_operator_update(
+                sequence=2,
+                change=CatalogReloadRequired(deployment_id="deployment-a"),
+            ),
+        )
+        provider._apply_update_envelope(first, event_cursor=_cursor(2))
+
+        assert provider._apply_update_envelope(first, event_cursor=_cursor(2)) == (None, None)
+
+        assert reads == ["catalog"]
+        assert received_catalogs == [catalog]
+        assert provider._catalog == catalog
+        assert provider._cursor.event_ulid == _event_ulid(2)
+
+        provider._apply_update_envelope(
+            OperatorUpdateEnvelope(
+                operator_instance_id="operator-1",
+                update=_operator_update(
+                    sequence=3,
+                    change=CatalogReloadRequired(deployment_id="deployment-a"),
+                ),
+            ),
+            event_cursor=_cursor(3),
+        )
+        assert reads == ["catalog"]
+        assert received_catalogs == [catalog]
+        assert provider._cursor.event_ulid == _event_ulid(3)
+
+        with pytest.raises(_RunUpdateResetError, match="different update"):
+            provider._apply_update_envelope(
+                OperatorUpdateEnvelope(
+                    operator_instance_id="operator-1",
+                    update=_operator_update(
+                        sequence=3,
+                        change=CatalogReloadRequired(deployment_id="deployment-b"),
+                    ),
+                ),
+                event_cursor=_cursor(3),
+            )
+        with pytest.raises(_RunUpdateResetError, match="moved backwards"):
+            provider._apply_update_envelope(
+                OperatorUpdateEnvelope(
+                    operator_instance_id="operator-1",
+                    update=_operator_update(
+                        sequence=2,
+                        change=CatalogReloadRequired(deployment_id="deployment-a"),
+                    ),
+                ),
+                event_cursor=_cursor(2),
+            )
+    finally:
+        provider.close()
+
+
 def test_client_applies_ordered_updates_and_ignores_duplicates():
     provider = GrpcStateProvider("localhost:1")
     try:
@@ -836,6 +914,39 @@ def test_malformed_activity_conversion_is_fail_closed_and_stream_resets(kind, ex
             yield malformed
 
     provider._stub = MalformedActivityStub()
+
+    def require_reset(scope, observed, *, event_cursor):
+        resets.append((scope, observed, event_cursor))
+        provider._stream_stop.set()
+
+    provider._require_stream_reset = require_reset
+    try:
+        provider._stream_loop()
+    finally:
+        provider.close()
+
+    assert resets == [("operator-1", _event_ulid(2), malformed.cursor)]
+
+
+def test_malformed_catalog_reload_notice_is_fail_closed_and_stream_resets():
+    malformed = pb.RunStatusEnvelopeV2(
+        scope_ref=_scope(),
+        event_ulid=_event_ulid(2),
+        cursor=_cursor(2),
+        catalog_reload_required=pb.CatalogReloadRequiredV2(),
+    )
+
+    with pytest.raises(ValueError, match="deployment ID"):
+        operator_update_envelope_from_v2(malformed)
+
+    provider = GrpcStateProvider("localhost:1")
+    resets = []
+
+    class MalformedCatalogReloadStub:
+        def WatchRunStatus(self, request, *, metadata):  # noqa: N802
+            yield malformed
+
+    provider._stub = MalformedCatalogReloadStub()
 
     def require_reset(scope, observed, *, event_cursor):
         resets.append((scope, observed, event_cursor))

@@ -4,6 +4,7 @@ import { GrpcWebOperatorApi, type AgentEventPageRequest, type LogPageRequest } f
 import {
   ActivityDetailChunkV2,
   ActivityDetailRefV2,
+  CatalogReloadRequiredV2,
   ContinuationRefV2,
   FlowListV2,
   LifecycleCursorV2,
@@ -133,6 +134,37 @@ describe("GrpcWebOperatorApi", () => {
     expect(getRunSnapshot).not.toHaveBeenCalled();
   });
 
+  it("rejects catalog pages that change scope, cursor, or revision", async () => {
+    const changedPages = [
+      FlowListV2.create({ cursor: cursor(8), scopeRef: scope("operator-2"), revision: "4" }),
+      FlowListV2.create({ cursor: cursor(9), scopeRef: scope(), revision: "4" }),
+      FlowListV2.create({ cursor: cursor(8), scopeRef: scope(), revision: "5" }),
+    ];
+
+    for (const changedPage of changedPages) {
+      const firstPage = FlowListV2.create({
+        cursor: cursor(8),
+        scopeRef: scope(),
+        revision: "4",
+        nextPage: ContinuationRefV2.create({
+          scopeRef: scope(),
+          continuationId: "flows:1",
+          cursor: cursor(8),
+        }),
+      });
+      const discoverFlows = vi
+        .fn()
+        .mockReturnValueOnce({ response: Promise.resolve(firstPage) })
+        .mockReturnValueOnce({ response: Promise.resolve(changedPage) });
+      const api = apiWith({ discoverFlows });
+
+      await expect(api.getCatalog()).rejects.toThrow(
+        "Flow catalog changed while loading pages",
+      );
+      expect(discoverFlows).toHaveBeenCalledTimes(2);
+    }
+  });
+
   it("preserves a V2 workflow selector on a live run-created summary", async () => {
     const envelope = RunStatusEnvelopeV2.create({
       eventUlid: eventUlid(9),
@@ -178,6 +210,67 @@ describe("GrpcWebOperatorApi", () => {
       { scopeRef: { reference: "operator-1" } },
       undefined,
     );
+  });
+
+  it("maps a catalog reload notice and rejects malformed or unknown payloads", async () => {
+    const valid = RunStatusEnvelopeV2.create({
+      eventUlid: eventUlid(9),
+      cursor: cursor(9),
+      scopeRef: scope(),
+      payload: {
+        oneofKind: "catalogReloadRequired",
+        catalogReloadRequired: CatalogReloadRequiredV2.create({ deploymentId: "deployment-a" }),
+      },
+    });
+    const validApi = apiWith({
+      watchRunStatus: vi.fn(() => ({
+        responses: (async function* () {
+          yield valid;
+        })(),
+      })),
+    });
+
+    const updates = [];
+    for await (const update of validApi.streamUpdates("operator-1", eventUlid(8))) {
+      updates.push(update);
+    }
+    expect(updates).toMatchObject([
+      {
+        payload: {
+          update: {
+            change: {
+              oneofKind: "catalogReloadRequired",
+              catalogReloadRequired: { deploymentId: "deployment-a" },
+            },
+          },
+        },
+      },
+    ]);
+
+    const malformedPayloads: RunStatusEnvelopeV2["payload"][] = [
+      {
+        oneofKind: "catalogReloadRequired",
+        catalogReloadRequired: CatalogReloadRequiredV2.create(),
+      },
+      { oneofKind: undefined },
+    ];
+    for (const payload of malformedPayloads) {
+      const api = apiWith({
+        watchRunStatus: vi.fn(() => ({
+          responses: (async function* () {
+            yield RunStatusEnvelopeV2.create({
+              eventUlid: eventUlid(9),
+              cursor: cursor(9),
+              scopeRef: scope(),
+              payload,
+            });
+          })(),
+        })),
+      });
+      await expect(
+        api.streamUpdates("operator-1", eventUlid(8))[Symbol.asyncIterator]().next(),
+      ).rejects.toThrow(/deployment ID|Unknown run status payload/);
+    }
   });
 
   it("maps terminal seals in snapshots and structural activity updates", async () => {

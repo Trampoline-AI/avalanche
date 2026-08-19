@@ -1059,6 +1059,16 @@ export const CatalogReplaced = {
   },
 };
 
+export interface CatalogReloadRequired {
+  deploymentId: string;
+}
+
+export const CatalogReloadRequired = {
+  create(value: DeepPartial<CatalogReloadRequired> = {}): CatalogReloadRequired {
+    return { deploymentId: "", ...value } as CatalogReloadRequired;
+  },
+};
+
 export interface WorkflowReloadStatus {
   /**
    * @generated from protobuf field: bool reloading = 1
@@ -1150,6 +1160,10 @@ export interface OperatorUpdate {
          * @generated from protobuf field: avalanche.operator.CatalogReplaced catalog_replaced = 8
          */
         catalogReplaced: CatalogReplaced;
+      }
+    | {
+        oneofKind: "catalogReloadRequired";
+        catalogReloadRequired: CatalogReloadRequired;
       }
     | {
         oneofKind: "workflowReloadStatus";

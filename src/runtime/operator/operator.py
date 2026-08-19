@@ -33,6 +33,7 @@ from .models import (
     AgentEventDescriptor,
     AgentEventDetailAppended,
     AgentEventPage,
+    CatalogReloadRequired,
     CatalogReplaced,
     CatalogSnapshot,
     CatalogView,
@@ -49,6 +50,7 @@ from .models import (
     NodeStatus,
     NodeStatusChanged,
     OperatorUpdate,
+    OperatorUpdateChange,
     OperatorUpdateEnvelope,
     ResetRequired,
     RunCreated,
@@ -429,7 +431,9 @@ class Operator:
             return self._catalog_snapshot(self._registry.view, self._catalog_sequence)
 
     def _catalog_snapshot(self, view: CatalogView, as_of_sequence: int) -> CatalogSnapshot:
-        workflows = self._registry.list_workflows(view)
+        # get_catalog() and _publish_catalog() call this while self._lock is held.
+        # Own registry projections before adding dynamic schedule/webhook state.
+        workflows = deepcopy(self._registry.list_workflows(view))
         for info in workflows:
             route = next(
                 (
@@ -2706,12 +2710,18 @@ class Operator:
             self._notification_queue.put_nowait(notifications)
         self._wait_for_notifications(notifications)
 
-    def _publish_workflow_reload_status(self, *, reloading: bool) -> None:
+    def publish_update(self, change: OperatorUpdateChange) -> None:
+        """Publish one caller-owned typed lifecycle update."""
         with self._lock:
             self._sequence += 1
+            if isinstance(change, CatalogReloadRequired):
+                # A reload notice fences the existing catalog graph at this event.
+                # DiscoverFlows can therefore return a baseline that covers the notice
+                # without publishing a replacement catalog or changing its contents.
+                self._catalog_sequence = self._sequence
             update = OperatorUpdate(
                 sequence=self._sequence,
-                change=WorkflowReloadStatus(reloading=reloading),
+                change=change,
             )
             self._stream_history.append(update)
             envelope = OperatorUpdateEnvelope(
@@ -2731,6 +2741,9 @@ class Operator:
             )
             self._notification_queue.put_nowait(notifications)
         self._wait_for_notifications(notifications)
+
+    def _publish_workflow_reload_status(self, *, reloading: bool) -> None:
+        self.publish_update(WorkflowReloadStatus(reloading=reloading))
 
     def _wait_for_notifications(self, notifications: _RunNotifications) -> None:
         notifications.ready.set()

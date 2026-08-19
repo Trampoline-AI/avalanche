@@ -10,6 +10,7 @@ from datetime import datetime
 from .models import (
     AgentEventAppended,
     AgentEventDescriptor,
+    CatalogReloadRequired,
     CatalogReplaced,
     CatalogSnapshot,
     LogAppended,
@@ -549,6 +550,12 @@ def update_envelope_to_v2(
                 )
             )
         )
+    elif isinstance(change, CatalogReloadRequired):
+        if not change.deployment_id:
+            raise ValueError("catalog reload notice requires a deployment ID")
+        message.catalog_reload_required.CopyFrom(
+            pb.CatalogReloadRequiredV2(deployment_id=change.deployment_id)
+        )
     elif isinstance(change, WorkflowReloadStatus):
         message.flow_reload_status.CopyFrom(pb.FlowReloadStatusV2(reloading=change.reloading))
     else:
@@ -881,6 +888,11 @@ def operator_update_envelope_from_v2(
         change = CatalogReplaced(
             catalog=catalog_snapshot_from_v2(msg.flow_list_changed.flow_list)
         )
+    elif payload == "catalog_reload_required":
+        deployment_id = msg.catalog_reload_required.deployment_id
+        if not deployment_id:
+            raise ValueError("catalog reload notice omitted its deployment ID")
+        change = CatalogReloadRequired(deployment_id=deployment_id)
     elif payload == "flow_reload_status":
         change = WorkflowReloadStatus(reloading=msg.flow_reload_status.reloading)
     elif payload is None:

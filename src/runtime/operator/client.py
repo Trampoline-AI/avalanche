@@ -36,6 +36,7 @@ from .models import (
     AgentEvent,
     AgentEventAppended,
     AgentEventDetailAppended,
+    CatalogReloadRequired,
     CatalogReplaced,
     CatalogSnapshot,
     DetailUpdate,
@@ -302,6 +303,7 @@ class GrpcStateProvider:
         self._validated_reset_baseline: ResetBaseline | None = None
         self._last_applied_update: OperatorUpdate | None = None
         self._catalog = CatalogSnapshot()
+        self._catalog_reload_deployment_id: str | None = None
 
         # Operator reachability is independent from live-update stream health.
         self.operator_instance_id: str = ""
@@ -422,8 +424,16 @@ class GrpcStateProvider:
         return operation_error
 
     def get_catalog(self) -> CatalogSnapshot:
+        catalog = self._read_catalog()
+        with self._state_lock:
+            self._install_catalog_locked(catalog)
+        return catalog
+
+    def _read_catalog(self) -> CatalogSnapshot:
         flows: list[pb.FlowInfoV2] = []
         continuation: pb.ContinuationRefV2 | None = None
+        catalog_marker: tuple[str, int, str, str, int, str, str] | None = None
+        seen_tokens: set[str] = set()
         page_count = 0
         while True:
             page_count += 1
@@ -432,14 +442,55 @@ class GrpcStateProvider:
             if continuation is not None:
                 request.continuation.CopyFrom(continuation)
             page = self._call(self._stub.DiscoverFlows, request)
+            cursor = page.cursor
+            if (
+                not page.scope_ref.reference
+                or cursor.stream != _EVENTS_STREAM
+                or not self._has_complete_lifecycle_cursor(cursor)
+            ):
+                raise ValueError("flow catalog page is not a complete baseline binding")
+            page_marker = (
+                page.scope_ref.reference,
+                page.revision,
+                cursor.stream,
+                cursor.topology_fingerprint,
+                cursor.stream_generation,
+                cursor.retained_floor_event_ulid,
+                cursor.event_ulid,
+            )
+            if catalog_marker is None:
+                catalog_marker = page_marker
+            elif page_marker != catalog_marker:
+                raise ValueError(
+                    "flow catalog pages crossed a scope, cursor, or revision boundary"
+                )
             flows.extend(page.flows)
-            if not page.next_page.continuation_id:
-                catalog = catalog_snapshot_from_v2(page, flows=flows)
-                break
-            continuation = page.next_page
-        with self._state_lock:
-            self._install_catalog_locked(catalog)
-        return catalog
+            next_page = page.next_page
+            if not next_page.continuation_id:
+                return catalog_snapshot_from_v2(page, flows=flows)
+            if (
+                next_page.scope_ref.reference != page.scope_ref.reference
+                or not self._has_complete_lifecycle_cursor(next_page.cursor)
+                or (
+                    next_page.cursor.stream,
+                    next_page.cursor.topology_fingerprint,
+                    next_page.cursor.stream_generation,
+                    next_page.cursor.retained_floor_event_ulid,
+                    next_page.cursor.event_ulid,
+                )
+                != (
+                    cursor.stream,
+                    cursor.topology_fingerprint,
+                    cursor.stream_generation,
+                    cursor.retained_floor_event_ulid,
+                    cursor.event_ulid,
+                )
+            ):
+                raise ValueError("flow catalog continuation does not match its page baseline")
+            if next_page.continuation_id in seen_tokens:
+                raise ValueError("flow catalog pagination repeated a page token")
+            seen_tokens.add(next_page.continuation_id)
+            continuation = next_page
 
     def list_workflows(self) -> list[WorkflowInfo]:
         return list(self.get_catalog().workflows)
@@ -1176,6 +1227,10 @@ class GrpcStateProvider:
             ):
                 raise _RunUpdateResetError("reset cursors are not a complete event binding")
             return
+        if payload == "catalog_reload_required":
+            if not message.catalog_reload_required.deployment_id:
+                raise _RunUpdateResetError("catalog reload notice omitted its deployment ID")
+            return
         if payload == "run_created":
             created = message.run_created
             run_id = created.summary.run_id
@@ -1201,6 +1256,13 @@ class GrpcStateProvider:
                     node_id=activity.node_id,
                     revision=activity.trace.revision,
                 )
+        elif payload not in {
+            "run_status_changed",
+            "node_status_changed",
+            "flow_list_changed",
+            "flow_reload_status",
+        }:
+            raise _RunUpdateResetError("run status envelope has an unknown payload")
 
     def _activity_continuation_for(
         self,
@@ -2109,9 +2171,15 @@ class GrpcStateProvider:
             self._record_unary_error(e)
             return False
 
-    def _install_catalog_locked(self, catalog: CatalogSnapshot) -> None:
+    def _install_catalog_locked(
+        self,
+        catalog: CatalogSnapshot,
+        *,
+        allow_revision_regression: bool = False,
+    ) -> None:
         if (
-            catalog.operator_instance_id == self._catalog.operator_instance_id
+            not allow_revision_regression
+            and catalog.operator_instance_id == self._catalog.operator_instance_id
             and catalog.revision < self._catalog.revision
         ):
             return
@@ -2327,6 +2395,24 @@ class GrpcStateProvider:
             if self._reset_acknowledged.wait(0.1):
                 break
 
+    def _load_catalog_reload_baseline(
+        self,
+        envelope: OperatorUpdateEnvelope,
+        update: OperatorUpdate,
+    ) -> CatalogSnapshot:
+        """Read a complete catalog without replacing the current local baseline."""
+        try:
+            catalog = self._read_catalog()
+        except (AttributeError, OSError, OverflowError, TypeError, ValueError) as exc:
+            raise _RunUpdateResetError("catalog reload baseline is malformed") from exc
+        if (
+            catalog.operator_instance_id != envelope.operator_instance_id
+            or not self._is_canonical_event_ulid(catalog.as_of_event_ulid)
+            or catalog.as_of_event_ulid < update.event_ulid
+        ):
+            raise _RunUpdateResetError("catalog reload baseline does not cover its notice")
+        return catalog
+
     def _apply_update_envelope(
         self,
         envelope: OperatorUpdateEnvelope,
@@ -2347,6 +2433,16 @@ class GrpcStateProvider:
                     raise _RunUpdateResetError("replayed event ULID has a different update")
             if event_cursor is not None:
                 self._validate_event_cursor_locked(update, event_cursor)
+        catalog_reload_baseline: CatalogSnapshot | None = None
+        if isinstance(update.change, CatalogReloadRequired):
+            if not update.change.deployment_id:
+                raise _RunUpdateResetError("catalog reload notice omitted its deployment ID")
+            with self._state_lock:
+                reload_required = (
+                    self._catalog_reload_deployment_id != update.change.deployment_id
+                )
+            if reload_required:
+                catalog_reload_baseline = self._load_catalog_reload_baseline(envelope, update)
         log_detail: LogEntry | None = None
         event_detail: AgentEvent | None = None
         if isinstance(update.change, LogAppended):
@@ -2379,15 +2475,21 @@ class GrpcStateProvider:
                 size_bytes=descriptor.size_bytes,
             )
         with self._state_lock:
+            catalog_reloaded = (
+                isinstance(update.change, CatalogReloadRequired)
+                and catalog_reload_baseline is not None
+                and self._catalog_reload_deployment_id != update.change.deployment_id
+            )
             result = self._apply_update_envelope_locked(
                 envelope,
                 log_detail=log_detail,
                 event_detail=event_detail,
                 event_cursor=event_cursor,
+                catalog_reload_baseline=catalog_reload_baseline,
             )
             catalog = (
                 deepcopy(self._catalog)
-                if update is not None and isinstance(update.change, CatalogReplaced)
+                if isinstance(update.change, CatalogReplaced) or catalog_reloaded
                 else None
             )
         if catalog is not None:
@@ -2427,6 +2529,7 @@ class GrpcStateProvider:
         log_detail: LogEntry | None = None,
         event_detail: AgentEvent | None = None,
         event_cursor: pb.LifecycleCursorV2 | None = None,
+        catalog_reload_baseline: CatalogSnapshot | None = None,
     ) -> tuple[RunState | None, DetailUpdate | None]:
         update = envelope.update
         if self._closed:
@@ -2469,6 +2572,18 @@ class GrpcStateProvider:
             ):
                 raise _RunUpdateResetError("catalog update marker mismatch")
             self._install_catalog_locked(catalog)
+            run = None
+        elif isinstance(change, CatalogReloadRequired):
+            if not change.deployment_id:
+                raise _RunUpdateResetError("catalog reload notice omitted its deployment ID")
+            if self._catalog_reload_deployment_id != change.deployment_id:
+                if catalog_reload_baseline is None:
+                    raise _RunUpdateResetError("catalog reload baseline is unavailable")
+                self._install_catalog_locked(
+                    catalog_reload_baseline,
+                    allow_revision_regression=True,
+                )
+                self._catalog_reload_deployment_id = change.deployment_id
             run = None
         elif isinstance(change, WorkflowReloadStatus):
             run = None
@@ -2700,6 +2815,7 @@ class GrpcStateProvider:
             self._cursor = _StreamCursor(operator_instance_id, as_of_event_ulid)
             self._event_cursor = None
             self._last_applied_update = None
+            self._catalog_reload_deployment_id = None
 
     def _notify_catalog_callbacks(self, catalog: CatalogSnapshot) -> None:
         for callback in self._catalog_callbacks:

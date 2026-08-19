@@ -227,6 +227,11 @@ def test_v2_cursors_and_resets_require_complete_bounded_replay_state():
         field.message_type.name == "LifecycleCursorV2" for field in reset_fields.values()
     )
 
+    reload_fields = pb.CatalogReloadRequiredV2.DESCRIPTOR.fields_by_name
+    assert {name: field.number for name, field in reload_fields.items()} == {
+        "deployment_id": 1,
+    }
+
     status_fields = pb.RunStatusEnvelopeV2.DESCRIPTOR.fields_by_name
     assert {name: field.number for name, field in status_fields.items()} == {
         "event_ulid": 1,
@@ -239,6 +244,7 @@ def test_v2_cursors_and_resets_require_complete_bounded_replay_state():
         "flow_list_changed": 8,
         "flow_reload_status": 9,
         "scope_ref": 10,
+        "catalog_reload_required": 11,
     }
     assert status_fields["cursor"].message_type.name == "LifecycleCursorV2"
     assert status_fields["cursor"].containing_oneof is None
@@ -251,6 +257,7 @@ def test_v2_cursors_and_resets_require_complete_bounded_replay_state():
         "activity_appended",
         "flow_list_changed",
         "flow_reload_status",
+        "catalog_reload_required",
     ]
 
     complete_cursor = pb.LifecycleCursorV2(
