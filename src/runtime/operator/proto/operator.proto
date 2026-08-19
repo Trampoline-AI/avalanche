@@ -48,6 +48,18 @@ message LifecycleCursorV2 {
   string event_ulid = 5;
 }
 
+// A snapshot position for a V2 project-summary page chain. This cursor is
+// independent from LifecycleCursorV2 and must not be used for event replay.
+message ProjectSummaryCursorV2 {
+  string stream = 1;
+  string topology_fingerprint = 2;
+  string source_generation = 3;
+  uint64 retained_floor_sequence = 4;
+  uint64 target_head_sequence = 5;
+  uint64 checkpoint_watermark = 6;
+  string checkpoint_digest = 7;
+}
+
 // A server-issued page continuation bound to the authenticated scope and the
 // cursor used to materialize the page. The reference is not a legacy bearer
 // page token and is revalidated on every request.
@@ -55,6 +67,7 @@ message ContinuationRefV2 {
   ScopeReferenceV2 scope_ref = 1;
   string continuation_id = 2;
   LifecycleCursorV2 cursor = 3;
+  ProjectSummaryCursorV2 project_summary_cursor = 4;
 }
 
 message DiscoverFlowsRequestV2 {
@@ -185,6 +198,7 @@ message RunSummaryPageV2 {
   repeated RunSummaryV2 runs = 2;
   ContinuationRefV2 next_page = 3;
   ScopeReferenceV2 scope_ref = 4;
+  ProjectSummaryCursorV2 project_summary_cursor = 5;
 }
 
 message GetRunSnapshotRequestV2 {

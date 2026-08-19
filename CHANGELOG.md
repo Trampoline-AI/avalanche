@@ -4,6 +4,8 @@
 
 ### Operator transport
 
+- Added an additive V2 project-summary cursor for consistent run-summary page
+  chains without changing lifecycle watch or reset cursors.
 - Added a typed terminal-seal activity to V2 run updates and snapshots so clients
   can replay, retain, and display the final run status and optional reason.
 - Added a V2 catalog-reload notice so connected clients retain the current flow
