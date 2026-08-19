@@ -13,7 +13,7 @@
     "benchmark": "pnpm run benchmark:unit && pnpm run benchmark:browser",
     "benchmark:unit": "vitest run src/operator.large-run.benchmark.test.tsx --maxWorkers=1 --minWorkers=1 --no-file-parallelism",
     "benchmark:browser": "node scripts/operator-large-run-browser-benchmark.mjs",
-    "test": "vitest run --maxWorkers=1 --minWorkers=1 --no-file-parallelism --exclude src/operator.large-run.benchmark.test.tsx"
+    "test": "NODE_ENV=test vitest run --maxWorkers=1 --minWorkers=1 --no-file-parallelism --exclude src/operator.large-run.benchmark.test.tsx"
   },
   "dependencies": {
     "@codemirror/lang-json": "^6.0.2",
