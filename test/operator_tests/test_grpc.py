@@ -77,6 +77,27 @@ def _cursor(sequence: int, *, stream: str = "operator-events") -> pb.LifecycleCu
     )
 
 
+def _project_summary_cursor(
+    *,
+    stream: str = "project-summaries",
+    topology_fingerprint: str = "project-summary-topology",
+    source_generation: str = "2026-08-19T14:57:00Z",
+    retained_floor_sequence: int = 10,
+    target_head_sequence: int = 20,
+    checkpoint_watermark: int = 15,
+    checkpoint_digest: str = "checkpoint-digest-1",
+) -> pb.ProjectSummaryCursorV2:
+    return pb.ProjectSummaryCursorV2(
+        stream=stream,
+        topology_fingerprint=topology_fingerprint,
+        source_generation=source_generation,
+        retained_floor_sequence=retained_floor_sequence,
+        target_head_sequence=target_head_sequence,
+        checkpoint_watermark=checkpoint_watermark,
+        checkpoint_digest=checkpoint_digest,
+    )
+
+
 def _baseline_cursor(sequence: int, *, retained_floor: int = 0) -> ResetBaselineCursor:
     return ResetBaselineCursor(
         stream="operator-events",
@@ -1826,7 +1847,7 @@ def test_stream_reconnect_transitions_through_replay_to_live():
     assert provider.stream_state is StreamState.STOPPED
 
 
-def test_client_list_runs_returns_oldest_to_newest_across_summary_pages():
+def test_client_list_runs_forwards_stable_project_summary_cursor_across_pages():
     summaries = [
         RunSummary(
             run_id="run-new",
@@ -1843,35 +1864,260 @@ def test_client_list_runs_returns_oldest_to_newest_across_summary_pages():
             revision=1,
         ),
     ]
+    summary_cursor = _project_summary_cursor()
+    next_page = pb.ContinuationRefV2(
+        scope_ref=_scope(),
+        continuation_id="older",
+        cursor=_cursor(2, stream="run-summaries"),
+        project_summary_cursor=summary_cursor,
+    )
 
     class PagedSummaryStub:
+        def __init__(self):
+            self.requests = []
+
         def ListRunSummaries(self, request, **kwargs):  # noqa: N802
+            self.requests.append(request)
+            assert request.workflow_selector == "flow"
             if not request.continuation.continuation_id:
                 return pb.RunSummaryPageV2(
                     cursor=_cursor(2, stream="run-summaries"),
                     scope_ref=_scope(),
                     runs=[run_summary_to_v2(summaries[0])],
-                    next_page=pb.ContinuationRefV2(
-                        scope_ref=_scope(),
-                        continuation_id="older",
-                        cursor=_cursor(2, stream="run-summaries"),
-                    ),
+                    next_page=next_page,
+                    project_summary_cursor=summary_cursor,
                 )
-            assert request.continuation.continuation_id == "older"
+            assert request.continuation == next_page
             return pb.RunSummaryPageV2(
                 cursor=_cursor(2, stream="run-summaries"),
                 scope_ref=_scope(),
                 runs=[run_summary_to_v2(summaries[1])],
+                project_summary_cursor=summary_cursor,
             )
 
     provider = GrpcStateProvider("localhost:1")
-    provider._stub = PagedSummaryStub()
+    stub = PagedSummaryStub()
+    provider._stub = stub
     try:
         runs = provider.list_runs("flow")
     finally:
         provider.close()
 
     assert [run.run_id for run in runs] == ["run-old", "run-new"]
+    assert [request.workflow_selector for request in stub.requests] == ["flow", "flow"]
+
+
+def test_client_list_runs_accepts_all_absent_project_summary_cursor_chain():
+    class LegacySummaryStub:
+        def ListRunSummaries(self, request, **kwargs):  # noqa: N802
+            if not request.continuation.continuation_id:
+                return pb.RunSummaryPageV2(
+                    cursor=_cursor(2, stream="run-summaries"),
+                    scope_ref=_scope(),
+                    runs=[
+                        pb.RunSummaryV2(
+                            run_id="run-1",
+                            status="running",
+                            created_sequence=1,
+                        )
+                    ],
+                    next_page=pb.ContinuationRefV2(
+                        scope_ref=_scope(),
+                        continuation_id="next",
+                        cursor=_cursor(2, stream="run-summaries"),
+                    ),
+                )
+            return pb.RunSummaryPageV2(
+                cursor=_cursor(2, stream="run-summaries"),
+                scope_ref=_scope(),
+                runs=[
+                    pb.RunSummaryV2(
+                        run_id="run-2",
+                        status="running",
+                        created_sequence=2,
+                    )
+                ],
+            )
+
+    provider = GrpcStateProvider("localhost:1")
+    provider._stub = LegacySummaryStub()
+    try:
+        runs = provider.list_runs("flow")
+    finally:
+        provider.close()
+
+    assert [run.run_id for run in runs] == ["run-1", "run-2"]
+
+
+@pytest.mark.parametrize(
+    ("page_has_cursor", "continuation_has_cursor"),
+    [
+        pytest.param(False, True, id="continuation-appears"),
+        pytest.param(True, False, id="continuation-disappears"),
+    ],
+)
+def test_client_list_runs_rejects_mixed_page_and_continuation_summary_cursors(
+    page_has_cursor,
+    continuation_has_cursor,
+):
+    summary_cursor = _project_summary_cursor()
+
+    class MixedSummaryCursorStub:
+        def ListRunSummaries(self, request, **kwargs):  # noqa: N802
+            response = pb.RunSummaryPageV2(
+                cursor=_cursor(2, stream="run-summaries"),
+                scope_ref=_scope(),
+                next_page=pb.ContinuationRefV2(
+                    scope_ref=_scope(),
+                    continuation_id="next",
+                    cursor=_cursor(2, stream="run-summaries"),
+                ),
+            )
+            if page_has_cursor:
+                response.project_summary_cursor.CopyFrom(summary_cursor)
+            if continuation_has_cursor:
+                response.next_page.project_summary_cursor.CopyFrom(summary_cursor)
+            return response
+
+    provider = GrpcStateProvider("localhost:1")
+    provider._stub = MixedSummaryCursorStub()
+    try:
+        with pytest.raises(OperatorCallError) as error:
+            provider.list_runs("flow")
+    finally:
+        provider.close()
+
+    assert error.value.status is grpc.StatusCode.DATA_LOSS
+    assert "continuation cursor" in error.value.details
+
+
+@pytest.mark.parametrize(
+    ("first_has_cursor", "second_has_cursor"),
+    [
+        pytest.param(False, True, id="cursor-appears-on-second-page"),
+        pytest.param(True, False, id="cursor-disappears-on-second-page"),
+    ],
+)
+def test_client_list_runs_rejects_summary_cursor_appearance_or_disappearance_across_pages(
+    first_has_cursor,
+    second_has_cursor,
+):
+    summary_cursor = _project_summary_cursor()
+
+    class AppearingSummaryCursorStub:
+        def ListRunSummaries(self, request, **kwargs):  # noqa: N802
+            if not request.continuation.continuation_id:
+                response = pb.RunSummaryPageV2(
+                    cursor=_cursor(2, stream="run-summaries"),
+                    scope_ref=_scope(),
+                    next_page=pb.ContinuationRefV2(
+                        scope_ref=_scope(),
+                        continuation_id="next",
+                        cursor=_cursor(2, stream="run-summaries"),
+                    ),
+                )
+                if first_has_cursor:
+                    response.project_summary_cursor.CopyFrom(summary_cursor)
+                    response.next_page.project_summary_cursor.CopyFrom(summary_cursor)
+                return response
+            response = pb.RunSummaryPageV2(
+                cursor=_cursor(2, stream="run-summaries"),
+                scope_ref=_scope(),
+            )
+            if second_has_cursor:
+                response.project_summary_cursor.CopyFrom(summary_cursor)
+            return response
+
+    provider = GrpcStateProvider("localhost:1")
+    provider._stub = AppearingSummaryCursorStub()
+    try:
+        with pytest.raises(OperatorCallError) as error:
+            provider.list_runs("flow")
+    finally:
+        provider.close()
+
+    assert error.value.status is grpc.StatusCode.DATA_LOSS
+    assert "appeared or disappeared" in error.value.details
+
+
+@pytest.mark.parametrize(
+    "changed_cursor",
+    [
+        pytest.param(_project_summary_cursor(stream="other-summary-stream"), id="stream"),
+        pytest.param(
+            _project_summary_cursor(topology_fingerprint="other-topology"), id="topology"
+        ),
+        pytest.param(
+            _project_summary_cursor(source_generation="2026-08-19T15:00:00Z"), id="source"
+        ),
+        pytest.param(_project_summary_cursor(retained_floor_sequence=11), id="retained-floor"),
+        pytest.param(_project_summary_cursor(target_head_sequence=21), id="target-head"),
+        pytest.param(_project_summary_cursor(checkpoint_watermark=16), id="watermark"),
+        pytest.param(_project_summary_cursor(checkpoint_digest="other-digest"), id="digest"),
+    ],
+)
+def test_client_list_runs_rejects_each_changed_project_summary_cursor_field(changed_cursor):
+    summary_cursor = _project_summary_cursor()
+
+    class ChangedSummaryCursorStub:
+        def ListRunSummaries(self, request, **kwargs):  # noqa: N802
+            if not request.continuation.continuation_id:
+                return pb.RunSummaryPageV2(
+                    cursor=_cursor(2, stream="run-summaries"),
+                    scope_ref=_scope(),
+                    next_page=pb.ContinuationRefV2(
+                        scope_ref=_scope(),
+                        continuation_id="next",
+                        cursor=_cursor(2, stream="run-summaries"),
+                        project_summary_cursor=summary_cursor,
+                    ),
+                    project_summary_cursor=summary_cursor,
+                )
+            return pb.RunSummaryPageV2(
+                cursor=_cursor(2, stream="run-summaries"),
+                scope_ref=_scope(),
+                project_summary_cursor=changed_cursor,
+            )
+
+    provider = GrpcStateProvider("localhost:1")
+    provider._stub = ChangedSummaryCursorStub()
+    try:
+        with pytest.raises(OperatorCallError) as error:
+            provider.list_runs("flow")
+    finally:
+        provider.close()
+
+    assert error.value.status is grpc.StatusCode.DATA_LOSS
+    assert "project summary cursor changed" in error.value.details
+
+
+def test_client_list_runs_rejects_repeated_summary_continuation_with_stable_cursor():
+    summary_cursor = _project_summary_cursor()
+
+    class RepeatedSummaryStub:
+        def ListRunSummaries(self, request, **kwargs):  # noqa: N802
+            return pb.RunSummaryPageV2(
+                cursor=_cursor(2, stream="run-summaries"),
+                scope_ref=_scope(),
+                next_page=pb.ContinuationRefV2(
+                    scope_ref=_scope(),
+                    continuation_id="repeated",
+                    cursor=_cursor(2, stream="run-summaries"),
+                    project_summary_cursor=summary_cursor,
+                ),
+                project_summary_cursor=summary_cursor,
+            )
+
+    provider = GrpcStateProvider("localhost:1")
+    provider._stub = RepeatedSummaryStub()
+    try:
+        with pytest.raises(OperatorCallError) as error:
+            provider.list_runs("flow")
+    finally:
+        provider.close()
+
+    assert error.value.status is grpc.StatusCode.DATA_LOSS
+    assert "repeated a page token" in error.value.details
 
 
 def test_reset_baseline_retains_runs_for_removed_workflows():
@@ -1964,6 +2210,7 @@ def test_default_reset_loader_retries_and_builds_bounded_authoritative_baseline(
             ),
         ),
     }
+    summary_cursor = _project_summary_cursor()
 
     class Retryable(grpc.RpcError):
         def __init__(self, status):
@@ -2001,13 +2248,17 @@ def test_default_reset_loader_retries_and_builds_bounded_authoritative_baseline(
                         scope_ref=_scope(operator_id),
                         continuation_id="page-2",
                         cursor=_cursor(3, stream="run-summaries"),
+                        project_summary_cursor=summary_cursor,
                     ),
+                    project_summary_cursor=summary_cursor,
                 )
             assert request.continuation.continuation_id == "page-2"
+            assert request.continuation.project_summary_cursor == summary_cursor
             return pb.RunSummaryPageV2(
                 cursor=_cursor(3, stream="run-summaries"),
                 scope_ref=_scope("operator-new"),
                 runs=[run_summary_to_v2(summaries[1])],
+                project_summary_cursor=summary_cursor,
             )
 
         def DiscoverFlows(self, request, **kwargs):  # noqa: N802
@@ -2041,6 +2292,7 @@ def test_default_reset_loader_retries_and_builds_bounded_authoritative_baseline(
                 observed_event_ulid=_event_ulid(2),
             )
         )
+        assert provider._event_cursor is None
     finally:
         provider.close()
 

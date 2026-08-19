@@ -14,9 +14,11 @@ import type {
   FlowListV2,
   LifecycleCursorV2,
   NodeSnapshotV2,
+  ProjectSummaryCursorV2,
   RunActivityDescriptorV2,
   RunSnapshotV2,
   RunStatusEnvelopeV2,
+  RunSummaryPageV2,
   RunSummaryV2,
   ScopeReferenceV2,
 } from "./generated/operator";
@@ -113,6 +115,11 @@ interface CatalogPageBaseline {
   revision: string;
 }
 
+interface ProjectSummaryCursorChain {
+  initialized: boolean;
+  cursor: ProjectSummaryCursorV2 | undefined;
+}
+
 export class GrpcWebOperatorApi implements OperatorApi {
   readonly client: IOperatorServiceV2Client;
 
@@ -170,6 +177,10 @@ export class GrpcWebOperatorApi implements OperatorApi {
     let operatorInstanceId = "";
     let asOfEventUlid = "";
     let summaryBytes = 0;
+    const summaryCursorChain: ProjectSummaryCursorChain = {
+      initialized: false,
+      cursor: undefined,
+    };
     do {
       if (seenContinuations.size >= MAX_BASELINE_PAGES) {
         throw new Error("Run baseline exceeds the page hydration budget");
@@ -183,6 +194,7 @@ export class GrpcWebOperatorApi implements OperatorApi {
         ? { workflowSelector: "", pageSize: 100, continuation }
         : { workflowSelector: "", pageSize: 100 };
       const page = await this.client.listRunSummaries(request, options).response;
+      this.validateProjectSummaryCursor(page, summaryCursorChain);
       const pageOperatorInstanceId = this.rememberScope(page.scopeRef);
       const pageAsOfEventUlid = this.rememberCursor(page.cursor);
       if (!operatorInstanceId) {
@@ -416,6 +428,50 @@ export class GrpcWebOperatorApi implements OperatorApi {
 
   private cursorForEventUlid(eventUlid: string): LifecycleCursorV2 | undefined {
     return this.eventCursorsByUlid.get(eventUlid);
+  }
+
+  private validateProjectSummaryCursor(
+    page: RunSummaryPageV2,
+    chain: ProjectSummaryCursorChain,
+  ): void {
+    const cursor = page.projectSummaryCursor;
+    if (!chain.initialized) {
+      chain.cursor = cursor;
+      chain.initialized = true;
+    } else if (Boolean(cursor) !== Boolean(chain.cursor)) {
+      throw new Error(
+        "Project summary cursor appeared or disappeared across run summary pages",
+      );
+    } else if (cursor && chain.cursor && !this.sameProjectSummaryCursor(cursor, chain.cursor)) {
+      throw new Error("Project summary cursor changed across run summary pages");
+    }
+
+    const nextPage = page.nextPage;
+    if (!nextPage?.continuationId) return;
+    const continuationCursor = nextPage.projectSummaryCursor;
+    if (
+      Boolean(continuationCursor) !== Boolean(cursor) ||
+      (cursor &&
+        continuationCursor &&
+        !this.sameProjectSummaryCursor(continuationCursor, cursor))
+    ) {
+      throw new Error("Project summary continuation cursor does not match its page");
+    }
+  }
+
+  private sameProjectSummaryCursor(
+    left: ProjectSummaryCursorV2,
+    right: ProjectSummaryCursorV2,
+  ): boolean {
+    return (
+      left.stream === right.stream &&
+      left.topologyFingerprint === right.topologyFingerprint &&
+      left.sourceGeneration === right.sourceGeneration &&
+      left.retainedFloorSequence === right.retainedFloorSequence &&
+      left.targetHeadSequence === right.targetHeadSequence &&
+      left.checkpointWatermark === right.checkpointWatermark &&
+      left.checkpointDigest === right.checkpointDigest
+    );
   }
 
   private registerContinuation(

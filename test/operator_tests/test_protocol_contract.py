@@ -189,17 +189,71 @@ def test_v2_cursors_and_resets_require_complete_bounded_replay_state():
         "event_ulid": 5,
     }
 
+    summary_cursor_fields = pb.ProjectSummaryCursorV2.DESCRIPTOR.fields_by_name
+    assert {name: field.number for name, field in summary_cursor_fields.items()} == {
+        "stream": 1,
+        "topology_fingerprint": 2,
+        "source_generation": 3,
+        "retained_floor_sequence": 4,
+        "target_head_sequence": 5,
+        "checkpoint_watermark": 6,
+        "checkpoint_digest": 7,
+    }
+    assert all(
+        summary_cursor_fields[name].type == FieldDescriptor.TYPE_STRING
+        for name in (
+            "stream",
+            "topology_fingerprint",
+            "source_generation",
+            "checkpoint_digest",
+        )
+    )
+    assert all(
+        summary_cursor_fields[name].type == FieldDescriptor.TYPE_UINT64
+        for name in (
+            "retained_floor_sequence",
+            "target_head_sequence",
+            "checkpoint_watermark",
+        )
+    )
+
     watch_request_fields = pb.WatchRunStatusRequestV2.DESCRIPTOR.fields_by_name
     assert {name: field.number for name, field in watch_request_fields.items()} == {
         "after_cursor": 1,
         "scope_ref": 2,
     }
     assert watch_request_fields["after_cursor"].message_type.name == "LifecycleCursorV2"
+    assert "project_summary_cursor" not in watch_request_fields
 
     continuation_fields = pb.ContinuationRefV2.DESCRIPTOR.fields_by_name
-    assert set(continuation_fields) == {"scope_ref", "continuation_id", "cursor"}
+    assert {name: field.number for name, field in continuation_fields.items()} == {
+        "scope_ref": 1,
+        "continuation_id": 2,
+        "cursor": 3,
+        "project_summary_cursor": 4,
+    }
     assert continuation_fields["scope_ref"].message_type.name == "ScopeReferenceV2"
     assert continuation_fields["cursor"].message_type.name == "LifecycleCursorV2"
+    assert (
+        continuation_fields["project_summary_cursor"].message_type.name
+        == "ProjectSummaryCursorV2"
+    )
+
+    summary_page_fields = pb.RunSummaryPageV2.DESCRIPTOR.fields_by_name
+    assert {name: field.number for name, field in summary_page_fields.items()} == {
+        "cursor": 1,
+        "runs": 2,
+        "next_page": 3,
+        "scope_ref": 4,
+        "project_summary_cursor": 5,
+    }
+    assert summary_page_fields["cursor"].message_type.name == "LifecycleCursorV2"
+    assert summary_page_fields["next_page"].message_type.name == "ContinuationRefV2"
+    assert summary_page_fields["scope_ref"].message_type.name == "ScopeReferenceV2"
+    assert (
+        summary_page_fields["project_summary_cursor"].message_type.name
+        == "ProjectSummaryCursorV2"
+    )
 
     for descriptor in (
         pb.DiscoverFlowsRequestV2.DESCRIPTOR,
@@ -210,6 +264,15 @@ def test_v2_cursors_and_resets_require_complete_bounded_replay_state():
         assert descriptor.fields_by_name["page_size"].type == FieldDescriptor.TYPE_UINT32
         continuation = descriptor.fields_by_name["continuation"]
         assert continuation.message_type.name == "ContinuationRefV2"
+
+    assert {
+        name: field.number
+        for name, field in pb.ListRunSummariesRequestV2.DESCRIPTOR.fields_by_name.items()
+    } == {
+        "workflow_selector": 1,
+        "page_size": 2,
+        "continuation": 3,
+    }
 
     for message in pb.DESCRIPTOR.message_types_by_name.values():
         if message.name.endswith("V2"):
@@ -226,6 +289,7 @@ def test_v2_cursors_and_resets_require_complete_bounded_replay_state():
     assert all(
         field.message_type.name == "LifecycleCursorV2" for field in reset_fields.values()
     )
+    assert "project_summary_cursor" not in reset_fields
 
     reload_fields = pb.CatalogReloadRequiredV2.DESCRIPTOR.fields_by_name
     assert {name: field.number for name, field in reload_fields.items()} == {
@@ -248,6 +312,7 @@ def test_v2_cursors_and_resets_require_complete_bounded_replay_state():
     }
     assert status_fields["cursor"].message_type.name == "LifecycleCursorV2"
     assert status_fields["cursor"].containing_oneof is None
+    assert "project_summary_cursor" not in status_fields
     payload_fields = pb.RunStatusEnvelopeV2.DESCRIPTOR.oneofs_by_name["payload"].fields
     assert [field.name for field in payload_fields] == [
         "run_created",
@@ -287,6 +352,16 @@ def test_v2_cursors_and_resets_require_complete_bounded_replay_state():
             pb.WatchRunStatusRequestV2(after_cursor=envelope.cursor).after_cursor
             == complete_cursor
         )
+
+
+def test_project_summary_cursor_round_trips_opaque_source_generation():
+    source_generation = "2026-08-19T12:34:56.789Z"
+    cursor = pb.ProjectSummaryCursorV2(source_generation=source_generation)
+
+    round_tripped = pb.ProjectSummaryCursorV2()
+    round_tripped.ParseFromString(cursor.SerializeToString())
+
+    assert round_tripped.source_generation == source_generation
 
 
 def test_legacy_operator_service_and_messages_are_absent():

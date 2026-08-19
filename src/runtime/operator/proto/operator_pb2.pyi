@@ -34,15 +34,35 @@ class LifecycleCursorV2(_message.Message):
     event_ulid: str
     def __init__(self, stream: _Optional[str] = ..., topology_fingerprint: _Optional[str] = ..., stream_generation: _Optional[int] = ..., retained_floor_event_ulid: _Optional[str] = ..., event_ulid: _Optional[str] = ...) -> None: ...
 
+class ProjectSummaryCursorV2(_message.Message):
+    __slots__ = ("stream", "topology_fingerprint", "source_generation", "retained_floor_sequence", "target_head_sequence", "checkpoint_watermark", "checkpoint_digest")
+    STREAM_FIELD_NUMBER: _ClassVar[int]
+    TOPOLOGY_FINGERPRINT_FIELD_NUMBER: _ClassVar[int]
+    SOURCE_GENERATION_FIELD_NUMBER: _ClassVar[int]
+    RETAINED_FLOOR_SEQUENCE_FIELD_NUMBER: _ClassVar[int]
+    TARGET_HEAD_SEQUENCE_FIELD_NUMBER: _ClassVar[int]
+    CHECKPOINT_WATERMARK_FIELD_NUMBER: _ClassVar[int]
+    CHECKPOINT_DIGEST_FIELD_NUMBER: _ClassVar[int]
+    stream: str
+    topology_fingerprint: str
+    source_generation: str
+    retained_floor_sequence: int
+    target_head_sequence: int
+    checkpoint_watermark: int
+    checkpoint_digest: str
+    def __init__(self, stream: _Optional[str] = ..., topology_fingerprint: _Optional[str] = ..., source_generation: _Optional[str] = ..., retained_floor_sequence: _Optional[int] = ..., target_head_sequence: _Optional[int] = ..., checkpoint_watermark: _Optional[int] = ..., checkpoint_digest: _Optional[str] = ...) -> None: ...
+
 class ContinuationRefV2(_message.Message):
-    __slots__ = ("scope_ref", "continuation_id", "cursor")
+    __slots__ = ("scope_ref", "continuation_id", "cursor", "project_summary_cursor")
     SCOPE_REF_FIELD_NUMBER: _ClassVar[int]
     CONTINUATION_ID_FIELD_NUMBER: _ClassVar[int]
     CURSOR_FIELD_NUMBER: _ClassVar[int]
+    PROJECT_SUMMARY_CURSOR_FIELD_NUMBER: _ClassVar[int]
     scope_ref: ScopeReferenceV2
     continuation_id: str
     cursor: LifecycleCursorV2
-    def __init__(self, scope_ref: _Optional[_Union[ScopeReferenceV2, _Mapping]] = ..., continuation_id: _Optional[str] = ..., cursor: _Optional[_Union[LifecycleCursorV2, _Mapping]] = ...) -> None: ...
+    project_summary_cursor: ProjectSummaryCursorV2
+    def __init__(self, scope_ref: _Optional[_Union[ScopeReferenceV2, _Mapping]] = ..., continuation_id: _Optional[str] = ..., cursor: _Optional[_Union[LifecycleCursorV2, _Mapping]] = ..., project_summary_cursor: _Optional[_Union[ProjectSummaryCursorV2, _Mapping]] = ...) -> None: ...
 
 class DiscoverFlowsRequestV2(_message.Message):
     __slots__ = ("page_size", "continuation")
@@ -277,16 +297,18 @@ class ListRunSummariesRequestV2(_message.Message):
     def __init__(self, workflow_selector: _Optional[str] = ..., page_size: _Optional[int] = ..., continuation: _Optional[_Union[ContinuationRefV2, _Mapping]] = ...) -> None: ...
 
 class RunSummaryPageV2(_message.Message):
-    __slots__ = ("cursor", "runs", "next_page", "scope_ref")
+    __slots__ = ("cursor", "runs", "next_page", "scope_ref", "project_summary_cursor")
     CURSOR_FIELD_NUMBER: _ClassVar[int]
     RUNS_FIELD_NUMBER: _ClassVar[int]
     NEXT_PAGE_FIELD_NUMBER: _ClassVar[int]
     SCOPE_REF_FIELD_NUMBER: _ClassVar[int]
+    PROJECT_SUMMARY_CURSOR_FIELD_NUMBER: _ClassVar[int]
     cursor: LifecycleCursorV2
     runs: _containers.RepeatedCompositeFieldContainer[RunSummaryV2]
     next_page: ContinuationRefV2
     scope_ref: ScopeReferenceV2
-    def __init__(self, cursor: _Optional[_Union[LifecycleCursorV2, _Mapping]] = ..., runs: _Optional[_Iterable[_Union[RunSummaryV2, _Mapping]]] = ..., next_page: _Optional[_Union[ContinuationRefV2, _Mapping]] = ..., scope_ref: _Optional[_Union[ScopeReferenceV2, _Mapping]] = ...) -> None: ...
+    project_summary_cursor: ProjectSummaryCursorV2
+    def __init__(self, cursor: _Optional[_Union[LifecycleCursorV2, _Mapping]] = ..., runs: _Optional[_Iterable[_Union[RunSummaryV2, _Mapping]]] = ..., next_page: _Optional[_Union[ContinuationRefV2, _Mapping]] = ..., scope_ref: _Optional[_Union[ScopeReferenceV2, _Mapping]] = ..., project_summary_cursor: _Optional[_Union[ProjectSummaryCursorV2, _Mapping]] = ...) -> None: ...
 
 class GetRunSnapshotRequestV2(_message.Message):
     __slots__ = ("run_id",)

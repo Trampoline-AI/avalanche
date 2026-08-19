@@ -177,6 +177,69 @@ class _DetailBudget:
         self.cache_keys += 1
 
 
+@dataclass
+class _ProjectSummaryCursorGuard:
+    """Reject a changed project-summary snapshot within one page chain."""
+
+    _expected: pb.ProjectSummaryCursorV2 | None = None
+    _initialized: bool = False
+
+    def validate(self, page: pb.RunSummaryPageV2) -> None:
+        cursor = (
+            page.project_summary_cursor if page.HasField("project_summary_cursor") else None
+        )
+        if not self._initialized:
+            self._expected = cursor
+            self._initialized = True
+        elif (cursor is None) != (self._expected is None):
+            raise OperatorCallError(
+                grpc.StatusCode.DATA_LOSS,
+                "project summary cursor appeared or disappeared across run summary pages",
+            )
+        elif (
+            cursor is not None
+            and self._expected is not None
+            and not _same_project_summary_cursor(cursor, self._expected)
+        ):
+            raise OperatorCallError(
+                grpc.StatusCode.DATA_LOSS,
+                "project summary cursor changed across run summary pages",
+            )
+
+        next_page = page.next_page
+        if not next_page.continuation_id:
+            return
+        continuation_cursor = (
+            next_page.project_summary_cursor
+            if next_page.HasField("project_summary_cursor")
+            else None
+        )
+        if (continuation_cursor is None) != (cursor is None) or (
+            cursor is not None
+            and continuation_cursor is not None
+            and not _same_project_summary_cursor(continuation_cursor, cursor)
+        ):
+            raise OperatorCallError(
+                grpc.StatusCode.DATA_LOSS,
+                "project summary continuation cursor does not match its page",
+            )
+
+
+def _same_project_summary_cursor(
+    left: pb.ProjectSummaryCursorV2,
+    right: pb.ProjectSummaryCursorV2,
+) -> bool:
+    return (
+        left.stream == right.stream
+        and left.topology_fingerprint == right.topology_fingerprint
+        and left.source_generation == right.source_generation
+        and left.retained_floor_sequence == right.retained_floor_sequence
+        and left.target_head_sequence == right.target_head_sequence
+        and left.checkpoint_watermark == right.checkpoint_watermark
+        and left.checkpoint_digest == right.checkpoint_digest
+    )
+
+
 _DetailCacheKey = tuple[str, str, str]
 
 
@@ -500,6 +563,7 @@ class GrpcStateProvider:
         runs: list[RunState] = []
         page_token: pb.ContinuationRefV2 | None = None
         seen_tokens: set[str] = set()
+        summary_cursor_guard = _ProjectSummaryCursorGuard()
         page_count = 0
         while True:
             page_count += 1
@@ -513,6 +577,7 @@ class GrpcStateProvider:
             response = self._call(self._stub.ListRunSummaries, request)
             if response is None:
                 return []
+            summary_cursor_guard.validate(response)
             for item in response.runs:
                 self._validate_page_accumulation(
                     len(runs) + 1,
@@ -1907,6 +1972,7 @@ class GrpcStateProvider:
         seen_tokens: set[str] = set()
         seen_run_ids: set[str] = set()
         marker: tuple[str, ResetBaselineCursor] | None = None
+        summary_cursor_guard = _ProjectSummaryCursorGuard()
         page_count = 0
         while True:
             page_count += 1
@@ -1915,6 +1981,7 @@ class GrpcStateProvider:
             if page_token is not None:
                 request.continuation.CopyFrom(page_token)
             page = self._call(self._stub.ListRunSummaries, request)
+            summary_cursor_guard.validate(page)
             if page.cursor.stream != _EVENTS_STREAM or not self._has_complete_lifecycle_cursor(
                 page.cursor
             ):

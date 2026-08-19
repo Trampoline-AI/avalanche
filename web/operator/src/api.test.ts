@@ -10,6 +10,7 @@ import {
   LifecycleCursorV2,
   NodeSnapshotV2,
   PageOrderV2,
+  ProjectSummaryCursorV2,
   RunActivityDescriptorV2,
   RunActivityPageV2,
   RunSnapshotV2,
@@ -59,6 +60,21 @@ function continuation(continuationId: string, sequence = 20, stream = "activity:
     scopeRef: scope(),
     continuationId,
     cursor: cursor(sequence, stream),
+  });
+}
+
+function projectSummaryCursor(
+  values: Partial<ProjectSummaryCursorV2> = {},
+): ProjectSummaryCursorV2 {
+  return ProjectSummaryCursorV2.create({
+    stream: "project-summaries",
+    topologyFingerprint: "summary-topology",
+    sourceGeneration: "2026-08-19T14:57:00Z",
+    retainedFloorSequence: "9007199254740993",
+    targetHeadSequence: "9007199254740995",
+    checkpointWatermark: "9007199254740997",
+    checkpointDigest: "checkpoint-digest-1",
+    ...values,
   });
 }
 
@@ -163,6 +179,202 @@ describe("GrpcWebOperatorApi", () => {
       );
       expect(discoverFlows).toHaveBeenCalledTimes(2);
     }
+  });
+
+  it("forwards a stable summary cursor chain without converting its opaque source epoch", async () => {
+    const lifecycleCursor = cursor(8);
+    const summaryCursor = projectSummaryCursor();
+    const nextPage = ContinuationRefV2.create({
+      scopeRef: scope(),
+      continuationId: "page-2",
+      cursor: lifecycleCursor,
+      projectSummaryCursor: summaryCursor,
+    });
+    const discoverFlows = vi.fn(() => ({
+      response: Promise.resolve(
+        FlowListV2.create({ cursor: lifecycleCursor, scopeRef: scope() }),
+      ),
+    }));
+    const listRunSummaries = vi.fn(
+      (request: {
+        workflowSelector: string;
+        pageSize: number;
+        continuation?: ContinuationRefV2;
+      }) => {
+        if (!request.continuation) {
+          return {
+            response: Promise.resolve(
+              RunSummaryPageV2.create({
+                cursor: lifecycleCursor,
+                scopeRef: scope(),
+                runs: [RunSummaryV2.create({ runId: "run-1", createdSequence: "1" })],
+                nextPage,
+                projectSummaryCursor: summaryCursor,
+              }),
+            ),
+          };
+        }
+        expect(request.continuation).toEqual(nextPage);
+        return {
+          response: Promise.resolve(
+            RunSummaryPageV2.create({
+              cursor: lifecycleCursor,
+              scopeRef: scope(),
+              runs: [RunSummaryV2.create({ runId: "run-2", createdSequence: "2" })],
+              projectSummaryCursor: summaryCursor,
+            }),
+          ),
+        };
+      },
+    );
+    const watchRunStatus = vi.fn(() => ({
+      responses: (async function* () {})(),
+    }));
+    const api = apiWith({ discoverFlows, listRunSummaries, watchRunStatus });
+
+    await expect(api.loadBaseline()).resolves.toMatchObject({
+      asOfEventUlid: eventUlid(8),
+      runs: [{ runId: "run-1" }, { runId: "run-2" }],
+    });
+    await api.streamUpdates("operator-1", eventUlid(8))[Symbol.asyncIterator]().next();
+
+    expect(listRunSummaries).toHaveBeenNthCalledWith(
+      1,
+      { workflowSelector: "", pageSize: 100 },
+      undefined,
+    );
+    expect(listRunSummaries).toHaveBeenNthCalledWith(
+      2,
+      { workflowSelector: "", pageSize: 100, continuation: nextPage },
+      undefined,
+    );
+    expect(listRunSummaries.mock.calls[1][0].continuation?.projectSummaryCursor).toMatchObject({
+      sourceGeneration: "2026-08-19T14:57:00Z",
+      retainedFloorSequence: "9007199254740993",
+      targetHeadSequence: "9007199254740995",
+      checkpointWatermark: "9007199254740997",
+    });
+    expect(watchRunStatus).toHaveBeenCalledWith(
+      { afterCursor: lifecycleCursor, scopeRef: { reference: "operator-1" } },
+      undefined,
+    );
+  });
+
+  it("accepts an all-absent summary cursor chain for local interoperability", async () => {
+    const lifecycleCursor = cursor(8);
+    const nextPage = ContinuationRefV2.create({
+      scopeRef: scope(),
+      continuationId: "page-2",
+      cursor: lifecycleCursor,
+    });
+    const discoverFlows = vi.fn(() => ({
+      response: Promise.resolve(
+        FlowListV2.create({ cursor: lifecycleCursor, scopeRef: scope() }),
+      ),
+    }));
+    const listRunSummaries = vi.fn(
+      (request: {
+        continuation?: ContinuationRefV2;
+        workflowSelector: string;
+        pageSize: number;
+      }) => ({
+        response: Promise.resolve(
+          request.continuation
+            ? RunSummaryPageV2.create({
+                cursor: lifecycleCursor,
+                scopeRef: scope(),
+                runs: [RunSummaryV2.create({ runId: "run-2", createdSequence: "2" })],
+              })
+            : RunSummaryPageV2.create({
+                cursor: lifecycleCursor,
+                scopeRef: scope(),
+                runs: [RunSummaryV2.create({ runId: "run-1", createdSequence: "1" })],
+                nextPage,
+              }),
+        ),
+      }),
+    );
+    const api = apiWith({ discoverFlows, listRunSummaries });
+
+    await expect(api.loadBaseline()).resolves.toMatchObject({
+      runs: [{ runId: "run-1" }, { runId: "run-2" }],
+    });
+    expect(listRunSummaries).toHaveBeenCalledTimes(2);
+  });
+
+  it("rejects a summary cursor missing from a nonempty continuation", async () => {
+    const lifecycleCursor = cursor(8);
+    const discoverFlows = vi.fn(() => ({
+      response: Promise.resolve(
+        FlowListV2.create({ cursor: lifecycleCursor, scopeRef: scope() }),
+      ),
+    }));
+    const listRunSummaries = vi.fn(() => ({
+      response: Promise.resolve(
+        RunSummaryPageV2.create({
+          cursor: lifecycleCursor,
+          scopeRef: scope(),
+          nextPage: ContinuationRefV2.create({
+            scopeRef: scope(),
+            continuationId: "page-2",
+            cursor: lifecycleCursor,
+          }),
+          projectSummaryCursor: projectSummaryCursor(),
+        }),
+      ),
+    }));
+    const api = apiWith({ discoverFlows, listRunSummaries });
+
+    await expect(api.loadBaseline()).rejects.toThrow(
+      "Project summary continuation cursor does not match its page",
+    );
+    expect(listRunSummaries).toHaveBeenCalledOnce();
+  });
+
+  it("rejects a changed summary cursor on a later page", async () => {
+    const lifecycleCursor = cursor(8);
+    const summaryCursor = projectSummaryCursor();
+    const nextPage = ContinuationRefV2.create({
+      scopeRef: scope(),
+      continuationId: "page-2",
+      cursor: lifecycleCursor,
+      projectSummaryCursor: summaryCursor,
+    });
+    const discoverFlows = vi.fn(() => ({
+      response: Promise.resolve(
+        FlowListV2.create({ cursor: lifecycleCursor, scopeRef: scope() }),
+      ),
+    }));
+    const listRunSummaries = vi.fn(
+      (request: {
+        continuation?: ContinuationRefV2;
+        workflowSelector: string;
+        pageSize: number;
+      }) => ({
+        response: Promise.resolve(
+          request.continuation
+            ? RunSummaryPageV2.create({
+                cursor: lifecycleCursor,
+                scopeRef: scope(),
+                projectSummaryCursor: projectSummaryCursor({
+                  checkpointDigest: "other-digest",
+                }),
+              })
+            : RunSummaryPageV2.create({
+                cursor: lifecycleCursor,
+                scopeRef: scope(),
+                nextPage,
+                projectSummaryCursor: summaryCursor,
+              }),
+        ),
+      }),
+    );
+    const api = apiWith({ discoverFlows, listRunSummaries });
+
+    await expect(api.loadBaseline()).rejects.toThrow(
+      "Project summary cursor changed across run summary pages",
+    );
+    expect(listRunSummaries).toHaveBeenCalledTimes(2);
   });
 
   it("preserves a V2 workflow selector on a live run-created summary", async () => {

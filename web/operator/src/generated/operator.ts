@@ -57,6 +57,42 @@ export interface LifecycleCursorV2 {
     eventUlid: string;
 }
 /**
+ * A snapshot position for a V2 project-summary page chain. This cursor is
+ * independent from LifecycleCursorV2 and must not be used for event replay.
+ *
+ * @generated from protobuf message avalanche.operator.ProjectSummaryCursorV2
+ */
+export interface ProjectSummaryCursorV2 {
+    /**
+     * @generated from protobuf field: string stream = 1
+     */
+    stream: string;
+    /**
+     * @generated from protobuf field: string topology_fingerprint = 2
+     */
+    topologyFingerprint: string;
+    /**
+     * @generated from protobuf field: string source_generation = 3
+     */
+    sourceGeneration: string;
+    /**
+     * @generated from protobuf field: uint64 retained_floor_sequence = 4
+     */
+    retainedFloorSequence: string;
+    /**
+     * @generated from protobuf field: uint64 target_head_sequence = 5
+     */
+    targetHeadSequence: string;
+    /**
+     * @generated from protobuf field: uint64 checkpoint_watermark = 6
+     */
+    checkpointWatermark: string;
+    /**
+     * @generated from protobuf field: string checkpoint_digest = 7
+     */
+    checkpointDigest: string;
+}
+/**
  * A server-issued page continuation bound to the authenticated scope and the
  * cursor used to materialize the page. The reference is not a legacy bearer
  * page token and is revalidated on every request.
@@ -76,6 +112,10 @@ export interface ContinuationRefV2 {
      * @generated from protobuf field: avalanche.operator.LifecycleCursorV2 cursor = 3
      */
     cursor?: LifecycleCursorV2;
+    /**
+     * @generated from protobuf field: avalanche.operator.ProjectSummaryCursorV2 project_summary_cursor = 4
+     */
+    projectSummaryCursor?: ProjectSummaryCursorV2;
 }
 /**
  * @generated from protobuf message avalanche.operator.DiscoverFlowsRequestV2
@@ -473,6 +513,10 @@ export interface RunSummaryPageV2 {
      * @generated from protobuf field: avalanche.operator.ScopeReferenceV2 scope_ref = 4
      */
     scopeRef?: ScopeReferenceV2;
+    /**
+     * @generated from protobuf field: avalanche.operator.ProjectSummaryCursorV2 project_summary_cursor = 5
+     */
+    projectSummaryCursor?: ProjectSummaryCursorV2;
 }
 /**
  * @generated from protobuf message avalanche.operator.GetRunSnapshotRequestV2
@@ -1413,12 +1457,108 @@ class LifecycleCursorV2$Type extends MessageType<LifecycleCursorV2> {
  */
 export const LifecycleCursorV2 = new LifecycleCursorV2$Type();
 // @generated message type with reflection information, may provide speed optimized methods
+class ProjectSummaryCursorV2$Type extends MessageType<ProjectSummaryCursorV2> {
+    constructor() {
+        super("avalanche.operator.ProjectSummaryCursorV2", [
+            { no: 1, name: "stream", kind: "scalar", T: 9 /*ScalarType.STRING*/ },
+            { no: 2, name: "topology_fingerprint", kind: "scalar", T: 9 /*ScalarType.STRING*/ },
+            { no: 3, name: "source_generation", kind: "scalar", T: 9 /*ScalarType.STRING*/ },
+            { no: 4, name: "retained_floor_sequence", kind: "scalar", T: 4 /*ScalarType.UINT64*/ },
+            { no: 5, name: "target_head_sequence", kind: "scalar", T: 4 /*ScalarType.UINT64*/ },
+            { no: 6, name: "checkpoint_watermark", kind: "scalar", T: 4 /*ScalarType.UINT64*/ },
+            { no: 7, name: "checkpoint_digest", kind: "scalar", T: 9 /*ScalarType.STRING*/ }
+        ]);
+    }
+    create(value?: PartialMessage<ProjectSummaryCursorV2>): ProjectSummaryCursorV2 {
+        const message = globalThis.Object.create((this.messagePrototype!));
+        message.stream = "";
+        message.topologyFingerprint = "";
+        message.sourceGeneration = "";
+        message.retainedFloorSequence = "0";
+        message.targetHeadSequence = "0";
+        message.checkpointWatermark = "0";
+        message.checkpointDigest = "";
+        if (value !== undefined)
+            reflectionMergePartial<ProjectSummaryCursorV2>(this, message, value);
+        return message;
+    }
+    internalBinaryRead(reader: IBinaryReader, length: number, options: BinaryReadOptions, target?: ProjectSummaryCursorV2): ProjectSummaryCursorV2 {
+        let message = target ?? this.create(), end = reader.pos + length;
+        while (reader.pos < end) {
+            let [fieldNo, wireType] = reader.tag();
+            switch (fieldNo) {
+                case /* string stream */ 1:
+                    message.stream = reader.string();
+                    break;
+                case /* string topology_fingerprint */ 2:
+                    message.topologyFingerprint = reader.string();
+                    break;
+                case /* string source_generation */ 3:
+                    message.sourceGeneration = reader.string();
+                    break;
+                case /* uint64 retained_floor_sequence */ 4:
+                    message.retainedFloorSequence = reader.uint64().toString();
+                    break;
+                case /* uint64 target_head_sequence */ 5:
+                    message.targetHeadSequence = reader.uint64().toString();
+                    break;
+                case /* uint64 checkpoint_watermark */ 6:
+                    message.checkpointWatermark = reader.uint64().toString();
+                    break;
+                case /* string checkpoint_digest */ 7:
+                    message.checkpointDigest = reader.string();
+                    break;
+                default:
+                    let u = options.readUnknownField;
+                    if (u === "throw")
+                        throw new globalThis.Error(`Unknown field ${fieldNo} (wire type ${wireType}) for ${this.typeName}`);
+                    let d = reader.skip(wireType);
+                    if (u !== false)
+                        (u === true ? UnknownFieldHandler.onRead : u)(this.typeName, message, fieldNo, wireType, d);
+            }
+        }
+        return message;
+    }
+    internalBinaryWrite(message: ProjectSummaryCursorV2, writer: IBinaryWriter, options: BinaryWriteOptions): IBinaryWriter {
+        /* string stream = 1; */
+        if (message.stream !== "")
+            writer.tag(1, WireType.LengthDelimited).string(message.stream);
+        /* string topology_fingerprint = 2; */
+        if (message.topologyFingerprint !== "")
+            writer.tag(2, WireType.LengthDelimited).string(message.topologyFingerprint);
+        /* string source_generation = 3; */
+        if (message.sourceGeneration !== "")
+            writer.tag(3, WireType.LengthDelimited).string(message.sourceGeneration);
+        /* uint64 retained_floor_sequence = 4; */
+        if (message.retainedFloorSequence !== "0")
+            writer.tag(4, WireType.Varint).uint64(message.retainedFloorSequence);
+        /* uint64 target_head_sequence = 5; */
+        if (message.targetHeadSequence !== "0")
+            writer.tag(5, WireType.Varint).uint64(message.targetHeadSequence);
+        /* uint64 checkpoint_watermark = 6; */
+        if (message.checkpointWatermark !== "0")
+            writer.tag(6, WireType.Varint).uint64(message.checkpointWatermark);
+        /* string checkpoint_digest = 7; */
+        if (message.checkpointDigest !== "")
+            writer.tag(7, WireType.LengthDelimited).string(message.checkpointDigest);
+        let u = options.writeUnknownFields;
+        if (u !== false)
+            (u == true ? UnknownFieldHandler.onWrite : u)(this.typeName, message, writer);
+        return writer;
+    }
+}
+/**
+ * @generated MessageType for protobuf message avalanche.operator.ProjectSummaryCursorV2
+ */
+export const ProjectSummaryCursorV2 = new ProjectSummaryCursorV2$Type();
+// @generated message type with reflection information, may provide speed optimized methods
 class ContinuationRefV2$Type extends MessageType<ContinuationRefV2> {
     constructor() {
         super("avalanche.operator.ContinuationRefV2", [
             { no: 1, name: "scope_ref", kind: "message", T: () => ScopeReferenceV2 },
             { no: 2, name: "continuation_id", kind: "scalar", T: 9 /*ScalarType.STRING*/ },
-            { no: 3, name: "cursor", kind: "message", T: () => LifecycleCursorV2 }
+            { no: 3, name: "cursor", kind: "message", T: () => LifecycleCursorV2 },
+            { no: 4, name: "project_summary_cursor", kind: "message", T: () => ProjectSummaryCursorV2 }
         ]);
     }
     create(value?: PartialMessage<ContinuationRefV2>): ContinuationRefV2 {
@@ -1442,6 +1582,9 @@ class ContinuationRefV2$Type extends MessageType<ContinuationRefV2> {
                 case /* avalanche.operator.LifecycleCursorV2 cursor */ 3:
                     message.cursor = LifecycleCursorV2.internalBinaryRead(reader, reader.uint32(), options, message.cursor);
                     break;
+                case /* avalanche.operator.ProjectSummaryCursorV2 project_summary_cursor */ 4:
+                    message.projectSummaryCursor = ProjectSummaryCursorV2.internalBinaryRead(reader, reader.uint32(), options, message.projectSummaryCursor);
+                    break;
                 default:
                     let u = options.readUnknownField;
                     if (u === "throw")
@@ -1463,6 +1606,9 @@ class ContinuationRefV2$Type extends MessageType<ContinuationRefV2> {
         /* avalanche.operator.LifecycleCursorV2 cursor = 3; */
         if (message.cursor)
             LifecycleCursorV2.internalBinaryWrite(message.cursor, writer.tag(3, WireType.LengthDelimited).fork(), options).join();
+        /* avalanche.operator.ProjectSummaryCursorV2 project_summary_cursor = 4; */
+        if (message.projectSummaryCursor)
+            ProjectSummaryCursorV2.internalBinaryWrite(message.projectSummaryCursor, writer.tag(4, WireType.LengthDelimited).fork(), options).join();
         let u = options.writeUnknownFields;
         if (u !== false)
             (u == true ? UnknownFieldHandler.onWrite : u)(this.typeName, message, writer);
@@ -2656,7 +2802,8 @@ class RunSummaryPageV2$Type extends MessageType<RunSummaryPageV2> {
             { no: 1, name: "cursor", kind: "message", T: () => LifecycleCursorV2 },
             { no: 2, name: "runs", kind: "message", repeat: 2 /*RepeatType.UNPACKED*/, T: () => RunSummaryV2 },
             { no: 3, name: "next_page", kind: "message", T: () => ContinuationRefV2 },
-            { no: 4, name: "scope_ref", kind: "message", T: () => ScopeReferenceV2 }
+            { no: 4, name: "scope_ref", kind: "message", T: () => ScopeReferenceV2 },
+            { no: 5, name: "project_summary_cursor", kind: "message", T: () => ProjectSummaryCursorV2 }
         ]);
     }
     create(value?: PartialMessage<RunSummaryPageV2>): RunSummaryPageV2 {
@@ -2683,6 +2830,9 @@ class RunSummaryPageV2$Type extends MessageType<RunSummaryPageV2> {
                 case /* avalanche.operator.ScopeReferenceV2 scope_ref */ 4:
                     message.scopeRef = ScopeReferenceV2.internalBinaryRead(reader, reader.uint32(), options, message.scopeRef);
                     break;
+                case /* avalanche.operator.ProjectSummaryCursorV2 project_summary_cursor */ 5:
+                    message.projectSummaryCursor = ProjectSummaryCursorV2.internalBinaryRead(reader, reader.uint32(), options, message.projectSummaryCursor);
+                    break;
                 default:
                     let u = options.readUnknownField;
                     if (u === "throw")
@@ -2707,6 +2857,9 @@ class RunSummaryPageV2$Type extends MessageType<RunSummaryPageV2> {
         /* avalanche.operator.ScopeReferenceV2 scope_ref = 4; */
         if (message.scopeRef)
             ScopeReferenceV2.internalBinaryWrite(message.scopeRef, writer.tag(4, WireType.LengthDelimited).fork(), options).join();
+        /* avalanche.operator.ProjectSummaryCursorV2 project_summary_cursor = 5; */
+        if (message.projectSummaryCursor)
+            ProjectSummaryCursorV2.internalBinaryWrite(message.projectSummaryCursor, writer.tag(5, WireType.LengthDelimited).fork(), options).join();
         let u = options.writeUnknownFields;
         if (u !== false)
             (u == true ? UnknownFieldHandler.onWrite : u)(this.typeName, message, writer);
