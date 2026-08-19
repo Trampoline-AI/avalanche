@@ -107,6 +107,12 @@ interface RegisteredContinuation {
   nodeId: string;
 }
 
+interface CatalogPageBaseline {
+  operatorInstanceId: string;
+  cursor: LifecycleCursorV2;
+  revision: string;
+}
+
 export class GrpcWebOperatorApi implements OperatorApi {
   readonly client: IOperatorServiceV2Client;
 
@@ -131,14 +137,26 @@ export class GrpcWebOperatorApi implements OperatorApi {
     const options = signal ? { abort: signal } : undefined;
     const pages: FlowListV2[] = [];
     let continuation: ContinuationRefV2 | undefined;
+    let baseline: CatalogPageBaseline | undefined;
+    const seenContinuations = new Set<string>();
     do {
       if (pages.length >= MAX_CATALOG_PAGES) {
         throw new Error("Flow catalog exceeds the page hydration budget");
       }
       const request = continuation ? { pageSize: 200, continuation } : { pageSize: 200 };
       const page = await this.client.discoverFlows(request, options).response;
+      baseline = this.validateCatalogPage(page, baseline);
       pages.push(page);
-      continuation = page.nextPage?.continuationId ? page.nextPage : undefined;
+      const continuationId = page.nextPage?.continuationId ?? "";
+      if (!continuationId) {
+        continuation = undefined;
+      } else {
+        if (seenContinuations.has(continuationId)) {
+          throw new Error("Flow catalog pagination made no progress");
+        }
+        seenContinuations.add(continuationId);
+        continuation = page.nextPage;
+      }
     } while (continuation);
     return this.catalogFromFlowLists(pages);
   }
@@ -231,7 +249,6 @@ export class GrpcWebOperatorApi implements OperatorApi {
     const call = this.client.watchRunStatus(request, signal ? { abort: signal } : undefined);
     for await (const envelope of call.responses) {
       const mapped = this.mapStatusEnvelope(envelope);
-      if (!mapped) continue;
       if (operatorInstanceId && mapped.operatorInstanceId !== operatorInstanceId) {
         throw new Error("Update does not belong to the connected operator scope");
       }
@@ -459,16 +476,55 @@ export class GrpcWebOperatorApi implements OperatorApi {
     );
   }
 
+  private validateCatalogPage(
+    page: FlowListV2,
+    baseline: CatalogPageBaseline | undefined,
+  ): CatalogPageBaseline {
+    const operatorInstanceId = page.scopeRef?.reference ?? "";
+    const cursor = page.cursor;
+    if (!operatorInstanceId || !cursor || !this.isCompleteCursor(cursor)) {
+      throw new Error("Flow catalog page is not a complete baseline binding");
+    }
+    const resolvedBaseline = baseline ?? {
+      operatorInstanceId,
+      cursor,
+      revision: page.revision,
+    };
+    if (
+      resolvedBaseline.operatorInstanceId !== operatorInstanceId ||
+      resolvedBaseline.revision !== page.revision ||
+      !this.sameCursor(resolvedBaseline.cursor, cursor)
+    ) {
+      throw new Error("Flow catalog changed while loading pages");
+    }
+    const continuation = page.nextPage;
+    if (
+      continuation?.continuationId &&
+      (continuation.scopeRef?.reference !== operatorInstanceId ||
+        !continuation.cursor ||
+        !this.sameCursor(continuation.cursor, cursor))
+    ) {
+      throw new Error("Flow catalog continuation does not match its page baseline");
+    }
+    return resolvedBaseline;
+  }
+
+  private sameCursor(left: LifecycleCursorV2, right: LifecycleCursorV2): boolean {
+    return (
+      left.stream === right.stream &&
+      left.topologyFingerprint === right.topologyFingerprint &&
+      left.streamGeneration === right.streamGeneration &&
+      left.retainedFloorEventUlid === right.retainedFloorEventUlid &&
+      left.eventUlid === right.eventUlid
+    );
+  }
+
   private sameContinuation(left: ContinuationRefV2, right: ContinuationRefV2): boolean {
     if (!left.cursor || !right.cursor) return false;
     return (
       left.scopeRef?.reference === right.scopeRef?.reference &&
       left.continuationId === right.continuationId &&
-      left.cursor.stream === right.cursor.stream &&
-      left.cursor.topologyFingerprint === right.cursor.topologyFingerprint &&
-      left.cursor.streamGeneration === right.cursor.streamGeneration &&
-      left.cursor.retainedFloorEventUlid === right.cursor.retainedFloorEventUlid &&
-      left.cursor.eventUlid === right.cursor.eventUlid
+      this.sameCursor(left.cursor, right.cursor)
     );
   }
 
@@ -489,28 +545,24 @@ export class GrpcWebOperatorApi implements OperatorApi {
     const flows: FlowInfoV2[] = [];
     const scanTargets: CatalogSnapshotMsg["scanTargets"] = [];
     const diagnostics: CatalogSnapshotMsg["diagnostics"] = [];
-    let operatorInstanceId = "";
-    let asOfEventUlid = "";
-    let revision = "";
+    let baseline: CatalogPageBaseline | undefined;
+    for (const page of pages) {
+      baseline = this.validateCatalogPage(page, baseline);
+    }
+    if (!baseline) {
+      throw new Error("Flow catalog did not return a page");
+    }
     for (const page of pages) {
       flows.push(...page.flows);
       scanTargets.push(...page.scanTargets);
       diagnostics.push(...page.diagnostics);
-      const reference = this.rememberScope(page.scopeRef);
-      if (!operatorInstanceId) operatorInstanceId = reference;
-      const pageEventUlid = this.rememberCursor(page.cursor);
-      if (page.cursor) asOfEventUlid = pageEventUlid;
-      if (page.revision !== "0") {
-        if (revision && page.revision !== revision) {
-          throw new Error("Flow catalog revision changed while loading pages");
-        }
-        revision = page.revision;
-      }
+      this.rememberScope(page.scopeRef);
+      this.rememberCursor(page.cursor);
     }
     return {
-      operatorInstanceId,
-      asOfEventUlid,
-      revision: revision || catalogRevision(flows),
+      operatorInstanceId: baseline.operatorInstanceId,
+      asOfEventUlid: baseline.cursor.eventUlid,
+      revision: baseline.revision !== "0" ? baseline.revision : catalogRevision(flows),
       workflows: flows.map(mapFlowInfo),
       scanTargets,
       diagnostics,
@@ -638,7 +690,7 @@ export class GrpcWebOperatorApi implements OperatorApi {
     };
   }
 
-  private mapStatusEnvelope(envelope: RunStatusEnvelopeV2): OperatorUpdateEnvelope | undefined {
+  private mapStatusEnvelope(envelope: RunStatusEnvelopeV2): OperatorUpdateEnvelope {
     const operatorInstanceId = this.rememberScope(envelope.scopeRef);
     if (!operatorInstanceId) {
       throw new Error("Update omitted its operator scope reference");
@@ -752,6 +804,16 @@ export class GrpcWebOperatorApi implements OperatorApi {
           },
         });
       }
+      case "catalogReloadRequired": {
+        const deploymentId = payload.catalogReloadRequired.deploymentId;
+        if (!deploymentId) {
+          throw new Error("Catalog reload notice omitted its deployment ID");
+        }
+        return update({
+          oneofKind: "catalogReloadRequired",
+          catalogReloadRequired: { deploymentId },
+        });
+      }
       case "flowReloadStatus": {
         return update({
           oneofKind: "workflowReloadStatus",
@@ -785,7 +847,7 @@ export class GrpcWebOperatorApi implements OperatorApi {
         };
       }
       default:
-        return undefined;
+        throw new Error("Unknown run status payload");
     }
   }
 }

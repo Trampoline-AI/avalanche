@@ -427,6 +427,11 @@ message FlowListChangedV2 {
   FlowListV2 flow_list = 1;
 }
 
+// A deployment selection changed; clients must reload their flow catalog.
+message CatalogReloadRequiredV2 {
+  string deployment_id = 1;
+}
+
 message FlowReloadStatusV2 {
   bool reloading = 1;
 }
@@ -451,6 +456,7 @@ message RunStatusEnvelopeV2 {
     ActivityAppendedV2 activity_appended = 7;
     FlowListChangedV2 flow_list_changed = 8;
     FlowReloadStatusV2 flow_reload_status = 9;
+    CatalogReloadRequiredV2 catalog_reload_required = 11;
   }
   // Complete baseline position for this exact event; retain it to resume.
   LifecycleCursorV2 cursor = 5;

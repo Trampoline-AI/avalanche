@@ -1161,6 +1161,17 @@ export interface FlowListChangedV2 {
     flowList?: FlowListV2;
 }
 /**
+ * A deployment selection changed; clients must reload their flow catalog.
+ *
+ * @generated from protobuf message avalanche.operator.CatalogReloadRequiredV2
+ */
+export interface CatalogReloadRequiredV2 {
+    /**
+     * @generated from protobuf field: string deployment_id = 1
+     */
+    deploymentId: string;
+}
+/**
  * @generated from protobuf message avalanche.operator.FlowReloadStatusV2
  */
 export interface FlowReloadStatusV2 {
@@ -1242,6 +1253,12 @@ export interface RunStatusEnvelopeV2 {
          * @generated from protobuf field: avalanche.operator.FlowReloadStatusV2 flow_reload_status = 9
          */
         flowReloadStatus: FlowReloadStatusV2;
+    } | {
+        oneofKind: "catalogReloadRequired";
+        /**
+         * @generated from protobuf field: avalanche.operator.CatalogReloadRequiredV2 catalog_reload_required = 11
+         */
+        catalogReloadRequired: CatalogReloadRequiredV2;
     } | {
         oneofKind: undefined;
     };
@@ -4736,6 +4753,53 @@ class FlowListChangedV2$Type extends MessageType<FlowListChangedV2> {
  */
 export const FlowListChangedV2 = new FlowListChangedV2$Type();
 // @generated message type with reflection information, may provide speed optimized methods
+class CatalogReloadRequiredV2$Type extends MessageType<CatalogReloadRequiredV2> {
+    constructor() {
+        super("avalanche.operator.CatalogReloadRequiredV2", [
+            { no: 1, name: "deployment_id", kind: "scalar", T: 9 /*ScalarType.STRING*/ }
+        ]);
+    }
+    create(value?: PartialMessage<CatalogReloadRequiredV2>): CatalogReloadRequiredV2 {
+        const message = globalThis.Object.create((this.messagePrototype!));
+        message.deploymentId = "";
+        if (value !== undefined)
+            reflectionMergePartial<CatalogReloadRequiredV2>(this, message, value);
+        return message;
+    }
+    internalBinaryRead(reader: IBinaryReader, length: number, options: BinaryReadOptions, target?: CatalogReloadRequiredV2): CatalogReloadRequiredV2 {
+        let message = target ?? this.create(), end = reader.pos + length;
+        while (reader.pos < end) {
+            let [fieldNo, wireType] = reader.tag();
+            switch (fieldNo) {
+                case /* string deployment_id */ 1:
+                    message.deploymentId = reader.string();
+                    break;
+                default:
+                    let u = options.readUnknownField;
+                    if (u === "throw")
+                        throw new globalThis.Error(`Unknown field ${fieldNo} (wire type ${wireType}) for ${this.typeName}`);
+                    let d = reader.skip(wireType);
+                    if (u !== false)
+                        (u === true ? UnknownFieldHandler.onRead : u)(this.typeName, message, fieldNo, wireType, d);
+            }
+        }
+        return message;
+    }
+    internalBinaryWrite(message: CatalogReloadRequiredV2, writer: IBinaryWriter, options: BinaryWriteOptions): IBinaryWriter {
+        /* string deployment_id = 1; */
+        if (message.deploymentId !== "")
+            writer.tag(1, WireType.LengthDelimited).string(message.deploymentId);
+        let u = options.writeUnknownFields;
+        if (u !== false)
+            (u == true ? UnknownFieldHandler.onWrite : u)(this.typeName, message, writer);
+        return writer;
+    }
+}
+/**
+ * @generated MessageType for protobuf message avalanche.operator.CatalogReloadRequiredV2
+ */
+export const CatalogReloadRequiredV2 = new CatalogReloadRequiredV2$Type();
+// @generated message type with reflection information, may provide speed optimized methods
 class FlowReloadStatusV2$Type extends MessageType<FlowReloadStatusV2> {
     constructor() {
         super("avalanche.operator.FlowReloadStatusV2", [
@@ -4847,6 +4911,7 @@ class RunStatusEnvelopeV2$Type extends MessageType<RunStatusEnvelopeV2> {
             { no: 7, name: "activity_appended", kind: "message", oneof: "payload", T: () => ActivityAppendedV2 },
             { no: 8, name: "flow_list_changed", kind: "message", oneof: "payload", T: () => FlowListChangedV2 },
             { no: 9, name: "flow_reload_status", kind: "message", oneof: "payload", T: () => FlowReloadStatusV2 },
+            { no: 11, name: "catalog_reload_required", kind: "message", oneof: "payload", T: () => CatalogReloadRequiredV2 },
             { no: 5, name: "cursor", kind: "message", T: () => LifecycleCursorV2 },
             { no: 10, name: "scope_ref", kind: "message", T: () => ScopeReferenceV2 }
         ]);
@@ -4909,6 +4974,12 @@ class RunStatusEnvelopeV2$Type extends MessageType<RunStatusEnvelopeV2> {
                         flowReloadStatus: FlowReloadStatusV2.internalBinaryRead(reader, reader.uint32(), options, (message.payload as any).flowReloadStatus)
                     };
                     break;
+                case /* avalanche.operator.CatalogReloadRequiredV2 catalog_reload_required */ 11:
+                    message.payload = {
+                        oneofKind: "catalogReloadRequired",
+                        catalogReloadRequired: CatalogReloadRequiredV2.internalBinaryRead(reader, reader.uint32(), options, (message.payload as any).catalogReloadRequired)
+                    };
+                    break;
                 case /* avalanche.operator.LifecycleCursorV2 cursor */ 5:
                     message.cursor = LifecycleCursorV2.internalBinaryRead(reader, reader.uint32(), options, message.cursor);
                     break;
@@ -4957,6 +5028,9 @@ class RunStatusEnvelopeV2$Type extends MessageType<RunStatusEnvelopeV2> {
         /* avalanche.operator.ScopeReferenceV2 scope_ref = 10; */
         if (message.scopeRef)
             ScopeReferenceV2.internalBinaryWrite(message.scopeRef, writer.tag(10, WireType.LengthDelimited).fork(), options).join();
+        /* avalanche.operator.CatalogReloadRequiredV2 catalog_reload_required = 11; */
+        if (message.payload.oneofKind === "catalogReloadRequired")
+            CatalogReloadRequiredV2.internalBinaryWrite(message.payload.catalogReloadRequired, writer.tag(11, WireType.LengthDelimited).fork(), options).join();
         let u = options.writeUnknownFields;
         if (u !== false)
             (u == true ? UnknownFieldHandler.onWrite : u)(this.typeName, message, writer);

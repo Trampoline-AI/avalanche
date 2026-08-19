@@ -292,6 +292,7 @@ class UIStore:
         self._runs_refresh_in_flight: set[str] = set()
         self._status_refresh_in_flight = False
         self._catalog_refresh_in_flight = False
+        self._catalog_refresh_generation = 0
         self._start_run_in_flight = False
         self._start_request_generation = 0
         self._run_interaction_generation = 0
@@ -1378,6 +1379,7 @@ class UIStore:
         self._catalog_refresh_in_flight = True
         provider = self.provider
         context_epoch = self._workflow_context_epoch
+        catalog_refresh_generation = self._catalog_refresh_generation
 
         import threading
 
@@ -1386,7 +1388,9 @@ class UIStore:
                 workflows = provider.list_workflows()
             except Exception:
                 workflows = None
-            self._background_updates.put(("catalog", (context_epoch, workflows)))
+            self._background_updates.put(
+                ("catalog", (context_epoch, catalog_refresh_generation, workflows))
+            )
 
         threading.Thread(target=_do_refresh, daemon=True).start()
 
@@ -2381,15 +2385,26 @@ class UIStore:
                 continue
             if kind == "catalog_replaced":
                 catalog = payload
-                if catalog.revision >= self.catalog_revision:
-                    self.catalog = catalog
-                    self.catalog_revision = catalog.revision
-                    self._reconcile_workflows(list(catalog.workflows))
+                if (
+                    catalog.operator_instance_id == self.catalog.operator_instance_id
+                    and catalog.as_of_event_ulid
+                    and self.catalog.as_of_event_ulid
+                    and catalog.as_of_event_ulid < self.catalog.as_of_event_ulid
+                ):
+                    continue
+                self._catalog_refresh_generation += 1
+                self.catalog = catalog
+                self.catalog_revision = catalog.revision
+                self._reconcile_workflows(list(catalog.workflows))
                 continue
             if kind == "catalog":
                 self._catalog_refresh_in_flight = False
-                context_epoch, workflows = payload
-                if workflows is not None and context_epoch == self._workflow_context_epoch:
+                context_epoch, catalog_refresh_generation, workflows = payload
+                if (
+                    workflows is not None
+                    and context_epoch == self._workflow_context_epoch
+                    and catalog_refresh_generation == self._catalog_refresh_generation
+                ):
                     self._reconcile_workflows(workflows)
             elif kind == "runs":
                 selector, data_revision, context_epoch, runs = payload
@@ -2559,6 +2574,7 @@ class UIStore:
         previous_selectors = {workflow.selector for workflow in self.workflows}
         baseline_selectors = {workflow.selector for workflow in baseline.catalog.workflows}
         self._workflow_context_epoch += 1
+        self._catalog_refresh_generation += 1
         for selector in previous_selectors | baseline_selectors:
             self._advance_run_data_revision(selector)
 

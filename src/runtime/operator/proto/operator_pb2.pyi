@@ -648,6 +648,12 @@ class FlowListChangedV2(_message.Message):
     flow_list: FlowListV2
     def __init__(self, flow_list: _Optional[_Union[FlowListV2, _Mapping]] = ...) -> None: ...
 
+class CatalogReloadRequiredV2(_message.Message):
+    __slots__ = ("deployment_id",)
+    DEPLOYMENT_ID_FIELD_NUMBER: _ClassVar[int]
+    deployment_id: str
+    def __init__(self, deployment_id: _Optional[str] = ...) -> None: ...
+
 class FlowReloadStatusV2(_message.Message):
     __slots__ = ("reloading",)
     RELOADING_FIELD_NUMBER: _ClassVar[int]
@@ -663,7 +669,7 @@ class ResetRequiredV2(_message.Message):
     def __init__(self, history_floor: _Optional[_Union[LifecycleCursorV2, _Mapping]] = ..., latest_cursor: _Optional[_Union[LifecycleCursorV2, _Mapping]] = ...) -> None: ...
 
 class RunStatusEnvelopeV2(_message.Message):
-    __slots__ = ("event_ulid", "run_created", "run_status_changed", "reset_required", "node_status_changed", "activity_appended", "flow_list_changed", "flow_reload_status", "cursor", "scope_ref")
+    __slots__ = ("event_ulid", "run_created", "run_status_changed", "reset_required", "node_status_changed", "activity_appended", "flow_list_changed", "flow_reload_status", "catalog_reload_required", "cursor", "scope_ref")
     EVENT_ULID_FIELD_NUMBER: _ClassVar[int]
     RUN_CREATED_FIELD_NUMBER: _ClassVar[int]
     RUN_STATUS_CHANGED_FIELD_NUMBER: _ClassVar[int]
@@ -672,6 +678,7 @@ class RunStatusEnvelopeV2(_message.Message):
     ACTIVITY_APPENDED_FIELD_NUMBER: _ClassVar[int]
     FLOW_LIST_CHANGED_FIELD_NUMBER: _ClassVar[int]
     FLOW_RELOAD_STATUS_FIELD_NUMBER: _ClassVar[int]
+    CATALOG_RELOAD_REQUIRED_FIELD_NUMBER: _ClassVar[int]
     CURSOR_FIELD_NUMBER: _ClassVar[int]
     SCOPE_REF_FIELD_NUMBER: _ClassVar[int]
     event_ulid: str
@@ -682,6 +689,7 @@ class RunStatusEnvelopeV2(_message.Message):
     activity_appended: ActivityAppendedV2
     flow_list_changed: FlowListChangedV2
     flow_reload_status: FlowReloadStatusV2
+    catalog_reload_required: CatalogReloadRequiredV2
     cursor: LifecycleCursorV2
     scope_ref: ScopeReferenceV2
-    def __init__(self, event_ulid: _Optional[str] = ..., run_created: _Optional[_Union[RunCreatedV2, _Mapping]] = ..., run_status_changed: _Optional[_Union[RunStatusChangedV2, _Mapping]] = ..., reset_required: _Optional[_Union[ResetRequiredV2, _Mapping]] = ..., node_status_changed: _Optional[_Union[NodeStatusChangedV2, _Mapping]] = ..., activity_appended: _Optional[_Union[ActivityAppendedV2, _Mapping]] = ..., flow_list_changed: _Optional[_Union[FlowListChangedV2, _Mapping]] = ..., flow_reload_status: _Optional[_Union[FlowReloadStatusV2, _Mapping]] = ..., cursor: _Optional[_Union[LifecycleCursorV2, _Mapping]] = ..., scope_ref: _Optional[_Union[ScopeReferenceV2, _Mapping]] = ...) -> None: ...
+    def __init__(self, event_ulid: _Optional[str] = ..., run_created: _Optional[_Union[RunCreatedV2, _Mapping]] = ..., run_status_changed: _Optional[_Union[RunStatusChangedV2, _Mapping]] = ..., reset_required: _Optional[_Union[ResetRequiredV2, _Mapping]] = ..., node_status_changed: _Optional[_Union[NodeStatusChangedV2, _Mapping]] = ..., activity_appended: _Optional[_Union[ActivityAppendedV2, _Mapping]] = ..., flow_list_changed: _Optional[_Union[FlowListChangedV2, _Mapping]] = ..., flow_reload_status: _Optional[_Union[FlowReloadStatusV2, _Mapping]] = ..., catalog_reload_required: _Optional[_Union[CatalogReloadRequiredV2, _Mapping]] = ..., cursor: _Optional[_Union[LifecycleCursorV2, _Mapping]] = ..., scope_ref: _Optional[_Union[ScopeReferenceV2, _Mapping]] = ...) -> None: ...

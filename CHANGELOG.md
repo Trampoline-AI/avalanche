@@ -6,6 +6,8 @@
 
 - Added a typed terminal-seal activity to V2 run updates and snapshots so clients
   can replay, retain, and display the final run status and optional reason.
+- Added a V2 catalog-reload notice so connected clients retain the current flow
+  catalog until a deployment change's complete discovery reload succeeds.
 
 ## 0.1.4
 

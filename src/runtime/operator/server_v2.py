@@ -33,6 +33,7 @@ from .convert_v2 import (
     update_envelope_to_v2,
     workflow_info_to_v2,
 )
+from .models import CatalogSnapshot
 from .operator import (
     InvalidRunIdError,
     Operator,
@@ -111,6 +112,7 @@ class _ContinuationBinding:
     node_id: str = ""
     category: str = ""
     workflow_selector: str = ""
+    catalog: CatalogSnapshot | None = None
 
 
 class OperatorV2Servicer(pb_grpc.OperatorServiceV2Servicer):
@@ -415,6 +417,7 @@ class OperatorV2Servicer(pb_grpc.OperatorServiceV2Servicer):
         node_id: str = "",
         category: str = "",
         workflow_selector: str = "",
+        catalog: CatalogSnapshot | None = None,
     ) -> pb.ContinuationRefV2 | None:
         if not token:
             return None
@@ -429,6 +432,7 @@ class OperatorV2Servicer(pb_grpc.OperatorServiceV2Servicer):
             node_id=node_id,
             category=category,
             workflow_selector=workflow_selector,
+            catalog=catalog,
         )
         key = self._continuation_registry_key(
             continuation,
@@ -443,6 +447,36 @@ class OperatorV2Servicer(pb_grpc.OperatorServiceV2Servicer):
             while len(self._continuations) > _MAX_ISSUED_BINDINGS:
                 self._continuations.popitem(last=False)
         return continuation
+
+    def _flow_continuation_binding(
+        self,
+        continuation: pb.ContinuationRefV2,
+        context,
+    ) -> _ContinuationBinding | None:
+        """Resolve one issued flow continuation and its exact catalog baseline."""
+        if not continuation.continuation_id:
+            return None
+        self._continuation_token(
+            continuation,
+            context,
+            stream=_EVENTS_STREAM,
+            category="flows",
+        )
+        key = self._continuation_registry_key(
+            continuation,
+            run_id="",
+            node_id="",
+            category="flows",
+            workflow_selector="",
+        )
+        with self._binding_lock:
+            binding = self._continuations.get(key)
+        if binding is None or binding.catalog is None:
+            context.abort(
+                grpc.StatusCode.FAILED_PRECONDITION,
+                "Flow continuation no longer retains its catalog baseline; rebaseline required",
+            )
+        return binding
 
     def _activity_continuation(
         self,
@@ -745,14 +779,21 @@ class OperatorV2Servicer(pb_grpc.OperatorServiceV2Servicer):
     # ── Discovery ─────────────────────────────────────────
 
     def DiscoverFlows(self, request, context):  # noqa: N802
-        catalog = self._op.get_catalog()
-        cursor = self._cursor(catalog.as_of_sequence)
-        token = self._continuation_token(
-            request.continuation,
-            context,
-            stream=_EVENTS_STREAM,
-            category="flows",
-        )
+        binding = self._flow_continuation_binding(request.continuation, context)
+        if binding is None:
+            catalog = self._op.get_catalog()
+            cursor = self._cursor(catalog.as_of_sequence)
+            token = ""
+        else:
+            catalog = binding.catalog
+            if catalog is None:
+                context.abort(
+                    grpc.StatusCode.FAILED_PRECONDITION,
+                    "Flow continuation no longer retains its catalog baseline; "
+                    "rebaseline required",
+                )
+            cursor = self._copy_cursor(binding.reference.cursor)
+            token = request.continuation.continuation_id
         offset = 0
         if token:
             if not token.startswith("flows:"):
@@ -766,7 +807,12 @@ class OperatorV2Servicer(pb_grpc.OperatorServiceV2Servicer):
         page = flows[offset : offset + size]
         next_offset = offset + len(page)
         next_page = (
-            self._continuation(cursor, f"flows:{next_offset}", category="flows")
+            self._continuation(
+                cursor,
+                f"flows:{next_offset}",
+                category="flows",
+                catalog=catalog,
+            )
             if next_offset < len(flows)
             else None
         )

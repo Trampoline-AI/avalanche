@@ -358,6 +358,17 @@ class CatalogReplaced:
 
 
 @dataclass(frozen=True)
+class CatalogReloadRequired:
+    """A deployment change requires clients to reload their catalog baseline."""
+
+    deployment_id: str
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.deployment_id, str) or not self.deployment_id:
+            raise ValueError("catalog reload notice requires a deployment ID")
+
+
+@dataclass(frozen=True)
 class WorkflowReloadStatus:
     """Whether the operator is rebuilding its workflow catalog."""
 
@@ -434,7 +445,9 @@ RunUpdateChange = (
     | TraceFinalized
     | TerminalSealAppended
 )
-OperatorUpdateChange = RunUpdateChange | CatalogReplaced | WorkflowReloadStatus
+OperatorUpdateChange = (
+    RunUpdateChange | CatalogReplaced | CatalogReloadRequired | WorkflowReloadStatus
+)
 
 
 @dataclass(frozen=True)
