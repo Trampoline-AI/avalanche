@@ -354,6 +354,16 @@ def test_v2_cursors_and_resets_require_complete_bounded_replay_state():
         )
 
 
+def test_project_summary_cursor_round_trips_opaque_source_generation():
+    source_generation = "2026-08-19T12:34:56.789Z"
+    cursor = pb.ProjectSummaryCursorV2(source_generation=source_generation)
+
+    round_tripped = pb.ProjectSummaryCursorV2()
+    round_tripped.ParseFromString(cursor.SerializeToString())
+
+    assert round_tripped.source_generation == source_generation
+
+
 def test_legacy_operator_service_and_messages_are_absent():
     assert "OperatorService" not in pb.DESCRIPTOR.services_by_name
     assert "CatalogSnapshotMsg" not in pb.DESCRIPTOR.message_types_by_name
