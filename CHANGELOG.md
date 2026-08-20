@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+## 0.1.5rc1
+
+This prerelease carries the V2 server, converter, and generated bindings used by Delta.
+
 ### Operator transport
 
 - Added an additive V2 project-summary cursor for consistent run-summary page
