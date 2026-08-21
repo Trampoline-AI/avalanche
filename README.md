@@ -21,7 +21,7 @@ Avalanche makes agents first-class steps in typed data pipelines. Compose adapti
   <img src="docs/assets/screenshots/output-onlinegiftools-half.gif" alt="Avalanche workflow demo" width="100%" />
 </p>
 
-> [!NOTE]  
+> [!NOTE]
 > Avalanche is an early release candidate intended for local development and experimentation. APIs and operational behavior may change before a stable release.
 
 ## Requirements
@@ -47,19 +47,41 @@ uv run ava dev
 
 This starts the operator and opens the browser UI at `http://127.0.0.1:7435`.
 
+You can then use the provided avalanche skill to create your own workflow by describing your wanted outcome to your agent:
+
+```bash
+/avalanche <outcome>
+```
+
 ## Installation
 
+### Option A — Starter project (recommended)
 
-
-### Starter project
-
-We recommend starting with the default Avalanche project, which includes everything you need to get started quickly on your first workflow. Just create an empty directory, cd into it and run:
+Create an empty directory, move into it, and run:
 
 ```bash
 uvx avalanche-ai init
 ```
 
-Follow the instruction to set up your LLM provider
+Follow the instructions to set up your LLM provider.
+
+This installs a ready-to-run starter project with project dependencies, the Avalanche
+authoring skill, provider setup, and an example workflow. Its key structure is:
+
+```text
+.
+├── .agent/
+│   └── skills/
+│       └── avalanche/                # Avalanche workflow creation skill
+├── scripts/
+│   └── configure-provider.sh         # LLM provider setup
+├── src/                              # workflows live here
+│   └── binary_converter/
+│       └── flow.py                   # included example workflow
+├── AGENTS.md                       
+├── pyproject.toml                  
+└── uv.lock
+```
 
 When run from an interactive terminal, the bootstrapper offers provider setup immediately. To change
 providers or credentials later in the starter project:
@@ -68,9 +90,20 @@ providers or credentials later in the starter project:
 bash scripts/configure-provider.sh
 ```
 
+#### Local checkout dependencies
 
+To develop Avalanche and PredictRLM alongside a new workspace, initialize an
+empty directory with editable dependencies:
 
-### Existing project
+```bash
+uvx avalanche-ai init --editable-deps
+```
+
+This clones both Trampoline AI projects into `.trampoline-ai/` and configures
+them as local editable dependencies, so changes to either checkout are used
+immediately by the workspace.
+
+### Option B — Existing project
 
 Avalanche is also usable as a project dependency.
 
@@ -86,24 +119,7 @@ Install the avalanche skill in the same project:
 npx skills add Trampoline-AI/avalanche
 ```
 
-
-
-### Local checkout dependencies
-
-To develop Avalanche and PredictRLM alongside a new workspace, initialize an
-empty directory with editable dependencies:
-
-```bash
-uvx avalanche-ai init --editable-deps
-```
-
-This clones both Trampoline AI projects into `.trampoline-ai/` and configures
-them as local editable dependencies, so changes to either checkout are used
-immediately by the workspace.
-
 ## Usage
-
-
 
 ### Creating a workflow
 
@@ -178,7 +194,6 @@ to `ava operator` or `ava dev` to set a different positive, finite limit.
 > working directory. Run it only from a dedicated flow workspace; otherwise pass
 > a specific flow file or flow-only directory with `--flows`.
 
-
 Similarily, you can pass `--connect` to the Web UI to change the operator url to connect to:
 
 ```bash
@@ -196,8 +211,6 @@ Once you have the operator running, you can either start workflows directly in t
 uv run ava run <workflow_name>
 ```
 
-
-
 ### TUI
 
 Avalanche also ships with a Terminal UI, that you can launch on the operator:
@@ -211,14 +224,12 @@ The operator defaults to port 7433.
 ### Workflow inputs
 
 Avalanche supports passing inputs to workflows using the BaseInput class. Learn more in
-[the DAG API's input and context guide](docs/dag-api.md#input-and-context). You can pass
+[the DAG API&#39;s input and context guide](docs/dag-api.md#input-and-context). You can pass
 inputs directly in the Web UI using small JSON editor, or through the command line:
 
 ```bash
 uv run ava run <workflow_name> --input '{"key": "value"}'
 ```
-
-
 
 ### Embedded workflows
 
@@ -229,8 +240,6 @@ run = feedback_workflow().run(executor=ava.LocalExecutor())
 print(run.run_id)
 result = run.result()
 ```
-
-
 
 ## Quick Example
 
@@ -263,22 +272,20 @@ def binary_converter():
     return generate_binary() >> convert_binary() >> print_result()
 ```
 
-
-
 ## Examples
 
 The [`examples/`](examples/) directory contains runnable workflows. Start with
 the customer feedback review, a production-shaped agentic data-transformation
 workflow; the rest are focused pattern demos.
 
-| Example | Description |
-| ------- | ----------- |
-| [Customer feedback review](examples/customer_feedback_review/) | End-to-end agentic workflow: parallel theme/risk analysis of a feedback workbook, deterministic reconciliation, and published Excel + Word review pack. |
-| [`complex_dag_pattern.py`](examples/complex_dag_pattern.py) | Local DAG API with explicit data passing, fan-out, and fan-in on `ava.LocalExecutor`. |
-| [`stream_pattern.py`](examples/stream_pattern.py) | Stream-based incremental processing with local Iceberg tables. |
-| [`cursor_pattern.py`](examples/cursor_pattern.py) | Manual checkpoint control with cursors for advanced incremental flows. |
-| [`document_file_workflow.py`](examples/document_file_workflow.py) | Typed `ava.File` inputs and outputs through a `BaseInput` workflow. |
-| [`operator_workflow.py`](examples/operator_workflow.py) | Flow file for the local operator and connected TUI path. |
+| Example                                                            | Description                                                                                                                                             |
+| ------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| [Customer feedback review](examples/customer_feedback_review/)      | End-to-end agentic workflow: parallel theme/risk analysis of a feedback workbook, deterministic reconciliation, and published Excel + Word review pack. |
+| [`complex_dag_pattern.py`](examples/complex_dag_pattern.py)       | Local DAG API with explicit data passing, fan-out, and fan-in on`ava.LocalExecutor`.                                                                  |
+| [`stream_pattern.py`](examples/stream_pattern.py)                 | Stream-based incremental processing with local Iceberg tables.                                                                                          |
+| [`cursor_pattern.py`](examples/cursor_pattern.py)                 | Manual checkpoint control with cursors for advanced incremental flows.                                                                                  |
+| [`document_file_workflow.py`](examples/document_file_workflow.py) | Typed`ava.File` inputs and outputs through a `BaseInput` workflow.                                                                                  |
+| [`operator_workflow.py`](examples/operator_workflow.py)           | Flow file for the local operator and connected TUI path.                                                                                                |
 
 See [`examples/README.md`](examples/README.md) for how to run each example.
 
@@ -287,7 +294,7 @@ See [`examples/README.md`](examples/README.md) for how to run each example.
 Avalanche sends agent-model requests through [LiteLLM](https://www.litellm.ai/).
 Any provider and model supported by LiteLLM is therefore supported by Avalanche.
 Configure the provider credentials as environment variables documented in
-[LiteLLM's provider guide](https://docs.litellm.ai/docs/providers); the process
+[LiteLLM&#39;s provider guide](https://docs.litellm.ai/docs/providers); the process
 running the operator must have access to those variables.
 
 We select models on each `@ava.agent_step` with LiteLLM's provider-qualified
@@ -324,20 +331,16 @@ tools remain defined on each agent step.
 
 ## Optional components
 
-
-| Extra   | Purpose                       |
-| ------- | ----------------------------- |
+| Extra     | Purpose                       |
+| --------- | ----------------------------- |
 | `ray`   | Ray-backed workflow execution |
 | `lance` | Lance storage backend         |
-
 
 The remaining extras can be combined:
 
 ```bash
 uv add "avalanche-ai[ray,lance]"
 ```
-
-
 
 ## Documentation
 
@@ -348,8 +351,6 @@ uv add "avalanche-ai[ray,lance]"
 - [Architecture](ARCHITECTURE.md)
 - [Examples](examples/README.md)
 - [Changelog](CHANGELOG.md)
-
-
 
 ## Contributing
 
