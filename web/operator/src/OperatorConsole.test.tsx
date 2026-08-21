@@ -122,9 +122,22 @@ vi.mock("./state", () => ({
   useOperatorProjection: () => projectionHarness,
 }));
 
-import { App } from "./App";
 import { GrpcWebOperatorApi } from "./api";
+import { OperatorConsole } from "./console/OperatorConsole";
+import type { OperatorConsoleHost, OperatorConsoleNavigation } from "./console/types";
+import { LocalOperatorShell } from "./local/LocalOperatorShell";
 import { RunSnapshotMsg, RunSummaryMsg, WorkflowTopologyMsg } from "./model";
+
+function consoleHost(): OperatorConsoleHost {
+  return {
+    api: new GrpcWebOperatorApi("http://localhost"),
+    presentation: {
+      rootLabel: "Test operator",
+      unavailableDescription: "Test operator is unavailable",
+      workflowReloadDescription: "Workflow catalog is refreshing",
+    },
+  };
+}
 
 const summary = RunSummaryMsg.create({
   runId: "run-1",
@@ -149,7 +162,7 @@ function selectedSnapshot(runId: string, nodeName: string) {
   });
 }
 
-describe("App", () => {
+describe("OperatorConsole", () => {
   beforeEach(() => {
     projectionHarness.state.runs = {};
     projectionHarness.state.selectedRun = undefined;
@@ -161,6 +174,7 @@ describe("App", () => {
     projectionHarness.state.catalog.revision = "1";
     projectionHarness.state.sequence = "1";
     projectionHarness.state.workflowReloading = false;
+    projectionHarness.state.catalog.workflows = [projectionHarness.state.catalog.workflows[0]];
     Object.defineProperty(window, "innerWidth", {
       configurable: true,
       writable: true,
@@ -178,34 +192,37 @@ describe("App", () => {
     projectionHarness.state.connection = "reconnecting";
 
     const { container } = render(
-      <App api={new GrpcWebOperatorApi("http://localhost")} operatorPort="17777" />,
+      <LocalOperatorShell
+        api={new GrpcWebOperatorApi("http://localhost")}
+        operatorPort="17777"
+      />,
     );
 
     expect(screen.getByRole("status")).toHaveTextContent("Reconnecting...");
-    expect(screen.getByText("No operator process found at port 17777")).toBeVisible();
+    expect(screen.getByRole("status")).toHaveTextContent("17777");
     expect(container.querySelector(".operator-connection-screen")).toHaveClass("min-h-screen");
     expect(container.querySelector(".topbar")).not.toBeInTheDocument();
   });
 
   it("shows a bottom update card while workflows are reloading", () => {
-    const view = render(<App api={new GrpcWebOperatorApi("http://localhost")} />);
+    const view = render(<OperatorConsole host={consoleHost()} />);
     expect(screen.queryByRole("status")).not.toBeInTheDocument();
 
     projectionHarness.state.workflowReloading = true;
-    view.rerender(<App api={new GrpcWebOperatorApi("http://localhost")} />);
+    view.rerender(<OperatorConsole host={consoleHost()} />);
 
     const indicator = screen.getByRole("status");
     expect(indicator).toBeVisible();
     expect(indicator).toHaveClass("bottom-5");
 
     projectionHarness.state.workflowReloading = false;
-    view.rerender(<App api={new GrpcWebOperatorApi("http://localhost")} />);
+    view.rerender(<OperatorConsole host={consoleHost()} />);
     expect(screen.queryByRole("status")).not.toBeInTheDocument();
   });
 
   it("keeps Explorer accessible through the narrow navigation toggle", () => {
     window.innerWidth = 375;
-    const { container } = render(<App api={new GrpcWebOperatorApi("http://localhost")} />);
+    const { container } = render(<OperatorConsole host={consoleHost()} />);
     const toggle = screen.getByRole("button", { name: "Explorer" });
 
     expect(toggle).toHaveAttribute("aria-controls", "operator-explorer");
@@ -224,8 +241,33 @@ describe("App", () => {
     expect(projectionHarness.startRun).toHaveBeenCalledWith("flow.py::demo", undefined);
   });
 
+  it("delegates workflow navigation to a controlled host", () => {
+    projectionHarness.state.catalog.workflows = [
+      projectionHarness.state.catalog.workflows[0],
+      {
+        ...projectionHarness.state.catalog.workflows[0],
+        workflowId: "flow.py::other",
+        displayName: "other",
+        relativeFile: "other.py",
+      },
+    ];
+    const navigation: OperatorConsoleNavigation = {
+      selection: { kind: "workflow", workflowId: "flow.py::demo" },
+      onSelectionChange: vi.fn(),
+    };
+
+    render(<OperatorConsole host={consoleHost()} navigation={navigation} />);
+    fireEvent.click(screen.getByRole("button", { name: /other/ }));
+
+    expect(navigation.onSelectionChange).toHaveBeenCalledWith({
+      kind: "workflow",
+      workflowId: "flow.py::other",
+    });
+    expect(projectionHarness.selectRun).toHaveBeenCalledWith(undefined);
+  });
+
   it("starts a run without selecting it before preparation completes", async () => {
-    render(<App api={new GrpcWebOperatorApi("http://localhost")} />);
+    render(<OperatorConsole host={consoleHost()} />);
 
     fireEvent.click(screen.getByRole("button", { name: "Run" }));
 
@@ -236,7 +278,7 @@ describe("App", () => {
   });
 
   it("collapses and restores the desktop Explorer independently of the narrow toggle", () => {
-    const { container } = render(<App api={new GrpcWebOperatorApi("http://localhost")} />);
+    const { container } = render(<OperatorConsole host={consoleHost()} />);
     const toggle = screen.getByRole("button", { name: "Collapse Explorer" });
     const explorer = screen.getByRole("complementary", { name: "Explorer" });
     const narrowToggle = screen.getByRole("button", { name: "Explorer" });
@@ -273,7 +315,7 @@ describe("App", () => {
   });
 
   it("maps divider arrow keys to physical movement and intended pane widths", () => {
-    const { container } = render(<App api={new GrpcWebOperatorApi("http://localhost")} />);
+    const { container } = render(<OperatorConsole host={consoleHost()} />);
     const workspace = container.querySelector<HTMLElement>(".workspace")!;
     const explorerDivider = screen.getByRole("separator", {
       name: "Resize Explorer",
@@ -308,7 +350,7 @@ describe("App", () => {
   });
 
   it("clamps direction-aware divider keyboard resizing without changing Home or End", () => {
-    const { container } = render(<App api={new GrpcWebOperatorApi("http://localhost")} />);
+    const { container } = render(<OperatorConsole host={consoleHost()} />);
     const workspace = container.querySelector<HTMLElement>(".workspace")!;
     const explorerDivider = screen.getByRole("separator", {
       name: "Resize Explorer",
@@ -347,7 +389,7 @@ describe("App", () => {
   });
 
   it("keeps pointer resizing aligned with each divider direction", () => {
-    const { container } = render(<App api={new GrpcWebOperatorApi("http://localhost")} />);
+    const { container } = render(<OperatorConsole host={consoleHost()} />);
     const workspace = container.querySelector<HTMLElement>(".workspace")!;
     const explorerDivider = screen.getByRole("separator", {
       name: "Resize Explorer",
@@ -372,7 +414,7 @@ describe("App", () => {
   });
 
   it("keeps transport sequence internal while log and trace updates retain catalog revision", () => {
-    const view = render(<App api={new GrpcWebOperatorApi("http://localhost")} />);
+    const view = render(<OperatorConsole host={consoleHost()} />);
     const catalogRevision = screen.getByText("catalog r1");
 
     expect(view.container).not.toHaveTextContent(/seq 1/i);
@@ -385,7 +427,7 @@ describe("App", () => {
     projectionHarness.state.liveEvents = {
       "run-1:node-1": [{ eventSequence: "93" }],
     };
-    view.rerender(<App api={new GrpcWebOperatorApi("http://localhost")} />);
+    view.rerender(<OperatorConsole host={consoleHost()} />);
 
     expect(screen.getByText("catalog r1")).toBe(catalogRevision);
     expect(view.container).not.toHaveTextContent(/seq 93/i);
@@ -394,7 +436,7 @@ describe("App", () => {
 
   it("removes the canvas header while preserving the retained snapshot explanation", async () => {
     projectionHarness.state.runs = { "run-1": summary };
-    const view = render(<App api={new GrpcWebOperatorApi("http://localhost")} />);
+    const view = render(<OperatorConsole host={consoleHost()} />);
 
     fireEvent.click(await screen.findByRole("button", { name: /run-1/ }));
 
@@ -404,7 +446,7 @@ describe("App", () => {
     projectionHarness.state.selectedRunId = "run-1";
     projectionHarness.state.selectedRunStatus = "ready";
     projectionHarness.state.selectedRun = selectedSnapshot("run-1", "Recorded node");
-    view.rerender(<App api={new GrpcWebOperatorApi("http://localhost")} />);
+    view.rerender(<OperatorConsole host={consoleHost()} />);
 
     expect(screen.getByText("Immutable run snapshot")).toBeInTheDocument();
     expect(
@@ -420,7 +462,7 @@ describe("App", () => {
 
   it("navigates summary-only runs with one demand-load selection and clears it", async () => {
     projectionHarness.state.runs = { "run-1": summary };
-    const view = render(<App api={new GrpcWebOperatorApi("http://localhost")} />);
+    const view = render(<OperatorConsole host={consoleHost()} />);
 
     fireEvent.click(await screen.findByRole("button", { name: /run-1/ }));
 
@@ -438,26 +480,26 @@ describe("App", () => {
 
   it("shows selected-run loading and error states without rendering stale snapshots", async () => {
     projectionHarness.state.runs = { "run-1": summary };
-    const view = render(<App api={new GrpcWebOperatorApi("http://localhost")} />);
+    const view = render(<OperatorConsole host={consoleHost()} />);
     fireEvent.click(await screen.findByRole("button", { name: /run-1/ }));
 
     projectionHarness.state.selectedRunId = "run-1";
     projectionHarness.state.selectedRunStatus = "loading";
-    view.rerender(<App api={new GrpcWebOperatorApi("http://localhost")} />);
+    view.rerender(<OperatorConsole host={consoleHost()} />);
     expect(screen.getByRole("heading", { name: "Loading run snapshot" })).toBeInTheDocument();
 
     projectionHarness.state.selectedRunStatus = "error";
     projectionHarness.state.selectedRunError = "snapshot was evicted";
-    view.rerender(<App api={new GrpcWebOperatorApi("http://localhost")} />);
+    view.rerender(<OperatorConsole host={consoleHost()} />);
     expect(screen.getByRole("alert")).toHaveTextContent("snapshot was evicted");
 
     projectionHarness.state.selectedRunStatus = "ready";
     projectionHarness.state.selectedRun = selectedSnapshot("run-2", "Stale node");
-    view.rerender(<App api={new GrpcWebOperatorApi("http://localhost")} />);
+    view.rerender(<OperatorConsole host={consoleHost()} />);
     expect(screen.queryByText(/Run graph/)).not.toBeInTheDocument();
 
     projectionHarness.state.selectedRun = selectedSnapshot("run-1", "Recorded node");
-    view.rerender(<App api={new GrpcWebOperatorApi("http://localhost")} />);
+    view.rerender(<OperatorConsole host={consoleHost()} />);
     fireEvent.click(screen.getByRole("button", { name: "Run graph Recorded node" }));
     expect(screen.getByText("Inspector run-1")).toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: "Cancel run" }));
@@ -465,43 +507,43 @@ describe("App", () => {
 
     projectionHarness.state.selectedRunId = "run-2";
     projectionHarness.state.selectedRun = selectedSnapshot("run-2", "New stale node");
-    view.rerender(<App api={new GrpcWebOperatorApi("http://localhost")} />);
+    view.rerender(<OperatorConsole host={consoleHost()} />);
     expect(screen.queryByText(/Run graph/)).not.toBeInTheDocument();
     expect(screen.queryByText(/Inspector/)).not.toBeInTheDocument();
   });
   it("reloads a surviving selected run once after baseline replacement", async () => {
     projectionHarness.state.runs = { "run-1": summary };
-    const view = render(<App api={new GrpcWebOperatorApi("http://localhost")} />);
+    const view = render(<OperatorConsole host={consoleHost()} />);
     fireEvent.click(await screen.findByRole("button", { name: /run-1/ }));
 
     projectionHarness.state.selectedRunId = "run-1";
     projectionHarness.state.selectedRunStatus = "ready";
     projectionHarness.state.selectedRun = selectedSnapshot("run-1", "Recorded node");
-    view.rerender(<App api={new GrpcWebOperatorApi("http://localhost")} />);
+    view.rerender(<OperatorConsole host={consoleHost()} />);
     projectionHarness.selectRun.mockClear();
 
     projectionHarness.state.runs = { "run-1": summary };
     projectionHarness.state.selectedRunId = undefined;
     projectionHarness.state.selectedRunStatus = "idle";
     projectionHarness.state.selectedRun = undefined;
-    view.rerender(<App api={new GrpcWebOperatorApi("http://localhost")} />);
+    view.rerender(<OperatorConsole host={consoleHost()} />);
 
     expect(projectionHarness.selectRun).toHaveBeenCalledTimes(1);
     expect(projectionHarness.selectRun).toHaveBeenCalledWith("run-1");
 
-    view.rerender(<App api={new GrpcWebOperatorApi("http://localhost")} />);
+    view.rerender(<OperatorConsole host={consoleHost()} />);
     expect(projectionHarness.selectRun).toHaveBeenCalledTimes(1);
   });
 
   it("falls back to the selected run's workflow when replacement omits its summary", async () => {
     projectionHarness.state.runs = { "run-1": summary };
-    const view = render(<App api={new GrpcWebOperatorApi("http://localhost")} />);
+    const view = render(<OperatorConsole host={consoleHost()} />);
     fireEvent.click(await screen.findByRole("button", { name: /run-1/ }));
 
     projectionHarness.state.selectedRunId = "run-1";
     projectionHarness.state.selectedRunStatus = "ready";
     projectionHarness.state.selectedRun = selectedSnapshot("run-1", "Recorded node");
-    view.rerender(<App api={new GrpcWebOperatorApi("http://localhost")} />);
+    view.rerender(<OperatorConsole host={consoleHost()} />);
     fireEvent.click(screen.getByRole("button", { name: "Run graph Recorded node" }));
     expect(screen.getByText("Inspector run-1")).toBeInTheDocument();
     projectionHarness.selectRun.mockClear();
@@ -510,7 +552,7 @@ describe("App", () => {
     projectionHarness.state.selectedRunId = undefined;
     projectionHarness.state.selectedRunStatus = "idle";
     projectionHarness.state.selectedRun = undefined;
-    view.rerender(<App api={new GrpcWebOperatorApi("http://localhost")} />);
+    view.rerender(<OperatorConsole host={consoleHost()} />);
 
     expect(projectionHarness.selectRun).toHaveBeenCalledTimes(1);
     expect(projectionHarness.selectRun).toHaveBeenCalledWith(undefined);
@@ -525,13 +567,13 @@ describe("App", () => {
     projectionHarness.state.liveLogs = {
       "run-1": [{ sequence: "17" }, { sequence: "18" }],
     };
-    const view = render(<App api={new GrpcWebOperatorApi("http://localhost")} />);
+    const view = render(<OperatorConsole host={consoleHost()} />);
     fireEvent.click(await screen.findByRole("button", { name: /run-1/ }));
 
     projectionHarness.state.selectedRunId = "run-1";
     projectionHarness.state.selectedRunStatus = "ready";
     projectionHarness.state.selectedRun = selectedSnapshot("run-1", "Recorded node");
-    view.rerender(<App api={new GrpcWebOperatorApi("http://localhost")} />);
+    view.rerender(<OperatorConsole host={consoleHost()} />);
 
     expect(screen.getByText("Live logs 17,18")).toBeInTheDocument();
     expect(screen.getByText("Log scope all")).toBeInTheDocument();

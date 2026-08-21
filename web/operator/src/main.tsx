@@ -3,7 +3,7 @@ import { StrictMode } from "react";
 import { createRoot } from "react-dom/client";
 
 import { GrpcWebOperatorApi } from "./api";
-import { App } from "./App";
+import { LocalOperatorShell } from "./local/LocalOperatorShell";
 import "./style.css";
 
 const root = document.getElementById("root");
@@ -15,6 +15,6 @@ if (operatorPort === null) throw new Error("Operator port metadata is missing");
 
 createRoot(root).render(
   <StrictMode>
-    <App api={new GrpcWebOperatorApi()} operatorPort={operatorPort.content} />
+    <LocalOperatorShell api={new GrpcWebOperatorApi()} operatorPort={operatorPort.content} />
   </StrictMode>,
 );
