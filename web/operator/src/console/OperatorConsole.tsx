@@ -9,17 +9,17 @@ import {
 } from "react";
 import { LoaderCircle, PanelLeftOpen } from "lucide-react";
 
-import type { OperatorApi } from "./api";
-import { Explorer, type Selection } from "./Explorer";
-import { GraphCanvas } from "./GraphCanvas";
-import { Inspector } from "./Inspector";
-import { RunLogPane } from "./RunLogPane";
-import { RunControls } from "./RunControls";
-import { RunListPanel } from "./RunListPanel";
-import { useOperatorProjection } from "./state";
+import { Explorer } from "../Explorer";
+import { GraphCanvas } from "../GraphCanvas";
+import { Inspector } from "../Inspector";
+import { RunLogPane } from "../RunLogPane";
+import { RunControls } from "../RunControls";
+import { RunListPanel } from "../RunListPanel";
+import { useOperatorProjection } from "../state";
+import type { OperatorConsoleProps, OperatorConsoleSelection } from "./types";
 
 const avalancheDiamond = new URL(
-  "../../../docs/assets/brand/avalanche-diamond-3d-1024.png",
+  "../../../../docs/assets/brand/avalanche-diamond-3d-1024.png",
   import.meta.url,
 ).href;
 
@@ -107,14 +107,21 @@ function WorkspaceDivider({
   );
 }
 
-interface AppProps {
-  api: OperatorApi;
-  operatorPort?: string;
-}
-
-export function App({ api, operatorPort = "7433" }: AppProps) {
+export function OperatorConsole({ host, navigation }: OperatorConsoleProps) {
+  const { api, presentation } = host;
   const { state, startRun, cancelRun, selectRun } = useOperatorProjection(api);
-  const [selection, setSelection] = useState<Selection>();
+  const [localSelection, setLocalSelection] = useState<OperatorConsoleSelection>();
+  const selection = navigation ? navigation.selection : localSelection;
+  const setSelection = useCallback(
+    (next: OperatorConsoleSelection | undefined) => {
+      if (navigation) {
+        navigation.onSelectionChange(next);
+        return;
+      }
+      setLocalSelection(next);
+    },
+    [navigation],
+  );
   const [inspectedNode, setInspectedNode] = useState<string>();
   const [explorerOpen, setExplorerOpen] = useState(false);
   const [explorerCollapsed, setExplorerCollapsed] = useState(false);
@@ -141,7 +148,7 @@ export function App({ api, operatorPort = "7433" }: AppProps) {
       setInspectedNode(undefined);
       void selectRun(undefined);
     }
-  }, [selectRun, selection, state.catalog]);
+  }, [selectRun, selection, setSelection, state.catalog]);
 
   useEffect(() => {
     const priorSelectedRunId = previousSelectedRunId.current;
@@ -169,6 +176,7 @@ export function App({ api, operatorPort = "7433" }: AppProps) {
   }, [
     selectRun,
     selection,
+    setSelection,
     state.catalog,
     state.runs,
     state.selectedRunId,
@@ -198,13 +206,13 @@ export function App({ api, operatorPort = "7433" }: AppProps) {
   const collapseExplorer = useCallback(() => setExplorerCollapsed(true), []);
   const restoreExplorer = useCallback(() => setExplorerCollapsed(false), []);
   const select = useCallback(
-    (next: Selection) => {
+    (next: OperatorConsoleSelection) => {
       setSelection(next);
       setInspectedNode(undefined);
       setExplorerOpen(false);
       void selectRun(next.kind === "run" ? next.runId : undefined);
     },
-    [selectRun],
+    [selectRun, setSelection],
   );
   const selectWorkflowRun = useCallback(
     (runId: string) => {
@@ -279,9 +287,7 @@ export function App({ api, operatorPort = "7433" }: AppProps) {
             <h1 className="text-lg font-semibold tracking-[-0.02em] text-ink">
               Reconnecting...
             </h1>
-            <p className="mt-2 text-sm text-muted">
-              No operator process found at port {operatorPort}
-            </p>
+            <p className="mt-2 text-sm text-muted">{presentation.unavailableDescription}</p>
           </div>
         </div>
       </main>
@@ -307,7 +313,7 @@ export function App({ api, operatorPort = "7433" }: AppProps) {
           </div>
         </div>
         <div className="breadcrumb absolute left-1/2 flex -translate-x-1/2 justify-center gap-[9px] text-xs text-muted max-[700px]:hidden [&_i]:opacity-40 [&_strong]:font-semibold [&_strong]:text-[#26322c]">
-          <span>{workflow?.rootAlias || "Local operator"}</span>
+          <span>{workflow?.rootAlias || presentation.rootLabel}</span>
           {workflow && (
             <>
               <i>/</i>
@@ -498,7 +504,7 @@ export function App({ api, operatorPort = "7433" }: AppProps) {
               <span className="absolute inline-flex size-full animate-ping rounded-full bg-acid opacity-60 motion-reduce:animate-none" />
               <span className="relative inline-flex size-2 rounded-full bg-acid" />
             </span>
-            Workflow change detected. Scanning...
+            {presentation.workflowReloadDescription}
           </div>
         </div>
       )}
