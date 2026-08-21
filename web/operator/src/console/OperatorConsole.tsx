@@ -18,11 +18,6 @@ import { RunListPanel } from "../RunListPanel";
 import { useOperatorProjection } from "../state";
 import type { OperatorConsoleProps, OperatorConsoleSelection } from "./types";
 
-const avalancheDiamond = new URL(
-  "../../../../docs/assets/brand/avalanche-diamond-3d-1024.png",
-  import.meta.url,
-).href;
-
 const EXPLORER_MIN_WIDTH = 220;
 const EXPLORER_MAX_WIDTH = 420;
 const EXPLORER_DEFAULT_WIDTH = 280;
@@ -273,241 +268,245 @@ export function OperatorConsole({ host, navigation }: OperatorConsoleProps) {
   } as CSSProperties;
   if (state.connection !== "live") {
     return (
-      <main
-        className="operator-connection-screen grid min-h-screen w-full place-items-center bg-canvas p-6 text-center"
-        role="status"
-        aria-live="polite"
-      >
-        <div className="grid justify-items-center gap-4">
-          <LoaderCircle
-            aria-hidden="true"
-            className="size-7 animate-spin text-acid motion-reduce:animate-none"
-          />
-          <div>
-            <h1 className="text-lg font-semibold tracking-[-0.02em] text-ink">
-              Reconnecting...
-            </h1>
-            <p className="mt-2 text-sm text-muted">{presentation.unavailableDescription}</p>
+      <div className="avalanche-console">
+        <main
+          className="operator-connection-screen grid min-h-screen w-full place-items-center bg-canvas p-6 text-center"
+          role="status"
+          aria-live="polite"
+        >
+          <div className="grid justify-items-center gap-4">
+            <LoaderCircle
+              aria-hidden="true"
+              className="size-7 animate-spin text-acid motion-reduce:animate-none"
+            />
+            <div>
+              <h1 className="text-lg font-semibold tracking-[-0.02em] text-ink">
+                Reconnecting...
+              </h1>
+              <p className="mt-2 text-sm text-muted">{presentation.unavailableDescription}</p>
+            </div>
           </div>
-        </div>
-      </main>
+        </main>
+      </div>
     );
   }
 
   return (
-    <div
-      className={`app-shell flex h-full flex-col ${explorerOpen ? "explorer-open" : ""} ${
-        explorerCollapsed ? "explorer-collapsed" : ""
-      }`}
-    >
-      <header className="topbar relative z-10 grid min-h-[58px] grid-cols-[260px_minmax(0,1fr)_auto_auto] items-center border-b border-line bg-white px-5 shadow-[0_1px_2px_rgba(20,31,26,.04)] max-[1000px]:grid-cols-[210px_minmax(0,1fr)_auto_auto] max-[700px]:grid-cols-[auto_minmax(0,1fr)_auto] max-[700px]:gap-2 max-[700px]:px-2.5">
-        <div className="brand flex items-center gap-[11px]">
-          <img
-            className="brand-mark size-[30px] object-contain"
-            src={avalancheDiamond}
-            alt=""
-          />
-          <div className="flex items-baseline gap-[7px]">
-            <strong className="text-[15px] tracking-[-0.02em]">Avalanche</strong>
-            <span className="font-mono text-[11px] text-muted uppercase">Operator</span>
-          </div>
-        </div>
-        <div className="breadcrumb absolute left-1/2 flex -translate-x-1/2 justify-center gap-[9px] text-xs text-muted max-[700px]:hidden [&_i]:opacity-40 [&_strong]:font-semibold [&_strong]:text-[#26322c]">
-          <span>{workflow?.rootAlias || presentation.rootLabel}</span>
-          {workflow && (
-            <>
-              <i>/</i>
-              <strong>{workflow.displayName}</strong>
-            </>
-          )}
-          {historical && (
-            <>
-              <i>/</i>
-              <strong>{selection.runId}</strong>
-            </>
-          )}
-        </div>
-        <div
-          className={`connection flex items-center gap-2 font-mono text-[11px] capitalize [&>span]:size-[7px] [&>span]:rounded-full ${state.connection === "live" ? "[&>span]:bg-mint" : "[&>span]:bg-amber"} max-[700px]:justify-self-end connection-${state.connection}`}
-        >
-          <span />
-          {state.connection === "live" ? "Live" : state.connection}
-        </div>
-        <button
-          type="button"
-          className="explorer-toggle hidden cursor-pointer rounded-[7px] border border-[#cbd2ce] bg-white px-[9px] py-[7px] text-[10px] max-[700px]:block"
-          aria-controls="operator-explorer"
-          aria-expanded={explorerOpen}
-          onClick={() => setExplorerOpen((open) => !open)}
-        >
-          Explorer
-        </button>
-      </header>
-      {state.error && (
-        <div className="connection-error border-b border-[#efb9b5] bg-[#fff1f0] px-[18px] py-2 text-xs text-[#9d2923]">
-          {state.error}
-        </div>
-      )}
-      <main
-        className={`workspace grid min-h-0 w-full flex-1 overflow-hidden grid-cols-[var(--workspace-explorer-column-width)_var(--workspace-explorer-divider-width)_minmax(0,1fr)_var(--workspace-inspector-divider-width)_var(--workspace-inspector-column-width)] max-[1000px]:grid-cols-[var(--workspace-explorer-column-width)_var(--workspace-explorer-divider-width)_minmax(0,1fr)] max-[700px]:grid-cols-[minmax(0,1fr)] ${inspectorOpen ? "with-inspector" : ""}`}
-        style={workspaceStyle}
+    <div className="avalanche-console">
+      <div
+        className={`app-shell flex h-full flex-col ${explorerOpen ? "explorer-open" : ""} ${
+          explorerCollapsed ? "explorer-collapsed" : ""
+        }`}
       >
-        <Explorer
-          catalog={state.catalog}
-          selection={selection}
-          onSelect={select}
-          onCollapse={collapseExplorer}
-          open={explorerOpen}
-          collapsed={explorerCollapsed}
-        />
-        {!explorerCollapsed && (
-          <WorkspaceDivider
-            className="workspace-explorer-divider col-start-2 z-[5] w-4 -translate-x-1/2 max-[700px]:hidden"
-            label="Resize Explorer"
-            controls="operator-explorer"
-            value={explorerWidth}
-            min={EXPLORER_MIN_WIDTH}
-            max={EXPLORER_MAX_WIDTH}
-            pointerDirection={1}
-            onChange={setExplorerWidth}
-          />
-        )}
-        <section className="canvas-shell relative col-start-3 grid min-h-0 min-w-0 w-full grid-rows-[minmax(0,1fr)] overflow-hidden bg-[#f7f9f8] max-[700px]:col-start-1">
+        <header className="topbar relative z-10 grid min-h-[58px] grid-cols-[260px_minmax(0,1fr)_auto_auto] items-center border-b border-line bg-white px-5 shadow-[0_1px_2px_rgba(20,31,26,.04)] max-[1000px]:grid-cols-[210px_minmax(0,1fr)_auto_auto] max-[700px]:grid-cols-[auto_minmax(0,1fr)_auto] max-[700px]:gap-2 max-[700px]:px-2.5">
+          <div className="brand flex items-center gap-[11px]">
+            <img
+              className="brand-mark size-[30px] object-contain"
+              src={presentation.brandImageUrl}
+              alt=""
+            />
+            <div className="flex items-baseline gap-[7px]">
+              <strong className="text-[15px] tracking-[-0.02em]">Avalanche</strong>
+              <span className="font-mono text-[11px] text-muted uppercase">Operator</span>
+            </div>
+          </div>
+          <div className="breadcrumb absolute left-1/2 flex -translate-x-1/2 justify-center gap-[9px] text-xs text-muted max-[700px]:hidden [&_i]:opacity-40 [&_strong]:font-semibold [&_strong]:text-[#26322c]">
+            <span>{workflow?.rootAlias || presentation.rootLabel}</span>
+            {workflow && (
+              <>
+                <i>/</i>
+                <strong>{workflow.displayName}</strong>
+              </>
+            )}
+            {historical && (
+              <>
+                <i>/</i>
+                <strong>{selection.runId}</strong>
+              </>
+            )}
+          </div>
           <div
-            className={
-              historical
-                ? "canvas run-canvas relative flex min-h-0 min-w-0 w-full flex-col overflow-hidden bg-[radial-gradient(circle,#e1e4df_1px,transparent_1px),#fafaf8] bg-[length:24px_24px]"
-                : "canvas blueprint-canvas relative min-h-0 min-w-0 w-full overflow-hidden bg-white"
-            }
+            className={`connection flex items-center gap-2 font-mono text-[11px] capitalize [&>span]:size-[7px] [&>span]:rounded-full ${state.connection === "live" ? "[&>span]:bg-mint" : "[&>span]:bg-amber"} max-[700px]:justify-self-end connection-${state.connection}`}
           >
-            {historical ? (
-              run ? (
-                <>
-                  <div className="run-graph-shell relative min-h-0 min-w-0 flex-[1_1_auto] overflow-hidden">
-                    <GraphCanvas
-                      runTopology={run.topology}
-                      runNodes={run.nodes}
-                      selectedNodeId={inspectedNode}
-                      onClearNode={closeNode}
-                      onOpenNode={openNode}
-                      topLeftPanel={runListPanel}
-                      bottomRightPanel={runControlsPanel}
-                    />
-                    <div className="historical-badge absolute top-[18px] right-[18px] z-[5] rounded-lg border border-[#dfc99e] bg-[rgba(255,252,245,.96)] px-3 py-[9px] text-[9px] text-[#766548] shadow-[0_4px_14px_rgba(54,44,25,.08)] [&>span]:mb-[3px] [&>span]:block [&>span]:font-mono [&>span]:text-[8px] [&>span]:text-amber [&>span]:uppercase">
-                      <span>Immutable run snapshot</span>
-                      Current workflow changes do not alter this canvas
+            <span />
+            {state.connection === "live" ? "Live" : state.connection}
+          </div>
+          <button
+            type="button"
+            className="explorer-toggle hidden cursor-pointer rounded-[7px] border border-[#cbd2ce] bg-white px-[9px] py-[7px] text-[10px] max-[700px]:block"
+            aria-controls="operator-explorer"
+            aria-expanded={explorerOpen}
+            onClick={() => setExplorerOpen((open) => !open)}
+          >
+            Explorer
+          </button>
+        </header>
+        {state.error && (
+          <div className="connection-error border-b border-[#efb9b5] bg-[#fff1f0] px-[18px] py-2 text-xs text-[#9d2923]">
+            {state.error}
+          </div>
+        )}
+        <main
+          className={`workspace grid min-h-0 w-full flex-1 overflow-hidden grid-cols-[var(--workspace-explorer-column-width)_var(--workspace-explorer-divider-width)_minmax(0,1fr)_var(--workspace-inspector-divider-width)_var(--workspace-inspector-column-width)] max-[1000px]:grid-cols-[var(--workspace-explorer-column-width)_var(--workspace-explorer-divider-width)_minmax(0,1fr)] max-[700px]:grid-cols-[minmax(0,1fr)] ${inspectorOpen ? "with-inspector" : ""}`}
+          style={workspaceStyle}
+        >
+          <Explorer
+            catalog={state.catalog}
+            selection={selection}
+            onSelect={select}
+            onCollapse={collapseExplorer}
+            open={explorerOpen}
+            collapsed={explorerCollapsed}
+          />
+          {!explorerCollapsed && (
+            <WorkspaceDivider
+              className="workspace-explorer-divider col-start-2 z-[5] w-4 -translate-x-1/2 max-[700px]:hidden"
+              label="Resize Explorer"
+              controls="operator-explorer"
+              value={explorerWidth}
+              min={EXPLORER_MIN_WIDTH}
+              max={EXPLORER_MAX_WIDTH}
+              pointerDirection={1}
+              onChange={setExplorerWidth}
+            />
+          )}
+          <section className="canvas-shell relative col-start-3 grid min-h-0 min-w-0 w-full grid-rows-[minmax(0,1fr)] overflow-hidden bg-[#f7f9f8] max-[700px]:col-start-1">
+            <div
+              className={
+                historical
+                  ? "canvas run-canvas relative flex min-h-0 min-w-0 w-full flex-col overflow-hidden bg-[radial-gradient(circle,#e1e4df_1px,transparent_1px),#fafaf8] bg-[length:24px_24px]"
+                  : "canvas blueprint-canvas relative min-h-0 min-w-0 w-full overflow-hidden bg-white"
+              }
+            >
+              {historical ? (
+                run ? (
+                  <>
+                    <div className="run-graph-shell relative min-h-0 min-w-0 flex-[1_1_auto] overflow-hidden">
+                      <GraphCanvas
+                        runTopology={run.topology}
+                        runNodes={run.nodes}
+                        selectedNodeId={inspectedNode}
+                        onClearNode={closeNode}
+                        onOpenNode={openNode}
+                        topLeftPanel={runListPanel}
+                        bottomRightPanel={runControlsPanel}
+                      />
+                      <div className="historical-badge absolute top-[18px] right-[18px] z-[5] rounded-lg border border-[#dfc99e] bg-[rgba(255,252,245,.96)] px-3 py-[9px] text-[9px] text-[#766548] shadow-[0_4px_14px_rgba(54,44,25,.08)] [&>span]:mb-[3px] [&>span]:block [&>span]:font-mono [&>span]:text-[8px] [&>span]:text-amber [&>span]:uppercase">
+                        <span>Immutable run snapshot</span>
+                        Current workflow changes do not alter this canvas
+                      </div>
                     </div>
-                  </div>
-                  <RunLogPane
-                    api={api}
-                    run={run}
-                    nodeId={inspectedNode}
-                    liveLogs={state.liveLogs[selection.runId]}
-                    onSelectNode={openNode}
-                  />
-                </>
-              ) : state.selectedRunId === selection.runId &&
-                state.selectedRunStatus === "loading" ? (
-                <>
-                  {restoreButton}
-                  <div
-                    className="empty-state grid h-full place-content-center text-center text-[#6d7872] [&>span]:text-[40px] [&>span]:text-acid [&>h2]:my-2 [&>h2]:text-[#27332d] [&>p]:max-w-[390px] [&>p]:text-xs"
-                    role="status"
-                  >
-                    <span>◇</span>
-                    <h2>Loading run snapshot</h2>
-                    <p>Retrieving the retained topology and execution state.</p>
-                  </div>
-                </>
-              ) : state.selectedRunId === selection.runId &&
-                state.selectedRunStatus === "error" ? (
-                <>
-                  {restoreButton}
-                  <div
-                    className="empty-state grid h-full place-content-center text-center text-[#6d7872] [&>span]:text-[40px] [&>span]:text-acid [&>h2]:my-2 [&>h2]:text-[#27332d] [&>p]:max-w-[390px] [&>p]:text-xs"
-                    role="alert"
-                  >
-                    <span>!</span>
-                    <h2>Run snapshot unavailable</h2>
-                    <p>{state.selectedRunError || "The selected run could not be loaded."}</p>
-                  </div>
-                </>
+                    <RunLogPane
+                      api={api}
+                      run={run}
+                      nodeId={inspectedNode}
+                      liveLogs={state.liveLogs[selection.runId]}
+                      onSelectNode={openNode}
+                    />
+                  </>
+                ) : state.selectedRunId === selection.runId &&
+                  state.selectedRunStatus === "loading" ? (
+                  <>
+                    {restoreButton}
+                    <div
+                      className="empty-state grid h-full place-content-center text-center text-[#6d7872] [&>span]:text-[40px] [&>span]:text-acid [&>h2]:my-2 [&>h2]:text-[#27332d] [&>p]:max-w-[390px] [&>p]:text-xs"
+                      role="status"
+                    >
+                      <span>◇</span>
+                      <h2>Loading run snapshot</h2>
+                      <p>Retrieving the retained topology and execution state.</p>
+                    </div>
+                  </>
+                ) : state.selectedRunId === selection.runId &&
+                  state.selectedRunStatus === "error" ? (
+                  <>
+                    {restoreButton}
+                    <div
+                      className="empty-state grid h-full place-content-center text-center text-[#6d7872] [&>span]:text-[40px] [&>span]:text-acid [&>h2]:my-2 [&>h2]:text-[#27332d] [&>p]:max-w-[390px] [&>p]:text-xs"
+                      role="alert"
+                    >
+                      <span>!</span>
+                      <h2>Run snapshot unavailable</h2>
+                      <p>{state.selectedRunError || "The selected run could not be loaded."}</p>
+                    </div>
+                  </>
+                ) : (
+                  <>
+                    {restoreButton}
+                    <div className="empty-state grid h-full place-content-center text-center text-[#6d7872] [&>span]:text-[40px] [&>span]:text-acid [&>h2]:my-2 [&>h2]:text-[#27332d] [&>p]:max-w-[390px] [&>p]:text-xs">
+                      <span>◇</span>
+                      <h2>No run snapshot</h2>
+                      <p>Select the run again to load its retained topology.</p>
+                    </div>
+                  </>
+                )
+              ) : workflow ? (
+                <GraphCanvas
+                  workflow={workflow}
+                  topLeftPanel={runListPanel}
+                  bottomRightPanel={runControlsPanel}
+                  selectedNodeId={inspectedNode}
+                  onClearNode={closeNode}
+                  onOpenNode={openNode}
+                />
               ) : (
                 <>
                   {restoreButton}
                   <div className="empty-state grid h-full place-content-center text-center text-[#6d7872] [&>span]:text-[40px] [&>span]:text-acid [&>h2]:my-2 [&>h2]:text-[#27332d] [&>p]:max-w-[390px] [&>p]:text-xs">
                     <span>◇</span>
-                    <h2>No run snapshot</h2>
-                    <p>Select the run again to load its retained topology.</p>
+                    <h2>No workflows discovered</h2>
+                    <p>
+                      Catalog changes will appear here as the operator scans configured targets.
+                    </p>
                   </div>
                 </>
-              )
-            ) : workflow ? (
-              <GraphCanvas
-                workflow={workflow}
-                topLeftPanel={runListPanel}
-                bottomRightPanel={runControlsPanel}
-                selectedNodeId={inspectedNode}
-                onClearNode={closeNode}
-                onOpenNode={openNode}
-              />
-            ) : (
-              <>
-                {restoreButton}
-                <div className="empty-state grid h-full place-content-center text-center text-[#6d7872] [&>span]:text-[40px] [&>span]:text-acid [&>h2]:my-2 [&>h2]:text-[#27332d] [&>p]:max-w-[390px] [&>p]:text-xs">
-                  <span>◇</span>
-                  <h2>No workflows discovered</h2>
-                  <p>
-                    Catalog changes will appear here as the operator scans configured targets.
-                  </p>
-                </div>
-              </>
-            )}
-          </div>
-        </section>
-        {inspectorOpen && (
-          <>
-            <WorkspaceDivider
-              className="workspace-inspector-divider col-start-4 z-[5] w-4 -translate-x-1/2 max-[1000px]:fixed max-[1000px]:top-[58px] max-[1000px]:right-[calc(min(var(--workspace-inspector-width),100vw)-8px)] max-[1000px]:bottom-0 max-[1000px]:z-[31] max-[700px]:hidden"
-              label="Resize Inspector"
-              controls="operator-inspector"
-              value={inspectorWidth}
-              min={INSPECTOR_MIN_WIDTH}
-              max={INSPECTOR_MAX_WIDTH}
-              pointerDirection={-1}
-              onChange={setInspectorWidth}
-            />
-            <div
-              id="operator-inspector"
-              className="workspace-inspector-pane col-start-5 grid min-h-0 min-w-0 overflow-hidden max-[1000px]:contents"
-            >
-              <Inspector
-                api={api}
-                workflow={workflow}
-                run={run}
-                nodeId={inspectedNode}
-                liveEvents={state.liveEvents[liveEventDescriptorKey]}
-                onClose={closeNode}
-              />
+              )}
             </div>
-          </>
-        )}
-      </main>
-      {state.workflowReloading && (
-        <div
-          className="workflow-reload-indicator pointer-events-none fixed inset-x-0 bottom-5 z-50 flex justify-center px-4"
-          role="status"
-          aria-live="polite"
-        >
-          <div className="flex items-center gap-2.5 rounded-lg border border-white/10 bg-[#1d2923] px-3.5 py-2.5 text-[11px] font-medium tracking-[-0.01em] text-white shadow-[0_10px_30px_rgba(15,25,20,.22)]">
-            <span className="relative flex size-2" aria-hidden="true">
-              <span className="absolute inline-flex size-full animate-ping rounded-full bg-acid opacity-60 motion-reduce:animate-none" />
-              <span className="relative inline-flex size-2 rounded-full bg-acid" />
-            </span>
-            {presentation.workflowReloadDescription}
+          </section>
+          {inspectorOpen && (
+            <>
+              <WorkspaceDivider
+                className="workspace-inspector-divider col-start-4 z-[5] w-4 -translate-x-1/2 max-[1000px]:fixed max-[1000px]:top-[58px] max-[1000px]:right-[calc(min(var(--workspace-inspector-width),100vw)-8px)] max-[1000px]:bottom-0 max-[1000px]:z-[31] max-[700px]:hidden"
+                label="Resize Inspector"
+                controls="operator-inspector"
+                value={inspectorWidth}
+                min={INSPECTOR_MIN_WIDTH}
+                max={INSPECTOR_MAX_WIDTH}
+                pointerDirection={-1}
+                onChange={setInspectorWidth}
+              />
+              <div
+                id="operator-inspector"
+                className="workspace-inspector-pane col-start-5 grid min-h-0 min-w-0 overflow-hidden max-[1000px]:contents"
+              >
+                <Inspector
+                  api={api}
+                  workflow={workflow}
+                  run={run}
+                  nodeId={inspectedNode}
+                  liveEvents={state.liveEvents[liveEventDescriptorKey]}
+                  onClose={closeNode}
+                />
+              </div>
+            </>
+          )}
+        </main>
+        {state.workflowReloading && (
+          <div
+            className="workflow-reload-indicator pointer-events-none fixed inset-x-0 bottom-5 z-50 flex justify-center px-4"
+            role="status"
+            aria-live="polite"
+          >
+            <div className="flex items-center gap-2.5 rounded-lg border border-white/10 bg-[#1d2923] px-3.5 py-2.5 text-[11px] font-medium tracking-[-0.01em] text-white shadow-[0_10px_30px_rgba(15,25,20,.22)]">
+              <span className="relative flex size-2" aria-hidden="true">
+                <span className="absolute inline-flex size-full animate-ping rounded-full bg-acid opacity-60 motion-reduce:animate-none" />
+                <span className="relative inline-flex size-2 rounded-full bg-acid" />
+              </span>
+              {presentation.workflowReloadDescription}
+            </div>
           </div>
-        </div>
-      )}
+        )}
+      </div>
     </div>
   );
 }

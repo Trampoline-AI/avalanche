@@ -5,6 +5,7 @@ export type OperatorConsoleSelection =
 
 export interface OperatorConsolePresentation {
   rootLabel: string;
+  brandImageUrl: string;
   unavailableDescription: string;
   workflowReloadDescription: string;
 }

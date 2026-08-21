@@ -1,10 +1,10 @@
-import "@xyflow/react/dist/style.css";
+import "@avalanche/operator-console/styles.css";
+import { GrpcWebOperatorApi } from "@avalanche/operator-console";
 import { StrictMode } from "react";
 import { createRoot } from "react-dom/client";
 
-import { GrpcWebOperatorApi } from "./api";
 import { LocalOperatorShell } from "./local/LocalOperatorShell";
-import "./style.css";
+import "./local.css";
 
 const root = document.getElementById("root");
 if (!root) throw new Error("Operator UI root element is missing");
