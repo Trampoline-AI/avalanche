@@ -30,7 +30,7 @@ jobs:
           version: 10.17.1
       - run: uv sync --all-extras
       - run: pnpm install --frozen-lockfile
-        working-directory: web/operator
+        working-directory: web
       - run: make web-proto
       - run: make web-test
       - run: make web-assets-check WEB_ASSETS_CHECK_CONTEXT=ci

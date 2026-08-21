@@ -63,7 +63,7 @@ jobs:
           version: 10.17.1
       - name: Install browser dependencies
         run: pnpm install --frozen-lockfile
-        working-directory: web/operator
+        working-directory: web
       - name: Verify packaged browser assets
         run: make web-assets-check WEB_ASSETS_CHECK_CONTEXT=ci
       - name: Build sdist and wheel

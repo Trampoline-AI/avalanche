@@ -4,7 +4,7 @@ import globals from "globals";
 import tseslint from "typescript-eslint";
 
 export default tseslint.config(
-  { ignores: [".vite/**", "src/generated/**"] },
+  { ignores: [".vite/**", "dist/**", "src/generated/**"] },
   {
     files: ["*.{js,mjs}", "scripts/**/*.mjs"],
     extends: [js.configs.recommended],
