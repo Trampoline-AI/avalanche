@@ -49,11 +49,11 @@ proto:
 
 # Regenerate the checked-in TypeScript operator client.
 web-proto:
-	cd web/operator && pnpm generate
+	cd web && pnpm generate
 
 # Build the packaged browser interface.
 web-build:
-	cd web/operator && pnpm build
+	cd web && pnpm build
 
 # Rebuild the packaged browser interface and reject unstaged generated assets.
 web-assets-check: web-build
@@ -80,23 +80,23 @@ web-assets-check: web-build
 
 # Lint the browser TypeScript and React source.
 web-lint:
-	cd web/operator && pnpm lint
+	cd web && pnpm lint
 
 # Format the browser source with Prettier.
 web-format:
-	cd web/operator && pnpm format
+	cd web && pnpm format
 
 # Check browser formatting without modifying files.
 web-format-check:
-	cd web/operator && pnpm format:check
+	cd web && pnpm format:check
 
 # Run browser projection and component tests.
 web-test:
-	cd web/operator && pnpm test
+	cd web && pnpm test
 
 # Run the Vitest volume gate followed by the Node-managed real-Chromium virtualizer gate.
 web-bench:
-	cd web/operator && pnpm benchmark
+	cd web && pnpm benchmark
 
 # Build checked-in brand image artifacts from the Three.js source HTML.
 brand:

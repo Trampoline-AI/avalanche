@@ -1,13 +1,11 @@
 {
   "compilerOptions": {
     "composite": true,
-    "lib": ["ES2024"],
     "noEmit": true,
     "skipLibCheck": true,
     "module": "ESNext",
     "moduleResolution": "Bundler",
-    "strict": true,
-    "types": ["node"]
+    "strict": true
   },
-  "include": ["vite.config.ts", "postcss-prefix-selector.d.ts"]
+  "include": ["vite.config.ts"]
 }

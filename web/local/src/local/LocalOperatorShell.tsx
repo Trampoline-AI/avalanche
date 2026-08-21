@@ -1,6 +1,10 @@
-import type { OperatorApi } from "../api";
-import { OperatorConsole } from "../console/OperatorConsole";
-import type { OperatorConsoleHost } from "../console/types";
+import { OperatorConsole } from "@avalanche/operator-console";
+import type { OperatorApi, OperatorConsoleHost } from "@avalanche/operator-console";
+
+const avalancheDiamond = new URL(
+  "../../../../docs/assets/brand/avalanche-diamond-3d-1024.png",
+  import.meta.url,
+).href;
 
 interface LocalOperatorShellProps {
   api: OperatorApi;
@@ -11,6 +15,7 @@ export function LocalOperatorShell({ api, operatorPort = "7433" }: LocalOperator
   const host: OperatorConsoleHost = {
     api,
     presentation: {
+      brandImageUrl: avalancheDiamond,
       rootLabel: "Local operator",
       unavailableDescription: `No operator process found at port ${operatorPort}`,
       workflowReloadDescription: "Workflow change detected. Scanning...",

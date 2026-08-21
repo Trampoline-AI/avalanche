@@ -1,11 +1,24 @@
 {
-  "name": "@avalanche/operator-web",
-  "private": true,
+  "name": "@avalanche/operator-console",
   "version": "0.1.0",
   "type": "module",
+  "types": "./dist/index.d.ts",
+  "files": [
+    "dist"
+  ],
+  "sideEffects": [
+    "./dist/styles.css"
+  ],
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    },
+    "./styles.css": "./dist/styles.css"
+  },
   "scripts": {
-    "build": "tsc --noEmit -p tsconfig.app.json && tsc --noEmit -p tsconfig.node.json && vite build",
-    "dev": "vite",
+    "build": "tsc --noEmit -p tsconfig.app.json && tsc --noEmit -p tsconfig.node.json && vite build && tsc -p tsconfig.build.json",
+    "dev": "vite build --watch",
     "generate": "uv run python -m grpc_tools.protoc -I../../src/runtime/operator/proto --plugin=protoc-gen-ts=./node_modules/.bin/protoc-gen-ts --ts_out=src/generated --ts_opt=long_type_string ../../src/runtime/operator/proto/operator.proto",
     "format": "prettier --write .",
     "format:check": "prettier --check .",
@@ -13,7 +26,8 @@
     "benchmark": "pnpm run benchmark:unit && pnpm run benchmark:browser",
     "benchmark:unit": "vitest run src/operator.large-run.benchmark.test.tsx --maxWorkers=1 --minWorkers=1 --no-file-parallelism",
     "benchmark:browser": "node scripts/operator-large-run-browser-benchmark.mjs",
-    "test": "NODE_ENV=test vitest run --maxWorkers=1 --minWorkers=1 --no-file-parallelism --exclude src/operator.large-run.benchmark.test.tsx"
+    "test": "NODE_ENV=test vitest run --maxWorkers=1 --minWorkers=1 --no-file-parallelism --exclude src/operator.large-run.benchmark.test.tsx",
+    "prepack": "pnpm run build"
   },
   "dependencies": {
     "@codemirror/lang-json": "^6.0.2",
@@ -25,9 +39,11 @@
     "@tanstack/react-virtual": "^3.13.12",
     "@xyflow/react": "^12.9.2",
     "lucide-react": "^1.28.0",
-    "react": "^19.1.1",
-    "react-dom": "^19.1.1",
     "react-markdown": "^10.1.0"
+  },
+  "peerDependencies": {
+    "react": "^19.1.1",
+    "react-dom": "^19.1.1"
   },
   "devDependencies": {
     "@eslint/js": "^10.0.1",
@@ -36,6 +52,7 @@
     "@testing-library/jest-dom": "6.9.1",
     "@testing-library/react": "^16.3.0",
     "@testing-library/user-event": "^14.6.1",
+    "@types/node": "^24.13.3",
     "@types/react": "^19.1.16",
     "@types/react-dom": "^19.1.9",
     "@vitejs/plugin-react": "^5.0.4",
@@ -43,12 +60,15 @@
     "eslint-plugin-react-hooks": "^7.1.1",
     "globals": "^17.9.0",
     "jsdom": "^27.0.0",
+    "postcss": "^8.5.25",
+    "postcss-prefix-selector": "^2.1.1",
     "prettier": "^3.9.6",
+    "react": "^19.1.1",
+    "react-dom": "^19.1.1",
     "tailwindcss": "^4.3.3",
     "typescript": "^5.9.2",
     "typescript-eslint": "^8.67.0",
     "vite": "^7.1.7",
     "vitest": "^3.2.4"
-  },
-  "packageManager": "pnpm@10.17.1"
+  }
 }

@@ -122,10 +122,8 @@ vi.mock("./state", () => ({
   useOperatorProjection: () => projectionHarness,
 }));
 
-import { GrpcWebOperatorApi } from "./api";
-import { OperatorConsole } from "./console/OperatorConsole";
-import type { OperatorConsoleHost, OperatorConsoleNavigation } from "./console/types";
-import { LocalOperatorShell } from "./local/LocalOperatorShell";
+import { GrpcWebOperatorApi, OperatorConsole } from "./index";
+import type { OperatorConsoleHost, OperatorConsoleNavigation } from "./index";
 import { RunSnapshotMsg, RunSummaryMsg, WorkflowTopologyMsg } from "./model";
 
 function consoleHost(): OperatorConsoleHost {
@@ -133,6 +131,7 @@ function consoleHost(): OperatorConsoleHost {
     api: new GrpcWebOperatorApi("http://localhost"),
     presentation: {
       rootLabel: "Test operator",
+      brandImageUrl: "/avalanche-brand.png",
       unavailableDescription: "Test operator is unavailable",
       workflowReloadDescription: "Workflow catalog is refreshing",
     },
@@ -191,17 +190,20 @@ describe("OperatorConsole", () => {
   it("shows a full-screen connecting view until the operator is available", () => {
     projectionHarness.state.connection = "reconnecting";
 
-    const { container } = render(
-      <LocalOperatorShell
-        api={new GrpcWebOperatorApi("http://localhost")}
-        operatorPort="17777"
-      />,
-    );
+    const { container } = render(<OperatorConsole host={consoleHost()} />);
 
     expect(screen.getByRole("status")).toHaveTextContent("Reconnecting...");
-    expect(screen.getByRole("status")).toHaveTextContent("17777");
+    expect(screen.getByRole("status")).toHaveTextContent("Test operator is unavailable");
     expect(container.querySelector(".operator-connection-screen")).toHaveClass("min-h-screen");
     expect(container.querySelector(".topbar")).not.toBeInTheDocument();
+  });
+
+  it("renders host branding inside its CSS scope", () => {
+    const { container } = render(<OperatorConsole host={consoleHost()} />);
+
+    const consoleScope = container.querySelector(".avalanche-console");
+    expect(consoleScope).not.toBeNull();
+    expect(consoleScope?.querySelector("img")).toHaveAttribute("src", "/avalanche-brand.png");
   });
 
   it("shows a bottom update card while workflows are reloading", () => {
