@@ -302,6 +302,7 @@ const WorkflowNodeCard = memo(({ data, selected }: NodeProps<Node<CardData>>) =>
           className={`node-title block self-stretch ${isCompact ? "text-xl" : "pr-[76px] text-sm"} leading-tight text-ink`}
         >
           {data.label}
+          {data.identity && ` ${data.identity}`}
           {data.status === "success" && (
             <Check
               aria-hidden="true"
@@ -323,11 +324,6 @@ const WorkflowNodeCard = memo(({ data, selected }: NodeProps<Node<CardData>>) =>
             title={data.instructionLine}
           >
             {data.instructionLine}
-          </span>
-        )}
-        {data.identity && (
-          <span className="node-card-meta node-identity font-mono text-[9px] text-secondary">
-            {data.identity}
           </span>
         )}
         {data.status && (
@@ -459,7 +455,12 @@ function invocationIdentity(nodeId: string, label: string): string {
 
 type TopologyView = Pick<
   WorkflowTopologyMsg,
-  "nodeIds" | "graph" | "nodeTypes" | "displayNames" | "agentInstructionLines"
+  | "nodeIds"
+  | "graph"
+  | "nodeTypes"
+  | "displayNames"
+  | "agentInstructionLines"
+  | "standardStepDocstringLines"
 >;
 
 interface GraphLayout {
@@ -555,6 +556,7 @@ function GraphCanvasView({
       nodeTypes: workflow.nodeTypes,
       displayNames: workflow.displayNames,
       agentInstructionLines: {},
+      standardStepDocstringLines: workflow.standardStepDocstringLines,
     };
   }, [runTopology, workflow]);
   const topologyNodeIds = topology?.nodeIds;
@@ -603,9 +605,10 @@ function GraphCanvasView({
       const declaration = runTopology
         ? parseAgentFieldSchemas(runTopology.agentFieldSchemasJson[nodeId])
         : agentDeclaration;
-      const instructionLine = runTopology
-        ? runTopology.agentInstructionLines[nodeId] || undefined
-        : firstInstructionLine(agentDeclaration?.instructions);
+      const instructionLine =
+        topology.agentInstructionLines[nodeId] ||
+        topology.standardStepDocstringLines[nodeId] ||
+        (!runTopology ? firstInstructionLine(agentDeclaration?.instructions) : undefined);
       return {
         id: nodeId,
         selected: nodeId === selectedNodeId,

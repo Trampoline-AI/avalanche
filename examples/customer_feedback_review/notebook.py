@@ -46,9 +46,7 @@ def _(Path, ast, importlib, load_dotenv, os):
     load_dotenv()
 
     MODEL = os.getenv("CUSTOMER_FEEDBACK_REVIEW_MODEL", "openai/gpt-5.6-terra")
-    SUB_MODEL = os.getenv(
-        "CUSTOMER_FEEDBACK_REVIEW_SUB_MODEL", "gemini/gemini-3.5-flash"
-    )
+    SUB_MODEL = os.getenv("CUSTOMER_FEEDBACK_REVIEW_SUB_MODEL", "gemini/gemini-3.5-flash")
     FEEDBACK_WORKBOOK_PATH = Path(__file__).with_name("feedback_workbook.xlsx")
     WORKFLOW_DAG_PATH = Path(__file__).with_name("workflowdag.jpg")
     WORKFLOW_NODE_TYPES_DAG_PATH = Path(__file__).with_name("workflowdag2.jpg")
@@ -595,6 +593,7 @@ def _(
 ):
     @ava.source
     def load_feedback_workbook() -> File:
+        """Load the customer feedback workbook."""
         return File(path=str(FEEDBACK_WORKBOOK_PATH))
 
     class ExtractThemes(ava.Signature):
@@ -637,6 +636,7 @@ def _(
         themes: ThemeReport,
         risks: RiskReport,
     ) -> ProductReview:
+        """Combine validated theme and risk reports into a product review."""
         if themes.feedback_rows_analyzed != risks.feedback_rows_analyzed:
             raise ValueError("theme and risk reports analyzed different row counts")
         return ProductReview(
@@ -691,6 +691,7 @@ def _(
 
     @ava.dest
     def publish_review_pack(workbook: File, brief: File) -> PublishedReviewPack:
+        """Publish the review workbook and executive brief."""
         if workbook.path is None or brief.path is None:
             raise ValueError("review artifacts must have host file paths")
         return PublishedReviewPack(

@@ -34,6 +34,7 @@ from .models import (
     display_name_from_id,
 )
 from .source import resolve_watch_roots
+from .workflow_metadata import standard_step_docstring_lines_for_workflow
 
 logger = logging.getLogger(__name__)
 
@@ -118,6 +119,9 @@ def workflow_to_info(
     display_names = {nid: display_name_from_id(nid) for nid in node_ids}
     agent_metadata_json = agent_metadata_for_workflow(workflow, node_ids)
     agent_node_ids = list(agent_metadata_json)
+    standard_step_docstring_lines = standard_step_docstring_lines_for_workflow(
+        workflow, node_ids
+    )
     return WorkflowInfo(
         name=workflow.name,
         display_name=workflow.name,
@@ -132,6 +136,7 @@ def workflow_to_info(
         display_names=display_names,
         agent_node_ids=agent_node_ids,
         agent_metadata_json=agent_metadata_json,
+        standard_step_docstring_lines=standard_step_docstring_lines,
         cron=workflow.cron,
         webhook_path=workflow.webhook.path if workflow.webhook else None,
         webhook_enabled=workflow.webhook is not None,
@@ -154,6 +159,7 @@ def descriptor_to_info(descriptor: WorkflowDescriptor) -> WorkflowInfo:
         display_names=dict(descriptor.display_names),
         agent_node_ids=list(descriptor.agent_node_ids),
         agent_metadata_json=dict(descriptor.agent_metadata_json),
+        standard_step_docstring_lines=dict(descriptor.standard_step_docstring_lines),
         cron=descriptor.cron,
         webhook_path=descriptor.webhook_path,
         webhook_enabled=descriptor.webhook_enabled,

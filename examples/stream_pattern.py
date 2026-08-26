@@ -69,6 +69,7 @@ ns = ExampleNamespace(
 
 @ava.source
 def load_documents(*, docs=ns.document):
+    """Append sample documents to the stream."""
     ns.push()
     rows = pl.DataFrame(
         {
@@ -90,6 +91,7 @@ def chunk_documents(
     *,
     dest=ns.chunk,
 ):
+    """Convert streamed documents into chunks."""
     chunks = process_documents_to_chunks(docs)
     return dest.append(chunks)
 
@@ -101,6 +103,7 @@ def embed_chunks(
     *,
     dest=ns.embedding,
 ):
+    """Generate embeddings for streamed chunks."""
     embeddings = generate_embeddings(chunks, model="local-demo")
     return dest.append(embeddings)
 
@@ -112,6 +115,7 @@ def summarize_embeddings(
         ns.embedding, key="embeddings_to_summary", mode="append_scan"
     ),
 ) -> str:
+    """Summarize generated embedding models."""
     models = sorted(set(embeddings["model"].to_list()))
     return f"summarized {len(embeddings)} embeddings from {', '.join(models)}"
 

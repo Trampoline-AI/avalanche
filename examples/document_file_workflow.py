@@ -19,6 +19,7 @@ class DocumentReport(BaseModel):
 
 @ava.dest
 def build_document_report(payload: DocumentInput) -> DocumentReport:
+    """Build a report and processed copy of the input document."""
     text = payload.document.read_bytes().decode("utf-8")
     content = f"value={payload.value}\n{text}".encode()
     return DocumentReport(

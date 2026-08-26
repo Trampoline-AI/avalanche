@@ -148,7 +148,7 @@ class NodeEdgesV2(_message.Message):
     def __init__(self, children: _Optional[_Iterable[str]] = ...) -> None: ...
 
 class WorkflowTopologyV2(_message.Message):
-    __slots__ = ("node_ids", "graph", "node_types", "display_names", "agent_field_schemas_json", "agent_instruction_lines")
+    __slots__ = ("node_ids", "graph", "node_types", "display_names", "agent_field_schemas_json", "agent_instruction_lines", "standard_step_docstring_lines")
     class GraphEntry(_message.Message):
         __slots__ = ("key", "value")
         KEY_FIELD_NUMBER: _ClassVar[int]
@@ -184,19 +184,28 @@ class WorkflowTopologyV2(_message.Message):
         key: str
         value: str
         def __init__(self, key: _Optional[str] = ..., value: _Optional[str] = ...) -> None: ...
+    class StandardStepDocstringLinesEntry(_message.Message):
+        __slots__ = ("key", "value")
+        KEY_FIELD_NUMBER: _ClassVar[int]
+        VALUE_FIELD_NUMBER: _ClassVar[int]
+        key: str
+        value: str
+        def __init__(self, key: _Optional[str] = ..., value: _Optional[str] = ...) -> None: ...
     NODE_IDS_FIELD_NUMBER: _ClassVar[int]
     GRAPH_FIELD_NUMBER: _ClassVar[int]
     NODE_TYPES_FIELD_NUMBER: _ClassVar[int]
     DISPLAY_NAMES_FIELD_NUMBER: _ClassVar[int]
     AGENT_FIELD_SCHEMAS_JSON_FIELD_NUMBER: _ClassVar[int]
     AGENT_INSTRUCTION_LINES_FIELD_NUMBER: _ClassVar[int]
+    STANDARD_STEP_DOCSTRING_LINES_FIELD_NUMBER: _ClassVar[int]
     node_ids: _containers.RepeatedScalarFieldContainer[str]
     graph: _containers.MessageMap[str, NodeEdgesV2]
     node_types: _containers.ScalarMap[str, str]
     display_names: _containers.ScalarMap[str, str]
     agent_field_schemas_json: _containers.ScalarMap[str, str]
     agent_instruction_lines: _containers.ScalarMap[str, str]
-    def __init__(self, node_ids: _Optional[_Iterable[str]] = ..., graph: _Optional[_Mapping[str, NodeEdgesV2]] = ..., node_types: _Optional[_Mapping[str, str]] = ..., display_names: _Optional[_Mapping[str, str]] = ..., agent_field_schemas_json: _Optional[_Mapping[str, str]] = ..., agent_instruction_lines: _Optional[_Mapping[str, str]] = ...) -> None: ...
+    standard_step_docstring_lines: _containers.ScalarMap[str, str]
+    def __init__(self, node_ids: _Optional[_Iterable[str]] = ..., graph: _Optional[_Mapping[str, NodeEdgesV2]] = ..., node_types: _Optional[_Mapping[str, str]] = ..., display_names: _Optional[_Mapping[str, str]] = ..., agent_field_schemas_json: _Optional[_Mapping[str, str]] = ..., agent_instruction_lines: _Optional[_Mapping[str, str]] = ..., standard_step_docstring_lines: _Optional[_Mapping[str, str]] = ...) -> None: ...
 
 class ScanTargetV2(_message.Message):
     __slots__ = ("alias", "target_path", "kind")

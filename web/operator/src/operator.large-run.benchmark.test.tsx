@@ -91,6 +91,7 @@ const catalog = CatalogSnapshotMsg.create({
       displayNames: {},
       agentNodeIds: [SELECTED_NODE],
       agentMetadataJson: {},
+      standardStepDocstringLines: {},
     },
   ],
 });

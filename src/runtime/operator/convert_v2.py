@@ -60,6 +60,7 @@ def workflow_topology_to_v2(topology: WorkflowTopology) -> pb.WorkflowTopologyV2
         display_names=dict(topology.display_names),
         agent_field_schemas_json=dict(topology.agent_field_schemas_json),
         agent_instruction_lines=dict(topology.agent_instruction_lines),
+        standard_step_docstring_lines=dict(topology.standard_step_docstring_lines),
     )
 
 
@@ -69,6 +70,7 @@ def workflow_info_to_v2(info: WorkflowInfo) -> pb.FlowInfoV2:
         graph=tuple((parent, tuple(children)) for parent, children in info.graph.items()),
         node_types=tuple(sorted(info.node_types.items())),
         display_names=tuple(sorted(info.display_names.items())),
+        standard_step_docstring_lines=tuple(sorted(info.standard_step_docstring_lines.items())),
     )
     manifest_digest = sha256_hex(("\n".join([info.selector, *info.node_ids])).encode("utf-8"))
     return pb.FlowInfoV2(
@@ -583,6 +585,11 @@ def workflow_topology_from_v2(msg: pb.WorkflowTopologyV2) -> WorkflowTopology:
             for node_id in node_ids
             if node_id in msg.agent_instruction_lines
         ),
+        standard_step_docstring_lines=tuple(
+            (node_id, msg.standard_step_docstring_lines[node_id])
+            for node_id in node_ids
+            if node_id in msg.standard_step_docstring_lines
+        ),
     )
 
 
@@ -598,6 +605,7 @@ def workflow_info_from_v2(msg: pb.FlowInfoV2) -> WorkflowInfo:
         display_names=dict(msg.topology.display_names),
         agent_node_ids=list(msg.agent_node_ids),
         agent_metadata_json=dict(msg.agent_metadata_json),
+        standard_step_docstring_lines=dict(msg.topology.standard_step_docstring_lines),
         cron=msg.cron or None,
         next_run_at=msg.next_run_at or None,
         last_run_at=msg.last_run_at or None,

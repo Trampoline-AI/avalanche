@@ -99,12 +99,7 @@ vi.mock("@xyflow/react", () => {
 
 import { GraphCanvas, parseAgentDeclaration } from "./GraphCanvas";
 import { Markdown } from "./Markdown";
-import {
-  FlowInfoMsg,
-  NodeSnapshotMsg,
-  TraceDescriptorMsg,
-  WorkflowTopologyMsg,
-} from "./model";
+import { FlowInfoMsg, NodeSnapshotMsg, TraceDescriptorMsg, WorkflowTopologyMsg } from "./model";
 
 function metadata(field: string) {
   return JSON.stringify({
@@ -275,6 +270,57 @@ describe("GraphCanvas", () => {
     expect(screen.queryByText("current_input")).not.toBeInTheDocument();
   });
 
+  it("renders standard step docstring summaries in current and recorded DAGs", () => {
+    const view = render(
+      <GraphCanvas
+        workflow={FlowInfoMsg.create({
+          workflowId: "flow.py::standard",
+          displayName: "Standard",
+          nodeIds: ["normalize"],
+          graph: { normalize: { children: [] } },
+          nodeTypes: { normalize: "step" },
+          displayNames: { normalize: "Normalize" },
+          standardStepDocstringLines: { normalize: "Normalize incoming records." },
+        })}
+        onOpenNode={() => undefined}
+      />,
+    );
+
+    const currentCard = screen
+      .getByRole("button", { name: "Inspect Normalize" })
+      .closest("article");
+    expect(currentCard).toHaveAttribute("data-node-kind", "standard");
+    expect(screen.getByText("Normalize incoming records.")).toHaveClass(
+      "node-instruction-line",
+    );
+
+    view.rerender(
+      <GraphCanvas
+        runTopology={WorkflowTopologyMsg.create({
+          nodeIds: ["normalize"],
+          graph: { normalize: { children: [] } },
+          nodeTypes: { normalize: "step" },
+          displayNames: { normalize: "Normalize" },
+          standardStepDocstringLines: { normalize: "Normalize the recorded input." },
+        })}
+        runNodes={[
+          NodeSnapshotMsg.create({
+            nodeId: "normalize",
+            name: "Normalize",
+            nodeType: "step",
+            status: "success",
+          }),
+        ]}
+        onOpenNode={() => undefined}
+      />,
+    );
+
+    expect(screen.getByText("Normalize the recorded input.")).toHaveClass(
+      "node-instruction-line",
+    );
+    expect(screen.queryByText("Normalize incoming records.")).not.toBeInTheDocument();
+  });
+
   it("distinguishes repeated invocations by stable node identity", () => {
     render(
       <GraphCanvas
@@ -295,8 +341,8 @@ describe("GraphCanvas", () => {
 
     expect(screen.getByRole("button", { name: "Inspect repeat #1" })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Inspect repeat #2" })).toBeInTheDocument();
-    expect(screen.getByText("#1")).toBeInTheDocument();
-    expect(screen.getByText("#2")).toBeInTheDocument();
+    expect(screen.getByText("repeat #1", { selector: ".node-title" })).toBeInTheDocument();
+    expect(screen.getByText("repeat #2", { selector: ".node-title" })).toBeInTheDocument();
   });
 
   it("reuses nodes and layout for detail-only rerenders while applying status and topology changes", () => {

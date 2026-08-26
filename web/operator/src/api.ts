@@ -938,6 +938,7 @@ function mapFlowInfo(flow: FlowInfoV2): FlowInfoMsg {
     graph: flow.topology?.graph ?? {},
     nodeTypes: flow.topology?.nodeTypes ?? {},
     displayNames: flow.topology?.displayNames ?? {},
+    standardStepDocstringLines: flow.topology?.standardStepDocstringLines ?? {},
     cron: flow.cron,
     nextRunAt: flow.nextRunAt,
     lastRunAt: flow.lastRunAt,

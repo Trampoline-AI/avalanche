@@ -1775,6 +1775,11 @@ class Operator:
                 for node_id in node_ids
                 if node_id in prepared["agent_instruction_lines"]
             ),
+            standard_step_docstring_lines=tuple(
+                (node_id, prepared["standard_step_docstring_lines"][node_id])
+                for node_id in node_ids
+                if node_id in prepared["standard_step_docstring_lines"]
+            ),
         )
         run = RunState(
             run_id=run_id,
@@ -3181,6 +3186,7 @@ def _validate_preparation_event(event: object) -> str:
                 "display_name",
                 "agent_field_schemas_json",
                 "agent_instruction_lines",
+                "standard_step_docstring_lines",
             },
         )
         node_ids = _required_field(event, "node_ids")
@@ -3202,6 +3208,7 @@ def _validate_preparation_event(event: object) -> str:
             event, "agent_field_schemas_json"
         )
         agent_instruction_lines = _string_mapping(event, "agent_instruction_lines")
+        standard_step_docstring_lines = _string_mapping(event, "standard_step_docstring_lines")
         for node_id in node_ids:
             if node_id not in node_types:
                 raise _CoordinatorProtocolError(
@@ -3223,6 +3230,15 @@ def _validate_preparation_event(event: object) -> str:
             unknown = min(unknown_instruction_nodes)
             raise _CoordinatorProtocolError(
                 f"field 'agent_instruction_lines' references unknown node "
+                f"{_bounded_ascii(unknown)}"
+            )
+        unknown_standard_step_docstring_nodes = set(standard_step_docstring_lines).difference(
+            node_ids
+        )
+        if unknown_standard_step_docstring_nodes:
+            unknown = min(unknown_standard_step_docstring_nodes)
+            raise _CoordinatorProtocolError(
+                f"field 'standard_step_docstring_lines' references unknown node "
                 f"{_bounded_ascii(unknown)}"
             )
         display_name = event.get("display_name")

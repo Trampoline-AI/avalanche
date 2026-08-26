@@ -46,6 +46,7 @@ const workflow: FlowInfoMsg = {
   builderSymbol: "agent_flow",
   agentNodeIds: ["agent_1"],
   agentMetadataJson: { agent_1: declaration },
+  standardStepDocstringLines: {},
   webhookPath: "",
   webhookUrl: "",
   webhookActive: false,
@@ -107,6 +108,7 @@ const run: RunSnapshotMsg = {
     displayNames: { agent_1: "Agent" },
     agentFieldSchemasJson: { agent_1: fieldSchemas },
     agentInstructionLines: { agent_1: "Answer the question." },
+    standardStepDocstringLines: {},
   },
 };
 

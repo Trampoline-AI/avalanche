@@ -124,6 +124,7 @@ message WorkflowTopologyV2 {
   map<string, string> display_names = 4;
   map<string, string> agent_field_schemas_json = 5;
   map<string, string> agent_instruction_lines = 6;
+  map<string, string> standard_step_docstring_lines = 7;
 }
 
 message ScanTargetV2 {

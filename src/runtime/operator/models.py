@@ -52,6 +52,7 @@ class WorkflowTopology:
     display_names: tuple[tuple[str, str], ...] = ()
     agent_field_schemas_json: tuple[tuple[str, str], ...] = ()
     agent_instruction_lines: tuple[tuple[str, str], ...] = ()
+    standard_step_docstring_lines: tuple[tuple[str, str], ...] = ()
 
 
 @dataclass
@@ -490,6 +491,7 @@ class WorkflowInfo:
     display_names: dict[str, str] = field(default_factory=dict)  # node_id -> display name
     agent_node_ids: list[str] = field(default_factory=list)
     agent_metadata_json: dict[str, str] = field(default_factory=dict)
+    standard_step_docstring_lines: dict[str, str] = field(default_factory=dict)
     cron: str | None = None  # cron expression for scheduled execution
     next_run_at: float | None = None  # unix timestamp of next scheduled run
     last_run_at: float | None = None  # unix timestamp of last triggered run
@@ -583,6 +585,7 @@ class WorkflowDescriptor:
     display_names: tuple[tuple[str, str], ...]
     agent_node_ids: tuple[str, ...] = ()
     agent_metadata_json: tuple[tuple[str, str], ...] = ()
+    standard_step_docstring_lines: tuple[tuple[str, str], ...] = ()
     cron: str | None = None
     webhook_path: str | None = None
     webhook_enabled: bool = False
