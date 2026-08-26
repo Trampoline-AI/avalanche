@@ -32,6 +32,7 @@ const projectionHarness = vi.hoisted(() => ({
           displayNames: { "node-1": "Current node" },
           agentNodeIds: [],
           agentMetadataJson: {},
+          standardStepDocstringLines: {},
         },
       ],
       scanTargets: [

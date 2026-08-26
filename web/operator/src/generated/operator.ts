@@ -302,6 +302,12 @@ export interface WorkflowTopologyV2 {
     agentInstructionLines: {
         [key: string]: string;
     };
+    /**
+     * @generated from protobuf field: map<string, string> standard_step_docstring_lines = 7
+     */
+    standardStepDocstringLines: {
+        [key: string]: string;
+    };
 }
 /**
  * @generated from protobuf message avalanche.operator.ScanTargetV2
@@ -2058,7 +2064,8 @@ class WorkflowTopologyV2$Type extends MessageType<WorkflowTopologyV2> {
             { no: 3, name: "node_types", kind: "map", K: 9 /*ScalarType.STRING*/, V: { kind: "scalar", T: 9 /*ScalarType.STRING*/ } },
             { no: 4, name: "display_names", kind: "map", K: 9 /*ScalarType.STRING*/, V: { kind: "scalar", T: 9 /*ScalarType.STRING*/ } },
             { no: 5, name: "agent_field_schemas_json", kind: "map", K: 9 /*ScalarType.STRING*/, V: { kind: "scalar", T: 9 /*ScalarType.STRING*/ } },
-            { no: 6, name: "agent_instruction_lines", kind: "map", K: 9 /*ScalarType.STRING*/, V: { kind: "scalar", T: 9 /*ScalarType.STRING*/ } }
+            { no: 6, name: "agent_instruction_lines", kind: "map", K: 9 /*ScalarType.STRING*/, V: { kind: "scalar", T: 9 /*ScalarType.STRING*/ } },
+            { no: 7, name: "standard_step_docstring_lines", kind: "map", K: 9 /*ScalarType.STRING*/, V: { kind: "scalar", T: 9 /*ScalarType.STRING*/ } }
         ]);
     }
     create(value?: PartialMessage<WorkflowTopologyV2>): WorkflowTopologyV2 {
@@ -2069,6 +2076,7 @@ class WorkflowTopologyV2$Type extends MessageType<WorkflowTopologyV2> {
         message.displayNames = {};
         message.agentFieldSchemasJson = {};
         message.agentInstructionLines = {};
+        message.standardStepDocstringLines = {};
         if (value !== undefined)
             reflectionMergePartial<WorkflowTopologyV2>(this, message, value);
         return message;
@@ -2095,6 +2103,9 @@ class WorkflowTopologyV2$Type extends MessageType<WorkflowTopologyV2> {
                     break;
                 case /* map<string, string> agent_instruction_lines */ 6:
                     this.binaryReadMap6(message.agentInstructionLines, reader, options);
+                    break;
+                case /* map<string, string> standard_step_docstring_lines */ 7:
+                    this.binaryReadMap7(message.standardStepDocstringLines, reader, options);
                     break;
                 default:
                     let u = options.readUnknownField;
@@ -2187,6 +2198,22 @@ class WorkflowTopologyV2$Type extends MessageType<WorkflowTopologyV2> {
         }
         map[key ?? ""] = val ?? "";
     }
+    private binaryReadMap7(map: WorkflowTopologyV2["standardStepDocstringLines"], reader: IBinaryReader, options: BinaryReadOptions): void {
+        let len = reader.uint32(), end = reader.pos + len, key: keyof WorkflowTopologyV2["standardStepDocstringLines"] | undefined, val: WorkflowTopologyV2["standardStepDocstringLines"][any] | undefined;
+        while (reader.pos < end) {
+            let [fieldNo, wireType] = reader.tag();
+            switch (fieldNo) {
+                case 1:
+                    key = reader.string();
+                    break;
+                case 2:
+                    val = reader.string();
+                    break;
+                default: throw new globalThis.Error("unknown map entry field for avalanche.operator.WorkflowTopologyV2.standard_step_docstring_lines");
+            }
+        }
+        map[key ?? ""] = val ?? "";
+    }
     internalBinaryWrite(message: WorkflowTopologyV2, writer: IBinaryWriter, options: BinaryWriteOptions): IBinaryWriter {
         /* repeated string node_ids = 1; */
         for (let i = 0; i < message.nodeIds.length; i++)
@@ -2210,6 +2237,9 @@ class WorkflowTopologyV2$Type extends MessageType<WorkflowTopologyV2> {
         /* map<string, string> agent_instruction_lines = 6; */
         for (let k of globalThis.Object.keys(message.agentInstructionLines))
             writer.tag(6, WireType.LengthDelimited).fork().tag(1, WireType.LengthDelimited).string(k).tag(2, WireType.LengthDelimited).string(message.agentInstructionLines[k]).join();
+        /* map<string, string> standard_step_docstring_lines = 7; */
+        for (let k of globalThis.Object.keys(message.standardStepDocstringLines))
+            writer.tag(7, WireType.LengthDelimited).fork().tag(1, WireType.LengthDelimited).string(k).tag(2, WireType.LengthDelimited).string(message.standardStepDocstringLines[k]).join();
         let u = options.writeUnknownFields;
         if (u !== false)
             (u == true ? UnknownFieldHandler.onWrite : u)(this.typeName, message, writer);

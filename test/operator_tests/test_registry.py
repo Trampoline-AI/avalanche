@@ -926,6 +926,46 @@ def test_agent_steps_are_identified_without_changing_node_type():
     assert info.node_types["analyze_1"] == "step"
 
 
+def test_standard_step_docstring_lines_exclude_agent_source_and_destination_nodes():
+    class Analyze(ava.Signature):
+        """Analyze normalized text."""
+
+        text: str = ava.InputField()
+        result: str = ava.OutputField()
+
+    @ava.source
+    def load() -> str:
+        """Load source text."""
+        return "input"
+
+    @ava.step
+    def normalize(text: str) -> str:
+        """
+        Normalize source text.
+
+        This detail must not be displayed in the DAG node.
+        """
+        return text
+
+    @ava.agent_step(Analyze)
+    async def analyze(text: str, *, agent: ava.Agent) -> str:
+        """Do not use the agent function docstring."""
+        return (await agent(text=text)).result
+
+    @ava.dest
+    def store(result: str) -> None:
+        """Store analyzed text."""
+        return None
+
+    @ava.workflow
+    def mixed_flow():
+        return store(analyze(normalize(load())))
+
+    info = workflow_to_info(mixed_flow(), "<test>")
+
+    assert info.standard_step_docstring_lines == {"normalize_1": "Normalize source text."}
+
+
 def test_agent_metadata_failure_does_not_hide_workflow(monkeypatch):
     class Analyze(ava.Signature):
         """Analyze text."""

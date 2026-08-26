@@ -21,7 +21,7 @@ from .source import iter_source_paths
 
 logger = logging.getLogger(__name__)
 
-_CACHE_SCHEMA_VERSION = 1
+_CACHE_SCHEMA_VERSION = 2
 
 
 class _CacheModel(BaseModel):
@@ -73,6 +73,7 @@ class _CachedDescriptor(_CacheModel):
     display_names: tuple[tuple[str, str], ...]
     agent_node_ids: tuple[str, ...]
     agent_metadata_json: tuple[tuple[str, str], ...]
+    standard_step_docstring_lines: tuple[tuple[str, str], ...]
     cron: str | None
     webhook_path: str | None
     webhook_enabled: bool
@@ -89,6 +90,7 @@ class _CachedDescriptor(_CacheModel):
             display_names=descriptor.display_names,
             agent_node_ids=descriptor.agent_node_ids,
             agent_metadata_json=descriptor.agent_metadata_json,
+            standard_step_docstring_lines=descriptor.standard_step_docstring_lines,
             cron=descriptor.cron,
             webhook_path=descriptor.webhook_path,
             webhook_enabled=descriptor.webhook_enabled,
@@ -105,6 +107,7 @@ class _CachedDescriptor(_CacheModel):
             display_names=self.display_names,
             agent_node_ids=self.agent_node_ids,
             agent_metadata_json=self.agent_metadata_json,
+            standard_step_docstring_lines=self.standard_step_docstring_lines,
             cron=self.cron,
             webhook_path=self.webhook_path,
             webhook_enabled=self.webhook_enabled,
@@ -164,7 +167,7 @@ class _SourceStamp(_CacheModel):
 
 
 class _CacheDocument(_CacheModel):
-    schema_version: Literal[1]
+    schema_version: Literal[2]
     environment: str
     roots: tuple[_CachedRoot, ...]
     watch_roots: tuple[str, ...]

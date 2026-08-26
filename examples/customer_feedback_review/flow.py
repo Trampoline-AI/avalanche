@@ -23,6 +23,7 @@ from .util import publish_review_pack_files
 
 @ava.source
 def load_feedback_workbook() -> File:
+    """Load the customer feedback workbook."""
     return File(path=str(FEEDBACK_WORKBOOK_PATH))
 
 
@@ -53,6 +54,7 @@ def compose_product_review(
     themes: ThemeReport,
     risks: RiskReport,
 ) -> ProductReview:
+    """Combine validated theme and risk reports into a product review."""
     if themes.feedback_rows_analyzed != risks.feedback_rows_analyzed:
         raise ValueError(
             "theme and risk reports analyzed different feedback row counts: "
@@ -113,6 +115,7 @@ async def write_executive_brief(
 
 @ava.dest
 def publish_review_pack(workbook: File, brief: File) -> PublishedReviewPack:
+    """Publish the review workbook and executive brief."""
     return publish_review_pack_files(
         workbook,
         brief,

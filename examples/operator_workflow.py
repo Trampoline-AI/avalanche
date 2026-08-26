@@ -14,6 +14,7 @@ import avalanche as ava
 
 @ava.source
 def fetch_orders(log=ava.Logger()) -> dict[str, object]:
+    """Load two local demo orders."""
     log.info("Fetched two local demo orders")
     return {
         "orders": [
@@ -28,6 +29,7 @@ def validate_orders(
     order_batch: dict[str, object],
     log=ava.Logger(),
 ) -> dict[str, object]:
+    """Keep only orders with positive amounts."""
     orders = order_batch["orders"]
     valid = [order for order in orders if float(order["amount"]) > 0]
     log.info(f"Validated {len(valid)} orders")
@@ -39,6 +41,7 @@ def summarize_orders(
     order_batch: dict[str, object],
     log=ava.Logger(),
 ) -> dict[str, object]:
+    """Compute the order count and total amount."""
     orders = order_batch["orders"]
     total = sum(float(order["amount"]) for order in orders)
     log.info(f"Computed local order total: {total}")
@@ -47,6 +50,7 @@ def summarize_orders(
 
 @ava.dest
 def publish_summary(summary: dict[str, object], log=ava.Logger()) -> dict[str, object]:
+    """Publish the order summary."""
     log.info(f"Published summary for {summary['count']} orders")
     return summary
 

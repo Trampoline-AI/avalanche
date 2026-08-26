@@ -31,6 +31,7 @@ from .models import (
 )
 from .source_policy import is_excluded_directory, is_path_in_excluded_directory
 from .windows_job import WindowsJob, assign_process, close_job, create_kill_on_close_job
+from .workflow_metadata import standard_step_docstring_lines_for_workflow
 
 logger = logging.getLogger(__name__)
 
@@ -551,6 +552,9 @@ def _descriptor_to_dict(
     workflow: Workflow,
 ) -> dict[str, Any]:
     node_ids = workflow._topological_sort()
+    standard_step_docstring_lines = standard_step_docstring_lines_for_workflow(
+        workflow, node_ids
+    )
     agent_node_ids = []
     agent_metadata_json = []
     for node_id in node_ids:
@@ -597,6 +601,7 @@ def _descriptor_to_dict(
         "display_names": [[nid, display_name_from_id(nid)] for nid in node_ids],
         "agent_node_ids": agent_node_ids,
         "agent_metadata_json": agent_metadata_json,
+        "standard_step_docstring_lines": list(standard_step_docstring_lines.items()),
         "cron": workflow.cron,
         "webhook_path": workflow.webhook.path if workflow.webhook else None,
         "webhook_enabled": workflow.webhook is not None,
@@ -615,6 +620,9 @@ def _descriptor_from_dict(item: dict[str, Any]) -> WorkflowDescriptor:
         agent_node_ids=tuple(item.get("agent_node_ids", ())),
         agent_metadata_json=tuple(
             (key, value) for key, value in item.get("agent_metadata_json", ())
+        ),
+        standard_step_docstring_lines=tuple(
+            (key, value) for key, value in item.get("standard_step_docstring_lines", ())
         ),
         cron=item["cron"],
         webhook_path=item.get("webhook_path"),

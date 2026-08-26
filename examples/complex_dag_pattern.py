@@ -7,6 +7,7 @@ import avalanche as ava
 
 @ava.source
 def load_documents() -> dict[str, object]:
+    """Load a sample document batch."""
     return {
         "documents": [
             {"doc_id": "guide", "tokens": 120, "priority": "high"},
@@ -18,6 +19,7 @@ def load_documents() -> dict[str, object]:
 
 @ava.step
 def chunk_documents(document_batch: dict[str, object]) -> dict[str, object]:
+    """Split documents into searchable chunks."""
     chunks = []
     for doc in document_batch["documents"]:
         chunks.append(
@@ -33,6 +35,7 @@ def chunk_documents(document_batch: dict[str, object]) -> dict[str, object]:
 
 @ava.step
 def validate_chunks(chunk_batch: dict[str, object]) -> dict[str, object]:
+    """Validate that every chunk has a positive token count."""
     chunks = chunk_batch["chunks"]
     return {
         "valid": all(int(chunk["tokens"]) > 0 for chunk in chunks),
@@ -42,6 +45,7 @@ def validate_chunks(chunk_batch: dict[str, object]) -> dict[str, object]:
 
 @ava.step
 def build_search_index(chunk_batch: dict[str, object]) -> dict[str, object]:
+    """Build a local search index from chunk IDs."""
     chunks = chunk_batch["chunks"]
     return {
         "indexed_ids": [chunk["chunk_id"] for chunk in chunks],
@@ -51,6 +55,7 @@ def build_search_index(chunk_batch: dict[str, object]) -> dict[str, object]:
 
 @ava.step
 def summarize_corpus(chunk_batch: dict[str, object]) -> dict[str, object]:
+    """Summarize total and high-priority chunks."""
     chunks = chunk_batch["chunks"]
     high_priority = [chunk for chunk in chunks if chunk["priority"] == "high"]
     return {"chunks": len(chunks), "high_priority": len(high_priority)}
@@ -62,6 +67,7 @@ def publish_results(
     search_index: dict[str, object],
     summary: dict[str, object],
 ) -> dict[str, object]:
+    """Publish validation, index, and summary results."""
     return {
         "validated": validation["valid"],
         "indexed": len(search_index["indexed_ids"]),

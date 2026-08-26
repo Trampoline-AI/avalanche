@@ -156,6 +156,12 @@ export interface FlowInfoMsg {
     [key: string]: string;
   };
   /**
+   * First non-empty docstring lines for non-agent standard steps.
+   */
+  standardStepDocstringLines: {
+    [key: string]: string;
+  };
+  /**
    * @generated from protobuf field: string webhook_path = 17
    */
   webhookPath: string;
@@ -188,6 +194,7 @@ export const FlowInfoMsg = {
       builderSymbol: "",
       agentNodeIds: [],
       agentMetadataJson: {},
+      standardStepDocstringLines: {},
       webhookPath: "",
       webhookUrl: "",
       webhookActive: false,
@@ -544,6 +551,12 @@ export interface WorkflowTopologyMsg {
   agentInstructionLines: {
     [key: string]: string;
   };
+  /**
+   * @generated from protobuf field: map<string, string> standard_step_docstring_lines = 7
+   */
+  standardStepDocstringLines: {
+    [key: string]: string;
+  };
 }
 
 export const WorkflowTopologyMsg = {
@@ -555,6 +568,7 @@ export const WorkflowTopologyMsg = {
       displayNames: {},
       agentFieldSchemasJson: {},
       agentInstructionLines: {},
+      standardStepDocstringLines: {},
       ...value,
     } as WorkflowTopologyMsg;
   },

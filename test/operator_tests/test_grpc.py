@@ -3100,23 +3100,26 @@ def test_server_non_loopback_binding_is_explicit_and_warned(monkeypatch, caplog)
     assert "trusted and authenticated boundary" in caplog.text
 
 
-def test_agent_fields_roundtrip_and_legacy_defaults():
+def test_agent_and_standard_step_fields_roundtrip_and_legacy_defaults():
     workflow = WorkflowInfo(
         name="agent-flow",
         file_path="flow.py",
-        node_ids=["agent_1"],
-        graph={"agent_1": []},
-        node_types={"agent_1": "step"},
+        node_ids=["agent_1", "standard_1"],
+        graph={"agent_1": [], "standard_1": []},
+        node_types={"agent_1": "step", "standard_1": "step"},
         agent_node_ids=["agent_1"],
         agent_metadata_json={"agent_1": '{"signature":{"name":"Inspect"}}'},
+        standard_step_docstring_lines={"standard_1": "Summarize the input."},
     )
     restored = workflow_info_from_v2(workflow_info_to_v2(workflow))
     assert restored.agent_node_ids == ["agent_1"]
     assert restored.agent_metadata_json == workflow.agent_metadata_json
+    assert restored.standard_step_docstring_lines == workflow.standard_step_docstring_lines
 
     legacy = workflow_info_from_v2(pb.FlowInfoV2())
     assert legacy.agent_node_ids == []
     assert legacy.agent_metadata_json == {}
+    assert legacy.standard_step_docstring_lines == {}
 
 
 def _seed_hydration_run(operator, run_id: str) -> RunState:

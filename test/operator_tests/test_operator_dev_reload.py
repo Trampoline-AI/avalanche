@@ -431,6 +431,7 @@ def test_preparation_event_accepts_only_agent_invocation_field_schemas():
         "display_name": "Flow",
         "agent_field_schemas_json": {"agent_1": field_schemas},
         "agent_instruction_lines": {"agent_1": "Answer questions."},
+        "standard_step_docstring_lines": {},
     }
 
     assert operator_module._validate_preparation_event(event) == "prepared"

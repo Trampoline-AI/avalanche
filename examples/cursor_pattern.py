@@ -68,6 +68,7 @@ ns = ExampleNamespace(
 
 @ava.source
 def load_documents(*, docs=ns.document):
+    """Append sample documents to the local catalog."""
     ns.push()
     rows = pl.DataFrame(
         {
@@ -90,6 +91,7 @@ def chunk_documents(
     source=ns.document,
     dest=ns.chunk,
 ) -> str:
+    """Chunk newly appended documents and advance the cursor."""
     with cursor.tx() as tx:
         last_snapshot = cursor.get()
         doc_df = source.append_scan(start_snapshot_id=last_snapshot).to_polars()
@@ -113,6 +115,7 @@ def embed_chunks_per_model(
     source=ns.chunk,
     dest=ns.embedding,
 ) -> str:
+    """Embed newly chunked documents for one model."""
     key = f"embed_{model.replace('-', '_')}"
     cursor = ava.Cursor(dest, key=key)
 
@@ -140,6 +143,7 @@ def sync_to_vector_db(
     chunks=ns.chunk,
     embeddings=ns.embedding,
 ) -> str:
+    """Sync chunk and embedding snapshots to the vector database."""
     with cursor.transaction():
         previous_state = cursor.get()
         current_state = [

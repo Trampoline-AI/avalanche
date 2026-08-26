@@ -1118,6 +1118,7 @@ def test_prepared_run_retains_immutable_topology_after_source_metadata_changes()
             '"outputs":[]}'
         },
         "agent_instruction_lines": {"step_1": "Original instruction."},
+        "standard_step_docstring_lines": {},
     }
 
     run = Operator._run_from_prepared(
@@ -1143,3 +1144,30 @@ def test_prepared_run_retains_immutable_topology_after_source_metadata_changes()
         )
     }
     assert dict(run.topology.agent_instruction_lines) == {"step_1": "Original instruction."}
+
+
+def test_prepared_run_retains_standard_step_docstring_lines():
+    prepared = {
+        "display_name": "Original",
+        "node_ids": ["standard_1"],
+        "graph": {"standard_1": []},
+        "node_types": {"standard_1": "step"},
+        "display_names": {"standard_1": "Standard"},
+        "agent_field_schemas_json": {},
+        "agent_instruction_lines": {},
+        "standard_step_docstring_lines": {"standard_1": "Original docstring line."},
+    }
+
+    run = Operator._run_from_prepared(
+        "run-standard-topology",
+        "flow.py::original",
+        "Original",
+        "manual",
+        1.0,
+        prepared,
+    )
+    prepared["standard_step_docstring_lines"]["standard_1"] = "Changed docstring line."
+
+    assert dict(run.topology.standard_step_docstring_lines) == {
+        "standard_1": "Original docstring line."
+    }
