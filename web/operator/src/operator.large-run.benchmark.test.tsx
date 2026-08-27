@@ -308,6 +308,7 @@ describe("large retained-run browser benchmark", () => {
       getCatalog: async () => catalog,
       loadBaseline: vi.fn(async () => baseline),
       getLatestRunSnapshot,
+      getWorkflowNodeSource: async () => undefined,
       streamUpdates: async function* (_operatorInstanceId, _afterSequence, signal) {
         await startUpdates.promise;
         for (let sequence = 1; sequence <= ENVELOPE_COUNT; sequence += 1) {
@@ -452,6 +453,7 @@ describe("large retained-run browser benchmark", () => {
       getCatalog: async () => catalog,
       loadBaseline: async () => baseline,
       getLatestRunSnapshot: async () => selectedRun,
+      getWorkflowNodeSource: async () => undefined,
       streamUpdates: async function* () {
         return;
       },

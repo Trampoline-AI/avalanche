@@ -18,6 +18,7 @@ import {
   RunSummaryPageV2,
   RunSummaryV2,
   ScopeReferenceV2,
+  WorkflowNodeSourceV2,
   TerminalSealV2,
   TraceDescriptorV2,
 } from "./generated/operator";
@@ -148,6 +149,24 @@ describe("GrpcWebOperatorApi", () => {
     expect(discoverFlows).toHaveBeenNthCalledWith(1, { pageSize: 200 }, { abort: signal });
     expect(discoverFlows).toHaveBeenNthCalledWith(2, { pageSize: 200 }, { abort: signal });
     expect(getRunSnapshot).not.toHaveBeenCalled();
+  });
+
+  it("requests source for only the selected current node", async () => {
+    const signal = new AbortController().signal;
+    const getWorkflowNodeSource = vi.fn(() => ({
+      response: Promise.resolve(
+        WorkflowNodeSourceV2.create({ sourceCode: "@step\ndef normalize():\n    return None" }),
+      ),
+    }));
+    const api = apiWith({ getWorkflowNodeSource });
+
+    await expect(
+      api.getWorkflowNodeSource("flows.py::build", "normalize_1", signal),
+    ).resolves.toBe("@step\ndef normalize():\n    return None");
+    expect(getWorkflowNodeSource).toHaveBeenCalledWith(
+      { workflowSelector: "flows.py::build", nodeId: "normalize_1" },
+      { abort: signal },
+    );
   });
 
   it("rejects catalog pages that change scope, cursor, or revision", async () => {

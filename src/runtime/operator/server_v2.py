@@ -824,6 +824,34 @@ class OperatorV2Servicer(pb_grpc.OperatorServiceV2Servicer):
             scope_ref=self._scope(),
         )
 
+    def GetWorkflowNodeSource(self, request, context):  # noqa: N802
+        if not request.workflow_selector:
+            context.abort(grpc.StatusCode.INVALID_ARGUMENT, "workflow_selector is required")
+        if not request.node_id:
+            context.abort(grpc.StatusCode.INVALID_ARGUMENT, "node_id is required")
+        workflow = next(
+            (
+                info
+                for info in self._op.get_catalog().workflows
+                if info.selector == request.workflow_selector
+            ),
+            None,
+        )
+        if workflow is None:
+            context.abort(
+                grpc.StatusCode.NOT_FOUND,
+                f"Workflow {request.workflow_selector!r} not found",
+            )
+        if request.node_id not in workflow.node_ids:
+            context.abort(
+                grpc.StatusCode.NOT_FOUND,
+                f"Node {request.node_id!r} not found in workflow {request.workflow_selector!r}",
+            )
+        source_code = workflow.node_source_code.get(request.node_id)
+        if source_code is None:
+            return pb.WorkflowNodeSourceV2()
+        return pb.WorkflowNodeSourceV2(source_code=source_code)
+
     # ── Run control ───────────────────────────────────────
 
     def StartRun(self, request, context):  # noqa: N802

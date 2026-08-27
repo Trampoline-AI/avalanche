@@ -21,6 +21,7 @@ import {
 } from "./model";
 import { isUnknownRecord } from "./guards";
 import { Markdown } from "./Markdown";
+import { PythonSource } from "./PythonSource";
 import { ValueView } from "./ValueView";
 
 interface InspectorProps {
@@ -50,6 +51,11 @@ interface InputOutputState {
   status: "loading" | "ready" | "error";
   error?: string;
 }
+
+type NodeSourceState =
+  | { key: string; status: "loading" }
+  | { key: string; status: "ready"; sourceCode: string | undefined }
+  | { key: string; status: "error"; error: string };
 
 const DETAIL_CACHE_MAX_ENTRIES = 8;
 
@@ -107,7 +113,9 @@ export function Inspector({
   const [detailLoadingVersion, setDetailLoadingVersion] = useState(0);
   const [inputOutputState, setInputOutputState] = useState<InputOutputState>();
 
+  const [nodeSourceState, setNodeSourceState] = useState<NodeSourceState>();
   const detailCache = useRef(new Map<string, DetailCacheEntry>());
+  const nodeSourceCache = useRef(new Map<string, string | undefined>());
   const detailLoading = useRef(new Set<string>());
   const detailControllers = useRef(new Set<AbortController>());
   const pageController = useRef<AbortController | null>(null);
@@ -130,12 +138,30 @@ export function Inspector({
   const eventPageOrder =
     tab === "output" ? DescriptorPageOrder.NEWEST_FIRST : DescriptorPageOrder.FORWARD;
   const activeEventPage = eventPageScope === pageKey ? eventPage : EMPTY_EVENT_PAGE;
-  const workflowDeclaration = run
-    ? undefined
-    : parseAgentDeclaration(workflow?.agentMetadataJson[nodeId ?? ""]);
+  const isWorkflowAgentNode =
+    !run &&
+    workflow !== undefined &&
+    nodeId !== undefined &&
+    workflow.agentNodeIds.includes(nodeId);
+  const workflowDeclaration =
+    run || !isWorkflowAgentNode
+      ? undefined
+      : parseAgentDeclaration(workflow?.agentMetadataJson[nodeId ?? ""]);
   const runFieldSchemas = run
     ? parseAgentFieldSchemas(run.topology?.agentFieldSchemasJson[nodeId ?? ""])
     : undefined;
+  const sourceWorkflowSelector =
+    !run && workflow !== undefined && nodeId !== undefined && !isWorkflowAgentNode
+      ? workflow.name
+      : undefined;
+  const nodeSourceScope =
+    sourceWorkflowSelector !== undefined && nodeId !== undefined
+      ? `${sourceWorkflowSelector}\0${nodeId}`
+      : undefined;
+  const activeNodeSource =
+    nodeSourceScope !== undefined && nodeSourceState?.key === nodeSourceScope
+      ? nodeSourceState
+      : undefined;
 
   tabRef.current = tab;
   const abortDetailHydration = useCallback(() => {
@@ -151,6 +177,43 @@ export function Inspector({
     },
     [abortDetailHydration],
   );
+
+  useEffect(() => {
+    if (
+      nodeSourceScope === undefined ||
+      sourceWorkflowSelector === undefined ||
+      nodeId === undefined
+    ) {
+      setNodeSourceState(undefined);
+      return;
+    }
+    if (nodeSourceCache.current.has(nodeSourceScope)) {
+      setNodeSourceState({
+        key: nodeSourceScope,
+        status: "ready",
+        sourceCode: nodeSourceCache.current.get(nodeSourceScope),
+      });
+      return;
+    }
+    const controller = new AbortController();
+    setNodeSourceState({ key: nodeSourceScope, status: "loading" });
+    void api
+      .getWorkflowNodeSource(sourceWorkflowSelector, nodeId, controller.signal)
+      .then((sourceCode) => {
+        if (controller.signal.aborted) return;
+        nodeSourceCache.current.set(nodeSourceScope, sourceCode);
+        setNodeSourceState({ key: nodeSourceScope, status: "ready", sourceCode });
+      })
+      .catch((error: unknown) => {
+        if (controller.signal.aborted) return;
+        setNodeSourceState({
+          key: nodeSourceScope,
+          status: "error",
+          error: error instanceof Error ? error.message : "Source code unavailable",
+        });
+      });
+    return () => controller.abort();
+  }, [api, nodeId, nodeSourceScope, sourceWorkflowSelector]);
 
   function closeInspector() {
     abortDetailHydration();
@@ -515,13 +578,13 @@ export function Inspector({
   if (!run && workflow && nodeId) {
     return (
       <aside
-        className="inspector inspector-declaration fixed top-[58px] right-0 bottom-0 z-30 grid h-full w-[min(var(--workspace-inspector-width),100vw)] min-h-0 min-w-0 grid-rows-[auto_minmax(0,1fr)] overflow-hidden border-l border-line bg-panel shadow-[-20px_0_50px_rgba(20,31,26,.14)] min-[1001px]:static min-[1001px]:z-auto min-[1001px]:w-auto min-[1001px]:shadow-none max-[700px]:w-screen"
-        aria-label="Node declaration"
+        className="inspector inspector-declaration fixed top-[58px] right-0 bottom-0 z-30 grid h-auto w-[min(var(--workspace-inspector-width),100vw)] min-h-0 min-w-0 grid-rows-[auto_minmax(0,1fr)] overflow-hidden border-l border-line bg-panel shadow-[-20px_0_50px_rgba(20,31,26,.14)] min-[1001px]:static min-[1001px]:z-auto min-[1001px]:h-full min-[1001px]:w-auto min-[1001px]:shadow-none max-[700px]:w-screen"
+        aria-label={isWorkflowAgentNode ? "Node declaration" : "Node code"}
       >
         <header className="flex items-start justify-between border-b border-line px-5 pt-[19px] pb-3.5">
           <div>
             <span className="eyebrow block font-mono text-[9px] tracking-[.16em] text-acid uppercase">
-              Declaration
+              {isWorkflowAgentNode ? "Declaration" : "Code"}
             </span>
             <h2 className="mt-1 mb-[5px] text-lg">{workflow.displayNames[nodeId] || nodeId}</h2>
           </div>
@@ -534,84 +597,104 @@ export function Inspector({
             <X aria-hidden="true" className="size-4" strokeWidth={1.8} />
           </button>
         </header>
-        {workflowDeclaration ? (
-          <div className="inspector-body inspector-body-full declaration h-full min-h-0 min-w-0 overflow-auto px-5 pt-[18px] pb-[30px] [&>section]:mb-[23px] [&_h3]:text-[10px] [&_h3]:tracking-[.08em] [&_h3]:text-secondary [&_h3]:uppercase">
-            <section>
-              <h3>Instructions</h3>
-              <Markdown className="instructions text-xs leading-[1.65] whitespace-normal text-secondary [&>:first-child]:mt-0 [&>:last-child]:mb-0">
-                {workflowDeclaration.instructions || "No instructions"}
-              </Markdown>
-            </section>
-            <section className="signature-columns grid grid-cols-[minmax(0,1fr)_minmax(0,1fr)] gap-3">
-              <div>
-                <h3>Inputs</h3>
-                {workflowDeclaration.inputs.map((field) => (
-                  <div
-                    className="field-detail border-t border-line py-2 [&_strong]:block [&_strong]:text-[10px] [&_code]:mt-0.5 [&_code]:block [&_code]:text-[8px] [&_code]:text-muted [&_code]:[overflow-wrap:anywhere] [&_p]:mt-1 [&_p]:mb-0 [&_p]:text-[9px] [&_p]:text-muted [&_p]:[overflow-wrap:anywhere]"
-                    key={field.name}
-                  >
-                    <strong>{field.name}</strong>
-                    <code>{field.type}</code>
-                    {field.description && <p>{field.description}</p>}
-                  </div>
-                ))}
-              </div>
-              <div>
-                <h3>Outputs</h3>
-                {workflowDeclaration.outputs.map((field) => (
-                  <div
-                    className="field-detail border-t border-line py-2 [&_strong]:block [&_strong]:text-[10px] [&_code]:mt-0.5 [&_code]:block [&_code]:text-[8px] [&_code]:text-muted [&_code]:[overflow-wrap:anywhere] [&_p]:mt-1 [&_p]:mb-0 [&_p]:text-[9px] [&_p]:text-muted [&_p]:[overflow-wrap:anywhere]"
-                    key={field.name}
-                  >
-                    <strong>{field.name}</strong>
-                    <code>{field.type}</code>
-                    {field.description && <p>{field.description}</p>}
-                  </div>
-                ))}
-              </div>
-            </section>
-            {workflowDeclaration.runtime !== undefined && (
+        {isWorkflowAgentNode ? (
+          workflowDeclaration ? (
+            <div className="inspector-body inspector-body-full declaration h-full min-h-0 min-w-0 overflow-auto px-5 pt-[18px] pb-[30px] [&>section]:mb-[23px] [&_h3]:text-[10px] [&_h3]:tracking-[.08em] [&_h3]:text-secondary [&_h3]:uppercase">
               <section>
-                <h3>Runtime</h3>
-                <ValueView value={workflowDeclaration.runtime} />
+                <h3>Instructions</h3>
+                <Markdown className="instructions text-xs leading-[1.65] whitespace-normal text-secondary [&>:first-child]:mt-0 [&>:last-child]:mb-0">
+                  {workflowDeclaration.instructions || "No instructions"}
+                </Markdown>
               </section>
-            )}
-            {workflowDeclaration.model !== undefined && (
-              <section>
-                <h3>Models</h3>
-                <ValueView value={workflowDeclaration.model} />
+              <section className="signature-columns grid grid-cols-[minmax(0,1fr)_minmax(0,1fr)] gap-3">
+                <div>
+                  <h3>Inputs</h3>
+                  {workflowDeclaration.inputs.map((field) => (
+                    <div
+                      className="field-detail border-t border-line py-2 [&_strong]:block [&_strong]:text-[10px] [&_code]:mt-0.5 [&_code]:block [&_code]:text-[8px] [&_code]:text-muted [&_code]:[overflow-wrap:anywhere] [&_p]:mt-1 [&_p]:mb-0 [&_p]:text-[9px] [&_p]:text-muted [&_p]:[overflow-wrap:anywhere]"
+                      key={field.name}
+                    >
+                      <strong>{field.name}</strong>
+                      <code>{field.type}</code>
+                      {field.description && <p>{field.description}</p>}
+                    </div>
+                  ))}
+                </div>
+                <div>
+                  <h3>Outputs</h3>
+                  {workflowDeclaration.outputs.map((field) => (
+                    <div
+                      className="field-detail border-t border-line py-2 [&_strong]:block [&_strong]:text-[10px] [&_code]:mt-0.5 [&_code]:block [&_code]:text-[8px] [&_code]:text-muted [&_code]:[overflow-wrap:anywhere] [&_p]:mt-1 [&_p]:mb-0 [&_p]:text-[9px] [&_p]:text-muted [&_p]:[overflow-wrap:anywhere]"
+                      key={field.name}
+                    >
+                      <strong>{field.name}</strong>
+                      <code>{field.type}</code>
+                      {field.description && <p>{field.description}</p>}
+                    </div>
+                  ))}
+                </div>
               </section>
-            )}
-            {(workflowDeclaration.skills.length > 0 ||
-              workflowDeclaration.tools.length > 0) && (
-              <section className="inspector-declaration-resources grid gap-3">
-                <h3>Skills &amp; tools</h3>
-                {workflowDeclaration.skills.map((skill) => (
-                  <article
-                    className="inspector-declaration-resource min-w-0 border-t border-line pt-2 text-[10px] leading-[1.55] text-secondary [&>strong]:inline [&>span]:ml-1.5 [&>span]:font-mono [&>span]:text-[8px] [&>span]:text-muted [&>span]:uppercase [&>div]:mt-1.5 [&>div]:[overflow-wrap:anywhere] [&>div>:last-child]:mb-0"
-                    key={`skill-${skill.name}`}
-                  >
-                    <strong>{skill.name}</strong>
-                    <span>Skill</span>
-                    <Markdown>{skill.instructions}</Markdown>
-                  </article>
-                ))}
-                {workflowDeclaration.tools.map((tool) => (
-                  <article
-                    className="inspector-declaration-resource min-w-0 border-t border-line pt-2 text-[10px] leading-[1.55] text-secondary [&>strong]:inline [&>span]:ml-1.5 [&>span]:font-mono [&>span]:text-[8px] [&>span]:text-muted [&>span]:uppercase [&>div]:mt-1.5 [&>div]:[overflow-wrap:anywhere] [&>div>:last-child]:mb-0"
-                    key={`tool-${tool.name}`}
-                  >
-                    <strong>{tool.name}</strong>
-                    <span>Tool</span>
-                    <Markdown>{tool.description}</Markdown>
-                  </article>
-                ))}
-              </section>
-            )}
-          </div>
+              {workflowDeclaration.runtime !== undefined && (
+                <section>
+                  <h3>Runtime</h3>
+                  <ValueView value={workflowDeclaration.runtime} />
+                </section>
+              )}
+              {workflowDeclaration.model !== undefined && (
+                <section>
+                  <h3>Models</h3>
+                  <ValueView value={workflowDeclaration.model} />
+                </section>
+              )}
+              {(workflowDeclaration.skills.length > 0 ||
+                workflowDeclaration.tools.length > 0) && (
+                <section className="inspector-declaration-resources grid gap-3">
+                  <h3>Skills &amp; tools</h3>
+                  {workflowDeclaration.skills.map((skill) => (
+                    <article
+                      className="inspector-declaration-resource min-w-0 border-t border-line pt-2 text-[10px] leading-[1.55] text-secondary [&>strong]:inline [&>span]:ml-1.5 [&>span]:font-mono [&>span]:text-[8px] [&>span]:text-muted [&>span]:uppercase [&>div]:mt-1.5 [&>div]:[overflow-wrap:anywhere] [&>div>:last-child]:mb-0"
+                      key={`skill-${skill.name}`}
+                    >
+                      <strong>{skill.name}</strong>
+                      <span>Skill</span>
+                      <Markdown>{skill.instructions}</Markdown>
+                    </article>
+                  ))}
+                  {workflowDeclaration.tools.map((tool) => (
+                    <article
+                      className="inspector-declaration-resource min-w-0 border-t border-line pt-2 text-[10px] leading-[1.55] text-secondary [&>strong]:inline [&>span]:ml-1.5 [&>span]:font-mono [&>span]:text-[8px] [&>span]:text-muted [&>span]:uppercase [&>div]:mt-1.5 [&>div]:[overflow-wrap:anywhere] [&>div>:last-child]:mb-0"
+                      key={`tool-${tool.name}`}
+                    >
+                      <strong>{tool.name}</strong>
+                      <span>Tool</span>
+                      <Markdown>{tool.description}</Markdown>
+                    </article>
+                  ))}
+                </section>
+              )}
+            </div>
+          ) : (
+            <p className="empty-copy text-[11px] text-muted">
+              This node has no agent declaration metadata.
+            </p>
+          )
+        ) : activeNodeSource?.status === "ready" ? (
+          activeNodeSource.sourceCode !== undefined ? (
+            <div className="inspector-body inspector-body-full h-full min-h-0 min-w-0 overflow-hidden">
+              <PythonSource source={activeNodeSource.sourceCode} />
+            </div>
+          ) : (
+            <p className="empty-copy text-[11px] text-muted">
+              Source code is unavailable for this node.
+            </p>
+          )
+        ) : activeNodeSource?.status === "error" ? (
+          <p className="empty-copy text-[11px] text-muted" role="alert">
+            Source code is unavailable: {activeNodeSource.error}
+          </p>
         ) : (
-          <p className="empty-copy text-[11px] text-muted">
-            This node has no agent declaration metadata.
+          <p className="empty-copy text-[11px] text-muted" role="status">
+            Loading source code…
           </p>
         )}
       </aside>
@@ -646,7 +729,7 @@ export function Inspector({
 
   return (
     <aside
-      className="inspector inspector-run fixed top-[58px] right-0 bottom-0 z-30 grid h-full w-[min(var(--workspace-inspector-width),100vw)] min-h-0 min-w-0 grid-rows-[auto_auto_minmax(0,1fr)] overflow-hidden border-l border-line bg-panel shadow-[-20px_0_50px_rgba(20,31,26,.14)] min-[1001px]:static min-[1001px]:z-auto min-[1001px]:w-auto min-[1001px]:shadow-none max-[700px]:w-screen"
+      className="inspector inspector-run fixed top-[58px] right-0 bottom-0 z-30 grid h-auto w-[min(var(--workspace-inspector-width),100vw)] min-h-0 min-w-0 grid-rows-[auto_auto_minmax(0,1fr)] overflow-hidden border-l border-line bg-panel shadow-[-20px_0_50px_rgba(20,31,26,.14)] min-[1001px]:static min-[1001px]:z-auto min-[1001px]:h-full min-[1001px]:w-auto min-[1001px]:shadow-none max-[700px]:w-screen"
       aria-label="Run inspector"
     >
       <header className="flex items-start justify-between border-b border-line px-5 pt-[19px] pb-3.5">

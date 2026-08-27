@@ -82,6 +82,11 @@ export interface AgentEventDescriptorPage {
 export interface OperatorApi {
   getCatalog(signal?: AbortSignal): Promise<CatalogSnapshotMsg>;
   loadBaseline(signal?: AbortSignal): Promise<StructuralBaseline>;
+  getWorkflowNodeSource(
+    workflowSelector: string,
+    nodeId: string,
+    signal?: AbortSignal,
+  ): Promise<string | undefined>;
   getLatestRunSnapshot(
     runId: string,
     operatorInstanceId: string,
@@ -166,6 +171,18 @@ export class GrpcWebOperatorApi implements OperatorApi {
       }
     } while (continuation);
     return this.catalogFromFlowLists(pages);
+  }
+
+  async getWorkflowNodeSource(
+    workflowSelector: string,
+    nodeId: string,
+    signal?: AbortSignal,
+  ): Promise<string | undefined> {
+    const source = await this.client.getWorkflowNodeSource(
+      { workflowSelector, nodeId },
+      signal ? { abort: signal } : undefined,
+    ).response;
+    return source.sourceCode;
   }
 
   async loadBaseline(signal?: AbortSignal): Promise<StructuralBaseline> {

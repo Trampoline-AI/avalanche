@@ -13,7 +13,13 @@ export default defineConfig({
       output: {
         manualChunks: {
           graph: ["@xyflow/react"],
-          editor: ["@codemirror/lang-json", "@codemirror/state", "@codemirror/view"],
+          editor: [
+            "@codemirror/lang-json",
+            "@codemirror/lang-python",
+            "@codemirror/state",
+            "@codemirror/view",
+            "@uiw/codemirror-theme-github",
+          ],
           protobuf: [
             "@protobuf-ts/grpcweb-transport",
             "@protobuf-ts/runtime",

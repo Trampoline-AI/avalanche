@@ -133,6 +133,32 @@ export interface DiscoverFlowsRequestV2 {
     continuation?: ContinuationRefV2;
 }
 /**
+ * Source is available only for a node in the current discovered catalog.
+ *
+ * @generated from protobuf message avalanche.operator.GetWorkflowNodeSourceRequestV2
+ */
+export interface GetWorkflowNodeSourceRequestV2 {
+    /**
+     * @generated from protobuf field: string workflow_selector = 1
+     */
+    workflowSelector: string;
+    /**
+     * @generated from protobuf field: string node_id = 2
+     */
+    nodeId: string;
+}
+/**
+ * @generated from protobuf message avalanche.operator.WorkflowNodeSourceV2
+ */
+export interface WorkflowNodeSourceV2 {
+    /**
+     * Unset when inspect cannot recover source for this discovered node.
+     *
+     * @generated from protobuf field: optional string source_code = 1
+     */
+    sourceCode?: string;
+}
+/**
  * @generated from protobuf message avalanche.operator.FlowInfoV2
  */
 export interface FlowInfoV2 {
@@ -1679,6 +1705,107 @@ class DiscoverFlowsRequestV2$Type extends MessageType<DiscoverFlowsRequestV2> {
  * @generated MessageType for protobuf message avalanche.operator.DiscoverFlowsRequestV2
  */
 export const DiscoverFlowsRequestV2 = new DiscoverFlowsRequestV2$Type();
+// @generated message type with reflection information, may provide speed optimized methods
+class GetWorkflowNodeSourceRequestV2$Type extends MessageType<GetWorkflowNodeSourceRequestV2> {
+    constructor() {
+        super("avalanche.operator.GetWorkflowNodeSourceRequestV2", [
+            { no: 1, name: "workflow_selector", kind: "scalar", T: 9 /*ScalarType.STRING*/ },
+            { no: 2, name: "node_id", kind: "scalar", T: 9 /*ScalarType.STRING*/ }
+        ]);
+    }
+    create(value?: PartialMessage<GetWorkflowNodeSourceRequestV2>): GetWorkflowNodeSourceRequestV2 {
+        const message = globalThis.Object.create((this.messagePrototype!));
+        message.workflowSelector = "";
+        message.nodeId = "";
+        if (value !== undefined)
+            reflectionMergePartial<GetWorkflowNodeSourceRequestV2>(this, message, value);
+        return message;
+    }
+    internalBinaryRead(reader: IBinaryReader, length: number, options: BinaryReadOptions, target?: GetWorkflowNodeSourceRequestV2): GetWorkflowNodeSourceRequestV2 {
+        let message = target ?? this.create(), end = reader.pos + length;
+        while (reader.pos < end) {
+            let [fieldNo, wireType] = reader.tag();
+            switch (fieldNo) {
+                case /* string workflow_selector */ 1:
+                    message.workflowSelector = reader.string();
+                    break;
+                case /* string node_id */ 2:
+                    message.nodeId = reader.string();
+                    break;
+                default:
+                    let u = options.readUnknownField;
+                    if (u === "throw")
+                        throw new globalThis.Error(`Unknown field ${fieldNo} (wire type ${wireType}) for ${this.typeName}`);
+                    let d = reader.skip(wireType);
+                    if (u !== false)
+                        (u === true ? UnknownFieldHandler.onRead : u)(this.typeName, message, fieldNo, wireType, d);
+            }
+        }
+        return message;
+    }
+    internalBinaryWrite(message: GetWorkflowNodeSourceRequestV2, writer: IBinaryWriter, options: BinaryWriteOptions): IBinaryWriter {
+        /* string workflow_selector = 1; */
+        if (message.workflowSelector !== "")
+            writer.tag(1, WireType.LengthDelimited).string(message.workflowSelector);
+        /* string node_id = 2; */
+        if (message.nodeId !== "")
+            writer.tag(2, WireType.LengthDelimited).string(message.nodeId);
+        let u = options.writeUnknownFields;
+        if (u !== false)
+            (u == true ? UnknownFieldHandler.onWrite : u)(this.typeName, message, writer);
+        return writer;
+    }
+}
+/**
+ * @generated MessageType for protobuf message avalanche.operator.GetWorkflowNodeSourceRequestV2
+ */
+export const GetWorkflowNodeSourceRequestV2 = new GetWorkflowNodeSourceRequestV2$Type();
+// @generated message type with reflection information, may provide speed optimized methods
+class WorkflowNodeSourceV2$Type extends MessageType<WorkflowNodeSourceV2> {
+    constructor() {
+        super("avalanche.operator.WorkflowNodeSourceV2", [
+            { no: 1, name: "source_code", kind: "scalar", opt: true, T: 9 /*ScalarType.STRING*/ }
+        ]);
+    }
+    create(value?: PartialMessage<WorkflowNodeSourceV2>): WorkflowNodeSourceV2 {
+        const message = globalThis.Object.create((this.messagePrototype!));
+        if (value !== undefined)
+            reflectionMergePartial<WorkflowNodeSourceV2>(this, message, value);
+        return message;
+    }
+    internalBinaryRead(reader: IBinaryReader, length: number, options: BinaryReadOptions, target?: WorkflowNodeSourceV2): WorkflowNodeSourceV2 {
+        let message = target ?? this.create(), end = reader.pos + length;
+        while (reader.pos < end) {
+            let [fieldNo, wireType] = reader.tag();
+            switch (fieldNo) {
+                case /* optional string source_code */ 1:
+                    message.sourceCode = reader.string();
+                    break;
+                default:
+                    let u = options.readUnknownField;
+                    if (u === "throw")
+                        throw new globalThis.Error(`Unknown field ${fieldNo} (wire type ${wireType}) for ${this.typeName}`);
+                    let d = reader.skip(wireType);
+                    if (u !== false)
+                        (u === true ? UnknownFieldHandler.onRead : u)(this.typeName, message, fieldNo, wireType, d);
+            }
+        }
+        return message;
+    }
+    internalBinaryWrite(message: WorkflowNodeSourceV2, writer: IBinaryWriter, options: BinaryWriteOptions): IBinaryWriter {
+        /* optional string source_code = 1; */
+        if (message.sourceCode !== undefined)
+            writer.tag(1, WireType.LengthDelimited).string(message.sourceCode);
+        let u = options.writeUnknownFields;
+        if (u !== false)
+            (u == true ? UnknownFieldHandler.onWrite : u)(this.typeName, message, writer);
+        return writer;
+    }
+}
+/**
+ * @generated MessageType for protobuf message avalanche.operator.WorkflowNodeSourceV2
+ */
+export const WorkflowNodeSourceV2 = new WorkflowNodeSourceV2$Type();
 // @generated message type with reflection information, may provide speed optimized methods
 class FlowInfoV2$Type extends MessageType<FlowInfoV2> {
     constructor() {
@@ -5229,6 +5356,7 @@ export const RunStatusEnvelopeV2 = new RunStatusEnvelopeV2$Type();
  */
 export const OperatorServiceV2 = new ServiceType("avalanche.operator.OperatorServiceV2", [
     { name: "DiscoverFlows", options: {}, I: DiscoverFlowsRequestV2, O: FlowListV2 },
+    { name: "GetWorkflowNodeSource", options: {}, I: GetWorkflowNodeSourceRequestV2, O: WorkflowNodeSourceV2 },
     { name: "StartRun", options: {}, I: StartRunRequestV2, O: StartRunResponseV2 },
     { name: "CancelRun", options: {}, I: CancelRunRequestV2, O: CancelRunResponseV2 },
     { name: "ListRunSummaries", options: {}, I: ListRunSummariesRequestV2, O: RunSummaryPageV2 },

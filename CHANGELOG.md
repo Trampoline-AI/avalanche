@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+### Operator web interface
+
+- Source-code inspectors now end at the viewport edge on narrow screens, preserving the
+  inset around the full-height code surface.
+
 ## 0.1.5rc1
 
 This prerelease carries the V2 server, converter, and generated bindings used by Delta.
