@@ -79,6 +79,7 @@ function operatorApi(overrides: Partial<OperatorApi> = {}): OperatorApi {
       asOfEventUlid: "0",
       runs: [],
     }),
+    getWorkflowNodeSource: async () => undefined,
     getLatestRunSnapshot: async () => run,
     streamUpdates: async function* () {
       return;

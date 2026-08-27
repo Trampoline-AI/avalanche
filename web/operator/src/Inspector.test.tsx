@@ -155,6 +155,7 @@ function operatorApi(): OperatorApi {
     loadBaseline: async () => {
       throw new Error("unused");
     },
+    getWorkflowNodeSource: async () => undefined,
     getLatestRunSnapshot: async () => run,
     streamUpdates: async function* () {
       return;

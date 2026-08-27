@@ -12,6 +12,8 @@ package avalanche.operator;
 // from transport metadata and use only V2 request and response messages.
 service OperatorServiceV2 {
   rpc DiscoverFlows(DiscoverFlowsRequestV2) returns (FlowListV2);
+  rpc GetWorkflowNodeSource(GetWorkflowNodeSourceRequestV2)
+      returns (WorkflowNodeSourceV2);
   rpc StartRun(StartRunRequestV2) returns (StartRunResponseV2);
   rpc CancelRun(CancelRunRequestV2) returns (CancelRunResponseV2);
   rpc ListRunSummaries(ListRunSummariesRequestV2) returns (RunSummaryPageV2);
@@ -74,6 +76,17 @@ message DiscoverFlowsRequestV2 {
   // Bounded by the server.
   uint32 page_size = 1;
   ContinuationRefV2 continuation = 2;
+}
+
+// Source is available only for a node in the current discovered catalog.
+message GetWorkflowNodeSourceRequestV2 {
+  string workflow_selector = 1;
+  string node_id = 2;
+}
+
+message WorkflowNodeSourceV2 {
+  // Unset when inspect cannot recover source for this discovered node.
+  optional string source_code = 1;
 }
 
 message FlowInfoV2 {

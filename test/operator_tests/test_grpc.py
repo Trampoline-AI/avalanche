@@ -413,6 +413,46 @@ class TestGrpcRoundtrip:
         assert "source" in info.node_types.values()
         assert info.file_path.endswith("sample_workflows.py")
 
+    @pytest.mark.parametrize(
+        ("node_id", "decorator"),
+        [
+            ("fetch_data_1", "source"),
+            ("process_data_1", "step"),
+            ("save_data_1", "dest"),
+        ],
+    )
+    def test_get_workflow_node_source(self, client, node_id, decorator):
+        workflow_selector = next(
+            workflow.selector
+            for workflow in client.list_workflows()
+            if workflow.name == "simple_workflow"
+        )
+        source = client._stub.GetWorkflowNodeSource(  # noqa: SLF001 - gRPC contract test
+            pb.GetWorkflowNodeSourceRequestV2(
+                workflow_selector=workflow_selector,
+                node_id=node_id,
+            )
+        )
+
+        assert source.HasField("source_code")
+        assert source.source_code.startswith(f"@{decorator}\n")
+
+    def test_get_workflow_node_source_rejects_unknown_node(self, client):
+        workflow_selector = next(
+            workflow.selector
+            for workflow in client.list_workflows()
+            if workflow.name == "simple_workflow"
+        )
+        with pytest.raises(grpc.RpcError) as error:
+            client._stub.GetWorkflowNodeSource(  # noqa: SLF001 - gRPC contract test
+                pb.GetWorkflowNodeSourceRequestV2(
+                    workflow_selector=workflow_selector,
+                    node_id="outside_catalog",
+                )
+            )
+
+        assert error.value.code() is grpc.StatusCode.NOT_FOUND
+
     def test_start_run_and_complete(self, client):
         run_id = client.start_run("simple_workflow")
         assert run_id.startswith("run_")
