@@ -21,6 +21,11 @@ def test_v2_service_exposes_exact_native_job_contract():
     service = pb.DESCRIPTOR.services_by_name["OperatorServiceV2"]
     expected_methods = {
         "DiscoverFlows": ("DiscoverFlowsRequestV2", "FlowListV2", False),
+        "GetWorkflowNodeSource": (
+            "GetWorkflowNodeSourceRequestV2",
+            "WorkflowNodeSourceV2",
+            False,
+        ),
         "StartRun": ("StartRunRequestV2", "StartRunResponseV2", False),
         "CancelRun": ("CancelRunRequestV2", "CancelRunResponseV2", False),
         "ListRunSummaries": (
