@@ -6,6 +6,8 @@
 
 - Source-code inspectors now end at the viewport edge on narrow screens, preserving the
   inset around the full-height code surface.
+- Source and destination nodes now show their first docstring lines, matching standard
+  step summaries.
 
 ## 0.1.5rc1
 

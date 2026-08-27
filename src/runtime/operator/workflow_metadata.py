@@ -8,14 +8,14 @@ import textwrap
 from avalanche.dag import NodeType, Workflow
 
 
-def standard_step_docstring_lines_for_workflow(
+def node_docstring_lines_for_workflow(
     workflow: Workflow, node_ids: list[str]
 ) -> dict[str, str]:
-    """Return first non-empty docstring lines for non-agent standard steps."""
+    """Return first non-empty docstring lines for non-agent DAG nodes."""
     lines_by_node: dict[str, str] = {}
     for node_id in node_ids:
         node = workflow.nodes[node_id].node
-        if node.node_type is not NodeType.STEP:
+        if node.node_type not in (NodeType.SOURCE, NodeType.STEP, NodeType.DEST):
             continue
         if getattr(node.fn, "__agent_step__", None) is not None:
             continue

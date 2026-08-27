@@ -32,8 +32,8 @@ from .models import (
 from .source_policy import is_excluded_directory, is_path_in_excluded_directory
 from .windows_job import WindowsJob, assign_process, close_job, create_kill_on_close_job
 from .workflow_metadata import (
+    node_docstring_lines_for_workflow,
     node_source_code_for_workflow,
-    standard_step_docstring_lines_for_workflow,
 )
 
 logger = logging.getLogger(__name__)
@@ -555,9 +555,7 @@ def _descriptor_to_dict(
     workflow: Workflow,
 ) -> dict[str, Any]:
     node_ids = workflow._topological_sort()
-    standard_step_docstring_lines = standard_step_docstring_lines_for_workflow(
-        workflow, node_ids
-    )
+    standard_step_docstring_lines = node_docstring_lines_for_workflow(workflow, node_ids)
     node_source_code = node_source_code_for_workflow(workflow, node_ids)
     agent_node_ids = []
     agent_metadata_json = []
