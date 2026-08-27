@@ -926,7 +926,7 @@ def test_agent_steps_are_identified_without_changing_node_type():
     assert info.node_types["analyze_1"] == "step"
 
 
-def test_standard_step_docstring_lines_exclude_agent_source_and_destination_nodes():
+def test_node_docstring_lines_include_source_step_and_destination_nodes():
     class Analyze(ava.Signature):
         """Analyze normalized text."""
 
@@ -963,7 +963,11 @@ def test_standard_step_docstring_lines_exclude_agent_source_and_destination_node
 
     info = workflow_to_info(mixed_flow(), "<test>")
 
-    assert info.standard_step_docstring_lines == {"normalize_1": "Normalize source text."}
+    assert info.standard_step_docstring_lines == {
+        "load_1": "Load source text.",
+        "normalize_1": "Normalize source text.",
+        "store_1": "Store analyzed text.",
+    }
 
 
 def test_agent_metadata_failure_does_not_hide_workflow(monkeypatch):

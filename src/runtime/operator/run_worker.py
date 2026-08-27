@@ -31,7 +31,7 @@ from .result_store import (
     publish_workflow_result,
 )
 from .results import encode_workflow_result
-from .workflow_metadata import standard_step_docstring_lines_for_workflow
+from .workflow_metadata import node_docstring_lines_for_workflow
 
 
 def _import_isolated_ray() -> Any:
@@ -338,9 +338,7 @@ def _workflow_metadata(workflow: Workflow) -> dict[str, Any]:
         "display_names": {node_id: display_name_from_id(node_id) for node_id in node_ids},
         "agent_field_schemas_json": agent_field_schemas_for_workflow(workflow, node_ids),
         "agent_instruction_lines": agent_instruction_lines_for_workflow(workflow, node_ids),
-        "standard_step_docstring_lines": standard_step_docstring_lines_for_workflow(
-            workflow, node_ids
-        ),
+        "standard_step_docstring_lines": node_docstring_lines_for_workflow(workflow, node_ids),
     }
 
 

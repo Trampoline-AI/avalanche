@@ -270,44 +270,72 @@ describe("GraphCanvas", () => {
     expect(screen.queryByText("current_input")).not.toBeInTheDocument();
   });
 
-  it("renders standard step docstring summaries in current and recorded DAGs", () => {
+  it("renders source, step, and destination docstring summaries in current and recorded DAGs", () => {
     const view = render(
       <GraphCanvas
         workflow={FlowInfoMsg.create({
           workflowId: "flow.py::standard",
           displayName: "Standard",
-          nodeIds: ["normalize"],
-          graph: { normalize: { children: [] } },
-          nodeTypes: { normalize: "step" },
-          displayNames: { normalize: "Normalize" },
-          standardStepDocstringLines: { normalize: "Normalize incoming records." },
+          nodeIds: ["load", "normalize", "store"],
+          graph: {
+            load: { children: ["normalize"] },
+            normalize: { children: ["store"] },
+            store: { children: [] },
+          },
+          nodeTypes: { load: "source", normalize: "step", store: "dest" },
+          displayNames: { load: "Load", normalize: "Normalize", store: "Store" },
+          standardStepDocstringLines: {
+            load: "Load incoming records.",
+            normalize: "Normalize incoming records.",
+            store: "Store normalized records.",
+          },
         })}
         onOpenNode={() => undefined}
       />,
     );
 
-    const currentCard = screen
-      .getByRole("button", { name: "Inspect Normalize" })
-      .closest("article");
-    expect(currentCard).toHaveAttribute("data-node-kind", "standard");
-    expect(screen.getByText("Normalize incoming records.")).toHaveClass(
-      "node-instruction-line",
-    );
+    for (const summary of [
+      "Load incoming records.",
+      "Normalize incoming records.",
+      "Store normalized records.",
+    ]) {
+      expect(screen.getByText(summary)).toHaveClass("node-instruction-line");
+    }
 
     view.rerender(
       <GraphCanvas
         runTopology={WorkflowTopologyMsg.create({
-          nodeIds: ["normalize"],
-          graph: { normalize: { children: [] } },
-          nodeTypes: { normalize: "step" },
-          displayNames: { normalize: "Normalize" },
-          standardStepDocstringLines: { normalize: "Normalize the recorded input." },
+          nodeIds: ["load", "normalize", "store"],
+          graph: {
+            load: { children: ["normalize"] },
+            normalize: { children: ["store"] },
+            store: { children: [] },
+          },
+          nodeTypes: { load: "source", normalize: "step", store: "dest" },
+          displayNames: { load: "Load", normalize: "Normalize", store: "Store" },
+          standardStepDocstringLines: {
+            load: "Load the recorded input.",
+            normalize: "Normalize the recorded input.",
+            store: "Store the recorded output.",
+          },
         })}
         runNodes={[
+          NodeSnapshotMsg.create({
+            nodeId: "load",
+            name: "Load",
+            nodeType: "source",
+            status: "success",
+          }),
           NodeSnapshotMsg.create({
             nodeId: "normalize",
             name: "Normalize",
             nodeType: "step",
+            status: "success",
+          }),
+          NodeSnapshotMsg.create({
+            nodeId: "store",
+            name: "Store",
+            nodeType: "dest",
             status: "success",
           }),
         ]}
@@ -315,10 +343,14 @@ describe("GraphCanvas", () => {
       />,
     );
 
-    expect(screen.getByText("Normalize the recorded input.")).toHaveClass(
-      "node-instruction-line",
-    );
-    expect(screen.queryByText("Normalize incoming records.")).not.toBeInTheDocument();
+    for (const summary of [
+      "Load the recorded input.",
+      "Normalize the recorded input.",
+      "Store the recorded output.",
+    ]) {
+      expect(screen.getByText(summary)).toHaveClass("node-instruction-line");
+    }
+    expect(screen.queryByText("Load incoming records.")).not.toBeInTheDocument();
   });
 
   it("distinguishes repeated invocations by stable node identity", () => {
