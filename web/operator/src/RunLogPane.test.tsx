@@ -127,14 +127,14 @@ describe("RunLogPane", () => {
     );
 
     const pane = screen.getByRole("region", { name: "Run logs" });
-    await waitFor(() => expect(within(pane).getAllByRole("article")).toHaveLength(3));
-    await waitFor(() => expect(pane).toHaveTextContent("body-live-2"));
+    await waitFor(() =>
+      expect(
+        within(pane)
+          .getAllByRole("article")
+          .map((row) => row.querySelector("pre")?.textContent),
+      ).toEqual(["body-log-1", "body-live-2", "body-log-3"]),
+    );
     const rows = within(pane).getAllByRole("article");
-    expect(rows.map((row) => row.querySelector("pre")?.textContent)).toEqual([
-      "body-log-1",
-      "body-live-2",
-      "body-log-3",
-    ]);
     expect(listLogPage).toHaveBeenCalledWith(
       expect.objectContaining({
         pageToken: "logs",
