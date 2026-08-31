@@ -195,6 +195,7 @@ describe("Inspector", () => {
         api={operatorApi()}
         workflow={workflow}
         nodeId="agent_1"
+        embedded
         onClose={() => undefined}
       />,
     );
@@ -206,6 +207,10 @@ describe("Inspector", () => {
     expect(screen.getByText("lookup")).toBeInTheDocument();
     expect(screen.getByText("trusted").tagName).toBe("CODE");
     expect(view.container).not.toHaveTextContent('"skills"');
+    expect(view.container.querySelector(".inspector-declaration")).toHaveClass("top-0");
+    expect(view.container.querySelector(".inspector-declaration")).not.toHaveClass(
+      "top-[58px]",
+    );
     expect(view.container.querySelector(".inspector-body-full")).toBeInTheDocument();
   });
 
@@ -227,11 +232,27 @@ describe("Inspector", () => {
     expect(listAgentEventPage).not.toHaveBeenCalled();
     expect(listLogPage).not.toHaveBeenCalled();
     expect(readJsonDetail).not.toHaveBeenCalled();
-    expect(view.container.querySelector(".inspector-run")).toHaveClass("inspector");
+    expect(view.container.querySelector(".inspector-run")).toHaveClass(
+      "inspector",
+      "top-[58px]",
+    );
     expect(view.container.querySelector(".inspector-body")).toHaveClass("inspector-body-full");
     expect(view.container.querySelector(".inspector-overview")).toHaveClass("inspector-panel");
     expect(screen.queryByText("Revision")).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "logs" })).not.toBeInTheDocument();
+    view.rerender(
+      <Inspector
+        api={{ ...api, listAgentEventPage, listLogPage, readJsonDetail }}
+        workflow={workflow}
+        run={run}
+        nodeId="agent_1"
+        embedded
+        onClose={() => undefined}
+      />,
+    );
+
+    expect(view.container.querySelector(".inspector-run")).toHaveClass("top-0");
+    expect(view.container.querySelector(".inspector-run")).not.toHaveClass("top-[58px]");
   });
 
   it("shows immediate Inputs loading, cancels superseded detail, and renders the retained root directly", async () => {
