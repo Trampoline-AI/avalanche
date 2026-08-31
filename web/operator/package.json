@@ -31,7 +31,8 @@
     "registry": "https://npm.pkg.github.com"
   },
   "scripts": {
-    "build": "tsc --noEmit -p tsconfig.app.json && tsc --noEmit -p tsconfig.node.json && vite build && tsc -p tsconfig.build.json",
+    "build": "tsc --noEmit -p tsconfig.app.json && tsc --noEmit -p tsconfig.node.json && vite build && tsc -p tsconfig.build.json && pnpm run rewrite:declarations",
+    "rewrite:declarations": "node scripts/rewrite-declaration-specifiers.mjs",
     "dev": "vite build --watch",
     "generate": "uv run python -m grpc_tools.protoc -I../../src/runtime/operator/proto --plugin=protoc-gen-ts=./node_modules/.bin/protoc-gen-ts --ts_out=src/generated --ts_opt=long_type_string ../../src/runtime/operator/proto/operator.proto",
     "format": "prettier --write .",

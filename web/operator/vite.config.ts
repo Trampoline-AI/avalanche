@@ -35,9 +35,11 @@ export default defineConfig({
           prefix: ".avalanche-operator-ui",
           transform(prefix, selector, prefixedSelector) {
             if (selector === ":root" || selector === ":host") return prefix;
-            return selector === prefix || selector.startsWith(`${prefix} `)
-              ? selector
-              : prefixedSelector;
+            if (selector === prefix || selector.startsWith(`${prefix} `)) return selector;
+            if (!selector.startsWith(".")) return prefixedSelector;
+
+            // Class selectors may apply to the scope root or its descendants.
+            return `${prefix}${selector}, ${prefixedSelector}`;
           },
         }),
       ],
