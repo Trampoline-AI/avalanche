@@ -1,4 +1,4 @@
-import type { ReactNode } from "react";
+import { StrictMode, type ReactNode, useState } from "react";
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -139,6 +139,50 @@ function uiHost(): OperatorUiHost {
   };
 }
 
+interface ControlledOperatorUiProps {
+  initialSelection: OperatorUiNavigation["selection"];
+  onSelectionChange?: OperatorUiNavigation["onSelectionChange"];
+}
+
+function ControlledOperatorUi({
+  initialSelection,
+  onSelectionChange,
+}: ControlledOperatorUiProps) {
+  const [selection, setSelection] = useState(initialSelection);
+
+  return (
+    <>
+      <button
+        type="button"
+        onClick={() =>
+          setSelection({ kind: "run", workflowId: "flow.py::demo", runId: "run-1" })
+        }
+      >
+        Host select run
+      </button>
+      <button
+        type="button"
+        onClick={() => setSelection({ kind: "workflow", workflowId: "flow.py::demo" })}
+      >
+        Host select workflow
+      </button>
+      <button type="button" onClick={() => setSelection(undefined)}>
+        Host clear selection
+      </button>
+      <OperatorUi
+        host={uiHost()}
+        navigation={{
+          selection,
+          onSelectionChange: (next) => {
+            setSelection(next);
+            onSelectionChange?.(next);
+          },
+        }}
+      />
+    </>
+  );
+}
+
 const summary = RunSummaryMsg.create({
   runId: "run-1",
   workflowId: "flow.py::demo",
@@ -265,6 +309,216 @@ describe("OperatorUi", () => {
     expect(navigation.onSelectionChange).toHaveBeenCalledWith({
       kind: "workflow",
       workflowId: "flow.py::other",
+    });
+    expect(projectionHarness.selectRun).toHaveBeenCalledWith(undefined);
+  });
+
+  it("loads an accepted controlled run once through catalog recovery", async () => {
+    const catalog = projectionHarness.state.catalog;
+    const onSelectionChange = vi.fn();
+    const runSelection: OperatorUiNavigation["selection"] = {
+      kind: "run",
+      workflowId: "flow.py::demo",
+      runId: "run-1",
+    };
+    try {
+      expect(Reflect.deleteProperty(projectionHarness.state, "catalog")).toBe(true);
+      const view = render(
+        <ControlledOperatorUi
+          initialSelection={runSelection}
+          onSelectionChange={onSelectionChange}
+        />,
+      );
+
+      expect(onSelectionChange).not.toHaveBeenCalledWith(undefined);
+
+      projectionHarness.state.catalog = catalog;
+      view.rerender(
+        <ControlledOperatorUi
+          initialSelection={runSelection}
+          onSelectionChange={onSelectionChange}
+        />,
+      );
+      await waitFor(() => expect(projectionHarness.selectRun).toHaveBeenCalledWith("run-1"));
+      projectionHarness.selectRun.mockClear();
+
+      projectionHarness.state.runs = { "run-1": summary };
+      projectionHarness.state.selectedRunId = "run-1";
+      projectionHarness.state.selectedRunStatus = "ready";
+      view.rerender(
+        <ControlledOperatorUi
+          initialSelection={runSelection}
+          onSelectionChange={onSelectionChange}
+        />,
+      );
+      projectionHarness.selectRun.mockClear();
+
+      fireEvent.click(screen.getByRole("button", { name: "Host select workflow" }));
+      await waitFor(() => expect(projectionHarness.selectRun).toHaveBeenCalledWith(undefined));
+      projectionHarness.selectRun.mockClear();
+
+      expect(Reflect.deleteProperty(projectionHarness.state, "catalog")).toBe(true);
+      projectionHarness.state.selectedRun = undefined;
+      projectionHarness.state.selectedRunId = undefined;
+      projectionHarness.state.selectedRunStatus = "idle";
+      view.rerender(
+        <ControlledOperatorUi
+          initialSelection={runSelection}
+          onSelectionChange={onSelectionChange}
+        />,
+      );
+      fireEvent.click(screen.getByRole("button", { name: "Host select run" }));
+
+      expect(onSelectionChange).not.toHaveBeenCalledWith(undefined);
+      expect(projectionHarness.selectRun).not.toHaveBeenCalled();
+
+      projectionHarness.state.catalog = catalog;
+      view.rerender(
+        <ControlledOperatorUi
+          initialSelection={runSelection}
+          onSelectionChange={onSelectionChange}
+        />,
+      );
+
+      await waitFor(() => expect(projectionHarness.selectRun).toHaveBeenCalledTimes(1));
+      expect(projectionHarness.selectRun).toHaveBeenCalledWith("run-1");
+    } finally {
+      projectionHarness.state.catalog = catalog;
+    }
+  });
+
+  it("clears an accepted controlled run once when the host clears selection", async () => {
+    const onSelectionChange = vi.fn();
+    const runSelection: OperatorUiNavigation["selection"] = {
+      kind: "run",
+      workflowId: "flow.py::demo",
+      runId: "run-1",
+    };
+    render(
+      <ControlledOperatorUi
+        initialSelection={runSelection}
+        onSelectionChange={onSelectionChange}
+      />,
+    );
+    projectionHarness.selectRun.mockClear();
+
+    projectionHarness.state.selectedRunId = "run-1";
+    projectionHarness.state.selectedRunStatus = "ready";
+    fireEvent.click(screen.getByRole("button", { name: "Host clear selection" }));
+
+    await waitFor(() => {
+      expect(onSelectionChange).toHaveBeenCalledTimes(1);
+      expect(onSelectionChange).toHaveBeenCalledWith({
+        kind: "workflow",
+        workflowId: "flow.py::demo",
+      });
+      expect(projectionHarness.selectRun).toHaveBeenCalledTimes(1);
+    });
+    expect(projectionHarness.selectRun).toHaveBeenCalledWith(undefined);
+  });
+
+  it("clears accepted controlled transitions while the catalog is unavailable", async () => {
+    const catalog = projectionHarness.state.catalog;
+    const workflowSelection: OperatorUiNavigation["selection"] = {
+      kind: "workflow",
+      workflowId: "flow.py::demo",
+    };
+    try {
+      const view = render(<ControlledOperatorUi initialSelection={workflowSelection} />);
+      projectionHarness.selectRun.mockClear();
+
+      fireEvent.click(screen.getByRole("button", { name: "Host select run" }));
+      await waitFor(() => expect(projectionHarness.selectRun).toHaveBeenCalledWith("run-1"));
+      projectionHarness.selectRun.mockClear();
+
+      projectionHarness.state.selectedRunId = "run-1";
+      expect(Reflect.deleteProperty(projectionHarness.state, "catalog")).toBe(true);
+      view.rerender(<ControlledOperatorUi initialSelection={workflowSelection} />);
+
+      fireEvent.click(screen.getByRole("button", { name: "Host select workflow" }));
+      await waitFor(() => expect(projectionHarness.selectRun).toHaveBeenCalledWith(undefined));
+      projectionHarness.selectRun.mockClear();
+
+      projectionHarness.state.selectedRunId = undefined;
+      view.rerender(<ControlledOperatorUi initialSelection={workflowSelection} />);
+      projectionHarness.state.selectedRunId = "run-1";
+      fireEvent.click(screen.getByRole("button", { name: "Host clear selection" }));
+      await waitFor(() => expect(projectionHarness.selectRun).toHaveBeenCalledWith(undefined));
+    } finally {
+      projectionHarness.state.catalog = catalog;
+    }
+  });
+
+  it("reloads an accepted controlled run after StrictMode cleanup", async () => {
+    render(
+      <StrictMode>
+        <ControlledOperatorUi
+          initialSelection={{ kind: "run", workflowId: "flow.py::demo", runId: "run-1" }}
+        />
+      </StrictMode>,
+    );
+
+    await waitFor(() => expect(projectionHarness.selectRun).toHaveBeenLastCalledWith("run-1"));
+    expect(projectionHarness.selectRun).toHaveBeenCalledWith(undefined);
+  });
+
+  it("synchronizes an accepted catalog fallback once", async () => {
+    const onSelectionChange = vi.fn();
+
+    render(
+      <ControlledOperatorUi
+        initialSelection={{ kind: "workflow", workflowId: "missing.py::workflow" }}
+        onSelectionChange={onSelectionChange}
+      />,
+    );
+
+    await waitFor(() => {
+      expect(onSelectionChange).toHaveBeenCalledTimes(1);
+      expect(onSelectionChange).toHaveBeenCalledWith({
+        kind: "workflow",
+        workflowId: "flow.py::demo",
+      });
+      expect(projectionHarness.selectRun).toHaveBeenCalledTimes(1);
+    });
+    expect(projectionHarness.selectRun).toHaveBeenCalledWith(undefined);
+  });
+
+  it("synchronizes an accepted stale-run fallback once", async () => {
+    projectionHarness.state.runs = { "run-1": summary };
+    projectionHarness.state.selectedRunId = "run-1";
+    projectionHarness.state.selectedRunStatus = "ready";
+    const onSelectionChange = vi.fn();
+    const runSelection: OperatorUiNavigation["selection"] = {
+      kind: "run",
+      workflowId: "flow.py::demo",
+      runId: "run-1",
+    };
+    const view = render(
+      <ControlledOperatorUi
+        initialSelection={runSelection}
+        onSelectionChange={onSelectionChange}
+      />,
+    );
+    projectionHarness.selectRun.mockClear();
+
+    projectionHarness.state.runs = {};
+    projectionHarness.state.selectedRun = undefined;
+    projectionHarness.state.selectedRunId = undefined;
+    projectionHarness.state.selectedRunStatus = "idle";
+    view.rerender(
+      <ControlledOperatorUi
+        initialSelection={runSelection}
+        onSelectionChange={onSelectionChange}
+      />,
+    );
+
+    await waitFor(() => {
+      expect(onSelectionChange).toHaveBeenCalledTimes(1);
+      expect(onSelectionChange).toHaveBeenCalledWith({
+        kind: "workflow",
+        workflowId: "flow.py::demo",
+      });
+      expect(projectionHarness.selectRun).toHaveBeenCalledTimes(1);
     });
     expect(projectionHarness.selectRun).toHaveBeenCalledWith(undefined);
   });
