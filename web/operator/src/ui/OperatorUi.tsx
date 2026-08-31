@@ -102,11 +102,23 @@ function WorkspaceDivider({
   );
 }
 
+function sameSelection(
+  left: OperatorUiSelection | undefined | null,
+  right: OperatorUiSelection | undefined,
+): boolean {
+  if (left === null) return false;
+  if (left === undefined || right === undefined) return left === right;
+  if (left.kind !== right.kind || left.workflowId !== right.workflowId) return false;
+  if (left.kind === "workflow") return true;
+  return right.kind === "run" && left.runId === right.runId;
+}
+
 export function OperatorUi({ host, navigation }: OperatorUiProps) {
   const { api, presentation } = host;
   const { state, startRun, cancelRun, selectRun } = useOperatorProjection(api);
   const [localSelection, setLocalSelection] = useState<OperatorUiSelection>();
   const selection = navigation ? navigation.selection : localSelection;
+  const navigationSelection = navigation?.selection;
   const setSelection = useCallback(
     (next: OperatorUiSelection | undefined) => {
       if (navigation) {
@@ -123,14 +135,36 @@ export function OperatorUi({ host, navigation }: OperatorUiProps) {
   const [explorerWidth, setExplorerWidth] = useState(EXPLORER_DEFAULT_WIDTH);
   const [inspectorWidth, setInspectorWidth] = useState(INSPECTOR_DEFAULT_WIDTH);
   const previousSelectedRunId = useRef(state.selectedRunId);
+  const synchronizedNavigationSelection = useRef<OperatorUiSelection | undefined | null>(null);
+  const pendingRunClear = useRef(false);
+  useEffect(() => {
+    if (state.selectedRunId === undefined) pendingRunClear.current = false;
+  }, [state.selectedRunId]);
+  const synchronizeSelectionProjection = useCallback(
+    (next: OperatorUiSelection | undefined, clearCurrentRun: boolean) => {
+      synchronizedNavigationSelection.current = next;
+      setInspectedNode(undefined);
+      if (next?.kind === "run") {
+        previousSelectedRunId.current = undefined;
+        pendingRunClear.current = false;
+        void selectRun(next.runId);
+        return;
+      }
+      if (clearCurrentRun && !pendingRunClear.current) {
+        pendingRunClear.current = true;
+        void selectRun(undefined);
+      }
+    },
+    [selectRun],
+  );
 
   useEffect(() => {
-    const workflows = state.catalog?.workflows ?? [];
+    if (!state.catalog) return;
+    const workflows = state.catalog.workflows;
     if (!workflows.length) {
       if (selection) {
+        synchronizeSelectionProjection(undefined, true);
         setSelection(undefined);
-        setInspectedNode(undefined);
-        void selectRun(undefined);
       }
       return;
     }
@@ -139,13 +173,59 @@ export function OperatorUi({ host, navigation }: OperatorUiProps) {
       return;
     }
     if (!workflows.some((workflow) => workflow.workflowId === selection.workflowId)) {
-      setSelection({ kind: "workflow", workflowId: workflows[0].workflowId });
-      setInspectedNode(undefined);
-      void selectRun(undefined);
+      const fallbackSelection = {
+        kind: "workflow" as const,
+        workflowId: workflows[0].workflowId,
+      };
+      synchronizeSelectionProjection(fallbackSelection, true);
+      setSelection(fallbackSelection);
     }
-  }, [selectRun, selection, setSelection, state.catalog]);
+  }, [selection, setSelection, state.catalog, synchronizeSelectionProjection]);
 
   useEffect(() => {
+    if (!navigation) {
+      synchronizedNavigationSelection.current = null;
+      return;
+    }
+
+    const previousSelection = synchronizedNavigationSelection.current;
+    if (sameSelection(previousSelection, navigationSelection)) return;
+    if (
+      state.catalog &&
+      navigationSelection &&
+      !state.catalog.workflows.some(
+        (workflow) => workflow.workflowId === navigationSelection.workflowId,
+      )
+    ) {
+      return;
+    }
+    if (navigationSelection?.kind !== "run") {
+      synchronizeSelectionProjection(
+        navigationSelection,
+        previousSelection?.kind === "run" || state.selectedRunId !== undefined,
+      );
+      return;
+    }
+    if (!state.catalog) return;
+
+    synchronizeSelectionProjection(navigationSelection, false);
+  }, [
+    navigation,
+    navigationSelection,
+    state.catalog,
+    state.selectedRunId,
+    synchronizeSelectionProjection,
+  ]);
+
+  useEffect(() => {
+    if (!state.catalog) return;
+    if (
+      navigation &&
+      !sameSelection(synchronizedNavigationSelection.current, navigationSelection)
+    ) {
+      return;
+    }
+
     const priorSelectedRunId = previousSelectedRunId.current;
     previousSelectedRunId.current = state.selectedRunId;
     if (
@@ -158,17 +238,22 @@ export function OperatorUi({ host, navigation }: OperatorUiProps) {
     }
 
     if (state.runs[selection.runId]) {
+      pendingRunClear.current = false;
       void selectRun(selection.runId);
       return;
     }
 
-    const workflows = state.catalog?.workflows ?? [];
     const workflow =
-      workflows.find((item) => item.workflowId === selection.workflowId) ?? workflows[0];
-    setSelection(workflow ? { kind: "workflow", workflowId: workflow.workflowId } : undefined);
-    setInspectedNode(undefined);
-    void selectRun(undefined);
+      state.catalog.workflows.find((item) => item.workflowId === selection.workflowId) ??
+      state.catalog.workflows[0];
+    const fallbackSelection = workflow
+      ? { kind: "workflow" as const, workflowId: workflow.workflowId }
+      : undefined;
+    synchronizeSelectionProjection(fallbackSelection, true);
+    setSelection(fallbackSelection);
   }, [
+    navigation,
+    navigationSelection,
     selectRun,
     selection,
     setSelection,
@@ -176,10 +261,13 @@ export function OperatorUi({ host, navigation }: OperatorUiProps) {
     state.runs,
     state.selectedRunId,
     state.selectedRunStatus,
+    synchronizeSelectionProjection,
   ]);
 
   useEffect(
     () => () => {
+      synchronizedNavigationSelection.current = null;
+      pendingRunClear.current = true;
       void selectRun(undefined);
     },
     [selectRun],
@@ -202,12 +290,11 @@ export function OperatorUi({ host, navigation }: OperatorUiProps) {
   const restoreExplorer = useCallback(() => setExplorerCollapsed(false), []);
   const select = useCallback(
     (next: OperatorUiSelection) => {
+      synchronizeSelectionProjection(next, true);
       setSelection(next);
-      setInspectedNode(undefined);
       setExplorerOpen(false);
-      void selectRun(next.kind === "run" ? next.runId : undefined);
     },
-    [selectRun, setSelection],
+    [setSelection, synchronizeSelectionProjection],
   );
   const selectWorkflowRun = useCallback(
     (runId: string) => {
