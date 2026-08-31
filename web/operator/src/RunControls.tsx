@@ -1,7 +1,7 @@
 import { json } from "@codemirror/lang-json";
 import { EditorState } from "@codemirror/state";
 import { EditorView, keymap } from "@codemirror/view";
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useRef, useState } from "react";
 
 import type { FlowInfoMsg, RunSnapshotMsg } from "./model";
 import { isUnknownRecord } from "./guards";
@@ -76,6 +76,12 @@ export function RunControls({
   const [showInput, setShowInput] = useState(false);
   const [draft, setDraft] = useState("{}");
   const [error, setError] = useState<string>();
+  useLayoutEffect(() => {
+    if (!runActionsEnabled) {
+      setShowInput(false);
+    }
+  }, [runActionsEnabled]);
+
   const active =
     run?.summary?.status === "requesting" ||
     run?.summary?.status === "pending" ||
@@ -170,7 +176,7 @@ export function RunControls({
           )}
         </div>
       )}
-      {showInput && workflow && (
+      {showInput && workflow && runActionsEnabled && (
         <div className="input-popover absolute right-0 bottom-[43px] z-20 w-[390px] rounded-[9px] border border-[#cbd2ce] bg-white p-[13px] shadow-[0_18px_50px_rgba(20,31,26,.16)] max-[700px]:w-[calc(100vw-32px)] [&>div:first-child]:mb-[9px] [&>div:first-child]:flex [&>div:first-child]:justify-between [&_strong]:text-[11px] [&_span]:font-mono [&_span]:text-[8px] [&_span]:text-[#6d7872]">
           <div>
             <strong>Workflow input</strong>

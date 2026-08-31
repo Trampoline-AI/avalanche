@@ -62,7 +62,20 @@ describe("RunControls", () => {
   });
 
   it("hides mutation controls when the host disables run actions", () => {
-    render(
+    const view = render(
+      <RunControls
+        workflow={workflow}
+        run={running}
+        onStart={async () => "run-2"}
+        onCancel={async () => undefined}
+        runActionsEnabled={true}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "Add JSON input" }));
+    expect(screen.getByRole("textbox", { name: "Workflow input JSON" })).toBeInTheDocument();
+
+    view.rerender(
       <RunControls
         workflow={workflow}
         run={running}
@@ -75,6 +88,26 @@ describe("RunControls", () => {
     expect(screen.queryByRole("button", { name: "Run" })).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Add JSON input" })).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Cancel run" })).not.toBeInTheDocument();
+    expect(
+      screen.queryByRole("textbox", { name: "Workflow input JSON" }),
+    ).not.toBeInTheDocument();
+
+    view.rerender(
+      <RunControls
+        workflow={workflow}
+        run={running}
+        onStart={async () => "run-2"}
+        onCancel={async () => undefined}
+        runActionsEnabled={true}
+      />,
+    );
+
+    expect(screen.getByRole("button", { name: "Run" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Add JSON input" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Cancel run" })).toBeInTheDocument();
+    expect(
+      screen.queryByRole("textbox", { name: "Workflow input JSON" }),
+    ).not.toBeInTheDocument();
   });
 
   it("keeps the JSON editor closed by default and surfaces operator validation", async () => {
