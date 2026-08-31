@@ -157,6 +157,9 @@ Every PR description must be self-contained, use plain and direct language, and 
 these sections in this order:
 
 Avoid jargon. Explain an internal term the first time it matters.
+Plain language does not mean a shorter or less complete description. Cover the important
+behavior, technical boundaries, risks, and follow-up work; explain them in ordinary words.
+
 
 ```markdown
 ## Rationale
