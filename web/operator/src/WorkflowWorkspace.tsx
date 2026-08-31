@@ -199,6 +199,13 @@ export function WorkflowWorkspaceSurface({
                     <span>!</span>
                     <h2>Run snapshot unavailable</h2>
                     <p>{state.selectedRunError || "The selected run could not be loaded."}</p>
+                    <div className="mt-3">
+                      <RunControls
+                        onStart={startRun}
+                        onCancel={cancelRun}
+                        onViewWorkflow={viewCurrentWorkflow}
+                      />
+                    </div>
                   </EmptyWorkspace>
                 </>
               ) : (
@@ -248,10 +255,11 @@ export function WorkflowWorkspaceSurface({
             />
             <div
               id="operator-inspector"
-              className="workspace-inspector-pane col-start-3 grid min-h-0 min-w-0 overflow-hidden bg-panel max-[1000px]:absolute max-[1000px]:inset-y-0 max-[1000px]:right-0 max-[1000px]:z-30 max-[1000px]:w-[var(--workspace-inspector-width)] max-[700px]:hidden"
+              className="workspace-inspector-pane col-start-3 grid min-h-0 min-w-0 overflow-hidden bg-panel max-[1000px]:absolute max-[1000px]:inset-y-0 max-[1000px]:right-0 max-[1000px]:z-30 max-[1000px]:w-[var(--workspace-inspector-width)]"
             >
               <Inspector
                 api={api}
+                embedded
                 workflow={workflow}
                 run={run}
                 nodeId={inspectedNode}
@@ -295,6 +303,7 @@ export function WorkflowWorkspace({
   const { state, startRun, cancelRun, selectRun } = useOperatorProjection(api);
   const [selectedRunId, setSelectedRunId] = useState<string>();
   const previousSelectedRunId = useRef(state.selectedRunId);
+  const previousWorkflowId = useRef(workflowId);
 
   const selectWorkspaceRun = useCallback(
     (runId: string | undefined) => {
@@ -309,6 +318,12 @@ export function WorkflowWorkspace({
     setSelectedRunId(undefined);
     void selectRun(undefined);
   }, [selectRun, workflowId]);
+
+  useEffect(() => {
+    if (previousWorkflowId.current === workflowId) return;
+    previousWorkflowId.current = workflowId;
+    onSelectedRunChange?.(undefined);
+  }, [onSelectedRunChange, workflowId]);
 
   useEffect(() => {
     const priorSelectedRunId = previousSelectedRunId.current;

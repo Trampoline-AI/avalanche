@@ -30,6 +30,7 @@ interface InspectorProps {
   run?: RunSnapshotMsg;
   nodeId?: string;
   liveEvents?: AgentEventDescriptorMsg[];
+  embedded?: boolean;
   onClose: () => void;
 }
 
@@ -99,6 +100,7 @@ export function Inspector({
   run,
   nodeId,
   liveEvents = EMPTY_EVENTS,
+  embedded = false,
   onClose,
 }: InspectorProps) {
   const [tabSelection, setTabSelection] = useState<{ scope: string; tab: RunTab }>();
@@ -219,6 +221,10 @@ export function Inspector({
     abortDetailHydration();
     onClose();
   }
+
+  const panelLayout = embedded
+    ? "top-0 min-[701px]:static min-[701px]:z-auto min-[701px]:h-full min-[701px]:w-auto min-[701px]:shadow-none"
+    : "top-[58px] min-[1001px]:static min-[1001px]:z-auto min-[1001px]:h-full min-[1001px]:w-auto min-[1001px]:shadow-none";
 
   function cacheKey(format: DetailFormat, token: string) {
     return `${format}\0${token}`;
@@ -578,7 +584,7 @@ export function Inspector({
   if (!run && workflow && nodeId) {
     return (
       <aside
-        className="inspector inspector-declaration fixed top-[58px] right-0 bottom-0 z-30 grid h-auto w-[min(var(--workspace-inspector-width),100vw)] min-h-0 min-w-0 grid-rows-[auto_minmax(0,1fr)] overflow-hidden border-l border-line bg-panel shadow-[-20px_0_50px_rgba(20,31,26,.14)] min-[1001px]:static min-[1001px]:z-auto min-[1001px]:h-full min-[1001px]:w-auto min-[1001px]:shadow-none max-[700px]:w-screen"
+        className={`inspector inspector-declaration fixed right-0 bottom-0 z-30 grid h-auto w-[min(var(--workspace-inspector-width),100vw)] min-h-0 min-w-0 grid-rows-[auto_minmax(0,1fr)] overflow-hidden border-l border-line bg-panel shadow-[-20px_0_50px_rgba(20,31,26,.14)] max-[700px]:w-screen ${panelLayout}`}
         aria-label={isWorkflowAgentNode ? "Node declaration" : "Node code"}
       >
         <header className="flex items-start justify-between border-b border-line px-5 pt-[19px] pb-3.5">
@@ -729,7 +735,7 @@ export function Inspector({
 
   return (
     <aside
-      className="inspector inspector-run fixed top-[58px] right-0 bottom-0 z-30 grid h-auto w-[min(var(--workspace-inspector-width),100vw)] min-h-0 min-w-0 grid-rows-[auto_auto_minmax(0,1fr)] overflow-hidden border-l border-line bg-panel shadow-[-20px_0_50px_rgba(20,31,26,.14)] min-[1001px]:static min-[1001px]:z-auto min-[1001px]:h-full min-[1001px]:w-auto min-[1001px]:shadow-none max-[700px]:w-screen"
+      className={`inspector inspector-run fixed right-0 bottom-0 z-30 grid h-auto w-[min(var(--workspace-inspector-width),100vw)] min-h-0 min-w-0 grid-rows-[auto_auto_minmax(0,1fr)] overflow-hidden border-l border-line bg-panel shadow-[-20px_0_50px_rgba(20,31,26,.14)] max-[700px]:w-screen ${panelLayout}`}
       aria-label="Run inspector"
     >
       <header className="flex items-start justify-between border-b border-line px-5 pt-[19px] pb-3.5">
