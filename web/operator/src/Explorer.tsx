@@ -2,12 +2,12 @@ import { memo, useEffect, useState } from "react";
 import { PanelLeftClose, X } from "lucide-react";
 
 import type { CatalogSnapshotMsg, FlowInfoMsg } from "./model";
-import type { OperatorConsoleSelection } from "./console/types";
+import type { OperatorUiSelection } from "./ui/types";
 
 interface ExplorerProps {
   catalog?: CatalogSnapshotMsg;
-  selection?: OperatorConsoleSelection;
-  onSelect: (selection: OperatorConsoleSelection) => void;
+  selection?: OperatorUiSelection;
+  onSelect: (selection: OperatorUiSelection) => void;
   onCollapse?: () => void;
   open?: boolean;
   collapsed?: boolean;
@@ -16,7 +16,7 @@ interface ExplorerProps {
 interface WorkflowRowProps {
   workflow: FlowInfoMsg;
   selected: boolean;
-  onSelect: (selection: OperatorConsoleSelection) => void;
+  onSelect: (selection: OperatorUiSelection) => void;
 }
 
 const WorkflowRow = memo(function WorkflowRow({

@@ -61,7 +61,7 @@ function EmptyWorkspace({
 }
 
 /**
- * The graph, run list, run controls, logs, and inspector shared by local and hosted consoles.
+ * The graph, run list, run controls, logs, and inspector shared by local and hosted operator UIs.
  *
  * The host owns navigation and provides an OperatorApi. This surface owns only temporary node
  * inspection state and the inspector width.
@@ -138,7 +138,7 @@ export function WorkflowWorkspaceSurface({
 
   return (
     <section
-      className={`avalanche-console avalanche-workspace min-h-0 min-w-0 ${className}`}
+      className={`avalanche-operator-ui avalanche-workspace min-h-0 min-w-0 ${className}`}
       style={{ height: "100%" }}
     >
       <div
@@ -348,7 +348,7 @@ export function WorkflowWorkspace({
   if (state.connection !== "live") {
     return (
       <section
-        className={`avalanche-console avalanche-workspace grid min-h-[32rem] place-items-center bg-canvas p-6 text-center ${className ?? ""}`}
+        className={`avalanche-operator-ui avalanche-workspace grid min-h-[32rem] place-items-center bg-canvas p-6 text-center ${className ?? ""}`}
         style={{ height: "100%" }}
         role="status"
         aria-live="polite"

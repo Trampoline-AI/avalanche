@@ -10,7 +10,7 @@ importers:
 
   local:
     dependencies:
-      '@avalanche/operator-console':
+      '@trampoline-ai/operator-ui':
         specifier: workspace:*
         version: link:../operator
       react:

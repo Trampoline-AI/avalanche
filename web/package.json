@@ -4,13 +4,13 @@
   "version": "0.0.0",
   "packageManager": "pnpm@10.17.1",
   "scripts": {
-    "build": "pnpm --filter @avalanche/operator-console run build && pnpm --filter @avalanche/operator-local run build",
-    "dev": "pnpm --filter @avalanche/operator-console run build && pnpm --filter @avalanche/operator-local run dev",
-    "generate": "pnpm --filter @avalanche/operator-console run generate",
-    "format": "pnpm --filter @avalanche/operator-console run format && pnpm --filter @avalanche/operator-local run format",
-    "format:check": "pnpm --filter @avalanche/operator-console run format:check && pnpm --filter @avalanche/operator-local run format:check",
-    "lint": "pnpm --filter @avalanche/operator-console run lint && pnpm --filter @avalanche/operator-local run lint",
-    "test": "pnpm --filter @avalanche/operator-console run test",
-    "benchmark": "pnpm --filter @avalanche/operator-console run benchmark"
+    "build": "pnpm --filter @trampoline-ai/operator-ui run build && pnpm --filter @avalanche/operator-local run build",
+    "dev": "pnpm --filter @trampoline-ai/operator-ui run build && pnpm --filter @avalanche/operator-local run dev",
+    "generate": "pnpm --filter @trampoline-ai/operator-ui run generate",
+    "format": "pnpm --filter @trampoline-ai/operator-ui run format && pnpm --filter @avalanche/operator-local run format",
+    "format:check": "pnpm --filter @trampoline-ai/operator-ui run format:check && pnpm --filter @avalanche/operator-local run format:check",
+    "lint": "pnpm --filter @trampoline-ai/operator-ui run lint && pnpm --filter @avalanche/operator-local run lint",
+    "test": "pnpm --filter @trampoline-ai/operator-ui run test",
+    "benchmark": "pnpm --filter @trampoline-ai/operator-ui run benchmark"
   }
 }

@@ -20,7 +20,7 @@
   --font-mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
 }
 
-.avalanche-console {
+.avalanche-operator-ui {
   height: 100%;
   overflow: hidden;
   background: var(--color-canvas);
@@ -29,9 +29,9 @@
   font-synthesis: none;
 }
 
-.avalanche-console code,
-.avalanche-console pre,
-.avalanche-console small {
+.avalanche-operator-ui code,
+.avalanche-operator-ui pre,
+.avalanche-operator-ui small {
   font-family: var(--font-mono);
 }
 

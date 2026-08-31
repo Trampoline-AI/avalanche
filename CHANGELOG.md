@@ -8,8 +8,8 @@
   inset around the full-height code surface.
 - Source and destination nodes now show their first docstring lines, matching standard
   step summaries.
-- Extracted the embeddable operator console into the `@avalanche/operator-console`
-  package, with typed host and workflow-workspace APIs for local and hosted shells.
+- Extracted the embeddable operator UI into the `@trampoline-ai/operator-ui` package, with
+  typed host and workflow-workspace APIs for local and hosted shells.
 
 ## 0.1.5rc1
 

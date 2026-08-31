@@ -1,5 +1,5 @@
-import { OperatorConsole } from "@avalanche/operator-console";
-import type { OperatorApi, OperatorConsoleHost } from "@avalanche/operator-console";
+import { OperatorUi } from "@trampoline-ai/operator-ui";
+import type { OperatorApi, OperatorUiHost } from "@trampoline-ai/operator-ui";
 
 const avalancheDiamond = new URL(
   "../../../../docs/assets/brand/avalanche-diamond-3d-1024.png",
@@ -12,7 +12,7 @@ interface LocalOperatorShellProps {
 }
 
 export function LocalOperatorShell({ api, operatorPort = "7433" }: LocalOperatorShellProps) {
-  const host: OperatorConsoleHost = {
+  const host: OperatorUiHost = {
     api,
     presentation: {
       brandImageUrl: avalancheDiamond,
@@ -22,5 +22,5 @@ export function LocalOperatorShell({ api, operatorPort = "7433" }: LocalOperator
     },
   };
 
-  return <OperatorConsole host={host} />;
+  return <OperatorUi host={host} />;
 }

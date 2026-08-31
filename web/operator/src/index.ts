@@ -9,14 +9,14 @@ export type {
   OperatorApi,
   StructuralBaseline,
 } from "./api";
-export { OperatorConsole } from "./console/OperatorConsole";
+export { OperatorUi } from "./ui/OperatorUi";
 export type {
-  OperatorConsoleHost,
-  OperatorConsoleNavigation,
-  OperatorConsolePresentation,
-  OperatorConsoleProps,
-  OperatorConsoleSelection,
-} from "./console/types";
+  OperatorUiHost,
+  OperatorUiNavigation,
+  OperatorUiPresentation,
+  OperatorUiProps,
+  OperatorUiSelection,
+} from "./ui/types";
 export { WorkflowWorkspace } from "./WorkflowWorkspace";
 export type { WorkflowWorkspaceProps } from "./WorkflowWorkspace";
 export * from "./model";

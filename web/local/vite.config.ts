@@ -1,7 +1,7 @@
 import react from "@vitejs/plugin-react";
 import { defineConfig } from "vite";
 
-function consoleChunk(id: string): string | undefined {
+function operatorUiChunk(id: string): string | undefined {
   if (id.includes("node_modules/@xyflow/react/")) return "graph";
   if (id.includes("node_modules/@codemirror/")) return "editor";
   if (id.includes("node_modules/@protobuf-ts/")) return "protobuf";
@@ -17,7 +17,7 @@ export default defineConfig({
     sourcemap: false,
     rollupOptions: {
       output: {
-        manualChunks: consoleChunk,
+        manualChunks: operatorUiChunk,
       },
     },
   },

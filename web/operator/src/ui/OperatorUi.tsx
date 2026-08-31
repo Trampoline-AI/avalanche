@@ -16,7 +16,7 @@ import { RunLogPane } from "../RunLogPane";
 import { RunControls } from "../RunControls";
 import { RunListPanel } from "../RunListPanel";
 import { useOperatorProjection } from "../state";
-import type { OperatorConsoleProps, OperatorConsoleSelection } from "./types";
+import type { OperatorUiProps, OperatorUiSelection } from "./types";
 
 const EXPLORER_MIN_WIDTH = 220;
 const EXPLORER_MAX_WIDTH = 420;
@@ -102,13 +102,13 @@ function WorkspaceDivider({
   );
 }
 
-export function OperatorConsole({ host, navigation }: OperatorConsoleProps) {
+export function OperatorUi({ host, navigation }: OperatorUiProps) {
   const { api, presentation } = host;
   const { state, startRun, cancelRun, selectRun } = useOperatorProjection(api);
-  const [localSelection, setLocalSelection] = useState<OperatorConsoleSelection>();
+  const [localSelection, setLocalSelection] = useState<OperatorUiSelection>();
   const selection = navigation ? navigation.selection : localSelection;
   const setSelection = useCallback(
-    (next: OperatorConsoleSelection | undefined) => {
+    (next: OperatorUiSelection | undefined) => {
       if (navigation) {
         navigation.onSelectionChange(next);
         return;
@@ -201,7 +201,7 @@ export function OperatorConsole({ host, navigation }: OperatorConsoleProps) {
   const collapseExplorer = useCallback(() => setExplorerCollapsed(true), []);
   const restoreExplorer = useCallback(() => setExplorerCollapsed(false), []);
   const select = useCallback(
-    (next: OperatorConsoleSelection) => {
+    (next: OperatorUiSelection) => {
       setSelection(next);
       setInspectedNode(undefined);
       setExplorerOpen(false);
@@ -268,7 +268,7 @@ export function OperatorConsole({ host, navigation }: OperatorConsoleProps) {
   } as CSSProperties;
   if (state.connection !== "live") {
     return (
-      <div className="avalanche-console">
+      <div className="avalanche-operator-ui">
         <main
           className="operator-connection-screen grid min-h-screen w-full place-items-center bg-canvas p-6 text-center"
           role="status"
@@ -292,7 +292,7 @@ export function OperatorConsole({ host, navigation }: OperatorConsoleProps) {
   }
 
   return (
-    <div className="avalanche-console">
+    <div className="avalanche-operator-ui">
       <div
         className={`app-shell flex h-full flex-col ${explorerOpen ? "explorer-open" : ""} ${
           explorerCollapsed ? "explorer-collapsed" : ""

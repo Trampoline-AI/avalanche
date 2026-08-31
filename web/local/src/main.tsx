@@ -1,5 +1,5 @@
-import "@avalanche/operator-console/styles.css";
-import { GrpcWebOperatorApi } from "@avalanche/operator-console";
+import "@trampoline-ai/operator-ui/styles.css";
+import { GrpcWebOperatorApi } from "@trampoline-ai/operator-ui";
 import { StrictMode } from "react";
 import { createRoot } from "react-dom/client";
 
