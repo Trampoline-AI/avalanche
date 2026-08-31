@@ -1,0 +1,65 @@
+---
+title: Troubleshoot local runs
+description: Resolve the most common local discovery, provider, connection, and result-retrieval problems.
+---
+
+## No workflows appear
+
+Point discovery at a specific flow file or dedicated directory:
+
+```bash
+uv run ava dev --flows ./src/my_workflow/flow.py
+```
+
+The operator imports candidate Python modules. Keep workflow builders
+import-safe, avoid import-time side effects, and do not scan a repository root
+with unrelated Python.
+
+## A model-backed step cannot run
+
+Configure an LLM provider in the environment of the operator process. In a
+starter workspace, run:
+
+```bash
+bash scripts/configure-provider.sh
+```
+
+Check the model identifier on `@ava.agent_step` or workflow `agent_defaults`.
+Avalanche sends agent-model requests through LiteLLM, so provider credentials
+must be available to the process running the workflow.
+
+## The browser UI cannot connect
+
+Confirm the operator is running at the address passed to `ava web`:
+
+```bash
+uv run ava operator --flows ./flows --port 7433
+uv run ava web --connect localhost:7433 --port 7435
+```
+
+The defaults are operator gRPC `7433`, webhook ingress `7434` when routes exist,
+and browser UI `7435`.
+
+## A code change did not refresh discovery
+
+The live watcher follows eligible Python source changes. Restart the operator
+when a non-Python resource used at import time changes, such as a JSON file that
+defines workflow metadata.
+
+## Result download fails because the destination exists
+
+`ava result --output-dir PATH` requires a new destination directory. Choose a
+new path rather than reusing an existing one:
+
+```bash
+uv run ava result RUN_ID --wait --output-dir ./run-result-002
+```
+
+## A rerun is missing its input
+
+Supply `input=` again for a rerun that needs workflow input. Avalanche does not
+restore input from the source run.
+
+## Need a supported surface
+
+See [CLI reference](../reference/cli-reference), [Python API reference](../reference/python-api), and [current limits](../reference/architecture-and-limits).

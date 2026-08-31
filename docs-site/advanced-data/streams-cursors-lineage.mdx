@@ -1,0 +1,62 @@
+---
+title: Streams, cursors, and lineage
+description: Process current-run data or incremental table snapshots through typed runtime providers.
+---
+
+`ava.Stream`, `ava.ModelStream`, and `ava.Cursor` are runtime providers. They
+are references while the DAG is constructed and resolve when a node runs.
+
+## Stream table rows into a node
+
+Use `ava.Stream(table)` for rows produced during the current workflow run.
+Use `mode="append_scan"` with a unique key to process an incremental table
+backlog:
+
+```python
+@ava.step
+def chunk_documents(
+    _loaded: object = None,
+    documents=ava.Stream(
+        ns.documents,
+        key="documents-to-chunks",
+        mode="append_scan",
+    ),
+    *,
+    destination=ns.chunks,
+):
+    return destination.append(process_documents_to_chunks(documents))
+```
+
+Do not call `.read()` on a `Stream` provider. Avalanche injects the
+`polars.DataFrame` when the node executes.
+
+| Need | API |
+| --- | --- |
+| Rows written in the current run | `ava.Stream(table)` |
+| One pending snapshot from an incremental backlog | `ava.Stream(table, key="...", mode="append_scan")` |
+| Validated Pydantic models | `ava.ModelStream.one(table)`, `.one_or_none(table)`, or `.all(table)` |
+| Manual checkpoint state | `ava.Cursor(table, key="...")` |
+
+`append_scan` processes one pending snapshot per run. `ModelStream` requires a
+Pydantic-model table and accepts the same durable options as `Stream`.
+
+## Preserve row provenance
+
+Iceberg and Lance tables add `_ava_*` provenance columns by default, including
+write time, workflow run, producing node, and rerun lineage. Disable this on a
+table only when you do not need it:
+
+```python
+documents = ava.IcebergTable(schema=DocumentSchema, row_lineage=False)
+```
+
+Keep row lineage enabled for run-scoped streams and reruns.
+
+## Use cursors deliberately
+
+A cursor tracks checkpoint state for an explicit consumer. Give each durable
+consumer a stable key and keep its advancement logic visible in the workflow.
+For patterns, run the repository's `stream_pattern.py` and `cursor_pattern.py`
+examples.
+
+Rerun selected DAG nodes with `ava.Rerun`; see [results and reruns](../build-workflows/results-and-reruns).

@@ -1,0 +1,77 @@
+---
+title: Integrate execution services
+description: Extend executor-owned task lifecycle handling without putting platform state in workflow code.
+---
+
+Execution services are an advanced platform integration API. They let a platform
+materialize worker-visible inputs, open task-scoped resources, and publish a
+small commit receipt around an Avalanche node invocation. Most workflow authors
+do not need to implement one.
+
+Workflow code remains ordinary Avalanche code:
+
+```python
+class DocumentInput(ava.BaseInput):
+    source_path: str
+
+
+@ava.source
+def read_document(payload: DocumentInput) -> str:
+    with open(payload.source_path, encoding="utf-8") as source:
+        return source.read()
+
+
+@ava.dest
+def record_document(document: str) -> int:
+    return len(document)
+
+
+@ava.workflow(input=DocumentInput)
+def document_flow():
+    return read_document() >> record_document()
+```
+
+A platform opts in at the run boundary:
+
+```python
+handle = document_flow().run(
+    executor=ava.RayExecutor(),
+    input={"source_path": {"artifact_id": "artifact_123"}},
+    execution_services=ava.ExecutionServicesSpec(
+        service=platform_services,
+        request=platform_request,
+    ),
+)
+receipts = handle.execution_receipts()
+```
+
+The service materializes the platform descriptor into a value valid for the
+workflow's `BaseInput` type in the actual worker.
+
+## Lifecycle
+
+Avalanche owns the order of this synchronous provider lifecycle:
+
+```text
+probe → negotiate → open → materialize_input → user task → finalize → teardown
+                                             └── abort on failure
+```
+
+`ava.ExecutionServices` defines the provider protocol. The serializable,
+immutable request must not contain credentials, absolute worker-local paths,
+open handles, or scheduler-affinity state. The provider obtains local
+capabilities after execution placement.
+
+## Ownership and failure rules
+
+- A failure before or during `open` stops execution; there is no fallback.
+- After `open`, a materialization, user-task, normalization, or finalization
+  failure calls `abort`.
+- `teardown` runs exactly once for every opened session and never masks the
+  primary failure.
+- Local and Ray implementations must preserve the same lifecycle semantics.
+
+`ExecutionServiceReceipt` values stay separate from workflow payloads and are
+available through the run handle only for terminal publication. Execution
+services do not supply a storage model, credential system, retention policy, or
+shared filesystem.

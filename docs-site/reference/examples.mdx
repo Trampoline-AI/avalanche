@@ -1,0 +1,64 @@
+---
+title: Examples
+description: Runnable Avalanche workflows from the repository, ordered from the fastest local learning path to richer data workflows.
+---
+
+The repository's standalone examples are smoke-tested. Run them from the
+`examples/` directory with the local operator and browser UI:
+
+```bash
+cd examples
+uv run ava dev
+```
+
+## Start here
+
+### `complex_dag_pattern.py`
+
+The smallest local execution path. It demonstrates the Python DAG API, explicit
+data passing, fan-out, fan-in, and `ava.LocalExecutor` without requiring
+Iceberg, Ray, the operator, or the TUI.
+
+### `operator_workflow.py`
+
+A flow module for the local operator and connected UI path.
+
+## Data workflow patterns
+
+### `stream_pattern.py`
+
+Incremental processing with local Iceberg tables and `ava.Stream` in
+`append_scan` mode. Each consumer edge receives a unique stream key.
+
+### `cursor_pattern.py`
+
+Manual checkpoint control with `ava.Cursor`, including a source-table snapshot,
+model-specific cursors, and a multi-table synchronization checkpoint.
+
+### `document_file_workflow.py`
+
+Typed `ava.File` inputs and outputs through a `BaseInput` workflow.
+
+## Flagship walkthrough: customer feedback review
+
+`customer_feedback_review/` is a production-shaped example of an Avalanche
+workflow. It:
+
+1. loads a typed customer-feedback workbook;
+2. runs theme and risk analysis agents in parallel;
+3. reconciles the reports deterministically and rejects inconsistencies;
+4. renders an Excel review workbook and Word executive brief in parallel;
+5. publishes the validated artifacts to an output directory.
+
+Start it against its dedicated flow module:
+
+```bash
+uv run ava dev --flows customer_feedback_review/flow.py
+```
+
+Generated example artifacts land beneath `.avalanche/outputs/feedback_review/`
+by default. Set `AVALANCHE_EXAMPLE_ROOT` to isolate example artifacts.
+
+The example is deliberately richer than the starter workflow. Use it after you
+understand the source → agent step → deterministic action shape from
+[the quickstart](../start-here/run-starter).

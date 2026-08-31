@@ -1,0 +1,137 @@
+{
+  "name": "Avalanche",
+  "logo": {
+    "light": "https://raw.githubusercontent.com/Trampoline-AI/avalanche/main/docs/assets/brand/avalanche-logo-3d_transparent.png",
+    "dark": "https://raw.githubusercontent.com/Trampoline-AI/avalanche/main/docs/assets/brand/avalanche-logo-3d_transparent.png",
+    "href": "https://github.com/Trampoline-AI/avalanche"
+  },
+  "favicon": "https://raw.githubusercontent.com/Trampoline-AI/avalanche/main/docs/assets/brand/avalanche-diamond-3d-1024.png",
+  "font": {
+    "headings": {
+      "family": "JetBrains Mono",
+      "weight": "600"
+    },
+    "body": {
+      "family": "Inter"
+    },
+    "code": {
+      "family": "JetBrains Mono"
+    }
+  },
+  "colors": {
+    "primary": "#1D4ED8",
+    "light": "#60A5FA",
+    "dark": "#1E3A8A",
+    "background": {
+      "light": "#F8FAFC",
+      "dark": "#020617"
+    },
+    "anchors": {
+      "from": "#1D4ED8",
+      "to": "#38BDF8"
+    }
+  },
+  "background": {
+    "style": "gradient"
+  },
+  "layout": {
+    "rounded": "default",
+    "wide": true
+  },
+  "sidebar": {
+    "items": "container"
+  },
+  "topbar": {
+    "style": "default"
+  },
+  "topbarCtaButton": {
+    "name": "Install Avalanche",
+    "url": "/start-here/install"
+  },
+  "anchors": [
+    {
+      "name": "GitHub",
+      "icon": "github",
+      "url": "https://github.com/Trampoline-AI/avalanche"
+    },
+    {
+      "name": "Discord",
+      "icon": "message-circle",
+      "url": "https://discord.gg/BAkd288sGN"
+    }
+  ],
+  "navigation": [
+    {
+      "group": "Getting Started",
+      "pages": [
+        "index",
+        "start-here/run-starter",
+        "start-here/understand-starter",
+        "start-here/build-with-skill"
+      ]
+    },
+    {
+      "group": "Install",
+      "pages": [
+        "start-here/install",
+        "start-here/starter-workspace",
+        "start-here/existing-project"
+      ]
+    },
+    {
+      "group": "Why Avalanche",
+      "pages": [
+        "why-avalanche/agentic-workflows",
+        "why-avalanche/agent-steps-and-control"
+      ]
+    },
+    {
+      "group": "Build Workflows",
+      "pages": [
+        "build-workflows/dags",
+        "build-workflows/agent-steps",
+        "build-workflows/inputs-and-artifacts",
+        "build-workflows/results-and-reruns"
+      ]
+    },
+    {
+      "group": "Run and Observe",
+      "pages": [
+        "run-observe/operator",
+        "run-observe/web-ui",
+        "run-observe/cli",
+        "run-observe/tui-and-webhooks",
+        "run-observe/troubleshooting"
+      ]
+    },
+    {
+      "group": "Advanced Data Workflows",
+      "pages": [
+        "advanced-data/schemas-and-tables",
+        "advanced-data/streams-cursors-lineage",
+        "advanced-data/backends"
+      ]
+    },
+    {
+      "group": "Extend",
+      "pages": [
+        "extend/models-and-providers",
+        "extend/executors",
+        "extend/execution-services"
+      ]
+    },
+    {
+      "group": "Reference",
+      "pages": [
+        "reference/python-api",
+        "reference/cli-reference",
+        "reference/architecture-and-limits",
+        "reference/examples"
+      ]
+    }
+  ],
+  "footerSocials": {
+    "github": "https://github.com/Trampoline-AI/avalanche"
+  }
+}
+

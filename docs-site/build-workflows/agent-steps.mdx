@@ -1,0 +1,101 @@
+---
+title: Declare agent steps
+description: Give native agent work an explicit input/output contract, capabilities, and runtime settings.
+---
+
+`@ava.agent_step` is an ordinary workflow step with an injected callable agent.
+The body maps workflow values into model inputs, awaits a raw prediction, and
+returns an explicit result.
+
+## Use a typed signature for shared contracts
+
+```python
+import avalanche as ava
+from pydantic import BaseModel
+
+
+class Review(BaseModel):
+    summary: str
+    approved: bool
+
+
+class ReviewDocument(ava.Signature):
+    """Review a document for publication."""
+
+    document: str = ava.InputField(desc="Document text to review.")
+    review: Review = ava.OutputField(desc="Publication decision and summary.")
+
+
+@ava.agent_step(ReviewDocument, lm="openai/gpt-5.6-terra")
+async def review_document(document: str, *, agent: ava.Agent) -> Review:
+    prediction = await agent(document=document)
+    return prediction.review
+```
+
+The `agent` parameter is required and keyword-only. Workflow callsites supply
+only normal workflow values; Avalanche injects the agent when the node runs.
+
+`ava.Signature`, `ava.InputField`, and `ava.OutputField` align with DSPy
+signature conventions. Native DSPy signatures are accepted too.
+
+## Use an inline signature for a local contract
+
+```python
+answer_signature = ava.agent.Signature(
+    "question: str, context: str -> answer: str",
+    "Answer the question from the supplied context.",
+)
+
+
+@ava.agent.step(answer_signature)
+async def answer_question(question: str, context: str, *, agent: ava.Agent) -> str:
+    return (await agent(question=question, context=context)).answer
+```
+
+Use a typed class for a substantial or reusable contract. Use the inline form
+for a compact, local one.
+
+## Add skills and tools at the step
+
+Skills and tools are capabilities of a particular agent step, not properties of
+the signature:
+
+```python
+@ava.agent_step(
+    answer_signature,
+    skills=[ava.agent.skills.pdf],
+    tools=[search_contract_repository],
+)
+async def answer_contract_question(question: str, *, agent: ava.Agent) -> str:
+    return (await agent(question=question)).answer
+```
+
+Tools are ordinary callables with unique stable `__name__` values. Avalanche
+ships lazy PredictRLM skill re-exports such as `pdf`, `docx`, and `spreadsheet`.
+
+## Set runtime defaults deliberately
+
+Shared model settings belong on the workflow; a setting on a specific agent step
+takes precedence:
+
+```python
+@ava.dest
+def publish_review(review: Review) -> Review:
+    return review
+
+
+@ava.workflow(
+    agent_defaults={
+        "lm": "openai/gpt-5.6-terra",
+        "sub_lm": "gemini/gemini-3.5-flash",
+        "max_iterations": 30,
+    }
+)
+def proposal_flow():
+    return (review := review_document(ava.input.document)) >> publish_review()
+```
+
+`signature`, `skills`, and `tools` remain step-local. Agent steps are quiet by
+default; set `verbose=True` only when live PredictRLM trace output is needed.
+
+Next: [provide runtime input and artifacts](./inputs-and-artifacts).

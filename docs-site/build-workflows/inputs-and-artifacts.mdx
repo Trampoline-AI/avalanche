@@ -1,0 +1,103 @@
+---
+title: Inputs, context, files, and workspaces
+description: Give workflows typed runtime input and carry files or directories through a DAG.
+---
+
+Declare a Pydantic `ava.BaseInput` subclass when a workflow accepts runtime
+input. Nodes can receive that input directly, select fields through `ava.input`,
+or receive a `ava.RunContext`.
+
+```python
+import avalanche as ava
+
+
+class DocumentInput(ava.BaseInput):
+    value: int
+    document: ava.File
+
+
+@ava.source
+def load_document(payload: DocumentInput, ctx: ava.RunContext) -> str:
+    text = payload.document.read_bytes().decode()
+    return f"{ctx.run_id}:{payload.value}:{text}"
+
+@ava.dest
+def present_document(document: str) -> str:
+    return document
+
+
+@ava.workflow(input=DocumentInput)
+def document_flow():
+    return load_document() >> present_document()
+```
+
+Run it with a validated input value:
+
+```python
+result = document_flow().run(
+    executor=ava.LocalExecutor(),
+    input={
+        "value": 41,
+        "document": {"name": "doc.txt", "content": b"hello"},
+    },
+    context={"metadata": {"request_id": "req_123"}},
+).result()
+```
+
+`RunContext` includes the run ID, workflow name, executor type, current node
+identity, rerun details, and optional caller metadata.
+
+## Select a field inside the graph
+
+Use `ava.input.<field>` when the node consumes one runtime value:
+
+```python
+@ava.dest
+def publish_classification(classification: str) -> str:
+    return classification
+
+
+@ava.workflow(input=DocumentInput)
+def document_flow():
+    return (
+        (classification := classify_document(ava.input.document))
+        >> publish_classification()
+    )
+```
+
+## Files and workspaces
+
+`ava.File` carries file content. Start an embedded run with
+`ava.File.from_path(path)` when a local path is the input.
+
+`ava.Workspace` carries a portable directory tree:
+
+```python
+class ReportInput(ava.BaseInput):
+    workspace: ava.Workspace
+
+
+workspace = ava.Workspace.from_path("./project")
+```
+
+Inside a node, `workspace.path` is a local directory. Return the workspace to
+pass modified contents to downstream nodes.
+
+## Attach files to an operator run
+
+Send JSON fields with `--input`, and attach top-level file or workspace fields
+separately:
+
+```bash
+uv run ava run document_file_workflow \
+  --connect localhost:7433 \
+  --input '{"value": 41}' \
+  --file document=./doc.txt
+
+uv run ava run report_workspace \
+  --connect localhost:7433 \
+  --workspace workspace=./project
+```
+
+Repeat `--file` or `--workspace` for multiple fields. A field may appear in only
+one of `--input`, `--file`, or `--workspace`.

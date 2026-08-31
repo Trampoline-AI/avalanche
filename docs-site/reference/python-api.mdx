@@ -1,0 +1,103 @@
+---
+title: Python API reference
+description: Supported public Avalanche Python namespaces, types, decorators, and runtime providers.
+---
+
+Import the supported user-facing surface from `avalanche`:
+
+```python
+import avalanche as ava
+```
+
+## Workflow authoring
+
+| API | Purpose |
+| --- | --- |
+| `ava.source` | Declare an ingest/create node |
+| `ava.step` | Declare a deterministic node |
+| `ava.transform` | Alias of `ava.step` |
+| `ava.dest` | Declare an explicit destination/final-action node |
+| `ava.workflow` | Declare a runnable workflow DAG |
+| `ava.pipeline` | Declare a pipeline |
+| `ava.input` | Select a runtime input field during graph construction |
+| `ava.Workflow`, `ava.Pipeline` | Constructed workflow types |
+
+See [Build a DAG](../build-workflows/dags).
+
+## Agent integration
+
+| API | Purpose |
+| --- | --- |
+| `ava.Agent` | Injected callable agent type |
+| `ava.agent_step`, `ava.agent.step` | Declare an agent-backed workflow node |
+| `ava.Signature`, `ava.InputField`, `ava.OutputField` | DSPy-compatible typed model contract helpers |
+| `ava.agent.Skill`, `ava.agent.skills` | PredictRLM skill surface |
+| `ava.agent.File` | PredictRLM file type exposed by agent integration |
+| `ava.agent.capture_agent_evidence` | Capture agent evidence events |
+| `ava.agent.AgentEvidenceEvent`, `AgentEvidenceListener`, `AgentEvidenceObserverEvent` | Agent evidence event interfaces |
+| `ava.agent.AgentInvocationId`, `AgentTraceFinishedEvent`, `AgentTraceUnavailableEvent`, `ListenerErrorPolicy` | Agent evidence metadata and policies |
+| `ava.agent.AgentStepError`, `AgentStepExecutionError` | Agent-step error types |
+
+See [Declare agent steps](../build-workflows/agent-steps).
+
+## Runtime values and providers
+
+| API | Purpose |
+| --- | --- |
+| `ava.BaseInput`, `ava.BaseContext`, `ava.RunContext` | Typed run input and context |
+| `ava.File`, `ava.Workspace` | Portable file and directory values |
+| `ava.RunHandle` | Awaitable embedded-run lifecycle handle |
+| `ava.Rerun` | Partial rerun descriptor |
+| `ava.Stream`, `ava.ModelStream`, `ava.consume_stream` | Table-backed runtime stream providers |
+| `ava.Cursor` | Manual table checkpoint provider |
+| `ava.Logger` | Injected runtime logging provider |
+| `ava.ProgressStore` | Progress tracking store |
+
+The `avalanche.runtime` namespace additionally exposes
+`get_current_run_context`, `run_with_context`, and `LoggerInstance`.
+
+## Executors and execution services
+
+| API | Purpose |
+| --- | --- |
+| `ava.Executor` | Executor protocol |
+| `ava.LocalExecutor` | Local execution |
+| `ava.RayExecutor` | Optional Ray-backed execution |
+| `ava.get_default_executor` | Resolve the configured default executor |
+| `ava.ExecutionServices`, `ava.ExecutionServicesSpec` | Advanced executor-owned lifecycle provider and run specification |
+| `ava.ExecutionTaskSpec`, `ava.ExecutionServiceReceipt` | Task identity and terminal receipt types |
+| `ava.EXECUTION_SERVICES_V1` | Current execution-services protocol version |
+
+See [Choose an executor](../extend/executors) and [Integrate execution services](../extend/execution-services).
+
+## Storage, tables, and lineage
+
+| API | Purpose |
+| --- | --- |
+| `ava.Namespace`, `ava.NamespaceConfig` | Backend-neutral namespace contract and configuration |
+| `ava.Table`, `ava.TableGroup`, `ava.ScanResult` | Backend-neutral table interfaces and scan result |
+| `ava.AppendResult` | Append result and typed conversion helpers |
+| `ava.SnapshotState`, `ava.SnapshotMetadata` | Snapshot metadata types |
+| `ava.Json` | Mark a model field for JSON storage |
+
+## Iceberg and Lance
+
+| API | Purpose |
+| --- | --- |
+| `ava.IcebergNamespace`, `ava.IcebergNs`, `ava.IcebergNsConfig` | Iceberg namespace names and configuration |
+| `ava.IcebergTable`, `ava.IcebergTableGroup`, `ava.IcebergAppendScan` | Iceberg tables and append scan provider |
+| `ava.LanceNamespace`, `ava.LanceNs`, `ava.LanceNamespaceConfig`, `ava.LanceNsConfig` | Lance namespace names and configuration |
+| `ava.LanceTable` | Lance-backed table |
+
+See [schemas and tables](../advanced-data/schemas-and-tables) and [backend selection](../advanced-data/backends).
+
+## Other public types
+
+| API | Purpose |
+| --- | --- |
+| `ava.Webhook` | Workflow webhook declaration |
+
+Avalanche's public surface is intentionally centered on the root package and
+`ava.agent` integration namespace. Operator, TUI, and browser implementation
+modules are documented as runtime behavior rather than supported application
+imports.

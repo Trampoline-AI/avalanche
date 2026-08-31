@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+### Documentation
+
+- Replaced the published Avalanche documentation source with a workflow-first Docsalot site covering onboarding, authoring, local operation, advanced data workflows, extensions, and complete public API and CLI reference.
+
 ### Operator web interface
 
 - Source-code inspectors now end at the viewport edge on narrow screens, preserving the

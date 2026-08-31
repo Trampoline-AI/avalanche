@@ -1,0 +1,56 @@
+---
+title: Understand the starter workflow
+description: See how a source, native agent step, and deterministic destination form one Avalanche workflow.
+---
+
+The generated `binary_converter` is intentionally small. It is a complete
+workflow, not a special demo runtime:
+
+```python
+@ava.source
+def generate_binary() -> str:
+    return "101101"
+
+
+@ava.agent_step(
+    ava.Signature("binary: str -> decimal: str"),
+    lm=starter_lm(),
+)
+async def convert_binary(binary: str, *, agent: ava.Agent) -> str:
+    return (await agent(binary=binary)).decimal
+
+
+@ava.dest
+def print_result(result: str) -> str:
+    print(result)
+    return result
+
+
+@ava.workflow
+def binary_converter():
+    return generate_binary() >> convert_binary() >> print_result()
+```
+
+## One workflow, different responsibilities
+
+- `@ava.source` creates the value entering the workflow.
+- `@ava.agent_step` declares an ordinary workflow node with an injected,
+  keyword-only `ava.Agent`. Its signature makes the model contract explicit.
+- `@ava.dest` is normal deterministic Python. It owns the consequential action:
+  printing and returning the result.
+- `@ava.workflow` declares the dependency graph. Calling decorated nodes here
+  creates graph edges; runtime work stays inside the nodes.
+
+`>>` connects the output of one node to the first positional input of the next
+node. Avalanche schedules the resulting DAG when the workflow runs.
+
+## Why this shape matters
+
+The model is used for the judgment it is good at—converting the binary text.
+The workflow owner still decides what enters the agent, what happens after it,
+and where critical actions occur. That same shape scales to richer workflows:
+parallel agent steps, deterministic reconciliation, typed files, tables, and
+explicit output publication.
+
+Next: [build a workflow with the Avalanche skill](./build-with-skill), then
+read [DAG fundamentals](../build-workflows/dags).

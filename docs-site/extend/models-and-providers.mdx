@@ -1,0 +1,58 @@
+---
+title: Configure models and providers
+description: Select models for agent steps and set workflow-level defaults through LiteLLM-compatible configuration.
+---
+
+Avalanche sends agent-model requests through LiteLLM. Configure provider
+credentials in the environment of the process running the workflow, then use a
+provider-qualified model identifier on an agent step or at the workflow level.
+
+## Set a model on one step
+
+```python
+@ava.agent_step(
+    ExtractThemes,
+    lm="openai/gpt-5.6-terra",
+    sub_lm="gemini/gemini-3.5-flash",
+)
+async def extract_themes(feedback: str, *, agent: ava.Agent) -> ThemeReport:
+    return (await agent(feedback=feedback)).report
+```
+
+`lm` selects the main model and `sub_lm` selects the sub-model.
+
+## Share defaults across a workflow
+
+```python
+@ava.workflow(
+    agent_defaults={
+        "lm": "openai/gpt-5.6-terra",
+        "sub_lm": "gemini/gemini-3.5-flash",
+    }
+)
+def feedback_workflow():
+    return load_feedback() >> extract_themes()
+```
+
+A value on an individual agent step overrides the workflow default. Workflow
+`agent_defaults` configure runtime policy; signatures, skills, and tools remain
+explicit on each agent step.
+
+Resolution order:
+
+```text
+agent-step runtime kwargs
+  → workflow agent_defaults
+  → Avalanche agent defaults
+  → PredictRLM defaults
+```
+
+## Keep credentials out of workflow code
+
+Use environment variables recognized by your LiteLLM provider. In a starter
+workspace, `scripts/configure-provider.sh` writes needed credentials to the
+Git-ignored local `.env` file. Do not put provider secrets in workflow modules,
+source control, or execution-service requests.
+
+See [declare agent steps](../build-workflows/agent-steps) for signatures,
+skills, tools, and model contracts.

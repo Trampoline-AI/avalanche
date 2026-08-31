@@ -1,0 +1,39 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 360" role="img" aria-labelledby="title desc">
+  <title id="title">An Avalanche workflow combines deterministic and agent steps</title>
+  <desc id="desc">Typed input flows through a native agent step, deterministic business logic, and an explicit action to a typed result.</desc>
+  <defs>
+    <linearGradient id="agent" x1="0" x2="1">
+      <stop offset="0" stop-color="#1D4ED8"/>
+      <stop offset="1" stop-color="#38BDF8"/>
+    </linearGradient>
+    <marker id="arrow" markerWidth="10" markerHeight="10" refX="9" refY="3" orient="auto" markerUnits="strokeWidth">
+      <path d="M0,0 L0,6 L9,3 z" fill="#64748B"/>
+    </marker>
+  </defs>
+  <rect width="1200" height="360" rx="28" fill="#F8FAFC"/>
+  <text x="72" y="68" fill="#0F172A" font-family="Inter, Arial, sans-serif" font-size="28" font-weight="700">One workflow. Native agent reasoning. Explicit deterministic control.</text>
+  <g font-family="Inter, Arial, sans-serif">
+    <rect x="72" y="145" width="210" height="116" rx="18" fill="#FFFFFF" stroke="#94A3B8" stroke-width="2"/>
+    <text x="177" y="190" text-anchor="middle" fill="#0F172A" font-size="20" font-weight="700">Typed input</text>
+    <text x="177" y="220" text-anchor="middle" fill="#475569" font-size="16">source / file / data</text>
+
+    <line x1="282" y1="203" x2="360" y2="203" stroke="#64748B" stroke-width="3" marker-end="url(#arrow)"/>
+
+    <rect x="372" y="145" width="210" height="116" rx="18" fill="url(#agent)"/>
+    <text x="477" y="190" text-anchor="middle" fill="#FFFFFF" font-size="20" font-weight="700">Agent step</text>
+    <text x="477" y="220" text-anchor="middle" fill="#E0F2FE" font-size="16">judgment / interpretation</text>
+
+    <line x1="582" y1="203" x2="660" y2="203" stroke="#64748B" stroke-width="3" marker-end="url(#arrow)"/>
+
+    <rect x="672" y="145" width="210" height="116" rx="18" fill="#FFFFFF" stroke="#1D4ED8" stroke-width="2"/>
+    <text x="777" y="185" text-anchor="middle" fill="#0F172A" font-size="20" font-weight="700">Python steps</text>
+    <text x="777" y="215" text-anchor="middle" fill="#475569" font-size="16">business logic / action</text>
+    <text x="777" y="239" text-anchor="middle" fill="#475569" font-size="16">remains explicit</text>
+
+    <line x1="882" y1="203" x2="960" y2="203" stroke="#64748B" stroke-width="3" marker-end="url(#arrow)"/>
+
+    <rect x="972" y="145" width="156" height="116" rx="18" fill="#FFFFFF" stroke="#94A3B8" stroke-width="2"/>
+    <text x="1050" y="190" text-anchor="middle" fill="#0F172A" font-size="20" font-weight="700">Result</text>
+    <text x="1050" y="220" text-anchor="middle" fill="#475569" font-size="16">typed output</text>
+  </g>
+</svg>

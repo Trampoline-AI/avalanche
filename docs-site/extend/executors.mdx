@@ -1,0 +1,47 @@
+---
+title: Choose an executor
+description: Run a workflow locally or select Ray while preserving the same DAG semantics.
+---
+
+Avalanche schedules a workflow topologically. The executor decides where node
+functions run; it does not change the workflow's dependency graph or provider
+binding semantics.
+
+## Local execution
+
+Use `ava.LocalExecutor` for direct local execution:
+
+```python
+run = my_workflow().run(executor=ava.LocalExecutor())
+result = run.result()
+```
+
+The local executor invokes node functions in the local coordinator process.
+
+## Ray execution
+
+Install the optional Ray extra, then select `ava.RayExecutor` in embedded mode
+or pass `--ray` to the local operator:
+
+```bash
+uv add "avalanche-ai[ray]"
+uv run ava dev --flows ./flows --ray
+```
+
+```python
+run = my_workflow().run(executor=ava.RayExecutor())
+result = run.result()
+```
+
+With Ray, object references remain distributed until a consumer needs
+materialization. The DAG runtime controls dependency order; the local operator
+and UI remain control-plane clients rather than the execution engine.
+
+## Select deliberately
+
+- Choose **LocalExecutor** for the normal local development path and simple
+  embedded workflows.
+- Choose **RayExecutor** only when a local Ray runtime is installed and the
+  workflow should execute through Ray.
+
+Ray is optional and participates only when `RayExecutor` is selected.

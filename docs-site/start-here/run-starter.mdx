@@ -1,0 +1,39 @@
+---
+title: Run the starter workflow
+description: Run the generated starter with the local operator and browser UI.
+---
+
+Create a starter workspace first. It includes the `binary_converter` example
+workflow, the Avalanche authoring skill, and a provider-configuration helper.
+See [Create a starter workspace](./starter-workspace) if you have not run
+`uvx avalanche-ai init` yet.
+
+## Start Avalanche
+
+```bash
+uv run ava dev
+```
+
+`ava dev` starts the local operator and a connected browser UI. Open
+`http://127.0.0.1:7435`, select the included `binary_converter` workflow, and
+start a run.
+
+The operator listens on `127.0.0.1:7433` by default; the browser UI listens on
+`127.0.0.1:7435`.
+
+> Run `ava dev` from a dedicated flow workspace. Without `--flows`, the
+> operator scans the current directory recursively for workflow modules. In a
+> mixed repository, pass a narrow file or flow-only directory instead.
+
+```bash
+uv run ava dev --flows ./src/binary_converter/flow.py
+```
+
+## What success looks like
+
+The workflow appears in the local UI, starts as a run, and progresses through
+its source, native agent step, and destination. The starter destination prints
+the converted value when it completes.
+
+Next: [understand the starter workflow](./understand-starter) or
+[describe a workflow you want to build](./build-with-skill).

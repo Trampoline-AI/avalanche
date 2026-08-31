@@ -1,0 +1,59 @@
+---
+title: Run a local operator
+description: Discover workflows, control local runs, and keep the operator boundary explicit.
+---
+
+The local operator discovers workflow modules, coordinates runs, retains bounded
+local run state, and serves the CLI, browser UI, and TUI over gRPC.
+
+Start it against a specific flow file or directory:
+
+```bash
+uv run ava operator --flows ./flow.py
+
+# Or a dedicated directory of flows:
+uv run ava operator --flows ./flows --port 7433
+```
+
+The default listener is `127.0.0.1:7433`.
+
+## Keep discovery narrow
+
+Discovery imports candidate Python modules in the configured target. Workflow
+modules and their builders must be import-safe and side-effect-light. Do not
+scan a repository root containing unrelated Python:
+
+```bash
+# Avoid in a mixed repository:
+uv run ava operator --flows .
+
+# Prefer:
+uv run ava operator --flows ./src/workflows
+```
+
+`ava dev --flows PATH` starts this operator together with a connected browser
+UI. Use it for the normal local development loop.
+
+## What the operator owns
+
+For an operator-managed run, the parent process owns local discovery, run
+coordination, status, logs, agent-event descriptors, results, scheduling, and
+webhook routing. Each workflow run executes in a spawned coordinator process;
+the browser UI and TUI are clients and do not import workflow modules or execute
+nodes themselves.
+
+## Reload and scheduled metadata
+
+The operator watches eligible Python source below configured roots. A changed
+workflow module or imported Python helper triggers targeted rediscovery.
+Non-Python import-time configuration is not watched; restart the operator after
+changing it.
+
+Workflow descriptors can declare scheduled metadata and webhook routes. When
+webhook routes exist, the local webhook HTTP ingress defaults to port `7434`.
+
+## Local boundary
+
+This is a local-development control plane. Its state is bounded and is not
+durable recovery across restarts. Loopback defaults and `--trusted-proxy` do not
+turn Avalanche into a production authentication or multi-tenant system.

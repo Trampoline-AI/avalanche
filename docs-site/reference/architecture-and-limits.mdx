@@ -1,0 +1,61 @@
+---
+title: Architecture and current limits
+description: The local authoring, execution, operator, and client boundaries that define Avalanche today.
+---
+
+Avalanche separates workflow authoring and execution from local run control and
+presentation.
+
+```text
+Python workflow module
+  @workflow + @source/@step/@agent_step/@dest
+    ├─ embedded: Workflow.run() → LocalExecutor or RayExecutor
+    └─ operator-managed: local discovery → run coordinator → executor
+
+Local operator
+  discovery · run coordination · local results · gRPC · webhook ingress
+    ├─ CLI and Textual TUI
+    └─ Browser UI through a loopback HTTP and gRPC-Web proxy
+```
+
+## Core boundaries
+
+- Workflow builders declare a DAG; node functions perform runtime work.
+- Embedded `RunHandle` objects are process-local, not durable run registries.
+- The local operator owns discovered descriptors and local run state; it does
+  not receive or send live `Workflow` objects across its process boundary.
+- The browser UI and TUI are clients. They do not import workflow modules or
+  execute user tasks.
+- Ray references stay distributed until a consumer requires materialization.
+- Operator results are encoded values plus file attachments, not arbitrary live
+  Python objects.
+
+## Current limits
+
+- Avalanche is intended for local development and experimentation.
+- The local operator retains bounded state and does not provide durable recovery
+  across restarts.
+- Avalanche does not provide a production deployment control plane,
+  authentication, or multi-tenancy.
+- Loopback defaults and the browser `--trusted-proxy` acknowledgement are not a
+  production security model.
+- Discovery imports configured Python; use narrow, trusted flow paths.
+- Live reload follows eligible Python changes only. Restart after changing
+  non-Python import-time configuration.
+- Ray is optional and runs only when `RayExecutor` is selected.
+
+## Repository map
+
+| Area | Primary location |
+| --- | --- |
+| Public DAG, agent, runtime, and storage APIs | `src/avalanche/` |
+| Local and Ray executors | `src/runtime/executor.py` |
+| Operator runtime and transport | `src/runtime/operator/` |
+| Browser UI | `web/operator/` |
+| Textual TUI | `src/tui/` |
+| CLI | `src/ava_cli/` |
+| Runnable examples | `examples/` |
+
+For user-facing commands, read the [CLI reference](./cli-reference). For
+implementation-level details, the repository's `ARCHITECTURE.md` remains the
+source architecture document.

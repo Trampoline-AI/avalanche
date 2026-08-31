@@ -1,0 +1,56 @@
+---
+title: Choose a storage backend
+description: Use Iceberg by default or install Lance for a local alternative while retaining the common table contract.
+---
+
+Avalanche exposes backend-neutral namespace and table contracts. Use Iceberg by
+default. Install the Lance extra when a Lance-backed namespace is the right
+local fit:
+
+```bash
+uv sync --extra lance
+```
+
+## Iceberg
+
+`ava.IcebergNs`, `ava.IcebergNsConfig`, `ava.IcebergTable`, and
+`ava.IcebergTableGroup` model Iceberg-backed storage. Iceberg tables expose the
+common table operations and available backend-native PyIceberg methods such as
+`history()` and `snapshots()`.
+
+## Lance
+
+Declare a Lance namespace with the same broad shape:
+
+```python
+import avalanche as ava
+
+
+class DocumentLanceNamespace(ava.LanceNamespace):
+    ns_config = ava.LanceNamespaceConfig(
+        name="documents",
+        base_location=".avalanche/data/lance",
+    )
+
+    documents = ava.LanceTable(schema=DocumentSchema)
+
+
+ns = DocumentLanceNamespace()
+ns.push()
+```
+
+Lance supports `append`, `scan`, `read`, `history`, and `current_version_id`.
+
+## Keep application code portable
+
+Depend on `ava.Namespace` and `ava.Table` in application-level functions when
+the backend should remain replaceable. Choose a concrete namespace/table class
+at the boundary where the catalog and storage location are configured.
+
+## Current limits
+
+Schema migration commands are not part of this release candidate.
+`IcebergTable.merge(...)` is not implemented; use append/read/overwrite or
+backend-native PyIceberg operations. Repository examples use local SQLite
+catalogs and local filesystem paths; they are examples, not an Avalanche global
+storage default.

@@ -1,0 +1,58 @@
+---
+title: Build a workflow with the Avalanche skill
+description: Turn a desired outcome into an Avalanche workflow with the supplied authoring skill.
+---
+
+If you installed the starter project, the Avalanche authoring skill is already
+included. Otherwise, install it in your existing project:
+
+```bash
+npx skills add Trampoline-AI/avalanche
+```
+
+Use the skill after you have run a local workflow and can inspect it in the
+browser UI.
+
+Describe the outcome you want:
+
+```text
+/avalanche <outcome>
+```
+
+For coding agents that expose skills through shell-style commands, the supplied
+workspace documents the equivalent form:
+
+```text
+$avalanche <outcome>
+```
+
+Give the agent enough operational detail to design a real workflow:
+
+- the input data, files, or workspace it receives;
+- the judgment an agent should make;
+- the business logic or critical action that must remain deterministic Python;
+- the result, artifact, or table the workflow should produce.
+
+A useful request is concrete about the trust boundary. For example: ask the
+agent to extract themes from feedback, validate the resulting report against
+business rules in ordinary Python, and publish only the validated artifacts.
+
+## Run the generated workflow
+
+Keep workflow modules in the workspace, then start the operator against a
+specific flow path:
+
+```bash
+uv run ava dev --flows ./src/my_workflow/flow.py
+```
+
+Use the browser UI to discover the workflow and inspect runs. If the workflow
+needs model credentials, configure the provider from the workspace:
+
+```bash
+bash scripts/configure-provider.sh
+```
+
+The skill helps create workflow code; it does not replace review. Read the
+[workflow authoring guides](../build-workflows/dags), keep consequential actions
+in deterministic steps, and exercise the generated workflow locally.

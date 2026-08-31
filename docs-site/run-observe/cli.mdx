@@ -1,0 +1,63 @@
+---
+title: Run workflows from the CLI
+description: Start local services, control operator runs, and retrieve results with ava.
+---
+
+`ava` is the local command-line front door for Avalanche.
+
+## Start local services
+
+```bash
+# Discover flows and serve gRPC.
+uv run ava operator --flows ./flows
+
+# Serve the browser UI for a running operator.
+uv run ava web --connect localhost:7433
+
+# Start both together.
+uv run ava dev --flows ./flows
+```
+
+Use `--ray` with `operator` or `dev` when the selected workflows should use the
+Ray executor and Ray is installed.
+
+## Start a workflow run
+
+```bash
+uv run ava run my_workflow \
+  --connect localhost:7433 \
+  --input '{"customer_id": "cust_123"}' \
+  --context '{"request_id": "req_123"}'
+```
+
+The command prints a run ID. Attach top-level file and workspace fields with
+`--file FIELD=PATH` and `--workspace FIELD=DIR`.
+
+## Download a terminal result
+
+```bash
+uv run ava result RUN_ID \
+  --connect localhost:7433 \
+  --wait \
+  --timeout 300 \
+  --output-dir ./run-result
+```
+
+`--output-dir` must name a directory that does not already exist. Avalanche
+creates it with result metadata and any returned file or workspace content.
+
+## Inspect local webhook routes
+
+```bash
+uv run ava webhooks list --connect localhost:7433
+uv run ava webhooks get workflow_name --connect localhost:7433
+```
+
+## Launch the terminal UI
+
+```bash
+uv run ava tui --connect localhost:7433
+```
+
+See the [complete CLI reference](../reference/cli-reference) for supported
+arguments, defaults, and the starter-project `ava init` command.

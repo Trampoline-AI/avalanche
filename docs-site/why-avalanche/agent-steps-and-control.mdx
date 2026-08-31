@@ -1,0 +1,53 @@
+---
+title: Native agent steps and deterministic control
+description: Decide what the agent owns and what remains explicit deterministic workflow code.
+---
+
+An agent step is not a black box around the workflow. It is an ordinary
+Avalanche node with a declared model contract and an injected callable agent.
+The step body decides which workflow values become model inputs and what to do
+with the returned prediction.
+
+```python
+@ava.agent_step(ClassifyRequest)
+async def classify_request(request: Request, *, agent: ava.Agent) -> Category:
+    prediction = await agent(request=request)
+    return Category.model_validate(prediction.category)
+
+
+@ava.step
+def assign_owner(category: Category) -> Assignment:
+    return assignment_policy(category)
+
+
+@ava.dest
+def create_case(assignment: Assignment) -> Case:
+    return case_service.create(assignment)
+```
+
+## Put judgment and actions in the right place
+
+Use an agent step for work that benefits from model reasoning, such as semantic
+classification, extraction from unstructured material, synthesis, or generating
+a draft.
+
+Keep these responsibilities in deterministic nodes:
+
+- business rules and deterministic transformations;
+- validation, reconciliation, and eligibility decisions;
+- durable writes, output publication, and other consequential actions;
+- the workflow graph, dependencies, and branch structure.
+
+The agent result is raw model output. Avalanche does not automatically choose an
+output, validate a model, append a row, or publish a file for you. That explicit
+boundary is where the workflow retains control.
+
+## Design a useful boundary
+
+Make the contract narrow. Define typed agent inputs and outputs, validate the
+result when necessary, then hand a typed value to deterministic Python. Split an
+operation into a separate node when it needs an independent retry or rerun
+boundary, fans out, produces a durable artifact, or has substantial I/O.
+
+Next: [declare agent steps](../build-workflows/agent-steps) and
+[design DAG dependencies](../build-workflows/dags).

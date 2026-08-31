@@ -1,0 +1,43 @@
+---
+title: Use the TUI and local webhooks
+description: Connect the terminal UI to an operator and inspect the local webhook surface.
+---
+
+## Terminal UI
+
+Launch the Textual terminal UI against a running local operator:
+
+```bash
+uv run ava tui --connect localhost:7433
+```
+
+The connected TUI is a client of the operator's gRPC state. It does not discover
+workflow modules, execute nodes, or manage Ray itself.
+
+For local UI development without an operator, launch mock mode:
+
+```bash
+uv run ava tui
+```
+
+The command also accepts an optional `flow` or `flow/node` deep link and TLS
+configuration flags for a configured gRPC connection.
+
+## Local webhooks
+
+Workflow descriptors can declare webhook routes. When at least one route exists,
+the operator starts a loopback JSON webhook ingress on port `7434` by default.
+A valid JSON POST body becomes workflow input and receives an accepted run ID.
+
+Inspect the routes discovered by the current operator:
+
+```bash
+uv run ava webhooks list --connect localhost:7433
+uv run ava webhooks get workflow_name --connect localhost:7433
+```
+
+Treat webhook ingress as a local development interface. The operator's loopback
+server does not provide a production authentication or deployment boundary.
+
+For workflow discovery and browser-based run control, see the
+[local operator guide](./operator).

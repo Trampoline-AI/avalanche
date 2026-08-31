@@ -1,0 +1,55 @@
+---
+title: Agentic ETL & Workflows
+description: Build workflows that combine agent reasoning with deterministic Python ownership.
+---
+
+Avalanche is for workflows where an agent should contribute judgment, but should
+not silently own the whole path from input to action.
+
+A hand-built application that calls an LLM directly gives you deterministic
+control, but makes every model contract, dependency, retry boundary, run, and
+output convention your responsibility. A hosted agent can absorb a broad task,
+but may make the execution path and critical actions harder to constrain.
+
+Avalanche puts both in one workflow:
+
+- **Native agent steps** handle interpretation, analysis, or flexible work.
+- **Deterministic Python nodes** apply business logic and perform critical
+  actions explicitly.
+- **The workflow DAG** makes dependencies, parallelism, inputs, and outputs
+  inspectable before a run starts.
+
+The term *agentic ETL* describes this useful shape for data-oriented work. It
+does not require a fixed Extract/Transform/Load stage model or limit Avalanche
+to a particular storage backend.
+
+## Workflows make execution explicit
+
+A workflow is a Python function decorated with `@ava.workflow`. Inside it, calls
+to decorated nodes build dependency edges rather than executing user code:
+
+```python
+@ava.workflow
+def review_feedback():
+    return (
+        (feedback := load_feedback())
+        >> (
+            (themes := extract_themes(feedback))
+            & (risks := identify_risks(feedback))
+        )
+        >> (review := apply_business_rules(themes, risks))
+        >> publish_report(review)
+    )
+```
+
+`>>` expresses sequential edges and `&` groups parallel work. Capture a
+`NodeFuture` with `:=` when a later branch or fan-in must reference it. At
+runtime, Avalanche schedules the graph topologically. A workflow can mix plain
+`@ava.step` nodes and `@ava.agent_step` nodes without treating agents as a
+separate control plane.
+
+## Start with a concrete run
+
+Run the [starter workflow](../start-here/run-starter), then use the
+[customer-feedback example](../reference/examples) to see parallel agent work
+followed by deterministic reconciliation and artifact publication.

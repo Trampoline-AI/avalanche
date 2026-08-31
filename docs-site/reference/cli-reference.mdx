@@ -1,0 +1,94 @@
+---
+title: ava CLI reference
+description: Commands and supported arguments for the Avalanche local command-line interface.
+---
+
+Run the CLI through the project environment:
+
+```bash
+uv run ava COMMAND
+```
+
+## `init`
+
+```text
+ava init [--editable-deps]
+```
+
+Creates a verified starter workspace in the current empty directory.
+`--editable-deps` clones Avalanche and PredictRLM into `.trampoline-ai/` and
+configures them as editable dependencies.
+
+## `operator`
+
+```text
+ava operator [--flows PATH ...] [--port PORT] [--host HOST]
+             [--webhook-port PORT] [--log-level LEVEL] [--ray]
+             [--discovery-timeout SECONDS]
+```
+
+Starts the local flow operator. `--flows` accepts one or more flow files or
+directories and defaults to the current directory. The defaults are gRPC port
+`7433`, loopback host `127.0.0.1`, webhook port `7434`, and `WARNING` log level.
+
+## `dev`
+
+```text
+ava dev [--flows PATH ...] [--port PORT] [--web-port PORT]
+        [--ray] [--discovery-timeout SECONDS]
+```
+
+Starts an operator subprocess and connected browser UI. Defaults: operator port
+`7433`, browser UI port `7435`.
+
+## `web`
+
+```text
+ava web [--connect HOST:PORT] [--host HOST] [--port PORT] [--trusted-proxy]
+```
+
+Starts the local browser UI and gRPC-Web proxy. `--connect` defaults to
+`localhost:7433`; the listener defaults to `127.0.0.1:7435`.
+
+## `run`
+
+```text
+ava run FLOW [--connect HOST:PORT] [--input JSON] [--context JSON]
+             [--file FIELD=PATH] [--workspace FIELD=DIR]
+```
+
+Starts a flow on a running local operator and prints its run ID. JSON input and
+context must be objects. Each top-level input field may be supplied once across
+`--input`, `--file`, and `--workspace`.
+
+## `result`
+
+```text
+ava result RUN_ID --output-dir PATH [--connect HOST:PORT] [--wait]
+                  [--timeout SECONDS]
+```
+
+Downloads a successful operator result into a new destination directory.
+`--wait` waits for a nonterminal run; `--timeout` defaults to `300` seconds.
+
+## `tui`
+
+```text
+ava tui [FLOW[/NODE]] [--connect HOST:PORT] [--token TOKEN]
+        [--tls | --insecure] [--tls-ca-cert PATH]
+```
+
+Launches the terminal UI in mock mode without `--connect`, or against a real
+operator with it.
+
+## `webhooks`
+
+```text
+ava webhooks list [--connect HOST:PORT]
+ava webhooks get SELECTOR [--connect HOST:PORT]
+```
+
+Lists local webhook routes or retrieves one canonical workflow selector.
+
+Use `ava COMMAND --help` for the parser's generated help in the installed
+version.

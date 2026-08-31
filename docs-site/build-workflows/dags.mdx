@@ -1,0 +1,88 @@
+---
+title: Build a DAG
+description: Declare deterministic and agent-backed Avalanche nodes as one runnable workflow graph.
+---
+
+A workflow body declares graph edges. Runtime work belongs in decorated nodes.
+Calling a decorated node from an `@ava.workflow` body creates a deferred
+`NodeFuture`; it does not execute the function immediately.
+
+| Decorator | Role |
+| --- | --- |
+| `@ava.source` | Ingest or create a value |
+| `@ava.step` | Deterministic work (`@ava.transform` is an alias) |
+| `@ava.agent_step` | Agent-backed work with an injected `ava.Agent` |
+| `@ava.dest` | Explicit final action or summary |
+| `@ava.workflow` | Declares a runnable graph |
+
+## Compose the graph with DAG operators
+
+```python
+import avalanche as ava
+
+
+@ava.source
+def load_documents() -> list[str]:
+    return ["Avalanche workflow docs"]
+
+
+@ava.step
+def normalize(documents: list[str]) -> list[str]:
+    return [document.strip() for document in documents]
+
+
+@ava.dest
+def count(documents: list[str]) -> int:
+    return len(documents)
+
+
+@ava.workflow
+def document_flow():
+    return load_documents() >> normalize() >> count()
+```
+
+`>>` draws a sequential edge and passes the upstream value to a downstream node
+with no explicit positional arguments. Capture a `NodeFuture` with `:=` only
+when a later branch or fan-in needs to name it:
+
+
+`&` groups independent branches. Parenthesize every parallel group:
+
+```python
+@ava.workflow
+def analyze_documents():
+    return (
+        (documents := load_documents())
+        >> (chunks := normalize(documents))
+        >> (check_quality(chunks) & build_index(chunks))
+        >> publish_summary()
+    )
+```
+
+## Multiple outputs
+
+Use `num_returns` when a node returns several values that downstream nodes need
+individually. Capture the returned `NodeFuture` before indexing its values:
+
+```python
+@ava.source(num_returns=2)
+def load_train_test() -> tuple[list[str], list[str]]:
+    return ["train"], ["test"]
+
+
+@ava.workflow
+def training_flow():
+    return (
+        (splits := load_train_test())
+        >> (model := train_model(splits[0]))
+        >> evaluate(model, splits[1])
+    )
+```
+
+## Keep the declaration boundary clean
+
+Do not put runtime-data conditionals, network I/O, data processing, or direct
+model calls in a workflow body. The body describes topology. Node functions do
+the work when the workflow runs.
+
+Continue with [agent steps](./agent-steps) or [inputs and artifacts](./inputs-and-artifacts).

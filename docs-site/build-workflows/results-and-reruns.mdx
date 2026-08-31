@@ -1,0 +1,69 @@
+---
+title: Results, cancellation, and reruns
+description: Retrieve typed workflow results, cancel cooperatively, and rerun a selected part of a DAG.
+---
+
+Calling `.run()` starts a workflow and returns an awaitable `ava.RunHandle`
+immediately:
+
+```python
+run = document_flow().run(executor=ava.LocalExecutor())
+print(run.run_id)
+result = run.result()
+
+# In async code:
+result = await document_flow().run(executor=ava.LocalExecutor())
+```
+
+A workflow may return JSON-compatible values, Pydantic models, `ava.File`, or
+`ava.Workspace`, including those values nested in models and containers.
+
+## Embedded and operator results
+
+In embedded execution, `.result()` returns the original Python value. In an
+operator-managed run, retrieve a successful result through the client or the
+CLI:
+
+```bash
+uv run ava result "$RUN_ID" \
+  --connect localhost:7433 \
+  --wait \
+  --timeout 300 \
+  --output-dir ./run-result
+```
+
+The output directory must not already exist. The command writes result metadata
+and downloaded file or workspace contents beneath it.
+
+## Cancellation
+
+```python
+run.cancel()
+```
+
+Cancellation is cooperative. Avalanche stops submitting later nodes after a
+cancellation request, but an already running local function or Ray task is not
+forcibly interrupted.
+
+## Rerun a section of a workflow
+
+Give durable rerun targets stable slugs:
+
+```python
+@ava.step(slug="chunk-docs")
+def chunk_documents(documents: list[str]) -> list[str]:
+    return documents
+
+
+result = document_flow().run(
+    executor=ava.LocalExecutor(),
+    run_id="rerun_002",
+    rerun=ava.Rerun(run_id="run_001", start=["chunk-docs"], mode="autorun"),
+).result()
+```
+
+`mode="autorun"` runs each selected node and everything downstream.
+`mode="lazy"` runs only the selected nodes. Supply `input=` again when a rerun
+needs workflow input; Avalanche does not restore it from the source run.
+
+For data-backed incremental execution, see [streams, cursors, and lineage](../advanced-data/streams-cursors-lineage).

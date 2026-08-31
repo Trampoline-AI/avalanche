@@ -1,0 +1,51 @@
+---
+title: Add Avalanche to an existing project
+description: Install Avalanche as a dependency, add the authoring skill, and run a narrow local workflow target.
+---
+
+Use this path when you already have a Python project and want to introduce
+Avalanche workflows alongside its application code.
+
+## Install the package
+
+```bash
+uv add avalanche-ai
+```
+
+Install the authoring skill in the same project when you want a coding agent to
+help build workflows:
+
+```bash
+npx skills add Trampoline-AI/avalanche
+```
+
+Configure model-provider credentials in the environment of the process that
+runs the operator. Avalanche routes agent-model requests through LiteLLM; use a
+provider-qualified model identifier on an agent step or shared workflow default.
+
+## Start with a narrow flow target
+
+Put a workflow in a known module, then point discovery at that module or a
+flow-only directory:
+
+```bash
+uv run ava dev --flows ./flow.py
+```
+
+Avoid starting `ava dev` or `ava operator` from a repository root containing
+unrelated Python. Discovery imports candidate Python modules; narrow targets
+make that boundary explicit.
+
+## Choose an execution mode
+
+- Use the local operator and browser UI for workflow discovery, local run
+  control, UI inspection, scheduled metadata, or webhooks.
+- Use embedded execution when the application owns the run directly:
+
+```python
+run = my_workflow().run(executor=ava.LocalExecutor())
+result = run.result()
+```
+
+Continue with [workflow authoring](../build-workflows/dags) or
+[operator-managed runs](../run-observe/operator).

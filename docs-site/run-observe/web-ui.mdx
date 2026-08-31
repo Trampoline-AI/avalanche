@@ -1,0 +1,50 @@
+---
+title: Use the browser UI
+description: Connect the local browser UI to an Avalanche operator and inspect workflow runs.
+---
+
+The browser UI is a local client for the operator. It discovers available
+workflows, starts and cancels runs, and retrieves run status and details from
+the configured operator.
+
+## Start the complete local loop
+
+```bash
+uv run ava dev --flows ./flows
+```
+
+This starts an operator and a connected browser UI. The UI listens on
+`http://127.0.0.1:7435` by default.
+
+## Connect to an existing operator
+
+Start the UI separately when the operator already runs elsewhere on your local
+machine:
+
+```bash
+uv run ava web --connect localhost:7433
+```
+
+Change the browser listen address or port when needed:
+
+```bash
+uv run ava web --connect localhost:7433 --host 127.0.0.1 --port 7435
+```
+
+The browser UI uses a loopback HTTP listener and a gRPC-Web proxy to the native
+gRPC operator. It does not receive a direct Python channel to user workflow
+code.
+
+## Use it as a workflow surface
+
+Use the UI to select a discovered workflow, provide supported run input, start a
+run, cancel a running workflow, and inspect the operator-provided workflow/run
+state. The UI fetches detailed logs, agent events, traces, and output artifacts
+on demand for the selected run rather than eagerly loading all detail.
+
+For scripts and automation, use the [CLI](./cli). For a terminal client, use
+the [TUI and webhooks guide](./tui-and-webhooks).
+
+> The HTTP listener defaults to loopback. Non-loopback exposure requires
+> `--trusted-proxy`, but Avalanche does not supply authentication or multi-tenant
+> security for that exposure.

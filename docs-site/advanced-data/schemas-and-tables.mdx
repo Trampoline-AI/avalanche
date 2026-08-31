@@ -1,0 +1,92 @@
+---
+title: Schemas, namespaces, and tables
+description: Model durable data with typed schemas, backend-neutral tables, and explicit namespaces.
+---
+
+Use the storage API when a workflow needs durable, typed table data. Avalanche
+provides backend-neutral `ava.Namespace` and `ava.Table` contracts; Iceberg and
+Lance supply concrete backends.
+
+## Define a schema
+
+Use a DataFramely schema for dataframe-first work:
+
+```python
+import dataframely as dy
+
+
+class DocumentSchema(dy.Schema):
+    doc_id = dy.String(nullable=False)
+    title = dy.String(nullable=False)
+    body = dy.String(nullable=False)
+```
+
+Use Pydantic models for model-first tables. Nested models and `list[...]` fields
+become nested table columns.
+
+## Create an Iceberg namespace
+
+```python
+from pathlib import Path
+
+import avalanche as ava
+
+
+class DocumentNamespace(ava.IcebergNs):
+    ns_config = ava.IcebergNsConfig(
+        name="documents",
+        base_location=str(Path(".avalanche/data") / "warehouse"),
+    )
+
+    documents = ava.IcebergTable(schema=DocumentSchema)
+
+
+ns = DocumentNamespace(
+    catalog="documents",
+    load_catalog_props={
+        "type": "sql",
+        "uri": "sqlite:///.avalanche/data/catalog.db",
+    },
+)
+ns.push()
+```
+
+Declare tables as class attributes, instantiate the namespace, then call
+`push()` to create missing tables.
+
+## Write and read rows
+
+Tables accept Polars dataframes, PyArrow tables, and record batches:
+
+```python
+import polars as pl
+
+rows = pl.DataFrame(
+    {"doc_id": ["doc-1"], "title": ["Release notes"], "body": ["Ready."]}
+)
+
+append_result = ns.documents.append(rows)
+selected = ns.documents.scan(columns=["doc_id", "title"]).to_polars()
+all_rows = ns.documents.read()
+```
+
+`append()` returns `ava.AppendResult`. Use `to_polars()`, `to_arrow()`, or
+`to_dicts()` to inspect the appended rows. Model-declared tables also accept
+model instances and expose validated model-reading helpers.
+
+## Use portable contracts
+
+Write code against `ava.Table` and `ava.Namespace` when it must work across
+backends:
+
+```python
+def consume(table: ava.Table) -> int:
+    return len(table.read())
+
+
+def deploy(namespace: ava.Namespace) -> None:
+    namespace.push()
+```
+
+Continue with [streams, cursors, and lineage](./streams-cursors-lineage) or
+[backend selection](./backends).
