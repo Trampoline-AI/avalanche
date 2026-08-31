@@ -17,4 +17,6 @@ export type {
   OperatorConsoleProps,
   OperatorConsoleSelection,
 } from "./console/types";
+export { WorkflowWorkspace } from "./WorkflowWorkspace";
+export type { WorkflowWorkspaceProps } from "./WorkflowWorkspace";
 export * from "./model";

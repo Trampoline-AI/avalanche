@@ -55,6 +55,7 @@ interface RunControlsProps {
   onStart: (workflowSelector: string, input?: Record<string, unknown>) => Promise<string>;
   onCancel: (runId: string) => Promise<void>;
   onViewWorkflow?: () => void;
+  runActionsEnabled?: boolean;
 }
 
 export function parseRunInput(draft: string): Record<string, unknown> {
@@ -70,6 +71,7 @@ export function RunControls({
   onStart,
   onCancel,
   onViewWorkflow,
+  runActionsEnabled = true,
 }: RunControlsProps) {
   const [showInput, setShowInput] = useState(false);
   const [draft, setDraft] = useState("{}");
@@ -119,7 +121,7 @@ export function RunControls({
           <span>Current workflow</span>
         </button>
       )}
-      {workflow && (
+      {workflow && runActionsEnabled && (
         <>
           <button
             type="button"
@@ -140,7 +142,7 @@ export function RunControls({
           </button>
         </>
       )}
-      {active && run?.summary && (
+      {active && run?.summary && runActionsEnabled && (
         <button
           type="button"
           className="cancel-button cursor-pointer rounded-[7px] border border-[#e0a6a1] bg-white px-[11px] py-[7px] text-[10px] text-[#a92f29] hover:bg-[#fff3f2]"
