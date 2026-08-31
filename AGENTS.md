@@ -153,14 +153,17 @@ Avoid `--flows .`: operator discovery imports Python files recursively. Use a na
 Every PR MUST add an entry under `## Unreleased` in `CHANGELOG.md` describing
 its user-facing change.
 
-Every PR description must be self-contained and start with these sections in this order:
+Every PR description must be self-contained, use plain and direct language, and start with
+these sections in this order:
+
+Avoid jargon. Explain an internal term the first time it matters.
 
 ```markdown
 ## Rationale
-Explain why the change is needed: the problem, motivation, or user-facing impact.
+Explain in plain words why the change is needed and what it means for users.
 
 ## Summary
-Describe what changed. Assume the reader has no prior conversation or commit context.
+Explain in plain words what changed. Assume the reader has no prior conversation or commit context.
 
 ## Test Plan
 - [ ] List the exact commands or manual scenarios used for verification.
