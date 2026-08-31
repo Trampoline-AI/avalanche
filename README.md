@@ -203,6 +203,47 @@ uv run ava web --connect localhost:7433
 The operator defaults to `127.0.0.1:7433` and the Web UI to
 `http://127.0.0.1:7435`.
 
+### Embedding the operator UI
+
+`@trampoline-ai/operator-ui` is the embeddable React package for an Avalanche operator
+interface. It exports `OperatorUi`, `WorkflowWorkspace`, `GrpcWebOperatorApi`, and their
+typed host APIs. The embedding host owns its `OperatorApi` implementation and presentation
+configuration.
+
+After a version is released, configure the GitHub Packages scope and an authenticated token
+outside source control:
+
+```ini
+@trampoline-ai:registry=https://npm.pkg.github.com
+//npm.pkg.github.com/:_authToken=${NODE_AUTH_TOKEN}
+```
+
+Then install that version and its styles:
+
+```bash
+pnpm add @trampoline-ai/operator-ui@<version>
+```
+
+```tsx
+import "@trampoline-ai/operator-ui/styles.css";
+import { OperatorUi } from "@trampoline-ai/operator-ui";
+```
+
+Avalanche does not provide a remote operator endpoint or authentication boundary for an
+embedding host.
+
+### Releasing the operator UI
+
+Release the package independently from the Python distribution:
+
+1. Update `web/operator/package.json` with the next semantic version.
+2. Run `make web-test`, `make web-lint`, and `pnpm pack` from `web/operator`.
+3. Merge the version change to `main`.
+4. Create and push a matching `operator-ui-vX.Y.Z` tag.
+
+The `Release operator UI` workflow validates the tag, packs and inspects the archive, then
+publishes it to GitHub Packages.
+
 ### Running a workflow
 
 Once you have the operator running, you can either start workflows directly in the web UI, or start runs from your command line in a different terminal:

@@ -1,6 +1,17 @@
 {
   "name": "@trampoline-ai/operator-ui",
   "version": "0.1.0",
+  "description": "Embeddable React UI for Avalanche operators",
+  "license": "Apache-2.0",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/Trampoline-AI/avalanche.git",
+    "directory": "web/operator"
+  },
+  "homepage": "https://github.com/Trampoline-AI/avalanche#embedding-the-operator-ui",
+  "bugs": {
+    "url": "https://github.com/Trampoline-AI/avalanche/issues"
+  },
   "type": "module",
   "types": "./dist/index.d.ts",
   "files": [
@@ -15,6 +26,9 @@
       "import": "./dist/index.js"
     },
     "./styles.css": "./dist/styles.css"
+  },
+  "publishConfig": {
+    "registry": "https://npm.pkg.github.com"
   },
   "scripts": {
     "build": "tsc --noEmit -p tsconfig.app.json && tsc --noEmit -p tsconfig.node.json && vite build && tsc -p tsconfig.build.json",

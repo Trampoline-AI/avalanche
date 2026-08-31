@@ -10,6 +10,8 @@
   step summaries.
 - Extracted the embeddable operator UI into the `@trampoline-ai/operator-ui` package, with
   typed host and workflow-workspace APIs for local and hosted shells.
+- Prepared `@trampoline-ai/operator-ui` for independent GitHub Packages releases with archive
+  verification and a versioned release workflow.
 
 ## 0.1.5rc1
 
