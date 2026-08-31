@@ -61,6 +61,22 @@ describe("RunControls", () => {
     expect(screen.queryByRole("button", { name: "Run" })).not.toBeInTheDocument();
   });
 
+  it("hides mutation controls when the host disables run actions", () => {
+    render(
+      <RunControls
+        workflow={workflow}
+        run={running}
+        onStart={async () => "run-2"}
+        onCancel={async () => undefined}
+        runActionsEnabled={false}
+      />,
+    );
+
+    expect(screen.queryByRole("button", { name: "Run" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Add JSON input" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Cancel run" })).not.toBeInTheDocument();
+  });
+
   it("keeps the JSON editor closed by default and surfaces operator validation", async () => {
     const onStart = vi.fn(async () => {
       throw new Error("input.value is required");
