@@ -32,7 +32,7 @@ export default defineConfig({
     postcss: {
       plugins: [
         prefixer({
-          prefix: ".avalanche-console",
+          prefix: ".avalanche-operator-ui",
           transform(prefix, selector, prefixedSelector) {
             if (selector === ":root" || selector === ":host") return prefix;
             return selector === prefix || selector.startsWith(`${prefix} `)

@@ -11,7 +11,7 @@
     "lint": "eslint . --max-warnings 0"
   },
   "dependencies": {
-    "@avalanche/operator-console": "workspace:*",
+    "@trampoline-ai/operator-ui": "workspace:*",
     "react": "^19.1.1",
     "react-dom": "^19.1.1"
   },

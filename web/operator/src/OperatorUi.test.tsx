@@ -123,11 +123,11 @@ vi.mock("./state", () => ({
   useOperatorProjection: () => projectionHarness,
 }));
 
-import { GrpcWebOperatorApi, OperatorConsole } from "./index";
-import type { OperatorConsoleHost, OperatorConsoleNavigation } from "./index";
+import { GrpcWebOperatorApi, OperatorUi } from "./index";
+import type { OperatorUiHost, OperatorUiNavigation } from "./index";
 import { RunSnapshotMsg, RunSummaryMsg, WorkflowTopologyMsg } from "./model";
 
-function consoleHost(): OperatorConsoleHost {
+function uiHost(): OperatorUiHost {
   return {
     api: new GrpcWebOperatorApi("http://localhost"),
     presentation: {
@@ -162,7 +162,7 @@ function selectedSnapshot(runId: string, nodeName: string) {
   });
 }
 
-describe("OperatorConsole", () => {
+describe("OperatorUi", () => {
   beforeEach(() => {
     projectionHarness.state.runs = {};
     projectionHarness.state.selectedRun = undefined;
@@ -191,7 +191,7 @@ describe("OperatorConsole", () => {
   it("shows a full-screen connecting view until the operator is available", () => {
     projectionHarness.state.connection = "reconnecting";
 
-    const { container } = render(<OperatorConsole host={consoleHost()} />);
+    const { container } = render(<OperatorUi host={uiHost()} />);
 
     expect(screen.getByRole("status")).toHaveTextContent("Reconnecting...");
     expect(screen.getByRole("status")).toHaveTextContent("Test operator is unavailable");
@@ -200,32 +200,32 @@ describe("OperatorConsole", () => {
   });
 
   it("renders host branding inside its CSS scope", () => {
-    const { container } = render(<OperatorConsole host={consoleHost()} />);
+    const { container } = render(<OperatorUi host={uiHost()} />);
 
-    const consoleScope = container.querySelector(".avalanche-console");
-    expect(consoleScope).not.toBeNull();
-    expect(consoleScope?.querySelector("img")).toHaveAttribute("src", "/avalanche-brand.png");
+    const uiScope = container.querySelector(".avalanche-operator-ui");
+    expect(uiScope).not.toBeNull();
+    expect(uiScope?.querySelector("img")).toHaveAttribute("src", "/avalanche-brand.png");
   });
 
   it("shows a bottom update card while workflows are reloading", () => {
-    const view = render(<OperatorConsole host={consoleHost()} />);
+    const view = render(<OperatorUi host={uiHost()} />);
     expect(screen.queryByRole("status")).not.toBeInTheDocument();
 
     projectionHarness.state.workflowReloading = true;
-    view.rerender(<OperatorConsole host={consoleHost()} />);
+    view.rerender(<OperatorUi host={uiHost()} />);
 
     const indicator = screen.getByRole("status");
     expect(indicator).toBeVisible();
     expect(indicator).toHaveClass("bottom-5");
 
     projectionHarness.state.workflowReloading = false;
-    view.rerender(<OperatorConsole host={consoleHost()} />);
+    view.rerender(<OperatorUi host={uiHost()} />);
     expect(screen.queryByRole("status")).not.toBeInTheDocument();
   });
 
   it("keeps Explorer accessible through the narrow navigation toggle", () => {
     window.innerWidth = 375;
-    const { container } = render(<OperatorConsole host={consoleHost()} />);
+    const { container } = render(<OperatorUi host={uiHost()} />);
     const toggle = screen.getByRole("button", { name: "Explorer" });
 
     expect(toggle).toHaveAttribute("aria-controls", "operator-explorer");
@@ -254,12 +254,12 @@ describe("OperatorConsole", () => {
         relativeFile: "other.py",
       },
     ];
-    const navigation: OperatorConsoleNavigation = {
+    const navigation: OperatorUiNavigation = {
       selection: { kind: "workflow", workflowId: "flow.py::demo" },
       onSelectionChange: vi.fn(),
     };
 
-    render(<OperatorConsole host={consoleHost()} navigation={navigation} />);
+    render(<OperatorUi host={uiHost()} navigation={navigation} />);
     fireEvent.click(screen.getByRole("button", { name: /other/ }));
 
     expect(navigation.onSelectionChange).toHaveBeenCalledWith({
@@ -270,7 +270,7 @@ describe("OperatorConsole", () => {
   });
 
   it("starts a run without selecting it before preparation completes", async () => {
-    render(<OperatorConsole host={consoleHost()} />);
+    render(<OperatorUi host={uiHost()} />);
 
     fireEvent.click(screen.getByRole("button", { name: "Run" }));
 
@@ -281,7 +281,7 @@ describe("OperatorConsole", () => {
   });
 
   it("collapses and restores the desktop Explorer independently of the narrow toggle", () => {
-    const { container } = render(<OperatorConsole host={consoleHost()} />);
+    const { container } = render(<OperatorUi host={uiHost()} />);
     const toggle = screen.getByRole("button", { name: "Collapse Explorer" });
     const explorer = screen.getByRole("complementary", { name: "Explorer" });
     const narrowToggle = screen.getByRole("button", { name: "Explorer" });
@@ -318,7 +318,7 @@ describe("OperatorConsole", () => {
   });
 
   it("maps divider arrow keys to physical movement and intended pane widths", () => {
-    const { container } = render(<OperatorConsole host={consoleHost()} />);
+    const { container } = render(<OperatorUi host={uiHost()} />);
     const workspace = container.querySelector<HTMLElement>(".workspace")!;
     const explorerDivider = screen.getByRole("separator", {
       name: "Resize Explorer",
@@ -353,7 +353,7 @@ describe("OperatorConsole", () => {
   });
 
   it("clamps direction-aware divider keyboard resizing without changing Home or End", () => {
-    const { container } = render(<OperatorConsole host={consoleHost()} />);
+    const { container } = render(<OperatorUi host={uiHost()} />);
     const workspace = container.querySelector<HTMLElement>(".workspace")!;
     const explorerDivider = screen.getByRole("separator", {
       name: "Resize Explorer",
@@ -392,7 +392,7 @@ describe("OperatorConsole", () => {
   });
 
   it("keeps pointer resizing aligned with each divider direction", () => {
-    const { container } = render(<OperatorConsole host={consoleHost()} />);
+    const { container } = render(<OperatorUi host={uiHost()} />);
     const workspace = container.querySelector<HTMLElement>(".workspace")!;
     const explorerDivider = screen.getByRole("separator", {
       name: "Resize Explorer",
@@ -417,7 +417,7 @@ describe("OperatorConsole", () => {
   });
 
   it("keeps transport sequence internal while log and trace updates retain catalog revision", () => {
-    const view = render(<OperatorConsole host={consoleHost()} />);
+    const view = render(<OperatorUi host={uiHost()} />);
     const catalogRevision = screen.getByText("catalog r1");
 
     expect(view.container).not.toHaveTextContent(/seq 1/i);
@@ -430,7 +430,7 @@ describe("OperatorConsole", () => {
     projectionHarness.state.liveEvents = {
       "run-1:node-1": [{ eventSequence: "93" }],
     };
-    view.rerender(<OperatorConsole host={consoleHost()} />);
+    view.rerender(<OperatorUi host={uiHost()} />);
 
     expect(screen.getByText("catalog r1")).toBe(catalogRevision);
     expect(view.container).not.toHaveTextContent(/seq 93/i);
@@ -439,7 +439,7 @@ describe("OperatorConsole", () => {
 
   it("removes the canvas header while preserving the retained snapshot explanation", async () => {
     projectionHarness.state.runs = { "run-1": summary };
-    const view = render(<OperatorConsole host={consoleHost()} />);
+    const view = render(<OperatorUi host={uiHost()} />);
 
     fireEvent.click(await screen.findByRole("button", { name: /run-1/ }));
 
@@ -449,7 +449,7 @@ describe("OperatorConsole", () => {
     projectionHarness.state.selectedRunId = "run-1";
     projectionHarness.state.selectedRunStatus = "ready";
     projectionHarness.state.selectedRun = selectedSnapshot("run-1", "Recorded node");
-    view.rerender(<OperatorConsole host={consoleHost()} />);
+    view.rerender(<OperatorUi host={uiHost()} />);
 
     expect(screen.getByText("Immutable run snapshot")).toBeInTheDocument();
     expect(
@@ -465,7 +465,7 @@ describe("OperatorConsole", () => {
 
   it("navigates summary-only runs with one demand-load selection and clears it", async () => {
     projectionHarness.state.runs = { "run-1": summary };
-    const view = render(<OperatorConsole host={consoleHost()} />);
+    const view = render(<OperatorUi host={uiHost()} />);
 
     fireEvent.click(await screen.findByRole("button", { name: /run-1/ }));
 
@@ -483,26 +483,26 @@ describe("OperatorConsole", () => {
 
   it("shows selected-run loading and error states without rendering stale snapshots", async () => {
     projectionHarness.state.runs = { "run-1": summary };
-    const view = render(<OperatorConsole host={consoleHost()} />);
+    const view = render(<OperatorUi host={uiHost()} />);
     fireEvent.click(await screen.findByRole("button", { name: /run-1/ }));
 
     projectionHarness.state.selectedRunId = "run-1";
     projectionHarness.state.selectedRunStatus = "loading";
-    view.rerender(<OperatorConsole host={consoleHost()} />);
+    view.rerender(<OperatorUi host={uiHost()} />);
     expect(screen.getByRole("heading", { name: "Loading run snapshot" })).toBeInTheDocument();
 
     projectionHarness.state.selectedRunStatus = "error";
     projectionHarness.state.selectedRunError = "snapshot was evicted";
-    view.rerender(<OperatorConsole host={consoleHost()} />);
+    view.rerender(<OperatorUi host={uiHost()} />);
     expect(screen.getByRole("alert")).toHaveTextContent("snapshot was evicted");
 
     projectionHarness.state.selectedRunStatus = "ready";
     projectionHarness.state.selectedRun = selectedSnapshot("run-2", "Stale node");
-    view.rerender(<OperatorConsole host={consoleHost()} />);
+    view.rerender(<OperatorUi host={uiHost()} />);
     expect(screen.queryByText(/Run graph/)).not.toBeInTheDocument();
 
     projectionHarness.state.selectedRun = selectedSnapshot("run-1", "Recorded node");
-    view.rerender(<OperatorConsole host={consoleHost()} />);
+    view.rerender(<OperatorUi host={uiHost()} />);
     fireEvent.click(screen.getByRole("button", { name: "Run graph Recorded node" }));
     expect(screen.getByText("Inspector run-1")).toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: "Cancel run" }));
@@ -510,43 +510,43 @@ describe("OperatorConsole", () => {
 
     projectionHarness.state.selectedRunId = "run-2";
     projectionHarness.state.selectedRun = selectedSnapshot("run-2", "New stale node");
-    view.rerender(<OperatorConsole host={consoleHost()} />);
+    view.rerender(<OperatorUi host={uiHost()} />);
     expect(screen.queryByText(/Run graph/)).not.toBeInTheDocument();
     expect(screen.queryByText(/Inspector/)).not.toBeInTheDocument();
   });
   it("reloads a surviving selected run once after baseline replacement", async () => {
     projectionHarness.state.runs = { "run-1": summary };
-    const view = render(<OperatorConsole host={consoleHost()} />);
+    const view = render(<OperatorUi host={uiHost()} />);
     fireEvent.click(await screen.findByRole("button", { name: /run-1/ }));
 
     projectionHarness.state.selectedRunId = "run-1";
     projectionHarness.state.selectedRunStatus = "ready";
     projectionHarness.state.selectedRun = selectedSnapshot("run-1", "Recorded node");
-    view.rerender(<OperatorConsole host={consoleHost()} />);
+    view.rerender(<OperatorUi host={uiHost()} />);
     projectionHarness.selectRun.mockClear();
 
     projectionHarness.state.runs = { "run-1": summary };
     projectionHarness.state.selectedRunId = undefined;
     projectionHarness.state.selectedRunStatus = "idle";
     projectionHarness.state.selectedRun = undefined;
-    view.rerender(<OperatorConsole host={consoleHost()} />);
+    view.rerender(<OperatorUi host={uiHost()} />);
 
     expect(projectionHarness.selectRun).toHaveBeenCalledTimes(1);
     expect(projectionHarness.selectRun).toHaveBeenCalledWith("run-1");
 
-    view.rerender(<OperatorConsole host={consoleHost()} />);
+    view.rerender(<OperatorUi host={uiHost()} />);
     expect(projectionHarness.selectRun).toHaveBeenCalledTimes(1);
   });
 
   it("falls back to the selected run's workflow when replacement omits its summary", async () => {
     projectionHarness.state.runs = { "run-1": summary };
-    const view = render(<OperatorConsole host={consoleHost()} />);
+    const view = render(<OperatorUi host={uiHost()} />);
     fireEvent.click(await screen.findByRole("button", { name: /run-1/ }));
 
     projectionHarness.state.selectedRunId = "run-1";
     projectionHarness.state.selectedRunStatus = "ready";
     projectionHarness.state.selectedRun = selectedSnapshot("run-1", "Recorded node");
-    view.rerender(<OperatorConsole host={consoleHost()} />);
+    view.rerender(<OperatorUi host={uiHost()} />);
     fireEvent.click(screen.getByRole("button", { name: "Run graph Recorded node" }));
     expect(screen.getByText("Inspector run-1")).toBeInTheDocument();
     projectionHarness.selectRun.mockClear();
@@ -555,7 +555,7 @@ describe("OperatorConsole", () => {
     projectionHarness.state.selectedRunId = undefined;
     projectionHarness.state.selectedRunStatus = "idle";
     projectionHarness.state.selectedRun = undefined;
-    view.rerender(<OperatorConsole host={consoleHost()} />);
+    view.rerender(<OperatorUi host={uiHost()} />);
 
     expect(projectionHarness.selectRun).toHaveBeenCalledTimes(1);
     expect(projectionHarness.selectRun).toHaveBeenCalledWith(undefined);
@@ -570,13 +570,13 @@ describe("OperatorConsole", () => {
     projectionHarness.state.liveLogs = {
       "run-1": [{ sequence: "17" }, { sequence: "18" }],
     };
-    const view = render(<OperatorConsole host={consoleHost()} />);
+    const view = render(<OperatorUi host={uiHost()} />);
     fireEvent.click(await screen.findByRole("button", { name: /run-1/ }));
 
     projectionHarness.state.selectedRunId = "run-1";
     projectionHarness.state.selectedRunStatus = "ready";
     projectionHarness.state.selectedRun = selectedSnapshot("run-1", "Recorded node");
-    view.rerender(<OperatorConsole host={consoleHost()} />);
+    view.rerender(<OperatorUi host={uiHost()} />);
 
     expect(screen.getByText("Live logs 17,18")).toBeInTheDocument();
     expect(screen.getByText("Log scope all")).toBeInTheDocument();
