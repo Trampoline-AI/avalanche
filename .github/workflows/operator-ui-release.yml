@@ -22,8 +22,9 @@ jobs:
       - name: Verify tag is on main
         run: |
           TAG="${GITHUB_REF_NAME}"
+          TAG_VERSION="${TAG#operator-ui-v}"
 
-          if [[ "$TAG" == *"-"* ]]; then
+          if [[ "$TAG_VERSION" == *"-"* ]]; then
             echo "::notice title=Ancestry check skipped::Prerelease tag '$TAG', skipping main ancestry check."
             exit 0
           fi
@@ -153,7 +154,14 @@ jobs:
           name: operator-ui-package
           path: ${{ runner.temp }}/operator-ui
       - name: Publish package archive
-        run: npm publish "$RUNNER_TEMP"/operator-ui/*.tgz
         env:
           NODE_AUTH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ github.ref_name }}
+        run: |
+          TAG_VERSION="${TAG#operator-ui-v}"
+          if [[ "$TAG_VERSION" == *"-"* ]]; then
+            npm publish "$RUNNER_TEMP"/operator-ui/*.tgz --tag next
+          else
+            npm publish "$RUNNER_TEMP"/operator-ui/*.tgz --tag latest
+          fi
 

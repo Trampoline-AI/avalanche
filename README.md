@@ -237,9 +237,10 @@ embedding host.
 Release the package independently from the Python distribution:
 
 1. Update `web/operator/package.json` with the next semantic version.
-2. Run `make web-test`, `make web-lint`, and `pnpm pack` from `web/operator`.
-3. Merge the version change to `main`.
-4. Create and push a matching `operator-ui-vX.Y.Z` tag.
+2. From the repository root, run `make web-test` and `make web-lint`.
+3. From `web/operator`, run `pnpm pack`.
+4. Merge the version change to `main`.
+5. Create and push a matching `operator-ui-vX.Y.Z` tag.
 
 The `Release operator UI` workflow validates the tag, packs and inspects the archive, then
 publishes it to GitHub Packages.
