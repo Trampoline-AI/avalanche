@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+### Continuous integration
+
+- CI actions and browser tooling now run on Node.js 24.
+- Release validation now rejects prerelease hotfix tags; only major and minor
+  prereleases are accepted.
+
 ### Documentation
 
 - Replaced the published Avalanche documentation source with a workflow-first Docsalot site covering onboarding, authoring, local operation, advanced data workflows, extensions, and complete public API and CLI reference.
