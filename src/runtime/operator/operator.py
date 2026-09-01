@@ -2403,10 +2403,10 @@ class Operator:
                 f"(exit code {handle.process.exitcode})"
             ),
         )
+        self._result_store.discard(handle.result_bundle)
         with self._lock:
             run = self._runs.get(run_id)
             if run is None:
-                self._result_store.discard(handle.result_bundle)
                 return
             run.status = RunStatus.CANCELLED if cancelled else RunStatus.FAILED
             self._stored_results.pop(run_id, None)
@@ -2422,7 +2422,6 @@ class Operator:
                 status_node_ids=changed_node_ids,
                 log_entry=log_entry,
             )
-        self._result_store.discard(handle.result_bundle)
         self._wait_for_notifications(notifications)
 
     def _force_cancel_after_grace(self, run_id: str, handle: _RunHandle) -> None:
