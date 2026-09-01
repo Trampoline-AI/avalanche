@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 0.2.0
+
 ### Continuous integration
 
 - CI actions and browser tooling now run on Node.js 24.
