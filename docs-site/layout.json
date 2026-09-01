@@ -46,7 +46,7 @@
   },
   "topbarCtaButton": {
     "name": "Install Avalanche",
-    "url": "/start-here/install"
+    "url": "/getting-started/starter-project"
   },
   "anchors": [
     {
@@ -65,17 +65,8 @@
       "group": "Getting Started",
       "pages": [
         "index",
-        "start-here/run-starter",
-        "start-here/understand-starter",
-        "start-here/build-with-skill"
-      ]
-    },
-    {
-      "group": "Install",
-      "pages": [
-        "start-here/install",
-        "start-here/starter-workspace",
-        "start-here/existing-project"
+        "getting-started/starter-project",
+        "getting-started/existing-project"
       ]
     },
     {
@@ -88,8 +79,9 @@
     {
       "group": "Build Workflows",
       "pages": [
-        "build-workflows/dags",
         "build-workflows/agent-steps",
+        "build-workflows/dags",
+        "build-workflows/build-with-skill",
         "build-workflows/inputs-and-artifacts",
         "build-workflows/results-and-reruns"
       ]

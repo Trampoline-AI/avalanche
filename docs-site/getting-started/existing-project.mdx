@@ -1,0 +1,63 @@
+---
+title: Option B — Existing project
+description: Add Avalanche to an existing Python project and run a narrow local workflow target.
+---
+
+Use this path when Avalanche should live alongside existing application code.
+
+## Requirements
+
+- Python 3.11, 3.12, or 3.13
+- [uv](https://docs.astral.sh/uv/)
+- An LLM provider API key or Codex subscription only when the workflow uses
+  agent steps
+
+## Add Avalanche
+
+```bash
+uv add avalanche-ai
+```
+
+## Add the skill (optional)
+
+Install the authoring skill in the same project when you want a coding agent to
+help build workflows:
+
+```bash
+npx skills add Trampoline-AI/avalanche
+```
+
+## Configure a provider
+
+Configure credentials in the environment that runs `ava dev` or the local
+operator, using the environment variables recognized by your LiteLLM provider.
+Keep provider secrets out of workflow modules and source control.
+
+<Info>
+The model identifier belongs in the workflow; provider secrets belong only in
+the runtime environment.
+</Info>
+
+Set a provider-qualified model identifier on an agent step or in workflow
+`agent_defaults`; a value on the individual step takes precedence. See
+[Configure models and providers](../extend/models-and-providers) for credential
+and model-selection examples, and [declare agent steps](../build-workflows/agent-steps)
+for the step-level model contract.
+
+## Start with a narrow flow target
+
+Put a workflow in a known module, then start the local operator against that
+module or a flow-only directory:
+
+```bash
+uv run ava dev --flows ./flow.py
+```
+
+<Warning>
+Avoid starting `ava dev` or `ava operator` from a repository root containing
+unrelated Python. Discovery imports candidate Python modules; narrow targets
+make that boundary explicit.
+</Warning>
+
+Continue with [workflow authoring](../build-workflows/dags) or
+[operator-managed runs](../run-observe/operator).

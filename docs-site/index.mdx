@@ -1,5 +1,5 @@
 ---
-title: Avalanche
+title: What is Avalanche
 description: Agentic ETL & Workflows
 ---
 
@@ -13,6 +13,9 @@ agent. You define the workflow, dependencies, rules, and consequential actions.
 Use native agent steps where judgment, interpretation, or flexible execution is
 useful.
 
+New here? Start with [Option A — Starter project (recommended)](./getting-started/starter-project).
+
+
 ![A representative Avalanche workflow: source data flows through an agent step and deterministic business logic to a typed result.](./assets/workflow-shape.svg)
 
 ## A workflow keeps the important parts explicit
@@ -20,27 +23,26 @@ useful.
 ```python
 import avalanche as ava
 
-
 @ava.source
 def load_request() -> str:
     return "Classify this customer request."
-
 
 @ava.agent_step(ava.Signature("request: str -> category: str"))
 async def classify_request(request: str, *, agent: ava.Agent) -> str:
     return (await agent(request=request)).category
 
-
 @ava.step
 def choose_route(category: str) -> str:
     return {"billing": "finance", "support": "service"}.get(category, "triage")
 
-
 @ava.dest
 def publish_route(route: str) -> str:
     return route
+```
 
+The workflow body connects those nodes:
 
+```python
 @ava.workflow
 def route_request():
     return load_request() >> classify_request() >> choose_route() >> publish_route()
@@ -49,38 +51,23 @@ def route_request():
 The agent step supplies the judgment. The surrounding Python keeps the workflow
 shape, business rule, and action explicit and inspectable.
 
-## Install Avalanche
-
-Choose the path that matches where you are starting.
-
-### Create a starter workspace (recommended)
-
-In a new, empty directory:
-
-```bash
-uvx avalanche-ai init
-```
-
-This creates a ready-to-run project with an example workflow, the Avalanche
-authoring skill, and provider setup. [Create the workspace](./start-here/starter-workspace),
-then [run its workflow](./start-here/run-starter).
-
-### Add Avalanche to an existing project
-
-```bash
-uv add avalanche-ai
-```
-
-Use this path when Avalanche belongs alongside application code. [Add it to an
-existing project](./start-here/existing-project) for optional skill setup and a
-narrow local run target.
-
-> **Local release candidate.** Avalanche is intended for local development and
-> experimentation. The current release does not provide a production deployment
-> control plane, authentication, multi-tenancy, or durable recovery.
 
 ## Continue
 
-- **Have a starter workspace:** [run the included workflow](./start-here/run-starter).
-- **Want to author with an agent:** [build a workflow with the skill](./start-here/build-with-skill).
-- **Need the API:** [browse the Python and CLI reference](./reference/python-api).
+<CardGroup cols={2}>
+  <Card title="Option A — Starter project (recommended)" icon="rocket" href="/getting-started/starter-project">
+    Start a new project and see Avalanche run.
+  </Card>
+  <Card title="Option B — Existing project" icon="code" href="/getting-started/existing-project">
+    Add Avalanche and the optional authoring skill to your current Python project.
+  </Card>
+  <Card title="Agentic ETL & Workflows" icon="lightbulb" href="/why-avalanche/agentic-workflows">
+    Learn when agent judgment and deterministic workflow steps belong together.
+  </Card>
+  <Card title="Build a workflow" icon="code-branch" href="/build-workflows/agent-steps">
+    Declare agent steps, then compose a DAG.
+  </Card>
+  <Card title="Reference" icon="book-open" href="/reference/python-api">
+    Find `ava` commands and the public Python API.
+  </Card>
+</CardGroup>

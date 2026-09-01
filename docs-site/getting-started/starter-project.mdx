@@ -1,0 +1,105 @@
+---
+title: Option A — Starter project (recommended)
+description: Create a ready-to-run Avalanche project, run it locally, and understand its starter workflow.
+---
+
+Use a new, empty directory to get a ready-to-run example, the Avalanche
+authoring skill, and provider setup included.
+
+## Requirements
+
+- Python 3.11, 3.12, or 3.13
+- [uv](https://docs.astral.sh/uv/)
+- An LLM provider API key or Codex subscription only when the workflow uses
+  agent steps
+
+## Create the starter project
+
+```bash
+mkdir avalanche-workspace
+cd avalanche-workspace
+uvx avalanche-ai init
+```
+
+The starter project contains project dependencies, a provider-configuration
+helper, and the `binary_converter` example workflow. In an interactive terminal,
+the initializer offers provider setup. If you skip that prompt, configure it
+later:
+
+```bash
+bash scripts/configure-provider.sh
+```
+
+## Run the starter workflow
+
+```bash
+uv run ava dev
+```
+
+`ava dev` starts the local operator and a connected browser UI. Open
+`http://127.0.0.1:7435`, select the included `binary_converter` workflow, and
+start a run.
+
+## What you should see
+
+The workflow appears in the local UI and progresses through its source, native
+agent step, and destination. The starter destination prints the converted value
+when it completes.
+
+![The starter `binary_converter` workflow in the Avalanche browser UI, showing the `generate_binary`, `convert_binary`, and `print_result` nodes ready to run.](../assets/starter-workflow.webp)
+
+## Understand the starter workflow
+
+The generated `binary_converter` is intentionally small. It is a complete
+workflow, not a special demo runtime:
+
+```python
+@ava.source
+def generate_binary() -> str:
+    return "101101"
+
+@ava.agent_step(
+    ava.Signature("binary: str -> decimal: str"),
+    lm=starter_lm(),
+)
+async def convert_binary(binary: str, *, agent: ava.Agent) -> str:
+    return (await agent(binary=binary)).decimal
+
+@ava.dest
+def print_result(result: str) -> str:
+    print(result)
+    return result
+```
+
+The workflow body connects those nodes:
+
+```python
+@ava.workflow
+def binary_converter():
+    return generate_binary() >> convert_binary() >> print_result()
+```
+
+- `@ava.source` creates the value entering the workflow.
+- `@ava.agent_step` declares an ordinary workflow node with an injected,
+  keyword-only `ava.Agent`. Its signature makes the model contract explicit.
+- `@ava.dest` is normal deterministic Python. It owns the consequential action:
+  printing and returning the result.
+- `@ava.workflow` declares the dependency graph. Calling decorated nodes here
+  creates graph edges; runtime work stays inside the nodes.
+
+`>>` connects the output of one node to the first positional input of the next
+node. Avalanche schedules the resulting DAG when the workflow runs.
+
+<Accordion title="Develop with editable local checkouts">
+  To develop Avalanche and PredictRLM alongside a new workspace, initialize it
+  with editable dependencies:
+
+  ```bash
+  uvx avalanche-ai init --editable-deps
+  ```
+
+  This clones both projects into `.trampoline-ai/` and uses those checkouts as
+  editable dependencies.
+</Accordion>
+
+Next: [Build a workflow with the Avalanche skill](../build-workflows/build-with-skill).
