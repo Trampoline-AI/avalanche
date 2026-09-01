@@ -16,6 +16,8 @@
   typed host and workflow-workspace APIs for local and hosted shells.
 - Prepared `@trampoline-ai/operator-ui` for independent GitHub Packages releases with archive
   verification and a versioned release workflow.
+- Added a package-specific README so GitHub Packages displays operator UI installation and
+  embedding guidance.
 
 ## 0.1.5rc1
 

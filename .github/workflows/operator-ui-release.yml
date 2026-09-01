@@ -101,6 +101,7 @@ jobs:
           test -f "$PACKAGE_ROOT/dist/index.d.ts"
           test -f "$PACKAGE_ROOT/dist/styles.css"
           test -f "$PACKAGE_ROOT/dist/ui/OperatorUi.d.ts"
+          test -f "$PACKAGE_ROOT/README.md"
           node --input-type=module <<'EOF'
           import { readFile } from "node:fs/promises";
 
