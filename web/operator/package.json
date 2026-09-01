@@ -1,6 +1,6 @@
 {
   "name": "@trampoline-ai/operator-ui",
-  "version": "0.1.0-rc1",
+  "version": "0.1.0-rc2",
   "description": "Embeddable React UI for Avalanche operators",
   "license": "Apache-2.0",
   "repository": {
@@ -15,7 +15,8 @@
   "type": "module",
   "types": "./dist/index.d.ts",
   "files": [
-    "dist"
+    "dist",
+    "README.md"
   ],
   "sideEffects": [
     "./dist/styles.css"
