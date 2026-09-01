@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+### Dependencies
+
+- Updated the operator web workspace's transitive `nanoid` package to 3.3.18.
+
 ## 0.2.0
 
 ### Continuous integration
