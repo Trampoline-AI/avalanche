@@ -238,9 +238,9 @@ def test_local_service_input_lifecycle_receipts_and_fan_in():
     assert receipts[0].value["node"] == "join_1"
 
     opens = [event for event in events if event[1] == "open"]
-    assert [event[0] for event in opens] == ["typed_1", "selected_1", "join_1"]
-    assert opens[0][3] == ()
-    assert opens[1][3] == ()
+    assert {event[0] for event in opens[:2]} == {"typed_1", "selected_1"}
+    assert opens[2][0] == "join_1"
+    assert all(event[3] == () for event in opens[:2])
     assert [receipt["node"] for receipt in opens[2][3]] == ["typed_1", "selected_1"]
     for node_id in ("typed_1", "selected_1", "join_1"):
         assert [event[1] for event in events if event[0] == node_id] == [

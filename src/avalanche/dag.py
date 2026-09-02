@@ -49,12 +49,13 @@ When a workflow runs:
 from __future__ import annotations
 
 from collections import defaultdict
-from concurrent.futures import CancelledError
+from concurrent.futures import FIRST_COMPLETED, CancelledError, Future, ThreadPoolExecutor, wait
 from contextvars import ContextVar
 from copy import copy
 from dataclasses import dataclass, field
 from enum import Enum
 from functools import update_wrapper, wraps
+from threading import Lock
 from typing import TYPE_CHECKING, Any, Callable, DefaultDict, TypeVar, get_type_hints
 
 from ulid import ULID
@@ -2291,6 +2292,7 @@ class Workflow:
         # Service receipts are a separate control channel. They are never
         # stored in result_refs or exposed to workflow arguments/context.
         receipt_refs: dict[str, Any] = {}
+        receipt_refs_lock = Lock()
 
         # Build reverse dependency map (child -> parents) for execution.
         # Keep the original map so rerun stream providers can still identify
@@ -2322,10 +2324,14 @@ class Workflow:
             )
         )
 
-        def submit_node(node_id: str) -> tuple[NodeFuture, Any]:
+        def submit_node(
+            node_id: str,
+            *,
+            emit_hooks: bool = True,
+        ) -> tuple[NodeFuture, Any]:
             node_ref = self.nodes[node_id]
 
-            if hooks and hooks.on_node_start:
+            if emit_hooks and hooks and hooks.on_node_start:
                 hooks.on_node_start(node_id)
 
             node_system_context = _context_for_node(
@@ -2579,11 +2585,12 @@ class Workflow:
                 if execution_services is not None:
                     from .execution_services import ExecutionTaskSpec
 
-                    parent_receipts = tuple(
-                        receipt_refs[parent_id]
-                        for parent_id in dependencies_map.get(node_id, [])
-                        if parent_id in receipt_refs
-                    )
+                    with receipt_refs_lock:
+                        parent_receipts = tuple(
+                            receipt_refs[parent_id]
+                            for parent_id in dependencies_map.get(node_id, [])
+                            if parent_id in receipt_refs
+                        )
                     result, receipt_ref, status_ref = executor.submit_with_services(
                         actual_fn,
                         execution_services,
@@ -2603,7 +2610,8 @@ class Workflow:
                         *resolved_args,
                         **resolved_kwargs,
                     )
-                    receipt_refs[node_id] = receipt_ref
+                    with receipt_refs_lock:
+                        receipt_refs[node_id] = receipt_ref
                     if is_ray_executor and status_ref is not None:
                         # Status is a same-task completion/failure marker. Keep
                         # receipts worker-side until terminal publication.
@@ -2627,7 +2635,7 @@ class Workflow:
                         **resolved_kwargs,
                     )
             except Exception as exc:
-                if hooks and hooks.on_node_failure:
+                if emit_hooks and hooks and hooks.on_node_failure:
                     hooks.on_node_failure(node_id, exc)
                 raise
 
@@ -2672,6 +2680,32 @@ class Workflow:
             # unwrap_result / driver boundary: convert internal handles back to
             # public AppendResult (payload fetch here is intentional).
             return _materialize_append_handles_for_driver(value, executor)
+
+        def complete_non_ray_node(
+            node_id: str,
+            node_ref: NodeFuture,
+            result: Any,
+        ) -> None:
+            try:
+                if hooks and (hooks.on_node_success or hooks.unwrap_result):
+                    resolved_val = resolve_submitted_result(node_ref, result)
+                    if hooks.unwrap_result:
+                        user_val = _unwrap_lineaged_tree(resolved_val)
+                        replacement = hooks.unwrap_result(node_id, user_val)
+                        result = _reattach_lineage(replacement, resolved_val)
+                    else:
+                        result = resolved_val
+                    if hooks.on_node_success:
+                        hooks.on_node_success(node_id)
+                result_refs[node_id] = result
+            except Exception as exc:
+                if hooks and hooks.on_node_failure:
+                    hooks.on_node_failure(node_id, exc)
+                raise
+
+        from runtime.executor import LocalExecutor
+
+        is_local_executor = isinstance(executor, LocalExecutor)
 
         observe_ray_completion = bool(
             is_ray_executor
@@ -2817,6 +2851,73 @@ class Workflow:
                     cancelled = True
             if cancelled:
                 raise CancelledError()
+        elif is_local_executor:
+            completed_nodes: set[str] = set()
+            remaining_nodes = list(execution_order)
+            pending_tasks: dict[Future[tuple[NodeFuture, Any]], str] = {}
+            primary_failure: Exception | None = None
+            cancelled = False
+
+            def dependencies_ready(node_id: str) -> bool:
+                return all(
+                    parent_id in completed_nodes
+                    for parent_id in dependencies_map.get(node_id, [])
+                )
+
+            with ThreadPoolExecutor(
+                max_workers=executor.max_workers,
+                thread_name_prefix=f"avalanche-local-{run_id}",
+            ) as pool:
+                while remaining_nodes or pending_tasks:
+                    if primary_failure is None and not cancelled:
+                        for node_id in list(remaining_nodes):
+                            if cancel_requested and cancel_requested():
+                                cancelled = True
+                                break
+                            if not dependencies_ready(node_id):
+                                continue
+
+                            if hooks and hooks.on_node_start:
+                                hooks.on_node_start(node_id)
+                            task = pool.submit(submit_node, node_id, emit_hooks=False)
+                            pending_tasks[task] = node_id
+                            remaining_nodes.remove(node_id)
+
+                    if not pending_tasks:
+                        if primary_failure is not None or cancelled:
+                            break
+                        if remaining_nodes:
+                            raise RuntimeError("Local workflow scheduler has no runnable nodes")
+                        break
+
+                    wait(tuple(pending_tasks), return_when=FIRST_COMPLETED)
+                    completed_tasks = [task for task in pending_tasks if task.done()]
+                    for task in completed_tasks:
+                        node_id = pending_tasks.pop(task)
+                        try:
+                            node_ref, result = task.result()
+                        except Exception as exc:
+                            if hooks and hooks.on_node_failure:
+                                hooks.on_node_failure(node_id, exc)
+                            if primary_failure is None:
+                                primary_failure = exc
+                            continue
+
+                        try:
+                            complete_non_ray_node(node_id, node_ref, result)
+                        except Exception as exc:
+                            if primary_failure is None:
+                                primary_failure = exc
+                        else:
+                            completed_nodes.add(node_id)
+
+                    if cancel_requested and cancel_requested():
+                        cancelled = True
+
+            if primary_failure is not None:
+                raise primary_failure
+            if cancelled:
+                raise CancelledError()
         else:
             for node_id in execution_order:
                 # Check cancellation before starting each node
@@ -2824,27 +2925,7 @@ class Workflow:
                     raise CancelledError()
 
                 node_ref, result = submit_node(node_id)
-                # For non-Ray executors, resolve refs immediately so
-                # on_node_success fires after actual completion (not just
-                # submission). This serializes execution but gives accurate
-                # per-node progress — the right tradeoff for the operator.
-                if hooks and (hooks.on_node_success or hooks.unwrap_result):
-                    # Wait for completion and resolve to actual value.
-                    # For multi-return nodes (num_returns > 1), result is
-                    # a tuple of refs; for single-return it's one ref/value.
-                    resolved_val = resolve_submitted_result(node_ref, result)
-                    # Unwrap side-channel data (e.g. logs from Ray workers).
-                    # Hooks see user-facing values; result_refs keeps the
-                    # lineage-preserving envelope for downstream dataflow.
-                    if hooks.unwrap_result:
-                        user_val = _unwrap_lineaged_tree(resolved_val)
-                        replacement = hooks.unwrap_result(node_id, user_val)
-                        result = _reattach_lineage(replacement, resolved_val)
-                    else:
-                        result = resolved_val
-                    if hooks.on_node_success:
-                        hooks.on_node_success(node_id)
-                result_refs[node_id] = result
+                complete_non_ray_node(node_id, node_ref, result)
 
         # If workflow doesn't return anything, wait for all nodes to complete.
         # Skip if hooks were active — we already resolved per-node above.

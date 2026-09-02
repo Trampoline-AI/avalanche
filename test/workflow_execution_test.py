@@ -1,5 +1,7 @@
 """Integration tests for Workflow execution with Ray."""
 
+import threading
+
 import pytest
 
 from avalanche.dag import dest, source, step, workflow
@@ -50,6 +52,34 @@ class TestWorkflowExecution:
 
         print("✓ Workflow executed locally!")
         print(f"  Result: {result}")
+
+    def test_workflow_parallel_execution_with_local_executor(self):
+        """Independent ``&`` branches overlap and fan in with stable argument order."""
+        both_running = threading.Barrier(2)
+
+        @source
+        def left():
+            both_running.wait(timeout=2)
+            return "left"
+
+        @source
+        def right():
+            both_running.wait(timeout=2)
+            return "right"
+
+        @dest
+        def join(left_value, right_value):
+            return left_value, right_value
+
+        @workflow
+        def parallel_workflow():
+            return (left() & right()) >> join()
+
+        result = (
+            parallel_workflow().run(executor=LocalExecutor(max_workers=2)).result(timeout=5)
+        )
+
+        assert result == ("left", "right")
 
     @pytest.mark.ray
     def test_workflow_execution_with_ray_executor(self):

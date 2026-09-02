@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import threading
 from collections.abc import Callable
 from functools import wraps
 from typing import Any
@@ -124,6 +125,32 @@ async def test_local_executor_resolves_async_task_inside_existing_event_loop():
         return left + right
 
     assert executor.submit(add, 2, 3) == 5
+
+
+def test_local_executor_runs_independent_async_nodes_concurrently():
+    both_running = threading.Barrier(2)
+
+    async def left_impl() -> str:
+        await asyncio.sleep(0)
+        both_running.wait(timeout=2)
+        return "left"
+
+    async def right_impl() -> str:
+        await asyncio.sleep(0)
+        both_running.wait(timeout=2)
+        return "right"
+
+    left = ava.source(left_impl)
+    right = ava.source(right_impl)
+    join = ava.dest(lambda left_value, right_value: (left_value, right_value))
+
+    @ava.workflow
+    def parallel_workflow():
+        return (left() & right()) >> join()
+
+    assert parallel_workflow().run(executor=ava.LocalExecutor(max_workers=2)).result(
+        timeout=5
+    ) == ("left", "right")
 
 
 @pytest.mark.ray

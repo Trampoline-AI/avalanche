@@ -143,20 +143,23 @@ and tools stay step-local capabilities.
 
 ### Executors
 
-`LocalExecutor` executes submitted node functions in the local coordinator
-process. `RayExecutor` submits work to Ray when selected. The DAG runtime, not
-the UI or operator parent, controls dependency order and binding. Ray object
-references remain distributed until a consumer needs materialization; the
-operator parent receives lifecycle events and encoded terminal results rather
-than live task objects.
+`LocalExecutor` runs dependency-ready nodes concurrently in a per-run thread
+pool inside the local coordinator process. Its worker bound is configurable;
+one worker provides serial execution. Node arguments and fan-in receipts retain
+DAG declaration order even when sibling completion order differs. `RayExecutor`
+submits work to Ray when selected. The DAG runtime, not the UI or operator
+parent, controls dependency order and binding. Ray object references remain
+distributed until a consumer needs materialization; the operator parent
+receives lifecycle events and encoded terminal results rather than live task
+objects.
 
 For an operator run, executor construction happens in the spawned coordinator:
 
 ```text
 Operator parent
   └── coordinator imports one workflow module and builds one Workflow
-        ├── LocalExecutor: local node execution with queue-backed observers
-        └── RayExecutor: Ray runtime environment + Ray log queue
+        ├── LocalExecutor: dependency-ready thread-pool nodes + queue observers
+        └── RayExecutor: Ray tasks + Ray log queue
 ```
 
 The coordinator tears down its executor after a terminal outcome. The parent

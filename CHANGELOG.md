@@ -17,6 +17,15 @@
 - `ava init` now configures its starter workspace to scan `src/`, so
   `uv run ava dev` discovers newly added starter workflows without a local wrapper.
 
+### Workflow execution
+
+- `LocalExecutor` now runs independent, dependency-ready workflow nodes
+  concurrently in a bounded thread pool while preserving fan-in argument,
+  receipt, hook, and node-log behavior.
+- The cursor example keeps per-model embedding work parallel and commits both
+  results through one fan-in transaction, avoiding concurrent writes to the
+  shared Iceberg table.
+
 ## 0.2.0
 
 ### Continuous integration
