@@ -398,22 +398,39 @@ class _QueueLogHandler(logging.Handler):
 class _QueueStream:
     def __init__(self, event_queue: Any, node_id: str, level: int) -> None:
         self._queue = event_queue
-        self.node_id = node_id
+        self._default_node_id = node_id
         self._level = level
-        self._buffer = ""
+        self._local = threading.local()
+
+    def bind_node(self, node_id: str) -> tuple[bool, str]:
+        """Bind writes from the current worker thread to one node."""
+        had_binding = hasattr(self._local, "node_id")
+        previous = self._local.node_id if had_binding else self._default_node_id
+        self._local.node_id = node_id
+        return had_binding, previous
+
+    def reset_node(self, binding: tuple[bool, str]) -> None:
+        """Restore the current worker thread's prior node binding."""
+        had_binding, previous = binding
+        if had_binding:
+            self._local.node_id = previous
+        else:
+            del self._local.node_id
 
     def write(self, value: str) -> int:
-        self._buffer += value
-        while "\n" in self._buffer:
-            line, self._buffer = self._buffer.split("\n", 1)
+        buffer = getattr(self._local, "buffer", "") + value
+        while "\n" in buffer:
+            line, buffer = buffer.split("\n", 1)
             if line.strip():
                 self._emit(line.rstrip())
+        self._local.buffer = buffer
         return len(value)
 
     def flush(self) -> None:
-        if self._buffer.strip():
-            self._emit(self._buffer.rstrip())
-        self._buffer = ""
+        buffer = getattr(self._local, "buffer", "")
+        if buffer.strip():
+            self._emit(buffer.rstrip())
+        self._local.buffer = ""
 
     def isatty(self) -> bool:
         return False
@@ -432,7 +449,8 @@ class _QueueStream:
                 "type": "log",
                 "timestamp": time.time(),
                 "level": self._level,
-                "node_id": current_agent_log_node_id() or self.node_id,
+                "node_id": current_agent_log_node_id()
+                or getattr(self._local, "node_id", self._default_node_id),
                 "message": _bounded_event_text(message, 65_536),
             },
         )
@@ -462,31 +480,29 @@ def _with_node_streams(
 
         @wraps(fn)
         async def async_wrapper(*args: Any, **kwargs: Any) -> Any:
-            old_stdout, old_stderr = stdout.node_id, stderr.node_id
-            stdout.node_id = name
-            stderr.node_id = name
+            stdout_binding = stdout.bind_node(name)
+            stderr_binding = stderr.bind_node(name)
             try:
                 return await fn(*args, **kwargs)
             finally:
                 stdout.flush()
                 stderr.flush()
-                stdout.node_id = old_stdout
-                stderr.node_id = old_stderr
+                stdout.reset_node(stdout_binding)
+                stderr.reset_node(stderr_binding)
 
         return async_wrapper
 
     @wraps(fn)
     def wrapper(*args: Any, **kwargs: Any) -> Any:
-        old_stdout, old_stderr = stdout.node_id, stderr.node_id
-        stdout.node_id = name
-        stderr.node_id = name
+        stdout_binding = stdout.bind_node(name)
+        stderr_binding = stderr.bind_node(name)
         try:
             return fn(*args, **kwargs)
         finally:
             stdout.flush()
             stderr.flush()
-            stdout.node_id = old_stdout
-            stderr.node_id = old_stderr
+            stdout.reset_node(stdout_binding)
+            stderr.reset_node(stderr_binding)
 
     return wrapper
 

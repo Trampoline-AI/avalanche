@@ -9,7 +9,7 @@ from runtime.executor import LocalExecutor, RayExecutor, get_default_executor
 
 
 class TestLocalExecutor:
-    """Test LocalExecutor for sequential execution."""
+    """Test LocalExecutor's synchronous call API and workflow worker configuration."""
 
     def test_local_executor_submit_executes_immediately(self):
         """Test that LocalExecutor executes functions immediately."""
@@ -66,6 +66,16 @@ class TestLocalExecutor:
 
         with pytest.raises(ValueError, match="expected to return 2 values"):
             executor.submit(return_triple, num_returns=2)
+
+    @pytest.mark.parametrize("max_workers", [0, -1])
+    def test_local_executor_rejects_non_positive_max_workers(self, max_workers):
+        with pytest.raises(ValueError, match="greater than zero"):
+            LocalExecutor(max_workers=max_workers)
+
+    @pytest.mark.parametrize("max_workers", [True, 1.5, "2"])
+    def test_local_executor_rejects_non_integer_max_workers(self, max_workers):
+        with pytest.raises(TypeError, match="integer or None"):
+            LocalExecutor(max_workers=max_workers)
 
 
 @pytest.mark.ray

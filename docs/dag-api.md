@@ -98,6 +98,28 @@ def fanout_flow():
     )
 ```
 
+`&` records fan-out and fan-in dependencies. During local execution, every node
+whose parents have completed is eligible to run in the `LocalExecutor` thread
+pool, so independent branches overlap. The downstream node starts only after
+both branches complete, and receives their values in declaration order.
+
+`LocalExecutor(max_workers=...)` can bound local concurrency. Its default uses
+Python's standard thread-pool worker count. Threads are effective for I/O-bound
+nodes and native libraries that release the GIL; use `RayExecutor` for
+distributed or CPU-bound Python execution. Concurrent nodes that share external
+state must provide their own synchronization.
+
+When parallel branches produce data for the same transactional table, keep the
+computation parallel but use one downstream writer. Each branch returns its
+prepared data; the fan-in node combines the values and commits them in one
+transaction. Two sibling transactions against the same table may conflict even
+though the DAG nodes are otherwise independent.
+
+```python
+prepared = source() >> (prepare_left() & prepare_right())
+return prepared >> persist_both()
+```
+
 ## Multiple outputs
 
 Set `num_returns` when downstream nodes need individual values from a tuple-like
@@ -261,8 +283,12 @@ result = run.result()
 result = await document_flow().run(executor=ava.LocalExecutor())
 ```
 
-Use `ava.LocalExecutor` for local execution. `ava.RayExecutor` is available when
-Ray support is installed. Call `run.cancel()` to request cooperative cancellation.
+Use `ava.LocalExecutor` for concurrent in-process execution. Pass
+`max_workers=1` when a workflow must run serially, or a larger value to bound
+the number of local node threads. `ava.RayExecutor` is available when Ray
+support is installed. Call `run.cancel()` to request cooperative cancellation;
+already-submitted local nodes are allowed to finish, while their unscheduled
+descendants do not start.
 
 For task-scoped platform resources, pass `ava.ExecutionServicesSpec`; see
 [Execution services](execution-services.md).

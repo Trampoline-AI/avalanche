@@ -162,7 +162,10 @@ methods. Sessions never cross from one task attempt to another.
 
 ### Local and Ray execution
 
-`LocalExecutor` invokes the lifecycle synchronously and carries values directly.
+`LocalExecutor` runs each node's lifecycle synchronously within that node's
+worker thread and carries values directly. Independent node lifecycles may
+overlap, while a dependent lifecycle receives completed parent receipts in DAG
+order.
 
 `RayExecutor` runs the complete lifecycle inside one Ray task. The task returns three
 separate channels: user payloads, one small receipt, and one status marker. The driver

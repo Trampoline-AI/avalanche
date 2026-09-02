@@ -1,9 +1,9 @@
 """
 Execution engines for Avalanche workflows.
 
-Provides abstract interface for different execution backends:
+Provides abstract interfaces for different execution backends:
 - RayExecutor: Distributed execution with Ray
-- LocalExecutor: Sequential execution for testing
+- LocalExecutor: Concurrent in-process workflow execution
 - (Future: DaskExecutor, etc.)
 """
 
@@ -255,17 +255,26 @@ class Executor(Protocol):
 
 class LocalExecutor:
     """
-    Sequential local executor for testing and development.
+    In-process executor for testing and local development.
 
-    Executes tasks synchronously in the current process.
-    Since execution is immediate, refs are just the actual values.
+    Direct ``submit`` calls execute synchronously and return materialized values.
+    ``Workflow.run`` uses ``max_workers`` to execute dependency-ready nodes in a
+    thread pool while preserving DAG ordering.
 
     Useful for:
     - Testing
     - Debugging
-    - Small workflows
+    - I/O-bound workflows
     - Local development
     """
+
+    def __init__(self, *, max_workers: int | None = None) -> None:
+        if max_workers is not None:
+            if type(max_workers) is not int:
+                raise TypeError("max_workers must be an integer or None")
+            if max_workers <= 0:
+                raise ValueError("max_workers must be greater than zero")
+        self.max_workers = max_workers
 
     def submit(
         self, fn: Callable, *args: Any, num_returns: int = 1, **kwargs: Any

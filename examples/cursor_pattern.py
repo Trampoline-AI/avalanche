@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import json
 import os
+from dataclasses import dataclass
 from pathlib import Path
 
 import dataframely as dy
@@ -47,6 +48,13 @@ class EmbeddingSchema(dy.Schema):
     chunk_id = dy.String(nullable=False)
     model = dy.String(nullable=False)
     vector = dy.Binary(nullable=False)
+
+
+@dataclass(frozen=True)
+class PendingEmbeddings:
+    data: pl.DataFrame | None
+    chunk_count: int
+    source_snapshot_id: int
 
 
 class ExampleNamespace(ava.IcebergNs):
@@ -113,31 +121,44 @@ def embed_chunks_per_model(
     *,
     model: str = "local_demo",
     source=ns.chunk,
-    dest=ns.embedding,
+    checkpoint=ava.Cursor(ns.embedding, key="embedding_models"),
+) -> PendingEmbeddings:
+    """Compute one model's embeddings without committing shared table state."""
+    last_snapshot = checkpoint.get()
+    chunk_df = source.append_scan(start_snapshot_id=last_snapshot).to_polars()
+    current_snapshot = source.current_snapshot().snapshot_id
+    embeddings = None if chunk_df.is_empty() else generate_embeddings(chunk_df, model=model)
+    return PendingEmbeddings(
+        data=embeddings,
+        chunk_count=len(chunk_df),
+        source_snapshot_id=current_snapshot,
+    )
+
+
+@ava.step
+def persist_embeddings(
+    local_batch: PendingEmbeddings,
+    backup_batch: PendingEmbeddings,
+    *,
+    cursor=ava.Cursor(ns.embedding, key="embedding_models"),
 ) -> str:
-    """Embed newly chunked documents for one model."""
-    key = f"embed_{model.replace('-', '_')}"
-    cursor = ava.Cursor(dest, key=key)
+    """Commit parallel embedding results and their shared checkpoint once."""
+    if local_batch.source_snapshot_id != backup_batch.source_snapshot_id:
+        raise ValueError("Embedding branches read different chunk snapshots")
 
+    frames = [batch.data for batch in (local_batch, backup_batch) if batch.data is not None]
     with cursor.tx() as tx:
-        last_snapshot = cursor.get()
-        chunk_df = source.append_scan(start_snapshot_id=last_snapshot).to_polars()
-        current_snapshot = source.current_snapshot().snapshot_id
+        if frames:
+            tx.append(pl.concat(frames).to_arrow())
+        cursor.set(local_batch.source_snapshot_id)
 
-        if chunk_df.is_empty():
-            cursor.set(current_snapshot)
-            return f"no chunks for {model}"
-
-        embeddings = generate_embeddings(chunk_df, model=model)
-        tx.append(embeddings.to_arrow())
-        cursor.set(current_snapshot)
-        return f"embedded {len(chunk_df)} chunks with {model}"
+    total_embeddings = sum(batch.chunk_count for batch in (local_batch, backup_batch))
+    return f"persisted {total_embeddings} embeddings"
 
 
 @ava.dest
 def sync_to_vector_db(
-    _local_embeddings: object = None,
-    _backup_embeddings: object = None,
+    _persisted_embeddings: object = None,
     *,
     cursor=ava.Cursor(ns.embedding, key="vector_db_sync"),
     chunks=ns.chunk,
@@ -162,16 +183,11 @@ def sync_to_vector_db(
 
 @ava.workflow
 def cursor_workflow():
-    # Equivalent NodeFuture argument form, less visual:
-    # load = load_documents()
-    # chunk = chunk_documents(load)
-    # embed_local = embed_chunks_per_model(chunk)
-    # embed_backup = embed_chunks_per_model(chunk, model="backup_demo")
-    # sync = sync_to_vector_db(embed_local, embed_backup)
     return (
         load_documents()
         >> chunk_documents()
         >> (embed_chunks_per_model() & embed_chunks_per_model(model="backup_demo"))
+        >> persist_embeddings()
         >> sync_to_vector_db()
     )
 
