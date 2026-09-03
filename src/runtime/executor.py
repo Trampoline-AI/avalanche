@@ -268,6 +268,8 @@ class LocalExecutor:
     - Local development
     """
 
+    max_workers: int | None = None
+
     def __init__(self, *, max_workers: int | None = None) -> None:
         if max_workers is not None:
             if type(max_workers) is not int:

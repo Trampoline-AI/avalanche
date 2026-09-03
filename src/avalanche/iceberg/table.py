@@ -16,11 +16,13 @@ All PyIceberg Table methods are accessible through this wrapper:
 """
 
 from collections.abc import Sequence
+from threading import Lock
 from typing import TYPE_CHECKING, Any, Optional, Tuple, Union
 
 import polars as pl
 import pyarrow as pa
 from pydantic import BaseModel
+from pyiceberg.exceptions import CommitFailedException
 from pyiceberg.schema import Schema as IcebergSchema
 from pyiceberg.table import ALWAYS_TRUE, EMPTY_DICT, BooleanExpression, Properties, Table
 from pyiceberg.types import NestedField, StringType, TimestampType
@@ -33,6 +35,8 @@ from .schema import normalize_schema
 
 if TYPE_CHECKING:
     from .namespace import IcebergAppendScan
+
+_APPEND_RETRIES = 3
 
 
 def _with_row_lineage_schema(schema: IcebergSchema) -> IcebergSchema:
@@ -80,6 +84,8 @@ def _reconnect_table(
     table._table_name = identifier
     table.row_lineage = row_lineage
     table.row_model = row_model
+    table._append_lock = Lock()
+
     table._reconnect_spec = (
         catalog_name,
         catalog_props,
@@ -138,6 +144,7 @@ class IcebergTable(StorageTable):
 
         self._table: Table | None = None
         self._reconnect_spec: tuple[str, dict, str, bool, type | None] | None = None
+        self._append_lock = Lock()
 
     def __reduce__(self) -> tuple[Any, tuple]:
         """Pickle as a reconnect recipe (catalog address + identifier).
@@ -245,11 +252,7 @@ class IcebergTable(StorageTable):
                 "Cannot append - table has not been created yet. Call namespace.push() first."
             )
 
-        # Refresh so cross-process commits (e.g. Ray workers) are on the latest
-        # metadata before this append; avoids committing from a stale snapshot.
-        self._refresh_table_metadata()
-
-        # Convert to PyArrow if needed
+        # Convert to PyArrow if needed.
         if isinstance(df, pl.DataFrame):
             arrow_data = df.to_arrow()
         else:
@@ -263,19 +266,31 @@ class IcebergTable(StorageTable):
                 context=get_current_run_context(),
             )
 
-        arrow_data = self._cast_to_table_schema(arrow_data)
+        # ``Table.refresh()`` mutates the PyIceberg handle. Serialize appends
+        # through this wrapper instance so each AppendResult retains its own
+        # committed snapshot ID; separate workers retry catalog conflicts below.
+        last_error: CommitFailedException | None = None
+        with self._append_lock:
+            for _ in range(_APPEND_RETRIES):
+                self._refresh_table_metadata()
+                attempt_data = self._cast_to_table_schema(arrow_data)
+                try:
+                    self._table.append(attempt_data)
+                except CommitFailedException as exc:
+                    last_error = exc
+                    continue
 
-        # Call underlying PyIceberg append
-        self._table.append(arrow_data)
+                snapshot_id = self.current_version_id
+                assert snapshot_id is not None
+                return AppendResult(
+                    data=attempt_data,
+                    snapshot_id=snapshot_id,
+                    table_identity=self.identifier,
+                    row_model=self.row_model,
+                )
 
-        snapshot_id = self.current_version_id
-        assert snapshot_id is not None
-        return AppendResult(
-            data=arrow_data,
-            snapshot_id=snapshot_id,
-            table_identity=self.identifier,
-            row_model=self.row_model,
-        )
+        assert last_error is not None
+        raise last_error
 
     def _cast_to_table_schema(self, arrow_data: pa.Table | pa.RecordBatch) -> pa.Table:
         """Align Arrow field types/nullability with the declared Iceberg schema."""

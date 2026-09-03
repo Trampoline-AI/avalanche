@@ -106,19 +106,12 @@ both branches complete, and receives their values in declaration order.
 `LocalExecutor(max_workers=...)` can bound local concurrency. Its default uses
 Python's standard thread-pool worker count. Threads are effective for I/O-bound
 nodes and native libraries that release the GIL; use `RayExecutor` for
-distributed or CPU-bound Python execution. Concurrent nodes that share external
-state must provide their own synchronization.
+distributed or CPU-bound Python execution.
 
-When parallel branches produce data for the same transactional table, keep the
-computation parallel but use one downstream writer. Each branch returns its
-prepared data; the fan-in node combines the values and commits them in one
-transaction. Two sibling transactions against the same table may conflict even
-though the DAG nodes are otherwise independent.
-
-```python
-prepared = source() >> (prepare_left() & prepare_right())
-return prepared >> persist_both()
-```
+Parallel nodes have no ordering guarantee. Independent nodes can append to the
+same Avalanche table; both appends are retained, but commit order is unspecified.
+If a node must observe another node's output or otherwise follow it, express that
+dependency with `>>`. Other shared external state still needs user synchronization.
 
 ## Multiple outputs
 

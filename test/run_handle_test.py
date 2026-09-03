@@ -38,7 +38,7 @@ def test_run_returns_active_handle_with_canonical_context_id():
     release.set()
     assert handle.result(timeout=5) == (
         "caller-run",
-        "avalanche-run-caller-run",
+        "avalanche-local-caller-run_0",
         False,
     )
     assert handle.done()

@@ -290,11 +290,17 @@ class LanceTable(Table):
                 context=get_current_run_context(),
             )
         arrow_data = arrow_data.cast(self.schema)
-        mode = "append" if self._dataset_exists() else "overwrite"
-        lance.write_dataset(arrow_data, self.location, mode=mode)
+        dataset_exists = self._dataset_exists()
+        try:
+            dataset = lance.write_dataset(arrow_data, self.location, mode="append")
+        except OSError:
+            # ``append`` creates a dataset when absent. If a sibling writer won
+            # that initial creation, retry against the dataset it committed.
+            if dataset_exists or not self._dataset_exists():
+                raise
+            dataset = lance.write_dataset(arrow_data, self.location, mode="append")
 
-        snapshot_id = self.current_version_id
-        assert snapshot_id is not None
+        snapshot_id = int(dataset.version)
         return AppendResult(
             data=arrow_data,
             snapshot_id=snapshot_id,

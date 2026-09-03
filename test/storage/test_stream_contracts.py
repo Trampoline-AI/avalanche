@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import asyncio
+import threading
 from collections.abc import Callable
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from typing import Any
 
@@ -97,6 +99,20 @@ def _rows(*ids: int) -> pl.DataFrame:
 def _value_rows(values: list[str]) -> pl.DataFrame:
     ids = list(range(1, len(values) + 1))
     return pl.DataFrame({"id": ids, "value": values})
+
+
+def test_concurrent_appends_preserve_every_data_version(table):
+    barrier = threading.Barrier(2)
+
+    def append(row_id: int):
+        barrier.wait()
+        return table.append(_rows(row_id))
+
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        results = list(pool.map(append, (1, 2)))
+
+    assert len({result.snapshot_id for result in results}) == 2
+    assert table.read().sort("id")["id"].to_list() == [1, 2]
 
 
 def test_consume_stream_reads_one_data_version_at_a_time(table):
