@@ -1,5 +1,7 @@
 """Tests for workspace-configured workflow targets."""
 
+from pathlib import Path
+
 import pytest
 
 from runtime.operator.workspace_config import format_scan_targets, select_workflow_targets
@@ -62,4 +64,22 @@ def test_invalid_workspace_target_identifies_its_configuration(tmp_path):
     config_path.write_text('[tool.avalanche]\nflow_targets = ["missing.py"]\n')
 
     with pytest.raises(ValueError, match=str(config_path)):
+        select_workflow_targets([], working_directory=workspace)
+
+
+def test_unresolved_workspace_home_directory_target_is_a_validation_error(
+    tmp_path, monkeypatch
+):
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    (workspace / "pyproject.toml").write_text(
+        '[tool.avalanche]\nflow_targets = ["~missing-user/flow.py"]\n'
+    )
+
+    def raise_unresolved_home_directory(_path: Path) -> Path:
+        raise RuntimeError("Could not determine home directory.")
+
+    monkeypatch.setattr(Path, "expanduser", raise_unresolved_home_directory)
+
+    with pytest.raises(ValueError, match="unresolved home directory"):
         select_workflow_targets([], working_directory=workspace)

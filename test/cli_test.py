@@ -1920,6 +1920,27 @@ def test_ava_dev_starts_services_after_operator_readiness(monkeypatch, capsys):
     assert "Scan targets (command line)" in output
     assert f"{Path('examples').resolve()} (directory)" in output
 
+@pytest.mark.parametrize("signum", (signal.SIGINT, signal.SIGTERM))
+def test_ava_dev_interrupts_blocking_discovery(monkeypatch, signum):
+    from ava_cli import app
+    from runtime.operator import operator as operator_module
+
+    installed_handlers = {}
+
+    def record_handler(registered_signum, handler):
+        installed_handlers[registered_signum] = handler
+
+    class BlockingOperator:
+        def __init__(self, *_args, **_kwargs):
+            installed_handlers[signum](signum, None)
+            pytest.fail("Discovery continued after its shutdown signal")
+
+    monkeypatch.setattr(app, "_configure_terminal_logging", lambda _level: None)
+    monkeypatch.setattr(app.signal, "signal", record_handler)
+    monkeypatch.setattr(operator_module, "Operator", BlockingOperator)
+
+    assert app.main(["dev", "examples"]) == 0
+
 
 def test_ava_dev_reports_discovery_failure_without_starting_services(monkeypatch, capsys):
     from ava_cli import app

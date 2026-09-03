@@ -1401,11 +1401,10 @@ def _run_dev(args: argparse.Namespace) -> int:
     grpc_server = None
     browser_server = None
     exit_code = 0
-    stop_requested = threading.Event()
     previous_handlers = {}
 
     def request_shutdown(_signum, _frame) -> None:
-        stop_requested.set()
+        raise KeyboardInterrupt
 
     if threading.current_thread() is threading.main_thread():
         for signum in (signal.SIGINT, signal.SIGTERM):
@@ -1421,8 +1420,6 @@ def _run_dev(args: argparse.Namespace) -> int:
             discovery_timeout=args.discovery_timeout,
             executor_backend="ray" if args.ray else "local",
         )
-        if stop_requested.is_set():
-            raise KeyboardInterrupt
         workflow_count = len(operator.get_catalog().workflows)
         print(
             f"  Discovered {workflow_count} workflow"
@@ -1438,8 +1435,6 @@ def _run_dev(args: argparse.Namespace) -> int:
         finally:
             channel.close()
         print(f"  Operator ready: grpc://{operator_address}")
-        if stop_requested.is_set():
-            raise KeyboardInterrupt
 
         stage = "web UI startup"
         browser_server = start_browser_server(operator_address, port=args.web_port)
@@ -1448,11 +1443,10 @@ def _run_dev(args: argparse.Namespace) -> int:
         print("Ready. Press Ctrl-C to stop.")
 
         stage = "workflow watching"
-        while not stop_requested.is_set():
+        while True:
             failure = operator.wait_for_failure(timeout=0.1)
             if failure is not None:
                 raise failure
-        print("Stopping Avalanche dev...")
     except KeyboardInterrupt:
         print("Stopping Avalanche dev...")
     except WorkflowDiscoveryError as exc:
