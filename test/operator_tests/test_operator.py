@@ -15,6 +15,7 @@ from avalanche import LocalExecutor, RayExecutor
 from avalanche._agent_evidence import emit_agent_evidence
 from runtime.operator import Operator
 from runtime.operator import operator as operator_module
+from runtime.operator.discovery import WorkflowDiscoveryError
 from runtime.operator.models import (
     NodeState,
     NodeStatus,
@@ -298,7 +299,16 @@ class TestOperatorLifecycle:
         finally:
             operator.close()
 
-    def test_refresh_invalid_file_retains_descriptor_and_schedule(self, tmp_path, caplog):
+    def test_initial_discovery_error_aborts_operator_start(self, tmp_path):
+        workflow_file = tmp_path / "broken.py"
+        workflow_file.write_text("invalid Python !!!\n")
+
+        with pytest.raises(WorkflowDiscoveryError) as exc_info:
+            Operator(workflow_paths=[str(workflow_file)], schedule=False, watch=False)
+
+        assert exc_info.value.diagnostics[0].kind == "import_error"
+
+    def test_refresh_invalid_file_raises_and_preserves_descriptor_and_schedule(self, tmp_path):
         workflow_file = tmp_path / "scheduled.py"
         workflow_file.write_text(
             "import avalanche as ava\n"
@@ -313,16 +323,49 @@ class TestOperatorLifecycle:
         assert len(operator._scheduler.list_schedules()) == 1
 
         workflow_file.write_text("invalid Python !!!\n")
-        caplog.set_level("INFO", logger="runtime.operator.operator")
-        operator._refresh_workflows()
+
+        with pytest.raises(WorkflowDiscoveryError):
+            operator._refresh_workflows()
 
         assert [item.workflow_id for item in operator.list_workflows()] == [
             "scheduled.py::scheduled"
         ]
         assert len(operator._scheduler.list_schedules()) == 1
         assert [item.kind for item in operator.list_diagnostics()] == ["import_error"]
-        assert "Workflow reload failed; retaining catalog revision" in caplog.text
-        assert "import_error" in caplog.text
+
+    def test_watcher_records_discovery_failure_for_process_supervision(
+        self, tmp_path, monkeypatch
+    ):
+        workflow_file = tmp_path / "flow.py"
+        workflow_file.write_text(
+            "import avalanche as ava\n" "@ava.workflow\n" "def flow():\n" "    return None\n"
+        )
+        operator = Operator(workflow_paths=[str(workflow_file)], schedule=False, watch=False)
+        failure = WorkflowDiscoveryError(
+            (
+                WorkflowDiscoveryDiagnostic(
+                    path=str(workflow_file),
+                    kind="import_error",
+                    message="No module named 'missing_helper'",
+                ),
+            )
+        )
+
+        def fake_watch(*_paths, **_kwargs):
+            yield {("modified", str(workflow_file))}
+
+        monkeypatch.setattr("watchfiles.watch", fake_watch)
+        monkeypatch.setattr(
+            operator,
+            "_refresh_workflows",
+            lambda _changed_files: (_ for _ in ()).throw(failure),
+        )
+        try:
+            operator._watch_loop()
+
+            assert operator.wait_for_failure(timeout=0) is failure
+        finally:
+            operator.close()
 
     def test_reload_diagnostic_summary_bounds_complete_rendered_text(self):
         diagnostic = WorkflowDiscoveryDiagnostic(
@@ -372,7 +415,8 @@ class TestOperatorLifecycle:
                 "def flow():\n"
                 "    return None\n"
             )
-            operator._refresh_workflows()
+            with pytest.raises(RuntimeError, match="Workflow reload reconciliation failed"):
+                operator._refresh_workflows()
 
             assert operator._registry.view is previous
             assert "Workflow reload reconciliation failed" in caplog.text

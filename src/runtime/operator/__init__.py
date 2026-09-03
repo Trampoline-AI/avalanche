@@ -1,5 +1,8 @@
 """Avalanche Operator — workflow orchestration and execution."""
 
+import signal
+import threading
+
 from .models import (
     CatalogView,
     WorkflowDescriptor,
@@ -29,11 +32,7 @@ __all__ = [
 
 def _report_workflow_scan(operator: Operator) -> None:
     workflows = operator.get_catalog().workflows
-    if not workflows:
-        print("Workflow scan complete: 0 workflows loaded")
-        return
-    selectors = ", ".join(workflow.selector for workflow in workflows)
-    print(f"Workflow scan complete: {len(workflows)} workflows loaded: {selectors}")
+    print(f"  Discovered {len(workflows)} workflow" f"{'' if len(workflows) == 1 else 's'}")
 
 
 def serve(
@@ -44,12 +43,38 @@ def serve(
     webhook_port: int = 7434,
     **kwargs,
 ) -> None:
-    """Start the local operator daemon."""
+    """Start the local operator daemon and fail on any lifecycle error."""
     from .server import serve as _serve
 
     op = Operator(workflow_paths, webhook_port=webhook_port, **kwargs)
     _report_workflow_scan(op)
+    server = None
+    stop_requested = threading.Event()
+    previous_handlers = {}
+
+    def request_shutdown(_signum, _frame) -> None:
+        stop_requested.set()
+
+    if threading.current_thread() is threading.main_thread():
+        for signum in (signal.SIGINT, signal.SIGTERM):
+            previous_handlers[signum] = signal.getsignal(signum)
+            signal.signal(signum, request_shutdown)
+
     try:
-        _serve(op, port=port, block=True, host=host)
+        server = _serve(op, port=port, block=False, host=host)
+        print(f"  Operator ready: grpc://{host}:{port}")
+        print("Ready. Press Ctrl-C to stop.")
+        while not stop_requested.is_set():
+            failure = op.wait_for_failure(timeout=0.1)
+            if failure is not None:
+                raise failure
+    except KeyboardInterrupt:
+        pass
     finally:
-        op.close()
+        try:
+            if server is not None:
+                server.stop(grace=1.0).wait(timeout=2.0)
+        finally:
+            op.close()
+            for signum, handler in previous_handlers.items():
+                signal.signal(signum, handler)

@@ -9,13 +9,13 @@ description: Start local services, control operator runs, and retrieve results w
 
 ```bash
 # Discover flows and serve gRPC.
-uv run ava operator --flows ./flows
+uv run ava operator ./flows
 
 # Serve the browser UI for a running operator.
 uv run ava web --connect localhost:7433
 
 # Start both together.
-uv run ava dev --flows ./flows
+uv run ava dev ./flows
 ```
 
 Use `--ray` with `operator` or `dev` when the selected workflows should use the

@@ -22,6 +22,7 @@ TMUX = shutil.which("tmux")
 SESSION = "pytest-tui"
 TUI_CMD = "uv run ava tui"
 
+
 def tmux(*args: str, input: str | None = None) -> str:
     """Run a tmux command and return stdout."""
     result = subprocess.run(
@@ -81,9 +82,9 @@ def start_tui(args: str = "", *, width: int = 100, height: int = 40) -> None:
         SESSION,
         "#{window_width}x#{window_height}",
     ).strip()
-    assert actual_size == f"{width}x{height}", (
-        f"tmux session has size {actual_size!r}, expected {width}x{height}"
-    )
+    assert (
+        actual_size == f"{width}x{height}"
+    ), f"tmux session has size {actual_size!r}, expected {width}x{height}"
     subprocess.run(
         ["tmux", "respawn-pane", "-k", "-t", SESSION, command],
         check=True,

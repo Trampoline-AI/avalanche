@@ -26,7 +26,10 @@ from typing import Any, Callable, Literal, TypeAlias
 from uuid import uuid4
 
 from ..executor import LocalExecutor, RayExecutor
-from .discovery import DEFAULT_DISCOVERY_TIMEOUT
+from .discovery import (
+    DEFAULT_DISCOVERY_TIMEOUT,
+    raise_for_discovery_diagnostics,
+)
 from .models import (
     AgentEvent,
     AgentEventAppended,
@@ -333,6 +336,7 @@ class Operator:
         initial_view = None
         if self._workflow_paths:
             initial_view = self._registry.scan(self._workflow_paths, validate=routes_for)
+            raise_for_discovery_diagnostics(initial_view.diagnostics)
         self._subscriber_queue_capacity = subscriber_queue_capacity
         self._mp = multiprocessing.get_context("spawn")
         self._runs: dict[str, RunState] = {}
@@ -368,6 +372,8 @@ class Operator:
         self._watcher_stop = threading.Event()
         self._watcher_ready = threading.Event()
         self._watcher_thread: threading.Thread | None = None
+        self._fatal_error: Exception | None = None
+        self._fatal_error_ready = threading.Event()
         self._result_cleanup_stop = threading.Event()
         self._result_cleanup_thread: threading.Thread | None = None
         self._closed = False
@@ -408,6 +414,17 @@ class Operator:
     def current_sequence(self) -> int:
         with self._lock:
             return self._sequence
+
+    @property
+    def fatal_error(self) -> Exception | None:
+        """Return the terminal watcher failure, if discovery can no longer continue."""
+        with self._lock:
+            return self._fatal_error
+
+    def wait_for_failure(self, timeout: float | None = None) -> Exception | None:
+        """Wait for a fatal operator failure without consuming it."""
+        self._fatal_error_ready.wait(timeout)
+        return self.fatal_error
 
     def update_history_bounds(self) -> tuple[int, int]:
         """Return the retained lifecycle update interval for V2 cursor validation."""
@@ -1624,15 +1641,18 @@ class Operator:
             self._watcher_stop.set()
             self._watcher_thread.join(timeout=2.0)
             raise RuntimeError("Workflow watcher did not become ready")
+        failure = self.wait_for_failure(timeout=0)
+        if failure is not None:
+            raise failure
 
     def _watch_loop(self) -> None:
         from watchfiles import watch
 
-        locators = tuple(descriptor.locator for descriptor in self._registry.descriptors())
-        source_roots = resolve_watch_roots(self._registry.configured_roots, locators)
-        watch_dirs = tuple(str(path) for path in source_roots)
-        logger.info("Workflow watcher started: roots=%s", watch_dirs)
         try:
+            locators = tuple(descriptor.locator for descriptor in self._registry.descriptors())
+            source_roots = resolve_watch_roots(self._registry.configured_roots, locators)
+            watch_dirs = tuple(str(path) for path in source_roots)
+            logger.info("Workflow watcher started: roots=%s", watch_dirs)
             for changes in watch(
                 *watch_dirs,
                 stop_event=self._watcher_stop,
@@ -1645,8 +1665,20 @@ class Operator:
                     continue
                 changed_files = tuple(sorted(path for _, path in changes))
                 self._refresh_workflows(changed_files)
+        except Exception as exc:
+            self._record_fatal_error(exc)
+            logger.error("Workflow watcher failed: %s", exc)
         finally:
+            self._watcher_ready.set()
             logger.info("Workflow watcher stopped")
+
+    def _record_fatal_error(self, error: Exception) -> None:
+        with self._lock:
+            if self._closed or self._fatal_error is not None:
+                return
+            self._fatal_error = error
+            self._fatal_error_ready.set()
+        self._watcher_stop.set()
 
     def _refresh_workflows(self, changed_files: tuple[str, ...] = ()) -> None:
         self._publish_workflow_reload_status(reloading=True)
@@ -1671,21 +1703,12 @@ class Operator:
                 if changed_files
                 else self._registry.rescan(validate=routes_for)
             )
-            failed_diagnostics = tuple(
-                diagnostic for diagnostic in view.diagnostics if diagnostic.kind != "skipped"
-            )
-            if failed_diagnostics:
-                logger.warning(
-                    "Workflow reload failed; retaining catalog revision %d: %s",
-                    previous.revision,
-                    _summarize_reload_diagnostics(failed_diagnostics),
-                )
+            raise_for_discovery_diagnostics(view.diagnostics)
             if view is previous:
-                if not failed_diagnostics:
-                    logger.info(
-                        "Workflow reload unchanged: revision=%d",
-                        previous.revision,
-                    )
+                logger.info(
+                    "Workflow reload unchanged: revision=%d",
+                    previous.revision,
+                )
                 return
             try:
                 self._scheduler.reconcile(view.by_id.values())
@@ -1694,22 +1717,19 @@ class Operator:
                 self._registry.restore_view(view, previous)
                 self._scheduler.reconcile(previous.by_id.values())
                 self._reconcile_webhooks(previous.by_id.values())
-                error = _bound_reload_log_text(f"{type(exc).__name__}: {exc}")
-                logger.warning(
-                    "Workflow reload reconciliation failed; retaining catalog "
-                    "revision %d: %s",
-                    previous.revision,
-                    error,
+                message = (
+                    "Workflow reload reconciliation failed: "
+                    f"{_bound_reload_log_text(f'{type(exc).__name__}: {exc}')}"
                 )
-                return
+                logger.error("%s", message)
+                raise RuntimeError(message) from exc
         self._publish_catalog(view)
-        if not failed_diagnostics:
-            logger.info(
-                "Workflow reload succeeded: revision=%d->%d workflows=%d",
-                previous.revision,
-                view.revision,
-                len(view.by_id),
-            )
+        logger.info(
+            "Workflow reload succeeded: revision=%d->%d workflows=%d",
+            previous.revision,
+            view.revision,
+            len(view.by_id),
+        )
 
     def _reconcile_webhooks(self, descriptors) -> None:
         routes = routes_for(tuple(descriptors))

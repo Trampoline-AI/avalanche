@@ -18,6 +18,7 @@ from .discovery import (
     DEFAULT_DISCOVERY_TIMEOUT,
     ConfiguredRoot,
     FileDiscoveryResult,
+    WorkflowDiscoveryError,
     candidate_files,
     configure_roots,
     discover_files,
@@ -192,6 +193,7 @@ class WorkflowRegistry:
         self._file_rollback: (
             tuple[CatalogView, dict[tuple[str, Path], FileDiscoveryResult]] | None
         ) = None
+        self._requires_full_rescan = False
 
     @property
     def view(self) -> CatalogView:
@@ -234,6 +236,7 @@ class WorkflowRegistry:
             self._scan_paths = tuple(paths)
             self._roots = roots
             self._cache = cache
+            self._requires_full_rescan = False
         cached_files = cache.load()
         if cached_files is not None:
             view, accepted = self._install_files(roots, cached_files, (), validate=validate)
@@ -254,9 +257,10 @@ class WorkflowRegistry:
         """Refresh affected configured sources while preserving the last valid catalog."""
         with self._lock:
             roots = self._roots
+            requires_full_rescan = self._requires_full_rescan
         if not roots:
             return self.view
-        if not changed_files:
+        if not changed_files or requires_full_rescan:
             return self._scan_roots(roots, validate=validate)
         if any(Path(path).suffix != ".py" for path in changed_files):
             return self._scan_roots(roots, validate=validate)
@@ -310,11 +314,16 @@ class WorkflowRegistry:
             return self.view
 
         if affected:
-            discovered, diagnostics = discover_files(
-                roots,
-                targets=target_keys,
-                timeout=self._discovery_timeout,
-            )
+            try:
+                discovered, diagnostics = discover_files(
+                    roots,
+                    targets=target_keys,
+                    timeout=self._discovery_timeout,
+                )
+            except WorkflowDiscoveryError:
+                with self._lock:
+                    self._requires_full_rescan = True
+                raise
         else:
             discovered, diagnostics = (), ()
         discovered_by_key = {
@@ -342,6 +351,9 @@ class WorkflowRegistry:
         view, accepted = self._install_files(roots, files, diagnostics, validate=validate)
         if accepted:
             self._commit_files(view, files)
+        else:
+            with self._lock:
+                self._requires_full_rescan = True
         rescanned_workflow_ids = previous_workflow_ids | {
             descriptor.workflow_id
             for file_result in discovered
@@ -374,10 +386,20 @@ class WorkflowRegistry:
                 for file_result in self._discovery_files.values()
                 for descriptor in file_result.descriptors
             }
-        files, diagnostics = discover_files(roots, timeout=self._discovery_timeout)
+        try:
+            files, diagnostics = discover_files(roots, timeout=self._discovery_timeout)
+        except WorkflowDiscoveryError:
+            with self._lock:
+                self._requires_full_rescan = True
+            raise
         view, accepted = self._install_files(roots, files, diagnostics, validate=validate)
         if accepted:
             self._commit_files(view, files)
+            with self._lock:
+                self._requires_full_rescan = False
+        else:
+            with self._lock:
+                self._requires_full_rescan = True
         rescanned_workflow_ids = previous_workflow_ids | {
             descriptor.workflow_id
             for file_result in files

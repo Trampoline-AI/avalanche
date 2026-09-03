@@ -160,39 +160,50 @@ $avalanche <Describe your wanted outcome here>
 
 ### Running the operator and Web UI
 
-The operator scans your code for workflows, then loads and runs them:
+In a workspace configured with `[tool.avalanche].flow_targets`, the operator
+scans that code for workflows, then loads and runs them:
 
 ```bash
 uv run ava operator
 ```
 
-The Web UI reflects the state of the oeprator:
+The Web UI reflects the state of the operator:
 
 ```bash
 uv run ava web
 ```
 
-Start the operator and Web UI together:
+Start the operator and Web UI together from a configured workspace:
 
 ```bash
 uv run ava dev
 ```
 
-You can pass `--flows` to `operator` or `dev` to point the operator scan to a certain file or directory:
+`ava init` writes this workspace configuration, so the starter command scans
+every Python workflow below `src/`:
 
-```bash
-uv run ava dev --flows ./flow.py
+```toml
+[tool.avalanche]
+flow_targets = ["src"]
 ```
 
-Otherwise, the scan defaults to the current working directory.
+`operator` and `dev` use `flow_targets` when positional `FLOW` values are
+omitted. Configuration paths are relative to that `pyproject.toml`. Passing one
+or more `FLOW` values replaces the configuration rather than adding to it:
+
+```bash
+uv run ava operator ./flows ./shared_flows --port 7433
+```
+
+Without explicit targets or a nonempty `flow_targets` setting, the command
+stops before starting services. It never scans the current directory by default.
 
 Discovery allows 60 seconds per scan by default. Pass `--discovery-timeout SECONDS`
 to `ava operator` or `ava dev` to set a different positive, finite limit.
 
 > [!WARNING]
-> `ava dev` or `ava operator` without `--flows` scans every eligible Python file below the current
-> working directory. Run it only from a dedicated flow workspace; otherwise pass
-> a specific flow file or flow-only directory with `--flows`.
+> Discovery imports eligible Python modules beneath each target. Use a specific
+> flow file or dedicated flow directory, not a mixed repository root.
 
 Similarily, you can pass `--connect` to the Web UI to change the operator url to connect to:
 

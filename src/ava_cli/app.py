@@ -7,12 +7,15 @@ import ctypes
 import errno
 import hashlib
 import json
+import logging
 import math
 import os
 import re
+import signal
 import stat
 import subprocess
 import sys
+import threading
 import time
 import webbrowser
 from collections.abc import Sequence
@@ -20,7 +23,12 @@ from importlib.resources import as_file, files
 from pathlib import Path, PurePosixPath
 from uuid import uuid4
 
-from runtime.operator.discovery import DEFAULT_DISCOVERY_TIMEOUT, validate_discovery_timeout
+from runtime.operator.discovery import (
+    DEFAULT_DISCOVERY_TIMEOUT,
+    WorkflowDiscoveryError,
+    validate_discovery_timeout,
+)
+from runtime.operator.workspace_config import format_scan_targets, select_workflow_targets
 
 _RENAME_NOREPLACE = 1
 _RENAME_EXCL = 0x00000004
@@ -28,6 +36,8 @@ _STAGED_OUTPUT_NAME = "result"
 _MAX_STAGED_OUTPUT_ENTRIES = 2048
 _MAX_STAGED_OUTPUT_DEPTH = 8
 _MAX_PARENT_IDENTITY_SCAN = 4096
+
+_OPERATOR_READY_TIMEOUT_SECONDS = 5.0
 
 
 def main(argv: Sequence[str] | None = None) -> int:
@@ -38,6 +48,10 @@ def main(argv: Sequence[str] | None = None) -> int:
     if args.command in {"dev", "operator"}:
         try:
             validate_discovery_timeout(args.discovery_timeout)
+            if args.command == "dev":
+                selection = select_workflow_targets(args.flows)
+                args.flows = list(selection.paths)
+                args.flow_target_selection = selection
         except ValueError as exc:
             parser.error(str(exc))
     if not hasattr(args, "handler"):
@@ -70,11 +84,10 @@ def _build_parser() -> argparse.ArgumentParser:
         allow_abbrev=False,
     )
     operator.add_argument(
-        "--flows",
-        nargs="+",
-        default=["."],
-        metavar="PATH",
-        help="flow file or directory to scan (default: current directory)",
+        "flows",
+        nargs="*",
+        metavar="FLOW",
+        help="workflow Python file or directory; uses workspace configuration when omitted",
     )
     operator.add_argument("--port", type=int, default=7433, help="operator gRPC port")
     operator.add_argument(
@@ -239,15 +252,21 @@ def _build_parser() -> argparse.ArgumentParser:
         description="Start a local operator and wait until it stops.",
     )
     dev.add_argument(
-        "--flows",
-        nargs="+",
-        default=["."],
-        metavar="PATH",
-        help="flow file or directory to scan (default: current directory)",
+        "flows",
+        nargs="*",
+        metavar="FLOW",
+        help="workflow Python file or directory; uses workspace configuration when omitted",
     )
     dev.add_argument("--port", type=int, default=7433, help="operator gRPC port")
     dev.add_argument("--web-port", type=int, default=7435, help="browser UI HTTP port")
     dev.add_argument("--ray", action="store_true", help="use the Ray executor")
+    dev.add_argument(
+        "--log-level",
+        type=str.upper,
+        choices=("DEBUG", "INFO", "WARNING", "ERROR"),
+        default="WARNING",
+        help="terminal log level (default: WARNING)",
+    )
     dev.add_argument(
         "--discovery-timeout",
         type=float,
@@ -274,7 +293,6 @@ def _run_init(args: argparse.Namespace) -> int:
 
 def _run_operator(args: argparse.Namespace) -> int:
     runtime_args = [
-        "--flows",
         *args.flows,
         "--host",
         args.host,
@@ -303,20 +321,7 @@ def _run_web(args: argparse.Namespace) -> int:
     )
     print(f"Avalanche web UI: {server.endpoint}")
     try:
-        try:
-            opened = webbrowser.open(server.endpoint, new=2)
-        except webbrowser.Error as exc:
-            print(
-                f"Could not open a browser automatically ({exc}); "
-                f"open {server.endpoint} manually.",
-                file=sys.stderr,
-            )
-        else:
-            if not opened:
-                print(
-                    f"Could not open a browser automatically; open {server.endpoint} manually.",
-                    file=sys.stderr,
-                )
+        _open_browser(server.endpoint)
         server.wait()
     except KeyboardInterrupt:
         return 0
@@ -1383,47 +1388,140 @@ def _launch_tui(argv: Sequence[str]) -> None:
 
 
 def _run_dev(args: argparse.Namespace) -> int:
-    port = args.port
-    web_port = args.web_port
-    operator_process = _start_operator_process(
-        args.flows, port, args.ray, args.discovery_timeout
-    )
-    web_process = None
+    import grpc
+
+    from runtime.operator.operator import Operator
+    from runtime.operator.server import serve as serve_operator
+    from runtime.operator.web import start_browser_server
+
+    _configure_terminal_logging(args.log_level)
+    started = time.monotonic()
+    stage = "discovery"
+    operator = None
+    grpc_server = None
+    browser_server = None
+    exit_code = 0
+    stop_requested = threading.Event()
+    previous_handlers = {}
+
+    def request_shutdown(_signum, _frame) -> None:
+        stop_requested.set()
+
+    if threading.current_thread() is threading.main_thread():
+        for signum in (signal.SIGINT, signal.SIGTERM):
+            previous_handlers[signum] = signal.getsignal(signum)
+            signal.signal(signum, request_shutdown)
     try:
-        web_process = _start_web_process(f"127.0.0.1:{port}", web_port)
-        return operator_process.wait()
+        print("Avalanche dev")
+        for line in format_scan_targets(args.flow_target_selection):
+            print(line)
+        print("  Discovering workflows...")
+        operator = Operator(
+            args.flows,
+            discovery_timeout=args.discovery_timeout,
+            executor_backend="ray" if args.ray else "local",
+        )
+        if stop_requested.is_set():
+            raise KeyboardInterrupt
+        workflow_count = len(operator.get_catalog().workflows)
+        print(
+            f"  Discovered {workflow_count} workflow"
+            f"{'' if workflow_count == 1 else 's'} in {time.monotonic() - started:.2f}s"
+        )
+
+        stage = "operator startup"
+        grpc_server = serve_operator(operator, port=args.port, block=False)
+        operator_address = f"127.0.0.1:{args.port}"
+        channel = grpc.insecure_channel(operator_address)
+        try:
+            grpc.channel_ready_future(channel).result(timeout=_OPERATOR_READY_TIMEOUT_SECONDS)
+        finally:
+            channel.close()
+        print(f"  Operator ready: grpc://{operator_address}")
+        if stop_requested.is_set():
+            raise KeyboardInterrupt
+
+        stage = "web UI startup"
+        browser_server = start_browser_server(operator_address, port=args.web_port)
+        print(f"  Web UI ready: {browser_server.endpoint}")
+        _open_browser(browser_server.endpoint)
+        print("Ready. Press Ctrl-C to stop.")
+
+        stage = "workflow watching"
+        while not stop_requested.is_set():
+            failure = operator.wait_for_failure(timeout=0.1)
+            if failure is not None:
+                raise failure
+        print("Stopping Avalanche dev...")
+    except KeyboardInterrupt:
+        print("Stopping Avalanche dev...")
+    except WorkflowDiscoveryError as exc:
+        _report_dev_failure(stage, exc)
+        exit_code = 1
+    except Exception as exc:
+        _report_dev_failure(stage, exc)
+        exit_code = 1
     finally:
-        if web_process is not None:
-            _stop_operator_process(web_process)
-        _stop_operator_process(operator_process)
+        cleanup_error: Exception | None = None
+        if browser_server is not None:
+            try:
+                browser_server.close()
+            except Exception as exc:
+                cleanup_error = exc
+        if grpc_server is not None:
+            try:
+                grpc_server.stop(grace=1.0).wait(timeout=2.0)
+            except Exception as exc:
+                cleanup_error = cleanup_error or exc
+        if operator is not None:
+            try:
+                operator.close()
+            except Exception as exc:
+                cleanup_error = cleanup_error or exc
+        if cleanup_error is not None:
+            _report_dev_failure("shutdown", cleanup_error)
+            exit_code = 1
+        for signum, handler in previous_handlers.items():
+            signal.signal(signum, handler)
+    if exit_code == 0:
+        print("Stopped.")
+    return exit_code
 
 
-def _start_operator_process(
-    flows: list[str],
-    port: int,
-    use_ray: bool,
-    discovery_timeout: float,
-) -> subprocess.Popen:
-    cmd = [
-        sys.executable,
-        "-m",
-        "runtime.operator",
-        "--flows",
-        *flows,
-        "--port",
-        str(port),
-        "--discovery-timeout",
-        str(discovery_timeout),
-    ]
-    if use_ray:
-        cmd.append("--ray")
-    return subprocess.Popen(cmd)
-
-
-def _start_web_process(address: str, port: int) -> subprocess.Popen:
-    return subprocess.Popen(
-        [sys.executable, "-m", "ava_cli", "web", "--connect", address, "--port", str(port)]
+def _configure_terminal_logging(level_name: str) -> None:
+    logging.basicConfig(
+        level=getattr(logging, level_name),
+        format="%(asctime)s %(levelname)s %(name)s: %(message)s",
+        force=True,
     )
+
+
+def _open_browser(endpoint: str) -> None:
+    try:
+        opened = webbrowser.open(endpoint, new=2)
+    except webbrowser.Error as exc:
+        print(
+            f"Could not open a browser automatically ({exc}); open {endpoint} manually.",
+            file=sys.stderr,
+        )
+    else:
+        if not opened:
+            print(
+                f"Could not open a browser automatically; open {endpoint} manually.",
+                file=sys.stderr,
+            )
+
+
+def _report_dev_failure(stage: str, error: Exception) -> None:
+    print(f"error: Avalanche dev failed during {stage}", file=sys.stderr)
+    if isinstance(error, WorkflowDiscoveryError):
+        for diagnostic in error.diagnostics:
+            print(
+                f"  {diagnostic.path}: {diagnostic.kind}: {diagnostic.message}",
+                file=sys.stderr,
+            )
+        return
+    print(f"  {type(error).__name__}: {error}", file=sys.stderr)
 
 
 def _make_provider(address: str):

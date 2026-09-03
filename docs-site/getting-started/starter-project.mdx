@@ -40,6 +40,17 @@ uv run ava dev
 `http://127.0.0.1:7435`, select the included `binary_converter` workflow, and
 start a run.
 
+The initializer also writes this setting to `pyproject.toml`, so newly added
+workflows beneath `src/` are included without changing a local command wrapper:
+
+```toml
+[tool.avalanche]
+flow_targets = ["src"]
+```
+
+Pass `FLOW` values to `ava dev` only when you want to scan a different explicit
+set; they replace the configured `src/` target.
+
 ## What you should see
 
 The workflow appears in the local UI and progresses through its source, native

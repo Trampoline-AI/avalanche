@@ -102,11 +102,14 @@ if [ "$1" = "sync" ]; then
         fi
         shift
     done
+    test -f "$directory/src/binary_converter/flow.py" || exit 1
     mkdir -p "$directory/.venv/bin"
     printf '#!/bin/sh\nexit 0\n' > "$directory/.venv/bin/python"
     entrypoint="$directory/.venv/bin/ava"
     printf '#!/bin/sh\n[ -x "%s/.venv/bin/python" ] || exit 1\n' "$directory" > "$entrypoint"
     chmod +x "$directory/.venv/bin/python" "$directory/.venv/bin/ava"
+elif [ "$1" = "run" ] && [ "$2" = "ava" ] && [ "$3" = "dev" ]; then
+    test -f src/binary_converter/flow.py || exit 1
 fi
 """,
         encoding="utf-8",
@@ -131,15 +134,18 @@ fi
     assert (workspace_root / ".agent" / "skills" / "avalanche" / "SKILL.md").is_file()
     workspace = tomllib.loads((workspace_root / "pyproject.toml").read_text())
     assert workspace["project"]["dependencies"] == ["avalanche-ai", "predict-rlm"]
+    assert workspace["tool"]["avalanche"]["flow_targets"] == ["src"]
+    assert "scripts" not in workspace["project"]
+    assert not (workspace_root / "src" / "binary_converter" / "dev.py").exists()
     guidance = (workspace_root / "AGENTS.md").read_text()
-    assert "uv run ava dev --flows src/binary_converter/" in guidance
-    assert "ava operator --flows src/binary_converter/ --web" not in guidance
+    assert "uv run ava dev" in guidance
+    assert "--flows" not in guidance
 
     ava = workspace_root / ".venv" / "bin" / "ava"
     assert subprocess.run([str(ava), "run", "--help"], check=False).returncode == 0
 
 
-def test_ava_operator_delegates_to_runtime_operator_with_flows(monkeypatch):
+def test_ava_operator_delegates_to_runtime_operator_with_targets(monkeypatch):
     from ava_cli import app
 
     calls = []
@@ -154,7 +160,6 @@ def test_ava_operator_delegates_to_runtime_operator_with_flows(monkeypatch):
         app.main(
             [
                 "operator",
-                "--flows",
                 "examples",
                 "--port",
                 "17777",
@@ -167,7 +172,6 @@ def test_ava_operator_delegates_to_runtime_operator_with_flows(monkeypatch):
     )
     assert calls == [
         [
-            "--flows",
             "examples",
             "--host",
             "127.0.0.1",
@@ -184,15 +188,113 @@ def test_ava_operator_delegates_to_runtime_operator_with_flows(monkeypatch):
     ]
 
 
-def test_ava_operator_defaults_flows_to_current_directory(monkeypatch):
+def test_ava_operator_accepts_multiple_file_targets(monkeypatch):
     from ava_cli import app
 
     calls = []
     monkeypatch.setattr(app, "_operator_main", lambda argv: calls.append(argv) or 0)
 
-    assert app.main(["operator"]) == 0
-    assert calls[0][:2] == ["--flows", "."]
-    assert calls[0][-2:] == ["--discovery-timeout", "60.0"]
+    assert (
+        app.main(
+            [
+                "operator",
+                "examples/operator_workflow.py",
+                "test/fixtures/sample_workflows.py",
+            ]
+        )
+        == 0
+    )
+    assert calls[0][:2] == [
+        "examples/operator_workflow.py",
+        "test/fixtures/sample_workflows.py",
+    ]
+
+
+def test_ava_operator_requires_configured_or_explicit_workflow_targets(capsys):
+    from ava_cli import app
+
+    with pytest.raises(SystemExit) as exc_info:
+        app.main(["operator"])
+
+    assert exc_info.value.code == 2
+    assert "No workflow targets configured" in capsys.readouterr().err
+
+
+def test_ava_dev_uses_workspace_configured_targets(monkeypatch, tmp_path):
+    from ava_cli import app
+
+    workspace = tmp_path / "workspace"
+    flows = workspace / "src"
+    flows.mkdir(parents=True)
+    (workspace / "pyproject.toml").write_text('[tool.avalanche]\nflow_targets = ["src"]\n')
+    calls = []
+    monkeypatch.chdir(workspace)
+    monkeypatch.setattr(
+        app,
+        "_run_dev",
+        lambda args: calls.append((args.flows, args.flow_target_selection)) or 0,
+    )
+
+    assert app.main(["dev"]) == 0
+
+    assert calls[0][0] == [str(flows)]
+    assert calls[0][1].config_path == workspace / "pyproject.toml"
+
+
+def test_ava_dev_explicit_target_overrides_workspace_configuration(monkeypatch, tmp_path):
+    from ava_cli import app
+
+    workspace = tmp_path / "workspace"
+    flows = workspace / "src"
+    flows.mkdir(parents=True)
+    explicit_flow = workspace / "single.py"
+    explicit_flow.write_text("import avalanche as ava\n")
+    (workspace / "pyproject.toml").write_text('[tool.avalanche]\nflow_targets = ["src"]\n')
+    calls = []
+    monkeypatch.chdir(workspace)
+    monkeypatch.setattr(
+        app,
+        "_run_dev",
+        lambda args: calls.append((args.flows, args.flow_target_selection)) or 0,
+    )
+
+    assert app.main(["dev", str(explicit_flow)]) == 0
+
+    assert calls[0][0] == [str(explicit_flow)]
+    assert calls[0][1].config_path is None
+
+
+def test_ava_operator_rejects_legacy_flow_flag(capsys):
+    from ava_cli import app
+
+    with pytest.raises(SystemExit) as exc_info:
+        app.main(["operator", "--flows", "examples"])
+
+    assert exc_info.value.code == 2
+    assert "unrecognized arguments: --flows" in capsys.readouterr().err
+
+
+@pytest.mark.parametrize(
+    ("target_name", "expected_error"),
+    [
+        ("missing.py", "Workflow target does not exist"),
+        ("not-a-flow.txt", "Workflow file target must end in .py"),
+    ],
+)
+def test_ava_operator_rejects_invalid_workflow_target(
+    tmp_path, capsys, target_name, expected_error
+):
+    from ava_cli import app
+
+    target = tmp_path / target_name
+    if target_name == "not-a-flow.txt":
+        target.write_text("not a workflow")
+
+    with pytest.raises(SystemExit) as exc_info:
+        app.main(["operator", str(target)])
+
+    assert exc_info.value.code == 2
+    assert expected_error in capsys.readouterr().err
 
 
 def test_ava_operator_forwards_case_insensitive_log_level(monkeypatch):
@@ -201,7 +303,7 @@ def test_ava_operator_forwards_case_insensitive_log_level(monkeypatch):
     calls = []
     monkeypatch.setattr(app, "_operator_main", lambda argv: calls.append(argv) or 0)
 
-    assert app.main(["operator", "--flows", "examples", "--log-level", "info"]) == 0
+    assert app.main(["operator", "examples", "--log-level", "info"]) == 0
     assert calls[0][-4:] == ["--log-level", "INFO", "--discovery-timeout", "60.0"]
 
 
@@ -222,9 +324,7 @@ def test_runtime_operator_configures_logging_before_serve(monkeypatch):
     )
 
     assert (
-        operator_main.main(
-            ["--flows", "examples", "--log-level", "info", "--discovery-timeout", "45"]
-        )
+        operator_main.main(["examples", "--log-level", "info", "--discovery-timeout", "45"])
         == 0
     )
     assert lifecycle[0] == (
@@ -239,20 +339,40 @@ def test_runtime_operator_configures_logging_before_serve(monkeypatch):
     assert lifecycle[1][1][1]["discovery_timeout"] == 45.0
 
 
-def test_runtime_operator_defaults_flows_to_current_directory(monkeypatch):
+def test_runtime_operator_requires_configured_or_explicit_workflow_targets(capsys):
+    from runtime.operator import __main__ as operator_main
+
+    with pytest.raises(SystemExit) as exc_info:
+        operator_main.main([])
+
+    assert exc_info.value.code == 2
+    assert "No workflow targets configured" in capsys.readouterr().err
+
+
+def test_runtime_operator_uses_workspace_configured_targets(monkeypatch, tmp_path, capsys):
     import runtime.operator as runtime_operator
     from runtime.operator import __main__ as operator_main
 
+    workspace = tmp_path / "workspace"
+    flows = workspace / "src"
+    flows.mkdir(parents=True)
+    config_path = workspace / "pyproject.toml"
+    config_path.write_text('[tool.avalanche]\nflow_targets = ["src"]\n')
     calls = []
+    monkeypatch.chdir(workspace)
+    monkeypatch.setattr(operator_main.logging, "basicConfig", lambda **_kwargs: None)
     monkeypatch.setattr(
         runtime_operator,
         "serve",
-        lambda flows, **kwargs: calls.append((flows, kwargs)),
+        lambda paths, **kwargs: calls.append((paths, kwargs)),
     )
 
     assert operator_main.main([]) == 0
-    assert calls[0][0] == ["."]
-    assert calls[0][1]["discovery_timeout"] == 60.0
+
+    assert calls[0][0] == [str(flows)]
+    output = capsys.readouterr().out
+    assert f"Scan targets (workspace config: {config_path})" in output
+    assert f"{flows.resolve()} (directory)" in output
 
 
 @pytest.mark.parametrize("timeout", ("0", "nan", "inf"))
@@ -260,37 +380,78 @@ def test_runtime_operator_rejects_invalid_discovery_timeout(capsys, timeout):
     from runtime.operator import __main__ as operator_main
 
     with pytest.raises(SystemExit) as exc_info:
-        operator_main.main(["--discovery-timeout", timeout])
+        operator_main.main(["examples", "--discovery-timeout", timeout])
 
     assert exc_info.value.code == 2
     assert "Discovery timeout must be positive and finite" in capsys.readouterr().err
 
 
-def test_runtime_operator_reports_loaded_workflows(monkeypatch, capsys):
+def test_runtime_operator_reports_loaded_workflows(capsys):
     import runtime.operator as runtime_operator
-    from runtime.operator import server as operator_server
 
     class FakeWorkflow:
-        def __init__(self, selector):
-            self.selector = selector
+        pass
 
     class FakeCatalog:
-        workflows = (FakeWorkflow("first"), FakeWorkflow("second"))
+        workflows = (FakeWorkflow(), FakeWorkflow())
 
     class FakeOperator:
         def get_catalog(self):
             return FakeCatalog()
 
+    runtime_operator._report_workflow_scan(FakeOperator())
+
+    assert capsys.readouterr().out == "  Discovered 2 workflows\n"
+
+
+def test_runtime_operator_stops_server_when_watcher_fails(monkeypatch):
+    import runtime.operator as runtime_operator
+    from runtime.operator import server as operator_server
+
+    events = []
+    failure = RuntimeError("workflow watcher failed")
+
+    class FakeCatalog:
+        workflows = ()
+
+    class FakeOperator:
+        def get_catalog(self):
+            return FakeCatalog()
+
+        def wait_for_failure(self, *, timeout):
+            events.append(("watch", timeout))
+            return failure
+
         def close(self):
-            pass
+            events.append("operator-close")
 
-    monkeypatch.setattr(runtime_operator, "Operator", lambda *args, **kwargs: FakeOperator())
-    monkeypatch.setattr(operator_server, "serve", lambda *args, **kwargs: None)
+    class FakeServer:
+        def stop(self, *, grace):
+            events.append(("server-stop", grace))
+            return self
 
-    runtime_operator.serve(["examples"])
+        def wait(self, *, timeout):
+            events.append(("server-wait", timeout))
 
-    expected = "Workflow scan complete: 2 workflows loaded: first, second\n"
-    assert capsys.readouterr().out == expected
+    monkeypatch.setattr(runtime_operator, "Operator", lambda *_args, **_kwargs: FakeOperator())
+    monkeypatch.setattr(
+        operator_server,
+        "serve",
+        lambda *_args, **kwargs: events.append(("server-start", kwargs)) or FakeServer(),
+    )
+    monkeypatch.setattr(runtime_operator.threading, "current_thread", lambda: object())
+    monkeypatch.setattr(runtime_operator.threading, "main_thread", lambda: object())
+
+    with pytest.raises(RuntimeError, match="workflow watcher failed"):
+        runtime_operator.serve(["examples"])
+
+    assert events == [
+        ("server-start", {"port": 7433, "block": False, "host": "127.0.0.1"}),
+        ("watch", 0.1),
+        ("server-stop", 1.0),
+        ("server-wait", 2.0),
+        "operator-close",
+    ]
 
 
 def test_ava_web_starts_remote_browser_proxy_and_opens_browser(monkeypatch):
@@ -1644,38 +1805,81 @@ def test_ava_run_preserves_ambiguity_candidates_on_stderr(monkeypatch, capsys):
     assert "right/flow.py::shared" in error
 
 
-def test_ava_dev_starts_web_without_waiting_for_operator_readiness(monkeypatch):
+def test_ava_dev_starts_services_after_operator_readiness(monkeypatch, capsys):
+    import grpc
+
     from ava_cli import app
+    from runtime.operator import operator as operator_module
+    from runtime.operator import server as operator_server
+    from runtime.operator import web as operator_web
 
     events = []
 
-    class FakeProcess:
-        def terminate(self):
-            events.append("terminate")
+    class FakeOperator:
+        def __init__(self, flows, **kwargs):
+            events.append(("operator", flows, kwargs))
 
-        def wait(self, timeout=None):
-            events.append(("wait", timeout))
-            return 0
+        def get_catalog(self):
+            return type("Catalog", (), {"workflows": ("flow",)})()
 
-        def kill(self):
-            events.append("kill")
+        def wait_for_failure(self, *, timeout):
+            events.append(("watch", timeout))
+            raise KeyboardInterrupt
 
-    def fake_start_operator_process(flows, port, use_ray, discovery_timeout):
-        events.append(("start", flows, port, use_ray, discovery_timeout))
-        return FakeProcess()
+        def close(self):
+            events.append("operator-close")
 
-    def fake_start_web_process(address, port):
-        events.append(("web", address, port))
-        return FakeProcess()
+    class FakeGrpcServer:
+        def stop(self, *, grace):
+            events.append(("grpc-stop", grace))
+            return self
 
-    monkeypatch.setattr(app, "_start_operator_process", fake_start_operator_process)
-    monkeypatch.setattr(app, "_start_web_process", fake_start_web_process)
+        def wait(self, *, timeout):
+            events.append(("grpc-wait", timeout))
+
+    class FakeChannel:
+        def close(self):
+            events.append("channel-close")
+
+    class FakeReady:
+        def result(self, *, timeout):
+            events.append(("ready", timeout))
+
+    class FakeBrowserServer:
+        endpoint = "http://127.0.0.1:8444"
+
+        def close(self):
+            events.append("web-close")
+
+    monkeypatch.setattr(app, "_configure_terminal_logging", lambda level: None)
+    monkeypatch.setattr(operator_module, "Operator", FakeOperator)
+    monkeypatch.setattr(
+        operator_server,
+        "serve",
+        lambda operator, **kwargs: events.append(("grpc-start", kwargs)) or FakeGrpcServer(),
+    )
+    monkeypatch.setattr(
+        operator_web,
+        "start_browser_server",
+        lambda address, **kwargs: events.append(("web-start", address, kwargs))
+        or FakeBrowserServer(),
+    )
+    monkeypatch.setattr(
+        grpc,
+        "insecure_channel",
+        lambda address: events.append(("channel", address)) or FakeChannel(),
+    )
+    monkeypatch.setattr(grpc, "channel_ready_future", lambda channel: FakeReady())
+    monkeypatch.setattr(
+        app.webbrowser,
+        "open",
+        lambda endpoint, *, new: events.append(("browser-open", endpoint, new)) or True,
+    )
 
     assert (
         app.main(
             [
                 "dev",
-                "--flows",
                 "examples",
                 "--ray",
                 "--port",
@@ -1689,14 +1893,151 @@ def test_ava_dev_starts_web_without_waiting_for_operator_readiness(monkeypatch):
         == 0
     )
     assert events == [
-        ("start", ["examples"], 8443, True, 45.0),
-        ("web", "127.0.0.1:8443", 8444),
-        ("wait", None),
-        "terminate",
-        ("wait", 5),
-        "terminate",
-        ("wait", 5),
+        (
+            "operator",
+            ["examples"],
+            {"discovery_timeout": 45.0, "executor_backend": "ray"},
+        ),
+        ("grpc-start", {"port": 8443, "block": False}),
+        ("channel", "127.0.0.1:8443"),
+        ("ready", 5.0),
+        "channel-close",
+        ("web-start", "127.0.0.1:8443", {"port": 8444}),
+        ("browser-open", "http://127.0.0.1:8444", 2),
+        ("watch", 0.1),
+        "web-close",
+        ("grpc-stop", 1.0),
+        ("grpc-wait", 2.0),
+        "operator-close",
     ]
+    output = capsys.readouterr().out
+    assert "Scan targets (command line)" in output
+    assert f"{Path('examples').resolve()} (directory)" in output
+
+
+def test_ava_dev_reports_discovery_failure_without_starting_services(monkeypatch, capsys):
+    from ava_cli import app
+    from runtime.operator import operator as operator_module
+    from runtime.operator.discovery import WorkflowDiscoveryError
+    from runtime.operator.models import WorkflowDiscoveryDiagnostic
+
+    starts = []
+
+    class FailingOperator:
+        def __init__(self, *_args, **_kwargs):
+            raise WorkflowDiscoveryError(
+                (
+                    WorkflowDiscoveryDiagnostic(
+                        path="flow.py",
+                        kind="import_error",
+                        message="No module named 'missing_helper'",
+                    ),
+                )
+            )
+
+    monkeypatch.setattr(app, "_configure_terminal_logging", lambda level: None)
+    monkeypatch.setattr(operator_module, "Operator", FailingOperator)
+    monkeypatch.setattr(
+        "runtime.operator.server.serve", lambda *_args, **_kwargs: starts.append("grpc")
+    )
+    monkeypatch.setattr(
+        "runtime.operator.web.start_browser_server",
+        lambda *_args, **_kwargs: starts.append("web"),
+    )
+
+    assert app.main(["dev", "examples"]) == 1
+    assert starts == []
+    error = capsys.readouterr().err
+    assert "Avalanche dev failed during discovery" in error
+    assert "No module named 'missing_helper'" in error
+
+
+def test_ava_dev_reports_operator_start_failure(monkeypatch, capsys):
+    from ava_cli import app
+    from runtime.operator import operator as operator_module
+    from runtime.operator import server as operator_server
+    from runtime.operator import web as operator_web
+
+    events = []
+
+    class FakeOperator:
+        def get_catalog(self):
+            return type("Catalog", (), {"workflows": ()})()
+
+        def close(self):
+            events.append("operator-close")
+
+    monkeypatch.setattr(app, "_configure_terminal_logging", lambda level: None)
+    monkeypatch.setattr(operator_module, "Operator", lambda *_args, **_kwargs: FakeOperator())
+    monkeypatch.setattr(
+        operator_server,
+        "serve",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(RuntimeError("port is occupied")),
+    )
+    monkeypatch.setattr(
+        operator_web,
+        "start_browser_server",
+        lambda *_args, **_kwargs: events.append("web-start"),
+    )
+
+    assert app.main(["dev", "examples"]) == 1
+    assert events == ["operator-close"]
+    assert "Avalanche dev failed during operator startup" in capsys.readouterr().err
+
+
+def test_ava_dev_reports_web_start_failure(monkeypatch, capsys):
+    import grpc
+
+    from ava_cli import app
+    from runtime.operator import operator as operator_module
+    from runtime.operator import server as operator_server
+    from runtime.operator import web as operator_web
+
+    events = []
+
+    class FakeOperator:
+        def get_catalog(self):
+            return type("Catalog", (), {"workflows": ()})()
+
+        def close(self):
+            events.append("operator-close")
+
+    class FakeServer:
+        def stop(self, *, grace):
+            events.append(("grpc-stop", grace))
+            return self
+
+        def wait(self, *, timeout):
+            events.append(("grpc-wait", timeout))
+
+    class FakeChannel:
+        def close(self):
+            events.append("channel-close")
+
+    class FakeReady:
+        def result(self, *, timeout):
+            events.append(("ready", timeout))
+
+    monkeypatch.setattr(app, "_configure_terminal_logging", lambda level: None)
+    monkeypatch.setattr(operator_module, "Operator", lambda *_args, **_kwargs: FakeOperator())
+    monkeypatch.setattr(operator_server, "serve", lambda *_args, **_kwargs: FakeServer())
+    monkeypatch.setattr(grpc, "insecure_channel", lambda _address: FakeChannel())
+    monkeypatch.setattr(grpc, "channel_ready_future", lambda _channel: FakeReady())
+    monkeypatch.setattr(
+        operator_web,
+        "start_browser_server",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(RuntimeError("web port is occupied")),
+    )
+
+    assert app.main(["dev", "examples"]) == 1
+    assert events == [
+        ("ready", 5.0),
+        "channel-close",
+        ("grpc-stop", 1.0),
+        ("grpc-wait", 2.0),
+        "operator-close",
+    ]
+    assert "Avalanche dev failed during web UI startup" in capsys.readouterr().err
 
 
 def test_ava_dev_rejects_colliding_operator_and_browser_ports(monkeypatch, capsys):
@@ -1705,58 +2046,17 @@ def test_ava_dev_rejects_colliding_operator_and_browser_ports(monkeypatch, capsy
     monkeypatch.setattr(app, "_run_dev", lambda args: 0)
 
     with pytest.raises(SystemExit) as exc_info:
-        app.main(["dev", "--port", "7435"])
+        app.main(["dev", "examples", "--port", "7435"])
 
     assert exc_info.value.code == 2
     assert "--port and --web-port must differ" in capsys.readouterr().err
 
 
-def test_ava_dev_defaults_flows_to_current_directory(monkeypatch):
+def test_ava_dev_requires_configured_or_explicit_workflow_targets(capsys):
     from ava_cli import app
 
-    calls = []
-    monkeypatch.setattr(
-        app,
-        "_run_dev",
-        lambda args: calls.append((args.flows, args.discovery_timeout)) or 0,
-    )
+    with pytest.raises(SystemExit) as exc_info:
+        app.main(["dev"])
 
-    assert app.main(["dev"]) == 0
-    assert calls == [(["."], 60.0)]
-
-
-def test_ava_dev_stops_operator_when_wait_is_interrupted(monkeypatch):
-    from ava_cli import app
-
-    events = []
-
-    class FakeProcess:
-        def terminate(self):
-            events.append("terminate")
-
-        def wait(self, timeout=None):
-            events.append(("wait", timeout))
-            if timeout is None:
-                raise KeyboardInterrupt
-            return 0
-
-        def kill(self):
-            events.append("kill")
-
-    monkeypatch.setattr(
-        app,
-        "_start_operator_process",
-        lambda flows, port, use_ray, discovery_timeout: FakeProcess(),
-    )
-    monkeypatch.setattr(app, "_start_web_process", lambda address, port: FakeProcess())
-
-    with pytest.raises(KeyboardInterrupt):
-        app.main(["dev", "--flows", "examples"])
-
-    assert events == [
-        ("wait", None),
-        "terminate",
-        ("wait", 5),
-        "terminate",
-        ("wait", 5),
-    ]
+    assert exc_info.value.code == 2
+    assert "No workflow targets configured" in capsys.readouterr().err

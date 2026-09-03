@@ -57,6 +57,7 @@ EXECUTOR_FACTORIES = [
     pytest.param(ava.RayExecutor, marks=pytest.mark.ray),
 ]
 
+
 @pytest.fixture(scope="module")
 def _shared_ray_runtime():
     ray = pytest.importorskip("ray")

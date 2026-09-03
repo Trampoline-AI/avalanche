@@ -6,11 +6,11 @@ are covered by `test/example_smoke_test.py`.
 Run the examples from this directory:
 
 ```bash
-uv run ava dev
+uv run ava dev .
 ```
 
-This starts the local operator and browser UI. The operator discovers the
-workflows in `examples/`; select any discovered workflow in the UI to start a
+This explicit target keeps discovery inside `examples/`. The local operator and
+browser UI start together; select any discovered workflow in the UI to start a
 run.
 
 ## Canonical Examples

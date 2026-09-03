@@ -62,19 +62,21 @@ attribute names—read `.completion` for the signature above, not `.summary`.
 Use this when the user asks to start a local operator and browser UI together:
 
 ```bash
-uv run ava dev --flows path/to/flow.py
+uv run ava dev path/to/flow.py
 ```
 
 `ava dev` starts the operator on `127.0.0.1:7433` and a browser UI connected to
 it at `http://127.0.0.1:7435` by default.
 
 ```text
-uv run ava dev [--flows PATH [PATH ...]] [--port PORT] [--web-port PORT] [--ray]
+uv run ava dev [FLOW [FLOW ...]] [--port PORT] [--web-port PORT] [--ray]
 ```
 
-- `--flows PATH [PATH ...]`: one or more flow files or clean flow-only
-  directories. It defaults to the current directory, but use a narrow target;
-  never pass `--flows .`.
+- `FLOW [FLOW ...]`: optional flow files or clean flow-only directories. When
+  omitted, the command uses `[tool.avalanche].flow_targets` in the nearest
+  `pyproject.toml`; relative paths resolve from that file.
+- Explicit `FLOW` values replace configured targets. Without either source, the
+  command fails before starting services; there is no current-directory default.
 - `--port PORT`: operator gRPC port, default `7433`.
 - `--web-port PORT`: browser UI HTTP port, default `7435`. It must differ from
   `--port`.
@@ -90,7 +92,7 @@ custom browser-listener settings:
 
 ```bash
 # terminal 1
-uv run ava operator --flows path/to/flow.py --port 7433
+uv run ava operator path/to/flow.py --port 7433
 
 # terminal 2
 uv run ava web --connect localhost:7433
@@ -100,12 +102,13 @@ uv run ava web --connect localhost:7433
 separately.
 
 ```text
-uv run ava operator [--flows PATH [PATH ...]] [--host HOST] [--port PORT]
+uv run ava operator [FLOW [FLOW ...]] [--host HOST] [--port PORT]
                         [--webhook-port PORT] [--log-level LEVEL] [--ray]
 ```
 
-- `--flows PATH [PATH ...]`: flow discovery targets; use narrow paths, never
-  `.`.
+- `FLOW [FLOW ...]`: optional flow discovery targets. Without them, the command
+  uses `[tool.avalanche].flow_targets` from the nearest `pyproject.toml`; explicit
+  targets replace it. Use narrow paths, never a mixed repository root.
 - `--host HOST`: gRPC listen host, default `127.0.0.1`. Non-loopback exposure
   requires an external trusted, authenticated boundary.
 - `--port PORT`: gRPC port, default `7433`.
