@@ -62,18 +62,18 @@ def test_iceberg_table_pickle_roundtrip_reconnects(file_backed_namespace):
 
 def test_reconnected_iceberg_tables_append_concurrently(file_backed_namespace):
     table = file_backed_namespace.records
-    restored = pickle.loads(pickle.dumps(table))
-    barrier = threading.Barrier(2)
+    handles = [table, *(pickle.loads(pickle.dumps(table)) for _ in range(7))]
+    barrier = threading.Barrier(len(handles))
 
     def append(target: IcebergTable, row_id: int):
         barrier.wait()
         return target.append(pl.DataFrame({"id": [row_id], "value": [str(row_id)]}))
 
-    with ThreadPoolExecutor(max_workers=2) as pool:
-        results = list(pool.map(append, (table, restored), (1, 2)))
+    with ThreadPoolExecutor(max_workers=len(handles)) as pool:
+        results = list(pool.map(append, handles, range(1, len(handles) + 1)))
 
-    assert len({result.snapshot_id for result in results}) == 2
-    assert table.read().sort("id")["id"].to_list() == [1, 2]
+    assert len({result.snapshot_id for result in results}) == len(handles)
+    assert table.read().sort("id")["id"].to_list() == list(range(1, len(handles) + 1))
 
 
 class RecordModel(BaseModel):
