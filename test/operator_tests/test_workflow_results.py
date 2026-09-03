@@ -1704,18 +1704,24 @@ def test_worker_seals_asynchronous_output_after_provisional_success(tmp_path):
     workflow_path.write_text(
         """
 import threading
-import time
 
 import avalanche as ava
+import runtime.operator.run_worker as run_worker_module
 
 
 @ava.source
 def value():
-    def delayed_output():
-        time.sleep(0.2)
-        print("background output after result")
+    original_put_terminal = run_worker_module._put_terminal_run_event
 
-    threading.Thread(target=delayed_output).start()
+    def put_terminal_then_emit_output(event_queue, event):
+        original_put_terminal(event_queue, event)
+        background = threading.Thread(
+            target=lambda: print("background output after result"),
+        )
+        background.start()
+        background.join()
+
+    run_worker_module._put_terminal_run_event = put_terminal_then_emit_output
     return "complete"
 
 
@@ -1896,7 +1902,16 @@ def test_failed_and_cancelled_runs_remove_their_pending_result_bundles(
     client.cancel_run(cancelled_id)
     assert _wait_for_terminal(client, cancelled_id).status == RunStatus.CANCELLED
 
-    assert {path.name for path in operator._result_store.root.iterdir()} == before
+    deadline = time.monotonic() + 10
+    while time.monotonic() < deadline:
+        remaining = {path.name for path in operator._result_store.root.iterdir()}
+        if remaining == before:
+            break
+        time.sleep(0.05)
+    else:
+        pytest.fail("Pending result bundle was not removed")
+
+    assert remaining == before
     assert failed_id not in operator._stored_results
     assert cancelled_id not in operator._stored_results
 
