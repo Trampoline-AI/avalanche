@@ -8,7 +8,7 @@ description: Resolve the most common local discovery, provider, connection, and 
 Point discovery at a specific flow file or dedicated directory:
 
 ```bash
-uv run ava dev --flows ./src/my_workflow/flow.py
+uv run ava dev ./src/my_workflow/flow.py
 ```
 
 The operator imports candidate Python modules. Keep workflow builders
@@ -33,7 +33,7 @@ must be available to the process running the workflow.
 Confirm the operator is running at the address passed to `ava web`:
 
 ```bash
-uv run ava operator --flows ./flows --port 7433
+uv run ava operator ./flows --port 7433
 uv run ava web --connect localhost:7433 --port 7435
 ```
 

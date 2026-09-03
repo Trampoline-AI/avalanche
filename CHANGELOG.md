@@ -5,6 +5,17 @@
 ### Dependencies
 
 - Updated the operator web workspace's transitive `nanoid` package to 3.3.18.
+### Operator CLI
+
+- `ava operator` and `ava dev` now use `[tool.avalanche].flow_targets` when
+  positional flow targets are omitted. Explicit targets replace that configured
+  list, and commands without either source fail instead of scanning the current
+  directory.
+- Discovery failures now stop local operator and development services rather
+  than leaving a stale workflow catalog running.
+- `ava dev` starts the operator and browser UI under one lifecycle supervisor.
+- `ava init` now configures its starter workspace to scan `src/`, so
+  `uv run ava dev` discovers newly added starter workflows without a local wrapper.
 
 ## 0.2.0
 
@@ -260,8 +271,8 @@ toolkit.
 - Production auth, authorization, TLS, and multitenancy are out of scope.
 - One-click cloud deploy and schema migration CLI are not implemented.
 - Durable operator replay/recovery is limited to the current implementation.
-- `--flows .` from the repository root is unsafe because discovery imports Python
-  files; use a specific flow file or clean flow-only directory.
+- `ava operator .` from the repository root is unsafe because discovery imports
+  Python files; use a specific flow file or clean flow-only directory.
 - Some tests may be skipped when optional local services or terminal features are
   unavailable.
 

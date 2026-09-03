@@ -22,24 +22,31 @@ configures them as editable dependencies.
 ## `operator`
 
 ```text
-ava operator [--flows PATH ...] [--port PORT] [--host HOST]
+ava operator [FLOW [FLOW ...]] [--port PORT] [--host HOST]
              [--webhook-port PORT] [--log-level LEVEL] [--ray]
              [--discovery-timeout SECONDS]
 ```
 
-Starts the local flow operator. `--flows` accepts one or more flow files or
-directories and defaults to the current directory. The defaults are gRPC port
-`7433`, loopback host `127.0.0.1`, webhook port `7434`, and `WARNING` log level.
+Starts the local flow operator. `FLOW` values are existing Python files or
+directories. When omitted, the command reads
+`[tool.avalanche].flow_targets` from the nearest `pyproject.toml`; configured
+relative paths resolve from that file. Explicit `FLOW` values replace configured
+targets. Without either, the command stops before services start and never
+scans the current directory by default. Defaults: gRPC port `7433`, loopback
+host `127.0.0.1`, webhook port `7434`, and `WARNING` log level. A discovery
+error stops the operator with its diagnostic.
 
 ## `dev`
 
 ```text
-ava dev [--flows PATH ...] [--port PORT] [--web-port PORT]
-        [--ray] [--discovery-timeout SECONDS]
+ava dev [FLOW [FLOW ...]] [--port PORT] [--web-port PORT] [--ray]
+        [--log-level LEVEL] [--discovery-timeout SECONDS]
 ```
 
-Starts an operator subprocess and connected browser UI. Defaults: operator port
-`7433`, browser UI port `7435`.
+Starts discovery, the local operator, and a connected browser UI under one
+supervisor. It resolves targets with the same explicit-or-workspace-configuration
+rules as `operator`. The UI starts only after the gRPC listener is ready.
+Defaults: operator port `7433`, browser UI port `7435`.
 
 ## `web`
 

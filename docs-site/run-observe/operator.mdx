@@ -9,13 +9,23 @@ local run state, and serves the CLI, browser UI, and TUI over gRPC.
 Start it against a specific flow file or directory:
 
 ```bash
-uv run ava operator --flows ./flow.py
+uv run ava operator ./flow.py
 
 # Or a dedicated directory of flows:
-uv run ava operator --flows ./flows --port 7433
+uv run ava operator ./flows --port 7433
 ```
 
-The default listener is `127.0.0.1:7433`.
+For a normal workspace command without `FLOW`, configure the dedicated flow
+tree in `pyproject.toml`:
+
+```toml
+[tool.avalanche]
+flow_targets = ["src/workflows"]
+```
+
+Configured relative paths are resolved from that `pyproject.toml`. Explicit
+`FLOW` values replace this list; without either source, the command fails before
+starting services. The default listener is `127.0.0.1:7433`.
 
 ## Keep discovery narrow
 
@@ -25,13 +35,13 @@ scan a repository root containing unrelated Python:
 
 ```bash
 # Avoid in a mixed repository:
-uv run ava operator --flows .
+uv run ava operator .
 
 # Prefer:
-uv run ava operator --flows ./src/workflows
+uv run ava operator ./src/workflows
 ```
 
-`ava dev --flows PATH` starts this operator together with a connected browser
+`ava dev [FLOW [FLOW ...]]` starts this operator together with a connected browser
 UI. Use it for the normal local development loop.
 
 ## What the operator owns
@@ -45,7 +55,8 @@ nodes themselves.
 ## Reload and scheduled metadata
 
 The operator watches eligible Python source below configured roots. A changed
-workflow module or imported Python helper triggers targeted rediscovery.
+workflow module or imported Python helper triggers targeted rediscovery. A
+discovery error stops the local operator rather than retaining a stale catalog.
 Non-Python import-time configuration is not watched; restart the operator after
 changing it.
 

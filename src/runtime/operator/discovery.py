@@ -61,6 +61,31 @@ DEFAULT_DISCOVERY_TIMEOUT = 60.0
 _DISCOVERY_TERMINATE_GRACE = 1.0
 
 
+class WorkflowDiscoveryError(RuntimeError):
+    """Raised when discovery cannot produce a usable catalog."""
+
+    def __init__(self, diagnostics: tuple[WorkflowDiscoveryDiagnostic, ...]) -> None:
+        if not diagnostics:
+            raise ValueError("Workflow discovery failure requires a diagnostic")
+        self.diagnostics = diagnostics
+        super().__init__(
+            "; ".join(f"{item.kind} {item.path}: {item.message}" for item in diagnostics)
+        )
+
+
+class WorkflowDiscoveryTimeoutError(WorkflowDiscoveryError):
+    """Raised when one discovery worker exceeds its configured deadline."""
+
+
+def raise_for_discovery_diagnostics(
+    diagnostics: tuple[WorkflowDiscoveryDiagnostic, ...],
+) -> None:
+    """Raise when catalog diagnostics make discovery unusable."""
+    failures = tuple(item for item in diagnostics if item.kind != "skipped")
+    if failures:
+        raise WorkflowDiscoveryError(failures)
+
+
 def validate_discovery_timeout(timeout: float) -> None:
     """Raise when a discovery timeout cannot bound one scan."""
     if not math.isfinite(timeout) or timeout <= 0:
@@ -68,12 +93,29 @@ def validate_discovery_timeout(timeout: float) -> None:
 
 
 def configure_roots(paths: list[str]) -> tuple[ConfiguredRoot, ...]:
-    """Normalize configured file/directory inputs and deterministic aliases."""
+    """Normalize explicit file/directory inputs and deterministic aliases."""
+    if not paths:
+        raise ValueError("At least one workflow target is required")
+
     pending: list[tuple[str | None, Path, Path]] = []
     for value in paths:
         explicit_alias, raw_path = _split_alias(value)
-        target = Path(raw_path).expanduser().resolve()
-        root = target if target.is_dir() else target.parent
+        configured_path = Path(raw_path).expanduser()
+        if not configured_path.exists():
+            raise ValueError(f"Workflow target does not exist: {raw_path}")
+        target = configured_path.resolve()
+        if target.is_file():
+            if target.suffix != ".py":
+                raise ValueError(f"Workflow file target must end in .py: {raw_path}")
+            if not os.access(target, os.R_OK):
+                raise ValueError(f"Workflow file target is not readable: {raw_path}")
+            root = target.parent
+        elif target.is_dir():
+            if not os.access(target, os.R_OK | os.X_OK):
+                raise ValueError(f"Workflow directory target is not readable: {raw_path}")
+            root = target
+        else:
+            raise ValueError(f"Workflow target must be a Python file or directory: {raw_path}")
         pending.append((explicit_alias, root, target))
 
     targets = [target for _, _, target in pending]
@@ -164,7 +206,9 @@ def discover_files(
                         "incomplete scan results were discarded",
                         timeout,
                     )
-                    return (), (_discovery_failure(f"Discovery exceeded {timeout:.1f}s"),)
+                    raise WorkflowDiscoveryTimeoutError(
+                        (_discovery_failure(f"Discovery exceeded {timeout:.1f}s"),)
+                    ) from None
                 finally:
                     _terminate_discovery_process(process, windows_job)
                     terminated = True
@@ -179,7 +223,9 @@ def discover_files(
             captured = _bounded_diagnostic(stderr.read() or stdout.read())
 
         if process.returncode != 0:
-            return (), (_discovery_failure(captured or "Discovery worker failed"),)
+            raise WorkflowDiscoveryError(
+                (_discovery_failure(captured or "Discovery worker failed"),)
+            )
         try:
             result = json.loads(result_path.read_text())
             files = tuple(
@@ -201,9 +247,9 @@ def discover_files(
                 WorkflowDiscoveryDiagnostic(**item) for item in result["diagnostics"]
             )
         except (OSError, KeyError, TypeError, json.JSONDecodeError) as exc:
-            return (), (
-                _discovery_failure(f"Invalid discovery result: {_format_exception(exc)}"),
-            )
+            raise WorkflowDiscoveryError(
+                (_discovery_failure(f"Invalid discovery result: {_format_exception(exc)}"),)
+            ) from exc
         return files, diagnostics
 
 

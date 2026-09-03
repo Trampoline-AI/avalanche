@@ -134,7 +134,7 @@ def feedback_review():
 We run the workflow with the dev command:
 
 ```bash
-uv run ava dev --flows customer_feedback_review/flow.py
+uv run ava dev customer_feedback_review/flow.py
 ```
 
 The resulting graph has 5 execution stages, with 7 total nodes, 3 ava.step and 4 ava.agent_step:

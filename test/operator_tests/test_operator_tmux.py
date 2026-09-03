@@ -19,9 +19,9 @@ import pytest
 TMUX = shutil.which("tmux")
 SESSION = "pytest-operator"
 FIXTURES = os.path.join(os.path.dirname(os.path.dirname(__file__)), "fixtures")
-OPERATOR_CMD = f"uv run ava operator --flows {FIXTURES}"
+OPERATOR_CMD = f"uv run ava operator {FIXTURES}"
 TUI_CMD = "uv run ava tui --connect localhost:17434"
-OPERATOR_PORT_CMD = f"uv run ava operator --flows {FIXTURES} --port 17434"
+OPERATOR_PORT_CMD = f"uv run ava operator {FIXTURES} --port 17434"
 
 
 def tmux_run(*args: str) -> str:

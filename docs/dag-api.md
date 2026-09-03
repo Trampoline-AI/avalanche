@@ -295,8 +295,9 @@ needs workflow input; it is not restored from the source run.
   network calls, or data processing there.
 - Task enable/disable modifiers such as `.skip()` and `.only()` are not part of
   the current release-candidate API.
-- Operator/TUI discovery imports Python files. Point `--flows` to a flow file or
-  dedicated flow directory, not the repository root.
+- Operator/TUI discovery imports Python files. Pass positional flow targets to
+  `ava operator` or `ava dev`, or configure `[tool.avalanche].flow_targets` in
+  `pyproject.toml`; use a flow file or dedicated flow directory, not the repository root.
 
 See [`examples/complex_dag_pattern.py`](../examples/complex_dag_pattern.py) for a
 runnable DAG example.

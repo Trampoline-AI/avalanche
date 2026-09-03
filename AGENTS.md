@@ -52,13 +52,14 @@ Useful runtime examples:
 
 ```bash
 uv run python examples/complex_dag_pattern.py
-uv run ava dev --flows examples
-uv run ava operator --flows examples --port 7433
+uv run ava dev examples
+uv run ava operator examples --port 7433
 uv run ava tui --connect localhost:7433
 uv run ava tui                            # mock TUI
 ```
 
-Avoid `--flows .`: operator discovery imports Python files recursively. Use a narrow file or directory.
+Avoid `ava operator .`: operator discovery imports Python files recursively. Use a
+narrow file or directory.
 
 ## Code Conventions & Common Patterns
 

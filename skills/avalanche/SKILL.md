@@ -435,35 +435,39 @@ the TUI is an optional terminal alternative.
 
 See more details in the usage reference [usage.md](references/usage.md)
 
-For the combined local path, use:
+For the combined local path, use a specific target or workspace configuration:
 
 ```bash
-uv run ava dev --flows <flow-file-or-clean-flow-directory>
+uv run ava dev [<flow-file-or-clean-flow-directory> ...]
 ```
 
-`ava dev` starts the local operator and browser UI. Its flags are:
+`ava dev` starts the local operator and browser UI. When no `FLOW` is supplied,
+it reads `[tool.avalanche].flow_targets` from the nearest `pyproject.toml`;
+relative entries resolve from that file. Explicit `FLOW` values replace the
+configured list. Without either, the command fails before services start and
+never scans the current directory by default. Its flags are:
 
-- `--flows PATH [PATH ...]`: one or more flow files or directories to scan;
 - `--port PORT`: operator gRPC port, default `7433`;
 - `--web-port PORT`: browser UI HTTP port, default `7435`; it must differ from
   `--port`;
 - `--ray`: use the Ray executor.
 
-Use a specific flow file or a clean flow-only directory; never use `--flows .`.
+Use a specific flow file or a clean configured flow-only directory; never pass
+a mixed repository root.
 
 For separate processes or a custom browser-listener host, start them in separate
 terminals:
 
 ```bash
-uv run ava operator --flows <flow-file-or-clean-flow-directory> \
+uv run ava operator [<flow-file-or-clean-flow-directory> ...] \
   --host 127.0.0.1 --port 7433 --webhook-port 7434 --log-level WARNING
 uv run ava web --connect localhost:7433 --host 127.0.0.1 --port 7435
 ```
 
-`ava operator` also accepts `--ray`. Its `--log-level` accepts `DEBUG`, `INFO`,
-`WARNING`, or `ERROR`. `ava web` connects with `--connect HOST:PORT`; use
-`--trusted-proxy` only for non-loopback traffic protected by a trusted,
-authenticated proxy.
+`ava operator` resolves targets with the same explicit-or-configured rule. It
+also accepts `--ray`. Its `--log-level` accepts `DEBUG`, `INFO`, `WARNING`, or
+`ERROR`. `ava web` connects with `--connect HOST:PORT`; use `--trusted-proxy`
+only for non-loopback traffic protected by a trusted, authenticated proxy.
 
 Start a discovered workflow with:
 

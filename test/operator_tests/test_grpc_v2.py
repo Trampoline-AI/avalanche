@@ -367,9 +367,7 @@ def test_discover_flows_continuation_keeps_its_catalog_snapshot(contract_stub, m
     monkeypatch.setattr(
         operator,
         "start_run",
-        lambda workflow_id, *, triggered_by: scheduled_runs.append(
-            (workflow_id, triggered_by)
-        ),
+        lambda workflow_id, *, triggered_by: scheduled_runs.append((workflow_id, triggered_by)),
     )
     first = service.DiscoverFlows(pb.DiscoverFlowsRequestV2(page_size=1))
 

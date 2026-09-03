@@ -87,7 +87,7 @@ or webhook-triggered runs, observability, or a UI:
 
 ```bash
 # From the repository root
-uv run ava operator --flows examples --port 7433
+uv run ava operator examples --port 7433
 
 # In another terminal
 uv run ava web --connect localhost:7433
@@ -95,9 +95,10 @@ uv run ava web --connect localhost:7433
 uv run ava tui --connect localhost:7433
 ```
 
-`ava dev --flows examples` is the browser-oriented convenience command. It
-starts an operator subprocess and a connected `ava web` subprocess; the browser
-UI listens on `http://127.0.0.1:7435` by default. It does not start the TUI.
+`ava dev examples` is the browser-oriented convenience command. One process
+owns discovery, the operator gRPC server, and the connected browser UI; it waits
+for gRPC readiness before starting the UI. The browser UI listens on
+`http://127.0.0.1:7435` by default. It does not start the TUI.
 
 ## Workflow authoring and runtime
 
@@ -198,9 +199,9 @@ storage default:
 
 ### Discovery catalog
 
-`WorkflowRegistry` receives configured `--flows` paths. A file target is one
-candidate; a directory target is recursively scanned for public `*.py` files.
-Private files beginning with `_` and hidden/generated directories are skipped.
+`WorkflowRegistry` receives resolved workflow targets. A file target is one
+candidate; a directory target is recursively scanned for public `*.py`
+files. Private files beginning with `_` and hidden/generated directories are skipped.
 Each candidate is discovered in a short-lived process, which:
 
 1. imports the module through its normal package path when applicable;
@@ -216,16 +217,22 @@ Python environment and source metadata. The cache contains descriptors and
 paths, never live workflow callables.
 
 Discovery imports arbitrary configured source. Workflow modules and builders
-must be import-safe and side-effect-light. Do not scan a repository root unless
-it is deliberately a flow-only tree:
+must be import-safe and side-effect-light. `ava operator` and `ava dev` use
+explicit existing file or directory targets when supplied. Otherwise they read
+`[tool.avalanche].flow_targets` from the nearest `pyproject.toml`; each relative
+path is resolved from that file's directory. Do not configure a repository root
+unless it is deliberately a flow-only tree:
 
 ```bash
-# Avoid from a repository root containing unrelated Python.
-uv run ava operator --flows .
+# Avoid in a mixed repository:
+uv run ava operator .
 
-# Prefer a specific module or flow directory.
-uv run ava operator --flows examples
+# Prefer an explicit specific module or flow directory:
+uv run ava operator examples
 ```
+
+An explicit target list replaces configured targets. If neither is present, the
+command fails before starting services; it never falls back to the current directory.
 
 ### Live reload and scheduled metadata
 
@@ -233,6 +240,10 @@ The live watcher observes only non-excluded Python files below resolved import
 roots. A changed workflow module or imported Python helper triggers targeted
 discovery; adding or deleting a Python candidate updates the catalog without
 reimporting unrelated candidates.
+
+Any discovery failure is terminal for the local operator. A failed targeted scan
+does not leave a stale catalog serving runs; startup or live reload exits with
+the discovery diagnostic.
 
 Live watching intentionally ignores non-Python changes. If a workflow reads an
 import-time resource such as JSON to define a cron expression, restart the

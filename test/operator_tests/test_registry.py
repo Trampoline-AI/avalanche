@@ -12,7 +12,12 @@ import pytest
 
 import avalanche as ava
 from avalanche.dag import Workflow
-from runtime.operator.discovery import FileDiscoveryResult, _worker, configure_roots
+from runtime.operator.discovery import (
+    FileDiscoveryResult,
+    WorkflowDiscoveryTimeoutError,
+    _worker,
+    configure_roots,
+)
 from runtime.operator.discovery_cache import DiscoveryCache
 from runtime.operator.models import WorkflowDiscoveryDiagnostic
 from runtime.operator.registry import (
@@ -358,7 +363,9 @@ class TestWorkflowRegistry:
         assert [item.workflow_id for item in registry.descriptors()] == ["flow.py::scheduled"]
         assert registry.list_diagnostics()[0].kind == "import_error"
 
-    def test_discovery_timeout_retains_current_view(self, tmp_path, caplog):
+    def test_discovery_timeout_raises_typed_error_and_preserves_current_view(
+        self, tmp_path, caplog
+    ):
         workflow_file = tmp_path / "flow.py"
         workflow_file.write_text(
             "import avalanche as ava\n"
@@ -374,11 +381,13 @@ class TestWorkflowRegistry:
         workflow_file.write_text("while True:\n    pass\n")
         registry._discovery_timeout = 0.2
         started = time.monotonic()
-        registry.rescan()
+
+        with pytest.raises(WorkflowDiscoveryTimeoutError) as exc_info:
+            registry.rescan()
 
         assert time.monotonic() - started < 2.0
         assert [item.workflow_id for item in registry.descriptors()] == ["flow.py::scheduled"]
-        assert "exceeded 0.2s" in registry.list_diagnostics()[0].message
+        assert "exceeded 0.2s" in exc_info.value.diagnostics[0].message
         timeout_warnings = [
             record
             for record in caplog.records
@@ -674,7 +683,37 @@ class TestWorkflowRegistry:
         registry.rescan((str(helper),))
         assert registry.resolve("dependent").cron == "2 * * * *"
         assert registry.list_diagnostics() == []
-        assert unrelated_counter.read_text() == "1"
+        assert unrelated_counter.read_text() == "2"
+
+    def test_missing_dependency_recovery_forces_a_complete_rescan(self, tmp_path):
+        source_root = tmp_path / "flows"
+        source_root.mkdir()
+        flow = source_root / "flow.py"
+        helper = source_root / "_schedule.py"
+        flow.write_text(
+            "import avalanche as ava\n"
+            "@ava.workflow(cron='1 * * * *')\n"
+            "def scheduled():\n"
+            "    return None\n"
+        )
+        registry = WorkflowRegistry()
+        registry.scan([str(source_root)])
+
+        flow.write_text(
+            "import avalanche as ava\n"
+            "from _schedule import CRON\n"
+            "@ava.workflow(cron=CRON)\n"
+            "def scheduled():\n"
+            "    return None\n"
+        )
+        registry.rescan((str(flow),))
+        assert [item.kind for item in registry.list_diagnostics()] == ["import_error"]
+
+        helper.write_text('CRON = "2 * * * *"\n')
+        registry.rescan((str(helper),))
+
+        assert registry.resolve("scheduled").cron == "2 * * * *"
+        assert registry.list_diagnostics() == []
 
     def test_added_and_deleted_workflow_do_not_reimport_unchanged_files(self, tmp_path):
         source_root = tmp_path / "flows"

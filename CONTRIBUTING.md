@@ -52,7 +52,9 @@ uv build
 
 - Document only commands that exist and are tested or clearly marked interactive.
 - Use `ava` for the CLI command. Do not document an `avalanche` console command.
-- Public CLI docs should say `flow` and `--flows`.
+- Public CLI docs should explain that `operator` and `dev` use explicit
+  positional flow targets or `[tool.avalanche].flow_targets`, not a `--flows`
+  flag or a current-directory default.
 - Keep historical or speculative material out of onboarding docs unless it is
   clearly marked as non-release context.
 

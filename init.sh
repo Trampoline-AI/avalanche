@@ -348,7 +348,7 @@ main() {
     printf '.env contains %s and is ignored by Git.\n' "$credential_env"
   fi
   printf '\nStart the demo with:\n'
-  printf '  uv run ava dev --flows src/binary_converter/\n'
+  printf '  uv run ava dev\n'
 }
 
 main "$@"
@@ -376,24 +376,17 @@ Each direct child of `src/` is one workflow. Do not add a wrapper package such
 as `src/avalanche_workflows/`, and do not create a separate `pyproject.toml` or
 virtual environment for each workflow.
 
-## Starter flow
-
-Reconfigure the model provider at any time with:
+`pyproject.toml` configures `src/` as the workspace flow target. The normal
+command scans every flow beneath that dedicated directory:
 
 ```bash
-bash scripts/configure-provider.sh
+uv run ava dev
 ```
 
-The script stores API keys in the Git-ignored `.env` when needed. Do not place
-credentials in `src/binary_converter/flow.py`.
-
-## Execution boundary
-
-Flows execute through Avalanche's operator. This workspace contains flow
-declarations only. From the workspace root, start the starter flow with:
+To scan one flow instead of the configured workspace target:
 
 ```bash
-uv run ava dev --flows src/binary_converter/
+uv run ava dev src/binary_converter/flow.py
 ```
 EOF
 
@@ -444,6 +437,12 @@ EOF
 
   cat >>"$staging_root/pyproject.toml" <<'EOF'
 
+[tool.avalanche]
+flow_targets = ["src"]
+EOF
+
+  cat >>"$staging_root/pyproject.toml" <<'EOF'
+
 [project.optional-dependencies]
 codex-lm = ["predict-rlm[codex-lm]"]
 EOF
@@ -470,9 +469,9 @@ EOF
 EOF
   chmod 600 "$staging_root/.env"
 
+  write_starter_flow
   uv sync --no-dev --directory "$staging_root"
 
-  write_starter_flow
   write_provider_configurator
   write_workspace_guidance
 }
@@ -482,6 +481,7 @@ verify_workspace() {
   (
     cd "$root"
     .venv/bin/python -B -c 'import avalanche; print(avalanche.__file__)'
+    uv run ava dev --help >/dev/null
 
     if [[ "$use_editable_dependencies" == true ]]; then
       .venv/bin/python -B -c '

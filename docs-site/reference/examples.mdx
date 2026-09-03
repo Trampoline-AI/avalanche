@@ -8,7 +8,7 @@ The repository's standalone examples are smoke-tested. Run them from the
 
 ```bash
 cd examples
-uv run ava dev
+uv run ava dev .
 ```
 
 ## Start here
@@ -53,7 +53,7 @@ workflow. It:
 Start it against its dedicated flow module:
 
 ```bash
-uv run ava dev --flows customer_feedback_review/flow.py
+uv run ava dev customer_feedback_review/flow.py
 ```
 
 Generated example artifacts land beneath `.avalanche/outputs/feedback_review/`

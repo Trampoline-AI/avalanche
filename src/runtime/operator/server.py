@@ -23,6 +23,7 @@ DEFAULT_PORT = 7433
 DEFAULT_HOST = "127.0.0.1"
 TRACE_CHUNK_BYTES = 1024 * 1024
 
+
 def serve(
     operator: Operator,
     port: int = DEFAULT_PORT,
@@ -53,9 +54,7 @@ def serve(
         # server_v2 reuses helpers from this module.
         from .server_v2 import OperatorV2Servicer
 
-        pb_grpc.add_OperatorServiceV2Servicer_to_server(
-            OperatorV2Servicer(operator), server
-        )
+        pb_grpc.add_OperatorServiceV2Servicer_to_server(OperatorV2Servicer(operator), server)
         listen_address = _listen_address(host, port)
         if not _is_loopback_host(host):
             logger.warning(
@@ -77,6 +76,27 @@ def serve(
 
     if block:
         previous_handlers: dict[int, Any] = {}
+        monitor_stop = threading.Event()
+        fatal_error: list[Exception] = []
+        failure_monitor: threading.Thread | None = None
+
+        if isinstance(operator, Operator):
+
+            def stop_for_fatal_operator_error() -> None:
+                while not monitor_stop.is_set():
+                    failure = operator.wait_for_failure(timeout=0.1)
+                    if failure is None:
+                        continue
+                    fatal_error.append(failure)
+                    server.stop(grace=0)
+                    return
+
+            failure_monitor = threading.Thread(
+                target=stop_for_fatal_operator_error,
+                name="avalanche-operator-failure-monitor",
+                daemon=True,
+            )
+            failure_monitor.start()
 
         def request_shutdown(signum, _frame) -> None:
             logger.info("Received signal %s; shutting down", signum)
@@ -91,12 +111,17 @@ def serve(
         except KeyboardInterrupt:
             request_shutdown(signal.SIGINT, None)
         finally:
+            monitor_stop.set()
+            if failure_monitor is not None:
+                failure_monitor.join(timeout=1.0)
             try:
                 server.stop(grace=1.0).wait(timeout=2.0)
             finally:
                 operator.close()
                 for signum, handler in previous_handlers.items():
                     signal.signal(signum, handler)
+        if fatal_error:
+            raise fatal_error[0]
 
     return server
 
