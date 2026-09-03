@@ -22,9 +22,10 @@
 - `LocalExecutor` now runs independent, dependency-ready workflow nodes
   concurrently in a bounded thread pool while preserving fan-in argument,
   receipt, hook, and node-log behavior.
+- Concurrent `Table.append()` calls now preserve every append for Iceberg and Lance
+  tables; commit ordering is unspecified.
 - The cursor example keeps per-model embedding work parallel and commits both
-  results through one fan-in transaction, avoiding concurrent writes to the
-  shared Iceberg table.
+  results through one fan-in transaction.
 
 ## 0.2.0
 

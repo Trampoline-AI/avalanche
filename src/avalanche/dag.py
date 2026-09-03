@@ -2911,9 +2911,6 @@ class Workflow:
                         else:
                             completed_nodes.add(node_id)
 
-                    if cancel_requested and cancel_requested():
-                        cancelled = True
-
             if primary_failure is not None:
                 raise primary_failure
             if cancelled:
