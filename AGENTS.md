@@ -154,6 +154,11 @@ narrow file or directory.
 Every PR MUST add an entry under `## Unreleased` in `CHANGELOG.md` describing
 its user-facing change.
 
+Before drafting or updating a PR description, MUST inspect the complete diff
+against its base branch (`git diff origin/main...HEAD` for this repository) and
+describe every substantive change. Do not summarize only the most recent task or
+commit.
+
 Every PR description must be self-contained, use plain and direct language, and start with
 these sections in this order:
 
