@@ -16,7 +16,9 @@ All PyIceberg Table methods are accessible through this wrapper:
 """
 
 from collections.abc import Sequence
+from random import uniform
 from threading import Lock
+from time import monotonic, sleep
 from typing import TYPE_CHECKING, Any, Optional, Tuple, Union
 
 import polars as pl
@@ -36,7 +38,9 @@ from .schema import normalize_schema
 if TYPE_CHECKING:
     from .namespace import IcebergAppendScan
 
-_APPEND_RETRIES = 3
+_APPEND_RETRY_TIMEOUT_SECONDS = 30.0
+_APPEND_RETRY_INITIAL_DELAY_SECONDS = 0.01
+_APPEND_RETRY_MAX_DELAY_SECONDS = 0.25
 
 
 def _with_row_lineage_schema(schema: IcebergSchema) -> IcebergSchema:
@@ -239,6 +243,9 @@ class IcebergTable(StorageTable):
         Returns:
             AppendResult with data and snapshot_id
 
+        Raises:
+            CommitFailedException: If catalog conflicts persist for 30 seconds.
+
         Example:
             @ava.source
             def load_docs(*, documents=ns.documents):
@@ -268,16 +275,38 @@ class IcebergTable(StorageTable):
 
         # ``Table.refresh()`` mutates the PyIceberg handle. Serialize appends
         # through this wrapper instance so each AppendResult retains its own
-        # committed snapshot ID; separate workers retry catalog conflicts below.
-        last_error: CommitFailedException | None = None
+        # committed snapshot ID. Separate workers retry catalog conflicts until
+        # the bounded deadline expires.
         with self._append_lock:
-            for _ in range(_APPEND_RETRIES):
-                self._refresh_table_metadata()
+            deadline = monotonic() + _APPEND_RETRY_TIMEOUT_SECONDS
+            retry_delay = _APPEND_RETRY_INITIAL_DELAY_SECONDS
+            self._refresh_table_metadata()
+
+            while True:
+                observed_snapshot_id = self.current_version_id
                 attempt_data = self._cast_to_table_schema(arrow_data)
                 try:
                     self._table.append(attempt_data)
-                except CommitFailedException as exc:
-                    last_error = exc
+                except CommitFailedException:
+                    if monotonic() >= deadline:
+                        raise
+
+                    self._refresh_table_metadata()
+                    if self.current_version_id != observed_snapshot_id:
+                        # A sibling commit advanced the catalog. Retry promptly
+                        # against that newer snapshot instead of treating this
+                        # as repeated no-progress contention.
+                        retry_delay = _APPEND_RETRY_INITIAL_DELAY_SECONDS
+                    else:
+                        retry_delay = min(
+                            retry_delay * 2,
+                            _APPEND_RETRY_MAX_DELAY_SECONDS,
+                        )
+
+                    remaining = deadline - monotonic()
+                    if remaining <= 0:
+                        raise
+                    sleep(min(uniform(retry_delay / 2, retry_delay), remaining))
                     continue
 
                 snapshot_id = self.current_version_id
@@ -288,9 +317,6 @@ class IcebergTable(StorageTable):
                     table_identity=self.identifier,
                     row_model=self.row_model,
                 )
-
-        assert last_error is not None
-        raise last_error
 
     def _cast_to_table_schema(self, arrow_data: pa.Table | pa.RecordBatch) -> pa.Table:
         """Align Arrow field types/nullability with the declared Iceberg schema."""

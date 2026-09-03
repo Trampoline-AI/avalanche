@@ -3,7 +3,9 @@
 from tempfile import TemporaryDirectory
 
 import dataframely as dy
+import polars as pl
 import pytest
+from pyiceberg.exceptions import CommitFailedException
 from pyiceberg.schema import Schema as IcebergSchema
 from pyiceberg.types import NestedField, StringType
 
@@ -184,6 +186,27 @@ class TestIcebergTableDataOperations:
 
         # The actual append functionality is PyIceberg's responsibility
         # We're just testing that the proxy works
+
+    def test_append_stops_after_retry_timeout(self, namespace, monkeypatch):
+        table = namespace.test_table
+        assert table._table is not None
+        attempts = 0
+
+        def fail_append(_data):
+            nonlocal attempts
+            attempts += 1
+            raise CommitFailedException("conflict")
+
+        monkeypatch.setattr(table._table, "append", fail_append)
+        monkeypatch.setattr(
+            "avalanche.iceberg.table._APPEND_RETRY_TIMEOUT_SECONDS",
+            0.0,
+        )
+
+        with pytest.raises(CommitFailedException, match="conflict"):
+            table.append(pl.DataFrame({"id": ["1"], "name": ["one"], "value": [1]}))
+
+        assert attempts == 1
 
     def test_scan_via_proxy(self, namespace):
         """Test that scan is proxied to PyIceberg."""
