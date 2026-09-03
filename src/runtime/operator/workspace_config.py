@@ -124,7 +124,12 @@ def _workspace_target_path(value: str, workspace_root: Path) -> str:
     alias, raw_path = _split_alias(value)
     if not raw_path.strip():
         raise ValueError("Workspace flow target must not be empty")
-    path = Path(raw_path).expanduser()
+    try:
+        path = Path(raw_path).expanduser()
+    except RuntimeError as exc:
+        raise ValueError(
+            f"Workspace flow target has an unresolved home directory: {raw_path}"
+        ) from exc
     if not path.is_absolute():
         path = workspace_root / path
     if alias is None:
