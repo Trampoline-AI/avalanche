@@ -210,9 +210,12 @@ def test_ava_operator_accepts_multiple_file_targets(monkeypatch):
     ]
 
 
-def test_ava_operator_requires_configured_or_explicit_workflow_targets(capsys):
+def test_ava_operator_requires_configured_or_explicit_workflow_targets(
+    capsys, monkeypatch, tmp_path
+):
     from ava_cli import app
 
+    monkeypatch.chdir(tmp_path)
     with pytest.raises(SystemExit) as exc_info:
         app.main(["operator"])
 
@@ -339,9 +342,12 @@ def test_runtime_operator_configures_logging_before_serve(monkeypatch):
     assert lifecycle[1][1][1]["discovery_timeout"] == 45.0
 
 
-def test_runtime_operator_requires_configured_or_explicit_workflow_targets(capsys):
+def test_runtime_operator_requires_configured_or_explicit_workflow_targets(
+    capsys, monkeypatch, tmp_path
+):
     from runtime.operator import __main__ as operator_main
 
+    monkeypatch.chdir(tmp_path)
     with pytest.raises(SystemExit) as exc_info:
         operator_main.main([])
 
@@ -2052,9 +2058,12 @@ def test_ava_dev_rejects_colliding_operator_and_browser_ports(monkeypatch, capsy
     assert "--port and --web-port must differ" in capsys.readouterr().err
 
 
-def test_ava_dev_requires_configured_or_explicit_workflow_targets(capsys):
+def test_ava_dev_requires_configured_or_explicit_workflow_targets(
+    capsys, monkeypatch, tmp_path
+):
     from ava_cli import app
 
+    monkeypatch.chdir(tmp_path)
     with pytest.raises(SystemExit) as exc_info:
         app.main(["dev"])
 
