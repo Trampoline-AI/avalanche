@@ -65,6 +65,9 @@ examples = [
     "openpyxl>=3.1,<4",
 ]
 
+[tool.avalanche]
+flow_targets = ["examples/operator_workflow.py"]
+
 [tool.pytest.ini_options]
 minversion = "6.0"
 addopts = "-rP --testdox"
