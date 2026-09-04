@@ -34,11 +34,17 @@
   retain the operator's revision, including zero, and TUI refreshes no longer
   silently swallow unexpected rendering errors.
 
+### Operator web interface
+
+- Agent traces now lead with each turn's reasoning and separate main/sub-model costs, while
+  code, compact terminal output, tool calls, and model calls remain expandable.
+
 ## 0.3.0
 
 ### Dependencies
 
 - Updated the operator web workspace's transitive `nanoid` package to 3.3.18.
+
 ### Operator CLI
 
 - `ava operator` and `ava dev` now use `[tool.avalanche].flow_targets` when

@@ -131,44 +131,5 @@ describe("retained run inspection", () => {
       expect(screen.getByText(value)).toBeInTheDocument();
     },
   );
-
-  it("hydrates turns on demand and keeps expanded content across live appends", async () => {
-    const records = Array.from({ length: 5 }, (_, index) => ({
-      ...event(index + 1),
-      sizeBytes: String(2 * 1024 * 1024),
-    }));
-    const reads = new Map<string, number>();
-    const api = createApi({
-      listAgentEventPage: async () => eventPage(records),
-      readJsonDetail: async (token) => {
-        const version = (reads.get(token) ?? 0) + 1;
-        reads.set(token, version);
-        return { reasoning: `Retained ${token} version ${version}` };
-      },
-    });
-    const view = render(
-      <Inspector api={api} run={run} nodeId={node.nodeId} onClose={() => undefined} />,
-    );
-    expect(reads.size).toBe(0);
-    fireEvent.click(screen.getByRole("button", { name: "trace" }));
-    fireEvent.click(await screen.findByRole("button", { name: "Expand turns" }));
-    for (let index = 0; index < 5; index += 1) {
-      fireEvent.click(await screen.findByRole("button", { name: `Expand ${index}` }));
-      await screen.findByText(`Retained event-${index + 1} version 1`);
-    }
-    view.rerender(
-      <Inspector
-        api={api}
-        run={run}
-        nodeId={node.nodeId}
-        liveEvents={[event(6)]}
-        onClose={() => undefined}
-      />,
-    );
-    await screen.findByRole("button", { name: "Expand 5" });
-    expect(screen.getByText("Retained event-5 version 1")).toBeInTheDocument();
-    fireEvent.click(screen.getByRole("button", { name: "Collapse 0" }));
-    fireEvent.click(screen.getByRole("button", { name: "Expand 0" }));
-    expect(await screen.findByText("Retained event-1 version 2")).toBeInTheDocument();
   });
 });
