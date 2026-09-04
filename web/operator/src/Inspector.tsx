@@ -1,6 +1,14 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { X } from "lucide-react";
 
+import { AgentTraceExplorer, type AgentTraceTurn } from "./AgentTraceExplorer";
+import {
+  type AgentTraceStep,
+  type AgentTraceStepSummary,
+  parseAgentTraceStepEvent,
+  summarizeAgentTraceStep,
+} from "./agentTrace";
+
 import type { OperatorApi } from "./api";
 import {
   boundDescriptors,
@@ -42,8 +50,12 @@ interface ScopedResult<T> {
   value: T;
 }
 
+type CachedDetail =
+  | { kind: "event"; body: unknown }
+  | { kind: "trace-step"; body: unknown; step: AgentTraceStep };
+
 interface DetailCacheEntry {
-  value: unknown;
+  detail: CachedDetail;
   byteCost: number;
 }
 
@@ -81,19 +93,6 @@ function eventPayload(value: unknown): Record<string, unknown> | undefined {
   return isUnknownRecord(value.data) ? value.data : value;
 }
 
-function eventSummary(event: AgentEventDescriptorMsg) {
-  return {
-    event: event.eventKind,
-    event_sequence: event.eventSequence,
-    invocation_id: event.invocationId,
-    iteration: event.iteration,
-    duration_ms: event.durationMs,
-    tool_count: event.toolCount,
-    predict_count: event.predictCount,
-    failed: event.error,
-  };
-}
-
 export function Inspector({
   api,
   workflow,
@@ -117,6 +116,7 @@ export function Inspector({
 
   const [nodeSourceState, setNodeSourceState] = useState<NodeSourceState>();
   const detailCache = useRef(new Map<string, DetailCacheEntry>());
+  const traceSummaries = useRef(new Map<string, AgentTraceStepSummary>());
   const nodeSourceCache = useRef(new Map<string, string | undefined>());
   const detailLoading = useRef(new Set<string>());
   const detailControllers = useRef(new Set<AbortController>());
@@ -230,11 +230,11 @@ export function Inspector({
     return `${format}\0${token}`;
   }
 
-  function storeCachedDetail(key: string, value: unknown, reportedSize?: string) {
-    const byteCost = measuredByteCost(value, reportedSize);
+  function storeCachedDetail(key: string, detail: CachedDetail, reportedSize?: string) {
+    const byteCost = measuredByteCost(detail.body, reportedSize);
     if (byteCost > DETAIL_CACHE_MAX_BYTES) return false;
     detailCache.current.delete(key);
-    detailCache.current.set(key, { value, byteCost });
+    detailCache.current.set(key, { detail, byteCost });
     let cachedBytes = 0;
     for (const entry of detailCache.current.values()) cachedBytes += entry.byteCost;
     while (
@@ -323,6 +323,7 @@ export function Inspector({
     setDetailErrors({});
     setInputOutputState(undefined);
     detailCache.current.clear();
+    traceSummaries.current.clear();
     detailLoading.current.clear();
   }, [abortDetailHydration, api, descriptorScope]);
 
@@ -457,7 +458,7 @@ export function Inspector({
           tabRef.current !== tab
         )
           return;
-        if (!storeCachedDetail(key, body, valueEvent.sizeBytes)) {
+        if (!storeCachedDetail(key, { kind: "event", body }, valueEvent.sizeBytes)) {
           setInputOutputState({
             key: valueDetailKey,
             status: "error",
@@ -506,7 +507,9 @@ export function Inspector({
           tabRef.current !== "trace"
         )
           return;
-        if (!storeCachedDetail(key, body, event.sizeBytes)) {
+        const step = parseAgentTraceStepEvent(body);
+        traceSummaries.current.set(key, summarizeAgentTraceStep(step));
+        if (!storeCachedDetail(key, { kind: "trace-step", body, step }, event.sizeBytes)) {
           setDetailErrors((current) => ({
             ...current,
             [key]: "Turn detail exceeds the browser detail limit.",
@@ -528,53 +531,39 @@ export function Inspector({
       });
   }
 
-  const traceProjection = useMemo(() => {
-    const descriptors = new WeakMap<object, AgentEventDescriptorMsg>();
-    const values = turns.map((event) => {
-      const key = cacheKey("json", event.bodyToken);
-      const cached = detailCache.current.get(key)?.value;
-      const error = detailErrors[key];
-      const loading = detailLoading.current.has(key);
-      const value = {
-        ...eventSummary(event),
-        ...(isUnknownRecord(cached)
-          ? cached
-          : cached !== undefined
-            ? { detail: cached }
-            : {
-                detail: error
-                  ? { kind: "unavailable", reason: error }
-                  : loading
-                    ? "Loading retained turn…"
-                    : "Expand this turn to load its retained detail.",
-              }),
-      };
-      descriptors.set(value, event);
-      return value;
-    });
-    return { descriptors, values };
-  }, [cacheVersion, detailErrors, detailLoadingVersion, turns]);
-
-  const traceRoot = useMemo(() => {
-    const header = node?.trace?.header;
-    return {
-      status: node?.trace?.status,
-      complete: node?.trace?.complete,
-      event_count: node?.trace?.eventCount,
-      size_bytes: node?.trace?.sizeBytes,
-      model: header?.model,
-      sub_model: header?.subModel,
-      iterations: header?.iterations,
-      max_iterations: header?.maxIterations,
-      duration_ms: header?.durationMs,
-      usage: parseRetainedJson(header?.usageJson),
-      telemetry: parseRetainedJson(header?.telemetryJson),
-      lifecycle: combinedEvents
-        .filter((event) => event.eventKind !== "iteration.recorded")
-        .map(eventSummary),
-      turns: traceProjection.values,
-    };
-  }, [combinedEvents, node?.trace, traceProjection.values]);
+  const traceTurnViews = useMemo<AgentTraceTurn[]>(
+    () =>
+      turns.map((event) => {
+        const key = cacheKey("json", event.bodyToken);
+        const cached = detailCache.current.get(key)?.detail;
+        const summary = traceSummaries.current.get(key);
+        const error = detailErrors[key];
+        const isLoading = detailLoading.current.has(key);
+        return {
+          descriptor: event,
+          summary: summary
+            ? { status: "ready", step: summary }
+            : error
+              ? { status: "error", error }
+              : isLoading
+                ? { status: "loading" }
+                : { status: "idle" },
+          detail:
+            cached?.kind === "trace-step"
+              ? { status: "ready", step: cached.step }
+              : error
+                ? { status: "error", error }
+                : isLoading
+                  ? { status: "loading" }
+                  : { status: "idle" },
+        };
+      }),
+    [cacheVersion, detailErrors, detailLoadingVersion, turns],
+  );
+  const lifecycleEvents = useMemo(
+    () => combinedEvents.filter((event) => event.eventKind !== "iteration.recorded"),
+    [combinedEvents],
+  );
 
   useEffect(() => {
     if (tab !== "trace" || !following || !turns.length || !traceScrollElement.current) return;
@@ -717,7 +706,10 @@ export function Inspector({
   const valueCacheEntry = valueEvent
     ? detailCache.current.get(cacheKey("json", valueEvent.bodyToken))
     : undefined;
-  const selectedPayload = eventPayload(valueCacheEntry?.value);
+  const selectedPayload =
+    valueCacheEntry?.detail.kind === "event"
+      ? eventPayload(valueCacheEntry.detail.body)
+      : undefined;
   const valueKey = tab === "inputs" ? "inputs" : "outputs";
   const activePageError = pageError?.key === pageKey ? pageError.value : undefined;
   const activeInputOutputState =
@@ -879,41 +871,23 @@ export function Inspector({
           </section>
         )}
 
-        {tab === "trace" && (
-          <section className="inspector-panel inspector-trace-panel mb-0! flex h-full min-h-full min-w-0 flex-col gap-3">
-            <div className="trace-toolbar flex items-center justify-between gap-2 [&_h3]:mt-0 [&_h3]:mb-[3px] [&_span]:font-mono [&_span]:text-[8px] [&_span]:text-muted">
-              <div>
-                <h3>RunTrace</h3>
-                <span>
-                  {turns.length} retained {turns.length === 1 ? "turn" : "turns"}
-                </span>
-              </div>
-              <button
-                type="button"
-                className={`toggle flex-none cursor-pointer rounded-full border bg-panel px-2 py-[5px] font-mono text-[8px] ${following ? "active border-acid text-acid" : "border-line text-secondary"}`}
-                onClick={() => setFollowing((value) => !value)}
-              >
-                {following ? "Following live" : "Follow latest"}
-              </button>
-            </div>
-            {activePageError && (
-              <p
-                className="inspector-error rounded-[7px] border border-danger p-2.5 text-[10px] text-danger [overflow-wrap:anywhere]"
-                role="alert"
-              >
-                {activePageError}
-              </p>
-            )}
-            {pageLoading && !combinedEvents.length && (
-              <p className="inspector-loading text-[11px] text-muted italic" role="status">
-                Loading retained trace…
-              </p>
-            )}
-            <div
-              className="inspector-trace-explorer min-h-48 min-w-0 flex-[1_1_auto] overflow-auto rounded-[7px] border border-line bg-panel p-2"
-              ref={traceScrollElement}
-              onScroll={(event) => {
-                const element = event.currentTarget;
+        {tab === "trace" &&
+          (node.trace ? (
+            <AgentTraceExplorer
+              scopeKey={descriptorScope}
+              trace={node.trace}
+              turns={traceTurnViews}
+              lifecycleEvents={lifecycleEvents}
+              running={node.status === "running"}
+              following={following}
+              loading={pageLoading}
+              error={activePageError}
+              hasMore={Boolean(activeEventPage.nextPageToken)}
+              scrollRef={traceScrollElement}
+              onFollowingChange={setFollowing}
+              onLoadTurn={hydrateTraceTurn}
+              onLoadMore={loadMoreEvents}
+              onScroll={(element) => {
                 const distanceFromBottom =
                   element.scrollHeight - element.scrollTop - element.clientHeight;
                 if (distanceFromBottom > SCROLL_LOAD_THRESHOLD_PX) setFollowing(false);
@@ -924,43 +898,15 @@ export function Inspector({
                   loadMoreEvents();
                 }
               }}
-            >
-              <ValueView
-                value={traceRoot}
-                onExpand={(value) => {
-                  if (value === traceProjection.values) {
-                    if (activeEventPage.nextPageToken) loadMoreEvents();
-                    return;
-                  }
-                  if (typeof value !== "object" || value === null) return;
-                  const descriptor = traceProjection.descriptors.get(value);
-                  if (descriptor) hydrateTraceTurn(descriptor);
-                }}
-              />
-              {pageLoading && combinedEvents.length > 0 && (
-                <p className="inspector-loading text-[11px] text-muted italic" role="status">
-                  Loading more retained trace…
-                </p>
-              )}
-              {!pageLoading && !activeEventPage.nextPageToken && combinedEvents.length > 0 && (
-                <p className="inspector-end-state mt-2 text-center font-mono text-[8px] text-muted uppercase">
-                  End of retained trace
-                </p>
-              )}
-            </div>
-            {activeEventPage.nextPageToken && (
-              <button
-                type="button"
-                className="descriptor-page-action cursor-pointer rounded-md border border-line bg-panel px-2 py-[5px] font-mono text-[8px] text-acid disabled:cursor-wait disabled:text-muted"
-                disabled={pageLoading}
-                aria-busy={pageLoading}
-                onClick={loadMoreEvents}
-              >
-                {pageLoading ? "Loading events…" : "Load more trace"}
-              </button>
-            )}
-          </section>
-        )}
+            />
+          ) : (
+            <section className="inspector-panel min-h-full min-w-0">
+              <h3>Agent trace</h3>
+              <p className="empty-copy text-[11px] text-muted">
+                No structured agent trace is available for this node.
+              </p>
+            </section>
+          ))}
       </div>
     </aside>
   );
