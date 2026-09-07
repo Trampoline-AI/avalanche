@@ -434,15 +434,6 @@ class UIStore:
         return self.current_run.run_id if self.current_run else None
 
     @property
-    def sidebar_selected_name(self) -> str:
-        """Compatibility alias; the stored value is now a workflow ID."""
-        return self.sidebar_selected_id
-
-    @sidebar_selected_name.setter
-    def sidebar_selected_name(self, value: str) -> None:
-        self.sidebar_selected_id = value
-
-    @property
     def runs_for_current_workflow(self) -> list[RunState]:
         """Returns cached runs list — refreshed in background every ~1s."""
         if self.current_workflow is None:

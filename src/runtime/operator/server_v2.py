@@ -205,9 +205,6 @@ class OperatorV2Servicer(pb_grpc.OperatorServiceV2Servicer):
         history_floor, _ = self._op.update_history_bounds()
         return max(0, history_floor)
 
-    def _expected_topology_fingerprint(self, stream: str) -> str:
-        return self._stream_topology_fingerprint(stream)
-
     @staticmethod
     def _cursor_identity(
         cursor: pb.LifecycleCursorV2,
@@ -277,7 +274,7 @@ class OperatorV2Servicer(pb_grpc.OperatorServiceV2Servicer):
         sequence = self._sequence_for_event_ulid(cursor.event_ulid)
         if sequence is None:
             return False
-        if cursor.topology_fingerprint != self._expected_topology_fingerprint(cursor.stream):
+        if cursor.topology_fingerprint != self._stream_topology_fingerprint(cursor.stream):
             return False
         floor_sequence = self._retained_floor_sequence_for()
         cursor_floor_sequence = self._sequence_for_event_ulid(cursor.retained_floor_event_ulid)

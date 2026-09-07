@@ -1626,7 +1626,11 @@ def _materialize_append_handles_for_driver(value: Any, executor: Any) -> Any:
 
 
 def _with_current_run_context(
-    fn: Callable[..., Any], context: Any, *, num_returns: int = 1
+    fn: Callable[..., Any],
+    context: Any,
+    *,
+    num_returns: int = 1,
+    context_param_names: tuple[str, ...] = (),
 ) -> Callable[..., Any]:
     """Wrap a node function so framework helpers can read its RunContext.
 
@@ -1651,6 +1655,8 @@ def _with_current_run_context(
         def plain(*args: Any, **kwargs: Any) -> Any:
             args = _materialize_append_handles_for_worker(args)
             kwargs = _materialize_worker_kwargs(kwargs)
+            for name in context_param_names:
+                kwargs[name] = context
             return fn(*_unwrap_lineaged_tree(args), **_unwrap_lineaged_tree(kwargs))
 
         return plain
@@ -1670,6 +1676,10 @@ def _with_current_run_context(
             merged = dict(context.lineage_vector)
             merged.update(parent_lineage)
             context.lineage_vector = merged
+        # Bind after deserialization so annotated parameters share the context
+        # whose producer lineage is resolved here, rather than a separate copy.
+        for name in context_param_names:
+            kwargs[name] = context
 
         unwrapped_args = _unwrap_lineaged_tree(args)
         unwrapped_kwargs = _unwrap_lineaged_tree(kwargs)
@@ -2579,6 +2589,9 @@ class Workflow:
                 actual_fn,
                 node_run_context,
                 num_returns=node_ref.node.num_returns,
+                context_param_names=tuple(
+                    name for name, value in runtime_params.items() if value is node_run_context
+                ),
             )
 
             try:

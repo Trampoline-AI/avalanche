@@ -16,10 +16,6 @@ class LanceAppendScanSchema(dy.Schema):
     value = dy.String(nullable=False)
 
 
-def _rows(value: str) -> pl.DataFrame:
-    return pl.DataFrame({"id": [1], "value": [value]})
-
-
 @pytest.fixture
 def table(tmp_path):
     class LanceAppendScanNamespace(LanceNamespace):
@@ -34,10 +30,11 @@ def table(tmp_path):
     return ns.records
 
 
-def test_lance_append_scan_replays_one_requested_data_version(table):
-    first = table.append(_rows("first"))
-    second = table.append(_rows("second"))
-    third = table.append(_rows("third"))
+def test_lance_append_scan_replays_one_version_and_rejects_ambiguous_ranges(table):
+    first, second, third = [
+        table.append(pl.DataFrame({"id": [1], "value": [value]}))
+        for value in ("first", "second", "third")
+    ]
 
     assert table.append_scan(snapshot_id=first.snapshot_id).to_polars()["value"].to_list() == [
         "first"
@@ -46,12 +43,6 @@ def test_lance_append_scan_replays_one_requested_data_version(table):
         start_snapshot_id=second.snapshot_id,
         snapshot_id=third.snapshot_id,
     ).to_polars()["value"].to_list() == ["third"]
-
-
-def test_lance_append_scan_rejects_unsupported_snapshot_ranges(table):
-    first = table.append(_rows("first"))
-    table.append(_rows("second"))
-    third = table.append(_rows("third"))
 
     with pytest.raises(NotImplementedError, match="arbitrary snapshot ranges"):
         table.append_scan(

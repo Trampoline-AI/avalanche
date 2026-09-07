@@ -16,6 +16,7 @@ classifiers = [
 dependencies = [
     "croniter>=6.2.2",
     "dataframely>=1.13.0",
+    "filelock>=3.20,<4",
     "grpcio>=1.75.1",
     "predict-rlm[codex-lm]>=0.8.0a",
     "protobuf>=6.31.1",
@@ -42,7 +43,6 @@ lance = [
 dev = [
     "boto3>=1.35,<1.36",
     "pytest>=9.0.3,<10",
-    "pytest-testdox>=3.1.0,<4",
     "pytest-asyncio>=1.4.0,<2",
     "ruff>=0.5.6,<0.6",
     "croniter>=6.2.2",
@@ -70,7 +70,8 @@ flow_targets = ["examples/operator_workflow.py"]
 
 [tool.pytest.ini_options]
 minversion = "6.0"
-addopts = "-rP --testdox"
+addopts = "-ra"
+testpaths = ["test"]
 asyncio_mode = "strict"
 markers = [
     "tmux: tests that require a tmux session (real terminal rendering)",

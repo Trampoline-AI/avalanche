@@ -21,6 +21,7 @@ import webbrowser
 from collections.abc import Sequence
 from importlib.resources import as_file, files
 from pathlib import Path, PurePosixPath
+from typing import TYPE_CHECKING
 from uuid import uuid4
 
 from runtime.operator.discovery import (
@@ -29,6 +30,9 @@ from runtime.operator.discovery import (
     validate_discovery_timeout,
 )
 from runtime.operator.workspace_config import format_scan_targets, select_workflow_targets
+
+if TYPE_CHECKING:
+    from runtime.operator.client import GrpcStateProvider
 
 _RENAME_NOREPLACE = 1
 _RENAME_EXCL = 0x00000004
@@ -408,17 +412,15 @@ def _run_flow(args: argparse.Namespace) -> int:
         except (OperatorCallError, ValueError) as exc:
             print(str(exc), file=sys.stderr)
             return 1
-        if run_id:
-            print(run_id)
-            return 0
-        if last_error := getattr(provider, "last_error", ""):
-            print(last_error, file=sys.stderr)
-        return 1
+        print(run_id)
+        return 0
     finally:
         provider.close()
 
 
 def _run_result(args: argparse.Namespace) -> int:
+    import grpc
+
     if not math.isfinite(args.timeout) or args.timeout <= 0:
         print("--timeout must be positive and finite", file=sys.stderr)
         return 2
@@ -429,13 +431,13 @@ def _run_result(args: argparse.Namespace) -> int:
             args.run_id,
             timeout=args.timeout,
         ):
-            if last_error := getattr(provider, "last_error", ""):
+            if last_error := provider.last_error:
                 print(last_error, file=sys.stderr)
             return 1
         try:
             value = provider.get_run_result(args.run_id)
-        except Exception as exc:
-            error = getattr(provider, "last_error", "") or str(exc)
+        except (grpc.RpcError, TypeError, ValueError) as exc:
+            error = provider.last_error or str(exc)
             print(error, file=sys.stderr)
             return 1
         try:
@@ -453,16 +455,17 @@ def _run_result(args: argparse.Namespace) -> int:
         provider.close()
 
 
-def _wait_for_terminal_run(provider, run_id: str, *, timeout: float) -> bool:
+def _wait_for_terminal_run(provider: GrpcStateProvider, run_id: str, *, timeout: float) -> bool:
+    from runtime.operator.models import RunStatus
+
     deadline = time.monotonic() + timeout
     while True:
         run = provider.get_run(run_id)
         if run is None:
-            if not getattr(provider, "last_error", ""):
+            if not provider.last_error:
                 provider.last_error = f"Run {run_id} not found"
             return False
-        status = getattr(run.status, "value", run.status)
-        if status in {"success", "failed", "cancelled"}:
+        if run.status in {RunStatus.SUCCESS, RunStatus.FAILED, RunStatus.CANCELLED}:
             return True
         remaining = deadline - time.monotonic()
         if remaining <= 0:
@@ -1518,7 +1521,7 @@ def _report_dev_failure(stage: str, error: Exception) -> None:
     print(f"  {type(error).__name__}: {error}", file=sys.stderr)
 
 
-def _make_provider(address: str):
+def _make_provider(address: str) -> GrpcStateProvider:
     from runtime.operator.client import GrpcStateProvider
 
     return GrpcStateProvider(address)

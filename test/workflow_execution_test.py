@@ -1,286 +1,103 @@
-"""Integration tests for Workflow execution with Ray."""
+"""Local scheduling, binding and output integrity."""
 
 import threading
 
+import polars as pl
 import pytest
 
-from avalanche.dag import dest, source, step, workflow
-from runtime.executor import LocalExecutor, RayExecutor
+import avalanche as ava
 
-# Shared state for tracking task execution order
-execution_log = []
 
+def test_parallel_branches_overlap_and_fan_in_in_declaration_order():
+    both_running = threading.Barrier(2)
 
-class TestWorkflowExecution:
-    """Test Workflow.run() with different executors."""
+    @ava.source
+    def load(value):
+        both_running.wait(timeout=5)
+        return value
 
-    def test_workflow_execution_with_local_executor(self):
-        """Test workflow execution with LocalExecutor."""
+    @ava.dest
+    def join(left, right):
+        return left, right
 
-        @source
-        def load_data():
-            return {"data": [1, 2, 3]}
-
-        @step
-        def double_values(data):
-            # Actually use the input data
-            return {"data": [x * 2 for x in data["data"]]}
-
-        @dest
-        def save_results(data):
-            # Use the input data
-            return f"saved_{len(data['data'])}_items"
-
-        @workflow
-        def my_workflow():
-            result = load_data() >> double_values() >> save_results()
-            return result  # Return final result
+    @ava.workflow
+    def flow():
+        return (load("left") & load("right")) >> join()
 
-        # Build workflow
-        p = my_workflow()
+    assert flow().run(executor=ava.LocalExecutor(max_workers=2)).result(timeout=10) == (
+        "left",
+        "right",
+    )
 
-        # Verify workflow structure
-        assert len(p.nodes) == 3
-        assert len(p.graph) == 2  # 2 edges
 
-        # Execute with LocalExecutor
-        executor = LocalExecutor()
-        result = p.run(executor=executor).result()
-
-        # Verify result
-        assert result == "saved_3_items"
-
-        print("✓ Workflow executed locally!")
-        print(f"  Result: {result}")
+def test_multiple_returns_preserve_frames_and_explicit_keyword_binding():
+    @ava.source(num_returns=2)
+    def extract():
+        return pl.DataFrame({"value": [10, 20]}), pl.DataFrame({"value": [30, 40]})
 
-    def test_workflow_parallel_execution_with_local_executor(self):
-        """Independent ``&`` branches overlap and fan in with stable argument order."""
-        both_running = threading.Barrier(2)
+    @ava.step
+    def double(frame):
+        return frame.with_columns(pl.col("value") * 2)
 
-        @source
-        def left():
-            both_running.wait(timeout=2)
-            return "left"
-
-        @source
-        def right():
-            both_running.wait(timeout=2)
-            return "right"
+    @ava.dest
+    def combine(left, right, *, offset):
+        return left["value"].sum() + right["value"].sum() + offset
 
-        @dest
-        def join(left_value, right_value):
-            return left_value, right_value
+    @ava.workflow
+    def flow():
+        pair = extract()
+        first = double(pair[0])
+        return pair, first, combine(right=pair[1], left=first, offset=1)
 
-        @workflow
-        def parallel_workflow():
-            return (left() & right()) >> join()
-
-        result = (
-            parallel_workflow().run(executor=LocalExecutor(max_workers=2)).result(timeout=5)
-        )
-
-        assert result == ("left", "right")
-
-    @pytest.mark.ray
-    def test_workflow_execution_with_ray_executor(self):
-        """Test workflow execution with RayExecutor - actual distributed execution!"""
-        pytest.importorskip("ray")
-        import ray
-
-        if ray.is_initialized():
-            ray.shutdown()
-
-        ray.init(
-            num_cpus=4,
-            ignore_reinit_error=True,
-            include_dashboard=False,
-        )
-
-        try:
-
-            @source
-            def extract():
-                """Extract data from source."""
-                return [1, 2, 3, 4, 5]
-
-            @step
-            def double(data):
-                """Double the values."""
-                return [x * 2 for x in data]
-
-            @dest
-            def load(data):
-                """Load results."""
-                return f"completed_{len(data)}_items"
+    pair, first, total = flow().run(executor=ava.LocalExecutor()).result(timeout=5)
+    assert [frame["value"].to_list() for frame in pair] == [[10, 20], [30, 40]]
+    assert first["value"].to_list() == [20, 40]
+    assert total == 131
 
-            @workflow
-            def data_workflow():
-                a = extract()
-                b = double()
-                c = load()
-                a >> b >> c
-                return c  # Return final result
-
-            # Build workflow
-            p = data_workflow()
-
-            # Verify workflow structure
-            assert len(p.nodes) == 3
-            assert len(p.graph) == 2  # 2 edges: extract->double, double->load
-
-            # Execute with RayExecutor - ACTUALLY RUNS THROUGH RAY!
-            executor = RayExecutor()
-            result = p.run(executor=executor).result()
-
-            # Verify result
-            assert result == "completed_5_items"
-
-            print("✓ Workflow executed through Ray successfully!")
-            print(f"  Result: {result}")
-
-        finally:
-            ray.shutdown()
-
-    @pytest.mark.ray
-    def test_workflow_parallel_execution_with_ray(self):
-        """Test parallel execution through Ray."""
-        pytest.importorskip("ray")
-        import ray
-
-        if ray.is_initialized():
-            ray.shutdown()
-
-        ray.init(
-            num_cpus=4,
-            ignore_reinit_error=True,
-            include_dashboard=False,
-        )
-
-        try:
-
-            @source
-            def source_task():
-                return "source_data"
-
-            @step
-            def branch_a(data):
-                return f"{data}_processed_a"
-
-            @step
-            def branch_b(data):
-                return f"{data}_processed_b"
-
-            @dest
-            def sink(data_a, data_b):
-                # Note: With parallel branches, both pass data but sink needs to handle both
-                # For now, just accept one (first one to arrive)
-                return f"sink_done_{data_a}"
-
-            @workflow
-            def parallel_workflow():
-                src = source_task()
-                a = branch_a()
-                b = branch_b()
-                dest_task = sink()
-
-                # Fan-out and fan-in
-                result = src >> (a & b) >> dest_task
-                return result  # Return final sink result
-
-            # Build workflow
-            p = parallel_workflow()
-
-            # Verify DAG structure
-            assert len(p.nodes) == 4
-
-            # Execute through Ray - branches run in parallel!
-            executor = RayExecutor()
-            result = p.run(executor=executor).result()
-
-            # Verify final result contains expected data
-            assert "sink_done" in result
-            assert "source_data_processed" in result
-
-            print("✓ Parallel workflow executed through Ray!")
-            print("  DAG: source -> (branch_a & branch_b) -> sink")
-            print(f"  Result: {result}")
-
-        finally:
-            ray.shutdown()
-
-
-class TestFireAndForgetWorkflows:
-    """Test workflows that don't return values."""
-
-    def test_fire_and_forget_local(self):
-        """Test fire-and-forget workflow with LocalExecutor."""
-        executed = []
-
-        @source
-        def load():
-            executed.append("load")
-            return [1, 2, 3]
-
-        @dest
-        def save(data):
-            executed.append("save")
-            return "done"
-
-        @workflow
-        def background_job():
-            data = load()
-            save(data)
-            # No return - fire and forget!
-
-        p = background_job()
-        result = p.run(LocalExecutor()).result()
-
-        # Should return None but execute all nodes
-        assert result is None
-        assert executed == ["load", "save"]
-
-    @pytest.mark.ray
-    def test_fire_and_forget_with_ray(self):
-        """Test fire-and-forget workflow with Ray."""
-        pytest.importorskip("ray")
-        import ray
-
-        if ray.is_initialized():
-            ray.shutdown()
-
-        ray.init(
-            num_cpus=2,
-            ignore_reinit_error=True,
-            include_dashboard=False,
-        )
-
-        try:
-
-            @source
-            def extract():
-                return [1, 2, 3, 4, 5]
-
-            @step
-            def process(data):
-                return [x * 2 for x in data]
-
-            @dest
-            def sink(data):
-                return f"processed_{len(data)}_items"
-
-            @workflow
-            def fire_and_forget():
-                data = extract()
-                processed = process(data)
-                sink(processed)
-                # No return!
-
-            p = fire_and_forget()
-            result = p.run().result()
-
-            # Should return None (fire-and-forget)
-            assert result is None
-            # Workflow executed successfully (didn't raise errors)
-
-        finally:
-            ray.shutdown()
+
+def test_no_return_workflow_waits_for_side_effects_and_propagates_failure():
+    saved = []
+
+    @ava.source
+    def load():
+        return [1, 2, 3]
+
+    @ava.dest
+    def save(values, *, fail):
+        if fail:
+            raise ValueError("storage unavailable")
+        saved.extend(values)
+
+    @ava.workflow
+    def successful():
+        save(load(), fail=False)
+
+    @ava.workflow
+    def failing():
+        save(load(), fail=True)
+
+    assert successful().run(executor=ava.LocalExecutor()).result(timeout=5) is None
+    assert saved == [1, 2, 3]
+    with pytest.raises(ValueError, match="storage unavailable"):
+        failing().run(executor=ava.LocalExecutor()).result(timeout=5)
+    assert saved == [1, 2, 3]
+
+
+def test_wrong_return_count_fails_before_downstream_can_lose_data():
+    called = []
+
+    @ava.source(num_returns=2)
+    def malformed():
+        return ("only one",)
+
+    @ava.dest
+    def consume(value):
+        called.append(value)
+
+    @ava.workflow
+    def flow():
+        return malformed()[0] >> consume()
+
+    with pytest.raises(ValueError, match="expected to return 2 values"):
+        flow().run(executor=ava.LocalExecutor()).result(timeout=5)
+    assert called == []

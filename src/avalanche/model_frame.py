@@ -38,6 +38,7 @@ class _FieldSpec:
 
 
 _UNION_ORIGINS = (Union, types.UnionType)
+_JsonInclude = dict[str, "_JsonInclude | bool"]
 
 
 def model_to_arrow_schema(model: type[BaseModel]) -> pa.Schema:
@@ -50,10 +51,11 @@ def models_to_arrow(models: Sequence[BaseModel], model: type[BaseModel]) -> pa.T
     """Serialize pydantic model instances into a PyArrow table."""
     specs = _model_specs(model)
     schema = pa.schema([spec.arrow_field for spec in specs])
+    json_fields = _json_fields(specs)
     rows = []
     for item in models:
         python_row = item.model_dump(mode="python")
-        json_row = item.model_dump(mode="json")
+        json_row = item.model_dump(mode="json", include=json_fields) if json_fields else {}
         rows.append(_dump_fields(python_row, json_row, specs))
 
     return pa.Table.from_pylist(rows, schema=schema)
@@ -247,15 +249,30 @@ def _description_metadata(description: str | None) -> dict[bytes, bytes] | None:
     return {b"description": description.encode("utf-8")}
 
 
+def _json_fields(specs: tuple[_FieldSpec, ...]) -> _JsonInclude:
+    return {spec.name: selection for spec in specs if (selection := _json_include(spec.value))}
+
+
+def _json_include(spec: _ValueSpec) -> _JsonInclude | bool:
+    if spec.is_json:
+        return True
+    if spec.item is not None:
+        selection = _json_include(spec.item)
+        return {"__all__": selection} if selection else {}
+    return _json_fields(spec.fields)
+
+
 def _dump_fields(
     python_row: dict[str, Any],
     json_row: dict[str, Any],
     specs: tuple[_FieldSpec, ...],
 ) -> dict[str, Any]:
-    return {
-        spec.name: _dump_value(python_row.get(spec.name), json_row.get(spec.name), spec.value)
-        for spec in specs
-    }
+    for spec in specs:
+        if spec.name in json_row:
+            python_row[spec.name] = _dump_value(
+                python_row[spec.name], json_row[spec.name], spec.value
+            )
+    return python_row
 
 
 def _dump_value(python_value: Any, json_value: Any, spec: _ValueSpec) -> Any:

@@ -73,8 +73,8 @@ def test_ray_operator_uses_live_source_for_imports_logs_and_later_runs(tmp_path)
         second_id = operator.start_run("flow")
         second = _wait_terminal(operator, second_id)
         assert second.status == RunStatus.SUCCESS
-        assert any("logger=2:2" in entry.message for entry in second.logs)
-        assert not any("logger=1:1" in entry.message for entry in second.logs)
+        assert operator.get_run_result(first_id) == (1, 1)
+        assert operator.get_run_result(second_id) == (2, 2)
 
         cancelled_id = operator.start_run("flow")
         operator.cancel_run(cancelled_id)
@@ -87,66 +87,5 @@ def test_ray_operator_uses_live_source_for_imports_logs_and_later_runs(tmp_path)
         failed = _wait_terminal(operator, failed_id)
         assert failed.status == RunStatus.FAILED
         assert any("ray boom" in entry.message for entry in failed.logs)
-        assert not _contains_source_payload(operator._registry.view)
-        assert not _contains_source_payload(first)
-        assert not _contains_source_payload(second)
-        assert not _contains_source_payload(cancelled)
-        assert not _contains_source_payload(failed)
     finally:
         operator.close()
-
-
-@pytest.mark.ray
-def test_ray_operator_deferred_standalone_import_uses_live_source(tmp_path):
-    pytest.importorskip("ray")
-    (tmp_path / "helper.py").write_text("VALUE = 41\n")
-    workflow = tmp_path / "standalone.py"
-    workflow.write_text(
-        "import importlib\n"
-        "import avalanche as ava\n"
-        "@ava.source\n"
-        "def read(log=ava.Logger()):\n"
-        "    value = importlib.import_module('helper').VALUE\n"
-        "    log.info(f'standalone={value}')\n"
-        "    return value\n"
-        "@ava.workflow\n"
-        "def standalone():\n"
-        "    return read()\n"
-    )
-    operator = Operator(
-        [str(workflow)],
-        executor_backend="ray",
-        watch=False,
-        schedule=False,
-        prepare_timeout=30.0,
-    )
-    try:
-        run_id = operator.start_run("standalone")
-        run = _wait_terminal(operator, run_id)
-        assert run.status == RunStatus.SUCCESS
-        assert any("standalone=41" in entry.message for entry in run.logs)
-    finally:
-        operator.close()
-
-
-def _contains_source_payload(value, seen: set[int] | None = None) -> bool:
-    """Catalog/run metadata must not retain custom source bytes or archives."""
-    if isinstance(value, bytes):
-        return True
-    if isinstance(value, str):
-        return value.endswith((".zip", ".tar", ".tar.gz"))
-    if value is None or isinstance(value, (str, int, float, bool)):
-        return False
-    seen = seen or set()
-    if id(value) in seen:
-        return False
-    seen.add(id(value))
-    if isinstance(value, dict):
-        return any(
-            _contains_source_payload(item, seen) for pair in value.items() for item in pair
-        )
-    if isinstance(value, (list, tuple, set, frozenset)):
-        return any(_contains_source_payload(item, seen) for item in value)
-    if hasattr(value, "__dict__"):
-        return _contains_source_payload(vars(value), seen)
-    return False

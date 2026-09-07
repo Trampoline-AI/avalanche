@@ -214,6 +214,7 @@ source = { editable = "." }
 dependencies = [
     { name = "croniter" },
     { name = "dataframely" },
+    { name = "filelock" },
     { name = "grpcio" },
     { name = "predict-rlm", extra = ["codex-lm"] },
     { name = "protobuf" },
@@ -247,7 +248,6 @@ dev = [
     { name = "pytest" },
     { name = "pytest-asyncio" },
     { name = "pytest-cov" },
-    { name = "pytest-testdox" },
     { name = "pytest-xdist" },
     { name = "ray", extra = ["default"] },
     { name = "ruff" },
@@ -263,6 +263,7 @@ examples = [
 requires-dist = [
     { name = "croniter", specifier = ">=6.2.2" },
     { name = "dataframely", specifier = ">=1.13.0" },
+    { name = "filelock", specifier = ">=3.20,<4" },
     { name = "grpcio", specifier = ">=1.75.1" },
     { name = "predict-rlm", extras = ["codex-lm"], specifier = ">=0.8.0a0" },
     { name = "protobuf", specifier = ">=6.31.1" },
@@ -291,7 +292,6 @@ dev = [
     { name = "pytest", specifier = ">=9.0.3,<10" },
     { name = "pytest-asyncio", specifier = ">=1.4.0,<2" },
     { name = "pytest-cov", specifier = ">=7.0.0" },
-    { name = "pytest-testdox", specifier = ">=3.1.0,<4" },
     { name = "pytest-xdist", specifier = ">=3.6,<4" },
     { name = "ray", extras = ["default"], specifier = ">=2.50.0" },
     { name = "ruff", specifier = ">=0.5.6,<0.6" },
@@ -2936,18 +2936,6 @@ dependencies = [
 sdist = { url = "https://files.pythonhosted.org/packages/5e/f7/c933acc76f5208b3b00089573cf6a2bc26dc80a8aece8f52bb7d6b1855ca/pytest_cov-7.0.0.tar.gz", hash = "sha256:33c97eda2e049a0c5298e91f519302a1334c26ac65c1a483d6206fd458361af1", size = 54328, upload-time = "2025-09-09T10:57:02.113Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/ee/49/1377b49de7d0c1ce41292161ea0f721913fa8722c19fb9c1e3aa0367eecb/pytest_cov-7.0.0-py3-none-any.whl", hash = "sha256:3b8e9558b16cc1479da72058bdecf8073661c7f57f7d3c5f22a1c23507f2d861", size = 22424, upload-time = "2025-09-09T10:57:00.695Z" },
-]
-
-[[package]]
-name = "pytest-testdox"
-version = "3.1.0"
-source = { registry = "https://pypi.org/simple" }
-dependencies = [
-    { name = "pytest" },
-]
-sdist = { url = "https://files.pythonhosted.org/packages/64/32/d833d70c7b30994c593d721001ab218f02baee4f6d5be322e9ba3f7f77c0/pytest-testdox-3.1.0.tar.gz", hash = "sha256:f48c49c517f0fb926560b383062db4961112078ec6ca555f91692c661bb5c765", size = 8917, upload-time = "2023-07-22T03:42:47.476Z" }
-wheels = [
-    { url = "https://files.pythonhosted.org/packages/94/8c/515ff4ab03b744b00f1283455ff189537082a16f62aa5ace6171f4cb5aea/pytest_testdox-3.1.0-py2.py3-none-any.whl", hash = "sha256:f3a8f0789d668ccfb60f15aab81fb927b75066cfd19209176166bd7cecae73e6", size = 9041, upload-time = "2023-07-22T03:42:46.069Z" },
 ]
 
 [[package]]

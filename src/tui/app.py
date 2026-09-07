@@ -8,6 +8,7 @@ from concurrent.futures import ThreadPoolExecutor
 
 from textual.app import App, ComposeResult
 from textual.binding import Binding
+from textual.css.query import NoMatches
 from textual.timer import Timer
 from textual.widgets import Header
 
@@ -239,11 +240,11 @@ class AvalancheApp(App):
                 else "Agent step"
             )
             inspector.border_title = f"Agent {display_name}"
-        except Exception:
+        except NoMatches:
             pass
         try:
             self._screen.sync_controls()
-        except Exception:
+        except NoMatches:
             pass
         # Show/hide sidebar + grip, sync width
         visible = self.store.sidebar_visible
@@ -252,7 +253,7 @@ class AvalancheApp(App):
             sidebar.display = visible
             if visible:
                 sidebar.styles.width = self.store.sidebar_width
-        except Exception:
+        except NoMatches:
             pass
         # Toggle -pane-active class on the focused pane (lazygit-style borders)
         focused = self.store.focused_pane
@@ -264,18 +265,18 @@ class AvalancheApp(App):
                 else:
                     w.remove_class("-pane-active")
                 w.refresh()
-            except Exception:
+            except NoMatches:
                 pass
         # Refresh non-pane widgets
         for widget_id in ("status-bar", "dag-panel"):
             try:
                 self._screen.query_one(f"#{widget_id}").refresh()
-            except Exception:
+            except NoMatches:
                 pass
         # Run history still sizes itself to its complete table.
         try:
             self._screen.query_one("#run-history-content").refresh(layout=True)
-        except Exception:
+        except NoMatches:
             pass
         if self.store.trace_inspector_open:
             for content_id in (
@@ -285,7 +286,7 @@ class AvalancheApp(App):
             ):
                 try:
                     self._screen.query_one(f"#{content_id}").refresh(layout=True)
-                except Exception:
+                except NoMatches:
                     pass
         # Update sticky headers
         try:
@@ -294,11 +295,11 @@ class AvalancheApp(App):
             self._screen.query_one("#run-history-header").update(
                 RunHistoryWidget.render_header()
             )
-        except Exception:
+        except NoMatches:
             pass
         try:
             self._screen.query_one("#log-header").update(LogWidget.render_header())
-        except Exception:
+        except NoMatches:
             pass
         # Update border titles with run context
         run_id = self.store.selected_run_id
@@ -309,7 +310,7 @@ class AvalancheApp(App):
             # Show center button only when DAG is scrollable
             btn = self._screen.query_one("#dag-center-btn")
             btn.display = dag.max_scroll_x > 0 or dag.max_scroll_y > 0
-        except Exception:
+        except NoMatches:
             pass
         try:
             from .widgets.run_history import _cron_description, _next_run_label
@@ -337,7 +338,7 @@ class AvalancheApp(App):
                 rh.border_title = f"{left} {line} {right}"
             else:
                 rh.border_title = left
-        except Exception:
+        except NoMatches:
             pass
         # Log panel border title + toggle hints + wrap width
         try:
@@ -373,7 +374,7 @@ class AvalancheApp(App):
             # Subtract 2: 1 for the scrollbar gutter + 1 for breathing room
             log_w.wrap_width = (lp.content_size.width - 2) if self._log_wrap else 0
             log_w.sync_from_store()
-        except Exception:
+        except NoMatches:
             pass
 
     def _sync_sidebar_focus(self) -> None:

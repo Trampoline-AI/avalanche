@@ -3,9 +3,9 @@ import { afterEach } from "vitest";
 import "@testing-library/jest-dom/vitest";
 
 const viewportGeometry = [
-  { selector: ".explorer", width: 280, height: 800 },
-  { selector: ".turn-list", width: 640, height: 220 },
-  { selector: ".log-list", width: 640, height: 220 },
+  { selector: ".run-list-scroll", width: 300, height: 192 },
+  { selector: ".run-log-scroll", width: 640, height: 220 },
+  { selector: ".run-log-row", width: 640, height: 48 },
 ] as const;
 
 function geometryFor(element: Element) {

@@ -10,6 +10,7 @@ from typing import Any
 
 import polars as pl
 import pyarrow as pa
+from filelock import FileLock
 from pydantic import BaseModel
 from pyiceberg.exceptions import CommitFailedException
 
@@ -248,7 +249,7 @@ class LanceTable(Table):
             )
         return (
             _reconnect_lance_table,
-            (location, self.schema, self.row_lineage, self._table_name, self.row_model),
+            (location, self.schema, self.row_lineage, self.identifier, self.row_model),
         )
 
     @property
@@ -290,21 +291,19 @@ class LanceTable(Table):
                 context=get_current_run_context(),
             )
         arrow_data = arrow_data.cast(self.schema)
-        dataset_exists = self._dataset_exists()
-        try:
+        if self._dataset_exists():
             dataset = lance.write_dataset(arrow_data, self.location, mode="append")
-        except OSError:
-            # ``append`` creates a dataset when absent. If a sibling writer won
-            # that initial creation, retry against the dataset it committed.
-            if dataset_exists or not self._dataset_exists():
-                raise
-            dataset = lance.write_dataset(arrow_data, self.location, mode="append")
+        else:
+            # Native append-on-missing uses overwrite transactions. Serialize
+            # initial creation so a late first writer cannot replace committed rows.
+            with FileLock(self._dataset_path() / ".create.lock"):
+                dataset = lance.write_dataset(arrow_data, self.location, mode="append")
 
         snapshot_id = int(dataset.version)
         return AppendResult(
             data=arrow_data,
             snapshot_id=snapshot_id,
-            table_identity=getattr(self, "identifier", None) or self.location,
+            table_identity=self.identifier,
             row_model=self.row_model,
         )
 
@@ -441,8 +440,10 @@ class LanceTable(Table):
         if not self.location:
             return False
 
-        dataset_path = self._dataset_path()
-        return dataset_path.exists() and any(dataset_path.iterdir())
+        versions = self._dataset_path() / "_versions"
+        return versions.is_dir() and any(
+            path.suffix == ".manifest" for path in versions.iterdir()
+        )
 
     def _dataset(self, version: int | None = None) -> Any:
         lance = _require_lance()
@@ -455,8 +456,11 @@ class LanceTable(Table):
 
     def _create_empty_dataset(self) -> Any:
         lance = _require_lance()
-        empty = pa.Table.from_pylist([], schema=self.schema)
-        return lance.write_dataset(empty, self.location, mode="overwrite")
+        with FileLock(self._dataset_path() / ".create.lock"):
+            if self._dataset_exists():
+                return self._dataset()
+            empty = pa.Table.from_pylist([], schema=self.schema)
+            return lance.write_dataset(empty, self.location, mode="create")
 
     def _read_arrow(
         self,
