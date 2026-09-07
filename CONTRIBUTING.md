@@ -5,18 +5,41 @@ Keep changes small, tested, and honest about what is implemented.
 ## Local Setup
 
 ```bash
-uv sync
+uv sync --all-extras
+pnpm --dir web install --frozen-lockfile
 ```
 
 ## Quality Gates
 
-Run the full test suite:
+Run the core regression collection with one command (requires `tmux`):
 
 ```bash
 make test
 ```
 
-Run the full pre-commit gate before handing off changes:
+This runs local Python scenarios, then isolated Ray and real-terminal scenarios,
+then browser tests. Ordinary Python scenarios run concurrently; Ray and tmux
+remain serial because they own process-global resources. CI runs these same
+groups in separate jobs.
+
+Keep this collection focused on:
+
+- DAG execution, runtime injection, failure, cancellation, and rerun lineage.
+- Storage read/write integrity, concurrent commits, cursors, and safe file publication.
+- Operator discovery, spawned execution, transport recovery, and trust boundaries.
+- UI selection, run controls, live-state ordering, inspection, and recovery.
+
+UI tests protect interactions and displayed data, not every widget, label, color,
+or layout coordinate. Generated schema inventories, static documentation checks,
+mock forwarding, and repeated happy paths do not belong in the suite. Add a test
+only when a plausible regression would change an observable result; consolidate
+overlapping scenarios instead of accumulating a test for every branch.
+
+This is core regression coverage, not a promise of exhaustive API, visual, or
+platform compatibility. Run `make tui-bench` and `make web-bench` when changing
+refresh or large-run behavior.
+
+For the aggregate Python lint, Python regression, and browser test gate:
 
 ```bash
 make precommit-check
@@ -34,6 +57,8 @@ Useful focused commands:
 uv run ruff check src/ test/
 uv run pytest test/example_smoke_test.py -v
 uv run pytest test/cli_test.py -v
+make web-test
+make web-lint
 ```
 
 Build artifacts when package metadata or entry points change:

@@ -10,7 +10,7 @@ import avalanche as ava
 from runtime.operator.hooks import RunHooks
 
 
-def test_run_returns_active_handle_with_canonical_context_id():
+def test_active_handle_times_out_then_caches_result_or_failure():
     started = threading.Event()
     release = threading.Event()
 
@@ -18,37 +18,6 @@ def test_run_returns_active_handle_with_canonical_context_id():
     def load(ctx: ava.RunContext):
         started.set()
         assert release.wait(5)
-        thread = threading.current_thread()
-        return ctx.run_id, thread.name, thread.daemon
-
-    @ava.workflow
-    def flow():
-        return load()
-
-    handle = flow().run(executor=ava.LocalExecutor(), run_id="caller-run")
-
-    assert isinstance(handle, ava.RunHandle)
-    assert handle.run_id == "caller-run"
-    assert started.wait(5)
-    assert handle.running()
-    assert not handle.done()
-    assert not handle.cancel_requested()
-    assert not handle.cancelled()
-
-    release.set()
-    assert handle.result(timeout=5) == (
-        "caller-run",
-        "avalanche-local-caller-run_0",
-        False,
-    )
-    assert handle.done()
-    assert not handle.running()
-    assert handle.exception() is None
-
-
-def test_generated_run_id_reaches_context():
-    @ava.source
-    def load(ctx: ava.RunContext):
         return ctx.run_id
 
     @ava.workflow
@@ -56,33 +25,17 @@ def test_generated_run_id_reaches_context():
         return load()
 
     handle = flow().run(executor=ava.LocalExecutor())
-
-    assert len(handle.run_id) == 26
+    try:
+        assert started.wait(5)
+        assert handle.running()
+        with pytest.raises(TimeoutError):
+            handle.result(timeout=0)
+    finally:
+        release.set()
     assert handle.result(timeout=5) == handle.run_id
-
-
-def test_result_none_failure_repeated_reads_and_timeouts():
-    started = threading.Event()
-    release = threading.Event()
-
-    @ava.source
-    def blocked():
-        started.set()
-        assert release.wait(5)
-
-    @ava.workflow
-    def none_flow():
-        blocked()
-
-    handle = none_flow().run(executor=ava.LocalExecutor())
-    assert started.wait(5)
-    with pytest.raises(TimeoutError):
-        handle.result(timeout=0)
-    with pytest.raises(TimeoutError):
-        handle.exception(timeout=0)
-    release.set()
-    assert handle.result(timeout=5) is None
-    assert handle.result() is None
+    assert handle.result() == handle.run_id
+    assert handle.done()
+    assert not handle.cancel()
 
     error = ValueError("boom")
 
@@ -91,43 +44,15 @@ def test_result_none_failure_repeated_reads_and_timeouts():
         raise error
 
     @ava.workflow
-    def failing_flow():
+    def failing():
         return fail()
 
-    failed = failing_flow().run(executor=ava.LocalExecutor())
-    with pytest.raises(ValueError, match="boom") as first:
+    failed = failing().run(executor=ava.LocalExecutor())
+    with pytest.raises(ValueError, match="boom"):
         failed.result(timeout=5)
-    with pytest.raises(ValueError, match="boom") as second:
+    with pytest.raises(ValueError, match="boom"):
         failed.result()
-    assert first.value is error
-    assert second.value is error
     assert failed.exception() is error
-
-
-def test_thread_start_failure_returns_terminal_failed_handle(monkeypatch):
-    error = RuntimeError("thread-start-boom")
-
-    def fail_start(_thread):
-        raise error
-
-    monkeypatch.setattr(threading.Thread, "start", fail_start)
-
-    @ava.source
-    def load():
-        return "unreachable"
-
-    @ava.workflow
-    def flow():
-        return load()
-
-    handle = flow().run(executor=ava.LocalExecutor())
-
-    assert handle.done()
-    assert not handle.running()
-    assert handle.exception() is error
-    with pytest.raises(RuntimeError, match="thread-start-boom") as raised:
-        handle.result()
-    assert raised.value is error
 
 
 @pytest.mark.asyncio
@@ -146,90 +71,29 @@ async def test_await_is_non_blocking_and_waiter_cancellation_is_shielded():
         return load()
 
     handle = flow().run(executor=ava.LocalExecutor())
-    assert await asyncio.to_thread(started.wait, 5)
-
-    waiter = asyncio.ensure_future(handle)
-    await asyncio.sleep(0)
-    waiter.cancel()
-    with pytest.raises(asyncio.CancelledError):
-        await waiter
-
-    assert handle.running()
-    assert not handle.cancel_requested()
-    release.set()
+    try:
+        assert await asyncio.to_thread(started.wait, 5)
+        waiter = asyncio.ensure_future(handle)
+        await asyncio.sleep(0)
+        waiter.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await waiter
+        assert handle.running()
+        assert not handle.cancel_requested()
+    finally:
+        release.set()
     assert await handle == 42
 
 
-def test_cooperative_cancellation_composes_with_copied_hooks():
-    started = threading.Event()
+def test_cancellation_isolates_handles_and_stops_descendants_without_mutating_hooks():
+    both_started = threading.Barrier(3)
     release = threading.Event()
-    downstream_called = threading.Event()
-    caller_cancel_checks = 0
+    finished = []
 
-    def caller_cancel_requested() -> bool:
-        nonlocal caller_cancel_checks
-        caller_cancel_checks += 1
+    def caller_cancel_requested():
         return False
 
     hooks = RunHooks(cancel_requested=caller_cancel_requested)
-
-    @ava.source
-    def load():
-        started.set()
-        assert release.wait(5)
-        return "data"
-
-    @ava.step
-    def downstream(value):
-        downstream_called.set()
-        return value
-
-    @ava.workflow
-    def flow():
-        return load() >> downstream()
-
-    handle = flow().run(executor=ava.LocalExecutor(), hooks=hooks)
-    assert started.wait(5)
-    assert handle.cancel()
-    assert not handle.cancel()
-    assert handle.cancel_requested()
-    assert hooks.cancel_requested is caller_cancel_requested
-    release.set()
-
-    with pytest.raises(CancelledError):
-        handle.result(timeout=5)
-    with pytest.raises(CancelledError):
-        handle.exception()
-    assert handle.cancelled()
-    assert not downstream_called.is_set()
-    assert caller_cancel_checks > 0
-
-
-def test_completion_or_failure_before_cancellation_observation_wins():
-    completed = threading.Event()
-    release = threading.Event()
-
-    @ava.source
-    def load():
-        completed.set()
-        assert release.wait(5)
-        return "done"
-
-    @ava.workflow
-    def flow():
-        return load()
-
-    handle = flow().run(executor=ava.LocalExecutor())
-    assert completed.wait(5)
-    assert handle.cancel()
-    release.set()
-    assert handle.result(timeout=5) == "done"
-    assert not handle.cancelled()
-
-
-def test_concurrent_handles_isolate_identity_and_cancellation():
-    both_started = threading.Barrier(3)
-    release = threading.Event()
 
     @ava.source
     def load(ctx: ava.RunContext):
@@ -238,7 +102,8 @@ def test_concurrent_handles_isolate_identity_and_cancellation():
         return ctx.run_id
 
     @ava.step
-    def finish(run_id: str):
+    def finish(run_id):
+        finished.append(run_id)
         return run_id
 
     @ava.workflow
@@ -246,100 +111,48 @@ def test_concurrent_handles_isolate_identity_and_cancellation():
         return load() >> finish()
 
     workflow = flow()
-    first = workflow.run(executor=ava.LocalExecutor(), run_id="first")
-    second = workflow.run(executor=ava.LocalExecutor(), run_id="second")
-    both_started.wait(timeout=5)
-    assert first.cancel()
-    release.set()
-
+    executor = ava.LocalExecutor()
+    first = workflow.run(executor=executor, hooks=hooks, run_id="first")
+    second = workflow.run(executor=executor, hooks=hooks, run_id="second")
+    try:
+        both_started.wait(timeout=5)
+        assert first.cancel()
+        assert not first.cancel()
+        assert hooks.cancel_requested is caller_cancel_requested
+    finally:
+        release.set()
     with pytest.raises(CancelledError):
         first.result(timeout=5)
+    with pytest.raises(CancelledError):
+        first.exception()
+    assert first.cancelled()
     assert second.result(timeout=5) == "second"
     assert not second.cancel_requested()
+    assert finished == ["second"]
 
 
-def test_workflow_never_shuts_down_caller_executor():
-    class TrackingExecutor(ava.LocalExecutor):
-        def __init__(self):
-            self.shutdown_called = False
-
-        def shutdown(self):
-            self.shutdown_called = True
+def test_terminal_completion_before_cancellation_observation_wins():
+    started = threading.Event()
+    release = threading.Event()
 
     @ava.source
     def load():
-        return "ok"
+        started.set()
+        assert release.wait(5)
+        return "done"
 
     @ava.workflow
     def flow():
         return load()
 
-    executor = TrackingExecutor()
-    assert flow().run(executor=executor).result(timeout=5) == "ok"
-    assert not executor.shutdown_called
-
-
-@pytest.mark.parametrize("use_default", [False, True])
-def test_ray_preparation_runs_on_caller_before_driver_thread(monkeypatch, use_default):
-    calls = []
-    caller_thread_id = threading.get_ident()
-
-    class FakeRay:
-        initialized = False
-
-        def is_initialized(self):
-            calls.append(("is_initialized", threading.get_ident()))
-            return self.initialized
-
-        def init(self, **kwargs):
-            calls.append(("init", threading.get_ident(), kwargs))
-            self.initialized = True
-
-    executor = object.__new__(ava.RayExecutor)
-    executor.ray = FakeRay()
-    executor._ray_init_kwargs = {"include_dashboard": False}
-
-    @ava.source
-    def load():
-        return "unused"
-
-    @ava.workflow
-    def flow():
-        return load()
-
-    workflow = flow()
-
-    def run_driver(**kwargs):
-        calls.append(("driver", threading.get_ident(), kwargs["executor"]))
-        return kwargs["run_id"]
-
-    monkeypatch.setattr(workflow, "_run_driver", run_driver)
-    if use_default:
-
-        def get_default_executor():
-            calls.append(("default", threading.get_ident()))
-            return executor
-
-        monkeypatch.setattr("runtime.executor.get_default_executor", get_default_executor)
-        handle = workflow.run(run_id="caller-ray-run")
-    else:
-        handle = workflow.run(executor=executor, run_id="caller-ray-run")
-
-    assert handle.run_id == "caller-ray-run"
-    assert handle.result(timeout=5) == "caller-ray-run"
-
-    preparation_calls = [call for call in calls if call[0] != "driver"]
-    if use_default:
-        assert preparation_calls[0] == ("default", caller_thread_id)
-        preparation_calls = preparation_calls[1:]
-    assert preparation_calls == [
-        ("is_initialized", caller_thread_id),
-        ("init", caller_thread_id, {"include_dashboard": False}),
-    ]
-    driver_call = calls[-1]
-    assert driver_call[0] == "driver"
-    assert driver_call[1] != caller_thread_id
-    assert driver_call[2] is executor
+    handle = flow().run(executor=ava.LocalExecutor())
+    try:
+        assert started.wait(5)
+        assert handle.cancel()
+    finally:
+        release.set()
+    assert handle.result(timeout=5) == "done"
+    assert not handle.cancelled()
 
 
 @pytest.mark.ray

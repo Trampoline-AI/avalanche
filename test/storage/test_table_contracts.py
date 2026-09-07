@@ -1,337 +1,304 @@
-"""Backend-neutral table/catalog contract tests.
+"""Core data-integrity contracts shared by Iceberg and Lance."""
 
-Every storage backend that claims to implement the Avalanche table contract must
-pass this suite. Backend-specific tests can still cover native extras, but core
-user-facing behavior belongs here so Lance and Iceberg do not drift.
-"""
-
-from __future__ import annotations
-
+import asyncio
 import json
-from collections.abc import Callable
-from dataclasses import dataclass
-from datetime import datetime
-from typing import Any
+import pickle
+import threading
+from concurrent.futures import ThreadPoolExecutor
+from types import SimpleNamespace
 
 import dataframely as dy
 import polars as pl
-import pyarrow as pa
 import pytest
+from pydantic import BaseModel
 
 import avalanche as ava
-from avalanche import Namespace, NamespaceConfig, Table, TableGroup
+import avalanche.progress as progress_module
 from avalanche.iceberg import IcebergNs, IcebergNsConfig, IcebergTable
 from avalanche.lance import LanceNamespace, LanceNamespaceConfig, LanceTable
-from avalanche.lineage import ROW_LINEAGE_COLUMNS
-
-BUSINESS_COLUMNS = ("id", "name", "value")
-TABLE_COLUMNS = (*BUSINESS_COLUMNS, *ROW_LINEAGE_COLUMNS)
+from avalanche.runtime import consume_stream
 
 
-class ContractSchema(dy.Schema):
+class RecordSchema(dy.Schema):
     id = dy.Int64(nullable=False)
-    name = dy.String(nullable=False)
-    value = dy.Int64(nullable=True)
+    value = dy.String(nullable=False)
 
 
-@dataclass(frozen=True)
-class BackendCase:
+class Address(BaseModel):
+    city: str
+    zip_code: str | None = None
+
+
+class Person(BaseModel):
+    id: int
     name: str
-    table_cls: type
-    namespace_cls: type
-    namespace_config_cls: type
-    namespace_kwargs: Callable[[str], dict[str, Any]]
-    requires: tuple[str, ...] = ()
+    address: Address
+    tags: list[str]
 
 
-BACKENDS = [
-    BackendCase(
-        name="iceberg",
-        table_cls=IcebergTable,
-        namespace_cls=IcebergNs,
-        namespace_config_cls=IcebergNsConfig,
-        namespace_kwargs=lambda tmpdir: {
+@pytest.fixture(params=["iceberg", "lance"])
+def namespace(request, tmp_path):
+    if request.param == "iceberg":
+        namespace_cls, config_cls, table_cls = IcebergNs, IcebergNsConfig, IcebergTable
+        kwargs = {
             "catalog": "contract-catalog",
-            "load_catalog_props": {"type": "sql", "uri": "sqlite:///:memory:"},
-        },
-    ),
-    BackendCase(
-        name="lance",
-        table_cls=LanceTable,
-        namespace_cls=LanceNamespace,
-        namespace_config_cls=LanceNamespaceConfig,
-        namespace_kwargs=lambda tmpdir: {},
-        requires=("lance",),
-    ),
-]
+            "load_catalog_props": {"type": "sql", "uri": f"sqlite:///{tmp_path}/catalog.db"},
+        }
+    else:
+        pytest.importorskip("lance")
+        namespace_cls, config_cls, table_cls = LanceNamespace, LanceNamespaceConfig, LanceTable
+        kwargs = {}
 
+    class ContractNamespace(namespace_cls):
+        ns_config = config_cls(name="contracts", base_location=str(tmp_path / "warehouse"))
+        records = table_cls(schema=RecordSchema)
+        people = table_cls(schema=Person)
+        no_lineage = table_cls(schema=RecordSchema, row_lineage=False)
 
-def _skip_missing_backend(case: BackendCase) -> None:
-    for module_name in case.requires:
-        pytest.importorskip(module_name)
-
-
-@pytest.fixture(params=BACKENDS, ids=lambda case: case.name)
-def backend(request: pytest.FixtureRequest) -> BackendCase:
-    case = request.param
-    _skip_missing_backend(case)
-    return case
-
-
-@pytest.fixture
-def namespace(backend: BackendCase, tmp_path):
-    class ContractNamespace(backend.namespace_cls):
-        ns_config = backend.namespace_config_cls(
-            name=f"contract-{backend.name}",
-            base_location=str(tmp_path),
-        )
-        records = backend.table_cls(schema=ContractSchema)
-        grouped = TableGroup(extra=backend.table_cls(schema=ContractSchema))
-
-    ns = ContractNamespace(**backend.namespace_kwargs(str(tmp_path)))
+    ns = ContractNamespace(**kwargs)
     ns.push()
     return ns
 
 
-def _rows(*, start: int = 1, count: int = 3) -> pl.DataFrame:
-    ids = list(range(start, start + count))
-    return pl.DataFrame(
-        {
-            "id": ids,
-            "name": [f"name-{i}" for i in ids],
-            "value": [i * 10 for i in ids],
-        }
-    )
+@pytest.fixture
+def table(namespace):
+    return namespace.records
 
 
-def _sorted_dicts(df: pl.DataFrame) -> list[dict[str, Any]]:
-    return df.select(BUSINESS_COLUMNS).sort("id").to_dicts()
-
-
-def _assert_default_lineage(df: pl.DataFrame, *, expected_rows: int) -> None:
-    lineage = df.select(ROW_LINEAGE_COLUMNS)
-    assert lineage.height == expected_rows
-    for row in lineage.to_dicts():
-        assert isinstance(row["_ava_updated_at"], datetime)
-        assert row["_ava_run_id"] is None
-        assert row["_ava_rerun_of"] is None
-        assert row["_ava_workflow_name"] is None
-        assert row["_ava_node_id"] is None
-        assert row["_ava_node_name"] is None
-        assert row["_ava_node_slug"] is None
-        assert row["_ava_lineage_vector"] is None
-        assert row["_ava_ctx_metadata"] is None
-
-
-def test_backend_matrix_includes_all_declared_backends():
-    assert [case.name for case in BACKENDS] == ["iceberg", "lance"]
-
-
-def test_tables_accept_dataframely_schemas(backend: BackendCase):
-    table = backend.table_cls(schema=ContractSchema)
-
-    assert isinstance(table, Table)
-    assert table.schema is not None
-    assert table.schema_fields == TABLE_COLUMNS
-    assert table.identifier == ""
-    assert table.location == ""
-    assert table.current_version_id is None
-
-
-def test_row_lineage_can_be_disabled(backend: BackendCase):
-    table = backend.table_cls(schema=ContractSchema, row_lineage=False)
-
-    assert table.row_lineage is False
-    assert table.schema_fields == BUSINESS_COLUMNS
-
-
-def test_tables_reject_invalid_schemas(backend: BackendCase):
-    with pytest.raises(TypeError, match="Schema must be either"):
-        backend.table_cls(schema="not a schema")
-
-
-def test_namespace_config_is_required(backend: BackendCase):
-    class MissingConfigNamespace(backend.namespace_cls):
-        records = backend.table_cls(schema=ContractSchema)
-
-    with pytest.raises(ValueError, match="must define ns_config"):
-        MissingConfigNamespace(**backend.namespace_kwargs("/tmp"))
-
-
-def test_namespaces_discover_plain_and_grouped_tables(backend: BackendCase, tmp_path):
-    class ContractNamespace(backend.namespace_cls):
-        ns_config = backend.namespace_config_cls(
-            name=f"contract-{backend.name}",
-            base_location=str(tmp_path),
-        )
-        records = backend.table_cls(schema=ContractSchema)
-        grouped = TableGroup(extra=backend.table_cls(schema=ContractSchema))
-
-    ns = ContractNamespace(**backend.namespace_kwargs(str(tmp_path)))
-
-    assert isinstance(ns, Namespace)
-    assert isinstance(ns.ns_config, NamespaceConfig)
-    assert ns.name == f"contract-{backend.name}"
-    assert ns.base_location == str(tmp_path)
-    assert ns.list_tables() == ["records", "extra"]
-
-    assert ns.records._ns is ns
-    assert ns.records._table_name == "records"
-    assert ns.records.identifier == f"contract-{backend.name}.records"
-    assert ns.records.location.endswith(f"contract-{backend.name}/records")
-
-    grouped_extra = getattr(ns.grouped, "extra")
-    assert grouped_extra._ns is ns
-    assert grouped_extra._table_name == "extra"
-    assert grouped_extra.identifier == f"contract-{backend.name}.extra"
-    assert grouped_extra.location.endswith(f"contract-{backend.name}/extra")
-
-
-def test_push_is_idempotent(namespace):
-    namespace.push()
-    namespace.push()
-
-    assert namespace.records.current_version_id is None
-    assert namespace.records.read().height == 0
-
-
-def test_unbound_table_operations_raise_clear_errors(backend: BackendCase):
-    table = backend.table_cls(schema=ContractSchema)
-
-    with pytest.raises(AttributeError, match="namespace|created"):
-        table.append(_rows())
-
-    with pytest.raises(AttributeError, match="namespace|created"):
-        table.scan().to_arrow()
-
-
-def test_empty_bound_table_reads_as_empty_schema(namespace):
-    table = namespace.records
-
-    assert table.current_version_id is None
-    assert table.scan().to_arrow().schema.names == list(TABLE_COLUMNS)
-    assert table.scan().to_polars().columns == list(TABLE_COLUMNS)
-    assert table.read().height == 0
-
-
-def test_append_polars_returns_append_result_and_persists_rows(namespace):
-    table = namespace.records
-    rows = _rows()
-
-    result = table.append(rows)
-
-    assert result.snapshot_id == table.current_version_id
-    assert result.snapshot_id is not None
-    assert _sorted_dicts(result.to_polars()) == _sorted_dicts(rows)
-    _assert_default_lineage(result.to_polars(), expected_rows=3)
-    assert _sorted_dicts(table.scan().to_polars()) == _sorted_dicts(rows)
-    assert _sorted_dicts(table.read()) == _sorted_dicts(rows)
-
-
-def test_append_arrow_table_and_record_batch(namespace):
-    table = namespace.records
-    first = _rows(start=1, count=2)
-    second = _rows(start=3, count=2)
-
-    table.append(first.to_arrow())
-    batch = second.to_arrow().to_batches()[0]
-    assert isinstance(batch, pa.RecordBatch)
-    table.append(batch)
-
-    expected = pl.concat([first, second])
-    assert _sorted_dicts(table.read()) == _sorted_dicts(expected)
-
-
-def test_multiple_appends_advance_version_and_accumulate_rows(namespace):
-    table = namespace.records
-
-    first = table.append(_rows(start=1, count=2))
-    second = table.append(_rows(start=3, count=2))
-
-    assert first.snapshot_id is not None
-    assert second.snapshot_id is not None
-    assert second.snapshot_id != first.snapshot_id
-    assert table.current_version_id == second.snapshot_id
-    assert table.read().height == 4
-
-
-def test_append_casts_to_declared_schema(namespace):
-    table = namespace.records
+def test_append_formats_snapshot_history_and_filtered_reads(table, namespace):
+    assert table.read().is_empty()
     rows = pl.DataFrame(
         {
-            "id": [1],
-            "name": ["one"],
-            # Int32 should be widened to declared Int64 where needed.
-            "value": pl.Series("value", [10], dtype=pl.Int32),
+            "id": pl.Series([2, 1, 3], dtype=pl.Int32),
+            "value": ["second", "first", "third"],
         }
     )
+    results = [
+        table.append(rows.slice(0, 1)),
+        table.append(rows.slice(1, 1).to_arrow()),
+        table.append(rows.slice(2, 1).to_arrow().to_batches()[0]),
+    ]
+    assert [result.to_dicts()[0]["value"] for result in results] == rows["value"].to_list()
+    assert len({result.snapshot_id for result in results}) == 3
+    assert [entry.snapshot_id for entry in table.history()] == [
+        result.snapshot_id for result in results
+    ]
+    namespace.push()
+    with pytest.raises(ValueError):
+        table.append(pl.DataFrame({"id": ["not an integer"], "value": ["invalid"]}))
+    assert table.current_version_id == results[-1].snapshot_id
+    assert (
+        table.read().select("id", "value").sort("id").to_dicts() == rows.sort("id").to_dicts()
+    )
+    filtered = table.scan(filter="id > 1", columns=["value"]).to_polars()
+    assert filtered.sort("value").to_dicts() == [{"value": "second"}, {"value": "third"}]
+    limited = table.scan(filter="id > 1", columns=["value"], limit=1).to_polars()
+    assert limited.to_dicts() in ([{"value": "second"}], [{"value": "third"}])
+    assert table.append_scan(snapshot_id=results[0].snapshot_id).to_polars()[
+        "id"
+    ].to_list() == [2]
+    namespace.drop(drop_tables=True)
+    namespace.push()
+    assert table.read().is_empty()
 
-    table.append(rows)
-    arrow = table.scan().to_arrow()
 
-    assert arrow.schema.field("value").type == pa.int64()
-    assert _sorted_dicts(table.read()) == [{"id": 1, "name": "one", "value": 10}]
+def test_models_survive_reconnection_and_reject_wrong_schema_without_writing(namespace):
+    people = [
+        Person(
+            id=1, name="Ada", address=Address(city="Toronto", zip_code="M5V"), tags=["math"]
+        ),
+        Person(id=2, name="Grace", address=Address(city="Arlington"), tags=[]),
+    ]
+    result = namespace.people.append(people[0])
+    assert result.one() == people[0]
+    restored = pickle.loads(pickle.dumps(namespace.people))
+    assert restored.append(people[1:]).to_models() == people[1:]
+    assert sorted(namespace.people.read_models(), key=lambda person: person.id) == people
+
+    with pytest.raises(TypeError):
+        restored.append(Address(city="wrong model"))
+    with pytest.raises(ValueError):
+        restored.append([])
+    with pytest.raises(TypeError):
+        namespace.records.append(people[0])
+    assert sorted(restored.read_models(), key=lambda person: person.id) == people
+    assert namespace.records.read().is_empty()
 
 
-def test_scan_supports_projection_filter_and_limit(namespace):
-    table = namespace.records
-    table.append(_rows(start=1, count=5))
+def test_concurrent_reconnected_appends_preserve_all_rows_and_versions(table):
+    handles = [table, *(pickle.loads(pickle.dumps(table)) for _ in range(7))]
+    barrier = threading.Barrier(len(handles))
 
-    projected = table.scan(columns=["id", "name"]).to_polars()
-    assert projected.columns == ["id", "name"]
-    assert projected.height == 5
+    def append(target, row_id):
+        barrier.wait(timeout=10)
+        return target.append(pl.DataFrame({"id": [row_id], "value": [str(row_id)]}))
 
-    filtered = table.scan(filter="id = 3").to_polars()
-    assert _sorted_dicts(filtered) == [{"id": 3, "name": "name-3", "value": 30}]
+    with ThreadPoolExecutor(max_workers=len(handles)) as pool:
+        results = list(pool.map(append, handles, range(len(handles))))
 
-    combined = table.scan(filter="id > 2", columns=["name"], limit=2).to_polars()
-    assert combined.columns == ["name"]
-    assert combined.height == 2
-    assert combined["name"].to_list() == ["name-3", "name-4"]
+    assert len({result.snapshot_id for result in results}) == len(handles)
+    assert table.read().sort("id")["id"].to_list() == list(range(len(handles)))
+    assert {entry.snapshot_id for entry in table.history()} == {
+        result.snapshot_id for result in results
+    }
 
 
-def test_row_lineage_captures_workflow_context(namespace):
-    table = namespace.records
+def test_cursor_transactions_commit_rollback_and_isolate_keys(table):
+    cursor = ava.Cursor(table, key="last_id")
+    with pytest.raises(RuntimeError):
+        cursor.set(1)
+    with cursor.transaction():
+        cursor.set(1)
+    with pytest.raises(ValueError, match="abort"):
+        with cursor.transaction():
+            cursor.set(2)
+            raise ValueError("abort")
+    table.refresh()
+    assert ava.Cursor(table, key="last_id").get() == "1"
+    assert ava.Cursor(table, key="other").get() is None
+    with pytest.raises(RuntimeError):
+        cursor.set(3)
 
+
+def test_progress_claim_exclusion_and_expired_lease_recovery(table, monkeypatch):
+    now = 1000
+    monkeypatch.setattr(progress_module, "time", SimpleNamespace(time=lambda: now))
+    result = table.append(pl.DataFrame({"id": [1], "value": ["work"]}))
+    first = ava.ProgressStore(table, key="leases", worker_id="first", lease_ttl_seconds=10)
+    second = ava.ProgressStore(table, key="leases", worker_id="second", lease_ttl_seconds=10)
+    assert first.claim_next_pending() == result.snapshot_id
+    assert second.claim_next_pending() is None
+    with pytest.raises(RuntimeError):
+        second.claim(result.snapshot_id)
+    now += 11
+    assert second.claim_next_pending() == result.snapshot_id
+    second.mark_done(result.snapshot_id)
+    assert second.advance_cursor() == result.snapshot_id
+    assert first.list_pending() == []
+    assert [entry.snapshot_id for entry in table.history()] == [result.snapshot_id]
+
+
+def test_progress_cursor_cannot_skip_pending_or_retryable_failure(table):
+    snapshots = [
+        table.append(pl.DataFrame({"id": [row_id], "value": [str(row_id)]})).snapshot_id
+        for row_id in range(3)
+    ]
+    store = ava.ProgressStore(table, key="ordered", max_attempts=2, max_done_history=1)
+    for snapshot in (snapshots[0], snapshots[2]):
+        store.claim(snapshot)
+        store.mark_done(snapshot)
+    assert store.advance_cursor() == snapshots[0]
+    store.claim(snapshots[1])
+    store.mark_failed(snapshots[1], error="retryable")
+    assert store.advance_cursor() is None
+    assert store.get_cursor() == snapshots[0]
+    assert store.list_pending() == [snapshots[1]]
+    store.claim(snapshots[1])
+    store.mark_failed(snapshots[1], error="quarantined")
+    assert store.advance_cursor() == snapshots[2]
+    assert store.list_pending() == []
+    store.reset()
+    assert store.get_cursor() is None
+    assert store.list_pending() == snapshots
+
+
+def test_append_stream_retries_failed_version_without_leaking_later_rows(table):
+    snapshots = [
+        table.append(pl.DataFrame({"id": [1], "value": [value]})).snapshot_id
+        for value in ("first", "second", "third")
+    ]
+    with consume_stream(table, key="ordered", mode="append_scan") as frame:
+        assert frame["value"].to_list() == ["first"]
+    with pytest.raises(ValueError, match="retry"):
+        with consume_stream(table, key="ordered", mode="append_scan") as frame:
+            assert frame["value"].to_list() == ["second"]
+            raise ValueError("retry")
+    assert ava.ProgressStore(table, key="ordered").get_cursor() == snapshots[0]
+    for value in ("second", "third"):
+        with consume_stream(table, key="ordered", mode="append_scan") as frame:
+            assert frame["value"].to_list() == [value]
+    assert ava.ProgressStore(table, key="ordered").get_cursor() == snapshots[-1]
+    with consume_stream(table, key="ordered", mode="append_scan") as frame:
+        assert frame.is_empty()
+
+
+@pytest.mark.parametrize("asynchronous", [False, True])
+def test_passthrough_failure_leaves_snapshot_available_for_retry(table, asynchronous):
     @ava.source
-    def load_rows(*, records=table):
-        return records.append(_rows(count=1))
+    def produce():
+        return table.append(pl.DataFrame({"id": [1], "value": ["retry me"]}))
+
+    def fail(frame=ava.Stream(table, key="async_retry", mode="append_scan")):
+        assert frame["value"].to_list() == ["retry me"]
+        raise ValueError("consumer failed")
+
+    async def async_fail(frame=ava.Stream(table, key="async_retry", mode="append_scan")):
+        await asyncio.sleep(0)
+        fail(frame)
+
+    consume = ava.step(async_fail if asynchronous else fail)
 
     @ava.workflow
-    def lineage_flow():
-        return load_rows()
+    def flow():
+        return produce() >> consume()
 
-    result = (
-        lineage_flow()
-        .run(
-            executor=ava.LocalExecutor(),
-            run_id="exec_123",
-            context={"metadata": {"attempt": 2, "tenant": "acme"}},
-        )
-        .result()
-    )
-    row = result.to_polars().to_dicts()[0]
-
-    assert isinstance(row["_ava_updated_at"], datetime)
-    assert row["_ava_run_id"] == "exec_123"
-    assert row["_ava_workflow_name"] == "lineage_flow"
-    assert row["_ava_node_id"] == "load_rows_1"
-    assert row["_ava_node_name"] == "load_rows"
-    assert row["_ava_node_slug"] == "load_rows"
-    assert row["_ava_rerun_of"] is None
-    assert json.loads(row["_ava_lineage_vector"]) == {"load_rows": "exec_123"}
-    assert json.loads(row["_ava_ctx_metadata"]) == {"attempt": 2, "tenant": "acme"}
+    with pytest.raises(ValueError, match="consumer failed"):
+        flow().run(executor=ava.LocalExecutor()).result()
+    assert ava.ProgressStore(table, key="async_retry").get_cursor() is None
+    with consume_stream(table, key="async_retry", mode="append_scan") as frame:
+        assert frame["value"].to_list() == ["retry me"]
+    assert ava.ProgressStore(table, key="async_retry").list_pending() == []
 
 
-def test_drop_tables_removes_backend_data(namespace):
-    table = namespace.records
-    table.append(_rows())
-    assert table.read().height == 3
+def test_run_scoped_stream_isolates_run_and_producer_lineage(table):
+    table.append(pl.DataFrame({"id": [0], "value": ["old"]}))
 
-    namespace.drop(drop_tables=True)
+    @ava.source(slug="wanted")
+    def produce():
+        table.append(pl.DataFrame({"id": [1], "value": ["wanted"]}))
+        return "force durable read"
 
-    assert table.current_version_id is None
+    @ava.source(slug="noise")
+    def noise():
+        table.append(pl.DataFrame({"id": [2], "value": ["noise"]}))
 
-    namespace.push()
-    assert table.current_version_id is None
-    assert table.read().height == 0
+    @ava.step
+    def consume(frame=ava.Stream(table)):
+        return frame["value"].to_list()
+
+    @ava.workflow
+    def flow():
+        noise()
+        return produce() >> consume()
+
+    for run_id in ("first-run", "second-run"):
+        assert flow().run(executor=ava.LocalExecutor(), run_id=run_id).result() == ["wanted"]
+    stored = table.read().filter(pl.col("_ava_run_id") == "second-run")
+    wanted = stored.filter(pl.col("_ava_node_slug") == "wanted").to_dicts()[0]
+    assert json.loads(wanted["_ava_lineage_vector"]) == {"wanted": "second-run"}
+    assert ava.ProgressStore(table, key="backlog").get_cursor() is None
+    assert len(ava.ProgressStore(table, key="backlog").list_pending()) == 5
+
+
+@pytest.mark.parametrize("passthrough", [True, False])
+def test_run_scoped_reads_require_lineage_unless_passed_through(namespace, passthrough):
+    table = namespace.no_lineage
+
+    @ava.source
+    def produce():
+        result = table.append(pl.DataFrame({"id": [1], "value": ["current"]}))
+        return result if passthrough else "force durable read"
+
+    @ava.step
+    def consume(frame=ava.Stream(table)):
+        return frame["value"].to_list()
+
+    @ava.workflow
+    def flow():
+        return produce() >> consume()
+
+    if passthrough:
+        assert flow().run(executor=ava.LocalExecutor()).result() == ["current"]
+    else:
+        with pytest.raises(ValueError, match="row_lineage"):
+            flow().run(executor=ava.LocalExecutor()).result()

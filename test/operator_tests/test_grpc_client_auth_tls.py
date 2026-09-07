@@ -1,125 +1,115 @@
-from __future__ import annotations
+"""Exercise certificate trust and bearer authorization over an actual TLS channel."""
 
+import threading
+import time
 from concurrent import futures
+from datetime import datetime, timedelta, timezone
 
 import grpc
+import pytest
+from cryptography import x509
+from cryptography.hazmat.primitives import hashes, serialization
+from cryptography.hazmat.primitives.asymmetric import rsa
+from cryptography.x509.oid import NameOID
 
-from runtime.operator import client as client_module
-from runtime.operator._grpc import MAX_GRPC_MESSAGE_BYTES
-from runtime.operator.client import GrpcStateProvider
-from runtime.operator.convert_v2 import flow_list_to_v2
-from runtime.operator.models import CatalogSnapshot, WorkflowInfo
+from runtime.operator.client import GrpcStateProvider, OperatorCallError, StreamState
 from runtime.operator.proto import operator_pb2 as pb
 from runtime.operator.proto import operator_pb2_grpc as pb_grpc
-from tui import ConnectionAwareStateProvider
-
-
-def test_grpc_state_provider_sends_bearer_metadata() -> None:
-    server = grpc.server(futures.ThreadPoolExecutor(max_workers=1))
-    pb_grpc.add_OperatorServiceV2Servicer_to_server(AuthenticatedOperatorService(), server)
-    port = server.add_insecure_port("127.0.0.1:0")
-    server.start()
-    provider = GrpcStateProvider(f"127.0.0.1:{port}", token="secret")
-    try:
-        workflows = provider.list_workflows()
-    finally:
-        provider.close()
-        server.stop(grace=0)
-
-    assert [workflow.name for workflow in workflows] == ["demo-flow"]
-
-
-def test_grpc_state_provider_uses_secure_channel_when_tls_enabled(monkeypatch) -> None:
-    calls: dict[str, object] = {}
-
-    class FakeChannel:
-        def close(self) -> None:
-            calls["closed"] = True
-
-    def fake_credentials(*, root_certificates=None, private_key=None, certificate_chain=None):
-        calls["root_certificates"] = root_certificates
-        calls["private_key"] = private_key
-        calls["certificate_chain"] = certificate_chain
-        return "credentials"
-
-    def fake_secure_channel(address: str, credentials: object, *, options):
-        calls["address"] = address
-        calls["credentials"] = credentials
-        calls["options"] = options
-        return FakeChannel()
-
-    monkeypatch.setattr(client_module.grpc, "ssl_channel_credentials", fake_credentials)
-    monkeypatch.setattr(client_module.grpc, "secure_channel", fake_secure_channel)
-    monkeypatch.setattr(
-        client_module.pb_grpc, "OperatorServiceV2Stub", lambda channel: object()
-    )
-
-    provider = GrpcStateProvider("operator.example:443", tls=True, root_certificates=b"ca")
-    assert isinstance(provider, ConnectionAwareStateProvider)
-    assert provider.connection_label == "operator.example:443"
-    provider.close()
-
-    assert calls["address"] == "operator.example:443"
-    assert calls["credentials"] == "credentials"
-    assert calls["root_certificates"] == b"ca"
-    assert dict(calls["options"]) == {
-        "grpc.max_send_message_length": MAX_GRPC_MESSAGE_BYTES,
-        "grpc.max_receive_message_length": MAX_GRPC_MESSAGE_BYTES,
-    }
-    assert calls["closed"] is True
-
-
-def test_grpc_state_provider_uses_bounded_insecure_channel_options(monkeypatch) -> None:
-    calls: dict[str, object] = {}
-
-    class FakeChannel:
-        def close(self) -> None:
-            pass
-
-    def fake_insecure_channel(address: str, *, options):
-        calls["address"] = address
-        calls["options"] = options
-        return FakeChannel()
-
-    monkeypatch.setattr(client_module.grpc, "insecure_channel", fake_insecure_channel)
-    monkeypatch.setattr(
-        client_module.pb_grpc, "OperatorServiceV2Stub", lambda channel: object()
-    )
-
-    provider = GrpcStateProvider("localhost:7433")
-    provider.close()
-
-    assert calls["address"] == "localhost:7433"
-    assert dict(calls["options"]) == {
-        "grpc.max_send_message_length": MAX_GRPC_MESSAGE_BYTES,
-        "grpc.max_receive_message_length": MAX_GRPC_MESSAGE_BYTES,
-    }
 
 
 class AuthenticatedOperatorService(pb_grpc.OperatorServiceV2Servicer):
+    def __init__(self):
+        self.watching = threading.Event()
+
+    def _authorize(self, context):
+        if dict(context.invocation_metadata()).get("authorization") != "Bearer secret":
+            context.abort(grpc.StatusCode.UNAUTHENTICATED, "bearer token required")
+
     def DiscoverFlows(self, request, context):  # noqa: N802
-        authorization = dict(context.invocation_metadata()).get("authorization")
-        if authorization != "Bearer secret":
-            context.abort(grpc.StatusCode.UNAUTHENTICATED, "missing_bearer")
-        return flow_list_to_v2(
-            CatalogSnapshot(
-                operator_instance_id="operator-auth",
-                workflows=(
-                    WorkflowInfo(
-                        name="demo-flow",
-                        file_path="demo.py",
-                        node_ids=[],
-                        graph={},
-                        node_types={},
-                    ),
-                ),
-            ),
+        self._authorize(context)
+        return pb.FlowListV2(
+            scope_ref=pb.ScopeReferenceV2(reference="operator-auth"),
             cursor=pb.LifecycleCursorV2(
                 stream="operator-events",
                 topology_fingerprint="operator-events-topology",
                 stream_generation=1,
-                retained_floor_event_ulid="00000000000000000000000001",
-                event_ulid="00000000000000000000000002",
+                retained_floor_event_ulid="00000000000000000000000000",
+                event_ulid="00000000000000000000000000",
             ),
-            scope_ref=pb.ScopeReferenceV2(reference="operator-auth"),
+            flows=[pb.FlowInfoV2(workflow_selector="demo", display_name="demo")],
         )
+
+    def WatchRunStatus(self, request, context):  # noqa: N802
+        self._authorize(context)
+        context.send_initial_metadata(())
+        self.watching.set()
+        closed = threading.Event()
+        context.add_callback(closed.set)
+        closed.wait(10)
+        return iter(())
+
+
+def test_tls_trust_and_bearer_auth_gate_unary_and_stream_calls():
+    key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
+    subject = x509.Name([x509.NameAttribute(NameOID.COMMON_NAME, "localhost")])
+    now = datetime.now(timezone.utc)
+    certificate = (
+        x509.CertificateBuilder()
+        .subject_name(subject)
+        .issuer_name(subject)
+        .public_key(key.public_key())
+        .serial_number(x509.random_serial_number())
+        .not_valid_before(now - timedelta(minutes=1))
+        .not_valid_after(now + timedelta(days=1))
+        .add_extension(x509.SubjectAlternativeName([x509.DNSName("localhost")]), critical=False)
+        .sign(key, hashes.SHA256())
+        .public_bytes(serialization.Encoding.PEM)
+    )
+    private_key = key.private_bytes(
+        serialization.Encoding.PEM,
+        serialization.PrivateFormat.TraditionalOpenSSL,
+        serialization.NoEncryption(),
+    )
+    service = AuthenticatedOperatorService()
+    server = grpc.server(futures.ThreadPoolExecutor(max_workers=4))
+    pb_grpc.add_OperatorServiceV2Servicer_to_server(service, server)
+    credentials = grpc.ssl_server_credentials(((private_key, certificate),))
+    port = server.add_secure_port("localhost:0", credentials)
+    server.start()
+    try:
+        untrusted = GrpcStateProvider(
+            f"localhost:{port}", tls=True, token="secret", unary_timeout=1
+        )
+        try:
+            with pytest.raises(OperatorCallError) as error:
+                untrusted.list_workflows()
+            assert error.value.status is grpc.StatusCode.UNAVAILABLE
+        finally:
+            untrusted.close()
+
+        for token in (None, "wrong"):
+            denied = GrpcStateProvider(
+                f"localhost:{port}", tls=True, root_certificates=certificate, token=token
+            )
+            try:
+                with pytest.raises(OperatorCallError) as error:
+                    denied.list_workflows()
+                assert error.value.status is grpc.StatusCode.UNAUTHENTICATED
+            finally:
+                denied.close()
+
+        client = GrpcStateProvider(
+            f"localhost:{port}", tls=True, root_certificates=certificate, token="secret"
+        )
+        try:
+            assert [flow.selector for flow in client.list_workflows()] == ["demo"]
+            client.start_stream()
+            assert service.watching.wait(5)
+            deadline = time.monotonic() + 5
+            while client.stream_state is not StreamState.LIVE and time.monotonic() < deadline:
+                time.sleep(0.01)
+            assert client.stream_state is StreamState.LIVE
+        finally:
+            client.close()
+    finally:
+        server.stop(grace=0).wait()

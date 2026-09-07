@@ -1,5 +1,8 @@
-"""Embedded workflow result behavior for public File values."""
+"""Embedded file values survive workflow output handling without data loss."""
 
+import hashlib
+
+import pytest
 from pydantic import BaseModel
 
 import avalanche as ava
@@ -10,47 +13,42 @@ class FileBundle(BaseModel):
     files: list[ava.File]
 
 
-def test_run_handle_result_returns_direct_file_without_wrapping():
+def test_result_preserves_direct_files_and_files_nested_in_models_and_containers():
     @ava.source
     def build_file():
-        return ava.File(
-            name="summary.txt",
-            content=b"embedded",
-            content_type="text/plain",
-        )
+        return ava.File(name="summary.txt", content=b"embedded", content_type="text/plain")
 
-    @ava.workflow
-    def file_workflow():
-        return build_file()
-
-    result = file_workflow().run(executor=ava.LocalExecutor()).result()
-
-    assert isinstance(result, ava.File)
-    assert result.name == "summary.txt"
-    assert result.content_type == "text/plain"
-    assert result.read_bytes() == b"embedded"
-
-
-def test_run_handle_result_preserves_files_nested_in_pydantic_and_containers():
-    @ava.source
-    def build_bundle():
+    @ava.step
+    def bundle(file):
         return {
-            "bundle": FileBundle(
-                label="documents",
-                files=[ava.File(name="one.txt", content=b"one")],
-            ),
+            "bundle": FileBundle(label="documents", files=[file]),
             "tail": (ava.File(name="two.txt", content=b"two"), 2),
         }
 
     @ava.workflow
-    def bundle_workflow():
-        return build_bundle()
+    def flow():
+        file = build_file()
+        return file, bundle(file)
 
-    result = bundle_workflow().run(executor=ava.LocalExecutor()).result()
-
+    file, result = flow().run(executor=ava.LocalExecutor()).result(timeout=5)
+    assert file.read_bytes() == b"embedded"
+    assert file.name == "summary.txt"
+    assert file.content_type == "text/plain"
     assert isinstance(result["bundle"], FileBundle)
-    assert isinstance(result["bundle"].files[0], ava.File)
-    assert result["bundle"].files[0].read_bytes() == b"one"
+    assert result["bundle"].files[0].read_bytes() == b"embedded"
     assert isinstance(result["tail"], tuple)
-    assert isinstance(result["tail"][0], ava.File)
     assert result["tail"][0].read_bytes() == b"two"
+
+
+def test_large_file_roundtrip_checks_content_hash(tmp_path):
+    content = b"x" * (4 * 1024 * 1024 + 1)
+    digest = hashlib.sha256(content).hexdigest()
+    path = tmp_path / "large.bin"
+    path.write_bytes(content)
+
+    file = ava.File.from_path(path)
+    assert file.read_bytes() == content
+    assert file.sha256 == digest
+    assert ava.File(content=content, sha256=digest.upper()).sha256 == digest
+    with pytest.raises(ValueError, match="sha256"):
+        ava.File(content=content, sha256="0" * 64)

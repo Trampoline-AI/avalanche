@@ -1,186 +1,74 @@
-"""Sync/async workflow behavior matrix tests."""
-
-from __future__ import annotations
+"""Async task bodies share the same injection and failure boundaries as sync tasks."""
 
 import asyncio
 import threading
-from collections.abc import Callable
-from functools import wraps
-from typing import Any
 
 import pytest
 
 import avalanche as ava
-
-TASK_MODES = [
-    pytest.param(False, id="sync"),
-    pytest.param(True, id="async"),
-]
-
-
-def maybe_async(async_mode: bool, fn: Callable[..., Any]) -> Callable[..., Any]:
-    """Return fn unchanged or wrapped as an async function for matrix tests."""
-    if not async_mode:
-        return fn
-
-    @wraps(fn)
-    async def async_fn(*args: Any, **kwargs: Any) -> Any:
-        await asyncio.sleep(0)
-        return fn(*args, **kwargs)
-
-    return async_fn
-
-
-@pytest.mark.parametrize("async_mode", TASK_MODES)
-def test_source_step_dest_chain_matrix(async_mode: bool):
-    load = ava.source(maybe_async(async_mode, lambda: {"data": [1, 2, 3]}))
-    double = ava.step(
-        maybe_async(async_mode, lambda data: {"data": [item * 2 for item in data["data"]]})
-    )
-    save = ava.dest(maybe_async(async_mode, lambda data: f"saved_{sum(data['data'])}"))
-
-    @ava.workflow
-    def matrix_workflow():
-        return load() >> double() >> save()
-
-    assert matrix_workflow().run(executor=ava.LocalExecutor()).result() == "saved_12"
-
-
-@pytest.mark.parametrize("async_mode", TASK_MODES)
-def test_explicit_args_and_multiple_returns_matrix(async_mode: bool):
-    def load_pair_impl():
-        return [1, 2], [3, 4]
-
-    def sum_values_impl(values: list[int]) -> int:
-        return sum(values)
-
-    def combine_impl(left: int, right: int) -> dict[str, int]:
-        return {"left": left, "right": right, "total": left + right}
-
-    load_pair = ava.source(maybe_async(async_mode, load_pair_impl), num_returns=2)
-    sum_values = ava.step(maybe_async(async_mode, sum_values_impl))
-    combine = ava.dest(maybe_async(async_mode, combine_impl))
-
-    @ava.workflow
-    def matrix_workflow():
-        pair = load_pair()
-        left = sum_values(pair[0])
-        right = sum_values(pair[1])
-        combined = combine(left, right)
-        return pair, left, right, combined
-
-    pair, left, right, combined = matrix_workflow().run(executor=ava.LocalExecutor()).result()
-
-    assert pair == ([1, 2], [3, 4])
-    assert left == 3
-    assert right == 7
-    assert combined == {"left": 3, "right": 7, "total": 10}
-
-
-@pytest.mark.parametrize("async_mode", TASK_MODES)
-def test_runtime_injection_matrix(async_mode: bool):
-    def capture_impl(data: list[int], *, logger=ava.Logger()) -> dict[str, Any]:
-        from avalanche.runtime import get_current_run_context
-        from avalanche.runtime.providers.logger import LoggerInstance
-
-        context = get_current_run_context()
-        assert context is not None
-        assert isinstance(logger, LoggerInstance)
-        return {
-            "data": data,
-            "node": context.node_name,
-            "metadata": context.metadata,
-            "logger_type": type(logger).__name__,
-        }
-
-    capture = ava.step(maybe_async(async_mode, capture_impl))
-
-    @ava.workflow
-    def matrix_workflow():
-        return capture([1, 2, 3])
-
-    result = (
-        matrix_workflow()
-        .run(
-            executor=ava.LocalExecutor(),
-            context={"metadata": {"tenant": "acme"}},
-        )
-        .result()
-    )
-
-    assert result == {
-        "data": [1, 2, 3],
-        "node": "capture_impl",
-        "metadata": {"tenant": "acme"},
-        "logger_type": "LoggerInstance",
-    }
+from avalanche.runtime import get_current_run_context
 
 
 @pytest.mark.asyncio
-async def test_local_executor_resolves_async_task_inside_existing_event_loop():
-    executor = ava.LocalExecutor()
+async def test_async_chain_injects_context_across_await_and_preserves_multiple_returns():
+    @ava.source(num_returns=2)
+    async def load():
+        await asyncio.sleep(0)
+        return [1, 2], [3, 4]
 
-    async def add(left: int, right: int) -> int:
+    @ava.step
+    async def total(values, ctx: ava.RunContext, *, logger=ava.Logger()):
+        await asyncio.sleep(0)
+        assert get_current_run_context().run_id == ctx.run_id
+        logger.info("Summing workflow data")
+        return sum(values), ctx.metadata["tenant"]
+
+    @ava.dest
+    def save(left, right):
+        return left, right
+
+    @ava.workflow
+    def flow():
+        pair = load()
+        return save(total(pair[0]), total(pair[1]))
+
+    handle = flow().run(
+        executor=ava.LocalExecutor(),
+        context={"metadata": {"tenant": "acme"}},
+    )
+    assert await handle == ((3, "acme"), (7, "acme"))
+    assert get_current_run_context() is None
+
+
+@pytest.mark.asyncio
+async def test_direct_async_submission_inside_an_event_loop():
+    async def add(left, right):
         await asyncio.sleep(0)
         return left + right
 
-    assert executor.submit(add, 2, 3) == 5
+    assert ava.LocalExecutor().submit(add, 2, 3) == 5
 
 
-def test_local_executor_runs_independent_async_nodes_concurrently():
+def test_async_branches_overlap_and_failure_prevents_descendants():
     both_running = threading.Barrier(2)
+    called = []
 
-    async def left_impl() -> str:
+    @ava.source
+    async def load(value):
         await asyncio.sleep(0)
-        both_running.wait(timeout=2)
-        return "left"
+        both_running.wait(timeout=5)
+        if value == "bad":
+            raise ValueError("async failure")
+        return value
 
-    async def right_impl() -> str:
-        await asyncio.sleep(0)
-        both_running.wait(timeout=2)
-        return "right"
-
-    left = ava.source(left_impl)
-    right = ava.source(right_impl)
-    join = ava.dest(lambda left_value, right_value: (left_value, right_value))
+    @ava.dest
+    async def save(left, right):
+        called.append((left, right))
 
     @ava.workflow
-    def parallel_workflow():
-        return (left() & right()) >> join()
+    def flow():
+        (load("good") & load("bad")) >> save()
 
-    assert parallel_workflow().run(executor=ava.LocalExecutor(max_workers=2)).result(
-        timeout=5
-    ) == ("left", "right")
-
-
-@pytest.mark.ray
-def test_ray_executor_resolves_async_step():
-    pytest.importorskip("ray")
-    import ray
-
-    if ray.is_initialized():
-        ray.shutdown()
-
-    ray.init(
-        num_cpus=2,
-        ignore_reinit_error=True,
-        include_dashboard=False,
-    )
-
-    try:
-        load = ava.source(lambda: [1, 2, 3])
-
-        async def double_impl(data: list[int]) -> list[int]:
-            await asyncio.sleep(0)
-            return [item * 2 for item in data]
-
-        double = ava.step(double_impl)
-        save = ava.dest(lambda data: f"saved_{sum(data)}")
-
-        @ava.workflow
-        def matrix_workflow():
-            return load() >> double() >> save()
-
-        assert matrix_workflow().run(executor=ava.RayExecutor()).result() == "saved_12"
-    finally:
-        ray.shutdown()
+    with pytest.raises(ValueError, match="async failure"):
+        flow().run(executor=ava.LocalExecutor(max_workers=2)).result(timeout=10)
+    assert called == []

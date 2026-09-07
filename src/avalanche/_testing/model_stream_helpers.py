@@ -18,18 +18,8 @@ def append_passthrough_people(*, people):
     )
 
 
-def append_rerun_people(*, people):
-    return people.append(
-        [ModelStreamRow(id=3, name="third"), ModelStreamRow(id=4, name="fourth")]
-    )
-
-
 def collect_model_pairs(people: list[ModelStreamRow]) -> list[tuple[int, str]]:
     return [(person.id, person.name) for person in people]
-
-
-def collect_model_names(people: list[ModelStreamRow]) -> list[str]:
-    return [person.name for person in people]
 
 
 def return_model(person: ModelStreamRow) -> ModelStreamRow:

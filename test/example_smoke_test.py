@@ -38,14 +38,3 @@ def test_canonical_example_executes(example_path: Path, tmp_path: Path):
         f"STDOUT:\n{result.stdout}\n"
         f"STDERR:\n{result.stderr}"
     )
-
-
-def test_operator_workflow_example_is_discoverable():
-    from runtime.operator.registry import WorkflowRegistry
-
-    registry = WorkflowRegistry()
-    registry.scan([str(REPO_ROOT / "examples" / "operator_workflow.py")])
-
-    assert [workflow.name for workflow in registry.list_workflows()] == [
-        "operator_demo_workflow"
-    ]

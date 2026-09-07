@@ -7,6 +7,7 @@ test:
 	uv run --all-extras pytest -n $(PYTEST_WORKERS) -m "not ray and not tmux"
 	uv run --all-extras pytest -m ray
 	uv run --all-extras pytest -m tmux
+	$(MAKE) web-test
 
 # Run tests with coverage report
 test-cov:

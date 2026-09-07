@@ -2,6 +2,21 @@
 
 ## Unreleased
 
+- Consolidated Python, terminal, and browser tests around core execution, data
+  integrity, recovery, and interaction scenarios; removed redundant test scaffolding
+  and static-copy/schema inventories. `make test` now includes browser tests.
+- Model-to-Arrow conversion JSON-serializes only JSON-backed fields, preserving
+  arbitrary binary values in native fields and nested models.
+- Injected `RunContext` parameters now share worker-resolved producer lineage under
+  Ray instead of retaining a separately serialized, stale context.
+- Lance tables preserve their qualified identity across worker serialization, so
+  Ray stream consumers can use their matching upstream append results.
+- Serialized initial Lance dataset creation to prevent competing first appends
+  from overwriting committed rows; ordinary appends remain concurrent.
+- Removed obsolete test-double and compatibility fallbacks; browser catalogs now
+  retain the operator's revision, including zero, and TUI refreshes no longer
+  silently swallow unexpected rendering errors.
+
 ## 0.3.0
 
 ### Dependencies

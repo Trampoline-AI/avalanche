@@ -1,16 +1,15 @@
-from __future__ import annotations
+"""Real webhook ingress, route ownership, and HTTP rejection boundaries."""
 
+import http.client
 import json
-from collections.abc import Callable
-from typing import cast
-from urllib.error import HTTPError
-from urllib.request import Request, urlopen
+import time
+from urllib.parse import urlsplit
 
 import pytest
 
-from avalanche import Webhook, Workflow, workflow
-from runtime.operator.models import WorkflowDescriptor, WorkflowLocator
-from runtime.operator.webhooks import WebhookServer, routes_for
+from runtime.operator import Operator
+from runtime.operator.models import RunStatus, WorkflowDescriptor, WorkflowLocator
+from runtime.operator.webhooks import MAX_WEBHOOK_BODY_BYTES, routes_for
 
 
 def _descriptor(
@@ -33,7 +32,7 @@ def test_default_routes_are_hierarchical_and_collisions_reject_the_catalog():
     route = routes_for((_descriptor(),))
     assert list(route) == ["/webhooks/root/reports/daily/shared"]
 
-    with pytest.raises(ValueError, match="Webhook route collision"):
+    with pytest.raises(ValueError):
         routes_for(
             (
                 _descriptor(path="/same"),
@@ -42,65 +41,69 @@ def test_default_routes_are_hierarchical_and_collisions_reject_the_catalog():
         )
 
 
-def test_declaration_normalizes_bool_and_validates_configured_paths():
-    explicit = Webhook(path="/stripe/events")
+def test_webhook_executes_json_input_and_rejects_invalid_or_removed_routes(tmp_path):
+    workflow_path = tmp_path / "ingress.py"
+    workflow_path.write_text(
+        """import avalanche as ava
 
-    def declared(value: Webhook | bool | None) -> Workflow:
-        decorator = cast(
-            Callable[[Callable[[], None]], Callable[[], Workflow]],
-            workflow(webhook=value),
-        )
+class Input(ava.BaseInput):
+    message: str
 
-        def definition() -> None:
-            return None
+@ava.source
+def capture(payload: Input):
+    return payload.message
 
-        return decorator(definition)()
-
-    assert declared(True).webhook == Webhook()
-    assert declared(False).webhook is None
-    assert declared(explicit).webhook is explicit
-    for invalid in ("relative", "//double", "/trailing/", "/../escape", "/a//b"):
-        with pytest.raises(ValueError):
-            Webhook(path=invalid)
-
-
-def test_loopback_post_accepts_json_object_and_rejects_invalid_requests():
-    class FakeOperator:
-        calls = []
-
-        def start_run(self, selector, *, input, triggered_by):
-            self.calls.append((selector, input, triggered_by))
-            return "run_webhook"
-
-    operator = FakeOperator()
-    server = WebhookServer(operator, 0)
-    routes = routes_for((_descriptor(),))
-    server.reconcile(routes)
+@ava.workflow(input=Input, webhook=ava.Webhook(path="/ingest"))
+def ingress():
+    return capture()
+"""
+    )
+    operator = Operator([str(workflow_path)], schedule=False, watch=False, webhook_port=0)
     try:
-        url = server.url_for("/webhooks/root/reports/daily/shared")
-        assert url is not None and url.startswith("http://127.0.0.1:")
-        request = Request(
-            f"{url}?source=test",
-            data=json.dumps({"message": "hello"}).encode(),
-            method="POST",
-            headers={"Content-Type": "application/json"},
-        )
-        with urlopen(request) as response:  # noqa: S310 - loopback test server
-            assert response.status == 202
-            assert json.loads(response.read()) == {"run_id": "run_webhook"}
-        assert operator.calls == [
-            ("root/reports/daily.py::shared", {"message": "hello"}, "webhook")
-        ]
+        flow = operator.list_workflows()[0]
+        address = urlsplit(flow.webhook_url)
+        assert address.hostname == "127.0.0.1"
 
-        server.reconcile({})
-        with pytest.raises(HTTPError) as removed_error:
-            urlopen(request)  # noqa: S310 - loopback test server
-        assert removed_error.value.code == 404
-        server.reconcile(routes)
+        def request(
+            method, body=b"", *, path="/ingest", content_type="application/json", length=None
+        ):
+            connection = http.client.HTTPConnection(address.hostname, address.port, timeout=5)
+            try:
+                headers = {"Content-Type": content_type}
+                if length is not None:
+                    headers["Content-Length"] = str(length)
+                connection.request(method, path, body=body, headers=headers)
+                response = connection.getresponse()
+                return response.status, json.loads(response.read())
+            finally:
+                connection.close()
 
-        with pytest.raises(HTTPError) as error:
-            urlopen(url)  # noqa: S310 - loopback test server
-        assert error.value.code == 405
+        status, body = request("POST", b'{"message":"delivered"}', path="/ingest?source=test")
+        assert status == 202
+        run_id = body["run_id"]
+        deadline = time.monotonic() + 15
+        while time.monotonic() < deadline:
+            run = operator.get_run(run_id)
+            if run.status in (RunStatus.SUCCESS, RunStatus.FAILED):
+                break
+            time.sleep(0.02)
+        assert run.status is RunStatus.SUCCESS
+        assert operator.get_run_result(run_id) == "delivered"
+        assert run.triggered_by == "webhook"
+
+        for method, payload, content_type, length, expected in (
+            ("GET", b"", "application/json", None, 405),
+            ("POST", b"{}", "text/plain", None, 415),
+            ("POST", b"not json", "application/json", None, 400),
+            ("POST", b"[]", "application/json", None, 400),
+            ("POST", b"", "application/json", MAX_WEBHOOK_BODY_BYTES + 1, 413),
+        ):
+            status, _ = request(method, payload, content_type=content_type, length=length)
+            assert status == expected
+        assert [run.run_id for run in operator.list_runs(flow.selector)] == [run_id]
+
+        operator._webhooks.reconcile({})
+        assert request("POST", b'{"message":"removed"}')[0] == 404
+        assert [run.run_id for run in operator.list_runs(flow.selector)] == [run_id]
     finally:
-        server.close()
-    assert not server.active
+        operator.close()

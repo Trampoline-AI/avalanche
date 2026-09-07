@@ -263,13 +263,6 @@ class IcebergNamespace(Namespace):
         """
         load_catalog_props = load_catalog_props or {}
 
-        # Require ns_config
-        if not hasattr(self.__class__, "ns_config") or self.__class__.ns_config is None:
-            raise ValueError(
-                f"{self.__class__.__name__} must define ns_config. "
-                "Example: ns_config = IcebergNsConfig(name='...', base_location='...')"
-            )
-
         super().__init__()
 
         # Load catalog if provided

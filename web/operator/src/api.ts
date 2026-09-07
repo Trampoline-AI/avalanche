@@ -635,7 +635,7 @@ export class GrpcWebOperatorApi implements OperatorApi {
     return {
       operatorInstanceId: baseline.operatorInstanceId,
       asOfEventUlid: baseline.cursor.eventUlid,
-      revision: baseline.revision !== "0" ? baseline.revision : catalogRevision(flows),
+      revision: baseline.revision,
       workflows: flows.map(mapFlowInfo),
       scanTargets,
       diagnostics,
@@ -970,22 +970,6 @@ function mapFlowInfo(flow: FlowInfoV2): FlowInfoMsg {
     webhookUrl: flow.webhookUrl,
     webhookActive: flow.webhookActive,
   };
-}
-
-/**
- * Preserve a deterministic fallback for older test doubles that omit the
- * independent catalog revision field.
- */
-function catalogRevision(flows: FlowInfoV2[]): string {
-  let hash = 0x811c9dc5;
-  const text = flows
-    .map((flow) => `${flow.workflowSelector}=${flow.manifestDigest}`)
-    .join("\n");
-  for (let index = 0; index < text.length; index += 1) {
-    hash ^= text.charCodeAt(index);
-    hash = Math.imul(hash, 0x01000193);
-  }
-  return String(hash >>> 0);
 }
 
 function assertPageProgress(

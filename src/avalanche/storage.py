@@ -195,7 +195,7 @@ class Namespace(ABC):
     ns_config: NamespaceConfig | None = None
 
     def __init__(self) -> None:
-        if not hasattr(self.__class__, "ns_config") or self.__class__.ns_config is None:
+        if self.__class__.ns_config is None:
             raise ValueError(
                 f"{self.__class__.__name__} must define ns_config. "
                 "Example: ns_config = NamespaceConfig(name='...', base_location='...')"
