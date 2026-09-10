@@ -1541,7 +1541,7 @@ def _wrap_lineaged_result(value: Any, context: Any, *, num_returns: int) -> Any:
     Multi-return nodes wrap each item individually so executor multi-return
     (e.g. Ray) still sees the expected number of results.
     """
-    from .outcomes import _ExpandedSkip, _expand_skip
+    from .outcomes import _expand_skip, _ExpandedSkip
     from .types import LineagedResult
 
     lineage = dict(context.lineage_vector)
