@@ -153,7 +153,7 @@ describe("operator workflows", () => {
 
     act(() => publish.resolve());
     fireEvent.click(await screen.findByRole("button", { name: /run-new, running/ }));
-    fireEvent.click(await screen.findByRole("button", { name: "Inspect Recorded fetch" }));
+    fireEvent.click(await screen.findByRole("button", { name: /^Inspect Recorded fetch/ }));
     fireEvent.click(screen.getByRole("button", { name: "output" }));
     expect(await screen.findByText("Retained result")).toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: "Cancel run" }));
@@ -164,7 +164,7 @@ describe("operator workflows", () => {
     await screen.findByRole("button", { name: "Inspect Fetch" });
     expect(screen.queryByText("Retained result")).not.toBeInTheDocument();
     expect(
-      screen.queryByRole("button", { name: "Inspect Recorded fetch" }),
+      screen.queryByRole("button", { name: /^Inspect Recorded fetch/ }),
     ).not.toBeInTheDocument();
   });
 
@@ -199,7 +199,7 @@ describe("operator workflows", () => {
     expect(screen.queryByRole("button", { name: "Cancel run" })).not.toBeInTheDocument();
     act(() => ready.resolve(baseline));
     await screen.findByRole("button", { name: "Cancel run" });
-    fireEvent.click(screen.getByRole("button", { name: "Inspect Fetch" }));
+    fireEvent.click(screen.getByRole("button", { name: /^Inspect Fetch/ }));
     expect(screen.getByRole("button", { name: "output" })).toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: "Host return to workflow" }));
     await screen.findByRole("button", { name: "Run" });

@@ -12,10 +12,10 @@ from uuid import uuid4
 
 from pydantic import BaseModel
 
+from avalanche.outcomes import Skipped
 from avalanche.runtime import File
 from avalanche.runtime.context import _FILE_SERIALIZER_CONTEXT_KEY
 from avalanche.workspace import _WORKSPACE_SERIALIZER_CONTEXT_KEY, Workspace
-from avalanche.outcomes import Skipped
 
 _RESULT_FORMAT_VERSION = 1
 MAX_RESULT_ATTACHMENTS = 1024

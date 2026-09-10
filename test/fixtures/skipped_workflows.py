@@ -7,7 +7,9 @@ import avalanche as ava
 
 @ava.source
 def optional_records():
-    return ava.skip("No eligible records for this partition", {"partition": "today", "count": 0})
+    return ava.skip(
+        "No eligible records for this partition", {"partition": "today", "count": 0},
+    )
 
 
 @ava.source

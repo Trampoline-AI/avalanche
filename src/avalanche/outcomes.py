@@ -6,10 +6,17 @@ import hashlib
 import json
 import math
 from dataclasses import dataclass
-from typing import Any
+from typing import TYPE_CHECKING
+
+from pydantic import BaseModel, ConfigDict, JsonValue, TypeAdapter
+
+if TYPE_CHECKING:
+    from .storage import Table
+
+_METADATA = TypeAdapter(dict[str, JsonValue] | None)
 
 
-def _validate_metadata(value: Any) -> None:
+def _validate_metadata(value: object) -> None:
     if value is None or type(value) in (str, bool, int):
         return
     if type(value) is float and math.isfinite(value):
@@ -37,7 +44,7 @@ class Skipped:
     reason: str
     _metadata_json: str
 
-    def __init__(self, reason: str, metadata: dict[str, Any] | None = None) -> None:
+    def __init__(self, reason: str, metadata: dict[str, JsonValue] | None = None) -> None:
         if type(reason) is not str or not reason.strip():
             raise ValueError("skip reason must be a non-empty string")
         if len(reason.encode("utf-8")) > 4096:
@@ -52,16 +59,16 @@ class Skipped:
         object.__setattr__(self, "_metadata_json", encoded)
 
     @property
-    def metadata(self) -> dict[str, Any] | None:
-        return json.loads(self._metadata_json)
+    def metadata(self) -> dict[str, JsonValue] | None:
+        return _METADATA.validate_json(self._metadata_json)
 
 
-def skip(reason: str, metadata: dict[str, Any] | None = None) -> Skipped:
+def skip(reason: str, metadata: dict[str, JsonValue] | None = None) -> Skipped:
     """Return a successful skipped outcome without creating a payload value."""
     return Skipped(reason, metadata)
 
 
-def _skip_outcome(value: Any) -> Skipped | None:
+def _skip_outcome(value: object) -> Skipped | None:
     """Read a whole-node outcome, including expanded multi-return transport."""
     from .types import LineagedResult
 
@@ -76,24 +83,35 @@ def _skip_outcome(value: Any) -> Skipped | None:
     return None
 
 
+class _SkipReceipt(BaseModel):
+    """Durable empty producer version, decoded before traversing rerun ancestry."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True, strict=True)
+
+    run_id: str
+    node_slug: str
+    reason: str
+    metadata: dict[str, JsonValue] | None
+
+
 def _skip_property_key(run_id: str, node_slug: str) -> str:
     identity = json.dumps([run_id, node_slug], separators=(",", ":"))
     return "avalanche.skip." + hashlib.sha256(identity.encode()).hexdigest()
 
 
-def _persist_skip(table: Any, outcome: Skipped) -> Skipped:
+def _persist_skip(table: Table, outcome: Skipped) -> Skipped:
     """Record an empty producer version without appending payload rows."""
     from .runtime import get_current_run_context
 
     context = get_current_run_context()
     if context is None or context.node_slug is None:
         raise RuntimeError("persisting skip requires an active workflow node context")
-    document = json.dumps({
-        "run_id": context.run_id,
-        "node_slug": context.node_slug,
-        "reason": outcome.reason,
-        "metadata": outcome.metadata,
-    }, allow_nan=False)
+    document = _SkipReceipt(
+        run_id=context.run_id,
+        node_slug=context.node_slug,
+        reason=outcome.reason,
+        metadata=outcome.metadata,
+    ).model_dump_json()
     properties = {_skip_property_key(context.run_id, context.node_slug): document}
     if context.rerun is not None and context.rerun.run_id != context.run_id:
         from .runtime.providers.stream import _rerun_edge_property_key

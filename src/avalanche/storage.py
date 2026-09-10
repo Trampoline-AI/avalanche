@@ -109,7 +109,9 @@ class Table(ABC):
     @abstractmethod
     def append(
         self,
-        df: pl.DataFrame | pa.Table | pa.RecordBatch | BaseModel | Sequence[BaseModel] | Skipped,
+        df: (
+            pl.DataFrame | pa.Table | pa.RecordBatch | BaseModel | Sequence[BaseModel] | Skipped
+        ),
     ) -> AppendResult | Skipped:
         """Append data, or persist a skipped producer receipt without adding rows."""
 

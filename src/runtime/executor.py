@@ -103,8 +103,8 @@ def _wrap_with_status(fn: Callable, user_num_returns: int) -> Callable:
 
     @wraps(fn)
     def wrapper(*args: Any, **kwargs: Any) -> Any:
-        from avalanche.workspace import run_workspace_invocation
         from avalanche.outcomes import _skip_outcome
+        from avalanche.workspace import run_workspace_invocation
 
         result = run_workspace_invocation(call_sync_or_async, fn, *args, **kwargs)
         result = _normalize_distributed_result(result)
@@ -122,8 +122,8 @@ def _project_index(value: Any, index: int) -> Any:
     Preserves a ``LineagedResult`` envelope so downstream Python-arg consumers
     still record the producer lineage of the selected element.
     """
-    from avalanche.types import LineagedResult
     from avalanche.outcomes import Skipped
+    from avalanche.types import LineagedResult
 
     if isinstance(value, LineagedResult):
         if isinstance(value.value, Skipped):

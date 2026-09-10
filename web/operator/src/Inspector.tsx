@@ -745,8 +745,9 @@ export function Inspector({
           </span>
           <h2 className="mt-1 mb-[5px] text-lg">{node.name}</h2>
           <span
-            className={`status-pill inline-flex rounded-full border bg-panel px-[7px] py-[3px] font-mono text-[8px] uppercase ${node.status === "failed" ? "status-failed border-danger text-danger" : node.status === "success" ? "status-success border-mint text-mint" : "border-line text-muted"}`}
+            className={`status-pill inline-flex rounded-full border bg-panel px-[7px] py-[3px] font-mono text-[8px] uppercase ${node.status === "failed" ? "status-failed border-danger text-danger" : node.status === "success" ? "status-success border-mint text-mint" : node.status === "skipped" ? "status-skipped border-skipped border-dashed text-skipped" : "border-line text-muted"}`}
           >
+            {node.status === "skipped" && <span aria-hidden="true">⊘&nbsp;</span>}
             {node.status}
           </span>
         </div>
@@ -800,6 +801,27 @@ export function Inspector({
               <p className="node-failure rounded-[7px] border border-danger p-2.5 text-[10px] text-danger [overflow-wrap:anywhere]">
                 {node.error}
               </p>
+            )}
+            {node.status === "skipped" && (
+              <section
+                className="mt-3 rounded-[7px] border border-dashed border-skipped bg-skipped/5 p-2.5 text-[10px] [overflow-wrap:anywhere]"
+                aria-label="Skip detail"
+              >
+                <h3>⊘ {node.skip ? "Skipped intentionally" : "Not executed"}</h3>
+                <p className="text-skipped">
+                  {node.skip
+                    ? node.skip.reason
+                    : run.summary?.status === "cancelled"
+                      ? "Run cancelled."
+                      : "Upstream dependency failed."}
+                </p>
+                {node.skip && (
+                  <div>
+                    <h3>Metadata</h3>
+                    <ValueView value={parseRetainedJson(node.skip.metadataJson)} />
+                  </div>
+                )}
+              </section>
             )}
             {node.trace && (
               <section>

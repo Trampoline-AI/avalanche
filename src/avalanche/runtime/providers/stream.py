@@ -304,7 +304,9 @@ class Stream(ParameterProvider, Generic[T]):
             matching_result = param_context.materialize(raw_matching_result)
             matching_result = unwrap_lineaged(matching_result)
             upstream_data = (
-                matching_result if isinstance(matching_result, (AppendResult, Skipped)) else None
+                matching_result
+                if isinstance(matching_result, (AppendResult, Skipped))
+                else None
             )
         matching_slug = param_context.get_matching_node_slug()
         source_node_slugs = (
@@ -560,8 +562,8 @@ def consume_stream(
         Normally you don't call this directly - the framework calls it when
         resolving Stream dependencies.
     """
-    from avalanche.progress import ProgressStore
     from avalanche.outcomes import Skipped
+    from avalanche.progress import ProgressStore
     from avalanche.runtime import get_current_run_context
 
     if mode not in ("run_scoped", "append_scan"):
@@ -843,20 +845,21 @@ def _read_rerun_rows(
     seen: set[str] = set()
     empty_result: pl.DataFrame | None = None
     seen_slugs: set[str] = set()
+    from avalanche.outcomes import _SkipReceipt
+
+    table.refresh()
+    skips_by_run: dict[str, set[str]] = {}
+    for key, value in table.properties.items():
+        if key.startswith("avalanche.skip."):
+            receipt = _SkipReceipt.model_validate_json(value)
+            skips_by_run.setdefault(receipt.run_id, set()).add(receipt.node_slug)
 
     while current_run_id is not None and current_run_id not in seen:
         seen.add(current_run_id)
         df = _scan_run_rows(table, current_run_id, node_slugs=node_slugs)
         if empty_result is None:
             empty_result = df
-        table.refresh()
-        skipped_slugs = {
-            receipt["node_slug"]
-            for key, value in table.properties.items()
-            if key.startswith("avalanche.skip.")
-            for receipt in (json.loads(value),)
-            if receipt["run_id"] == current_run_id
-        }
+        skipped_slugs = skips_by_run.get(current_run_id, set())
         if "_ava_node_slug" in df.columns:
             df = df.filter(~pl.col("_ava_node_slug").is_in(seen_slugs | skipped_slugs))
             seen_slugs.update(df["_ava_node_slug"].drop_nulls().to_list())

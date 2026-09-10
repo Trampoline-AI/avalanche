@@ -1892,8 +1892,8 @@ def _indexed_parent_result(presult: Any, tuple_index: int, executor: Any = None)
       the driver;
     - local tuple/list: index in place.
     """
-    from .types import LineagedResult
     from .outcomes import Skipped
+    from .types import LineagedResult
 
     if isinstance(presult, LineagedResult):
         if isinstance(presult.value, Skipped):
@@ -2329,12 +2329,11 @@ class Workflow:
             )
         )
 
-        from .outcomes import _skip_outcome
+        from .outcomes import Skipped, _skip_outcome
 
-        def report_completion(node_id: str, outcome: Any) -> None:
+        def report_completion(node_id: str, skipped: Skipped | None) -> None:
             if hooks is None:
                 return
-            skipped = _skip_outcome(outcome)
             if skipped is not None:
                 if hooks.on_node_skipped:
                     hooks.on_node_skipped(node_id, skipped)
@@ -2717,7 +2716,7 @@ class Workflow:
                         result = _reattach_lineage(replacement, resolved_val)
                     else:
                         result = resolved_val
-                    report_completion(node_id, result)
+                    report_completion(node_id, _skip_outcome(result))
                 result_refs[node_id] = result
             except Exception as exc:
                 if hooks and hooks.on_node_failure:
@@ -2775,7 +2774,7 @@ class Workflow:
                         # surface a task failure. Never materialize the payload;
                         # result_refs keeps the payload ref for downstream tasks.
                         outcome = executor.get([status_refs[node_id]])[0]
-                    report_completion(node_id, outcome)
+                    report_completion(node_id, _skip_outcome(outcome))
                     completed_nodes.add(node_id)
                 except Exception as exc:
                     if hooks and hooks.on_node_failure:

@@ -661,12 +661,12 @@ def marker_for(node: DagNode, status: NodeStatus, frame: int) -> str:
 
 
 def _duration_label(elapsed: float | None, status: NodeStatus) -> str:
+    if status == NodeStatus.SKIPPED:
+        return f"skipped · {_fmt_elapsed(elapsed)}" if elapsed is not None else "skipped"
     if elapsed is not None:
         return _fmt_elapsed(elapsed)
     if status == NodeStatus.PENDING:
         return "pending"
-    if status == NodeStatus.SKIPPED:
-        return "skipped"
     return "—"
 
 

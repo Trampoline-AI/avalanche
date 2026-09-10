@@ -14,6 +14,7 @@ CANONICAL_EXAMPLES = [
     Path("examples/stream_pattern.py"),
     Path("examples/cursor_pattern.py"),
     Path("examples/operator_workflow.py"),
+    Path("examples/skipped_node.py"),
 ]
 
 

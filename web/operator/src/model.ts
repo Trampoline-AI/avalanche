@@ -310,6 +310,11 @@ export const RunSummaryMsg = {
   },
 };
 
+export interface SkippedOutcome {
+  reason: string;
+  metadataJson: string;
+}
+
 export interface NodeSnapshotMsg {
   /**
    * @generated from protobuf field: string node_id = 1
@@ -355,6 +360,7 @@ export interface NodeSnapshotMsg {
    * @generated from protobuf field: optional double running_elapsed_seconds = 11
    */
   runningElapsedSeconds?: number;
+  skip?: SkippedOutcome;
 }
 
 export const NodeSnapshotMsg = {
@@ -972,6 +978,7 @@ export interface NodeStatusChanged {
    * @generated from protobuf field: optional double running_elapsed_seconds = 8
    */
   runningElapsedSeconds?: number;
+  skip?: SkippedOutcome;
 }
 
 export const NodeStatusChanged = {

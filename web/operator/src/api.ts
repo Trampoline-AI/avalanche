@@ -673,6 +673,7 @@ export class GrpcWebOperatorApi implements OperatorApi {
     };
     if (node.trace) mapped.trace = node.trace;
     if (node.error !== undefined) mapped.error = node.error;
+    if (node.skip !== undefined) mapped.skip = node.skip;
     if (node.runningElapsedSeconds !== undefined) {
       mapped.runningElapsedSeconds = node.runningElapsedSeconds;
     }
@@ -815,6 +816,7 @@ export class GrpcWebOperatorApi implements OperatorApi {
             endedAt: node?.endedAt ?? 0,
             revision: node?.revision ?? "0",
             ...(node?.error !== undefined ? { error: node.error } : {}),
+            ...(node?.skip !== undefined ? { skip: node.skip } : {}),
             ...(node?.runningElapsedSeconds !== undefined
               ? { runningElapsedSeconds: node.runningElapsedSeconds }
               : {}),

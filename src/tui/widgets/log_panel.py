@@ -172,7 +172,7 @@ class LogWidget(RichLog):
                 )
                 if node is not None and node.skip is not None:
                     self.write(Text(
-                        f"  Skipped intentionally — {node.skip.reason}",
+                        f"  ⊘ Skipped intentionally — {node.skip.reason}",
                         style=STATUS_STYLES[NodeStatus.SKIPPED],
                     ), scroll_end=False)
                     if node.skip.metadata is not None:

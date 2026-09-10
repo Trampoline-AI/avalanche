@@ -5,7 +5,10 @@
 - Added `ava.skip(reason, metadata=None)` and `ava.Skipped`: intentional absence
   remains distinct from successful `None`, satisfies dependencies and `&` fan-in,
   and survives Local/Ray execution, operator events/results, gRPC, and CLI output.
-  The TUI distinguishes authored skips from failed/cancelled dependencies.
+  Browser and terminal graphs mark skips with a distinct symbol and status text;
+  inspectors show authored reasons and metadata separately from failed dependencies.
+  Try `uv run python examples/skipped_node.py` or explore it with
+  `uv run ava dev examples/skipped_node.py`.
   Table appends of skips persist empty producer receipts without payload rows;
   rerun replay does not resurrect an explicitly skipped producer's ancestor rows.
 - Consolidated Python, terminal, and browser tests around core execution, data

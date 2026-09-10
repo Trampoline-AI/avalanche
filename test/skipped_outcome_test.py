@@ -78,12 +78,16 @@ def test_skip_satisfies_dependency_and_preserves_fan_in_value_positions(executor
     )
     absent_result, joined, tail = handle.result(timeout=60)
     assert absent_result == ava.skip("no eligible records", {"count": 0, "partition": "today"})
-    assert joined == ("no eligible records", None, {"absent": "skipped-fan-in", "empty": "skipped-fan-in"})
+    assert joined == (
+        "no eligible records", None, {"absent": "skipped-fan-in", "empty": "skipped-fan-in"},
+    )
     assert tail == "dependency satisfied"
     assert list(skips.values()) == [absent_result]
     assert not set(skips).intersection(successes)
     assert len(successes) == 3
-    assert decode_workflow_result(encode_workflow_result((absent_result, None))) == (absent_result, None)
+    assert decode_workflow_result(encode_workflow_result((absent_result, None))) == (
+        absent_result, None,
+    )
 
 
 def test_multi_return_and_indexed_skips_are_non_values(executor):
@@ -101,7 +105,9 @@ def test_multi_return_and_indexed_skips_are_non_values(executor):
         combined = combine(pair[0], pair[1])
         return pair[1], combined
 
-    assert flow().run(executor=executor).result(timeout=60) == (ava.skip("whole node omitted"), True)
+    assert flow().run(executor=executor).result(timeout=60) == (
+        ava.skip("whole node omitted"), True,
+    )
 
 
 def test_single_return_projection_preserves_skip_but_containers_are_values(executor):
@@ -217,8 +223,14 @@ def test_persisted_skip_shadows_ancestor_rows_without_advancing_cursor(namespace
     )).result(timeout=60) == 0
     table.refresh()
     assert sorted(table.read()["id"].to_list()) == [1, 2]
-    receipts = [json.loads(value) for key, value in table.properties.items() if key.startswith("avalanche.skip.")]
-    assert receipts == [{"run_id": "omitted", "node_slug": "producer", "reason": "partition excluded", "metadata": {"partition": "today"}}]
+    receipts = [
+        json.loads(value) for key, value in table.properties.items()
+        if key.startswith("avalanche.skip.")
+    ]
+    assert receipts == [{
+        "run_id": "omitted", "node_slug": "producer", "reason": "partition excluded",
+        "metadata": {"partition": "today"},
+    }]
     # A lazy rerun must not resurrect original rows, including through sparse ancestry.
     for run_id, parent in (("replay", "omitted"), ("replay-again", "replay")):
         assert flow().run(executor=executor, run_id=run_id, rerun=ava.Rerun(

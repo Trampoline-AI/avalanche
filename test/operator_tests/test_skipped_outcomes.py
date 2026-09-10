@@ -61,23 +61,34 @@ def test_spawned_skip_is_successful_and_retains_state_and_result(transport):
     run = wait_for(provider, run_id, lambda run: run.status == RunStatus.SUCCESS)
     node = run.nodes["optional_records_1"]
     assert node.status == NodeStatus.SKIPPED
-    assert node.skip == ava.skip("No eligible records for this partition", {"partition": "today", "count": 0})
+    assert node.skip == ava.skip(
+        "No eligible records for this partition", {"partition": "today", "count": 0},
+    )
     assert node.error is None
     assert node.started_at is not None and node.ended_at >= node.started_at
-    assert all(item.status == NodeStatus.SUCCESS for key, item in run.nodes.items() if key != node.node_id)
-    assert provider.get_run_result(run_id) == (node.skip, "fan-in complete", "dependency satisfied")
+    assert all(
+        item.status == NodeStatus.SUCCESS
+        for key, item in run.nodes.items() if key != node.node_id
+    )
+    assert provider.get_run_result(run_id) == (
+        node.skip, "fan-in complete", "dependency satisfied",
+    )
     # The independently decoded baseline and the live/replayed client agree.
     snapshot = operator.get_latest_run_snapshot(
         run_id, operator_instance_id=run.operator_instance_id,
     )
-    assert next(item for item in snapshot.nodes if item.node_id == node.node_id).skip == node.skip
+    snapshot_node = next(item for item in snapshot.nodes if item.node_id == node.node_id)
+    assert snapshot_node.skip == node.skip
     deadline = time.monotonic() + 5
     while time.monotonic() < deadline and not any(
         item.nodes.get(node.node_id) and item.nodes[node.node_id].skip == node.skip
         for item in updates
     ):
         time.sleep(0.02)
-    assert any(item.nodes.get(node.node_id) and item.nodes[node.node_id].skip == node.skip for item in updates)
+    assert any(
+        item.nodes.get(node.node_id) and item.nodes[node.node_id].skip == node.skip
+        for item in updates
+    )
 
 
 @pytest.mark.parametrize("workflow,terminal", [
@@ -88,7 +99,10 @@ def test_unfinished_dependency_skips_are_not_authored_outcomes(transport, workfl
     _, provider = transport
     run_id = provider.start_run(workflow)
     if terminal == RunStatus.CANCELLED:
-        wait_for(provider, run_id, lambda run: any(node.status == NodeStatus.RUNNING for node in run.nodes.values()))
+        wait_for(
+            provider, run_id,
+            lambda run: any(node.status == NodeStatus.RUNNING for node in run.nodes.values()),
+        )
         provider.cancel_run(run_id)
     run = wait_for(provider, run_id, lambda run: run.status == terminal)
     dependent = run.nodes["dependency_only_1"]

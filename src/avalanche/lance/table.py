@@ -273,7 +273,9 @@ class LanceTable(Table):
 
     def append(
         self,
-        df: pl.DataFrame | pa.Table | pa.RecordBatch | BaseModel | Sequence[BaseModel] | Skipped,
+        df: (
+            pl.DataFrame | pa.Table | pa.RecordBatch | BaseModel | Sequence[BaseModel] | Skipped
+        ),
     ) -> AppendResult | Skipped:
         if isinstance(df, Skipped):
             return _persist_skip(self, df)
