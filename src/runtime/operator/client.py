@@ -179,9 +179,9 @@ class _DetailBudget:
 
 @dataclass
 class _ProjectSummaryCursorGuard:
-    """Reject a changed project-summary snapshot within one page chain."""
+    """Preserve source continuity while live summary observations advance."""
 
-    _expected: pb.ProjectSummaryCursorV2 | None = None
+    _previous: pb.ProjectSummaryCursorV2 | None = None
     _initialized: bool = False
 
     def validate(self, page: pb.RunSummaryPageV2) -> None:
@@ -189,22 +189,30 @@ class _ProjectSummaryCursorGuard:
             page.project_summary_cursor if page.HasField("project_summary_cursor") else None
         )
         if not self._initialized:
-            self._expected = cursor
             self._initialized = True
-        elif (cursor is None) != (self._expected is None):
+        elif (cursor is None) != (self._previous is None):
             raise OperatorCallError(
                 grpc.StatusCode.DATA_LOSS,
                 "project summary cursor appeared or disappeared across run summary pages",
             )
         elif (
             cursor is not None
-            and self._expected is not None
-            and not _same_project_summary_cursor(cursor, self._expected)
+            and self._previous is not None
+            and (
+                cursor.stream != self._previous.stream
+                or cursor.topology_fingerprint != self._previous.topology_fingerprint
+                or cursor.source_generation != self._previous.source_generation
+                or cursor.retained_floor_sequence != self._previous.retained_floor_sequence
+                or cursor.target_head_sequence < self._previous.target_head_sequence
+            )
         ):
             raise OperatorCallError(
                 grpc.StatusCode.DATA_LOSS,
                 "project summary cursor changed across run summary pages",
             )
+        # Checkpoint metadata describes this observation, not the source identity.
+        # Compare heads to the preceding page so later rewinds cannot hide progress.
+        self._previous = cursor
 
         next_page = page.next_page
         if not next_page.continuation_id:

@@ -48,8 +48,12 @@ message LifecycleCursorV2 {
   string event_ulid = 5;
 }
 
-// A snapshot position for a V2 project-summary page chain. This cursor is
-// independent from LifecycleCursorV2 and must not be used for event replay.
+// A source observation for a V2 project-summary page. Live page chains retain
+// the stream, topology, source generation, and retained floor, with a
+// nondecreasing target head. Checkpoint metadata describes each observation and
+// may change between pages. A continuation must preserve every field from its
+// issuing page. This cursor is independent from LifecycleCursorV2 and must not
+// be used for event replay.
 message ProjectSummaryCursorV2 {
   string stream = 1;
   string topology_fingerprint = 2;

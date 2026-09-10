@@ -2,9 +2,17 @@
 
 ## Unreleased
 
+Prepared for `0.1.5rc2`.
+
+### Operator transport
+
+- Fixed live run-summary pagination rejecting pages when the source head or
+  projection checkpoint advances. Clients preserve source continuity and exact
+  continuation bindings while accepting each page's current checkpoint metadata.
+
 ## 0.1.5rc1
 
-This prerelease carries the V2 server, converter, and generated bindings used by Delta.
+This prerelease carries the V2 server, converter, and generated bindings for runtime clients.
 
 ### Operator transport
 
