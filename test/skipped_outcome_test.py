@@ -1,0 +1,276 @@
+"""Intentional absence survives real execution, storage, and value-edge boundaries."""
+
+import json
+from concurrent.futures import CancelledError
+
+import dataframely as dy
+import polars as pl
+import pytest
+
+import avalanche as ava
+from runtime.operator.hooks import RunHooks
+from runtime.operator.results import decode_workflow_result, encode_workflow_result
+
+
+@pytest.fixture(params=["local", pytest.param("ray", marks=pytest.mark.ray)])
+def executor(request):
+    if request.param == "local":
+        yield ava.LocalExecutor()
+    else:
+        import ray
+
+        ray.init(num_cpus=2, include_dashboard=False, _node_ip_address="127.0.0.1")
+        try:
+            yield ava.RayExecutor()
+        finally:
+            ray.shutdown()
+
+
+def test_skip_satisfies_dependency_and_preserves_fan_in_value_positions(executor):
+    skips, successes = {}, []
+
+    @ava.source
+    def absent():
+        return ava.skip("no eligible records", {"count": 0, "partition": "today"})
+
+    @ava.source
+    def empty():
+        return None
+
+    @ava.step
+    def join(left, right, context: ava.RunContext):
+        assert isinstance(left, ava.Skipped)
+        assert right is None
+        return left.reason, right, context.lineage_vector
+
+    @ava.step
+    def dependency_only():
+        return "dependency satisfied"
+
+    @ava.workflow
+    def flow():
+        left, right = absent(), empty()
+        joined = (left & right) >> join()
+        tail = left >> dependency_only()
+        return left, joined, tail
+
+    handle = flow().run(
+        executor=executor,
+        run_id="skipped-fan-in",
+        hooks=RunHooks(
+            on_node_skipped=lambda node, outcome: skips.update({node: outcome}),
+            on_node_success=successes.append,
+        ),
+    )
+    absent_result, joined, tail = handle.result(timeout=60)
+    assert absent_result == ava.skip("no eligible records", {"count": 0, "partition": "today"})
+    assert joined == ("no eligible records", None, {"absent": "skipped-fan-in", "empty": "skipped-fan-in"})
+    assert tail == "dependency satisfied"
+    assert list(skips.values()) == [absent_result]
+    assert not set(skips).intersection(successes)
+    assert len(successes) == 3
+    assert decode_workflow_result(encode_workflow_result((absent_result, None))) == (absent_result, None)
+
+
+def test_multi_return_and_indexed_skips_are_non_values(executor):
+    @ava.source(num_returns=2)
+    def absent():
+        return ava.skip("whole node omitted")
+
+    @ava.step
+    def combine(left, right):
+        return isinstance(left, ava.Skipped) and left == right
+
+    @ava.workflow
+    def flow():
+        pair = absent()
+        combined = combine(pair[0], pair[1])
+        return pair[1], combined
+
+    assert flow().run(executor=executor).result(timeout=60) == (ava.skip("whole node omitted"), True)
+
+
+def test_single_return_projection_preserves_skip_but_containers_are_values(executor):
+    skips, successes = [], []
+
+    @ava.source
+    def absent():
+        return ava.skip("no tuple today")
+
+    @ava.source
+    def container():
+        return [ava.skip("retained nested outcome")]
+
+    @ava.step
+    def inspect(value):
+        return value.reason
+
+    @ava.workflow
+    def flow():
+        single = absent()
+        return inspect(single[0]), container()
+
+    assert flow().run(
+        executor=executor,
+        hooks=RunHooks(
+            on_node_skipped=lambda node, outcome: skips.append(node),
+            on_node_success=successes.append,
+        ),
+    ).result(timeout=60) == ("no tuple today", [ava.skip("retained nested outcome")])
+    assert skips == ["absent_1"]
+    assert set(successes) == {"container_1", "inspect_1"}
+
+
+def test_failure_and_cancellation_do_not_become_authored_skips():
+    skips, starts = [], []
+
+    @ava.source
+    def broken():
+        raise RuntimeError("actual failure")
+
+    @ava.step
+    def downstream():
+        starts.append("downstream")
+
+    @ava.workflow
+    def flow():
+        broken() >> downstream()
+
+    hooks = RunHooks(on_node_skipped=lambda *args: skips.append(args))
+    with pytest.raises(RuntimeError, match="actual failure"):
+        flow().run(executor=ava.LocalExecutor(), hooks=hooks).result()
+    hooks.cancel_requested = lambda: True
+    with pytest.raises(CancelledError):
+        flow().run(executor=ava.LocalExecutor(), hooks=hooks).result()
+    assert skips == starts == []
+
+
+class Row(dy.Schema):
+    id = dy.Int64(nullable=False)
+
+
+@pytest.fixture(params=["iceberg", "lance"])
+def namespace(request, tmp_path):
+    if request.param == "iceberg":
+        base, config, table = ava.IcebergNs, ava.IcebergNsConfig, ava.IcebergTable
+        kwargs = {"catalog": "skip", "load_catalog_props": {
+            "type": "sql", "uri": f"sqlite:///{tmp_path / 'catalog.db'}",
+        }}
+    else:
+        base, config, table = ava.LanceNamespace, ava.LanceNamespaceConfig, ava.LanceTable
+        kwargs = {}
+
+    class Store(base):
+        ns_config = config(name="skip", base_location=str(tmp_path / "warehouse"))
+        rows = table(schema=Row)
+
+    ns = Store(**kwargs)
+    ns.push()
+    return ns
+
+
+def test_persisted_skip_shadows_ancestor_rows_without_advancing_cursor(namespace, executor):
+    table = namespace.rows
+
+    @ava.source(slug="producer")
+    def produce(context: ava.RunContext):
+        if context.run_id == "original":
+            return table.append(pl.DataFrame({"id": [1]}))
+        return table.append(ava.skip("partition excluded", {"partition": "today"}))
+
+    @ava.step(slug="consumer")
+    def consume(rows=ava.Stream(table, mode="append_scan", key="skip_consumer")):
+        return rows.height
+
+    @ava.workflow
+    def flow():
+        return produce() >> consume()
+
+    assert flow().run(executor=executor, run_id="original").result(timeout=60) == 1
+    @ava.source(slug="other")
+    def other():
+        return table.append(pl.DataFrame({"id": [2]}))
+
+    @ava.workflow
+    def other_flow():
+        other()
+
+    other_flow().run(executor=executor, run_id="original").result(timeout=60)
+    table.refresh()
+    cursor = ava.ProgressStore(table, key="skip_consumer").get_cursor()
+    assert flow().run(executor=executor, run_id="omitted", rerun=ava.Rerun(
+        run_id="original", start=["producer"],
+    )).result(timeout=60) == 0
+    table.refresh()
+    assert sorted(table.read()["id"].to_list()) == [1, 2]
+    receipts = [json.loads(value) for key, value in table.properties.items() if key.startswith("avalanche.skip.")]
+    assert receipts == [{"run_id": "omitted", "node_slug": "producer", "reason": "partition excluded", "metadata": {"partition": "today"}}]
+    # A lazy rerun must not resurrect original rows, including through sparse ancestry.
+    for run_id, parent in (("replay", "omitted"), ("replay-again", "replay")):
+        assert flow().run(executor=executor, run_id=run_id, rerun=ava.Rerun(
+            run_id=parent, start=["consumer"], mode="lazy",
+        )).result(timeout=60) == 0
+    assert ava.ProgressStore(table, key="skip_consumer").get_cursor() == cursor
+    # Empty producer versions shadow only their own slug, not sibling producers.
+    with ava.consume_stream(
+        table, rerun=ava.Rerun(run_id="replay-again", start=["consumer"])
+    ) as rows:
+        assert rows["id"].to_list() == [2]
+
+
+def test_metadata_is_immutable_and_rejects_lossy_transport():
+    metadata = {"nested": ["original"]}
+    outcome = ava.skip("no records", metadata)
+    metadata["nested"].append("changed")
+    outcome.metadata["nested"].append("also changed")
+    assert outcome.metadata == {"nested": ["original"]}
+    with pytest.raises(TypeError):
+        ava.skip("no records", {"value": float("nan")})
+    with pytest.raises(TypeError):
+        ava.skip("no records", {"value": {1: "not a string key"}})
+
+
+def test_skip_finalizes_services_and_satisfies_receipt_dependencies(executor):
+    class Services:
+        def probe(self, *, request, task):
+            return request
+
+        def negotiate(self, *, request, task, probe):
+            return probe
+
+        def open(self, *, request, task, negotiation, upstream_receipts):
+            return {"node": task.node_slug, "parents": upstream_receipts}
+
+        def materialize_input(self, *, session, input_type, input):
+            return input
+
+        def finalize(self, *, session):
+            return dict(session)
+
+        def abort(self, *, session, error):
+            raise AssertionError("A successful skip must not abort")
+
+        def teardown(self, *, session):
+            session.clear()
+
+    @ava.source(num_returns=2)
+    def absent():
+        return ava.skip("service-managed absence")
+
+    @ava.step
+    def downstream():
+        return "completed"
+
+    @ava.workflow
+    def flow():
+        return absent() >> downstream()
+
+    handle = flow().run(
+        executor=executor,
+        execution_services=ava.ExecutionServicesSpec(service=Services(), request=None),
+    )
+    assert handle.result(timeout=60) == "completed"
+    receipt, = handle.execution_receipts()
+    assert receipt.value == {
+        "node": "downstream", "parents": ({"node": "absent", "parents": ()},),
+    }

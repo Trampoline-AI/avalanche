@@ -97,18 +97,21 @@ def _wrap_with_status(fn: Callable, user_num_returns: int) -> Callable:
 
     The status value is produced by the *same* task as the payload, so fetching
     only the status ref surfaces a task exception without materializing the
-    payload on the driver (or in a separate worker). ``None`` on success.
+    payload on the driver (or in a separate worker). A skipped outcome on
+    intentional absence, otherwise ``None`` on success.
     """
 
     @wraps(fn)
     def wrapper(*args: Any, **kwargs: Any) -> Any:
         from avalanche.workspace import run_workspace_invocation
+        from avalanche.outcomes import _skip_outcome
 
         result = run_workspace_invocation(call_sync_or_async, fn, *args, **kwargs)
         result = _normalize_distributed_result(result)
+        outcome = _skip_outcome(result)
         if user_num_returns > 1:
-            return (*result, None)
-        return result, None
+            return (*result, outcome)
+        return result, outcome
 
     return wrapper
 
@@ -120,8 +123,11 @@ def _project_index(value: Any, index: int) -> Any:
     still record the producer lineage of the selected element.
     """
     from avalanche.types import LineagedResult
+    from avalanche.outcomes import Skipped
 
     if isinstance(value, LineagedResult):
+        if isinstance(value.value, Skipped):
+            return value
         return LineagedResult(value.value[index], dict(value.lineage_vector))
     return value[index]
 
@@ -141,6 +147,7 @@ def _distributed_execution_services_task(
 ) -> Any:
     """Ray entry point with service dependencies exposed as top-level args."""
     from avalanche.execution_services import _run_with_execution_services
+    from avalanche.outcomes import _skip_outcome
     from avalanche.workspace import run_workspace_invocation
 
     upstream_receipts = tuple(dependency_and_user_args[:dependency_count])
@@ -159,9 +166,10 @@ def _distributed_execution_services_task(
         num_returns=user_num_returns,
         normalize_result=_normalize_distributed_result,
     )
+    outcome = _skip_outcome(result)
     if user_num_returns > 1:
-        return (*result, receipt, None)
-    return result, receipt, None
+        return (*result, receipt, outcome)
+    return result, receipt, outcome
 
 
 class Executor(Protocol):

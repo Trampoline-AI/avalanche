@@ -15,6 +15,7 @@ from pydantic import BaseModel
 from avalanche.runtime import File
 from avalanche.runtime.context import _FILE_SERIALIZER_CONTEXT_KEY
 from avalanche.workspace import _WORKSPACE_SERIALIZER_CONTEXT_KEY, Workspace
+from avalanche.outcomes import Skipped
 
 _RESULT_FORMAT_VERSION = 1
 MAX_RESULT_ATTACHMENTS = 1024
@@ -218,6 +219,12 @@ def _encode_value(
     budget.nodes += 1
     if budget.nodes > MAX_RESULT_VALUE_NODES:
         raise ValueError(f"Workflow result exceeds {MAX_RESULT_VALUE_NODES} encoded values")
+    if isinstance(value, Skipped):
+        return {
+            "kind": "skipped",
+            "reason": value.reason,
+            "metadata": value.metadata,
+        }
     if isinstance(value, File):
         return {
             "kind": "file",
@@ -318,7 +325,7 @@ def _encode_value(
         }
     raise TypeError(
         "Operator workflow results support JSON scalar/container values, "
-        "Pydantic models, ava.File values, and ava.Workspace values"
+        "Pydantic models, ava.File, ava.Workspace, and ava.Skipped outcomes"
     )
 
 
@@ -422,6 +429,10 @@ def _decode_value(
     if type(encoded) is not dict or type(encoded.get("kind")) is not str:
         raise ValueError("Malformed workflow result value")
     kind = encoded["kind"]
+    if kind == "skipped":
+        if set(encoded) != {"kind", "reason", "metadata"}:
+            raise ValueError("Malformed skipped workflow result")
+        return Skipped(encoded["reason"], encoded["metadata"])
     if kind == "scalar":
         if set(encoded) != {"kind", "value"}:
             raise ValueError("Malformed scalar workflow result")

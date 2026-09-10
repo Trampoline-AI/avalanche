@@ -3,9 +3,12 @@
 from __future__ import annotations
 
 import hashlib
+import json
 import math
 from collections.abc import Callable, Mapping
 from datetime import datetime
+
+from avalanche.outcomes import Skipped
 
 from .models import (
     AgentEventAppended,
@@ -252,6 +255,11 @@ def node_snapshot_to_v2(
         message.running_elapsed_seconds = node.running_elapsed_seconds
     if node.error is not None:
         message.error = node.error
+    if node.skip is not None:
+        message.skip.CopyFrom(pb.SkippedOutcomeV2(
+            reason=node.skip.reason,
+            metadata_json=json.dumps(node.skip.metadata, allow_nan=False),
+        ))
     if node.trace is not None:
         message.trace.CopyFrom(trace_descriptor_to_v2(node.trace, detail_ref=trace_detail_ref))
     if activity_continuation is not None:
@@ -476,6 +484,7 @@ def update_envelope_to_v2(
                         started_at=change.started_at,
                         ended_at=change.ended_at,
                         error=change.error,
+                        skip=change.skip,
                         revision=change.revision,
                         running_elapsed_seconds=change.running_elapsed_seconds,
                     ),
@@ -706,6 +715,10 @@ def node_snapshot_from_v2(msg: pb.NodeSnapshotV2) -> NodeSnapshot:
         started_at=msg.started_at or None,
         ended_at=msg.ended_at or None,
         error=msg.error if msg.HasField("error") else None,
+        skip=(
+            Skipped(msg.skip.reason, json.loads(msg.skip.metadata_json))
+            if msg.HasField("skip") else None
+        ),
         trace=trace_descriptor_from_v2(msg.trace) if msg.HasField("trace") else None,
         revision=msg.revision,
         event_page_token=msg.activity_continuation.continuation_id,
@@ -852,6 +865,10 @@ def operator_update_envelope_from_v2(
             started_at=node.started_at or None,
             ended_at=node.ended_at or None,
             error=node.error if node.HasField("error") else None,
+            skip=(
+                Skipped(node.skip.reason, json.loads(node.skip.metadata_json))
+                if node.HasField("skip") else None
+            ),
             revision=node.revision,
             running_elapsed_seconds=(
                 node.running_elapsed_seconds

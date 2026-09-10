@@ -30,6 +30,7 @@ from pyiceberg.table import ALWAYS_TRUE, EMPTY_DICT, BooleanExpression, Properti
 from pyiceberg.types import NestedField, StringType, TimestampType
 
 from ..lineage import ROW_LINEAGE_COLUMNS, add_row_lineage_to_data
+from ..outcomes import Skipped, _persist_skip
 from ..storage import NativeScanResult
 from ..storage import Table as StorageTable
 from ..types import AppendResult
@@ -229,8 +230,9 @@ class IcebergTable(StorageTable):
             "pa.RecordBatch",
             BaseModel,
             Sequence[BaseModel],
+            Skipped,
         ],
-    ) -> AppendResult:
+    ) -> AppendResult | Skipped:
         """
         Append data to the table and return AppendResult.
 
@@ -253,6 +255,8 @@ class IcebergTable(StorageTable):
                 result = documents.append(docs.to_arrow())
                 return result  # AppendResult for zero-copy passing
         """
+        if isinstance(df, Skipped):
+            return _persist_skip(self, df)
         df = self._coerce_append_input(df)
         if self._table is None:
             raise AttributeError(

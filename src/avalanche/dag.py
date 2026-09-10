@@ -725,21 +725,7 @@ def _resolve_to_ref(arg, result_refs, executor=None):
     if arg.tuple_index is None:
         return ref
 
-    # True multi-return: the ref is already a tuple/list of per-slot refs.
-    if isinstance(ref, (tuple, list)):
-        return ref[arg.tuple_index]
-
-    # Single-return node whose payload is a tuple/list. Under a distributed
-    # executor the ref is opaque; project it worker-side rather than fetching
-    # the whole tuple to the driver just to index one element.
-    if (
-        executor is not None
-        and _is_executor_ref(ref, executor)
-        and hasattr(executor, "project")
-    ):
-        return executor.project(ref, arg.tuple_index)
-
-    return ref[arg.tuple_index]
+    return _indexed_parent_result(ref, arg.tuple_index, executor)
 
 
 def _resolve_input_refs(
@@ -1555,12 +1541,15 @@ def _wrap_lineaged_result(value: Any, context: Any, *, num_returns: int) -> Any:
     Multi-return nodes wrap each item individually so executor multi-return
     (e.g. Ray) still sees the expected number of results.
     """
+    from .outcomes import Skipped
     from .types import LineagedResult
 
     lineage = dict(context.lineage_vector)
     if context.node_slug is not None:
         lineage[context.node_slug] = context.run_id
 
+    if num_returns > 1 and isinstance(value, Skipped):
+        return tuple(LineagedResult(value, lineage) for _ in range(num_returns))
     if num_returns > 1 and isinstance(value, tuple):
         return tuple(LineagedResult(item, lineage) for item in value)
     if num_returns > 1 and isinstance(value, list):
@@ -1904,8 +1893,11 @@ def _indexed_parent_result(presult: Any, tuple_index: int, executor: Any = None)
     - local tuple/list: index in place.
     """
     from .types import LineagedResult
+    from .outcomes import Skipped
 
     if isinstance(presult, LineagedResult):
+        if isinstance(presult.value, Skipped):
+            return presult
         return LineagedResult(presult.value[tuple_index], dict(presult.lineage_vector))
 
     # True multi-return: presult is already a tuple/list of per-slot refs.
@@ -2329,10 +2321,25 @@ class Workflow:
                 or self.returns is None
                 or (
                     hooks
-                    and (hooks.on_node_success or hooks.on_node_failure or hooks.unwrap_result)
+                    and (
+                        hooks.on_node_success or hooks.on_node_skipped
+                        or hooks.on_node_failure or hooks.unwrap_result
+                    )
                 )
             )
         )
+
+        from .outcomes import _skip_outcome
+
+        def report_completion(node_id: str, outcome: Any) -> None:
+            if hooks is None:
+                return
+            skipped = _skip_outcome(outcome)
+            if skipped is not None:
+                if hooks.on_node_skipped:
+                    hooks.on_node_skipped(node_id, skipped)
+            elif hooks.on_node_success:
+                hooks.on_node_success(node_id)
 
         def submit_node(
             node_id: str,
@@ -2700,7 +2707,9 @@ class Workflow:
             result: Any,
         ) -> None:
             try:
-                if hooks and (hooks.on_node_success or hooks.unwrap_result):
+                if hooks and (
+                    hooks.on_node_success or hooks.on_node_skipped or hooks.unwrap_result
+                ):
                     resolved_val = resolve_submitted_result(node_ref, result)
                     if hooks.unwrap_result:
                         user_val = _unwrap_lineaged_tree(resolved_val)
@@ -2708,8 +2717,7 @@ class Workflow:
                         result = _reattach_lineage(replacement, resolved_val)
                     else:
                         result = resolved_val
-                    if hooks.on_node_success:
-                        hooks.on_node_success(node_id)
+                    report_completion(node_id, result)
                 result_refs[node_id] = result
             except Exception as exc:
                 if hooks and hooks.on_node_failure:
@@ -2726,7 +2734,10 @@ class Workflow:
                 cancel_requested is not None
                 or (
                     hooks
-                    and (hooks.on_node_success or hooks.on_node_failure or hooks.unwrap_result)
+                    and (
+                        hooks.on_node_success or hooks.on_node_skipped
+                        or hooks.on_node_failure or hooks.unwrap_result
+                    )
                 )
             )
         )
@@ -2748,6 +2759,7 @@ class Workflow:
                 node_ref = self.nodes[node_id]
                 result = result_refs[node_id]
                 try:
+                    outcome = None
                     if hooks and hooks.unwrap_result:
                         # unwrap_result needs the user-facing value, so a payload
                         # fetch here is intentional. Keep the lineage-preserving
@@ -2757,13 +2769,13 @@ class Workflow:
                         user_val = _unwrap_lineaged_tree(resolved_val)
                         replacement = hooks.unwrap_result(node_id, user_val)
                         result_refs[node_id] = _reattach_lineage(replacement, resolved_val)
+                        outcome = result_refs[node_id]
                     elif node_id in status_refs:
                         # Progress-only: fetch just the tiny status ref to
                         # surface a task failure. Never materialize the payload;
                         # result_refs keeps the payload ref for downstream tasks.
-                        executor.get([status_refs[node_id]])
-                    if hooks and hooks.on_node_success:
-                        hooks.on_node_success(node_id)
+                        outcome = executor.get([status_refs[node_id]])[0]
+                    report_completion(node_id, outcome)
                     completed_nodes.add(node_id)
                 except Exception as exc:
                     if hooks and hooks.on_node_failure:
@@ -2942,7 +2954,10 @@ class Workflow:
         if self.returns is None:
             already_observed = bool(
                 hooks
-                and (hooks.on_node_success or hooks.on_node_failure or hooks.unwrap_result)
+                and (
+                    hooks.on_node_success or hooks.on_node_skipped
+                    or hooks.on_node_failure or hooks.unwrap_result
+                )
             )
             if already_observed:
                 # Per-node completion/failure was already observed above (hooks).

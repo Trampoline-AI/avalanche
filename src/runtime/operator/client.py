@@ -2699,6 +2699,7 @@ class GrpcStateProvider:
                     node.started_at = change.started_at
                     node.ended_at = change.ended_at
                     node.error = change.error
+                    node.skip = change.skip
                     node.revision = change.revision
                     run.nodes = dict(current.nodes)
                     run.nodes[change.node_id] = node
@@ -2990,6 +2991,7 @@ def _run_from_created(operator_instance_id: str, created: RunCreated) -> RunStat
             started_at=item.started_at,
             ended_at=item.ended_at,
             error=item.error,
+            skip=item.skip,
             trace=item.trace,
             revision=item.revision,
             event_page_token=item.event_page_token,

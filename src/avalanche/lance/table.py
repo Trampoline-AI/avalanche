@@ -15,6 +15,7 @@ from pydantic import BaseModel
 from pyiceberg.exceptions import CommitFailedException
 
 from avalanche.lineage import add_row_lineage_to_arrow_schema, add_row_lineage_to_data
+from avalanche.outcomes import Skipped, _persist_skip
 from avalanche.storage import ScanResult, Table
 from avalanche.types import AppendResult
 
@@ -272,8 +273,10 @@ class LanceTable(Table):
 
     def append(
         self,
-        df: pl.DataFrame | pa.Table | pa.RecordBatch | BaseModel | Sequence[BaseModel],
-    ) -> AppendResult:
+        df: pl.DataFrame | pa.Table | pa.RecordBatch | BaseModel | Sequence[BaseModel] | Skipped,
+    ) -> AppendResult | Skipped:
+        if isinstance(df, Skipped):
+            return _persist_skip(self, df)
         df = self._coerce_append_input(df)
         if not self.location:
             raise AttributeError(

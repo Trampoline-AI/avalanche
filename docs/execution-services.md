@@ -68,6 +68,12 @@ def selected_document_flow():
 Without `execution_services=`, input validation and execution retain their ordinary
 behavior. `handle.execution_receipts()` returns an empty tuple.
 
+A node returning `ava.skip(...)` follows successful finalization and teardown,
+not abort. Its opaque service receipt still satisfies downstream receipt
+dependencies, including `&` fan-in. The skipped outcome is carried separately
+from that receipt and from ordinary successful `None`; providers retain their
+existing responsibility for durable commit semantics.
+
 ## Materialization semantics
 
 `materialize_input` means “make the declared task input available through the worker.”

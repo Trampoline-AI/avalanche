@@ -36,6 +36,7 @@ from .lance import (
     LanceTable,
 )
 from .model_frame import Json
+from .outcomes import Skipped, skip
 
 # Progress tracking
 from .progress import ProgressStore
@@ -95,6 +96,8 @@ __all__ = [
     "workflow",
     "pipeline",
     "input",
+    "skip",
+    "Skipped",
     # Workflow
     "Workflow",
     "Pipeline",

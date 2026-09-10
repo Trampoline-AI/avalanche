@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+- Added `ava.skip(reason, metadata=None)` and `ava.Skipped`: intentional absence
+  remains distinct from successful `None`, satisfies dependencies and `&` fan-in,
+  and survives Local/Ray execution, operator events/results, gRPC, and CLI output.
+  The TUI distinguishes authored skips from failed/cancelled dependencies.
+  Table appends of skips persist empty producer receipts without payload rows;
+  rerun replay does not resurrect an explicitly skipped producer's ancestor rows.
 - Consolidated Python, terminal, and browser tests around core execution, data
   integrity, recovery, and interaction scenarios; removed redundant test scaffolding
   and static-copy/schema inventories. `make test` now includes browser tests.
