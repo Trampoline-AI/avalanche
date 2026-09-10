@@ -40,14 +40,16 @@ describe("retained run inspection", () => {
     const api = createApi();
     const skippedRun = RunSnapshotMsg.create({
       ...run,
-      nodes: [{
-        ...node,
-        status: "skipped",
-        skip: {
-          reason: "No eligible records",
-          metadataJson: '{"partition":"today","count":0}',
+      nodes: [
+        {
+          ...node,
+          status: "skipped",
+          skip: {
+            reason: "No eligible records",
+            metadataJson: '{"partition":"today","count":0}',
+          },
         },
-      }],
+      ],
     });
     const view = render(
       <Inspector api={api} run={skippedRun} nodeId={node.nodeId} onClose={() => undefined} />,
