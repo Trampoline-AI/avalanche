@@ -263,7 +263,7 @@ const WorkflowNodeCard = memo(({ data, selected }: NodeProps<Node<CardData>>) =>
         : data.status === "running"
           ? "status-running gradient-animate border-[3px]"
           : data.status === "skipped"
-            ? "status-skipped border-skipped border-dashed bg-skipped/5"
+            ? "status-skipped border-skipped border-dashed"
             : "blueprint";
   return (
     <article

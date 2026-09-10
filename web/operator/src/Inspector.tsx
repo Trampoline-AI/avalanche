@@ -804,7 +804,7 @@ export function Inspector({
             )}
             {node.status === "skipped" && (
               <section
-                className="mt-3 rounded-[7px] border border-dashed border-skipped bg-skipped/5 p-2.5 text-[10px] [overflow-wrap:anywhere]"
+                className="mt-3 rounded-[7px] border border-dashed border-skipped p-2.5 text-[10px] [overflow-wrap:anywhere]"
                 aria-label="Skip detail"
               >
                 <h3>⊘ {node.skip ? "Skipped intentionally" : "Not executed"}</h3>
