@@ -10,6 +10,7 @@ import polars as pl
 import pyarrow as pa
 from pydantic import BaseModel
 
+from .outcomes import Skipped
 from .types import AppendResult
 from .utils import urljoin
 
@@ -108,9 +109,11 @@ class Table(ABC):
     @abstractmethod
     def append(
         self,
-        df: pl.DataFrame | pa.Table | pa.RecordBatch | BaseModel | Sequence[BaseModel],
-    ) -> AppendResult:
-        """Append data and return the created version identity."""
+        df: (
+            pl.DataFrame | pa.Table | pa.RecordBatch | BaseModel | Sequence[BaseModel] | Skipped
+        ),
+    ) -> AppendResult | Skipped:
+        """Append data, or persist a skipped producer receipt without adding rows."""
 
     @abstractmethod
     def scan(self, *args: Any, **kwargs: Any) -> ScanResult:

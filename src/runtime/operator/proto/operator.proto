@@ -219,6 +219,12 @@ message GetRunSnapshotRequestV2 {
   string run_id = 1;
 }
 
+message SkippedOutcomeV2 {
+  string reason = 1;
+  // Finite JSON object or null; distinct from a successful None payload.
+  string metadata_json = 2;
+}
+
 message NodeSnapshotV2 {
   string node_id = 1;
   string name = 2;
@@ -232,6 +238,7 @@ message NodeSnapshotV2 {
   TraceDescriptorV2 trace = 10;
   // Snapshot-pinned continuation for paging this node's agent-event activities.
   ContinuationRefV2 activity_continuation = 11;
+  SkippedOutcomeV2 skip = 12;
 }
 
 message TraceHeaderV2 {

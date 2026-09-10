@@ -9,6 +9,8 @@ from enum import Enum
 from types import MappingProxyType
 from typing import Any, Literal, Mapping
 
+from avalanche.outcomes import Skipped
+
 
 class NodeStatus(Enum):
     PENDING = "pending"
@@ -68,6 +70,7 @@ class NodeState:
     trace: TraceDescriptor | None = None
     revision: int = 0
     event_page_token: str = ""
+    skip: Skipped | None = None
 
     @property
     def elapsed(self) -> float | None:
@@ -172,6 +175,7 @@ class NodeSnapshot:
     revision: int = 0
     event_page_token: str = ""
     running_elapsed_seconds: float | None = None
+    skip: Skipped | None = None
 
 
 @dataclass(frozen=True)
@@ -402,6 +406,7 @@ class NodeStatusChanged:
     error: str | None = None
     revision: int = 0
     running_elapsed_seconds: float | None = None
+    skip: Skipped | None = None
 
 
 @dataclass(frozen=True)

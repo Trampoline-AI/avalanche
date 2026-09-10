@@ -213,14 +213,15 @@ def test_open_failure_has_no_fallback_or_opened_session_cleanup():
     assert [event[1] for event in events] == ["probe", "negotiate", "open"]
 
 
-def test_malformed_multi_return_aborts_before_finalize():
+@pytest.mark.parametrize("context_type", [ava.RunContext, ava.BaseContext])
+def test_malformed_multi_return_aborts_before_finalize(context_type):
     events: list[tuple[Any, ...]] = []
 
     @ava.source(num_returns=2)
     def task(payload: ManagedInput):
         return (payload.scalar,)
 
-    @ava.workflow(input=ManagedInput)
+    @ava.workflow(input=ManagedInput, context=context_type)
     def flow():
         return task()
 

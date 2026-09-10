@@ -30,6 +30,7 @@ from pyiceberg.table import ALWAYS_TRUE, EMPTY_DICT, BooleanExpression, Properti
 from pyiceberg.types import NestedField, StringType, TimestampType
 
 from ..lineage import ROW_LINEAGE_COLUMNS, add_row_lineage_to_data
+from ..outcomes import Skipped, _persist_skip
 from ..storage import NativeScanResult
 from ..storage import Table as StorageTable
 from ..types import AppendResult
@@ -229,8 +230,9 @@ class IcebergTable(StorageTable):
             "pa.RecordBatch",
             BaseModel,
             Sequence[BaseModel],
+            Skipped,
         ],
-    ) -> AppendResult:
+    ) -> AppendResult | Skipped:
         """
         Append data to the table and return AppendResult.
 
@@ -253,19 +255,23 @@ class IcebergTable(StorageTable):
                 result = documents.append(docs.to_arrow())
                 return result  # AppendResult for zero-copy passing
         """
-        df = self._coerce_append_input(df)
+        outcome = df if isinstance(df, Skipped) else None
+        if outcome is None:
+            df = self._coerce_append_input(df)
         if self._table is None:
             raise AttributeError(
                 "Cannot append - table has not been created yet. Call namespace.push() first."
             )
 
         # Convert to PyArrow if needed.
-        if isinstance(df, pl.DataFrame):
+        if outcome is not None:
+            arrow_data = None
+        elif isinstance(df, pl.DataFrame):
             arrow_data = df.to_arrow()
         else:
             arrow_data = df
 
-        if self.row_lineage:
+        if self.row_lineage and outcome is None:
             from ..runtime import get_current_run_context
 
             arrow_data = add_row_lineage_to_data(
@@ -284,8 +290,12 @@ class IcebergTable(StorageTable):
 
             while True:
                 observed_snapshot_id = self.current_version_id
-                attempt_data = self._cast_to_table_schema(arrow_data)
+                attempt_data = (
+                    self._cast_to_table_schema(arrow_data) if outcome is None else None
+                )
                 try:
+                    if outcome is not None:
+                        return _persist_skip(self, outcome)
                     self._table.append(attempt_data)
                 except CommitFailedException:
                     if monotonic() >= deadline:

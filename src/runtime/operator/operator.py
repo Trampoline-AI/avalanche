@@ -919,6 +919,7 @@ class Operator:
                     node.elapsed if node.status is NodeStatus.RUNNING else None
                 ),
                 error=node.error,
+                skip=node.skip,
                 trace=self._trace_descriptors.get((run.run_id, node.node_id)),
                 revision=self._node_revisions.get(
                     (run.run_id, node.node_id),
@@ -1967,6 +1968,7 @@ class Operator:
                             "node_started": NodeStatus.RUNNING,
                             "node_succeeded": NodeStatus.SUCCESS,
                             "node_failed": NodeStatus.FAILED,
+                            "node_skipped": NodeStatus.SKIPPED,
                         }[event_type]
                         node.status = status
                         if status == NodeStatus.RUNNING:
@@ -1974,6 +1976,10 @@ class Operator:
                         else:
                             node.ended_at = event["timestamp"]
                             node.error = event["error"] if status == NodeStatus.FAILED else None
+                            if status == NodeStatus.SKIPPED:
+                                from avalanche.outcomes import Skipped
+
+                                node.skip = Skipped(event["reason"], event["metadata"])
                         changed_node_ids = (node.node_id,)
                         status_node_ids = changed_node_ids
                         mutated = True
@@ -2583,6 +2589,7 @@ class Operator:
                         ),
                         revision=publication_sequence,
                         error=node.error,
+                        skip=node.skip,
                     )
                 )
             if log_entry is not None:
@@ -3080,11 +3087,12 @@ _RUN_EVENT_TYPES = {
     "node_started",
     "node_succeeded",
     "node_failed",
+    "node_skipped",
     "agent_evidence",
     "log",
     "terminal",
 }
-_NODE_EVENT_TYPES = {"node_started", "node_succeeded", "node_failed"}
+_NODE_EVENT_TYPES = {"node_started", "node_succeeded", "node_failed", "node_skipped"}
 _TERMINAL_STATUSES = {"success", "failed", "cancelled"}
 _MAX_EVENT_NODES = 10_000
 _MAX_EVENT_EDGES = 100_000
@@ -3293,11 +3301,20 @@ def _validate_run_event(event: object, *, validate_result: bool = True) -> str:
         expected = {"type", "node_id", "timestamp"}
         if event_type == "node_failed":
             expected.add("error")
+        if event_type == "node_skipped":
+            expected.update(("reason", "metadata"))
         _require_exact_event_keys(event, expected)
         _string_field(event, "node_id", maximum_length=_MAX_EVENT_FIELD_LENGTH)
         _timestamp_field(event, "timestamp")
         if event_type == "node_failed":
             _string_field(event, "error", maximum_length=_MAX_EVENT_MESSAGE_LENGTH)
+        if event_type == "node_skipped":
+            from avalanche.outcomes import Skipped
+
+            try:
+                Skipped(event["reason"], event["metadata"])
+            except (TypeError, ValueError, RecursionError) as exc:
+                raise _CoordinatorProtocolError(f"invalid skipped outcome: {exc}") from exc
     elif event_type == "agent_evidence":
         _require_exact_event_keys(event, {"type", "node_id", "event"})
         _string_field(event, "node_id", maximum_length=_MAX_EVENT_FIELD_LENGTH)

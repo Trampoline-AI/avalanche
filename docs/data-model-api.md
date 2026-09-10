@@ -127,8 +127,12 @@ selected = ns.documents.scan(columns=["doc_id", "title"]).to_polars()
 all_rows = ns.documents.read()
 ```
 
-`append()` returns `ava.AppendResult`. Use `to_polars()`, `to_arrow()`, or
-`to_dicts()` for the appended rows.
+For data, `append()` returns `ava.AppendResult`. Use `to_polars()`, `to_arrow()`,
+or `to_dicts()` for the appended rows. Inside a workflow node,
+`table.append(ava.skip(reason, metadata))` instead persists an empty producer
+receipt and returns the `ava.Skipped` outcome without appending any payload rows.
+Metadata commits can create a table version. See the
+[skipped outcome and rerun contract](dag-api.md#intentional-skipped-outcomes).
 
 Model-declared tables accept model instances and can return validated models:
 

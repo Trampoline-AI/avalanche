@@ -264,6 +264,7 @@ function applyEnvelope(
               endedAt: changed.endedAt,
               revision: changed.revision,
               error: changed.error,
+              skip: changed.skip,
             }
           : node,
       ),

@@ -50,6 +50,63 @@ result = document_flow().run(executor=ava.LocalExecutor()).result()
 Calls inside a workflow return deferred `NodeFuture` values. Passing one to a
 node creates a dependency; its result is supplied when the workflow runs.
 
+## Intentional skipped outcomes
+
+Return `ava.skip(reason, metadata=None)` when a node intentionally produces no
+value. This is a successful `ava.Skipped` outcome, not an exception or a successful
+`None`. The operator records node status `SKIPPED`, the reason and metadata, and
+the existing started/ended timestamps; the run can still succeed.
+
+```python
+@ava.source
+def optional_documents():
+    return ava.skip("No eligible documents", {"partition": "today"})
+
+
+@ava.step
+def summarize(documents):
+    if isinstance(documents, ava.Skipped):
+        return {"count": 0, "reason": documents.reason}
+    return {"count": len(documents)}
+```
+
+Dependency-only successors execute normally. Python value edges pass the
+`Skipped` outcome itself, never silently substitute `None`, drop a positional
+argument, or skip the consumer. This applies to explicit arguments, implicit
+`>>` binding, and existing `&` fan-in: branch positions remain stable. Consumers
+must handle the outcome when their producer can skip; ordinary Python type
+errors still fail the run. There is no gather API.
+
+A whole-node skip on `num_returns=N` occupies all N output slots; indexing a
+skipped output retains the outcome. Explicit workflow returns retain `Skipped`
+(including inside result containers). The operator result bundle preserves its
+typed identity, and `ava result` writes `{"skipped": {"reason": ..., "metadata": ...}}`
+in downloaded result metadata.
+
+`reason` must be non-blank and at most 4096 UTF-8 bytes. Optional metadata is a
+finite JSON object with string keys, at most 16384 bytes when compactly encoded.
+Metadata is copied on access, so it cannot mutate a published outcome.
+
+For table-backed replay, return `table.append(ava.skip(...))` **inside the node**.
+Iceberg and Lance persist a run/producer-keyed metadata receipt without appending
+payload rows. A metadata version may still be created. Direct `return ava.skip(...)`
+does not infer a destination table and does not undo writes already performed.
+
+`Stream` edges from an explicit skip deliver an empty DataFrame (no columns),
+without reading backlog or advancing a cursor. `ModelStream` applies its normal
+empty-input cardinality rules. A persisted skip is an empty producer version:
+rerun replay must not resurrect that producer's older rows, but unrelated
+producer rows remain eligible. Selecting a skipped node in a rerun executes it
+again; rerun-pruned Python value inputs remain rejected as before. Python edges
+retain the skipped producer's run in their lineage; empty stream batches have
+no row lineage to merge.
+
+These guarantees use the existing table metadata and operator result storage
+boundaries. Operator run state and embedded handles remain process-local; this
+does not add durable coordinator recovery, exactly-once execution, or rollback.
+Dependency skips caused by failure/cancellation remain distinct from authored
+skips and are labelled separately in the TUI.
+
 ## Connect nodes
 
 Use normal arguments when names make the graph clear:

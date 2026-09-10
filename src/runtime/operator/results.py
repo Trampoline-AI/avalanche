@@ -12,6 +12,7 @@ from uuid import uuid4
 
 from pydantic import BaseModel
 
+from avalanche.outcomes import _SKIP_SERIALIZER_CONTEXT_KEY, Skipped
 from avalanche.runtime import File
 from avalanche.runtime.context import _FILE_SERIALIZER_CONTEXT_KEY
 from avalanche.workspace import _WORKSPACE_SERIALIZER_CONTEXT_KEY, Workspace
@@ -74,6 +75,11 @@ def encode_workflow_result(value: Any) -> EncodedWorkflowResult:
             context={
                 _FILE_SERIALIZER_CONTEXT_KEY: serialize_file,
                 _WORKSPACE_SERIALIZER_CONTEXT_KEY: serialize_workspace,
+                _SKIP_SERIALIZER_CONTEXT_KEY: lambda outcome: {
+                    "__operator_skip_marker__": marker_token,
+                    "reason": outcome.reason,
+                    "metadata": outcome.metadata,
+                },
             },
         )
     encoded = _encode_value(
@@ -218,6 +224,12 @@ def _encode_value(
     budget.nodes += 1
     if budget.nodes > MAX_RESULT_VALUE_NODES:
         raise ValueError(f"Workflow result exceeds {MAX_RESULT_VALUE_NODES} encoded values")
+    if isinstance(value, Skipped):
+        return {
+            "kind": "skipped",
+            "reason": value.reason,
+            "metadata": value.metadata,
+        }
     if isinstance(value, File):
         return {
             "kind": "file",
@@ -240,6 +252,13 @@ def _encode_value(
         and set(value) == {"__operator_workspace_marker__", "manifest"}
     ):
         return {"kind": "workspace", "manifest": value["manifest"]}
+    if (
+        type(value) is dict
+        and value.get("__operator_skip_marker__") == marker_token
+        and set(value) == {"__operator_skip_marker__", "reason", "metadata"}
+    ):
+        outcome = Skipped(value["reason"], value["metadata"])
+        return {"kind": "skipped", "reason": outcome.reason, "metadata": outcome.metadata}
     if value is None or type(value) in {bool, int, str}:
         return {"kind": "scalar", "value": value}
     if type(value) is float:
@@ -255,6 +274,11 @@ def _encode_value(
                 _WORKSPACE_SERIALIZER_CONTEXT_KEY: lambda workspace: {
                     "__operator_workspace_marker__": marker_token,
                     "manifest": workspace._manifest_for_serialization(),
+                },
+                _SKIP_SERIALIZER_CONTEXT_KEY: lambda outcome: {
+                    "__operator_skip_marker__": marker_token,
+                    "reason": outcome.reason,
+                    "metadata": outcome.metadata,
                 },
             },
         )
@@ -318,7 +342,7 @@ def _encode_value(
         }
     raise TypeError(
         "Operator workflow results support JSON scalar/container values, "
-        "Pydantic models, ava.File values, and ava.Workspace values"
+        "Pydantic models, ava.File, ava.Workspace, and ava.Skipped outcomes"
     )
 
 
@@ -422,6 +446,10 @@ def _decode_value(
     if type(encoded) is not dict or type(encoded.get("kind")) is not str:
         raise ValueError("Malformed workflow result value")
     kind = encoded["kind"]
+    if kind == "skipped":
+        if set(encoded) != {"kind", "reason", "metadata"}:
+            raise ValueError("Malformed skipped workflow result")
+        return Skipped(encoded["reason"], encoded["metadata"])
     if kind == "scalar":
         if set(encoded) != {"kind", "value"}:
             raise ValueError("Malformed scalar workflow result")

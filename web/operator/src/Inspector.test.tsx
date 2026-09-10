@@ -36,6 +36,49 @@ function eventPage(
 }
 
 describe("retained run inspection", () => {
+  it("shows authored skip details without confusing them with blocked dependencies", () => {
+    const api = createApi();
+    const skippedRun = RunSnapshotMsg.create({
+      ...run,
+      nodes: [
+        {
+          ...node,
+          status: "skipped",
+          skip: {
+            reason: "No eligible records",
+            metadataJson: '{"partition":"today","count":0}',
+          },
+        },
+      ],
+    });
+    const view = render(
+      <Inspector api={api} run={skippedRun} nodeId={node.nodeId} onClose={() => undefined} />,
+    );
+    expect(screen.getByRole("region", { name: "Skip detail" })).toHaveTextContent(
+      "No eligible records",
+    );
+    expect(screen.getByText("today")).toBeInTheDocument();
+    expect(screen.queryByText(/Upstream dependency failed/)).not.toBeInTheDocument();
+
+    view.rerender(
+      <Inspector
+        api={api}
+        run={RunSnapshotMsg.create({
+          ...run,
+          summary: { ...run.summary, status: "cancelled" },
+          nodes: [{ ...node, status: "skipped" }],
+        })}
+        nodeId={node.nodeId}
+        onClose={() => undefined}
+      />,
+    );
+    expect(screen.getByRole("region", { name: "Skip detail" })).toHaveTextContent(
+      "Run cancelled.",
+    );
+    expect(screen.queryByText("No eligible records")).not.toBeInTheDocument();
+    expect(screen.queryByText("today")).not.toBeInTheDocument();
+  });
+
   it("cancels inactive hydration, keeps fresh output after a late input completes, and exposes page failures", async () => {
     const input = Promise.withResolvers<unknown>();
     const output = Promise.withResolvers<unknown>();

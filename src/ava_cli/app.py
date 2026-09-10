@@ -475,6 +475,7 @@ def _wait_for_terminal_run(provider: GrpcStateProvider, run_id: str, *, timeout:
 
 
 def _materialize_result(run_id: str, value, output_directory: Path) -> dict:
+    from avalanche.outcomes import Skipped
     from avalanche.runtime import File
     from avalanche.workspace import Workspace
     from runtime.operator.results import encode_workflow_result
@@ -500,6 +501,8 @@ def _materialize_result(run_id: str, value, output_directory: Path) -> dict:
     workspace_identities: dict[str, tuple[int, int]] = {}
 
     def materialize(item):
+        if isinstance(item, Skipped):
+            return {"skipped": {"reason": item.reason, "metadata": item.metadata}}
         if isinstance(item, File):
             index = len(files) + 1
             digest = hashlib.sha256(item.content).hexdigest()
@@ -698,10 +701,14 @@ def _preflight_result_materialization(
     workspace_type: type,
 ) -> None:
     """Reject result trees that cannot be deterministically cleaned."""
+    from avalanche.outcomes import Skipped
+
     staged_entries = 1  # The metadata document.
     stack = [value]
     while stack:
         item = stack.pop()
+        if isinstance(item, Skipped):
+            continue
         if isinstance(item, file_type):
             staged_entries += 1
         elif isinstance(item, workspace_type):

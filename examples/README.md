@@ -64,6 +64,24 @@ model-specific cursors, and a multi-table sync checkpoint.
 Flow file for the local operator and connected UI path. It is discovered along
 with the other examples when `uv run ava dev` runs from this directory.
 
+### `skipped_node.py`
+
+Credential-free, two-node example: `optional_records` returns `ava.skip` with a
+reason and metadata; `publish_summary` receives the explicit `ava.Skipped` outcome
+and completes successfully. No tables, external services, or credentials needed.
+
+```bash
+uv run python examples/skipped_node.py
+uv run ava dev examples/skipped_node.py
+```
+
+Run these commands from the repository root. In the browser, select
+`skipped_node_example`, start a run, and inspect the purple dashed skipped node
+for its reason and metadata. The downstream node and overall run are successful.
+For the terminal UI, run `uv run ava tui --connect 127.0.0.1:7433` against the
+running local operator (or substitute its configured gRPC port).
+The example is also discovered by `ava dev .` from this directory.
+
 ## Notes
 
 - `ava.Stream(table)` is a provider marker, not an object you call with

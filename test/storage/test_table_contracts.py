@@ -143,6 +143,47 @@ def test_concurrent_reconnected_appends_preserve_all_rows_and_versions(table):
     }
 
 
+@pytest.mark.parametrize("reconnected", [False, True])
+@pytest.mark.parametrize("skip_count", [8, 4])
+def test_concurrent_skip_and_data_appends_preserve_each_producer(
+    table, reconnected, skip_count,
+):
+    handles = [
+        pickle.loads(pickle.dumps(table)) if reconnected else table for _ in range(8)
+    ]
+    barrier = threading.Barrier(len(handles))
+
+    @ava.source
+    def append(index):
+        barrier.wait(timeout=10)
+        target = handles[index]
+        if index < skip_count:
+            return target.append(ava.skip("excluded", {"producer": index}))
+        return target.append(pl.DataFrame({"id": [index], "value": [str(index)]}))
+
+    @ava.workflow
+    def flow():
+        return tuple(append(index) for index in range(len(handles)))
+
+    results = flow().run(
+        executor=ava.LocalExecutor(max_workers=8), run_id="concurrent",
+    ).result(timeout=60)
+    assert results[:skip_count] == tuple(
+        ava.skip("excluded", {"producer": index}) for index in range(skip_count)
+    )
+    assert len({result.snapshot_id for result in results[skip_count:]}) == 8 - skip_count
+    table.refresh()
+    receipts = [
+        json.loads(value) for key, value in table.properties.items()
+        if key.startswith("avalanche.skip.")
+    ]
+    assert sorted(receipt["metadata"]["producer"] for receipt in receipts) == list(
+        range(skip_count)
+    )
+    assert len({receipt["node_slug"] for receipt in receipts}) == skip_count
+    assert table.read().sort("id")["id"].to_list() == list(range(skip_count, 8))
+
+
 def test_cursor_transactions_commit_rollback_and_isolate_keys(table):
     cursor = ava.Cursor(table, key="last_id")
     with pytest.raises(RuntimeError):

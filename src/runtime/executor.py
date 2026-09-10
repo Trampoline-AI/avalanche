@@ -48,9 +48,13 @@ def _normalize_distributed_result(value: Any) -> Any:
     through ``LineagedResult`` envelopes and tuple/list/dict containers,
     preserving shape and lineage.
     """
+    from avalanche.outcomes import _ExpandedSkip
     from avalanche.types import AppendResult, AppendResultHandle, LineagedResult
     from avalanche.workspace import Workspace
 
+    if isinstance(value, _ExpandedSkip):
+        # These slots contain only skips (and optional lineage), never payloads.
+        return value
     if isinstance(value, LineagedResult):
         return LineagedResult(
             _normalize_distributed_result(value.value), dict(value.lineage_vector)
@@ -97,18 +101,21 @@ def _wrap_with_status(fn: Callable, user_num_returns: int) -> Callable:
 
     The status value is produced by the *same* task as the payload, so fetching
     only the status ref surfaces a task exception without materializing the
-    payload on the driver (or in a separate worker). ``None`` on success.
+    payload on the driver (or in a separate worker). A skipped outcome on
+    intentional absence, otherwise ``None`` on success.
     """
 
     @wraps(fn)
     def wrapper(*args: Any, **kwargs: Any) -> Any:
+        from avalanche.outcomes import _skip_outcome
         from avalanche.workspace import run_workspace_invocation
 
         result = run_workspace_invocation(call_sync_or_async, fn, *args, **kwargs)
         result = _normalize_distributed_result(result)
+        outcome = _skip_outcome(result)
         if user_num_returns > 1:
-            return (*result, None)
-        return result, None
+            return (*result, outcome)
+        return result, outcome
 
     return wrapper
 
@@ -119,9 +126,14 @@ def _project_index(value: Any, index: int) -> Any:
     Preserves a ``LineagedResult`` envelope so downstream Python-arg consumers
     still record the producer lineage of the selected element.
     """
+    from avalanche.outcomes import Skipped
     from avalanche.types import LineagedResult
 
+    if isinstance(value, Skipped):
+        return value
     if isinstance(value, LineagedResult):
+        if isinstance(value.value, Skipped):
+            return value
         return LineagedResult(value.value[index], dict(value.lineage_vector))
     return value[index]
 
@@ -141,6 +153,7 @@ def _distributed_execution_services_task(
 ) -> Any:
     """Ray entry point with service dependencies exposed as top-level args."""
     from avalanche.execution_services import _run_with_execution_services
+    from avalanche.outcomes import _skip_outcome
     from avalanche.workspace import run_workspace_invocation
 
     upstream_receipts = tuple(dependency_and_user_args[:dependency_count])
@@ -159,9 +172,10 @@ def _distributed_execution_services_task(
         num_returns=user_num_returns,
         normalize_result=_normalize_distributed_result,
     )
+    outcome = _skip_outcome(result)
     if user_num_returns > 1:
-        return (*result, receipt, None)
-    return result, receipt, None
+        return (*result, receipt, outcome)
+    return result, receipt, outcome
 
 
 class Executor(Protocol):
@@ -324,10 +338,13 @@ class LocalExecutor:
         """Execute immediately; the status is trivial (exceptions already raised).
 
         Local execution is synchronous, so any task exception surfaces here at
-        submit time. The status value is ``None`` on success.
+        submit time. Status is the skipped outcome for intentional absence,
+        otherwise ``None`` on success.
         """
+        from avalanche.outcomes import _skip_outcome
+
         result = self.submit(fn, *args, num_returns=num_returns, **kwargs)
-        return result, None
+        return result, _skip_outcome(result)
 
     def submit_with_services(
         self,
@@ -345,6 +362,7 @@ class LocalExecutor:
     ) -> tuple[Any, Any, Any | None]:
         """Execute a service-managed task synchronously."""
         from avalanche.execution_services import _run_with_execution_services
+        from avalanche.outcomes import _skip_outcome
         from avalanche.workspace import run_workspace_invocation
 
         result, receipt = run_workspace_invocation(
@@ -360,7 +378,7 @@ class LocalExecutor:
             kwargs,
             num_returns=num_returns,
         )
-        return result, receipt, None
+        return result, receipt, _skip_outcome(result)
 
     def wait(self, futures: list[Any]) -> None:
         """Local values are already computed; just resolve any awaitables."""
@@ -473,10 +491,10 @@ class RayExecutor:
         """Submit a Ray task that also emits a tiny status marker.
 
         The task is created with ``num_returns + 1`` return values: the user
-        payload(s) followed by a small status value (``None`` on success). The
-        status ref lets the driver observe completion/failure without fetching
-        the payload, and it is produced by the *same* task so no payload is
-        deserialized in a separate worker.
+        payload(s) followed by a small status value (the skipped outcome for
+        intentional absence, otherwise ``None``). The status ref lets the driver
+        observe completion/failure without fetching the payload, and is produced
+        by the *same* task so no payload is deserialized in a separate worker.
         """
         if hasattr(fn, "remote"):
             raise TypeError(

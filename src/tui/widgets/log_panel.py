@@ -2,11 +2,13 @@
 
 from __future__ import annotations
 
+import json
+
 from rich.style import Style
 from rich.text import Text
 from textual.widgets import RichLog
 
-from ..models import LogLevel, NodeStatus
+from ..models import LogLevel, NodeStatus, RunStatus
 from ..theme import (
     DIM_STYLE,
     ICE_FROST,
@@ -111,6 +113,11 @@ class LogWidget(RichLog):
             query,
             store.search_index if query else -1,
             self._wrap_width,
+            (
+                store.current_run.nodes[selected_node.name].skip
+                if selected_node and store.current_run
+                and selected_node.name in store.current_run.nodes else None
+            ),
         )
         logs = store.logs
         snapshot_replaced = store.current_run is not None and logs is not self._logs_ref
@@ -159,12 +166,32 @@ class LogWidget(RichLog):
                 store.set_match_count(0)
                 return
             if status == NodeStatus.SKIPPED:
-                self._write_placeholder(
-                    "  Skipped — upstream dependency failed.",
-                    Style(color=ICE_WARN),
+                node = (
+                    store.current_run.nodes.get(selected_node.name)
+                    if store.current_run else None
                 )
-                store.set_match_count(0)
-                return
+                if node is not None and node.skip is not None:
+                    self.write(Text(
+                        f"  ⊘ Skipped intentionally — {node.skip.reason}",
+                        style=STATUS_STYLES[NodeStatus.SKIPPED],
+                    ), scroll_end=False)
+                    if node.skip.metadata is not None:
+                        self.write(Text(
+                            "  Metadata: " + json.dumps(node.skip.metadata, ensure_ascii=False),
+                            style=DIM_STYLE,
+                        ), scroll_end=False)
+                else:
+                    cancelled = (
+                        store.current_run is not None
+                        and store.current_run.status == RunStatus.CANCELLED
+                    )
+                    self._write_placeholder(
+                        "  Skipped — run cancelled." if cancelled
+                        else "  Skipped — upstream dependency failed.",
+                        Style(color=ICE_WARN),
+                    )
+                    store.set_match_count(0)
+                    return
 
         self._append_entries(store.logs, store)
         if self._visible_count == 0:

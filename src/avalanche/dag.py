@@ -725,21 +725,7 @@ def _resolve_to_ref(arg, result_refs, executor=None):
     if arg.tuple_index is None:
         return ref
 
-    # True multi-return: the ref is already a tuple/list of per-slot refs.
-    if isinstance(ref, (tuple, list)):
-        return ref[arg.tuple_index]
-
-    # Single-return node whose payload is a tuple/list. Under a distributed
-    # executor the ref is opaque; project it worker-side rather than fetching
-    # the whole tuple to the driver just to index one element.
-    if (
-        executor is not None
-        and _is_executor_ref(ref, executor)
-        and hasattr(executor, "project")
-    ):
-        return executor.project(ref, arg.tuple_index)
-
-    return ref[arg.tuple_index]
+    return _indexed_parent_result(ref, arg.tuple_index, executor)
 
 
 def _resolve_input_refs(
@@ -1555,12 +1541,16 @@ def _wrap_lineaged_result(value: Any, context: Any, *, num_returns: int) -> Any:
     Multi-return nodes wrap each item individually so executor multi-return
     (e.g. Ray) still sees the expected number of results.
     """
+    from .outcomes import _expand_skip, _ExpandedSkip
     from .types import LineagedResult
 
     lineage = dict(context.lineage_vector)
     if context.node_slug is not None:
         lineage[context.node_slug] = context.run_id
 
+    value = _expand_skip(value, num_returns=num_returns)
+    if isinstance(value, _ExpandedSkip):
+        return _ExpandedSkip(LineagedResult(item, lineage) for item in value)
     if num_returns > 1 and isinstance(value, tuple):
         return tuple(LineagedResult(item, lineage) for item in value)
     if num_returns > 1 and isinstance(value, list):
@@ -1645,6 +1635,9 @@ def _with_current_run_context(
     back into ``AppendResult`` here (worker-side) so user code and Stream
     wrappers never see the internal transport type.
     """
+    from runtime._async import call_sync_or_async
+
+    from .outcomes import _expand_skip
     from .runtime import RunContext
     from .runtime.context import _run_with_context
 
@@ -1657,7 +1650,10 @@ def _with_current_run_context(
             kwargs = _materialize_worker_kwargs(kwargs)
             for name in context_param_names:
                 kwargs[name] = context
-            return fn(*_unwrap_lineaged_tree(args), **_unwrap_lineaged_tree(kwargs))
+            result = call_sync_or_async(
+                fn, *_unwrap_lineaged_tree(args), **_unwrap_lineaged_tree(kwargs)
+            )
+            return _expand_skip(result, num_returns=num_returns)
 
         return plain
 
@@ -1903,9 +1899,14 @@ def _indexed_parent_result(presult: Any, tuple_index: int, executor: Any = None)
       the driver;
     - local tuple/list: index in place.
     """
+    from .outcomes import Skipped
     from .types import LineagedResult
 
+    if isinstance(presult, Skipped):
+        return presult
     if isinstance(presult, LineagedResult):
+        if isinstance(presult.value, Skipped):
+            return presult
         return LineagedResult(presult.value[tuple_index], dict(presult.lineage_vector))
 
     # True multi-return: presult is already a tuple/list of per-slot refs.
@@ -2329,10 +2330,24 @@ class Workflow:
                 or self.returns is None
                 or (
                     hooks
-                    and (hooks.on_node_success or hooks.on_node_failure or hooks.unwrap_result)
+                    and (
+                        hooks.on_node_success or hooks.on_node_skipped
+                        or hooks.on_node_failure or hooks.unwrap_result
+                    )
                 )
             )
         )
+
+        from .outcomes import Skipped, _skip_outcome
+
+        def report_completion(node_id: str, skipped: Skipped | None) -> None:
+            if hooks is None:
+                return
+            if skipped is not None:
+                if hooks.on_node_skipped:
+                    hooks.on_node_skipped(node_id, skipped)
+            elif hooks.on_node_success:
+                hooks.on_node_success(node_id)
 
         def submit_node(
             node_id: str,
@@ -2700,7 +2715,10 @@ class Workflow:
             result: Any,
         ) -> None:
             try:
-                if hooks and (hooks.on_node_success or hooks.unwrap_result):
+                outcome = _skip_outcome(result)
+                if hooks and (
+                    hooks.on_node_success or hooks.on_node_skipped or hooks.unwrap_result
+                ):
                     resolved_val = resolve_submitted_result(node_ref, result)
                     if hooks.unwrap_result:
                         user_val = _unwrap_lineaged_tree(resolved_val)
@@ -2708,8 +2726,7 @@ class Workflow:
                         result = _reattach_lineage(replacement, resolved_val)
                     else:
                         result = resolved_val
-                    if hooks.on_node_success:
-                        hooks.on_node_success(node_id)
+                    report_completion(node_id, outcome)
                 result_refs[node_id] = result
             except Exception as exc:
                 if hooks and hooks.on_node_failure:
@@ -2726,7 +2743,10 @@ class Workflow:
                 cancel_requested is not None
                 or (
                     hooks
-                    and (hooks.on_node_success or hooks.on_node_failure or hooks.unwrap_result)
+                    and (
+                        hooks.on_node_success or hooks.on_node_skipped
+                        or hooks.on_node_failure or hooks.unwrap_result
+                    )
                 )
             )
         )
@@ -2748,6 +2768,7 @@ class Workflow:
                 node_ref = self.nodes[node_id]
                 result = result_refs[node_id]
                 try:
+                    outcome = None
                     if hooks and hooks.unwrap_result:
                         # unwrap_result needs the user-facing value, so a payload
                         # fetch here is intentional. Keep the lineage-preserving
@@ -2757,13 +2778,12 @@ class Workflow:
                         user_val = _unwrap_lineaged_tree(resolved_val)
                         replacement = hooks.unwrap_result(node_id, user_val)
                         result_refs[node_id] = _reattach_lineage(replacement, resolved_val)
-                    elif node_id in status_refs:
+                    if node_id in status_refs:
                         # Progress-only: fetch just the tiny status ref to
                         # surface a task failure. Never materialize the payload;
                         # result_refs keeps the payload ref for downstream tasks.
-                        executor.get([status_refs[node_id]])
-                    if hooks and hooks.on_node_success:
-                        hooks.on_node_success(node_id)
+                        outcome = executor.get([status_refs[node_id]])[0]
+                    report_completion(node_id, _skip_outcome(outcome))
                     completed_nodes.add(node_id)
                 except Exception as exc:
                     if hooks and hooks.on_node_failure:
@@ -2942,7 +2962,10 @@ class Workflow:
         if self.returns is None:
             already_observed = bool(
                 hooks
-                and (hooks.on_node_success or hooks.on_node_failure or hooks.unwrap_result)
+                and (
+                    hooks.on_node_success or hooks.on_node_skipped
+                    or hooks.on_node_failure or hooks.unwrap_result
+                )
             )
             if already_observed:
                 # Per-node completion/failure was already observed above (hooks).

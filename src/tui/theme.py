@@ -42,7 +42,7 @@ STATUS_STYLES: dict[NodeStatus, Style] = {
     NodeStatus.RUNNING: Style(color=ICE_BRIGHT, bold=True),
     NodeStatus.SUCCESS: Style(color=ICE_TEAL, bold=True),
     NodeStatus.FAILED: Style(color=ICE_FAIL, bold=True),
-    NodeStatus.SKIPPED: Style(color=ICE_PURPLE),
+    NodeStatus.SKIPPED: Style(color=ICE_PURPLE, bold=True),
 }
 
 # ── Structural styles ─────────────────────────────────────────────────────

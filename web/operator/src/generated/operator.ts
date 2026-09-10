@@ -560,6 +560,21 @@ export interface GetRunSnapshotRequestV2 {
     runId: string;
 }
 /**
+ * @generated from protobuf message avalanche.operator.SkippedOutcomeV2
+ */
+export interface SkippedOutcomeV2 {
+    /**
+     * @generated from protobuf field: string reason = 1
+     */
+    reason: string;
+    /**
+     * Finite JSON object or null; distinct from a successful None payload.
+     *
+     * @generated from protobuf field: string metadata_json = 2
+     */
+    metadataJson: string;
+}
+/**
  * @generated from protobuf message avalanche.operator.NodeSnapshotV2
  */
 export interface NodeSnapshotV2 {
@@ -609,6 +624,10 @@ export interface NodeSnapshotV2 {
      * @generated from protobuf field: avalanche.operator.ContinuationRefV2 activity_continuation = 11
      */
     activityContinuation?: ContinuationRefV2;
+    /**
+     * @generated from protobuf field: avalanche.operator.SkippedOutcomeV2 skip = 12
+     */
+    skip?: SkippedOutcomeV2;
 }
 /**
  * @generated from protobuf message avalanche.operator.TraceHeaderV2
@@ -3075,6 +3094,61 @@ class GetRunSnapshotRequestV2$Type extends MessageType<GetRunSnapshotRequestV2> 
  */
 export const GetRunSnapshotRequestV2 = new GetRunSnapshotRequestV2$Type();
 // @generated message type with reflection information, may provide speed optimized methods
+class SkippedOutcomeV2$Type extends MessageType<SkippedOutcomeV2> {
+    constructor() {
+        super("avalanche.operator.SkippedOutcomeV2", [
+            { no: 1, name: "reason", kind: "scalar", T: 9 /*ScalarType.STRING*/ },
+            { no: 2, name: "metadata_json", kind: "scalar", T: 9 /*ScalarType.STRING*/ }
+        ]);
+    }
+    create(value?: PartialMessage<SkippedOutcomeV2>): SkippedOutcomeV2 {
+        const message = globalThis.Object.create((this.messagePrototype!));
+        message.reason = "";
+        message.metadataJson = "";
+        if (value !== undefined)
+            reflectionMergePartial<SkippedOutcomeV2>(this, message, value);
+        return message;
+    }
+    internalBinaryRead(reader: IBinaryReader, length: number, options: BinaryReadOptions, target?: SkippedOutcomeV2): SkippedOutcomeV2 {
+        let message = target ?? this.create(), end = reader.pos + length;
+        while (reader.pos < end) {
+            let [fieldNo, wireType] = reader.tag();
+            switch (fieldNo) {
+                case /* string reason */ 1:
+                    message.reason = reader.string();
+                    break;
+                case /* string metadata_json */ 2:
+                    message.metadataJson = reader.string();
+                    break;
+                default:
+                    let u = options.readUnknownField;
+                    if (u === "throw")
+                        throw new globalThis.Error(`Unknown field ${fieldNo} (wire type ${wireType}) for ${this.typeName}`);
+                    let d = reader.skip(wireType);
+                    if (u !== false)
+                        (u === true ? UnknownFieldHandler.onRead : u)(this.typeName, message, fieldNo, wireType, d);
+            }
+        }
+        return message;
+    }
+    internalBinaryWrite(message: SkippedOutcomeV2, writer: IBinaryWriter, options: BinaryWriteOptions): IBinaryWriter {
+        /* string reason = 1; */
+        if (message.reason !== "")
+            writer.tag(1, WireType.LengthDelimited).string(message.reason);
+        /* string metadata_json = 2; */
+        if (message.metadataJson !== "")
+            writer.tag(2, WireType.LengthDelimited).string(message.metadataJson);
+        let u = options.writeUnknownFields;
+        if (u !== false)
+            (u == true ? UnknownFieldHandler.onWrite : u)(this.typeName, message, writer);
+        return writer;
+    }
+}
+/**
+ * @generated MessageType for protobuf message avalanche.operator.SkippedOutcomeV2
+ */
+export const SkippedOutcomeV2 = new SkippedOutcomeV2$Type();
+// @generated message type with reflection information, may provide speed optimized methods
 class NodeSnapshotV2$Type extends MessageType<NodeSnapshotV2> {
     constructor() {
         super("avalanche.operator.NodeSnapshotV2", [
@@ -3088,7 +3162,8 @@ class NodeSnapshotV2$Type extends MessageType<NodeSnapshotV2> {
             { no: 8, name: "error", kind: "scalar", opt: true, T: 9 /*ScalarType.STRING*/ },
             { no: 9, name: "running_elapsed_seconds", kind: "scalar", opt: true, T: 1 /*ScalarType.DOUBLE*/ },
             { no: 10, name: "trace", kind: "message", T: () => TraceDescriptorV2 },
-            { no: 11, name: "activity_continuation", kind: "message", T: () => ContinuationRefV2 }
+            { no: 11, name: "activity_continuation", kind: "message", T: () => ContinuationRefV2 },
+            { no: 12, name: "skip", kind: "message", T: () => SkippedOutcomeV2 }
         ]);
     }
     create(value?: PartialMessage<NodeSnapshotV2>): NodeSnapshotV2 {
@@ -3142,6 +3217,9 @@ class NodeSnapshotV2$Type extends MessageType<NodeSnapshotV2> {
                 case /* avalanche.operator.ContinuationRefV2 activity_continuation */ 11:
                     message.activityContinuation = ContinuationRefV2.internalBinaryRead(reader, reader.uint32(), options, message.activityContinuation);
                     break;
+                case /* avalanche.operator.SkippedOutcomeV2 skip */ 12:
+                    message.skip = SkippedOutcomeV2.internalBinaryRead(reader, reader.uint32(), options, message.skip);
+                    break;
                 default:
                     let u = options.readUnknownField;
                     if (u === "throw")
@@ -3187,6 +3265,9 @@ class NodeSnapshotV2$Type extends MessageType<NodeSnapshotV2> {
         /* avalanche.operator.ContinuationRefV2 activity_continuation = 11; */
         if (message.activityContinuation)
             ContinuationRefV2.internalBinaryWrite(message.activityContinuation, writer.tag(11, WireType.LengthDelimited).fork(), options).join();
+        /* avalanche.operator.SkippedOutcomeV2 skip = 12; */
+        if (message.skip)
+            SkippedOutcomeV2.internalBinaryWrite(message.skip, writer.tag(12, WireType.LengthDelimited).fork(), options).join();
         let u = options.writeUnknownFields;
         if (u !== false)
             (u == true ? UnknownFieldHandler.onWrite : u)(this.typeName, message, writer);

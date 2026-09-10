@@ -17,6 +17,7 @@ result = await document_flow().run(executor=ava.LocalExecutor())
 
 A workflow may return JSON-compatible values, Pydantic models, `ava.File`, or
 `ava.Workspace`, including those values nested in models and containers.
+Explicit skipped outcomes also survive result-container transport.
 
 ## Embedded and operator results
 
@@ -34,6 +35,55 @@ uv run ava result "$RUN_ID" \
 
 The output directory must not already exist. The command writes result metadata
 and downloaded file or workspace contents beneath it.
+
+## Intentionally skip a node
+
+```python
+@ava.source
+def optional_records():
+    return ava.skip("No eligible records", {"partition": "today"})
+
+
+@ava.step
+def summarize(records):
+    if isinstance(records, ava.Skipped):
+        return {"count": 0, "reason": records.reason}
+    return {"count": len(records)}
+```
+
+`ava.skip(reason, metadata=None)` is a successful non-value outcome, distinct
+from `None`. Operator node state records `SKIPPED`, reason, metadata, and
+started/ended timestamps; the run still succeeds. Failure/cancellation skips
+are not node-authored outcomes.
+
+Dependency-only successors run normally. Python value edges receive the
+`ava.Skipped` marker and must handle it: neither argument positions nor consumer
+invocations are silently removed. This includes implicit `>>` and existing `&`
+fan-in; no gather API is added. A whole-node skip on a multi-return node occupies
+every declared output slot. Explicit workflow returns preserve the marker.
+Downloaded CLI result metadata represents it as a `skipped` object with
+`reason` and `metadata`.
+
+Reason must be non-blank and at most 4096 UTF-8 bytes; metadata must be a finite
+JSON object with string keys, at most 16384 compactly encoded bytes. Metadata
+is copied on access.
+
+For table-backed reruns, use `return table.append(ava.skip(...))` inside the node.
+This persists an empty producer receipt in Iceberg/Lance metadata, appends zero
+payload rows, and may create a metadata version. Replay treats it as an empty
+producer version instead of falling back to that producer's older rows; sibling
+producers are unaffected. Selecting the producer in a rerun executes it again.
+Unscheduled Python value inputs are still rejected rather than restored.
+
+A direct skip does not infer a destination table or undo prior side effects.
+Live `Stream` edges from a skip deliver an empty DataFrame with no columns,
+without draining backlog or moving cursors. `ModelStream` retains its usual
+empty-input cardinality rules. Python edges carry the skipped producer's run
+lineage; an empty stream contributes no row lineage.
+
+Skip durability is limited to the existing table receipt and result-bundle
+boundaries. Run state and embedded handles remain process-local; there is no
+new coordinator recovery, rollback, or exactly-once guarantee.
 
 ## Cancellation
 

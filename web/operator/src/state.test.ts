@@ -180,6 +180,41 @@ describe("live operator projection", () => {
     },
   );
 
+  it("retains authored skip detail when a selected running node completes live", async () => {
+    const release = Promise.withResolvers<void>();
+    const skip = { reason: "No eligible records", metadataJson: '{"count":0}' };
+    const api = createApi({
+      streamUpdates: async function* (_instance, _cursor, signal) {
+        await release.promise;
+        yield envelope(2, {
+          oneofKind: "nodeStatusChanged",
+          nodeStatusChanged: {
+            runId: summary.runId,
+            nodeId: node.nodeId,
+            status: "skipped",
+            revision: "2",
+            startedAt: 1,
+            endedAt: 2,
+            skip,
+          },
+        });
+        yield* idleUpdates(signal);
+      },
+    });
+    const { result } = renderHook(() => useOperatorProjection(api));
+    await waitFor(() => expect(result.current.state.connection).toBe("live"));
+    act(() => {
+      void result.current.selectRun(summary.runId);
+    });
+    await waitFor(() => expect(result.current.state.selectedRunStatus).toBe("ready"));
+    act(() => release.resolve());
+    await waitFor(() =>
+      expect(result.current.state.selectedRun?.nodes[0].status).toBe("skipped"),
+    );
+    expect(result.current.state.selectedRun?.nodes[0].skip).toEqual(skip);
+    expect(result.current.state.selectedRun?.nodes[0].error).toBeUndefined();
+  });
+
   it("retries an overtaken snapshot rather than rolling live node status backward", async () => {
     const release = Promise.withResolvers<void>();
     const stale = Promise.withResolvers<RunSnapshotMsg>();

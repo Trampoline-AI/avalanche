@@ -108,3 +108,38 @@ def test_no_return_drains_status_without_payloads_and_surfaces_errors(
     failed = failing().run(executor=ava.RayExecutor())
     with pytest.raises(ray_runtime.exceptions.RayTaskError, match="cannot persist data"):
         failed.result(timeout=30)
+
+
+@pytest.mark.parametrize("context_type", [ava.RunContext, ava.BaseContext])
+def test_skip_status_and_containers_do_not_materialize_payloads(
+    ray_runtime, worker_payload, context_type,
+):
+    @ava.source
+    def packed():
+        return [worker_payload("data"), ava.skip("nested")]
+
+    @ava.source(num_returns=2)
+    def absent():
+        return ava.skip("whole absence")
+
+    @ava.dest
+    def consume(container, left, right):
+        assert container[1] == ava.skip("nested")
+        assert left == right == ava.skip("whole absence")
+        return worker_payload(container[0].value + "-consumed")
+
+    @ava.workflow(context=context_type)
+    def background():
+        pair = absent()
+        consume(packed(), pair[0], pair[1])
+
+    skipped, completed = {}, []
+    assert background().run(
+        executor=ava.RayExecutor(),
+        hooks=RunHooks(
+            on_node_skipped=lambda node, outcome: skipped.update({node: outcome}),
+            on_node_success=completed.append,
+        ),
+    ).result(timeout=60) is None
+    assert skipped == {"absent_1": ava.skip("whole absence")}
+    assert set(completed) == {"packed_1", "consume_1"}

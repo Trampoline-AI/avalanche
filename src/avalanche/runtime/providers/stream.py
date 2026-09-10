@@ -92,6 +92,7 @@ def _resolve_deferred_stream_upstream(
     dedicated ``_MISSING_PARENT`` sentinel — not ``None`` — signals a missing
     hidden kwarg.
     """
+    from avalanche.outcomes import Skipped
     from avalanche.types import (
         AppendResult,
         AppendResultHandle,
@@ -117,6 +118,9 @@ def _resolve_deferred_stream_upstream(
     control = parent_value
     if isinstance(control, LineagedResult):
         control = control.value
+
+    if isinstance(control, Skipped):
+        return control
 
     expected = upstream_data.table_identity
 
@@ -274,6 +278,7 @@ class Stream(ParameterProvider, Generic[T]):
             param_value: Stream instance to resolve
             param_context: ParamContext with parent_results, executor, etc.
         """
+        from avalanche.outcomes import Skipped
         from avalanche.types import AppendResult, DeferredStreamUpstream, unwrap_lineaged
 
         stream = param_value
@@ -299,7 +304,9 @@ class Stream(ParameterProvider, Generic[T]):
             matching_result = param_context.materialize(raw_matching_result)
             matching_result = unwrap_lineaged(matching_result)
             upstream_data = (
-                matching_result if isinstance(matching_result, AppendResult) else None
+                matching_result
+                if isinstance(matching_result, (AppendResult, Skipped))
+                else None
             )
         matching_slug = param_context.get_matching_node_slug()
         source_node_slugs = (
@@ -555,6 +562,7 @@ def consume_stream(
         Normally you don't call this directly - the framework calls it when
         resolving Stream dependencies.
     """
+    from avalanche.outcomes import Skipped
     from avalanche.progress import ProgressStore
     from avalanche.runtime import get_current_run_context
 
@@ -574,6 +582,11 @@ def consume_stream(
                 "run_scoped streams do not use key=...; omit key or set "
                 "mode='append_scan' for backlog/cursor streaming"
             )
+
+    if isinstance(upstream_data, Skipped):
+        # A non-value edge must never fall through to backlog or ancestor rows.
+        yield pl.DataFrame()
+        return
 
     if active_rerun is not None:
         # Rerun override: always run-scoped source-run replay, regardless of
@@ -831,12 +844,29 @@ def _read_rerun_rows(
     current_run_id: str | None = run_id
     seen: set[str] = set()
     empty_result: pl.DataFrame | None = None
+    seen_slugs: set[str] = set()
+    from avalanche.outcomes import _SkipReceipt
+
+    table.refresh()
+    skips_by_run: dict[str, set[str]] = {}
+    for key, value in table.properties.items():
+        if key.startswith("avalanche.skip."):
+            receipt = _SkipReceipt.model_validate_json(value)
+            skips_by_run.setdefault(receipt.run_id, set()).add(receipt.node_slug)
 
     while current_run_id is not None and current_run_id not in seen:
         seen.add(current_run_id)
         df = _scan_run_rows(table, current_run_id, node_slugs=node_slugs)
         if empty_result is None:
-            empty_result = df
+            empty_result = df.head(0)
+        skipped_slugs = skips_by_run.get(current_run_id, set())
+        if "_ava_node_slug" in df.columns:
+            df = df.filter(
+                pl.col("_ava_node_slug").is_null()
+                | ~pl.col("_ava_node_slug").is_in(seen_slugs | skipped_slugs)
+            )
+            seen_slugs.update(df["_ava_node_slug"].drop_nulls().to_list())
+        seen_slugs.update(skipped_slugs)
         if not df.is_empty():
             frames.append(df)
 

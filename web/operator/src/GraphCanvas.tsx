@@ -8,7 +8,7 @@ import {
   useRef,
   useState,
 } from "react";
-import { Check, X } from "lucide-react";
+import { Check, CircleSlash, X } from "lucide-react";
 
 import {
   Background,
@@ -252,7 +252,9 @@ const WorkflowNodeCard = memo(({ data, selected }: NodeProps<Node<CardData>>) =>
       ? "text-success"
       : data.status === "failed"
         ? "text-failed"
-        : "text-muted";
+        : data.status === "skipped"
+          ? "text-skipped"
+          : "text-muted";
   const statusClass =
     data.status === "success"
       ? "status-success"
@@ -260,7 +262,9 @@ const WorkflowNodeCard = memo(({ data, selected }: NodeProps<Node<CardData>>) =>
         ? "status-failed"
         : data.status === "running"
           ? "status-running gradient-animate border-[3px]"
-          : "blueprint";
+          : data.status === "skipped"
+            ? "status-skipped border-skipped border-dashed"
+            : "blueprint";
   return (
     <article
       className={`node-card ${isCompact ? "node-card--compact min-h-[100px] justify-center gap-0 px-4 py-3" : "min-h-[130px] gap-2 p-4"} relative flex w-[360px] cursor-pointer flex-col items-stretch rounded-xl border border-line bg-panel text-left shadow-[0_8px_24px_rgba(25,39,32,.08)] transition-[border-color,box-shadow,transform] duration-150 ease-out hover:-translate-y-px hover:border-acid hover:shadow-[0_10px_28px_rgba(25,39,32,.12)] motion-reduce:transition-none ${selected && data.status !== "running" ? "border-acid!" : ""} ${agentClass} ${statusClass}`}
@@ -284,7 +288,7 @@ const WorkflowNodeCard = memo(({ data, selected }: NodeProps<Node<CardData>>) =>
         type="button"
         className="node-card-action absolute inset-0 z-[2] cursor-pointer rounded-[inherit] border-0 bg-transparent p-0 focus-visible:outline-3 focus-visible:outline-offset-3 focus-visible:outline-acid"
         onClick={openAndFocusNode}
-        aria-label={`Inspect ${data.label}${data.identity ? ` ${data.identity}` : ""}`}
+        aria-label={`Inspect ${data.label}${data.identity ? ` ${data.identity}` : ""}${data.status ? `, ${data.status}` : ""}`}
       />
       <header
         className={`node-header relative flex flex-col ${
@@ -314,6 +318,13 @@ const WorkflowNodeCard = memo(({ data, selected }: NodeProps<Node<CardData>>) =>
             <X
               aria-hidden="true"
               className={`node-status-icon ml-1 inline-block text-failed transition-[width,height] duration-200 ease-out motion-reduce:transition-none ${isCompact ? "size-6 align-[-0.15em]" : "size-3 align-[-0.08em]"}`}
+              strokeWidth={2.5}
+            />
+          )}
+          {data.status === "skipped" && (
+            <CircleSlash
+              aria-hidden="true"
+              className={`node-status-icon ml-1 inline-block text-skipped transition-[width,height] duration-200 ease-out motion-reduce:transition-none ${isCompact ? "size-6 align-[-0.15em]" : "size-3 align-[-0.08em]"}`}
               strokeWidth={2.5}
             />
           )}
