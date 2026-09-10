@@ -332,10 +332,13 @@ class LocalExecutor:
         """Execute immediately; the status is trivial (exceptions already raised).
 
         Local execution is synchronous, so any task exception surfaces here at
-        submit time. The status value is ``None`` on success.
+        submit time. Status is the skipped outcome for intentional absence,
+        otherwise ``None`` on success.
         """
+        from avalanche.outcomes import _skip_outcome
+
         result = self.submit(fn, *args, num_returns=num_returns, **kwargs)
-        return result, None
+        return result, _skip_outcome(result)
 
     def submit_with_services(
         self,
@@ -353,6 +356,7 @@ class LocalExecutor:
     ) -> tuple[Any, Any, Any | None]:
         """Execute a service-managed task synchronously."""
         from avalanche.execution_services import _run_with_execution_services
+        from avalanche.outcomes import _skip_outcome
         from avalanche.workspace import run_workspace_invocation
 
         result, receipt = run_workspace_invocation(
@@ -368,7 +372,7 @@ class LocalExecutor:
             kwargs,
             num_returns=num_returns,
         )
-        return result, receipt, None
+        return result, receipt, _skip_outcome(result)
 
     def wait(self, futures: list[Any]) -> None:
         """Local values are already computed; just resolve any awaitables."""
@@ -481,10 +485,10 @@ class RayExecutor:
         """Submit a Ray task that also emits a tiny status marker.
 
         The task is created with ``num_returns + 1`` return values: the user
-        payload(s) followed by a small status value (``None`` on success). The
-        status ref lets the driver observe completion/failure without fetching
-        the payload, and it is produced by the *same* task so no payload is
-        deserialized in a separate worker.
+        payload(s) followed by a small status value (the skipped outcome for
+        intentional absence, otherwise ``None``). The status ref lets the driver
+        observe completion/failure without fetching the payload, and is produced
+        by the *same* task so no payload is deserialized in a separate worker.
         """
         if hasattr(fn, "remote"):
             raise TypeError(

@@ -26,6 +26,20 @@ def executor(request):
             ray.shutdown()
 
 
+def test_executor_status_distinguishes_skip_from_successful_none(executor):
+    def absent():
+        return ava.skip("no payload", {"count": 0})
+
+    def empty():
+        return None
+
+    _, absent_status = executor.submit_with_status(absent)
+    _, empty_status = executor.submit_with_status(empty)
+    assert executor.get([absent_status, empty_status]) == [
+        ava.skip("no payload", {"count": 0}), None,
+    ]
+
+
 def test_skip_satisfies_dependency_and_preserves_fan_in_value_positions(executor):
     skips, successes = {}, []
 
