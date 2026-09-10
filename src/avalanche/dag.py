@@ -1541,15 +1541,16 @@ def _wrap_lineaged_result(value: Any, context: Any, *, num_returns: int) -> Any:
     Multi-return nodes wrap each item individually so executor multi-return
     (e.g. Ray) still sees the expected number of results.
     """
-    from .outcomes import Skipped
+    from .outcomes import _ExpandedSkip, _expand_skip
     from .types import LineagedResult
 
     lineage = dict(context.lineage_vector)
     if context.node_slug is not None:
         lineage[context.node_slug] = context.run_id
 
-    if num_returns > 1 and isinstance(value, Skipped):
-        return tuple(LineagedResult(value, lineage) for _ in range(num_returns))
+    value = _expand_skip(value, num_returns=num_returns)
+    if isinstance(value, _ExpandedSkip):
+        return _ExpandedSkip(LineagedResult(item, lineage) for item in value)
     if num_returns > 1 and isinstance(value, tuple):
         return tuple(LineagedResult(item, lineage) for item in value)
     if num_returns > 1 and isinstance(value, list):
@@ -1634,6 +1635,9 @@ def _with_current_run_context(
     back into ``AppendResult`` here (worker-side) so user code and Stream
     wrappers never see the internal transport type.
     """
+    from runtime._async import call_sync_or_async
+
+    from .outcomes import _expand_skip
     from .runtime import RunContext
     from .runtime.context import _run_with_context
 
@@ -1646,7 +1650,10 @@ def _with_current_run_context(
             kwargs = _materialize_worker_kwargs(kwargs)
             for name in context_param_names:
                 kwargs[name] = context
-            return fn(*_unwrap_lineaged_tree(args), **_unwrap_lineaged_tree(kwargs))
+            result = call_sync_or_async(
+                fn, *_unwrap_lineaged_tree(args), **_unwrap_lineaged_tree(kwargs)
+            )
+            return _expand_skip(result, num_returns=num_returns)
 
         return plain
 
@@ -1895,6 +1902,8 @@ def _indexed_parent_result(presult: Any, tuple_index: int, executor: Any = None)
     from .outcomes import Skipped
     from .types import LineagedResult
 
+    if isinstance(presult, Skipped):
+        return presult
     if isinstance(presult, LineagedResult):
         if isinstance(presult.value, Skipped):
             return presult
@@ -2706,6 +2715,7 @@ class Workflow:
             result: Any,
         ) -> None:
             try:
+                outcome = _skip_outcome(result)
                 if hooks and (
                     hooks.on_node_success or hooks.on_node_skipped or hooks.unwrap_result
                 ):
@@ -2716,7 +2726,7 @@ class Workflow:
                         result = _reattach_lineage(replacement, resolved_val)
                     else:
                         result = resolved_val
-                    report_completion(node_id, _skip_outcome(result))
+                    report_completion(node_id, outcome)
                 result_refs[node_id] = result
             except Exception as exc:
                 if hooks and hooks.on_node_failure:
@@ -2768,8 +2778,7 @@ class Workflow:
                         user_val = _unwrap_lineaged_tree(resolved_val)
                         replacement = hooks.unwrap_result(node_id, user_val)
                         result_refs[node_id] = _reattach_lineage(replacement, resolved_val)
-                        outcome = result_refs[node_id]
-                    elif node_id in status_refs:
+                    if node_id in status_refs:
                         # Progress-only: fetch just the tiny status ref to
                         # surface a task failure. Never materialize the payload;
                         # result_refs keeps the payload ref for downstream tasks.

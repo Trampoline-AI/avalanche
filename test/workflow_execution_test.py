@@ -83,7 +83,8 @@ def test_no_return_workflow_waits_for_side_effects_and_propagates_failure():
     assert saved == [1, 2, 3]
 
 
-def test_wrong_return_count_fails_before_downstream_can_lose_data():
+@pytest.mark.parametrize("context_type", [ava.RunContext, ava.BaseContext])
+def test_wrong_return_count_fails_before_downstream_can_lose_data(context_type):
     called = []
 
     @ava.source(num_returns=2)
@@ -94,7 +95,7 @@ def test_wrong_return_count_fails_before_downstream_can_lose_data():
     def consume(value):
         called.append(value)
 
-    @ava.workflow
+    @ava.workflow(context=context_type)
     def flow():
         return malformed()[0] >> consume()
 

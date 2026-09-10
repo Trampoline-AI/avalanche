@@ -48,9 +48,13 @@ def _normalize_distributed_result(value: Any) -> Any:
     through ``LineagedResult`` envelopes and tuple/list/dict containers,
     preserving shape and lineage.
     """
+    from avalanche.outcomes import _ExpandedSkip
     from avalanche.types import AppendResult, AppendResultHandle, LineagedResult
     from avalanche.workspace import Workspace
 
+    if isinstance(value, _ExpandedSkip):
+        # These slots contain only skips (and optional lineage), never payloads.
+        return value
     if isinstance(value, LineagedResult):
         return LineagedResult(
             _normalize_distributed_result(value.value), dict(value.lineage_vector)
@@ -125,6 +129,8 @@ def _project_index(value: Any, index: int) -> Any:
     from avalanche.outcomes import Skipped
     from avalanche.types import LineagedResult
 
+    if isinstance(value, Skipped):
+        return value
     if isinstance(value, LineagedResult):
         if isinstance(value.value, Skipped):
             return value

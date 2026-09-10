@@ -121,3 +121,36 @@ def test_spawned_pydantic_skip_result_preserves_native_identity(transport):
     for result in (operator.get_run_result(run_id), provider.get_run_result(run_id)):
         assert isinstance(result["outcome"], ava.Skipped)
         assert result["outcome"] == ava.skip("intentional", {"count": 0})
+
+
+@pytest.mark.parametrize("workflow", ["run_context_outcomes", "application_context_outcomes"])
+def test_spawned_containers_succeed_while_expanded_absence_is_skipped(transport, workflow):
+    operator, provider = transport
+    run_id = provider.start_run(workflow)
+    run = wait_for(provider, run_id, lambda run: run.status == RunStatus.SUCCESS)
+    omitted = run.nodes["omitted_pair_1"]
+    assert omitted.status == NodeStatus.SKIPPED
+    assert omitted.skip == ava.skip(
+        "Whole producer intentionally omitted", {"count": 0, "slots": 2},
+    )
+    assert all(
+        node.status == NodeStatus.SUCCESS and node.skip is None
+        for node in run.nodes.values() if node.node_id != omitted.node_id
+    )
+    assert all(
+        node.error is None and node.started_at is not None
+        and node.ended_at >= node.started_at
+        for node in run.nodes.values()
+    )
+    result = "all slots consumed; downstream completed"
+    if workflow == "application_context_outcomes":
+        result = (result, {"label": "application context"})
+    assert provider.get_run_result(run_id) == result
+    snapshot = operator.get_latest_run_snapshot(
+        run_id, operator_instance_id=run.operator_instance_id,
+    )
+    assert {
+        node.node_id: (node.status, node.skip) for node in snapshot.nodes
+    } == {
+        node.node_id: (node.status, node.skip) for node in run.nodes.values()
+    }

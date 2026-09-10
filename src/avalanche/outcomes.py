@@ -86,6 +86,16 @@ def skip(reason: str, metadata: dict[str, JsonValue] | None = None) -> Skipped:
     return Skipped(reason, metadata)
 
 
+class _ExpandedSkip(tuple[object, ...]):
+    """Internal multi-return slots expanded from one authored node absence."""
+
+
+def _expand_skip(value: object, *, num_returns: int) -> object:
+    if num_returns > 1 and isinstance(value, Skipped):
+        return _ExpandedSkip((value,) * num_returns)
+    return value
+
+
 def _skip_outcome(value: object) -> Skipped | None:
     """Read a whole-node outcome, including expanded multi-return transport."""
     from .types import LineagedResult
@@ -94,10 +104,8 @@ def _skip_outcome(value: object) -> Skipped | None:
         return value.value if isinstance(value.value, Skipped) else None
     if isinstance(value, Skipped):
         return value
-    if isinstance(value, (tuple, list)) and value:
-        first = _skip_outcome(value[0])
-        if first is not None and all(_skip_outcome(item) == first for item in value[1:]):
-            return first
+    if isinstance(value, _ExpandedSkip):
+        return _skip_outcome(value[0])
     return None
 
 

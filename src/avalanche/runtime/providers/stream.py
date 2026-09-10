@@ -861,7 +861,10 @@ def _read_rerun_rows(
             empty_result = df.head(0)
         skipped_slugs = skips_by_run.get(current_run_id, set())
         if "_ava_node_slug" in df.columns:
-            df = df.filter(~pl.col("_ava_node_slug").is_in(seen_slugs | skipped_slugs))
+            df = df.filter(
+                pl.col("_ava_node_slug").is_null()
+                | ~pl.col("_ava_node_slug").is_in(seen_slugs | skipped_slugs)
+            )
             seen_slugs.update(df["_ava_node_slug"].drop_nulls().to_list())
         seen_slugs.update(skipped_slugs)
         if not df.is_empty():

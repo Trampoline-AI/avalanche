@@ -73,3 +73,54 @@ def nested_result():
 @ava.workflow
 def nested_skipped_result():
     return nested_result()
+
+
+class ApplicationContext(ava.BaseContext):
+    label: str = "application context"
+
+
+@ava.source
+def skip_container():
+    return [ava.skip("nested outcome"), ava.skip("nested outcome")]
+
+
+@ava.source(num_returns=2)
+def equal_skip_slots():
+    return ava.skip("equal slot"), ava.skip("equal slot")
+
+
+@ava.source(num_returns=2)
+def omitted_pair():
+    return ava.skip("Whole producer intentionally omitted", {"count": 0, "slots": 2})
+
+
+@ava.step
+def inspect_outcome_slots(left, right, nested, first, second):
+    assert left == right == ava.skip(
+        "Whole producer intentionally omitted", {"count": 0, "slots": 2},
+    )
+    assert nested == [ava.skip("nested outcome"), ava.skip("nested outcome")]
+    assert first == second == ava.skip("equal slot")
+    return "all slots consumed; downstream completed"
+
+
+@ava.step
+def inspect_application_context(context: ApplicationContext):
+    return context.model_dump()
+
+
+def outcome_graph():
+    pair, equal = omitted_pair(), equal_skip_slots()
+    return inspect_outcome_slots(
+        pair[0], pair[1], skip_container(), equal[0], equal[1],
+    )
+
+
+@ava.workflow
+def run_context_outcomes():
+    return outcome_graph()
+
+
+@ava.workflow(context=ApplicationContext)
+def application_context_outcomes():
+    return outcome_graph(), inspect_application_context()

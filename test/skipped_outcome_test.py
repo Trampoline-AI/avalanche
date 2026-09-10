@@ -2,6 +2,7 @@
 
 import json
 from concurrent.futures import CancelledError
+from pathlib import Path
 
 import dataframely as dy
 import polars as pl
@@ -20,11 +21,24 @@ def executor(request):
     else:
         import ray
 
-        ray.init(num_cpus=2, include_dashboard=False, _node_ip_address="127.0.0.1")
+        ray.init(
+            num_cpus=2, include_dashboard=False, _node_ip_address="127.0.0.1",
+            runtime_env={"env_vars": {"PYTHONPATH": str(Path(__file__).parent)}},
+        )
         try:
             yield ava.RayExecutor()
         finally:
             ray.shutdown()
+
+
+@pytest.fixture(params=["RunContext", "CustomContext"])
+def context_type(request):
+    if request.param == "RunContext":
+        return ava.RunContext
+
+    from fixtures.skipped_workflows import ApplicationContext
+
+    return ApplicationContext
 
 
 def test_executor_status_distinguishes_skip_from_successful_none(executor):
@@ -39,6 +53,19 @@ def test_executor_status_distinguishes_skip_from_successful_none(executor):
     assert executor.get([absent_status, empty_status]) == [
         ava.skip("no payload", {"count": 0}), None,
     ]
+    # Single-return containers and explicitly returned equal slots are values,
+    # not evidence that the author omitted the whole node.
+    for value, count in (
+        ([ava.skip("nested")], 1),
+        ([ava.skip("nested"), ava.skip("nested")], 1),
+        ((ava.skip("nested"), ava.skip("nested")), 1),
+        (([ava.skip("nested")], [ava.skip("nested")]), 1),
+        ((ava.skip("nested"), ava.skip("nested")), 2),
+    ):
+        payload, status = executor.submit_with_status(lambda: value, num_returns=count)
+        assert executor.get([status]) == [None]
+        actual = executor.get(list(payload)) if count > 1 else executor.get([payload])[0]
+        assert actual == (list(value) if count > 1 else value)
 
 
 def test_skip_satisfies_dependency_and_preserves_fan_in_value_positions(executor):
@@ -91,27 +118,38 @@ def test_skip_satisfies_dependency_and_preserves_fan_in_value_positions(executor
     )
 
 
-def test_multi_return_and_indexed_skips_are_non_values(executor):
+@pytest.mark.parametrize("unwrap", [False, True])
+def test_multi_return_and_indexed_skips_are_non_values(executor, context_type, unwrap):
+    skips, successes = {}, []
     @ava.source(num_returns=2)
-    def absent():
+    async def absent():
         return ava.skip("whole node omitted")
 
     @ava.step
     def combine(left, right):
         return isinstance(left, ava.Skipped) and left == right
 
-    @ava.workflow
+    @ava.workflow(context=context_type)
     def flow():
         pair = absent()
-        combined = combine(pair[0], pair[1])
+        combined = (pair[0] & pair[1]) >> combine()
         return pair[1], combined
 
-    assert flow().run(executor=executor).result(timeout=60) == (
+    hooks = RunHooks(
+        on_node_skipped=lambda node, outcome: skips.update({node: outcome}),
+        on_node_success=successes.append,
+        unwrap_result=(lambda node, value: value) if unwrap else None,
+    )
+    assert flow().run(executor=executor, hooks=hooks).result(timeout=60) == (
         ava.skip("whole node omitted"), True,
     )
+    assert skips == {"absent_1": ava.skip("whole node omitted")}
+    assert successes == ["combine_1"]
 
 
-def test_single_return_projection_preserves_skip_but_containers_are_values(executor):
+def test_single_return_projection_preserves_skip_but_containers_are_values(
+    executor, context_type,
+):
     skips, successes = [], []
 
     @ava.source
@@ -120,13 +158,13 @@ def test_single_return_projection_preserves_skip_but_containers_are_values(execu
 
     @ava.source
     def container():
-        return [ava.skip("retained nested outcome")]
+        return [ava.skip("retained nested outcome"), ava.skip("retained nested outcome")]
 
     @ava.step
     def inspect(value):
         return value.reason
 
-    @ava.workflow
+    @ava.workflow(context=context_type)
     def flow():
         single = absent()
         return inspect(single[0]), container()
@@ -137,7 +175,10 @@ def test_single_return_projection_preserves_skip_but_containers_are_values(execu
             on_node_skipped=lambda node, outcome: skips.append(node),
             on_node_success=successes.append,
         ),
-    ).result(timeout=60) == ("no tuple today", [ava.skip("retained nested outcome")])
+    ).result(timeout=60) == (
+        "no tuple today",
+        [ava.skip("retained nested outcome"), ava.skip("retained nested outcome")],
+    )
     assert skips == ["absent_1"]
     assert set(successes) == {"container_1", "inspect_1"}
 
@@ -245,6 +286,50 @@ def test_persisted_skip_shadows_ancestor_rows_without_advancing_cursor(namespace
         assert rows["id"].to_list() == [2]
 
 
+def test_null_slug_replay_survives_named_skips_and_sparse_ancestry(namespace):
+    from avalanche.runtime.context import run_with_context
+
+    table = namespace.rows
+    run_with_context(
+        ava.RunContext(run_id="original", workflow_name="flow"),
+        table.append,
+        pl.DataFrame({"id": [1]}),
+    )
+    run_with_context(
+        ava.RunContext(run_id="original", workflow_name="flow", node_slug="named"),
+        table.append,
+        pl.DataFrame({"id": [2]}),
+    )
+    with ava.consume_stream(
+        table, rerun=ava.Rerun(run_id="original", start=["consumer"]),
+    ) as rows:
+        assert sorted(rows["id"].to_list()) == [1, 2]
+
+    run_with_context(
+        ava.RunContext(
+            run_id="omitted", workflow_name="flow", node_slug="named",
+            rerun=ava.Rerun(run_id="original", start=["named"]),
+        ),
+        table.append,
+        ava.skip("named producer omitted"),
+    )
+    def replay():
+        with ava.consume_stream(table) as rows:
+            assert rows["id"].to_list() == [1]
+            assert rows["_ava_node_slug"].to_list() == [None]
+
+    # consume_stream records the sparse ancestry edge even without new rows.
+    for run_id, parent in (("replay", "omitted"), ("again", "replay")):
+        run_with_context(
+            ava.RunContext(
+                run_id=run_id, workflow_name="flow", node_slug="consumer",
+                rerun=ava.Rerun(run_id=parent, start=["consumer"]),
+            ),
+            replay,
+        )
+    assert sorted(table.read()["id"].to_list()) == [1, 2]
+
+
 def test_write_then_skip_keeps_physical_rows_but_replays_empty_schema(namespace):
     table = namespace.rows
 
@@ -306,7 +391,7 @@ def test_metadata_is_immutable_and_rejects_lossy_transport():
         ava.skip("no records", {"value": {1: "not a string key"}})
 
 
-def test_skip_finalizes_services_and_satisfies_receipt_dependencies(executor):
+def test_skip_finalizes_services_and_satisfies_receipt_dependencies(executor, context_type):
     class Services:
         def probe(self, *, request, task):
             return request
@@ -333,20 +418,35 @@ def test_skip_finalizes_services_and_satisfies_receipt_dependencies(executor):
     def absent():
         return ava.skip("service-managed absence")
 
+    @ava.source(num_returns=2)
+    def present():
+        return ava.skip("nested"), ava.skip("nested")
+
     @ava.step
     def downstream():
         return "completed"
 
-    @ava.workflow
+    @ava.workflow(context=context_type)
     def flow():
-        return absent() >> downstream()
+        return (absent() & present()) >> downstream()
 
+    skips, successes = {}, []
     handle = flow().run(
         executor=executor,
         execution_services=ava.ExecutionServicesSpec(service=Services(), request=None),
+        hooks=RunHooks(
+            on_node_skipped=lambda node, outcome: skips.update({node: outcome}),
+            on_node_success=successes.append,
+        ),
     )
     assert handle.result(timeout=60) == "completed"
+    assert skips == {"absent_1": ava.skip("service-managed absence")}
+    assert set(successes) == {"present_1", "downstream_1"}
     receipt, = handle.execution_receipts()
     assert receipt.value == {
-        "node": "downstream", "parents": ({"node": "absent", "parents": ()},),
+        "node": "downstream",
+        "parents": (
+            {"node": "absent", "parents": ()},
+            {"node": "present", "parents": ()},
+        ),
     }
