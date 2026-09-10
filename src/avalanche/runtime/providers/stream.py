@@ -858,7 +858,7 @@ def _read_rerun_rows(
         seen.add(current_run_id)
         df = _scan_run_rows(table, current_run_id, node_slugs=node_slugs)
         if empty_result is None:
-            empty_result = df
+            empty_result = df.head(0)
         skipped_slugs = skips_by_run.get(current_run_id, set())
         if "_ava_node_slug" in df.columns:
             df = df.filter(~pl.col("_ava_node_slug").is_in(seen_slugs | skipped_slugs))

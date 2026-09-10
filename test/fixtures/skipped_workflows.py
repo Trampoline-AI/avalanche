@@ -2,6 +2,8 @@
 
 import time
 
+from pydantic import BaseModel
+
 import avalanche as ava
 
 
@@ -57,3 +59,17 @@ def failed_dependency():
 @ava.workflow
 def cancelled_dependency():
     cancellable() >> dependency_only()
+
+
+class NestedOutcome(BaseModel):
+    outcome: ava.Skipped
+
+
+@ava.source
+def nested_result():
+    return NestedOutcome(outcome=ava.skip("intentional", {"count": 0}))
+
+
+@ava.workflow
+def nested_skipped_result():
+    return nested_result()

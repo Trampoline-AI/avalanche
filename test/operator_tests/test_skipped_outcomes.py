@@ -111,3 +111,13 @@ def test_unfinished_dependency_skips_are_not_authored_outcomes(transport, workfl
     if terminal == RunStatus.FAILED:
         assert run.nodes["failure_1"].status == NodeStatus.FAILED
         assert run.nodes["failure_1"].error
+
+
+def test_spawned_pydantic_skip_result_preserves_native_identity(transport):
+    operator, provider = transport
+    run_id = provider.start_run("nested_skipped_result")
+    run = wait_for(provider, run_id, lambda run: run.status == RunStatus.SUCCESS)
+    assert run.nodes["nested_result_1"].status == NodeStatus.SUCCESS
+    for result in (operator.get_run_result(run_id), provider.get_run_result(run_id)):
+        assert isinstance(result["outcome"], ava.Skipped)
+        assert result["outcome"] == ava.skip("intentional", {"count": 0})

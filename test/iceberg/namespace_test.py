@@ -11,6 +11,7 @@ from pyiceberg.exceptions import CommitFailedException
 from pyiceberg.schema import Schema
 from pyiceberg.types import NestedField, StringType
 
+import avalanche as ava
 from avalanche import Cursor
 from avalanche.iceberg import IcebergNs, IcebergNsConfig, IcebergTable
 
@@ -83,6 +84,28 @@ def test_conflict_timeout_does_not_report_or_persist_success(namespace, monkeypa
     monkeypatch.setattr("avalanche.iceberg.table._APPEND_RETRY_TIMEOUT_SECONDS", 0.0)
     with pytest.raises(CommitFailedException):
         namespace.rows.append(pl.DataFrame({"value": ["not committed"]}))
+    assert namespace.rows.read()["value"].to_list() == ["survives threads"]
+
+
+def test_skip_conflict_timeout_fails_run_without_publishing_receipt(namespace, monkeypatch):
+    def fail_commit(*args, **kwargs):
+        raise CommitFailedException("conflict")
+
+    monkeypatch.setattr(namespace.catalog, "commit_table", fail_commit)
+    monkeypatch.setattr("avalanche.iceberg.table._APPEND_RETRY_TIMEOUT_SECONDS", 0.0)
+
+    @ava.source
+    def absent():
+        return namespace.rows.append(ava.skip("excluded"))
+
+    @ava.workflow
+    def flow():
+        return absent()
+
+    with pytest.raises(CommitFailedException):
+        flow().run(executor=ava.LocalExecutor()).result()
+    namespace.rows.refresh()
+    assert not any(key.startswith("avalanche.skip.") for key in namespace.rows.properties)
     assert namespace.rows.read()["value"].to_list() == ["survives threads"]
 
 

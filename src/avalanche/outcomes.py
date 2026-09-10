@@ -8,12 +8,20 @@ import math
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
-from pydantic import BaseModel, ConfigDict, JsonValue, TypeAdapter
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    JsonValue,
+    SerializationInfo,
+    TypeAdapter,
+    model_serializer,
+)
 
 if TYPE_CHECKING:
     from .storage import Table
 
 _METADATA = TypeAdapter(dict[str, JsonValue] | None)
+_SKIP_SERIALIZER_CONTEXT_KEY = "__avalanche_operator_skipped_serializer__"
 
 
 def _validate_metadata(value: object) -> None:
@@ -61,6 +69,16 @@ class Skipped:
     @property
     def metadata(self) -> dict[str, JsonValue] | None:
         return _METADATA.validate_json(self._metadata_json)
+
+    @model_serializer
+    def _serialize(self, info: SerializationInfo) -> dict[str, JsonValue]:
+        context = info.context
+        serializer = (
+            context.get(_SKIP_SERIALIZER_CONTEXT_KEY) if isinstance(context, dict) else None
+        )
+        if callable(serializer):
+            return serializer(self)
+        return {"reason": self.reason, "metadata": self.metadata}
 
 
 def skip(reason: str, metadata: dict[str, JsonValue] | None = None) -> Skipped:

@@ -6,6 +6,7 @@ from concurrent.futures import CancelledError
 import dataframely as dy
 import polars as pl
 import pytest
+from pydantic import BaseModel, Field
 
 import avalanche as ava
 from runtime.operator.hooks import RunHooks
@@ -242,6 +243,55 @@ def test_persisted_skip_shadows_ancestor_rows_without_advancing_cursor(namespace
         table, rerun=ava.Rerun(run_id="replay-again", start=["consumer"])
     ) as rows:
         assert rows["id"].to_list() == [2]
+
+
+def test_write_then_skip_keeps_physical_rows_but_replays_empty_schema(namespace):
+    table = namespace.rows
+
+    @ava.source(slug="producer")
+    def producer():
+        table.append(pl.DataFrame({"id": [1]}))
+        return table.append(ava.skip("discard producer version"))
+
+    @ava.step(slug="consumer")
+    def consumer(rows=ava.Stream(table)):
+        return rows.to_dicts(), rows.schema
+
+    @ava.workflow
+    def flow():
+        return producer() >> consumer()
+
+    live, _ = flow().run(executor=ava.LocalExecutor(), run_id="first").result()
+    assert live == []
+    replay, replay_schema = flow().run(
+        executor=ava.LocalExecutor(),
+        run_id="second",
+        rerun=ava.Rerun(run_id="first", start=["consumer"], mode="lazy"),
+    ).result()
+    assert replay == []
+    assert replay_schema == table.read().schema
+    assert table.read()["id"].to_list() == [1]
+
+
+def test_pydantic_results_preserve_nested_native_skip_and_public_metadata():
+    class Output(BaseModel):
+        outcome: ava.Skipped = Field(serialization_alias="omitted")
+        history: list[ava.Skipped]
+
+    outcome = ava.skip("intentional", {"count": 0, "nested": [None, True]})
+    model = Output(outcome=outcome, history=[outcome])
+    public = {"reason": outcome.reason, "metadata": outcome.metadata}
+    assert model.model_dump(mode="json", by_alias=True) == {
+        "omitted": public, "history": [public],
+    }
+    for value in (model, {"output": [model]}):
+        encoded = encode_workflow_result(value)
+        assert "_metadata_json" not in encoded.value_json
+        decoded = decode_workflow_result(encoded)
+        result = decoded if value is model else decoded["output"][0]
+        assert isinstance(result["omitted"], ava.Skipped)
+        assert result == {"omitted": outcome, "history": [outcome]}
+        assert result["omitted"].metadata == outcome.metadata
 
 
 def test_metadata_is_immutable_and_rejects_lossy_transport():
