@@ -243,18 +243,33 @@ import { OperatorUi } from "@trampoline-ai/operator-ui";
 Avalanche does not provide a remote operator endpoint or authentication boundary for an
 embedding host.
 
-### Releasing the operator UI
+### Releasing Avalanche and the operator UI
 
-Release the package independently from the Python distribution:
+The Python distribution and `@trampoline-ai/operator-ui` share one version and one
+Avalanche `vX.Y.Z` release tag. There are no separate operator UI releases, even when
+only the backend changes. Use the UI version matching your Avalanche operator.
 
-1. Update `web/operator/package.json` with the next semantic version.
-2. From the repository root, run `make web-test` and `make web-lint`.
-3. From `web/operator`, run `pnpm pack`.
-4. Merge the version change to `main`.
-5. Create and push a matching `operator-ui-vX.Y.Z` tag.
+1. Update `pyproject.toml`, `src/avalanche/__init__.py`, and `web/operator/package.json`
+   together, and run `uv lock`. Stable versions are identical; prereleases use Python
+   spelling such as `0.4.0rc1` and npm spelling `0.4.0-rc1` (likewise Python `a`/`b`
+   map to npm `alpha`/`beta`).
+2. Move the unreleased changelog entries under the new version.
+3. Run `make web-test`, `make web-lint`, `make web-assets-check`, and `uv build`.
+   From `web/operator`, run `pnpm pack` to check the npm archive.
+4. Merge the release commit to `main`, then create and push the matching Avalanche
+   tag, such as `v0.4.0` or `v0.4.0-rc1`. Prereleases must have patch version zero.
 
-The `Release operator UI` workflow validates the tag, packs and inspects the archive, then
-publishes it to GitHub Packages.
+The `Release` workflow checks both versions, generated clients, browser tests and
+assets, and the npm archive before publishing either package. It publishes Python
+distributions to PyPI and the UI to GitHub Packages (`latest` for stable versions,
+`next` for prereleases). The GitHub Release appears only after both publishes succeed.
+
+The two registries cannot publish atomically. If one publish fails, rerun the failed
+jobs in the same workflow run to reuse its validated artifacts; do not move the tag
+or bump just one package. PyPI skips files already uploaded. The npm publisher skips
+an existing version only when its archive integrity matches, and fails on conflicting
+contents or registry errors. Re-running an already published UI does not move its npm
+distribution tag, so retrying an older release does not change `latest` or `next`.
 
 ### Running a workflow
 

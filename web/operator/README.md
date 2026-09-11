@@ -4,6 +4,11 @@ Embeddable React UI for inspecting and controlling Avalanche workflows. The pack
 workflow graph, run list, run controls, logs, node details, and agent details; the embedding host
 owns navigation, the operator connection, and presentation.
 
+This package releases with Avalanche from the same commit and release tag. Use the
+version matching your operator: stable versions are identical, while Avalanche
+`0.4.0rc1` corresponds to operator UI `0.4.0-rc1` (`a`/`b` map to `alpha`/`beta`).
+Stable releases use the npm `latest` tag; prereleases use `next`.
+
 ## Install
 
 The package is published through GitHub Packages. Configure the scope and an authenticated token
