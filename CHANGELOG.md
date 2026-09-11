@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+- Avalanche and `@trampoline-ai/operator-ui` now share versions and a single Avalanche
+  release tag. Both packages are built and checked before either publishes, and the
+  GitHub Release waits for both registries. Failed publication jobs can reuse their
+  validated artifacts without re-uploading existing packages; npm retries verify
+  archive integrity before skipping an existing version.
 - Consolidated Python, terminal, and browser tests around core execution, data
   integrity, recovery, and interaction scenarios; removed redundant test scaffolding
   and static-copy/schema inventories. `make test` now includes browser tests.

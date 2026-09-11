@@ -8,10 +8,17 @@ on:
 permissions:
   contents: read
 
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
 jobs:
   validate:
     name: Validate tag
     runs-on: ubuntu-latest
+    outputs:
+      npm-version: ${{ steps.versions.outputs.npm-version }}
+      npm-tag: ${{ steps.versions.outputs.npm-tag }}
     steps:
       - uses: actions/checkout@v6
         with:
@@ -22,7 +29,7 @@ jobs:
           TAG="${GITHUB_REF_NAME}"
 
           # Skip ancestry check for prerelease tags (e.g., v1.2.0-rc.1)
-          if [[ "$TAG" == *"-"* ]]; then
+          if [[ "$TAG" =~ (alpha|beta|rc) ]]; then
             echo "::notice title=Ancestry check skipped::Prerelease tag '$TAG', skipping main ancestry check."
             exit 0
           fi
@@ -34,15 +41,22 @@ jobs:
             echo "::error::Tag '$TAG' is not on main. Ensure the tagged commit is on the main branch."
             exit 1
           fi
-      - name: Verify tag matches package version
+      - name: Verify tag matches both package versions
+        id: versions
         env:
           TAG: ${{ github.ref_name }}
         run: |
           uv run --no-project --with packaging python - <<'EOF'
-          import os, sys, tomllib
+          import json, os, re, sys, tomllib
           from packaging.version import Version
 
           tag = os.environ["TAG"].removeprefix("v")
+          if re.fullmatch(
+              r"(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)"
+              r"(?:-?(?:alpha|beta|rc)\.?(0|[1-9]\d*))?",
+              tag,
+          ) is None:
+              sys.exit(f"::error::Unsupported release tag v{tag}")
           pkg = tomllib.load(open("pyproject.toml", "rb"))["project"]["version"]
           tag_version = Version(tag)
           package_version = Version(pkg)
@@ -55,12 +69,26 @@ jobs:
           if tag_version != package_version:
               print(f"::error::Tag v{tag} does not match pyproject version {pkg}")
               sys.exit(1)
-          kind = "pre-release" if package_version.is_prerelease else "release"
-          print(f"Tag v{tag} matches pyproject version ({kind})")
+          npm_version = ".".join(map(str, package_version.release))
+          npm_tag = "latest"
+          if package_version.pre is not None:
+              channel, serial = package_version.pre
+              channel = {"a": "alpha", "b": "beta", "rc": "rc"}[channel]
+              npm_version += f"-{channel}{serial}"
+              npm_tag = "next"
+          ui_version = json.load(open("web/operator/package.json"))["version"]
+          if ui_version != npm_version:
+              sys.exit(
+                  f"::error::Tag v{tag} requires operator-ui version {npm_version}, "
+                  f"got {ui_version}"
+              )
+          with open(os.environ["GITHUB_OUTPUT"], "a") as output:
+              output.write(f"npm-version={npm_version}\nnpm-tag={npm_tag}\n")
+          print(f"Tag v{tag} matches avalanche-ai {pkg} and operator-ui {npm_version}")
           EOF
 
   build:
-    name: Build distributions
+    name: Build and validate both packages
     needs: validate
     runs-on: ubuntu-latest
     steps:
@@ -72,18 +100,83 @@ jobs:
       - uses: pnpm/action-setup@v5
         with:
           version: 10.17.1
+      - name: Install Python dependencies
+        run: uv sync --all-extras
       - name: Install browser dependencies
         run: pnpm install --frozen-lockfile
+        working-directory: web
+      - name: Generate operator client
+        run: make web-proto
+      - name: Verify generated operator client
+        run: git diff --exit-code -- src/runtime/operator/proto web/operator/src/generated
+      - name: Test operator UI
+        run: pnpm --filter @trampoline-ai/operator-ui run test
+        working-directory: web
+      - name: Lint operator UI
+        run: pnpm --filter @trampoline-ai/operator-ui run lint
         working-directory: web
       - name: Verify packaged browser assets
         run: make web-assets-check WEB_ASSETS_CHECK_CONTEXT=ci
       - name: Build sdist and wheel
         run: uv build
+      - name: Pack operator UI
+        run: |
+          mkdir -p "$RUNNER_TEMP/operator-ui"
+          pnpm pack --pack-destination "$RUNNER_TEMP/operator-ui"
+        working-directory: web/operator
+      - name: Verify package archive
+        env:
+          VERSION: ${{ needs.validate.outputs.npm-version }}
+        run: |
+          ARCHIVE="$RUNNER_TEMP/operator-ui/trampoline-ai-operator-ui-$VERSION.tgz"
+          PACKAGE_ROOT="$RUNNER_TEMP/operator-ui-unpacked/package"
+          export PACKAGE_ROOT
+          test -f "$ARCHIVE"
+          mkdir -p "$RUNNER_TEMP/operator-ui-unpacked"
+          tar -xzf "$ARCHIVE" -C "$RUNNER_TEMP/operator-ui-unpacked"
+          test -f "$PACKAGE_ROOT/dist/index.js"
+          test -f "$PACKAGE_ROOT/dist/index.d.ts"
+          test -f "$PACKAGE_ROOT/dist/styles.css"
+          test -f "$PACKAGE_ROOT/dist/ui/OperatorUi.d.ts"
+          test -f "$PACKAGE_ROOT/README.md"
+          node --input-type=module <<'EOF'
+          import { readFile } from "node:fs/promises";
+
+          const root = process.env.PACKAGE_ROOT;
+          const packageJson = JSON.parse(await readFile(`${root}/package.json`, "utf8"));
+          if (packageJson.name !== "@trampoline-ai/operator-ui") {
+            throw new Error(`Unexpected package name: ${packageJson.name}`);
+          }
+          if (packageJson.version !== process.env.VERSION) {
+            throw new Error(`Unexpected package version: ${packageJson.version}`);
+          }
+          if (packageJson.publishConfig?.registry !== "https://npm.pkg.github.com") {
+            throw new Error("Package archive is not configured for GitHub Packages.");
+          }
+          if (packageJson.exports?.["./styles.css"] !== "./dist/styles.css") {
+            throw new Error("Package archive does not export its styles.");
+          }
+          if (packageJson.repository?.url !== "https://github.com/Trampoline-AI/avalanche.git") {
+            throw new Error("Package archive is not linked to this repository.");
+          }
+          const declarations = await readFile(`${root}/dist/index.d.ts`, "utf8");
+          for (const symbol of ["OperatorUi", "OperatorUiHost", "WorkflowWorkspace"]) {
+            if (!declarations.includes(symbol)) {
+              throw new Error(`Missing public export: ${symbol}`);
+            }
+          }
+          EOF
       - name: Upload distributions
         uses: actions/upload-artifact@v6
         with:
           name: dist
           path: dist/
+          if-no-files-found: error
+      - name: Upload operator UI archive
+        uses: actions/upload-artifact@v6
+        with:
+          name: operator-ui-package
+          path: ${{ runner.temp }}/operator-ui/*.tgz
           if-no-files-found: error
 
   publish:
@@ -103,11 +196,40 @@ jobs:
           path: dist/
       - name: Publish to PyPI
         uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          skip-existing: true
 
+  publish-ui:
+    name: Publish operator UI to GitHub Packages
+    needs: [validate, build]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 24
+          registry-url: https://npm.pkg.github.com
+          scope: "@trampoline-ai"
+      - name: Download package archive
+        uses: actions/download-artifact@v7
+        with:
+          name: operator-ui-package
+          path: ${{ runner.temp }}/operator-ui
+      - name: Publish package archive
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          VERSION: ${{ needs.validate.outputs.npm-version }}
+          NPM_TAG: ${{ needs.validate.outputs.npm-tag }}
+        run: |
+          node .github/scripts/publish-operator-ui.mjs "$VERSION" "$NPM_TAG" \
+            "$RUNNER_TEMP/operator-ui/trampoline-ai-operator-ui-$VERSION.tgz"
 
   release:
     name: Create GitHub Release
-    needs: publish
+    needs: [validate, publish, publish-ui]
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -116,5 +238,5 @@ jobs:
         uses: softprops/action-gh-release@v3
         with:
           generate_release_notes: true
-          prerelease: ${{ contains(github.ref_name, '-') }}
-          make_latest: ${{ contains(github.ref_name, '-') && 'false' || 'legacy' }}
+          prerelease: ${{ needs.validate.outputs.npm-tag == 'next' }}
+          make_latest: ${{ needs.validate.outputs.npm-tag == 'next' && 'false' || 'legacy' }}
