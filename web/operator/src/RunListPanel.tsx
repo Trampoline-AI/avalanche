@@ -1,5 +1,5 @@
 import { useVirtualizer } from "@tanstack/react-virtual";
-import { useMemo, useRef } from "react";
+import { useEffect, useMemo, useRef } from "react";
 
 import type { RunSummaryMsg } from "./model";
 
@@ -17,7 +17,7 @@ interface RunListPanelProps {
   onSelectRun: (runId: string) => void;
 }
 
-function compareNewestRun(left: RunSummaryMsg, right: RunSummaryMsg) {
+export function compareNewestRun(left: RunSummaryMsg, right: RunSummaryMsg) {
   const leftSequence = BigInt(left.createdSequence);
   const rightSequence = BigInt(right.createdSequence);
   if (leftSequence === rightSequence) return left.runId.localeCompare(right.runId);
@@ -47,6 +47,14 @@ export function RunListPanel({
         .sort(compareNewestRun),
     [runs, workflowId],
   );
+  useEffect(() => {
+    if (scrollElement.current) scrollElement.current.scrollTop = 0;
+  }, [workflowId]);
+  useEffect(() => {
+    if (selectedRunId === workflowRuns[0]?.runId && scrollElement.current) {
+      scrollElement.current.scrollTop = 0;
+    }
+  }, [selectedRunId, workflowRuns]);
   const virtualizer = useVirtualizer({
     count: workflowRuns.length,
     getScrollElement: () => scrollElement.current,
@@ -79,6 +87,7 @@ export function RunListPanel({
                   className={`run-list-row absolute top-0 left-0 grid w-full cursor-pointer grid-cols-[8px_minmax(0,1fr)_auto_38px] grid-rows-[12px_12px] items-center gap-x-[7px] gap-y-0 border-0 border-b border-[#eef1ef] bg-transparent px-[9px] py-1 text-left text-ink leading-none hover:bg-[#f4f6f5] [&_code]:overflow-hidden [&_code]:text-ellipsis [&_code]:whitespace-nowrap [&_code]:text-[9px] [&_code]:text-[#36423c] ${selectedRunId === summary.runId ? "active bg-[#edf3ff] shadow-[inset_2px_0_#2563eb]" : ""}`}
                   key={summary.runId}
                   onClick={() => onSelectRun(summary.runId)}
+                  aria-pressed={selectedRunId === summary.runId}
                   style={{
                     height: virtualRow.size,
                     transform: `translateY(${virtualRow.start}px)`,
@@ -117,7 +126,7 @@ export function RunListPanel({
         </div>
       ) : (
         <span className="run-list-empty block p-2.5 font-mono text-[8px] text-secondary">
-          No runs yet
+          No runs
         </span>
       )}
     </section>

@@ -73,6 +73,7 @@ interface CardData extends Record<string, unknown> {
   declaration?: AgentFieldSchemas;
   instructionLine?: string;
   onOpen: () => void;
+  inspectionDisabled?: boolean;
 }
 
 function skills(value: unknown): SkillMetadata[] {
@@ -265,6 +266,7 @@ const WorkflowNodeCard = memo(({ data, selected }: NodeProps<Node<CardData>>) =>
     <article
       className={`node-card ${isCompact ? "node-card--compact min-h-[100px] justify-center gap-0 px-4 py-3" : "min-h-[130px] gap-2 p-4"} relative flex w-[360px] cursor-pointer flex-col items-stretch rounded-xl border border-line bg-panel text-left shadow-[0_8px_24px_rgba(25,39,32,.08)] transition-[border-color,box-shadow,transform] duration-150 ease-out hover:-translate-y-px hover:border-acid hover:shadow-[0_10px_28px_rgba(25,39,32,.12)] motion-reduce:transition-none ${selected && data.status !== "running" ? "border-acid!" : ""} ${agentClass} ${statusClass}`}
       data-node-kind={data.isAgent ? "agent" : "standard"}
+      aria-disabled={data.inspectionDisabled || undefined}
     >
       <Handle
         id="target-left"
@@ -284,6 +286,7 @@ const WorkflowNodeCard = memo(({ data, selected }: NodeProps<Node<CardData>>) =>
         type="button"
         className="node-card-action absolute inset-0 z-[2] cursor-pointer rounded-[inherit] border-0 bg-transparent p-0 focus-visible:outline-3 focus-visible:outline-offset-3 focus-visible:outline-acid"
         onClick={openAndFocusNode}
+        disabled={data.inspectionDisabled}
         aria-label={`Inspect ${data.label}${data.identity ? ` ${data.identity}` : ""}`}
       />
       <header
@@ -534,6 +537,7 @@ interface GraphCanvasProps {
   selectedNodeId?: string;
   onClearNode?: () => void;
   onOpenNode: (nodeId: string) => void;
+  inspectionDisabled?: boolean;
 }
 
 function GraphCanvasView({
@@ -545,6 +549,7 @@ function GraphCanvasView({
   selectedNodeId,
   onClearNode,
   onOpenNode,
+  inspectionDisabled = false,
 }: GraphCanvasProps) {
   const isCurrentWorkflow = workflow !== undefined && runTopology === undefined;
   const topology = useMemo<TopologyView | undefined>(() => {
@@ -630,12 +635,14 @@ function GraphCanvasView({
           declaration,
           instructionLine,
           onOpen: openCallbacks[nodeId],
+          inspectionDisabled,
         },
       };
     });
     return nodes;
   }, [
     agentNodeIds,
+    inspectionDisabled,
     layout.positions,
     openCallbacks,
     runNodes,
@@ -658,7 +665,7 @@ function GraphCanvasView({
       maxZoom={1.8}
       nodesDraggable={false}
       nodesConnectable={false}
-      elementsSelectable
+      elementsSelectable={!inspectionDisabled}
       onPaneClick={onClearNode}
       proOptions={{ hideAttribution: true }}
     >
@@ -723,5 +730,6 @@ export const GraphCanvas = memo(
     left.selectedNodeId === right.selectedNodeId &&
     left.onClearNode === right.onClearNode &&
     left.onOpenNode === right.onOpenNode &&
+    left.inspectionDisabled === right.inspectionDisabled &&
     sameRunNodeState(left.runNodes, right.runNodes),
 );
