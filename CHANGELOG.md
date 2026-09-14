@@ -38,6 +38,8 @@
 
 - Agent traces now lead with each turn's reasoning and separate main/sub-model costs, while
   code, compact terminal output, tool calls, and model calls remain expandable.
+- Run inspectors now surface status, duration, models, per-model costs, and iterations in the
+  sidebar header, with raw execution details moved to a final Metadata tab.
 
 ## 0.3.0
 
