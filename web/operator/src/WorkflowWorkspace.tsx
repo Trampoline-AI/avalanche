@@ -25,6 +25,7 @@ const INSPECTOR_MAX_WIDTH = 640;
 const INSPECTOR_DEFAULT_WIDTH = 410;
 
 type WorkspaceMode = "runs" | "dag";
+type InspectorPanel = { kind: "node"; nodeId: string } | { kind: "runs" };
 
 export interface WorkflowWorkspaceProps {
   api: OperatorApi;
@@ -65,9 +66,11 @@ export function WorkflowWorkspaceSurface({
   runActionsEnabled = true,
 }: WorkflowWorkspaceSurfaceProps) {
   const [mode, setMode] = useState<WorkspaceMode>("runs");
-  const [inspectedNode, setInspectedNode] = useState<string>();
+  const [panel, setPanel] = useState<InspectorPanel>();
   const [inspectorWidth, setInspectorWidth] = useState(INSPECTOR_DEFAULT_WIDTH);
   const workspaceId = useId();
+  const paneRef = useRef<HTMLDivElement>(null);
+  const allRunsTrigger = useRef<HTMLElement | null>(null);
   const workflowId = workflow?.workflowId;
   const latestRunId = useMemo(() => {
     let newest: (typeof state.runs)[string] | undefined;
@@ -96,13 +99,13 @@ export function WorkflowWorkspaceSurface({
       current.following = !selectedRunId || selectedRunId === latestRunId;
       current.pendingSelection = undefined;
       setMode("runs");
-      setInspectedNode(undefined);
+      setPanel(undefined);
     } else if (current.observedRunId !== selectedRunId) {
       if (!current.pendingSelection || current.pendingSelection.runId !== selectedRunId) {
         // A host route change, rather than a selection made by this workspace.
         setMode(selectedRunId ? "runs" : "dag");
         current.following = !selectedRunId || selectedRunId === latestRunId;
-        setInspectedNode(undefined);
+        setPanel(undefined);
       }
       current.observedRunId = selectedRunId;
       current.pendingSelection = undefined;
@@ -128,7 +131,7 @@ export function WorkflowWorkspaceSurface({
   ]);
 
   useEffect(() => {
-    setInspectedNode(undefined);
+    setPanel((current) => (current?.kind === "node" ? undefined : current));
   }, [selectedRunId, mode]);
 
   const selectWorkflowRun = useCallback(
@@ -141,16 +144,29 @@ export function WorkflowWorkspaceSurface({
     },
     [latestRunId, onSelectRun, selectRun],
   );
-  const closePanel = useCallback(() => setInspectedNode(undefined), []);
-  const openNode = useCallback((nodeId: string) => setInspectedNode(nodeId), []);
+  const closePanel = useCallback(() => setPanel(undefined), []);
+  const openNode = useCallback((nodeId: string) => setPanel({ kind: "node", nodeId }), []);
+  const openAllRuns = useCallback(() => {
+    allRunsTrigger.current =
+      document.activeElement instanceof HTMLElement ? document.activeElement : null;
+    setPanel({ kind: "runs" });
+  }, []);
+  const closeAllRuns = useCallback(() => {
+    setPanel(undefined);
+    allRunsTrigger.current?.focus();
+  }, []);
   const viewCurrentWorkflow = useCallback(() => {
     setMode("dag");
-    setInspectedNode(undefined);
+    setPanel(undefined);
   }, []);
   const changeMode = (next: WorkspaceMode) => {
     setMode(next);
-    setInspectedNode(undefined);
+    setPanel(undefined);
   };
+  useEffect(() => {
+    if (panel?.kind === "runs")
+      paneRef.current?.querySelector<HTMLButtonElement>("button")?.focus();
+  }, [panel?.kind]);
 
   const historical = mode === "runs" && selectedRunId !== undefined;
   const run =
@@ -160,7 +176,9 @@ export function WorkflowWorkspaceSurface({
     state.selectedRun?.summary?.runId === selectedRunId
       ? state.selectedRun
       : undefined;
-  const inspectorOpen = Boolean(inspectedNode && (!historical || run));
+  const inspectedNode = panel?.kind === "node" ? panel.nodeId : undefined;
+  const inspectorOpen =
+    panel?.kind === "runs" || Boolean(inspectedNode && (!historical || run));
   const runListPanel =
     mode === "runs" && workflow ? (
       <RunListPanel
@@ -168,6 +186,7 @@ export function WorkflowWorkspaceSurface({
         runs={state.runs}
         selectedRunId={selectedRunId}
         onSelectRun={selectWorkflowRun}
+        onViewAll={openAllRuns}
       />
     ) : undefined;
   const runControlsPanel =
@@ -309,18 +328,31 @@ export function WorkflowWorkspaceSurface({
               onChange={setInspectorWidth}
             />
             <div
+              ref={paneRef}
               id={`${workspaceId}-inspector`}
               className="workspace-inspector-pane col-start-3 grid min-h-0 min-w-0 overflow-hidden bg-panel max-[1000px]:absolute max-[1000px]:inset-y-0 max-[1000px]:right-0 max-[1000px]:z-30 max-[1000px]:w-[var(--workspace-inspector-width)] max-[1000px]:max-w-full"
             >
-              <Inspector
-                api={api}
-                embedded
-                workflow={workflow}
-                run={run}
-                nodeId={inspectedNode}
-                liveEvents={state.liveEvents[liveEventDescriptorKey]}
-                onClose={closePanel}
-              />
+              {panel?.kind === "runs" && workflow ? (
+                <RunListPanel
+                  key={workflow.workflowId}
+                  expanded
+                  workflowId={workflow.workflowId}
+                  runs={state.runs}
+                  selectedRunId={selectedRunId}
+                  onSelectRun={selectWorkflowRun}
+                  onClose={closeAllRuns}
+                />
+              ) : (
+                <Inspector
+                  api={api}
+                  embedded
+                  workflow={workflow}
+                  run={run}
+                  nodeId={inspectedNode}
+                  liveEvents={state.liveEvents[liveEventDescriptorKey]}
+                  onClose={closePanel}
+                />
+              )}
             </div>
           </>
         )}
