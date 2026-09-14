@@ -395,4 +395,52 @@ describe.each(["hosted", "local"] as const)("%s shared workspace", (host) => {
     expect(screen.getByRole("button", { name: "Inspect Fetch" })).toBeEnabled();
     expect(screen.queryByRole("region", { name: "Workflow runs" })).not.toBeInTheDocument();
   });
+
+  it("replaces node inspection with searchable all-runs and supports keyboard closing", async () => {
+    mount(
+      createApi({
+        loadBaseline: async () => ({
+          ...baseline,
+          runs: [
+            RunSummaryMsg.create({
+              ...summary,
+              triggeredAt: new Date(2026, 8, 9, 12).getTime() / 1000,
+            }),
+            RunSummaryMsg.create({
+              ...secondSummary,
+              triggeredAt: new Date(2026, 8, 10, 12).getTime() / 1000,
+            }),
+          ],
+        }),
+      }),
+    );
+    await waitFor(() =>
+      expect(screen.getByRole("button", { name: "Inspect Fetch" })).toBeEnabled(),
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Inspect Fetch" }));
+    expect(screen.getByRole("button", { name: "output" })).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "View all runs" }));
+    const allRuns = screen.getByRole("region", { name: "All runs" });
+    expect(screen.queryByRole("button", { name: "output" })).not.toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: "All runs" })).toBeInTheDocument();
+    fireEvent.click(within(allRuns).getByText("Advanced filters"));
+    fireEvent.change(within(allRuns).getByRole("searchbox", { name: "Run ID" }), {
+      target: { value: "run-1" },
+    });
+    await within(allRuns).findByRole("button", { name: /run-1,/ });
+    expect(within(allRuns).queryByRole("button", { name: /run-2,/ })).not.toBeInTheDocument();
+    fireEvent.change(within(allRuns).getByRole("searchbox"), { target: { value: "" } });
+    fireEvent.change(within(allRuns).getByLabelText("From"), {
+      target: { value: "2026-09-10" },
+    });
+    fireEvent.change(within(allRuns).getByLabelText("To"), { target: { value: "2026-09-10" } });
+    await within(allRuns).findByRole("button", { name: /run-2,/ });
+    expect(within(allRuns).queryByRole("button", { name: /run-1,/ })).not.toBeInTheDocument();
+    fireEvent.keyDown(within(allRuns).getByRole("searchbox"), { key: "Escape" });
+    expect(screen.queryByRole("region", { name: "All runs" })).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "View all runs" }));
+    fireEvent.click(screen.getByRole("button", { name: "Inspect Fetch" }));
+    expect(screen.queryByRole("region", { name: "All runs" })).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "output" })).toBeInTheDocument();
+  });
 });
