@@ -108,6 +108,10 @@ Python's standard thread-pool worker count. Threads are effective for I/O-bound
 nodes and native libraries that release the GIL; use `RayExecutor` for
 distributed or CPU-bound Python execution.
 
+`LocalExecutor(max_workers=1)` selects true serial scheduling. Avalanche completes
+one node, checks cancellation, and only then admits the next node; it does not
+queue a ready sibling that could start after the earlier node cancels or fails.
+
 Parallel nodes have no ordering guarantee. Independent nodes can append to the
 same Avalanche table; both appends are retained, but commit order is unspecified.
 If a node must observe another node's output or otherwise follow it, express that
@@ -280,8 +284,9 @@ Use `ava.LocalExecutor` for concurrent in-process execution. Pass
 `max_workers=1` when a workflow must run serially, or a larger value to bound
 the number of local node threads. `ava.RayExecutor` is available when Ray
 support is installed. Call `run.cancel()` to request cooperative cancellation;
-already-submitted local nodes are allowed to finish, while their unscheduled
-descendants do not start.
+already-running local nodes are allowed to finish. With more than one worker,
+already-submitted siblings may also finish; with one worker, later nodes are not
+admitted after cancellation.
 
 For task-scoped platform resources, pass `ava.ExecutionServicesSpec`; see
 [Execution services](execution-services.md).

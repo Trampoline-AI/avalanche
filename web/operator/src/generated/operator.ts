@@ -57,8 +57,12 @@ export interface LifecycleCursorV2 {
     eventUlid: string;
 }
 /**
- * A snapshot position for a V2 project-summary page chain. This cursor is
+ * A live observation for a V2 project-summary page chain. This cursor is
  * independent from LifecycleCursorV2 and must not be used for event replay.
+ * Within one chain, stream, topology_fingerprint, source_generation, and
+ * retained_floor_sequence identify one source; target_head_sequence may only
+ * stay level or advance from the preceding page. Checkpoint fields describe
+ * each page observation and may change.
  *
  * @generated from protobuf message avalanche.operator.ProjectSummaryCursorV2
  */
@@ -95,7 +99,8 @@ export interface ProjectSummaryCursorV2 {
 /**
  * A server-issued page continuation bound to the authenticated scope and the
  * cursor used to materialize the page. The reference is not a legacy bearer
- * page token and is revalidated on every request.
+ * page token and is revalidated on every request. For run-summary pages, its
+ * project_summary_cursor exactly repeats the issuing page observation.
  *
  * @generated from protobuf message avalanche.operator.ContinuationRefV2
  */
@@ -546,6 +551,8 @@ export interface RunSummaryPageV2 {
      */
     scopeRef?: ScopeReferenceV2;
     /**
+     * A live source observation for this page; its continuation repeats it exactly.
+     *
      * @generated from protobuf field: avalanche.operator.ProjectSummaryCursorV2 project_summary_cursor = 5
      */
     projectSummaryCursor?: ProjectSummaryCursorV2;

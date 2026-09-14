@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+- Run-summary pagination now accepts forward live observations while preserving
+  source continuity, exact continuation bindings, and bounded page traversal.
+- `LocalExecutor(max_workers=1)` now uses true serial admission: it checks for
+  cancellation before every node and does not start a ready sibling after a
+  preceding node cancels or fails. Running local work remains cooperative.
+- Constrained DataFramely to its supported 1.x API and Polars to the qualified
+  1.34 series so fresh installations retain compatible typed table schemas.
 - Avalanche and `@trampoline-ai/operator-ui` now share versions and a single Avalanche
   release tag. Both packages are built and checked before either publishes, and the
   GitHub Release waits for both registries. Failed publication jobs can reuse their
@@ -77,7 +84,8 @@
 
 ## 0.1.5rc1
 
-This prerelease carries the V2 server, converter, and generated bindings used by Delta.
+This prerelease carries the V2 server, converter, and generated bindings for compatible
+operator clients.
 
 ### Operator transport
 
