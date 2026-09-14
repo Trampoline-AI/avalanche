@@ -5,6 +5,7 @@ import { AgentTraceExplorer, type AgentTraceTurn } from "./AgentTraceExplorer";
 import {
   type AgentTraceStep,
   type AgentTraceStepSummary,
+  parseAgentTraceUsage,
   parseAgentTraceStepEvent,
   summarizeAgentTraceStep,
 } from "./agentTrace";
@@ -42,7 +43,7 @@ interface InspectorProps {
   onClose: () => void;
 }
 
-type RunTab = "overview" | "inputs" | "output" | "trace";
+type RunTab = "inputs" | "output" | "trace" | "metadata";
 type DetailFormat = "json";
 
 interface ScopedResult<T> {
@@ -88,6 +89,18 @@ function parseRetainedJson(value: string | undefined) {
   }
 }
 
+function formatSeconds(seconds: number) {
+  return `${Math.max(0, seconds).toFixed(2)}s`;
+}
+
+function formatTraceDuration(durationMs: string) {
+  const parsed = Number(durationMs);
+  if (!Number.isFinite(parsed) || parsed < 0) {
+    throw new Error("Trace duration must be a non-negative number");
+  }
+  return formatSeconds(parsed / 1000);
+}
+
 function eventPayload(value: unknown): Record<string, unknown> | undefined {
   if (!isUnknownRecord(value)) return undefined;
   return isUnknownRecord(value.data) ? value.data : value;
@@ -125,7 +138,7 @@ export function Inspector({
   const pageGeneration = useRef(0);
   const detailGeneration = useRef(0);
   const traceScrollElement = useRef<HTMLDivElement>(null);
-  const tabRef = useRef<RunTab>("overview");
+  const tabRef = useRef<RunTab>("metadata");
 
   const node: NodeSnapshotMsg | undefined = run?.nodes.find((item) => item.nodeId === nodeId);
   const runId = run?.summary?.runId;
@@ -135,7 +148,7 @@ export function Inspector({
   const hasRunNode = Boolean(run && node);
   const selectionScope = `${operatorInstanceId}\0${runId ?? ""}\0${nodeId ?? ""}`;
   const descriptorScope = `${selectionScope}\0${asOfEventUlid}\0${eventPageToken}`;
-  const tab = tabSelection?.scope === selectionScope ? tabSelection.tab : "overview";
+  const tab = tabSelection?.scope === selectionScope ? tabSelection.tab : "metadata";
   const pageKey = `${descriptorScope}\0${tab}`;
   const eventPageOrder =
     tab === "output" ? DescriptorPageOrder.NEWEST_FIRST : DescriptorPageOrder.FORWARD;
@@ -307,7 +320,7 @@ export function Inspector({
   }
 
   useEffect(() => {
-    setTabSelection({ scope: selectionScope, tab: "overview" });
+    setTabSelection({ scope: selectionScope, tab: "metadata" });
   }, [selectionScope]);
 
   useEffect(() => {
@@ -340,7 +353,7 @@ export function Inspector({
     setEventPageScope(undefined);
     setPageError(undefined);
     setPageLoading(false);
-    if (!hasRunNode || !nodeId || !runId || tab === "overview") return;
+    if (!hasRunNode || !nodeId || !runId || tab === "metadata") return;
 
     const controller = new AbortController();
     pageController.current = controller;
@@ -724,23 +737,70 @@ export function Inspector({
         activeInputOutputState?.status !== "error"));
   const inputOutputError =
     activeInputOutputState?.status === "error" ? activeInputOutputState.error : undefined;
+  const nodeDuration =
+    node.startedAt > 0 && node.endedAt >= node.startedAt
+      ? formatSeconds(node.endedAt - node.startedAt)
+      : undefined;
+  const traceHeader = node.trace?.header;
+  const traceUsage = traceHeader
+    ? parseAgentTraceUsage(JSON.parse(traceHeader.usageJson) as unknown)
+    : undefined;
+  const headerDuration = traceHeader
+    ? formatTraceDuration(traceHeader.durationMs)
+    : nodeDuration;
+  const nodeStatusClass =
+    node.status === "success"
+      ? "status-success text-success"
+      : node.status === "failed"
+        ? "status-failed text-failed"
+        : node.status === "running"
+          ? "status-running text-muted"
+          : "text-muted";
 
   return (
     <aside
       className={`inspector inspector-run fixed right-0 bottom-0 z-30 grid h-auto w-[min(var(--workspace-inspector-width),100vw)] min-h-0 min-w-0 grid-rows-[auto_auto_minmax(0,1fr)] overflow-hidden border-l border-line bg-panel shadow-[-20px_0_50px_rgba(20,31,26,.14)] max-[700px]:w-screen ${panelLayout}`}
       aria-label="Run inspector"
     >
-      <header className="flex items-start justify-between border-b border-line px-5 pt-[19px] pb-3.5">
-        <div>
+      <header className="flex items-start justify-between gap-3 border-b border-line px-5 pt-[19px] pb-3.5">
+        <div className="min-w-0 flex-1">
           <span className="eyebrow block font-mono text-[9px] tracking-[.16em] text-acid uppercase">
             Execution detail
           </span>
-          <h2 className="mt-1 mb-[5px] text-lg">{node.name}</h2>
-          <span
-            className={`status-pill inline-flex rounded-full border bg-panel px-[7px] py-[3px] font-mono text-[8px] uppercase ${node.status === "failed" ? "status-failed border-danger text-danger" : node.status === "success" ? "status-success border-mint text-mint" : "border-line text-muted"}`}
-          >
-            {node.status}
-          </span>
+          <div className="mt-1 flex min-w-0 flex-wrap items-baseline gap-x-2 gap-y-1">
+            <h2 className="m-0 min-w-0 text-lg [overflow-wrap:anywhere]">{node.name}</h2>
+            <span className={`node-status font-mono text-[8px] uppercase ${nodeStatusClass}`}>
+              {node.status}
+            </span>
+            {headerDuration && (
+              <span className="font-mono text-[9px] text-muted">{headerDuration}</span>
+            )}
+          </div>
+          {traceHeader && traceUsage && (
+            <div className="mt-2 grid min-w-0 gap-0.5 font-mono text-[8px] leading-[1.5]">
+              <p className="m-0 whitespace-normal text-secondary [overflow-wrap:anywhere]">
+                <span className="mr-1.5 text-muted uppercase">Main</span>
+                {traceHeader.model}
+                {` · $${traceUsage.main.cost.toFixed(4)}`}
+              </p>
+              <p className="m-0 whitespace-normal text-secondary [overflow-wrap:anywhere]">
+                <span className="mr-1.5 text-muted uppercase">Sub</span>
+                {traceHeader.subModel ?? "—"}
+                {` · $${traceUsage.sub.cost.toFixed(4)}`}
+              </p>
+              <p className="m-0 text-muted">
+                <span className="text-secondary">
+                  {traceHeader.iterations} of {traceHeader.maxIterations}
+                </span>{" "}
+                iterations
+              </p>
+            </div>
+          )}
+          {node.error && (
+            <p className="mt-2 mb-0 text-[9px] text-danger [overflow-wrap:anywhere]">
+              {node.error}
+            </p>
+          )}
         </div>
         <button
           type="button"
@@ -755,7 +815,7 @@ export function Inspector({
         className="inspector-tabs flex overflow-x-auto border-b border-line px-2.5"
         aria-label="Run detail views"
       >
-        {(["overview", "inputs", "output", "trace"] as RunTab[]).map((item) => (
+        {(["trace", "inputs", "output", "metadata"] as RunTab[]).map((item) => (
           <button
             type="button"
             key={item}
@@ -768,34 +828,11 @@ export function Inspector({
         ))}
       </nav>
       <div className="inspector-body inspector-body-full h-full min-h-0 min-w-0 overflow-auto px-5 pt-[18px] pb-[30px] [&>section]:mb-[23px] [&_h3]:text-[10px] [&_h3]:tracking-[.08em] [&_h3]:text-secondary [&_h3]:uppercase">
-        {tab === "overview" && (
-          <section className="inspector-panel inspector-overview min-h-full min-w-0">
-            <div className="metric-grid grid grid-cols-2 gap-2 [&>div]:rounded-[7px] [&>div]:border [&>div]:border-line [&>div]:bg-panel [&>div]:p-2.5 [&_small]:block [&_small]:text-[7px] [&_small]:text-muted [&_small]:uppercase [&_strong]:mt-[5px] [&_strong]:block [&_strong]:text-[11px]">
-              <div>
-                <small>Status</small>
-                <strong>{node.status}</strong>
-              </div>
-              <div>
-                <small>Started</small>
-                <strong>{node.startedAt ? "yes" : "—"}</strong>
-              </div>
-              <div>
-                <small>Duration</small>
-                <strong>
-                  {node.startedAt && node.endedAt
-                    ? `${Math.max(0, node.endedAt - node.startedAt).toFixed(2)}s`
-                    : "—"}
-                </strong>
-              </div>
-            </div>
-            {node.error && (
-              <p className="node-failure rounded-[7px] border border-danger p-2.5 text-[10px] text-danger [overflow-wrap:anywhere]">
-                {node.error}
-              </p>
-            )}
+        {tab === "metadata" && (
+          <section className="inspector-panel inspector-metadata min-h-full min-w-0">
             {node.trace && (
               <section>
-                <h3>Trace summary</h3>
+                <h3>Trace metadata</h3>
                 <ValueView
                   value={{
                     status: node.trace.status,

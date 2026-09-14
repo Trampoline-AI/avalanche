@@ -8,7 +8,24 @@ import { createApi, node, snapshotFor } from "./test/fixtures";
 
 const run = RunSnapshotMsg.create({
   ...snapshotFor(),
-  nodes: [{ ...node, trace: { available: true, header: { model: "retained-model" } } }],
+  nodes: [
+    {
+      ...node,
+      trace: {
+        available: true,
+        header: {
+          status: "completed",
+          model: "retained-model",
+          subModel: "retained-sub-model",
+          iterations: "2",
+          maxIterations: "4",
+          durationMs: "125",
+          usageJson:
+            '{"main":{"input_tokens":12,"output_tokens":3,"cost":0.01,"cache_hits":0},"sub":{"input_tokens":0,"output_tokens":0,"cost":0,"cache_hits":0}}',
+        },
+      },
+    },
+  ],
 });
 function event(sequence: number, eventKind = "iteration.recorded") {
   return AgentEventDescriptorMsg.create({
@@ -131,5 +148,4 @@ describe("retained run inspection", () => {
       expect(screen.getByText(value)).toBeInTheDocument();
     },
   );
-  });
 });
