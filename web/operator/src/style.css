@@ -35,6 +35,17 @@
   font-family: var(--font-mono);
 }
 
+.avalanche-operator-ui .node-card[aria-disabled="true"] {
+  cursor: default;
+  opacity: 0.6;
+  transform: none;
+  border-color: var(--color-line);
+}
+
+.avalanche-operator-ui .node-card-action:disabled {
+  cursor: not-allowed;
+}
+
 @keyframes gradientRotate {
   0% {
     background-position: 100% 100%;
