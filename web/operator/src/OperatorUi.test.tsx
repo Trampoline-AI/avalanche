@@ -37,14 +37,16 @@ vi.mock("@xyflow/react", async (importOriginal) => ({
   },
 }));
 
-import { OperatorUi } from "./index";
+import { OperatorUi, WorkflowWorkspace } from "./index";
 import type { OperatorUiSelection } from "./index";
+import type { OperatorApi } from "./api";
 import {
   AgentEventDescriptorMsg,
   CatalogSnapshotMsg,
   FlowInfoMsg,
   RunSnapshotMsg,
   RunSummaryMsg,
+  OperatorUpdateEnvelope,
 } from "./model";
 import {
   baseline,
@@ -53,6 +55,7 @@ import {
   eventUlid,
   idleUpdates,
   snapshotFor,
+  secondSummary,
   summary,
   workflow,
 } from "./test/fixtures";
@@ -65,7 +68,7 @@ const presentation = {
 };
 
 describe("operator workflows", () => {
-  it("selects a workflow, starts without auto-selecting, inspects retained output, and cancels the selected run", async () => {
+  it("starts a run, follows its arrival, inspects retained output, and cancels it", async () => {
     const inventory = FlowInfoMsg.create({
       ...workflow,
       workflowId: "inventory.py::inventory",
@@ -152,7 +155,7 @@ describe("operator workflows", () => {
     expect(snapshots).not.toHaveBeenCalled();
 
     act(() => publish.resolve());
-    fireEvent.click(await screen.findByRole("button", { name: /run-new, running/ }));
+    await screen.findByRole("button", { name: /run-new, running/ });
     fireEvent.click(await screen.findByRole("button", { name: "Inspect Recorded fetch" }));
     fireEvent.click(screen.getByRole("button", { name: "output" }));
     expect(await screen.findByText("Retained result")).toBeInTheDocument();
@@ -214,12 +217,230 @@ describe("operator workflows", () => {
       },
     });
     render(<OperatorUi host={{ api, presentation }} />);
+    fireEvent.click(await screen.findByRole("tab", { name: "DAG" }));
     fireEvent.click(await screen.findByRole("button", { name: "Run" }));
     expect(
       await screen.findByText("Preparation rejected: missing credential"),
     ).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Inspect Fetch" })).toBeInTheDocument();
-    const runs = screen.getByRole("region", { name: "Workflow runs" });
-    await waitFor(() => expect(within(runs).getAllByRole("button")).toHaveLength(1));
+    expect(screen.getByRole("tab", { name: "DAG" })).toHaveAttribute("aria-selected", "true");
+    expect(screen.queryByRole("region", { name: "Workflow runs" })).not.toBeInTheDocument();
+  });
+});
+
+describe.each(["hosted", "local"] as const)("%s shared workspace", (host) => {
+  function mount(api: OperatorApi) {
+    return render(
+      <StrictMode>
+        {host === "hosted" ? (
+          <WorkflowWorkspace
+            api={api}
+            workflowId={workflow.workflowId}
+            runActionsEnabled={false}
+          />
+        ) : (
+          <OperatorUi host={{ api, presentation }} />
+        )}
+      </StrictMode>,
+    );
+  }
+
+  it("follows latest through bursts and baselines, but keeps an older run pinned across DAG and reconnect", async () => {
+    const ready = Promise.withResolvers<void>();
+    const thirdArrives = Promise.withResolvers<void>();
+    const fourthArrives = Promise.withResolvers<void>();
+    const reset = Promise.withResolvers<void>();
+    const sixthArrives = Promise.withResolvers<void>();
+    const staleSnapshot = Promise.withResolvers<RunSnapshotMsg>();
+    const third = RunSummaryMsg.create({ ...summary, runId: "run-3", createdSequence: "3" });
+    const fourth = RunSummaryMsg.create({ ...summary, runId: "run-4", createdSequence: "4" });
+    const fifth = RunSummaryMsg.create({ ...summary, runId: "run-5", createdSequence: "5" });
+    const sixth = RunSummaryMsg.create({ ...summary, runId: "run-6", createdSequence: "6" });
+    let runs = [
+      summary,
+      secondSummary,
+      RunSummaryMsg.create({
+        ...summary,
+        runId: "another-workflow-run",
+        workflowId: "another-workflow",
+        createdSequence: "100",
+      }),
+    ];
+    let cursor = 1;
+    let connections = 0;
+    const snapshot = (run: RunSummaryMsg) =>
+      RunSnapshotMsg.create({
+        ...snapshotFor(run),
+        asOfEventUlid: eventUlid(cursor),
+        topology: {
+          ...snapshotFor(run).topology!,
+          displayNames: { fetch: `Snapshot ${run.runId}` },
+        },
+      });
+    const api = createApi({
+      loadBaseline: async () => {
+        await ready.promise;
+        return { ...baseline, asOfEventUlid: eventUlid(cursor), runs };
+      },
+      getLatestRunSnapshot: async (runId) =>
+        runId === secondSummary.runId
+          ? staleSnapshot.promise
+          : snapshot(runs.find((run) => run.runId === runId)!),
+      streamUpdates: async function* (_instance, _cursor, signal) {
+        connections += 1;
+        if (connections === 1) {
+          await thirdArrives.promise;
+          yield envelope(2, {
+            oneofKind: "runCreated",
+            runCreated: { summary: third, nodes: [] },
+          });
+          await fourthArrives.promise;
+          yield envelope(3, {
+            oneofKind: "runCreated",
+            runCreated: { summary: fourth, nodes: [] },
+          });
+          await reset.promise;
+          yield OperatorUpdateEnvelope.create({
+            operatorInstanceId: "operator-1",
+            payload: {
+              oneofKind: "resetRequired",
+              resetRequired: {
+                latestEventUlid: eventUlid(4),
+                historyFloorEventUlid: eventUlid(4),
+              },
+            },
+          });
+          return;
+        }
+        await sixthArrives.promise;
+        yield envelope(5, {
+          oneofKind: "runCreated",
+          runCreated: { summary: sixth, nodes: [] },
+        });
+        yield* idleUpdates(signal);
+      },
+    });
+    mount(api);
+    act(() => ready.resolve());
+    await waitFor(() =>
+      expect(screen.getByRole("button", { name: /run-2,/ })).toHaveAttribute(
+        "aria-pressed",
+        "true",
+      ),
+    );
+    act(() => {
+      runs = [...runs, third];
+      cursor = 2;
+      thirdArrives.resolve();
+    });
+    await screen.findByRole("button", { name: "Inspect Snapshot run-3" });
+    act(() => staleSnapshot.resolve(snapshot(secondSummary)));
+    expect(screen.getByRole("button", { name: /run-3,/ })).toHaveAttribute(
+      "aria-pressed",
+      "true",
+    );
+    fireEvent.click(screen.getByRole("button", { name: /run-1,/ }));
+    await screen.findByRole("button", { name: "Inspect Snapshot run-1" });
+    act(() => {
+      runs = [...runs, fourth];
+      cursor = 3;
+      fourthArrives.resolve();
+    });
+    await screen.findByRole("button", { name: /run-4,/ });
+    expect(screen.getByRole("button", { name: /run-1,/ })).toHaveAttribute(
+      "aria-pressed",
+      "true",
+    );
+    fireEvent.click(screen.getByRole("tab", { name: "DAG" }));
+    expect(screen.queryByRole("region", { name: "Workflow runs" })).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Inspect Fetch" })).toBeEnabled();
+    fireEvent.click(screen.getByRole("tab", { name: "Runs" }));
+    await screen.findByRole("button", { name: "Inspect Snapshot run-1" });
+    act(() => {
+      runs = [...runs, fifth];
+      cursor = 4;
+      reset.resolve();
+    });
+    await screen.findByRole("button", { name: /run-5,/ });
+    await screen.findByRole("button", { name: "Inspect Snapshot run-1" });
+    expect(screen.getByRole("button", { name: /run-1,/ })).toHaveAttribute(
+      "aria-pressed",
+      "true",
+    );
+    fireEvent.click(screen.getByRole("button", { name: /run-5,/ }));
+    await screen.findByRole("button", { name: "Inspect Snapshot run-5" });
+    act(() => {
+      runs = [...runs, sixth];
+      cursor = 5;
+      sixthArrives.resolve();
+    });
+    await screen.findByRole("button", { name: "Inspect Snapshot run-6" });
+    expect(screen.getByRole("button", { name: /run-6,/ })).toHaveAttribute(
+      "aria-pressed",
+      "true",
+    );
+  });
+
+  it("keeps the empty workflow graph visible and disables inspection only in Runs", async () => {
+    mount(createApi({ loadBaseline: async () => ({ ...baseline, runs: [] }) }));
+    const node = await screen.findByRole("button", { name: "Inspect Fetch" });
+    expect(screen.getByRole("tab", { name: "Runs" })).toHaveAttribute("aria-selected", "true");
+    expect(node).toBeDisabled();
+    expect(
+      within(screen.getByRole("region", { name: "Workflow runs" })).getByText("No runs"),
+    ).toBeInTheDocument();
+    fireEvent.click(node);
+    expect(screen.queryByRole("complementary", { name: "Node code" })).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole("tab", { name: "DAG" }));
+    expect(screen.getByRole("button", { name: "Inspect Fetch" })).toBeEnabled();
+    expect(screen.queryByRole("region", { name: "Workflow runs" })).not.toBeInTheDocument();
+  });
+
+  it("replaces node inspection with searchable all-runs and supports keyboard closing", async () => {
+    mount(
+      createApi({
+        loadBaseline: async () => ({
+          ...baseline,
+          runs: [
+            RunSummaryMsg.create({
+              ...summary,
+              triggeredAt: new Date(2026, 8, 9, 12).getTime() / 1000,
+            }),
+            RunSummaryMsg.create({
+              ...secondSummary,
+              triggeredAt: new Date(2026, 8, 10, 12).getTime() / 1000,
+            }),
+          ],
+        }),
+      }),
+    );
+    await waitFor(() =>
+      expect(screen.getByRole("button", { name: "Inspect Fetch" })).toBeEnabled(),
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Inspect Fetch" }));
+    expect(screen.getByRole("button", { name: "output" })).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "View all runs" }));
+    const allRuns = screen.getByRole("region", { name: "All runs" });
+    expect(screen.queryByRole("button", { name: "output" })).not.toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: "All runs" })).toBeInTheDocument();
+    fireEvent.click(within(allRuns).getByText("Advanced filters"));
+    fireEvent.change(within(allRuns).getByRole("searchbox", { name: "Run ID" }), {
+      target: { value: "run-1" },
+    });
+    await within(allRuns).findByRole("button", { name: /run-1,/ });
+    expect(within(allRuns).queryByRole("button", { name: /run-2,/ })).not.toBeInTheDocument();
+    fireEvent.change(within(allRuns).getByRole("searchbox"), { target: { value: "" } });
+    fireEvent.change(within(allRuns).getByLabelText("From"), {
+      target: { value: "2026-09-10" },
+    });
+    fireEvent.change(within(allRuns).getByLabelText("To"), { target: { value: "2026-09-10" } });
+    await within(allRuns).findByRole("button", { name: /run-2,/ });
+    expect(within(allRuns).queryByRole("button", { name: /run-1,/ })).not.toBeInTheDocument();
+    fireEvent.keyDown(within(allRuns).getByRole("searchbox"), { key: "Escape" });
+    expect(screen.queryByRole("region", { name: "All runs" })).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "View all runs" }));
+    fireEvent.click(screen.getByRole("button", { name: "Inspect Fetch" }));
+    expect(screen.queryByRole("region", { name: "All runs" })).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "output" })).toBeInTheDocument();
   });
 });

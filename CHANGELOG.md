@@ -14,6 +14,13 @@
   GitHub Release waits for both registries. Failed publication jobs can reuse their
   validated artifacts without re-uploading existing packages; npm retries verify
   archive integrity before skipping an existing version.
+- Local and embedded operator browser interfaces now share Runs/DAG tabs. Runs
+  follows the latest run unless an older run is selected, preserving that choice
+  across reconnects and tab changes. Empty run history keeps the workflow graph
+  visible with run inspection disabled.
+- Added an all-runs browser beside the workflow graph, with 25-run pages, status
+  and inclusive local-date filters, and run-ID search. It shares the node inspector
+  pane and supports keyboard closing; pagination covers loaded history only.
 - Consolidated Python, terminal, and browser tests around core execution, data
   integrity, recovery, and interaction scenarios; removed redundant test scaffolding
   and static-copy/schema inventories. `make test` now includes browser tests.
