@@ -59,5 +59,15 @@ the newest run resumes following. That intent survives projection rehydration an
 switching to DAG. DAG displays the current workflow without the floating run list.
 An empty run collection keeps the graph visible with node inspection disabled.
 
+The floating list's **View all runs** action opens the right-hand run browser,
+replacing node inspection. It paginates the runs supplied by the API baseline in
+25-run pages, with a status dropdown and inclusive local-date filtering.
+Run-ID search is available under the initially collapsed **Advanced filters** section.
+Opening a node replaces the run browser. Escape closes the run browser and
+returns focus to its trigger.
+
+Pagination covers loaded history only; it does not retrieve records unavailable
+through the host's `OperatorApi`.
+
 This package does not run an operator server, create an authentication boundary, or provide
 multi-tenant behavior. Those concerns stay with the embedding host.
