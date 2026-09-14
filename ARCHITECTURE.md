@@ -145,8 +145,10 @@ and tools stay step-local capabilities.
 
 `LocalExecutor` runs dependency-ready nodes concurrently in a per-run thread
 pool inside the local coordinator process. Its worker bound is configurable;
-one worker provides serial execution. Node arguments and fan-in receipts retain
-DAG declaration order even when sibling completion order differs. `RayExecutor`
+one worker uses synchronous serial admission, checking cancellation before each
+node and leaving later ready siblings unqueued after cancellation or failure.
+Node arguments and fan-in receipts retain DAG declaration order even when sibling
+completion order differs. `RayExecutor`
 submits work to Ray when selected. The DAG runtime, not the UI or operator
 parent, controls dependency order and binding. Ray object references remain
 distributed until a consumer needs materialization; the operator parent
@@ -345,7 +347,7 @@ does not receive a direct Python or gRPC channel to user workflow code.
 
 ```text
 Browser SPA
-  ├── DiscoverFlows + paginated run-summary baseline
+  ├── DiscoverFlows + paginated live run-summary baseline
   ├── WatchRunStatus from the current cursor
   ├── fetch selected snapshots, logs, agent events, and details on demand
   └── StartRun / CancelRun actions
@@ -353,6 +355,10 @@ Browser SPA
           ▼
 ava web listener ── native gRPC ── OperatorServiceV2
 ```
+
+Run-summary pages keep a stable source identity while their observed head moves
+forward. A continuation repeats the exact observation that issued it, so a client
+can follow a live page chain without crossing sources or accepting a head rewind.
 
 The browser state layer checks operator instance IDs and sequence boundaries
 before merging data. A reset reloads the catalog and run baseline rather than

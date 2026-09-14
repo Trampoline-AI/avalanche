@@ -88,7 +88,8 @@ def _raw_input() -> dict[str, Any]:
     }
 
 
-def test_local_service_input_lifecycle_receipts_and_fan_in():
+@pytest.mark.parametrize("max_workers", (None, 1), ids=("default", "serial"))
+def test_local_service_input_lifecycle_receipts_and_fan_in(max_workers: int | None):
     events: list[tuple[Any, ...]] = []
     services = RecordingServices(events)
 
@@ -111,7 +112,7 @@ def test_local_service_input_lifecycle_receipts_and_fan_in():
         return join(left, right)
 
     handle = flow().run(
-        executor=ava.LocalExecutor(),
+        executor=ava.LocalExecutor(max_workers=max_workers),
         input=_raw_input(),
         execution_services=_spec(services),
     )

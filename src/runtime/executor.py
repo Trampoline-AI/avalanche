@@ -259,7 +259,9 @@ class LocalExecutor:
 
     Direct ``submit`` calls execute synchronously and return materialized values.
     ``Workflow.run`` uses ``max_workers`` to execute dependency-ready nodes in a
-    thread pool while preserving DAG ordering.
+    thread pool while preserving DAG ordering. ``max_workers=1`` uses the
+    synchronous scheduler: it checks cancellation before each node admission
+    and never queues a ready sibling behind a node that may end the run.
 
     Useful for:
     - Testing

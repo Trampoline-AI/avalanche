@@ -2864,7 +2864,7 @@ class Workflow:
                     cancelled = True
             if cancelled:
                 raise CancelledError()
-        elif is_local_executor:
+        elif is_local_executor and executor.max_workers != 1:
             completed_nodes: set[str] = set()
             remaining_nodes = list(execution_order)
             pending_tasks: dict[Future[tuple[NodeFuture, Any]], str] = {}
