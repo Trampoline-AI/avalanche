@@ -6,9 +6,15 @@ without DSPy or predict-rlm installed.
 
 from __future__ import annotations
 
+from enum import Enum
 from typing import Any, Mapping
 
-UNSET = object()
+
+class _Unset(Enum):
+    VALUE = "unset"
+
+
+UNSET = _Unset.VALUE
 
 # These are not agent runtime kwargs. Signatures describe only model inputs and
 # outputs; skills and tools belong to the agent-step decorator.
