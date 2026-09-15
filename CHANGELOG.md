@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 0.3.2
+
 - Agent steps can cross Ray/cloudpickle boundaries without serializing process-local
   workflow context variables. Omitted agent options retain their singleton identity
   after serialization instead of becoming invalid skills/tools overrides.
