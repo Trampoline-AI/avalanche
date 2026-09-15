@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- Agent steps can cross Ray/cloudpickle boundaries without serializing process-local
+  workflow context variables. Omitted agent options retain their singleton identity
+  after serialization instead of becoming invalid skills/tools overrides.
 - Run-summary pagination now accepts forward live observations while preserving
   source continuity, exact continuation bindings, and bounded page traversal.
 - `LocalExecutor(max_workers=1)` now uses true serial admission: it checks for
