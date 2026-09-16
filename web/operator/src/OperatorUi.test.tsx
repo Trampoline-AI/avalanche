@@ -40,8 +40,8 @@ vi.mock("@xyflow/react", async (importOriginal) => ({
 import { OperatorUi, WorkflowWorkspace } from "./index";
 import type { OperatorUiSelection } from "./index";
 import type { OperatorApi } from "./api";
+import { Explorer } from "./Explorer";
 import {
-  AgentEventDescriptorMsg,
   CatalogSnapshotMsg,
   FlowInfoMsg,
   RunSnapshotMsg,
@@ -68,7 +68,7 @@ const presentation = {
 };
 
 describe("operator workflows", () => {
-  it("starts a run, follows its arrival, inspects retained output, and cancels it", async () => {
+  it("starts and selects a run, inspects its node, and cancels it", async () => {
     const inventory = FlowInfoMsg.create({
       ...workflow,
       workflowId: "inventory.py::inventory",
@@ -125,89 +125,189 @@ describe("operator workflows", () => {
         });
         yield* idleUpdates(signal);
       },
-      listAgentEventPage: async () => ({
-        operatorInstanceId: "operator-1",
-        asOfEventUlid: eventUlid(2),
-        runId: "run-new",
-        nodeId: "fetch",
-        records: [
-          AgentEventDescriptorMsg.create({
-            eventSequence: "1",
-            eventKind: "run.succeeded",
-            bodyToken: "output",
-            sizeBytes: "128",
-          }),
-        ],
-        nextPageToken: "",
-        nextCursor: "1",
-      }),
-      readJsonDetail: async () => ({ outputs: { answer: "Retained result" } }),
+      getWorkflowNodeSource: async () => "def fetch():\n    return 'Current source'",
     });
     render(<OperatorUi host={{ api, presentation }} />);
     await screen.findByRole("button", { name: "Inspect Inventory fetch" });
-    fireEvent.click(screen.getByRole("button", { name: /Ordersflows.py/ }));
+    fireEvent.click(screen.getByRole("button", { name: /Orders\s*flows\.py/ }));
     await screen.findByRole("button", { name: "Inspect Fetch" });
     fireEvent.click(screen.getByRole("button", { name: "Run" }));
     await act(async () => {
       await started.promise;
     });
     expect(screen.queryByRole("button", { name: /run-new,/ })).not.toBeInTheDocument();
-    expect(snapshots).not.toHaveBeenCalled();
+    await screen.findByRole("button", { name: "Inspect Recorded fetch" });
 
     act(() => publish.resolve());
     await screen.findByRole("button", { name: /run-new, running/ });
     fireEvent.click(await screen.findByRole("button", { name: "Inspect Recorded fetch" }));
-    fireEvent.click(screen.getByRole("button", { name: "output" }));
-    expect(await screen.findByText("Retained result")).toBeInTheDocument();
+    expect(
+      screen.queryByRole("complementary", { name: "Run inspector" }),
+    ).not.toBeInTheDocument();
+    expect(screen.queryByRole("tab", { name: "Run I/O" })).not.toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: "Cancel run" }));
     await screen.findByRole("button", { name: /run-new, cancelled/ });
     expect(screen.queryByRole("button", { name: "Cancel run" })).not.toBeInTheDocument();
 
-    fireEvent.click(screen.getByRole("button", { name: "Current workflow" }));
+    fireEvent.click(screen.getByRole("button", { name: "Current" }));
     await screen.findByRole("button", { name: "Inspect Fetch" });
-    expect(screen.queryByText("Retained result")).not.toBeInTheDocument();
+    expect(screen.getByRole("complementary", { name: "Node code" })).toBeInTheDocument();
     expect(
       screen.queryByRole("button", { name: "Inspect Recorded fetch" }),
     ).not.toBeInTheDocument();
   });
 
-  it("honors a controlled deep link through StrictMode startup and clears inspection when the host navigates away", async () => {
-    const ready = Promise.withResolvers<typeof baseline>();
-    const api = createApi({ loadBaseline: () => ready.promise });
-    function HostedOperator() {
-      const [selection, setSelection] = useState<OperatorUiSelection | undefined>({
-        kind: "run",
-        workflowId: workflow.workflowId,
-        runId: summary.runId,
-      });
-      return (
-        <>
-          <button
-            onClick={() => setSelection({ kind: "workflow", workflowId: workflow.workflowId })}
-          >
-            Host return to workflow
-          </button>
-          <OperatorUi
-            host={{ api, presentation }}
-            navigation={{ selection, onSelectionChange: setSelection }}
-          />
-        </>
+  it.each(["operator", "workspace"] as const)(
+    "%s navigation returns to the current workflow and retains the selected node",
+    async (host) => {
+      const ready = Promise.withResolvers<typeof baseline>();
+      const api = createApi({ loadBaseline: () => ready.promise });
+      function HostedOperator() {
+        const [selection, setSelection] = useState<OperatorUiSelection | undefined>({
+          kind: "run",
+          workflowId: workflow.workflowId,
+          runId: summary.runId,
+        });
+        return (
+          <>
+            {host === "operator" ? (
+              <OperatorUi
+                host={{ api, presentation }}
+                navigation={{ selection, onSelectionChange: setSelection }}
+              />
+            ) : (
+              <WorkflowWorkspace
+                api={api}
+                workflowId={workflow.workflowId}
+                navigation={{
+                  selectedRunId: selection?.kind === "run" ? selection.runId : undefined,
+                  onSelectRun: (runId) =>
+                    setSelection(
+                      runId === undefined
+                        ? { kind: "workflow", workflowId: workflow.workflowId }
+                        : { kind: "run", workflowId: workflow.workflowId, runId },
+                    ),
+                }}
+              />
+            )}
+          </>
+        );
+      }
+      render(
+        <StrictMode>
+          <HostedOperator />
+        </StrictMode>,
       );
-    }
-    render(
-      <StrictMode>
-        <HostedOperator />
-      </StrictMode>,
+      expect(screen.queryByRole("button", { name: "Cancel run" })).not.toBeInTheDocument();
+      act(() => ready.resolve(baseline));
+      await screen.findByRole("button", { name: "Cancel run" });
+      fireEvent.click(screen.getByRole("button", { name: "Inspect Fetch" }));
+      expect(
+        screen.queryByRole("complementary", { name: "Run inspector" }),
+      ).not.toBeInTheDocument();
+      expect(screen.getByText("Viewing a run snapshot")).toBeInTheDocument();
+      expect(
+        screen.getByText("This view does not represent the workflow's current state."),
+      ).toBeInTheDocument();
+      fireEvent.click(
+        screen.getByRole("button", {
+          name: host === "operator" ? "View current state for Orders" : "Current",
+        }),
+      );
+      await screen.findByRole("button", { name: "Run" });
+      expect(screen.getByRole("complementary", { name: "Node code" })).toBeInTheDocument();
+      expect(screen.queryByRole("button", { name: "Cancel run" })).not.toBeInTheDocument();
+    },
+  );
+
+  it("keeps a collapsed rail available and pins a hovered Explorer", async () => {
+    render(<OperatorUi host={{ api: createApi(), presentation }} />);
+
+    const collapse = await screen.findByRole("button", { name: "Collapse Explorer" });
+    const explorer = screen.getByRole("complementary", { name: "Explorer" });
+    fireEvent.click(collapse);
+
+    expect(
+      screen.queryByRole("button", { name: /Orders\s*flows\.py/ }),
+    ).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Pin Explorer open" })).toHaveAttribute(
+      "aria-expanded",
+      "false",
     );
-    expect(screen.queryByRole("button", { name: "Cancel run" })).not.toBeInTheDocument();
-    act(() => ready.resolve(baseline));
-    await screen.findByRole("button", { name: "Cancel run" });
-    fireEvent.click(screen.getByRole("button", { name: "Inspect Fetch" }));
-    expect(screen.getByRole("button", { name: "output" })).toBeInTheDocument();
-    fireEvent.click(screen.getByRole("button", { name: "Host return to workflow" }));
-    await screen.findByRole("button", { name: "Run" });
-    expect(screen.queryByRole("button", { name: "output" })).not.toBeInTheDocument();
-    expect(screen.queryByRole("button", { name: "Cancel run" })).not.toBeInTheDocument();
+
+    fireEvent.mouseEnter(explorer);
+    fireEvent.click(screen.getByRole("button", { name: /Orders\s*flows\.py/ }));
+    fireEvent.mouseLeave(explorer);
+    expect(
+      screen.queryByRole("button", { name: /Orders\s*flows\.py/ }),
+    ).not.toBeInTheDocument();
+
+    fireEvent.mouseEnter(explorer);
+    fireEvent.click(screen.getByRole("button", { name: "Pin Explorer open" }));
+    fireEvent.mouseLeave(explorer);
+    expect(screen.getByRole("button", { name: /Orders\s*flows\.py/ })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Collapse Explorer" })).toHaveAttribute(
+      "aria-expanded",
+      "true",
+    );
+  });
+
+  it("groups only an unambiguous scan target and keeps all workflows when targets change", () => {
+    const target = {
+      alias: "examples",
+      targetPath: "/workspace/examples/flows.py",
+      kind: "file",
+    };
+    const workflows = [
+      FlowInfoMsg.create({ ...workflow, rootAlias: target.alias }),
+      FlowInfoMsg.create({
+        workflowId: "inventory.py::inventory",
+        displayName: "Inventory",
+        relativeFile: "inventory.py",
+        rootAlias: "another-root",
+      }),
+    ];
+    const props = {
+      onSelect: vi.fn(),
+      selection: { kind: "run", workflowId: workflow.workflowId, runId: "run-1" } as const,
+    };
+    const { rerender } = render(
+      <Explorer
+        {...props}
+        catalog={CatalogSnapshotMsg.create({ workflows, scanTargets: [target] })}
+      />,
+    );
+    const group = screen.getByRole("region", { name: "flows.py" });
+    expect(within(group).getByRole("button", { name: /Orders\s*flows\.py/ })).toHaveAttribute(
+      "aria-current",
+      "true",
+    );
+    expect(
+      within(group).getByRole("button", { name: /Inventory\s*inventory\.py/ }),
+    ).toBeInTheDocument();
+    expect(screen.queryByText(target.targetPath)).not.toBeInTheDocument();
+
+    rerender(
+      <Explorer
+        {...props}
+        catalog={CatalogSnapshotMsg.create({
+          workflows,
+          scanTargets: [
+            target,
+            { alias: "other", targetPath: "/workspace/other", kind: "directory" },
+          ],
+        })}
+      />,
+    );
+    expect(screen.queryByRole("region", { name: "flows.py" })).not.toBeInTheDocument();
+    expect(
+      within(screen.getByRole("region", { name: "Workflows" })).getAllByRole("button"),
+    ).toHaveLength(2);
+
+    rerender(<Explorer {...props} catalog={CatalogSnapshotMsg.create({ workflows })} />);
+    expect(
+      within(screen.getByRole("region", { name: "Workflows" })).getAllByRole("button"),
+    ).toHaveLength(2);
   });
 
   it("surfaces operator rejection without losing the selected workflow", async () => {
@@ -217,14 +317,16 @@ describe("operator workflows", () => {
       },
     });
     render(<OperatorUi host={{ api, presentation }} />);
-    fireEvent.click(await screen.findByRole("tab", { name: "DAG" }));
+    await screen.findByRole("button", { name: "Current" });
     fireEvent.click(await screen.findByRole("button", { name: "Run" }));
     expect(
       await screen.findByText("Preparation rejected: missing credential"),
     ).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Inspect Fetch" })).toBeInTheDocument();
-    expect(screen.getByRole("tab", { name: "DAG" })).toHaveAttribute("aria-selected", "true");
-    expect(screen.queryByRole("region", { name: "Workflow runs" })).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Current" })).toHaveAttribute(
+      "aria-pressed",
+      "true",
+    );
   });
 });
 
@@ -245,7 +347,7 @@ describe.each(["hosted", "local"] as const)("%s shared workspace", (host) => {
     );
   }
 
-  it("follows latest through bursts and baselines, but keeps an older run pinned across DAG and reconnect", async () => {
+  it("follows an explicitly selected latest run through bursts and baselines, but keeps an older run pinned", async () => {
     const ready = Promise.withResolvers<void>();
     const thirdArrives = Promise.withResolvers<void>();
     const fourthArrives = Promise.withResolvers<void>();
@@ -322,6 +424,7 @@ describe.each(["hosted", "local"] as const)("%s shared workspace", (host) => {
     });
     mount(api);
     act(() => ready.resolve());
+    fireEvent.click(await screen.findByRole("button", { name: /run-2,/ }));
     await waitFor(() =>
       expect(screen.getByRole("button", { name: /run-2,/ })).toHaveAttribute(
         "aria-pressed",
@@ -351,11 +454,6 @@ describe.each(["hosted", "local"] as const)("%s shared workspace", (host) => {
       "aria-pressed",
       "true",
     );
-    fireEvent.click(screen.getByRole("tab", { name: "DAG" }));
-    expect(screen.queryByRole("region", { name: "Workflow runs" })).not.toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "Inspect Fetch" })).toBeEnabled();
-    fireEvent.click(screen.getByRole("tab", { name: "Runs" }));
-    await screen.findByRole("button", { name: "Inspect Snapshot run-1" });
     act(() => {
       runs = [...runs, fifth];
       cursor = 4;
@@ -381,22 +479,194 @@ describe.each(["hosted", "local"] as const)("%s shared workspace", (host) => {
     );
   });
 
-  it("keeps the empty workflow graph visible and disables inspection only in Runs", async () => {
-    mount(createApi({ loadBaseline: async () => ({ ...baseline, runs: [] }) }));
+  it("opens static nodes without selecting a run or loading runtime data", async () => {
+    const snapshots = vi.fn();
+    const logs = vi.fn();
+    mount(
+      createApi({
+        getLatestRunSnapshot: snapshots,
+        listLogPage: logs,
+      }),
+    );
     const node = await screen.findByRole("button", { name: "Inspect Fetch" });
-    expect(screen.getByRole("tab", { name: "Runs" })).toHaveAttribute("aria-selected", "true");
-    expect(node).toBeDisabled();
-    expect(
-      within(screen.getByRole("region", { name: "Workflow runs" })).getByText("No runs"),
-    ).toBeInTheDocument();
+    expect(node).toBeEnabled();
+    expect(screen.getByRole("button", { name: "Current" })).toHaveAttribute(
+      "aria-pressed",
+      "true",
+    );
     fireEvent.click(node);
-    expect(screen.queryByRole("complementary", { name: "Node code" })).not.toBeInTheDocument();
-    fireEvent.click(screen.getByRole("tab", { name: "DAG" }));
-    expect(screen.getByRole("button", { name: "Inspect Fetch" })).toBeEnabled();
-    expect(screen.queryByRole("region", { name: "Workflow runs" })).not.toBeInTheDocument();
+    expect(screen.getByRole("complementary", { name: "Node code" })).toBeInTheDocument();
+    expect(snapshots).not.toHaveBeenCalled();
+    expect(logs).not.toHaveBeenCalled();
   });
 
-  it("replaces node inspection with searchable all-runs and supports keyboard closing", async () => {
+  it("clears loading and failed runs without late snapshots or reconnect restoring selection", async () => {
+    const lateSnapshot = Promise.withResolvers<RunSnapshotMsg>();
+    const reset = Promise.withResolvers<void>();
+    const third = RunSummaryMsg.create({ ...summary, runId: "run-3", createdSequence: "3" });
+    let connections = 0;
+    let snapshotRequests = 0;
+    let runs = [summary, secondSummary];
+    const api = createApi({
+      loadBaseline: async () => ({ ...baseline, runs }),
+      getLatestRunSnapshot: async () => {
+        snapshotRequests += 1;
+        if (snapshotRequests === 1) return lateSnapshot.promise;
+        throw new Error("Snapshot was removed");
+      },
+      streamUpdates: async function* (_instance, _cursor, signal) {
+        connections += 1;
+        if (connections === 1) {
+          await reset.promise;
+          yield OperatorUpdateEnvelope.create({
+            operatorInstanceId: "operator-1",
+            payload: {
+              oneofKind: "resetRequired",
+              resetRequired: {
+                latestEventUlid: eventUlid(1),
+                historyFloorEventUlid: eventUlid(1),
+              },
+            },
+          });
+          return;
+        }
+        yield* idleUpdates(signal);
+      },
+    });
+    mount(api);
+    fireEvent.click(await screen.findByRole("button", { name: "Inspect Fetch" }));
+    fireEvent.click(screen.getByRole("button", { name: /run-2,/ }));
+    await screen.findByText("Loading run snapshot");
+    fireEvent.click(screen.getByRole("button", { name: "Current" }));
+    expect(screen.getByRole("complementary", { name: "Node code" })).toBeInTheDocument();
+    await act(async () => lateSnapshot.resolve(snapshotFor(secondSummary)));
+    expect(screen.getByRole("button", { name: "Current" })).toHaveAttribute(
+      "aria-pressed",
+      "true",
+    );
+    expect(screen.queryByRole("region", { name: "Run logs" })).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: /run-2,/ }));
+    await screen.findByText("Snapshot was removed");
+    fireEvent.click(screen.getByRole("button", { name: "Current" }));
+    expect(screen.getByRole("complementary", { name: "Node code" })).toBeInTheDocument();
+    act(() => {
+      runs = [...runs, third];
+      reset.resolve();
+    });
+    await screen.findByRole("button", { name: /run-3,/ });
+    expect(screen.getByRole("button", { name: "Current" })).toHaveAttribute(
+      "aria-pressed",
+      "true",
+    );
+    expect(screen.queryByRole("region", { name: "Run logs" })).not.toBeInTheDocument();
+    expect(snapshotRequests).toBe(2);
+  });
+
+  it("opens only agent sidebars in run view while preserving current step code inspection", async () => {
+    const run = RunSnapshotMsg.create({
+      ...snapshotFor(),
+      topology: {
+        ...snapshotFor().topology!,
+        nodeIds: ["fetch", "review"],
+        graph: { fetch: { children: ["review"] }, review: { children: [] } },
+        nodeTypes: { fetch: "step", review: "step" },
+        displayNames: { fetch: "Fetch", review: "Review" },
+        agentFieldSchemasJson: { review: '{"inputs":[],"outputs":[]}' },
+      },
+    });
+    mount(
+      createApi({
+        getLatestRunSnapshot: async () => run,
+        getWorkflowNodeSource: async () => "def fetch():\n    return 'current source'",
+      }),
+    );
+    fireEvent.click(await screen.findByRole("button", { name: "Inspect Fetch" }));
+    expect(await screen.findByLabelText("Source code")).toHaveTextContent("current source");
+    fireEvent.click(screen.getByRole("button", { name: /run-1,/ }));
+    await screen.findByRole("button", { name: "Inspect Review" });
+    expect(screen.queryByRole("complementary", { name: "Node code" })).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Inspect Fetch" }));
+    expect(
+      screen.queryByRole("complementary", { name: "Run inspector" }),
+    ).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Inspect Review" }));
+    expect(screen.getByRole("complementary", { name: "Run inspector" })).toBeInTheDocument();
+    expect(screen.getByRole("tab", { name: "Trace" })).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Inspect Fetch" }));
+    expect(
+      screen.queryByRole("complementary", { name: "Run inspector" }),
+    ).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Current" }));
+    expect(await screen.findByLabelText("Source code")).toHaveTextContent("current source");
+  });
+
+  it("retains a selected node while loading another topology and clears it only when absent", async () => {
+    const firstSnapshot = Promise.withResolvers<RunSnapshotMsg>();
+    const nextSnapshot = Promise.withResolvers<RunSnapshotMsg>();
+    const third = RunSummaryMsg.create({ ...summary, runId: "run-3", createdSequence: "3" });
+    const agentSnapshot = RunSnapshotMsg.create({
+      ...snapshotFor(),
+      topology: {
+        ...snapshotFor().topology!,
+        agentFieldSchemasJson: { fetch: '{"inputs":[],"outputs":[]}' },
+      },
+    });
+    mount(
+      createApi({
+        loadBaseline: async () => ({ ...baseline, runs: [summary, secondSummary, third] }),
+        getLatestRunSnapshot: async (runId) => {
+          if (runId === summary.runId) return firstSnapshot.promise;
+          if (runId === secondSummary.runId) return nextSnapshot.promise;
+          if (runId === third.runId) {
+            return RunSnapshotMsg.create({
+              ...snapshotFor(third),
+              topology: {
+                ...snapshotFor(third).topology!,
+                nodeIds: ["replacement"],
+                graph: { replacement: { children: [] } },
+                nodeTypes: { replacement: "step" },
+                displayNames: { replacement: "Replacement" },
+              },
+              nodes: [],
+            });
+          }
+          return snapshotFor();
+        },
+      }),
+    );
+    fireEvent.click(await screen.findByRole("button", { name: "Inspect Fetch" }));
+    fireEvent.click(screen.getByRole("button", { name: /run-1,/ }));
+    await screen.findByText("Loading run snapshot");
+    expect(screen.getByRole("complementary", { name: "Node code" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Inspect Fetch" })).toBeEnabled();
+    act(() => firstSnapshot.resolve(agentSnapshot));
+    await screen.findByRole("complementary", { name: "Run inspector" });
+    fireEvent.click(screen.getByRole("button", { name: /run-2,/ }));
+    await screen.findByText("Loading run snapshot");
+    expect(screen.getByRole("complementary", { name: "Run inspector" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Inspect Fetch" })).toBeEnabled();
+    act(() =>
+      nextSnapshot.resolve(
+        RunSnapshotMsg.create({
+          ...agentSnapshot,
+          summary: secondSummary,
+          topology: { ...agentSnapshot.topology!, displayNames: { fetch: "Renamed fetch" } },
+        }),
+      ),
+    );
+    await screen.findByRole("button", { name: "Inspect Renamed fetch" });
+    expect(screen.getByRole("complementary", { name: "Run inspector" })).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: /run-3,/ }));
+    await screen.findByRole("button", { name: "Inspect Replacement" });
+    expect(
+      screen.queryByRole("complementary", { name: "Run inspector" }),
+    ).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Current" }));
+    expect(screen.queryByRole("complementary", { name: "Node code" })).not.toBeInTheDocument();
+  });
+
+  it("expands the timeline independently of node inspection and retains filters on collapse", async () => {
     mount(
       createApi({
         loadBaseline: async () => ({
@@ -412,17 +682,26 @@ describe.each(["hosted", "local"] as const)("%s shared workspace", (host) => {
             }),
           ],
         }),
+        getLatestRunSnapshot: async (runId) =>
+          RunSnapshotMsg.create({
+            ...snapshotFor(runId === secondSummary.runId ? secondSummary : summary),
+            topology: {
+              ...snapshotFor().topology!,
+              agentFieldSchemasJson: { fetch: '{"inputs":[],"outputs":[]}' },
+            },
+          }),
       }),
     );
+    fireEvent.click(await screen.findByRole("button", { name: /run-2,/ }));
     await waitFor(() =>
       expect(screen.getByRole("button", { name: "Inspect Fetch" })).toBeEnabled(),
     );
     fireEvent.click(screen.getByRole("button", { name: "Inspect Fetch" }));
-    expect(screen.getByRole("button", { name: "output" })).toBeInTheDocument();
-    fireEvent.click(screen.getByRole("button", { name: "View all runs" }));
-    const allRuns = screen.getByRole("region", { name: "All runs" });
-    expect(screen.queryByRole("button", { name: "output" })).not.toBeInTheDocument();
-    expect(screen.getByRole("heading", { name: "All runs" })).toBeInTheDocument();
+    expect(screen.getByRole("complementary", { name: "Run inspector" })).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Expand timeline" }));
+    const allRuns = screen.getByRole("region", { name: "Timeline" });
+    expect(screen.getByRole("complementary", { name: "Run inspector" })).toBeInTheDocument();
+    expect(within(allRuns).getByRole("button", { name: "Collapse timeline" })).toHaveFocus();
     fireEvent.click(within(allRuns).getByText("Advanced filters"));
     fireEvent.change(within(allRuns).getByRole("searchbox", { name: "Run ID" }), {
       target: { value: "run-1" },
@@ -437,10 +716,17 @@ describe.each(["hosted", "local"] as const)("%s shared workspace", (host) => {
     await within(allRuns).findByRole("button", { name: /run-2,/ });
     expect(within(allRuns).queryByRole("button", { name: /run-1,/ })).not.toBeInTheDocument();
     fireEvent.keyDown(within(allRuns).getByRole("searchbox"), { key: "Escape" });
-    expect(screen.queryByRole("region", { name: "All runs" })).not.toBeInTheDocument();
-    fireEvent.click(screen.getByRole("button", { name: "View all runs" }));
+    expect(within(allRuns).queryByRole("searchbox")).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Expand timeline" })).toHaveFocus();
+    expect(screen.getByRole("complementary", { name: "Run inspector" })).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Expand timeline" }));
     fireEvent.click(screen.getByRole("button", { name: "Inspect Fetch" }));
-    expect(screen.queryByRole("region", { name: "All runs" })).not.toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "output" })).toBeInTheDocument();
+    expect(within(allRuns).getByLabelText("From")).toHaveValue("2026-09-10");
+    expect(within(allRuns).getByLabelText("To")).toHaveValue("2026-09-10");
+    expect(within(allRuns).queryByRole("button", { name: /run-1,/ })).not.toBeInTheDocument();
+    expect(screen.getByRole("complementary", { name: "Run inspector" })).toBeInTheDocument();
+    fireEvent.click(within(allRuns).getByRole("button", { name: "Collapse timeline" }));
+    expect(screen.getByRole("region", { name: "Timeline" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Expand timeline" })).toHaveFocus();
   });
 });

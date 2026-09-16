@@ -25,7 +25,7 @@ import {
 afterEach(() => vi.restoreAllMocks());
 
 describe("large-run resource bounds", () => {
-  it("uses the real virtualizer to keep 10,000 runs navigable without mounting 10,000 rows", async () => {
+  it("caps a 10,000-run timeline while keeping the twentieth run reachable by scrolling", async () => {
     const runs = Object.fromEntries(
       Array.from({ length: 10_000 }, (_, index) => {
         const runId = `run-${index.toString().padStart(5, "0")}`;
@@ -43,21 +43,23 @@ describe("large-run resource bounds", () => {
     const view = render(
       <RunListPanel workflowId={workflow.workflowId} runs={runs} onSelectRun={selected} />,
     );
-    const region = screen.getByRole("region", { name: "Workflow runs" });
+    const region = screen.getByRole("region", { name: "Timeline" });
     const newest = await within(region).findByRole("button", { name: /run-09999,/ });
     expect(within(region).getAllByRole("button").length).toBeLessThan(100);
     expect(screen.queryByRole("button", { name: /run-00000,/ })).not.toBeInTheDocument();
     fireEvent.click(newest);
     expect(selected).toHaveBeenLastCalledWith("run-09999");
 
-    // Scroll to real off-screen data: a stub that simply slices the first rows fails here.
+    // The compact timeline keeps Current plus its twenty newest runs in the scroll range.
     const scroll = view.container.querySelector<HTMLElement>(".run-list-scroll")!;
-    scroll.scrollTop = 10_000 * 32 - 192;
+    scroll.scrollTop = 21 * 32 - 192;
     fireEvent.scroll(scroll);
-    const oldest = await within(region).findByRole("button", { name: /run-00000,/ });
+    const oldest = await within(region).findByRole("button", { name: /run-09980,/ });
     expect(within(region).getAllByRole("button").length).toBeLessThan(100);
     fireEvent.click(oldest);
-    expect(selected).toHaveBeenLastCalledWith("run-00000");
+    expect(selected).toHaveBeenLastCalledWith("run-09980");
+    expect(screen.queryByRole("button", { name: /run-09979,/ })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Current" })).not.toBeInTheDocument();
   });
 
   it("yields between live-update batches without losing order or the final status", async () => {

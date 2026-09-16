@@ -1,4 +1,5 @@
-import { fireEvent, render, screen } from "@testing-library/react";
+import { fireEvent, render, screen, within } from "@testing-library/react";
+import { useState } from "react";
 import { expect, it, vi } from "vitest";
 
 import { RunListPanel } from "./RunListPanel";
@@ -89,4 +90,82 @@ it("combines exact status, run ID and date filters without losing hidden active 
   );
   expect(screen.getByRole("combobox", { name: "Status" })).toHaveValue("failed");
   expect(screen.getByText("No matching runs")).toBeInTheDocument();
+});
+
+it("orders the timeline newest first and keeps one workflow or run selected", async () => {
+  const runs = Object.fromEntries(
+    [8, 10, 9].map((sequence) => {
+      const runId = `run-${sequence}`;
+      return [
+        runId,
+        RunSummaryMsg.create({ ...summary, runId, createdSequence: String(sequence) }),
+      ];
+    }),
+  );
+  function Timeline() {
+    const [selectedRunId, onSelectRun] = useState<string>();
+    return (
+      <RunListPanel
+        workflowId={workflow.workflowId}
+        runs={runs}
+        selectedRunId={selectedRunId}
+        onSelectRun={onSelectRun}
+      />
+    );
+  }
+  render(<Timeline />);
+  await screen.findByRole("button", { name: /run-8,/ });
+  const buttons = screen.getAllByRole("button");
+  expect(
+    buttons.map(
+      (button) => button.getAttribute("aria-label")?.split(",")[0] ?? button.textContent,
+    ),
+  ).toEqual(["Current", "run-10", "run-9", "run-8"]);
+  expect(screen.getAllByRole("button", { pressed: true })).toEqual([buttons[0]]);
+  fireEvent.click(buttons[2]);
+  expect(screen.getAllByRole("button", { pressed: true })).toEqual([buttons[2]]);
+  fireEvent.click(buttons[0]);
+  expect(screen.getAllByRole("button", { pressed: true })).toEqual([buttons[0]]);
+});
+
+it("caps the compact timeline at twenty runs, with Current and the history action in the scroll range", async () => {
+  const entries = Array.from({ length: 21 }, (_, index) => {
+    const runId = `run-${index}`;
+    return [
+      runId,
+      RunSummaryMsg.create({ ...summary, runId, createdSequence: String(index + 1) }),
+    ] as const;
+  });
+  const onViewAll = vi.fn();
+  const props = { workflowId: workflow.workflowId, onSelectRun: vi.fn(), onViewAll };
+  const view = render(
+    <RunListPanel {...props} runs={Object.fromEntries(entries.slice(0, 19))} />,
+  );
+  await screen.findByRole("button", { name: /run-18,/ });
+  const scroll = view.container.querySelector<HTMLElement>(".run-list-scroll")!;
+  scroll.scrollTop = 20 * 32 - 192;
+  fireEvent.scroll(scroll);
+  await within(scroll).findByRole("button", { name: /run-0,/ });
+  expect(within(scroll).queryByRole("button", { name: "View all" })).not.toBeInTheDocument();
+  expect(screen.queryByRole("button", { name: "Current" })).not.toBeInTheDocument();
+
+  view.rerender(<RunListPanel {...props} runs={Object.fromEntries(entries.slice(0, 20))} />);
+  scroll.scrollTop = 22 * 32 - 192;
+  fireEvent.scroll(scroll);
+  expect(await within(scroll).findByRole("button", { name: "View all" })).toBeInTheDocument();
+
+  view.rerender(<RunListPanel {...props} runs={Object.fromEntries(entries)} />);
+  await within(scroll).findByRole("button", { name: /run-1,/ });
+  expect(within(scroll).queryByRole("button", { name: /run-0,/ })).not.toBeInTheDocument();
+  fireEvent.click(within(scroll).getByRole("button", { name: "View all" }));
+  expect(onViewAll).toHaveBeenCalledOnce();
+
+  scroll.scrollTop = 0;
+  fireEvent.scroll(scroll);
+  expect(await screen.findByRole("button", { name: "Current" })).toBeInTheDocument();
+  view.rerender(<RunListPanel {...props} expanded runs={Object.fromEntries(entries)} />);
+  scroll.scrollTop = 22 * 56 - 192;
+  fireEvent.scroll(scroll);
+  expect(await within(scroll).findByRole("button", { name: /run-0,/ })).toBeInTheDocument();
+  expect(screen.queryByRole("button", { name: "View all" })).not.toBeInTheDocument();
 });
