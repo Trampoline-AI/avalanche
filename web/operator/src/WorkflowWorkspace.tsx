@@ -4,6 +4,7 @@ import {
   useCallback,
   useEffect,
   useId,
+  useLayoutEffect,
   useMemo,
   useRef,
   useState,
@@ -12,7 +13,7 @@ import {
 import type { OperatorApi } from "./api";
 import { GraphCanvas } from "./GraphCanvas";
 import { Inspector } from "./Inspector";
-import type { FlowInfoMsg } from "./model";
+import type { FlowInfoMsg, RunSnapshotMsg } from "./model";
 import { RunLogPane } from "./RunLogPane";
 import { RunControls } from "./RunControls";
 import { compareNewestRun, RunListPanel } from "./RunListPanel";
@@ -24,15 +25,19 @@ const INSPECTOR_MIN_WIDTH = 320;
 const INSPECTOR_MAX_WIDTH = 640;
 const INSPECTOR_DEFAULT_WIDTH = 410;
 
-type WorkspaceMode = "runs" | "dag";
-type InspectorPanel = { kind: "node"; nodeId: string } | { kind: "runs" };
-
 export interface WorkflowWorkspaceProps {
   api: OperatorApi;
   workflowId: string;
   className?: string;
   onSelectedRunChange?: (runId: string | undefined) => void;
   runActionsEnabled?: boolean;
+  definitionLabel?: string;
+  /** Overrides the graph actions panel; null hides it, undefined uses built-in controls. */
+  bottomRightPanel?: ReactNode;
+  navigation?: {
+    selectedRunId?: string;
+    onSelectRun: (runId: string | undefined) => void;
+  };
 }
 
 interface WorkflowWorkspaceSurfaceProps {
@@ -44,13 +49,14 @@ interface WorkflowWorkspaceSurfaceProps {
   selectRun: (runId?: string) => Promise<void>;
   startRun: (workflowSelector: string, input?: Record<string, unknown>) => Promise<string>;
   cancelRun: (runId: string) => Promise<void>;
-  leadingRunPanel?: ReactNode;
   workflowReloadDescription?: string;
   className?: string;
   runActionsEnabled?: boolean;
+  definitionLabel?: string;
+  bottomRightPanel?: ReactNode;
 }
 
-/** Both hosts share selection policy, tabs, graph, run controls, and the inspector column. */
+/** Both hosts share selection policy, graph, run controls, and the inspector column. */
 export function WorkflowWorkspaceSurface({
   api,
   state,
@@ -60,17 +66,19 @@ export function WorkflowWorkspaceSurface({
   selectRun,
   startRun,
   cancelRun,
-  leadingRunPanel,
   workflowReloadDescription = "Workflow change detected. Scanning...",
   className = "",
   runActionsEnabled = true,
+  definitionLabel,
+  bottomRightPanel,
 }: WorkflowWorkspaceSurfaceProps) {
-  const [mode, setMode] = useState<WorkspaceMode>("runs");
-  const [panel, setPanel] = useState<InspectorPanel>();
+  const [inspectedNode, setInspectedNode] = useState<string>();
+  const [timelineExpanded, setTimelineExpanded] = useState(false);
+  const timelineElement = useRef<HTMLDivElement>(null);
+  const timelineBounds = useRef<DOMRect | undefined>(undefined);
+  const timelineAnimation = useRef<Animation | undefined>(undefined);
   const [inspectorWidth, setInspectorWidth] = useState(INSPECTOR_DEFAULT_WIDTH);
   const workspaceId = useId();
-  const paneRef = useRef<HTMLDivElement>(null);
-  const allRunsTrigger = useRef<HTMLElement | null>(null);
   const workflowId = workflow?.workflowId;
   const latestRunId = useMemo(() => {
     let newest: (typeof state.runs)[string] | undefined;
@@ -88,29 +96,29 @@ export function WorkflowWorkspaceSurface({
     observedRunId?: string;
     following: boolean;
     pendingSelection?: { runId?: string };
-  }>({ following: true });
+  }>({ following: false });
 
   useEffect(() => {
-    if (!workflowId || state.connection !== "live") return;
+    if (!workflowId) return;
     const current = selection.current;
     if (current.workflowId !== workflowId) {
       current.workflowId = workflowId;
       current.observedRunId = selectedRunId;
-      current.following = !selectedRunId || selectedRunId === latestRunId;
+      current.following = selectedRunId !== undefined && selectedRunId === latestRunId;
       current.pendingSelection = undefined;
-      setMode("runs");
-      setPanel(undefined);
+      setInspectedNode(undefined);
+      setTimelineExpanded(false);
     } else if (current.observedRunId !== selectedRunId) {
       if (!current.pendingSelection || current.pendingSelection.runId !== selectedRunId) {
         // A host route change, rather than a selection made by this workspace.
-        setMode(selectedRunId ? "runs" : "dag");
-        current.following = !selectedRunId || selectedRunId === latestRunId;
-        setPanel(undefined);
+        current.following = selectedRunId !== undefined && selectedRunId === latestRunId;
       }
       current.observedRunId = selectedRunId;
       current.pendingSelection = undefined;
     }
-    const desiredRunId = current.following ? latestRunId : selectedRunId;
+    if (state.connection !== "live") return;
+    const desiredRunId =
+      current.following && latestRunId !== undefined ? latestRunId : selectedRunId;
     if (
       desiredRunId !== selectedRunId &&
       (!current.pendingSelection || current.pendingSelection.runId !== desiredRunId)
@@ -130,79 +138,125 @@ export function WorkflowWorkspaceSurface({
     workflowId,
   ]);
 
-  useEffect(() => {
-    setPanel((current) => (current?.kind === "node" ? undefined : current));
-  }, [selectedRunId, mode]);
-
   const selectWorkflowRun = useCallback(
-    (runId: string) => {
+    (runId: string | undefined) => {
       selection.current.pendingSelection = { runId };
-      selection.current.following = runId === latestRunId;
+      selection.current.following = runId !== undefined && runId === latestRunId;
       onSelectRun(runId);
       void selectRun(runId);
-      setMode("runs");
     },
     [latestRunId, onSelectRun, selectRun],
   );
-  const closePanel = useCallback(() => setPanel(undefined), []);
-  const openNode = useCallback((nodeId: string) => setPanel({ kind: "node", nodeId }), []);
-  const openAllRuns = useCallback(() => {
-    allRunsTrigger.current =
-      document.activeElement instanceof HTMLElement ? document.activeElement : null;
-    setPanel({ kind: "runs" });
+  const startWorkflowRun = useCallback(
+    async (workflowSelector: string, input?: Record<string, unknown>) => {
+      const runId = await startRun(workflowSelector, input);
+      selectWorkflowRun(runId);
+      return runId;
+    },
+    [selectWorkflowRun, startRun],
+  );
+  const closePanel = useCallback(() => setInspectedNode(undefined), []);
+  const openNode = useCallback((nodeId: string) => setInspectedNode(nodeId), []);
+  const toggleTimeline = useCallback((expanded: boolean) => {
+    timelineBounds.current = timelineElement.current?.getBoundingClientRect();
+    timelineAnimation.current?.cancel();
+    setTimelineExpanded(expanded);
   }, []);
-  const closeAllRuns = useCallback(() => {
-    setPanel(undefined);
-    allRunsTrigger.current?.focus();
-  }, []);
-  const viewCurrentWorkflow = useCallback(() => {
-    setMode("dag");
-    setPanel(undefined);
-  }, []);
-  const changeMode = (next: WorkspaceMode) => {
-    setMode(next);
-    setPanel(undefined);
-  };
-  useEffect(() => {
-    if (panel?.kind === "runs")
-      paneRef.current?.querySelector<HTMLButtonElement>("button")?.focus();
-  }, [panel?.kind]);
+  const openAllRuns = useCallback(() => toggleTimeline(true), [toggleTimeline]);
+  const closeAllRuns = useCallback(() => toggleTimeline(false), [toggleTimeline]);
 
-  const historical = mode === "runs" && selectedRunId !== undefined;
-  const run =
+  useLayoutEffect(() => {
+    const element = timelineElement.current;
+    const previous = timelineBounds.current;
+    timelineBounds.current = undefined;
+    if (
+      !element?.animate ||
+      !previous ||
+      window.matchMedia("(prefers-reduced-motion: reduce)").matches
+    )
+      return;
+    const next = element.getBoundingClientRect();
+    const animation = element.animate(
+      [
+        {
+          width: `${previous.width}px`,
+          height: `${previous.height}px`,
+          transform: `translate(${previous.left - next.left}px, ${previous.top - next.top}px)`,
+          overflow: "hidden",
+        },
+        {
+          width: `${next.width}px`,
+          height: `${next.height}px`,
+          transform: "translate(0, 0)",
+          overflow: "hidden",
+        },
+      ],
+      { duration: 220, easing: "cubic-bezier(0.2, 0, 0, 1)" },
+    );
+    timelineAnimation.current = animation;
+    return () => animation.cancel();
+  }, [timelineExpanded]);
+
+  const historical = selectedRunId !== undefined;
+  const loadedRun =
     historical &&
     state.selectedRunId === selectedRunId &&
     state.selectedRunStatus === "ready" &&
     state.selectedRun?.summary?.runId === selectedRunId
       ? state.selectedRun
       : undefined;
-  const inspectedNode = panel?.kind === "node" ? panel.nodeId : undefined;
-  const inspectorOpen =
-    panel?.kind === "runs" || Boolean(inspectedNode && (!historical || run));
-  const runListPanel =
-    mode === "runs" && workflow ? (
-      <RunListPanel
-        workflowId={workflow.workflowId}
-        runs={state.runs}
-        selectedRunId={selectedRunId}
-        onSelectRun={selectWorkflowRun}
-        onViewAll={openAllRuns}
-      />
-    ) : undefined;
+  const [retainedRun, setRetainedRun] = useState<RunSnapshotMsg>();
+  useEffect(() => {
+    setRetainedRun((current) => {
+      if (!historical) return undefined;
+      return loadedRun ?? current;
+    });
+  }, [historical, loadedRun]);
+  const run =
+    loadedRun ??
+    (historical && retainedRun?.summary?.workflowId === workflowId ? retainedRun : undefined);
+  const topologyNodeIds = run?.topology?.nodeIds ?? workflow?.nodeIds;
+  useEffect(() => {
+    if (!topologyNodeIds) return;
+    setInspectedNode((current) =>
+      current && !topologyNodeIds.includes(current) ? undefined : current,
+    );
+  }, [topologyNodeIds]);
+  const inspectedNodeAvailable =
+    !inspectedNode || !topologyNodeIds || topologyNodeIds.includes(inspectedNode);
+  const inspectorOpen = Boolean(
+    inspectedNode &&
+    inspectedNodeAvailable &&
+    (!run ||
+      (run.topology
+        ? Object.hasOwn(run.topology.agentFieldSchemasJson, inspectedNode)
+        : run.nodes.some((node) => node.nodeId === inspectedNode && node.trace))),
+  );
+  const runListPanel = workflow ? (
+    <RunListPanel
+      key={workflow.workflowId}
+      expanded={timelineExpanded}
+      workflowId={workflow.workflowId}
+      runs={state.runs}
+      selectedRunId={selectedRunId}
+      onSelectRun={selectWorkflowRun}
+      onViewAll={openAllRuns}
+      onClose={closeAllRuns}
+    />
+  ) : undefined;
   const runControlsPanel =
-    workflow && (!historical || run) ? (
+    workflow && (!historical || loadedRun) ? (
       <RunControls
         workflow={!historical ? workflow : undefined}
-        run={run}
-        pending={state.action}
-        onStart={startRun}
+        run={loadedRun}
+        onStart={startWorkflowRun}
         onCancel={cancelRun}
-        onViewWorkflow={historical ? viewCurrentWorkflow : undefined}
         runActionsEnabled={runActionsEnabled}
       />
     ) : undefined;
+  const displayedRunId = run?.summary?.runId;
   const liveEventDescriptorKey =
-    historical && inspectedNode ? `${selectedRunId}:${inspectedNode}` : "";
+    displayedRunId && inspectedNode ? `${displayedRunId}:${inspectedNode}` : "";
   const workspaceStyle = {
     "--workspace-inspector-width": `${inspectorWidth}px`,
     "--workspace-inspector-column-width": inspectorOpen ? `${inspectorWidth}px` : "0px",
@@ -214,50 +268,13 @@ export function WorkflowWorkspaceSurface({
       className={`avalanche-operator-ui avalanche-workspace flex min-h-0 min-w-0 flex-col ${className}`}
       style={{ height: "100%" }}
     >
-      <div className="flex min-h-11 shrink-0 items-center gap-3 border-b border-line bg-white px-3.5">
-        {leadingRunPanel}
-        <div role="tablist" aria-label="Workflow view" className="flex h-full gap-4">
-          {(["runs", "dag"] as const).map((tab) => (
-            <button
-              key={tab}
-              id={`${workspaceId}-${tab}`}
-              type="button"
-              role="tab"
-              aria-selected={mode === tab}
-              aria-controls={`${workspaceId}-content`}
-              tabIndex={mode === tab ? 0 : -1}
-              onClick={() => changeMode(tab)}
-              onKeyDown={(event) => {
-                if (!["ArrowLeft", "ArrowRight", "Home", "End"].includes(event.key)) return;
-                event.preventDefault();
-                const next =
-                  event.key === "Home"
-                    ? "runs"
-                    : event.key === "End"
-                      ? "dag"
-                      : mode === "runs"
-                        ? "dag"
-                        : "runs";
-                changeMode(next);
-                document.getElementById(`${workspaceId}-${next}`)?.focus();
-              }}
-              className={`cursor-pointer border-0 border-b-2 bg-transparent px-1 py-3 text-xs font-medium focus-visible:outline-2 focus-visible:outline-acid ${mode === tab ? "border-acid text-ink" : "border-transparent text-secondary hover:text-ink"}`}
-            >
-              {tab === "runs" ? "Runs" : "DAG"}
-            </button>
-          ))}
-        </div>
-      </div>
       <div
-        id={`${workspaceId}-content`}
-        role="tabpanel"
-        aria-labelledby={`${workspaceId}-${mode}`}
         className={`workflow-workspace relative grid min-h-0 min-w-0 w-full flex-1 overflow-hidden grid-cols-[minmax(0,1fr)_var(--workspace-inspector-divider-width)_var(--workspace-inspector-column-width)] max-[1000px]:grid-cols-[minmax(0,1fr)] ${inspectorOpen ? "with-inspector" : ""}`}
         style={workspaceStyle}
       >
         <section className="canvas-shell relative col-start-1 flex min-h-0 min-w-0 flex-col overflow-hidden bg-[#f7f9f8]">
           <div
-            className={`canvas relative flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden ${historical ? "run-canvas bg-[#fafaf8]" : "blueprint-canvas bg-white"}`}
+            className={`canvas relative flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden ${run ? "run-canvas bg-[#fafaf8]" : "blueprint-canvas bg-white"}`}
           >
             {workflow ? (
               <>
@@ -269,11 +286,11 @@ export function WorkflowWorkspaceSurface({
                     selectedNodeId={inspectedNode}
                     onClearNode={closePanel}
                     onOpenNode={openNode}
-                    inspectionDisabled={mode === "runs" && !run}
-                    topLeftPanel={runListPanel}
-                    bottomRightPanel={runControlsPanel}
+                    bottomRightPanel={
+                      bottomRightPanel === undefined ? runControlsPanel : bottomRightPanel
+                    }
                   />
-                  {historical && !run && (
+                  {historical && !loadedRun && (
                     <div
                       className="absolute right-3 top-3 max-w-[240px] rounded-lg border border-line bg-panel p-3 text-xs text-secondary"
                       role={state.selectedRunStatus === "error" ? "alert" : "status"}
@@ -290,8 +307,8 @@ export function WorkflowWorkspaceSurface({
                   )}
                   {run && (
                     <div className="historical-badge pointer-events-none absolute top-[18px] right-[18px] z-[5] rounded-lg border border-[#dfc99e] bg-[rgba(255,252,245,.96)] px-3 py-[9px] text-[9px] text-[#766548] shadow-[0_4px_14px_rgba(54,44,25,.08)] max-[700px]:hidden [&>span]:mb-[3px] [&>span]:block [&>span]:font-mono [&>span]:text-[8px] [&>span]:text-amber [&>span]:uppercase">
-                      <span>Immutable run snapshot</span>Current workflow changes do not alter
-                      this canvas
+                      <span>Viewing a run snapshot</span>This view does not represent the
+                      workflow&apos;s current state.
                     </div>
                   )}
                 </div>
@@ -300,7 +317,7 @@ export function WorkflowWorkspaceSurface({
                     api={api}
                     run={run}
                     nodeId={inspectedNode}
-                    liveLogs={selectedRunId ? state.liveLogs[selectedRunId] : undefined}
+                    liveLogs={displayedRunId ? state.liveLogs[displayedRunId] : undefined}
                     onSelectNode={openNode}
                   />
                 )}
@@ -314,6 +331,14 @@ export function WorkflowWorkspaceSurface({
               </div>
             )}
           </div>
+          {runListPanel && (
+            <div
+              ref={timelineElement}
+              className={`workspace-timeline absolute z-20 ${timelineExpanded ? "inset-y-0 left-0 w-[410px] max-w-full" : "top-3.5 left-3.5 w-[300px] max-w-[calc(100vw-3rem)]"}`}
+            >
+              {runListPanel}
+            </div>
+          )}
         </section>
         {inspectorOpen && (
           <>
@@ -328,31 +353,19 @@ export function WorkflowWorkspaceSurface({
               onChange={setInspectorWidth}
             />
             <div
-              ref={paneRef}
               id={`${workspaceId}-inspector`}
-              className="workspace-inspector-pane col-start-3 grid min-h-0 min-w-0 overflow-hidden bg-panel max-[1000px]:absolute max-[1000px]:inset-y-0 max-[1000px]:right-0 max-[1000px]:z-30 max-[1000px]:w-[var(--workspace-inspector-width)] max-[1000px]:max-w-full"
+              className="workspace-inspector-pane col-start-3 grid min-h-0 min-w-0 overflow-hidden bg-panel max-[1000px]:absolute max-[1000px]:inset-y-0 max-[1000px]:right-0 max-[1000px]:z-30 max-[1000px]:w-[var(--workspace-inspector-width)] max-[1000px]:max-w-full max-[700px]:w-full"
             >
-              {panel?.kind === "runs" && workflow ? (
-                <RunListPanel
-                  key={workflow.workflowId}
-                  expanded
-                  workflowId={workflow.workflowId}
-                  runs={state.runs}
-                  selectedRunId={selectedRunId}
-                  onSelectRun={selectWorkflowRun}
-                  onClose={closeAllRuns}
-                />
-              ) : (
-                <Inspector
-                  api={api}
-                  embedded
-                  workflow={workflow}
-                  run={run}
-                  nodeId={inspectedNode}
-                  liveEvents={state.liveEvents[liveEventDescriptorKey]}
-                  onClose={closePanel}
-                />
-              )}
+              <Inspector
+                api={api}
+                embedded
+                workflow={workflow}
+                run={run}
+                nodeId={inspectedNode}
+                liveEvents={state.liveEvents[liveEventDescriptorKey]}
+                onClose={closePanel}
+                definitionLabel={definitionLabel}
+              />
             </div>
           </>
         )}
@@ -376,17 +389,24 @@ export function WorkflowWorkspaceSurface({
   );
 }
 
-/** A complete workspace for a host-selected workflow, with no host-owned run navigation. */
+/** A complete workspace with local or host-controlled run selection. */
 export function WorkflowWorkspace({
   api,
   workflowId,
   className,
   onSelectedRunChange,
   runActionsEnabled = true,
+  definitionLabel,
+  bottomRightPanel,
+  navigation,
 }: WorkflowWorkspaceProps) {
   const { state, startRun, cancelRun, selectRun } = useOperatorProjection(api);
   const [selection, setSelection] = useState<{ workflowId: string; runId?: string }>();
-  const selectedRunId = selection?.workflowId === workflowId ? selection.runId : undefined;
+  const selectedRunId = navigation
+    ? navigation.selectedRunId
+    : selection?.workflowId === workflowId
+      ? selection.runId
+      : undefined;
   const notifiedRunId = useRef<string | undefined>(undefined);
   useEffect(() => {
     if (notifiedRunId.current === selectedRunId) return;
@@ -429,12 +449,14 @@ export function WorkflowWorkspace({
       state={state}
       workflow={workflow}
       selectedRunId={selectedRunId}
-      onSelectRun={onSelectRun}
+      onSelectRun={navigation ? navigation.onSelectRun : onSelectRun}
       selectRun={selectRun}
       startRun={startRun}
       cancelRun={cancelRun}
       className={className}
       runActionsEnabled={runActionsEnabled}
+      definitionLabel={definitionLabel}
+      bottomRightPanel={bottomRightPanel}
     />
   );
 }
