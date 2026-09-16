@@ -1,5 +1,5 @@
 import { type CSSProperties, useCallback, useEffect, useState } from "react";
-import { LoaderCircle, PanelLeftOpen } from "lucide-react";
+import { LoaderCircle, PanelLeft } from "lucide-react";
 
 import { Explorer } from "../Explorer";
 import { WorkflowWorkspaceSurface } from "../WorkflowWorkspace";
@@ -10,6 +10,7 @@ import type { OperatorUiProps, OperatorUiSelection } from "./types";
 const EXPLORER_MIN_WIDTH = 220;
 const EXPLORER_MAX_WIDTH = 420;
 const EXPLORER_DEFAULT_WIDTH = 280;
+const EXPLORER_RAIL_WIDTH = 48;
 export function OperatorUi({ host, navigation }: OperatorUiProps) {
   const { api, presentation } = host;
   const { state, startRun, cancelRun, selectRun } = useOperatorProjection(api);
@@ -29,7 +30,8 @@ export function OperatorUi({ host, navigation }: OperatorUiProps) {
     [navigation],
   );
   const [explorerOpen, setExplorerOpen] = useState(false);
-  const [explorerCollapsed, setExplorerCollapsed] = useState(false);
+  const [explorerPinned, setExplorerPinned] = useState(true);
+  const [explorerHovered, setExplorerHovered] = useState(false);
   const [explorerWidth, setExplorerWidth] = useState(EXPLORER_DEFAULT_WIDTH);
   useEffect(() => {
     if (!state.catalog) return;
@@ -43,8 +45,16 @@ export function OperatorUi({ host, navigation }: OperatorUiProps) {
     else if (selection) setSelection(undefined);
   }, [selection, setSelection, state.catalog]);
 
-  const collapseExplorer = useCallback(() => setExplorerCollapsed(true), []);
-  const restoreExplorer = useCallback(() => setExplorerCollapsed(false), []);
+  const toggleExplorerPin = useCallback(() => {
+    setExplorerPinned((pinned) => !pinned);
+    setExplorerHovered(false);
+  }, []);
+  const previewExplorer = useCallback(() => {
+    if (!explorerPinned) setExplorerHovered(true);
+  }, [explorerPinned]);
+  const closeExplorerPreview = useCallback(() => {
+    if (!explorerPinned) setExplorerHovered(false);
+  }, [explorerPinned]);
   const select = useCallback(
     (next: OperatorUiSelection) => {
       if (next.workflowId !== selection?.workflowId) void selectRun(undefined);
@@ -64,21 +74,15 @@ export function OperatorUi({ host, navigation }: OperatorUiProps) {
     },
     [setSelection, workflow],
   );
-  const restoreButton = explorerCollapsed ? (
-    <button
-      type="button"
-      className="explorer-restore-button grid size-7 flex-none cursor-pointer place-items-center rounded-[7px] border border-line bg-white p-0 text-secondary hover:border-secondary hover:bg-[#f7f9f8] hover:text-ink focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-acid max-[700px]:hidden"
-      aria-label="Restore Explorer"
-      aria-controls="operator-explorer"
-      aria-expanded="false"
-      onClick={restoreExplorer}
-    >
-      <PanelLeftOpen aria-hidden="true" className="size-4" strokeWidth={1.8} />
-    </button>
-  ) : undefined;
+  const explorerExpanded = explorerPinned || explorerHovered;
   const workspaceStyle = {
     "--workspace-explorer-width": `${explorerWidth}px`,
-    "--workspace-explorer-column-width": explorerCollapsed ? "0px" : `${explorerWidth}px`,
+    "--workspace-explorer-visible-width": explorerExpanded
+      ? `${explorerWidth}px`
+      : `${EXPLORER_RAIL_WIDTH}px`,
+    "--workspace-explorer-column-width": explorerPinned
+      ? `${explorerWidth}px`
+      : `${EXPLORER_RAIL_WIDTH}px`,
     "--workspace-explorer-divider-width": "0px",
   } as CSSProperties;
   if (!state.catalog) {
@@ -110,8 +114,8 @@ export function OperatorUi({ host, navigation }: OperatorUiProps) {
     <div className="avalanche-operator-ui">
       <div
         className={`app-shell flex h-full flex-col ${explorerOpen ? "explorer-open" : ""} ${
-          explorerCollapsed ? "explorer-collapsed" : ""
-        }`}
+          explorerPinned ? "explorer-pinned" : "explorer-unpinned"
+        } ${explorerExpanded ? "explorer-expanded" : "explorer-collapsed"}`}
       >
         <header className="topbar relative z-10 grid min-h-[58px] grid-cols-[260px_minmax(0,1fr)_auto_auto] items-center border-b border-line bg-white px-5 shadow-[0_1px_2px_rgba(20,31,26,.04)] max-[1000px]:grid-cols-[210px_minmax(0,1fr)_auto_auto] max-[700px]:grid-cols-[auto_minmax(0,1fr)_auto] max-[700px]:gap-2 max-[700px]:px-2.5">
           <div className="brand flex items-center gap-[11px]">
@@ -130,7 +134,15 @@ export function OperatorUi({ host, navigation }: OperatorUiProps) {
             {workflow && (
               <>
                 <i>/</i>
-                <strong>{workflow.displayName}</strong>
+                <button
+                  type="button"
+                  aria-label={`View current state for ${workflow.displayName}`}
+                  aria-current={selection?.kind === "workflow" ? "page" : undefined}
+                  className="cursor-pointer border-0 bg-transparent p-0 text-inherit hover:underline focus-visible:rounded-sm focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-acid"
+                  onClick={() => selectWorkflowRun(undefined)}
+                >
+                  <strong>{workflow.displayName}</strong>
+                </button>
               </>
             )}
             {selection?.kind === "run" && (
@@ -148,12 +160,13 @@ export function OperatorUi({ host, navigation }: OperatorUiProps) {
           </div>
           <button
             type="button"
-            className="explorer-toggle hidden cursor-pointer rounded-[7px] border border-[#cbd2ce] bg-white px-[9px] py-[7px] text-[10px] max-[700px]:block"
+            className="explorer-toggle hidden size-8 cursor-pointer items-center justify-center rounded-md border-0 bg-transparent text-muted hover:bg-canvas hover:text-ink focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-acid max-[700px]:flex"
+            aria-label="Toggle workflows"
             aria-controls="operator-explorer"
             aria-expanded={explorerOpen}
             onClick={() => setExplorerOpen((open) => !open)}
           >
-            Explorer
+            <PanelLeft aria-hidden="true" className="size-4" />
           </button>
         </header>
         {state.error && (
@@ -162,18 +175,21 @@ export function OperatorUi({ host, navigation }: OperatorUiProps) {
           </div>
         )}
         <main
-          className="workspace grid min-h-0 w-full flex-1 overflow-hidden grid-cols-[var(--workspace-explorer-column-width)_var(--workspace-explorer-divider-width)_minmax(0,1fr)] max-[700px]:grid-cols-[minmax(0,1fr)]"
+          className="workspace relative grid min-h-0 w-full flex-1 overflow-hidden grid-cols-[var(--workspace-explorer-column-width)_var(--workspace-explorer-divider-width)_minmax(0,1fr)] max-[700px]:grid-cols-[minmax(0,1fr)]"
           style={workspaceStyle}
         >
           <Explorer
             catalog={state.catalog}
             selection={selection}
             onSelect={select}
-            onCollapse={collapseExplorer}
+            pinned={explorerPinned}
+            expanded={explorerExpanded}
             open={explorerOpen}
-            collapsed={explorerCollapsed}
+            onTogglePin={toggleExplorerPin}
+            onHoverStart={previewExplorer}
+            onHoverEnd={closeExplorerPreview}
           />
-          {!explorerCollapsed && (
+          {explorerPinned && (
             <WorkspaceDivider
               className="workspace-explorer-divider col-start-2 z-[5] w-4 -translate-x-1/2 max-[700px]:hidden"
               label="Resize Explorer"
@@ -195,8 +211,8 @@ export function OperatorUi({ host, navigation }: OperatorUiProps) {
               selectRun={selectRun}
               startRun={startRun}
               cancelRun={cancelRun}
-              leadingRunPanel={restoreButton}
               workflowReloadDescription={presentation.workflowReloadDescription}
+              definitionLabel={presentation.definitionLabel}
               className="col-start-3 max-[700px]:col-start-1"
             />
           )}
