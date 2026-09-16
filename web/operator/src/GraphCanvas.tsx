@@ -40,11 +40,13 @@ interface FieldMetadata {
 export interface SkillMetadata {
   name: string;
   instructions: string;
+  packages: string[];
+  modules: string[];
 }
 
 export interface ToolMetadata {
   name: string;
-  description: string;
+  sourceCode?: string;
 }
 
 export interface AgentFieldSchemas {
@@ -76,6 +78,12 @@ interface CardData extends Record<string, unknown> {
   inspectionDisabled?: boolean;
 }
 
+function strings(value: unknown): string[] {
+  return Array.isArray(value)
+    ? value.filter((item): item is string => typeof item === "string")
+    : [];
+}
+
 function skills(value: unknown): SkillMetadata[] {
   if (!Array.isArray(value)) return [];
   return value.flatMap((item) =>
@@ -84,6 +92,8 @@ function skills(value: unknown): SkillMetadata[] {
           {
             name: item.name,
             instructions: typeof item.instructions === "string" ? item.instructions : "",
+            packages: strings(item.packages),
+            modules: strings(item.modules),
           },
         ]
       : [],
@@ -97,7 +107,7 @@ function tools(value: unknown): ToolMetadata[] {
       ? [
           {
             name: item.name,
-            description: typeof item.description === "string" ? item.description : "",
+            sourceCode: typeof item.source_code === "string" ? item.source_code : undefined,
           },
         ]
       : [],
@@ -532,7 +542,6 @@ interface GraphCanvasProps {
   workflow?: FlowInfoMsg;
   runTopology?: WorkflowTopologyMsg;
   runNodes?: NodeSnapshotMsg[];
-  topLeftPanel?: ReactNode;
   bottomRightPanel?: ReactNode;
   selectedNodeId?: string;
   onClearNode?: () => void;
@@ -544,7 +553,6 @@ function GraphCanvasView({
   workflow,
   runTopology,
   runNodes = [],
-  topLeftPanel,
   bottomRightPanel,
   selectedNodeId,
   onClearNode,
@@ -669,14 +677,6 @@ function GraphCanvasView({
       onPaneClick={onClearNode}
       proOptions={{ hideAttribution: true }}
     >
-      {topLeftPanel && (
-        <Panel
-          position="top-left"
-          className="dag-panel dag-runs-panel nodrag nopan nowheel m-3.5 flex items-start gap-2"
-        >
-          {topLeftPanel}
-        </Panel>
-      )}
       {bottomRightPanel && (
         <Panel
           position="bottom-right"
@@ -725,7 +725,6 @@ export const GraphCanvas = memo(
   (left, right) =>
     left.workflow === right.workflow &&
     left.runTopology === right.runTopology &&
-    left.topLeftPanel === right.topLeftPanel &&
     left.bottomRightPanel === right.bottomRightPanel &&
     left.selectedNodeId === right.selectedNodeId &&
     left.onClearNode === right.onClearNode &&

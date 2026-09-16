@@ -28,6 +28,7 @@ const MARKDOWN_ALLOWED_ELEMENTS = [
 interface MarkdownProps {
   children: string;
   className?: string;
+  full?: boolean;
   expandable?: boolean;
   sourceCharacterBudget?: number;
 }
@@ -65,7 +66,7 @@ function MarkdownContent({
 
   return (
     <div className={className}>
-      {visibleChunks}
+      <div className="operator-markdown">{visibleChunks}</div>
       {expandable && hasMore && (
         <button
           type="button"
@@ -89,9 +90,19 @@ function MarkdownSource(
 export function Markdown({
   children,
   className,
+  full = false,
   expandable = true,
   sourceCharacterBudget = MARKDOWN_SOURCE_CHUNK_CHARACTERS,
 }: MarkdownProps) {
+  if (full) {
+    return (
+      <div className={className}>
+        <div className="operator-markdown">
+          <MarkdownChunk source={children} />
+        </div>
+      </div>
+    );
+  }
   const boundedSourceCharacterBudget = Number.isFinite(sourceCharacterBudget)
     ? Math.min(MARKDOWN_SOURCE_CHUNK_CHARACTERS, Math.max(1, Math.floor(sourceCharacterBudget)))
     : MARKDOWN_SOURCE_CHUNK_CHARACTERS;
