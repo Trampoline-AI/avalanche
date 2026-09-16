@@ -1,5 +1,4 @@
 import "@trampoline-ai/operator-ui/styles.css";
-import { GrpcWebOperatorApi } from "@trampoline-ai/operator-ui";
 import { StrictMode } from "react";
 import { createRoot } from "react-dom/client";
 
@@ -15,6 +14,6 @@ if (operatorPort === null) throw new Error("Operator port metadata is missing");
 
 createRoot(root).render(
   <StrictMode>
-    <LocalOperatorShell api={new GrpcWebOperatorApi()} operatorPort={operatorPort.content} />
+    <LocalOperatorShell operatorPort={operatorPort.content} />
   </StrictMode>,
 );
