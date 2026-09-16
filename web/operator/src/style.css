@@ -1,6 +1,24 @@
 @import "@xyflow/react/dist/style.css";
 @import "tailwindcss";
 
+/* Nacelle's SIL Open Font License is distributed in Nacelle-LICENSE.txt. */
+
+@font-face {
+  font-family: "Nacelle";
+  font-style: normal;
+  font-weight: 400;
+  font-display: swap;
+  src: url("./fonts/Nacelle-Regular.woff2") format("woff2");
+}
+
+@font-face {
+  font-family: "Nacelle";
+  font-style: normal;
+  font-weight: 500 600;
+  font-display: swap;
+  src: url("./fonts/Nacelle-SemiBold.woff2") format("woff2");
+}
+
 @theme {
   --color-ink: #17211c;
   --color-canvas: #f6f8f7;
@@ -8,15 +26,15 @@
   --color-line: #dfe4e1;
   --color-muted: #68746e;
   --color-acid: #2563eb;
+  --color-sidebar-primary: #363cff;
   --color-mint: #16805d;
   --color-amber: #a15c00;
-  --color-danger: #c43d36;
+  --color-danger: #ef4444;
   --color-secondary: #55615b;
-  --color-success: var(--color-green-500);
-  --color-failed: var(--color-red-500);
+  --color-success: #22c55e;
+  --color-failed: var(--color-danger);
   --color-agent: var(--color-violet-500);
-  --font-sans:
-    Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  --font-sans: "Nacelle", Inter, Helvetica, sans-serif;
   --font-mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
 }
 
@@ -35,6 +53,18 @@
   font-family: var(--font-mono);
 }
 
+.avalanche-operator-ui .inspector-section-title {
+  margin: 0 0 12px;
+  padding-bottom: 8px;
+  border-bottom: 1px solid var(--color-line);
+  color: var(--color-ink);
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  line-height: 1.5;
+  text-transform: uppercase;
+}
+
 .avalanche-operator-ui .node-card[aria-disabled="true"] {
   cursor: default;
   opacity: 0.6;
@@ -44,6 +74,180 @@
 
 .avalanche-operator-ui .node-card-action:disabled {
   cursor: not-allowed;
+}
+
+.avalanche-operator-ui .timeline-scroll {
+  scrollbar-width: none;
+}
+
+.avalanche-operator-ui .timeline-scroll::-webkit-scrollbar {
+  display: none;
+}
+
+.avalanche-operator-ui .timeline-scroll-handle {
+  position: absolute;
+  top: 4px;
+  right: 1px;
+  width: 13px;
+  opacity: 0.45;
+  touch-action: none;
+  transition: opacity 240ms ease-out;
+}
+
+.avalanche-operator-ui .timeline-scroll-handle::before {
+  position: absolute;
+  inset: 0 4px;
+  border-radius: 999px;
+  background: rgb(85 97 91 / 35%);
+  content: "";
+}
+
+.avalanche-operator-ui .run-list-panel:hover .timeline-scroll-handle,
+.avalanche-operator-ui .all-runs-panel:hover .timeline-scroll-handle,
+.avalanche-operator-ui .timeline-scroll-handle[data-dragging] {
+  opacity: 1;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .avalanche-operator-ui .timeline-scroll-handle {
+    transition: none;
+  }
+}
+
+/* Authored Markdown needs typography after the reset. Keep it outside utility
+   layers so inspector section-label styles cannot flatten Markdown headings. */
+.avalanche-operator-ui .operator-markdown {
+  color: var(--color-secondary);
+  font-size: 0.8125rem;
+  line-height: 1.65;
+  overflow-wrap: anywhere;
+  white-space: normal;
+}
+
+.avalanche-operator-ui .operator-markdown :is(h1, h2, h3, h4, h5, h6) {
+  margin-block: 1.25em 0.5em;
+  color: var(--color-ink);
+  font-weight: 600;
+  line-height: 1.4;
+  letter-spacing: normal;
+  text-transform: none;
+}
+
+.avalanche-operator-ui .operator-markdown h1 {
+  font-size: 1.5em;
+}
+
+.avalanche-operator-ui .operator-markdown h2 {
+  font-size: 1.25em;
+}
+
+.avalanche-operator-ui .operator-markdown h3 {
+  font-size: 1.125em;
+}
+
+.avalanche-operator-ui .operator-markdown :is(h4, h5, h6) {
+  font-size: 1em;
+}
+
+.avalanche-operator-ui .operator-markdown :is(p, ul, ol, blockquote, pre) {
+  margin-block: 0.75em;
+}
+
+.avalanche-operator-ui .operator-markdown :is(ul, ol) {
+  padding-inline-start: 1.5em;
+}
+
+.avalanche-operator-ui .operator-markdown ul {
+  list-style-type: disc;
+}
+
+.avalanche-operator-ui .operator-markdown ol {
+  list-style-type: decimal;
+}
+
+.avalanche-operator-ui .operator-markdown ul ul {
+  list-style-type: circle;
+}
+
+.avalanche-operator-ui .operator-markdown li + li {
+  margin-block-start: 0.25em;
+}
+
+.avalanche-operator-ui .operator-markdown li > p {
+  margin-block: 0.375em;
+}
+
+.avalanche-operator-ui .operator-markdown li::marker {
+  color: var(--color-muted);
+}
+
+.avalanche-operator-ui .operator-markdown strong {
+  color: var(--color-ink);
+  font-weight: 600;
+}
+
+.avalanche-operator-ui .operator-markdown em {
+  font-style: italic;
+}
+
+.avalanche-operator-ui .operator-markdown a {
+  color: var(--color-acid);
+  text-decoration: underline;
+  text-underline-offset: 0.15em;
+}
+
+.avalanche-operator-ui .operator-markdown a:focus-visible {
+  outline: 2px solid var(--color-acid);
+  outline-offset: 2px;
+}
+
+.avalanche-operator-ui .operator-markdown blockquote {
+  border-inline-start: 3px solid var(--color-line);
+  padding-inline-start: 1em;
+  color: var(--color-muted);
+}
+
+.avalanche-operator-ui .operator-markdown :not(pre) > code {
+  border-radius: 0.25rem;
+  padding: 0.1em 0.3em;
+  background: var(--color-canvas);
+  color: var(--color-ink);
+  font-size: 0.9em;
+}
+
+.avalanche-operator-ui .operator-markdown pre {
+  max-width: 100%;
+  overflow-x: auto;
+  border: 1px solid var(--color-line);
+  border-radius: 0.375rem;
+  padding: 0.8em 1em;
+  background: var(--color-canvas);
+  color: var(--color-ink);
+  font-size: 0.9em;
+  line-height: 1.6;
+  overflow-wrap: normal;
+  white-space: pre;
+}
+
+.avalanche-operator-ui .operator-markdown pre code {
+  padding: 0;
+  background: transparent;
+  font: inherit;
+  white-space: inherit;
+}
+
+.avalanche-operator-ui .operator-markdown hr {
+  margin-block: 1.5em;
+  border: 0;
+  border-top: 1px solid var(--color-line);
+}
+
+.avalanche-operator-ui .operator-markdown > :first-child {
+  margin-block-start: 0;
+}
+
+.avalanche-operator-ui .operator-markdown > :last-child {
+  margin-block-end: 0;
 }
 
 @keyframes gradientRotate {
