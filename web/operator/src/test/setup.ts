@@ -76,4 +76,14 @@ Object.defineProperty(window, "ResizeObserver", {
 });
 globalThis.ResizeObserver = VirtualViewportResizeObserver;
 
+// jsdom has no dialog top layer; real focus containment is checked in browser smoke.
+HTMLDialogElement.prototype.showModal = function showModal() {
+  this.setAttribute("open", "");
+};
+HTMLDialogElement.prototype.close = function close() {
+  if (!this.open) return;
+  this.removeAttribute("open");
+  this.dispatchEvent(new Event("close"));
+};
+
 afterEach(cleanup);
