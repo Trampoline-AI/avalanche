@@ -6,6 +6,7 @@ import asyncio
 import inspect
 import json
 import math
+import textwrap
 import types
 import uuid
 from contextvars import ContextVar
@@ -565,14 +566,22 @@ def _serialize_skill(skill: Any) -> dict[str, Any]:
 
 
 def _serialize_tools(tools: Mapping[str, Callable[..., Any]]) -> list[dict[str, str]]:
-    return [
-        {
-            "name": name,
-            "description": inspect.getdoc(tool) or "",
-        }
-        for name, tool in tools.items()
-        if isinstance(name, str) and callable(tool)
-    ]
+    serialized = []
+    for name, tool in tools.items():
+        if not isinstance(name, str) or not callable(tool):
+            continue
+        try:
+            source_code = textwrap.dedent(inspect.getsource(tool)).rstrip()
+        except (OSError, TypeError):
+            source_code = ""
+        serialized.append(
+            {
+                "name": name,
+                "description": inspect.getdoc(tool) or "",
+                "source_code": source_code,
+            }
+        )
+    return serialized
 
 
 def _callable_name(value: Callable[..., Any]) -> str:
