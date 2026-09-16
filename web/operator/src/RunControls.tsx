@@ -54,7 +54,6 @@ interface RunControlsProps {
   pending?: { kind: "start" | "cancel"; target: string };
   onStart: (workflowSelector: string, input?: Record<string, unknown>) => Promise<string>;
   onCancel: (runId: string) => Promise<void>;
-  onViewWorkflow?: () => void;
   runActionsEnabled?: boolean;
 }
 
@@ -70,7 +69,6 @@ export function RunControls({
   pending,
   onStart,
   onCancel,
-  onViewWorkflow,
   runActionsEnabled = true,
 }: RunControlsProps) {
   const [showInput, setShowInput] = useState(false);
@@ -108,25 +106,6 @@ export function RunControls({
 
   return (
     <div className="run-controls relative flex items-center gap-2 max-[700px]:flex-wrap [&_button:disabled]:cursor-wait [&_button:disabled]:opacity-50">
-      {onViewWorkflow && (
-        <button
-          type="button"
-          className="workflow-view-button inline-flex cursor-pointer items-center gap-1.5 rounded-[7px] border border-line bg-white px-[11px] py-[7px] text-[10px] font-bold text-secondary hover:border-secondary hover:bg-[#f7f9f8] hover:text-ink [&_svg]:size-[11px]"
-          title="Leave this immutable run and view the current workflow"
-          onClick={onViewWorkflow}
-        >
-          <svg aria-hidden="true" viewBox="0 0 12 12" fill="none">
-            <path
-              d="M5 2 1.5 6 5 10M2 6h8"
-              stroke="currentColor"
-              strokeWidth="1.5"
-              strokeLinecap="round"
-              strokeLinejoin="round"
-            />
-          </svg>
-          <span>Current workflow</span>
-        </button>
-      )}
       {workflow && runActionsEnabled && (
         <>
           <button
