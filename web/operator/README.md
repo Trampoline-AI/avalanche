@@ -53,18 +53,95 @@ Use `GrpcWebOperatorApi` when the host has a compatible gRPC-Web endpoint, or im
 `OperatorApi` interface for another transport. `WorkflowWorkspace` is also available when the
 host supplies its own surrounding navigation and layout.
 
-Both hosts share the same Runs/DAG workspace. Runs selects the latest workflow run
-on entry and follows newly created runs. Selecting an older run pins it; selecting
-the newest run resumes following. That intent survives projection rehydration and
-switching to DAG. DAG displays the current workflow without the floating run list.
-An empty run collection keeps the graph visible with node inspection disabled.
+The UI bundles the same Nacelle Regular and SemiBold fonts as Delta Console;
+code and filename references remain monospace.
 
-The floating list's **View all runs** action opens the right-hand run browser,
-replacing node inspection. It paginates the runs supplied by the API baseline in
-25-run pages, with a status dropdown and inclusive local-date filtering.
-Run-ID search is available under the initially collapsed **Advanced filters** section.
-Opening a node replaces the run browser. Escape closes the run browser and
-returns focus to its trigger.
+`OperatorUi` uses a compact workflow sidebar with padded, square-cornered rows,
+8px gaps between workflows, and straight tree connectors reaching the scan-target
+icon. Selected labels use Delta's brand blue and retain it on hover. A catalog
+with exactly one scan target groups every workflow directly under that target's
+file or directory name, with the full path available on hover.
+With zero or multiple targets, workflows remain in a
+flat list rather than implying an unavailable per-target mapping. Source filename
+references remain visible, and long names truncate within the sidebar. The target
+is a label, not a project view. The sidebar has no dashboard, profile card, or
+Navigator/Explorer heading; its pin/hover controls and reload diagnostics remain.
+
+Both hosts share one workspace with an optional selected run. With no run selected,
+nodes expose their available definitions, without execution badges or logs. Selecting
+a run uses its immutable topology, status, durations, and collapsible logs. Selecting
+the newest run enables following newly created runs; selecting an older run pins it.
+**Current** stops following, including across reconnects. The current
+graph and inspector stay visible while another run snapshot loads. The inspected
+node stays selected when its ID exists in the destination topology.
+The floating **Timeline** shows Current followed by at most the 20 newest runs.
+Current scrolls with the run entries rather than staying pinned. When 20 runs are
+shown, a final **View all** row opens the expanded history browser; the header
+action remains available at all times. Selection highlights Current or the selected run.
+Both floating and expanded timelines use a trackless scroll handle that stays faintly
+visible whenever the list can scroll, and reaches full opacity while hovering over
+the timeline or dragging the handle. Rows extend beneath it with text padded clear.
+
+The inspector has separate current-state and run modes. Its header identifies
+`Agent · Current state` or `Step · Current state` in workflow view, and includes
+the run ID in run view. Current agent definitions have no tabs: they show
+instructions, input/output schemas, configured models, skills, tools, and runtime
+configuration. Consistent section headings, underline separators, and spacing
+establish hierarchy without boxed groups; inputs/outputs and model roles use quieter
+subheadings. Current regular steps show source code.
+
+Run agent inspectors expose only **Trace** and **Run I/O** tabs. Trace occupies the
+full panel with turn content. Run I/O pairs each historical field definition
+directly with its retained invocation value; missing schemas and values remain
+explicit instead of falling back to current metadata. Run headers retain execution
+status, duration, model usage, and iteration details. Selecting a regular step in
+run view highlights the node and filters its logs without opening a sidebar.
+Regular steps still open their source code in Current view.
+Run I/O uses the same section headings and separators as the current definition,
+with unboxed fields and subtly shaded, padded retained-value explorers.
+
+Run snapshots retain the selected node while its ID exists in the destination
+topology. The canvas notice reads **Viewing a run snapshot** and states that the
+view does not represent the workflow's current state.
+
+Skill titles open a dedicated, wider Markdown popup that renders the complete
+document with scrolling, without a **Show more** control. Non-empty **Packages** and
+**Modules** sections follow the instructions, displaying declared dependency strings
+and module names. Closing it returns focus to the selected skill without expanding
+the sidebar. Tools expand inline to show
+their full Python source, including docstrings, in a read-only code viewer that
+fits short functions and scrolls internally once it reaches its height limit.
+Tools without inspectable source show an explicit unavailable message.
+Runtime configuration remains collapsible.
+
+Authored Markdown in instructions and expanded resources has scoped heading, list,
+paragraph, link, quote, and code typography. These styles do not affect inspector
+controls or host content. Active HTML and remote images remain excluded.
+
+Full instructions, current field schemas, configured models, resources, and code
+come from the available workflow definition, not the historical run. Hosts can set
+`definitionLabel` on `WorkflowWorkspace`, or on `OperatorUi`'s presentation, to
+identify missing-definition messages.
+
+For route-controlled embedding, pass
+`navigation={{ selectedRunId, onSelectRun }}` to `WorkflowWorkspace`.
+`onSelectRun(undefined)` clears the run; changing routes within a workflow should
+retain the same component instance. Without `navigation`, selection is managed
+locally and `onSelectedRunChange` can observe it.
+
+Pass `bottomRightPanel` to `WorkflowWorkspace` to replace the graph's floating
+actions with host controls. Omit it to retain built-in controls, or pass `null`
+to hide the panel. The panel stays inside the graph when the inspector opens.
+
+The floating timeline's **Expand timeline** icon expands it into a wider, full-height
+**Timeline** panel on the left of the workspace, independently of node inspection on
+the right. It paginates the runs supplied by the API baseline in 25-run pages, with a
+status dropdown and inclusive local-date filtering. Run-ID search is available
+under the initially collapsed **Advanced filters** section. **Collapse timeline**
+or Escape restores the floating timeline and returns focus to its trigger.
+Filters and run selection survive expansion and collapse.
+Expansion and collapse animate the timeline's size and position unless reduced
+motion is requested.
 
 Pagination covers loaded history only; it does not retrieve records unavailable
 through the host's `OperatorApi`.

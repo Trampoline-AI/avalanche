@@ -2,6 +2,47 @@
 
 ## Unreleased
 
+- The floating and expanded browser timelines now use a subtle, trackless scroll handle over
+  full-width rows, clear of their text. It stays faintly visible when scrollable
+  and reaches full opacity on hover.
+- The expanded run browser now keeps the Timeline name. Both timeline sizes use
+  dark 2px separators above Current, dark 1px separators below it, and lighter
+  1px separators between runs.
+- Local and embedded operator browser interfaces now share Runs/DAG tabs. Runs
+  follows the latest run unless an older run is selected, preserving that choice
+  across reconnects and tab changes. Empty run history keeps the workflow graph
+  visible with run inspection disabled.
+- Added an all-runs browser beside the workflow graph, with 25-run pages, status
+  and inclusive local-date filters, and run-ID search. The floating timeline expands
+  into a full-height left-hand browser without replacing node inspection. Collapse
+  and Escape restore the compact timeline; pagination covers loaded history only.
+
+### Operator web interface
+
+- The operator UI now bundles Delta Console's Nacelle Regular and SemiBold fonts,
+  while keeping code and filename references monospace.
+- The local workflow sidebar now follows Delta Console's padded, square-cornered
+  rows and straight tree connectors reaching the target icon, retaining source
+  filenames. Selected labels retain Delta's brand blue on hover. A sole scan
+  target sits directly above its workflows; zero or multiple targets use a flat
+  workflow list without inferring ownership. Removed the Navigator/Explorer headings.
+- Skill popups now display declared package requirements and module names beneath
+  their instructions, using the existing declaration metadata.
+- Current-state tool entries expand into full Python source viewers instead of
+  docstring-only descriptions; discovery caches refresh to include tool source.
+- Agent traces now lead with each turn's reasoning and separate main/sub-model costs, while
+  code, compact terminal output, tool calls, and model calls remain expandable.
+- Run inspectors now surface status, duration, models, per-model costs, and iterations in the
+  sidebar header, with raw execution details moved to a final Metadata tab.
+- Run inspector headers no longer include the redundant **See current state** button;
+  use the run timeline or workflow breadcrumb to return to the current workflow.
+- The local browser header now identifies its sole configured workflow scan target,
+  retains the local-operator label when several targets are configured, and links
+  the workflow breadcrumb back to its current state.
+- The Explorer now collapses to a persistent rail and previews over the workspace
+  on pointer hover. Its compact footer control stays in place, and its non-wrapping
+  label appears only after the width transition finishes.
+
 ## 0.3.2
 
 - Agent steps can cross Ray/cloudpickle boundaries without serializing process-local
@@ -19,13 +60,6 @@
   GitHub Release waits for both registries. Failed publication jobs can reuse their
   validated artifacts without re-uploading existing packages; npm retries verify
   archive integrity before skipping an existing version.
-- Local and embedded operator browser interfaces now share Runs/DAG tabs. Runs
-  follows the latest run unless an older run is selected, preserving that choice
-  across reconnects and tab changes. Empty run history keeps the workflow graph
-  visible with run inspection disabled.
-- Added an all-runs browser beside the workflow graph, with 25-run pages, status
-  and inclusive local-date filters, and run-ID search. It shares the node inspector
-  pane and supports keyboard closing; pagination covers loaded history only.
 - Consolidated Python, terminal, and browser tests around core execution, data
   integrity, recovery, and interaction scenarios; removed redundant test scaffolding
   and static-copy/schema inventories. `make test` now includes browser tests.
@@ -40,13 +74,6 @@
 - Removed obsolete test-double and compatibility fallbacks; browser catalogs now
   retain the operator's revision, including zero, and TUI refreshes no longer
   silently swallow unexpected rendering errors.
-
-### Operator web interface
-
-- Agent traces now lead with each turn's reasoning and separate main/sub-model costs, while
-  code, compact terminal output, tool calls, and model calls remain expandable.
-- Run inspectors now surface status, duration, models, per-model costs, and iterations in the
-  sidebar header, with raw execution details moved to a final Metadata tab.
 
 ## 0.3.0
 
@@ -136,6 +163,7 @@ operator clients.
   are discarded.
 
 ## 0.1.2
+
 ### Dependencies
 
 - Declare Protobuf as an Avalanche runtime dependency required by the operator's

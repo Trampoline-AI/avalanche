@@ -527,8 +527,8 @@ async function run() {
   if (renderMs > RENDER_BUDGET_MS) {
     throw new Error("initial render exceeded " + RENDER_BUDGET_MS + "ms: " + renderMs);
   }
-  if (virtualList.getBoundingClientRect().height < RUN_COUNT * RUN_ROW_HEIGHT) {
-    throw new Error("virtual list did not retain deterministic 10k-row geometry");
+  if (virtualList.getBoundingClientRect().height > 21 * RUN_ROW_HEIGHT) {
+    throw new Error("compact timeline exceeded Current plus twenty runs");
   }
   assertDomBound();
   const scrollElement = panel.querySelector<HTMLElement>(".run-list-scroll");
@@ -539,9 +539,9 @@ async function run() {
   scrollElement.dispatchEvent(new Event("scroll"));
   const oldestRun = await until(
     () => Array.from(document.querySelectorAll<HTMLButtonElement>(".run-list-row"))
-      .find((button) => button.textContent?.includes("run-00000")),
+      .find((button) => button.textContent?.includes("run-09980")),
     INTERACTION_BUDGET_MS,
-    "scroll did not render the oldest run",
+    "scroll did not render the twentieth run",
   );
   const interactionMs = performance.now() - interactionStartedAt;
   if (interactionMs > INTERACTION_BUDGET_MS) {
@@ -551,7 +551,7 @@ async function run() {
   }
   assertDomBound();
   oldestRun.click();
-  if (selectedRunId !== "run-00000") throw new Error("oldest run interaction failed");
+  if (selectedRunId !== "run-09980") throw new Error("twentieth run interaction failed");
 
   document.body.dataset.benchmarkStatus = "pass";
   document.body.dataset.domRows = String(rows().length);
