@@ -20,10 +20,10 @@
   GitHub Release waits for both registries. Failed publication jobs can reuse their
   validated artifacts without re-uploading existing packages; npm retries verify
   archive integrity before skipping an existing version.
-- Local and embedded operator browser interfaces now share Runs/DAG tabs. Runs
-  follows the latest run unless an older run is selected, preserving that choice
-  across reconnects and tab changes. Empty run history keeps the workflow graph
-  visible with run inspection disabled.
+- Local and embedded operator browser interfaces now share one workflow workspace.
+  The timeline switches between Current and historical runs. Selecting the newest
+  run follows new runs; selecting an older run pins it, and Current stops following.
+  Selection intent survives reconnects, and Current keeps node definitions available.
 - Added an all-runs browser beside the workflow graph, with 25-run pages, status
   and inclusive local-date filters, and run-ID search. The floating timeline expands
   into a full-height left-hand browser without replacing node inspection. Collapse
@@ -58,8 +58,9 @@
   docstring-only descriptions; discovery caches refresh to include tool source.
 - Agent traces now lead with each turn's reasoning and separate main/sub-model costs, while
   code, compact terminal output, tool calls, and model calls remain expandable.
-- Run inspectors now surface status, duration, models, per-model costs, and iterations in the
-  sidebar header, with raw execution details moved to a final Metadata tab.
+- Agent run inspectors now surface status, duration, models, per-model costs, and
+  iterations in the sidebar header, with Trace and Run I/O tabs below. Current
+  definitions remain separate from historical run schemas and retained values.
 - Run inspector headers no longer include the redundant **See current state** button;
   use the run timeline or workflow breadcrumb to return to the current workflow.
 - The local browser header now identifies its sole configured workflow scan target,
