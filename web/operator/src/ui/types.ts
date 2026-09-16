@@ -8,6 +8,7 @@ export interface OperatorUiPresentation {
   brandImageUrl: string;
   unavailableDescription: string;
   workflowReloadDescription: string;
+  definitionLabel?: string;
 }
 
 export interface OperatorUiHost {

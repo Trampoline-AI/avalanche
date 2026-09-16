@@ -5,12 +5,10 @@ import type {
   AgentTraceStep,
   AgentTraceStepSummary,
   AgentTraceToolCall,
-  TraceLmUsage,
   TraceTokenUsage,
 } from "./agentTrace";
-import { parseAgentTraceUsage } from "./agentTrace";
 import { compareSequence } from "./detailProjection";
-import type { AgentEventDescriptorMsg, TraceDescriptorMsg } from "./model";
+import type { AgentEventDescriptorMsg } from "./model";
 import { PythonSource } from "./PythonSource";
 import { ValueView } from "./ValueView";
 
@@ -34,16 +32,13 @@ export interface AgentTraceTurn {
 
 interface AgentTraceExplorerProps {
   scopeKey: string;
-  trace: TraceDescriptorMsg;
   turns: AgentTraceTurn[];
   lifecycleEvents: AgentEventDescriptorMsg[];
   running: boolean;
-  following: boolean;
   loading: boolean;
   error?: string;
   hasMore: boolean;
   scrollRef: RefObject<HTMLDivElement | null>;
-  onFollowingChange: (following: boolean) => void;
   onLoadTurn: (event: AgentEventDescriptorMsg) => void;
   onLoadMore: () => void;
   onScroll: (element: HTMLDivElement) => void;
@@ -78,21 +73,6 @@ function turnUsageLabel(usage: TraceTokenUsage) {
   return `${NUMBER_FORMAT.format(usage.inputTokens)} in / ${NUMBER_FORMAT.format(usage.outputTokens)} out · $${usage.cost.toFixed(4)}`;
 }
 
-function HeaderUsage({ usage }: { usage: TraceLmUsage }) {
-  return (
-    <dl className="trace-usage mt-2 grid gap-1 font-mono text-[8px] text-muted">
-      <div className="grid grid-cols-[2.25rem_minmax(0,1fr)] gap-1.5">
-        <dt className="uppercase">Main</dt>
-        <dd className="m-0 text-secondary">{usageLabel(usage.main)}</dd>
-      </div>
-      <div className="grid grid-cols-[2.25rem_minmax(0,1fr)] gap-1.5">
-        <dt className="uppercase">Sub</dt>
-        <dd className="m-0 text-secondary">{usageLabel(usage.sub)}</dd>
-      </div>
-    </dl>
-  );
-}
-
 function TraceSection({
   label,
   children,
@@ -122,6 +102,14 @@ function TraceSection({
   );
 }
 
+function TraceErrorOutput({ error }: { error: string }) {
+  return (
+    <pre className="m-0 max-h-56 overflow-auto whitespace-pre-wrap font-mono text-[9px]/[1.55] text-danger [overflow-wrap:anywhere]">
+      {error}
+    </pre>
+  );
+}
+
 function ToolCalls({ calls }: { calls: AgentTraceToolCall[] }) {
   if (!calls.length) return <p className="m-0 text-[9px] text-muted">No tool calls.</p>;
   return (
@@ -148,7 +136,11 @@ function ToolCalls({ calls }: { calls: AgentTraceToolCall[] }) {
               >
                 {call.error ? "Error" : "Result"}
               </h5>
-              <ValueView value={call.error ?? call.result} />
+              {call.error ? (
+                <TraceErrorOutput error={call.error} />
+              ) : (
+                <ValueView value={call.result} />
+              )}
             </div>
           </div>
         </details>
@@ -203,7 +195,11 @@ function PredictCalls({ groups }: { groups: AgentTracePredictGroup[] }) {
                     >
                       {call.error ? "Error" : "Output"}
                     </h5>
-                    <ValueView value={call.error ?? call.output} />
+                    {call.error ? (
+                      <TraceErrorOutput error={call.error} />
+                    ) : (
+                      <ValueView value={call.output} />
+                    )}
                   </div>
                   <p className="m-0 font-mono text-[8px] text-muted">
                     {usageLabel(call.usage)}
@@ -325,16 +321,13 @@ const ACTIVITY_LABELS: Record<string, string> = {
 
 export function AgentTraceExplorer({
   scopeKey,
-  trace,
   turns,
   lifecycleEvents,
   running,
-  following,
   loading,
   error,
   hasMore,
   scrollRef,
-  onFollowingChange,
   onLoadTurn,
   onLoadMore,
   onScroll,
@@ -374,198 +367,161 @@ export function AgentTraceExplorer({
     [turns],
   );
 
-  const usage = useMemo(() => {
-    const usageJson = trace.header?.usageJson;
-    if (!usageJson) return undefined;
-    try {
-      return parseAgentTraceUsage(JSON.parse(usageJson));
-    } catch {
-      return undefined;
-    }
-  }, [trace.header?.usageJson]);
-  const telemetry = useMemo(() => {
-    const telemetryJson = trace.header?.telemetryJson;
-    if (!telemetryJson) return undefined;
-    try {
-      return JSON.parse(telemetryJson) as unknown;
-    } catch {
-      return { kind: "unavailable", reason: "Trace telemetry is malformed" };
-    }
-  }, [trace.header?.telemetryJson]);
   const currentActivity = lifecycleEvents.at(-1);
 
   return (
-    <section className="inspector-panel inspector-trace-panel mb-0! flex h-full min-h-full min-w-0 flex-col gap-3">
-      <div className="trace-toolbar flex items-start justify-between gap-2">
-        <div className="min-w-0">
-          <h3 className="mt-0! mb-1!">Agent trace</h3>
-          <p className="m-0 font-mono text-[8px] text-muted">
-            {trace.status || "unavailable"}
-            {trace.header?.model ? ` · ${trace.header.model}` : ""}
-            {trace.header
-              ? ` · ${trace.header.iterations}/${trace.header.maxIterations} turns · ${formatDuration(trace.header.durationMs)}`
-              : ""}
-          </p>
-          {usage && <HeaderUsage usage={usage} />}
-        </div>
-        <button
-          type="button"
-          className={`toggle flex-none cursor-pointer rounded-full border bg-panel px-2 py-[5px] font-mono text-[8px] ${following ? "active border-acid text-acid" : "border-line text-secondary"}`}
-          onClick={() => onFollowingChange(!following)}
-        >
-          {following ? "Following live" : "Follow latest"}
-        </button>
-      </div>
+    <section
+      aria-label="Agent trace"
+      className="inspector-panel inspector-trace-panel h-full min-h-0 min-w-0"
+    >
+      <div
+        className="inspector-trace-explorer h-full min-h-0 min-w-0 overflow-auto overscroll-contain"
+        ref={scrollRef}
+        onScroll={(event) => onScroll(event.currentTarget)}
+      >
+        <div className="flex min-h-full min-w-0 flex-col gap-3 px-5 pt-[18px] pb-[30px]">
+          {running && currentActivity && (
+            <div
+              className="trace-current-activity flex items-center gap-2 rounded-md border border-[#d9d1ff] bg-[#f8f6ff] px-2.5 py-2 text-[9px] text-secondary"
+              role="status"
+            >
+              <span className="relative flex size-2 flex-none" aria-hidden="true">
+                <span className="absolute inline-flex size-full animate-ping rounded-full bg-agent opacity-50 motion-reduce:animate-none" />
+                <span className="relative inline-flex size-2 rounded-full bg-agent" />
+              </span>
+              <span>
+                {ACTIVITY_LABELS[currentActivity.eventKind] ?? currentActivity.eventKind}
+                {currentActivity.iteration ? ` · turn ${currentActivity.iteration}` : ""}
+              </span>
+            </div>
+          )}
 
-      {running && currentActivity && (
-        <div
-          className="trace-current-activity flex items-center gap-2 rounded-md border border-[#d9d1ff] bg-[#f8f6ff] px-2.5 py-2 text-[9px] text-secondary"
-          role="status"
-        >
-          <span className="relative flex size-2 flex-none" aria-hidden="true">
-            <span className="absolute inline-flex size-full animate-ping rounded-full bg-agent opacity-50 motion-reduce:animate-none" />
-            <span className="relative inline-flex size-2 rounded-full bg-agent" />
-          </span>
-          <span>
-            {ACTIVITY_LABELS[currentActivity.eventKind] ?? currentActivity.eventKind}
-            {currentActivity.iteration ? ` · turn ${currentActivity.iteration}` : ""}
-          </span>
-        </div>
-      )}
+          {error && (
+            <p
+              className="inspector-error rounded-[7px] border border-danger p-2.5 text-[10px] text-danger [overflow-wrap:anywhere]"
+              role="alert"
+            >
+              {error}
+            </p>
+          )}
+          {loading && !orderedTurns.length && (
+            <p className="inspector-loading text-[11px] text-muted italic" role="status">
+              Loading retained trace…
+            </p>
+          )}
 
-      {error && (
-        <p
-          className="inspector-error rounded-[7px] border border-danger p-2.5 text-[10px] text-danger [overflow-wrap:anywhere]"
-          role="alert"
-        >
-          {error}
-        </p>
-      )}
-      {loading && !orderedTurns.length && (
-        <p className="inspector-loading text-[11px] text-muted italic" role="status">
-          Loading retained trace…
-        </p>
-      )}
-
-      {(!error || orderedTurns.length > 0) && (
-        <div
-          className="inspector-trace-explorer min-h-48 min-w-0 flex-[1_1_auto] overflow-auto"
-          ref={scrollRef}
-          onScroll={(event) => onScroll(event.currentTarget)}
-        >
-          <div className="turn-list grid min-w-0 gap-2.5">
-            {orderedTurns.map(({ descriptor, summary, detail }, index) => {
-              const turnKey = descriptor.bodyToken || descriptor.eventSequence;
-              const step = summary.status === "ready" ? summary.step : undefined;
-              const iteration = step?.iteration ?? descriptor.iteration ?? index + 1;
-              const failed = descriptor.error || step?.error;
-              const finishReason = failed ? undefined : finishLabel(step?.lm?.finishReason);
-              return (
-                <article
-                  className={`turn-row overflow-hidden rounded-lg border bg-panel ${failed ? "border-danger" : "border-line"}`}
-                  key={turnKey}
-                >
-                  <header className="grid grid-cols-[auto_minmax(0,1fr)] items-start gap-2.5 bg-canvas px-3 py-2.5">
-                    <span
-                      className={`mt-0.5 grid size-5 place-items-center rounded-full border font-mono text-[8px] ${failed ? "border-danger text-danger" : "border-acid text-acid"}`}
-                      aria-hidden="true"
+          {(!error || orderedTurns.length > 0) && (
+            <div>
+              <div className="turn-list grid min-w-0 gap-2.5">
+                {orderedTurns.map(({ descriptor, summary, detail }, index) => {
+                  const turnKey = descriptor.bodyToken || descriptor.eventSequence;
+                  const step = summary.status === "ready" ? summary.step : undefined;
+                  const iteration = step?.iteration ?? descriptor.iteration ?? index + 1;
+                  const failed = descriptor.error || step?.error;
+                  const finishReason = failed ? undefined : finishLabel(step?.lm?.finishReason);
+                  return (
+                    <article
+                      className={`turn-row overflow-hidden rounded-lg border bg-panel ${failed ? "border-danger" : "border-line"}`}
+                      key={turnKey}
                     >
-                      {failed ? "×" : iteration}
-                    </span>
-                    <div className="min-w-0">
-                      <strong className="block text-[10px] text-ink">Turn {iteration}</strong>
-                      <p className="mt-0.5 mb-0 whitespace-normal font-mono text-[8px] leading-[1.6] text-muted [overflow-wrap:anywhere]">
-                        {formatDuration(step?.durationMs ?? descriptor.durationMs)}
-                        {` · ${descriptor.toolCount} tool${descriptor.toolCount === 1 ? "" : "s"}`}
-                        {` · ${descriptor.predictCount} predict`}
-                        {step
-                          ? ` · main ${turnUsageLabel(step.usage.main)} · sub ${turnUsageLabel(step.usage.sub)}`
-                          : ""}
-                        {finishReason ? ` · ${finishReason}` : ""}
-                        {failed ? " · error" : ""}
-                      </p>
-                    </div>
-                  </header>
+                      <header className="grid grid-cols-[auto_minmax(0,1fr)] items-start gap-2.5 bg-canvas px-3 py-2.5">
+                        <span
+                          className={`mt-0.5 grid size-5 place-items-center rounded-full border font-mono text-[8px] ${failed ? "border-danger text-danger" : "border-acid text-acid"}`}
+                          aria-hidden="true"
+                        >
+                          {failed ? "×" : iteration}
+                        </span>
+                        <div className="min-w-0">
+                          <strong className="block text-[10px] text-ink">
+                            Turn {iteration}
+                          </strong>
+                          <p className="mt-0.5 mb-0 whitespace-normal font-mono text-[8px] leading-[1.6] text-muted [overflow-wrap:anywhere]">
+                            {formatDuration(step?.durationMs ?? descriptor.durationMs)}
+                            {` · ${descriptor.toolCount} tool${descriptor.toolCount === 1 ? "" : "s"}`}
+                            {` · ${descriptor.predictCount} predict`}
+                            {step
+                              ? ` · main ${turnUsageLabel(step.usage.main)} · sub ${turnUsageLabel(step.usage.sub)}`
+                              : ""}
+                            {finishReason ? ` · ${finishReason}` : ""}
+                            {failed ? " · error" : ""}
+                          </p>
+                        </div>
+                      </header>
 
-                  <section className="border-t border-line px-3 py-3">
-                    <h4 className="m-0 mb-1.5 font-mono text-[8px] font-semibold tracking-[0.08em] text-muted uppercase">
-                      Reasoning
-                    </h4>
-                    {step ? (
-                      <p className="m-0 whitespace-pre-wrap text-[13px] leading-[1.7] text-ink [overflow-wrap:anywhere]">
-                        {step.reasoning || "No reasoning was retained."}
-                      </p>
-                    ) : summary.status === "error" ? (
-                      <p className="m-0 text-[10px] text-danger" role="alert">
-                        Reasoning unavailable: {summary.error}
-                      </p>
-                    ) : (
-                      <p className="m-0 text-[10px] text-muted italic" role="status">
-                        Loading reasoning…
-                      </p>
-                    )}
-                  </section>
+                      <section className="border-t border-line px-3 py-3">
+                        <h4 className="m-0 mb-1.5 font-mono text-[8px] font-semibold tracking-[0.08em] text-muted uppercase">
+                          Reasoning
+                        </h4>
+                        {step ? (
+                          <p className="m-0 whitespace-pre-wrap text-[13px] leading-[1.7] text-ink [overflow-wrap:anywhere]">
+                            {step.reasoning || "No reasoning was retained."}
+                          </p>
+                        ) : summary.status === "error" ? (
+                          <p className="m-0 text-[10px] text-danger" role="alert">
+                            Reasoning unavailable: {summary.error}
+                          </p>
+                        ) : (
+                          <p className="m-0 text-[10px] text-muted italic" role="status">
+                            Loading reasoning…
+                          </p>
+                        )}
+                      </section>
 
-                  {step && (
-                    <TurnSecondaryDetails
-                      descriptor={descriptor}
-                      summary={step}
-                      detail={detail}
-                      showFullOutput={fullOutputTurns.has(turnKey)}
-                      onLoadTurn={() => onLoadTurn(descriptor)}
-                      onShowFullOutput={() =>
-                        setFullOutputTurns((current) => {
-                          const next = new Set(current);
-                          if (next.has(turnKey)) next.delete(turnKey);
-                          else next.add(turnKey);
-                          return next;
-                        })
-                      }
-                    />
-                  )}
-                </article>
-              );
-            })}
-          </div>
-          {!loading && !orderedTurns.length && !error && (
-            <p className="empty-copy text-[11px] text-muted">
-              No executable turn has been retained.
-            </p>
+                      {step && (
+                        <TurnSecondaryDetails
+                          descriptor={descriptor}
+                          summary={step}
+                          detail={detail}
+                          showFullOutput={fullOutputTurns.has(turnKey)}
+                          onLoadTurn={() => onLoadTurn(descriptor)}
+                          onShowFullOutput={() =>
+                            setFullOutputTurns((current) => {
+                              const next = new Set(current);
+                              if (next.has(turnKey)) next.delete(turnKey);
+                              else next.add(turnKey);
+                              return next;
+                            })
+                          }
+                        />
+                      )}
+                    </article>
+                  );
+                })}
+              </div>
+              {!loading && !orderedTurns.length && !error && (
+                <p className="empty-copy text-[11px] text-muted">
+                  No executable turn has been retained.
+                </p>
+              )}
+              {loading && orderedTurns.length > 0 && (
+                <p
+                  className="inspector-loading mt-2 text-[11px] text-muted italic"
+                  role="status"
+                >
+                  Loading more retained trace…
+                </p>
+              )}
+              {!loading && !hasMore && orderedTurns.length > 0 && (
+                <p className="inspector-end-state mt-3 text-center font-mono text-[8px] text-muted uppercase">
+                  End of retained trace
+                </p>
+              )}
+            </div>
           )}
-          {loading && orderedTurns.length > 0 && (
-            <p className="inspector-loading mt-2 text-[11px] text-muted italic" role="status">
-              Loading more retained trace…
-            </p>
-          )}
-          {!loading && !hasMore && orderedTurns.length > 0 && (
-            <p className="inspector-end-state mt-3 text-center font-mono text-[8px] text-muted uppercase">
-              End of retained trace
-            </p>
+
+          {hasMore && (
+            <button
+              type="button"
+              className="descriptor-page-action cursor-pointer rounded-md border border-line bg-panel px-2 py-[5px] font-mono text-[8px] text-acid disabled:cursor-wait disabled:text-muted"
+              disabled={loading}
+              aria-busy={loading}
+              onClick={onLoadMore}
+            >
+              {loading ? "Loading events…" : "Load more trace"}
+            </button>
           )}
         </div>
-      )}
-
-      {hasMore && (
-        <button
-          type="button"
-          className="descriptor-page-action cursor-pointer rounded-md border border-line bg-panel px-2 py-[5px] font-mono text-[8px] text-acid disabled:cursor-wait disabled:text-muted"
-          disabled={loading}
-          aria-busy={loading}
-          onClick={onLoadMore}
-        >
-          {loading ? "Loading events…" : "Load more trace"}
-        </button>
-      )}
-      {telemetry !== undefined && (
-        <details className="trace-metadata border-t border-line pt-2">
-          <summary className="cursor-pointer font-mono text-[8px] text-muted uppercase focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-acid">
-            Trace metadata
-          </summary>
-          <div className="mt-2">
-            <ValueView value={telemetry} />
-          </div>
-        </details>
-      )}
+      </div>
     </section>
   );
 }
