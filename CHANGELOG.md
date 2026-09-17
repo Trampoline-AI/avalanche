@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+- Late browser run-start responses no longer override newer navigation, retained
+  runs remain inspectable after their current workflow definition disappears, and
+  pending cancellation disables repeat submissions.
+- Open agent trace details take priority over background summary hydration within
+  the bounded browser cache. Evicted details and failed requests expose explicit
+  reload and retry controls instead of remaining stuck in a loading state.
+- Live status updates no longer reset compact timeline scrolling. Mobile workflow
+  drawers keep their last rows reachable, and bundled fonts preserve Markdown italics.
 - The floating and expanded browser timelines now use a subtle, trackless scroll handle over
   full-width rows, clear of their text. It stays faintly visible when scrollable
   and reaches full opacity on hover.
