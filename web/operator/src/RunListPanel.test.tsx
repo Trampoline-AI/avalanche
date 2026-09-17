@@ -169,3 +169,60 @@ it("caps the compact timeline at twenty runs, with Current and the history actio
   expect(await within(scroll).findByRole("button", { name: /run-0,/ })).toBeInTheDocument();
   expect(screen.queryByRole("button", { name: "View all" })).not.toBeInTheDocument();
 });
+
+it("preserves compact timeline scrolling across status and unrelated workflow updates", async () => {
+  const runs = Object.fromEntries(
+    Array.from({ length: 20 }, (_, index) => {
+      const runId = `run-${index}`;
+      return [
+        runId,
+        RunSummaryMsg.create({ ...summary, runId, createdSequence: String(index + 1) }),
+      ];
+    }),
+  );
+  const props = {
+    workflowId: workflow.workflowId,
+    runs,
+    selectedRunId: "run-19",
+    onSelectRun: vi.fn(),
+    onViewAll: vi.fn(),
+  };
+  const view = render(<RunListPanel {...props} />);
+  await screen.findByRole("button", { name: /run-19,/ });
+  const scroll = view.container.querySelector<HTMLElement>(".run-list-scroll")!;
+  const bottom = 22 * 32 - 192;
+  scroll.scrollTop = bottom;
+  fireEvent.scroll(scroll);
+  await within(scroll).findByRole("button", { name: "View all" });
+
+  const updatedRuns = {
+    ...runs,
+    "run-19": RunSummaryMsg.create({ ...runs["run-19"], status: "success", revision: "2" }),
+  };
+  view.rerender(<RunListPanel {...props} runs={updatedRuns} />);
+  expect(scroll.scrollTop).toBe(bottom);
+
+  const otherRun = RunSummaryMsg.create({
+    ...summary,
+    runId: "other-run",
+    workflowId: "other.py::workflow",
+    createdSequence: "21",
+  });
+  view.rerender(
+    <RunListPanel {...props} runs={{ ...updatedRuns, [otherRun.runId]: otherRun }} />,
+  );
+  expect(scroll.scrollTop).toBe(bottom);
+  fireEvent.click(within(scroll).getByRole("button", { name: "View all" }));
+  expect(props.onViewAll).toHaveBeenCalledOnce();
+
+  const newestRun = RunSummaryMsg.create({
+    ...summary,
+    runId: "run-20",
+    createdSequence: "22",
+  });
+  const withNewRun = { ...updatedRuns, [newestRun.runId]: newestRun };
+  view.rerender(<RunListPanel {...props} runs={withNewRun} />);
+  expect(scroll.scrollTop).toBe(bottom);
+  view.rerender(<RunListPanel {...props} runs={withNewRun} selectedRunId={newestRun.runId} />);
+  expect(scroll.scrollTop).toBe(0);
+});

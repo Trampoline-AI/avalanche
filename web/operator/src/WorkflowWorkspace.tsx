@@ -43,6 +43,7 @@ export interface WorkflowWorkspaceProps {
 interface WorkflowWorkspaceSurfaceProps {
   api: OperatorApi;
   state: OperatorProjection;
+  workflowId?: string;
   workflow?: FlowInfoMsg;
   selectedRunId?: string;
   onSelectRun: (runId: string | undefined) => void;
@@ -60,6 +61,7 @@ interface WorkflowWorkspaceSurfaceProps {
 export function WorkflowWorkspaceSurface({
   api,
   state,
+  workflowId,
   workflow,
   selectedRunId,
   onSelectRun,
@@ -79,7 +81,15 @@ export function WorkflowWorkspaceSurface({
   const timelineAnimation = useRef<Animation | undefined>(undefined);
   const [inspectorWidth, setInspectorWidth] = useState(INSPECTOR_DEFAULT_WIDTH);
   const workspaceId = useId();
-  const workflowId = workflow?.workflowId;
+  const navigationGeneration = useRef(0);
+  // Invalidate pending start navigation even when the user leaves and returns to the
+  // same selection. Layout cleanup also closes the scope before unmount completes.
+  useLayoutEffect(
+    () => () => {
+      navigationGeneration.current += 1;
+    },
+    [workflowId, selectedRunId],
+  );
   const latestRunId = useMemo(() => {
     let newest: (typeof state.runs)[string] | undefined;
     for (const run of Object.values(state.runs)) {
@@ -140,6 +150,7 @@ export function WorkflowWorkspaceSurface({
 
   const selectWorkflowRun = useCallback(
     (runId: string | undefined) => {
+      navigationGeneration.current += 1;
       selection.current.pendingSelection = { runId };
       selection.current.following = runId !== undefined && runId === latestRunId;
       onSelectRun(runId);
@@ -149,8 +160,9 @@ export function WorkflowWorkspaceSurface({
   );
   const startWorkflowRun = useCallback(
     async (workflowSelector: string, input?: Record<string, unknown>) => {
+      const generation = navigationGeneration.current;
       const runId = await startRun(workflowSelector, input);
-      selectWorkflowRun(runId);
+      if (navigationGeneration.current === generation) selectWorkflowRun(runId);
       return runId;
     },
     [selectWorkflowRun, startRun],
@@ -232,11 +244,11 @@ export function WorkflowWorkspaceSurface({
         ? Object.hasOwn(run.topology.agentFieldSchemasJson, inspectedNode)
         : run.nodes.some((node) => node.nodeId === inspectedNode && node.trace))),
   );
-  const runListPanel = workflow ? (
+  const runListPanel = workflowId ? (
     <RunListPanel
-      key={workflow.workflowId}
+      key={workflowId}
       expanded={timelineExpanded}
-      workflowId={workflow.workflowId}
+      workflowId={workflowId}
       runs={state.runs}
       selectedRunId={selectedRunId}
       onSelectRun={selectWorkflowRun}
@@ -244,16 +256,16 @@ export function WorkflowWorkspaceSurface({
       onClose={closeAllRuns}
     />
   ) : undefined;
-  const runControlsPanel =
-    workflow && (!historical || loadedRun) ? (
-      <RunControls
-        workflow={!historical ? workflow : undefined}
-        run={loadedRun}
-        onStart={startWorkflowRun}
-        onCancel={cancelRun}
-        runActionsEnabled={runActionsEnabled}
-      />
-    ) : undefined;
+  const runControlsPanel = (historical ? loadedRun : workflow) ? (
+    <RunControls
+      workflow={!historical ? workflow : undefined}
+      run={loadedRun}
+      pending={state.action}
+      onStart={startWorkflowRun}
+      onCancel={cancelRun}
+      runActionsEnabled={runActionsEnabled}
+    />
+  ) : undefined;
   const displayedRunId = run?.summary?.runId;
   const liveEventDescriptorKey =
     displayedRunId && inspectedNode ? `${displayedRunId}:${inspectedNode}` : "";
@@ -276,7 +288,7 @@ export function WorkflowWorkspaceSurface({
           <div
             className={`canvas relative flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden ${run ? "run-canvas bg-[#fafaf8]" : "blueprint-canvas bg-white"}`}
           >
-            {workflow ? (
+            {workflow || run ? (
               <>
                 <div className="run-graph-shell relative min-h-0 min-w-0 flex-1 overflow-hidden">
                   <GraphCanvas
@@ -447,6 +459,7 @@ export function WorkflowWorkspace({
     <WorkflowWorkspaceSurface
       api={api}
       state={state}
+      workflowId={workflowId}
       workflow={workflow}
       selectedRunId={selectedRunId}
       onSelectRun={navigation ? navigation.onSelectRun : onSelectRun}

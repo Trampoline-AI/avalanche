@@ -66,6 +66,7 @@ export function RunListPanel({
         .sort(compareNewestRun),
     [runs, workflowId],
   );
+  const newestRunId = workflowRuns[0]?.runId;
   const statuses = useMemo(() => {
     const values = new Set<string>();
     for (const run of workflowRuns) {
@@ -100,10 +101,10 @@ export function RunListPanel({
     if (scrollElement.current) scrollElement.current.scrollTop = 0;
   }, [workflowId, search, status, fromDate, toDate, pageIndex]);
   useEffect(() => {
-    if (!expanded && selectedRunId === workflowRuns[0]?.runId && scrollElement.current) {
+    if (!expanded && selectedRunId === newestRunId && scrollElement.current) {
       scrollElement.current.scrollTop = 0;
     }
-  }, [expanded, selectedRunId, workflowRuns]);
+  }, [expanded, selectedRunId, newestRunId]);
   useEffect(() => {
     if (previousExpanded.current !== expanded) toggleButton.current?.focus();
     previousExpanded.current = expanded;
