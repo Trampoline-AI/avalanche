@@ -16,18 +16,6 @@
 - The expanded run browser now keeps the Timeline name. Both timeline sizes use
   dark 2px separators above Current, dark 1px separators below it, and lighter
   1px separators between runs.
-- Run-summary pagination now accepts forward live observations while preserving
-  source continuity, exact continuation bindings, and bounded page traversal.
-- `LocalExecutor(max_workers=1)` now uses true serial admission: it checks for
-  cancellation before every node and does not start a ready sibling after a
-  preceding node cancels or fails. Running local work remains cooperative.
-- Constrained DataFramely to its supported 1.x API and Polars to the qualified
-  1.34 series so fresh installations retain compatible typed table schemas.
-- Avalanche and `@trampoline-ai/operator-ui` now share versions and a single Avalanche
-  release tag. Both packages are built and checked before either publishes, and the
-  GitHub Release waits for both registries. Failed publication jobs can reuse their
-  validated artifacts without re-uploading existing packages; npm retries verify
-  archive integrity before skipping an existing version.
 - Local and embedded operator browser interfaces now share one workflow workspace.
   The timeline switches between Current and historical runs. Selecting the newest
   run follows new runs; selecting an older run pins it, and Current stops following.
@@ -36,20 +24,6 @@
   and inclusive local-date filters, and run-ID search. The floating timeline expands
   into a full-height left-hand browser without replacing node inspection. Collapse
   and Escape restore the compact timeline; pagination covers loaded history only.
-- Consolidated Python, terminal, and browser tests around core execution, data
-  integrity, recovery, and interaction scenarios; removed redundant test scaffolding
-  and static-copy/schema inventories. `make test` now includes browser tests.
-- Model-to-Arrow conversion JSON-serializes only JSON-backed fields, preserving
-  arbitrary binary values in native fields and nested models.
-- Injected `RunContext` parameters now share worker-resolved producer lineage under
-  Ray instead of retaining a separately serialized, stale context.
-- Lance tables preserve their qualified identity across worker serialization, so
-  Ray stream consumers can use their matching upstream append results.
-- Serialized initial Lance dataset creation to prevent competing first appends
-  from overwriting committed rows; ordinary appends remain concurrent.
-- Removed obsolete test-double and compatibility fallbacks; browser catalogs now
-  retain the operator's revision, including zero, and TUI refreshes no longer
-  silently swallow unexpected rendering errors.
 
 ### Operator web interface
 
@@ -77,6 +51,38 @@
 - The Explorer now collapses to a persistent rail and previews over the workspace
   on pointer hover. Its compact footer control stays in place, and its non-wrapping
   label appears only after the width transition finishes.
+
+## 0.3.2
+
+- Agent steps can cross Ray/cloudpickle boundaries without serializing process-local
+  workflow context variables. Omitted agent options retain their singleton identity
+  after serialization instead of becoming invalid skills/tools overrides.
+- Run-summary pagination now accepts forward live observations while preserving
+  source continuity, exact continuation bindings, and bounded page traversal.
+- `LocalExecutor(max_workers=1)` now uses true serial admission: it checks for
+  cancellation before every node and does not start a ready sibling after a
+  preceding node cancels or fails. Running local work remains cooperative.
+- Constrained DataFramely to its supported 1.x API and Polars to the qualified
+  1.34 series so fresh installations retain compatible typed table schemas.
+- Avalanche and `@trampoline-ai/operator-ui` now share versions and a single Avalanche
+  release tag. Both packages are built and checked before either publishes, and the
+  GitHub Release waits for both registries. Failed publication jobs can reuse their
+  validated artifacts without re-uploading existing packages; npm retries verify
+  archive integrity before skipping an existing version.
+- Consolidated Python, terminal, and browser tests around core execution, data
+  integrity, recovery, and interaction scenarios; removed redundant test scaffolding
+  and static-copy/schema inventories. `make test` now includes browser tests.
+- Model-to-Arrow conversion JSON-serializes only JSON-backed fields, preserving
+  arbitrary binary values in native fields and nested models.
+- Injected `RunContext` parameters now share worker-resolved producer lineage under
+  Ray instead of retaining a separately serialized, stale context.
+- Lance tables preserve their qualified identity across worker serialization, so
+  Ray stream consumers can use their matching upstream append results.
+- Serialized initial Lance dataset creation to prevent competing first appends
+  from overwriting committed rows; ordinary appends remain concurrent.
+- Removed obsolete test-double and compatibility fallbacks; browser catalogs now
+  retain the operator's revision, including zero, and TUI refreshes no longer
+  silently swallow unexpected rendering errors.
 
 ## 0.3.0
 

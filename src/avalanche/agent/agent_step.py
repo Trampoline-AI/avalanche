@@ -476,6 +476,9 @@ class _AgentStepSpec:
         self, fn: Callable[..., Any], defaults: Mapping[str, Any]
     ) -> Callable[..., Any]:
         async def bound(*args: Any, **kwargs: Any) -> Any:
+            # Resolve process-local state on execution; Ray serializes this closure by value.
+            from avalanche.agent.agent_step import _WORKFLOW_AGENT_DEFAULTS
+
             token = _WORKFLOW_AGENT_DEFAULTS.set(defaults)
             try:
                 return await fn(*args, **kwargs)

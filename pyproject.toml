@@ -1,6 +1,6 @@
 [project]
 name = "avalanche-ai"
-version = "0.3.1"
+version = "0.3.2"
 description = "Python toolkit for local data-flow experiments with Iceberg and Lance"
 authors = [{ name = "Gabriel Lesperance", email = "611342+glesperance@users.noreply.github.com" }]
 requires-python = "<3.14,>=3.11"
@@ -19,7 +19,7 @@ dependencies = [
     "filelock>=3.20,<4",
     "grpcio>=1.75.1",
     "polars>=1.34,<1.35",
-    "predict-rlm[codex-lm]>=0.8.0a",
+    "predict-rlm[codex-lm]>=0.8.0",
     "protobuf>=6.31.1",
     "pydantic>=2,<3",
     "pyiceberg[glue, pandas, pyarrow, s3fs, sql-sqlite]>=0.9,<0.11",
