@@ -1,5 +1,10 @@
-import type { ReactNode } from "react";
-import { Check, ListFilter, ListOrdered, ToggleLeft } from "lucide-react";
+import { json } from "@codemirror/lang-json";
+import { foldGutter, foldKeymap } from "@codemirror/language";
+import { EditorState } from "@codemirror/state";
+import { EditorView, keymap, lineNumbers } from "@codemirror/view";
+import { githubLightInit } from "@uiw/codemirror-theme-github";
+import { useEffect, useId, useRef, useState } from "react";
+import { ChevronDown, ChevronRight } from "lucide-react";
 
 import type {
   ClassifierAnswer,
@@ -10,369 +15,304 @@ import type {
 } from "./classifier";
 import { ValueView } from "./ValueView";
 
-function DetailValue({ label, children }: { label: string; children: ReactNode }) {
-  return (
-    <div className="min-w-0">
-      <dt className="text-[10px] text-muted">{label}</dt>
-      <dd className="m-0 mt-1 min-w-0 text-[11px] [overflow-wrap:anywhere]">{children}</dd>
-    </div>
-  );
+const percent = new Intl.NumberFormat("en-US", { style: "percent", maximumFractionDigits: 0 });
+
+const inputColorTheme = githubLightInit({ settings: { background: "var(--color-panel)" } });
+const inputLayout = EditorView.theme({
+  "&": { fontSize: "11px" },
+  ".cm-content": { fontFamily: "var(--font-mono)", lineHeight: "1.65", padding: "8px 0" },
+  ".cm-scroller": { maxHeight: "320px", overflow: "auto" },
+  ".cm-gutters": {
+    backgroundColor: "var(--color-panel)",
+    color: "var(--color-muted)",
+    border: "0",
+  },
+  "&.cm-focused": { outline: "1px solid var(--color-acid)" },
+});
+
+function ClassifierInput({ value }: { value: Exclude<ClassifierEntry, null> }) {
+  const parent = useRef<HTMLDivElement>(null);
+  const source = JSON.stringify(value, null, 2);
+  useEffect(() => {
+    if (parent.current === null) return;
+    const view = new EditorView({
+      parent: parent.current,
+      state: EditorState.create({
+        doc: source,
+        extensions: [
+          json(),
+          inputColorTheme,
+          inputLayout,
+          lineNumbers(),
+          foldGutter(),
+          keymap.of(foldKeymap),
+          EditorView.lineWrapping,
+          EditorState.readOnly.of(true),
+          EditorView.editable.of(false),
+          EditorView.contentAttributes.of({
+            role: "textbox",
+            "aria-label": "Classifier input JSON",
+            "aria-readonly": "true",
+            "aria-multiline": "true",
+            tabindex: "0",
+          }),
+        ],
+      }),
+    });
+    return () => view.destroy();
+  }, [source]);
+  return <div ref={parent} className="min-w-0 overflow-hidden rounded-md border border-line" />;
 }
 
 function JsonValue({ value }: { value: ClassifierEntry }) {
   return (
-    <div className="classifier-value min-w-0 rounded-md bg-canvas p-2 text-[11px]">
+    <div className="classifier-value min-w-0 text-[11px]">
       <ValueView value={value} jsonOnly />
     </div>
   );
 }
 
-function QuestionKind({ kind }: { kind: ClassifierQuestion["type"] }) {
-  const Icon = kind === "choice" ? ListFilter : kind === "noul" ? ToggleLeft : ListOrdered;
-  return (
-    <span className="inline-flex shrink-0 items-center gap-1 rounded bg-classifier-light px-1.5 py-1 text-[10px] font-medium text-classifier">
-      <Icon className="size-3" aria-hidden="true" />
-      {kind === "choice" ? "Choice" : kind === "noul" ? "Noul" : "Score"}
-    </span>
+function DefinitionValue({ value }: { value: ClassifierEntry }) {
+  return typeof value === "string" ? (
+    <p className="m-0 text-[11px] leading-relaxed whitespace-pre-wrap text-secondary [overflow-wrap:anywhere]">
+      {value}
+    </p>
+  ) : (
+    <JsonValue value={value} />
   );
 }
 
-function QuestionFrame({
+function Probability({ value }: { value: number }) {
+  return <span className="shrink-0 tabular-nums">{percent.format(value)}</span>;
+}
+
+function AnswerSummary({
+  id,
+  answer,
+  expanded,
+}: {
+  id: string;
+  answer: ClassifierAnswer;
+  expanded: boolean;
+}) {
+  if (answer.type === "noul") {
+    return (
+      <div className="grid gap-1.5">
+        <div className="text-xs tabular-nums">
+          <span className="font-semibold text-classifier">{percent.format(answer.noul)}</span>{" "}
+          <span className="text-muted">true</span>
+        </div>
+        <div
+          role="meter"
+          aria-label={`${id} probability of true`}
+          aria-valuemin={0}
+          aria-valuemax={1}
+          aria-valuenow={answer.noul}
+          aria-valuetext={`${percent.format(answer.noul)} true`}
+          className="h-1 w-24 max-w-full overflow-hidden rounded-full bg-line"
+        >
+          <span
+            className="block h-full rounded-full bg-classifier"
+            style={{ width: `${answer.noul * 100}%` }}
+          />
+        </div>
+      </div>
+    );
+  }
+  return (
+    <div className="grid min-w-0 gap-1.5">
+      {answer.type === "choice" ? (
+        <ul aria-label={`${id} probabilities`} className="m-0 grid list-none gap-1 p-0">
+          {Object.entries(answer.probabilities)
+            .sort(
+              ([left, a], [right, b]) =>
+                b - a || Number(right === answer.choice) - Number(left === answer.choice),
+            )
+            .slice(0, expanded ? undefined : 3)
+            .map(([option, probability]) => (
+              <li
+                key={option}
+                className={`flex min-w-0 items-baseline justify-between gap-2 text-[11px] ${option === answer.choice ? "font-semibold text-ink" : "text-secondary"}`}
+              >
+                <span className="min-w-0 [overflow-wrap:anywhere]">{option}</span>
+                <Probability value={probability} />
+              </li>
+            ))}
+        </ul>
+      ) : (
+        <div className="text-xs tabular-nums">
+          <span className="font-semibold text-classifier">{answer.score}</span>{" "}
+          <span className="text-muted">of {Object.keys(answer.legend).length - 1}</span>
+        </div>
+      )}
+      <p className="m-0 text-[10px] text-muted">
+        Confidence: {percent.format(answer.confidence)}
+      </p>
+    </div>
+  );
+}
+
+function QuestionCriteria({
   id,
   question,
-  children,
+  answer,
 }: {
   id: string;
   question: ClassifierQuestion;
-  children: ReactNode;
+  answer?: ClassifierAnswer;
 }) {
-  return (
-    <section
-      aria-label={`Question ${id}`}
-      className="field-detail grid min-w-0 gap-3 rounded-lg border border-line bg-panel p-3"
-    >
-      <div className="flex min-w-0 flex-wrap items-center justify-between gap-2">
-        <h4 className="m-0 min-w-0 text-xs font-semibold [overflow-wrap:anywhere]">{id}</h4>
-        <QuestionKind kind={question.type} />
-      </div>
-      <div className="grid min-w-0 gap-1.5" role="group" aria-label="Instructions">
-        <h5 className="m-0 text-[10px] font-medium text-muted">Instructions</h5>
-        <JsonValue value={question.instructions} />
-      </div>
-      {children}
-    </section>
-  );
-}
-
-function ChoiceQuestion({
-  id,
-  question,
-}: {
-  id: string;
-  question: Extract<ClassifierQuestion, { type: "choice" }>;
-}) {
-  return (
-    <QuestionFrame id={id} question={question}>
-      <div className="grid min-w-0 gap-2">
-        <p className="m-0 text-[10px] text-muted">Choose one named option</p>
-        <ul className="m-0 grid min-w-0 list-none gap-2 p-0" aria-label={`${id} options`}>
-          {Object.entries(question.criteria).map(([name, criterion]) => (
-            <li
-              key={name}
-              className="grid min-w-0 gap-1.5 rounded-md border border-classifier/20 p-2"
+  if (question.type === "noul") {
+    return (
+      <dl className="m-0 grid grid-cols-[auto_minmax(0,1fr)] gap-x-3 gap-y-2">
+        {(["true", "false"] as const).map((key) => {
+          const value = question.criteria?.[key];
+          return (
+            <div
+              key={key}
+              className="contents"
+              role="group"
+              aria-label={`${id} ${key} criterion`}
             >
-              <h5 className="m-0 text-[11px] font-semibold text-classifier [overflow-wrap:anywhere]">
-                {name}
-              </h5>
-              <JsonValue value={criterion} />
-            </li>
-          ))}
-        </ul>
-      </div>
-    </QuestionFrame>
-  );
-}
-
-function NoulQuestion({
-  id,
-  question,
-}: {
-  id: string;
-  question: Extract<ClassifierQuestion, { type: "noul" }>;
-}) {
-  return (
-    <QuestionFrame id={id} question={question}>
-      <p className="m-0 text-[10px] text-muted">
-        Estimate the probability of yes, from 0 (no) to 1 (yes).
-      </p>
-      {question.criteria === null ? (
-        <div className="grid min-w-0 gap-1">
-          <span className="text-[10px] text-muted">No additional criteria</span>
-          <JsonValue value={null} />
-        </div>
-      ) : (
-        <div className="grid min-w-0 grid-cols-[repeat(auto-fit,minmax(min(100%,8rem),1fr))] gap-2">
-          <div
-            role="group"
-            aria-label={`${id} yes criterion`}
-            className="grid min-w-0 content-start gap-1.5 rounded-md border border-classifier/25 bg-classifier-light/50 p-2"
-          >
-            <h5 className="m-0 text-[11px] font-semibold text-classifier">
-              Yes <span className="font-mono font-normal">(true)</span>
-            </h5>
-            {question.criteria.true === undefined ? (
-              <span className="text-[10px] text-muted">Not specified</span>
-            ) : (
-              <JsonValue value={question.criteria.true} />
-            )}
-          </div>
-          <div
-            role="group"
-            aria-label={`${id} no criterion`}
-            className="grid min-w-0 content-start gap-1.5 rounded-md border border-line p-2"
-          >
-            <h5 className="m-0 text-[11px] font-semibold">
-              No <span className="font-mono font-normal">(false)</span>
-            </h5>
-            {question.criteria.false === undefined ? (
-              <span className="text-[10px] text-muted">Not specified</span>
-            ) : (
-              <JsonValue value={question.criteria.false} />
-            )}
-          </div>
+              <dt className="text-[11px] font-medium text-secondary">
+                {key === "true" ? "True" : "False"}
+              </dt>
+              <dd className="m-0 min-w-0">
+                {value !== undefined && <DefinitionValue value={value} />}
+              </dd>
+            </div>
+          );
+        })}
+      </dl>
+    );
+  }
+  const criteria =
+    question.type === "choice"
+      ? Object.entries(question.criteria)
+      : question.criteria.map((criterion, level): [string, ClassifierEntry] => [
+          String(level),
+          criterion,
+        ]);
+  const entries = criteria.map(([option, criterion]) => (
+    <li key={option} className="grid min-w-0 grid-cols-[minmax(0,1fr)_auto] gap-x-4 gap-y-1">
+      <h5 className="m-0 text-[11px] font-medium text-secondary [overflow-wrap:anywhere]">
+        {option}
+      </h5>
+      {answer && answer.type !== "noul" && (
+        <span className="text-[11px]">
+          <Probability value={answer.probabilities[option]} />
+        </span>
+      )}
+      {!answer && criterion !== null && (
+        <div className="col-span-2 min-w-0">
+          <DefinitionValue value={criterion} />
         </div>
       )}
-    </QuestionFrame>
+    </li>
+  ));
+  return question.type === "choice" ? (
+    <ul aria-label={`${id} options`} className="m-0 grid list-none gap-3 p-0">
+      {entries}
+    </ul>
+  ) : (
+    <ol start={0} aria-label={`${id} ordered levels`} className="m-0 grid list-none gap-3 p-0">
+      {entries}
+    </ol>
   );
 }
 
-function ScoreQuestion({
+function QuestionRow({
   id,
   question,
+  answer,
 }: {
   id: string;
-  question: Extract<ClassifierQuestion, { type: "score" }>;
+  question: ClassifierQuestion;
+  answer?: ClassifierAnswer;
 }) {
+  const [expanded, setExpanded] = useState(false);
+  const detailsId = useId();
+  const typeLabel =
+    question.type === "choice" ? "Choice" : question.type === "noul" ? "Noul" : "Score";
+  const count =
+    question.type === "choice"
+      ? Object.keys(question.criteria).length
+      : question.type === "score"
+        ? question.criteria.length
+        : null;
+  const expandable =
+    answer?.type === "choice" ? count !== null && count > 3 : answer?.type !== "noul";
   return (
-    <QuestionFrame id={id} question={question}>
-      <p className="m-0 text-[10px] text-muted">
-        Ordered levels · the result is a probability-weighted position.
-      </p>
-      <ol
-        start={0}
-        aria-label={`${id} ordered levels`}
-        className="m-0 grid min-w-0 list-none gap-2 p-0"
+    <section
+      aria-label={`${answer ? "Answer" : "Question"} ${id}`}
+      className="classifier-question-row"
+    >
+      {expandable ? (
+        <button
+          type="button"
+          aria-label={`${expanded ? "Collapse" : "Expand"} ${id} ${answer?.type === "choice" ? "options" : "criteria"}`}
+          aria-expanded={expanded}
+          aria-controls={detailsId}
+          onClick={() => setExpanded(!expanded)}
+          className="-m-1 mt-0 cursor-pointer self-start rounded border-0 bg-transparent p-1 text-muted hover:bg-canvas hover:text-classifier focus-visible:outline-2 focus-visible:outline-classifier"
+        >
+          {expanded ? (
+            <ChevronDown className="size-3.5" />
+          ) : (
+            <ChevronRight className="size-3.5" />
+          )}
+        </button>
+      ) : (
+        <span aria-hidden="true" />
+      )}
+      <div
+        className={`classifier-question-prompt min-w-0 ${answer ? "" : "classifier-question-prompt-only"}`}
       >
-        {question.criteria.map((criterion, level) => (
-          <li
-            key={level}
-            className="grid min-w-0 grid-cols-[1.5rem_minmax(0,1fr)] items-start gap-2"
-          >
-            <span
-              aria-hidden="true"
-              className="flex size-6 items-center justify-center rounded-full bg-classifier-light font-mono text-[11px] text-classifier"
-            >
-              {level}
-            </span>
-            <div className="grid min-w-0 gap-1.5 border-l border-classifier/20 pl-2">
-              <h5 className="m-0 text-[10px] font-medium text-muted">Level {level}</h5>
-              <JsonValue value={criterion} />
-            </div>
-          </li>
-        ))}
-      </ol>
-    </QuestionFrame>
+        <h4 className="m-0 text-[13px] font-semibold [overflow-wrap:anywhere]">{id}</h4>
+        {!answer && question.instructions !== null && (
+          <div className="mt-1">
+            <DefinitionValue value={question.instructions} />
+          </div>
+        )}
+      </div>
+      {answer && (
+        <div
+          id={answer.type === "choice" ? detailsId : undefined}
+          className="classifier-question-answer min-w-0"
+        >
+          <AnswerSummary id={id} answer={answer} expanded={expanded} />
+        </div>
+      )}
+      <div className="classifier-question-kind flex flex-wrap items-center justify-end gap-x-2 gap-y-1 text-right text-[9px] text-muted">
+        <span className="rounded border border-classifier/20 bg-classifier-light px-1.5 py-0.5 font-mono text-classifier">
+          {typeLabel}
+        </span>
+        {count !== null && (
+          <span className="whitespace-nowrap">
+            {question.type === "choice"
+              ? `${count} options`
+              : `${count} levels · 0–${count - 1}`}
+          </span>
+        )}
+      </div>
+      {expanded && expandable && answer?.type !== "choice" && (
+        <div
+          id={detailsId}
+          className="classifier-question-criteria min-w-0 border-l border-line py-1 pl-3"
+        >
+          <QuestionCriteria id={id} question={question} answer={answer} />
+        </div>
+      )}
+    </section>
   );
 }
 
 export function ClassifierQuestions({ declaration }: { declaration: ClassifierDeclaration }) {
   return (
-    <div className="classifier-questions grid min-w-0 gap-3">
-      <dl className="m-0 grid min-w-0 grid-cols-[repeat(auto-fit,minmax(min(100%,8rem),1fr))] gap-2">
-        <DetailValue label="Requested model">{declaration.runtime.model}</DetailValue>
-        <DetailValue label="Timeout">{declaration.runtime.timeout} seconds</DetailValue>
-      </dl>
-      {Object.entries(declaration.questions).map(([id, question]) => {
-        switch (question.type) {
-          case "choice":
-            return <ChoiceQuestion key={id} id={id} question={question} />;
-          case "noul":
-            return <NoulQuestion key={id} id={id} question={question} />;
-          case "score":
-            return <ScoreQuestion key={id} id={id} question={question} />;
-        }
-      })}
+    <div className="classifier-questions min-w-0">
+      {Object.entries(declaration.questions).map(([id, question]) => (
+        <QuestionRow key={id} id={id} question={question} />
+      ))}
     </div>
-  );
-}
-
-function Probability({ label, value }: { label: string; value: number }) {
-  return (
-    <div className="flex min-w-0 flex-wrap items-center gap-2">
-      <meter
-        min={0}
-        max={1}
-        value={value}
-        aria-label={label}
-        className="h-2 min-w-16 max-w-full flex-1 accent-classifier"
-      />
-      <span className="min-w-0 font-mono text-[10px] [overflow-wrap:anywhere]">{value}</span>
-    </div>
-  );
-}
-
-function ChoiceAnswer({
-  id,
-  answer,
-}: {
-  id: string;
-  answer: Extract<ClassifierAnswer, { type: "choice" }>;
-}) {
-  return (
-    <>
-      <dl className="m-0 grid min-w-0 grid-cols-[minmax(0,1fr)_auto] gap-3">
-        <DetailValue label="Selected option">
-          <span className="font-mono font-semibold text-classifier">{answer.choice}</span>
-        </DetailValue>
-        <DetailValue label="Confidence">
-          <span className="font-mono">{answer.confidence}</span>
-        </DetailValue>
-      </dl>
-      <div
-        className="grid min-w-0 gap-2"
-        role="group"
-        aria-label={`${id} probability distribution`}
-      >
-        <h5 className="m-0 text-[10px] font-medium text-muted">
-          Option probabilities · 0 to 1
-        </h5>
-        <dl className="m-0 grid min-w-0 gap-2">
-          {Object.entries(answer.probabilities).map(([option, probability]) => (
-            <div
-              key={option}
-              className={`grid min-w-0 gap-1.5 rounded-md border p-2 ${option === answer.choice ? "border-classifier/30 bg-classifier-light" : "border-line"}`}
-            >
-              <dt className="flex min-w-0 items-start gap-1 text-[11px] [overflow-wrap:anywhere]">
-                {option === answer.choice && (
-                  <Check aria-hidden="true" className="size-3 shrink-0 text-classifier" />
-                )}
-                <span className="min-w-0">{option}</span>
-              </dt>
-              <dd className="m-0 min-w-0">
-                <Probability label={`${id}: ${option} probability`} value={probability} />
-              </dd>
-            </div>
-          ))}
-        </dl>
-      </div>
-    </>
-  );
-}
-
-function NoulAnswer({
-  id,
-  answer,
-}: {
-  id: string;
-  answer: Extract<ClassifierAnswer, { type: "noul" }>;
-}) {
-  return (
-    <div className="grid min-w-0 gap-2 rounded-md bg-classifier-light p-3">
-      <dl className="m-0 min-w-0">
-        <DetailValue label="Probability of yes">
-          <span className="font-mono text-lg text-classifier">{answer.noul}</span>
-        </DetailValue>
-      </dl>
-      <meter
-        min={0}
-        max={1}
-        value={answer.noul}
-        aria-label={`${id}: probability of yes`}
-        className="h-2 w-full accent-classifier"
-      />
-      <div className="flex justify-between gap-2 text-[10px] text-muted">
-        <span>No · 0</span>
-        <span>Yes · 1</span>
-      </div>
-    </div>
-  );
-}
-
-function ScoreAnswer({
-  id,
-  answer,
-}: {
-  id: string;
-  answer: Extract<ClassifierAnswer, { type: "score" }>;
-}) {
-  const maximum = Object.keys(answer.legend).length - 1;
-  return (
-    <>
-      <div className="grid min-w-0 gap-2 rounded-md bg-classifier-light p-3">
-        <dl className="m-0 grid min-w-0 grid-cols-[minmax(0,1fr)_auto] gap-3">
-          <DetailValue label="Score">
-            <span className="font-mono text-lg text-classifier">{answer.score}</span>
-          </DetailValue>
-          <DetailValue label="Confidence">
-            <span className="font-mono">{answer.confidence}</span>
-          </DetailValue>
-        </dl>
-        <meter
-          min={0}
-          max={maximum}
-          value={answer.score}
-          aria-label={`${id}: weighted score`}
-          className="h-2 w-full accent-classifier"
-        />
-        <div className="flex justify-between gap-2 text-[10px] text-muted">
-          <span>Level 0</span>
-          <span>Level {maximum}</span>
-        </div>
-        <p className="m-0 text-[10px] text-muted">
-          Probability-weighted position, not a selected level.
-        </p>
-      </div>
-      <div
-        className="grid min-w-0 gap-2"
-        role="group"
-        aria-label={`${id} probability distribution`}
-      >
-        <h5 className="m-0 text-[10px] font-medium text-muted">Level probabilities · 0 to 1</h5>
-        <ol start={0} className="m-0 grid min-w-0 list-none gap-2 p-0">
-          {Object.entries(answer.probabilities).map(([level, probability]) => (
-            <li
-              key={level}
-              className="grid min-w-0 gap-1.5 border-l-2 border-classifier/25 pl-2"
-            >
-              <h6 className="m-0 text-[10px] font-medium text-classifier">Level {level}</h6>
-              <JsonValue value={answer.legend[level]} />
-              <Probability label={`${id}: ${level} probability`} value={probability} />
-            </li>
-          ))}
-        </ol>
-      </div>
-    </>
-  );
-}
-
-function AnswerDetails({ id, answer }: { id: string; answer: ClassifierAnswer }) {
-  return (
-    <section
-      aria-label={`Answer ${id}`}
-      className="grid min-w-0 gap-3 rounded-lg border border-line p-3"
-    >
-      <div className="flex min-w-0 flex-wrap items-center justify-between gap-2">
-        <h4 className="m-0 min-w-0 text-xs font-semibold [overflow-wrap:anywhere]">{id}</h4>
-        <QuestionKind kind={answer.type} />
-      </div>
-      {answer.type === "choice" ? (
-        <ChoiceAnswer id={id} answer={answer} />
-      ) : answer.type === "noul" ? (
-        <NoulAnswer id={id} answer={answer} />
-      ) : (
-        <ScoreAnswer id={id} answer={answer} />
-      )}
-    </section>
   );
 }
 
@@ -384,81 +324,55 @@ export function ClassifierInvocationDetails({
   statusOverride?: "interrupted" | "unknown";
 }) {
   const status = statusOverride ?? invocation.status;
+  const result = invocation.result;
   return (
     <section
-      className="classifier-invocation grid min-w-0 gap-4"
+      className="classifier-invocation grid min-w-0 gap-3"
       aria-label={`Classifier invocation ${invocation.invocation_id}`}
     >
-      <dl className="m-0 grid min-w-0 grid-cols-[repeat(auto-fit,minmax(min(100%,8rem),1fr))] gap-3">
-        <DetailValue label="Outcome">
-          <span
-            className={`capitalize ${status === "failed" ? "text-danger" : status === "success" ? "text-mint" : "text-muted"}`}
-          >
-            {status}
-          </span>
-        </DetailValue>
-        <DetailValue label="Requested model">
-          {invocation.declaration.runtime.model}
-        </DetailValue>
-        {invocation.result !== null && (
-          <>
-            <DetailValue label="Model">{invocation.result.model}</DetailValue>
-            <DetailValue label="Input tokens">
-              {invocation.result.usage.input_tokens}
-            </DetailValue>
-            <DetailValue label="Output tokens">
-              {invocation.result.usage.output_tokens}
-            </DetailValue>
-          </>
-        )}
-      </dl>
-      <section aria-label="Input state" className="grid min-w-0 gap-2">
-        <h4 className="m-0 text-[11px] font-semibold">Input state</h4>
+      <section aria-label="Input state" className="min-w-0">
+        <h4 className="m-0 mb-1.5 font-mono text-[9px] tracking-[.08em] text-muted uppercase">
+          Input
+        </h4>
         {invocation.input === null ? (
-          <p className="m-0 text-[11px] text-muted">
-            Not captured: the state failed validation before the request.
-          </p>
+          <p className="m-0 text-[11px] text-muted">Input not captured.</p>
         ) : (
-          <JsonValue value={invocation.input} />
+          <ClassifierInput value={invocation.input} />
         )}
       </section>
-      <section aria-label="Result" className="grid min-w-0 gap-2 border-t border-line pt-3">
-        <h4 className="m-0 text-[11px] font-semibold">Result</h4>
+      <section aria-label="Result" className="min-w-0">
         {invocation.error !== null && (
-          <div
+          <p
             role="alert"
-            className="min-w-0 rounded-md border border-danger/25 bg-canvas p-2 text-[11px] text-danger"
+            className="m-0 mb-2 text-[11px] whitespace-pre-wrap text-danger [overflow-wrap:anywhere]"
           >
-            <p className="m-0 whitespace-pre-wrap [overflow-wrap:anywhere]">
-              {invocation.error}
-            </p>
-          </div>
-        )}
-        {invocation.result === null ? (
-          <p className="m-0 text-[11px] text-muted" role="status">
-            {status === "running"
-              ? "Classification is running; answers are not available yet."
-              : statusOverride
-                ? "No terminal result was retained for this call."
-                : "No classification answers were returned."}
+            {invocation.error}
           </p>
+        )}
+        {result === null ? (
+          invocation.error === null && (
+            <p className="m-0 text-[11px] text-muted" role="status">
+              {status === "running"
+                ? "Running…"
+                : statusOverride
+                  ? "Result unavailable."
+                  : status === "cancelled"
+                    ? "Cancelled."
+                    : "No output."}
+            </p>
+          )
         ) : (
-          <div className="grid min-w-0 gap-3" role="group" aria-label="Classification answers">
-            {Object.entries(invocation.result.answers).map(([id, answer]) => (
-              <AnswerDetails key={id} id={id} answer={answer} />
+          <div
+            className="classifier-questions min-w-0"
+            role="group"
+            aria-label="Classification answers"
+          >
+            {Object.entries(invocation.declaration.questions).map(([id, question]) => (
+              <QuestionRow key={id} id={id} question={question} answer={result.answers[id]} />
             ))}
           </div>
         )}
       </section>
-      <details className="min-w-0 border-t border-line pt-2 text-[10px] text-muted">
-        <summary className="cursor-pointer rounded-sm focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-classifier">
-          Call metadata
-        </summary>
-        <dl className="m-0 mt-2 grid min-w-0 gap-2">
-          <DetailValue label="Invocation ID">{invocation.invocation_id}</DetailValue>
-          <DetailValue label="Call">{invocation.invocation_index + 1}</DetailValue>
-        </dl>
-      </details>
     </section>
   );
 }

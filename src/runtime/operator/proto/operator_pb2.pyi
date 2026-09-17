@@ -474,7 +474,7 @@ class ActivityDetailRefV2(_message.Message):
     def __init__(self, run_id: _Optional[str] = ..., scope_ref: _Optional[_Union[ScopeReferenceV2, _Mapping]] = ..., activity_id: _Optional[str] = ..., run_sequence: _Optional[int] = ..., object_uri: _Optional[str] = ..., object_key: _Optional[str] = ..., sha256: _Optional[str] = ..., size_bytes: _Optional[int] = ...) -> None: ...
 
 class RunActivityDescriptorV2(_message.Message):
-    __slots__ = ("activity_id", "run_sequence", "kind", "timestamp", "size_bytes", "detail_ref", "node_id", "level", "invocation_id", "iteration", "duration_ms", "error", "tool_count", "predict_count", "event_kind", "trace", "terminal_seal")
+    __slots__ = ("activity_id", "run_sequence", "kind", "timestamp", "size_bytes", "detail_ref", "node_id", "level", "invocation_id", "iteration", "duration_ms", "error", "tool_count", "predict_count", "event_kind", "trace", "terminal_seal", "classifier_summary")
     ACTIVITY_ID_FIELD_NUMBER: _ClassVar[int]
     RUN_SEQUENCE_FIELD_NUMBER: _ClassVar[int]
     KIND_FIELD_NUMBER: _ClassVar[int]
@@ -492,6 +492,7 @@ class RunActivityDescriptorV2(_message.Message):
     EVENT_KIND_FIELD_NUMBER: _ClassVar[int]
     TRACE_FIELD_NUMBER: _ClassVar[int]
     TERMINAL_SEAL_FIELD_NUMBER: _ClassVar[int]
+    CLASSIFIER_SUMMARY_FIELD_NUMBER: _ClassVar[int]
     activity_id: str
     run_sequence: int
     kind: str
@@ -509,7 +510,28 @@ class RunActivityDescriptorV2(_message.Message):
     event_kind: str
     trace: TraceDescriptorV2
     terminal_seal: TerminalSealV2
-    def __init__(self, activity_id: _Optional[str] = ..., run_sequence: _Optional[int] = ..., kind: _Optional[str] = ..., timestamp: _Optional[float] = ..., size_bytes: _Optional[int] = ..., detail_ref: _Optional[_Union[ActivityDetailRefV2, _Mapping]] = ..., node_id: _Optional[str] = ..., level: _Optional[str] = ..., invocation_id: _Optional[str] = ..., iteration: _Optional[int] = ..., duration_ms: _Optional[int] = ..., error: bool = ..., tool_count: _Optional[int] = ..., predict_count: _Optional[int] = ..., event_kind: _Optional[str] = ..., trace: _Optional[_Union[TraceDescriptorV2, _Mapping]] = ..., terminal_seal: _Optional[_Union[TerminalSealV2, _Mapping]] = ...) -> None: ...
+    classifier_summary: ClassifierInvocationSummaryV2
+    def __init__(self, activity_id: _Optional[str] = ..., run_sequence: _Optional[int] = ..., kind: _Optional[str] = ..., timestamp: _Optional[float] = ..., size_bytes: _Optional[int] = ..., detail_ref: _Optional[_Union[ActivityDetailRefV2, _Mapping]] = ..., node_id: _Optional[str] = ..., level: _Optional[str] = ..., invocation_id: _Optional[str] = ..., iteration: _Optional[int] = ..., duration_ms: _Optional[int] = ..., error: bool = ..., tool_count: _Optional[int] = ..., predict_count: _Optional[int] = ..., event_kind: _Optional[str] = ..., trace: _Optional[_Union[TraceDescriptorV2, _Mapping]] = ..., terminal_seal: _Optional[_Union[TerminalSealV2, _Mapping]] = ..., classifier_summary: _Optional[_Union[ClassifierInvocationSummaryV2, _Mapping]] = ...) -> None: ...
+
+class ClassifierInvocationSummaryV2(_message.Message):
+    __slots__ = ("invocation_index", "answers")
+    INVOCATION_INDEX_FIELD_NUMBER: _ClassVar[int]
+    ANSWERS_FIELD_NUMBER: _ClassVar[int]
+    invocation_index: int
+    answers: _containers.RepeatedCompositeFieldContainer[ClassifierAnswerSummaryV2]
+    def __init__(self, invocation_index: _Optional[int] = ..., answers: _Optional[_Iterable[_Union[ClassifierAnswerSummaryV2, _Mapping]]] = ...) -> None: ...
+
+class ClassifierAnswerSummaryV2(_message.Message):
+    __slots__ = ("question_id", "choice", "noul", "score")
+    QUESTION_ID_FIELD_NUMBER: _ClassVar[int]
+    CHOICE_FIELD_NUMBER: _ClassVar[int]
+    NOUL_FIELD_NUMBER: _ClassVar[int]
+    SCORE_FIELD_NUMBER: _ClassVar[int]
+    question_id: str
+    choice: str
+    noul: float
+    score: float
+    def __init__(self, question_id: _Optional[str] = ..., choice: _Optional[str] = ..., noul: _Optional[float] = ..., score: _Optional[float] = ...) -> None: ...
 
 class ListRunActivityRequestV2(_message.Message):
     __slots__ = ("run_id", "page_size", "continuation", "node_id", "order")

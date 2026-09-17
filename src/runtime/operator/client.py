@@ -2579,6 +2579,8 @@ class GrpcStateProvider:
             descriptor = update.change.event
             classifier_detail = ClassifierEvent(
                 invocation_id=descriptor.invocation_id,
+                invocation_index=descriptor.invocation_index,
+                answers=descriptor.answers,
                 event_sequence=descriptor.event_sequence,
                 event_json=(
                     self._read_detail_body(

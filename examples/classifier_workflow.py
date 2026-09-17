@@ -1,6 +1,6 @@
 """Classify a support ticket with the real TypeSafe SDK.
 
-Set TYPESAFE_API_KEY in the executing environment, then run:
+Set TYPESAFE_API_KEY in the executing environment or project .env, then run:
     uv run python examples/classifier_workflow.py
 
 Or inspect questions and run through the local browser UI:
@@ -28,8 +28,11 @@ def load_ticket() -> str:
     questions={
         "department": {
             "type": "choice",
-            "instructions": {"task": "Route the ticket", "context": ["customer support"]},
-            "criteria": {"billing": {"examples": ["duplicate charge"]}, "technical": None},
+            "instructions": "Which support team should handle this ticket?",
+            "criteria": {
+                "billing": "Charges, invoices, and refunds.",
+                "technical": "Software bugs and service issues.",
+            },
         },
         "urgent": {
             "type": "noul",
@@ -38,8 +41,8 @@ def load_ticket() -> str:
         },
         "severity": {
             "type": "score",
-            "instructions": ["Assess severity", {"consider": "customer impact"}],
-            "criteria": ["minor", {"impact": ["service unavailable"]}],
+            "instructions": "How severe is the customer impact?",
+            "criteria": ["Minor inconvenience", "Urgent customer impact"],
         },
     },
 )

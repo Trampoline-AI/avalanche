@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import copy
 import json
+import os
 import traceback
 from collections import defaultdict
 
@@ -100,6 +101,37 @@ def service(monkeypatch, response_body):
     monkeypatch.setenv("TYPESAFE_API_KEY", "test-only-key")
     monkeypatch.setattr(typesafe_sdk, "AsyncTypeSafeClient", make_client)
     return boundary
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("exported_key", [None, "exported-key"])
+async def test_runtime_dotenv_authenticates_without_overriding_exported_credentials(
+    tmp_path, monkeypatch, questions, service, exported_key
+):
+    (tmp_path / ".env").write_text("TYPESAFE_API_KEY=dotenv-key\n")
+    working_directory = tmp_path / "workflows"
+    working_directory.mkdir()
+    monkeypatch.chdir(working_directory)
+    monkeypatch.delenv("PYTHON_DOTENV_DISABLED", raising=False)
+    monkeypatch.delenv("TYPESAFE_API_KEY", raising=False)
+    if exported_key is not None:
+        monkeypatch.setenv("TYPESAFE_API_KEY", exported_key)
+    expected_key = exported_key if exported_key is not None else "dotenv-key"
+
+    async def authenticate(request):
+        if request.headers["Authorization"] != f"Bearer {expected_key}":
+            return httpx2.Response(401, json={"message": "Invalid credential"})
+        return httpx2.Response(200, json=service.response_body)
+
+    service.handler = authenticate
+
+    @ava.classifier_step(questions=questions)
+    async def classify(*, classifier: ava.Classifier):
+        return await classifier(state="ticket")
+
+    assert os.environ.get("TYPESAFE_API_KEY") == exported_key
+    result = await classify.fn()
+    assert result.choices["department"].choice == "billing"
 
 
 @pytest.mark.parametrize(
@@ -256,6 +288,62 @@ async def test_response_must_match_exact_declared_questions(questions, service, 
     assert observed[0].invocation_id == observed[-1].invocation_id
     assert all(record.input == "ticket" for record in observed)
     assert all(transport.closed for transport in service.transports)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("request_probability", [0.40, 0.42])
+async def test_rounded_probabilities_preserve_answers_and_success_evidence(
+    service, request_probability
+):
+    probabilities = {
+        "proposal": 0.02,
+        "other": 0.01,
+        "problem": 0.56,
+        "request": request_probability,
+    }
+    service.response_body["answers"] = {
+        "category": {
+            "type": "choice",
+            "choice": "problem",
+            "probabilities": probabilities,
+            "confidence": 0.36,
+        }
+    }
+
+    @ava.classifier_step(
+        questions={
+            "category": {
+                "type": "choice",
+                "criteria": {option: None for option in probabilities},
+            }
+        }
+    )
+    async def classify(*, classifier: ava.Classifier):
+        return await classifier(state="Design the scheduled-exports retry fix")
+
+    observed = []
+    with capture_classifier_evidence(observed.append):
+        result = await classify.fn()
+
+    assert result.choices["category"].choice == "problem"
+    assert result.choices["category"].probabilities == probabilities
+    assert [record.status for record in observed] == ["running", "success"]
+    assert observed[-1].result == result
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("billing_probability", [0.78, 0.82])
+async def test_invalid_probability_totals_still_fail(questions, service, billing_probability):
+    service.response_body["answers"]["department"]["probabilities"]["billing"] = (
+        billing_probability
+    )
+
+    @ava.classifier_step(questions=questions)
+    async def classify(*, classifier: ava.Classifier):
+        return await classifier(state="ticket")
+
+    with pytest.raises(ClassifierStepExecutionError):
+        await classify.fn()
 
 
 @pytest.mark.asyncio

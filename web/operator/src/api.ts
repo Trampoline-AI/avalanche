@@ -25,6 +25,7 @@ import type {
 import type {
   AgentEventDescriptorMsg,
   CatalogSnapshotMsg,
+  ClassifierAnswerSummary,
   ClassifierEventDescriptorMsg,
   FlowInfoMsg,
   ListAgentEventsRequest,
@@ -845,11 +846,49 @@ export class GrpcWebOperatorApi implements OperatorApi {
     ) {
       throw new Error("Classifier event activity is missing its bound detail reference");
     }
+    const summary = activity.classifierSummary;
+    if (
+      !summary ||
+      !Number.isSafeInteger(summary.invocationIndex) ||
+      summary.invocationIndex < 0 ||
+      summary.invocationIndex > 0xffffffff ||
+      (activity.eventKind !== "success" && summary.answers.length !== 0)
+    ) {
+      throw new Error("Classifier event activity has an invalid invocation summary");
+    }
+    const questionIds = new Set<string>();
+    const answers = summary.answers.map((entry): ClassifierAnswerSummary => {
+      if (!entry.questionId || questionIds.has(entry.questionId)) {
+        throw new Error("Classifier answer summary has an invalid question ID");
+      }
+      questionIds.add(entry.questionId);
+      const answer = entry.answer;
+      switch (answer.oneofKind) {
+        case "choice":
+          if (typeof answer.choice === "string" && answer.choice.length > 0) {
+            return { questionId: entry.questionId, type: "choice", choice: answer.choice };
+          }
+          break;
+        case "noul":
+          if (Number.isFinite(answer.noul) && answer.noul >= 0 && answer.noul <= 1) {
+            return { questionId: entry.questionId, type: "noul", noul: answer.noul };
+          }
+          break;
+        case "score":
+          if (Number.isFinite(answer.score) && answer.score >= 0) {
+            return { questionId: entry.questionId, type: "score", score: answer.score };
+          }
+          break;
+      }
+      throw new Error("Classifier answer summary has an invalid typed answer");
+    });
     return {
       eventSequence: activity.runSequence,
       sizeBytes: activity.sizeBytes,
       bodyToken: this.registerDetailRef(detailRef),
       invocationId: activity.invocationId,
+      invocationIndex: summary.invocationIndex,
+      answers,
       eventKind: activity.eventKind,
       ...(activity.durationMs !== undefined ? { durationMs: activity.durationMs } : {}),
       error: activity.error,

@@ -7,6 +7,7 @@ import { defineConfig } from "vitest/config";
 
 const external = [
   "@codemirror/lang-json",
+  "@codemirror/language",
   "@codemirror/state",
   "@codemirror/view",
   "@protobuf-ts/grpcweb-transport",

@@ -86,6 +86,54 @@
   outline-offset: 2px;
 }
 
+.avalanche-operator-ui .classifier-questions {
+  container-type: inline-size;
+}
+
+.avalanche-operator-ui .classifier-question-row {
+  display: grid;
+  grid-template-columns: 0.875rem minmax(0, 1.15fr) minmax(0, 1fr) 7.5rem;
+  align-items: start;
+  gap: 0.5rem;
+  padding: 0.625rem 0;
+  border-bottom: 1px solid var(--color-line);
+}
+
+.avalanche-operator-ui .classifier-question-row:last-child {
+  border-bottom: 0;
+}
+
+.avalanche-operator-ui .classifier-question-prompt-only {
+  grid-column: 2 / 4;
+}
+
+.avalanche-operator-ui .classifier-question-kind {
+  grid-column: 4;
+  grid-row: 1;
+}
+
+.avalanche-operator-ui .classifier-question-criteria {
+  grid-column: 2 / -1;
+}
+
+@container (max-width: 420px) {
+  .avalanche-operator-ui .classifier-question-row {
+    grid-template-columns: 0.875rem minmax(0, 1fr) auto;
+  }
+
+  .avalanche-operator-ui .classifier-question-prompt {
+    grid-column: 2;
+  }
+
+  .avalanche-operator-ui .classifier-question-kind {
+    grid-column: 3;
+  }
+
+  .avalanche-operator-ui .classifier-question-answer {
+    grid-column: 2 / -1;
+  }
+}
+
 .avalanche-operator-ui .node-card[aria-disabled="true"] {
   cursor: default;
   opacity: 0.6;
@@ -354,6 +402,18 @@
     text-align: center;
   }
 
+  .node-card--compact .node-kicker {
+    grid-row: 1;
+    align-self: end;
+    justify-self: center;
+  }
+
+  .node-card--compact .node-classifier-summary,
+  .node-card--compact .node-instruction-line {
+    grid-row: 3;
+    grid-column: 1;
+  }
+
   .node-card--compact .node-card-meta {
     max-height: 0;
     opacity: 0;
@@ -371,6 +431,7 @@
   }
 
   .node-card--compact .node-title {
+    grid-row: 2;
     display: -webkit-box;
     max-width: 100%;
     overflow: hidden;

@@ -233,10 +233,35 @@ class AgentEvent:
 
 
 @dataclass(frozen=True)
+class ClassifierChoiceSummary:
+    question_id: str
+    choice: str
+
+
+@dataclass(frozen=True)
+class ClassifierNoulSummary:
+    question_id: str
+    noul: float
+
+
+@dataclass(frozen=True)
+class ClassifierScoreSummary:
+    question_id: str
+    score: float
+
+
+ClassifierAnswerSummary = (
+    ClassifierChoiceSummary | ClassifierNoulSummary | ClassifierScoreSummary
+)
+
+
+@dataclass(frozen=True)
 class ClassifierEvent:
     """One classifier invocation snapshot stored outside structural state."""
 
     invocation_id: str
+    invocation_index: int
+    answers: tuple[ClassifierAnswerSummary, ...]
     event_sequence: int
     event_json: str
     size_bytes: int = 0
@@ -314,9 +339,11 @@ class AgentEventDescriptor:
 
 @dataclass(frozen=True)
 class ClassifierEventDescriptor:
-    """Bounded identity and availability metadata for a classifier invocation."""
+    """Identity, compact answers, and availability for a classifier invocation."""
 
     invocation_id: str
+    invocation_index: int
+    answers: tuple[ClassifierAnswerSummary, ...]
     event_sequence: int
     size_bytes: int
     body_token: str
