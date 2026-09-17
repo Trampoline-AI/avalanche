@@ -893,6 +893,58 @@ export interface RunActivityDescriptorV2 {
      * @generated from protobuf field: avalanche.operator.TerminalSealV2 terminal_seal = 17
      */
     terminalSeal?: TerminalSealV2;
+    /**
+     * Required for classifier_event, including when its detail body has expired.
+     *
+     * @generated from protobuf field: avalanche.operator.ClassifierInvocationSummaryV2 classifier_summary = 18
+     */
+    classifierSummary?: ClassifierInvocationSummaryV2;
+}
+/**
+ * @generated from protobuf message avalanche.operator.ClassifierInvocationSummaryV2
+ */
+export interface ClassifierInvocationSummaryV2 {
+    /**
+     * @generated from protobuf field: uint32 invocation_index = 1
+     */
+    invocationIndex: number;
+    /**
+     * @generated from protobuf field: repeated avalanche.operator.ClassifierAnswerSummaryV2 answers = 2
+     */
+    answers: ClassifierAnswerSummaryV2[];
+}
+/**
+ * @generated from protobuf message avalanche.operator.ClassifierAnswerSummaryV2
+ */
+export interface ClassifierAnswerSummaryV2 {
+    /**
+     * @generated from protobuf field: string question_id = 1
+     */
+    questionId: string;
+    /**
+     * @generated from protobuf oneof: answer
+     */
+    answer: {
+        oneofKind: "choice";
+        /**
+         * @generated from protobuf field: string choice = 2
+         */
+        choice: string;
+    } | {
+        oneofKind: "noul";
+        /**
+         * @generated from protobuf field: double noul = 3
+         */
+        noul: number;
+    } | {
+        oneofKind: "score";
+        /**
+         * @generated from protobuf field: double score = 4
+         */
+        score: number;
+    } | {
+        oneofKind: undefined;
+    };
 }
 /**
  * @generated from protobuf message avalanche.operator.ListRunActivityRequestV2
@@ -3747,7 +3799,8 @@ class RunActivityDescriptorV2$Type extends MessageType<RunActivityDescriptorV2> 
             { no: 14, name: "predict_count", kind: "scalar", T: 13 /*ScalarType.UINT32*/ },
             { no: 15, name: "event_kind", kind: "scalar", T: 9 /*ScalarType.STRING*/ },
             { no: 16, name: "trace", kind: "message", T: () => TraceDescriptorV2 },
-            { no: 17, name: "terminal_seal", kind: "message", T: () => TerminalSealV2 }
+            { no: 17, name: "terminal_seal", kind: "message", T: () => TerminalSealV2 },
+            { no: 18, name: "classifier_summary", kind: "message", T: () => ClassifierInvocationSummaryV2 }
         ]);
     }
     create(value?: PartialMessage<RunActivityDescriptorV2>): RunActivityDescriptorV2 {
@@ -3824,6 +3877,9 @@ class RunActivityDescriptorV2$Type extends MessageType<RunActivityDescriptorV2> 
                 case /* avalanche.operator.TerminalSealV2 terminal_seal */ 17:
                     message.terminalSeal = TerminalSealV2.internalBinaryRead(reader, reader.uint32(), options, message.terminalSeal);
                     break;
+                case /* avalanche.operator.ClassifierInvocationSummaryV2 classifier_summary */ 18:
+                    message.classifierSummary = ClassifierInvocationSummaryV2.internalBinaryRead(reader, reader.uint32(), options, message.classifierSummary);
+                    break;
                 default:
                     let u = options.readUnknownField;
                     if (u === "throw")
@@ -3887,6 +3943,9 @@ class RunActivityDescriptorV2$Type extends MessageType<RunActivityDescriptorV2> 
         /* avalanche.operator.TerminalSealV2 terminal_seal = 17; */
         if (message.terminalSeal)
             TerminalSealV2.internalBinaryWrite(message.terminalSeal, writer.tag(17, WireType.LengthDelimited).fork(), options).join();
+        /* avalanche.operator.ClassifierInvocationSummaryV2 classifier_summary = 18; */
+        if (message.classifierSummary)
+            ClassifierInvocationSummaryV2.internalBinaryWrite(message.classifierSummary, writer.tag(18, WireType.LengthDelimited).fork(), options).join();
         let u = options.writeUnknownFields;
         if (u !== false)
             (u == true ? UnknownFieldHandler.onWrite : u)(this.typeName, message, writer);
@@ -3897,6 +3956,139 @@ class RunActivityDescriptorV2$Type extends MessageType<RunActivityDescriptorV2> 
  * @generated MessageType for protobuf message avalanche.operator.RunActivityDescriptorV2
  */
 export const RunActivityDescriptorV2 = new RunActivityDescriptorV2$Type();
+// @generated message type with reflection information, may provide speed optimized methods
+class ClassifierInvocationSummaryV2$Type extends MessageType<ClassifierInvocationSummaryV2> {
+    constructor() {
+        super("avalanche.operator.ClassifierInvocationSummaryV2", [
+            { no: 1, name: "invocation_index", kind: "scalar", T: 13 /*ScalarType.UINT32*/ },
+            { no: 2, name: "answers", kind: "message", repeat: 2 /*RepeatType.UNPACKED*/, T: () => ClassifierAnswerSummaryV2 }
+        ]);
+    }
+    create(value?: PartialMessage<ClassifierInvocationSummaryV2>): ClassifierInvocationSummaryV2 {
+        const message = globalThis.Object.create((this.messagePrototype!));
+        message.invocationIndex = 0;
+        message.answers = [];
+        if (value !== undefined)
+            reflectionMergePartial<ClassifierInvocationSummaryV2>(this, message, value);
+        return message;
+    }
+    internalBinaryRead(reader: IBinaryReader, length: number, options: BinaryReadOptions, target?: ClassifierInvocationSummaryV2): ClassifierInvocationSummaryV2 {
+        let message = target ?? this.create(), end = reader.pos + length;
+        while (reader.pos < end) {
+            let [fieldNo, wireType] = reader.tag();
+            switch (fieldNo) {
+                case /* uint32 invocation_index */ 1:
+                    message.invocationIndex = reader.uint32();
+                    break;
+                case /* repeated avalanche.operator.ClassifierAnswerSummaryV2 answers */ 2:
+                    message.answers.push(ClassifierAnswerSummaryV2.internalBinaryRead(reader, reader.uint32(), options));
+                    break;
+                default:
+                    let u = options.readUnknownField;
+                    if (u === "throw")
+                        throw new globalThis.Error(`Unknown field ${fieldNo} (wire type ${wireType}) for ${this.typeName}`);
+                    let d = reader.skip(wireType);
+                    if (u !== false)
+                        (u === true ? UnknownFieldHandler.onRead : u)(this.typeName, message, fieldNo, wireType, d);
+            }
+        }
+        return message;
+    }
+    internalBinaryWrite(message: ClassifierInvocationSummaryV2, writer: IBinaryWriter, options: BinaryWriteOptions): IBinaryWriter {
+        /* uint32 invocation_index = 1; */
+        if (message.invocationIndex !== 0)
+            writer.tag(1, WireType.Varint).uint32(message.invocationIndex);
+        /* repeated avalanche.operator.ClassifierAnswerSummaryV2 answers = 2; */
+        for (let i = 0; i < message.answers.length; i++)
+            ClassifierAnswerSummaryV2.internalBinaryWrite(message.answers[i], writer.tag(2, WireType.LengthDelimited).fork(), options).join();
+        let u = options.writeUnknownFields;
+        if (u !== false)
+            (u == true ? UnknownFieldHandler.onWrite : u)(this.typeName, message, writer);
+        return writer;
+    }
+}
+/**
+ * @generated MessageType for protobuf message avalanche.operator.ClassifierInvocationSummaryV2
+ */
+export const ClassifierInvocationSummaryV2 = new ClassifierInvocationSummaryV2$Type();
+// @generated message type with reflection information, may provide speed optimized methods
+class ClassifierAnswerSummaryV2$Type extends MessageType<ClassifierAnswerSummaryV2> {
+    constructor() {
+        super("avalanche.operator.ClassifierAnswerSummaryV2", [
+            { no: 1, name: "question_id", kind: "scalar", T: 9 /*ScalarType.STRING*/ },
+            { no: 2, name: "choice", kind: "scalar", oneof: "answer", T: 9 /*ScalarType.STRING*/ },
+            { no: 3, name: "noul", kind: "scalar", oneof: "answer", T: 1 /*ScalarType.DOUBLE*/ },
+            { no: 4, name: "score", kind: "scalar", oneof: "answer", T: 1 /*ScalarType.DOUBLE*/ }
+        ]);
+    }
+    create(value?: PartialMessage<ClassifierAnswerSummaryV2>): ClassifierAnswerSummaryV2 {
+        const message = globalThis.Object.create((this.messagePrototype!));
+        message.questionId = "";
+        message.answer = { oneofKind: undefined };
+        if (value !== undefined)
+            reflectionMergePartial<ClassifierAnswerSummaryV2>(this, message, value);
+        return message;
+    }
+    internalBinaryRead(reader: IBinaryReader, length: number, options: BinaryReadOptions, target?: ClassifierAnswerSummaryV2): ClassifierAnswerSummaryV2 {
+        let message = target ?? this.create(), end = reader.pos + length;
+        while (reader.pos < end) {
+            let [fieldNo, wireType] = reader.tag();
+            switch (fieldNo) {
+                case /* string question_id */ 1:
+                    message.questionId = reader.string();
+                    break;
+                case /* string choice */ 2:
+                    message.answer = {
+                        oneofKind: "choice",
+                        choice: reader.string()
+                    };
+                    break;
+                case /* double noul */ 3:
+                    message.answer = {
+                        oneofKind: "noul",
+                        noul: reader.double()
+                    };
+                    break;
+                case /* double score */ 4:
+                    message.answer = {
+                        oneofKind: "score",
+                        score: reader.double()
+                    };
+                    break;
+                default:
+                    let u = options.readUnknownField;
+                    if (u === "throw")
+                        throw new globalThis.Error(`Unknown field ${fieldNo} (wire type ${wireType}) for ${this.typeName}`);
+                    let d = reader.skip(wireType);
+                    if (u !== false)
+                        (u === true ? UnknownFieldHandler.onRead : u)(this.typeName, message, fieldNo, wireType, d);
+            }
+        }
+        return message;
+    }
+    internalBinaryWrite(message: ClassifierAnswerSummaryV2, writer: IBinaryWriter, options: BinaryWriteOptions): IBinaryWriter {
+        /* string question_id = 1; */
+        if (message.questionId !== "")
+            writer.tag(1, WireType.LengthDelimited).string(message.questionId);
+        /* string choice = 2; */
+        if (message.answer.oneofKind === "choice")
+            writer.tag(2, WireType.LengthDelimited).string(message.answer.choice);
+        /* double noul = 3; */
+        if (message.answer.oneofKind === "noul")
+            writer.tag(3, WireType.Bit64).double(message.answer.noul);
+        /* double score = 4; */
+        if (message.answer.oneofKind === "score")
+            writer.tag(4, WireType.Bit64).double(message.answer.score);
+        let u = options.writeUnknownFields;
+        if (u !== false)
+            (u == true ? UnknownFieldHandler.onWrite : u)(this.typeName, message, writer);
+        return writer;
+    }
+}
+/**
+ * @generated MessageType for protobuf message avalanche.operator.ClassifierAnswerSummaryV2
+ */
+export const ClassifierAnswerSummaryV2 = new ClassifierAnswerSummaryV2$Type();
 // @generated message type with reflection information, may provide speed optimized methods
 class ListRunActivityRequestV2$Type extends MessageType<ListRunActivityRequestV2> {
     constructor() {

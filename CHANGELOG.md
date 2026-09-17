@@ -2,10 +2,20 @@
 
 ## Unreleased
 
+- Classifier steps now load the nearest `.env` at runtime when `TYPESAFE_API_KEY`
+  is absent, preserving exported variables without loading credentials during discovery.
+- Simplified the classifier example and quick-start questions to plain-text
+  instructions and criteria, without nested description objects.
+- Fixed classifier failures on TypeSafe's rounded probability distributions,
+  allowing meeting follow-up classification to complete without altering the returned evidence.
 - Added an operator-run meeting follow-up example combining agent extraction,
-  per-item TypeSafe classification, department-based routing, and opt-in Linear
-  issue publication, with source-quote validation, a separate extraction signature,
+  per-item TypeSafe classification, and department-based routing to illustrative
+  Linear, Attio, and Jira destinations, with source-quote validation, a separate extraction signature,
   and a bundled cross-functional transcript loaded automatically without run inputs.
+- Meeting follow-up routing maps every department to one of three parallel destination
+  nodes named Linear, Attio, and Jira, each returning a demo plan without service calls.
+- Removed the meeting demo's live service clients, publishing configuration, and receipts;
+  extraction, classification, and the seven-node workflow remain intact.
 - Avalanche authoring guidance now requires operator-based execution without
   standalone runners and separate files for all non-inline signatures.
 - Added bodyful `@ava.classifier_step` with runtime TypeSafe credentials, fixed
@@ -40,14 +50,32 @@
 
 ### Operator web interface
 
-- Classifiers now have a distinct cyan graph identity, Definition/Code workflow
-  tabs, and type-specific question explorers. Historical Calls/Definition tabs
-  pair each call's retained input state with typed answers; sensitive application
-  data in input now shares the existing bounded detail retention and expiry.
-- Classifier nodes now expose questions before execution and run-pinned questions
-  and typed answers afterward. The inspector separates multiple calls, preserves
-  full distributions and fractional scores, and shows cancellation, interruption,
-  and unavailable retained details without substituting current definitions.
+- Agent graph nodes now have a violet badge with a robot icon that remains visible
+  when zoomed out, matching the classifier badge treatment.
+- Zoomed-out graph cards center the step title itself, with badges above and
+  summaries below, keeping agent, classifier, and standard step titles aligned.
+- Classifier inspectors use compact question rows with Avalanche typography,
+  cyan classifier styling, ranked probabilities, confidence, and type badges.
+  DAG node labels show per-type counts without a redundant question total.
+  Expanded criteria are indented beneath question definitions with smaller labels,
+  and the Definition panel has reduced outer padding. Call inputs appear in a
+  read-only JSON editor with syntax highlighting, line numbers, and folding.
+  Meeting follow-up questions and option descriptions are shorter.
+- Classifier run results omit question and option descriptions, keeping names and
+  probabilities; full descriptions remain in Definition.
+- Choice expansion reveals remaining options in place instead of repeating results;
+  rows with three or fewer options need no expansion. Missing Noul criterion
+  descriptions stay blank, and boolean criteria are labeled True/False.
+- Classifier run inspectors no longer render a redundant single Calls tab.
+- Classifier call lists now receive call numbers and compact typed answers in
+  paginated and live activity descriptors, without input previews or background
+  detail prefetching. Full details load only for expanded calls and remain the
+  only data subject to the eight-entry, 8 MiB detail cache; evicted details reload
+  automatically on expansion without losing row summaries.
+- Classifier calls now use a compact, full-width table instead of individual cards,
+  with aligned answer, status, and duration columns, 25-call pages, and Previous/Next
+  navigation. Calls start at index 1 in ascending order, all collapsed by default.
+  Rows expand inline without fetching details for other rows or pages.
 - The operator UI now bundles Delta Console's Nacelle Regular and SemiBold fonts,
   while keeping code and filename references monospace.
 - The local workflow sidebar now follows Delta Console's padded, square-cornered

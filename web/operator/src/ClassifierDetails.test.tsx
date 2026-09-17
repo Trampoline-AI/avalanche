@@ -100,17 +100,21 @@ it("retains structured instructions and criteria under their independent questio
   expect(route.getByText(/Route the request/)).toBeInTheDocument();
   fireEvent.click(route.getByRole("button", { name: "Expand constraints" }));
   expect(route.getByText(/Use the current policy/)).toBeInTheDocument();
+  fireEvent.click(route.getByRole("button", { expanded: false, name: /criteria/ }));
   expect(route.getByRole("list", { name: "route options" })).toBeInTheDocument();
   expect(route.getByRole("heading", { name: "review" })).toBeInTheDocument();
   expect(route.getByText(/Needs a reviewer/)).toBeInTheDocument();
   fireEvent.click(route.getByRole("button", { name: "Expand exclusions" }));
   expect(route.getByText(/Already approved/)).toBeInTheDocument();
   const safe = within(screen.getByRole("region", { name: "Question safe" }));
-  expect(safe.getByRole("group", { name: "safe yes criterion" })).toHaveTextContent("true");
+  fireEvent.click(safe.getByRole("button", { expanded: false }));
+  expect(safe.getByRole("group", { name: "safe true criterion" })).toHaveTextContent("True");
+  expect(safe.getByRole("group", { name: "safe false criterion" })).toHaveTextContent("False");
   expect(safe.getByText(/Permission is recorded/)).toBeInTheDocument();
   expect(safe.queryByText(/Needs a reviewer/)).not.toBeInTheDocument();
   const urgency = within(screen.getByRole("region", { name: "Question urgency" }));
   expect(urgency.getByText(/Judge the impact/)).toBeInTheDocument();
+  fireEvent.click(urgency.getByRole("button", { expanded: false, name: /criteria/ }));
   expect(urgency.getByRole("list", { name: "urgency ordered levels" })).toHaveAttribute(
     "start",
     "0",
@@ -133,11 +137,14 @@ it("distinguishes an omitted Noul criterion from an explicitly null criterion", 
       }}
     />,
   );
-  const yes = within(screen.getByRole("group", { name: "permitted yes criterion" }));
-  const no = within(screen.getByRole("group", { name: "permitted no criterion" }));
-  expect(yes.getByText("null")).toBeInTheDocument();
-  expect(no.queryByText("null")).not.toBeInTheDocument();
-  expect(no.getByText("Not specified")).toBeInTheDocument();
+  fireEvent.click(screen.getByRole("button", { expanded: false }));
+  const trueCriterion = within(screen.getByRole("group", { name: "permitted true criterion" }));
+  const falseCriterion = within(
+    screen.getByRole("group", { name: "permitted false criterion" }),
+  );
+  expect(trueCriterion.getByText("null")).toBeInTheDocument();
+  expect(falseCriterion.queryByText("null")).not.toBeInTheDocument();
+  expect(falseCriterion.getByRole("definition")).toBeEmptyDOMElement();
 });
 
 it("renders typed answers without turning Noul into confidence or rounding Score to a level", () => {
@@ -147,42 +154,25 @@ it("renders typed answers without turning Noul into confidence or rounding Score
     />,
   );
   const route = within(screen.getByRole("region", { name: "Answer route" }));
-  expect(route.getByText("0.44")).toBeInTheDocument();
-  expect(route.getByRole("meter", { name: "route: review probability" })).toHaveAttribute(
-    "value",
-    "0.72",
-  );
-  expect(route.getByRole("meter", { name: "route: accept probability" })).toHaveAttribute(
-    "value",
-    "0.28",
-  );
+  expect(route.getByText("review", { selector: "span" })).toBeVisible();
+  expect(route.queryByText(/Route the request/)).not.toBeInTheDocument();
+  expect(route.queryByRole("button")).not.toBeInTheDocument();
+  expect(route.queryByText(/Needs a reviewer/)).not.toBeInTheDocument();
   const safe = within(screen.getByRole("region", { name: "Answer safe" }));
-  expect(safe.getByText("0.91")).toBeInTheDocument();
-  expect(safe.queryByText("Confidence")).not.toBeInTheDocument();
-  expect(safe.getByRole("meter", { name: "safe: probability of yes" })).toHaveAttribute(
-    "value",
-    "0.91",
-  );
+  expect(safe.getByRole("meter")).toHaveAttribute("aria-valuenow", "0.91");
+  expect(safe.queryByText(/Confidence:/)).not.toBeInTheDocument();
+  expect(safe.queryByText(/Does the policy permit/)).not.toBeInTheDocument();
+  expect(safe.queryByRole("button")).not.toBeInTheDocument();
   const urgency = within(screen.getByRole("region", { name: "Answer urgency" }));
-  const scoreTerm = urgency.getByText("Score", { selector: "dt" });
-  expect(scoreTerm.nextElementSibling).toHaveTextContent("0.375");
-  expect(urgency.getByRole("meter", { name: "urgency: weighted score" })).toHaveAttribute(
-    "value",
-    "0.375",
-  );
-  expect(urgency.getByText(/Can wait/)).toBeInTheDocument();
-  expect(urgency.getByText(/Needs action now/)).toBeInTheDocument();
-  expect(urgency.getByRole("meter", { name: "urgency: 0 probability" })).toHaveAttribute(
-    "value",
-    "0.625",
-  );
-  expect(urgency.getByRole("meter", { name: "urgency: 1 probability" })).toHaveAttribute(
-    "value",
-    "0.375",
-  );
-  expect(screen.getByText("jev-1.13")).toBeInTheDocument();
-  expect(screen.getByText("321")).toBeInTheDocument();
-  expect(screen.getByText("47")).toBeInTheDocument();
+  expect(urgency.getByText("0.375", { selector: "span" })).toBeVisible();
+  expect(urgency.queryByText(/Can wait|Needs action now/)).not.toBeInTheDocument();
+  expect(urgency.getByText(/25%/)).toBeVisible();
+  fireEvent.click(urgency.getByRole("button", { expanded: false, name: /criteria/ }));
+  expect(urgency.getByRole("heading", { name: "0" })).toBeVisible();
+  expect(urgency.getByRole("heading", { name: "1" })).toBeVisible();
+  expect(
+    urgency.queryByText(/Can wait|Needs action now|Judge the impact/),
+  ).not.toBeInTheDocument();
 });
 
 it("pairs each repeated call's retained input with its own answers", () => {
@@ -214,18 +204,11 @@ it("pairs each repeated call's retained input with its own answers", () => {
   expect(firstInput.getByText(/First request/)).toBeInTheDocument();
   expect(firstInput.queryByText(/Second request/)).not.toBeInTheDocument();
   expect(secondInput.getByText(/Second request/)).toBeInTheDocument();
-  fireEvent.click(firstInput.getByRole("button", { name: "Expand context" }));
-  fireEvent.click(firstInput.getByRole("button", { name: "Expand policy" }));
   expect(firstInput.getByText(/Policy one/)).toBeInTheDocument();
+  expect(firstInput.getByRole("textbox")).toHaveAttribute("aria-readonly", "true");
   expect(secondInput.queryByText(/Policy one/)).not.toBeInTheDocument();
-  expect(firstCall.getByRole("meter", { name: "route: accept probability" })).toHaveAttribute(
-    "value",
-    "0.28",
-  );
-  expect(secondCall.getByRole("meter", { name: "route: accept probability" })).toHaveAttribute(
-    "value",
-    "0.88",
-  );
+  expect(firstCall.getByRole("region", { name: "Answer route" })).toHaveTextContent("review");
+  expect(secondCall.getByRole("region", { name: "Answer route" })).toHaveTextContent("accept");
 });
 
 it("transitions from running to a failed record without fabricating answers or interpreting error HTML", () => {
@@ -270,7 +253,7 @@ it("transitions from running to a failed record without fabricating answers or i
       invocation={parseClassifierInvocation({ ...running, status: "cancelled", ended_at: 102 })}
     />,
   );
-  expect(screen.getByText("cancelled")).toBeInTheDocument();
+  expect(screen.getByRole("status")).toHaveTextContent(/cancelled/i);
   expect(screen.queryByRole("alert")).not.toBeInTheDocument();
   expect(screen.queryByRole("meter")).not.toBeInTheDocument();
 });
@@ -281,16 +264,16 @@ it("keeps valid empty inputs distinct from state that failed validation before c
     <ClassifierInvocationDetails invocation={{ ...invocation, input: "" }} />,
   );
   expect(
-    within(screen.getByRole("region", { name: "Input state" })).getByText('""'),
-  ).toBeInTheDocument();
+    within(screen.getByRole("region", { name: "Input state" })).getByRole("textbox"),
+  ).toHaveTextContent('""');
   view.rerender(<ClassifierInvocationDetails invocation={{ ...invocation, input: [] }} />);
   expect(
-    within(screen.getByRole("region", { name: "Input state" })).getByText("[]"),
-  ).toBeInTheDocument();
+    within(screen.getByRole("region", { name: "Input state" })).getByRole("textbox"),
+  ).toHaveTextContent("[]");
   view.rerender(<ClassifierInvocationDetails invocation={{ ...invocation, input: {} }} />);
   expect(
-    within(screen.getByRole("region", { name: "Input state" })).getByText("{}"),
-  ).toBeInTheDocument();
+    within(screen.getByRole("region", { name: "Input state" })).getByRole("textbox"),
+  ).toHaveTextContent("{}");
   view.rerender(
     <ClassifierInvocationDetails
       invocation={{
@@ -303,8 +286,47 @@ it("keeps valid empty inputs distinct from state that failed validation before c
     />,
   );
   const input = within(screen.getByRole("region", { name: "Input state" }));
-  expect(input.queryByRole("tree")).not.toBeInTheDocument();
+  expect(input.queryByRole("textbox")).not.toBeInTheDocument();
   expect(input.getByText(/not captured/i)).toBeInTheDocument();
+});
+
+it("shows the highest probabilities first and reveals every rounded option on expansion", () => {
+  const value = success();
+  value.declaration = {
+    ...declaration,
+    questions: {
+      route: {
+        type: "choice",
+        instructions: "What kind of follow-up is this?",
+        criteria: { other: null, proposal: null, request: null, problem: null },
+      },
+    },
+  };
+  value.result.answers = {
+    route: {
+      type: "choice",
+      choice: "problem",
+      probabilities: { other: 0.01, proposal: 0.02, request: 0.4, problem: 0.56 },
+      confidence: 0.36,
+    },
+  };
+  render(<ClassifierInvocationDetails invocation={parseClassifierInvocation(value)} />);
+  const answer = within(screen.getByRole("region", { name: "Answer route" }));
+  expect(answer.getAllByRole("listitem").map((item) => item.textContent)).toEqual([
+    "problem56%",
+    "request40%",
+    "proposal2%",
+  ]);
+  expect(answer.queryByText("other")).not.toBeInTheDocument();
+  fireEvent.click(answer.getByRole("button", { expanded: false }));
+  expect(answer.getAllByRole("listitem").map((item) => item.textContent)).toEqual([
+    "problem56%",
+    "request40%",
+    "proposal2%",
+    "other1%",
+  ]);
+  fireEvent.click(answer.getByRole("button", { expanded: true }));
+  expect(answer.queryByText("other")).not.toBeInTheDocument();
 });
 
 describe("strict classifier records", () => {
@@ -349,10 +371,7 @@ describe("strict classifier records", () => {
       },
     });
     render(<ClassifierInvocationDetails invocation={parsed} />);
-    expect(screen.getByRole("meter", { name: "only: retain probability" })).toHaveAttribute(
-      "value",
-      "1",
-    );
+    expect(screen.getByRole("region", { name: "Answer only" })).toHaveTextContent("retain");
   });
 
   it.each([

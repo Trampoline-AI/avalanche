@@ -404,8 +404,9 @@ An `lm` or `sub_lm` passed to an individual agent step overrides the same
 workflow default. `agent_defaults` configures runtime options only; signatures, skills, and
 tools remain defined on each agent step.
 
-Classifier steps use TypeSafe directly, not LiteLLM. Set runtime
-`TYPESAFE_API_KEY`; choose `model` and `timeout` on `@ava.classifier_step` or in
+Classifier steps use TypeSafe directly, not LiteLLM. Set `TYPESAFE_API_KEY` in the
+executing environment or your project's `.env` file; exported variables take precedence.
+Choose `model` and `timeout` on `@ava.classifier_step` or in
 `@ava.workflow(classifier_defaults={...})`. Step values override workflow values;
 otherwise the defaults are `jev-latest` and 10 seconds. No key is needed to
 discover questions before running. See [Classifier steps](docs/classifier-steps.md)

@@ -5,8 +5,6 @@ import type { OperatorApi } from "./api";
 import { ClassifierInvocationDetails, ClassifierQuestions } from "./ClassifierDetails";
 import {
   type ClassifierDeclaration,
-  type ClassifierEntry,
-  type ClassifierJson,
   type ClassifierInvocation,
   parseClassifierInvocation,
 } from "./classifier";
@@ -35,6 +33,9 @@ const EMPTY_PAGE: DescriptorPageState<ClassifierEventDescriptorMsg> = {
   nextCursor: "0",
 };
 const DETAIL_CACHE_MAX_ENTRIES = 8;
+const CALL_PAGE_SIZE = 25;
+const PAGE_BUTTON_CLASS =
+  "cursor-pointer rounded-md border border-line bg-transparent px-3 py-2 text-ink hover:bg-canvas focus-visible:outline-2 focus-visible:outline-classifier disabled:cursor-not-allowed disabled:opacity-40";
 const BUTTON_CLASS =
   "cursor-pointer rounded border border-line bg-panel px-2 py-1 text-[11px] text-secondary hover:text-ink disabled:cursor-default disabled:opacity-50 focus-visible:outline-2 focus-visible:outline-acid";
 
@@ -68,49 +69,18 @@ function groupInvocations(records: Iterable<ClassifierEventDescriptorMsg>) {
   return grouped;
 }
 
-function summarizeInput(input: ClassifierEntry): string {
-  if (input === null) return "Input not captured";
-  if (typeof input === "string")
-    return input === "" ? '""' : input.slice(0, 160).replace(/\s+/g, " ");
-  const entries: [string, ClassifierJson][] = [];
-  if (Array.isArray(input)) {
-    for (let index = 0; index < Math.min(input.length, 3); index++)
-      entries.push([String(index), input[index]]);
-  } else {
-    for (const key in input) {
-      entries.push([key, input[key]]);
-      if (entries.length === 3) break;
-    }
-  }
-  return `${Array.isArray(input) ? `Array (${input.length})` : "Object"}${entries.length ? " · " : ""}${entries
-    .map(([key, value]) => {
-      const preview =
-        typeof value === "string"
-          ? value.slice(0, 48).replace(/\s+/g, " ")
-          : value !== null && typeof value === "object"
-            ? Array.isArray(value)
-              ? "[…]"
-              : "{…}"
-            : String(value);
-      return `${key.slice(0, 32)}: ${preview}`;
-    })
-    .join(" · ")}`;
-}
-
 interface CachedInvocation {
   invocation: ClassifierInvocation;
   byteCost: number;
-  inputPreview: string;
 }
 type DetailStatus =
-  | { status: "loading" | "ready" | "released" }
-  | { status: "error"; error: string; retryable: boolean };
+  { status: "loading" | "ready" } | { status: "error"; error: string; retryable: boolean };
 interface HistoryState {
   api: OperatorApi;
   page: DescriptorPageState<ClassifierEventDescriptorMsg>;
   loaded: boolean;
   loading: boolean;
-  newerHistoryEvicted: boolean;
+  historyEvicted: boolean;
   error?: string;
   cache: Map<string, CachedInvocation>;
   details: Map<string, DetailStatus>;
@@ -121,7 +91,7 @@ function emptyHistory(api: OperatorApi): HistoryState {
     page: EMPTY_PAGE,
     loaded: false,
     loading: false,
-    newerHistoryEvicted: false,
+    historyEvicted: false,
     cache: new Map(),
     details: new Map(),
   };
@@ -144,17 +114,22 @@ function ClassifierHistory({
     api: OperatorApi;
     invocationId: string | null;
   }>();
+  const [pageStartId, setPageStartId] = useState<string | null>(null);
+  const [nextPageAfter, setNextPageAfter] = useState<string | null>(null);
+  const historyId = useId();
+  const tableScroll = useRef<HTMLDivElement>(null);
   const [stored, setStored] = useState(() => emptyHistory(api));
   const state = stored.api === api ? stored : emptyHistory(api);
   const pageController = useRef<AbortController | undefined>(undefined);
   const detailControllers = useRef(new Map<string, AbortController>());
+  const selectedBodyToken = useRef<string | undefined>(undefined);
   const runId = run.summary?.runId ?? "";
   const eventPageToken = node?.eventPageToken ?? "";
   const operatorInstanceId = run.operatorInstanceId;
   const asOfEventUlid = run.asOfEventUlid;
 
   const loadPage = useCallback(
-    (pageToken: string, beforeEventSequence = "0") => {
+    (pageToken: string, afterEventSequence = "0") => {
       if (pageController.current) return;
       const controller = new AbortController();
       pageController.current = controller;
@@ -167,10 +142,10 @@ function ClassifierHistory({
         .listClassifierEventPage(
           {
             pageToken,
-            afterEventSequence: "0",
-            beforeEventSequence,
+            afterEventSequence,
+            beforeEventSequence: "0",
             pageSize: DESCRIPTOR_PAGE_SIZE,
-            order: DescriptorPageOrder.NEWEST_FIRST,
+            order: DescriptorPageOrder.FORWARD,
             expectedOperatorInstanceId: operatorInstanceId,
             expectedAsOfEventUlid: asOfEventUlid,
             expectedRunId: runId,
@@ -186,13 +161,10 @@ function ClassifierHistory({
             return {
               ...current,
               loaded: true,
-              // Once newer groups leave this window, an older start cannot prove
-              // interruption: its terminal record may have been among the evictions.
-              newerHistoryEvicted:
-                current.newerHistoryEvicted || grouped.size > DESCRIPTOR_WINDOW_SIZE,
+              historyEvicted: current.historyEvicted || grouped.size > DESCRIPTOR_WINDOW_SIZE,
               page: {
                 ...page,
-                records: boundDescriptors(grouped, (event) => event.eventSequence, "older"),
+                records: boundDescriptors(grouped, (event) => event.eventSequence, "newer"),
               },
             };
           });
@@ -221,6 +193,9 @@ function ClassifierHistory({
   );
 
   useEffect(() => {
+    setSelection(undefined);
+    setPageStartId(null);
+    setNextPageAfter(null);
     setStored(emptyHistory(api));
     if (eventPageToken && runId) loadPage(eventPageToken);
     else setStored({ ...emptyHistory(api), loaded: true });
@@ -235,16 +210,61 @@ function ClassifierHistory({
 
   const events = useMemo(() => {
     const grouped = groupInvocations([...state.page.records, ...liveEvents]);
-    const liveSequences = liveEvents.map((event) => event.eventSequence);
-    return boundDescriptors(grouped, (event) => event.eventSequence, "older", liveSequences);
+    return boundDescriptors(grouped, (event) => String(event.invocationIndex), "older");
   }, [liveEvents, state.page.records]);
-  const newestFirstEvents = useMemo(() => events.toReversed(), [events]);
+  const pageOffset =
+    pageStartId === null
+      ? 0
+      : Math.max(
+          0,
+          events.findIndex((event) => event.invocationId === pageStartId),
+        );
+  const visibleEvents = events.slice(pageOffset, pageOffset + CALL_PAGE_SIZE);
+  const canAdvance =
+    pageOffset + CALL_PAGE_SIZE < events.length || Boolean(state.page.nextPageToken);
+
+  useEffect(() => {
+    if (!state.loaded || state.loading || state.error) return;
+    const afterIndex =
+      nextPageAfter === null
+        ? pageOffset - 1
+        : events.findIndex((event) => event.invocationId === nextPageAfter);
+    const available = events.length - afterIndex - 1;
+    if (available < CALL_PAGE_SIZE && state.page.nextPageToken) {
+      loadPage(state.page.nextPageToken, state.page.nextCursor);
+    } else if (nextPageAfter !== null) {
+      if (available > 0) {
+        setPageStartId(events[afterIndex + 1].invocationId);
+      }
+      setNextPageAfter(null);
+    }
+  }, [
+    loadPage,
+    events,
+    nextPageAfter,
+    pageOffset,
+    state.error,
+    state.loaded,
+    state.loading,
+    state.page.nextCursor,
+    state.page.nextPageToken,
+  ]);
+
+  useEffect(() => {
+    if (tableScroll.current) tableScroll.current.scrollTop = 0;
+  }, [pageStartId]);
   const selectedId =
     selection?.api === api &&
     (selection.invocationId === null ||
-      events.some((event) => event.invocationId === selection.invocationId))
+      visibleEvents.some((event) => event.invocationId === selection.invocationId))
       ? selection.invocationId
-      : events.at(-1)?.invocationId;
+      : null;
+
+  useEffect(() => {
+    selectedBodyToken.current = events.find(
+      (event) => event.invocationId === selectedId,
+    )?.bodyToken;
+  }, [events, selectedId]);
 
   // Only descriptors in the visible window may retain request/error/cache state.
   useEffect(() => {
@@ -290,6 +310,7 @@ function ClassifierHistory({
           const invocation = parseClassifierInvocation(body);
           if (
             invocation.invocation_id !== event.invocationId ||
+            invocation.invocation_index !== event.invocationIndex ||
             invocation.status !== event.eventKind
           ) {
             throw new Error("Classifier detail does not match its invocation descriptor");
@@ -311,17 +332,17 @@ function ClassifierHistory({
             cache.set(token, {
               invocation,
               byteCost,
-              inputPreview: summarizeInput(invocation.input),
             });
             details.set(token, { status: "ready" });
             let bytes = 0;
             for (const entry of cache.values()) bytes += entry.byteCost;
-            while (cache.size > DETAIL_CACHE_MAX_ENTRIES || bytes > DETAIL_CACHE_MAX_BYTES) {
-              const oldest = cache.entries().next().value;
-              if (!oldest) break;
-              cache.delete(oldest[0]);
-              bytes -= oldest[1].byteCost;
-              details.set(oldest[0], { status: "released" });
+            for (const [key, entry] of cache) {
+              if (cache.size <= DETAIL_CACHE_MAX_ENTRIES && bytes <= DETAIL_CACHE_MAX_BYTES)
+                break;
+              if (key === selectedBodyToken.current) continue;
+              cache.delete(key);
+              bytes -= entry.byteCost;
+              details.delete(key);
             }
             return { ...current, cache, details };
           });
@@ -350,12 +371,6 @@ function ClassifierHistory({
   );
 
   useEffect(() => {
-    for (const event of events.slice(-DETAIL_CACHE_MAX_ENTRIES)) {
-      if (!state.details.has(event.bodyToken)) hydrate(event);
-    }
-  }, [events, hydrate, state.details]);
-
-  useEffect(() => {
     const selected = events.find((event) => event.invocationId === selectedId);
     if (selected && !state.details.has(selected.bodyToken)) hydrate(selected);
   }, [events, hydrate, selectedId, state.details]);
@@ -367,20 +382,19 @@ function ClassifierHistory({
     run.summary?.status === "cancelled" ||
     run.summary?.status === "success";
   return (
-    <section aria-label="Classifier invocations" className="grid min-w-0 gap-4">
-      <div className="flex items-baseline justify-between gap-2">
-        <h3 className="inspector-section-title">Calls</h3>
-        <span className="font-mono text-[10px] text-muted">{events.length} loaded</span>
-      </div>
+    <section
+      aria-label="Classifier invocations"
+      className="flex h-full min-h-0 min-w-0 flex-col"
+    >
       {state.loading && (
-        <p role="status" className="m-0 text-[11px] text-muted">
+        <p role="status" className="m-0 shrink-0 px-3 py-2 text-[11px] text-muted">
           Loading classifier history…
         </p>
       )}
       {state.error && (
         <div
           role="alert"
-          className="grid min-w-0 gap-2 text-[11px] text-danger [overflow-wrap:anywhere]"
+          className="grid min-w-0 shrink-0 gap-2 px-3 py-2 text-[11px] text-danger [overflow-wrap:anywhere]"
         >
           <p className="m-0">Classifier history unavailable: {state.error}</p>
           <button
@@ -399,210 +413,255 @@ function ClassifierHistory({
         </div>
       )}
       {state.loaded && !state.error && !events.length && (
-        <p role="status" className="m-0 text-[11px] text-muted">
+        <p role="status" className="m-0 px-3 py-4 text-[11px] text-muted">
           {node
             ? "Classifier not invoked in this run."
             : "This node has no execution data yet."}
         </p>
       )}
-      {newestFirstEvents.map((event) => {
-        const cached = state.cache.get(event.bodyToken);
-        const invocation = cached?.invocation;
-        const detail = state.details.get(event.bodyToken);
-        const selected = event.invocationId === selectedId;
-        const ended = terminalNode || terminalRun;
-        const unresolved =
-          event.eventKind === "running" &&
-          (state.newerHistoryEvicted || (ended && !state.loaded));
-        const interrupted = event.eventKind === "running" && ended && !unresolved;
-        const status = unresolved ? "unknown" : interrupted ? "interrupted" : event.eventKind;
-        const statusColor =
-          status === "success"
-            ? "text-success"
-            : status === "failed"
-              ? "text-danger"
-              : status === "running" || status === "unknown" || status === "interrupted"
-                ? "text-amber"
-                : "text-muted";
-        return (
-          <article
-            key={event.invocationId}
-            aria-label={`Invocation ${event.invocationId}`}
-            className={`grid min-w-0 overflow-hidden rounded-lg border ${selected ? "border-classifier" : "border-line"}`}
-          >
-            <button
-              type="button"
-              aria-expanded={selected}
-              className={`flex min-w-0 cursor-pointer items-start gap-2 border-0 p-3 text-left focus-visible:outline-2 focus-visible:outline-classifier ${selected ? "bg-classifier-light" : "bg-panel hover:bg-canvas"}`}
-              onClick={() =>
-                setSelection({
-                  api,
-                  invocationId: selected ? null : event.invocationId,
-                })
-              }
-            >
-              {selected ? (
-                <ChevronDown
-                  aria-hidden="true"
-                  className="mt-0.5 size-3.5 shrink-0 text-classifier"
-                />
-              ) : (
-                <ChevronRight
-                  aria-hidden="true"
-                  className="mt-0.5 size-3.5 shrink-0 text-muted"
-                />
-              )}
-              <span className="grid min-w-0 flex-1 gap-1">
-                <span className="flex flex-wrap items-baseline justify-between gap-2">
-                  <span className="text-xs font-semibold text-ink">
-                    {invocation ? `Call ${invocation.invocation_index + 1}` : "Call"}
-                  </span>
-                  <span
-                    role="status"
-                    aria-label="Invocation status"
-                    className={`font-mono text-[10px] capitalize ${statusColor}`}
-                  >
-                    {status}
-                  </span>
-                </span>
-                {invocation && (
-                  <span className="font-mono text-[10px] text-secondary">
-                    <time>{new Date(invocation.started_at * 1000).toLocaleTimeString()}</time>
-                    {invocation.ended_at !== null &&
-                      ` · ${(invocation.ended_at - invocation.started_at).toFixed(2)}s`}
-                  </span>
-                )}
-                {cached && (
-                  <span className="truncate text-[11px] text-secondary">
-                    {cached.inputPreview}
-                  </span>
-                )}
-                <span className="font-mono text-[9px] text-muted [overflow-wrap:anywhere]">
-                  {event.invocationId}
-                </span>
-              </span>
-            </button>
-            {selected && (
-              <div className="grid min-w-0 gap-3 border-t border-line p-3">
-                {unresolved && (
-                  <p role="status" className="m-0 text-[11px] text-amber">
-                    {state.newerHistoryEvicted
-                      ? "Latest invocation result not loaded. Newer history has left this browser's window; return to latest invocations to inspect retained terminal evidence."
-                      : "Terminal invocation result not loaded. Waiting for classifier history."}
-                  </p>
-                )}
-                {interrupted && (
-                  <p role="status" className="m-0 text-[11px] text-amber">
-                    Invocation interrupted. The node or run ended before terminal classifier
-                    evidence was retained; answers are unavailable.
-                  </p>
-                )}
-                {invocation && (
-                  <>
-                    <ClassifierInvocationDetails
-                      invocation={invocation}
-                      statusOverride={
-                        unresolved ? "unknown" : interrupted ? "interrupted" : undefined
-                      }
-                    />
-                    <details className="min-w-0">
-                      <summary className="cursor-pointer text-[11px] text-secondary">
-                        Questions for this invocation
-                      </summary>
-                      <div className="mt-3 min-w-0">
-                        <ClassifierQuestions declaration={invocation.declaration} />
+      <div ref={tableScroll} className="min-h-0 flex-1 overflow-auto overscroll-contain">
+        <table
+          aria-label="Classifier calls"
+          className="w-full table-fixed border-collapse text-left text-[11px]"
+        >
+          <colgroup>
+            <col className="w-16" />
+            <col />
+            <col className="w-[4.5rem]" />
+            <col className="w-16" />
+          </colgroup>
+          <thead className="sticky top-0 z-10 bg-canvas font-mono text-[9px] text-muted uppercase">
+            <tr className="border-b border-line">
+              <th scope="col" className="px-3 py-2 font-normal">
+                Call
+              </th>
+              <th scope="col" className="px-2 py-2 font-normal">
+                Outputs
+              </th>
+              <th scope="col" className="px-2 py-2 font-normal">
+                Status
+              </th>
+              <th scope="col" className="px-3 py-2 text-right font-normal">
+                Duration
+              </th>
+            </tr>
+          </thead>
+          {visibleEvents.map((event) => {
+            const invocation = state.cache.get(event.bodyToken)?.invocation;
+            const detail = state.details.get(event.bodyToken);
+            const selected = event.invocationId === selectedId;
+            const ended = terminalNode || terminalRun;
+            const unresolved =
+              event.eventKind === "running" &&
+              (state.historyEvicted ||
+                (ended && (!state.loaded || Boolean(state.page.nextPageToken))));
+            const interrupted = event.eventKind === "running" && ended && !unresolved;
+            const status = unresolved
+              ? "unknown"
+              : interrupted
+                ? "interrupted"
+                : event.eventKind;
+            const statusColor =
+              status === "success"
+                ? "text-success"
+                : status === "failed"
+                  ? "text-danger"
+                  : status === "running" || status === "unknown" || status === "interrupted"
+                    ? "text-amber"
+                    : "text-muted";
+            const detailsId = `${historyId}-${event.eventSequence}`;
+            return (
+              <tbody key={event.invocationId} aria-label={`Invocation ${event.invocationId}`}>
+                <tr
+                  onClick={() =>
+                    setSelection({ api, invocationId: selected ? null : event.invocationId })
+                  }
+                  className={`cursor-pointer align-top ${selected ? "" : "border-b border-[#eef1ef] hover:bg-canvas"}`}
+                >
+                  <th scope="row" className="px-3 py-2.5 font-normal">
+                    <button
+                      type="button"
+                      aria-expanded={selected}
+                      aria-controls={detailsId}
+                      aria-label={`Call ${event.invocationIndex + 1}`}
+                      className="flex cursor-pointer items-center gap-1.5 rounded border-0 bg-transparent p-0 text-[11px] font-medium whitespace-nowrap text-ink focus-visible:outline-2 focus-visible:outline-classifier"
+                    >
+                      {selected ? (
+                        <ChevronDown
+                          aria-hidden="true"
+                          className="size-3 shrink-0 text-classifier"
+                        />
+                      ) : (
+                        <ChevronRight
+                          aria-hidden="true"
+                          className="size-3 shrink-0 text-muted"
+                        />
+                      )}
+                      {event.invocationIndex + 1}
+                    </button>
+                  </th>
+                  <td className="px-2 py-2.5 leading-relaxed text-secondary [overflow-wrap:anywhere]">
+                    {event.answers.length > 0 ? (
+                      event.answers.map((answer, index) => (
+                        <span key={answer.questionId}>
+                          {index > 0 && <span className="text-muted"> · </span>}
+                          <span className="text-muted">{answer.questionId}: </span>
+                          <span className="text-classifier">
+                            {answer.type === "choice"
+                              ? answer.choice
+                              : answer.type === "noul"
+                                ? answer.noul
+                                : answer.score}
+                          </span>
+                        </span>
+                      ))
+                    ) : (
+                      <span className="text-muted">—</span>
+                    )}
+                  </td>
+                  <td className="px-2 py-2.5">
+                    <span
+                      role="status"
+                      aria-label="Invocation status"
+                      className={`text-[10px] capitalize ${statusColor}`}
+                    >
+                      {status}
+                    </span>
+                  </td>
+                  <td className="px-3 py-2.5 text-right font-mono text-[10px] whitespace-nowrap text-secondary">
+                    {event.durationMs === undefined
+                      ? "—"
+                      : `${(Number(event.durationMs) / 1000).toFixed(1)}s`}
+                  </td>
+                </tr>
+                {selected && (
+                  <tr className="border-b border-line">
+                    <td colSpan={4} className="p-0">
+                      <div id={detailsId} className="grid min-w-0 gap-3 pt-1 pr-3 pb-3 pl-6">
+                        {unresolved && !invocation && (
+                          <p role="status" className="m-0 text-[11px] text-amber">
+                            Final result not loaded in this history window.
+                          </p>
+                        )}
+                        {interrupted && !invocation && (
+                          <p role="status" className="m-0 text-[11px] text-amber">
+                            Call interrupted; no output retained.
+                          </p>
+                        )}
+                        {invocation && (
+                          <ClassifierInvocationDetails
+                            invocation={invocation}
+                            statusOverride={
+                              unresolved ? "unknown" : interrupted ? "interrupted" : undefined
+                            }
+                          />
+                        )}
+                        {!invocation &&
+                          (!event.bodyToken ? (
+                            <p className="m-0 text-[11px] text-muted">
+                              Call detail unavailable.
+                            </p>
+                          ) : detail?.status === "error" ? (
+                            <div className="grid min-w-0 gap-2">
+                              <p
+                                role="alert"
+                                className="m-0 text-[11px] text-danger [overflow-wrap:anywhere]"
+                              >
+                                {detail.error}
+                              </p>
+                              {detail.retryable && (
+                                <button
+                                  className={BUTTON_CLASS}
+                                  type="button"
+                                  onClick={() => hydrate(event)}
+                                >
+                                  Retry invocation details
+                                </button>
+                              )}
+                            </div>
+                          ) : (
+                            <p role="status" className="m-0 text-[11px] text-muted">
+                              Loading…
+                            </p>
+                          ))}
                       </div>
-                    </details>
-                  </>
+                    </td>
+                  </tr>
                 )}
-                {!invocation &&
-                  (!event.bodyToken ? (
-                    <p className="m-0 text-[11px] text-muted">
-                      Invocation detail unavailable: no retained body.
-                    </p>
-                  ) : detail?.status === "loading" ? (
-                    <p role="status" className="m-0 text-[11px] text-muted">
-                      Loading invocation details…
-                    </p>
-                  ) : detail?.status === "error" ? (
-                    <div className="grid min-w-0 gap-2">
-                      <p
-                        role="alert"
-                        className="m-0 text-[11px] text-danger [overflow-wrap:anywhere]"
-                      >
-                        Invocation detail unavailable: {detail.error}
-                      </p>
-                      {detail.retryable && (
-                        <button
-                          className={BUTTON_CLASS}
-                          type="button"
-                          onClick={() => hydrate(event)}
-                        >
-                          Retry invocation details
-                        </button>
-                      )}
-                    </div>
-                  ) : (
-                    <div className="grid min-w-0 gap-2">
-                      {detail?.status === "released" && (
-                        <p className="m-0 text-[11px] text-muted">
-                          Invocation details released from the browser cache.
-                        </p>
-                      )}
-                      <button
-                        className={BUTTON_CLASS}
-                        type="button"
-                        onClick={() => hydrate(event)}
-                      >
-                        {detail?.status === "released"
-                          ? "Reload invocation details"
-                          : "Load invocation details"}
-                      </button>
-                    </div>
-                  ))}
-              </div>
-            )}
-          </article>
-        );
-      })}
+              </tbody>
+            );
+          })}
+        </table>
+      </div>
       {events.length === DESCRIPTOR_WINDOW_SIZE && (
-        <p className="m-0 text-[11px] text-muted">
+        <p className="m-0 shrink-0 px-3 py-2 text-[10px] text-muted">
           Only a bounded window of invocation history is held in this browser.
         </p>
       )}
-      {state.page.nextPageToken && !state.error && (
-        <button
-          className={BUTTON_CLASS}
-          type="button"
-          disabled={state.loading}
-          onClick={() => loadPage(state.page.nextPageToken, state.page.nextCursor)}
-        >
-          Load earlier invocations
-        </button>
-      )}
-      {state.page.records.length > 0 && (
-        <button
-          className={BUTTON_CLASS}
-          type="button"
-          disabled={state.loading}
-          onClick={() => {
-            for (const controller of detailControllers.current.values()) controller.abort();
-            detailControllers.current.clear();
-            setSelection(undefined);
-            setStored(emptyHistory(api));
-            loadPage(eventPageToken);
-          }}
-        >
-          Return to latest invocations
-        </button>
-      )}
+      <nav
+        aria-label="Call pagination"
+        className="flex shrink-0 flex-col gap-3 border-t border-[#eef1ef] px-3 py-3 text-xs text-secondary"
+      >
+        <span role="status">
+          {events.length
+            ? `${pageOffset + 1}–${pageOffset + visibleEvents.length} of ${events.length}${state.page.nextPageToken ? "+" : ""} calls`
+            : "0 calls"}
+        </span>
+        <div className="flex items-center justify-between gap-2">
+          <button
+            type="button"
+            aria-label="Previous page"
+            className={PAGE_BUTTON_CLASS}
+            disabled={pageOffset === 0 || state.loading || nextPageAfter !== null}
+            onClick={() => {
+              const offset = Math.max(0, pageOffset - CALL_PAGE_SIZE);
+              setPageStartId(offset < CALL_PAGE_SIZE ? null : events[offset].invocationId);
+              setSelection({ api, invocationId: null });
+            }}
+          >
+            Previous
+          </button>
+          <span>Page {Math.floor(pageOffset / CALL_PAGE_SIZE) + 1}</span>
+          <button
+            type="button"
+            aria-label="Next page"
+            className={PAGE_BUTTON_CLASS}
+            disabled={
+              !canAdvance || state.loading || nextPageAfter !== null || Boolean(state.error)
+            }
+            onClick={() => {
+              setSelection({ api, invocationId: null });
+              setNextPageAfter(visibleEvents[visibleEvents.length - 1].invocationId);
+            }}
+          >
+            Next
+          </button>
+        </div>
+        {state.historyEvicted && (
+          <button
+            className={BUTTON_CLASS}
+            type="button"
+            disabled={state.loading}
+            onClick={() => {
+              for (const controller of detailControllers.current.values()) controller.abort();
+              detailControllers.current.clear();
+              setPageStartId(null);
+              setNextPageAfter(null);
+              setSelection(undefined);
+              setStored(emptyHistory(api));
+              loadPage(eventPageToken);
+            }}
+          >
+            Return to first invocations
+          </button>
+        )}
+      </nav>
     </section>
   );
 }
 
-type ClassifierTab = "definition" | "code" | "calls";
+type ClassifierTab = "definition" | "code";
 const WORKFLOW_TABS: ClassifierTab[] = ["definition", "code"];
-const RUN_TABS: ClassifierTab[] = ["calls", "definition"];
 
 type SourceState = {
   api: OperatorApi;
@@ -688,10 +747,9 @@ export function ClassifierInspector({
   const runId = run?.summary?.runId;
   const scope = `${run?.operatorInstanceId ?? ""}\0${runId ?? ""}\0${nodeId}\0${run?.asOfEventUlid ?? ""}\0${node?.eventPageToken ?? ""}`;
   const tabsId = useId();
-  const tabScope = run ? `run\0${scope}` : `workflow\0${workflow?.name ?? ""}\0${nodeId}`;
+  const tabScope = `workflow\0${workflow?.name ?? ""}\0${nodeId}`;
   const [selectedTab, setSelectedTab] = useState<{ scope: string; tab: ClassifierTab }>();
-  const tabs = run ? RUN_TABS : WORKFLOW_TABS;
-  const tab = selectedTab?.scope === tabScope ? selectedTab.tab : run ? "calls" : "definition";
+  const tab = selectedTab?.scope === tabScope ? selectedTab.tab : "definition";
   const name = run
     ? run.topology?.displayNames[nodeId] || node?.name || nodeId
     : workflow?.displayNames[nodeId] || nodeId;
@@ -707,12 +765,9 @@ export function ClassifierInspector({
         <div className="min-w-0 flex-1">
           <span className="eyebrow flex items-center gap-1.5 font-mono text-[9px] tracking-[.16em] text-classifier uppercase">
             <ListFilter aria-hidden="true" className="size-3.5" strokeWidth={1.8} />
-            Classifier · {run ? `Run ${runId ?? ""}` : "Workflow"}
+            Classifier · {run ? "Run" : "Workflow"}
           </span>
           <h2 className="mt-1 mb-0 min-w-0 text-lg [overflow-wrap:anywhere]">{name}</h2>
-          {node && (
-            <span className="font-mono text-[9px] text-muted uppercase">{node.status}</span>
-          )}
           {node?.error && (
             <p
               role="alert"
@@ -731,83 +786,75 @@ export function ClassifierInspector({
           <X aria-hidden="true" className="size-4" strokeWidth={1.8} />
         </button>
       </header>
-      <div
-        className="inspector-tabs flex shrink-0 border-b border-line px-2.5"
-        role="tablist"
-        aria-label={run ? "Run classifier views" : "Workflow classifier views"}
-      >
-        {tabs.map((item) => (
-          <button
-            key={item}
-            type="button"
-            role="tab"
-            id={`${tabsId}-${item}`}
-            aria-controls={`${tabsId}-panel`}
-            aria-selected={tab === item}
-            tabIndex={tab === item ? 0 : -1}
-            className={`flex-1 cursor-pointer border-0 border-b-2 bg-transparent px-[9px] pt-[11px] pb-[9px] font-mono text-[9px] uppercase focus-visible:outline-2 focus-visible:outline-classifier ${tab === item ? "border-classifier text-classifier" : "border-transparent text-muted"}`}
-            onClick={() => setSelectedTab({ scope: tabScope, tab: item })}
-            onKeyDown={(event) => {
-              if (!["ArrowLeft", "ArrowRight", "Home", "End"].includes(event.key)) return;
-              event.preventDefault();
-              const next =
-                event.key === "Home"
-                  ? tabs[0]
-                  : event.key === "End"
-                    ? tabs[tabs.length - 1]
-                    : tabs[(tabs.indexOf(item) + 1) % tabs.length];
-              setSelectedTab({ scope: tabScope, tab: next });
-              document.getElementById(`${tabsId}-${next}`)?.focus();
-            }}
-          >
-            {item === "definition" ? "Definition" : item === "code" ? "Code" : "Calls"}
-          </button>
-        ))}
-      </div>
-      <div
-        role="tabpanel"
-        id={`${tabsId}-panel`}
-        aria-labelledby={`${tabsId}-${tab}`}
-        className={`inspector-body min-h-0 min-w-0 flex-1 ${tab === "code" ? "overflow-hidden bg-canvas" : "overflow-auto px-5 pt-[18px] pb-[30px] [scrollbar-gutter:stable]"}`}
-      >
-        {tab === "definition" && (
-          <section
-            aria-label={run ? "Historical classifier declaration" : definitionLabel}
-            className="min-w-0"
-          >
-            {run && (
-              <p className="mt-0 text-[11px] text-muted">
-                Retained from this run, not the current workflow definition.
-              </p>
-            )}
-            {declaration ? (
-              <ClassifierQuestions declaration={declaration} />
-            ) : (
-              <p role="alert" className="text-[11px] text-danger [overflow-wrap:anywhere]">
-                {run
-                  ? "Historical classifier declaration unavailable."
-                  : "Classifier declaration unavailable."}{" "}
-                {declarationError}
-              </p>
-            )}
-          </section>
-        )}
-        {tab === "code" && !run && workflow && (
-          <ClassifierSource api={api} workflow={workflow} nodeId={nodeId} />
-        )}
-        {run && (
-          <div hidden={tab !== "calls"}>
-            <ClassifierHistory
-              key={scope}
-              api={api}
-              run={run}
-              node={node}
-              nodeId={nodeId}
-              liveEvents={liveEvents}
-            />
-          </div>
-        )}
-      </div>
+      {!run && (
+        <div
+          className="inspector-tabs flex shrink-0 border-b border-line px-2.5"
+          role="tablist"
+          aria-label="Workflow classifier views"
+        >
+          {WORKFLOW_TABS.map((item) => (
+            <button
+              key={item}
+              type="button"
+              role="tab"
+              id={`${tabsId}-${item}`}
+              aria-controls={`${tabsId}-panel`}
+              aria-selected={tab === item}
+              tabIndex={tab === item ? 0 : -1}
+              className={`flex-1 cursor-pointer border-0 border-b-2 bg-transparent px-[9px] pt-[11px] pb-[9px] font-mono text-[9px] uppercase focus-visible:outline-2 focus-visible:outline-classifier ${tab === item ? "border-classifier text-classifier" : "border-transparent text-muted"}`}
+              onClick={() => setSelectedTab({ scope: tabScope, tab: item })}
+              onKeyDown={(event) => {
+                if (!["ArrowLeft", "ArrowRight", "Home", "End"].includes(event.key)) return;
+                event.preventDefault();
+                const next =
+                  event.key === "Home"
+                    ? WORKFLOW_TABS[0]
+                    : event.key === "End"
+                      ? WORKFLOW_TABS[WORKFLOW_TABS.length - 1]
+                      : WORKFLOW_TABS[(WORKFLOW_TABS.indexOf(item) + 1) % WORKFLOW_TABS.length];
+                setSelectedTab({ scope: tabScope, tab: next });
+                document.getElementById(`${tabsId}-${next}`)?.focus();
+              }}
+            >
+              {item === "definition" ? "Definition" : "Code"}
+            </button>
+          ))}
+        </div>
+      )}
+      {run ? (
+        <div className="inspector-body min-h-0 min-w-0 flex-1 overflow-hidden">
+          <ClassifierHistory
+            key={scope}
+            api={api}
+            run={run}
+            node={node}
+            nodeId={nodeId}
+            liveEvents={liveEvents}
+          />
+        </div>
+      ) : (
+        <div
+          role="tabpanel"
+          id={`${tabsId}-panel`}
+          aria-labelledby={`${tabsId}-${tab}`}
+          className={`inspector-body min-h-0 min-w-0 flex-1 ${tab === "code" ? "overflow-hidden bg-canvas" : "overflow-auto px-3 py-1 [scrollbar-gutter:stable]"}`}
+        >
+          {tab === "definition" && (
+            <section aria-label={definitionLabel} className="min-w-0">
+              {declaration ? (
+                <ClassifierQuestions declaration={declaration} />
+              ) : (
+                <p role="alert" className="text-[11px] text-danger [overflow-wrap:anywhere]">
+                  Classifier declaration unavailable. {declarationError}
+                </p>
+              )}
+            </section>
+          )}
+          {tab === "code" && workflow && (
+            <ClassifierSource api={api} workflow={workflow} nodeId={nodeId} />
+          )}
+        </div>
+      )}
     </aside>
   );
 }

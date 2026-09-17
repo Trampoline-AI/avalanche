@@ -113,7 +113,7 @@ export function Inspector(props: InspectorProps) {
   const metadata = run
     ? run.topology?.classifierMetadataJson
     : workflow?.classifierMetadataJson;
-  const rawDeclaration = nodeId === undefined ? undefined : metadata?.[nodeId];
+  const rawDeclaration = run || nodeId === undefined ? undefined : metadata?.[nodeId];
   const parsedDeclaration = useMemo(() => {
     if (rawDeclaration === undefined) return undefined;
     try {

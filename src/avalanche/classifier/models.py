@@ -128,10 +128,12 @@ class ClassificationUsage(_ClassifierModel):
 
 
 def _validate_distribution(probabilities: dict[str, float]) -> None:
-    if not probabilities or not math.isclose(
-        sum(probabilities.values()), 1.0, rel_tol=1e-5, abs_tol=1e-5
-    ):
-        raise ValueError("probabilities must sum to 1")
+    # TypeSafe rounds each probability to two decimal places independently.
+    # Bound accumulated rounding error without renormalizing the original evidence.
+    total = math.fsum(probabilities.values())
+    rounding_tolerance = 0.005 * len(probabilities) + 1e-12
+    if total <= 0 or not math.isclose(total, 1.0, rel_tol=0, abs_tol=rounding_tolerance):
+        raise ValueError("probabilities must sum to 1 within rounding precision")
 
 
 class ChoiceAnswer(_ClassifierModel):

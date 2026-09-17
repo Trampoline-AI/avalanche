@@ -109,6 +109,16 @@ section offers **Reload step detail** without discarding its reasoning summary.
 Failed requests expose explicit retry actions; oversized details retain their
 summary but cannot be loaded beyond the browser limit.
 
+Classifier calls use a compact table with Call, Outputs, Status, and Duration
+columns, 25-row pages, and Previous/Next controls matching the expanded timeline.
+Invocation numbers and typed compact answers come from paged and live activity
+descriptors, without input previews or full-body prefetching.
+Calls start at index 1 in ascending order, with every row collapsed. Only explicitly
+expanded calls fetch full details. Their eight-entry, 8 MiB cache holds full bodies only.
+Evicting a body leaves the list summary intact, and reopening its call reloads
+details automatically. Classifier descriptors require `classifier_summary`,
+including when the corresponding detail body has expired.
+
 Run snapshots retain the selected node while its ID exists in the destination
 topology. The canvas notice reads **Viewing a run snapshot** and states that the
 view does not represent the workflow's current state.

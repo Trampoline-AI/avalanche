@@ -64,6 +64,11 @@ def _build_client(runtime: ClassifierRuntime) -> AsyncTypeSafeClient:
     """Resolve credentials and construct the SDK only inside the executing process."""
     from typesafe_sdk import AsyncTypeSafeClient
 
+    if "TYPESAFE_API_KEY" not in os.environ:
+        from dotenv import find_dotenv, load_dotenv
+
+        load_dotenv(find_dotenv(usecwd=True), override=False)
+
     if not os.environ.get("TYPESAFE_API_KEY", "").strip():
         raise ClassifierStepExecutionError("TYPESAFE_API_KEY is required to call a classifier")
     return AsyncTypeSafeClient(model=runtime.model, timeout=runtime.timeout)

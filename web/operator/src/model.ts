@@ -733,11 +733,18 @@ export const AgentEventDescriptorMsg = {
   },
 };
 
+export type ClassifierAnswerSummary =
+  | { questionId: string; type: "choice"; choice: string }
+  | { questionId: string; type: "noul"; noul: number }
+  | { questionId: string; type: "score"; score: number };
+
 export interface ClassifierEventDescriptorMsg {
   eventSequence: string;
   sizeBytes: string;
   bodyToken: string;
   invocationId: string;
+  invocationIndex: number;
+  answers: ClassifierAnswerSummary[];
   eventKind: string;
   durationMs?: string;
   error: boolean;
@@ -750,6 +757,8 @@ export const ClassifierEventDescriptorMsg = {
       sizeBytes: "0",
       bodyToken: "",
       invocationId: "",
+      invocationIndex: 0,
+      answers: [],
       eventKind: "",
       error: false,
       ...value,

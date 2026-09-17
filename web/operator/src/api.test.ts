@@ -7,6 +7,7 @@ import {
   ActivityDetailChunkV2,
   ActivityDetailRefV2,
   CatalogReloadRequiredV2,
+  ClassifierInvocationSummaryV2,
   ContinuationRefV2,
   FlowInfoV2,
   FlowListV2,
@@ -113,6 +114,10 @@ function classifierActivity(sequence = "1"): RunActivityDescriptorV2 {
     runSequence: sequence,
     invocationId: classifierInvocation.invocation_id,
     eventKind: classifierInvocation.status,
+    classifierSummary: {
+      invocationIndex: classifierInvocation.invocation_index,
+      answers: [{ questionId: "accepted", answer: { oneofKind: "noul", noul: 0.8 } }],
+    },
     durationMs: "1000",
     sizeBytes: String(classifierBody.byteLength),
     detailRef: {
@@ -448,6 +453,8 @@ describe("operator transport boundary", () => {
       {
         eventSequence: "1",
         invocationId: "classifier-call",
+        invocationIndex: 0,
+        answers: [{ questionId: "accepted", type: "noul", noul: 0.8 }],
         eventKind: "success",
         bodyToken: "classifier-1",
         sizeBytes: String(classifierBody.byteLength),
@@ -475,6 +482,8 @@ describe("operator transport boundary", () => {
               eventSequence: "2",
               invocationId: "classifier-call",
               bodyToken: "classifier-2",
+              invocationIndex: 0,
+              answers: [{ questionId: "accepted", type: "noul", noul: 0.8 }],
             },
           },
         },
@@ -483,6 +492,153 @@ describe("operator transport boundary", () => {
     await expect(api.readJsonDetail("classifier-2")).resolves.toEqual(classifierInvocation);
   });
 
+  it("preserves every compact answer, including zero values, on pages and live updates without reading details", async () => {
+    const activity = RunActivityDescriptorV2.fromBinary(
+      RunActivityDescriptorV2.toBinary(
+        RunActivityDescriptorV2.create({
+          ...classifierActivity(),
+          classifierSummary: {
+            invocationIndex: 42,
+            answers: [
+              { questionId: "category", answer: { oneofKind: "choice", choice: "keep" } },
+              { questionId: "approved", answer: { oneofKind: "noul", noul: 0 } },
+              { questionId: "quality", answer: { oneofKind: "score", score: 0 } },
+              { questionId: "priority", answer: { oneofKind: "score", score: 7 } },
+            ],
+          },
+        }),
+      ),
+    );
+    const readActivityDetail = vi.fn();
+    const api = apiWith({
+      getRunSnapshot: () => ({ response: Promise.resolve(classifierSnapshot) }),
+      listRunActivity: () => ({
+        response: Promise.resolve(
+          RunActivityPageV2.create({
+            scopeRef,
+            cursor: cursor(),
+            runId: "run-1",
+            activities: [activity],
+          }),
+        ),
+      }),
+      watchRunStatus: () => ({
+        responses: (async function* () {
+          yield RunStatusEnvelopeV2.create({
+            scopeRef,
+            cursor: cursor(9),
+            eventUlid: eventUlid(9),
+            payload: {
+              oneofKind: "activityAppended",
+              activityAppended: { runId: "run-1", activity },
+            },
+          });
+        })(),
+      }),
+      readActivityDetail,
+    });
+    await api.getLatestRunSnapshot("run-1", "operator-1");
+    const expected = {
+      invocationIndex: 42,
+      answers: [
+        { questionId: "category", type: "choice", choice: "keep" },
+        { questionId: "approved", type: "noul", noul: 0 },
+        { questionId: "quality", type: "score", score: 0 },
+        { questionId: "priority", type: "score", score: 7 },
+      ],
+    };
+    expect((await api.listClassifierEventPage(classifierRequest)).records[0]).toMatchObject(
+      expected,
+    );
+    const liveUpdates = api.streamUpdates("operator-1", eventUlid(8));
+    const live = await liveUpdates[Symbol.asyncIterator]().next();
+    expect(live.value?.payload).toMatchObject({
+      update: { change: { classifierEventAppended: { event: expected } } },
+    });
+    expect(readActivityDetail).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    { name: "missing summary", summary: undefined },
+    {
+      name: "unsafe call number",
+      summary: ClassifierInvocationSummaryV2.create({
+        invocationIndex: Number.MAX_SAFE_INTEGER + 1,
+      }),
+    },
+    {
+      name: "negative call number",
+      summary: ClassifierInvocationSummaryV2.create({ invocationIndex: -1 }),
+    },
+    {
+      name: "missing typed answer",
+      summary: ClassifierInvocationSummaryV2.create({ answers: [{ questionId: "approved" }] }),
+    },
+    {
+      name: "non-finite answer",
+      summary: ClassifierInvocationSummaryV2.create({
+        answers: [{ questionId: "quality", answer: { oneofKind: "score", score: Infinity } }],
+      }),
+    },
+    {
+      name: "duplicate question",
+      summary: ClassifierInvocationSummaryV2.create({
+        answers: [
+          { questionId: "approved", answer: { oneofKind: "noul", noul: 0 } },
+          { questionId: "approved", answer: { oneofKind: "noul", noul: 1 } },
+        ],
+      }),
+    },
+    {
+      name: "answer on a non-success call",
+      eventKind: "running",
+      summary: ClassifierInvocationSummaryV2.create({
+        answers: [{ questionId: "approved", answer: { oneofKind: "noul", noul: 0 } }],
+      }),
+    },
+  ])(
+    "rejects $name on both classifier pages and live updates",
+    async ({ summary, eventKind }) => {
+      const activity = RunActivityDescriptorV2.create({
+        ...classifierActivity(),
+        classifierSummary: summary,
+        eventKind: eventKind ?? "success",
+      });
+      const api = apiWith({
+        getRunSnapshot: () => ({ response: Promise.resolve(classifierSnapshot) }),
+        listRunActivity: () => ({
+          response: Promise.resolve(
+            RunActivityPageV2.create({
+              scopeRef,
+              cursor: cursor(),
+              runId: "run-1",
+              activities: [activity],
+            }),
+          ),
+        }),
+        watchRunStatus: () => ({
+          responses: (async function* () {
+            yield RunStatusEnvelopeV2.create({
+              scopeRef,
+              cursor: cursor(9),
+              eventUlid: eventUlid(9),
+              payload: {
+                oneofKind: "activityAppended",
+                activityAppended: { runId: "run-1", activity },
+              },
+            });
+          })(),
+        }),
+      });
+      await api.getLatestRunSnapshot("run-1", "operator-1");
+      await expect(api.listClassifierEventPage(classifierRequest)).rejects.toThrow(/summary/i);
+      await expect(
+        api.streamUpdates("operator-1", eventUlid(8))[Symbol.asyncIterator]().next(),
+      ).rejects.toThrow(/summary/i);
+      await expect(api.readJsonDetail("classifier-1")).rejects.toThrow(/not bound/i);
+    },
+  );
+
   it("keeps expired classifier statuses pageable and replayable alongside retained details", async () => {
     const statuses = ["running", "success", "failed", "cancelled"] as const;
     const expired = statuses.map((status, index) =>
@@ -490,6 +646,13 @@ describe("operator transport boundary", () => {
         ...classifierActivity(String(index + 1)),
         invocationId: `expired-${status}`,
         eventKind: status,
+        classifierSummary: {
+          invocationIndex: index,
+          answers:
+            status === "success"
+              ? [{ questionId: "accepted", answer: { oneofKind: "noul", noul: 0.8 } }]
+              : [],
+        },
         error: status === "failed",
         detailRef: undefined,
       }),
@@ -533,6 +696,9 @@ describe("operator transport boundary", () => {
     expect(page.records.slice(0, 4)).toEqual(
       statuses.map((status, index) => ({
         invocationId: `expired-${status}`,
+        invocationIndex: index,
+        answers:
+          status === "success" ? [{ questionId: "accepted", type: "noul", noul: 0.8 }] : [],
         eventSequence: String(index + 1),
         eventKind: status,
         bodyToken: "",

@@ -8,7 +8,7 @@ import {
   useRef,
   useState,
 } from "react";
-import { Check, ListFilter, X } from "lucide-react";
+import { Bot, Check, ListFilter, X } from "lucide-react";
 
 import {
   Background,
@@ -305,17 +305,21 @@ const WorkflowNodeCard = memo(({ data, selected }: NodeProps<Node<CardData>>) =>
         aria-label={`Inspect ${data.label}${data.identity ? ` ${data.identity}` : ""}`}
       />
       <header
-        className={`node-header relative flex flex-col ${
+        className={`node-header relative ${
           isCompact
-            ? "min-h-0 items-center justify-center gap-0 pr-0 text-center"
-            : "min-h-10 items-start gap-1"
+            ? "grid min-h-0 flex-1 grid-cols-[minmax(0,1fr)] grid-rows-[1fr_auto_1fr] items-center gap-0 pr-0 text-center"
+            : "flex min-h-10 flex-col items-start gap-1"
         }`}
       >
         <span
-          className={`${data.isClassifier ? "node-classifier-identity mb-1 inline-flex items-center gap-1 rounded bg-classifier-light px-1.5 py-0.5 text-classifier" : `node-card-meta ${data.isAgent ? "text-agent" : "text-secondary"}`} node-kicker font-mono text-[8px] tracking-[.12em] uppercase`}
+          className={`${data.isClassifier || data.isAgent ? `mb-1 inline-flex items-center gap-1 rounded px-1.5 py-0.5 ${data.isClassifier ? "node-classifier-identity bg-classifier-light text-classifier" : "node-agent-identity bg-agent/10 text-agent"}` : "node-card-meta text-secondary"} node-kicker font-mono text-[8px] tracking-[.12em] uppercase`}
         >
-          {data.isClassifier && <ListFilter aria-hidden="true" className="size-3" />}
-          {data.isClassifier ? "Classifier" : data.isAgent ? "agent" : data.nodeType}
+          {data.isClassifier ? (
+            <ListFilter aria-hidden="true" className="size-3" />
+          ) : data.isAgent ? (
+            <Bot aria-hidden="true" className="size-3" />
+          ) : null}
+          {data.isClassifier ? "Classifier" : data.isAgent ? "Agent" : data.nodeType}
         </span>
         <strong
           className={`node-title block self-stretch ${isCompact ? "text-xl" : "pr-[76px] text-sm"} leading-tight text-ink`}
@@ -618,10 +622,8 @@ function GraphCanvasView({
           try {
             const declaration = decodeClassifierDeclaration(raw);
             const counts = { choice: 0, noul: 0, score: 0 };
-            let total = 0;
             for (const question of Object.values(declaration.questions)) {
               counts[question.type] += 1;
-              total += 1;
             }
             const kinds = [
               counts.choice ? `${counts.choice} Choice` : "",
@@ -630,7 +632,7 @@ function GraphCanvasView({
             ]
               .filter(Boolean)
               .join(" · ");
-            return [nodeId, `${total} ${total === 1 ? "question" : "questions"} · ${kinds}`];
+            return [nodeId, kinds];
           } catch {
             return [nodeId, "Question definition unavailable"];
           }

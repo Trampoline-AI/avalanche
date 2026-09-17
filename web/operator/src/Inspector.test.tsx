@@ -1139,6 +1139,15 @@ function classifierEvent(
   return ClassifierEventDescriptorMsg.create({
     eventSequence: String(sequence),
     invocationId: `classification-${index}`,
+    invocationIndex: index,
+    answers:
+      status === "success"
+        ? [
+            { questionId: "category", type: "choice", choice: "keep" },
+            { questionId: "approved", type: "noul", noul: 0.9 },
+            { questionId: "quality", type: "score", score: 0.75 },
+          ]
+        : [],
     eventKind: status,
     bodyToken: `classifier-${sequence}`,
     sizeBytes: "64",
@@ -1269,15 +1278,14 @@ describe("classifier inspection", () => {
       />,
     );
     expect(replacementSignal?.aborted).toBe(true);
-    expect(screen.getByRole("tab", { name: "Calls" })).toHaveAttribute("aria-selected", "true");
+    expect(screen.queryByRole("tab", { name: "Calls" })).toBeNull();
     expect(screen.queryByRole("tab", { name: "Code" })).toBeNull();
     await act(async () => {
       apiSource.resolve("return 'current code must not enter history'");
       await apiSource.promise;
     });
     expect(screen.queryByLabelText("Source code")).toBeNull();
-    fireEvent.click(screen.getByRole("tab", { name: "Definition" }));
-    expect(screen.getByLabelText("Historical classifier declaration")).toBeVisible();
+    expect(screen.queryByRole("tab", { name: "Definition" })).toBeNull();
     expect(replacementSource).toHaveBeenCalledTimes(1);
   });
 
@@ -1353,7 +1361,7 @@ describe("classifier inspection", () => {
     expect(screen.getByLabelText("Source code")).not.toHaveTextContent("stale other node");
   });
 
-  it("retains historical questions and all typed answers across current definition changes and deletion", async () => {
+  it("shows only calls in a run, independent of current definition changes and deletion", async () => {
     const api = createApi({
       listClassifierEventPage: async () => classifierPage([classifierEvent(1, 0)]),
       readJsonDetail: async () => classifierInvocation(0),
@@ -1378,20 +1386,21 @@ describe("classifier inspection", () => {
         onClose={() => undefined}
       />,
     );
-    expect(screen.getByRole("tab", { name: "Calls" })).toHaveAttribute("aria-selected", "true");
+    expect(screen.queryByRole("tab", { name: "Calls" })).toBeNull();
     expect(screen.queryByLabelText("Historical classifier declaration")).toBeNull();
+    fireEvent.click(await screen.findByRole("button", { name: "Call 1" }));
     const answer = await screen.findByLabelText("Answer category");
     expect(answer).toHaveTextContent("keep");
-    expect(
-      within(answer).getByRole("meter", { name: "category: discard probability" }),
-    ).toHaveAttribute("value", "0.2");
-    expect(within(answer).getByText("Confidence")).toBeInTheDocument();
-    expect(screen.getByLabelText("Answer approved")).toHaveTextContent("0.9");
+    expect(screen.queryByRole("tab", { name: "Definition" })).toBeNull();
+    expect(screen.queryByLabelText("Question category")).toBeNull();
+    expect(within(screen.getByLabelText("Answer approved")).getByRole("meter")).toHaveAttribute(
+      "aria-valuenow",
+      "0.9",
+    );
     expect(
       within(screen.getByLabelText("Answer approved")).queryByText("Confidence"),
     ).toBeNull();
     expect(screen.getByLabelText("Answer quality")).toHaveTextContent("0.75");
-    expect(screen.getByLabelText("Answer quality")).toHaveTextContent("High");
     expect(screen.queryByText("New current question")).toBeNull();
     view.rerender(
       <Inspector
@@ -1401,11 +1410,7 @@ describe("classifier inspection", () => {
         onClose={() => undefined}
       />,
     );
-    fireEvent.click(screen.getByRole("tab", { name: "Definition" }));
-    expect(screen.getByLabelText("Historical classifier declaration")).toHaveTextContent(
-      "Choose the historical category.",
-    );
-    fireEvent.click(screen.getByRole("tab", { name: "Calls" }));
+    expect(screen.queryByRole("tab", { name: "Definition" })).toBeNull();
     expect(screen.getByLabelText("Answer category")).toBeVisible();
   });
 
@@ -1437,6 +1442,7 @@ describe("classifier inspection", () => {
         onClose={() => undefined}
       />,
     );
+    fireEvent.click(await screen.findByRole("button", { name: "Call 1" }));
     expect(await screen.findByLabelText("Input state")).toHaveTextContent("input-0");
     expect(screen.getByRole("status", { name: "Invocation status" })).toHaveTextContent(
       "running",
@@ -1450,35 +1456,37 @@ describe("classifier inspection", () => {
         liveClassifierEvents={[
           classifierEvent(1, 0, "running"),
           classifierEvent(2, 0),
-          classifierEvent(3, 1),
+          ClassifierEventDescriptorMsg.create({
+            ...classifierEvent(3, 1),
+            answers: [
+              { questionId: "category", type: "choice", choice: "discard" },
+              { questionId: "approved", type: "noul", noul: 0.9 },
+              { questionId: "quality", type: "score", score: 0.75 },
+            ],
+          }),
           classifierEvent(4, 0, "running"),
         ]}
         onClose={() => undefined}
       />,
     );
-    expect(await screen.findByText("result-model-1")).toBeVisible();
+    fireEvent.click(screen.getByRole("button", { name: "Call 2" }));
+    expect(await screen.findByLabelText("Input state")).toHaveTextContent("different input");
     const second = screen.getByLabelText("Invocation classification-1");
     expect(within(second).getByLabelText("Input state")).toHaveTextContent("different input");
     expect(within(second).getByLabelText("Answer category")).toHaveTextContent("discard");
     const first = screen.getByLabelText("Invocation classification-0");
     fireEvent.click(within(first).getByRole("button", { expanded: false }));
-    expect(await within(first).findByText("result-model-0")).toBeVisible();
+    expect(await within(first).findByLabelText("Input state")).toHaveTextContent("input-0");
     expect(within(first).getByLabelText("Input state")).toHaveTextContent("input-0");
     expect(within(first).getByLabelText("Input state")).not.toHaveTextContent(
       "different input",
     );
     expect(within(first).getByLabelText("Answer category")).toHaveTextContent("keep");
-    expect(within(first).getByRole("button", { expanded: true })).toHaveTextContent(
-      /Call 1.*input-0/,
-    );
     expect(within(second).queryByLabelText("Input state")).toBeNull();
     fireEvent.click(within(second).getByRole("button", { expanded: false }));
     expect(within(second).getByLabelText("Input state")).toHaveTextContent("different input");
-    expect(within(second).getByRole("button", { expanded: true })).toHaveTextContent(
-      /Call 2.*different input/,
-    );
     expect(within(first).queryByLabelText("Input state")).toBeNull();
-    expect(screen.getAllByRole("article")).toHaveLength(2);
+    expect(screen.getAllByRole("rowgroup", { name: /^Invocation / })).toHaveLength(2);
     expect(within(first).getByRole("status", { name: "Invocation status" })).toHaveTextContent(
       "success",
     );
@@ -1509,6 +1517,7 @@ describe("classifier inspection", () => {
         onClose={() => undefined}
       />,
     );
+    fireEvent.click(await screen.findByRole("button", { name: "Call 3" }));
     expect(await screen.findByLabelText("Input state")).toHaveTextContent(/not captured/i);
     expect(screen.queryByLabelText("Classification answers")).toBeNull();
     const cancelledCall = screen.getByLabelText("Invocation classification-1");
@@ -1567,6 +1576,7 @@ describe("classifier inspection", () => {
         onClose={() => undefined}
       />,
     );
+    fireEvent.click(await screen.findByRole("button", { name: "Call 1" }));
     await waitFor(() => expect(bodySignal).toBeDefined());
     const otherRun = RunSnapshotMsg.create({
       ...classifierRun,
@@ -1577,14 +1587,16 @@ describe("classifier inspection", () => {
     );
     expect(pageSignal?.aborted).toBe(true);
     expect(bodySignal?.aborted).toBe(true);
-    expect(await screen.findByText("result-model-1")).toBeVisible();
+    expect(screen.queryByRole("button", { expanded: true })).toBeNull();
+    fireEvent.click(await screen.findByRole("button", { name: "Call 2" }));
+    expect(await screen.findByLabelText("Input state")).toHaveTextContent("input-1");
     await act(async () => {
       oldPage.resolve(classifierPage([classifierEvent(1, 0)]));
       oldBody.resolve(classifierInvocation(0));
       await Promise.all([oldPage.promise, oldBody.promise]);
     });
-    expect(screen.queryByText("result-model-0")).toBeNull();
-    expect(screen.queryByRole("article", { name: "Invocation classification-0" })).toBeNull();
+    expect(screen.getByLabelText("Input state")).not.toHaveTextContent("input-0");
+    expect(screen.queryByRole("rowgroup", { name: "Invocation classification-0" })).toBeNull();
   });
 
   it("distinguishes page failure, body failure, and a genuinely uninvoked classifier, with explicit retries", async () => {
@@ -1611,10 +1623,16 @@ describe("classifier inspection", () => {
     expect(await screen.findByText(/Page offline/)).toBeVisible();
     expect(screen.queryByText("Classifier not invoked in this run.")).toBeNull();
     fireEvent.click(screen.getByRole("button", { name: "Retry classifier history" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Call 1" }));
     expect(await screen.findByText(/Body offline/)).toBeVisible();
     expect(screen.queryByText("Classifier not invoked in this run.")).toBeNull();
+    const call = screen.getByLabelText("Invocation classification-0");
+    fireEvent.click(within(call).getByRole("button", { expanded: true }));
+    fireEvent.click(within(call).getByRole("button", { expanded: false }));
+    expect(within(call).getByRole("alert")).toHaveTextContent("Body offline");
+    expect(detailAttempts).toBe(1);
     fireEvent.click(screen.getByRole("button", { name: "Retry invocation details" }));
-    expect(await screen.findByText("result-model-0")).toBeVisible();
+    expect(await screen.findByLabelText("Input state")).toHaveTextContent("input-0");
     view.rerender(
       <Inspector
         api={createApi()}
@@ -1624,7 +1642,7 @@ describe("classifier inspection", () => {
       />,
     );
     expect(await screen.findByText("Classifier not invoked in this run.")).toBeVisible();
-    expect(screen.queryByText("result-model-0")).toBeNull();
+    expect(screen.queryByLabelText("Input state")).toBeNull();
   });
 
   it("shows expired invocation statuses without losing retained answers or offering unavailable body requests", async () => {
@@ -1650,9 +1668,10 @@ describe("classifier inspection", () => {
         onClose={() => undefined}
       />,
     );
-    expect(await screen.findByText("result-model-4")).toBeVisible();
+    fireEvent.click(await screen.findByRole("button", { name: "Call 5" }));
+    expect(await screen.findByLabelText("Input state")).toHaveTextContent("input-4");
     for (const [index, status] of statuses.entries()) {
-      const invocation = screen.getByRole("article", {
+      const invocation = screen.getByRole("rowgroup", {
         name: `Invocation classification-${index}`,
       });
       fireEvent.click(within(invocation).getByRole("button", { expanded: false }));
@@ -1660,6 +1679,11 @@ describe("classifier inspection", () => {
         within(invocation).getByRole("status", { name: "Invocation status" }),
       ).toHaveTextContent(status);
       expect(within(invocation).getByText(/detail unavailable/i)).toBeVisible();
+      const summary = within(invocation).getByRole("button", { expanded: true });
+      expect(summary).toHaveAccessibleName(`Call ${index + 1}`);
+      if (status === "success") {
+        expect(invocation).toHaveTextContent("category: keep · approved: 0.9 · quality: 0.75");
+      }
       expect(within(invocation).queryByLabelText("Classification answers")).toBeNull();
       expect(
         within(invocation).queryByRole("button", { name: /invocation details/i }),
@@ -1686,9 +1710,8 @@ describe("classifier inspection", () => {
         onClose={() => undefined}
       />,
     );
-    fireEvent.click(screen.getByRole("tab", { name: "Definition" }));
-    expect(screen.getByText(/Historical classifier declaration unavailable/)).toBeVisible();
-    fireEvent.click(screen.getByRole("tab", { name: "Calls" }));
+    expect(screen.queryByRole("tab", { name: "Definition" })).toBeNull();
+    fireEvent.click(await screen.findByRole("button", { name: "Call 1" }));
     expect(await screen.findByText(/does not match its invocation descriptor/)).toBeVisible();
     expect(screen.queryByLabelText("Question category")).toBeNull();
     expect(screen.queryByLabelText("Classification answers")).toBeNull();
@@ -1708,17 +1731,102 @@ describe("classifier inspection", () => {
     render(
       <Inspector api={api} run={stoppedRun} nodeId={node.nodeId} onClose={() => undefined} />,
     );
-    expect(await screen.findByText("result-model-1")).toBeVisible();
-    expect(screen.getByLabelText("Input state")).toHaveTextContent("input-1");
+    fireEvent.click(await screen.findByRole("button", { name: "Call 2" }));
+    expect(await screen.findByLabelText("Input state")).toHaveTextContent("input-1");
     expect(screen.getByLabelText("Answer category")).toHaveTextContent("keep");
-    const interrupted = screen.getByRole("article", { name: "Invocation classification-0" });
+    const interrupted = screen.getByRole("rowgroup", { name: "Invocation classification-0" });
     fireEvent.click(within(interrupted).getByRole("button", { expanded: false }));
-    expect(within(interrupted).getByLabelText("Input state")).toHaveTextContent("input-0");
+    expect(await within(interrupted).findByLabelText("Input state")).toHaveTextContent(
+      "input-0",
+    );
     expect(
       within(interrupted).getByRole("status", { name: "Invocation status" }),
     ).toHaveTextContent("interrupted");
     expect(within(interrupted).queryByLabelText("Classification answers")).toBeNull();
     expect(screen.getByText("Postprocessing failed")).toBeVisible();
+  });
+
+  it("pages calls in ascending index order and keeps them collapsed on load, paging, and live arrivals", async () => {
+    const events = Array.from({ length: 60 }, (_, index) => classifierEvent(index + 1, index));
+    const listClassifierEventPage = vi.fn<OperatorApi["listClassifierEventPage"]>(
+      async (request) => {
+        const ordered =
+          request.order === DescriptorPageOrder.FORWARD
+            ? events.filter(
+                (event) => Number(event.eventSequence) > Number(request.afterEventSequence),
+              )
+            : events.toReversed();
+        const records = ordered.slice(0, 20);
+        return classifierPage(records, ordered.length > records.length ? "more" : "");
+      },
+    );
+    const readJsonDetail = vi.fn<OperatorApi["readJsonDetail"]>(async (token) =>
+      classifierInvocation(Number(token.slice("classifier-".length)) - 1),
+    );
+    const api = createApi({ listClassifierEventPage, readJsonDetail });
+    const view = render(
+      <Inspector
+        api={api}
+        run={classifierRun}
+        nodeId={node.nodeId}
+        onClose={() => undefined}
+      />,
+    );
+    const table = within(await screen.findByRole("table", { name: "Classifier calls" }));
+    const callNumbers = () =>
+      table.getAllByRole("button").map((button) => button.getAttribute("aria-label"));
+    await waitFor(() =>
+      expect(callNumbers()).toEqual(
+        Array.from({ length: 25 }, (_, index) => `Call ${index + 1}`),
+      ),
+    );
+    expect(listClassifierEventPage).toHaveBeenCalledTimes(2);
+    expect(table.queryByRole("button", { expanded: true })).toBeNull();
+    expect(readJsonDetail).not.toHaveBeenCalled();
+    expect(screen.getByRole("button", { name: "Previous page" })).toBeDisabled();
+
+    fireEvent.click(screen.getByRole("button", { name: "Next page" }));
+    await waitFor(() =>
+      expect(callNumbers()).toEqual(
+        Array.from({ length: 25 }, (_, index) => `Call ${index + 26}`),
+      ),
+    );
+    expect(listClassifierEventPage).toHaveBeenCalledTimes(3);
+    fireEvent.click(screen.getByRole("button", { name: "Next page" }));
+    await waitFor(() =>
+      expect(callNumbers()).toEqual(
+        Array.from({ length: 10 }, (_, index) => `Call ${index + 51}`),
+      ),
+    );
+    expect(screen.getByRole("button", { name: "Next page" })).toBeDisabled();
+    fireEvent.click(screen.getByRole("button", { name: "Previous page" }));
+    view.rerender(
+      <Inspector
+        api={api}
+        run={classifierRun}
+        nodeId={node.nodeId}
+        liveClassifierEvents={[classifierEvent(61, 60)]}
+        onClose={() => undefined}
+      />,
+    );
+    expect(callNumbers()).toEqual(
+      Array.from({ length: 25 }, (_, index) => `Call ${index + 26}`),
+    );
+    expect(table.queryByRole("button", { expanded: true })).toBeNull();
+    expect(readJsonDetail).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole("button", { name: "Previous page" }));
+    fireEvent.click(table.getByRole("button", { name: "Call 1" }));
+    expect(await table.findByLabelText("Input state")).toHaveTextContent("input-0");
+    expect(readJsonDetail).toHaveBeenCalledTimes(1);
+    fireEvent.click(table.getByRole("button", { name: "Call 1" }));
+    fireEvent.click(table.getByRole("button", { name: "Call 1" }));
+    expect(table.getByLabelText("Input state")).toHaveTextContent("input-0");
+    expect(readJsonDetail).toHaveBeenCalledTimes(1);
+    fireEvent.click(
+      within(table.getByLabelText("Invocation classification-2")).getAllByRole("cell")[0],
+    );
+    expect(await table.findByLabelText("Input state")).toHaveTextContent("input-2");
+    expect(readJsonDetail).toHaveBeenCalledTimes(2);
   });
 
   it("keeps history pageable and terminal evidence authoritative over an older running page", async () => {
@@ -1741,18 +1849,18 @@ describe("classifier inspection", () => {
         onClose={() => undefined}
       />,
     );
-    expect(await screen.findByText("result-model-1")).toBeVisible();
-    fireEvent.click(screen.getByRole("button", { name: "Load earlier invocations" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Call 2" }));
+    expect(await screen.findByLabelText("Input state")).toHaveTextContent("input-1");
     await waitFor(() =>
-      expect(screen.queryByRole("button", { name: "Load earlier invocations" })).toBeNull(),
+      expect(screen.getByRole("button", { name: "Next page" })).toBeDisabled(),
     );
-    expect(screen.getAllByRole("article")).toHaveLength(2);
+    expect(screen.getAllByRole("rowgroup", { name: /^Invocation / })).toHaveLength(2);
     const first = screen.getByLabelText("Invocation classification-0");
     fireEvent.click(within(first).getByRole("button", { expanded: false }));
-    expect(screen.getByText("result-model-0")).toBeVisible();
+    expect(await screen.findByLabelText("Input state")).toHaveTextContent("input-0");
     const second = screen.getByLabelText("Invocation classification-1");
     fireEvent.click(within(second).getByRole("button", { expanded: false }));
-    expect(screen.getByText("result-model-1")).toBeVisible();
+    expect(screen.getByLabelText("Input state")).toHaveTextContent("input-1");
     expect(within(first).getByRole("status", { name: "Invocation status" })).toHaveTextContent(
       "success",
     );
@@ -1761,7 +1869,7 @@ describe("classifier inspection", () => {
     );
   });
 
-  it("does not infer interruption after paging away a long-running call's successful terminal record", async () => {
+  it("does not infer interruption before a long-running call's terminal record has been paged in", async () => {
     const records: ClassifierEventDescriptorMsg[] = [];
     const bodies = new Map<string, ClassifierInvocation>();
     const append = (
@@ -1779,13 +1887,12 @@ describe("classifier inspection", () => {
       append(index * 2 + 1, index, "success");
     }
     append(1202, 0, "success");
-    const newestFirst = records.toReversed();
     const api = createApi({
       listClassifierEventPage: async (request) => {
         const offset = request.pageToken === "events" ? 0 : Number(request.pageToken);
-        const page = newestFirst.slice(offset, offset + request.pageSize);
+        const page = records.slice(offset, offset + request.pageSize);
         const nextOffset = offset + page.length;
-        return classifierPage(page, nextOffset < newestFirst.length ? String(nextOffset) : "");
+        return classifierPage(page, nextOffset < records.length ? String(nextOffset) : "");
       },
       readJsonDetail: async (token) => {
         const invocation = bodies.get(token);
@@ -1809,47 +1916,39 @@ describe("classifier inspection", () => {
       );
     });
     const history = within(screen.getByLabelText("Classifier invocations"));
-    const earlier = history.getByRole("button", { name: "Load earlier invocations" });
-    const returnLatest = history.getByRole("button", { name: "Return to latest invocations" });
-    expect(history.getByText("result-model-0")).toBeVisible();
-    const latest = history.getByLabelText("Invocation classification-0");
-    expect(within(latest).getByRole("status", { name: "Invocation status" })).toHaveTextContent(
-      "success",
-    );
-
-    for (let offset = 100; offset < records.length; offset += 100) {
-      await act(async () => {
-        fireEvent.click(earlier);
-      });
-    }
-    expect(earlier).not.toBeInTheDocument();
-    expect(history.getAllByRole("article", { hidden: true })).toHaveLength(500);
-    const oldest = history.getByLabelText("Invocation classification-0");
-    expect(within(oldest).getByRole("status", { name: "Invocation status" })).toHaveTextContent(
+    const next = history.getByRole("button", { name: "Next page" });
+    const first = history.getByLabelText("Invocation classification-0");
+    expect(within(first).getByRole("status", { name: "Invocation status" })).toHaveTextContent(
       /unknown/i,
     );
-    expect(within(oldest).queryByLabelText("Classification answers")).toBeNull();
-    await act(async () => {
-      fireEvent.click(within(oldest).getByRole("button", { expanded: false }));
-    });
-    expect(within(oldest).getByText("Questions for this invocation")).toBeVisible();
-    expect(within(oldest).queryByText(/classification is running/i)).toBeNull();
+    expect(history.queryByLabelText("Input state")).toBeNull();
+    for (let page = 0; page < 40 && !next.hasAttribute("disabled"); page++) {
+      await act(async () => {
+        fireEvent.click(next);
+      });
+    }
+    expect(next).toBeDisabled();
+    expect(history.getByLabelText("Invocation classification-600")).toBeVisible();
+    const previous = history.getByRole("button", { name: "Previous page" });
+    for (let page = 0; page < 40 && !previous.hasAttribute("disabled"); page++) {
+      await act(async () => {
+        fireEvent.click(previous);
+      });
+    }
+    const completed = history.getByLabelText("Invocation classification-0");
     expect(
-      within(oldest).getByRole("status", { name: "Invocation status" }),
-    ).not.toHaveTextContent(/interrupted|running/i);
-
-    await act(async () => {
-      fireEvent.click(returnLatest);
-    });
-    expect(history.getByText("result-model-0")).toBeVisible();
-    const restored = history.getByLabelText("Invocation classification-0");
-    expect(
-      within(restored).getByRole("status", { name: "Invocation status" }),
+      within(completed).getByRole("status", { name: "Invocation status" }),
     ).toHaveTextContent("success");
-    expect(within(restored).getByLabelText("Classification answers")).toBeVisible();
+    fireEvent.click(within(completed).getByRole("button", { expanded: false }));
+    expect(await within(completed).findByLabelText("Classification answers")).toBeVisible();
+    await act(async () => {
+      fireEvent.click(history.getByRole("button", { name: "Return to first invocations" }));
+    });
+    expect(history.queryByLabelText("Input state")).toBeNull();
+    expect(history.getByLabelText("Invocation classification-0")).toBeVisible();
   }, 15_000);
 
-  it("bounds live descriptors while keeping newest calls accessible", async () => {
+  it("bounds live descriptors while keeping calls in ascending index order", async () => {
     const live = Array.from({ length: 510 }, (_, index) =>
       ClassifierEventDescriptorMsg.create({
         ...classifierEvent(index + 1, index),
@@ -1868,13 +1967,129 @@ describe("classifier inspection", () => {
       );
     });
     const history = within(screen.getByLabelText("Classifier invocations"));
-    expect(history.getAllByRole("article", { hidden: true })).toHaveLength(500);
-    expect(history.getByLabelText("Invocation classification-509")).toBeVisible();
-    expect(history.queryByLabelText("Invocation classification-0")).toBeNull();
+    expect(history.getAllByRole("rowgroup", { name: /^Invocation / })).toHaveLength(25);
+    expect(history.getByLabelText("Invocation classification-0")).toBeVisible();
+    expect(history.queryByLabelText("Invocation classification-509")).toBeNull();
     expect(history.queryByText("Classifier not invoked in this run.")).toBeNull();
+    for (let page = 1; page < 20; page++) {
+      await act(async () => {
+        fireEvent.click(history.getByRole("button", { name: "Next page" }));
+      });
+    }
+    expect(history.getByLabelText("Invocation classification-499")).toBeVisible();
+    expect(history.queryByLabelText("Invocation classification-509")).toBeNull();
+    expect(history.getByRole("button", { name: "Next page" })).toBeDisabled();
   });
 
-  it("releases oversized aggregate detail cache entries without automatic refetch loops and allows explicit recovery", async () => {
+  it("pages summaries without collapsed detail requests and reloads evicted calls on expansion", async () => {
+    const events = Array.from({ length: 12 }, (_, index) =>
+      ClassifierEventDescriptorMsg.create({
+        ...classifierEvent(index + 1, index),
+        answers: [
+          { questionId: "category", type: "choice", choice: "keep" },
+          { questionId: "approved", type: "noul", noul: 0 },
+          { questionId: "quality", type: "score", score: 0 },
+        ],
+      }),
+    );
+    const listClassifierEventPage = vi.fn<OperatorApi["listClassifierEventPage"]>(
+      async (request) =>
+        request.pageToken === "events"
+          ? classifierPage(events.slice(0, 6), "later")
+          : classifierPage(events.slice(6)),
+    );
+    const readJsonDetail = vi.fn<OperatorApi["readJsonDetail"]>(async (token) => {
+      const invocation = classifierInvocation(Number(token.slice("classifier-".length)) - 1);
+      if (invocation.result) {
+        invocation.result.answers.approved = { type: "noul", noul: 0 };
+        invocation.result.answers.quality = {
+          type: "score",
+          score: 0,
+          legend: { "0": "Low", "1": "High" },
+          probabilities: { "0": 1, "1": 0 },
+          confidence: 1,
+        };
+      }
+      return invocation;
+    });
+    render(
+      <Inspector
+        api={createApi({ listClassifierEventPage, readJsonDetail })}
+        run={classifierRun}
+        nodeId={node.nodeId}
+        onClose={() => undefined}
+      />,
+    );
+    await screen.findByLabelText("Invocation classification-11");
+    expect(listClassifierEventPage).toHaveBeenCalledTimes(2);
+    expect(readJsonDetail).not.toHaveBeenCalled();
+    expect(screen.queryByLabelText("Input state")).toBeNull();
+    for (const event of events) {
+      const row = screen.getByLabelText(`Invocation ${event.invocationId}`);
+      const button = within(row).getByRole("button", { expanded: false });
+      expect(button).toHaveAccessibleName(`Call ${event.invocationIndex + 1}`);
+      expect(row).toHaveTextContent("category: keep · approved: 0 · quality: 0");
+      expect(row).not.toHaveTextContent(/input-/);
+    }
+    for (let index = 0; index < 9; index++) {
+      const row = screen.getByLabelText(`Invocation classification-${index}`);
+      fireEvent.click(within(row).getByRole("button", { expanded: false }));
+      expect(await within(row).findByLabelText("Input state")).toHaveTextContent(
+        `input-${index}`,
+      );
+    }
+    const first = screen.getByLabelText("Invocation classification-0");
+    fireEvent.click(within(first).getByRole("button", { expanded: false }));
+    expect(await within(first).findByLabelText("Input state")).toHaveTextContent("input-0");
+    expect(
+      readJsonDetail.mock.calls.filter(([token]) => token === "classifier-1"),
+    ).toHaveLength(2);
+    expect(readJsonDetail).toHaveBeenCalledTimes(10);
+    for (const event of events) {
+      const row = screen.getByLabelText(`Invocation ${event.invocationId}`);
+      const button = within(row).getByRole("button", { expanded: event.invocationIndex === 0 });
+      expect(button).toHaveAccessibleName(`Call ${event.invocationIndex + 1}`);
+      expect(within(row).getAllByRole("cell")[0]).toHaveTextContent(
+        "category: keep · approved: 0 · quality: 0",
+      );
+    }
+  });
+
+  it("keeps the selected full detail when another expanded call finishes after selection changes", async () => {
+    const pending = Promise.withResolvers<unknown>();
+    const readJsonDetail = vi.fn<OperatorApi["readJsonDetail"]>((token) =>
+      token === "classifier-1" ? pending.promise : Promise.resolve(classifierInvocation(1)),
+    );
+    const events = [classifierEvent(1, 0), classifierEvent(2, 1)].map((event) =>
+      ClassifierEventDescriptorMsg.create({
+        ...event,
+        sizeBytes: String(DETAIL_CACHE_MAX_BYTES / 2 + 1),
+      }),
+    );
+    render(
+      <Inspector
+        api={createApi({ readJsonDetail })}
+        run={classifierRun}
+        nodeId={node.nodeId}
+        liveClassifierEvents={events}
+        onClose={() => undefined}
+      />,
+    );
+    fireEvent.click(await screen.findByRole("button", { name: "Call 2" }));
+    expect(await screen.findByLabelText("Input state")).toHaveTextContent("input-1");
+    const first = screen.getByLabelText("Invocation classification-0");
+    const second = screen.getByLabelText("Invocation classification-1");
+    fireEvent.click(within(first).getByRole("button", { expanded: false }));
+    fireEvent.click(within(second).getByRole("button", { expanded: false }));
+    await act(async () => {
+      pending.resolve(classifierInvocation(0));
+      await pending.promise;
+    });
+    expect(within(second).getByLabelText("Input state")).toHaveTextContent("input-1");
+    expect(readJsonDetail).toHaveBeenCalledTimes(2);
+  });
+
+  it("automatically reloads expanded details evicted by the aggregate byte limit", async () => {
     const readJsonDetail = vi.fn<OperatorApi["readJsonDetail"]>(async (token) =>
       classifierInvocation(token === "classifier-1" ? 0 : 1),
     );
@@ -1896,7 +2111,8 @@ describe("classifier inspection", () => {
         onClose={() => undefined}
       />,
     );
-    expect(await screen.findByText("result-model-0")).toBeVisible();
+    fireEvent.click(await screen.findByRole("button", { name: "Call 1" }));
+    expect(await screen.findByLabelText("Input state")).toHaveTextContent("input-0");
     view.rerender(
       <Inspector
         api={api}
@@ -1906,16 +2122,12 @@ describe("classifier inspection", () => {
         onClose={() => undefined}
       />,
     );
-    expect(await screen.findByText("result-model-1")).toBeVisible();
-    const firstCall = screen.getByRole("article", { name: "Invocation classification-0" });
+    fireEvent.click(screen.getByRole("button", { name: "Call 2" }));
+    expect(await screen.findByLabelText("Input state")).toHaveTextContent("input-1");
+    const firstCall = screen.getByRole("rowgroup", { name: "Invocation classification-0" });
     fireEvent.click(within(firstCall).getByRole("button", { expanded: false }));
-    expect(within(firstCall).queryByText("result-model-0")).toBeNull();
-    expect(readJsonDetail).toHaveBeenCalledTimes(2);
-    fireEvent.click(
-      within(firstCall).getByRole("button", { name: "Reload invocation details" }),
-    );
-    expect(await screen.findByText("result-model-0")).toBeVisible();
-    expect(screen.queryByText("result-model-1")).toBeNull();
+    expect(await screen.findByLabelText("Input state")).toHaveTextContent("input-0");
+    expect(screen.getByLabelText("Input state")).not.toHaveTextContent("input-1");
     expect(readJsonDetail).toHaveBeenCalledTimes(3);
   });
 });

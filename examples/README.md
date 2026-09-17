@@ -17,11 +17,11 @@ run.
 
 ### [`meeting_followups/`](meeting_followups/)
 
-Five-node meeting workflow: load a transcript, extract unresolved follow-ups with
-an agent, classify each item with TypeSafe, route by department in Python, and
-optionally create real Linear issues. The included synthetic cross-functional
-transcript contains repeated topics, corrections, rejected proposals, resolved
-items, and explicitly unresolved ownership.
+Seven-node meeting workflow: load a transcript, extract unresolved follow-ups with
+an agent, classify each item with TypeSafe, then route separate lists to three
+parallel demo destination steps named Linear, Attio, and Jira. The included
+synthetic cross-functional transcript contains repeated topics, corrections, rejected
+proposals, resolved items, and explicitly unresolved ownership.
 
 Run through the operator. From the repository root, with `OPENAI_API_KEY` and
 `TYPESAFE_API_KEY` set in the operator environment:
@@ -46,15 +46,17 @@ uv run ava result RUN_ID --connect localhost:7433 --wait \
   --output-dir .avalanche/meeting-followups-result
 ```
 
-The default `PUBLISH = False` runs real extraction and classification but previews
-the publication plan without contacting Linear. The run result contains the plan
-and an empty receipts list. There are no canned AI answers or offline substitutes.
+The workflow runs real extraction and classification, then returns three demo plans
+in Linear, Attio, and Jira order. Each plan names its destination and contains the
+routed issues, including an empty list for unused destinations. These service names
+are illustrative: the example has no clients, credentials, or live publishing mode
+for them. There are no canned AI answers or offline substitutes.
 Agent defaults are `openai/gpt-5.4` and `openai/gpt-5.4-mini`; override them with
 `MEETING_FOLLOWUPS_MODEL` and `MEETING_FOLLOWUPS_SUB_MODEL` in the operator
 environment and supply the selected provider's credentials. The classifier uses
 Avalanche's default `jev-latest`.
 
-The transcript path, meeting title, date, and publication settings live in
+The transcript path, meeting title, date, and destination routing live in
 `meeting_followups/config.py`. To use another local transcript, change those
 settings. The extractor must preserve verbatim source passages and line ranges;
 mismatched evidence stops the workflow. Semantic extraction accuracy still
@@ -62,32 +64,23 @@ requires review. The extraction signature lives in `signature.py`, while
 `flow.py` contains only the operator-discovered nodes and graph.
 
 The classifier asks independent `category` and `department` Choice questions per
-item. Department selects the Linear team; category selects a label. Probabilities
-remain available in classifier evidence but never gate routing. Department
-responsibilities are defined in `schema.py`.
+item. Department selects the destination through `DESTINATIONS` in `config.py`:
 
-To publish, set a personal `LINEAR_API_KEY` in the operator environment and
-configure `DESTINATIONS` in `config.py` with a `LinearDestination` for every
-`Department`, including shared intake. Each destination contains:
+| Department | Destination |
+| --- | --- |
+| Engineering | Linear |
+| Product | Jira |
+| Marketing | Attio |
+| Support | Attio |
+| Shared intake | Linear |
 
-- `team_id`: an actual Linear team UUID.
-- `category_label_ids`: a mapping from `problem`, `request`, `proposal`, and
-  `other` to actual label UUIDs available to that team.
+Every department must have a mapping. Departments sharing a destination are combined
+into one list; no follow-up is dropped. Category and source evidence are preserved
+in each planned issue. Probabilities remain available in
+classifier evidence but never gate routing. Department responsibilities live in `schema.py`.
 
-Copy model UUIDs using Linear's command menu. The example does not create teams
-or labels, guess account identities, or interpret informal deadlines as dates.
-Explicitly stated owners and deadlines are preserved in issue descriptions;
-issues are not automatically assigned to individual users. Linear uses the team's
-default intake state (Triage when enabled, otherwise its first Backlog state).
-
-Set `PUBLISH = True` in `config.py`, then start a new operator run. There is no
-standalone Python runner or Avalanche input model.
-
-Use demo teams: `PUBLISH = True` creates real issues. Successful output includes each
-follow-up's issue identifier and URL. Publication is not transactional or
-deduplicated across runs. On failure, confirmed issue URLs are attached to the
-exception; the failed request may also have committed. Inspect Linear before
-rerunning to avoid duplicates. Preview mode is explicit, not a fallback for errors.
+Explicitly stated owners and deadlines remain in the planned issue descriptions.
+No issues or tasks are created in external services.
 
 ### [`customer_feedback_review/`](customer_feedback_review/)
 

@@ -1,1 +1,1 @@
-"""Meeting transcript extraction, classification, and Linear routing example."""
+"""Meeting transcript extraction, classification, and demo destination routing."""

@@ -11,7 +11,7 @@ TypeSafe support is included in the base Avalanche installation through
 
 ## Quick start
 
-Set `TYPESAFE_API_KEY` in the environment of the process executing the workflow.
+Set `TYPESAFE_API_KEY` in the executing environment or your project's `.env` file.
 Then save and run this Python file:
 
 ```python
@@ -29,7 +29,7 @@ QUESTIONS = {
     },
     "urgent": {
         "type": "noul",
-        "instructions": {"task": "Does this need immediate attention?"},
+        "instructions": "Does this need immediate attention?",
         "criteria": {
             "true": "The customer cannot use the service.",
             "false": "The request can wait for normal support.",
@@ -37,8 +37,8 @@ QUESTIONS = {
     },
     "severity": {
         "type": "score",
-        "instructions": ["Assess customer impact.", "Use the ordered rubric."],
-        "criteria": ["minor", {"impact": ["service unavailable"]}],
+        "instructions": "How severe is the customer impact?",
+        "criteria": ["Minor inconvenience", "Service unavailable"],
     },
 }
 
@@ -93,7 +93,7 @@ is preserved. The quick start shows all three shapes.
 | Type | Criteria | Answer |
 | --- | --- | --- |
 | `"choice"` | Required nonempty object mapping option names to descriptions | Selected option, all option probabilities, and confidence |
-| `"noul"` | Optional object with string keys `"true"` and/or `"false"`, or null | Probability of yes, not a Boolean decision |
+| `"noul"` | Optional object with string keys `"true"` and/or `"false"`, or null | Probability of true, not a Boolean decision |
 | `"score"` | Required ordered array of at least two level descriptions | Probability-weighted position on the zero-based levels, legend, all level probabilities, and confidence |
 
 Instructions may be text, a JSON object, a JSON array, or null; omission means
@@ -145,11 +145,14 @@ the injected classifier for later use. Another step execution gets its own
 client. This lifecycle also applies when execution crosses a Ray worker boundary.
 
 Credentials come from runtime `TYPESAFE_API_KEY`, not decorator configuration,
-workflow defaults, or serialized declarations. Ensure local, operator, and Ray
-worker processes have the required environment. Importing a workflow, building
-its DAG, and discovering its questions do not create a client or make a model
-request. The requested model name is retained in the declaration; the model
-reported by TypeSafe is retained separately in the result.
+workflow defaults, or serialized declarations. If the variable is absent when
+the first call creates a client, Avalanche loads the nearest `.env` found from
+the executing process's working directory upward. Existing environment variables
+are never overwritten. Operator workers search from their workflow import root;
+Ray workers need either exported credentials or an accessible `.env` file.
+Importing a workflow, building its DAG, and discovering its questions do not load
+`.env`, create a client, or make a model request. The requested model name is
+retained in the declaration; TypeSafe's resolved model is retained in the result.
 
 ## Typed results and serialization
 
@@ -176,6 +179,9 @@ level. Score legend and probability keys are JSON strings (`"0"`, `"1"`, ...).
 Avalanche validates exact question IDs, answer types, Choice options, and Score
 levels against the declaration, rather than silently dropping or inventing
 answers.
+Distribution totals allow for TypeSafe rounding each probability to two decimal
+places (up to `0.005` per option). Returned probabilities are preserved unchanged,
+not renormalized; totals outside that rounding allowance are rejected.
 
 For the `result` produced above, serialize or reconstruct without losing those
 fields:
@@ -236,27 +242,39 @@ Classifier nodes have a distinct cyan identity and filter-list icon in the
 operator graph and inspector, separate from agent styling and execution-status
 colors:
 
-- **Current workflow:** **Definition** opens by default, showing the requested
-  model, timeout, and type-specific question explorers. Choice exposes named
-  options and their descriptions; Noul exposes yes/no criteria; Score exposes
-  its ordered, zero-based levels. Structured instructions and criteria remain
-  inspectable as JSON. The secondary **Code** tab shows the step's Python source.
-  These are the current workflow's definition and code, not historical evidence.
-- **Selected run:** **Calls** opens by default, with **Definition** available for
-  the questions prepared for that run. Editing or reloading the workflow does
-  not replace its historical questions. Historical inspection never substitutes
-  current source code for the retained definition.
-- **Call detail:** Select a call to inspect its **Input state**, outcome, model,
-  token usage, and typed answers when available. Input is displayed as the
-  captured text or JSON, paired with that call's answers rather than the node's
-  arguments or return value. Choice shows every option probability and confidence;
-  Noul shows probability of yes; Score shows the fractional score, ordered legend,
-  every level probability, and confidence. Multiple calls stay separate, while
-  lifecycle snapshots for one call are grouped together.
+- **Current workflow:** **Definition** opens by default with compact question rows
+  using Avalanche typography and cyan classifier styling. Expand a row to inspect
+  Choice options, Noul True/False meanings, or Score levels in an indented group with
+  smaller labels beneath the question definition.
+  Missing criterion descriptions stay blank. Structured instructions and criteria
+  remain inspectable as JSON.
+  **Code** shows the current step's Python source.
+- **Selected run:** Calls appear in a compact table with Call, Outputs, Status,
+  and Duration columns. Calls are ordered by ascending index, starting with Call 1.
+  Previous/Next controls show 25 calls per page, fetching more history as needed.
+  Paginated and live activity descriptors supply call numbers, status, and compact
+  answers: the selected Choice, Noul probability, or Score value for each question.
+  List rows do not show input previews or fetch full invocation bodies.
+  The Current State definition tabs are not rendered in run inspection.
+  Editing or reloading the workflow does not replace a call's retained answers.
+- **Call detail:** Captured input appears as formatted JSON in a read-only code
+  editor with syntax highlighting, line numbers, folding, and bounded scrolling.
+  Question rows show names, answers, and types without repeating descriptions from
+  Definition. Choice shows its three highest-probability options; expansion adds
+  the remaining options to the same list without duplicating results. Choices
+  with three or fewer options do not need an expansion control. Noul shows the
+  probability of true with a small filled bar. Score shows the fractional value
+  and maximum level. Choice and Score also show confidence.
+  Call IDs, timestamps, model names, and token counts remain in the evidence.
+  Each call has one expandable table row; lifecycle snapshots are grouped together.
+  All calls start collapsed. Only explicitly expanded calls fetch full details.
+  Full bodies alone use the eight-entry, 8 MiB browser detail cache. Eviction does
+  not remove call numbers or compact answers from the list. Expanding an evicted
+  call reloads its body automatically while it remains available on the operator.
 - **Availability:** Not invoked, running, failed, cancelled, interrupted, and
   unavailable details are distinct states. History is paged and bodies load on
-  demand; the browser offers reload/retry controls rather than treating a missing
-  body as an empty result.
+  demand. Failed requests offer an explicit retry; unavailable bodies are not
+  treated as empty results.
   When a terminal record falls outside the loaded history window, its outcome is
   reported as not loaded rather than inferred from an older running record.
 
@@ -264,9 +282,9 @@ These views are local-development inspection, not a durable execution journal.
 The entire invocation detail body, including input and results, shares the
 operator's result retention window (24 hours after a terminal run by default)
 and event/node/run size limits. Bodies are released when the operator closes.
-Historical descriptors can outlive their input and answer bodies; a retained
-run does not guarantee that its full evidence is still available. Expired or
-size-limited bodies are unavailable, not empty input or empty answers. Browser
+Historical descriptors retain call numbers and compact answers after full bodies
+expire; a retained run does not guarantee that its full evidence is still available.
+Expired or size-limited bodies are unavailable, not empty input or empty answers. Browser
 caches are bounded independently. There is no recovery or cross-restart history
 guarantee: explicitly persist required business results in your step.
 

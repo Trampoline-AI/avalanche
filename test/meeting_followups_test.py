@@ -1,12 +1,10 @@
-"""Evidence and external-write boundaries in the meeting follow-up example."""
+"""Evidence validation and demo routing in the meeting follow-up example."""
 
-import io
+import socket
 from datetime import date
 from pathlib import Path
-from uuid import UUID
 
 import pytest
-from pydantic import ValidationError
 
 import avalanche as ava
 
@@ -18,6 +16,7 @@ def example_import_path(monkeypatch):
 
 
 def test_extraction_rejects_wrong_source_location_and_fabricated_quote():
+    from examples.meeting_followups.config import DESTINATIONS
     from examples.meeting_followups.schema import (
         Extraction,
         Followup,
@@ -32,6 +31,7 @@ def test_extraction_rejects_wrong_source_location_and_fabricated_quote():
             transcript=ava.File(content=b"First statement\nSecond statement"),
             title="Review",
             meeting_date=date(2026, 9, 14),
+            destinations=DESTINATIONS,
         ),
         lines=["First statement", "Second statement"],
     )
@@ -48,68 +48,83 @@ def test_extraction_rejects_wrong_source_location_and_fabricated_quote():
         validate_extraction(extraction, context)
 
 
-def test_publish_requires_complete_destinations_before_work_starts():
-    from examples.meeting_followups.schema import MeetingRecord
-
-    with pytest.raises(ValidationError):
-        MeetingRecord(
-            transcript=ava.File(content=b"A meeting"),
-            title="Review",
-            meeting_date=date(2026, 9, 14),
-            publish=True,
-        )
-
-
-def test_graphql_error_stops_publication_and_preserves_confirmed_receipts(monkeypatch):
-    from examples.meeting_followups import flow, linear
+def test_destination_routing_keeps_every_department_and_previews_without_credentials(
+    monkeypatch,
+):
+    from examples.meeting_followups import flow
     from examples.meeting_followups.schema import (
         Category,
+        ClassifiedFollowup,
         Department,
-        IssueReceipt,
-        LinearDestination,
-        PlannedIssue,
-        PublicationPlan,
+        Destination,
+        Extraction,
+        Followup,
+        Passage,
     )
 
-    destination = LinearDestination(
-        team_id=UUID(int=1),
-        category_label_ids={
-            category: UUID(int=index) for index, category in enumerate(Category, 2)
-        },
-    )
-    issues = [
-        PlannedIssue(
-            item_id=f"item-{index}",
-            department=Department.ENGINEERING,
-            category=Category.PROBLEM,
-            title=f"Problem {index}",
-            description="Source-backed issue",
-            destination=destination,
-        )
-        for index in range(3)
-    ]
-    attempts = []
-    confirmed = IssueReceipt(
-        item_id="item-0", identifier="ENG-1", url="https://linear.app/demo/issue/ENG-1"
-    )
-
-    def publish(issue: PlannedIssue, *, api_key: str) -> IssueReceipt:
-        attempts.append(issue.item_id)
-        if issue.item_id == "item-0":
-            return confirmed
-        return linear.create_issue(issue, api_key=api_key)
-
-    def rejected_mutation(request, timeout):
-        # GraphQL failures can arrive with HTTP 200 and partially populated data.
-        return io.BytesIO(
-            b'{"data":{"issueCreate":{"success":false,"issue":null}},'
-            b'"errors":[{"message":"Team is inaccessible"}]}'
+    @ava.step
+    def extract(meeting):
+        return Extraction(
+            items=[
+                Followup(
+                    title=department.value,
+                    description="Follow up after the meeting",
+                    passages=[Passage(start_line=1, end_line=1, quote=meeting.lines[0])],
+                )
+                for department in Department
+            ]
         )
 
-    monkeypatch.setenv("LINEAR_API_KEY", "test-only-key")
-    monkeypatch.setattr(flow, "create_issue", publish)
-    monkeypatch.setattr(linear, "urlopen", rejected_mutation)
-    with pytest.raises(RuntimeError) as raised:
-        flow.publish_followups.fn(PublicationPlan(publish=True, issues=issues))
-    assert attempts == ["item-0", "item-1"]
-    assert any(confirmed.url in note for note in raised.value.__notes__)
+    @ava.step
+    def classify(extraction):
+        return [
+            ClassifiedFollowup(
+                item_id=department.value,
+                followup=item,
+                category=Category.PROBLEM,
+                department=department,
+                answers=ava.ClassificationResult.model_validate(
+                    {
+                        "model": "test",
+                        "answers": {
+                            "department": {
+                                "type": "choice",
+                                "choice": department.value,
+                                "probabilities": {department.value: 1.0},
+                                "confidence": 1.0,
+                            }
+                        },
+                        "usage": {"input_tokens": 0, "output_tokens": 0},
+                    }
+                ),
+            )
+            for department, item in zip(Department, extraction.items, strict=True)
+        ]
+
+    def unexpected_write(*args, **kwargs):
+        pytest.fail("Demo routing attempted a network connection")
+
+    monkeypatch.setattr(flow, "extract_followups", extract)
+    monkeypatch.setattr(flow, "classify_followups", classify)
+    monkeypatch.setattr(socket.socket, "connect", unexpected_write)
+    for variable in ("LINEAR_API_KEY", "ATTIO_API_KEY", "JIRA_EMAIL", "JIRA_API_TOKEN"):
+        monkeypatch.delenv(variable, raising=False)
+
+    def preview_departments():
+        plans = flow.meeting_followups().run(executor=ava.LocalExecutor()).result(timeout=10)
+        return {plan.destination: [issue.department for issue in plan.issues] for plan in plans}
+
+    assert preview_departments() == {
+        Destination.LINEAR: [Department.ENGINEERING, Department.SHARED_INTAKE],
+        Destination.ATTIO: [Department.MARKETING, Department.SUPPORT],
+        Destination.JIRA: [Department.PRODUCT],
+    }
+    # A configured remapping must not lose items or populate an unused destination.
+    monkeypatch.setattr(
+        flow, "DESTINATIONS", {department: Destination.ATTIO for department in Department}
+    )
+    assert preview_departments() == {
+        Destination.LINEAR: [],
+        Destination.ATTIO: list(Department),
+        Destination.JIRA: [],
+    }

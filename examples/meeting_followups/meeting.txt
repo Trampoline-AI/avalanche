@@ -1,0 +1,191 @@
+Atlas Cross-Functional Launch Review
+Date: 2026-09-14
+Duration: 60 minutes
+Format: Internal project meeting transcript
+Attendees: Maya Chen (Product, facilitator), Daniel Ortiz (Engineering), Priya Nair (Design), Leo Martin (Marketing), Sofia Reyes (Support), Jordan Blake (Data), Nina Patel (Operations)
+
+[00:00] Maya Chen (Product): Thanks, everyone. This is the Atlas launch review. The objective is to leave with a clear launch decision, the remaining risks, and named owners for every follow-up. Atlas is the new workspace-level reporting experience: the dashboard, saved views, scheduled exports, and the migration from the legacy reports page. We are still targeting the October 7 release, but that date only holds if the data refresh path, onboarding copy, and support readiness are all credible by the end of this week.
+
+[00:02] Maya: I have four agenda blocks: product readiness, engineering and data readiness, go-to-market and support readiness, then decisions and owners. Please interrupt if something changes the launch decision. We do not need to solve every detail here; we do need a concrete next action instead of an unresolved concern.
+
+[00:03] Daniel Ortiz (Engineering): Engineering has the dashboard and saved-view flows in the release branch. The main open item is scheduled exports. The background job completes for the normal case, but retry behavior is not correct when the report query times out after the file has already been written. The customer can receive two completion emails and see duplicate files in the export history. That is not a cosmetic issue. We should not enable scheduled exports until the job has an idempotency key carried through the worker and notification service.
+
+[00:04] Maya: Is the rest of the reporting experience usable without scheduled exports?
+
+[00:04] Daniel: Yes. Users can still export manually from a dashboard or saved view. The problem is isolated to scheduled exports and its history page. We could launch the dashboard, saved views, and manual CSV exports, and hold the scheduling toggle off. That would reduce the release surface materially.
+
+[00:05] Priya Nair (Design): From a product expectation standpoint, the onboarding flow currently presents scheduling as one of the first three capabilities. If we split it out, the first-run checklist and the empty state need to stop promising it. Otherwise a new user will follow a prompt to a disabled control. I can update the screens today, but we need a decision before I hand the copy to marketing.
+
+[00:06] Maya: Tentative decision: scheduled exports are not part of the October 7 launch unless the retry fix is complete and demonstrated by Friday. We will plan the launch experience without it. Daniel, can you own the retry design and give us a go/no-go by Friday at 3 p.m.?
+
+[00:06] Daniel: Yes. I will write the proposal today. The implementation should be small, but I do not want to promise Friday completion before I trace the existing notification retries. I can commit to the design and an estimate by tomorrow noon, then a go/no-go by Friday at 3 p.m.
+
+[00:07] Maya: Recorded. Priya, please update the onboarding and empty states to make manual export the relevant next step, and send the final strings to Leo by Thursday noon.
+
+[00:07] Priya: Yes. I will also remove the calendar icon from the launch screenshots so the visual story matches the enabled product.
+
+[00:08] Leo Martin (Marketing): Thank you. That affects the campaign outline, but it does not change the core message. We can talk about faster self-service reporting and saved views without scheduled delivery. What I need is a stable feature list and a named customer segment. The draft landing page currently says “automated reports delivered to your team.” I will remove that promise. I need product to approve revised launch copy by Friday morning because the email and in-app announcement go to review that afternoon.
+
+[00:09] Maya: I will own product approval of the revised copy. Send me the draft by Thursday end of day; I will return comments by Friday at 10 a.m.
+
+[00:10] Jordan Blake (Data): On the refresh path, our staging results found a more serious discrepancy. The dashboard query uses the new daily aggregate table for accounts on the new event pipeline, but it falls back to the legacy aggregate for accounts that have not migrated. The two tables define “active seat” differently. The new pipeline excludes suspended seats at query time; the legacy table includes them until its nightly reconciliation. For a handful of customers, the dashboard total can differ from the legacy reports page by two to five percent during the day.
+
+[00:11] Maya: Is the difference persistent or only before reconciliation?
+
+[00:11] Jordan: It is usually transient. The nightly job aligns the values. But the launch promise says reporting is current within an hour. Showing a number that changes because of a definition mismatch will produce support tickets, especially for admins comparing the two pages during migration.
+
+[00:12] Daniel: The dashboard can use the legacy definition everywhere for the first release. That loses the more current suspended-seat behavior but makes comparison stable. It is a feature flag in the query adapter, not a schema change. The downside is that we retain the nightly reconciliation lag for migrated accounts.
+
+[00:13] Jordan: I prefer that for launch. The deeper fix is to publish a shared active-seat metric and migrate both pages to it. We should not invent conversion logic in the dashboard just to hide the mismatch. I can write the metric contract and identify the downstream reports this week.
+
+[00:14] Maya: That sounds like two actions. For launch, Daniel will switch Atlas to the legacy active-seat definition so it matches the old reports page. Please have that in staging by Wednesday morning, with comparison results from at least ten migrated and ten legacy accounts. Jordan, write the shared metric proposal and a migration inventory by Friday. We will schedule the metric migration separately rather than attach it to launch.
+
+[00:15] Daniel: Agreed. I will need sample account identifiers from data to make the comparison meaningful.
+
+[00:15] Jordan: I will send a vetted list today. It will include accounts with suspended seats and one with a mid-day plan change, because those are the cases that exposed the difference.
+
+[00:16] Sofia Reyes (Support): Please include one account with a deleted user in that sample set. That is the first question support will get. In the current reporting page, deletion and suspension are not explained consistently. If Atlas is intentionally using the old definition at launch, the help article needs a plain statement about when seat counts refresh and which account states count.
+
+[00:17] Maya: Good catch. Sofia, can you draft the help-center section on reporting freshness and seat counts? Use Jordan’s metric language once it is ready, but make the launch version accurate for the legacy definition. What timing do you need?
+
+[00:17] Sofia: If Jordan shares the existing definition today, I can draft by Thursday. I also need screenshots with the actual disabled scheduling state, not design mocks, so I do not document a capability that is unavailable.
+
+[00:18] Priya: I can provide the final annotated screenshots Thursday afternoon. I will label the states explicitly: dashboard loaded, no-data empty state, manual export, and permissions restriction.
+
+[00:18] Sofia: Perfect. I will deliver the draft help article and the first-line support macro by Monday, September 21. The macro will explain the migration path, expected refresh time, and where to report a mismatch.
+
+[00:19] Nina Patel (Operations): From operations, I want to surface the rollout mechanics. The migration flag is currently set per workspace by an admin script. There is no self-service rollback, and the flag change has a five-minute cache propagation delay. If we enable Atlas for a cohort and find a problem, support cannot immediately move an account back. We need either a rollback tool or a documented on-call process before any external rollout.
+
+[00:20] Daniel: The flag service supports an API call, but the admin script is the only wrapper. A minimal internal command could safely validate the workspace ID and toggle Atlas. I do not think we need a UI before launch.
+
+[00:21] Nina: I agree that a UI is unnecessary. I do need a runbook with the command, required approval, expected propagation, and how to verify the old page is restored. The risk is not typing the API call; it is having someone make an untracked production change at 8 p.m. while a customer is waiting.
+
+[00:22] Maya: Then the launch gate is a documented rollback procedure plus a dry run in staging. Nina owns the runbook, Daniel owns the command. Please pair on it and complete the dry run by Friday. The runbook should name who can authorize a rollback and where it is logged.
+
+[00:22] Daniel: I can have the command ready Thursday morning. It will require an explicit workspace ID and emit the previous and new flag states. I will not build batch toggling into it; batch rollout remains through the existing controlled job.
+
+[00:23] Nina: That is the right boundary. I will add it to the release checklist and schedule the dry run for Friday at 11 a.m. Sofia, could a support lead participate? I want to verify the escalation path is understandable to the person receiving the ticket.
+
+[00:23] Sofia: Yes. I will join, and I will ask one of the support specialists to follow the runbook without prior context. If they cannot identify the owner and expected customer response, we will revise it.
+
+[00:24] Leo: On rollout, the campaign plan assumes a controlled early-access cohort of 25 workspaces before the broader announcement. Is that still the intended number? The signup list includes some customers with large data volumes, and I would rather not put all of them in the first group.
+
+[00:25] Maya: Product’s original plan was 25, selected from the beta list. Jordan, do we have a practical size threshold for safe initial exposure?
+
+[00:25] Jordan: We should not define safety by workspace count alone. Query load comes from dashboard complexity and event volume. I recommend the first cohort be ten workspaces: five normal-volume, three high-volume, and two accounts with complex role permissions. We should watch refresh latency and error rate for 48 hours, then decide whether to expand. I can provide the cohort candidates with expected load profiles tomorrow.
+
+[00:26] Daniel: Ten is safer for the database too. We have load-test data for equivalent aggregate queries, but not for all combinations of saved-view filters. I want production telemetry from a small cohort before we expose it broadly.
+
+[00:27] Leo: That changes the announcement calendar. We can frame the first group as early access and delay the general customer email. I need a target date for the broader release so that sales and customer success are not working from an empty calendar.
+
+[00:27] Maya: Let us set an expansion decision, not a fixed broad-release promise. Early access begins October 7 if the gates pass. We meet October 9 to review 48 hours of signals. If the cohort is healthy, the next step is 50 workspaces on October 12; general availability remains a proposal until that review.
+
+[00:28] Leo: Understood. I will change the external plan to early access and remove the general-availability date from customer-facing material. I will prepare two versions of the announcement: the early-access invitation and the later broad-release announcement. I will not schedule the second one yet.
+
+[00:29] Maya: Please add the decision point and owners to the launch calendar. We need one source of truth for the date changes.
+
+[00:29] Leo: I will update the calendar and send the revised timeline after this meeting.
+
+[00:30] Priya: I want to cover permissions. The UI handles a viewer correctly when the workspace policy is loaded at page entry. But if an administrator removes export permission while the dashboard is open, the manual export button remains enabled until the page is refreshed. The API rejects the request, which is secure, but the user sees a generic failure toast. The correct experience is to refresh permissions before opening the export dialog and show a permission-specific message if the policy changed.
+
+[00:31] Daniel: The API behavior is correct, but the client cache is too long. We can invalidate the cached policy after the export button is focused, or query it on dialog open. Querying on dialog open adds one small request and keeps the action boundary authoritative. I prefer that over trying to synchronize every policy change in real time.
+
+[00:32] Maya: Is that launch-blocking?
+
+[00:32] Sofia: For support, a generic failure on a revoked permission will look like an export defect. It is not a high-frequency event, but it is exactly the kind of confusing edge case that creates a poor first impression for admins.
+
+[00:33] Priya: I agree. It should be a contained fix. I can provide the message and dialog behavior today. Daniel, can engineering take it this sprint?
+
+[00:33] Daniel: Yes. I will add the policy check on dialog open and the specific error state. I will also add a behavior test for permission removal between dashboard load and export attempt. It should be in staging by Thursday.
+
+[00:34] Maya: Assigned to Daniel. Priya sends the final behavior and copy today. Sofia, please include this scenario in the support macro only if we see it during early access; we should not clutter the primary guide with a rare edge case.
+
+[00:34] Sofia: Agreed. I will keep it in the internal troubleshooting guide and add it to the customer article only if it becomes a pattern.
+
+[00:35] Jordan: I have one telemetry concern. The dashboard currently sends a generic “report_loaded” event. It lacks the dashboard type, refresh age, query duration bucket, and whether the result came from the new or legacy aggregate. Without those fields, we cannot tell whether a slow page is associated with a particular filter pattern or data source. We also need a clean event for manual export requested, export completed, and export failed.
+
+[00:36] Daniel: We can add the client-side fields and the worker events. Be careful with workspace and report names; those must not become event properties. We can use internal IDs and coarse buckets. The existing event schema supports an enum for data source and integer duration milliseconds.
+
+[00:37] Nina: Please also capture rollout cohort and flag state at the time of the event. Otherwise the October 9 review becomes a manual join across audit logs.
+
+[00:37] Daniel: Good point. The flag state can be recorded as a boolean and cohort as a controlled label. I will add a short event schema proposal rather than changing this ad hoc.
+
+[00:38] Maya: Jordan, own the measurement requirements. Send Daniel and Nina the exact fields, definitions, and thresholds by Wednesday noon. Daniel, implement the approved schema by Friday. Nina, add the dashboard links and thresholds to the release checklist. For the expansion decision, what are the initial thresholds?
+
+[00:39] Jordan: Proposed thresholds: p95 dashboard load under four seconds for the early-access cohort; refresh age under seventy minutes for 99 percent of successful loads; export failure rate under one percent excluding explicit permission denials; and no unresolved data-mismatch incident affecting more than one workspace. We should treat one severe correctness incident as a stop regardless of percentage.
+
+[00:40] Maya: Those are sensible. Nina, record them as provisional launch metrics. We will confirm the baselines after the staging comparison run.
+
+[00:40] Nina: I will. I also want an explicit owner for monitoring during the first 48 hours. A dashboard without a person looking at it is not a rollout plan.
+
+[00:41] Daniel: Engineering can own the technical dashboard during business hours. For after-hours alerts, the existing on-call rotation receives the error-rate alert, but it does not receive refresh-age alerts. I can add that alert if the data pipeline exposes the metric.
+
+[00:41] Jordan: It does. We already publish aggregate freshness. I will verify the label mapping for Atlas and send Daniel the alert query.
+
+[00:42] Maya: Daniel owns technical monitoring and the refresh-age alert. Sofia, does support have coverage for customer reports during that first week?
+
+[00:42] Sofia: Yes, with one caveat. We need the escalation form to capture workspace ID, dashboard URL, report time range, screenshot, and the time the customer observed the number. Today the form only asks for a description. Without the timestamp and report context, data investigations begin with three rounds of follow-up.
+
+[00:43] Maya: That is a concrete support readiness item. Sofia, draft the required fields. Nina, can operations update the form?
+
+[00:43] Nina: Yes. If Sofia sends the field list by Wednesday, I can update the intake form and test its routing by Thursday afternoon. We should keep the fields conditional so unrelated support issues do not become harder to submit.
+
+[00:44] Sofia: I will send the list by tomorrow at noon. The form should route Atlas data discrepancies to Data, functional defects to Engineering, and access questions to Support. Ambiguous reports can go to the shared intake queue for triage.
+
+[00:44] Maya: Good. That routing matches the teams’ responsibilities. Please document it in the internal runbook as well.
+
+[00:45] Leo: I have a customer communication issue. The sales team asked whether they can say Atlas replaces legacy reports. The truthful answer at early access is no: both experiences remain available, and the legacy page is the comparison reference for some values. We need a single approved statement so account teams do not imply forced migration or immediate parity.
+
+[00:46] Maya: Agreed. The approved statement is: “Atlas is an optional early-access reporting workspace that adds dashboards and saved views; legacy reports remain available while we gather feedback.” It does not promise schedule exports or immediate replacement. Leo, turn that into the field-facing note. Priya and Sofia, please review it for accuracy and expectation setting.
+
+[00:46] Leo: I will circulate a one-page enablement note by Thursday afternoon. I will include who is eligible, how to request access, what is not yet available, and where to send feedback. I need Sofia’s support link and Maya’s final feature wording.
+
+[00:47] Sofia: I will provide the support link once Nina updates the intake form. Until then, use the existing support portal with “Atlas early access” in the subject line; I will publish the final route before the enablement note goes out.
+
+[00:47] Priya: One usability detail for the eligibility language: viewers can see dashboards but cannot save views or export unless their workspace policy grants it. Please do not phrase Atlas as “available to every team member” without mentioning workspace permissions.
+
+[00:48] Leo: Noted. I will state that access follows existing workspace roles and export policies. I will send the draft to Priya and Sofia for review by Thursday afternoon.
+
+[00:48] Maya: Before we close, I want to check the data migration experience. Are existing saved reports converted automatically?
+
+[00:49] Daniel: No. We intentionally did not migrate them. The report model is different enough that an automatic conversion could produce a dashboard that appears correct but has different filter semantics. Users can recreate a saved view using a guided template, but we are not importing legacy reports.
+
+[00:49] Maya: Is that clear in the product?
+
+[00:50] Priya: Not sufficiently. The current empty state says “Create your first view,” which implies there is no prior work. For a customer with many legacy reports, we should explain that legacy reports remain available and offer a link to the migration guide. I can add a contextual callout when the workspace has legacy reports.
+
+[00:50] Daniel: We have a boolean on the workspace payload for legacy report existence, so that is straightforward. We should not fetch report counts or names just for a message.
+
+[00:51] Maya: Please add that contextual callout for launch. Priya owns design and copy; Daniel owns implementation. Use a small, factual message with a link, not an automated import promise. Sofia, add the same explanation to the help article. Leo, include it in the enablement note.
+
+[00:51] Priya: I will send the approved design tomorrow morning.
+
+[00:52] Daniel: I can include it with the permissions fix by Thursday, assuming the guide URL is stable.
+
+[00:52] Sofia: I will create the migration-guide article stub tomorrow and provide a stable URL, then complete the content with the rest of the help article by Monday.
+
+[00:53] Nina: We need to state the release gates clearly, because there are now several. My list is: active-seat definition alignment and comparison evidence; scheduled exports disabled unless explicitly cleared; permission recheck on export; telemetry schema and monitoring alerts; rollback command, runbook, and dry run; support intake routing; customer and internal communications; and the legacy-report callout. Is anything missing?
+
+[00:54] Jordan: Add the refresh metric baseline. The threshold is meaningless until we know staging and early-access measurement use the same clock. I will verify the freshness timestamp source during the comparison run.
+
+[00:54] Daniel: Add a security review of the manual export event fields. We are not changing export authorization, but telemetry changes are a boundary where accidental report metadata leaks are plausible. I can request the focused review today; it should not block engineering unless they identify a problem.
+
+[00:55] Maya: Add both. The security review is a launch gate for the telemetry addition, not for the existing manual export function. Daniel, request it today and share the result with Nina. Jordan, include timestamp-source validation in your comparison notes.
+
+[00:55] Leo: For communications, I want one final decision: do we invite customers directly, or do account teams nominate them? Direct invitation is faster, but account teams know which customers are likely to give useful feedback and which ones have upcoming reporting deadlines.
+
+[00:56] Maya: Use account-team nomination for the initial ten workspaces. It is safer and lets us confirm informed participants. Leo will send the nomination criteria. Maya—that is me—will make final cohort selection with Jordan’s load profile and Sofia’s support capacity in mind. No direct invitation before the first expansion decision.
+
+[00:57] Leo: I will send the criteria and nomination form by Wednesday end of day. I will cap nominations at two customers per account team until the cohort is full.
+
+[00:57] Sofia: Please make the form ask whether the customer has a reporting deadline in the next two weeks. We should avoid placing a customer with a critical board report into early access unless they explicitly accept that risk.
+
+[00:58] Leo: Added. We will also ask for a technical contact who can provide screenshots and timestamps if something looks wrong.
+
+[00:58] Maya: Final check on owner capacity: Daniel, you have active-seat alignment, permissions, telemetry implementation, rollback command, scheduled-export decision, monitoring alert, and security review coordination. Is that realistic?
+
+[00:59] Daniel: It is tight but realistic if scheduled-export implementation stays out of this week. The risk is context switching. I will sequence it: active-seat alignment first, then permissions and legacy callout, then rollback command, then telemetry. If any item slips, I will flag it in the release channel the same day rather than waiting for the Friday review.
+
+[00:59] Maya: Good. I will protect that order. No new launch-scope requests without a tradeoff discussion. Nina, please publish the action tracker and release gates today. Everyone, send updates in the launch channel by 4 p.m. each day through Friday. Our next formal review is Friday at 3 p.m. for the scheduled-export decision and gate status; the early-access readiness review is October 5. Thank you.
+
+[01:00] Meeting adjourned.

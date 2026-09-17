@@ -353,6 +353,8 @@ describe("live operator projection", () => {
                       event: ClassifierEventDescriptorMsg.create({
                         eventSequence: String(sequence),
                         invocationId: `call-${sequence}`,
+                        invocationIndex: sequence - 1,
+                        answers: [{ questionId: "accepted", type: "noul", noul: 0 }],
                         eventKind: "success",
                       }),
                     },
@@ -438,6 +440,8 @@ describe("live operator projection", () => {
     const event = ClassifierEventDescriptorMsg.create({
       eventSequence: "1",
       invocationId: "call-1",
+      invocationIndex: 0,
+      answers: [{ questionId: "accepted", type: "noul", noul: 0 }],
       bodyToken: "classifier-call-1",
       eventKind: "success",
     });
@@ -517,6 +521,8 @@ describe("live operator projection", () => {
             event: ClassifierEventDescriptorMsg.create({
               eventSequence: String(firstSequence + BigInt(256 - index)),
               invocationId: `call-${index}`,
+              invocationIndex: index,
+              answers: [],
             }),
           },
         }),

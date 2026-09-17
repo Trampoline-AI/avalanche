@@ -324,6 +324,22 @@ message RunActivityDescriptorV2 {
   // Full trace descriptor; populated only for kind=trace.
   TraceDescriptorV2 trace = 16;
   TerminalSealV2 terminal_seal = 17;
+  // Required for classifier_event, including when its detail body has expired.
+  ClassifierInvocationSummaryV2 classifier_summary = 18;
+}
+
+message ClassifierInvocationSummaryV2 {
+  uint32 invocation_index = 1;
+  repeated ClassifierAnswerSummaryV2 answers = 2;
+}
+
+message ClassifierAnswerSummaryV2 {
+  string question_id = 1;
+  oneof answer {
+    string choice = 2;
+    double noul = 3;
+    double score = 4;
+  }
 }
 
 message ListRunActivityRequestV2 {
