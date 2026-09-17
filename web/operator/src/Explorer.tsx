@@ -94,7 +94,7 @@ function ExplorerView({
       id="operator-explorer"
       className={`explorer relative col-start-1 row-start-1 flex h-full w-[var(--workspace-explorer-visible-width)] min-w-0 flex-col overflow-hidden border-r border-line bg-panel transition-[width,box-shadow] duration-200 ease-out motion-reduce:transition-none ${
         !pinned ? "z-30" : "z-20"
-      } ${expanded && !pinned ? "shadow-[18px_0_45px_rgba(20,31,26,.16)]" : ""} max-[700px]:fixed max-[700px]:top-[58px] max-[700px]:bottom-0 max-[700px]:left-0 max-[700px]:z-[31] max-[700px]:w-[min(320px,100vw)] max-[700px]:shadow-[18px_0_45px_rgba(20,31,26,.16)] ${
+      } ${expanded && !pinned ? "shadow-[18px_0_45px_rgba(20,31,26,.16)]" : ""} max-[700px]:fixed max-[700px]:top-[58px] max-[700px]:bottom-0 max-[700px]:h-auto max-[700px]:left-0 max-[700px]:z-[31] max-[700px]:w-[min(320px,100vw)] max-[700px]:shadow-[18px_0_45px_rgba(20,31,26,.16)] ${
         open ? "max-[700px]:flex" : "max-[700px]:hidden"
       }`}
       aria-label="Explorer"
