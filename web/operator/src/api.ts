@@ -25,8 +25,10 @@ import type {
 import type {
   AgentEventDescriptorMsg,
   CatalogSnapshotMsg,
+  ClassifierEventDescriptorMsg,
   FlowInfoMsg,
   ListAgentEventsRequest,
+  ListClassifierEventsRequest,
   ListLogsRequest,
   LogRecordDescriptorMsg,
   NodeSnapshotMsg,
@@ -61,6 +63,13 @@ export interface AgentEventPageRequest extends ListAgentEventsRequest {
   expectedNodeId: string;
 }
 
+export interface ClassifierEventPageRequest extends ListClassifierEventsRequest {
+  expectedOperatorInstanceId: string;
+  expectedAsOfEventUlid: string;
+  expectedRunId: string;
+  expectedNodeId: string;
+}
+
 export interface LogDescriptorPage {
   operatorInstanceId: string;
   asOfEventUlid: string;
@@ -75,6 +84,16 @@ export interface AgentEventDescriptorPage {
   runId: string;
   nodeId: string;
   records: AgentEventDescriptorMsg[];
+  nextPageToken: string;
+  nextCursor: string;
+}
+
+export interface ClassifierEventDescriptorPage {
+  operatorInstanceId: string;
+  asOfEventUlid: string;
+  runId: string;
+  nodeId: string;
+  records: ClassifierEventDescriptorMsg[];
   nextPageToken: string;
   nextCursor: string;
 }
@@ -102,6 +121,10 @@ export interface OperatorApi {
     request: AgentEventPageRequest,
     signal?: AbortSignal,
   ): Promise<AgentEventDescriptorPage>;
+  listClassifierEventPage(
+    request: ClassifierEventPageRequest,
+    signal?: AbortSignal,
+  ): Promise<ClassifierEventDescriptorPage>;
   readJsonDetail(bodyToken: string, signal?: AbortSignal): Promise<unknown>;
   readTextDetail(bodyToken: string, signal?: AbortSignal): Promise<string>;
   startRun(workflowSelector: string, input?: Record<string, unknown>): Promise<string>;
@@ -258,6 +281,9 @@ export class GrpcWebOperatorApi implements OperatorApi {
       { runId },
       signal ? { abort: signal } : undefined,
     ).response;
+    if (snapshot.summary?.runId !== runId) {
+      throw new Error("Run snapshot does not belong to the requested run");
+    }
     const mapped = this.mapRunSnapshot(snapshot);
     if (operatorInstanceId && mapped.operatorInstanceId !== operatorInstanceId) {
       throw new Error("Run snapshot does not belong to the connected operator instance");
@@ -376,6 +402,81 @@ export class GrpcWebOperatorApi implements OperatorApi {
       request.order,
       records.length,
       "Agent event",
+    );
+    return {
+      operatorInstanceId,
+      asOfEventUlid,
+      runId: page.runId,
+      nodeId: entry.nodeId,
+      records,
+      nextPageToken,
+      nextCursor,
+    };
+  }
+
+  async listClassifierEventPage(
+    request: ClassifierEventPageRequest,
+    signal?: AbortSignal,
+  ): Promise<ClassifierEventDescriptorPage> {
+    const entry = this.continuations.get(request.pageToken);
+    if (!entry) {
+      throw new Error("Classifier event page token is not bound to a known node snapshot");
+    }
+    const baselineCursor = entry.continuation.cursor;
+    if (
+      entry.runId !== request.expectedRunId ||
+      entry.nodeId !== request.expectedNodeId ||
+      !entry.nodeId ||
+      entry.continuation.scopeRef?.reference !== request.expectedOperatorInstanceId ||
+      !baselineCursor ||
+      baselineCursor.eventUlid !== request.expectedAsOfEventUlid
+    ) {
+      throw new Error(
+        "Classifier event page token does not belong to the selected node snapshot",
+      );
+    }
+    const page = await this.client.listRunActivity(
+      {
+        runId: entry.runId,
+        pageSize: request.pageSize,
+        continuation: entry.continuation,
+        nodeId: entry.nodeId,
+        order: mapPageOrder(request.order),
+      },
+      signal ? { abort: signal } : undefined,
+    ).response;
+    if (
+      page.scopeRef?.reference !== request.expectedOperatorInstanceId ||
+      !page.cursor ||
+      !this.sameCursor(page.cursor, baselineCursor) ||
+      page.runId !== entry.runId ||
+      page.activities.some((activity) => activity.nodeId !== entry.nodeId) ||
+      (page.nextPage?.continuationId &&
+        (page.nextPage.scopeRef?.reference !== request.expectedOperatorInstanceId ||
+          !page.nextPage.cursor ||
+          !this.sameCursor(page.nextPage.cursor, baselineCursor)))
+    ) {
+      throw new Error("Classifier event page does not belong to the selected node snapshot");
+    }
+    const operatorInstanceId = this.rememberScope(page.scopeRef);
+    const asOfEventUlid = this.rememberCursor(page.cursor);
+    const records = page.activities.map((activity) =>
+      this.mapClassifierEventDescriptor(activity, entry.runId, operatorInstanceId),
+    );
+    const currentCursor =
+      request.order === DescriptorPageOrder.NEWEST_FIRST
+        ? request.beforeEventSequence
+        : request.afterEventSequence;
+    const nextCursor = records.at(-1)?.eventSequence ?? currentCursor;
+    const nextPageToken = this.registerContinuation(page.nextPage, entry.runId, entry.nodeId);
+    assertPageProgress(
+      request.pageToken,
+      nextPageToken,
+      currentCursor,
+      nextCursor,
+      request.order,
+      records.length,
+      "Classifier event",
     );
     return {
       operatorInstanceId,
@@ -720,6 +821,41 @@ export class GrpcWebOperatorApi implements OperatorApi {
     return mapped;
   }
 
+  private mapClassifierEventDescriptor(
+    activity: RunActivityDescriptorV2,
+    runId: string,
+    operatorInstanceId: string,
+  ): ClassifierEventDescriptorMsg {
+    if (activity.kind !== "classifier_event") {
+      throw new Error(
+        `Expected classifier event activity, received ${activity.kind || "missing kind"}`,
+      );
+    }
+    const detailRef = activity.detailRef;
+    if (
+      !activity.nodeId ||
+      !activity.invocationId ||
+      (detailRef !== undefined &&
+        (!detailRef.objectKey ||
+          detailRef.runId !== runId ||
+          detailRef.scopeRef?.reference !== operatorInstanceId ||
+          detailRef.activityId !== activity.activityId ||
+          detailRef.runSequence !== activity.runSequence ||
+          detailRef.sizeBytes !== activity.sizeBytes))
+    ) {
+      throw new Error("Classifier event activity is missing its bound detail reference");
+    }
+    return {
+      eventSequence: activity.runSequence,
+      sizeBytes: activity.sizeBytes,
+      bodyToken: this.registerDetailRef(detailRef),
+      invocationId: activity.invocationId,
+      eventKind: activity.eventKind,
+      ...(activity.durationMs !== undefined ? { durationMs: activity.durationMs } : {}),
+      error: activity.error,
+    };
+  }
+
   private mapTerminalSealDescriptor(activity: RunActivityDescriptorV2): TerminalSealMsg {
     if (activity.kind !== "terminal_seal") {
       throw new Error(
@@ -840,6 +976,16 @@ export class GrpcWebOperatorApi implements OperatorApi {
               runId,
               nodeId: activity.nodeId,
               event: this.mapAgentEventDescriptor(activity),
+            },
+          });
+        }
+        if (activity.kind === "classifier_event") {
+          return update({
+            oneofKind: "classifierEventAppended",
+            classifierEventAppended: {
+              runId,
+              nodeId: activity.nodeId,
+              event: this.mapClassifierEventDescriptor(activity, runId, operatorInstanceId),
             },
           });
         }
@@ -966,6 +1112,7 @@ function mapFlowInfo(flow: FlowInfoV2): FlowInfoMsg {
     builderSymbol: "",
     agentNodeIds: flow.agentNodeIds,
     agentMetadataJson: flow.agentMetadataJson,
+    classifierMetadataJson: flow.classifierMetadataJson,
     webhookPath: flow.webhookPath,
     webhookUrl: flow.webhookUrl,
     webhookActive: flow.webhookActive,

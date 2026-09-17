@@ -53,6 +53,7 @@ class WorkflowTopology:
     agent_field_schemas_json: tuple[tuple[str, str], ...] = ()
     agent_instruction_lines: tuple[tuple[str, str], ...] = ()
     standard_step_docstring_lines: tuple[tuple[str, str], ...] = ()
+    classifier_metadata_json: tuple[tuple[str, str], ...] = ()
 
 
 @dataclass
@@ -232,6 +233,19 @@ class AgentEvent:
 
 
 @dataclass(frozen=True)
+class ClassifierEvent:
+    """One classifier invocation snapshot stored outside structural state."""
+
+    invocation_id: str
+    event_sequence: int
+    event_json: str
+    size_bytes: int = 0
+    event_kind: str = ""
+    duration_ms: int | None = None
+    error: bool = False
+
+
+@dataclass(frozen=True)
 class LogDetailAppended:
     """One identity-pinned live log body delivered outside structural state."""
 
@@ -255,7 +269,19 @@ class AgentEventDetailAppended:
     event: AgentEvent
 
 
-DetailUpdate = LogDetailAppended | AgentEventDetailAppended
+@dataclass(frozen=True)
+class ClassifierEventDetailAppended:
+    """One identity-pinned live classifier invocation body."""
+
+    operator_instance_id: str
+    run_id: str
+    created_sequence: int
+    sequence: int
+    node_id: str
+    event: ClassifierEvent
+
+
+DetailUpdate = LogDetailAppended | AgentEventDetailAppended | ClassifierEventDetailAppended
 
 
 @dataclass(frozen=True)
@@ -284,6 +310,19 @@ class AgentEventDescriptor:
     error: bool = False
     tool_count: int = 0
     predict_count: int = 0
+
+
+@dataclass(frozen=True)
+class ClassifierEventDescriptor:
+    """Bounded identity and availability metadata for a classifier invocation."""
+
+    invocation_id: str
+    event_sequence: int
+    size_bytes: int
+    body_token: str
+    event_kind: str = ""
+    duration_ms: int | None = None
+    error: bool = False
 
 
 @dataclass(frozen=True)
@@ -318,6 +357,19 @@ class AgentEventPage:
     node_id: str
     as_of_event_ulid: str = ""
     events: tuple[AgentEventDescriptor, ...] = ()
+    next_page_token: str = ""
+
+
+@dataclass(frozen=True)
+class ClassifierEventPage:
+    """One byte-bounded page of immutable classifier invocation descriptors."""
+
+    operator_instance_id: str
+    as_of_sequence: int
+    run_id: str
+    node_id: str
+    as_of_event_ulid: str = ""
+    events: tuple[ClassifierEventDescriptor, ...] = ()
     next_page_token: str = ""
 
 
@@ -418,6 +470,13 @@ class AgentEventAppended:
 
 
 @dataclass(frozen=True)
+class ClassifierEventAppended:
+    run_id: str
+    node_id: str
+    event: ClassifierEventDescriptor
+
+
+@dataclass(frozen=True)
 class TraceFinalized:
     run_id: str
     node_id: str
@@ -443,6 +502,7 @@ RunUpdateChange = (
     | NodeStatusChanged
     | LogAppended
     | AgentEventAppended
+    | ClassifierEventAppended
     | TraceFinalized
     | TerminalSealAppended
 )
@@ -491,6 +551,7 @@ class WorkflowInfo:
     display_names: dict[str, str] = field(default_factory=dict)  # node_id -> display name
     agent_node_ids: list[str] = field(default_factory=list)
     agent_metadata_json: dict[str, str] = field(default_factory=dict)
+    classifier_metadata_json: dict[str, str] = field(default_factory=dict)
     standard_step_docstring_lines: dict[str, str] = field(default_factory=dict)
     node_source_code: dict[str, str] = field(default_factory=dict)
     cron: str | None = None  # cron expression for scheduled execution
@@ -586,6 +647,7 @@ class WorkflowDescriptor:
     display_names: tuple[tuple[str, str], ...]
     agent_node_ids: tuple[str, ...] = ()
     agent_metadata_json: tuple[tuple[str, str], ...] = ()
+    classifier_metadata_json: tuple[tuple[str, str], ...] = ()
     standard_step_docstring_lines: tuple[tuple[str, str], ...] = ()
     node_source_code: tuple[tuple[str, str], ...] = ()
     cron: str | None = None

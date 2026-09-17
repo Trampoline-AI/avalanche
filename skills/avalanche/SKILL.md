@@ -3,12 +3,12 @@ name: avalanche
 description: >-
   Design, build, run, and refactor agentic workflows with Avalanche. Use when a
   user describes an outcome that should become a typed multi-step workflow, or
-  when creating an Avalanche flow or belt, choosing deterministic versus
-  PredictRLM-backed agent steps, composing DAGs with >> and &, selecting
-  embedded/operator/browser/TUI execution, or using Iceberg or Lance persistence.
+  when creating an Avalanche flow or belt, choosing deterministic, TypeSafe
+  classifier, or PredictRLM-backed agent steps, composing DAGs with >> and &,
+  selecting operator/browser/TUI execution, or using Iceberg or Lance persistence.
 compatibility: >-
-  Requires Python 3.11 through 3.13 and avalanche-ai. Agent steps are included
-  in the base package. Includes a vendored copy of PredictRLM's RLM-design skill
+  Requires Python 3.11 through 3.13 and avalanche-ai. Agent and classifier steps
+  are included in the base package. Includes a vendored copy of PredictRLM's RLM-design skill
   as a reference; check its upstream source for updates when access is available.
 metadata:
   author: Trampoline AI
@@ -22,10 +22,10 @@ metadata:
 > Replace `npx` with `pnpx`, `bunx`, or the equivalent package runner in use.
 
 Avalanche turns a desired outcome into a typed, observable agentic workflow. A
-workflow combines deterministic Python nodes with PredictRLM-backed agent nodes
-inside one DAG, then runs it locally or through the operator with the browser UI
-or TUI. The main
-design task is deciding where adaptive agent work belongs, what each stage
+workflow combines deterministic Python nodes, TypeSafe-backed classifier nodes,
+and PredictRLM-backed agent nodes inside one DAG, then runs it through the
+operator with the CLI, browser UI, or TUI. The main design task is deciding where
+fixed-question classification or adaptive agent work belongs, what each stage
 promises, and how data and artifacts move between stages. Decorators and arrow
 syntax come after that design.
 
@@ -37,7 +37,8 @@ Load only what the task needs:
   [agent-steps.md](references/agent-steps.md). It loads the vendored original
   PredictRLM skill for the single-step design process, then covers the Avalanche
   integration surface.
-- Usage, local execution, and CLI flags: [usage.md](references/usage.md).
+- Usage, native classifier syntax, local execution, and CLI flags:
+  [usage.md](references/usage.md).
 - File layout and maintainability: [project-layout.md](references/project-layout.md).
 - Iceberg and Lance persistence: [storage.md](references/storage.md).
 
@@ -154,6 +155,9 @@ For each stage, choose:
 - `@ava.source` to ingest or construct the first runtime value;
 - `@ava.step` for deterministic parsing, normalization, calculation, lookup,
   validation, conversion, routing, or artifact assembly;
+- `@ava.classifier_step` for fixed Choice, Noul, or Score questions over runtime
+  state; prefer this native TypeSafe integration over a custom client wrapper
+  or an agent whose only task is classification;
 - `@ava.agent_step` when the stage requires adaptive exploration, evidence
   gathering, tool choice, judgment, or synthesis;
 - `@ava.dest` for the final publish, export, notification, or external write.
@@ -224,10 +228,10 @@ Lance when artifacts must survive runs, be queried or audited, feed an
 incremental backlog, or be consumed outside the immediate process. Persistence
 is an architectural requirement, not a default stage.
 
-Choose the execution surface from the caller:
+Run workflows through the operator. Do not add standalone runner scripts,
+`main()` functions, `if __name__ == "__main__"` blocks, or direct
+`Workflow.run()` entry points. Choose the operator client from the caller:
 
-- embedded execution for application code that starts a run and consumes its
-  `RunHandle`;
 - operator/CLI execution for discovered flows run through the control plane;
 - the browser UI for interactive local operator work; prefer it to the TUI unless
   the user explicitly asks for terminal interaction;
@@ -381,14 +385,14 @@ do not omit a section because the design appears simple.
 2. **Stage plan:** a table with stage name, node type, responsibility,
    authoritative typed input and source, typed output, required capabilities
    (Skills, tools, permissions, or packages), and why this is a separate
-   boundary. State why each stage is deterministic or agentic; list explicit
+   boundary. State why each stage is deterministic, classifier-backed, or agentic; list explicit
    non-goals where they prevent responsibility overlap.
 3. **Mermaid DAG:** render the proposed data-flow graph as a `mermaid` diagram.
    Every node label must identify its stage name, node type, brief
    responsibility, typed input, and typed output. Show data dependencies,
    parallel branches, fan-in, earlier-stage references, and the terminal
    destination. Use a legend or Mermaid classes so `@ava.source`, `@ava.step`,
-   `@ava.agent_step`, and `@ava.dest` remain distinguishable.
+   `@ava.classifier_step`, `@ava.agent_step`, and `@ava.dest` remain distinguishable.
 4. **Contracts:** complete Pydantic contract sketches for the workflow input,
    each meaningful handoff, and final result, including invariants and
    incomplete/error states at boundaries.
@@ -421,7 +425,9 @@ for changes, update and re-present the complete plan for approval.
 2. Choose the package layout before writing `flow.py`.
 3. Implement deterministic `@ava.source`, `@ava.step`, and `@ava.dest` nodes.
 4. For each agent step, follow the bundled RLM reference's design workflow,
-   then define its signature and `@ava.agent_step` body.
+   then define its signature and `@ava.agent_step` body. For classifiers, declare
+   fixed questions on `@ava.classifier_step` and return the desired typed result
+   from its body; use the [usage reference](references/usage.md#native-classifier-steps).
 5. Declare the DAG at the bottom of `flow.py` as one parenthesized `>>` / `&`
    expression, binding reusable `NodeFuture` values inline with `:=`.
 6. For table-backed flows, define and push the Iceberg or Lance namespace, then
@@ -495,8 +501,8 @@ The TUI also supports `--token`, `--tls`, `--insecure`, and
 `--tls-ca-cert PATH` for its gRPC connection. `uv run ava tui` without
 `--connect` is mock mode for UI exploration only.
 
-When a browser UI is launched, report its actual local endpoint. Do not make
-operator or browser startup a mandatory handoff for an embedded workflow.
+When a browser UI is launched, report its actual local endpoint. Always hand off
+operator-based execution commands, never a standalone Python runner.
 
 ## Non-negotiable conventions
 
@@ -506,15 +512,19 @@ operator or browser startup a mandatory handoff for an embedded workflow.
 - Restrict `flow.py` to imports, decorated node definitions, and workflow
   declarations. Workflow declarations form the final section of the file;
   nothing follows them.
+- Always run authored workflows through the operator. Do not create standalone
+  execution scripts, `main()` functions, `__main__` blocks, or direct `.run()`
+  entry points, including in examples.
 - Put every undecorated helper function in `util.py`, including private,
   single-use, mapping, validation, formatting, conversion, and filesystem
   helpers.
-- Define Pydantic models in `schema.py`; keep reusable signature classes, config
-  loading, namespace construction, CLI entry points, and execution code out of
-  `flow.py`.
-- For a small agent contract, construct the inline signature directly inside
-  `@ava.agent_step(...)`. Reusable or substantial signatures get one directory
-  per agent, with at least `signature.py` and `schema.py`.
+- Define Pydantic models in `schema.py`; keep signature classes, config loading,
+  namespace construction, CLI entry points, and execution code out of `flow.py`.
+- Construct compact inline signatures directly inside `@ava.agent_step(...)`.
+  Every non-inline signature MUST live in a separate `signature.py`, even when
+  used only once. Use a root `signature.py` for a small flow or
+  `agents/<agent_name>/signature.py` for larger per-agent contracts; keep private
+  models in that agent's `schema.py`.
 - The docstring on an `ava.Signature` class is the agent's instruction. Put all
   instructions specific to that agent step in this docstring.
 - A Skill is reusable knowledge or a reusable capability shared by multiple
@@ -525,6 +535,11 @@ operator or browser startup a mandatory handoff for an embedded workflow.
   passed at DAG call sites.
 - `await agent(...)` returns the raw DSPy prediction. The body must select,
   validate, compose, and return or persist the intended output explicitly.
+- `classifier` is framework-injected, keyword-only, annotated `ava.Classifier`,
+  and never passed at DAG call sites. `await classifier(state=...)` returns
+  `ava.ClassificationResult`; keep probabilities when downstream work needs them.
+- Declare classifier questions statically. Resolve `TYPESAFE_API_KEY` only in
+  the executing environment, never in workflow definitions or metadata.
 - A workflow body defines edges only. No runtime loops, data-dependent branches,
   file/network I/O, or transformations there.
 - Always parenthesize parallel groups: `a() >> (b() & c()) >> d()`.
@@ -536,6 +551,8 @@ operator or browser startup a mandatory handoff for an embedded workflow.
 
 - `@ava.source`: ingest or construct the first runtime value.
 - `@ava.step`: deterministic transformation.
+- `@ava.classifier_step`: fixed TypeSafe Choice/Noul/Score questions with an
+  injected callable `ava.Classifier`; use an async body to classify runtime state.
 - `@ava.agent_step` / `@ava.agent.step`: wrapper around the PredictRLM runtime
   with an injected callable `ava.Agent`.
 - `@ava.dest`: publish, export, or summarize final results.
@@ -620,8 +637,8 @@ Use `:=` and explicit node arguments when:
 
 In this form, `:=` names each reused `NodeFuture`, explicit arguments carry data,
 `>>` shows stage ordering, and parenthesized `&` groups show parallel fan-out and
-fan-in. Return a `NodeFuture` when an embedded caller needs the terminal value
-through the `RunHandle`; a publishing or persisted flow may leave the graph as
+fan-in. Return the terminal `NodeFuture` when its value should be available as
+the operator run result; a publishing or persisted flow may leave the graph as
 the workflow body's expression statement.
 
 ## Completion checks
@@ -633,15 +650,15 @@ the workflow body's expression statement.
   and ends with its workflow declarations.
 - Every agent input/output field matches the keyword arguments used in
   `await agent(...)` and the prediction fields read afterward.
-- Every signature class has an instruction-bearing docstring, and every custom
-  Skill represents knowledge or capability reused across agent steps.
+- Every non-inline signature lives in a separate `signature.py` and every
+  signature class has an instruction-bearing docstring. Every custom Skill
+  represents knowledge or capability reused across agent steps.
 - Every tool has a stable unique function name, typed arguments, a precise
   docstring, and a serializable return value.
-- Embedded execution reaches a real terminal result.
-- When the user requests operator or browser verification, the completed
-  workflow is discovered through `uv run ava dev` or the separate
-  `uv run ava operator` and `uv run ava web` commands, and the browser endpoint
-  is exercised.
+- Workflow handoff uses the operator, never a standalone Python runner.
+- Execution verification uses the operator through `uv run ava dev` or
+  `uv run ava operator` with `uv run ava run`. Exercise the browser only when
+  browser verification is needed.
 - When a browser UI is started, the user receives its exact local URL and an
   explicit instruction to open it in a browser.
 - Operator discovery, CLI input, or browser UI is exercised only when it changes

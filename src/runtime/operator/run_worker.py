@@ -12,19 +12,27 @@ import time
 import traceback
 from functools import wraps
 from pathlib import Path
-from typing import Any, Callable
+from typing import Any, Callable, Protocol
+
+from pydantic import JsonValue
 
 from avalanche._agent_evidence import (
     capture_agent_evidence,
     capture_agent_log_node,
     current_agent_log_node_id,
 )
+from avalanche.classifier import capture_classifier_evidence
+from avalanche.classifier.models import ClassifierInvocation
 from avalanche.dag import Workflow
 
 from ..executor import Executor, LocalExecutor, RayExecutor
 from .hooks import RunHooks
 from .models import display_name_from_id
-from .registry import agent_field_schemas_for_workflow, agent_instruction_lines_for_workflow
+from .registry import (
+    agent_field_schemas_for_workflow,
+    agent_instruction_lines_for_workflow,
+    classifier_metadata_for_workflow,
+)
 from .result_store import (
     ResultPublicationCancelledError,
     detach_transferred_bundle_descriptor,
@@ -118,6 +126,8 @@ def _run_worker(
     executor: Executor | None = None
     ray_log_queue: Any | None = None
     ray_log_drain: threading.Thread | None = None
+    ray_log_errors: list[BaseException] = []
+    ray_logs_finished = False
     terminal_event: dict[str, Any] | None = None
     try:
         if not assignment_event.wait(timeout=30.0):
@@ -183,7 +193,7 @@ def _run_worker(
             ray_log_queue = RayQueue()
             ray_log_drain = threading.Thread(
                 target=_drain_ray_logs,
-                args=(ray_log_queue, event_queue),
+                args=(ray_log_queue, event_queue, ray_log_errors),
                 name=f"avalanche-ray-log-drain-{run_id}",
                 daemon=True,
             )
@@ -226,6 +236,9 @@ def _run_worker(
             context=context_value,
             run_id=run_id,
         ).result()
+        if ray_log_queue is not None and ray_log_drain is not None:
+            _finish_ray_logs(ray_log_queue, ray_log_drain, ray_log_errors)
+            ray_logs_finished = True
         status = "cancelled" if cancel_event.is_set() else "success"
         terminal_event = {"type": "terminal", "status": status}
         if status == "success":
@@ -267,13 +280,15 @@ def _run_worker(
     finally:
         if executor is not None:
             executor.shutdown()
-        if ray_log_queue is not None:
+        if ray_log_queue is not None and ray_log_drain is not None and not ray_logs_finished:
             try:
-                ray_log_queue.put(_RAY_LOG_STOP)
-            except Exception:
-                pass
-        if ray_log_drain is not None:
-            ray_log_drain.join(timeout=5.0)
+                _finish_ray_logs(ray_log_queue, ray_log_drain, ray_log_errors)
+            except BaseException as exc:
+                terminal_event = {
+                    "type": "terminal",
+                    "status": "cancelled" if cancel_event.is_set() else "failed",
+                    "error": _bounded_event_text(f"{type(exc).__name__}: {exc}", 65_536),
+                }
         if ray_log_queue is not None:
             try:
                 ray_log_queue.shutdown(force=True)
@@ -338,6 +353,7 @@ def _workflow_metadata(workflow: Workflow) -> dict[str, Any]:
         "display_names": {node_id: display_name_from_id(node_id) for node_id in node_ids},
         "agent_field_schemas_json": agent_field_schemas_for_workflow(workflow, node_ids),
         "agent_instruction_lines": agent_instruction_lines_for_workflow(workflow, node_ids),
+        "classifier_metadata_json": classifier_metadata_for_workflow(workflow, node_ids),
         "standard_step_docstring_lines": node_docstring_lines_for_workflow(workflow, node_ids),
     }
 
@@ -465,6 +481,8 @@ def _with_local_node_observers(
 ) -> Callable[..., Any]:
     if getattr(fn, "__agent_step__", None) is not None:
         fn = _with_agent_evidence(node_id, fn, event_queue)
+    if getattr(fn, "__classifier_step__", None) is not None:
+        fn = _with_classifier_evidence(node_id, fn, event_queue)
     return _with_node_streams(node_id, fn, stdout, stderr)
 
 
@@ -543,6 +561,42 @@ def _with_agent_evidence(
     return wrapper
 
 
+class _RunEventQueue(Protocol):
+    def put(self, event: dict[str, JsonValue]) -> None: ...
+
+
+def _with_classifier_evidence(
+    node_id: str,
+    fn: Callable[..., object],
+    event_queue: _RunEventQueue,
+) -> Callable[..., object]:
+    """Publish owned, typed invocation snapshots before returning to user code."""
+
+    def emit(invocation: ClassifierInvocation) -> None:
+        event: dict[str, JsonValue] = {
+            "type": "classifier_evidence",
+            "node_id": node_id,
+            "event": invocation.model_dump(mode="json"),
+        }
+        event_queue.put(event)
+
+    if inspect.iscoroutinefunction(fn):
+
+        @wraps(fn)
+        async def async_wrapper(*args: object, **kwargs: object) -> object:
+            with capture_classifier_evidence(emit):
+                return await fn(*args, **kwargs)
+
+        return async_wrapper
+
+    @wraps(fn)
+    def wrapper(*args: object, **kwargs: object) -> object:
+        with capture_classifier_evidence(emit):
+            return fn(*args, **kwargs)
+
+    return wrapper
+
+
 _RAY_LOG_STOP = {"type": "_ray_log_stop"}
 
 
@@ -553,6 +607,8 @@ def _with_ray_node_observers(
 ) -> Callable[..., Any]:
     if getattr(fn, "__agent_step__", None) is not None:
         fn = _with_agent_evidence(node_id, fn, ray_log_queue)
+    if getattr(fn, "__classifier_step__", None) is not None:
+        fn = _with_classifier_evidence(node_id, fn, ray_log_queue)
     return _with_ray_node_streams(node_id, fn, ray_log_queue)
 
 
@@ -611,20 +667,36 @@ def _with_ray_node_streams(
     return wrapper
 
 
-def _drain_ray_logs(ray_log_queue: Any, event_queue: Any) -> None:
-    """Bridge Ray actor-backed events into the parent multiprocessing protocol."""
-    from ray.util.queue import Empty
+def _drain_ray_logs(ray_log_queue: Any, event_queue: Any, errors: list[BaseException]) -> None:
+    """Bridge Ray events, retaining publication failures for the coordinator."""
+    try:
+        from ray.util.queue import Empty
 
-    while True:
-        try:
-            event = ray_log_queue.get(timeout=0.2)
-        except Empty:
-            continue
-        except Exception:
-            return
-        if event == _RAY_LOG_STOP:
-            return
-        _put_run_event(event_queue, event)
+        while True:
+            try:
+                event = ray_log_queue.get(timeout=0.2)
+            except Empty:
+                continue
+            if event == _RAY_LOG_STOP:
+                return
+            _put_run_event(event_queue, event)
+    except BaseException as exc:
+        errors.append(exc)
+
+
+def _finish_ray_logs(
+    ray_log_queue: _RunEventQueue,
+    ray_log_drain: threading.Thread,
+    errors: list[BaseException],
+) -> None:
+    """Flush all completed task evidence before publishing the workflow result."""
+    if ray_log_drain.is_alive():
+        ray_log_queue.put({"type": "_ray_log_stop"})
+        ray_log_drain.join(timeout=5.0)
+        if ray_log_drain.is_alive():
+            raise TimeoutError("Ray event forwarding did not finish")
+    if errors:
+        raise RuntimeError("Ray event forwarding failed") from errors[0]
 
 
 def _put_preparation_event(event_queue: Any, event: dict[str, Any]) -> None:

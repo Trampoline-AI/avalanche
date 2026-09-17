@@ -50,6 +50,10 @@ decorator, injected `ava.Agent` call, validation, and return value.
 ## Typed signature: the default
 
 Use a class for substantial, shared, or independently tested contracts.
+Every non-inline signature MUST be defined in a separate `signature.py`, not in
+`flow.py`, regardless of size or reuse. For one agent, a root `signature.py` is
+sufficient; use per-agent directories for larger flows.
+
 
 `agents/package_audit/schema.py`:
 
