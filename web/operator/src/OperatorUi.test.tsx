@@ -44,6 +44,7 @@ import { Explorer } from "./Explorer";
 import {
   CatalogSnapshotMsg,
   FlowInfoMsg,
+  LogRecordDescriptorMsg,
   RunSnapshotMsg,
   RunSummaryMsg,
   OperatorUpdateEnvelope,
@@ -308,6 +309,221 @@ describe("operator workflows", () => {
     expect(
       within(screen.getByRole("region", { name: "Workflows" })).getAllByRole("button"),
     ).toHaveLength(2);
+  });
+
+  it("does not return to a workflow when its start request finishes after navigation", async () => {
+    const inventory = FlowInfoMsg.create({
+      ...workflow,
+      workflowId: "inventory.py::inventory",
+      displayName: "Inventory",
+      relativeFile: "inventory.py",
+      displayNames: { fetch: "Inventory fetch" },
+    });
+    const started = Promise.withResolvers<string>();
+    const api = createApi({
+      loadBaseline: async () => ({
+        ...baseline,
+        catalog: CatalogSnapshotMsg.create({
+          ...baseline.catalog,
+          workflows: [workflow, inventory],
+        }),
+      }),
+      startRun: () => started.promise,
+      getLatestRunSnapshot: async () =>
+        snapshotFor(RunSummaryMsg.create({ ...summary, runId: "run-new" })),
+    });
+    render(<OperatorUi host={{ api, presentation }} />);
+    fireEvent.click(await screen.findByRole("button", { name: "Run" }));
+    fireEvent.click(screen.getByRole("button", { name: /Inventory\s*inventory\.py/ }));
+    await screen.findByRole("button", { name: "Inspect Inventory fetch" });
+    await act(async () => started.resolve("run-new"));
+    expect(screen.getByRole("button", { name: "Inspect Inventory fetch" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Current" })).toHaveAttribute(
+      "aria-pressed",
+      "true",
+    );
+    expect(screen.queryByRole("region", { name: "Run logs" })).not.toBeInTheDocument();
+  });
+
+  it.each(["workflow", "run", "pending host navigation", "round trip", "unmount"] as const)(
+    "does not select a started run after controlled %s navigation",
+    async (destination) => {
+      const inventory = FlowInfoMsg.create({
+        ...workflow,
+        workflowId: "inventory.py::inventory",
+        displayNames: { fetch: "Inventory fetch" },
+      });
+      const started = Promise.withResolvers<string>();
+      const onSelectRun = vi.fn();
+      const api = createApi({
+        loadBaseline: async () => ({
+          ...baseline,
+          catalog: CatalogSnapshotMsg.create({
+            ...baseline.catalog,
+            workflows: [workflow, inventory],
+          }),
+        }),
+        startRun: () => started.promise,
+      });
+      const workspace = (workflowId: string, selectedRunId?: string) => (
+        <WorkflowWorkspace
+          api={api}
+          workflowId={workflowId}
+          navigation={{ selectedRunId, onSelectRun }}
+        />
+      );
+      const view = render(workspace(workflow.workflowId));
+      fireEvent.click(await screen.findByRole("button", { name: "Run" }));
+      if (destination === "unmount") {
+        view.unmount();
+      } else if (destination === "pending host navigation") {
+        fireEvent.click(screen.getByRole("button", { name: /run-1,/ }));
+      } else if (destination === "run") {
+        view.rerender(workspace(workflow.workflowId, summary.runId));
+        await screen.findByRole("button", { name: "Cancel run" });
+      } else {
+        view.rerender(workspace(inventory.workflowId));
+        await screen.findByRole("button", { name: "Inspect Inventory fetch" });
+        if (destination === "round trip") {
+          view.rerender(workspace(workflow.workflowId));
+          await screen.findByRole("button", { name: "Inspect Fetch" });
+        }
+      }
+      await act(async () => started.resolve("run-new"));
+      if (destination === "pending host navigation") {
+        expect(onSelectRun).toHaveBeenCalledExactlyOnceWith(summary.runId);
+      } else {
+        expect(onSelectRun).not.toHaveBeenCalled();
+      }
+      if (destination === "run") {
+        expect(screen.getByRole("button", { name: /run-1,/ })).toHaveAttribute(
+          "aria-pressed",
+          "true",
+        );
+      } else if (destination !== "unmount") {
+        expect(screen.getByRole("button", { name: "Current" })).toHaveAttribute(
+          "aria-pressed",
+          "true",
+        );
+      }
+    },
+  );
+
+  it.each(["operator", "workspace"] as const)(
+    "%s disables cancellation until the pending request settles",
+    async (host) => {
+      const cancelled = Promise.withResolvers<void>();
+      const cancelRun = vi.fn(() => cancelled.promise);
+      const api = createApi({ cancelRun });
+      render(
+        host === "operator" ? (
+          <OperatorUi host={{ api, presentation }} />
+        ) : (
+          <WorkflowWorkspace api={api} workflowId={workflow.workflowId} />
+        ),
+      );
+      fireEvent.click(await screen.findByRole("button", { name: /run-1,/ }));
+      fireEvent.click(await screen.findByRole("button", { name: "Cancel run" }));
+      const pending = screen.getByRole("button", { name: "Cancelling…" });
+      expect(pending).toBeDisabled();
+      fireEvent.click(pending);
+      expect(cancelRun).toHaveBeenCalledTimes(1);
+      await act(async () => cancelled.resolve());
+      expect(screen.getByRole("button", { name: "Cancel run" })).toBeEnabled();
+    },
+  );
+
+  it("keeps historical workspace content and navigation after its definition is removed", async () => {
+    const removed = Promise.withResolvers<void>();
+    const nextSnapshot = Promise.withResolvers<RunSnapshotMsg>();
+    const third = RunSummaryMsg.create({ ...summary, runId: "run-3", createdSequence: "3" });
+    const run = RunSnapshotMsg.create({
+      ...snapshotFor(),
+      logPageToken: "logs",
+      topology: {
+        ...snapshotFor().topology!,
+        displayNames: { fetch: "Recorded fetch" },
+        agentFieldSchemasJson: { fetch: '{"inputs":[],"outputs":[]}' },
+      },
+    });
+    const api = createApi({
+      loadBaseline: async () => ({ ...baseline, runs: [summary, secondSummary] }),
+      getLatestRunSnapshot: async (runId) =>
+        runId === secondSummary.runId ? nextSnapshot.promise : run,
+      listLogPage: async () => ({
+        operatorInstanceId: "operator-1",
+        asOfEventUlid: eventUlid(1),
+        records: [
+          LogRecordDescriptorMsg.create({
+            sequence: "1",
+            timestamp: 1,
+            nodeId: "fetch",
+            bodyToken: "body",
+            level: "info",
+          }),
+        ],
+        nextPageToken: "",
+        nextCursor: "1",
+      }),
+      readTextDetail: async () => "Recorded order log",
+      streamUpdates: async function* (_instance, _cursor, signal) {
+        await removed.promise;
+        yield envelope(2, {
+          oneofKind: "catalogReplaced",
+          catalogReplaced: {
+            catalog: CatalogSnapshotMsg.create({
+              ...baseline.catalog,
+              asOfEventUlid: eventUlid(2),
+              revision: "2",
+              workflows: [],
+            }),
+          },
+        });
+        yield envelope(3, {
+          oneofKind: "runCreated",
+          runCreated: { summary: third, nodes: [] },
+        });
+        yield* idleUpdates(signal);
+      },
+    });
+    render(<WorkflowWorkspace api={api} workflowId={workflow.workflowId} />);
+    fireEvent.click(await screen.findByRole("button", { name: /run-1,/ }));
+    fireEvent.click(await screen.findByRole("button", { name: "Inspect Recorded fetch" }));
+    await screen.findByText("Recorded order log");
+    expect(screen.getByRole("complementary", { name: "Run inspector" })).toBeInTheDocument();
+    act(() => removed.resolve());
+    await screen.findByRole("button", { name: /run-3,/ });
+    expect(screen.getByRole("button", { name: /run-1,/ })).toHaveAttribute(
+      "aria-pressed",
+      "true",
+    );
+    expect(screen.getByRole("button", { name: "Inspect Recorded fetch" })).toBeEnabled();
+    expect(screen.getByText("Recorded order log")).toBeInTheDocument();
+    expect(screen.getByRole("complementary", { name: "Run inspector" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Cancel run" })).toBeEnabled();
+
+    fireEvent.click(screen.getByRole("button", { name: /run-2,/ }));
+    await screen.findByText("Loading run snapshot");
+    expect(screen.getByRole("button", { name: "Inspect Recorded fetch" })).toBeEnabled();
+    expect(screen.getByText("Recorded order log")).toBeInTheDocument();
+    expect(screen.getByRole("complementary", { name: "Run inspector" })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Cancel run" })).not.toBeInTheDocument();
+    act(() =>
+      nextSnapshot.resolve(
+        RunSnapshotMsg.create({
+          ...run,
+          asOfEventUlid: eventUlid(3),
+          summary: secondSummary,
+          topology: { ...run.topology!, displayNames: { fetch: "Next recorded fetch" } },
+        }),
+      ),
+    );
+    await screen.findByRole("button", { name: "Inspect Next recorded fetch" });
+    expect(screen.getByRole("button", { name: "Cancel run" })).toBeEnabled();
+    fireEvent.click(screen.getByRole("button", { name: "Current" }));
+    expect(screen.getByText("No workflows discovered")).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Run" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("region", { name: "Run logs" })).not.toBeInTheDocument();
   });
 
   it("surfaces operator rejection without losing the selected workflow", async () => {

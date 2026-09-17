@@ -205,6 +205,7 @@ export function OperatorUi({ host, navigation }: OperatorUiProps) {
             <WorkflowWorkspaceSurface
               api={api}
               state={state}
+              workflowId={selection?.workflowId}
               workflow={workflow}
               selectedRunId={selection?.kind === "run" ? selection.runId : undefined}
               onSelectRun={selectWorkflowRun}
