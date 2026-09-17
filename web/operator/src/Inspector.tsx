@@ -122,11 +122,14 @@ export function Inspector({
   const [pageLoading, setPageLoading] = useState(false);
   const [following, setFollowing] = useState(true);
   const [cacheVersion, setCacheVersion] = useState(0);
-  const [detailErrors, setDetailErrors] = useState<Record<string, string>>({});
+  const [detailErrors, setDetailErrors] = useState<
+    Record<string, { error: string; retryable: boolean }>
+  >({});
   const [detailLoadingVersion, setDetailLoadingVersion] = useState(0);
 
   const [nodeSourceState, setNodeSourceState] = useState<NodeSourceState>();
   const detailCache = useRef(new Map<string, DetailCacheEntry>());
+  const openTurnDetails = useRef(new Set<string>());
   const traceSummaries = useRef(new Map<string, AgentTraceStepSummary>());
   const detailLoading = useRef(new Set<string>());
   const detailControllers = useRef(new Set<AbortController>());
@@ -249,26 +252,42 @@ export function Inspector({
     return `${format}\0${token}`;
   }
 
-  function storeCachedDetail(key: string, detail: CachedDetail, reportedSize?: string) {
-    const byteCost = measuredByteCost(detail.body, reportedSize);
-    if (byteCost > DETAIL_CACHE_MAX_BYTES) return false;
-    detailCache.current.delete(key);
-    detailCache.current.set(key, { detail, byteCost });
-    let cachedBytes = 0;
-    for (const entry of detailCache.current.values()) cachedBytes += entry.byteCost;
-    while (
-      detailCache.current.size > DETAIL_CACHE_MAX_ENTRIES ||
-      cachedBytes > DETAIL_CACHE_MAX_BYTES
-    ) {
-      const oldest = detailCache.current.entries().next().value as
-        [string, DetailCacheEntry] | undefined;
-      if (!oldest) break;
-      detailCache.current.delete(oldest[0]);
-      cachedBytes -= oldest[1].byteCost;
-    }
-    setCacheVersion((current) => current + 1);
-    return true;
-  }
+  const storeCachedDetail = useCallback(
+    (key: string, detail: CachedDetail, reportedSize?: string) => {
+      const byteCost = measuredByteCost(detail.body, reportedSize);
+      if (byteCost > DETAIL_CACHE_MAX_BYTES) return false;
+      detailCache.current.delete(key);
+      detailCache.current.set(key, { detail, byteCost });
+      let cachedBytes = 0;
+      for (const entry of detailCache.current.values()) cachedBytes += entry.byteCost;
+      while (
+        detailCache.current.size > DETAIL_CACHE_MAX_ENTRIES ||
+        cachedBytes > DETAIL_CACHE_MAX_BYTES
+      ) {
+        // Background summaries yield their bodies before any actively inspected turn.
+        // If open turns alone fill the budget, the oldest one can be explicitly reloaded.
+        let oldest = detailCache.current.entries().next().value;
+        for (const entry of detailCache.current.entries()) {
+          if (!openTurnDetails.current.has(entry[0])) {
+            oldest = entry;
+            break;
+          }
+        }
+        if (!oldest) break;
+        detailCache.current.delete(oldest[0]);
+        cachedBytes -= oldest[1].byteCost;
+      }
+      setCacheVersion((current) => current + 1);
+      return true;
+    },
+    [],
+  );
+
+  const setTurnDetailOpen = useCallback((event: AgentEventDescriptorMsg, open: boolean) => {
+    const key = `json\0${event.bodyToken}`;
+    if (open) openTurnDetails.current.add(key);
+    else openTurnDetails.current.delete(key);
+  }, []);
 
   function loadMoreEvents() {
     if (!activeEventPage.nextPageToken || !nodeId || !runId || pageRequestInFlight.current)
@@ -422,58 +441,67 @@ export function Inspector({
     [combinedEvents],
   );
 
-  function hydrateTraceTurn(event: AgentEventDescriptorMsg) {
-    if (tabRef.current !== "trace") return;
-    const key = cacheKey("json", event.bodyToken);
-    if (detailCache.current.has(key) || detailLoading.current.has(key)) return;
-    const generation = detailGeneration.current;
-    const controller = new AbortController();
-    detailControllers.current.add(controller);
-    detailLoading.current.add(key);
-    setDetailErrors((current) => {
-      if (!(key in current)) return current;
-      const next = { ...current };
-      delete next[key];
-      return next;
-    });
-    setDetailLoadingVersion((current) => current + 1);
-    void api
-      .readJsonDetail(event.bodyToken, controller.signal)
-      .then((body) => {
-        if (
-          controller.signal.aborted ||
-          detailGeneration.current !== generation ||
-          tabRef.current !== "trace"
-        )
-          return;
-        const step = parseAgentTraceStepEvent(body);
-        traceSummaries.current.set(key, summarizeAgentTraceStep(step));
-        while (traceSummaries.current.size > DESCRIPTOR_WINDOW_SIZE) {
-          const oldest = traceSummaries.current.keys().next().value;
-          if (oldest === undefined) break;
-          traceSummaries.current.delete(oldest);
-        }
-        if (!storeCachedDetail(key, { body, step }, event.sizeBytes)) {
+  const hydrateTraceTurn = useCallback(
+    (event: AgentEventDescriptorMsg) => {
+      if (tabRef.current !== "trace") return;
+      const key = cacheKey("json", event.bodyToken);
+      if (detailCache.current.has(key) || detailLoading.current.has(key)) return;
+      const generation = detailGeneration.current;
+      const controller = new AbortController();
+      detailControllers.current.add(controller);
+      detailLoading.current.add(key);
+      setDetailErrors((current) => {
+        if (!(key in current)) return current;
+        const next = { ...current };
+        delete next[key];
+        return next;
+      });
+      setDetailLoadingVersion((current) => current + 1);
+      void api
+        .readJsonDetail(event.bodyToken, controller.signal)
+        .then((body) => {
+          if (
+            controller.signal.aborted ||
+            detailGeneration.current !== generation ||
+            tabRef.current !== "trace"
+          )
+            return;
+          const step = parseAgentTraceStepEvent(body);
+          traceSummaries.current.set(key, summarizeAgentTraceStep(step));
+          while (traceSummaries.current.size > DESCRIPTOR_WINDOW_SIZE) {
+            const oldest = traceSummaries.current.keys().next().value;
+            if (oldest === undefined) break;
+            traceSummaries.current.delete(oldest);
+          }
+          if (!storeCachedDetail(key, { body, step }, event.sizeBytes)) {
+            setDetailErrors((current) => ({
+              ...current,
+              [key]: {
+                error: "Turn detail exceeds the browser detail limit.",
+                retryable: false,
+              },
+            }));
+          }
+        })
+        .catch((error: unknown) => {
+          if (controller.signal.aborted || detailGeneration.current !== generation) return;
           setDetailErrors((current) => ({
             ...current,
-            [key]: "Turn detail exceeds the browser detail limit.",
+            [key]: {
+              error: error instanceof Error ? error.message : "Turn detail unavailable",
+              retryable: true,
+            },
           }));
-        }
-      })
-      .catch((error: unknown) => {
-        if (controller.signal.aborted || detailGeneration.current !== generation) return;
-        setDetailErrors((current) => ({
-          ...current,
-          [key]: error instanceof Error ? error.message : "Turn detail unavailable",
-        }));
-      })
-      .finally(() => {
-        detailControllers.current.delete(controller);
-        detailLoading.current.delete(key);
-        if (controller.signal.aborted || detailGeneration.current !== generation) return;
-        setDetailLoadingVersion((current) => current + 1);
-      });
-  }
+        })
+        .finally(() => {
+          if (controller.signal.aborted || detailGeneration.current !== generation) return;
+          detailControllers.current.delete(controller);
+          detailLoading.current.delete(key);
+          setDetailLoadingVersion((current) => current + 1);
+        });
+    },
+    [api, storeCachedDetail],
+  );
 
   const traceTurnViews = useMemo<AgentTraceTurn[]>(
     () =>
@@ -488,14 +516,14 @@ export function Inspector({
           summary: summary
             ? { status: "ready", step: summary }
             : error
-              ? { status: "error", error }
+              ? { status: "error", error: error.error }
               : isLoading
                 ? { status: "loading" }
                 : { status: "idle" },
           detail: cached
             ? { status: "ready", step: cached.step }
             : error
-              ? { status: "error", error }
+              ? { status: "error", ...error }
               : isLoading
                 ? { status: "loading" }
                 : { status: "idle" },
@@ -715,6 +743,7 @@ export function Inspector({
                 </div>
               ) : node?.trace ? (
                 <AgentTraceExplorer
+                  key={descriptorScope}
                   scopeKey={descriptorScope}
                   turns={traceTurnViews}
                   lifecycleEvents={lifecycleEvents}
@@ -724,6 +753,7 @@ export function Inspector({
                   hasMore={Boolean(activeEventPage.nextPageToken)}
                   scrollRef={traceScrollElement}
                   onLoadTurn={hydrateTraceTurn}
+                  onTurnDetailOpenChange={setTurnDetailOpen}
                   onLoadMore={loadMoreEvents}
                   onScroll={(element) => {
                     const distanceFromBottom =
