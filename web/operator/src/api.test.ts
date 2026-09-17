@@ -1,11 +1,14 @@
 import { describe, expect, it, vi } from "vitest";
 
 import { GrpcWebOperatorApi } from "./api";
+import type { ClassifierEventPageRequest } from "./api";
+import type { ClassifierDeclaration, ClassifierInvocation } from "./classifier";
 import {
   ActivityDetailChunkV2,
   ActivityDetailRefV2,
   CatalogReloadRequiredV2,
   ContinuationRefV2,
+  FlowInfoV2,
   FlowListV2,
   LifecycleCursorV2,
   NodeSnapshotV2,
@@ -18,6 +21,7 @@ import {
   RunSummaryV2,
   ScopeReferenceV2,
   TraceDescriptorV2,
+  WorkflowTopologyV2,
 } from "./generated/operator";
 import type { IOperatorServiceV2Client } from "./generated/operator.client";
 import { DescriptorPageOrder } from "./model";
@@ -51,6 +55,78 @@ const continuation = ContinuationRefV2.create({
   cursor: cursor(),
   projectSummaryCursor: summaryCursor,
 });
+
+const classifierDeclaration: ClassifierDeclaration = {
+  questions: {
+    accepted: { type: "noul", instructions: "Original decision", criteria: null },
+  },
+  runtime: { model: "jev-latest", timeout: 10 },
+};
+const classifierInvocation: ClassifierInvocation = {
+  invocation_id: "classifier-call",
+  invocation_index: 0,
+  status: "success",
+  started_at: 1,
+  ended_at: 2,
+  declaration: classifierDeclaration,
+  input: { request: "Review the current policy", revision: 2 },
+  result: {
+    model: "jev-latest",
+    answers: { accepted: { type: "noul", noul: 0.8 } },
+    usage: { input_tokens: 10, output_tokens: 2 },
+  },
+  error: null,
+};
+const classifierBody = new TextEncoder().encode(JSON.stringify(classifierInvocation));
+const classifierContinuation = ContinuationRefV2.create({
+  scopeRef,
+  cursor: cursor(),
+  continuationId: "classifier-events",
+});
+const classifierSnapshot = RunSnapshotV2.create({
+  scopeRef,
+  cursor: cursor(),
+  summary: { runId: "run-1" },
+  nodes: [{ nodeId: "classify", activityContinuation: classifierContinuation }],
+  topology: {
+    nodeIds: ["classify"],
+    classifierMetadataJson: { classify: JSON.stringify(classifierDeclaration) },
+  },
+});
+const classifierRequest: ClassifierEventPageRequest = {
+  pageToken: "classifier-events",
+  afterEventSequence: "0",
+  beforeEventSequence: "0",
+  pageSize: 25,
+  order: DescriptorPageOrder.FORWARD,
+  expectedOperatorInstanceId: "operator-1",
+  expectedAsOfEventUlid: eventUlid(8),
+  expectedRunId: "run-1",
+  expectedNodeId: "classify",
+};
+
+function classifierActivity(sequence = "1"): RunActivityDescriptorV2 {
+  return RunActivityDescriptorV2.create({
+    activityId: `classifier:classify:${sequence}`,
+    kind: "classifier_event",
+    nodeId: "classify",
+    runSequence: sequence,
+    invocationId: classifierInvocation.invocation_id,
+    eventKind: classifierInvocation.status,
+    durationMs: "1000",
+    sizeBytes: String(classifierBody.byteLength),
+    detailRef: {
+      runId: "run-1",
+      scopeRef,
+      activityId: `classifier:classify:${sequence}`,
+      runSequence: sequence,
+      objectUri: `local://detail/classifier-${sequence}`,
+      objectKey: `classifier-${sequence}`,
+      sha256: "b".repeat(64),
+      sizeBytes: String(classifierBody.byteLength),
+    },
+  });
+}
 
 describe("operator transport boundary", () => {
   it("loads all summary pages without hydrating runs, but refuses to mix checkpoint generations", async () => {
@@ -263,5 +339,341 @@ describe("operator transport boundary", () => {
     await expect(api.readTextDetail("text")).resolves.toBe("plain A😀B: not JSON }");
     await expect(api.readJsonDetail("text")).rejects.toThrow();
     await expect(api.readTextDetail("unregistered")).rejects.toThrow();
+  });
+
+  it("keeps historical classifier questions pinned when the current catalog changes", async () => {
+    const revisedDeclaration: ClassifierDeclaration = {
+      ...classifierDeclaration,
+      questions: {
+        accepted: { type: "noul", instructions: "Revised decision", criteria: null },
+      },
+    };
+    const api = apiWith({
+      discoverFlows: () => ({
+        response: Promise.resolve(
+          FlowListV2.create({
+            scopeRef,
+            cursor: cursor(),
+            flows: [
+              FlowInfoV2.create({
+                workflowSelector: "orders",
+                classifierMetadataJson: { classify: JSON.stringify(revisedDeclaration) },
+                topology: WorkflowTopologyV2.create({
+                  classifierMetadataJson: { classify: JSON.stringify(revisedDeclaration) },
+                }),
+              }),
+            ],
+          }),
+        ),
+      }),
+      getRunSnapshot: () => ({ response: Promise.resolve(classifierSnapshot) }),
+      watchRunStatus: () => ({
+        responses: (async function* () {
+          yield RunStatusEnvelopeV2.create({
+            scopeRef,
+            cursor: cursor(9),
+            eventUlid: eventUlid(9),
+            payload: {
+              oneofKind: "runCreated",
+              runCreated: {
+                summary: classifierSnapshot.summary,
+                nodes: classifierSnapshot.nodes,
+                topology: classifierSnapshot.topology,
+              },
+            },
+          });
+        })(),
+      }),
+    });
+    const historical = await api.getLatestRunSnapshot("run-1", "operator-1");
+    const current = await api.getCatalog();
+    expect(JSON.parse(current.workflows[0].classifierMetadataJson.classify)).toEqual(
+      revisedDeclaration,
+    );
+    expect(JSON.parse(historical.topology!.classifierMetadataJson.classify)).toEqual(
+      classifierDeclaration,
+    );
+    const createdUpdates = api.streamUpdates("operator-1", eventUlid(8));
+    const created = await createdUpdates[Symbol.asyncIterator]().next();
+    expect(created.value?.payload).toMatchObject({
+      update: {
+        change: {
+          oneofKind: "runCreated",
+          runCreated: {
+            topology: { classifierMetadataJson: historical.topology!.classifierMetadataJson },
+          },
+        },
+      },
+    });
+  });
+
+  it("hydrates classifier pages and live details without interpreting them as agent events", async () => {
+    const activity = classifierActivity();
+    const liveActivity = classifierActivity("2");
+    const api = apiWith({
+      getRunSnapshot: () => ({ response: Promise.resolve(classifierSnapshot) }),
+      listRunActivity: () => ({
+        response: Promise.resolve(
+          RunActivityPageV2.create({
+            scopeRef,
+            cursor: cursor(),
+            runId: "run-1",
+            activities: [activity],
+          }),
+        ),
+      }),
+      watchRunStatus: () => ({
+        responses: (async function* () {
+          yield RunStatusEnvelopeV2.create({
+            scopeRef,
+            cursor: cursor(9),
+            eventUlid: eventUlid(9),
+            payload: {
+              oneofKind: "activityAppended",
+              activityAppended: { runId: "run-1", activity: liveActivity },
+            },
+          });
+        })(),
+      }),
+      readActivityDetail: () => ({
+        responses: (async function* () {
+          yield ActivityDetailChunkV2.create({ data: classifierBody });
+        })(),
+      }),
+    });
+    await expect(api.listClassifierEventPage(classifierRequest)).rejects.toThrow(/not bound/i);
+    await api.getLatestRunSnapshot("run-1", "operator-1");
+    const page = await api.listClassifierEventPage(classifierRequest);
+    expect(page.records).toEqual([
+      {
+        eventSequence: "1",
+        invocationId: "classifier-call",
+        eventKind: "success",
+        bodyToken: "classifier-1",
+        sizeBytes: String(classifierBody.byteLength),
+        durationMs: "1000",
+        error: false,
+      },
+    ]);
+    expect(page.nextCursor).toBe("1");
+    await expect(api.readJsonDetail(page.records[0].bodyToken)).resolves.toEqual(
+      classifierInvocation,
+    );
+    await expect(api.listAgentEventPage(classifierRequest)).rejects.toThrow(
+      /expected agent event/i,
+    );
+    const liveUpdates = api.streamUpdates("operator-1", eventUlid(8));
+    const live = await liveUpdates[Symbol.asyncIterator]().next();
+    expect(live.value?.payload).toMatchObject({
+      update: {
+        change: {
+          oneofKind: "classifierEventAppended",
+          classifierEventAppended: {
+            runId: "run-1",
+            nodeId: "classify",
+            event: {
+              eventSequence: "2",
+              invocationId: "classifier-call",
+              bodyToken: "classifier-2",
+            },
+          },
+        },
+      },
+    });
+    await expect(api.readJsonDetail("classifier-2")).resolves.toEqual(classifierInvocation);
+  });
+
+  it("keeps expired classifier statuses pageable and replayable alongside retained details", async () => {
+    const statuses = ["running", "success", "failed", "cancelled"] as const;
+    const expired = statuses.map((status, index) =>
+      RunActivityDescriptorV2.create({
+        ...classifierActivity(String(index + 1)),
+        invocationId: `expired-${status}`,
+        eventKind: status,
+        error: status === "failed",
+        detailRef: undefined,
+      }),
+    );
+    const retained = classifierActivity("5");
+    const api = apiWith({
+      getRunSnapshot: () => ({ response: Promise.resolve(classifierSnapshot) }),
+      listRunActivity: () => ({
+        response: Promise.resolve(
+          RunActivityPageV2.create({
+            scopeRef,
+            cursor: cursor(),
+            runId: "run-1",
+            activities: [...expired, retained],
+          }),
+        ),
+      }),
+      watchRunStatus: () => ({
+        responses: (async function* () {
+          for (const [index, activity] of expired.entries()) {
+            yield RunStatusEnvelopeV2.create({
+              scopeRef,
+              cursor: cursor(index + 9),
+              eventUlid: eventUlid(index + 9),
+              payload: {
+                oneofKind: "activityAppended",
+                activityAppended: { runId: "run-1", activity },
+              },
+            });
+          }
+        })(),
+      }),
+      readActivityDetail: () => ({
+        responses: (async function* () {
+          yield ActivityDetailChunkV2.create({ data: classifierBody });
+        })(),
+      }),
+    });
+    await api.getLatestRunSnapshot("run-1", "operator-1");
+    const page = await api.listClassifierEventPage(classifierRequest);
+    expect(page.records.slice(0, 4)).toEqual(
+      statuses.map((status, index) => ({
+        invocationId: `expired-${status}`,
+        eventSequence: String(index + 1),
+        eventKind: status,
+        bodyToken: "",
+        sizeBytes: String(classifierBody.byteLength),
+        durationMs: "1000",
+        error: status === "failed",
+      })),
+    );
+    expect(page.nextCursor).toBe("5");
+    await expect(api.readJsonDetail(page.records[4].bodyToken)).resolves.toEqual(
+      classifierInvocation,
+    );
+    const updates = api.streamUpdates("operator-1", eventUlid(8))[Symbol.asyncIterator]();
+    for (const status of statuses) {
+      const update = await updates.next();
+      expect(update.value?.payload).toMatchObject({
+        update: {
+          change: {
+            oneofKind: "classifierEventAppended",
+            classifierEventAppended: {
+              event: { invocationId: `expired-${status}`, eventKind: status, bodyToken: "" },
+            },
+          },
+        },
+      });
+    }
+    expect((await updates.next()).done).toBe(true);
+  });
+
+  it("rejects present classifier references with no object key instead of treating them as expired", async () => {
+    const activity = classifierActivity();
+    activity.detailRef!.objectKey = "";
+    const api = apiWith({
+      getRunSnapshot: () => ({ response: Promise.resolve(classifierSnapshot) }),
+      listRunActivity: () => ({
+        response: Promise.resolve(
+          RunActivityPageV2.create({
+            scopeRef,
+            cursor: cursor(),
+            runId: "run-1",
+            activities: [activity],
+          }),
+        ),
+      }),
+      watchRunStatus: () => ({
+        responses: (async function* () {
+          yield RunStatusEnvelopeV2.create({
+            scopeRef,
+            cursor: cursor(9),
+            eventUlid: eventUlid(9),
+            payload: {
+              oneofKind: "activityAppended",
+              activityAppended: { runId: "run-1", activity },
+            },
+          });
+        })(),
+      }),
+    });
+    await api.getLatestRunSnapshot("run-1", "operator-1");
+    await expect(api.listClassifierEventPage(classifierRequest)).rejects.toThrow();
+    await expect(
+      api.streamUpdates("operator-1", eventUlid(8))[Symbol.asyncIterator]().next(),
+    ).rejects.toThrow();
+  });
+
+  it("rejects classifier page identities from another selection or an advanced baseline", async () => {
+    let response = RunActivityPageV2.create({
+      scopeRef,
+      cursor: cursor(),
+      runId: "run-2",
+      activities: [classifierActivity()],
+    });
+    const api = apiWith({
+      getRunSnapshot: () => ({ response: Promise.resolve(classifierSnapshot) }),
+      listRunActivity: () => ({ response: Promise.resolve(response) }),
+    });
+    await api.getLatestRunSnapshot("run-1", "operator-1");
+    await expect(
+      api.listClassifierEventPage({
+        ...classifierRequest,
+        expectedRunId: "run-2",
+      }),
+    ).rejects.toThrow(/selected node snapshot/i);
+    await expect(api.listClassifierEventPage(classifierRequest)).rejects.toThrow(
+      /selected node snapshot/i,
+    );
+    response = RunActivityPageV2.create({ ...response, runId: "run-1", cursor: cursor(9) });
+    await expect(api.listClassifierEventPage(classifierRequest)).rejects.toThrow(
+      /selected node snapshot/i,
+    );
+    response = RunActivityPageV2.create({
+      ...response,
+      cursor: cursor(),
+      activities: [{ ...classifierActivity(), nodeId: "another-node" }],
+    });
+    await expect(api.listClassifierEventPage(classifierRequest)).rejects.toThrow(
+      /selected node snapshot/i,
+    );
+    await expect(api.readJsonDetail("classifier-1")).rejects.toThrow(/not bound/i);
+  });
+
+  it("refuses agent activities on classifier pages and cross-run detail references on the live path", async () => {
+    const activity = classifierActivity();
+    const api = apiWith({
+      getRunSnapshot: () => ({ response: Promise.resolve(classifierSnapshot) }),
+      listRunActivity: () => ({
+        response: Promise.resolve(
+          RunActivityPageV2.create({
+            scopeRef,
+            cursor: cursor(),
+            runId: "run-1",
+            activities: [{ ...activity, kind: "agent_event" }],
+          }),
+        ),
+      }),
+      watchRunStatus: () => ({
+        responses: (async function* () {
+          yield RunStatusEnvelopeV2.create({
+            scopeRef,
+            cursor: cursor(9),
+            eventUlid: eventUlid(9),
+            payload: {
+              oneofKind: "activityAppended",
+              activityAppended: {
+                runId: "run-2",
+                activity,
+              },
+            },
+          });
+        })(),
+      }),
+    });
+    await api.getLatestRunSnapshot("run-1", "operator-1");
+    await expect(api.listClassifierEventPage(classifierRequest)).rejects.toThrow(
+      /expected classifier event/i,
+    );
+    await expect(
+      api.streamUpdates("operator-1", eventUlid(8))[Symbol.asyncIterator]().next(),
+    ).rejects.toThrow(/bound detail reference/i);
+    await expect(api.readJsonDetail("classifier-1")).rejects.toThrow(/not bound/i);
+    const agent = await api.listAgentEventPage(classifierRequest);
+    expect(agent.records[0].invocationId).toBe("classifier-call");
   });
 });

@@ -21,6 +21,7 @@ from typing import Any
 
 from croniter import croniter
 
+from avalanche.classifier.models import ClassifierDeclaration
 from avalanche.dag import Workflow
 
 from .models import (
@@ -501,11 +502,16 @@ def _worker(payload: dict[str, Any]) -> dict[str, Any]:
                 workflow_id = f"{relative_file}::{symbol}"
                 if multiple_roots:
                     workflow_id = f"{root.alias}/{workflow_id}"
-                file_descriptors.append(
-                    _descriptor_to_dict(
+                try:
+                    descriptor = _descriptor_to_dict(
                         workflow_id, root.alias, relative_file, symbol, workflow
                     )
-                )
+                except Exception as exc:
+                    file_diagnostics.append(
+                        _diagnostic(resolved_file, "build_error", _format_exception(exc))
+                    )
+                    continue
+                file_descriptors.append(descriptor)
             if not found:
                 file_diagnostics.append(
                     _diagnostic(
@@ -605,7 +611,14 @@ def _descriptor_to_dict(
     node_source_code = node_source_code_for_workflow(workflow, node_ids)
     agent_node_ids = []
     agent_metadata_json = []
+    classifier_metadata_json: list[list[str]] = []
     for node_id in node_ids:
+        classifier_spec = getattr(workflow.nodes[node_id].node.fn, "__classifier_step__", None)
+        if classifier_spec is not None:
+            declaration = ClassifierDeclaration.model_validate(
+                classifier_spec.declaration_metadata(workflow.classifier_defaults)
+            )
+            classifier_metadata_json.append([node_id, declaration.model_dump_json()])
         spec = getattr(workflow.nodes[node_id].node.fn, "__agent_step__", None)
         if spec is None:
             continue
@@ -649,6 +662,7 @@ def _descriptor_to_dict(
         "display_names": [[nid, display_name_from_id(nid)] for nid in node_ids],
         "agent_node_ids": agent_node_ids,
         "agent_metadata_json": agent_metadata_json,
+        "classifier_metadata_json": classifier_metadata_json,
         "standard_step_docstring_lines": list(standard_step_docstring_lines.items()),
         "node_source_code": list(node_source_code.items()),
         "cron": workflow.cron,
@@ -669,6 +683,9 @@ def _descriptor_from_dict(item: dict[str, Any]) -> WorkflowDescriptor:
         agent_node_ids=tuple(item.get("agent_node_ids", ())),
         agent_metadata_json=tuple(
             (key, value) for key, value in item.get("agent_metadata_json", ())
+        ),
+        classifier_metadata_json=tuple(
+            (key, value) for key, value in item.get("classifier_metadata_json", ())
         ),
         standard_step_docstring_lines=tuple(
             (key, value) for key, value in item.get("standard_step_docstring_lines", ())

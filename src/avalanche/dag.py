@@ -50,7 +50,7 @@ from __future__ import annotations
 
 from collections import defaultdict
 from concurrent.futures import FIRST_COMPLETED, CancelledError, Future, ThreadPoolExecutor, wait
-from contextvars import ContextVar
+from contextvars import ContextVar, copy_context
 from copy import copy
 from dataclasses import dataclass, field
 from enum import Enum
@@ -58,6 +58,7 @@ from functools import update_wrapper, wraps
 from threading import Lock
 from typing import TYPE_CHECKING, Any, Callable, DefaultDict, TypeVar, get_type_hints
 
+from pydantic import JsonValue
 from ulid import ULID
 
 from .input_ref import InputRef
@@ -2087,6 +2088,7 @@ class Workflow:
         input_type: type | None = None,
         context_type: type | None = None,
         agent_defaults: dict[str, Any] | None = None,
+        classifier_defaults: dict[str, JsonValue] | None = None,
     ):
         """
         Initialize workflow.
@@ -2111,6 +2113,11 @@ class Workflow:
         self.input_type = input_type
         self.context_type = context_type
         self.agent_defaults = dict(agent_defaults or {})
+        from .classifier.models import validate_runtime_defaults
+
+        self.classifier_defaults = validate_runtime_defaults(
+            classifier_defaults if classifier_defaults is not None else {}
+        )
 
         # Validate: detect cycles via Kahn's algorithm (incomplete sort = cycle)
         order = self._topological_sort()
@@ -2220,8 +2227,10 @@ class Workflow:
         driver_hooks = copy(hooks) if hooks is not None else None
         if driver_hooks is not None:
             driver_hooks.cancel_requested = cancel_requested
+        driver_context = copy_context()
         handle._start(
-            lambda: self._run_driver(
+            lambda: driver_context.run(
+                self._run_driver,
                 executor=resolved_executor,
                 hooks=driver_hooks,
                 cancel_requested=cancel_requested,
@@ -2489,6 +2498,11 @@ class Workflow:
             if agent_step_spec is not None:
                 actual_fn = agent_step_spec.with_workflow_defaults(
                     actual_fn, self.agent_defaults
+                )
+            classifier_step_spec = getattr(actual_fn, "__classifier_step__", None)
+            if classifier_step_spec is not None:
+                actual_fn = classifier_step_spec.with_workflow_defaults(
+                    actual_fn, self.classifier_defaults
                 )
             if hooks and hooks.wrap_fn:
                 actual_fn = hooks.wrap_fn(node_id, actual_fn)
@@ -2892,7 +2906,9 @@ class Workflow:
 
                             if hooks and hooks.on_node_start:
                                 hooks.on_node_start(node_id)
-                            task = pool.submit(submit_node, node_id, emit_hooks=False)
+                            task = pool.submit(
+                                copy_context().run, submit_node, node_id, emit_hooks=False
+                            )
                             pending_tasks[task] = node_id
                             remaining_nodes.remove(node_id)
 
@@ -3022,6 +3038,7 @@ def workflow(
     context: type | None = None,
     ctx: type | None = None,
     agent_defaults: dict[str, Any] | None = None,
+    classifier_defaults: dict[str, JsonValue] | None = None,
 ) -> Callable[[], Workflow] | Callable[[Callable[[], None]], Callable[[], Workflow]]:
     """
     Decorator for workflow definitions.
@@ -3062,6 +3079,10 @@ def workflow(
         agent_defaults = validate_runtime_kwargs(
             agent_defaults, owner="ava.workflow(agent_defaults=...)"
         )
+    if classifier_defaults is not None:
+        from .classifier.models import validate_runtime_defaults
+
+        classifier_defaults = validate_runtime_defaults(classifier_defaults)
 
     def decorator(fn: Callable[[], None]) -> Callable[[], Workflow]:
         @wraps(fn)
@@ -3083,6 +3104,7 @@ def workflow(
                     input_type=input,
                     context_type=context_type,
                     agent_defaults=agent_defaults,
+                    classifier_defaults=classifier_defaults,
                 )
             finally:
                 _workflow_context.reset(token)

@@ -241,7 +241,8 @@ export function WorkflowWorkspaceSurface({
     inspectedNodeAvailable &&
     (!run ||
       (run.topology
-        ? Object.hasOwn(run.topology.agentFieldSchemasJson, inspectedNode)
+        ? Object.hasOwn(run.topology.agentFieldSchemasJson, inspectedNode) ||
+          Object.hasOwn(run.topology.classifierMetadataJson, inspectedNode)
         : run.nodes.some((node) => node.nodeId === inspectedNode && node.trace))),
   );
   const runListPanel = workflowId ? (
@@ -375,6 +376,7 @@ export function WorkflowWorkspaceSurface({
                 run={run}
                 nodeId={inspectedNode}
                 liveEvents={state.liveEvents[liveEventDescriptorKey]}
+                liveClassifierEvents={state.liveClassifierEvents[liveEventDescriptorKey]}
                 onClose={closePanel}
                 definitionLabel={definitionLabel}
               />

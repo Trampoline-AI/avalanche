@@ -1,11 +1,17 @@
 import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 
-import type { AgentEventDescriptorPage, OperatorApi } from "./api";
+import type {
+  AgentEventDescriptorPage,
+  ClassifierEventDescriptorPage,
+  OperatorApi,
+} from "./api";
+import type { ClassifierDeclaration, ClassifierInvocation } from "./classifier";
 import { Inspector } from "./Inspector";
 import { DETAIL_CACHE_MAX_BYTES } from "./detailProjection";
 import {
   AgentEventDescriptorMsg,
+  ClassifierEventDescriptorMsg,
   DescriptorPageOrder,
   FlowInfoMsg,
   RunSnapshotMsg,
@@ -1061,5 +1067,855 @@ describe("regular step inspection", () => {
     expect(screen.queryByRole("complementary")).not.toBeInTheDocument();
     expect(screen.queryByLabelText("Source code")).not.toBeInTheDocument();
     expect(getWorkflowNodeSource).not.toHaveBeenCalled();
+  });
+});
+
+const classifierDeclaration: ClassifierDeclaration = {
+  questions: {
+    category: {
+      type: "choice",
+      instructions: "Choose the historical category.",
+      criteria: { keep: "Useful", discard: "Not useful" },
+    },
+    approved: { type: "noul", instructions: "Is it approved?", criteria: null },
+    quality: { type: "score", instructions: ["Assess quality"], criteria: ["Low", "High"] },
+  },
+  runtime: { model: "jev-latest", timeout: 10 },
+};
+const classifierWorkflow = FlowInfoMsg.create({
+  ...workflow,
+  classifierMetadataJson: { [node.nodeId]: JSON.stringify(classifierDeclaration) },
+});
+const classifierRun = RunSnapshotMsg.create({
+  ...snapshotFor(),
+  topology: {
+    ...snapshotFor().topology,
+    classifierMetadataJson: classifierWorkflow.classifierMetadataJson,
+  },
+});
+function classifierInvocation(
+  index: number,
+  status: ClassifierInvocation["status"] = "success",
+): ClassifierInvocation {
+  return {
+    invocation_id: `classification-${index}`,
+    invocation_index: index,
+    status,
+    started_at: 100,
+    ended_at: status === "running" ? null : 101,
+    declaration: classifierDeclaration,
+    input: { record: `input-${index}`, approved: index === 0 },
+    error: status === "failed" ? "Classification request failed" : null,
+    result:
+      status === "success"
+        ? {
+            model: `result-model-${index}`,
+            usage: { input_tokens: 10, output_tokens: 5 },
+            answers: {
+              category: {
+                type: "choice",
+                choice: "keep",
+                probabilities: { keep: 0.8, discard: 0.2 },
+                confidence: 0.7,
+              },
+              approved: { type: "noul", noul: 0.9 },
+              quality: {
+                type: "score",
+                score: 0.75,
+                legend: { "0": "Low", "1": "High" },
+                probabilities: { "0": 0.25, "1": 0.75 },
+                confidence: 0.6,
+              },
+            },
+          }
+        : null,
+  };
+}
+function classifierEvent(
+  sequence: number,
+  index: number,
+  status: ClassifierInvocation["status"] = "success",
+) {
+  return ClassifierEventDescriptorMsg.create({
+    eventSequence: String(sequence),
+    invocationId: `classification-${index}`,
+    eventKind: status,
+    bodyToken: `classifier-${sequence}`,
+    sizeBytes: "64",
+    error: status === "failed",
+  });
+}
+function classifierPage(
+  records: ClassifierEventDescriptorMsg[],
+  nextPageToken = "",
+): ClassifierEventDescriptorPage {
+  return {
+    operatorInstanceId: classifierRun.operatorInstanceId,
+    asOfEventUlid: classifierRun.asOfEventUlid,
+    runId: classifierRun.summary!.runId,
+    nodeId: node.nodeId,
+    records,
+    nextPageToken,
+    nextCursor: records.at(-1)?.eventSequence ?? "0",
+  };
+}
+
+describe("classifier inspection", () => {
+  it("shows declared questions before a run without fetching execution or source", () => {
+    const listClassifierEventPage = vi.fn<OperatorApi["listClassifierEventPage"]>();
+    const getWorkflowNodeSource = vi.fn<OperatorApi["getWorkflowNodeSource"]>();
+    render(
+      <Inspector
+        api={createApi({ listClassifierEventPage, getWorkflowNodeSource })}
+        workflow={classifierWorkflow}
+        nodeId={node.nodeId}
+        onClose={() => undefined}
+      />,
+    );
+    const declaration = screen.getByRole("complementary", { name: "Classifier declaration" });
+    expect(within(declaration).getByRole("tab", { name: "Definition" })).toHaveAttribute(
+      "aria-selected",
+      "true",
+    );
+    expect(within(declaration).getByRole("tab", { name: "Code" })).toHaveAttribute(
+      "aria-selected",
+      "false",
+    );
+    expect(within(declaration).getByLabelText("Question category")).toHaveTextContent(
+      "Choose the historical category.",
+    );
+    expect(within(declaration).getByLabelText("Question approved")).toHaveTextContent(
+      "Is it approved?",
+    );
+    expect(within(declaration).getByLabelText("Question quality")).toHaveTextContent(
+      "Assess quality",
+    );
+    expect(listClassifierEventPage).not.toHaveBeenCalled();
+    expect(getWorkflowNodeSource).not.toHaveBeenCalled();
+  });
+
+  it("loads source only in Code and cancels stale requests across tabs, definitions, APIs, and selections", async () => {
+    const pendingSource = Promise.withResolvers<string>();
+    const getWorkflowNodeSource = vi
+      .fn<OperatorApi["getWorkflowNodeSource"]>()
+      .mockImplementationOnce(() => pendingSource.promise)
+      .mockResolvedValue("return 'current classifier'");
+    const api = createApi({ getWorkflowNodeSource });
+    const view = render(
+      <Inspector
+        api={api}
+        workflow={classifierWorkflow}
+        nodeId={node.nodeId}
+        onClose={() => undefined}
+      />,
+    );
+    fireEvent.click(screen.getByRole("tab", { name: "Code" }));
+    expect(getWorkflowNodeSource).toHaveBeenCalledWith(
+      classifierWorkflow.name,
+      node.nodeId,
+      expect.any(AbortSignal),
+    );
+    const firstSignal = getWorkflowNodeSource.mock.calls[0][2];
+    fireEvent.click(screen.getByRole("tab", { name: "Definition" }));
+    expect(firstSignal?.aborted).toBe(true);
+    await act(async () => {
+      pendingSource.resolve("return 'stale classifier'");
+      await pendingSource.promise;
+    });
+    expect(screen.queryByLabelText("Source code")).toBeNull();
+    fireEvent.keyDown(screen.getByRole("tab", { name: "Definition" }), { key: "ArrowRight" });
+    expect(screen.getByRole("tab", { name: "Code" })).toHaveFocus();
+    expect(await screen.findByLabelText("Source code")).toHaveTextContent("current classifier");
+    const updatedWorkflow = FlowInfoMsg.create(classifierWorkflow);
+    const definitionSource = Promise.withResolvers<string>();
+    getWorkflowNodeSource.mockImplementationOnce(() => definitionSource.promise);
+    view.rerender(
+      <Inspector
+        api={api}
+        workflow={updatedWorkflow}
+        nodeId={node.nodeId}
+        onClose={() => undefined}
+      />,
+    );
+    const definitionSignal = getWorkflowNodeSource.mock.calls[2][2];
+    expect(screen.queryByLabelText("Source code")).toBeNull();
+    const apiSource = Promise.withResolvers<string>();
+    const replacementSource = vi.fn<OperatorApi["getWorkflowNodeSource"]>(
+      () => apiSource.promise,
+    );
+    const replacementApi = createApi({ getWorkflowNodeSource: replacementSource });
+    view.rerender(
+      <Inspector
+        api={replacementApi}
+        workflow={updatedWorkflow}
+        nodeId={node.nodeId}
+        onClose={() => undefined}
+      />,
+    );
+    expect(definitionSignal?.aborted).toBe(true);
+    await act(async () => {
+      definitionSource.resolve("return 'obsolete definition'");
+      await definitionSource.promise;
+    });
+    expect(screen.queryByLabelText("Source code")).toBeNull();
+    const replacementSignal = replacementSource.mock.calls[0][2];
+    view.rerender(
+      <Inspector
+        api={replacementApi}
+        workflow={updatedWorkflow}
+        run={classifierRun}
+        nodeId={node.nodeId}
+        onClose={() => undefined}
+      />,
+    );
+    expect(replacementSignal?.aborted).toBe(true);
+    expect(screen.getByRole("tab", { name: "Calls" })).toHaveAttribute("aria-selected", "true");
+    expect(screen.queryByRole("tab", { name: "Code" })).toBeNull();
+    await act(async () => {
+      apiSource.resolve("return 'current code must not enter history'");
+      await apiSource.promise;
+    });
+    expect(screen.queryByLabelText("Source code")).toBeNull();
+    fireEvent.click(screen.getByRole("tab", { name: "Definition" }));
+    expect(screen.getByLabelText("Historical classifier declaration")).toBeVisible();
+    expect(replacementSource).toHaveBeenCalledTimes(1);
+  });
+
+  it("presents unavailable source and retries failures only on explicit request", async () => {
+    const getWorkflowNodeSource = vi
+      .fn<OperatorApi["getWorkflowNodeSource"]>()
+      .mockRejectedValueOnce(new Error("Source offline"))
+      .mockResolvedValueOnce(undefined);
+    render(
+      <Inspector
+        api={createApi({ getWorkflowNodeSource })}
+        workflow={classifierWorkflow}
+        nodeId={node.nodeId}
+        onClose={() => undefined}
+      />,
+    );
+    fireEvent.click(screen.getByRole("tab", { name: "Code" }));
+    expect(await screen.findByRole("alert")).toHaveTextContent("Source offline");
+    expect(getWorkflowNodeSource).toHaveBeenCalledTimes(1);
+    fireEvent.click(screen.getByRole("button", { name: "Retry source code" }));
+    expect(await screen.findByText("Source code is unavailable for this node.")).toBeVisible();
+    expect(getWorkflowNodeSource).toHaveBeenCalledTimes(2);
+  });
+
+  it("aborts source on node selection and never shows another classifier's code", async () => {
+    const oldSource = Promise.withResolvers<string>();
+    const otherNodeId = "other-classifier";
+    const twoClassifiers = FlowInfoMsg.create({
+      ...classifierWorkflow,
+      nodeIds: [node.nodeId, otherNodeId],
+      classifierMetadataJson: {
+        ...classifierWorkflow.classifierMetadataJson,
+        [otherNodeId]: JSON.stringify(classifierDeclaration),
+      },
+    });
+    const getWorkflowNodeSource = vi.fn<OperatorApi["getWorkflowNodeSource"]>(
+      (_workflow, selectedNode) =>
+        selectedNode === node.nodeId
+          ? oldSource.promise
+          : Promise.resolve("return 'other classifier'"),
+    );
+    const api = createApi({ getWorkflowNodeSource });
+    const view = render(
+      <Inspector
+        api={api}
+        workflow={twoClassifiers}
+        nodeId={node.nodeId}
+        onClose={() => undefined}
+      />,
+    );
+    fireEvent.click(screen.getByRole("tab", { name: "Code" }));
+    const oldSignal = getWorkflowNodeSource.mock.calls[0][2];
+    view.rerender(
+      <Inspector
+        api={api}
+        workflow={twoClassifiers}
+        nodeId={otherNodeId}
+        onClose={() => undefined}
+      />,
+    );
+    expect(oldSignal?.aborted).toBe(true);
+    expect(screen.getByRole("tab", { name: "Definition" })).toHaveAttribute(
+      "aria-selected",
+      "true",
+    );
+    expect(getWorkflowNodeSource).toHaveBeenCalledTimes(1);
+    fireEvent.click(screen.getByRole("tab", { name: "Code" }));
+    expect(await screen.findByLabelText("Source code")).toHaveTextContent("other classifier");
+    await act(async () => {
+      oldSource.resolve("return 'stale other node'");
+      await oldSource.promise;
+    });
+    expect(screen.getByLabelText("Source code")).not.toHaveTextContent("stale other node");
+  });
+
+  it("retains historical questions and all typed answers across current definition changes and deletion", async () => {
+    const api = createApi({
+      listClassifierEventPage: async () => classifierPage([classifierEvent(1, 0)]),
+      readJsonDetail: async () => classifierInvocation(0),
+    });
+    const changedWorkflow = FlowInfoMsg.create({
+      ...classifierWorkflow,
+      classifierMetadataJson: {
+        [node.nodeId]: JSON.stringify({
+          questions: {
+            replacement: { type: "noul", instructions: "New current question", criteria: null },
+          },
+          runtime: classifierDeclaration.runtime,
+        }),
+      },
+    });
+    const view = render(
+      <Inspector
+        api={api}
+        workflow={changedWorkflow}
+        run={classifierRun}
+        nodeId={node.nodeId}
+        onClose={() => undefined}
+      />,
+    );
+    expect(screen.getByRole("tab", { name: "Calls" })).toHaveAttribute("aria-selected", "true");
+    expect(screen.queryByLabelText("Historical classifier declaration")).toBeNull();
+    const answer = await screen.findByLabelText("Answer category");
+    expect(answer).toHaveTextContent("keep");
+    expect(
+      within(answer).getByRole("meter", { name: "category: discard probability" }),
+    ).toHaveAttribute("value", "0.2");
+    expect(within(answer).getByText("Confidence")).toBeInTheDocument();
+    expect(screen.getByLabelText("Answer approved")).toHaveTextContent("0.9");
+    expect(
+      within(screen.getByLabelText("Answer approved")).queryByText("Confidence"),
+    ).toBeNull();
+    expect(screen.getByLabelText("Answer quality")).toHaveTextContent("0.75");
+    expect(screen.getByLabelText("Answer quality")).toHaveTextContent("High");
+    expect(screen.queryByText("New current question")).toBeNull();
+    view.rerender(
+      <Inspector
+        api={api}
+        run={classifierRun}
+        nodeId={node.nodeId}
+        onClose={() => undefined}
+      />,
+    );
+    fireEvent.click(screen.getByRole("tab", { name: "Definition" }));
+    expect(screen.getByLabelText("Historical classifier declaration")).toHaveTextContent(
+      "Choose the historical category.",
+    );
+    fireEvent.click(screen.getByRole("tab", { name: "Calls" }));
+    expect(screen.getByLabelText("Answer category")).toBeVisible();
+  });
+
+  it("groups lifecycle records by call and pairs each selected input with its own typed answers", async () => {
+    const secondInvocation = classifierInvocation(1);
+    secondInvocation.input = ["different input", { document: "second" }];
+    if (secondInvocation.result) {
+      secondInvocation.result.answers.category = {
+        type: "choice",
+        choice: "discard",
+        probabilities: { keep: 0.1, discard: 0.9 },
+        confidence: 0.85,
+      };
+    }
+    const readJsonDetail = vi.fn<OperatorApi["readJsonDetail"]>(async (token) =>
+      token === "classifier-1"
+        ? classifierInvocation(0, "running")
+        : token === "classifier-2"
+          ? classifierInvocation(0)
+          : secondInvocation,
+    );
+    const api = createApi({ readJsonDetail });
+    const view = render(
+      <Inspector
+        api={api}
+        run={classifierRun}
+        nodeId={node.nodeId}
+        liveClassifierEvents={[classifierEvent(1, 0, "running")]}
+        onClose={() => undefined}
+      />,
+    );
+    expect(await screen.findByLabelText("Input state")).toHaveTextContent("input-0");
+    expect(screen.getByRole("status", { name: "Invocation status" })).toHaveTextContent(
+      "running",
+    );
+    expect(screen.queryByLabelText("Classification answers")).toBeNull();
+    view.rerender(
+      <Inspector
+        api={api}
+        run={classifierRun}
+        nodeId={node.nodeId}
+        liveClassifierEvents={[
+          classifierEvent(1, 0, "running"),
+          classifierEvent(2, 0),
+          classifierEvent(3, 1),
+          classifierEvent(4, 0, "running"),
+        ]}
+        onClose={() => undefined}
+      />,
+    );
+    expect(await screen.findByText("result-model-1")).toBeVisible();
+    const second = screen.getByLabelText("Invocation classification-1");
+    expect(within(second).getByLabelText("Input state")).toHaveTextContent("different input");
+    expect(within(second).getByLabelText("Answer category")).toHaveTextContent("discard");
+    const first = screen.getByLabelText("Invocation classification-0");
+    fireEvent.click(within(first).getByRole("button", { expanded: false }));
+    expect(await within(first).findByText("result-model-0")).toBeVisible();
+    expect(within(first).getByLabelText("Input state")).toHaveTextContent("input-0");
+    expect(within(first).getByLabelText("Input state")).not.toHaveTextContent(
+      "different input",
+    );
+    expect(within(first).getByLabelText("Answer category")).toHaveTextContent("keep");
+    expect(within(first).getByRole("button", { expanded: true })).toHaveTextContent(
+      /Call 1.*input-0/,
+    );
+    expect(within(second).queryByLabelText("Input state")).toBeNull();
+    fireEvent.click(within(second).getByRole("button", { expanded: false }));
+    expect(within(second).getByLabelText("Input state")).toHaveTextContent("different input");
+    expect(within(second).getByRole("button", { expanded: true })).toHaveTextContent(
+      /Call 2.*different input/,
+    );
+    expect(within(first).queryByLabelText("Input state")).toBeNull();
+    expect(screen.getAllByRole("article")).toHaveLength(2);
+    expect(within(first).getByRole("status", { name: "Invocation status" })).toHaveTextContent(
+      "success",
+    );
+    expect(within(second).getByRole("status", { name: "Invocation status" })).toHaveTextContent(
+      "success",
+    );
+    expect(readJsonDetail.mock.calls.some(([token]) => token === "classifier-4")).toBe(false);
+  });
+
+  it("keeps failed and cancelled calls paired with captured input and distinguishes validation failure", async () => {
+    const failed = classifierInvocation(0, "failed");
+    const cancelled = classifierInvocation(1, "cancelled");
+    const invalid = { ...classifierInvocation(2, "failed"), input: null };
+    render(
+      <Inspector
+        api={createApi({
+          listClassifierEventPage: async () =>
+            classifierPage([
+              classifierEvent(1, 0, "failed"),
+              classifierEvent(2, 1, "cancelled"),
+              classifierEvent(3, 2, "failed"),
+            ]),
+          readJsonDetail: async (token) =>
+            token === "classifier-1" ? failed : token === "classifier-2" ? cancelled : invalid,
+        })}
+        run={classifierRun}
+        nodeId={node.nodeId}
+        onClose={() => undefined}
+      />,
+    );
+    expect(await screen.findByLabelText("Input state")).toHaveTextContent(/not captured/i);
+    expect(screen.queryByLabelText("Classification answers")).toBeNull();
+    const cancelledCall = screen.getByLabelText("Invocation classification-1");
+    fireEvent.click(within(cancelledCall).getByRole("button", { expanded: false }));
+    expect(await within(cancelledCall).findByLabelText("Input state")).toHaveTextContent(
+      "input-1",
+    );
+    expect(
+      within(cancelledCall).getByRole("status", { name: "Invocation status" }),
+    ).toHaveTextContent("cancelled");
+    expect(within(cancelledCall).queryByLabelText("Classification answers")).toBeNull();
+    const failedCall = screen.getByLabelText("Invocation classification-0");
+    fireEvent.click(within(failedCall).getByRole("button", { expanded: false }));
+    expect(await within(failedCall).findByLabelText("Input state")).toHaveTextContent(
+      "input-0",
+    );
+    expect(within(failedCall).getByRole("alert")).toHaveTextContent(
+      "Classification request failed",
+    );
+    expect(
+      within(failedCall).getByRole("status", { name: "Invocation status" }),
+    ).toHaveTextContent("failed");
+    expect(within(failedCall).queryByLabelText("Classification answers")).toBeNull();
+  });
+
+  it("aborts both page and body requests on selection changes and discards late completions", async () => {
+    const oldPage = Promise.withResolvers<ClassifierEventDescriptorPage>();
+    const oldBody = Promise.withResolvers<unknown>();
+    let pageSignal: AbortSignal | undefined;
+    let bodySignal: AbortSignal | undefined;
+    const api = createApi({
+      listClassifierEventPage: (request, signal) => {
+        if (request.expectedRunId === classifierRun.summary!.runId) {
+          pageSignal = signal;
+          return oldPage.promise;
+        }
+        return Promise.resolve({
+          ...classifierPage([classifierEvent(3, 1)]),
+          runId: request.expectedRunId,
+        });
+      },
+      readJsonDetail: (token, signal) => {
+        if (token === "classifier-1") {
+          bodySignal = signal;
+          return oldBody.promise;
+        }
+        return Promise.resolve(classifierInvocation(1));
+      },
+    });
+    const view = render(
+      <Inspector
+        api={api}
+        run={classifierRun}
+        nodeId={node.nodeId}
+        liveClassifierEvents={[classifierEvent(1, 0)]}
+        onClose={() => undefined}
+      />,
+    );
+    await waitFor(() => expect(bodySignal).toBeDefined());
+    const otherRun = RunSnapshotMsg.create({
+      ...classifierRun,
+      summary: { ...classifierRun.summary, runId: "other-run" },
+    });
+    view.rerender(
+      <Inspector api={api} run={otherRun} nodeId={node.nodeId} onClose={() => undefined} />,
+    );
+    expect(pageSignal?.aborted).toBe(true);
+    expect(bodySignal?.aborted).toBe(true);
+    expect(await screen.findByText("result-model-1")).toBeVisible();
+    await act(async () => {
+      oldPage.resolve(classifierPage([classifierEvent(1, 0)]));
+      oldBody.resolve(classifierInvocation(0));
+      await Promise.all([oldPage.promise, oldBody.promise]);
+    });
+    expect(screen.queryByText("result-model-0")).toBeNull();
+    expect(screen.queryByRole("article", { name: "Invocation classification-0" })).toBeNull();
+  });
+
+  it("distinguishes page failure, body failure, and a genuinely uninvoked classifier, with explicit retries", async () => {
+    let pageAttempts = 0;
+    let detailAttempts = 0;
+    const api = createApi({
+      listClassifierEventPage: async () => {
+        if (++pageAttempts === 1) throw new Error("Page offline");
+        return classifierPage([classifierEvent(1, 0)]);
+      },
+      readJsonDetail: async () => {
+        if (++detailAttempts === 1) throw new Error("Body offline");
+        return classifierInvocation(0);
+      },
+    });
+    const view = render(
+      <Inspector
+        api={api}
+        run={classifierRun}
+        nodeId={node.nodeId}
+        onClose={() => undefined}
+      />,
+    );
+    expect(await screen.findByText(/Page offline/)).toBeVisible();
+    expect(screen.queryByText("Classifier not invoked in this run.")).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: "Retry classifier history" }));
+    expect(await screen.findByText(/Body offline/)).toBeVisible();
+    expect(screen.queryByText("Classifier not invoked in this run.")).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: "Retry invocation details" }));
+    expect(await screen.findByText("result-model-0")).toBeVisible();
+    view.rerender(
+      <Inspector
+        api={createApi()}
+        run={classifierRun}
+        nodeId={node.nodeId}
+        onClose={() => undefined}
+      />,
+    );
+    expect(await screen.findByText("Classifier not invoked in this run.")).toBeVisible();
+    expect(screen.queryByText("result-model-0")).toBeNull();
+  });
+
+  it("shows expired invocation statuses without losing retained answers or offering unavailable body requests", async () => {
+    const statuses = ["running", "success", "failed", "cancelled"] as const;
+    const expired = statuses.map((status, index) =>
+      ClassifierEventDescriptorMsg.create({
+        ...classifierEvent(index + 1, index, status),
+        bodyToken: "",
+      }),
+    );
+    const readJsonDetail = vi.fn<OperatorApi["readJsonDetail"]>(async () =>
+      classifierInvocation(4),
+    );
+    render(
+      <Inspector
+        api={createApi({
+          listClassifierEventPage: async () =>
+            classifierPage([...expired, classifierEvent(5, 4)]),
+          readJsonDetail,
+        })}
+        run={classifierRun}
+        nodeId={node.nodeId}
+        onClose={() => undefined}
+      />,
+    );
+    expect(await screen.findByText("result-model-4")).toBeVisible();
+    for (const [index, status] of statuses.entries()) {
+      const invocation = screen.getByRole("article", {
+        name: `Invocation classification-${index}`,
+      });
+      fireEvent.click(within(invocation).getByRole("button", { expanded: false }));
+      expect(
+        within(invocation).getByRole("status", { name: "Invocation status" }),
+      ).toHaveTextContent(status);
+      expect(within(invocation).getByText(/detail unavailable/i)).toBeVisible();
+      expect(within(invocation).queryByLabelText("Classification answers")).toBeNull();
+      expect(
+        within(invocation).queryByRole("button", { name: /invocation details/i }),
+      ).toBeNull();
+    }
+    expect(screen.queryByRole("alert")).toBeNull();
+    expect(readJsonDetail).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not substitute current questions when retained declaration or detail is malformed", async () => {
+    const malformedRun = RunSnapshotMsg.create({
+      ...classifierRun,
+      topology: { ...classifierRun.topology, classifierMetadataJson: { [node.nodeId]: "{}" } },
+    });
+    render(
+      <Inspector
+        api={createApi({
+          listClassifierEventPage: async () => classifierPage([classifierEvent(1, 0)]),
+          readJsonDetail: async () => classifierInvocation(1),
+        })}
+        workflow={classifierWorkflow}
+        run={malformedRun}
+        nodeId={node.nodeId}
+        onClose={() => undefined}
+      />,
+    );
+    fireEvent.click(screen.getByRole("tab", { name: "Definition" }));
+    expect(screen.getByText(/Historical classifier declaration unavailable/)).toBeVisible();
+    fireEvent.click(screen.getByRole("tab", { name: "Calls" }));
+    expect(await screen.findByText(/does not match its invocation descriptor/)).toBeVisible();
+    expect(screen.queryByLabelText("Question category")).toBeNull();
+    expect(screen.queryByLabelText("Classification answers")).toBeNull();
+  });
+
+  it("derives interruption from terminal node state while retaining successful calls after postprocessing failure", async () => {
+    const api = createApi({
+      listClassifierEventPage: async () =>
+        classifierPage([classifierEvent(1, 0, "running"), classifierEvent(2, 1)]),
+      readJsonDetail: async (token) =>
+        token === "classifier-1" ? classifierInvocation(0, "running") : classifierInvocation(1),
+    });
+    const stoppedRun = RunSnapshotMsg.create({
+      ...classifierRun,
+      nodes: [{ ...node, status: "failed", error: "Postprocessing failed" }],
+    });
+    render(
+      <Inspector api={api} run={stoppedRun} nodeId={node.nodeId} onClose={() => undefined} />,
+    );
+    expect(await screen.findByText("result-model-1")).toBeVisible();
+    expect(screen.getByLabelText("Input state")).toHaveTextContent("input-1");
+    expect(screen.getByLabelText("Answer category")).toHaveTextContent("keep");
+    const interrupted = screen.getByRole("article", { name: "Invocation classification-0" });
+    fireEvent.click(within(interrupted).getByRole("button", { expanded: false }));
+    expect(within(interrupted).getByLabelText("Input state")).toHaveTextContent("input-0");
+    expect(
+      within(interrupted).getByRole("status", { name: "Invocation status" }),
+    ).toHaveTextContent("interrupted");
+    expect(within(interrupted).queryByLabelText("Classification answers")).toBeNull();
+    expect(screen.getByText("Postprocessing failed")).toBeVisible();
+  });
+
+  it("keeps history pageable and terminal evidence authoritative over an older running page", async () => {
+    const api = createApi({
+      listClassifierEventPage: async (request) =>
+        request.pageToken === "events"
+          ? classifierPage([classifierEvent(4, 1), classifierEvent(3, 0)], "older")
+          : classifierPage([
+              classifierEvent(2, 1, "running"),
+              classifierEvent(1, 0, "running"),
+            ]),
+      readJsonDetail: async (token) =>
+        token === "classifier-4" ? classifierInvocation(1) : classifierInvocation(0),
+    });
+    render(
+      <Inspector
+        api={api}
+        run={classifierRun}
+        nodeId={node.nodeId}
+        onClose={() => undefined}
+      />,
+    );
+    expect(await screen.findByText("result-model-1")).toBeVisible();
+    fireEvent.click(screen.getByRole("button", { name: "Load earlier invocations" }));
+    await waitFor(() =>
+      expect(screen.queryByRole("button", { name: "Load earlier invocations" })).toBeNull(),
+    );
+    expect(screen.getAllByRole("article")).toHaveLength(2);
+    const first = screen.getByLabelText("Invocation classification-0");
+    fireEvent.click(within(first).getByRole("button", { expanded: false }));
+    expect(screen.getByText("result-model-0")).toBeVisible();
+    const second = screen.getByLabelText("Invocation classification-1");
+    fireEvent.click(within(second).getByRole("button", { expanded: false }));
+    expect(screen.getByText("result-model-1")).toBeVisible();
+    expect(within(first).getByRole("status", { name: "Invocation status" })).toHaveTextContent(
+      "success",
+    );
+    expect(within(second).getByRole("status", { name: "Invocation status" })).toHaveTextContent(
+      "success",
+    );
+  });
+
+  it("does not infer interruption after paging away a long-running call's successful terminal record", async () => {
+    const records: ClassifierEventDescriptorMsg[] = [];
+    const bodies = new Map<string, ClassifierInvocation>();
+    const append = (
+      sequence: number,
+      index: number,
+      status: ClassifierInvocation["status"],
+    ) => {
+      const event = classifierEvent(sequence, index, status);
+      records.push(event);
+      bodies.set(event.bodyToken, classifierInvocation(index, status));
+    };
+    append(1, 0, "running");
+    for (let index = 1; index <= 600; index++) {
+      append(index * 2, index, "running");
+      append(index * 2 + 1, index, "success");
+    }
+    append(1202, 0, "success");
+    const newestFirst = records.toReversed();
+    const api = createApi({
+      listClassifierEventPage: async (request) => {
+        const offset = request.pageToken === "events" ? 0 : Number(request.pageToken);
+        const page = newestFirst.slice(offset, offset + request.pageSize);
+        const nextOffset = offset + page.length;
+        return classifierPage(page, nextOffset < newestFirst.length ? String(nextOffset) : "");
+      },
+      readJsonDetail: async (token) => {
+        const invocation = bodies.get(token);
+        if (!invocation) throw new Error("Unknown classifier detail");
+        return invocation;
+      },
+    });
+    const completedRun = RunSnapshotMsg.create({
+      ...classifierRun,
+      summary: { ...classifierRun.summary, status: "success" },
+      nodes: [{ ...node, status: "success" }],
+    });
+    await act(async () => {
+      render(
+        <Inspector
+          api={api}
+          run={completedRun}
+          nodeId={node.nodeId}
+          onClose={() => undefined}
+        />,
+      );
+    });
+    const history = within(screen.getByLabelText("Classifier invocations"));
+    const earlier = history.getByRole("button", { name: "Load earlier invocations" });
+    const returnLatest = history.getByRole("button", { name: "Return to latest invocations" });
+    expect(history.getByText("result-model-0")).toBeVisible();
+    const latest = history.getByLabelText("Invocation classification-0");
+    expect(within(latest).getByRole("status", { name: "Invocation status" })).toHaveTextContent(
+      "success",
+    );
+
+    for (let offset = 100; offset < records.length; offset += 100) {
+      await act(async () => {
+        fireEvent.click(earlier);
+      });
+    }
+    expect(earlier).not.toBeInTheDocument();
+    expect(history.getAllByRole("article", { hidden: true })).toHaveLength(500);
+    const oldest = history.getByLabelText("Invocation classification-0");
+    expect(within(oldest).getByRole("status", { name: "Invocation status" })).toHaveTextContent(
+      /unknown/i,
+    );
+    expect(within(oldest).queryByLabelText("Classification answers")).toBeNull();
+    await act(async () => {
+      fireEvent.click(within(oldest).getByRole("button", { expanded: false }));
+    });
+    expect(within(oldest).getByText("Questions for this invocation")).toBeVisible();
+    expect(within(oldest).queryByText(/classification is running/i)).toBeNull();
+    expect(
+      within(oldest).getByRole("status", { name: "Invocation status" }),
+    ).not.toHaveTextContent(/interrupted|running/i);
+
+    await act(async () => {
+      fireEvent.click(returnLatest);
+    });
+    expect(history.getByText("result-model-0")).toBeVisible();
+    const restored = history.getByLabelText("Invocation classification-0");
+    expect(
+      within(restored).getByRole("status", { name: "Invocation status" }),
+    ).toHaveTextContent("success");
+    expect(within(restored).getByLabelText("Classification answers")).toBeVisible();
+  }, 15_000);
+
+  it("bounds live descriptors while keeping newest calls accessible", async () => {
+    const live = Array.from({ length: 510 }, (_, index) =>
+      ClassifierEventDescriptorMsg.create({
+        ...classifierEvent(index + 1, index),
+        bodyToken: "",
+      }),
+    );
+    await act(async () => {
+      render(
+        <Inspector
+          api={createApi()}
+          run={classifierRun}
+          nodeId={node.nodeId}
+          liveClassifierEvents={live}
+          onClose={() => undefined}
+        />,
+      );
+    });
+    const history = within(screen.getByLabelText("Classifier invocations"));
+    expect(history.getAllByRole("article", { hidden: true })).toHaveLength(500);
+    expect(history.getByLabelText("Invocation classification-509")).toBeVisible();
+    expect(history.queryByLabelText("Invocation classification-0")).toBeNull();
+    expect(history.queryByText("Classifier not invoked in this run.")).toBeNull();
+  });
+
+  it("releases oversized aggregate detail cache entries without automatic refetch loops and allows explicit recovery", async () => {
+    const readJsonDetail = vi.fn<OperatorApi["readJsonDetail"]>(async (token) =>
+      classifierInvocation(token === "classifier-1" ? 0 : 1),
+    );
+    const api = createApi({ readJsonDetail });
+    const first = ClassifierEventDescriptorMsg.create({
+      ...classifierEvent(1, 0),
+      sizeBytes: String(DETAIL_CACHE_MAX_BYTES / 2 + 1),
+    });
+    const second = ClassifierEventDescriptorMsg.create({
+      ...classifierEvent(2, 1),
+      sizeBytes: String(DETAIL_CACHE_MAX_BYTES / 2 + 1),
+    });
+    const view = render(
+      <Inspector
+        api={api}
+        run={classifierRun}
+        nodeId={node.nodeId}
+        liveClassifierEvents={[first]}
+        onClose={() => undefined}
+      />,
+    );
+    expect(await screen.findByText("result-model-0")).toBeVisible();
+    view.rerender(
+      <Inspector
+        api={api}
+        run={classifierRun}
+        nodeId={node.nodeId}
+        liveClassifierEvents={[first, second]}
+        onClose={() => undefined}
+      />,
+    );
+    expect(await screen.findByText("result-model-1")).toBeVisible();
+    const firstCall = screen.getByRole("article", { name: "Invocation classification-0" });
+    fireEvent.click(within(firstCall).getByRole("button", { expanded: false }));
+    expect(within(firstCall).queryByText("result-model-0")).toBeNull();
+    expect(readJsonDetail).toHaveBeenCalledTimes(2);
+    fireEvent.click(
+      within(firstCall).getByRole("button", { name: "Reload invocation details" }),
+    );
+    expect(await screen.findByText("result-model-0")).toBeVisible();
+    expect(screen.queryByText("result-model-1")).toBeNull();
+    expect(readJsonDetail).toHaveBeenCalledTimes(3);
   });
 });

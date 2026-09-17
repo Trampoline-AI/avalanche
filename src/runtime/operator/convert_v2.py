@@ -13,6 +13,8 @@ from .models import (
     CatalogReloadRequired,
     CatalogReplaced,
     CatalogSnapshot,
+    ClassifierEventAppended,
+    ClassifierEventDescriptor,
     LogAppended,
     LogLevel,
     LogRecordDescriptor,
@@ -61,6 +63,7 @@ def workflow_topology_to_v2(topology: WorkflowTopology) -> pb.WorkflowTopologyV2
         agent_field_schemas_json=dict(topology.agent_field_schemas_json),
         agent_instruction_lines=dict(topology.agent_instruction_lines),
         standard_step_docstring_lines=dict(topology.standard_step_docstring_lines),
+        classifier_metadata_json=dict(topology.classifier_metadata_json),
     )
 
 
@@ -71,6 +74,7 @@ def workflow_info_to_v2(info: WorkflowInfo) -> pb.FlowInfoV2:
         node_types=tuple(sorted(info.node_types.items())),
         display_names=tuple(sorted(info.display_names.items())),
         standard_step_docstring_lines=tuple(sorted(info.standard_step_docstring_lines.items())),
+        classifier_metadata_json=tuple(sorted(info.classifier_metadata_json.items())),
     )
     manifest_digest = sha256_hex(("\n".join([info.selector, *info.node_ids])).encode("utf-8"))
     return pb.FlowInfoV2(
@@ -83,6 +87,7 @@ def workflow_info_to_v2(info: WorkflowInfo) -> pb.FlowInfoV2:
         topology=workflow_topology_to_v2(topology),
         agent_node_ids=info.agent_node_ids,
         agent_metadata_json=info.agent_metadata_json,
+        classifier_metadata_json=info.classifier_metadata_json,
         cron=info.cron or "",
         next_run_at=info.next_run_at or 0.0,
         last_run_at=info.last_run_at or 0.0,
@@ -366,6 +371,29 @@ def agent_event_activity_to_v2(
     return message
 
 
+def classifier_event_activity_to_v2(
+    event: ClassifierEventDescriptor,
+    *,
+    run_id: str,
+    node_id: str,
+    detail_ref: pb.ActivityDetailRefV2 | None,
+) -> pb.RunActivityDescriptorV2:
+    message = pb.RunActivityDescriptorV2(
+        activity_id=f"classifier:{node_id}:{event.event_sequence}",
+        run_sequence=event.event_sequence,
+        kind="classifier_event",
+        size_bytes=event.size_bytes,
+        detail_ref=detail_ref,
+        node_id=node_id,
+        invocation_id=event.invocation_id,
+        error=event.error,
+        event_kind=event.event_kind,
+    )
+    if event.duration_ms is not None:
+        message.duration_ms = event.duration_ms
+    return message
+
+
 def trace_activity_to_v2(
     trace: TraceDescriptor,
     *,
@@ -393,6 +421,9 @@ def update_envelope_to_v2(
     cursor_for: Callable[[int], pb.LifecycleCursorV2],
     activity_continuation_for: Callable[[str, str, str], pb.ContinuationRefV2],
     body_detail_ref_for: Callable[[str, str, str, int, int], pb.ActivityDetailRefV2],
+    classifier_detail_ref_for: Callable[
+        [str, str, str, int, int], pb.ActivityDetailRefV2 | None
+    ],
     trace_detail_ref_for: Callable[[str, str, TraceDescriptor, int], pb.ActivityDetailRefV2],
 ) -> pb.RunStatusEnvelopeV2:
     """Convert one operator update envelope with its complete event cursor."""
@@ -517,6 +548,24 @@ def update_envelope_to_v2(
                 ),
             )
         )
+    elif isinstance(change, ClassifierEventAppended):
+        message.activity_appended.CopyFrom(
+            pb.ActivityAppendedV2(
+                run_id=change.run_id,
+                activity=classifier_event_activity_to_v2(
+                    change.event,
+                    run_id=change.run_id,
+                    node_id=change.node_id,
+                    detail_ref=classifier_detail_ref_for(
+                        change.run_id,
+                        f"classifier:{change.node_id}:{change.event.event_sequence}",
+                        change.event.body_token,
+                        change.event.event_sequence,
+                        change.event.size_bytes,
+                    ),
+                ),
+            )
+        )
     elif isinstance(change, TraceFinalized):
         message.activity_appended.CopyFrom(
             pb.ActivityAppendedV2(
@@ -590,6 +639,11 @@ def workflow_topology_from_v2(msg: pb.WorkflowTopologyV2) -> WorkflowTopology:
             for node_id in node_ids
             if node_id in msg.standard_step_docstring_lines
         ),
+        classifier_metadata_json=tuple(
+            (node_id, msg.classifier_metadata_json[node_id])
+            for node_id in node_ids
+            if node_id in msg.classifier_metadata_json
+        ),
     )
 
 
@@ -605,6 +659,7 @@ def workflow_info_from_v2(msg: pb.FlowInfoV2) -> WorkflowInfo:
         display_names=dict(msg.topology.display_names),
         agent_node_ids=list(msg.agent_node_ids),
         agent_metadata_json=dict(msg.agent_metadata_json),
+        classifier_metadata_json=dict(msg.classifier_metadata_json),
         standard_step_docstring_lines=dict(msg.topology.standard_step_docstring_lines),
         cron=msg.cron or None,
         next_run_at=msg.next_run_at or None,
@@ -812,6 +867,22 @@ def agent_event_descriptor_from_v2(
     )
 
 
+def classifier_event_descriptor_from_v2(
+    msg: pb.RunActivityDescriptorV2,
+) -> ClassifierEventDescriptor:
+    if msg.kind != "classifier_event":
+        raise ValueError("classifier event descriptor has a non-classifier activity kind")
+    return ClassifierEventDescriptor(
+        invocation_id=msg.invocation_id,
+        event_sequence=msg.run_sequence,
+        size_bytes=msg.size_bytes,
+        body_token=msg.detail_ref.object_key if msg.HasField("detail_ref") else "",
+        event_kind=msg.event_kind,
+        duration_ms=msg.duration_ms if msg.HasField("duration_ms") else None,
+        error=msg.error,
+    )
+
+
 def operator_update_envelope_from_v2(
     msg: pb.RunStatusEnvelopeV2,
 ) -> OperatorUpdateEnvelope:
@@ -876,6 +947,12 @@ def operator_update_envelope_from_v2(
                 run_id=appended.run_id,
                 node_id=activity.node_id,
                 event=agent_event_descriptor_from_v2(activity),
+            )
+        elif activity.kind == "classifier_event":
+            change = ClassifierEventAppended(
+                run_id=appended.run_id,
+                node_id=activity.node_id,
+                event=classifier_event_descriptor_from_v2(activity),
             )
         elif activity.kind == "trace":
             if not activity.HasField("trace"):

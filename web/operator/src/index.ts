@@ -4,6 +4,8 @@ export { GrpcWebOperatorApi } from "./api";
 export type {
   AgentEventDescriptorPage,
   AgentEventPageRequest,
+  ClassifierEventDescriptorPage,
+  ClassifierEventPageRequest,
   LogDescriptorPage,
   LogPageRequest,
   OperatorApi,

@@ -8,7 +8,7 @@ import {
   useRef,
   useState,
 } from "react";
-import { Check, X } from "lucide-react";
+import { Check, ListFilter, X } from "lucide-react";
 
 import {
   Background,
@@ -31,6 +31,7 @@ import {
 
 import type { FlowInfoMsg, NodeSnapshotMsg, WorkflowTopologyMsg } from "./model";
 import { isUnknownRecord } from "./guards";
+import { decodeClassifierDeclaration } from "./classifier";
 
 interface FieldMetadata {
   name: string;
@@ -66,6 +67,8 @@ interface CardData extends Record<string, unknown> {
   label: string;
   nodeType: string;
   isAgent: boolean;
+  isClassifier: boolean;
+  classifierSummary?: string;
   identity?: string;
   status?: string;
   error?: string;
@@ -255,9 +258,11 @@ const WorkflowNodeCard = memo(({ data, selected }: NodeProps<Node<CardData>>) =>
     },
     [data.onOpen, screenToFlowPosition, setCenter],
   );
-  const agentClass = data.isAgent
-    ? "node-agent before:pointer-events-none before:absolute before:inset-y-3 before:left-0 before:w-[3px] before:rounded-r-full before:bg-agent before:content-['']"
-    : "";
+  const designationClass = data.isClassifier
+    ? "node-classifier before:pointer-events-none before:absolute before:inset-y-3 before:left-0 before:w-[3px] before:rounded-r-full before:bg-classifier before:content-['']"
+    : data.isAgent
+      ? "node-agent before:pointer-events-none before:absolute before:inset-y-3 before:left-0 before:w-[3px] before:rounded-r-full before:bg-agent before:content-['']"
+      : "";
   const statusColorClass =
     data.status === "success"
       ? "text-success"
@@ -274,8 +279,8 @@ const WorkflowNodeCard = memo(({ data, selected }: NodeProps<Node<CardData>>) =>
           : "blueprint";
   return (
     <article
-      className={`node-card ${isCompact ? "node-card--compact min-h-[100px] justify-center gap-0 px-4 py-3" : "min-h-[130px] gap-2 p-4"} relative flex w-[360px] cursor-pointer flex-col items-stretch rounded-xl border border-line bg-panel text-left shadow-[0_8px_24px_rgba(25,39,32,.08)] transition-[border-color,box-shadow,transform] duration-150 ease-out hover:-translate-y-px hover:border-acid hover:shadow-[0_10px_28px_rgba(25,39,32,.12)] motion-reduce:transition-none ${selected && data.status !== "running" ? "border-acid!" : ""} ${agentClass} ${statusClass}`}
-      data-node-kind={data.isAgent ? "agent" : "standard"}
+      className={`node-card ${isCompact ? "node-card--compact min-h-[100px] justify-center gap-0 px-4 py-3" : "min-h-[130px] gap-2 p-4"} relative flex w-[360px] cursor-pointer flex-col items-stretch rounded-xl border border-line bg-panel text-left shadow-[0_8px_24px_rgba(25,39,32,.08)] transition-[border-color,box-shadow,transform] duration-150 ease-out hover:-translate-y-px hover:border-acid hover:shadow-[0_10px_28px_rgba(25,39,32,.12)] motion-reduce:transition-none ${selected && data.status !== "running" ? "border-acid!" : ""} ${designationClass} ${statusClass}`}
+      data-node-kind={data.isClassifier ? "classifier" : data.isAgent ? "agent" : "standard"}
       aria-disabled={data.inspectionDisabled || undefined}
     >
       <Handle
@@ -307,9 +312,10 @@ const WorkflowNodeCard = memo(({ data, selected }: NodeProps<Node<CardData>>) =>
         }`}
       >
         <span
-          className={`node-card-meta node-kicker font-mono text-[8px] tracking-[.12em] uppercase ${data.isAgent ? "text-agent" : "text-secondary"}`}
+          className={`${data.isClassifier ? "node-classifier-identity mb-1 inline-flex items-center gap-1 rounded bg-classifier-light px-1.5 py-0.5 text-classifier" : `node-card-meta ${data.isAgent ? "text-agent" : "text-secondary"}`} node-kicker font-mono text-[8px] tracking-[.12em] uppercase`}
         >
-          {data.isAgent ? "agent" : data.nodeType}
+          {data.isClassifier && <ListFilter aria-hidden="true" className="size-3" />}
+          {data.isClassifier ? "Classifier" : data.isAgent ? "agent" : data.nodeType}
         </span>
         <strong
           className={`node-title block self-stretch ${isCompact ? "text-xl" : "pr-[76px] text-sm"} leading-tight text-ink`}
@@ -331,6 +337,11 @@ const WorkflowNodeCard = memo(({ data, selected }: NodeProps<Node<CardData>>) =>
             />
           )}
         </strong>
+        {data.classifierSummary && (
+          <span className="node-classifier-summary mt-1 min-w-0 self-stretch text-[9px] leading-relaxed text-classifier [overflow-wrap:anywhere]">
+            {data.classifierSummary}
+          </span>
+        )}
         {data.instructionLine && (
           <span
             className="node-card-meta node-instruction-line min-w-0 self-stretch overflow-hidden text-ellipsis line-clamp-2 font-mono text-[9px] leading-[1.35] text-secondary"
@@ -474,6 +485,7 @@ type TopologyView = Pick<
   | "displayNames"
   | "agentInstructionLines"
   | "standardStepDocstringLines"
+  | "classifierMetadataJson"
 >;
 
 interface GraphLayout {
@@ -570,6 +582,7 @@ function GraphCanvasView({
       displayNames: workflow.displayNames,
       agentInstructionLines: {},
       standardStepDocstringLines: workflow.standardStepDocstringLines,
+      classifierMetadataJson: workflow.classifierMetadataJson,
     };
   }, [runTopology, workflow]);
   const topologyNodeIds = topology?.nodeIds;
@@ -596,6 +609,34 @@ function GraphCanvasView({
           : (workflow?.agentNodeIds ?? []),
       ),
     [runTopology, workflow],
+  );
+  const classifierMetadata = topology?.classifierMetadataJson;
+  const classifierSummaries = useMemo(
+    () =>
+      Object.fromEntries(
+        Object.entries(classifierMetadata ?? {}).map(([nodeId, raw]) => {
+          try {
+            const declaration = decodeClassifierDeclaration(raw);
+            const counts = { choice: 0, noul: 0, score: 0 };
+            let total = 0;
+            for (const question of Object.values(declaration.questions)) {
+              counts[question.type] += 1;
+              total += 1;
+            }
+            const kinds = [
+              counts.choice ? `${counts.choice} Choice` : "",
+              counts.noul ? `${counts.noul} Noul` : "",
+              counts.score ? `${counts.score} Score` : "",
+            ]
+              .filter(Boolean)
+              .join(" · ");
+            return [nodeId, `${total} ${total === 1 ? "question" : "questions"} · ${kinds}`];
+          } catch {
+            return [nodeId, "Question definition unavailable"];
+          }
+        }),
+      ),
+    [classifierMetadata],
   );
   const nodes = useMemo(() => {
     if (!topology) return [];
@@ -635,6 +676,8 @@ function GraphCanvasView({
               : undefined,
           nodeType: topology.nodeTypes[nodeId] || runtimeNode?.nodeType || "step",
           isAgent: agentNodeIds.has(nodeId),
+          isClassifier: Object.hasOwn(topology.classifierMetadataJson, nodeId),
+          classifierSummary: classifierSummaries[nodeId],
           status: runtimeNode?.status,
           error: runtimeNode?.error,
           startedAt: runtimeNode?.startedAt || undefined,
@@ -650,6 +693,7 @@ function GraphCanvasView({
     return nodes;
   }, [
     agentNodeIds,
+    classifierSummaries,
     inspectionDisabled,
     layout.positions,
     openCallbacks,

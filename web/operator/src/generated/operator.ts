@@ -231,6 +231,12 @@ export interface FlowInfoV2 {
      * @generated from protobuf field: bool webhook_active = 15
      */
     webhookActive: boolean;
+    /**
+     * @generated from protobuf field: map<string, string> classifier_metadata_json = 16
+     */
+    classifierMetadataJson: {
+        [key: string]: string;
+    };
 }
 /**
  * @generated from protobuf message avalanche.operator.DiscoveryDiagnosticV2
@@ -337,6 +343,12 @@ export interface WorkflowTopologyV2 {
      * @generated from protobuf field: map<string, string> standard_step_docstring_lines = 7
      */
     standardStepDocstringLines: {
+        [key: string]: string;
+    };
+    /**
+     * @generated from protobuf field: map<string, string> classifier_metadata_json = 8
+     */
+    classifierMetadataJson: {
         [key: string]: string;
     };
 }
@@ -611,7 +623,7 @@ export interface NodeSnapshotV2 {
      */
     trace?: TraceDescriptorV2;
     /**
-     * Snapshot-pinned continuation for paging this node's agent-event activities.
+     * Snapshot-pinned continuation for this node's agent or classifier events.
      *
      * @generated from protobuf field: avalanche.operator.ContinuationRefV2 activity_continuation = 11
      */
@@ -808,7 +820,7 @@ export interface RunActivityDescriptorV2 {
      */
     runSequence: string;
     /**
-     * Activity kind: "log", "agent_event", "trace", or "terminal_seal".
+     * Activity kind: "log", "agent_event", "classifier_event", "trace", or "terminal_seal".
      *
      * @generated from protobuf field: string kind = 3
      */
@@ -828,7 +840,7 @@ export interface RunActivityDescriptorV2 {
      */
     detailRef?: ActivityDetailRefV2;
     /**
-     * Populated for kind=log and kind=agent_event; empty for structural kinds.
+     * Populated for log, agent_event, and classifier_event; empty for structural kinds.
      *
      * @generated from protobuf field: string node_id = 7
      */
@@ -840,7 +852,7 @@ export interface RunActivityDescriptorV2 {
      */
     level: string;
     /**
-     * Agent invocation metadata; populated only for kind=agent_event.
+     * Invocation metadata; populated for agent_event and classifier_event.
      *
      * @generated from protobuf field: string invocation_id = 9
      */
@@ -866,7 +878,7 @@ export interface RunActivityDescriptorV2 {
      */
     predictCount: number;
     /**
-     * Agent event kind; populated only for kind=agent_event.
+     * Agent event kind or classifier invocation status.
      *
      * @generated from protobuf field: string event_kind = 15
      */
@@ -901,8 +913,8 @@ export interface ListRunActivityRequestV2 {
      */
     continuation?: ContinuationRefV2;
     /**
-     * Empty lists run-wide log activities; set lists agent-event activities for
-     * exactly one node.
+     * Empty lists run-wide log activities; set lists agent or classifier events for
+     * exactly one node, selected using its run-pinned topology metadata.
      *
      * @generated from protobuf field: string node_id = 4
      */
@@ -1831,7 +1843,8 @@ class FlowInfoV2$Type extends MessageType<FlowInfoV2> {
             { no: 12, name: "last_run_at", kind: "scalar", T: 1 /*ScalarType.DOUBLE*/ },
             { no: 13, name: "webhook_path", kind: "scalar", T: 9 /*ScalarType.STRING*/ },
             { no: 14, name: "webhook_url", kind: "scalar", T: 9 /*ScalarType.STRING*/ },
-            { no: 15, name: "webhook_active", kind: "scalar", T: 8 /*ScalarType.BOOL*/ }
+            { no: 15, name: "webhook_active", kind: "scalar", T: 8 /*ScalarType.BOOL*/ },
+            { no: 16, name: "classifier_metadata_json", kind: "map", K: 9 /*ScalarType.STRING*/, V: { kind: "scalar", T: 9 /*ScalarType.STRING*/ } }
         ]);
     }
     create(value?: PartialMessage<FlowInfoV2>): FlowInfoV2 {
@@ -1850,6 +1863,7 @@ class FlowInfoV2$Type extends MessageType<FlowInfoV2> {
         message.webhookPath = "";
         message.webhookUrl = "";
         message.webhookActive = false;
+        message.classifierMetadataJson = {};
         if (value !== undefined)
             reflectionMergePartial<FlowInfoV2>(this, message, value);
         return message;
@@ -1904,6 +1918,9 @@ class FlowInfoV2$Type extends MessageType<FlowInfoV2> {
                 case /* bool webhook_active */ 15:
                     message.webhookActive = reader.bool();
                     break;
+                case /* map<string, string> classifier_metadata_json */ 16:
+                    this.binaryReadMap16(message.classifierMetadataJson, reader, options);
+                    break;
                 default:
                     let u = options.readUnknownField;
                     if (u === "throw")
@@ -1927,6 +1944,22 @@ class FlowInfoV2$Type extends MessageType<FlowInfoV2> {
                     val = reader.string();
                     break;
                 default: throw new globalThis.Error("unknown map entry field for avalanche.operator.FlowInfoV2.agent_metadata_json");
+            }
+        }
+        map[key ?? ""] = val ?? "";
+    }
+    private binaryReadMap16(map: FlowInfoV2["classifierMetadataJson"], reader: IBinaryReader, options: BinaryReadOptions): void {
+        let len = reader.uint32(), end = reader.pos + len, key: keyof FlowInfoV2["classifierMetadataJson"] | undefined, val: FlowInfoV2["classifierMetadataJson"][any] | undefined;
+        while (reader.pos < end) {
+            let [fieldNo, wireType] = reader.tag();
+            switch (fieldNo) {
+                case 1:
+                    key = reader.string();
+                    break;
+                case 2:
+                    val = reader.string();
+                    break;
+                default: throw new globalThis.Error("unknown map entry field for avalanche.operator.FlowInfoV2.classifier_metadata_json");
             }
         }
         map[key ?? ""] = val ?? "";
@@ -1977,6 +2010,9 @@ class FlowInfoV2$Type extends MessageType<FlowInfoV2> {
         /* bool webhook_active = 15; */
         if (message.webhookActive !== false)
             writer.tag(15, WireType.Varint).bool(message.webhookActive);
+        /* map<string, string> classifier_metadata_json = 16; */
+        for (let k of globalThis.Object.keys(message.classifierMetadataJson))
+            writer.tag(16, WireType.LengthDelimited).fork().tag(1, WireType.LengthDelimited).string(k).tag(2, WireType.LengthDelimited).string(message.classifierMetadataJson[k]).join();
         let u = options.writeUnknownFields;
         if (u !== false)
             (u == true ? UnknownFieldHandler.onWrite : u)(this.typeName, message, writer);
@@ -2199,7 +2235,8 @@ class WorkflowTopologyV2$Type extends MessageType<WorkflowTopologyV2> {
             { no: 4, name: "display_names", kind: "map", K: 9 /*ScalarType.STRING*/, V: { kind: "scalar", T: 9 /*ScalarType.STRING*/ } },
             { no: 5, name: "agent_field_schemas_json", kind: "map", K: 9 /*ScalarType.STRING*/, V: { kind: "scalar", T: 9 /*ScalarType.STRING*/ } },
             { no: 6, name: "agent_instruction_lines", kind: "map", K: 9 /*ScalarType.STRING*/, V: { kind: "scalar", T: 9 /*ScalarType.STRING*/ } },
-            { no: 7, name: "standard_step_docstring_lines", kind: "map", K: 9 /*ScalarType.STRING*/, V: { kind: "scalar", T: 9 /*ScalarType.STRING*/ } }
+            { no: 7, name: "standard_step_docstring_lines", kind: "map", K: 9 /*ScalarType.STRING*/, V: { kind: "scalar", T: 9 /*ScalarType.STRING*/ } },
+            { no: 8, name: "classifier_metadata_json", kind: "map", K: 9 /*ScalarType.STRING*/, V: { kind: "scalar", T: 9 /*ScalarType.STRING*/ } }
         ]);
     }
     create(value?: PartialMessage<WorkflowTopologyV2>): WorkflowTopologyV2 {
@@ -2211,6 +2248,7 @@ class WorkflowTopologyV2$Type extends MessageType<WorkflowTopologyV2> {
         message.agentFieldSchemasJson = {};
         message.agentInstructionLines = {};
         message.standardStepDocstringLines = {};
+        message.classifierMetadataJson = {};
         if (value !== undefined)
             reflectionMergePartial<WorkflowTopologyV2>(this, message, value);
         return message;
@@ -2240,6 +2278,9 @@ class WorkflowTopologyV2$Type extends MessageType<WorkflowTopologyV2> {
                     break;
                 case /* map<string, string> standard_step_docstring_lines */ 7:
                     this.binaryReadMap7(message.standardStepDocstringLines, reader, options);
+                    break;
+                case /* map<string, string> classifier_metadata_json */ 8:
+                    this.binaryReadMap8(message.classifierMetadataJson, reader, options);
                     break;
                 default:
                     let u = options.readUnknownField;
@@ -2348,6 +2389,22 @@ class WorkflowTopologyV2$Type extends MessageType<WorkflowTopologyV2> {
         }
         map[key ?? ""] = val ?? "";
     }
+    private binaryReadMap8(map: WorkflowTopologyV2["classifierMetadataJson"], reader: IBinaryReader, options: BinaryReadOptions): void {
+        let len = reader.uint32(), end = reader.pos + len, key: keyof WorkflowTopologyV2["classifierMetadataJson"] | undefined, val: WorkflowTopologyV2["classifierMetadataJson"][any] | undefined;
+        while (reader.pos < end) {
+            let [fieldNo, wireType] = reader.tag();
+            switch (fieldNo) {
+                case 1:
+                    key = reader.string();
+                    break;
+                case 2:
+                    val = reader.string();
+                    break;
+                default: throw new globalThis.Error("unknown map entry field for avalanche.operator.WorkflowTopologyV2.classifier_metadata_json");
+            }
+        }
+        map[key ?? ""] = val ?? "";
+    }
     internalBinaryWrite(message: WorkflowTopologyV2, writer: IBinaryWriter, options: BinaryWriteOptions): IBinaryWriter {
         /* repeated string node_ids = 1; */
         for (let i = 0; i < message.nodeIds.length; i++)
@@ -2374,6 +2431,9 @@ class WorkflowTopologyV2$Type extends MessageType<WorkflowTopologyV2> {
         /* map<string, string> standard_step_docstring_lines = 7; */
         for (let k of globalThis.Object.keys(message.standardStepDocstringLines))
             writer.tag(7, WireType.LengthDelimited).fork().tag(1, WireType.LengthDelimited).string(k).tag(2, WireType.LengthDelimited).string(message.standardStepDocstringLines[k]).join();
+        /* map<string, string> classifier_metadata_json = 8; */
+        for (let k of globalThis.Object.keys(message.classifierMetadataJson))
+            writer.tag(8, WireType.LengthDelimited).fork().tag(1, WireType.LengthDelimited).string(k).tag(2, WireType.LengthDelimited).string(message.classifierMetadataJson[k]).join();
         let u = options.writeUnknownFields;
         if (u !== false)
             (u == true ? UnknownFieldHandler.onWrite : u)(this.typeName, message, writer);

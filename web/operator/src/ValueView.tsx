@@ -5,6 +5,7 @@ import { isUnknownRecord } from "./guards";
 interface ValueViewProps {
   value: unknown;
   depth?: number;
+  jsonOnly?: boolean;
   onExpand?: (value: unknown, path: ReadonlyArray<string | number>) => void;
 }
 
@@ -12,6 +13,7 @@ interface CollectionProps {
   value: unknown[] | Record<string, unknown>;
   depth: number;
   path: ReadonlyArray<string | number>;
+  jsonOnly: boolean;
   onExpand?: ValueViewProps["onExpand"];
 }
 
@@ -42,9 +44,10 @@ function collectionSummary(value: unknown[] | Record<string, unknown>) {
     : `{${count} ${plural(count, "property", "properties")}}`;
 }
 
-function LongString({ value }: { value: string }) {
+function LongString({ value, jsonOnly }: { value: string; jsonOnly: boolean }) {
   const [expanded, setExpanded] = useState(false);
   const contentId = useId();
+  const visible = expanded ? value : value.slice(0, STRING_PREVIEW_LENGTH);
 
   return (
     <span className="value-long-string inline">
@@ -52,7 +55,8 @@ function LongString({ value }: { value: string }) {
         className="value-string whitespace-pre-wrap text-mint [overflow-wrap:anywhere]"
         id={contentId}
       >
-        {expanded ? value : `${value.slice(0, STRING_PREVIEW_LENGTH)}…`}
+        {jsonOnly ? JSON.stringify(visible) : visible}
+        {!expanded && "…"}
       </span>{" "}
       <button
         type="button"
@@ -81,14 +85,14 @@ function TruncatedCollection({ value }: { value: unknown[] | Record<string, unkn
   );
 }
 
-function ScalarValue({ value }: { value: unknown }) {
+function ScalarValue({ value, jsonOnly }: { value: unknown; jsonOnly: boolean }) {
   if (value === null) return <span className="value-null text-muted">null</span>;
   if (typeof value === "string") {
     return value.length > STRING_PREVIEW_LENGTH ? (
-      <LongString value={value} />
+      <LongString value={value} jsonOnly={jsonOnly} />
     ) : (
       <span className="value-string whitespace-pre-wrap text-mint [overflow-wrap:anywhere]">
-        {value}
+        {jsonOnly ? JSON.stringify(value) : value}
       </span>
     );
   }
@@ -121,14 +125,18 @@ function ScalarValue({ value }: { value: unknown }) {
   return <span className="value-unavailable text-[9px] text-amber">Unavailable</span>;
 }
 
-function isCollection(value: unknown): value is unknown[] | Record<string, unknown> {
+function isCollection(
+  value: unknown,
+  jsonOnly: boolean,
+): value is unknown[] | Record<string, unknown> {
   return (
     Array.isArray(value) ||
     (isUnknownRecord(value) &&
-      !(
-        (value.kind === "predict_rlm_file" && typeof value.path === "string") ||
-        (value.kind === "unavailable" && typeof value.reason === "string")
-      ))
+      (jsonOnly ||
+        !(
+          (value.kind === "predict_rlm_file" && typeof value.path === "string") ||
+          (value.kind === "unavailable" && typeof value.reason === "string")
+        )))
   );
 }
 
@@ -137,6 +145,7 @@ function CollectionNode({
   value,
   depth,
   path,
+  jsonOnly,
   onExpand,
 }: CollectionProps & { label: string }) {
   const [expanded, setExpanded] = useState(false);
@@ -167,14 +176,20 @@ function CollectionNode({
           id={contentId}
           role="group"
         >
-          <CollectionChildren value={value} depth={depth} path={path} onExpand={onExpand} />
+          <CollectionChildren
+            value={value}
+            depth={depth}
+            path={path}
+            jsonOnly={jsonOnly}
+            onExpand={onExpand}
+          />
         </div>
       )}
     </div>
   );
 }
 
-function CollectionChildren({ value, depth, path, onExpand }: CollectionProps) {
+function CollectionChildren({ value, depth, path, jsonOnly, onExpand }: CollectionProps) {
   const [visibleCount, setVisibleCount] = useState(CHILDREN_PER_GROUP);
   const entries: Array<[string | number, unknown]> = Array.isArray(value)
     ? value.slice(0, visibleCount).map((item, index) => [index, item])
@@ -196,7 +211,7 @@ function CollectionChildren({ value, depth, path, onExpand }: CollectionProps) {
       <ul className="value-group m-0 min-w-80 list-none p-0" role="group">
         {entries.map(([key, item]) => {
           const childPath = [...path, key];
-          const nested = isCollection(item);
+          const nested = isCollection(item, jsonOnly);
           return (
             <li
               className="value-tree-item min-w-0 border-t border-line first:border-t-0"
@@ -217,10 +232,11 @@ function CollectionChildren({ value, depth, path, onExpand }: CollectionProps) {
                       value={item}
                       depth={depth + 1}
                       path={childPath}
+                      jsonOnly={jsonOnly}
                       onExpand={onExpand}
                     />
                   ) : (
-                    <ScalarValue value={item} />
+                    <ScalarValue value={item} jsonOnly={jsonOnly} />
                   )}
                 </div>
               </div>
@@ -244,8 +260,8 @@ function CollectionChildren({ value, depth, path, onExpand }: CollectionProps) {
   );
 }
 
-export function ValueView({ value, depth = 0, onExpand }: ValueViewProps) {
-  if (!isCollection(value)) return <ScalarValue value={value} />;
+export function ValueView({ value, depth = 0, jsonOnly = false, onExpand }: ValueViewProps) {
+  if (!isCollection(value, jsonOnly)) return <ScalarValue value={value} jsonOnly={jsonOnly} />;
   if (depth >= MAX_DISCLOSURE_DEPTH) return <TruncatedCollection value={value} />;
 
   return (
@@ -254,7 +270,13 @@ export function ValueView({ value, depth = 0, onExpand }: ValueViewProps) {
       role="tree"
       aria-label="JSON value"
     >
-      <CollectionChildren value={value} depth={depth} path={[]} onExpand={onExpand} />
+      <CollectionChildren
+        value={value}
+        depth={depth}
+        path={[]}
+        jsonOnly={jsonOnly}
+        onExpand={onExpand}
+      />
     </div>
   );
 }

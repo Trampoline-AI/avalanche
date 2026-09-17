@@ -79,6 +79,16 @@ def __getattr__(name: str):
         import avalanche.agent
 
         value = getattr(avalanche.agent, name)
+    elif name in {
+        "Classifier",
+        "ClassificationResult",
+        "ClassifierStepError",
+        "ClassifierStepExecutionError",
+        "classifier_step",
+    }:
+        import avalanche.classifier
+
+        value = getattr(avalanche.classifier, name)
     else:
         raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
 
@@ -94,6 +104,7 @@ __all__ = [
     "dest",
     "workflow",
     "pipeline",
+    "classifier_step",
     "input",
     # Workflow
     "Workflow",
@@ -126,6 +137,10 @@ __all__ = [
     "ProgressStore",
     # Types
     "AppendResult",
+    "Classifier",
+    "ClassificationResult",
+    "ClassifierStepError",
+    "ClassifierStepExecutionError",
     "SnapshotState",
     "SnapshotMetadata",
     "Json",

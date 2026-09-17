@@ -22,8 +22,10 @@ from dataclasses import dataclass, replace
 from datetime import datetime
 from functools import partial
 from types import MappingProxyType
-from typing import Any, Callable, Literal, TypeAlias
+from typing import Any, Callable, Literal, TypeAlias, TypeVar
 from uuid import uuid4
+
+from avalanche.classifier.models import ClassifierDeclaration, ClassifierInvocation
 
 from ..executor import LocalExecutor, RayExecutor
 from .discovery import (
@@ -40,6 +42,11 @@ from .models import (
     CatalogReplaced,
     CatalogSnapshot,
     CatalogView,
+    ClassifierEvent,
+    ClassifierEventAppended,
+    ClassifierEventDescriptor,
+    ClassifierEventDetailAppended,
+    ClassifierEventPage,
     DetailUpdate,
     FinalizedTrace,
     LogAppended,
@@ -111,6 +118,7 @@ SUBSCRIBER_QUEUE_CAPACITY = 256
 MAX_RUN_ID_BYTES = 256
 MAX_TRANSPORT_PAGE_BYTES = 2 * 1024 * 1024
 MAX_AGENT_EVENT_BYTES = 8 * 1024 * 1024
+MAX_CLASSIFIER_EVENT_BYTES = 8 * 1024 * 1024
 MAX_TRACE_BODY_BYTES = 32 * 1024 * 1024
 MAX_NODE_DETAIL_BYTES = 64 * 1024 * 1024
 MAX_RUN_LOG_BYTES = 16 * 1024 * 1024
@@ -140,6 +148,10 @@ class RunResultNotReadyError(RuntimeError):
 
 class RunResultUnavailableError(RuntimeError):
     """Raised when a failed or cancelled run has no workflow result."""
+
+
+class ClassifierDetailExpiredError(KeyError):
+    """A validated classifier invocation body was removed by retention."""
 
 
 class StructuralBaselineUnavailableError(RuntimeError):
@@ -197,6 +209,14 @@ class _AgentEvidenceMutation:
     entry: LogEntry
     agent_event: AgentEvent | None = None
     finalized_trace: bytes | None = None
+
+
+@dataclass(frozen=True)
+class _ClassifierInvocationLifecycle:
+    node_id: str
+    invocation_index: int
+    started_at: float
+    terminal: bool
 
 
 @dataclass(frozen=True)
@@ -349,6 +369,9 @@ class Operator:
         self._logs: dict[str, list[SequencedLogEntry]] = {}
         self._log_sequences_by_node: dict[str, dict[str, list[int]]] = {}
         self._agent_events: dict[tuple[str, str], list[AgentEvent]] = {}
+        self._classifier_events: dict[tuple[str, str], list[ClassifierEvent]] = {}
+        self._classifier_invocations: dict[str, dict[str, _ClassifierInvocationLifecycle]] = {}
+        self._classifier_detail_runs: set[str] = set()
         self._trace_descriptors: dict[tuple[str, str], TraceDescriptor] = {}
         self._trace_bodies: dict[tuple[str, str], dict[int, bytes]] = {}
         self._trace_errors: dict[tuple[str, str], str | None] = {}
@@ -799,9 +822,101 @@ class Operator:
                 next_page_token=next_page_token,
             )
 
+    def list_classifier_events(
+        self,
+        run_id: str = "",
+        node_id: str = "",
+        *,
+        page_token: str = "",
+        after_event_sequence: int = 0,
+        page_size: int = 0,
+        before_event_sequence: int = 0,
+        order: int = _DESCRIPTOR_PAGE_ORDER_FORWARD,
+    ) -> ClassifierEventPage:
+        """Page immutable classifier snapshots independently of agent evidence."""
+        size = _bounded_page_size(page_size)
+        order = _validated_descriptor_page_order(order)
+        after_event_sequence = _validated_descriptor_cursor(
+            after_event_sequence, "after_event_sequence"
+        )
+        before_event_sequence = _validated_descriptor_cursor(
+            before_event_sequence, "before_event_sequence"
+        )
+        if order == _DESCRIPTOR_PAGE_ORDER_FORWARD and before_event_sequence:
+            raise ValueError("before_event_sequence is only valid for newest-first pages")
+        if order == _DESCRIPTOR_PAGE_ORDER_NEWEST_FIRST and after_event_sequence:
+            raise ValueError("after_event_sequence is only valid for forward pages")
+        with self._lock:
+            token = _decode_transport_token(
+                page_token
+                or self._classifier_event_page_token_locked(run_id, node_id, self._sequence),
+                "classifier-events",
+            )
+            self._validate_transport_token_locked(token)
+            if run_id and run_id != token["run_id"]:
+                raise ValueError("Classifier page token run does not match request")
+            if node_id and node_id != token["node_id"]:
+                raise ValueError("Classifier page token node does not match request")
+            run_id = token["run_id"]
+            node_id = token["node_id"]
+            through_sequence = token["through_sequence"]
+            if "cursor" in token:
+                if token["order"] != order:
+                    raise ValueError("Page order does not match the continuation token")
+                requested_cursor = (
+                    after_event_sequence
+                    if order == _DESCRIPTOR_PAGE_ORDER_FORWARD
+                    else before_event_sequence
+                )
+                if requested_cursor and requested_cursor != token["cursor"]:
+                    raise ValueError("Page cursor does not match the continuation token")
+                cursor = token["cursor"]
+            else:
+                cursor = (
+                    after_event_sequence
+                    if order == _DESCRIPTOR_PAGE_ORDER_FORWARD
+                    else before_event_sequence or through_sequence + 1
+                )
+            events = self._classifier_events.get((run_id, node_id), ())
+            if through_sequence > len(events):
+                raise ValueError("Classifier page token exceeds retained history")
+            if order == _DESCRIPTOR_PAGE_ORDER_FORWARD:
+                start = bisect_right(events, cursor, key=lambda item: item.event_sequence)
+                stop = min(start + size + 1, through_sequence)
+                candidates = events[start:stop]
+            else:
+                upper = bisect_right(
+                    events,
+                    min(cursor - 1, through_sequence),
+                    key=lambda item: item.event_sequence,
+                )
+                candidates = list(reversed(events[max(0, upper - size - 1) : upper]))
+            descriptors = [
+                self._classifier_event_descriptor_locked(
+                    run_id, node_id, item, as_of_sequence=token["as_of_sequence"]
+                )
+                for item in candidates
+            ]
+            selected = _take_bounded_descriptors(descriptors, size)
+            next_page_token = ""
+            if selected and len(selected) < len(descriptors):
+                next_page_token = _encode_transport_token(
+                    **{**token, "order": order, "cursor": selected[-1].event_sequence}
+                )
+            return ClassifierEventPage(
+                operator_instance_id=self._operator_instance_id,
+                as_of_sequence=token["as_of_sequence"],
+                run_id=run_id,
+                node_id=node_id,
+                events=tuple(selected),
+                next_page_token=next_page_token,
+            )
+
     def read_detail(self, body_token: str) -> bytes:
         """Resolve one immutable log or event body from an opaque token."""
-        token = _decode_transport_token(body_token, {"log-body", "event-body"})
+        token = _decode_transport_token(
+            body_token, {"log-body", "event-body", "classifier-event-body"}
+        )
         with self._lock:
             self._validate_transport_token_locked(token)
             run_id = token["run_id"]
@@ -811,6 +926,18 @@ class Operator:
                 if sequence < 1 or sequence > len(logs):
                     raise KeyError(sequence)
                 body = logs[sequence - 1].entry.message
+            elif token["kind"] == "classifier-event-body":
+                classifier_events = self._classifier_events.get((run_id, token["node_id"]), ())
+                if sequence > len(classifier_events):
+                    raise KeyError(sequence)
+                item = classifier_events[sequence - 1]
+                if item.invocation_id != token["invocation_id"]:
+                    raise ValueError("Classifier body token invocation does not match")
+                if not item.event_json:
+                    raise ClassifierDetailExpiredError(
+                        "Classifier invocation detail has expired"
+                    )
+                body = item.event_json
             else:
                 node_id = token["node_id"]
                 events = self._agent_events.get((run_id, node_id), ())
@@ -907,6 +1034,7 @@ class Operator:
         summary: RunSummary,
         as_of_sequence: int,
     ) -> RunSnapshot:
+        classifier_node_ids = {node_id for node_id, _ in run.topology.classifier_metadata_json}
         nodes = tuple(
             NodeSnapshot(
                 node_id=node.node_id,
@@ -924,10 +1052,12 @@ class Operator:
                     (run.run_id, node.node_id),
                     self._run_created_sequences.get(run.run_id, 0),
                 ),
-                event_page_token=self._event_page_token_locked(
-                    run.run_id,
-                    node.node_id,
-                    as_of_sequence,
+                event_page_token=(
+                    self._classifier_event_page_token_locked(
+                        run.run_id, node.node_id, as_of_sequence
+                    )
+                    if node.node_id in classifier_node_ids
+                    else self._event_page_token_locked(run.run_id, node.node_id, as_of_sequence)
                 ),
             )
             for node in run.nodes.values()
@@ -991,6 +1121,28 @@ class Operator:
             through_sequence=events[-1].event_sequence if events else 0,
         )
 
+    def _classifier_event_page_token_locked(
+        self, run_id: str, node_id: str, as_of_sequence: int
+    ) -> str:
+        run = self._runs.get(run_id)
+        if run is None:
+            raise KeyError(run_id)
+        if node_id not in run.nodes or not any(
+            declared_node == node_id
+            for declared_node, _ in run.topology.classifier_metadata_json
+        ):
+            raise KeyError(node_id)
+        events = self._classifier_events.get((run_id, node_id), ())
+        return _encode_transport_token(
+            kind="classifier-events",
+            operator_instance_id=self._operator_instance_id,
+            created_sequence=self._run_created_sequences[run_id],
+            as_of_sequence=as_of_sequence,
+            run_id=run_id,
+            node_id=node_id,
+            through_sequence=events[-1].event_sequence if events else 0,
+        )
+
     def _validate_transport_token_locked(self, token: Mapping[str, Any]) -> None:
         if token["operator_instance_id"] != self._operator_instance_id:
             raise StructuralBaselineUnavailableError(
@@ -1003,6 +1155,21 @@ class Operator:
         node_id = token.get("node_id")
         if node_id and node_id not in run.nodes:
             raise KeyError(node_id)
+        if token["kind"] in {"classifier-events", "classifier-event-body"}:
+            created_sequence = self._run_created_sequences.get(run_id)
+            if token["created_sequence"] != created_sequence:
+                raise StructuralBaselineUnavailableError(
+                    "Run identity changed; restart classifier detail hydration"
+                )
+            if created_sequence is None or not (
+                created_sequence <= token["as_of_sequence"] <= self._sequence
+            ):
+                raise ValueError("Classifier token has an invalid publication sequence")
+            if not any(
+                declared_node == node_id
+                for declared_node, _ in run.topology.classifier_metadata_json
+            ):
+                raise KeyError(node_id)
 
     def _log_descriptor_locked(
         self,
@@ -1052,6 +1219,35 @@ class Operator:
             error=item.error,
             tool_count=item.tool_count,
             predict_count=item.predict_count,
+        )
+
+    def _classifier_event_descriptor_locked(
+        self,
+        run_id: str,
+        node_id: str,
+        item: ClassifierEvent,
+        *,
+        as_of_sequence: int,
+    ) -> ClassifierEventDescriptor:
+        return ClassifierEventDescriptor(
+            invocation_id=item.invocation_id,
+            event_sequence=item.event_sequence,
+            size_bytes=item.size_bytes,
+            body_token=_encode_transport_token(
+                kind="classifier-event-body",
+                operator_instance_id=self._operator_instance_id,
+                created_sequence=self._run_created_sequences[run_id],
+                as_of_sequence=as_of_sequence,
+                run_id=run_id,
+                node_id=node_id,
+                invocation_id=item.invocation_id,
+                sequence=item.event_sequence,
+            )
+            if item.event_json
+            else "",
+            event_kind=item.event_kind,
+            duration_ms=item.duration_ms,
+            error=item.error,
         )
 
     def _capture_run_detail_locked(self, run: RunState) -> _RunDetailCapture:
@@ -1306,6 +1502,9 @@ class Operator:
             handle.start_event.set()
             _teardown_process_group(process, windows_job)
             with self._lock:
+                run = self._runs.get(run_id)
+                if run is not None:
+                    self._evict_classifier_details_locked(run, remove_descriptors=True)
                 self._runs.pop(run_id, None)
                 self._log_sequences_by_node.pop(run_id, None)
                 self._stored_results.pop(run_id, None)
@@ -1561,6 +1760,19 @@ class Operator:
             for run_id, stored in list(self._stored_results.items()):
                 if stored.published_at <= cutoff and self._result_leases.get(run_id, 0) == 0:
                     expired.append((run_id, self._stored_results.pop(run_id)))
+            for run_id in tuple(self._classifier_detail_runs):
+                run = self._runs[run_id]
+                if (
+                    run.ended_at is not None
+                    and run.ended_at <= cutoff
+                    and run.status
+                    in {
+                        RunStatus.SUCCESS,
+                        RunStatus.FAILED,
+                        RunStatus.CANCELLED,
+                    }
+                ):
+                    self._evict_classifier_details_locked(run)
         for run_id, stored in expired:
             try:
                 self._result_store.discard(stored)
@@ -1572,6 +1784,32 @@ class Operator:
                 with self._lock:
                     if not self._closed and run_id not in self._stored_results:
                         self._stored_results[run_id] = stored
+
+    def _evict_classifier_details_locked(
+        self, run: RunState, *, remove_descriptors: bool = False
+    ) -> None:
+        """Release bodies and lifecycle state without erasing historical availability."""
+        released = 0
+        for node_id, _ in run.topology.classifier_metadata_json:
+            key = (run.run_id, node_id)
+            events = self._classifier_events.get(key)
+            if events is None:
+                continue
+            node_bytes = 0
+            for index, item in enumerate(events):
+                if item.event_json:
+                    node_bytes += item.size_bytes
+                    if not remove_descriptors:
+                        events[index] = replace(item, event_json="")
+            if remove_descriptors:
+                self._classifier_events.pop(key)
+            if node_bytes:
+                self._node_detail_bytes[key] -= node_bytes
+                released += node_bytes
+        if released:
+            self._run_detail_bytes[run.run_id] -= released
+        self._classifier_invocations.pop(run.run_id, None)
+        self._classifier_detail_runs.discard(run.run_id)
 
     def _begin_notification_shutdown(
         self,
@@ -1609,6 +1847,8 @@ class Operator:
         with self._lock:
             self._stored_results.clear()
             self._result_leases.clear()
+            for run_id in tuple(self._classifier_detail_runs):
+                self._evict_classifier_details_locked(self._runs[run_id])
         self._result_store.close()
 
     def _start_notification_dispatcher(self) -> None:
@@ -1800,6 +2040,9 @@ class Operator:
                 for node_id in node_ids
                 if node_id in prepared["standard_step_docstring_lines"]
             ),
+            classifier_metadata_json=tuple(
+                _classifier_metadata_mapping(prepared["classifier_metadata_json"]).items()
+            ),
         )
         run = RunState(
             run_id=run_id,
@@ -1903,6 +2146,11 @@ class Operator:
         event: dict[str, Any],
     ) -> bool:
         event_type = _validate_run_event(event, validate_result=False)
+        classifier_invocation = (
+            _classifier_invocation_from_payload(event["event"])
+            if event_type == "classifier_evidence"
+            else None
+        )
         terminal = event_type == "terminal"
         result_manifest_sha256 = (
             _result_manifest_digest_from_event(event)
@@ -1946,6 +2194,7 @@ class Operator:
                 trace_node_ids: tuple[str, ...] = ()
                 finalized_traces: dict[str, bytes] = {}
                 agent_events: dict[str, AgentEvent] = {}
+                classifier_events: dict[str, ClassifierEvent] = {}
                 log_entry: LogEntry | None = None
                 mutated = False
 
@@ -2000,6 +2249,23 @@ class Operator:
                         if mutation.finalized_trace is not None:
                             finalized_traces[node_id] = mutation.finalized_trace
                         mutated = True
+                elif event_type == "classifier_evidence":
+                    active_handle = self._active_runs.get(run_id)
+                    if active_handle is not None and active_handle is not handle:
+                        return False
+                    if classifier_invocation is None:
+                        raise _CoordinatorProtocolError(
+                            "missing validated classifier invocation"
+                        )
+                    node_id = event["node_id"]
+                    classifier_event = self._record_classifier_evidence_event_locked(
+                        run, node_id, classifier_invocation
+                    )
+                    if classifier_event is not None:
+                        classifier_events[node_id] = classifier_event
+                        changed_node_ids = (node_id,)
+                        status_node_ids = ()
+                        mutated = True
                 elif event_type == "log":
                     if run.status in {
                         RunStatus.SUCCESS,
@@ -2033,6 +2299,15 @@ class Operator:
                             and (cancelled_result or handle.cancel_event.is_set())
                             else event["status"]
                         )
+                        if effective_status == "success" and any(
+                            not invocation.terminal
+                            for invocation in self._classifier_invocations.get(
+                                run_id, {}
+                            ).values()
+                        ):
+                            raise _CoordinatorProtocolError(
+                                "workflow success has unfinished classifier invocations"
+                            )
                         run.status = {
                             "success": RunStatus.SUCCESS,
                             "failed": RunStatus.FAILED,
@@ -2060,6 +2335,7 @@ class Operator:
                     trace_node_ids=trace_node_ids,
                     finalized_traces=finalized_traces,
                     agent_events=agent_events,
+                    classifier_events=classifier_events,
                     log_entry=log_entry,
                 )
 
@@ -2309,6 +2585,101 @@ class Operator:
             finalized_trace=finalized_trace,
         )
 
+    def _record_classifier_evidence_event_locked(
+        self,
+        run: RunState,
+        node_id: str,
+        invocation: ClassifierInvocation,
+    ) -> ClassifierEvent | None:
+        if run.terminal_seal is not None or run.status in {
+            RunStatus.SUCCESS,
+            RunStatus.FAILED,
+            RunStatus.CANCELLED,
+        }:
+            return None
+        if node_id not in run.nodes:
+            raise _CoordinatorProtocolError(
+                "classifier evidence references unpublished node " f"{_bounded_ascii(node_id)}"
+            )
+        declaration_json = next(
+            (
+                metadata
+                for declared_node, metadata in run.topology.classifier_metadata_json
+                if declared_node == node_id
+            ),
+            None,
+        )
+        if declaration_json is None:
+            raise _CoordinatorProtocolError(
+                "classifier evidence references a non-classifier node"
+            )
+        try:
+            invocation_declaration_json = invocation.declaration.model_dump_json()
+            event_json = invocation.model_dump_json()
+            event_size = len(event_json.encode())
+        except (ValueError, TypeError, RecursionError) as exc:
+            raise _CoordinatorProtocolError(
+                "classifier invocation is not valid UTF-8 JSON"
+            ) from exc
+        if invocation_declaration_json != declaration_json:
+            raise _CoordinatorProtocolError(
+                "classifier invocation declaration differs from the prepared workflow"
+            )
+        invocations = self._classifier_invocations.get(run.run_id, {})
+        previous = invocations.get(invocation.invocation_id)
+        if invocation.status == "running":
+            if previous is not None:
+                raise _CoordinatorProtocolError("classifier invocation ID was already started")
+        elif previous is None:
+            raise _CoordinatorProtocolError(
+                "classifier terminal evidence has no recorded start"
+            )
+        elif (
+            previous.terminal
+            or previous.node_id != node_id
+            or previous.invocation_index != invocation.invocation_index
+            or previous.started_at != invocation.started_at
+        ):
+            raise _CoordinatorProtocolError(
+                "classifier terminal evidence changes invocation identity"
+            )
+
+        if event_size > MAX_CLASSIFIER_EVENT_BYTES:
+            raise _CoordinatorProtocolError(
+                f"classifier event exceeds {MAX_CLASSIFIER_EVENT_BYTES} byte limit"
+            )
+        self._ensure_detail_capacity_locked(run.run_id, node_id, node_bytes=event_size)
+        key = (run.run_id, node_id)
+        events = self._classifier_events.setdefault(key, [])
+        item = ClassifierEvent(
+            invocation_id=invocation.invocation_id,
+            event_sequence=len(events) + 1,
+            event_json=event_json,
+            size_bytes=event_size,
+            event_kind=invocation.status,
+            duration_ms=(
+                round((invocation.ended_at - invocation.started_at) * 1000)
+                if invocation.ended_at is not None
+                else None
+            ),
+            error=invocation.status in {"failed", "cancelled"},
+        )
+        events.append(item)
+        self._classifier_invocations.setdefault(run.run_id, {})[invocation.invocation_id] = (
+            _ClassifierInvocationLifecycle(
+                node_id=node_id,
+                invocation_index=invocation.invocation_index,
+                started_at=invocation.started_at,
+                terminal=invocation.status != "running",
+            )
+        )
+        self._classifier_detail_runs.add(run.run_id)
+        self._node_detail_bytes[key] = self._node_detail_bytes.get(key, 0) + event_size
+        self._run_detail_bytes[run.run_id] = (
+            self._run_detail_bytes.get(run.run_id, 0) + event_size
+        )
+        return item
+
     def _ensure_detail_capacity_locked(
         self,
         run_id: str,
@@ -2398,13 +2769,19 @@ class Operator:
                 )
                 self._stored_results.pop(run_id, None)
                 run.ended_at = time.monotonic()
-                self._append_log_locked(run, entry)
+                log_entry = None
+                try:
+                    self._append_log_locked(run, entry)
+                    log_entry = entry
+                except _CoordinatorProtocolError:
+                    # A full detail budget must not prevent the terminal failure seal.
+                    logger.error("%s", entry.message)
                 changed_node_ids = self._skip_unfinished_nodes_locked(run)
                 notifications = self._publish_run_locked(
                     run,
                     changed_node_ids=changed_node_ids,
                     status_node_ids=changed_node_ids,
-                    log_entry=entry,
+                    log_entry=log_entry,
                 )
         self._result_store.discard(handle.result_bundle)
         if notifications is not None:
@@ -2433,8 +2810,11 @@ class Operator:
             run.ended_at = time.monotonic()
             log_entry = None
             if not cancelled:
-                self._append_log_locked(run, entry)
-                log_entry = entry
+                try:
+                    self._append_log_locked(run, entry)
+                    log_entry = entry
+                except _CoordinatorProtocolError:
+                    logger.error("%s", entry.message)
             changed_node_ids = self._skip_unfinished_nodes_locked(run)
             notifications = self._publish_run_locked(
                 run,
@@ -2470,6 +2850,7 @@ class Operator:
         trace_node_ids: tuple[str, ...] = (),
         finalized_traces: Mapping[str, bytes] | None = None,
         agent_events: Mapping[str, AgentEvent] | None = None,
+        classifier_events: Mapping[str, ClassifierEvent] | None = None,
         log_entry: LogEntry | None = None,
     ) -> _RunNotifications:
         """Atomically publish one mutation to structural, detail, and update state."""
@@ -2481,8 +2862,14 @@ class Operator:
         status_node_ids = tuple(dict.fromkeys(status_node_ids))
         trace_node_ids = tuple(dict.fromkeys(trace_node_ids))
         agent_events = agent_events or {}
+        classifier_events = classifier_events or {}
         finalized_traces = finalized_traces or {}
-        activity_count = int(log_entry is not None) + len(agent_events) + len(trace_node_ids)
+        activity_count = (
+            int(log_entry is not None)
+            + len(agent_events)
+            + len(classifier_events)
+            + len(trace_node_ids)
+        )
         terminal_seal_appended = False
         if (
             run.status
@@ -2515,6 +2902,7 @@ class Operator:
                 + len(status_node_ids)
                 + int(log_entry is not None)
                 + len(agent_events)
+                + len(classifier_events)
                 + len(trace_node_ids)
                 + int(terminal_seal_appended)
             )
@@ -2610,6 +2998,19 @@ class Operator:
                         ),
                     )
                 )
+            for node_id, event in classifier_events.items():
+                changes.append(
+                    ClassifierEventAppended(
+                        run_id=run.run_id,
+                        node_id=node_id,
+                        event=self._classifier_event_descriptor_locked(
+                            run.run_id,
+                            node_id,
+                            event,
+                            as_of_sequence=publication_sequence,
+                        ),
+                    )
+                )
             for node_id in trace_node_ids:
                 changes.append(
                     TraceFinalized(
@@ -2672,6 +3073,17 @@ class Operator:
                         sequence=update.sequence,
                         node_id=change.node_id,
                         event=deepcopy(agent_events[change.node_id]),
+                    )
+                )
+            elif isinstance(change, ClassifierEventAppended):
+                detail_updates.append(
+                    ClassifierEventDetailAppended(
+                        operator_instance_id=self._operator_instance_id,
+                        run_id=run.run_id,
+                        created_sequence=self._run_created_sequences[run.run_id],
+                        sequence=update.sequence,
+                        node_id=change.node_id,
+                        event=classifier_events[change.node_id],
                     )
                 )
         notifications = _RunNotifications(
@@ -2923,7 +3335,7 @@ def _decode_transport_token(
         raise ValueError("Invalid detail token")
     if value["as_of_sequence"] < 0:
         raise ValueError("Invalid detail token")
-    if value["kind"] in {"logs", "events"}:
+    if value["kind"] in {"logs", "events", "classifier-events"}:
         if type(value.get("through_sequence")) is not int or value["through_sequence"] < 0:
             raise ValueError("Invalid detail token")
         if "cursor" in value:
@@ -2943,22 +3355,41 @@ def _decode_transport_token(
     else:
         if type(value.get("sequence")) is not int or value["sequence"] < 1:
             raise ValueError("Invalid detail token")
-    if value["kind"] in {"events", "event-body"} and type(value.get("node_id")) is not str:
+    if (
+        value["kind"] in {"events", "event-body", "classifier-events", "classifier-event-body"}
+        and type(value.get("node_id")) is not str
+    ):
         raise ValueError("Invalid detail token")
+    if value["kind"] in {"classifier-events", "classifier-event-body"}:
+        if type(value.get("created_sequence")) is not int or value["created_sequence"] < 1:
+            raise ValueError("Invalid classifier detail identity")
+        if value["kind"] == "classifier-event-body" and (
+            type(value.get("invocation_id")) is not str or not value["invocation_id"]
+        ):
+            raise ValueError("Invalid classifier invocation identity")
     return value
 
 
-def _descriptor_wire_size(item: LogRecordDescriptor | AgentEventDescriptor) -> int:
+def _descriptor_wire_size(
+    item: LogRecordDescriptor | AgentEventDescriptor | ClassifierEventDescriptor,
+) -> int:
     size = len(item.body_token.encode()) + 64
     if isinstance(item, LogRecordDescriptor):
         size += len(item.node_id.encode()) + len(item.level.value)
+    elif isinstance(item, ClassifierEventDescriptor):
+        size += len(item.invocation_id.encode()) + len(item.event_kind.encode())
     return size
 
 
+_Descriptor = TypeVar(
+    "_Descriptor", LogRecordDescriptor, AgentEventDescriptor, ClassifierEventDescriptor
+)
+
+
 def _take_bounded_descriptors(
-    candidates: list[LogRecordDescriptor] | list[AgentEventDescriptor],
+    candidates: list[_Descriptor],
     page_size: int,
-) -> list[Any]:
+) -> list[_Descriptor]:
     selected = []
     serialized_bytes = 128
     for item in candidates[:page_size]:
@@ -3081,6 +3512,7 @@ _RUN_EVENT_TYPES = {
     "node_succeeded",
     "node_failed",
     "agent_evidence",
+    "classifier_evidence",
     "log",
     "terminal",
 }
@@ -3092,23 +3524,39 @@ _MAX_EVENT_FIELD_LENGTH = 4096
 _MAX_EVENT_MESSAGE_LENGTH = 65_536
 _MAX_EVENT_AGENT_FIELD_SCHEMA_BYTES = 1024 * 1024
 _MAX_EVENT_AGENT_FIELD_SCHEMAS_TOTAL_BYTES = 16 * 1024 * 1024
+_MAX_EVENT_CLASSIFIER_METADATA_BYTES = 1024 * 1024
+_MAX_EVENT_CLASSIFIER_METADATA_TOTAL_BYTES = 16 * 1024 * 1024
 _MAX_EVENT_TRACEBACK_LENGTH = 262_144
 _MAX_EVENT_TIMESTAMP_MAGNITUDE = 10**12
 
 
-def _validate_agent_detail_depth(value: object) -> None:
-    """Reject cyclic or pathologically nested agent-owned detail bodies."""
+def _validate_agent_detail_depth(value: object, *, detail_kind: str = "agent") -> None:
+    """Reject cyclic or pathologically nested evidence bodies."""
     active: set[int] = set()
 
     def walk(item: object, depth: int) -> None:
         if depth > MAX_AGENT_DETAIL_DEPTH:
             raise _CoordinatorProtocolError(
-                f"agent detail exceeds maximum depth {MAX_AGENT_DETAIL_DEPTH}"
+                f"{detail_kind} detail exceeds maximum depth {MAX_AGENT_DETAIL_DEPTH}"
             )
+        if detail_kind == "classifier" and type(item) not in {
+            dict,
+            list,
+            str,
+            int,
+            float,
+            bool,
+            type(None),
+        }:
+            raise _CoordinatorProtocolError("classifier detail must contain only JSON values")
         if isinstance(item, dict):
+            if detail_kind == "classifier" and any(type(key) is not str for key in item):
+                raise _CoordinatorProtocolError("classifier detail keys must be strings")
             identity = id(item)
             if identity in active:
-                raise _CoordinatorProtocolError("agent detail contains a reference cycle")
+                raise _CoordinatorProtocolError(
+                    f"{detail_kind} detail contains a reference cycle"
+                )
             active.add(identity)
             try:
                 for child in item.values():
@@ -3118,7 +3566,9 @@ def _validate_agent_detail_depth(value: object) -> None:
         elif isinstance(item, (list, tuple)):
             identity = id(item)
             if identity in active:
-                raise _CoordinatorProtocolError("agent detail contains a reference cycle")
+                raise _CoordinatorProtocolError(
+                    f"{detail_kind} detail contains a reference cycle"
+                )
             active.add(identity)
             try:
                 for child in item:
@@ -3127,6 +3577,62 @@ def _validate_agent_detail_depth(value: object) -> None:
                 active.remove(identity)
 
     walk(value, 0)
+
+
+def _classifier_invocation_from_payload(value: object) -> ClassifierInvocation:
+    """Validate a worker-owned snapshot once before any retained state changes."""
+    _validate_agent_detail_depth(value, detail_kind="classifier")
+    try:
+        invocation = ClassifierInvocation.model_validate(value, strict=True)
+    except (ValueError, TypeError, RecursionError) as exc:
+        # Validation errors can contain input values; never retain those in a log.
+        raise _CoordinatorProtocolError("invalid classifier invocation payload") from exc
+    if len(invocation.invocation_id) > _MAX_EVENT_FIELD_LENGTH:
+        raise _CoordinatorProtocolError("classifier invocation ID exceeds its length limit")
+    if abs(invocation.started_at) > _MAX_EVENT_TIMESTAMP_MAGNITUDE or (
+        invocation.ended_at is not None
+        and abs(invocation.ended_at) > _MAX_EVENT_TIMESTAMP_MAGNITUDE
+    ):
+        raise _CoordinatorProtocolError("classifier invocation timestamps exceed their bounds")
+    if invocation.error is not None and len(invocation.error) > _MAX_EVENT_MESSAGE_LENGTH:
+        raise _CoordinatorProtocolError("classifier invocation error exceeds its length limit")
+    return invocation
+
+
+def _classifier_metadata_mapping(value: object) -> dict[str, str]:
+    if not isinstance(value, dict) or len(value) > _MAX_EVENT_NODES:
+        raise _CoordinatorProtocolError("classifier metadata must be a bounded node mapping")
+    metadata: dict[str, str] = {}
+    total_bytes = 0
+    for node_id, declaration_json in value.items():
+        if (
+            not isinstance(node_id, str)
+            or len(node_id) > _MAX_EVENT_FIELD_LENGTH
+            or not isinstance(declaration_json, str)
+        ):
+            raise _CoordinatorProtocolError(
+                "classifier metadata must map node IDs to JSON strings"
+            )
+        try:
+            size = len(declaration_json.encode())
+            if size > _MAX_EVENT_CLASSIFIER_METADATA_BYTES:
+                raise _CoordinatorProtocolError("classifier declaration exceeds its byte limit")
+            declaration = ClassifierDeclaration.model_validate_json(
+                declaration_json, strict=True
+            )
+            canonical = declaration.model_dump_json()
+            canonical_size = len(canonical.encode())
+            if canonical_size > _MAX_EVENT_CLASSIFIER_METADATA_BYTES:
+                raise _CoordinatorProtocolError("classifier declaration exceeds its byte limit")
+            total_bytes += canonical_size
+            if total_bytes > _MAX_EVENT_CLASSIFIER_METADATA_TOTAL_BYTES:
+                raise _CoordinatorProtocolError(
+                    "classifier metadata exceeds its total byte limit"
+                )
+        except (ValueError, TypeError, RecursionError) as exc:
+            raise _CoordinatorProtocolError("invalid classifier declaration metadata") from exc
+        metadata[node_id] = canonical
+    return metadata
 
 
 def _trace_header_from_payload(trace: dict[str, Any]) -> TraceHeader | None:
@@ -3206,6 +3712,7 @@ def _validate_preparation_event(event: object) -> str:
                 "agent_field_schemas_json",
                 "agent_instruction_lines",
                 "standard_step_docstring_lines",
+                "classifier_metadata_json",
             },
         )
         node_ids = _required_field(event, "node_ids")
@@ -3228,6 +3735,15 @@ def _validate_preparation_event(event: object) -> str:
         )
         agent_instruction_lines = _string_mapping(event, "agent_instruction_lines")
         standard_step_docstring_lines = _string_mapping(event, "standard_step_docstring_lines")
+        classifier_metadata_json = _classifier_metadata_mapping(
+            event["classifier_metadata_json"]
+        )
+        unknown_classifier_nodes = set(classifier_metadata_json).difference(node_ids)
+        if unknown_classifier_nodes:
+            raise _CoordinatorProtocolError(
+                "field 'classifier_metadata_json' references unknown node "
+                f"{_bounded_ascii(min(unknown_classifier_nodes))}"
+            )
         for node_id in node_ids:
             if node_id not in node_types:
                 raise _CoordinatorProtocolError(
@@ -3298,7 +3814,7 @@ def _validate_run_event(event: object, *, validate_result: bool = True) -> str:
         _timestamp_field(event, "timestamp")
         if event_type == "node_failed":
             _string_field(event, "error", maximum_length=_MAX_EVENT_MESSAGE_LENGTH)
-    elif event_type == "agent_evidence":
+    elif event_type in {"agent_evidence", "classifier_evidence"}:
         _require_exact_event_keys(event, {"type", "node_id", "event"})
         _string_field(event, "node_id", maximum_length=_MAX_EVENT_FIELD_LENGTH)
         agent_event = _required_field(event, "event")

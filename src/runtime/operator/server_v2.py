@@ -25,6 +25,7 @@ from .convert_v2 import (
     RESULT_URI_SCHEME,
     TRACE_URI_SCHEME,
     agent_event_activity_to_v2,
+    classifier_event_activity_to_v2,
     flow_list_to_v2,
     log_activity_to_v2,
     run_snapshot_to_v2,
@@ -33,8 +34,9 @@ from .convert_v2 import (
     update_envelope_to_v2,
     workflow_info_to_v2,
 )
-from .models import CatalogSnapshot
+from .models import CatalogSnapshot, RunCreated, RunSnapshot
 from .operator import (
+    ClassifierDetailExpiredError,
     InvalidRunIdError,
     Operator,
     RunAlreadyExistsError,
@@ -481,13 +483,15 @@ class OperatorV2Servicer(pb_grpc.OperatorServiceV2Servicer):
         node_id: str,
         token: str,
         as_of_sequence: int,
+        *,
+        category: str,
     ) -> pb.ContinuationRefV2 | None:
         return self._continuation(
             self._cursor(as_of_sequence),
             token,
             run_id=run_id,
             node_id=node_id,
-            category="agent-events" if node_id else "logs",
+            category=category,
         )
 
     @staticmethod
@@ -537,6 +541,8 @@ class OperatorV2Servicer(pb_grpc.OperatorServiceV2Servicer):
                     operator_instance_id=self._op.operator_instance_id,
                     revision=binding.trace_revision,
                 ).data
+        except ClassifierDetailExpiredError:
+            raise
         except StructuralBaselineUnavailableError as exc:
             context.abort(grpc.StatusCode.FAILED_PRECONDITION, str(exc))
         except KeyError:
@@ -605,6 +611,25 @@ class OperatorV2Servicer(pb_grpc.OperatorServiceV2Servicer):
         )
         return self._register_activity_binding(binding, context)
 
+    def _classifier_detail_ref(
+        self,
+        run_id: str,
+        activity_id: str,
+        body_token: str,
+        run_sequence: int,
+        size_bytes: int,
+        context,
+    ) -> pb.ActivityDetailRefV2 | None:
+        if not body_token:
+            return None
+        try:
+            return self._body_detail_ref(
+                run_id, activity_id, body_token, run_sequence, size_bytes, context
+            )
+        except ClassifierDetailExpiredError:
+            # Queued live/replay descriptors may predate retention cleanup.
+            return None
+
     def _trace_detail_ref(
         self,
         run_id: str,
@@ -641,17 +666,20 @@ class OperatorV2Servicer(pb_grpc.OperatorServiceV2Servicer):
                 grpc.StatusCode.FAILED_PRECONDITION,
                 "Activity detail reference was not issued by this operator view",
             )
-        data = self._read_activity_binding(entry.binding, context)
+        if not self._same_activity_reference(detail_ref, entry.reference):
+            context.abort(
+                grpc.StatusCode.INVALID_ARGUMENT,
+                "Activity detail reference does not match its immutable descriptor",
+            )
+        try:
+            data = self._read_activity_binding(entry.binding, context)
+        except ClassifierDetailExpiredError:
+            context.abort(grpc.StatusCode.NOT_FOUND, "Classifier invocation detail has expired")
         derived = self._canonical_activity_reference(entry.binding, data)
         if not self._same_activity_reference(entry.reference, derived):
             context.abort(
                 grpc.StatusCode.DATA_LOSS,
                 "Activity detail body no longer matches its immutable descriptor",
-            )
-        if not self._same_activity_reference(detail_ref, entry.reference):
-            context.abort(
-                grpc.StatusCode.INVALID_ARGUMENT,
-                "Activity detail reference does not match its immutable binding",
             )
         return data
 
@@ -734,9 +762,12 @@ class OperatorV2Servicer(pb_grpc.OperatorServiceV2Servicer):
             )
         return data
 
-    def _run_snapshot_message(self, snapshot, context) -> pb.RunSnapshotV2:
+    def _run_snapshot_message(self, snapshot: RunSnapshot, context) -> pb.RunSnapshotV2:
         run_id = snapshot.summary.run_id
         as_of_sequence = snapshot.as_of_sequence
+        classifier_nodes = {
+            node_id for node_id, _ in snapshot.topology.classifier_metadata_json
+        }
         continuations = {
             node.node_id: continuation
             for node in snapshot.nodes
@@ -746,6 +777,11 @@ class OperatorV2Servicer(pb_grpc.OperatorServiceV2Servicer):
                     node.node_id,
                     node.event_page_token,
                     as_of_sequence,
+                    category=(
+                        "classifier-events"
+                        if node.node_id in classifier_nodes
+                        else "agent-events"
+                    ),
                 )
             )
             is not None
@@ -770,6 +806,7 @@ class OperatorV2Servicer(pb_grpc.OperatorServiceV2Servicer):
                 "",
                 snapshot.log_page_token,
                 as_of_sequence,
+                category="logs",
             ),
         )
 
@@ -942,6 +979,21 @@ class OperatorV2Servicer(pb_grpc.OperatorServiceV2Servicer):
     def ListRunActivity(self, request, context):  # noqa: N802
         order = int(request.order)
         category = "agent-events" if request.node_id else "logs"
+        if request.node_id:
+            try:
+                snapshot = self._op.get_latest_run_snapshot(
+                    request.run_id,
+                    operator_instance_id=self._op.operator_instance_id,
+                )
+            except StructuralBaselineUnavailableError as exc:
+                context.abort(grpc.StatusCode.FAILED_PRECONDITION, str(exc))
+            if snapshot is None:
+                context.abort(grpc.StatusCode.NOT_FOUND, "Activity target not found")
+            if any(
+                node_id == request.node_id
+                for node_id, _ in snapshot.topology.classifier_metadata_json
+            ):
+                category = "classifier-events"
         token = self._continuation_token(
             request.continuation,
             context,
@@ -951,7 +1003,36 @@ class OperatorV2Servicer(pb_grpc.OperatorServiceV2Servicer):
             category=category,
         )
         try:
-            if request.node_id:
+            if category == "classifier-events":
+                page = self._op.list_classifier_events(
+                    request.run_id,
+                    request.node_id,
+                    page_token=token,
+                    page_size=request.page_size,
+                    order=order,
+                )
+                if page.run_id != request.run_id or page.node_id != request.node_id:
+                    context.abort(
+                        grpc.StatusCode.FAILED_PRECONDITION,
+                        "Activity continuation resolved to a different run or node",
+                    )
+                activities = [
+                    classifier_event_activity_to_v2(
+                        item,
+                        run_id=page.run_id,
+                        node_id=page.node_id,
+                        detail_ref=self._classifier_detail_ref(
+                            page.run_id,
+                            f"classifier:{page.node_id}:{item.event_sequence}",
+                            item.body_token,
+                            item.event_sequence,
+                            item.size_bytes,
+                            context,
+                        ),
+                    )
+                    for item in page.events
+                ]
+            elif request.node_id:
                 page = self._op.list_agent_events(
                     request.run_id,
                     request.node_id,
@@ -1194,6 +1275,12 @@ class OperatorV2Servicer(pb_grpc.OperatorServiceV2Servicer):
                     if envelope.update is not None
                     else envelope.reset_required.latest_sequence
                 )
+                change = envelope.update.change if envelope.update is not None else None
+                classifier_nodes = (
+                    {node_id for node_id, _ in change.topology.classifier_metadata_json}
+                    if isinstance(change, RunCreated)
+                    else ()
+                )
                 message = update_envelope_to_v2(
                     envelope,
                     scope_ref=self._scope(),
@@ -1204,11 +1291,28 @@ class OperatorV2Servicer(pb_grpc.OperatorServiceV2Servicer):
                             node_id,
                             token,
                             update_sequence,
+                            category=(
+                                "classifier-events"
+                                if node_id in classifier_nodes
+                                else "agent-events"
+                            ),
                         )
                     ),
                     body_detail_ref_for=(
                         lambda run_id, activity_id, body_token, run_sequence, size_bytes: (
                             self._body_detail_ref(
+                                run_id,
+                                activity_id,
+                                body_token,
+                                run_sequence,
+                                size_bytes,
+                                context,
+                            )
+                        )
+                    ),
+                    classifier_detail_ref_for=(
+                        lambda run_id, activity_id, body_token, run_sequence, size_bytes: (
+                            self._classifier_detail_ref(
                                 run_id,
                                 activity_id,
                                 body_token,

@@ -7,8 +7,10 @@ or verify a workflow through the operator.
 
 ## Choose an execution surface
 
-- **Embedded execution:** application code constructs a workflow and calls
-  `.run()` directly.
+- **Operator CLI:** start discovery with `uv run ava operator path/to/flow.py`,
+  then submit runs with `uv run ava run`. All workflow execution goes through
+  the operator; never add standalone scripts, `main()`/`__main__` blocks, or
+  direct `Workflow.run()` entry points.
 - **Browser UI:** the normal interactive local surface. Use it with the local
   operator when the user asks for an interactive run, inspection, or browser
   verification.
@@ -17,12 +19,13 @@ or verify a workflow through the operator.
 
 For the browser UI, prefer `uv run ava dev` unless the user needs separate
 process lifecycles or custom browser-listener settings. Do not automatically
-launch an operator or UI merely because an embedded workflow was implemented.
+launch an operator or UI merely because a workflow was implemented.
 
 ## Define a workflow
 
-Use deterministic `@ava.step` nodes for ordinary Python work, and
-`@ava.agent_step` for model-backed work:
+Use deterministic `@ava.step` nodes for ordinary Python work,
+`@ava.classifier_step` for fixed classification questions, and `@ava.agent_step`
+for adaptive model-backed work:
 
 ```python
 import avalanche as ava
@@ -43,17 +46,83 @@ def feedback_workflow():
     return step1() >> step2()
 ```
 
-`@ava.workflow` decorates a builder function. Call the builder before running:
+`@ava.workflow` declares the builder that the operator discovers. Save this as
+`flow.py` and start it through the operator and browser:
 
-```python
-run = feedback_workflow().run(executor=ava.LocalExecutor())
-print(run.run_id)
-result = run.result()
+```bash
+uv run ava dev path/to/flow.py
 ```
 
-`Workflow.run()` returns an awaitable `ava.RunHandle`; `.result()` waits
-synchronously. The declared `ava.Signature` output names are the prediction
-attribute names—read `.completion` for the signature above, not `.summary`.
+The declared `ava.Signature` output names are the prediction attribute names:
+read `.completion` for the signature above, not `.summary`. A signature that is
+not constructed inline inside the step decorator belongs in `signature.py`.
+
+## Native classifier steps
+
+Prefer `@ava.classifier_step` for fixed Choice, Noul, or Score questions rather
+than wrapping the TypeSafe client yourself or using an adaptive agent solely
+for classification. The SDK is included in the base Avalanche package.
+
+```python
+import avalanche as ava
+
+
+@ava.source
+def load_ticket() -> str:
+    return "Please reverse the duplicate charge today."
+
+
+@ava.classifier_step(
+    questions={
+        "urgent": {
+            "type": "noul",
+            "instructions": "Does the ticket require action today?",
+        },
+    },
+)
+async def classify_ticket(
+    ticket: str, *, classifier: ava.Classifier
+) -> ava.ClassificationResult:
+    return await classifier(state=ticket)
+
+
+@ava.workflow(classifier_defaults={"model": "jev-latest", "timeout": 10.0})
+def ticket_workflow():
+    return load_ticket() >> classify_ticket()
+```
+
+The keyword-only `classifier` parameter is injected; never supply it in the
+DAG. `state` accepts text, a JSON object, or a JSON array. Questions are declared
+statically, snapshotted at decoration, and cannot be overridden at invocation.
+Question `criteria` holds named options for `choice`, optional `"true"`/`"false"`
+criteria for `noul`, or an ordered list of at least two levels for `score`.
+Instructions and criteria entries can contain structured JSON as well as text.
+
+`ava.ClassificationResult` retains model, usage, and typed answers:
+`result.choices["department"]` exposes choice, all option probabilities, and
+confidence; `result.nouls["urgent"].noul` is P(yes), not a Boolean or a confidence
+score; `result.scores["severity"]` retains the fractional probability-weighted
+score, legend, probabilities, and confidence. A step may return this result
+directly or transform it into a domain result. Operator invocation records remain
+separate from the step return, including when later postprocessing fails.
+
+Set `TYPESAFE_API_KEY` in the executing process environment. Discovery needs
+neither credentials nor a client; execution without a key fails instead of
+substituting answers. Do not put keys in workflow definitions or metadata.
+Workflow `classifier_defaults` accepts `model` and `timeout` (seconds);
+step-level `model=` and `timeout=` override those defaults. Without either,
+the defaults are `jev-latest` and 10 seconds. Optional `slug=` names the node.
+
+The repository's `examples/classifier_workflow.py` demonstrates all three answer
+types and returns the full typed result from `classifier_workflow()`:
+
+```bash
+uv run ava dev examples/classifier_workflow.py
+```
+
+The browser can show declared questions before a run and invocation answers
+afterward. Evidence uses existing local operator retention limits and lifetime;
+it is not durable recovery storage.
 
 ## Browser UI and operator
 
@@ -202,23 +271,3 @@ uv run ava tui [FLOW[/NODE]] [--connect HOST:PORT] [--token TOKEN]
 The TUI discovers and controls workflows through gRPC; it does not import or
 execute a flow directly.
 
-## Embedded execution
-
-For application-owned execution, call the workflow builder and run the returned
-`Workflow` in the same process:
-
-```python
-import avalanche as ava
-
-
-@ava.workflow
-def document_flow():
-    return step1() >> step2()
-
-
-run = document_flow().run(executor=ava.LocalExecutor())
-result = run.result()
-```
-
-No operator or gRPC connection is involved. Use this path when the caller owns
-the run and consumes its terminal result directly.

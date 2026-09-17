@@ -3,8 +3,11 @@
 `flow.py` is the readable index of the DAG, not a general implementation module.
 It contains imports, decorated node definitions, and the workflow declarations
 at the end. A compact inline signature belongs inside its `@ava.agent_step`
-decorator rather than in a standalone module variable. Schemas carry contracts;
-`util.py` carries every helper; agent directories carry large model contracts.
+decorator rather than in a standalone module variable. Every non-inline signature
+MUST live in a separate `signature.py`, even if it is small or used only once.
+Schemas carry contracts; `util.py` carries every helper; agent directories carry
+large model contracts. Workflows run through the operator, never standalone
+runner scripts, `main()`/`__main__` blocks, or direct `.run()` entry points.
 
 ## Small flow
 
@@ -20,6 +23,10 @@ my_flow/
 ```
 
 Include `skills.py` only when a custom Skill is shared by multiple agent steps.
+A flow with a named signature also has `signature.py` beside `flow.py`. Larger
+flows may put it under `agents/<agent_name>/signature.py`; the separation is
+required regardless of signature size.
+
 
 Construct a compact inline signature directly in the agent-step decorator:
 
@@ -171,6 +178,6 @@ or perform I/O with them.
 - Any undecorated helper, model, configuration, namespace, or runner in `flow.py`.
 - Untyped `dict[str, object]` payloads crossing node boundaries.
 - Agent directories for two-line inline signatures.
-- Giant signature classes embedded in `flow.py`.
+- Any non-inline signature defined outside its separate `signature.py`.
 - Skills or tools declared as signature metadata.
 - Unparenthesized parallel expressions such as `a() >> b() & c()`.

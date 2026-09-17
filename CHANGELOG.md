@@ -2,6 +2,19 @@
 
 ## Unreleased
 
+- Added an operator-run meeting follow-up example combining agent extraction,
+  per-item TypeSafe classification, department-based routing, and opt-in Linear
+  issue publication, with source-quote validation, a separate extraction signature,
+  and a bundled cross-functional transcript loaded automatically without run inputs.
+- Avalanche authoring guidance now requires operator-based execution without
+  standalone runners and separate files for all non-inline signatures.
+- Added bodyful `@ava.classifier_step` with runtime TypeSafe credentials, fixed
+  Choice/Noul/Score questions, typed probability-preserving results, and
+  workflow-scoped model/timeout defaults. Each call captures evidence separately
+  from the node return, including answers retained when later postprocessing fails.
+- Browser run views refresh prepared nodes and topology when a run leaves the
+  requesting state. Python client run initialization preserves issued node
+  activity bindings for classifier evidence.
 - Late browser run-start responses no longer override newer navigation, retained
   runs remain inspectable after their current workflow definition disappears, and
   pending cancellation disables repeat submissions.
@@ -27,6 +40,14 @@
 
 ### Operator web interface
 
+- Classifiers now have a distinct cyan graph identity, Definition/Code workflow
+  tabs, and type-specific question explorers. Historical Calls/Definition tabs
+  pair each call's retained input state with typed answers; sensitive application
+  data in input now shares the existing bounded detail retention and expiry.
+- Classifier nodes now expose questions before execution and run-pinned questions
+  and typed answers afterward. The inspector separates multiple calls, preserves
+  full distributions and fractional scores, and shows cancellation, interruption,
+  and unavailable retained details without substituting current definitions.
 - The operator UI now bundles Delta Console's Nacelle Regular and SemiBold fonts,
   while keeping code and filename references monospace.
 - The local workflow sidebar now follows Delta Console's padded, square-cornered

@@ -123,8 +123,9 @@ npx skills add Trampoline-AI/avalanche
 
 ### Creating a workflow
 
-Avalanche workflows chain deterministic `@ava.step` and agent-backed
-`@ava.agent_step` nodes inside an `@ava.workflow`.
+Avalanche workflows chain deterministic `@ava.step`, agent-backed
+`@ava.agent_step`, and TypeSafe-backed `@ava.classifier_step` nodes inside an
+`@ava.workflow`.
 
 ```python
 @ava.step
@@ -143,6 +144,11 @@ async def step2(text: str, *, agent: ava.Agent) -> str:
 def feedback_workflow():
     return step1() >> step2()
 ```
+
+Use [agent steps](docs/agent-steps.md) for adaptive model work and
+[classifier steps](docs/classifier-steps.md) for fixed Choice, Noul, and Score
+questions with typed probabilities. Both keep input preparation, output
+composition, and persistence in the Python step body.
 
 We recommend using the skill directly in order to have your agent align on a goal and build a workflow for you.
 
@@ -349,6 +355,7 @@ workflow; the rest are focused pattern demos.
 | Example                                                            | Description                                                                                                                                             |
 | ------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | [Customer feedback review](examples/customer_feedback_review/)      | End-to-end agentic workflow: parallel theme/risk analysis of a feedback workbook, deterministic reconciliation, and published Excel + Word review pack. |
+| [`classifier_workflow.py`](examples/classifier_workflow.py) | TypeSafe Choice, Noul, and Score questions, typed answers, and current/historical classifier inspection in the operator UI. |
 | [`complex_dag_pattern.py`](examples/complex_dag_pattern.py)       | Local DAG API with explicit data passing, fan-out, and fan-in on`ava.LocalExecutor`.                                                                  |
 | [`stream_pattern.py`](examples/stream_pattern.py)                 | Stream-based incremental processing with local Iceberg tables.                                                                                          |
 | [`cursor_pattern.py`](examples/cursor_pattern.py)                 | Manual checkpoint control with cursors for advanced incremental flows.                                                                                  |
@@ -397,6 +404,13 @@ An `lm` or `sub_lm` passed to an individual agent step overrides the same
 workflow default. `agent_defaults` configures runtime options only; signatures, skills, and
 tools remain defined on each agent step.
 
+Classifier steps use TypeSafe directly, not LiteLLM. Set runtime
+`TYPESAFE_API_KEY`; choose `model` and `timeout` on `@ava.classifier_step` or in
+`@ava.workflow(classifier_defaults={...})`. Step values override workflow values;
+otherwise the defaults are `jev-latest` and 10 seconds. No key is needed to
+discover questions before running. See [Classifier steps](docs/classifier-steps.md)
+for the full API, probability semantics, and local evidence retention limits.
+
 ## Optional components
 
 | Extra     | Purpose                       |
@@ -414,6 +428,7 @@ uv add "avalanche-ai[ray,lance]"
 
 - [DAG API](docs/dag-api.md)
 - [Agent steps](docs/agent-steps.md)
+- [Classifier steps](docs/classifier-steps.md)
 - [Data model and storage API](docs/data-model-api.md)
 - [Execution services](docs/execution-services.md)
 - [Architecture](ARCHITECTURE.md)

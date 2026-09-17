@@ -111,6 +111,7 @@ message FlowInfoV2 {
   string webhook_path = 13;
   string webhook_url = 14;
   bool webhook_active = 15;
+  map<string, string> classifier_metadata_json = 16;
 }
 
 message DiscoveryDiagnosticV2 {
@@ -143,6 +144,7 @@ message WorkflowTopologyV2 {
   map<string, string> agent_field_schemas_json = 5;
   map<string, string> agent_instruction_lines = 6;
   map<string, string> standard_step_docstring_lines = 7;
+  map<string, string> classifier_metadata_json = 8;
 }
 
 message ScanTargetV2 {
@@ -236,7 +238,7 @@ message NodeSnapshotV2 {
   optional string error = 8;
   optional double running_elapsed_seconds = 9;
   TraceDescriptorV2 trace = 10;
-  // Snapshot-pinned continuation for paging this node's agent-event activities.
+  // Snapshot-pinned continuation for this node's agent or classifier events.
   ContinuationRefV2 activity_continuation = 11;
 }
 
@@ -300,24 +302,24 @@ message ActivityDetailRefV2 {
 message RunActivityDescriptorV2 {
   string activity_id = 1;
   uint64 run_sequence = 2;
-  // Activity kind: "log", "agent_event", "trace", or "terminal_seal".
+  // Activity kind: "log", "agent_event", "classifier_event", "trace", or "terminal_seal".
   string kind = 3;
   double timestamp = 4;
   uint64 size_bytes = 5;
   // Absent when this structural activity has no immutable body.
   ActivityDetailRefV2 detail_ref = 6;
-  // Populated for kind=log and kind=agent_event; empty for structural kinds.
+  // Populated for log, agent_event, and classifier_event; empty for structural kinds.
   string node_id = 7;
   // Log level; populated only for kind=log.
   string level = 8;
-  // Agent invocation metadata; populated only for kind=agent_event.
+  // Invocation metadata; populated for agent_event and classifier_event.
   string invocation_id = 9;
   optional uint32 iteration = 10;
   optional uint64 duration_ms = 11;
   bool error = 12;
   uint32 tool_count = 13;
   uint32 predict_count = 14;
-  // Agent event kind; populated only for kind=agent_event.
+  // Agent event kind or classifier invocation status.
   string event_kind = 15;
   // Full trace descriptor; populated only for kind=trace.
   TraceDescriptorV2 trace = 16;
@@ -329,8 +331,8 @@ message ListRunActivityRequestV2 {
   // Bounded by the server.
   uint32 page_size = 2;
   ContinuationRefV2 continuation = 3;
-  // Empty lists run-wide log activities; set lists agent-event activities for
-  // exactly one node.
+  // Empty lists run-wide log activities; set lists agent or classifier events for
+  // exactly one node, selected using its run-pinned topology metadata.
   string node_id = 4;
   PageOrderV2 order = 5;
 }
