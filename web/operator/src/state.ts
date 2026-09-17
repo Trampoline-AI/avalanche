@@ -4,6 +4,7 @@ import type { OperatorApi, StructuralBaseline } from "./api";
 import type {
   AgentEventDescriptorMsg,
   CatalogSnapshotMsg,
+  ClassifierEventDescriptorMsg,
   LogRecordDescriptorMsg,
   OperatorUpdate,
   OperatorUpdateEnvelope,
@@ -27,10 +28,13 @@ export interface OperatorProjection {
   selectedRun?: RunSnapshotMsg;
   selectedRunStatus: SelectedRunStatus;
   selectedRunError?: string;
+  selectedRunStructureRepairEventUlid?: string;
   terminalSeals: Record<string, TerminalSealMsg>;
   liveEvents: Record<string, AgentEventDescriptorMsg[]>;
+  liveClassifierEvents: Record<string, ClassifierEventDescriptorMsg[]>;
   liveLogs: Record<string, LogRecordDescriptorMsg[]>;
   liveEventRepairWatermarks: Record<string, string>;
+  liveClassifierEventRepairWatermarks: Record<string, string>;
   liveLogRepairWatermarks: Record<string, string>;
   operatorInstanceId: string;
   eventUlid: string;
@@ -65,8 +69,10 @@ export const emptyProjection: OperatorProjection = {
   selectedRunStatus: "idle",
   terminalSeals: {},
   liveEvents: {},
+  liveClassifierEvents: {},
   liveLogs: {},
   liveEventRepairWatermarks: {},
+  liveClassifierEventRepairWatermarks: {},
   liveLogRepairWatermarks: {},
   operatorInstanceId: "",
   eventUlid: "",
@@ -141,11 +147,13 @@ function runIdForChange(change: OperatorUpdate["change"]): string {
         ? change.logAppended.runId
         : change.oneofKind === "agentEventAppended"
           ? change.agentEventAppended.runId
-          : change.oneofKind === "traceFinalized"
-            ? change.traceFinalized.runId
-            : change.oneofKind === "terminalSealAppended"
-              ? change.terminalSealAppended.runId
-              : "";
+          : change.oneofKind === "classifierEventAppended"
+            ? change.classifierEventAppended.runId
+            : change.oneofKind === "traceFinalized"
+              ? change.traceFinalized.runId
+              : change.oneofKind === "terminalSealAppended"
+                ? change.terminalSealAppended.runId
+                : "";
 }
 
 function sameTerminalSeal(left: TerminalSealMsg, right: TerminalSealMsg): boolean {
@@ -240,6 +248,10 @@ function applyEnvelope(
       };
     }
     if (selected?.summary) {
+      if (selected.summary.status === "requesting" && changed.status !== "requesting") {
+        // Preparation installs the run-pinned topology, but its live update carries only status.
+        next.selectedRunStructureRepairEventUlid = update.eventUlid;
+      }
       next.selectedRun = {
         ...selected,
         summary: {
@@ -327,6 +339,31 @@ function applyEnvelope(
         [key]: laterWatermark(state.liveEventRepairWatermarks[key], appended.droppedThrough),
       };
     }
+  } else if (
+    change.oneofKind === "classifierEventAppended" &&
+    state.selectedRunId === runId &&
+    (selectedSnapshot === undefined || update.eventUlid > selectedSnapshot.asOfEventUlid) &&
+    change.classifierEventAppended.event
+  ) {
+    const event = change.classifierEventAppended.event;
+    const key = `${runId}:${change.classifierEventAppended.nodeId}`;
+    const appended = appendBounded(
+      state.liveClassifierEvents[key] ?? [],
+      event,
+      (value) => value.eventSequence,
+    );
+    if (appended.items !== state.liveClassifierEvents[key]) {
+      next.liveClassifierEvents = { ...state.liveClassifierEvents, [key]: appended.items };
+    }
+    if (appended.droppedThrough !== undefined) {
+      next.liveClassifierEventRepairWatermarks = {
+        ...state.liveClassifierEventRepairWatermarks,
+        [key]: laterWatermark(
+          state.liveClassifierEventRepairWatermarks[key],
+          appended.droppedThrough,
+        ),
+      };
+    }
   } else if (change.oneofKind === "traceFinalized" && selected && change.traceFinalized.trace) {
     next.selectedRun = {
       ...selected,
@@ -384,9 +421,12 @@ export function projectionReducer(
       selectedRun: undefined,
       selectedRunStatus: "loading",
       selectedRunError: undefined,
+      selectedRunStructureRepairEventUlid: undefined,
       liveEvents: {},
+      liveClassifierEvents: {},
       liveLogs: {},
       liveEventRepairWatermarks: {},
+      liveClassifierEventRepairWatermarks: {},
       liveLogRepairWatermarks: {},
     };
   }
@@ -412,10 +452,16 @@ export function projectionReducer(
       terminalSeals,
       selectedRunStatus: "ready",
       selectedRunError: undefined,
+      selectedRunStructureRepairEventUlid: undefined,
       liveEvents: withoutRunBuckets(state.liveEvents, action.runId),
+      liveClassifierEvents: withoutRunBuckets(state.liveClassifierEvents, action.runId),
       liveLogs: withoutKey(state.liveLogs, action.runId),
       liveEventRepairWatermarks: withoutRunBuckets(
         state.liveEventRepairWatermarks,
+        action.runId,
+      ),
+      liveClassifierEventRepairWatermarks: withoutRunBuckets(
+        state.liveClassifierEventRepairWatermarks,
         action.runId,
       ),
       liveLogRepairWatermarks: withoutKey(state.liveLogRepairWatermarks, action.runId),
@@ -437,9 +483,12 @@ export function projectionReducer(
       selectedRun: undefined,
       selectedRunStatus: "idle",
       selectedRunError: undefined,
+      selectedRunStructureRepairEventUlid: undefined,
       liveEvents: {},
+      liveClassifierEvents: {},
       liveLogs: {},
       liveEventRepairWatermarks: {},
+      liveClassifierEventRepairWatermarks: {},
       liveLogRepairWatermarks: {},
     };
   }
@@ -724,10 +773,17 @@ export function useOperatorProjection(api: OperatorApi) {
   const repairWatermark =
     selectedRunId && state.selectedRunStatus === "ready"
       ? [
+          ...(state.selectedRunStructureRepairEventUlid
+            ? [`structure:${state.selectedRunStructureRepairEventUlid}`]
+            : []),
           ...Object.entries(state.liveEventRepairWatermarks)
             .filter(([key]) => key.startsWith(`${selectedRunId}:`))
             .sort(([left], [right]) => left.localeCompare(right))
             .map(([key, watermark]) => `${key}:${watermark}`),
+          ...Object.entries(state.liveClassifierEventRepairWatermarks)
+            .filter(([key]) => key.startsWith(`${selectedRunId}:`))
+            .sort(([left], [right]) => left.localeCompare(right))
+            .map(([key, watermark]) => `classifier:${key}:${watermark}`),
           ...(state.liveLogRepairWatermarks[selectedRunId]
             ? [`${selectedRunId}:${state.liveLogRepairWatermarks[selectedRunId]}`]
             : []),

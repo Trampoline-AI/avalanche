@@ -12,6 +12,8 @@ import {
 } from "./agentTrace";
 
 import type { OperatorApi } from "./api";
+import { ClassifierInspector } from "./ClassifierInspector";
+import { decodeClassifierDeclaration } from "./classifier";
 import {
   boundDescriptors,
   DESCRIPTOR_PAGE_SIZE,
@@ -26,6 +28,7 @@ import { parseAgentDeclaration, parseAgentFieldSchemas } from "./GraphCanvas";
 import {
   DescriptorPageOrder,
   type AgentEventDescriptorMsg,
+  type ClassifierEventDescriptorMsg,
   type FlowInfoMsg,
   type NodeSnapshotMsg,
   type RunSnapshotMsg,
@@ -42,6 +45,7 @@ interface InspectorProps {
   run?: RunSnapshotMsg;
   nodeId?: string;
   liveEvents?: AgentEventDescriptorMsg[];
+  liveClassifierEvents?: ClassifierEventDescriptorMsg[];
   embedded?: boolean;
   definitionLabel?: string;
   onClose: () => void;
@@ -104,7 +108,47 @@ function declaredModelName(value: unknown): string | undefined {
   return typeof identity.type === "string" ? identity.type : undefined;
 }
 
-export function Inspector({
+export function Inspector(props: InspectorProps) {
+  const { workflow, run, nodeId } = props;
+  const metadata = run
+    ? run.topology?.classifierMetadataJson
+    : workflow?.classifierMetadataJson;
+  const rawDeclaration = nodeId === undefined ? undefined : metadata?.[nodeId];
+  const parsedDeclaration = useMemo(() => {
+    if (rawDeclaration === undefined) return undefined;
+    try {
+      return { declaration: decodeClassifierDeclaration(rawDeclaration) };
+    } catch (error: unknown) {
+      return {
+        error: error instanceof Error ? error.message : "Classifier declaration unavailable",
+      };
+    }
+  }, [rawDeclaration]);
+  if (
+    nodeId !== undefined &&
+    metadata !== undefined &&
+    Object.hasOwn(metadata, nodeId) &&
+    (run || workflow?.nodeIds.includes(nodeId))
+  ) {
+    return (
+      <ClassifierInspector
+        api={props.api}
+        nodeId={nodeId}
+        workflow={workflow}
+        run={run}
+        declaration={parsedDeclaration?.declaration}
+        declarationError={parsedDeclaration?.error}
+        liveEvents={props.liveClassifierEvents}
+        embedded={props.embedded}
+        definitionLabel={props.definitionLabel}
+        onClose={props.onClose}
+      />
+    );
+  }
+  return <AgentAndStepInspector {...props} />;
+}
+
+function AgentAndStepInspector({
   api,
   workflow,
   run,

@@ -34,6 +34,8 @@
   --color-success: #22c55e;
   --color-failed: var(--color-danger);
   --color-agent: var(--color-violet-500);
+  --color-classifier: #0e7490;
+  --color-classifier-light: #ecfeff;
   --font-sans: "Nacelle", Inter, Helvetica, sans-serif;
   --font-mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
 }
@@ -63,6 +65,25 @@
   letter-spacing: 0.08em;
   line-height: 1.5;
   text-transform: uppercase;
+}
+
+.avalanche-operator-ui
+  .classifier-value
+  :is(.value-group, .value-child-group, .value-row, .value-content) {
+  min-width: 0;
+}
+
+.avalanche-operator-ui .classifier-value .value-row {
+  grid-template-columns: minmax(0, 0.55fr) 0.55rem minmax(0, 1fr);
+}
+
+.avalanche-operator-ui .classifier-value :is(.value-disclosure, .value-more) {
+  color: var(--color-classifier);
+}
+
+.avalanche-operator-ui .classifier-value button:focus-visible {
+  outline: 2px solid var(--color-classifier);
+  outline-offset: 2px;
 }
 
 .avalanche-operator-ui .node-card[aria-disabled="true"] {

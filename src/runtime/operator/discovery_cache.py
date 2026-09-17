@@ -21,7 +21,7 @@ from .source import iter_source_paths
 
 logger = logging.getLogger(__name__)
 
-_CACHE_SCHEMA_VERSION = 4
+_CACHE_SCHEMA_VERSION = 5
 
 
 class _CacheModel(BaseModel):
@@ -73,6 +73,7 @@ class _CachedDescriptor(_CacheModel):
     display_names: tuple[tuple[str, str], ...]
     agent_node_ids: tuple[str, ...]
     agent_metadata_json: tuple[tuple[str, str], ...]
+    classifier_metadata_json: tuple[tuple[str, str], ...]
     standard_step_docstring_lines: tuple[tuple[str, str], ...]
     node_source_code: tuple[tuple[str, str], ...]
     cron: str | None
@@ -91,6 +92,7 @@ class _CachedDescriptor(_CacheModel):
             display_names=descriptor.display_names,
             agent_node_ids=descriptor.agent_node_ids,
             agent_metadata_json=descriptor.agent_metadata_json,
+            classifier_metadata_json=descriptor.classifier_metadata_json,
             standard_step_docstring_lines=descriptor.standard_step_docstring_lines,
             node_source_code=descriptor.node_source_code,
             cron=descriptor.cron,
@@ -109,6 +111,7 @@ class _CachedDescriptor(_CacheModel):
             display_names=self.display_names,
             agent_node_ids=self.agent_node_ids,
             agent_metadata_json=self.agent_metadata_json,
+            classifier_metadata_json=self.classifier_metadata_json,
             standard_step_docstring_lines=self.standard_step_docstring_lines,
             node_source_code=self.node_source_code,
             cron=self.cron,
@@ -170,7 +173,7 @@ class _SourceStamp(_CacheModel):
 
 
 class _CacheDocument(_CacheModel):
-    schema_version: Literal[4]
+    schema_version: Literal[5]
     environment: str
     roots: tuple[_CachedRoot, ...]
     watch_roots: tuple[str, ...]

@@ -39,6 +39,9 @@ from .models import (
     CatalogReloadRequired,
     CatalogReplaced,
     CatalogSnapshot,
+    ClassifierEvent,
+    ClassifierEventAppended,
+    ClassifierEventDetailAppended,
     DetailUpdate,
     LogAppended,
     LogDetailAppended,
@@ -1321,7 +1324,9 @@ class GrpcStateProvider:
                     )
         elif payload == "activity_appended":
             activity = message.activity_appended.activity
-            if activity.kind in {"log", "agent_event"}:
+            if activity.kind in {"log", "agent_event"} or (
+                activity.kind == "classifier_event" and activity.HasField("detail_ref")
+            ):
                 self._remember_detail_reference(activity.detail_ref)
             elif activity.kind == "trace" and activity.trace.available:
                 self._remember_trace_reference(
@@ -1488,15 +1493,35 @@ class GrpcStateProvider:
         self._retained_detail_count = 0
         self._retained_detail_bytes = 0
 
-    def _evict_run_detail_caches_locked(self, run_id: str) -> None:
+    def _evict_run_detail_caches_locked(
+        self, run_id: str, *, replacement: RunState | None = None
+    ) -> None:
+        # RunCreated bindings arrive before the reducer replaces the old run.
+        # Keep only bindings named by that new projection, never old bodies.
+        nodes = replacement.nodes.values() if replacement is not None else ()
+        retained_continuations = {
+            (run_id, node.node_id, node.event_page_token)
+            for node in nodes
+            if node.event_page_token
+        }
+        retained_traces = {
+            (run_id, node.node_id, node.trace.revision)
+            for node in nodes
+            if node.trace is not None and node.trace.available
+        }
+        retained_detail_keys = {
+            reference.object_key
+            for key in retained_traces
+            if (reference := self._trace_detail_refs.get(key)) is not None
+        }
         for key in tuple(self._activity_continuations):
-            if key[0] == run_id:
+            if key[0] == run_id and key not in retained_continuations:
                 del self._activity_continuations[key]
         for object_key, reference in tuple(self._detail_refs_by_key.items()):
-            if reference.run_id == run_id:
+            if reference.run_id == run_id and object_key not in retained_detail_keys:
                 del self._detail_refs_by_key[object_key]
         for key in tuple(self._trace_detail_refs):
-            if key[0] == run_id:
+            if key[0] == run_id and key not in retained_traces:
                 del self._trace_detail_refs[key]
         cache_keys = {key for key in self._detail_cache_usage if key[1] == run_id}
         if run_id in self._log_entries or run_id in self._hydrated_log_runs:
@@ -2520,6 +2545,7 @@ class GrpcStateProvider:
                 catalog_reload_baseline = self._load_catalog_reload_baseline(envelope, update)
         log_detail: LogEntry | None = None
         event_detail: AgentEvent | None = None
+        classifier_detail: ClassifierEvent | None = None
         if isinstance(update.change, LogAppended):
             descriptor = update.change.log
             message = self._read_detail_body(
@@ -2549,6 +2575,24 @@ class GrpcStateProvider:
                 predict_count=descriptor.predict_count,
                 size_bytes=descriptor.size_bytes,
             )
+        elif isinstance(update.change, ClassifierEventAppended):
+            descriptor = update.change.event
+            classifier_detail = ClassifierEvent(
+                invocation_id=descriptor.invocation_id,
+                event_sequence=descriptor.event_sequence,
+                event_json=(
+                    self._read_detail_body(
+                        descriptor.body_token,
+                        descriptor.size_bytes,
+                    ).decode()
+                    if descriptor.body_token
+                    else ""
+                ),
+                size_bytes=descriptor.size_bytes,
+                event_kind=descriptor.event_kind,
+                duration_ms=descriptor.duration_ms,
+                error=descriptor.error,
+            )
         with self._state_lock:
             catalog_reloaded = (
                 isinstance(update.change, CatalogReloadRequired)
@@ -2559,6 +2603,7 @@ class GrpcStateProvider:
                 envelope,
                 log_detail=log_detail,
                 event_detail=event_detail,
+                classifier_detail=classifier_detail,
                 event_cursor=event_cursor,
                 catalog_reload_baseline=catalog_reload_baseline,
             )
@@ -2603,6 +2648,7 @@ class GrpcStateProvider:
         *,
         log_detail: LogEntry | None = None,
         event_detail: AgentEvent | None = None,
+        classifier_detail: ClassifierEvent | None = None,
         event_cursor: pb.LifecycleCursorV2 | None = None,
         catalog_reload_baseline: CatalogSnapshot | None = None,
     ) -> tuple[RunState | None, DetailUpdate | None]:
@@ -2668,7 +2714,7 @@ class GrpcStateProvider:
             if change.summary.revision <= old_revision:
                 run = None
             else:
-                self._evict_run_detail_caches_locked(run.run_id)
+                self._evict_run_detail_caches_locked(run.run_id, replacement=run)
                 self._reserve_detail_cache_locked({self._log_cache_key(run.run_id): (0, 0)})
                 self._runs_by_id[run.run_id] = run
                 self._run_revisions[run.run_id] = change.summary.revision
@@ -2790,6 +2836,26 @@ class GrpcStateProvider:
                         node_id=change.node_id,
                         event=event_detail,
                     )
+            elif isinstance(change, ClassifierEventAppended):
+                if classifier_detail is None:
+                    raise _RunUpdateResetError("classifier event update detail is unavailable")
+                if change.node_id not in run.nodes or not any(
+                    node_id == change.node_id
+                    for node_id, _ in run.topology.classifier_metadata_json
+                ):
+                    raise _RunUpdateResetError(
+                        f"update references unknown classifier {change.run_id}/{change.node_id}"
+                    )
+                detail = ClassifierEventDetailAppended(
+                    operator_instance_id=operator_instance_id,
+                    run_id=change.run_id,
+                    created_sequence=current.created_sequence,
+                    sequence=update.sequence,
+                    node_id=change.node_id,
+                    event=classifier_detail,
+                )
+                # Classifier evidence is delivered separately, never as an agent trace.
+                run = None
             elif isinstance(change, TraceFinalized):
                 node = run.nodes.get(change.node_id)
                 if node is None:

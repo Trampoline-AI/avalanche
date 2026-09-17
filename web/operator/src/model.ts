@@ -155,6 +155,8 @@ export interface FlowInfoMsg {
   agentMetadataJson: {
     [key: string]: string;
   };
+  /** Validated classifier declarations keyed by node ID. */
+  classifierMetadataJson: Record<string, string>;
   /**
    * First non-empty docstring lines for non-agent standard steps.
    */
@@ -194,6 +196,7 @@ export const FlowInfoMsg = {
       builderSymbol: "",
       agentNodeIds: [],
       agentMetadataJson: {},
+      classifierMetadataJson: {},
       standardStepDocstringLines: {},
       webhookPath: "",
       webhookUrl: "",
@@ -557,6 +560,8 @@ export interface WorkflowTopologyMsg {
   standardStepDocstringLines: {
     [key: string]: string;
   };
+  /** Classifier declarations pinned to the executing workflow definition. */
+  classifierMetadataJson: Record<string, string>;
 }
 
 export const WorkflowTopologyMsg = {
@@ -569,6 +574,7 @@ export const WorkflowTopologyMsg = {
       agentFieldSchemasJson: {},
       agentInstructionLines: {},
       standardStepDocstringLines: {},
+      classifierMetadataJson: {},
       ...value,
     } as WorkflowTopologyMsg;
   },
@@ -724,6 +730,30 @@ export const AgentEventDescriptorMsg = {
       predictCount: 0,
       ...value,
     } as AgentEventDescriptorMsg;
+  },
+};
+
+export interface ClassifierEventDescriptorMsg {
+  eventSequence: string;
+  sizeBytes: string;
+  bodyToken: string;
+  invocationId: string;
+  eventKind: string;
+  durationMs?: string;
+  error: boolean;
+}
+
+export const ClassifierEventDescriptorMsg = {
+  create(value: Partial<ClassifierEventDescriptorMsg> = {}): ClassifierEventDescriptorMsg {
+    return {
+      eventSequence: "0",
+      sizeBytes: "0",
+      bodyToken: "",
+      invocationId: "",
+      eventKind: "",
+      error: false,
+      ...value,
+    };
   },
 };
 
@@ -1028,6 +1058,18 @@ export const AgentEventAppended = {
   },
 };
 
+export interface ClassifierEventAppended {
+  runId: string;
+  nodeId: string;
+  event?: ClassifierEventDescriptorMsg;
+}
+
+export const ClassifierEventAppended = {
+  create(value: Partial<ClassifierEventAppended> = {}): ClassifierEventAppended {
+    return { runId: "", nodeId: "", ...value };
+  },
+};
+
 export interface TraceFinalized {
   /**
    * @generated from protobuf field: string run_id = 1
@@ -1156,6 +1198,10 @@ export interface OperatorUpdate {
          * @generated from protobuf field: avalanche.operator.AgentEventAppended agent_event_appended = 6
          */
         agentEventAppended: AgentEventAppended;
+      }
+    | {
+        oneofKind: "classifierEventAppended";
+        classifierEventAppended: ClassifierEventAppended;
       }
     | {
         oneofKind: "traceFinalized";
@@ -1323,5 +1369,26 @@ export const ListAgentEventsRequest = {
       order: DescriptorPageOrder.FORWARD,
       ...value,
     } as ListAgentEventsRequest;
+  },
+};
+
+export interface ListClassifierEventsRequest {
+  pageToken: string;
+  afterEventSequence: string;
+  pageSize: number;
+  beforeEventSequence: string;
+  order: DescriptorPageOrder;
+}
+
+export const ListClassifierEventsRequest = {
+  create(value: Partial<ListClassifierEventsRequest> = {}): ListClassifierEventsRequest {
+    return {
+      pageToken: "",
+      afterEventSequence: "0",
+      pageSize: 0,
+      beforeEventSequence: "0",
+      order: DescriptorPageOrder.FORWARD,
+      ...value,
+    };
   },
 };

@@ -11,7 +11,7 @@ from avalanche.dag import NodeType, Workflow
 def node_docstring_lines_for_workflow(
     workflow: Workflow, node_ids: list[str]
 ) -> dict[str, str]:
-    """Return first non-empty docstring lines for non-agent DAG nodes."""
+    """Return first docstring lines for source-bearing nodes, including classifiers."""
     lines_by_node: dict[str, str] = {}
     for node_id in node_ids:
         node = workflow.nodes[node_id].node
@@ -31,7 +31,7 @@ def node_docstring_lines_for_workflow(
 
 
 def node_source_code_for_workflow(workflow: Workflow, node_ids: list[str]) -> dict[str, str]:
-    """Return inspectable source blocks for non-agent DAG nodes."""
+    """Return source blocks for ordinary and classifier nodes, excluding agents."""
     source_by_node: dict[str, str] = {}
     for node_id in node_ids:
         node = workflow.nodes[node_id].node
