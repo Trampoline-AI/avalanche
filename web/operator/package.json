@@ -49,6 +49,7 @@
   "dependencies": {
     "@codemirror/lang-json": "^6.0.2",
     "@codemirror/lang-python": "^6.2.1",
+    "@codemirror/language": "^6.12.4",
     "@codemirror/state": "^6.5.2",
     "@codemirror/view": "^6.38.6",
     "@protobuf-ts/grpcweb-transport": "^2.11.1",

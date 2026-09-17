@@ -10,6 +10,8 @@ import grpc
 import pytest
 
 from avalanche.classifier.models import (
+    ChoiceAnswer,
+    ChoiceQuestion,
     ClassificationResult,
     ClassificationUsage,
     ClassifierDeclaration,
@@ -17,9 +19,19 @@ from avalanche.classifier.models import (
     ClassifierRuntime,
     NoulAnswer,
     NoulQuestion,
+    ScoreAnswer,
+    ScoreQuestion,
 )
 from runtime.operator.client import GrpcStateProvider, StreamState
-from runtime.operator.models import ClassifierEventDetailAppended, RunStatus
+from runtime.operator.convert_v2 import classifier_event_descriptor_from_v2
+from runtime.operator.models import (
+    ClassifierAnswerSummary,
+    ClassifierChoiceSummary,
+    ClassifierEventDetailAppended,
+    ClassifierNoulSummary,
+    ClassifierScoreSummary,
+    RunStatus,
+)
 from runtime.operator.operator import Operator, _CoordinatorProtocolError
 from runtime.operator.proto import operator_pb2 as pb
 from runtime.operator.proto import operator_pb2_grpc as pb_grpc
@@ -52,10 +64,18 @@ def transport():
         operator.close()
 
 
-def _declaration() -> ClassifierDeclaration:
+def _declaration(choice: str = "accept") -> ClassifierDeclaration:
     return ClassifierDeclaration(
         questions={
-            "match": NoulQuestion(type="noul", instructions="Original retained question")
+            "route": ChoiceQuestion(
+                type="choice", criteria={choice: "Accept the request", "reject": "Reject it"}
+            ),
+            "match": NoulQuestion(type="noul", instructions="Original retained question"),
+            "priority": ScoreQuestion(type="score", criteria=["Routine", "Urgent"]),
+            **{
+                f"extra-{index}": NoulQuestion(type="noul", instructions=f"Check {index}")
+                for index in range(6)
+            },
         },
         runtime=ClassifierRuntime(model="jev-latest", timeout=10.0),
     )
@@ -69,7 +89,12 @@ def _event_handle(operator: Operator | None = None) -> SimpleNamespace:
     )
 
 
-def _seed_run(operator: Operator, run_id: str):
+def _seed_run(
+    operator: Operator, run_id: str, declaration: ClassifierDeclaration | None = None
+):
+    if declaration is None:
+        declaration = _declaration()
+    declaration_json = declaration.model_dump_json()
     node_ids = ["classify", "other", "agent"]
     run = operator._run_from_prepared(
         run_id,
@@ -88,7 +113,7 @@ def _seed_run(operator: Operator, run_id: str):
             "agent_instruction_lines": {},
             "standard_step_docstring_lines": {},
             "classifier_metadata_json": {
-                node_id: _declaration().model_dump_json() for node_id in ("classify", "other")
+                node_id: declaration_json for node_id in ("classify", "other")
             },
         },
     )
@@ -99,7 +124,10 @@ def _seed_run(operator: Operator, run_id: str):
 
 
 def _invocation(
-    index: int, status: Literal["running", "success", "failed", "cancelled"]
+    index: int,
+    status: Literal["running", "success", "failed", "cancelled"],
+    *,
+    choice: str = "accept",
 ) -> ClassifierInvocation:
     return ClassifierInvocation(
         invocation_id=f"call-{index}",
@@ -107,18 +135,46 @@ def _invocation(
         status=status,
         started_at=100.0 + index,
         ended_at=None if status == "running" else 101.0 + index,
-        declaration=_declaration(),
+        declaration=_declaration(choice),
         input={"index": index, "ticket": ["captured state"]},
         result=(
             ClassificationResult(
                 model="jev-latest",
-                answers={"match": NoulAnswer(type="noul", noul=0.8)},
+                answers={
+                    "route": ChoiceAnswer(
+                        type="choice",
+                        choice=choice,
+                        probabilities={choice: 1.0, "reject": 0.0},
+                        confidence=1.0,
+                    ),
+                    "match": NoulAnswer(type="noul", noul=0.0),
+                    "priority": ScoreAnswer(
+                        type="score",
+                        score=0.0,
+                        legend={"0": "Routine", "1": "Urgent"},
+                        probabilities={"0": 1.0, "1": 0.0},
+                        confidence=1.0,
+                    ),
+                    **{
+                        f"extra-{index}": NoulAnswer(type="noul", noul=1.0)
+                        for index in range(6)
+                    },
+                },
                 usage=ClassificationUsage(input_tokens=2, output_tokens=1),
             )
             if status == "success"
             else None
         ),
         error="Request interrupted" if status in {"failed", "cancelled"} else None,
+    )
+
+
+def _answers(choice: str = "accept") -> tuple[ClassifierAnswerSummary, ...]:
+    return (
+        ClassifierChoiceSummary("route", choice),
+        ClassifierNoulSummary("match", 0.0),
+        ClassifierScoreSummary("priority", 0.0),
+        *(ClassifierNoulSummary(f"extra-{index}", 1.0) for index in range(6)),
     )
 
 
@@ -199,6 +255,18 @@ def test_snapshot_paging_retains_classifier_records_without_a_current_workflow(t
         "classifier:classify:3",
     ]
     assert {item.kind for item in forward} == {"classifier_event"}
+    summaries = [classifier_event_descriptor_from_v2(item) for item in forward]
+    assert [item.invocation_index for item in summaries] == [0, 0, 1]
+    assert [item.answers for item in summaries] == [(), _answers(), ()]
+    assert [item.duration_ms for item in summaries] == [None, 1000, None]
+    assert [
+        answer.WhichOneof("answer") for answer in forward[1].classifier_summary.answers
+    ] == [
+        "choice",
+        "noul",
+        "score",
+        *(["noul"] * 6),
+    ]
     assert [item.detail_ref.activity_id for item in reverse] == [
         item.activity_id for item in reverse
     ]
@@ -314,6 +382,8 @@ def test_live_classifier_details_advance_python_client_without_agent_traces(tran
             ClassifierInvocation.model_validate_json(detail.event.event_json)
             for detail in details
         ] == [_invocation(0, "running"), _invocation(0, "success")]
+        assert [detail.event.invocation_index for detail in details] == [0, 0]
+        assert [detail.event.answers for detail in details] == [(), _answers()]
         assert {detail.operator_instance_id for detail in details} == {
             operator.operator_instance_id
         }
@@ -393,6 +463,11 @@ def test_expired_classifier_details_preserve_paging_and_replay(transport, monkey
     assert forward == expected
     assert reverse == list(reversed(expected))
     assert [item.event_kind for item in forward] == [record.status for record in records]
+    summaries = [classifier_event_descriptor_from_v2(item) for item in forward]
+    assert [item.invocation_index for item in summaries] == [0, 0, 1, 1, 2, 2]
+    assert [item.answers for item in summaries] == [(), _answers(), (), (), (), ()]
+    assert [item.error for item in summaries] == [False, False, False, True, False, True]
+    assert [item.duration_ms for item in summaries] == [None, 1000, None, 1000, None, 1000]
     assert all(
         not item.body_token
         for item in operator.list_classifier_events(run.run_id, "classify").events
@@ -446,6 +521,15 @@ def test_expired_classifier_details_preserve_paging_and_replay(transport, monkey
             record.status for record in records
         ]
         assert all(not detail.event.event_json for detail in details)
+        assert [detail.event.invocation_index for detail in details] == [0, 0, 1, 1, 2, 2]
+        assert [detail.event.answers for detail in details] == [
+            (),
+            _answers(),
+            (),
+            (),
+            (),
+            (),
+        ]
         retained = provider.get_run(run.run_id)
         assert retained is not None and retained.status is RunStatus.FAILED
         assert retained.nodes["classify"].agent_trace_json is None
@@ -468,6 +552,46 @@ def test_missing_classifier_body_is_not_treated_as_known_expiry(transport, monke
             pb.ListRunActivityRequestV2(run_id=run.run_id, node_id="classify"), timeout=5
         )
     assert error.value.code() is grpc.StatusCode.NOT_FOUND
+
+
+def test_classifier_summary_bytes_bound_pages_without_truncating_answers(
+    transport, monkeypatch
+):
+    operator, _, _ = transport
+    choice = "選" * 1024
+    run = _seed_run(operator, "summary-budget", _declaration(choice))
+    for index in range(3):
+        _publish(operator, run.run_id, _invocation(index, "running", choice=choice))
+        _publish(operator, run.run_id, _invocation(index, "success", choice=choice))
+    monkeypatch.setattr("runtime.operator.operator.MAX_TRANSPORT_PAGE_BYTES", 6000)
+
+    page = operator.list_classifier_events(run.run_id, "classify")
+    retained = []
+    while True:
+        successful = [item for item in page.events if item.event_kind == "success"]
+        assert len(successful) <= 1
+        assert all(item.answers == _answers(choice) for item in successful)
+        retained.extend(page.events)
+        if not page.next_page_token:
+            break
+        page = operator.list_classifier_events(page_token=page.next_page_token)
+    assert [item.event_sequence for item in retained] == [1, 2, 3, 4, 5, 6]
+    assert [item.invocation_index for item in retained] == [0, 0, 1, 1, 2, 2]
+
+
+@pytest.mark.parametrize(
+    "summary",
+    [
+        None,
+        pb.ClassifierInvocationSummaryV2(
+            answers=[pb.ClassifierAnswerSummaryV2(question_id="match")]
+        ),
+    ],
+)
+def test_classifier_descriptor_rejects_missing_typed_summary(summary):
+    activity = pb.RunActivityDescriptorV2(kind="classifier_event", classifier_summary=summary)
+    with pytest.raises(ValueError):
+        classifier_event_descriptor_from_v2(activity)
 
 
 @pytest.mark.parametrize("limit", ["event", "node", "run"])

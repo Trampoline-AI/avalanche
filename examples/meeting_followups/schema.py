@@ -3,7 +3,6 @@
 from datetime import date
 from enum import StrEnum
 from typing import Annotated, Self
-from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
@@ -18,6 +17,12 @@ class Department(StrEnum):
     MARKETING = "marketing"
     SUPPORT = "support"
     SHARED_INTAKE = "shared_intake"
+
+
+class Destination(StrEnum):
+    LINEAR = "linear"
+    ATTIO = "attio"
+    JIRA = "jira"
 
 
 class Category(StrEnum):
@@ -40,31 +45,19 @@ class Model(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
 
-class LinearDestination(Model):
-    team_id: UUID
-    category_label_ids: dict[Category, UUID]
-
-    @model_validator(mode="after")
-    def complete_labels(self) -> Self:
-        if set(self.category_label_ids) != set(Category):
-            raise ValueError("Configure one Linear label ID for every category")
-        return self
-
-
 class MeetingRecord(Model):
     transcript: ava.File
     title: Text
     meeting_date: date
     departments: dict[Department, Text] = Field(default_factory=lambda: DEPARTMENTS.copy())
-    destinations: dict[Department, LinearDestination] = Field(default_factory=dict)
-    publish: bool = False
+    destinations: dict[Department, Destination]
 
     @model_validator(mode="after")
     def complete_routing(self) -> Self:
         if set(self.departments) != set(Department):
             raise ValueError("Describe every department, including shared_intake")
-        if self.publish and set(self.destinations) != set(Department):
-            raise ValueError("Publishing requires a Linear destination for every department")
+        if set(self.destinations) != set(Department):
+            raise ValueError("Route every department, including shared_intake")
         return self
 
 
@@ -105,21 +98,8 @@ class PlannedIssue(Model):
     category: Category
     title: str
     description: str
-    # An unconfigured destination is a legitimate preview-only state.
-    destination: LinearDestination | None
 
 
 class PublicationPlan(Model):
-    publish: bool
+    destination: Destination
     issues: list[PlannedIssue]
-
-
-class IssueReceipt(Model):
-    item_id: str
-    identifier: str
-    url: str
-
-
-class PublicationReport(Model):
-    plan: PublicationPlan
-    receipts: list[IssueReceipt]

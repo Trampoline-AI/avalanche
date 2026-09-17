@@ -13,8 +13,12 @@ from .models import (
     CatalogReloadRequired,
     CatalogReplaced,
     CatalogSnapshot,
+    ClassifierAnswerSummary,
+    ClassifierChoiceSummary,
     ClassifierEventAppended,
     ClassifierEventDescriptor,
+    ClassifierNoulSummary,
+    ClassifierScoreSummary,
     LogAppended,
     LogLevel,
     LogRecordDescriptor,
@@ -371,6 +375,31 @@ def agent_event_activity_to_v2(
     return message
 
 
+def classifier_answer_summary_to_v2(
+    answer: ClassifierAnswerSummary,
+) -> pb.ClassifierAnswerSummaryV2:
+    if isinstance(answer, ClassifierChoiceSummary):
+        return pb.ClassifierAnswerSummaryV2(
+            question_id=answer.question_id, choice=answer.choice
+        )
+    if isinstance(answer, ClassifierNoulSummary):
+        return pb.ClassifierAnswerSummaryV2(question_id=answer.question_id, noul=answer.noul)
+    return pb.ClassifierAnswerSummaryV2(question_id=answer.question_id, score=answer.score)
+
+
+def classifier_answer_summary_from_v2(
+    answer: pb.ClassifierAnswerSummaryV2,
+) -> ClassifierAnswerSummary:
+    kind = answer.WhichOneof("answer")
+    if kind == "choice":
+        return ClassifierChoiceSummary(answer.question_id, answer.choice)
+    if kind == "noul":
+        return ClassifierNoulSummary(answer.question_id, answer.noul)
+    if kind == "score":
+        return ClassifierScoreSummary(answer.question_id, answer.score)
+    raise ValueError("classifier answer summary is missing its typed answer")
+
+
 def classifier_event_activity_to_v2(
     event: ClassifierEventDescriptor,
     *,
@@ -388,6 +417,10 @@ def classifier_event_activity_to_v2(
         invocation_id=event.invocation_id,
         error=event.error,
         event_kind=event.event_kind,
+        classifier_summary=pb.ClassifierInvocationSummaryV2(
+            invocation_index=event.invocation_index,
+            answers=[classifier_answer_summary_to_v2(answer) for answer in event.answers],
+        ),
     )
     if event.duration_ms is not None:
         message.duration_ms = event.duration_ms
@@ -809,6 +842,7 @@ def terminal_seal_descriptor_from_v2(
         or msg.predict_count
         or msg.event_kind
         or msg.HasField("trace")
+        or msg.HasField("classifier_summary")
     ):
         raise ValueError("terminal seal descriptor contains non-seal activity fields")
     if not msg.HasField("terminal_seal"):
@@ -872,8 +906,15 @@ def classifier_event_descriptor_from_v2(
 ) -> ClassifierEventDescriptor:
     if msg.kind != "classifier_event":
         raise ValueError("classifier event descriptor has a non-classifier activity kind")
+    if not msg.HasField("classifier_summary"):
+        raise ValueError("classifier event activity is missing its invocation summary")
     return ClassifierEventDescriptor(
         invocation_id=msg.invocation_id,
+        invocation_index=msg.classifier_summary.invocation_index,
+        answers=tuple(
+            classifier_answer_summary_from_v2(answer)
+            for answer in msg.classifier_summary.answers
+        ),
         event_sequence=msg.run_sequence,
         size_bytes=msg.size_bytes,
         body_token=msg.detail_ref.object_key if msg.HasField("detail_ref") else "",

@@ -25,7 +25,12 @@ from types import MappingProxyType
 from typing import Any, Callable, Literal, TypeAlias, TypeVar
 from uuid import uuid4
 
-from avalanche.classifier.models import ClassifierDeclaration, ClassifierInvocation
+from avalanche.classifier.models import (
+    ChoiceAnswer,
+    ClassifierDeclaration,
+    ClassifierInvocation,
+    NoulAnswer,
+)
 
 from ..executor import LocalExecutor, RayExecutor
 from .discovery import (
@@ -42,11 +47,15 @@ from .models import (
     CatalogReplaced,
     CatalogSnapshot,
     CatalogView,
+    ClassifierAnswerSummary,
+    ClassifierChoiceSummary,
     ClassifierEvent,
     ClassifierEventAppended,
     ClassifierEventDescriptor,
     ClassifierEventDetailAppended,
     ClassifierEventPage,
+    ClassifierNoulSummary,
+    ClassifierScoreSummary,
     DetailUpdate,
     FinalizedTrace,
     LogAppended,
@@ -1231,6 +1240,8 @@ class Operator:
     ) -> ClassifierEventDescriptor:
         return ClassifierEventDescriptor(
             invocation_id=item.invocation_id,
+            invocation_index=item.invocation_index,
+            answers=item.answers,
             event_sequence=item.event_sequence,
             size_bytes=item.size_bytes,
             body_token=_encode_transport_token(
@@ -2649,10 +2660,21 @@ class Operator:
                 f"classifier event exceeds {MAX_CLASSIFIER_EVENT_BYTES} byte limit"
             )
         self._ensure_detail_capacity_locked(run.run_id, node_id, node_bytes=event_size)
+        answers: list[ClassifierAnswerSummary] = []
+        if invocation.result is not None:
+            for question_id, answer in invocation.result.answers.items():
+                if isinstance(answer, ChoiceAnswer):
+                    answers.append(ClassifierChoiceSummary(question_id, answer.choice))
+                elif isinstance(answer, NoulAnswer):
+                    answers.append(ClassifierNoulSummary(question_id, answer.noul))
+                else:
+                    answers.append(ClassifierScoreSummary(question_id, answer.score))
         key = (run.run_id, node_id)
         events = self._classifier_events.setdefault(key, [])
         item = ClassifierEvent(
             invocation_id=invocation.invocation_id,
+            invocation_index=invocation.invocation_index,
+            answers=tuple(answers),
             event_sequence=len(events) + 1,
             event_json=event_json,
             size_bytes=event_size,
@@ -3378,6 +3400,11 @@ def _descriptor_wire_size(
         size += len(item.node_id.encode()) + len(item.level.value)
     elif isinstance(item, ClassifierEventDescriptor):
         size += len(item.invocation_id.encode()) + len(item.event_kind.encode())
+        size += 16
+        for answer in item.answers:
+            size += len(answer.question_id.encode()) + 32
+            if isinstance(answer, ClassifierChoiceSummary):
+                size += len(answer.choice.encode())
     return size
 
 

@@ -208,7 +208,9 @@ function probabilities(value: unknown, keys: string[], path: string): Record<str
       return [key, parsed];
     }),
   );
-  if (!numericallyEqual(total, 1)) throw new Error(`${path} must sum to 1`);
+  // Match the API's independently rounded, two-decimal probabilities.
+  if (total <= 0 || Math.abs(total - 1) > 0.005 * keys.length + 1e-12)
+    throw new Error(`${path} must sum to 1 within rounding precision`);
   return parsed;
 }
 
