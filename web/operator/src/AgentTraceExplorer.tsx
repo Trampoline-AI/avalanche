@@ -1,4 +1,4 @@
-import { type ReactNode, type RefObject, useEffect, useMemo, useState } from "react";
+import { type ReactNode, type RefObject, useEffect, useMemo, useRef, useState } from "react";
 
 import type {
   AgentTracePredictGroup,
@@ -16,7 +16,7 @@ export type AgentTraceTurnDetail =
   | { status: "idle" }
   | { status: "loading" }
   | { status: "ready"; step: AgentTraceStep }
-  | { status: "error"; error: string };
+  | { status: "error"; error: string; retryable: boolean };
 
 export type AgentTraceTurnSummary =
   | { status: "idle" }
@@ -41,6 +41,7 @@ interface AgentTraceExplorerProps {
   scrollRef: RefObject<HTMLDivElement | null>;
   onLoadTurn: (event: AgentEventDescriptorMsg) => void;
   onLoadMore: () => void;
+  onTurnDetailOpenChange: (event: AgentEventDescriptorMsg, open: boolean) => void;
   onScroll: (element: HTMLDivElement) => void;
 }
 
@@ -76,11 +77,11 @@ function turnUsageLabel(usage: TraceTokenUsage) {
 function TraceSection({
   label,
   children,
-  onOpen,
+  onOpenChange,
 }: {
   label: string;
   children: ReactNode;
-  onOpen?: () => void;
+  onOpenChange?: (open: boolean) => void;
 }) {
   const [open, setOpen] = useState(false);
 
@@ -91,7 +92,7 @@ function TraceSection({
       onToggle={(event) => {
         const nextOpen = event.currentTarget.open;
         setOpen(nextOpen);
-        if (nextOpen) onOpen?.();
+        onOpenChange?.(nextOpen);
       }}
     >
       <summary className="cursor-pointer font-mono text-[9px] font-semibold text-secondary focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-acid">
@@ -217,23 +218,38 @@ function PredictCalls({ groups }: { groups: AgentTracePredictGroup[] }) {
 
 function DeferredTurnDetail({
   detail,
+  onLoadTurn,
   children,
 }: {
   detail: AgentTraceTurnDetail;
+  onLoadTurn: () => void;
   children: (step: AgentTraceStep) => ReactNode;
 }) {
   if (detail.status === "ready") return children(detail.step);
-  if (detail.status === "error") {
+  if (detail.status === "loading") {
     return (
-      <p className="m-0 text-[9px] text-danger" role="alert">
-        Step detail unavailable: {detail.error}
+      <p className="m-0 text-[9px] text-muted italic" role="status">
+        Loading step detail…
       </p>
     );
   }
   return (
-    <p className="m-0 text-[9px] text-muted italic" role="status">
-      Loading step detail…
-    </p>
+    <div className="grid gap-2">
+      {detail.status === "error" && (
+        <p className="m-0 text-[9px] text-danger" role="alert">
+          Step detail unavailable: {detail.error}
+        </p>
+      )}
+      {(detail.status === "idle" || detail.retryable) && (
+        <button
+          type="button"
+          className="w-fit cursor-pointer rounded-md border border-line bg-panel px-2 py-1 font-mono text-[9px] text-acid focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-acid"
+          onClick={onLoadTurn}
+        >
+          {detail.status === "error" ? "Retry step detail" : "Reload step detail"}
+        </button>
+      )}
+    </div>
   );
 }
 
@@ -244,6 +260,7 @@ function TurnSecondaryDetails({
   showFullOutput,
   onShowFullOutput,
   onLoadTurn,
+  onTurnDetailOpenChange,
 }: {
   descriptor: AgentEventDescriptorMsg;
   summary: AgentTraceStepSummary;
@@ -251,11 +268,29 @@ function TurnSecondaryDetails({
   showFullOutput: boolean;
   onShowFullOutput: () => void;
   onLoadTurn: () => void;
+  onTurnDetailOpenChange: (event: AgentEventDescriptorMsg, open: boolean) => void;
 }) {
+  const openSections = useRef(new Set<string>());
+
+  useEffect(() => {
+    onTurnDetailOpenChange(descriptor, openSections.current.size > 0);
+    return () => onTurnDetailOpenChange(descriptor, false);
+  }, [descriptor, onTurnDetailOpenChange]);
+
+  function setSectionOpen(section: string, open: boolean) {
+    if (open) openSections.current.add(section);
+    else openSections.current.delete(section);
+    onTurnDetailOpenChange(descriptor, openSections.current.size > 0);
+    if (open && detail.status === "idle") onLoadTurn();
+  }
+
   return (
     <div className="trace-turn-detail border-t border-line px-3 pb-1">
-      <TraceSection label="Generated Python" onOpen={onLoadTurn}>
-        <DeferredTurnDetail detail={detail}>
+      <TraceSection
+        label="Generated Python"
+        onOpenChange={(open) => setSectionOpen("code", open)}
+      >
+        <DeferredTurnDetail detail={detail} onLoadTurn={onLoadTurn}>
           {(step) => (
             <div className="h-56 max-h-[45vh] min-h-32 overflow-auto rounded-md border border-line bg-canvas">
               <PythonSource source={step.code} />
@@ -265,9 +300,9 @@ function TurnSecondaryDetails({
       </TraceSection>
       <TraceSection
         label={summary.error ? "Sandbox error output" : "Sandbox output"}
-        onOpen={onLoadTurn}
+        onOpenChange={(open) => setSectionOpen("output", open)}
       >
-        <DeferredTurnDetail detail={detail}>
+        <DeferredTurnDetail detail={detail} onLoadTurn={onLoadTurn}>
           {(step) => {
             const outputDiffers = step.untruncatedOutput !== step.output;
             return (
@@ -292,13 +327,19 @@ function TurnSecondaryDetails({
           }}
         </DeferredTurnDetail>
       </TraceSection>
-      <TraceSection label={`Tools (${descriptor.toolCount})`} onOpen={onLoadTurn}>
-        <DeferredTurnDetail detail={detail}>
+      <TraceSection
+        label={`Tools (${descriptor.toolCount})`}
+        onOpenChange={(open) => setSectionOpen("tools", open)}
+      >
+        <DeferredTurnDetail detail={detail} onLoadTurn={onLoadTurn}>
           {(step) => <ToolCalls calls={step.toolCalls} />}
         </DeferredTurnDetail>
       </TraceSection>
-      <TraceSection label={`Predict calls (${descriptor.predictCount})`} onOpen={onLoadTurn}>
-        <DeferredTurnDetail detail={detail}>
+      <TraceSection
+        label={`Predict calls (${descriptor.predictCount})`}
+        onOpenChange={(open) => setSectionOpen("predict", open)}
+      >
+        <DeferredTurnDetail detail={detail} onLoadTurn={onLoadTurn}>
           {(step) => <PredictCalls groups={step.predictCalls} />}
         </DeferredTurnDetail>
       </TraceSection>
@@ -329,6 +370,7 @@ export function AgentTraceExplorer({
   hasMore,
   scrollRef,
   onLoadTurn,
+  onTurnDetailOpenChange,
   onLoadMore,
   onScroll,
 }: AgentTraceExplorerProps) {
@@ -457,9 +499,19 @@ export function AgentTraceExplorer({
                             {step.reasoning || "No reasoning was retained."}
                           </p>
                         ) : summary.status === "error" ? (
-                          <p className="m-0 text-[10px] text-danger" role="alert">
-                            Reasoning unavailable: {summary.error}
-                          </p>
+                          <div>
+                            <p className="m-0 text-[10px] text-danger" role="alert">
+                              Reasoning unavailable: {summary.error}
+                            </p>
+                            <button
+                              type="button"
+                              className="mt-2 cursor-pointer rounded-md border border-line bg-panel px-2 py-1 font-mono text-[9px] text-acid focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-acid"
+                              onClick={() => onLoadTurn(descriptor)}
+                              aria-label={`Retry turn ${iteration}`}
+                            >
+                              Retry
+                            </button>
+                          </div>
                         ) : (
                           <p className="m-0 text-[10px] text-muted italic" role="status">
                             Loading reasoning…
@@ -474,6 +526,7 @@ export function AgentTraceExplorer({
                           detail={detail}
                           showFullOutput={fullOutputTurns.has(turnKey)}
                           onLoadTurn={() => onLoadTurn(descriptor)}
+                          onTurnDetailOpenChange={onTurnDetailOpenChange}
                           onShowFullOutput={() =>
                             setFullOutputTurns((current) => {
                               const next = new Set(current);
