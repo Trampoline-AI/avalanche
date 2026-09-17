@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 0.4.0
+
 - Late browser run-start responses no longer override newer navigation, retained
   runs remain inspectable after their current workflow definition disappears, and
   pending cancellation disables repeat submissions.
