@@ -74,6 +74,9 @@ the newest run enables following newly created runs; selecting an older run pins
 **Current** stops following, including across reconnects. The current
 graph and inspector stay visible while another run snapshot loads. The inspected
 node stays selected when its ID exists in the destination topology.
+Loaded historical runs remain available if their current workflow definition is
+removed from the catalog. Completing a run-start request selects the new run only
+if workflow/run navigation has not changed in the meantime.
 The floating **Timeline** shows Current followed by at most the 20 newest runs.
 Current scrolls with the run entries rather than staying pinned. When 20 runs are
 shown, a final **View all** row opens the expanded history browser; the header
@@ -99,6 +102,12 @@ run view highlights the node and filters its logs without opening a sidebar.
 Regular steps still open their source code in Current view.
 Run I/O uses the same section headings and separators as the current definition,
 with unboxed fields and subtly shaded, padded retained-value explorers.
+
+Open trace details take priority over background summary loading within the
+eight-entry, 8 MiB detail cache. If open turns alone exceed that budget, an evicted
+section offers **Reload step detail** without discarding its reasoning summary.
+Failed requests expose explicit retry actions; oversized details retain their
+summary but cannot be loaded beyond the browser limit.
 
 Run snapshots retain the selected node while its ID exists in the destination
 topology. The canvas notice reads **Viewing a run snapshot** and states that the
