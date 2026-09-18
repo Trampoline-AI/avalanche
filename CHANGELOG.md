@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+## 0.4.1
+
+- Changed Avalanche's license to MIT to match predict-rlm's license. The Python
+  distribution and operator UI ship the MIT license text and metadata; third-party
+  license notices remain intact.
+
 ## 0.4.0
 
 - Late browser run-start responses no longer override newer navigation, retained
