@@ -1,13 +1,13 @@
 [project]
 name = "avalanche-ai"
-version = "0.4.0"
+version = "0.4.1"
 description = "Python toolkit for local data-flow experiments with Iceberg and Lance"
 authors = [{ name = "Gabriel Lesperance", email = "611342+glesperance@users.noreply.github.com" }]
 requires-python = "<3.14,>=3.11"
 readme = "README.md"
 license = { file = "LICENSE" }
 classifiers = [
-    "License :: OSI Approved :: Apache Software License",
+    "License :: OSI Approved :: MIT License",
     "Programming Language :: Python :: 3",
     "Programming Language :: Python :: 3.11",
     "Programming Language :: Python :: 3.12",
@@ -112,10 +112,12 @@ include = ["src/avalanche", "src/ava_cli", "src/runtime", "src/tui"]
 include = ["src/avalanche", "src/ava_cli", "src/runtime", "src/tui"]
 
 [tool.hatch.build.targets.wheel.force-include]
+"LICENSE" = "LICENSE"
 "init.sh" = "ava_cli/init.sh"
 "skills/avalanche" = "ava_cli/skills/avalanche"
 
 [tool.hatch.build.targets.sdist.force-include]
+"LICENSE" = "LICENSE"
 "init.sh" = "init.sh"
 "skills/avalanche" = "skills/avalanche"
 

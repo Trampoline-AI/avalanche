@@ -427,4 +427,4 @@ quality gates, and pull request expectations.
 
 ## License
 
-Avalanche is licensed under the [Apache License 2.0](LICENSE).
+Avalanche is licensed under the [MIT License](LICENSE).
