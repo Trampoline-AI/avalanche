@@ -2,6 +2,16 @@
 
 ## Unreleased
 
+- Classifier definitions now show annotated step inputs and outputs separately
+  from an optional `input_model=` state schema, including expandable nested fields.
+  Declared state models validate calls before TypeSafe requests; historical calls
+  retain their original schemas. Agent and ordinary step displays are unchanged.
+- Classifier sidebars now lead with questions, visually grouped with classifier
+  input, and place step inputs and output together in a separate bottom panel.
+- Classifier DAG cards now show annotated step inputs and return types in the
+  same two-column layout as agent cards, hiding the fields at compact zoom.
+- DAG card field sections now size to their contents, removing the empty row
+  beneath single-input classifiers while preserving the shared bottom padding.
 - Classifier steps now load the nearest `.env` at runtime when `TYPESAFE_API_KEY`
   is absent, preserving exported variables without loading credentials during discovery.
 - Simplified the classifier example and quick-start questions to plain-text
