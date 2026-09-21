@@ -14,6 +14,7 @@ import type {
   ClassifierQuestion,
 } from "./classifier";
 import { ValueView } from "./ValueView";
+import { ClassifierInputSchema, ClassifierStepSchemas } from "./ClassifierSchema";
 
 const percent = new Intl.NumberFormat("en-US", { style: "percent", maximumFractionDigits: 0 });
 
@@ -316,6 +317,29 @@ export function ClassifierQuestions({ declaration }: { declaration: ClassifierDe
   );
 }
 
+export function ClassifierDefinition({ declaration }: { declaration: ClassifierDeclaration }) {
+  return (
+    <div className="grid min-w-0 gap-5 py-3">
+      <section aria-label="Classifier" className="min-w-0 border-l-2 border-classifier/40 pl-3">
+        <section aria-label="Questions" className="min-w-0">
+          <h3 className="inspector-section-title">Questions</h3>
+          <ClassifierQuestions declaration={declaration} />
+        </section>
+        <div className="mt-3 border-t border-line pt-3">
+          <ClassifierInputSchema declaration={declaration} />
+        </div>
+      </section>
+      <section
+        aria-label="Step interface"
+        className="min-w-0 rounded-md border border-line bg-canvas/50 p-3"
+      >
+        <h3 className="inspector-section-title">Step interface</h3>
+        <ClassifierStepSchemas declaration={declaration} />
+      </section>
+    </div>
+  );
+}
+
 export function ClassifierInvocationDetails({
   invocation,
   statusOverride,
@@ -323,6 +347,8 @@ export function ClassifierInvocationDetails({
   invocation: ClassifierInvocation;
   statusOverride?: "interrupted" | "unknown";
 }) {
+  const [definitionExpanded, setDefinitionExpanded] = useState(false);
+  const definitionId = useId();
   const status = statusOverride ?? invocation.status;
   const result = invocation.result;
   return (
@@ -370,6 +396,28 @@ export function ClassifierInvocationDetails({
             {Object.entries(invocation.declaration.questions).map(([id, question]) => (
               <QuestionRow key={id} id={id} question={question} answer={result.answers[id]} />
             ))}
+          </div>
+        )}
+      </section>
+      <section aria-label="Invocation definition" className="min-w-0 border-t border-line pt-2">
+        <button
+          type="button"
+          aria-label={`${definitionExpanded ? "Collapse" : "Expand"} invocation definition`}
+          aria-expanded={definitionExpanded}
+          aria-controls={definitionId}
+          onClick={() => setDefinitionExpanded(!definitionExpanded)}
+          className="flex cursor-pointer items-center gap-1.5 rounded border-0 bg-transparent p-0 text-[11px] text-secondary hover:text-classifier focus-visible:outline-2 focus-visible:outline-classifier"
+        >
+          {definitionExpanded ? (
+            <ChevronDown className="size-3.5" />
+          ) : (
+            <ChevronRight className="size-3.5" />
+          )}
+          Definition
+        </button>
+        {definitionExpanded && (
+          <div id={definitionId}>
+            <ClassifierDefinition declaration={invocation.declaration} />
           </div>
         )}
       </section>

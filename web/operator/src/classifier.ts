@@ -18,9 +18,74 @@ export type ClassifierQuestion =
       criteria: Exclude<ClassifierEntry, null>[];
     };
 
+type SchemaType = "null" | "boolean" | "object" | "array" | "number" | "integer" | "string";
+export type ClassifierSchema = boolean | ClassifierJsonSchema;
+export type ClassifierJsonSchema = { [keyword: string]: ClassifierJson } & {
+  type?: SchemaType | SchemaType[];
+  title?: string;
+  description?: string;
+  $ref?: string;
+  $defs?: Record<string, ClassifierSchema>;
+  definitions?: Record<string, ClassifierSchema>;
+  properties?: Record<string, ClassifierSchema>;
+  patternProperties?: Record<string, ClassifierSchema>;
+  dependentSchemas?: Record<string, ClassifierSchema>;
+  required?: string[];
+  items?: ClassifierSchema | ClassifierSchema[];
+  prefixItems?: ClassifierSchema[];
+  additionalProperties?: ClassifierSchema;
+  additionalItems?: ClassifierSchema;
+  unevaluatedProperties?: ClassifierSchema;
+  unevaluatedItems?: ClassifierSchema;
+  propertyNames?: ClassifierSchema;
+  contains?: ClassifierSchema;
+  anyOf?: ClassifierSchema[];
+  oneOf?: ClassifierSchema[];
+  allOf?: ClassifierSchema[];
+  not?: ClassifierSchema;
+  if?: ClassifierSchema;
+  then?: ClassifierSchema;
+  else?: ClassifierSchema;
+  minimum?: number;
+  maximum?: number;
+  exclusiveMinimum?: number;
+  exclusiveMaximum?: number;
+  multipleOf?: number;
+  minLength?: number;
+  maxLength?: number;
+  minItems?: number;
+  maxItems?: number;
+  minContains?: number;
+  maxContains?: number;
+  minProperties?: number;
+  maxProperties?: number;
+  uniqueItems?: boolean;
+  readOnly?: boolean;
+  writeOnly?: boolean;
+  deprecated?: boolean;
+  format?: string;
+  pattern?: string;
+  enum?: ClassifierJson[];
+  examples?: ClassifierJson[];
+  dependentRequired?: Record<string, string[]>;
+};
+
+export interface ClassifierStepOutput {
+  type_name: string;
+  json_schema: ClassifierJsonSchema | null;
+}
+
+export interface ClassifierStepInput extends ClassifierStepOutput {
+  name: string;
+  required: boolean;
+}
+
 export interface ClassifierDeclaration {
   questions: Record<string, ClassifierQuestion>;
   runtime: { model: string; timeout: number };
+  input_schema: ClassifierJsonSchema | null;
+  step_inputs: ClassifierStepInput[];
+  step_output: ClassifierStepOutput;
 }
 
 export type ClassifierAnswer =
@@ -159,10 +224,203 @@ function question(value: unknown, path: string): ClassifierQuestion {
   }
 }
 
+function boolean(value: unknown, path: string): boolean {
+  if (typeof value !== "boolean") throw new Error(`${path} must be a boolean`);
+  return value;
+}
+
+function array(value: unknown, path: string): unknown[] {
+  if (!Array.isArray(value)) throw new Error(`${path} must be an array`);
+  return value;
+}
+
+function schemaType(value: unknown, path: string): SchemaType {
+  switch (value) {
+    case "null":
+    case "boolean":
+    case "object":
+    case "array":
+    case "number":
+    case "integer":
+    case "string":
+      return value;
+    default:
+      throw new Error(`${path} must be a JSON Schema type`);
+  }
+}
+
+function schema(value: unknown, path: string): ClassifierSchema {
+  return typeof value === "boolean" ? value : schemaObject(value, path);
+}
+
+function schemaObject(value: unknown, path: string): ClassifierJsonSchema {
+  const parsed: ClassifierJsonSchema = {};
+  for (const [key, item] of Object.entries(record(value, path))) {
+    const location = `${path}.${key}`;
+    switch (key) {
+      case "type":
+        if (Array.isArray(item)) {
+          if (!item.length) throw new Error(`${location} must not be empty`);
+          parsed.type = item.map((value: unknown) => schemaType(value, location));
+          if (new Set(parsed.type).size !== parsed.type.length)
+            throw new Error(`${location} must contain unique types`);
+        } else {
+          parsed.type = schemaType(item, location);
+        }
+        break;
+      case "$defs":
+      case "definitions":
+      case "properties":
+      case "patternProperties":
+      case "dependentSchemas":
+        parsed[key] = Object.fromEntries(
+          Object.entries(record(item, location)).map(([name, value]) => [
+            name,
+            schema(value, `${location}.${name}`),
+          ]),
+        );
+        break;
+      case "required":
+        parsed.required = array(item, location).map((value) => {
+          if (typeof value !== "string") throw new Error(`${location} must contain strings`);
+          return value;
+        });
+        if (new Set(parsed.required).size !== parsed.required.length)
+          throw new Error(`${location} must contain unique names`);
+        break;
+      case "dependentRequired":
+        parsed.dependentRequired = Object.fromEntries(
+          Object.entries(record(item, location)).map(([name, value]) => {
+            const names = array(value, `${location}.${name}`).map((entry) => {
+              if (typeof entry !== "string")
+                throw new Error(`${location}.${name} must contain strings`);
+              return entry;
+            });
+            if (new Set(names).size !== names.length)
+              throw new Error(`${location}.${name} must contain unique names`);
+            return [name, names];
+          }),
+        );
+        break;
+      case "items":
+        parsed.items = Array.isArray(item)
+          ? item.map((value: unknown, index: number) => schema(value, `${location}[${index}]`))
+          : schema(item, location);
+        break;
+      case "prefixItems":
+      case "anyOf":
+      case "oneOf":
+      case "allOf":
+        parsed[key] = array(item, location).map((value, index) =>
+          schema(value, `${location}[${index}]`),
+        );
+        if (!parsed[key].length) throw new Error(`${location} must not be empty`);
+        break;
+      case "additionalProperties":
+      case "additionalItems":
+      case "unevaluatedProperties":
+      case "unevaluatedItems":
+      case "propertyNames":
+      case "contains":
+      case "not":
+      case "if":
+      case "then":
+      case "else":
+        parsed[key] = schema(item, location);
+        break;
+      case "$ref":
+      case "$dynamicRef":
+      case "$schema":
+      case "$id":
+      case "$anchor":
+      case "$dynamicAnchor":
+      case "$comment":
+      case "title":
+      case "description":
+      case "format":
+      case "pattern":
+      case "contentEncoding":
+      case "contentMediaType":
+        if (typeof item !== "string") throw new Error(`${location} must be a string`);
+        parsed[key] = item;
+        break;
+      case "minimum":
+      case "maximum":
+      case "exclusiveMinimum":
+      case "exclusiveMaximum":
+        parsed[key] = number(item, location, -Infinity);
+        break;
+      case "multipleOf": {
+        const divisor = number(item, location);
+        if (divisor === 0) throw new Error(`${location} must be positive`);
+        parsed[key] = divisor;
+        break;
+      }
+      case "minLength":
+      case "maxLength":
+      case "minItems":
+      case "maxItems":
+      case "minContains":
+      case "maxContains":
+      case "minProperties":
+      case "maxProperties":
+        parsed[key] = integer(item, location);
+        break;
+      case "uniqueItems":
+      case "readOnly":
+      case "writeOnly":
+      case "deprecated":
+        parsed[key] = boolean(item, location);
+        break;
+      case "enum":
+      case "examples":
+        parsed[key] = array(item, location).map((value, index) =>
+          json(value, `${location}[${index}]`),
+        );
+        if (key === "enum" && !parsed.enum?.length)
+          throw new Error(`${location} must not be empty`);
+        break;
+      default:
+        // JSON Schema has an open vocabulary, including Pydantic json_schema_extra.
+        Object.defineProperty(parsed, key, {
+          value: json(item, location),
+          enumerable: true,
+          configurable: true,
+          writable: true,
+        });
+    }
+  }
+  return parsed;
+}
+
+function nullableSchema(value: unknown, path: string): ClassifierJsonSchema | null {
+  return value === null ? null : schemaObject(value, path);
+}
+
+function stepOutput(value: unknown, path: string): ClassifierStepOutput {
+  const item = record(value, path);
+  fields(item, ["type_name", "json_schema"], path);
+  return {
+    type_name: string(item.type_name, `${path}.type_name`),
+    json_schema: nullableSchema(item.json_schema, `${path}.json_schema`),
+  };
+}
+
+function stepInput(value: unknown, path: string): ClassifierStepInput {
+  const item = record(value, path);
+  fields(item, ["name", "type_name", "json_schema", "required"], path);
+  return {
+    name: string(item.name, `${path}.name`),
+    type_name: string(item.type_name, `${path}.type_name`),
+    json_schema: nullableSchema(item.json_schema, `${path}.json_schema`),
+    required: boolean(item.required, `${path}.required`),
+  };
+}
+
 export function parseClassifierDeclaration(value: unknown): ClassifierDeclaration {
   const path = "classifier declaration";
   const item = record(value, path);
-  fields(item, ["questions", "runtime"], path);
+  fields(item, ["questions", "runtime", "input_schema", "step_inputs", "step_output"], path);
   const questions = Object.fromEntries(
     Object.entries(record(item.questions, `${path}.questions`)).map(([id, value]) => {
       string(id, `${path} question ID`);
@@ -178,6 +436,11 @@ export function parseClassifierDeclaration(value: unknown): ClassifierDeclaratio
   return {
     questions,
     runtime: { model: string(runtime.model, `${path}.runtime.model`), timeout },
+    input_schema: nullableSchema(item.input_schema, `${path}.input_schema`),
+    step_inputs: array(item.step_inputs, `${path}.step_inputs`).map((value, index) =>
+      stepInput(value, `${path}.step_inputs[${index}]`),
+    ),
+    step_output: stepOutput(item.step_output, `${path}.step_output`),
   };
 }
 

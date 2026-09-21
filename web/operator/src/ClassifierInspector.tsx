@@ -2,7 +2,7 @@ import { useCallback, useEffect, useId, useMemo, useRef, useState } from "react"
 import { ChevronDown, ChevronRight, ListFilter, X } from "lucide-react";
 
 import type { OperatorApi } from "./api";
-import { ClassifierInvocationDetails, ClassifierQuestions } from "./ClassifierDetails";
+import { ClassifierDefinition, ClassifierInvocationDetails } from "./ClassifierDetails";
 import {
   type ClassifierDeclaration,
   type ClassifierInvocation,
@@ -842,7 +842,7 @@ export function ClassifierInspector({
           {tab === "definition" && (
             <section aria-label={definitionLabel} className="min-w-0">
               {declaration ? (
-                <ClassifierQuestions declaration={declaration} />
+                <ClassifierDefinition declaration={declaration} />
               ) : (
                 <p role="alert" className="text-[11px] text-danger [overflow-wrap:anywhere]">
                   Classifier declaration unavailable. {declarationError}

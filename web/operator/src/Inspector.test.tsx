@@ -1071,6 +1071,21 @@ describe("regular step inspection", () => {
 });
 
 const classifierDeclaration: ClassifierDeclaration = {
+  input_schema: {
+    title: "HistoricalInput",
+    type: "object",
+    properties: { historical_state: { type: "string" } },
+    required: ["historical_state"],
+  },
+  step_inputs: [
+    {
+      name: "historical_arg",
+      type_name: "str",
+      json_schema: { type: "string" },
+      required: true,
+    },
+  ],
+  step_output: { type_name: "bool", json_schema: { type: "boolean" } },
   questions: {
     category: {
       type: "choice",
@@ -1370,6 +1385,10 @@ describe("classifier inspection", () => {
       ...classifierWorkflow,
       classifierMetadataJson: {
         [node.nodeId]: JSON.stringify({
+          ...classifierDeclaration,
+          input_schema: { type: "object", properties: { current_state: { type: "number" } } },
+          step_inputs: [],
+          step_output: { type_name: "int", json_schema: { type: "integer" } },
           questions: {
             replacement: { type: "noul", instructions: "New current question", criteria: null },
           },
@@ -1402,6 +1421,17 @@ describe("classifier inspection", () => {
     ).toBeNull();
     expect(screen.getByLabelText("Answer quality")).toHaveTextContent("0.75");
     expect(screen.queryByText("New current question")).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: "Expand invocation definition" }));
+    const definition = within(screen.getByRole("region", { name: "Invocation definition" }));
+    expect(definition.getByRole("region", { name: "Step inputs" })).toHaveTextContent(
+      "historical_arg",
+    );
+    fireEvent.click(definition.getByRole("button", { name: "Expand state schema" }));
+    expect(definition.getByRole("region", { name: "Classifier input" })).toHaveTextContent(
+      "historical_state",
+    );
+    expect(definition.queryByText("current_state")).toBeNull();
+    expect(definition.queryByText("New current question")).toBeNull();
     view.rerender(
       <Inspector
         api={api}
@@ -1412,6 +1442,9 @@ describe("classifier inspection", () => {
     );
     expect(screen.queryByRole("tab", { name: "Definition" })).toBeNull();
     expect(screen.getByLabelText("Answer category")).toBeVisible();
+    expect(definition.getByRole("region", { name: "Classifier input" })).toHaveTextContent(
+      "historical_state",
+    );
   });
 
   it("groups lifecycle records by call and pairs each selected input with its own typed answers", async () => {
@@ -1470,21 +1503,25 @@ describe("classifier inspection", () => {
       />,
     );
     fireEvent.click(screen.getByRole("button", { name: "Call 2" }));
-    expect(await screen.findByLabelText("Input state")).toHaveTextContent("different input");
     const second = screen.getByLabelText("Invocation classification-1");
-    expect(within(second).getByLabelText("Input state")).toHaveTextContent("different input");
+    await waitFor(() =>
+      expect(within(second).getByLabelText("Input state")).toHaveTextContent("different input"),
+    );
     expect(within(second).getByLabelText("Answer category")).toHaveTextContent("discard");
     const first = screen.getByLabelText("Invocation classification-0");
     fireEvent.click(within(first).getByRole("button", { expanded: false }));
-    expect(await within(first).findByLabelText("Input state")).toHaveTextContent("input-0");
-    expect(within(first).getByLabelText("Input state")).toHaveTextContent("input-0");
+    await waitFor(() =>
+      expect(within(first).getByLabelText("Input state")).toHaveTextContent("input-0"),
+    );
     expect(within(first).getByLabelText("Input state")).not.toHaveTextContent(
       "different input",
     );
     expect(within(first).getByLabelText("Answer category")).toHaveTextContent("keep");
     expect(within(second).queryByLabelText("Input state")).toBeNull();
     fireEvent.click(within(second).getByRole("button", { expanded: false }));
-    expect(within(second).getByLabelText("Input state")).toHaveTextContent("different input");
+    await waitFor(() =>
+      expect(within(second).getByLabelText("Input state")).toHaveTextContent("different input"),
+    );
     expect(within(first).queryByLabelText("Input state")).toBeNull();
     expect(screen.getAllByRole("rowgroup", { name: /^Invocation / })).toHaveLength(2);
     expect(within(first).getByRole("status", { name: "Invocation status" })).toHaveTextContent(
@@ -1970,15 +2007,15 @@ describe("classifier inspection", () => {
     expect(history.getAllByRole("rowgroup", { name: /^Invocation / })).toHaveLength(25);
     expect(history.getByLabelText("Invocation classification-0")).toBeVisible();
     expect(history.queryByLabelText("Invocation classification-509")).toBeNull();
-    expect(history.queryByText("Classifier not invoked in this run.")).toBeNull();
+    const nextPage = history.getByRole("button", { name: "Next page" });
     for (let page = 1; page < 20; page++) {
       await act(async () => {
-        fireEvent.click(history.getByRole("button", { name: "Next page" }));
+        fireEvent.click(nextPage);
       });
     }
     expect(history.getByLabelText("Invocation classification-499")).toBeVisible();
     expect(history.queryByLabelText("Invocation classification-509")).toBeNull();
-    expect(history.getByRole("button", { name: "Next page" })).toBeDisabled();
+    expect(nextPage).toBeDisabled();
   });
 
   it("pages summaries without collapsed detail requests and reloads evicted calls on expansion", async () => {

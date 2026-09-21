@@ -58,6 +58,9 @@ const continuation = ContinuationRefV2.create({
 });
 
 const classifierDeclaration: ClassifierDeclaration = {
+  input_schema: { type: "object", properties: { original: { type: "string" } } },
+  step_inputs: [],
+  step_output: { type_name: "Unspecified", json_schema: null },
   questions: {
     accepted: { type: "noul", instructions: "Original decision", criteria: null },
   },
@@ -346,9 +349,19 @@ describe("operator transport boundary", () => {
     await expect(api.readTextDetail("unregistered")).rejects.toThrow();
   });
 
-  it("keeps historical classifier questions pinned when the current catalog changes", async () => {
+  it("keeps historical classifier declarations pinned when the current catalog changes", async () => {
     const revisedDeclaration: ClassifierDeclaration = {
       ...classifierDeclaration,
+      input_schema: { type: "object", properties: { revised: { type: "number" } } },
+      step_inputs: [
+        {
+          name: "revision",
+          type_name: "int",
+          json_schema: { type: "integer" },
+          required: true,
+        },
+      ],
+      step_output: { type_name: "bool", json_schema: { type: "boolean" } },
       questions: {
         accepted: { type: "noul", instructions: "Revised decision", criteria: null },
       },

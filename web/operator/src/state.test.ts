@@ -239,6 +239,9 @@ describe("live operator projection", () => {
     const prepared = Promise.withResolvers<RunSnapshotMsg>();
     const requestingSummary = { ...summary, status: "requesting" };
     const declaration = JSON.stringify({
+      input_schema: null,
+      step_inputs: [],
+      step_output: { type_name: "Unspecified", json_schema: null },
       questions: {
         accepted: { type: "noul", instructions: "Prepared definition", criteria: null },
       },

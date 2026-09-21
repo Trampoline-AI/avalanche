@@ -376,7 +376,7 @@ const WorkflowNodeCard = memo(({ data, selected }: NodeProps<Node<CardData>>) =>
           className={`node-card-details field-grid grid grid-cols-[minmax(0,1fr)_minmax(0,1fr)] overflow-hidden ${
             isCompact
               ? "min-h-0! max-h-0! gap-0! border-t-transparent! pt-0! opacity-0 pointer-events-none"
-              : "min-h-[58px] gap-6 border-t border-line pt-2.5"
+              : "gap-6 border-t border-line pt-2.5"
           }`}
         >
           <section
@@ -615,7 +615,7 @@ function GraphCanvasView({
     [runTopology, workflow],
   );
   const classifierMetadata = topology?.classifierMetadataJson;
-  const classifierSummaries = useMemo(
+  const classifierCards = useMemo(
     () =>
       Object.fromEntries(
         Object.entries(classifierMetadata ?? {}).map(([nodeId, raw]) => {
@@ -632,9 +632,16 @@ function GraphCanvasView({
             ]
               .filter(Boolean)
               .join(" · ");
-            return [nodeId, kinds];
+            const fields: AgentFieldSchemas = {
+              inputs: declaration.step_inputs.map((input) => ({
+                name: input.name,
+                type: input.type_name,
+              })),
+              outputs: [{ name: "return", type: declaration.step_output.type_name }],
+            };
+            return [nodeId, { summary: kinds, fields }];
           } catch {
-            return [nodeId, "Question definition unavailable"];
+            return [nodeId, { summary: "Question definition unavailable", fields: undefined }];
           }
         }),
       ),
@@ -658,9 +665,12 @@ function GraphCanvasView({
       const agentDeclaration = runTopology
         ? undefined
         : parseAgentDeclaration(workflow?.agentMetadataJson[nodeId]);
-      const declaration = runTopology
-        ? parseAgentFieldSchemas(runTopology.agentFieldSchemasJson[nodeId])
-        : agentDeclaration;
+      const classifierCard = classifierCards[nodeId];
+      const declaration = classifierCard
+        ? classifierCard.fields
+        : runTopology
+          ? parseAgentFieldSchemas(runTopology.agentFieldSchemasJson[nodeId])
+          : agentDeclaration;
       const instructionLine =
         topology.agentInstructionLines[nodeId] ||
         topology.standardStepDocstringLines[nodeId] ||
@@ -679,7 +689,7 @@ function GraphCanvasView({
           nodeType: topology.nodeTypes[nodeId] || runtimeNode?.nodeType || "step",
           isAgent: agentNodeIds.has(nodeId),
           isClassifier: Object.hasOwn(topology.classifierMetadataJson, nodeId),
-          classifierSummary: classifierSummaries[nodeId],
+          classifierSummary: classifierCard?.summary,
           status: runtimeNode?.status,
           error: runtimeNode?.error,
           startedAt: runtimeNode?.startedAt || undefined,
@@ -695,7 +705,7 @@ function GraphCanvasView({
     return nodes;
   }, [
     agentNodeIds,
-    classifierSummaries,
+    classifierCards,
     inspectionDisabled,
     layout.positions,
     openCallbacks,
