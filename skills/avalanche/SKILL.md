@@ -37,8 +37,9 @@ Load only what the task needs:
   [agent-steps.md](references/agent-steps.md). It loads the vendored original
   PredictRLM skill for the single-step design process, then covers the Avalanche
   integration surface.
-- Usage, native classifier syntax, local execution, and CLI flags:
-  [usage.md](references/usage.md).
+- Usage, native classifier syntax, question-object design for routing, labels,
+  scoring, extraction, and verification, local execution, and CLI flags:
+  [usage.md](references/usage.md#native-classifier-steps).
 - File layout and maintainability: [project-layout.md](references/project-layout.md).
 - Iceberg and Lance persistence: [storage.md](references/storage.md).
 
@@ -425,9 +426,11 @@ for changes, update and re-present the complete plan for approval.
 2. Choose the package layout before writing `flow.py`.
 3. Implement deterministic `@ava.source`, `@ava.step`, and `@ava.dest` nodes.
 4. For each agent step, follow the bundled RLM reference's design workflow,
-   then define its signature and `@ava.agent_step` body. For classifiers, declare
-   fixed questions on `@ava.classifier_step` and return the desired typed result
-   from its body; use the [usage reference](references/usage.md#native-classifier-steps).
+   then define its signature and `@ava.agent_step` body. For classifiers, design
+   state, question instructions, and Choice/Noul/Score criteria using the
+   [question-design guidance](references/usage.md#structure-the-questions-object).
+   Batch independent judgments, declare the questions on `@ava.classifier_step`,
+   and return the desired typed result from its body.
 5. Declare the DAG at the bottom of `flow.py` as one parenthesized `>>` / `&`
    expression, binding reusable `NodeFuture` values inline with `:=`.
 6. For table-backed flows, define and push the Iceberg or Lance namespace, then

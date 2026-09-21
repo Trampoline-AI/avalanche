@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- Expanded the Avalanche authoring skill with classifier question-object examples
+  for routing, overlapping labels, scoring, and evidence checks, plus guidance on
+  structured rubrics, candidate selection, batching, and uncertainty.
+
 ## 0.5.0
 
 - Classifier answers remain valid when TypeSafe omits either token-usage count or

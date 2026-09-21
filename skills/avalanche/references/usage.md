@@ -137,6 +137,175 @@ The browser can show declared questions before a run and invocation answers
 afterward. Evidence uses existing local operator retention limits and lifetime;
 it is not durable recovery storage.
 
+### Structure the `questions` object
+
+Start from what downstream code must decide, then choose the smallest useful
+judgments. `questions` maps stable question IDs to objects with `type`,
+`instructions`, and type-specific `criteria`. IDs identify answers in code;
+**the model does not see question IDs**, so instructions must state the complete
+judgment. Keep runtime facts in `state`, not in a dynamically rebuilt declaration.
+Use named state fields when context has several parts, and refer to them with
+backticked paths such as `ticket.messages[0].text`.
+
+| Need | Type | `criteria` shape |
+| --- | --- | --- |
+| One route, category, handler, or known argument | `"choice"` | Map of option names to descriptions. Distinguish competing options and include a no-match option when none may fit. |
+| A condition, label, or evidence check | `"noul"` | Optional map with string keys `"true"` and `"false"` describing yes and no. Use separate questions when several labels can apply. |
+| Degree, quality, relevance, or ranking signal | `"score"` | Ordered list of concrete level descriptions, low to high; at least two levels. Use the same rubric across items being ranked. |
+
+Ask one coherent judgment per question. Split independently useful dimensions,
+not the related facts needed to judge one relationship. Keep exact lookups,
+calculations, policy enforcement, and external actions in ordinary Python.
+
+### Routing, multiple labels, and graded severity
+
+This declaration expects state shaped like
+`{"ticket": {"text": "Export crashes; please refund my subscription."}}`.
+The Choice selects one primary route, the Nouls allow overlapping labels, and
+the Score measures one dimension under an explicit speculative premise:
+
+```python
+questions = {
+    "route": {
+        "type": "choice",
+        "instructions": "Which team should own the primary request in `ticket.text`?",
+        "criteria": {
+            "engineering": "Fix broken product behavior.",
+            "billing": "Resolve charges, invoices, or refunds.",
+            "other": "The primary request fits neither engineering nor billing.",
+        },
+    },
+    "refund_requested": {
+        "type": "noul",
+        "instructions": "Does the customer ask for money back in `ticket.text`?",
+        "criteria": {
+            "true": "Requests a refund, reversal, or return of a payment.",
+            "false": "Does not request money back; a payment mention alone is not enough.",
+        },
+    },
+    "human_requested": {
+        "type": "noul",
+        "instructions": "Does the customer ask to speak to a person in `ticket.text`?",
+    },
+    "bug_severity": {
+        "type": "score",
+        "instructions": (
+            "Assuming `ticket.text` reports a product bug, how much does that bug "
+            "disrupt the customer's use of the product?"
+        ),
+        "criteria": [
+            "Cosmetic defect; product functions remain usable.",
+            "A function is broken or degraded, but a workaround exists.",
+            "An essential task is blocked with no workaround.",
+        ],
+    },
+}
+```
+
+Pass the mapping as `@ava.classifier_step(questions=questions)` and call
+`await classifier(state=...)` inside its async body. Read the results through
+`result.choices["route"]`, `result.nouls["refund_requested"]`, and
+`result.scores["bug_severity"]`. Code consumes severity only for the applicable
+bug-handling branch; an unused speculative answer must not trigger escalation.
+The two Noul answers can both be yes regardless of the primary route.
+
+Score levels must stand on their own: describe situations, not bare numbers,
+vague labels such as "medium", or comparisons such as "worse than above".
+With three levels the score ranges from 0 to 2 and may be fractional; it is not
+automatically a 0–1 value. For multiple ranking dimensions, ask one Score per
+dimension and combine their values in code. Weights can change without rerunning
+inference when evidence and question meanings are unchanged. Do not average away
+a serious violation: use separate conditions for hard policy gates.
+
+### Structured instructions and evidence verification
+
+Start with strings. Use objects or arrays inside `instructions` or criterion
+descriptions when definitions, exclusions, contrasts, or examples clarify the
+judgment. These inner keys are your rubric, not additional API fields. Keep the
+outer shape unchanged: Choice criteria remain a map, Score criteria a list,
+and Noul criteria a `"true"`/`"false"` map.
+
+For example, pass a proposed claim and its source excerpt as
+`{"claim": "...", "source_text": "..."}` and declare:
+
+```python
+questions = {
+    "claim_supported": {
+        "type": "noul",
+        "instructions": {
+            "question": "Does `source_text` support the entire factual `claim`?",
+            "scope": "Judge only against the supplied source, not outside knowledge.",
+            "checks": [
+                "Match the entities and relationships.",
+                "Preserve qualifications, dates, and quantities.",
+            ],
+        },
+        "criteria": {
+            "true": {
+                "definition": "The source supports every factual part of the claim.",
+                "includes": ["Faithful paraphrases that preserve the original meaning."],
+            },
+            "false": {
+                "definition": "The source contradicts or does not establish the full claim.",
+                "includes": ["A matching topic without evidence for the claimed fact."],
+            },
+        },
+    },
+}
+```
+
+This checks source support, not whether the claim is true in the world. If code
+must distinguish contradiction from missing evidence, use a Choice with
+`supported`, `contradicted`, and `not_established` options instead.
+
+The same structure works for other use cases:
+
+- **Handler arguments:** use one Choice for the handler and separate Choices
+  for closed-set arguments. State each branch's premise in its instructions;
+  consume only the arguments for the selected handler.
+- **Value extraction:** find candidates in code, select with a Choice, then copy
+  or normalize the chosen source value in code. Check candidate coverage and
+  include a no-match option; the model cannot select an omitted value.
+- **Retrieval and ranking:** put a query and candidate passage in state; apply
+  the same relevance Score to each pair, then sort in code. A Choice distribution
+  compares competing options; it is not an independent relevance score per item.
+- **Changing candidates:** Avalanche questions are fixed at decoration time.
+  Do not pass runtime `questions=` or mutate criteria per call. For a variable
+  candidate list, reuse a fixed Noul or Score question over each candidate's
+  state and select in code. Fixed candidate slots are another option only when
+  their coverage and absent-slot behavior are explicitly defined.
+
+### Batch independent judgments and handle uncertainty
+
+Put independent questions over the same state in one mapping and one call.
+They run in parallel and **cannot see each other's answers**. Do not write
+"use the route answer" in another question's instructions. Ask useful branch
+questions speculatively, as above; make a later call when an earlier answer is
+needed to fetch evidence or construct new state. Extra questions still consume
+tokens: measure request size, cost, and end-to-end latency.
+
+Keep raw probabilities available for downstream policy. A Noul near 0.5 means
+similar probability for yes and no, not medium severity; it has no separate
+confidence. Choice/Score confidence summarizes distribution concentration,
+not factual correctness or permission to act. Several acceptable alternatives
+can also lower confidence. Evaluate thresholds on representative user data and
+the consequences of errors, and ignore uncertainty on unused branches.
+
+Verify no-match cases, overlapping labels, missing evidence, ambiguous wording,
+and the resulting routing or review behavior. Inspect the exact state, rubric,
+candidates, answers, and code decisions when a case fails. Typed answers
+guarantee an interface, not truth.
+
+For current prompting guidance and worked patterns, consult the live TypeSafe
+[documentation index](https://docs.typesafe.ai/llms.txt),
+[Choice](https://docs.typesafe.ai/primitives/choice.md),
+[Noul](https://docs.typesafe.ai/primitives/noul.md),
+[Score](https://docs.typesafe.ai/primitives/score.md),
+[structured questions](https://docs.typesafe.ai/primitives/advanced.md), and
+[speculative fan-out](https://docs.typesafe.ai/patterns/fan-out.md).
+Adapt SDK examples to Avalanche's fixed declaration and injected callable;
+do not replace the native integration with a custom client.
+
 ## Browser UI and operator
 
 ### Combined local path: `ava dev`
