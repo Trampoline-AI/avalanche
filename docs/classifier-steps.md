@@ -297,7 +297,8 @@ colors:
 - **Current workflow:** **Definition** opens by default with questions first,
   visually grouped with the classifier input beneath them using a cyan accent.
   A separate **Step interface** panel at the bottom groups the step's inputs
-  and output. Expand a question row to inspect
+  and output, using the [same panel as other node types](dag-api.md#inspect-step-interfaces).
+  Expand a question row to inspect
   Choice options, Noul True/False meanings, or Score levels in an indented group with
   smaller labels beneath the question definition.
   Missing criterion descriptions stay blank. Structured instructions and criteria

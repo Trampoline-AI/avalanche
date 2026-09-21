@@ -2,10 +2,19 @@
 
 ## Unreleased
 
+- Source, ordinary, destination, and agent steps now share the classifier's
+  **Step interface** panel, with annotated inputs, return types, and expandable
+  nested schemas. Agent-call fields remain separate. Run views retain the
+  executed interface after source changes and allow inspection of non-agent nodes.
+- Source, ordinary, and destination DAG cards now show annotated inputs and return
+  types at detailed zoom; agent cards keep their existing call-field display.
+  Empty input and output columns keep their headings without placeholder text.
+- Standard-step sidebars now separate **Definition** and **Code** tabs, opening on
+  Definition and loading source only when Code is selected.
 - Classifier definitions now show annotated step inputs and outputs separately
   from an optional `input_model=` state schema, including expandable nested fields.
   Declared state models validate calls before TypeSafe requests; historical calls
-  retain their original schemas. Agent and ordinary step displays are unchanged.
+  retain their original schemas.
 - Classifier sidebars now lead with questions, visually grouped with classifier
   input, and place step inputs and output together in a separate bottom panel.
 - Classifier DAG cards now show annotated step inputs and return types in the
