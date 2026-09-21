@@ -351,6 +351,12 @@ export interface WorkflowTopologyV2 {
     classifierMetadataJson: {
         [key: string]: string;
     };
+    /**
+     * @generated from protobuf field: map<string, string> step_interface_json = 9
+     */
+    stepInterfaceJson: {
+        [key: string]: string;
+    };
 }
 /**
  * @generated from protobuf message avalanche.operator.ScanTargetV2
@@ -2288,7 +2294,8 @@ class WorkflowTopologyV2$Type extends MessageType<WorkflowTopologyV2> {
             { no: 5, name: "agent_field_schemas_json", kind: "map", K: 9 /*ScalarType.STRING*/, V: { kind: "scalar", T: 9 /*ScalarType.STRING*/ } },
             { no: 6, name: "agent_instruction_lines", kind: "map", K: 9 /*ScalarType.STRING*/, V: { kind: "scalar", T: 9 /*ScalarType.STRING*/ } },
             { no: 7, name: "standard_step_docstring_lines", kind: "map", K: 9 /*ScalarType.STRING*/, V: { kind: "scalar", T: 9 /*ScalarType.STRING*/ } },
-            { no: 8, name: "classifier_metadata_json", kind: "map", K: 9 /*ScalarType.STRING*/, V: { kind: "scalar", T: 9 /*ScalarType.STRING*/ } }
+            { no: 8, name: "classifier_metadata_json", kind: "map", K: 9 /*ScalarType.STRING*/, V: { kind: "scalar", T: 9 /*ScalarType.STRING*/ } },
+            { no: 9, name: "step_interface_json", kind: "map", K: 9 /*ScalarType.STRING*/, V: { kind: "scalar", T: 9 /*ScalarType.STRING*/ } }
         ]);
     }
     create(value?: PartialMessage<WorkflowTopologyV2>): WorkflowTopologyV2 {
@@ -2301,6 +2308,7 @@ class WorkflowTopologyV2$Type extends MessageType<WorkflowTopologyV2> {
         message.agentInstructionLines = {};
         message.standardStepDocstringLines = {};
         message.classifierMetadataJson = {};
+        message.stepInterfaceJson = {};
         if (value !== undefined)
             reflectionMergePartial<WorkflowTopologyV2>(this, message, value);
         return message;
@@ -2333,6 +2341,9 @@ class WorkflowTopologyV2$Type extends MessageType<WorkflowTopologyV2> {
                     break;
                 case /* map<string, string> classifier_metadata_json */ 8:
                     this.binaryReadMap8(message.classifierMetadataJson, reader, options);
+                    break;
+                case /* map<string, string> step_interface_json */ 9:
+                    this.binaryReadMap9(message.stepInterfaceJson, reader, options);
                     break;
                 default:
                     let u = options.readUnknownField;
@@ -2457,6 +2468,22 @@ class WorkflowTopologyV2$Type extends MessageType<WorkflowTopologyV2> {
         }
         map[key ?? ""] = val ?? "";
     }
+    private binaryReadMap9(map: WorkflowTopologyV2["stepInterfaceJson"], reader: IBinaryReader, options: BinaryReadOptions): void {
+        let len = reader.uint32(), end = reader.pos + len, key: keyof WorkflowTopologyV2["stepInterfaceJson"] | undefined, val: WorkflowTopologyV2["stepInterfaceJson"][any] | undefined;
+        while (reader.pos < end) {
+            let [fieldNo, wireType] = reader.tag();
+            switch (fieldNo) {
+                case 1:
+                    key = reader.string();
+                    break;
+                case 2:
+                    val = reader.string();
+                    break;
+                default: throw new globalThis.Error("unknown map entry field for avalanche.operator.WorkflowTopologyV2.step_interface_json");
+            }
+        }
+        map[key ?? ""] = val ?? "";
+    }
     internalBinaryWrite(message: WorkflowTopologyV2, writer: IBinaryWriter, options: BinaryWriteOptions): IBinaryWriter {
         /* repeated string node_ids = 1; */
         for (let i = 0; i < message.nodeIds.length; i++)
@@ -2486,6 +2513,9 @@ class WorkflowTopologyV2$Type extends MessageType<WorkflowTopologyV2> {
         /* map<string, string> classifier_metadata_json = 8; */
         for (let k of globalThis.Object.keys(message.classifierMetadataJson))
             writer.tag(8, WireType.LengthDelimited).fork().tag(1, WireType.LengthDelimited).string(k).tag(2, WireType.LengthDelimited).string(message.classifierMetadataJson[k]).join();
+        /* map<string, string> step_interface_json = 9; */
+        for (let k of globalThis.Object.keys(message.stepInterfaceJson))
+            writer.tag(9, WireType.LengthDelimited).fork().tag(1, WireType.LengthDelimited).string(k).tag(2, WireType.LengthDelimited).string(message.stepInterfaceJson[k]).join();
         let u = options.writeUnknownFields;
         if (u !== false)
             (u == true ? UnknownFieldHandler.onWrite : u)(this.typeName, message, writer);

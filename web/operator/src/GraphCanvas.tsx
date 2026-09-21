@@ -32,6 +32,7 @@ import {
 import type { FlowInfoMsg, NodeSnapshotMsg, WorkflowTopologyMsg } from "./model";
 import { isUnknownRecord } from "./guards";
 import { decodeClassifierDeclaration } from "./classifier";
+import { decodeStepInterface } from "./stepInterface";
 
 interface FieldMetadata {
   name: string;
@@ -384,42 +385,34 @@ const WorkflowNodeCard = memo(({ data, selected }: NodeProps<Node<CardData>>) =>
             aria-label="Inputs"
           >
             <small>Inputs</small>
-            {data.declaration.inputs.length ? (
-              data.declaration.inputs.map((field) => (
-                <span
-                  className="field node-field mt-[3px] flex min-h-3.5 min-w-0 items-start justify-start gap-1 font-mono text-[7px]/[1.35] text-[#36423c] [&>code]:min-w-0 [&>code]:[overflow-wrap:anywhere] [&>code]:text-[7px] [&>code]:text-muted"
-                  key={`input-${field.name}`}
-                >
-                  <span className="node-field-name min-w-0 [overflow-wrap:anywhere]">
-                    {field.name}
-                  </span>
-                  {field.type && <code>{field.type}</code>}
+            {data.declaration.inputs.map((field) => (
+              <span
+                className="field node-field mt-[3px] flex min-h-3.5 min-w-0 items-start justify-start gap-1 font-mono text-[7px]/[1.35] text-[#36423c] [&>code]:min-w-0 [&>code]:[overflow-wrap:anywhere] [&>code]:text-[7px] [&>code]:text-muted"
+                key={`input-${field.name}`}
+              >
+                <span className="node-field-name min-w-0 [overflow-wrap:anywhere]">
+                  {field.name}
                 </span>
-              ))
-            ) : (
-              <span className="node-field-empty font-mono text-[7px] text-muted">None</span>
-            )}
+                {field.type && <code>{field.type}</code>}
+              </span>
+            ))}
           </section>
           <section
             className="node-fields node-outputs min-w-0 overflow-hidden text-right [&>small]:mb-1.5 [&>small]:block [&>small]:font-mono [&>small]:text-[7px] [&>small]:tracking-[.08em] [&>small]:text-muted [&>small]:uppercase"
             aria-label="Outputs"
           >
             <small>Outputs</small>
-            {data.declaration.outputs.length ? (
-              data.declaration.outputs.map((field) => (
-                <span
-                  className="field node-field mt-[3px] flex min-h-3.5 min-w-0 items-start justify-end gap-1 font-mono text-[7px]/[1.35] text-[#36423c] [&>code]:min-w-0 [&>code]:[overflow-wrap:anywhere] [&>code]:text-[7px] [&>code]:text-muted"
-                  key={`output-${field.name}`}
-                >
-                  <span className="node-field-name min-w-0 [overflow-wrap:anywhere]">
-                    {field.name}
-                  </span>
-                  {field.type && <code>{field.type}</code>}
+            {data.declaration.outputs.map((field) => (
+              <span
+                className="field node-field mt-[3px] flex min-h-3.5 min-w-0 items-start justify-end gap-1 font-mono text-[7px]/[1.35] text-[#36423c] [&>code]:min-w-0 [&>code]:[overflow-wrap:anywhere] [&>code]:text-[7px] [&>code]:text-muted"
+                key={`output-${field.name}`}
+              >
+                <span className="node-field-name min-w-0 [overflow-wrap:anywhere]">
+                  {field.name}
                 </span>
-              ))
-            ) : (
-              <span className="node-field-empty font-mono text-[7px] text-muted">None</span>
-            )}
+                {field.type && <code>{field.type}</code>}
+              </span>
+            ))}
           </section>
         </div>
       )}
@@ -490,6 +483,7 @@ type TopologyView = Pick<
   | "agentInstructionLines"
   | "standardStepDocstringLines"
   | "classifierMetadataJson"
+  | "stepInterfaceJson"
 >;
 
 interface GraphLayout {
@@ -587,6 +581,7 @@ function GraphCanvasView({
       agentInstructionLines: {},
       standardStepDocstringLines: workflow.standardStepDocstringLines,
       classifierMetadataJson: workflow.classifierMetadataJson,
+      stepInterfaceJson: workflow.stepInterfaceJson,
     };
   }, [runTopology, workflow]);
   const topologyNodeIds = topology?.nodeIds;
@@ -647,6 +642,32 @@ function GraphCanvasView({
       ),
     [classifierMetadata],
   );
+  const stepInterfaces = topology?.stepInterfaceJson;
+  const standardFields = useMemo(
+    () =>
+      Object.fromEntries(
+        Object.entries(stepInterfaces ?? {})
+          .filter(
+            ([nodeId]) => !agentNodeIds.has(nodeId) && !Object.hasOwn(classifierCards, nodeId),
+          )
+          .map(([nodeId, raw]) => {
+            try {
+              const definition = decodeStepInterface(raw);
+              const fields: AgentFieldSchemas = {
+                inputs: definition.step_inputs.map((input) => ({
+                  name: input.name,
+                  type: input.type_name,
+                })),
+                outputs: [{ name: "return", type: definition.step_output.type_name }],
+              };
+              return [nodeId, fields];
+            } catch {
+              return [nodeId, undefined];
+            }
+          }),
+      ),
+    [agentNodeIds, classifierCards, stepInterfaces],
+  );
   const nodes = useMemo(() => {
     if (!topology) return [];
     const runtimeNodes = Object.fromEntries(runNodes.map((node) => [node.nodeId, node]));
@@ -668,9 +689,11 @@ function GraphCanvasView({
       const classifierCard = classifierCards[nodeId];
       const declaration = classifierCard
         ? classifierCard.fields
-        : runTopology
-          ? parseAgentFieldSchemas(runTopology.agentFieldSchemasJson[nodeId])
-          : agentDeclaration;
+        : agentNodeIds.has(nodeId)
+          ? runTopology
+            ? parseAgentFieldSchemas(runTopology.agentFieldSchemasJson[nodeId])
+            : agentDeclaration
+          : standardFields[nodeId];
       const instructionLine =
         topology.agentInstructionLines[nodeId] ||
         topology.standardStepDocstringLines[nodeId] ||
@@ -706,6 +729,7 @@ function GraphCanvasView({
   }, [
     agentNodeIds,
     classifierCards,
+    standardFields,
     inspectionDisabled,
     layout.positions,
     openCallbacks,

@@ -1,27 +1,19 @@
 import { useId, useMemo, useState } from "react";
 import { ChevronDown, ChevronRight } from "lucide-react";
 
-import type {
-  ClassifierDeclaration,
-  ClassifierJsonSchema,
-  ClassifierSchema,
-  ClassifierStepOutput,
-} from "./classifier";
+import type { JsonSchema, Schema, StepInterface, StepOutput } from "./stepInterface";
 import { ValueView } from "./ValueView";
 
 type SchemaChild = {
   label: string;
   path: string;
-  schema: ClassifierSchema;
+  schema: Schema;
   required?: boolean;
 };
 
-function schemaChildren(
-  schema: ClassifierJsonSchema,
-  includeDefinitions = false,
-): SchemaChild[] {
+function schemaChildren(schema: JsonSchema, includeDefinitions = false): SchemaChild[] {
   const children: SchemaChild[] = [];
-  const maps: [string, Record<string, ClassifierSchema> | undefined][] = [
+  const maps: [string, Record<string, Schema> | undefined][] = [
     ["properties", schema.properties],
     ["patternProperties", schema.patternProperties],
     ["dependentSchemas", schema.dependentSchemas],
@@ -40,7 +32,7 @@ function schemaChildren(
       });
     }
   }
-  const arrays: [string, ClassifierSchema[] | undefined][] = [
+  const arrays: [string, Schema[] | undefined][] = [
     ["anyOf", schema.anyOf],
     ["oneOf", schema.oneOf],
     ["allOf", schema.allOf],
@@ -66,7 +58,7 @@ function schemaChildren(
   } else if (schema.items !== undefined) {
     children.push({ label: "Items", path: "items", schema: schema.items });
   }
-  const nested: [string, string, ClassifierSchema | undefined][] = [
+  const nested: [string, string, Schema | undefined][] = [
     ["additionalProperties", "Additional properties", schema.additionalProperties],
     ["additionalItems", "Additional items", schema.additionalItems],
     ["unevaluatedProperties", "Unevaluated properties", schema.unevaluatedProperties],
@@ -89,9 +81,9 @@ function schemaChildren(
   return children;
 }
 
-function schemaIndex(root: ClassifierJsonSchema): ReadonlyMap<string, ClassifierSchema> {
-  const index = new Map<string, ClassifierSchema>();
-  function visit(schema: ClassifierSchema, pointer: string) {
+function schemaIndex(root: JsonSchema): ReadonlyMap<string, Schema> {
+  const index = new Map<string, Schema>();
+  function visit(schema: Schema, pointer: string) {
     index.set(pointer, schema);
     if (typeof schema !== "boolean") {
       for (const child of schemaChildren(schema, true))
@@ -102,7 +94,7 @@ function schemaIndex(root: ClassifierJsonSchema): ReadonlyMap<string, Classifier
   return index;
 }
 
-function schemaType(schema: ClassifierSchema): string {
+function schemaType(schema: Schema): string {
   if (typeof schema === "boolean") return schema ? "Any JSON" : "No values allowed";
   if (schema.type) return Array.isArray(schema.type) ? schema.type.join(" | ") : schema.type;
   if (schema.$ref !== undefined)
@@ -155,9 +147,9 @@ function SchemaNode({
   typeName,
 }: {
   label: string;
-  schema: ClassifierSchema;
-  index: ReadonlyMap<string, ClassifierSchema>;
-  ancestors: readonly ClassifierSchema[];
+  schema: Schema;
+  index: ReadonlyMap<string, Schema>;
+  ancestors: readonly Schema[];
   required?: boolean;
   typeName?: string;
 }) {
@@ -174,7 +166,7 @@ function SchemaNode({
       )
     : [];
   const reference = object?.$ref;
-  let referenced: ClassifierSchema | undefined;
+  let referenced: Schema | undefined;
   if (reference === "" || reference?.startsWith("#")) {
     try {
       referenced = index.get(reference === "" ? "#" : decodeURIComponent(reference));
@@ -221,7 +213,7 @@ function SchemaNode({
             aria-expanded={expanded}
             aria-controls={detailsId}
             onClick={() => setExpanded(!expanded)}
-            className="-m-0.5 shrink-0 cursor-pointer rounded border-0 bg-transparent p-0.5 text-muted hover:bg-canvas hover:text-classifier focus-visible:outline-2 focus-visible:outline-classifier"
+            className="-m-0.5 shrink-0 cursor-pointer rounded border-0 bg-transparent p-0.5 text-muted hover:bg-canvas hover:text-ink focus-visible:outline-2 focus-visible:outline-acid"
           >
             {expanded ? (
               <ChevronDown className="size-3.5" />
@@ -300,14 +292,14 @@ function SchemaNode({
   );
 }
 
-function DeclaredSchema({
+export function DeclaredSchema({
   label,
   schema,
   required,
   typeName,
 }: {
   label: string;
-  schema: ClassifierJsonSchema;
+  schema: JsonSchema;
   required?: boolean;
   typeName?: string;
 }) {
@@ -330,7 +322,7 @@ function SignatureType({
   required,
 }: {
   label: string;
-  definition: ClassifierStepOutput;
+  definition: StepOutput;
   required?: boolean;
 }) {
   if (definition.json_schema !== null) {
@@ -361,7 +353,7 @@ function SignatureType({
   );
 }
 
-export function ClassifierStepSchemas({ declaration }: { declaration: ClassifierDeclaration }) {
+function StepSchemas({ definition }: { definition: StepInterface }) {
   return (
     <div className="grid min-w-0 gap-4">
       <section aria-label="Step inputs" className="min-w-0">
@@ -369,8 +361,8 @@ export function ClassifierStepSchemas({ declaration }: { declaration: Classifier
           Inputs
         </h4>
         <div className="grid min-w-0 gap-2">
-          {declaration.step_inputs.length ? (
-            declaration.step_inputs.map((input) => (
+          {definition.step_inputs.length ? (
+            definition.step_inputs.map((input) => (
               <SignatureType
                 key={input.name}
                 label={input.name}
@@ -387,24 +379,39 @@ export function ClassifierStepSchemas({ declaration }: { declaration: Classifier
         <h4 className="mt-0 mb-2 font-mono text-[9px] tracking-[.08em] text-muted uppercase">
           Output
         </h4>
-        <SignatureType label="Return" definition={declaration.step_output} />
+        <SignatureType label="Return" definition={definition.step_output} />
       </section>
     </div>
   );
 }
 
-export function ClassifierInputSchema({ declaration }: { declaration: ClassifierDeclaration }) {
+export function StepInterfacePanel({
+  definition,
+  error,
+  historical = false,
+}: {
+  definition?: StepInterface;
+  error?: string;
+  historical?: boolean;
+}) {
   return (
-    <section aria-label="Classifier input" className="min-w-0">
-      <h4 className="mt-0 mb-2 font-mono text-[9px] tracking-[.08em] text-muted uppercase">
-        Classifier input
-      </h4>
-      {declaration.input_schema === null ? (
-        <p className="m-0 text-[11px] text-muted">
-          No input model declared. Accepts JSON state.
-        </p>
+    <section
+      aria-label="Step interface"
+      className="min-w-0 rounded-md border border-line bg-canvas/50 p-3"
+    >
+      <h3 className="inspector-section-title">Step interface</h3>
+      {definition ? (
+        <StepSchemas definition={definition} />
       ) : (
-        <DeclaredSchema label="state" schema={declaration.input_schema} />
+        <p
+          className={`m-0 text-[11px] [overflow-wrap:anywhere] ${error ? "text-danger" : "text-muted"}`}
+          role={error ? "alert" : undefined}
+        >
+          {historical
+            ? "Historical step interface unavailable for this run."
+            : "Step interface unavailable for this node."}
+          {error && ` ${error}`}
+        </p>
       )}
     </section>
   );

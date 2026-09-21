@@ -142,9 +142,9 @@ describe("operator workflows", () => {
     act(() => publish.resolve());
     await screen.findByRole("button", { name: /run-new, running/ });
     fireEvent.click(await screen.findByRole("button", { name: "Inspect Recorded fetch" }));
-    expect(
-      screen.queryByRole("complementary", { name: "Run inspector" }),
-    ).not.toBeInTheDocument();
+    expect(screen.getByRole("region", { name: "Step interface" })).toHaveTextContent(
+      /unavailable/i,
+    );
     expect(screen.queryByRole("tab", { name: "Run I/O" })).not.toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: "Cancel run" }));
     await screen.findByRole("button", { name: /run-new, cancelled/ });
@@ -152,7 +152,7 @@ describe("operator workflows", () => {
 
     fireEvent.click(screen.getByRole("button", { name: "Current" }));
     await screen.findByRole("button", { name: "Inspect Fetch" });
-    expect(screen.getByRole("complementary", { name: "Node code" })).toBeInTheDocument();
+    expect(screen.getByRole("tab", { name: "Definition" })).toBeVisible();
     expect(
       screen.queryByRole("button", { name: "Inspect Recorded fetch" }),
     ).not.toBeInTheDocument();
@@ -203,9 +203,9 @@ describe("operator workflows", () => {
       act(() => ready.resolve(baseline));
       await screen.findByRole("button", { name: "Cancel run" });
       fireEvent.click(screen.getByRole("button", { name: "Inspect Fetch" }));
-      expect(
-        screen.queryByRole("complementary", { name: "Run inspector" }),
-      ).not.toBeInTheDocument();
+      expect(screen.getByRole("region", { name: "Step interface" })).toHaveTextContent(
+        /unavailable/i,
+      );
       expect(screen.getByText("Viewing a run snapshot")).toBeInTheDocument();
       expect(
         screen.getByText("This view does not represent the workflow's current state."),
@@ -216,7 +216,7 @@ describe("operator workflows", () => {
         }),
       );
       await screen.findByRole("button", { name: "Run" });
-      expect(screen.getByRole("complementary", { name: "Node code" })).toBeInTheDocument();
+      expect(screen.getByRole("tab", { name: "Definition" })).toBeVisible();
       expect(screen.queryByRole("button", { name: "Cancel run" })).not.toBeInTheDocument();
     },
   );
@@ -711,7 +711,7 @@ describe.each(["hosted", "local"] as const)("%s shared workspace", (host) => {
       "true",
     );
     fireEvent.click(node);
-    expect(screen.getByRole("complementary", { name: "Node code" })).toBeInTheDocument();
+    expect(screen.getByRole("tab", { name: "Definition" })).toBeVisible();
     expect(snapshots).not.toHaveBeenCalled();
     expect(logs).not.toHaveBeenCalled();
   });
@@ -754,7 +754,7 @@ describe.each(["hosted", "local"] as const)("%s shared workspace", (host) => {
     fireEvent.click(screen.getByRole("button", { name: /run-2,/ }));
     await screen.findByText("Loading run snapshot");
     fireEvent.click(screen.getByRole("button", { name: "Current" }));
-    expect(screen.getByRole("complementary", { name: "Node code" })).toBeInTheDocument();
+    expect(screen.getByRole("tab", { name: "Definition" })).toBeVisible();
     await act(async () => lateSnapshot.resolve(snapshotFor(secondSummary)));
     expect(screen.getByRole("button", { name: "Current" })).toHaveAttribute(
       "aria-pressed",
@@ -765,7 +765,7 @@ describe.each(["hosted", "local"] as const)("%s shared workspace", (host) => {
     fireEvent.click(screen.getByRole("button", { name: /run-2,/ }));
     await screen.findByText("Snapshot was removed");
     fireEvent.click(screen.getByRole("button", { name: "Current" }));
-    expect(screen.getByRole("complementary", { name: "Node code" })).toBeInTheDocument();
+    expect(screen.getByRole("tab", { name: "Definition" })).toBeVisible();
     act(() => {
       runs = [...runs, third];
       reset.resolve();
@@ -779,7 +779,21 @@ describe.each(["hosted", "local"] as const)("%s shared workspace", (host) => {
     expect(snapshotRequests).toBe(2);
   });
 
-  it("opens only agent sidebars in run view while preserving current step code inspection", async () => {
+  it("opens retained step interfaces and agent traces without loading current source in run view", async () => {
+    const getWorkflowNodeSource = vi.fn(
+      async () => "def fetch():\n    return 'current source'",
+    );
+    const currentWorkflow = FlowInfoMsg.create({
+      ...workflow,
+      stepInterfaceJson: {
+        fetch: JSON.stringify({
+          step_inputs: [
+            { name: "limit", type_name: "int", required: false, json_schema: null },
+          ],
+          step_output: { type_name: "CurrentBatch", json_schema: null },
+        }),
+      },
+    });
     const run = RunSnapshotMsg.create({
       ...snapshotFor(),
       topology: {
@@ -789,31 +803,72 @@ describe.each(["hosted", "local"] as const)("%s shared workspace", (host) => {
         nodeTypes: { fetch: "step", review: "step" },
         displayNames: { fetch: "Fetch", review: "Review" },
         agentFieldSchemasJson: { review: '{"inputs":[],"outputs":[]}' },
+        stepInterfaceJson: {
+          fetch: JSON.stringify({
+            step_inputs: [],
+            step_output: { type_name: "HistoricalBatch", json_schema: null },
+          }),
+        },
       },
     });
     mount(
       createApi({
+        loadBaseline: async () => ({
+          ...baseline,
+          catalog: CatalogSnapshotMsg.create({
+            ...baseline.catalog,
+            workflows: [currentWorkflow],
+          }),
+        }),
         getLatestRunSnapshot: async () => run,
-        getWorkflowNodeSource: async () => "def fetch():\n    return 'current source'",
+        getWorkflowNodeSource,
       }),
     );
-    fireEvent.click(await screen.findByRole("button", { name: "Inspect Fetch" }));
+    const currentCard = (await screen.findByRole("button", { name: "Inspect Fetch" })).closest(
+      "article",
+    )!;
+    expect(within(currentCard).getByRole("region", { name: "Inputs" })).toHaveTextContent(
+      "limit",
+    );
+    expect(within(currentCard).getByRole("region", { name: "Outputs" })).toHaveTextContent(
+      "CurrentBatch",
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Inspect Fetch" }));
+    expect(screen.queryByLabelText("Source code")).not.toBeInTheDocument();
+    expect(getWorkflowNodeSource).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole("tab", { name: "Code" }));
     expect(await screen.findByLabelText("Source code")).toHaveTextContent("current source");
+    getWorkflowNodeSource.mockClear();
     fireEvent.click(screen.getByRole("button", { name: /run-1,/ }));
     await screen.findByRole("button", { name: "Inspect Review" });
-    expect(screen.queryByRole("complementary", { name: "Node code" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("tab", { name: "Code" })).not.toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: "Inspect Fetch" }));
-    expect(
-      screen.queryByRole("complementary", { name: "Run inspector" }),
-    ).not.toBeInTheDocument();
+    const historicalCard = screen
+      .getByRole("button", { name: "Inspect Fetch" })
+      .closest("article")!;
+    expect(within(historicalCard).getByRole("region", { name: "Outputs" })).toHaveTextContent(
+      "HistoricalBatch",
+    );
+    expect(historicalCard).not.toHaveTextContent("CurrentBatch");
+    expect(screen.getByRole("region", { name: "Step output" })).toHaveTextContent(
+      "HistoricalBatch",
+    );
+    expect(screen.queryByLabelText("Source code")).not.toBeInTheDocument();
+    expect(getWorkflowNodeSource).not.toHaveBeenCalled();
     fireEvent.click(screen.getByRole("button", { name: "Inspect Review" }));
     expect(screen.getByRole("complementary", { name: "Run inspector" })).toBeInTheDocument();
     expect(screen.getByRole("tab", { name: "Trace" })).toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: "Inspect Fetch" }));
-    expect(
-      screen.queryByRole("complementary", { name: "Run inspector" }),
-    ).not.toBeInTheDocument();
+    expect(screen.getByRole("region", { name: "Step output" })).toHaveTextContent(
+      "HistoricalBatch",
+    );
+    expect(getWorkflowNodeSource).not.toHaveBeenCalled();
     fireEvent.click(screen.getByRole("button", { name: "Current" }));
+    expect(screen.getByRole("tab", { name: "Definition" })).toHaveAttribute(
+      "aria-selected",
+      "true",
+    );
+    fireEvent.click(screen.getByRole("tab", { name: "Code" }));
     expect(await screen.findByLabelText("Source code")).toHaveTextContent("current source");
   });
 
@@ -854,7 +909,7 @@ describe.each(["hosted", "local"] as const)("%s shared workspace", (host) => {
     fireEvent.click(await screen.findByRole("button", { name: "Inspect Fetch" }));
     fireEvent.click(screen.getByRole("button", { name: /run-1,/ }));
     await screen.findByText("Loading run snapshot");
-    expect(screen.getByRole("complementary", { name: "Node code" })).toBeInTheDocument();
+    expect(screen.queryByLabelText("Source code")).not.toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Inspect Fetch" })).toBeEnabled();
     act(() => firstSnapshot.resolve(agentSnapshot));
     await screen.findByRole("complementary", { name: "Run inspector" });
@@ -879,7 +934,7 @@ describe.each(["hosted", "local"] as const)("%s shared workspace", (host) => {
       screen.queryByRole("complementary", { name: "Run inspector" }),
     ).not.toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: "Current" }));
-    expect(screen.queryByRole("complementary", { name: "Node code" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("tab", { name: "Definition" })).not.toBeInTheDocument();
   });
 
   it("expands the timeline independently of node inspection and retains filters on collapse", async () => {

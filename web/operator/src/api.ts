@@ -1152,6 +1152,7 @@ function mapFlowInfo(flow: FlowInfoV2): FlowInfoMsg {
     agentNodeIds: flow.agentNodeIds,
     agentMetadataJson: flow.agentMetadataJson,
     classifierMetadataJson: flow.classifierMetadataJson,
+    stepInterfaceJson: flow.topology?.stepInterfaceJson ?? {},
     webhookPath: flow.webhookPath,
     webhookUrl: flow.webhookUrl,
     webhookActive: flow.webhookActive,
