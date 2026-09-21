@@ -98,6 +98,12 @@ Question `criteria` holds named options for `choice`, optional `"true"`/`"false"
 criteria for `noul`, or an ordered list of at least two levels for `score`.
 Instructions and criteria entries can contain structured JSON as well as text.
 
+Use `input_model=YourPydanticModel` when the classifier state has a declared shape.
+Keep the model in `schema.py` and pass JSON-compatible state matching it; Avalanche
+validates the state before the request. The classifier Definition shows this
+per-call input separately from the step function's annotated parameters and return
+type, which may describe an entire batch or transformed results.
+
 `ava.ClassificationResult` retains model, usage, and typed answers:
 `result.choices["department"]` exposes choice, all option probabilities, and
 confidence; `result.nouls["urgent"].noul` is P(yes), not a Boolean or a confidence
