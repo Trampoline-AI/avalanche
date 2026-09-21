@@ -5,6 +5,8 @@
 - Expanded the Avalanche authoring skill with classifier question-object examples
   for routing, overlapping labels, scoring, and evidence checks, plus guidance on
   structured rubrics, candidate selection, batching, and uncertainty.
+- Starter-project documentation now uses `uvx avalanche-ai@latest init` so
+  initialization requests the latest published release rather than a cached version.
 
 ## 0.5.0
 

@@ -36,7 +36,7 @@ Move into an empty directory, then run this command to initialize a starter
 project with the Avalanche skill installed and an example workflow:
 
 ```bash
-uvx avalanche-ai init
+uvx avalanche-ai@latest init
 ```
 
 Follow the instructions to set up your LLM provider. Then finally, run the demo:
@@ -60,7 +60,7 @@ You can then use the provided avalanche skill to create your own workflow by des
 Create an empty directory, move into it, and run:
 
 ```bash
-uvx avalanche-ai init
+uvx avalanche-ai@latest init
 ```
 
 Follow the instructions to set up your LLM provider.
@@ -96,7 +96,7 @@ To develop Avalanche and PredictRLM alongside a new workspace, initialize an
 empty directory with editable dependencies:
 
 ```bash
-uvx avalanche-ai init --editable-deps
+uvx avalanche-ai@latest init --editable-deps
 ```
 
 This clones both Trampoline AI projects into `.trampoline-ai/` and configures
