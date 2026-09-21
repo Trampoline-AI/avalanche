@@ -10,10 +10,17 @@ import {
   type ClassifierDeclaration,
   type ClassifierInvocation,
 } from "./classifier";
-import { ClassifierInvocationDetails, ClassifierQuestions } from "./ClassifierDetails";
+import {
+  ClassifierDefinition,
+  ClassifierInvocationDetails,
+  ClassifierQuestions,
+} from "./ClassifierDetails";
 
 const declaration: ClassifierDeclaration = {
   runtime: { model: "jev-latest", timeout: 10 },
+  input_schema: null,
+  step_inputs: [],
+  step_output: { type_name: "Unspecified", json_schema: null },
   questions: {
     route: {
       type: "choice",
@@ -120,6 +127,118 @@ it("retains structured instructions and criteria under their independent questio
     "0",
   );
   expect(urgency.getByText(/Can wait/)).toBeInTheDocument();
+});
+
+it("exposes nested serialized fields, nullable variants, constraints, and finite recursive references", () => {
+  const decoded = parseClassifierDeclaration({
+    ...declaration,
+    step_inputs: [
+      {
+        name: "batch",
+        type_name: "list[str]",
+        json_schema: { type: "array", items: { type: "string" } },
+        required: true,
+      },
+    ],
+    step_output: { type_name: "bool", json_schema: { type: "boolean" } },
+    input_schema: {
+      title: "FollowupInput",
+      type: "object",
+      properties: { item: { $ref: "#/$defs/Follow~1up" } },
+      required: ["item"],
+      $defs: {
+        "Follow/up": {
+          type: "object",
+          properties: {
+            text: { type: "string", description: "Action to complete", minLength: 2 },
+            owner: { anyOf: [{ type: "string" }, { type: "null" }], default: null },
+            children: { type: "array", items: { $ref: "#/$defs/Follow~1up" }, default: [] },
+          },
+          required: ["text"],
+        },
+      },
+    },
+  });
+  render(<ClassifierDefinition declaration={decoded} />);
+  const inputs = within(screen.getByRole("region", { name: "Step inputs" }));
+  expect(inputs.getByText("batch")).toBeVisible();
+  expect(inputs.queryByText("item")).toBeNull();
+  expect(screen.getByRole("region", { name: "Step output" })).toHaveTextContent("bool");
+  const state = within(screen.getByRole("region", { name: "Classifier input" }));
+  expect(state.queryByText("text")).toBeNull();
+  fireEvent.click(state.getByRole("button", { name: "Expand state schema" }));
+  fireEvent.click(state.getByRole("button", { name: "Expand item schema" }));
+  expect(state.getByText("text")).toBeVisible();
+  expect(state.getByText("owner")).toBeVisible();
+  expect(
+    within(state.getByRole("group", { name: "text schema" })).getByText("Required"),
+  ).toBeVisible();
+  expect(
+    within(state.getByRole("group", { name: "owner schema" })).getByText("Optional"),
+  ).toBeVisible();
+  fireEvent.click(state.getByRole("button", { name: "Expand text schema" }));
+  expect(state.getByText("Action to complete")).toBeVisible();
+  expect(state.getByRole("group", { name: "text minLength" })).toHaveTextContent("2");
+  fireEvent.click(state.getByRole("button", { name: "Expand owner schema" }));
+  expect(state.getByRole("group", { name: "owner default" })).toHaveTextContent("null");
+  expect(state.getByRole("group", { name: "anyOf 1 schema" })).toHaveTextContent("string");
+  expect(state.getByRole("group", { name: "anyOf 2 schema" })).toHaveTextContent("null");
+  fireEvent.click(state.getByRole("button", { name: "Expand children schema" }));
+  fireEvent.click(state.getByRole("button", { name: "Expand Items schema" }));
+  expect(state.getByText(/Recursive reference/)).toBeVisible();
+});
+
+it("distinguishes empty signatures, missing annotations, unsupported annotations, and undeclared state models", () => {
+  const view = render(<ClassifierDefinition declaration={declaration} />);
+  const inputs = screen.getByRole("region", { name: "Step inputs" });
+  expect(within(inputs).queryByText("Unspecified")).toBeNull();
+  expect(screen.getByRole("region", { name: "Step output" })).toHaveTextContent("Unspecified");
+  expect(
+    within(screen.getByRole("region", { name: "Classifier input" })).queryByRole("button"),
+  ).toBeNull();
+  view.rerender(
+    <ClassifierDefinition
+      declaration={{
+        ...declaration,
+        step_inputs: [
+          { name: "context", type_name: "Unspecified", json_schema: null, required: true },
+          { name: "connection", type_name: "Connection", json_schema: null, required: false },
+        ],
+        input_schema: {},
+      }}
+    />,
+  );
+  expect(inputs).toHaveTextContent("context");
+  expect(inputs).toHaveTextContent("Unspecified");
+  expect(inputs).toHaveTextContent("connection");
+  expect(inputs).toHaveTextContent("Connection");
+  expect(within(inputs).getByText("Required")).toBeVisible();
+  expect(within(inputs).getByText("Optional")).toBeVisible();
+  expect(screen.getByRole("region", { name: "Classifier input" })).toHaveTextContent(
+    "Any JSON",
+  );
+});
+
+it("shows unresolved and external schema references without following them", () => {
+  render(
+    <ClassifierDefinition
+      declaration={{
+        ...declaration,
+        input_schema: {
+          type: "object",
+          properties: {
+            missing: { $ref: "#/$defs/Missing" },
+            remote: { $ref: "https://schemas.example.test/Remote" },
+          },
+        },
+      }}
+    />,
+  );
+  fireEvent.click(screen.getByRole("button", { name: "Expand state schema" }));
+  fireEvent.click(screen.getByRole("button", { name: "Expand missing schema" }));
+  fireEvent.click(screen.getByRole("button", { name: "Expand remote schema" }));
+  expect(screen.getByText(/Unresolved local reference/)).toBeVisible();
+  expect(screen.getByText(/External reference; not fetched/)).toBeVisible();
 });
 
 it("distinguishes an omitted Noul criterion from an explicitly null criterion", () => {
@@ -330,6 +449,66 @@ it("shows the highest probabilities first and reveals every rounded option on ex
 });
 
 describe("strict classifier records", () => {
+  it.each(["input_schema", "step_inputs", "step_output"])(
+    "requires declaration metadata %s at the JSON boundary",
+    (key) => {
+      expect(() =>
+        decodeClassifierDeclaration(JSON.stringify({ ...declaration, [key]: undefined })),
+      ).toThrow();
+    },
+  );
+
+  it.each([
+    { input_schema: [] },
+    { input_schema: false },
+    { step_inputs: {} },
+    { step_inputs: [{ name: "x", type_name: "str", json_schema: null, required: "yes" }] },
+    {
+      step_inputs: [
+        { name: "x", type_name: "str", json_schema: null, required: true, unexpected: true },
+      ],
+    },
+    { step_output: { type_name: "str" } },
+    { step_output: { type_name: "str", json_schema: [], unexpected: true } },
+  ])("rejects malformed signature metadata: %j", (metadata) => {
+    expect(() => parseClassifierDeclaration({ ...declaration, ...metadata })).toThrow();
+  });
+
+  it.each([
+    { properties: { nested: { type: "python" } } },
+    { $defs: { Model: { required: [true] } } },
+    { anyOf: [{ type: "string" }, null] },
+    { items: { minLength: -1 } },
+    { additionalProperties: null },
+    { description: 42 },
+    { enum: "one" },
+    { default: { value: Infinity } },
+    { "x-extra": { value: undefined } },
+  ])(
+    "rejects malformed nested schemas without losing their declaration: %j",
+    (input_schema) => {
+      expect(() => parseClassifierDeclaration({ ...declaration, input_schema })).toThrow();
+    },
+  );
+
+  it("preserves JSON schema extension keywords and prototype-like property names", () => {
+    const input_schema = {
+      type: "object",
+      properties: { constructor: { type: "string" } },
+      additionalProperties: false,
+      "x-policy": { versions: [1, null], enabled: true },
+    };
+    const serialized = JSON.stringify({ ...declaration, input_schema }).replace(
+      '"x-policy":',
+      '"__proto__":{"type":"number"},"x-policy":',
+    );
+    const decoded = decodeClassifierDeclaration(serialized);
+    expect(decoded.input_schema).toMatchObject(input_schema);
+    expect(Object.hasOwn(decoded.input_schema ?? {}, "__proto__")).toBe(true);
+    expect(decoded.input_schema?.type).toBe("object");
+    expect(decoded.input_schema?.["__proto__"]).toEqual({ type: "number" });
+  });
+
   it("requires a JSON state entry, rejects scalar state, and preserves nested JSON", () => {
     const value = success();
     const { input, ...withoutInput } = value;
