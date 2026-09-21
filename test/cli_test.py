@@ -448,7 +448,9 @@ def test_ava_result_fails_closed_without_anchored_io_before_writing(
 
 
 @pytest.mark.parametrize("signum", (signal.SIGINT, signal.SIGTERM))
-def test_ava_dev_interrupts_blocking_discovery(monkeypatch, signum):
+@pytest.mark.parametrize("command", ("dev", "operator"))
+def test_startup_interrupts_blocking_discovery(monkeypatch, signum, command):
+    import runtime.operator as operator_package
     from ava_cli import app
     from runtime.operator import operator as operator_module
 
@@ -465,8 +467,9 @@ def test_ava_dev_interrupts_blocking_discovery(monkeypatch, signum):
     monkeypatch.setattr(app, "_configure_terminal_logging", lambda _level: None)
     monkeypatch.setattr(app.signal, "signal", record_handler)
     monkeypatch.setattr(operator_module, "Operator", BlockingOperator)
+    monkeypatch.setattr(operator_package, "Operator", BlockingOperator)
 
-    assert app.main(["dev", "examples"]) == 0
+    assert app.main([command, "examples"]) == 0
 
 
 def test_ava_dev_reports_discovery_failure_without_starting_services(monkeypatch, capsys):
@@ -505,56 +508,171 @@ def test_ava_dev_reports_discovery_failure_without_starting_services(monkeypatch
     assert "No module named 'missing_helper'" in error
 
 
-def test_ava_dev_reports_web_start_failure(monkeypatch, capsys):
+@pytest.mark.parametrize("command", ("dev", "operator"))
+def test_http_start_failure_releases_operator_listener(monkeypatch, tmp_path, command):
+    from ava_cli import app
+    from runtime.operator import server as operator_server
+
+    bound_ports = []
+    serve = operator_server.serve
+
+    def record_server(*args, **kwargs):
+        server = serve(*args, **kwargs)
+        bound_ports.append(server._avalanche_bound_port)
+        return server
+
+    monkeypatch.setattr(operator_server, "serve", record_server)
+    previous_handlers = {sig: signal.getsignal(sig) for sig in (signal.SIGINT, signal.SIGTERM)}
+    with socket.socket() as occupied:
+        occupied.bind(("127.0.0.1", 0))
+        occupied.listen()
+        argv = [
+            command,
+            str(tmp_path),
+            "--port",
+            "0",
+            "--web-port",
+            str(occupied.getsockname()[1]),
+        ]
+        if command == "dev":
+            assert app.main(argv) == 1
+        else:
+            with pytest.raises(OSError):
+                app.main(argv)
+
+    assert len(bound_ports) == 1
+    with socket.socket() as rebound:
+        rebound.bind(("127.0.0.1", bound_ports[0]))
+    for sig, previous in previous_handlers.items():
+        assert signal.getsignal(sig) == previous
+
+
+def test_operator_fatal_error_closes_both_listeners_despite_http_cleanup_error(monkeypatch):
+    from urllib.request import urlopen
+
+    import runtime.operator as operator_module
+    from runtime.operator import server as operator_server
+    from runtime.operator import web
+
+    fatal_error = RuntimeError("operator failed")
+    bound_ports = []
+    serve = operator_server.serve
+    start_browser_server = web.start_browser_server
+    close_browser = web.BrowserServer.close
+    endpoints = []
+
+    def record_server(*args, **kwargs):
+        server = serve(*args, **kwargs)
+        bound_ports.append(server._avalanche_bound_port)
+        return server
+
+    def record_browser(*args, **kwargs):
+        browser = start_browser_server(*args, **kwargs)
+        bound_ports.append(browser.port)
+        endpoints.append(browser.endpoint)
+        return browser
+
+    def fail_after_request(self, *, timeout):
+        with urlopen(f"{endpoints[0]}/api/v1/flows", timeout=2) as response:
+            assert response.status == 200
+            assert json.load(response)["flows"] == []
+        return fatal_error
+
+    def fail_after_close(self):
+        close_browser(self)
+        raise RuntimeError("HTTP cleanup failed")
+
+    monkeypatch.setattr(operator_server, "serve", record_server)
+    monkeypatch.setattr(web, "start_browser_server", record_browser)
+    monkeypatch.setattr(web.BrowserServer, "close", fail_after_close)
+    monkeypatch.setattr(operator_module.Operator, "wait_for_failure", fail_after_request)
+
+    with pytest.raises(RuntimeError) as caught:
+        operator_module.serve(
+            [],
+            host="0.0.0.0",
+            port=0,
+            web_port=0,
+            webhook_port=0,
+            watch=False,
+            schedule=False,
+        )
+    assert caught.value is fatal_error
+    assert endpoints[0].startswith("http://127.0.0.1:")
+    assert len(bound_ports) == 2
+    for port in bound_ports:
+        with socket.socket() as rebound:
+            rebound.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+            rebound.bind(("127.0.0.1", port))
+
+
+@pytest.mark.parametrize(
+    "argv",
+    (
+        ["operator", "--port", "7435"],
+        ["operator", "--web-port", "7434"],
+        ["operator", "--port", "7434", "--no-web"],
+        ["dev", "--web-port", "7434"],
+    ),
+)
+def test_conflicting_listener_ports_fail_before_discovery(monkeypatch, argv):
+    from ava_cli import app
+
+    def unexpected_discovery(*args, **kwargs):
+        pytest.fail("Conflicting ports reached discovery")
+
+    monkeypatch.setattr(app, "select_workflow_targets", unexpected_discovery)
+    with pytest.raises(SystemExit) as caught:
+        app.main(argv)
+    assert caught.value.code == 2
+
+
+def test_no_web_allows_an_occupied_http_port(monkeypatch, tmp_path):
     import grpc
 
     from ava_cli import app
-    from runtime.operator import operator as operator_module
+    from runtime.operator import Operator
     from runtime.operator import server as operator_server
-    from runtime.operator import web as operator_web
+    from runtime.operator.proto import operator_pb2 as pb
+    from runtime.operator.proto import operator_pb2_grpc as pb_grpc
 
-    events = []
+    bound_ports = []
+    serve = operator_server.serve
+    wait_for_failure = Operator.wait_for_failure
 
-    class FakeOperator:
-        def get_catalog(self):
-            return type("Catalog", (), {"workflows": ()})()
+    def record_server(*args, **kwargs):
+        server = serve(*args, **kwargs)
+        bound_ports.append(server._avalanche_bound_port)
+        return server
 
-        def close(self):
-            events.append("operator-close")
+    def interrupt_after_rpc(self, *, timeout):
+        if not bound_ports:
+            return wait_for_failure(self, timeout=timeout)
+        with grpc.insecure_channel(f"127.0.0.1:{bound_ports[0]}") as channel:
+            response = pb_grpc.OperatorServiceV2Stub(channel).DiscoverFlows(
+                pb.DiscoverFlowsRequestV2(), timeout=2
+            )
+            assert list(response.flows) == []
+        raise KeyboardInterrupt
 
-    class FakeServer:
-        def stop(self, *, grace):
-            events.append(("grpc-stop", grace))
-            return self
-
-        def wait(self, *, timeout):
-            events.append(("grpc-wait", timeout))
-
-    class FakeChannel:
-        def close(self):
-            events.append("channel-close")
-
-    class FakeReady:
-        def result(self, *, timeout):
-            events.append(("ready", timeout))
-
-    monkeypatch.setattr(app, "_configure_terminal_logging", lambda level: None)
-    monkeypatch.setattr(operator_module, "Operator", lambda *_args, **_kwargs: FakeOperator())
-    monkeypatch.setattr(operator_server, "serve", lambda *_args, **_kwargs: FakeServer())
-    monkeypatch.setattr(grpc, "insecure_channel", lambda _address: FakeChannel())
-    monkeypatch.setattr(grpc, "channel_ready_future", lambda _channel: FakeReady())
-    monkeypatch.setattr(
-        operator_web,
-        "start_browser_server",
-        lambda *_args, **_kwargs: (_ for _ in ()).throw(RuntimeError("web port is occupied")),
-    )
-
-    assert app.main(["dev", "examples"]) == 1
-    assert events == [
-        ("ready", 5.0),
-        "channel-close",
-        ("grpc-stop", 1.0),
-        ("grpc-wait", 2.0),
-        "operator-close",
-    ]
-    assert capsys.readouterr().err
+    monkeypatch.setattr(operator_server, "serve", record_server)
+    monkeypatch.setattr(Operator, "wait_for_failure", interrupt_after_rpc)
+    with socket.socket() as occupied:
+        occupied.bind(("127.0.0.1", 0))
+        occupied.listen()
+        assert (
+            app.main(
+                [
+                    "operator",
+                    str(tmp_path),
+                    "--port",
+                    "0",
+                    "--no-web",
+                    "--web-port",
+                    str(occupied.getsockname()[1]),
+                ]
+            )
+            == 0
+        )
+    with socket.socket() as rebound:
+        rebound.bind(("127.0.0.1", bound_ports[0]))

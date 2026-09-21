@@ -173,13 +173,9 @@ scans that code for workflows, then loads and runs them:
 uv run ava operator
 ```
 
-The Web UI reflects the state of the operator:
-
-```bash
-uv run ava web
-```
-
-Start the operator and Web UI together from a configured workspace:
+This also serves the Web UI and development REST API at
+`http://127.0.0.1:7435`. Open that address in your browser, or use `ava dev`
+to open it automatically:
 
 ```bash
 uv run ava dev
@@ -211,14 +207,81 @@ to `ava operator` or `ava dev` to set a different positive, finite limit.
 > Discovery imports eligible Python modules beneath each target. Use a specific
 > flow file or dedicated flow directory, not a mixed repository root.
 
-Similarily, you can pass `--connect` to the Web UI to change the operator url to connect to:
+For a separate HTTP listener, start the operator with `--no-web`, then connect:
 
 ```bash
 uv run ava web --connect localhost:7433
 ```
 
-The operator defaults to `127.0.0.1:7433` and the Web UI to
-`http://127.0.0.1:7435`.
+The operator defaults to `127.0.0.1:7433` and the Web UI/REST listener to
+`http://127.0.0.1:7435`. Use `--web-port` with `ava operator` or `ava dev`
+to change the HTTP port; `ava web` uses `--port` instead.
+
+### Development REST API
+
+The built-in API is available under `/api/v1` on the same listener as the Web UI.
+It translates JSON requests into the existing operator gRPC calls; it does not
+add a deployment service, separate run store, or durable recovery.
+`ava operator` and `ava dev` bind HTTP to loopback. There is no built-in
+authentication; do not expose it to an untrusted network. A separately launched
+`ava web --host ... --trusted-proxy` requires an external authenticated boundary.
+
+| Method | Path (under `/api/v1`) | Response |
+| --- | --- | --- |
+| GET | `/flows` | Discovered flows and their `workflow_selector` values |
+| POST | `/runs` | `202` with `run_id`; execution continues asynchronously |
+| GET | `/runs` | Paginated run summaries |
+| GET | `/runs/{run_id}` | Snapshot with `summary`, node states, and topology |
+| POST | `/runs/{run_id}/cancel` | `200` acknowledging cancellation; poll for terminal state |
+| GET | `/runs/{run_id}/output` | Retained result value and file descriptors |
+| GET | `/runs/{run_id}/activity` | Paginated log or node-event descriptors |
+
+For example, with the operator running:
+
+```bash
+curl http://127.0.0.1:7435/api/v1/flows
+
+# Copy workflow_selector from discovery; supply your workflow's input fields.
+curl -X POST http://127.0.0.1:7435/api/v1/runs \
+  -H 'Content-Type: application/json' \
+  -d '{"workflow_selector":"flows.py::my_flow","input_json":{"value":41}}'
+
+# Use the run_id returned above.
+curl http://127.0.0.1:7435/api/v1/runs/RUN_ID
+curl http://127.0.0.1:7435/api/v1/runs/RUN_ID/output
+curl -X POST http://127.0.0.1:7435/api/v1/runs/RUN_ID/cancel
+```
+
+Create requests require a nonempty `workflow_selector`. Optional `input_json`
+and `context_json` are JSON objects, not JSON-encoded strings, and default to `{}`.
+Omitting `run_id` generates a new ID; a supplied ID must satisfy the operator's
+run-ID rules. Reusing an existing ID returns `409`; it does not start another run
+or replay an earlier response. Unknown fields are rejected. File uploads and
+Delta's deployment/rerun fields are not part of this API; use the existing
+CLI/gRPC file-input support when needed.
+
+List endpoints accept `page_size` (positive integer, default 100; the operator
+caps pages at 500) and `continuation`. To continue, JSON-encode the complete
+`next_page` object from the response and URL-encode it as `continuation`; omit
+it on the first request. Preserve the same filters throughout the page chain.
+`GET /runs` also accepts `workflow_selector`. Activity accepts `node_id` for
+agent/classifier events and `order=forward|newest_first`; without `node_id` it
+lists run-wide log descriptors.
+
+Responses preserve the existing protobuf JSON contract with snake_case names.
+64-bit integers are JSON strings. `/output` exposes Avalanche's encoded result
+document in `value.value_json`, with its digest and size alongside it; this is
+not a plain workflow-result object. File bodies and activity-detail bodies
+remain available through gRPC and the existing CLI/UI, not these REST routes.
+
+Errors are JSON: `{"error":{"code":"NOT_FOUND","message":"..."}}`.
+Invalid JSON or query parameters return `400`, unknown resources `404`,
+unsupported methods `405`, and duplicate runs or unavailable results `409`.
+Create requests require `application/json` (`415` otherwise) and a
+`Content-Length` (`411` otherwise), with a 4 MiB body limit (`413`).
+An unavailable operator returns `503`; an upstream call exceeding 30 seconds
+returns `504`. A timeout does not prove a run was not started: if you supplied
+a run ID, inspect that run before submitting another request.
 
 ### Embedding the operator UI
 

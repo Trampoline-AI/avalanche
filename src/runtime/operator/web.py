@@ -1,4 +1,4 @@
-"""In-process gRPC-Web and static asset listener for the local operator UI."""
+"""In-process REST, gRPC-Web, and static asset listener for the local operator."""
 
 from __future__ import annotations
 
@@ -21,7 +21,9 @@ import grpc
 from google.protobuf import message_factory
 from google.protobuf.message import DecodeError, Message
 
+from ._grpc import _BOUNDED_MESSAGE_OPTIONS
 from .proto import operator_pb2 as pb
+from .rest import serve_rest
 
 logger = logging.getLogger(__name__)
 
@@ -70,11 +72,11 @@ class _BrowserHTTPServer(ThreadingHTTPServer):
         operator_address: str,
         asset_root: Path,
     ) -> None:
-        self.channel = grpc.insecure_channel(operator_address)
         self.asset_root = asset_root
         self.operator_port = _operator_port(operator_address)
         self.stopping = threading.Event()
         super().__init__(server_address, _BrowserRequestHandler)
+        self.channel = grpc.insecure_channel(operator_address, options=_BOUNDED_MESSAGE_OPTIONS)
 
 
 class _BrowserRequestHandler(BaseHTTPRequestHandler):
@@ -82,9 +84,15 @@ class _BrowserRequestHandler(BaseHTTPRequestHandler):
     server: _BrowserHTTPServer
 
     def do_GET(self) -> None:  # noqa: N802
+        if self._is_rest_request():
+            serve_rest(self, self.server.channel)
+            return
         self._serve_asset()
 
     def do_POST(self) -> None:  # noqa: N802
+        if self._is_rest_request():
+            serve_rest(self, self.server.channel)
+            return
         method_name = urlsplit(self.path).path.removeprefix(_GRPC_SERVICE_PATH)
         method = _RPC_METHODS.get(method_name)
         if method is None or urlsplit(self.path).path != f"{_GRPC_SERVICE_PATH}{method_name}":
@@ -110,6 +118,25 @@ class _BrowserRequestHandler(BaseHTTPRequestHandler):
         except Exception:
             logger.exception("Unhandled gRPC-Web proxy failure: %s", method_name)
             self._send_grpc_error(grpc.StatusCode.INTERNAL, "internal proxy error")
+
+    def _is_rest_request(self) -> bool:
+        path = urlsplit(self.path).path
+        return path == "/api" or path.startswith("/api/")
+
+    def do_PUT(self) -> None:  # noqa: N802
+        if self._is_rest_request():
+            serve_rest(self, self.server.channel)
+        else:
+            self.send_error(HTTPStatus.METHOD_NOT_ALLOWED)
+
+    def do_PATCH(self) -> None:  # noqa: N802
+        self.do_PUT()
+
+    def do_DELETE(self) -> None:  # noqa: N802
+        self.do_PUT()
+
+    def do_HEAD(self) -> None:  # noqa: N802
+        self.do_PUT()
 
     def do_OPTIONS(self) -> None:  # noqa: N802
         self.send_response(HTTPStatus.NO_CONTENT)
@@ -319,7 +346,18 @@ def start_browser_server(
         name="avalanche-browser-listener",
         daemon=True,
     )
-    thread.start()
+    try:
+        thread.start()
+    except BaseException as failure:
+        try:
+            server.server_close()
+        except Exception as exc:
+            failure.add_note(f"HTTP socket cleanup also failed: {exc}")
+        try:
+            server.channel.close()
+        except Exception as exc:
+            failure.add_note(f"HTTP upstream cleanup also failed: {exc}")
+        raise
     browser_server = BrowserServer(server, thread)
     logger.info(
         "Browser UI listening on %s for operator %s",
