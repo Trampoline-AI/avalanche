@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- DAG cards now align by their vertical centers, keeping same-row arrows straight
+  when connected cards have different heights.
 - Source, ordinary, destination, and agent steps now share the classifier's
   **Step interface** panel, with annotated inputs, return types, and expandable
   nested schemas. Agent-call fields remain separate. Run views retain the

@@ -466,6 +466,7 @@ const SkipEdge = memo(
 SkipEdge.displayName = "SkipEdge";
 
 const NODE_TYPES = { workflow: WorkflowNodeCard };
+const NODE_ORIGIN: [number, number] = [0, 0.5];
 const EDGE_TYPES = { skip: SkipEdge };
 const FIT_VIEW_OPTIONS = { padding: 0.24 };
 
@@ -746,6 +747,7 @@ function GraphCanvasView({
       nodes={nodes}
       edges={layout.edges}
       nodeTypes={NODE_TYPES}
+      nodeOrigin={NODE_ORIGIN}
       edgeTypes={EDGE_TYPES}
       fitView
       fitViewOptions={FIT_VIEW_OPTIONS}
