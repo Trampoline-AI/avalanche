@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 0.5.2
+
 - Classifier calls now accept runtime `questions=` that replace optional decorator
   defaults. Each call validates and retains its own questions, including concurrent
   calls with different candidates or rubrics; missing or invalid questions fail
