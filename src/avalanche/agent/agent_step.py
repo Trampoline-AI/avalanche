@@ -19,6 +19,11 @@ from pydantic import BaseModel
 
 from .._agent_evidence import AgentInvocationId, emit_agent_evidence
 from ..dag import Node, NodeType
+from ..step_interface import (
+    decoration_namespace,
+    resolve_step_signature,
+    step_interface_from_signature,
+)
 from .config import UNSET, validate_runtime_kwargs
 from .signature import resolve_signature
 
@@ -393,6 +398,7 @@ class _AgentStepSpec:
         runtime_kwargs: Mapping[str, Any],
         skills: Sequence[Any] | object,
         tools: Sequence[Callable[..., Any]] | object,
+        public_signature: inspect.Signature,
     ) -> None:
         self.user_fn = user_fn
         self.step_name = user_fn.__name__
@@ -400,7 +406,7 @@ class _AgentStepSpec:
         self.runtime_kwargs = dict(runtime_kwargs)
         self.skills = skills
         self.tools = tools
-        self.public_signature = _public_step_signature(user_fn)
+        self.public_signature = public_signature
 
     def make_agent(self) -> Agent:
         defaults = _WORKFLOW_AGENT_DEFAULTS.get()
@@ -766,12 +772,14 @@ def agent_step(
     runtime_kwargs = validate_runtime_kwargs(runtime_kwargs, owner="ava.agent_step")
 
     def decorator(user_fn: Callable[..., Any]) -> Node:
+        public_signature = _public_step_signature(user_fn, decoration_namespace())
         spec = _AgentStepSpec(
             user_fn,
             signature=signature,
             runtime_kwargs=runtime_kwargs,
             skills=skills,
             tools=tools,
+            public_signature=public_signature,
         )
 
         async def wrapper(*args: Any, **kwargs: Any) -> Any:
@@ -783,7 +791,12 @@ def agent_step(
         update_wrapper(wrapper, user_fn)
         wrapper.__signature__ = spec.public_signature  # type: ignore[attr-defined]
         wrapper.__agent_step__ = spec  # type: ignore[attr-defined]
-        return Node(wrapper, NodeType.STEP, num_returns=1)
+        return Node(
+            wrapper,
+            NodeType.STEP,
+            num_returns=1,
+            step_interface=step_interface_from_signature(public_signature),
+        )
 
     return decorator
 
@@ -792,8 +805,10 @@ def agent_step(
 step = agent_step
 
 
-def _public_step_signature(user_fn: Callable[..., Any]) -> inspect.Signature:
-    signature = inspect.signature(user_fn)
+def _public_step_signature(
+    user_fn: Callable[..., Any], localns: dict[str, object] | None
+) -> inspect.Signature:
+    signature = resolve_step_signature(user_fn, localns)
     agent_parameter = signature.parameters.get("agent")
     if agent_parameter is None:
         raise AgentStepError(
@@ -809,11 +824,7 @@ def _public_step_signature(user_fn: Callable[..., Any]) -> inspect.Signature:
             "and cannot have a default"
         )
 
-    try:
-        annotation = inspect.get_annotations(user_fn, eval_str=True).get("agent")
-    except Exception:
-        annotation = agent_parameter.annotation
-    if annotation is not Agent:
+    if agent_parameter.annotation is not Agent:
         raise AgentStepError(
             f"agent step {user_fn.__qualname__!r} agent parameter must be annotated ava.Agent"
         )

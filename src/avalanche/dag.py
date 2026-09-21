@@ -63,6 +63,7 @@ from ulid import ULID
 
 from .input_ref import InputRef
 from .run_handle import RunHandle
+from .step_interface import StepInterface, decoration_namespace, step_interface_for_function
 from .webhook import Webhook
 
 if TYPE_CHECKING:
@@ -130,6 +131,7 @@ class Node:
         num_returns: int = 1,
         *,
         slug: str | None = None,
+        step_interface: StepInterface | None = None,
     ):
         """
         Initialize a node.
@@ -146,6 +148,9 @@ class Node:
         self._explicit_slug = slug is not None
         self.node_type = node_type
         self.num_returns = num_returns
+        self.step_interface = (
+            step_interface if step_interface is not None else step_interface_for_function(fn)
+        )
 
     def __call__(self, *args: Any, **kwargs: Any) -> "NodeFuture":
         """
@@ -564,9 +569,17 @@ def source(
         def load_pair():
             return df_a, df_b
     """
+    localns = decoration_namespace() if fn is not None else None
 
     def decorator(f: F) -> Node:
-        return Node(f, NodeType.SOURCE, num_returns=num_returns, slug=slug)
+        namespace = localns if fn is not None else decoration_namespace()
+        return Node(
+            f,
+            NodeType.SOURCE,
+            num_returns=num_returns,
+            slug=slug,
+            step_interface=step_interface_for_function(f, namespace),
+        )
 
     if fn is None:
         return decorator
@@ -592,9 +605,17 @@ def step(
         def chunk_docs(*, docs=ava.Stream(ns().docs), chunks=ns().chunks):
             ...
     """
+    localns = decoration_namespace() if fn is not None else None
 
     def decorator(f: F) -> Node:
-        return Node(f, NodeType.STEP, num_returns=num_returns, slug=slug)
+        namespace = localns if fn is not None else decoration_namespace()
+        return Node(
+            f,
+            NodeType.STEP,
+            num_returns=num_returns,
+            slug=slug,
+            step_interface=step_interface_for_function(f, namespace),
+        )
 
     if fn is None:
         return decorator
@@ -623,9 +644,17 @@ def dest(
         def push_to_vespa(*, embeddings=ava.Stream(ns().embeddings)):
             ...
     """
+    localns = decoration_namespace() if fn is not None else None
 
     def decorator(f: F) -> Node:
-        return Node(f, NodeType.DEST, num_returns=num_returns, slug=slug)
+        namespace = localns if fn is not None else decoration_namespace()
+        return Node(
+            f,
+            NodeType.DEST,
+            num_returns=num_returns,
+            slug=slug,
+            step_interface=step_interface_for_function(f, namespace),
+        )
 
     if fn is None:
         return decorator

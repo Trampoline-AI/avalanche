@@ -31,6 +31,7 @@ from avalanche.classifier.models import (
     ClassifierInvocation,
     NoulAnswer,
 )
+from avalanche.step_interface import StepInterface
 
 from ..executor import LocalExecutor, RayExecutor
 from .discovery import (
@@ -2054,6 +2055,9 @@ class Operator:
             classifier_metadata_json=tuple(
                 _classifier_metadata_mapping(prepared["classifier_metadata_json"]).items()
             ),
+            step_interface_json=tuple(
+                (node_id, prepared["step_interface_json"][node_id]) for node_id in node_ids
+            ),
         )
         run = RunState(
             run_id=run_id,
@@ -3553,6 +3557,8 @@ _MAX_EVENT_AGENT_FIELD_SCHEMA_BYTES = 1024 * 1024
 _MAX_EVENT_AGENT_FIELD_SCHEMAS_TOTAL_BYTES = 16 * 1024 * 1024
 _MAX_EVENT_CLASSIFIER_METADATA_BYTES = 1024 * 1024
 _MAX_EVENT_CLASSIFIER_METADATA_TOTAL_BYTES = 16 * 1024 * 1024
+_MAX_EVENT_STEP_INTERFACE_BYTES = 1024 * 1024
+_MAX_EVENT_STEP_INTERFACES_TOTAL_BYTES = 16 * 1024 * 1024
 _MAX_EVENT_TRACEBACK_LENGTH = 262_144
 _MAX_EVENT_TIMESTAMP_MAGNITUDE = 10**12
 
@@ -3740,6 +3746,7 @@ def _validate_preparation_event(event: object) -> str:
                 "agent_instruction_lines",
                 "standard_step_docstring_lines",
                 "classifier_metadata_json",
+                "step_interface_json",
             },
         )
         node_ids = _required_field(event, "node_ids")
@@ -3765,6 +3772,13 @@ def _validate_preparation_event(event: object) -> str:
         classifier_metadata_json = _classifier_metadata_mapping(
             event["classifier_metadata_json"]
         )
+        step_interface_json = _step_interface_mapping(event)
+        unknown_interface_nodes = set(step_interface_json).difference(node_ids)
+        if unknown_interface_nodes:
+            raise _CoordinatorProtocolError(
+                "field 'step_interface_json' references unknown node "
+                f"{_bounded_ascii(min(unknown_interface_nodes))}"
+            )
         unknown_classifier_nodes = set(classifier_metadata_json).difference(node_ids)
         if unknown_classifier_nodes:
             raise _CoordinatorProtocolError(
@@ -3779,6 +3793,10 @@ def _validate_preparation_event(event: object) -> str:
             if node_id not in display_names:
                 raise _CoordinatorProtocolError(
                     f"field 'display_names' is missing node {_bounded_ascii(node_id)}"
+                )
+            if node_id not in step_interface_json:
+                raise _CoordinatorProtocolError(
+                    f"field 'step_interface_json' is missing node {_bounded_ascii(node_id)}"
                 )
         unknown_agent_nodes = set(agent_field_schemas_json).difference(node_ids)
         if unknown_agent_nodes:
@@ -3984,6 +4002,24 @@ def _string_mapping(
         )
     ):
         raise _CoordinatorProtocolError(f"field {field!r} must map bounded strings to strings")
+    return value
+
+
+def _step_interface_mapping(event: dict[str, Any]) -> Mapping[str, str]:
+    value = _string_mapping(event, "step_interface_json", maximum_value_length=None)
+    total_bytes = 0
+    for interface_json in value.values():
+        try:
+            encoded_size = len(interface_json.encode("utf-8"))
+            if encoded_size > _MAX_EVENT_STEP_INTERFACE_BYTES:
+                raise _CoordinatorProtocolError("step interface exceeds its byte limit")
+            total_bytes += encoded_size
+            if total_bytes > _MAX_EVENT_STEP_INTERFACES_TOTAL_BYTES:
+                raise _CoordinatorProtocolError("step interfaces exceed their total byte limit")
+            StepInterface.model_validate_json(interface_json, strict=True)
+        except (ValueError, TypeError, RecursionError) as exc:
+            # Schema errors may echo user values; keep those out of protocol diagnostics.
+            raise _CoordinatorProtocolError("invalid step interface metadata") from exc
     return value
 
 

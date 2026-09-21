@@ -16,6 +16,8 @@ from pydantic import (
     model_validator,
 )
 
+from ..step_interface import StepInput, StepOutput
+
 
 def _validate_json(value: object, ancestors: set[int] | None = None) -> object:
     """Reject Python-only values instead of silently JSON-coercing them."""
@@ -117,22 +119,12 @@ def validate_runtime_defaults(value: object) -> dict[str, JsonValue]:
     return runtime.model_dump(mode="json", exclude_unset=True)
 
 
-class ClassifierStepOutput(_ClassifierModel):
-    type_name: str = "Unspecified"
-    json_schema: dict[str, JsonValue] | None = None
-
-
-class ClassifierStepInput(ClassifierStepOutput):
-    name: str
-    required: bool
-
-
 class ClassifierDeclaration(_ClassifierModel):
     questions: Questions
     runtime: ClassifierRuntime
     input_schema: dict[str, JsonValue] | None = None
-    step_inputs: list[ClassifierStepInput] = Field(default_factory=list)
-    step_output: ClassifierStepOutput = Field(default_factory=ClassifierStepOutput)
+    step_inputs: list[StepInput] = Field(default_factory=list)
+    step_output: StepOutput = Field(default_factory=StepOutput)
 
 
 class ClassificationUsage(_ClassifierModel):

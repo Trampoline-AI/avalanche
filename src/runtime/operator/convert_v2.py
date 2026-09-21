@@ -68,6 +68,7 @@ def workflow_topology_to_v2(topology: WorkflowTopology) -> pb.WorkflowTopologyV2
         agent_instruction_lines=dict(topology.agent_instruction_lines),
         standard_step_docstring_lines=dict(topology.standard_step_docstring_lines),
         classifier_metadata_json=dict(topology.classifier_metadata_json),
+        step_interface_json=dict(topology.step_interface_json),
     )
 
 
@@ -79,6 +80,7 @@ def workflow_info_to_v2(info: WorkflowInfo) -> pb.FlowInfoV2:
         display_names=tuple(sorted(info.display_names.items())),
         standard_step_docstring_lines=tuple(sorted(info.standard_step_docstring_lines.items())),
         classifier_metadata_json=tuple(sorted(info.classifier_metadata_json.items())),
+        step_interface_json=tuple(sorted(info.step_interface_json.items())),
     )
     manifest_digest = sha256_hex(("\n".join([info.selector, *info.node_ids])).encode("utf-8"))
     return pb.FlowInfoV2(
@@ -677,6 +679,11 @@ def workflow_topology_from_v2(msg: pb.WorkflowTopologyV2) -> WorkflowTopology:
             for node_id in node_ids
             if node_id in msg.classifier_metadata_json
         ),
+        step_interface_json=tuple(
+            (node_id, msg.step_interface_json[node_id])
+            for node_id in node_ids
+            if node_id in msg.step_interface_json
+        ),
     )
 
 
@@ -694,6 +701,7 @@ def workflow_info_from_v2(msg: pb.FlowInfoV2) -> WorkflowInfo:
         agent_metadata_json=dict(msg.agent_metadata_json),
         classifier_metadata_json=dict(msg.classifier_metadata_json),
         standard_step_docstring_lines=dict(msg.topology.standard_step_docstring_lines),
+        step_interface_json=dict(msg.topology.step_interface_json),
         cron=msg.cron or None,
         next_run_at=msg.next_run_at or None,
         last_run_at=msg.last_run_at or None,

@@ -8,6 +8,14 @@ import textwrap
 from avalanche.dag import NodeType, Workflow
 
 
+def step_interface_for_workflow(workflow: Workflow, node_ids: list[str]) -> dict[str, str]:
+    """Snapshot each node's Python interface independently of invocation metadata."""
+    return {
+        node_id: workflow.nodes[node_id].node.step_interface.model_dump_json()
+        for node_id in node_ids
+    }
+
+
 def node_docstring_lines_for_workflow(
     workflow: Workflow, node_ids: list[str]
 ) -> dict[str, str]:

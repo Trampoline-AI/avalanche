@@ -3,13 +3,22 @@
 from __future__ import annotations
 
 import copy
+import json
 from pathlib import Path
 
 import pytest
 
 from avalanche.classifier.models import ClassifierDeclaration
+from avalanche.step_interface import StepInterface
 from runtime.operator import Operator, WorkflowRegistry
+from runtime.operator.convert_v2 import (
+    workflow_info_from_v2,
+    workflow_info_to_v2,
+    workflow_topology_from_v2,
+    workflow_topology_to_v2,
+)
 from runtime.operator.models import RunState, RunStatus
+from runtime.operator.proto import operator_pb2 as pb
 
 from .test_classifier_execution import (
     QUESTIONS,
@@ -46,9 +55,21 @@ def _write_discovery_workflow(root: Path) -> Path:
         "async def classify(messages: list[Message], *, classifier: ava.Classifier)"
         " -> list[Message]:\n"
         "    raise AssertionError('discovery executed the classifier body')\n"
+        "@ava.source\n"
+        "def load() -> list[Message]:\n"
+        "    raise AssertionError('discovery executed the source body')\n"
+        "@ava.step\n"
+        "def prepare(messages: list[Message], limit: int = 3) -> list[Message]:\n"
+        "    raise AssertionError('discovery executed the step body')\n"
+        "@ava.agent_step(ava.Signature('query: str -> reply: str'))\n"
+        "async def draft(messages: list[Message], *, agent: ava.Agent) -> list[Message]:\n"
+        "    raise AssertionError('discovery executed the agent body')\n"
+        "@ava.dest\n"
+        "def save(messages: list[Message]) -> None:\n"
+        "    raise AssertionError('discovery executed the destination body')\n"
         "@ava.workflow(classifier_defaults={'model': 'discovery-model', 'timeout': 6.0})\n"
         "def discoverable():\n"
-        "    return classify([])\n"
+        "    return save(draft(classify(prepare(load()))))\n"
     )
     return workflow
 
@@ -90,6 +111,20 @@ def test_discovery_and_cache_preserve_ordered_structured_questions_without_key_o
     assert step_input.json_schema["items"] == {"$ref": "#/$defs/Message"}
     assert declaration.input_schema["properties"]["item"] == {"$ref": "#/$defs/Message"}
     assert declaration.step_output.json_schema["items"] == {"$ref": "#/$defs/Message"}
+    interfaces = {
+        dict(descriptor.display_names)[key]: StepInterface.model_validate_json(value)
+        for key, value in descriptor.step_interface_json
+    }
+    assert set(interfaces) == {"load", "prepare", "classify", "draft", "save"}
+    assert interfaces["load"].step_inputs == []
+    assert interfaces["load"].step_output == declaration.step_output
+    assert [(item.name, item.required) for item in interfaces["prepare"].step_inputs] == [
+        ("messages", True),
+        ("limit", False),
+    ]
+    assert interfaces["draft"].step_inputs == declaration.step_inputs
+    assert interfaces["draft"].step_output == declaration.step_output
+    assert interfaces["save"].step_output.json_schema == {"type": "null"}
 
     # A restart must serve the validated cache without importing user code again.
     monkeypatch.setenv("CLASSIFIER_TEST_FORBID_IMPORT", "1")
@@ -107,6 +142,17 @@ def test_discovery_and_cache_preserve_ordered_structured_questions_without_key_o
     assert cached.step_inputs == declaration.step_inputs
     assert cached.step_output == declaration.step_output
     assert cached.input_schema == declaration.input_schema
+    current = workflow_info_from_v2(
+        pb.FlowInfoV2.FromString(workflow_info_to_v2(catalog_workflow).SerializeToString())
+    )
+    assert {
+        current.display_names[key]: StepInterface.model_validate_json(value)
+        for key, value in current.step_interface_json.items()
+    } == interfaces
+    [agent_json] = current.agent_metadata_json.values()
+    assert [field["name"] for field in json.loads(agent_json)["signature"]["inputs"]] == [
+        "query"
+    ]
 
 
 def _run_declaration(run: RunState) -> ClassifierDeclaration:
@@ -138,17 +184,26 @@ def _write_schema_workflow(root: Path, *, revised: bool = False) -> Path:
         "class CallInput(BaseModel):\n"
         f"    {field}: {annotation}\n"
         "@ava.source\n"
-        "def load():\n"
+        f"def load() -> {annotation}:\n"
         f"    return {source}\n"
+        "@ava.step\n"
+        f"def prepare(ticket: {annotation}) -> {annotation}:\n"
+        "    return ticket\n"
         f"@ava.classifier_step(questions={questions!r}, input_model=CallInput)\n"
         f"async def classify(ticket: {annotation}, *, classifier: ava.Classifier)"
         f" -> {output}:\n"
         f"    result = await classifier(state={{{field!r}: ticket}})\n"
         f"    return {result}\n"
+        "@ava.agent_step(ava.Signature('query: str -> reply: str'))\n"
+        f"async def review(result: {output}, *, agent: ava.Agent) -> {output}:\n"
+        "    return result\n"
+        "@ava.dest\n"
+        f"def save(result: {output}) -> {output}:\n"
+        "    return result\n"
         "@ava.workflow(classifier_defaults={"
         "'model': 'operator-request-model', 'timeout': 10.0})\n"
         "def flow():\n"
-        "    return classify(load())\n"
+        "    return save(review(classify(prepare(load()))))\n"
     )
     return workflow
 
@@ -180,6 +235,15 @@ def test_historical_questions_and_answers_survive_reload_and_source_removal(tmp_
         assert original.status == RunStatus.SUCCESS
         _assert_structured_declaration(_run_declaration(original))
         _assert_original_schema(_run_declaration(original))
+        original_interfaces = dict(original.topology.step_interface_json)
+        assert set(original_interfaces) == set(original.topology.node_ids)
+        assert set(dict(original.topology.display_names).values()) == {
+            "load",
+            "prepare",
+            "classify",
+            "review",
+            "save",
+        }
 
         _write_schema_workflow(tmp_path, revised=True)
         operator._refresh_workflows()
@@ -192,10 +256,19 @@ def test_historical_questions_and_answers_survive_reload_and_source_removal(tmp_
         assert current_declaration.questions["urgent"].instructions == {
             "ask": ["Is this a production outage?"]
         }
+        current_wire = workflow_info_from_v2(
+            pb.FlowInfoV2.FromString(workflow_info_to_v2(current).SerializeToString())
+        )
+        assert set(current_wire.step_interface_json) == set(original_interfaces)
+        assert all(
+            current_wire.step_interface_json[node_id] != interface
+            for node_id, interface in original_interfaces.items()
+        )
         revised = wait_terminal(operator, operator.start_run("flow"))
         assert revised.status == RunStatus.SUCCESS
         assert list(_run_declaration(revised).questions) == ["department", "urgent", "severity"]
         _assert_revised_schema(_run_declaration(revised))
+        assert dict(revised.topology.step_interface_json) == current_wire.step_interface_json
         assert operator.get_run_result(revised.run_id) == "jev-test-resolved"
 
         workflow.unlink()
@@ -210,6 +283,12 @@ def test_historical_questions_and_answers_survive_reload_and_source_removal(tmp_
         )
         _assert_structured_declaration(historical)
         _assert_original_schema(historical)
+        retained_topology = workflow_topology_from_v2(
+            pb.WorkflowTopologyV2.FromString(
+                workflow_topology_to_v2(retained.topology).SerializeToString()
+            )
+        )
+        assert dict(retained_topology.step_interface_json) == original_interfaces
         records = read_invocations(operator, original)
         assert [record.status for record in records] == ["running", "success"]
         _assert_structured_declaration(records[-1].declaration)
@@ -241,6 +320,11 @@ def test_prepared_run_uses_executed_declaration_not_stale_catalog(tmp_path):
         )
         declaration = _run_declaration(run)
         _assert_revised_schema(declaration)
+        assert set(dict(run.topology.step_interface_json)) == set(catalog.step_interface_json)
+        assert all(
+            interface != catalog.step_interface_json[node_id]
+            for node_id, interface in run.topology.step_interface_json
+        )
         assert list(declaration.questions) == ["department", "urgent", "severity"]
         assert declaration.questions["urgent"].instructions == {
             "ask": ["Is this a production outage?"]

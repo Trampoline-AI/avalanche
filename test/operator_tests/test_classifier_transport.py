@@ -1,5 +1,6 @@
 """Classifier activity stays identity-pinned across paging, replay, and completion."""
 
+import json
 import socket
 import threading
 from contextlib import contextmanager
@@ -9,6 +10,7 @@ from typing import Literal
 import grpc
 import pytest
 
+import avalanche as ava
 from avalanche.classifier.models import (
     ChoiceAnswer,
     ChoiceQuestion,
@@ -22,8 +24,12 @@ from avalanche.classifier.models import (
     ScoreAnswer,
     ScoreQuestion,
 )
+from avalanche.step_interface import StepInterface, StepOutput
 from runtime.operator.client import GrpcStateProvider, StreamState
-from runtime.operator.convert_v2 import classifier_event_descriptor_from_v2
+from runtime.operator.convert_v2 import (
+    classifier_event_descriptor_from_v2,
+    workflow_topology_from_v2,
+)
 from runtime.operator.models import (
     ClassifierAnswerSummary,
     ClassifierChoiceSummary,
@@ -32,9 +38,14 @@ from runtime.operator.models import (
     ClassifierScoreSummary,
     RunStatus,
 )
-from runtime.operator.operator import Operator, _CoordinatorProtocolError
+from runtime.operator.operator import (
+    Operator,
+    _CoordinatorProtocolError,
+    _validate_preparation_event,
+)
 from runtime.operator.proto import operator_pb2 as pb
 from runtime.operator.proto import operator_pb2_grpc as pb_grpc
+from runtime.operator.run_worker import _workflow_metadata
 from runtime.operator.server import serve
 
 
@@ -114,6 +125,12 @@ def _seed_run(
             "standard_step_docstring_lines": {},
             "classifier_metadata_json": {
                 node_id: declaration_json for node_id in ("classify", "other")
+            },
+            "step_interface_json": {
+                node_id: StepInterface(
+                    step_inputs=[], step_output=StepOutput()
+                ).model_dump_json()
+                for node_id in node_ids
             },
         },
     )
@@ -624,3 +641,63 @@ def test_input_and_result_share_existing_detail_budgets(transport, monkeypatch, 
     assert [_read_invocation(service, item.detail_ref) for item in retained.activities] == [
         running
     ]
+
+
+@pytest.mark.parametrize(
+    "failure",
+    [
+        "invalid-json",
+        "invalid-schema",
+        "coerced-required",
+        "unknown-node",
+        "missing-node",
+        "missing-map",
+    ],
+)
+def test_preparation_rejects_malformed_step_interfaces(failure):
+    @ava.source
+    def load() -> str:
+        return "value"
+
+    @ava.workflow
+    def flow():
+        return load()
+
+    event = {"type": "prepared", **_workflow_metadata(flow())}
+    [node_id] = event["node_ids"]
+    interfaces = event["step_interface_json"]
+    if failure == "invalid-json":
+        interfaces[node_id] = "{"
+    elif failure == "invalid-schema":
+        interface = json.loads(interfaces[node_id])
+        interface["step_output"]["json_schema"] = ["private-schema-value"]
+        interfaces[node_id] = json.dumps(interface)
+    elif failure == "coerced-required":
+        interface = json.loads(interfaces[node_id])
+        interface["step_inputs"] = [
+            {"name": "value", "type_name": "str", "json_schema": None, "required": "false"}
+        ]
+        interfaces[node_id] = json.dumps(interface)
+    elif failure == "unknown-node":
+        interfaces["absent"] = interfaces[node_id]
+    elif failure == "missing-node":
+        del interfaces[node_id]
+    else:
+        del event["step_interface_json"]
+
+    with pytest.raises(_CoordinatorProtocolError) as error:
+        _validate_preparation_event(event)
+    assert "private-schema-value" not in str(error.value)
+
+
+def test_historical_topology_without_step_interfaces_stays_unavailable():
+    legacy = pb.WorkflowTopologyV2(
+        node_ids=["load"],
+        graph={"load": pb.NodeEdgesV2()},
+        node_types={"load": "source"},
+        display_names={"load": "load"},
+    )
+    topology = workflow_topology_from_v2(
+        pb.WorkflowTopologyV2.FromString(legacy.SerializeToString())
+    )
+    assert topology.step_interface_json == ()
