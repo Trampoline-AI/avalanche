@@ -63,6 +63,14 @@ workflow values. The step body is asynchronous because the model call is
 awaitable. `Workflow.run()` returns an awaitable run handle; `.result()` is the
 explicit synchronous wait above.
 
+The browser's **Step interface** panel describes `review_document`'s Python
+parameters and return annotation, excluding the injected `agent`. It is separate
+from **Inputs & outputs**, which describes `ReviewSignature` and each agent call.
+The two contracts can differ when the step batches calls or transforms a prediction.
+Current definitions show the step interface below the agent configuration;
+historical **Run I/O** shows the interface captured for that run. See
+[step interface inspection](dag-api.md#inspect-step-interfaces) for schema details.
+
 Use `ava.input` when the value arrives at run time instead of being fixed in the
 workflow declaration:
 

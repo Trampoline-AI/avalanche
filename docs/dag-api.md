@@ -51,6 +51,38 @@ result = document_flow().run(executor=ava.LocalExecutor()).result()
 Calls inside a workflow return deferred `NodeFuture` values. Passing one to a
 node creates a dependency; its result is supplied when the workflow runs.
 
+## Inspect step interfaces
+
+The browser inspector shows a **Step interface** panel for source, ordinary,
+destination, agent, and classifier steps. It describes the Python function's
+annotated parameters and return value, not an agent or classifier call inside
+that function.
+
+Inputs show their names, types, and whether the function requires them. Nested
+Pydantic models, collections, unions, descriptions, and constraints can be
+expanded. Input schemas describe validation shapes; return schemas describe
+serialization shapes, so a model's field serializers may change its displayed
+output types. Avalanche excludes injected `agent`/`classifier` parameters,
+run context/input objects, and provider defaults such as `ava.Logger()`.
+
+An unannotated value appears as **Unspecified**. An annotation that cannot be
+represented as JSON Schema keeps its type name with an unavailable-schema notice.
+These schemas are inspection metadata: they do not add runtime validation or
+change what the function receives or returns.
+
+At detailed zoom, source, ordinary, and destination DAG cards show their annotated
+inputs and return type in the same two-column layout as classifier cards. Compact
+cards hide these fields. Agent cards keep showing the agent's call fields.
+
+Current source, ordinary, and destination sidebars open on **Definition**, which
+contains the step interface. **Code** is a separate tab that loads the Python source
+only when opened. For agents, the panel follows the agent definition and appears in
+**Run I/O** when inspecting a run; the agent's own call fields remain separate.
+Run interfaces are captured from the prepared workflow and do not change when
+source is edited, reloaded, or removed. Older runs without this metadata show it
+as unavailable; they never substitute the current definition. Historical Python
+source is not retained by this feature.
+
 ## Connect nodes
 
 Use normal arguments when names make the graph clear:
