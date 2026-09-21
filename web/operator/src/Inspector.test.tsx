@@ -8,6 +8,7 @@ import type {
 } from "./api";
 import type { ClassifierDeclaration, ClassifierInvocation } from "./classifier";
 import { Inspector } from "./Inspector";
+import type { StepInterface } from "./stepInterface";
 import { DETAIL_CACHE_MAX_BYTES } from "./detailProjection";
 import {
   AgentEventDescriptorMsg,
@@ -22,9 +23,32 @@ const schemas = {
   inputs: [{ name: "question", type: "str", description: "Historical question" }],
   outputs: [{ name: "answer", type: "str" }],
 };
+const currentStepInterface: StepInterface = {
+  step_inputs: [
+    {
+      name: "current_payload",
+      type_name: "str",
+      json_schema: { type: "string" },
+      required: true,
+    },
+  ],
+  step_output: { type_name: "str", json_schema: { type: "string" } },
+};
+const historicalStepInterface: StepInterface = {
+  step_inputs: [
+    {
+      name: "retained_payload",
+      type_name: "list[str]",
+      json_schema: { type: "array", items: { type: "string" } },
+      required: false,
+    },
+  ],
+  step_output: { type_name: "bool", json_schema: { type: "boolean" } },
+};
 const agentWorkflow = FlowInfoMsg.create({
   ...workflow,
   agentNodeIds: [node.nodeId],
+  stepInterfaceJson: { [node.nodeId]: JSON.stringify(currentStepInterface) },
   agentMetadataJson: {
     [node.nodeId]: JSON.stringify({
       signature: {
@@ -42,6 +66,7 @@ const run = RunSnapshotMsg.create({
   topology: {
     ...snapshotFor().topology,
     agentFieldSchemasJson: { [node.nodeId]: JSON.stringify(schemas) },
+    stepInterfaceJson: { [node.nodeId]: JSON.stringify(historicalStepInterface) },
   },
   nodes: [
     {
@@ -381,6 +406,10 @@ describe("retained run inspection", () => {
     const schemaGroup = screen.getByRole("region", { name: "Inputs and outputs" });
     expect(schemaGroup).toHaveTextContent("current_question");
     expect(schemaGroup).toHaveTextContent("current_answer");
+    const currentInterface = screen.getByRole("region", { name: "Step interface" });
+    expect(currentInterface).toHaveTextContent("current_payload");
+    expect(currentInterface).not.toHaveTextContent("current_question");
+    expect(schemaGroup).not.toHaveTextContent("current_payload");
     expect(screen.queryByText("running")).not.toBeInTheDocument();
 
     view.rerender(
@@ -400,6 +429,11 @@ describe("retained run inspection", () => {
     openRunIo();
     expect(await screen.findByText("Historical question")).toBeInTheDocument();
     expect(screen.queryByText("current_question")).not.toBeInTheDocument();
+    const retainedInterface = screen.getByRole("region", { name: "Step interface" });
+    expect(retainedInterface).toHaveTextContent("retained_payload");
+    expect(retainedInterface).not.toHaveTextContent("current_payload");
+    expect(retainedInterface).not.toHaveTextContent("Historical question");
+    expect(screen.getByRole("region", { name: "Step output" })).toHaveTextContent("bool");
 
     view.rerender(
       <Inspector
@@ -422,6 +456,9 @@ describe("retained run inspection", () => {
     expect(
       screen.getByText("Historical output schema unavailable for this run."),
     ).toBeInTheDocument();
+    expect(screen.getByRole("region", { name: "Step interface" })).toHaveTextContent(
+      "retained_payload",
+    );
   });
 
   it("shows only Trace and Run I/O in run mode and restores the selected run tab", async () => {
@@ -999,15 +1036,27 @@ describe("regular step inspection", () => {
     const view = render(
       <Inspector
         api={api}
-        workflow={workflow}
+        workflow={FlowInfoMsg.create({
+          ...workflow,
+          stepInterfaceJson: { [node.nodeId]: JSON.stringify(currentStepInterface) },
+        })}
         nodeId={node.nodeId}
         onClose={() => undefined}
       />,
     );
+    expect(screen.getByRole("region", { name: "Step inputs" })).toHaveTextContent(
+      "current_payload",
+    );
+    expect(screen.queryByLabelText("Source code")).not.toBeInTheDocument();
+    expect(calls).toBe(0);
+    fireEvent.keyDown(screen.getByRole("tab", { name: "Definition" }), { key: "ArrowRight" });
+    expect(screen.getByRole("tab", { name: "Code" })).toHaveFocus();
+    expect(screen.queryByRole("region", { name: "Step interface" })).not.toBeInTheDocument();
     await waitFor(() => expect(oldSignal).toBeDefined());
     const updatedWorkflow = FlowInfoMsg.create({
       ...workflow,
       displayNames: { fetch: "Updated fetch" },
+      stepInterfaceJson: { [node.nodeId]: JSON.stringify(historicalStepInterface) },
     });
     view.rerender(
       <Inspector
@@ -1019,6 +1068,8 @@ describe("regular step inspection", () => {
     );
     expect(oldSignal?.aborted).toBe(true);
     expect(await screen.findByLabelText("Source code")).toHaveTextContent("definition 2");
+    expect(screen.queryByRole("region", { name: "Step inputs" })).not.toBeInTheDocument();
+    expect(screen.queryByText("current_payload")).not.toBeInTheDocument();
     await act(async () => {
       oldSource.resolve("return 'stale definition'");
       await oldSource.promise;
@@ -1047,25 +1098,91 @@ describe("regular step inspection", () => {
     await waitFor(() =>
       expect(screen.getByLabelText("Source code")).toHaveTextContent("new API"),
     );
+    fireEvent.keyDown(screen.getByRole("tab", { name: "Code" }), { key: "Home" });
+    expect(screen.getByRole("tab", { name: "Definition" })).toHaveFocus();
+    expect(screen.queryByLabelText("Source code")).not.toBeInTheDocument();
+    expect(screen.getByRole("region", { name: "Step inputs" })).toHaveTextContent(
+      "retained_payload",
+    );
   });
 
-  it("omits standard run inspection without loading current source code", () => {
+  it("pins ordinary run interfaces without loading source or borrowing missing metadata from the catalog", () => {
     const getWorkflowNodeSource = vi.fn(async () => "return 'step result'");
+    const api = createApi({ getWorkflowNodeSource });
+    const currentWorkflow = FlowInfoMsg.create({
+      ...workflow,
+      stepInterfaceJson: { [node.nodeId]: JSON.stringify(currentStepInterface) },
+    });
     const stepRun = RunSnapshotMsg.create({
       ...snapshotFor(),
+      topology: {
+        ...snapshotFor().topology!,
+        stepInterfaceJson: { [node.nodeId]: JSON.stringify(historicalStepInterface) },
+      },
       nodes: [{ ...node, runningElapsedSeconds: 2.5, error: "Step error" }],
     });
-    render(
+    const view = render(
       <Inspector
-        api={createApi({ getWorkflowNodeSource })}
-        workflow={workflow}
+        api={api}
+        workflow={currentWorkflow}
         run={stepRun}
         nodeId={node.nodeId}
         onClose={() => undefined}
       />,
     );
-    expect(screen.queryByRole("complementary")).not.toBeInTheDocument();
+    expect(screen.getByRole("region", { name: "Step inputs" })).toHaveTextContent(
+      "retained_payload",
+    );
+    expect(screen.getByRole("region", { name: "Step output" })).toHaveTextContent("bool");
+    expect(screen.queryByText("current_payload")).not.toBeInTheDocument();
     expect(screen.queryByLabelText("Source code")).not.toBeInTheDocument();
+    expect(getWorkflowNodeSource).not.toHaveBeenCalled();
+
+    view.rerender(
+      <Inspector api={api} run={stepRun} nodeId={node.nodeId} onClose={() => undefined} />,
+    );
+    expect(screen.getByRole("region", { name: "Step inputs" })).toHaveTextContent(
+      "retained_payload",
+    );
+
+    view.rerender(
+      <Inspector
+        api={api}
+        workflow={currentWorkflow}
+        run={RunSnapshotMsg.create({
+          ...stepRun,
+          topology: { ...stepRun.topology!, stepInterfaceJson: {} },
+        })}
+        nodeId={node.nodeId}
+        onClose={() => undefined}
+      />,
+    );
+    const unavailable = screen.getByRole("region", { name: "Step interface" });
+    expect(unavailable).toHaveTextContent(/unavailable/i);
+    expect(within(unavailable).queryByRole("region", { name: "Step inputs" })).toBeNull();
+    expect(screen.queryByText("current_payload")).not.toBeInTheDocument();
+
+    view.rerender(
+      <Inspector
+        api={api}
+        workflow={currentWorkflow}
+        run={RunSnapshotMsg.create({
+          ...stepRun,
+          topology: {
+            ...stepRun.topology!,
+            stepInterfaceJson: {
+              [node.nodeId]: JSON.stringify({ ...historicalStepInterface, step_inputs: null }),
+            },
+          },
+        })}
+        nodeId={node.nodeId}
+        onClose={() => undefined}
+      />,
+    );
+    const malformed = screen.getByRole("region", { name: "Step interface" });
+    expect(within(malformed).getByRole("alert")).toHaveTextContent("step_inputs");
+    expect(within(malformed).queryByRole("region", { name: "Step inputs" })).toBeNull();
+    expect(screen.queryByText("current_payload")).not.toBeInTheDocument();
     expect(getWorkflowNodeSource).not.toHaveBeenCalled();
   });
 });
@@ -2071,13 +2188,15 @@ describe("classifier inspection", () => {
     for (let index = 0; index < 9; index++) {
       const row = screen.getByLabelText(`Invocation classification-${index}`);
       fireEvent.click(within(row).getByRole("button", { expanded: false }));
-      expect(await within(row).findByLabelText("Input state")).toHaveTextContent(
-        `input-${index}`,
+      await waitFor(() =>
+        expect(within(row).getByLabelText("Input state")).toHaveTextContent(`input-${index}`),
       );
     }
     const first = screen.getByLabelText("Invocation classification-0");
     fireEvent.click(within(first).getByRole("button", { expanded: false }));
-    expect(await within(first).findByLabelText("Input state")).toHaveTextContent("input-0");
+    await waitFor(() =>
+      expect(within(first).getByLabelText("Input state")).toHaveTextContent("input-0"),
+    );
     expect(
       readJsonDetail.mock.calls.filter(([token]) => token === "classifier-1"),
     ).toHaveLength(2);
@@ -2149,7 +2268,9 @@ describe("classifier inspection", () => {
       />,
     );
     fireEvent.click(await screen.findByRole("button", { name: "Call 1" }));
-    expect(await screen.findByLabelText("Input state")).toHaveTextContent("input-0");
+    await waitFor(() =>
+      expect(screen.getByLabelText("Input state")).toHaveTextContent("input-0"),
+    );
     view.rerender(
       <Inspector
         api={api}
@@ -2160,10 +2281,14 @@ describe("classifier inspection", () => {
       />,
     );
     fireEvent.click(screen.getByRole("button", { name: "Call 2" }));
-    expect(await screen.findByLabelText("Input state")).toHaveTextContent("input-1");
+    await waitFor(() =>
+      expect(screen.getByLabelText("Input state")).toHaveTextContent("input-1"),
+    );
     const firstCall = screen.getByRole("rowgroup", { name: "Invocation classification-0" });
     fireEvent.click(within(firstCall).getByRole("button", { expanded: false }));
-    expect(await screen.findByLabelText("Input state")).toHaveTextContent("input-0");
+    await waitFor(() =>
+      expect(screen.getByLabelText("Input state")).toHaveTextContent("input-0"),
+    );
     expect(screen.getByLabelText("Input state")).not.toHaveTextContent("input-1");
     expect(readJsonDetail).toHaveBeenCalledTimes(3);
   });

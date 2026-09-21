@@ -38,6 +38,8 @@ import { PythonSource } from "./PythonSource";
 import { InspectorFields, InspectorResources } from "./InspectorDefinition";
 import { RetainedAgentValue } from "./RetainedAgentValue";
 import { isUnknownRecord } from "./guards";
+import { StepInterfacePanel } from "./StepInterface";
+import { decodeStepInterface } from "./stepInterface";
 
 interface InspectorProps {
   api: OperatorApi;
@@ -52,6 +54,8 @@ interface InspectorProps {
 }
 
 type AgentTab = "trace" | "io";
+type StepTab = "definition" | "code";
+const STEP_TABS: readonly StepTab[] = ["definition", "code"];
 type DetailFormat = "json";
 
 interface ScopedResult<T> {
@@ -159,6 +163,7 @@ function AgentAndStepInspector({
   onClose,
 }: InspectorProps) {
   const [selectedTab, setSelectedTab] = useState<AgentTab>("trace");
+  const [selectedStepTab, setSelectedStepTab] = useState<{ scope: string; tab: StepTab }>();
   const [eventPage, setEventPage] =
     useState<DescriptorPageState<AgentEventDescriptorMsg>>(EMPTY_EVENT_PAGE);
   const [eventPageScope, setEventPageScope] = useState<string>();
@@ -192,7 +197,26 @@ function AgentAndStepInspector({
   const eventPageToken = node?.eventPageToken ?? "";
   const hasRunNode = Boolean(run && node);
   const selectionScope = `${operatorInstanceId}\0${runId ?? ""}\0${nodeId ?? ""}`;
+  const stepTabScope = `${workflow?.workflowId ?? workflow?.name ?? ""}\0${selectionScope}`;
+  const stepTab =
+    !run && selectedStepTab?.scope === stepTabScope ? selectedStepTab.tab : "definition";
   const descriptorScope = `${selectionScope}\0${asOfEventUlid}\0${eventPageToken}`;
+  const rawStepInterface =
+    nodeId === undefined
+      ? undefined
+      : run
+        ? run.topology?.stepInterfaceJson[nodeId]
+        : workflow?.stepInterfaceJson[nodeId];
+  const stepInterface = useMemo(() => {
+    if (rawStepInterface === undefined) return undefined;
+    try {
+      return { definition: decodeStepInterface(rawStepInterface) };
+    } catch (error: unknown) {
+      return {
+        error: error instanceof Error ? error.message : "Malformed step interface metadata.",
+      };
+    }
+  }, [rawStepInterface]);
   const tab = selectedTab;
   const pageKey = `${descriptorScope}\0${tab}`;
   const eventPageOrder = DescriptorPageOrder.FORWARD;
@@ -206,19 +230,21 @@ function AgentAndStepInspector({
       ? Object.hasOwn(run.topology.agentFieldSchemasJson, nodeId ?? "")
       : Boolean(node?.trace)
     : isWorkflowAgentNode;
+  const rawAgentDeclaration =
+    !run && isWorkflowAgentNode ? workflow?.agentMetadataJson[nodeId ?? ""] : undefined;
+  const rawHistoricalFieldSchemas = run?.topology?.agentFieldSchemasJson[nodeId ?? ""];
   const workflowDeclaration = useMemo(
-    () =>
-      isWorkflowAgentNode
-        ? parseAgentDeclaration(workflow?.agentMetadataJson[nodeId ?? ""])
-        : undefined,
-    [isWorkflowAgentNode, nodeId, workflow],
+    () => parseAgentDeclaration(rawAgentDeclaration),
+    [rawAgentDeclaration],
   );
   const historicalFieldSchemas = useMemo(
-    () => parseAgentFieldSchemas(run?.topology?.agentFieldSchemasJson[nodeId ?? ""]),
-    [nodeId, run],
+    () => parseAgentFieldSchemas(rawHistoricalFieldSchemas),
+    [rawHistoricalFieldSchemas],
   );
   const sourceWorkflowSelector =
-    !run && currentNodeExists && !isAgentNode ? workflow?.name : undefined;
+    !run && currentNodeExists && !isAgentNode && stepTab === "code"
+      ? workflow?.name
+      : undefined;
   const nodeSourceScope =
     sourceWorkflowSelector !== undefined && nodeId !== undefined
       ? `${sourceWorkflowSelector}\0${nodeId}`
@@ -585,7 +611,7 @@ function AgentAndStepInspector({
     traceScrollElement.current.scrollTop = traceScrollElement.current.scrollHeight;
   }, [following, tab, turns.length]);
 
-  if (!nodeId || (!run && !currentNodeExists) || (run && !isAgentNode)) return null;
+  if (!nodeId || (!run && !currentNodeExists)) return null;
   const activePageError = pageError?.key === pageKey ? pageError.value : undefined;
   const nodeDuration = node
     ? node.status === "running" && node.runningElapsedSeconds !== undefined
@@ -628,6 +654,14 @@ function AgentAndStepInspector({
       ? `${definitionLabel} no longer exists.`
       : undefined;
   const instructions = workflowDeclaration?.instructions || "No instructions.";
+  const stepInterfacePanel = (
+    <StepInterfacePanel
+      key={selectionScope}
+      definition={stepInterface?.definition}
+      error={stepInterface?.error}
+      historical={Boolean(run)}
+    />
+  );
   const closeButton = (
     <button
       type="button"
@@ -647,7 +681,7 @@ function AgentAndStepInspector({
   return (
     <aside
       className={`inspector ${run ? "inspector-run" : "inspector-declaration"} z-30 flex min-h-0 min-w-0 flex-col overflow-hidden border-l border-line bg-panel ${panelLayout}`}
-      aria-label={run ? "Run inspector" : isAgentNode ? "Node declaration" : "Node code"}
+      aria-label={run ? "Run inspector" : "Node declaration"}
     >
       <header className="flex shrink-0 items-start justify-between gap-3 border-b border-line px-5 pt-[19px] pb-3.5">
         <div className="min-w-0 flex-1">
@@ -784,6 +818,7 @@ function AgentAndStepInspector({
                       )}
                     </section>
                   ))}
+                  {stepInterfacePanel}
                 </div>
               ) : node?.trace ? (
                 <AgentTraceExplorer
@@ -890,33 +925,78 @@ function AgentAndStepInspector({
                   This node has no agent declaration metadata.
                 </p>
               )}
+              {stepInterfacePanel}
             </div>
           </div>
         )
       ) : (
-        <div className="flex min-h-0 min-w-0 flex-1 flex-col bg-canvas">
-          {definitionUnavailable ? (
-            <p className="px-5 text-[11px] text-muted">{definitionUnavailable}</p>
-          ) : activeNodeSource?.status === "ready" ? (
-            activeNodeSource.sourceCode !== undefined ? (
-              <div className="inspector-body inspector-body-full min-h-0 min-w-0 flex-1 overflow-hidden">
-                <PythonSource source={activeNodeSource.sourceCode} />
-              </div>
-            ) : (
-              <p className="px-5 text-[11px] text-muted">
-                Source code is unavailable for this node.
-              </p>
-            )
-          ) : activeNodeSource?.status === "error" ? (
-            <p className="px-5 text-[11px] text-muted" role="alert">
-              Source code is unavailable: {activeNodeSource.error}
-            </p>
-          ) : (
-            <p className="px-5 text-[11px] text-muted" role="status">
-              Loading source code…
-            </p>
+        <>
+          {!run && (
+            <div
+              className="inspector-tabs flex shrink-0 border-b border-line px-2.5"
+              role="tablist"
+              aria-label="Workflow step views"
+            >
+              {STEP_TABS.map((item) => (
+                <button
+                  key={item}
+                  type="button"
+                  role="tab"
+                  id={`${tabsId}-${item}`}
+                  aria-controls={`${tabsId}-step-panel`}
+                  aria-selected={stepTab === item}
+                  tabIndex={stepTab === item ? 0 : -1}
+                  className={`flex-1 cursor-pointer border-0 border-b-2 bg-transparent px-[9px] pt-[11px] pb-[9px] font-mono text-[9px] uppercase focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-acid ${stepTab === item ? "border-acid text-acid" : "border-transparent text-muted"}`}
+                  onClick={() => setSelectedStepTab({ scope: stepTabScope, tab: item })}
+                  onKeyDown={(event) => {
+                    if (!["ArrowLeft", "ArrowRight", "Home", "End"].includes(event.key)) return;
+                    event.preventDefault();
+                    const next =
+                      event.key === "Home"
+                        ? "definition"
+                        : event.key === "End"
+                          ? "code"
+                          : item === "definition"
+                            ? "code"
+                            : "definition";
+                    setSelectedStepTab({ scope: stepTabScope, tab: next });
+                    document.getElementById(`${tabsId}-${next}`)?.focus();
+                  }}
+                >
+                  {item === "definition" ? "Definition" : "Code"}
+                </button>
+              ))}
+            </div>
           )}
-        </div>
+          <div
+            className={`inspector-body inspector-body-full min-h-0 min-w-0 flex-1 ${stepTab === "code" ? "overflow-hidden bg-canvas" : "overflow-auto p-5 [scrollbar-gutter:stable]"}`}
+            role={run ? undefined : "tabpanel"}
+            id={`${tabsId}-step-panel`}
+            aria-labelledby={run ? undefined : `${tabsId}-${stepTab}`}
+          >
+            {stepTab === "definition" ? (
+              stepInterfacePanel
+            ) : definitionUnavailable ? (
+              <p className="px-5 text-[11px] text-muted">{definitionUnavailable}</p>
+            ) : activeNodeSource?.status === "ready" ? (
+              activeNodeSource.sourceCode !== undefined ? (
+                <PythonSource source={activeNodeSource.sourceCode} />
+              ) : (
+                <p className="px-5 text-[11px] text-muted">
+                  Source code is unavailable for this node.
+                </p>
+              )
+            ) : activeNodeSource?.status === "error" ? (
+              <p className="px-5 text-[11px] text-muted" role="alert">
+                Source code is unavailable: {activeNodeSource.error}
+              </p>
+            ) : (
+              <p className="px-5 text-[11px] text-muted" role="status">
+                Loading source code…
+              </p>
+            )}
+          </div>
+        </>
       )}
     </aside>
   );

@@ -227,7 +227,11 @@ export function WorkflowWorkspaceSurface({
   const run =
     loadedRun ??
     (historical && retainedRun?.summary?.workflowId === workflowId ? retainedRun : undefined);
-  const topologyNodeIds = run?.topology?.nodeIds ?? workflow?.nodeIds;
+  const topologyNodeIds = run
+    ? run.topology?.nodeIds
+    : historical
+      ? undefined
+      : workflow?.nodeIds;
   useEffect(() => {
     if (!topologyNodeIds) return;
     setInspectedNode((current) =>
@@ -237,13 +241,7 @@ export function WorkflowWorkspaceSurface({
   const inspectedNodeAvailable =
     !inspectedNode || !topologyNodeIds || topologyNodeIds.includes(inspectedNode);
   const inspectorOpen = Boolean(
-    inspectedNode &&
-    inspectedNodeAvailable &&
-    (!run ||
-      (run.topology
-        ? Object.hasOwn(run.topology.agentFieldSchemasJson, inspectedNode) ||
-          Object.hasOwn(run.topology.classifierMetadataJson, inspectedNode)
-        : run.nodes.some((node) => node.nodeId === inspectedNode && node.trace))),
+    inspectedNode && inspectedNodeAvailable && (!historical || run),
   );
   const runListPanel = workflowId ? (
     <RunListPanel

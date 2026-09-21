@@ -14,7 +14,7 @@ import type {
   ClassifierQuestion,
 } from "./classifier";
 import { ValueView } from "./ValueView";
-import { ClassifierInputSchema, ClassifierStepSchemas } from "./ClassifierSchema";
+import { DeclaredSchema, StepInterfacePanel } from "./StepInterface";
 
 const percent = new Intl.NumberFormat("en-US", { style: "percent", maximumFractionDigits: 0 });
 
@@ -326,16 +326,21 @@ export function ClassifierDefinition({ declaration }: { declaration: ClassifierD
           <ClassifierQuestions declaration={declaration} />
         </section>
         <div className="mt-3 border-t border-line pt-3">
-          <ClassifierInputSchema declaration={declaration} />
+          <section aria-label="Classifier input" className="min-w-0">
+            <h4 className="mt-0 mb-2 font-mono text-[9px] tracking-[.08em] text-muted uppercase">
+              Classifier input
+            </h4>
+            {declaration.input_schema === null ? (
+              <p className="m-0 text-[11px] text-muted">
+                No input model declared. Accepts JSON state.
+              </p>
+            ) : (
+              <DeclaredSchema label="state" schema={declaration.input_schema} />
+            )}
+          </section>
         </div>
       </section>
-      <section
-        aria-label="Step interface"
-        className="min-w-0 rounded-md border border-line bg-canvas/50 p-3"
-      >
-        <h3 className="inspector-section-title">Step interface</h3>
-        <ClassifierStepSchemas declaration={declaration} />
-      </section>
+      <StepInterfacePanel definition={declaration} />
     </div>
   );
 }
