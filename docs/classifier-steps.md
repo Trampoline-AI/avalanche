@@ -83,6 +83,52 @@ then inspect the run's invocations. Discovery itself does not require a key or
 contact TypeSafe. Live classification requires valid credentials and model
 access; example answers are not guaranteed.
 
+## Step schemas and classifier input models
+
+A classifier has two separate data contracts:
+
+- **Step inputs and output** come from the Python function's parameter and return
+  annotations. They describe data received and returned by the workflow node.
+- **Classifier input** describes the `state=` sent on each call. Declare it with
+  `input_model=`, independently of the step's annotations.
+
+For example, a step can receive a batch while classifying one item at a time:
+
+```python
+from pydantic import BaseModel, ConfigDict, Field
+
+
+class TicketInput(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+    ticket: str = Field(min_length=1, description="The customer message to classify.")
+
+
+@ava.classifier_step(input_model=TicketInput, questions=QUESTIONS)
+async def classify_tickets(
+    tickets: list[str], *, classifier: ava.Classifier
+) -> list[ava.ClassificationResult]:
+    return [await classifier(state={"ticket": ticket}) for ticket in tickets]
+```
+
+The Definition panel shows `tickets: list[str]` as the step input,
+`list[ClassificationResult]` as its output, and `TicketInput` as the separate
+classifier input. Expand models to inspect nested fields, required/optional
+fields, descriptions, defaults, and JSON Schema constraints.
+
+`input_model` accepts a Pydantic model class, including `RootModel` for text or
+array state. Calls still pass JSON-compatible values, not model instances.
+Avalanche validates state using the declared model's configuration, then sends
+its JSON serialization with aliases and defaults applied. Validation fails
+before client creation or a TypeSafe request; rejected input is not retained.
+Without `input_model`, the existing text/object/array state contract remains.
+
+Schemas are captured during decoration without executing the step or calling
+TypeSafe. Injected classifier, context, run-input, and provider parameters are
+excluded from step data inputs. Missing annotations appear as unspecified;
+annotations without a JSON Schema retain their type name. JSON Schema cannot
+express every custom Python validator. These displays apply only to classifier
+steps; ordinary and agent-step displays are unchanged.
+
 ## Question declarations
 
 `questions` is a nonempty JSON-shaped dictionary keyed by nonempty question IDs.
@@ -114,6 +160,7 @@ Keep runtime input out of the static declaration.
 The complete decorator configuration is:
 
 - `questions=`: required static question dictionary.
+- `input_model=`: optional Pydantic model class for each call's state.
 - `model=`: optional nonblank TypeSafe model name.
 - `timeout=`: optional positive, finite number of seconds.
 - `slug=`: optional node identifier, following the [DAG API](dag-api.md).
@@ -242,8 +289,15 @@ Classifier nodes have a distinct cyan identity and filter-list icon in the
 operator graph and inspector, separate from agent styling and execution-status
 colors:
 
-- **Current workflow:** **Definition** opens by default with compact question rows
-  using Avalanche typography and cyan classifier styling. Expand a row to inspect
+- **DAG cards:** At detailed zoom, classifier cards show step input names and
+  types on the left and the return type on the right, using the same layout as
+  agent cards. These describe the workflow step, not each classifier call's state.
+  Compact cards hide the field lists when zoomed out. Historical cards use the
+  selected run's retained declaration.
+- **Current workflow:** **Definition** opens by default with questions first,
+  visually grouped with the classifier input beneath them using a cyan accent.
+  A separate **Step interface** panel at the bottom groups the step's inputs
+  and output. Expand a question row to inspect
   Choice options, Noul True/False meanings, or Score levels in an indented group with
   smaller labels beneath the question definition.
   Missing criterion descriptions stay blank. Structured instructions and criteria
@@ -266,6 +320,8 @@ colors:
   probability of true with a small filled bar. Score shows the fractional value
   and maximum level. Choice and Score also show confidence.
   Call IDs, timestamps, model names, and token counts remain in the evidence.
+  Expand **Definition** within a call to inspect its retained schemas and questions.
+  These come from that invocation's declaration, not the current workflow code.
   Each call has one expandable table row; lifecycle snapshots are grouped together.
   All calls start collapsed. Only explicitly expanded calls fetch full details.
   Full bodies alone use the eight-entry, 8 MiB browser detail cache. Eviction does
