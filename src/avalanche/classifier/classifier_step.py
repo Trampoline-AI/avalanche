@@ -13,29 +13,22 @@ from contextvars import ContextVar
 from copy import deepcopy
 from dataclasses import dataclass
 from functools import update_wrapper
-from types import SimpleNamespace, UnionType
-from typing import (
-    TYPE_CHECKING,
-    Annotated,
-    Literal,
-    Union,
-    get_args,
-    get_origin,
-    get_type_hints,
-)
+from typing import TYPE_CHECKING
 
 from pydantic import BaseModel, JsonValue, PydanticUserError, TypeAdapter, ValidationError
-from pydantic.json_schema import JsonSchemaMode
 
-from ..dag import Node, NodeType, _matching_provider, _safe_issubclass
+from ..dag import Node, NodeType, _safe_issubclass
+from ..step_interface import (
+    decoration_namespace,
+    resolve_step_signature,
+    step_interface_from_signature,
+)
 from .evidence import emit_classifier_evidence
 from .models import (
     ClassificationResult,
     ClassifierDeclaration,
     ClassifierInvocation,
     ClassifierRuntime,
-    ClassifierStepInput,
-    ClassifierStepOutput,
     JSONContent,
     validate_questions,
     validate_runtime_defaults,
@@ -315,32 +308,10 @@ class _ClassifierStepSpec:
         return bound
 
 
-def _resolved_annotations(
-    user_fn: Callable[..., object], localns: dict[str, object] | None
-) -> dict[str, object]:
-    try:
-        return get_type_hints(user_fn, localns=localns, include_extras=True)
-    except (NameError, TypeError, SyntaxError):
-        # One unresolved annotation must not hide all the other declared types.
-        resolved: dict[str, object] = {}
-        for name, annotation in inspect.get_annotations(user_fn).items():
-            try:
-                resolved[name] = get_type_hints(
-                    SimpleNamespace(__annotations__={name: annotation}),
-                    globalns=user_fn.__globals__,
-                    localns=localns,
-                    include_extras=True,
-                )[name]
-            except (NameError, TypeError, SyntaxError):
-                resolved[name] = annotation
-        return resolved
-
-
 def _public_step_signature(
     user_fn: Callable[..., object], localns: dict[str, object] | None
 ) -> inspect.Signature:
-    signature = inspect.signature(user_fn)
-    annotations = _resolved_annotations(user_fn, localns)
+    signature = resolve_step_signature(user_fn, localns)
     parameter = signature.parameters.get("classifier")
     if parameter is None or parameter.kind is not inspect.Parameter.KEYWORD_ONLY:
         raise ClassifierStepError(
@@ -349,73 +320,13 @@ def _public_step_signature(
         )
     if parameter.default is not inspect.Parameter.empty:
         raise ClassifierStepError("classifier is framework-injected and cannot have a default")
-    if annotations.get("classifier") is not Classifier:
+    if parameter.annotation is not Classifier:
         raise ClassifierStepError("classifier parameter must be annotated ava.Classifier")
     return signature.replace(
         parameters=[
-            value.replace(annotation=annotations.get(name, value.annotation))
-            for name, value in signature.parameters.items()
-            if name != "classifier"
+            value for name, value in signature.parameters.items() if name != "classifier"
         ],
-        return_annotation=annotations.get("return", signature.return_annotation),
     )
-
-
-def _annotation_name(annotation: object) -> str:
-    origin = get_origin(annotation)
-    arguments = get_args(annotation)
-    if origin is Annotated:
-        return _annotation_name(arguments[0])
-    if origin in (Union, UnionType):
-        return " | ".join(_annotation_name(argument) for argument in arguments)
-    if origin is not None and origin is not Literal:
-        parameters = ", ".join(_annotation_name(argument) for argument in arguments)
-        return f"{_annotation_name(origin)}[{parameters}]"
-    if annotation is type(None):
-        return "None"
-    if isinstance(annotation, type):
-        return annotation.__name__
-    if isinstance(annotation, str):
-        return annotation
-    return inspect.formatannotation(annotation)
-
-
-def _annotation_schema(annotation: object, *, mode: JsonSchemaMode) -> ClassifierStepOutput:
-    if annotation is inspect.Signature.empty:
-        return ClassifierStepOutput()
-    type_name = _annotation_name(annotation)
-    try:
-        schema = TypeAdapter(annotation).json_schema(mode=mode)
-    except (PydanticUserError, NameError, TypeError, ValueError):
-        schema = None
-    return ClassifierStepOutput(type_name=type_name, json_schema=schema)
-
-
-def _step_inputs(signature: inspect.Signature) -> list[ClassifierStepInput]:
-    from ..runtime import BaseContext, BaseInput
-    from ..runtime.providers import PROVIDERS
-
-    inputs: list[ClassifierStepInput] = []
-    for parameter in signature.parameters.values():
-        runtime_type = parameter.annotation
-        if get_origin(runtime_type) is Annotated:
-            runtime_type = get_args(runtime_type)[0]
-        if _safe_issubclass(runtime_type, (BaseContext, BaseInput)):
-            continue
-        if _matching_provider(parameter.default, PROVIDERS) is not None:
-            continue
-        annotation = _annotation_schema(parameter.annotation, mode="validation")
-        inputs.append(
-            ClassifierStepInput(
-                name=parameter.name,
-                type_name=annotation.type_name,
-                json_schema=annotation.json_schema,
-                required=parameter.default is inspect.Parameter.empty
-                and parameter.kind
-                not in (inspect.Parameter.VAR_POSITIONAL, inspect.Parameter.VAR_KEYWORD),
-            )
-        )
-    return inputs
 
 
 def classifier_step(
@@ -448,20 +359,14 @@ def classifier_step(
         ) from None
 
     def decorator(user_fn: Callable[..., object]) -> Node:
-        frame = inspect.currentframe()
-        try:
-            localns = frame.f_back.f_locals if frame is not None and frame.f_back else None
-            public_signature = _public_step_signature(user_fn, localns)
-        finally:
-            del frame
+        public_signature = _public_step_signature(user_fn, decoration_namespace())
+        interface = step_interface_from_signature(public_signature)
         declaration = ClassifierDeclaration(
             questions=validated_questions,
             runtime=runtime_overrides,
             input_schema=input_schema,
-            step_inputs=_step_inputs(public_signature),
-            step_output=_annotation_schema(
-                public_signature.return_annotation, mode="serialization"
-            ),
+            step_inputs=interface.step_inputs,
+            step_output=interface.step_output,
         )
         spec = _ClassifierStepSpec(
             user_fn=user_fn,
@@ -502,6 +407,6 @@ def classifier_step(
         update_wrapper(wrapper, user_fn)
         wrapper.__signature__ = spec.public_signature  # type: ignore[attr-defined]
         wrapper.__classifier_step__ = spec  # type: ignore[attr-defined]
-        return Node(wrapper, NodeType.STEP, num_returns=1, slug=slug)
+        return Node(wrapper, NodeType.STEP, num_returns=1, slug=slug, step_interface=interface)
 
     return decorator

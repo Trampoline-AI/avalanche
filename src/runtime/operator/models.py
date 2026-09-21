@@ -54,6 +54,7 @@ class WorkflowTopology:
     agent_instruction_lines: tuple[tuple[str, str], ...] = ()
     standard_step_docstring_lines: tuple[tuple[str, str], ...] = ()
     classifier_metadata_json: tuple[tuple[str, str], ...] = ()
+    step_interface_json: tuple[tuple[str, str], ...] = ()
 
 
 @dataclass
@@ -579,6 +580,7 @@ class WorkflowInfo:
     agent_node_ids: list[str] = field(default_factory=list)
     agent_metadata_json: dict[str, str] = field(default_factory=dict)
     classifier_metadata_json: dict[str, str] = field(default_factory=dict)
+    step_interface_json: dict[str, str] = field(default_factory=dict)
     standard_step_docstring_lines: dict[str, str] = field(default_factory=dict)
     node_source_code: dict[str, str] = field(default_factory=dict)
     cron: str | None = None  # cron expression for scheduled execution
@@ -675,6 +677,7 @@ class WorkflowDescriptor:
     agent_node_ids: tuple[str, ...] = ()
     agent_metadata_json: tuple[tuple[str, str], ...] = ()
     classifier_metadata_json: tuple[tuple[str, str], ...] = ()
+    step_interface_json: tuple[tuple[str, str], ...] = ()
     standard_step_docstring_lines: tuple[tuple[str, str], ...] = ()
     node_source_code: tuple[tuple[str, str], ...] = ()
     cron: str | None = None

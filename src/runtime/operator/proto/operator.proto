@@ -145,6 +145,7 @@ message WorkflowTopologyV2 {
   map<string, string> agent_instruction_lines = 6;
   map<string, string> standard_step_docstring_lines = 7;
   map<string, string> classifier_metadata_json = 8;
+  map<string, string> step_interface_json = 9;
 }
 
 message ScanTargetV2 {

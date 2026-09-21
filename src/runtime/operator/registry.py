@@ -39,6 +39,7 @@ from .source import resolve_watch_roots
 from .workflow_metadata import (
     node_docstring_lines_for_workflow,
     node_source_code_for_workflow,
+    step_interface_for_workflow,
 )
 
 logger = logging.getLogger(__name__)
@@ -155,6 +156,7 @@ def workflow_to_info(
         agent_node_ids=agent_node_ids,
         agent_metadata_json=agent_metadata_json,
         classifier_metadata_json=classifier_metadata_for_workflow(workflow, node_ids),
+        step_interface_json=step_interface_for_workflow(workflow, node_ids),
         standard_step_docstring_lines=standard_step_docstring_lines,
         node_source_code=node_source_code,
         cron=workflow.cron,
@@ -180,6 +182,7 @@ def descriptor_to_info(descriptor: WorkflowDescriptor) -> WorkflowInfo:
         agent_node_ids=list(descriptor.agent_node_ids),
         agent_metadata_json=dict(descriptor.agent_metadata_json),
         classifier_metadata_json=dict(descriptor.classifier_metadata_json),
+        step_interface_json=dict(descriptor.step_interface_json),
         standard_step_docstring_lines=dict(descriptor.standard_step_docstring_lines),
         node_source_code=dict(descriptor.node_source_code),
         cron=descriptor.cron,

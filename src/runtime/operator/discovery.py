@@ -35,6 +35,7 @@ from .windows_job import WindowsJob, assign_process, close_job, create_kill_on_c
 from .workflow_metadata import (
     node_docstring_lines_for_workflow,
     node_source_code_for_workflow,
+    step_interface_for_workflow,
 )
 
 logger = logging.getLogger(__name__)
@@ -663,6 +664,7 @@ def _descriptor_to_dict(
         "agent_node_ids": agent_node_ids,
         "agent_metadata_json": agent_metadata_json,
         "classifier_metadata_json": classifier_metadata_json,
+        "step_interface_json": list(step_interface_for_workflow(workflow, node_ids).items()),
         "standard_step_docstring_lines": list(standard_step_docstring_lines.items()),
         "node_source_code": list(node_source_code.items()),
         "cron": workflow.cron,
@@ -686,6 +688,9 @@ def _descriptor_from_dict(item: dict[str, Any]) -> WorkflowDescriptor:
         ),
         classifier_metadata_json=tuple(
             (key, value) for key, value in item.get("classifier_metadata_json", ())
+        ),
+        step_interface_json=tuple(
+            (key, value) for key, value in item.get("step_interface_json", ())
         ),
         standard_step_docstring_lines=tuple(
             (key, value) for key, value in item.get("standard_step_docstring_lines", ())
