@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 0.5.0
+
 - Classifier answers remain valid when TypeSafe omits either token-usage count or
   reports it as null; unknown counts remain distinct from zero.
 - Rejected workflow-success events now release already-accepted result payloads,
