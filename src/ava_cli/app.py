@@ -1422,9 +1422,11 @@ def _run_dev(args: argparse.Namespace) -> int:
     browser_server = None
     exit_code = 0
     previous_handlers = {}
+    cleaning_up = False
 
     def request_shutdown(_signum, _frame) -> None:
-        raise KeyboardInterrupt
+        if not cleaning_up:
+            raise KeyboardInterrupt
 
     if threading.current_thread() is threading.main_thread():
         for signum in (signal.SIGINT, signal.SIGTERM):
@@ -1478,6 +1480,7 @@ def _run_dev(args: argparse.Namespace) -> int:
         _report_dev_failure(stage, exc)
         exit_code = 1
     finally:
+        cleaning_up = True
         cleanup_error: Exception | None = None
         if browser_server is not None:
             try:

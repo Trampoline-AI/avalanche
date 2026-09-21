@@ -78,8 +78,6 @@ class _HttpError(Exception):
 
 
 def _create_request(handler: BaseHTTPRequestHandler) -> pb.StartRunRequestV2:
-    if handler.headers.get_content_type() != "application/json":
-        raise _HttpError(HTTPStatus.UNSUPPORTED_MEDIA_TYPE, "Expected application/json")
     lengths = handler.headers.get_all("Content-Length", [])
     if handler.headers.get("Transfer-Encoding") is not None:
         raise _HttpError(HTTPStatus.BAD_REQUEST, "Transfer-Encoding is not supported")
@@ -125,6 +123,9 @@ def _dispatch(
         raise _HttpError(
             HTTPStatus.METHOD_NOT_ALLOWED, "Method not allowed", allow=", ".join(allowed)
         )
+    # Cross-origin JSON mutations require a CORS preflight; ordinary forms do not.
+    if handler.command == "POST" and handler.headers.get_content_type() != "application/json":
+        raise _HttpError(HTTPStatus.UNSUPPORTED_MEDIA_TYPE, "Expected application/json")
 
     if path == "/api/v1/flows":
         page = _PageQuery.model_validate_strings(parameters)

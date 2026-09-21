@@ -606,6 +606,90 @@ def test_operator_fatal_error_closes_both_listeners_despite_http_cleanup_error(m
             rebound.bind(("127.0.0.1", port))
 
 
+@pytest.mark.parametrize("command", ("operator", "dev"))
+@pytest.mark.parametrize("fatal", (False, True))
+def test_signals_during_cleanup_release_listeners_and_restore_handlers(
+    monkeypatch, tmp_path, command, fatal
+):
+    from ava_cli import app
+    from runtime.operator import Operator, web
+    from runtime.operator import server as operator_server
+
+    previous_handlers = {sig: signal.getsignal(sig) for sig in (signal.SIGINT, signal.SIGTERM)}
+    failure = RuntimeError("operator failed before cleanup")
+    servers = []
+    browsers = []
+    operators = []
+    ports = []
+    serve = operator_server.serve
+    start_browser = web.start_browser_server
+    close_browser = web.BrowserServer.close
+    close_operator = Operator.close
+    wait_for_failure = Operator.wait_for_failure
+
+    def record_server(operator, *args, **kwargs):
+        operators.append(operator)
+        server = serve(operator, *args, **kwargs)
+        servers.append(server)
+        ports.append(server._avalanche_bound_port)
+        return server
+
+    def record_browser(*args, **kwargs):
+        browser = start_browser(*args, **kwargs)
+        browsers.append(browser)
+        ports.append(browser.port)
+        return browser
+
+    def begin_shutdown(self, *, timeout):
+        if not browsers:
+            return wait_for_failure(self, timeout=timeout)
+        if fatal:
+            return failure
+        signal.raise_signal(signal.SIGINT)
+        pytest.fail("Shutdown signal did not interrupt the running operator")
+
+    def interrupted_browser_close(self):
+        signal.raise_signal(signal.SIGINT)
+        close_browser(self)
+
+    def interrupted_operator_close(self):
+        signal.raise_signal(signal.SIGTERM)
+        close_operator(self)
+
+    monkeypatch.setattr(operator_server, "serve", record_server)
+    monkeypatch.setattr(web, "start_browser_server", record_browser)
+    monkeypatch.setattr(web.BrowserServer, "close", interrupted_browser_close)
+    monkeypatch.setattr(Operator, "close", interrupted_operator_close)
+    monkeypatch.setattr(Operator, "wait_for_failure", begin_shutdown)
+    monkeypatch.setattr(app, "_open_browser", lambda _url: None)
+    argv = [command, str(tmp_path), "--port", "0", "--web-port", "0"]
+    try:
+        if command == "operator" and fatal:
+            with pytest.raises(RuntimeError) as caught:
+                app.main(argv)
+            assert caught.value is failure
+        else:
+            assert app.main(argv) == (1 if fatal else 0)
+        for sig, handler in previous_handlers.items():
+            assert signal.getsignal(sig) == handler
+        for port in ports:
+            with socket.socket() as rebound:
+                rebound.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+                rebound.bind(("127.0.0.1", port))
+    except KeyboardInterrupt:
+        pytest.fail("A cleanup signal interrupted resource release")
+    finally:
+        # A failing regression must not leak services or handlers into later tests.
+        for sig, handler in previous_handlers.items():
+            signal.signal(sig, handler)
+        for browser in browsers:
+            close_browser(browser)
+        for server in servers:
+            server.stop(grace=0).wait(timeout=2.0)
+        for operator in operators:
+            close_operator(operator)
+
+
 @pytest.mark.parametrize(
     "argv",
     (

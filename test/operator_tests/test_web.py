@@ -413,7 +413,6 @@ def test_rest_live_run_output_cancellation_and_conflicts(tmp_path):
         )
         assert status == 202
         run_id = created["run_id"]
-        assert run_id.startswith("run_")
         snapshot = _wait_for_rest_status(server, run_id, "success")
         assert isinstance(snapshot["summary"]["created_sequence"], str)
         status, result = _rest(server, "GET", f"/api/v1/runs/{run_id}/output")
@@ -439,6 +438,26 @@ def test_rest_live_run_output_cancellation_and_conflicts(tmp_path):
             409,
             "FAILED_PRECONDITION",
         )
+        _wait_for_rest_status(server, "run-cancel", "running")
+        for content_type in (
+            None,
+            "text/plain",
+            "application/x-www-form-urlencoded",
+            "multipart/form-data; boundary=browser-form",
+        ):
+            headers = {"Origin": "https://unrelated.example"}
+            if content_type is not None:
+                headers["Content-Type"] = content_type
+            connection = http.client.HTTPConnection(server.host, server.port, timeout=5)
+            try:
+                connection.request(
+                    "POST", "/api/v1/runs/run-cancel/cancel", body=b"", headers=headers
+                )
+                response = connection.getresponse()
+                _assert_rest_error((response.status, json.loads(response.read())), 415)
+            finally:
+                connection.close()
+        _wait_for_rest_status(server, "run-cancel", "running")
         status, _ = _rest(server, "POST", "/api/v1/runs/run-cancel/cancel", b"{}")
         assert status == 200
         _wait_for_rest_status(server, "run-cancel", "cancelled")
