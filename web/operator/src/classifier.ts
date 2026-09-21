@@ -25,7 +25,7 @@ export type ClassifierQuestion =
     };
 
 export interface ClassifierDeclaration extends StepInterface {
-  questions: Record<string, ClassifierQuestion>;
+  questions: Record<string, ClassifierQuestion> | null;
   runtime: { model: string; timeout: number };
   input_schema: JsonSchema | null;
 }
@@ -162,13 +162,16 @@ export function parseClassifierDeclaration(value: unknown): ClassifierDeclaratio
   const path = "classifier declaration";
   const item = record(value, path);
   fields(item, ["questions", "runtime", "input_schema", "step_inputs", "step_output"], path);
-  const questions = Object.fromEntries(
-    Object.entries(record(item.questions, `${path}.questions`)).map(([id, value]) => {
-      string(id, `${path} question ID`);
-      return [id, question(value, `${path}.questions.${id}`)];
-    }),
-  );
-  if (Object.keys(questions).length === 0)
+  const questions =
+    item.questions === null
+      ? null
+      : Object.fromEntries(
+          Object.entries(record(item.questions, `${path}.questions`)).map(([id, value]) => {
+            string(id, `${path} question ID`);
+            return [id, question(value, `${path}.questions.${id}`)];
+          }),
+        );
+  if (questions !== null && Object.keys(questions).length === 0)
     throw new Error(`${path} needs at least one question`);
   const runtime = record(item.runtime, `${path}.runtime`);
   fields(runtime, ["model", "timeout"], `${path}.runtime`);
@@ -305,6 +308,7 @@ function answer(value: unknown, declared: ClassifierQuestion, path: string): Cla
 
 function result(value: unknown, declaration: ClassifierDeclaration): ClassificationResult {
   const path = "classifier result";
+  if (declaration.questions === null) throw new Error(`${path} requires resolved questions`);
   const item = record(value, path);
   fields(item, ["model", "answers", "usage"], path);
   const answers = record(item.answers, `${path}.answers`);

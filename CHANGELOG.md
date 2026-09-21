@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+- Classifier calls now accept runtime `questions=` that replace optional decorator
+  defaults. Each call validates and retains its own questions, including concurrent
+  calls with different candidates or rubrics; missing or invalid questions fail
+  before contacting TypeSafe.
+- Classifier inspection distinguishes default questions from runtime-only steps
+  and shows each invocation's actual rubric, or an explicit unresolved-question
+  failure. Operator lifecycle validation preserves those rubrics through retention.
+
 ## 0.5.1
 
 - Expanded the Avalanche authoring skill with classifier question-object examples

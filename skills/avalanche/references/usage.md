@@ -24,7 +24,7 @@ launch an operator or UI merely because a workflow was implemented.
 ## Define a workflow
 
 Use deterministic `@ava.step` nodes for ordinary Python work,
-`@ava.classifier_step` for fixed classification questions, and `@ava.agent_step`
+`@ava.classifier_step` for typed classification questions, and `@ava.agent_step`
 for adaptive model-backed work:
 
 ```python
@@ -66,7 +66,7 @@ not constructed inline inside the step decorator belongs in `signature.py`.
 
 ## Native classifier steps
 
-Prefer `@ava.classifier_step` for fixed Choice, Noul, or Score questions rather
+Prefer `@ava.classifier_step` for Choice, Noul, or Score questions rather
 than wrapping the TypeSafe client yourself or using an adaptive agent solely
 for classification. The SDK is included in the base Avalanche package.
 
@@ -99,8 +99,9 @@ def ticket_workflow():
 ```
 
 The keyword-only `classifier` parameter is injected; never supply it in the
-DAG. `state` accepts text, a JSON object, or a JSON array. Questions are declared
-statically, snapshotted at decoration, and cannot be overridden at invocation.
+DAG. `state` accepts text, a JSON object, or a JSON array. Decorator `questions=`
+declares optional snapshotted defaults; per-call `questions=` replaces the entire
+mapping for that invocation. See [runtime questions](#runtime-questions).
 Question `criteria` holds named options for `choice`, optional `"true"`/`"false"`
 criteria for `noul`, or an ordered list of at least two levels for `score`.
 Instructions and criteria entries can contain structured JSON as well as text.
@@ -133,9 +134,52 @@ types and returns the full typed result from `classifier_workflow()`:
 uv run ava dev examples/classifier_workflow.py
 ```
 
-The browser can show declared questions before a run and invocation answers
-afterward. Evidence uses existing local operator retention limits and lifetime;
-it is not durable recovery storage.
+The browser shows default questions before a run, or indicates that questions
+are supplied at runtime. Call details retain actual resolved questions and answers,
+including overrides. Evidence uses existing local operator retention limits and
+lifetime; it is not durable recovery storage.
+
+### Runtime questions
+
+When candidates, question IDs, or rubrics depend on runtime data, build questions
+inside the step (or receive them from an upstream node), not in the workflow body.
+For example, select from a variable list of passages:
+
+```python
+@ava.classifier_step()
+async def select_passage(
+    query: str, passages: list[str], *, classifier: ava.Classifier
+) -> ava.ClassificationResult:
+    return await classifier(
+        state={"query": query, "passages": passages},
+        questions={
+            "best_match": {
+                "type": "choice",
+                "instructions": (
+                    "Which passage best answers `query`? "
+                    "Select none if no passage answers it."
+                ),
+                "criteria": {
+                    **{
+                        f"passage_{i}": f"The passage at `passages[{i}]`."
+                        for i in range(len(passages))
+                    },
+                    "none": "None of the supplied passages answers the query.",
+                },
+            },
+        },
+    )
+```
+
+Omitted or `None` call questions use decorator defaults. Without either source,
+the call fails before client creation. Explicit `{}` or malformed questions
+fail rather than falling back. Supplied questions replace the whole mapping;
+combine mappings explicitly in Python if needed. Each call validates and owns
+its resolved questions before sending, so later mutation or concurrent calls
+cannot change its rubric. Results are checked against those exact questions.
+Invalid/missing questions produce failed-call evidence with unresolved questions,
+not fabricated defaults. Model, timeout, and input-model configuration do not
+change per call.
 
 ### Structure the `questions` object
 
@@ -143,7 +187,8 @@ Start from what downstream code must decide, then choose the smallest useful
 judgments. `questions` maps stable question IDs to objects with `type`,
 `instructions`, and type-specific `criteria`. IDs identify answers in code;
 **the model does not see question IDs**, so instructions must state the complete
-judgment. Keep runtime facts in `state`, not in a dynamically rebuilt declaration.
+judgment. Keep source content and current facts in `state`; construct runtime
+questions when the judgments or candidate options themselves must change.
 Use named state fields when context has several parts, and refer to them with
 backticked paths such as `ticket.messages[0].text`.
 
@@ -269,11 +314,11 @@ The same structure works for other use cases:
 - **Retrieval and ranking:** put a query and candidate passage in state; apply
   the same relevance Score to each pair, then sort in code. A Choice distribution
   compares competing options; it is not an independent relevance score per item.
-- **Changing candidates:** Avalanche questions are fixed at decoration time.
-  Do not pass runtime `questions=` or mutate criteria per call. For a variable
-  candidate list, reuse a fixed Noul or Score question over each candidate's
-  state and select in code. Fixed candidate slots are another option only when
-  their coverage and absent-slot behavior are explicitly defined.
+- **Changing candidates:** construct a Choice's criteria from the actual candidates
+  and pass the mapping as runtime `questions=`. Include a no-match option. For
+  independent relevance scores, reuse a fixed Score over each candidate instead.
+  An earlier result can determine a later call's taxonomy options; do not mutate
+  the decorator defaults or expect questions in one call to see each other's answers.
 
 ### Batch independent judgments and handle uncertainty
 
@@ -303,7 +348,7 @@ For current prompting guidance and worked patterns, consult the live TypeSafe
 [Score](https://docs.typesafe.ai/primitives/score.md),
 [structured questions](https://docs.typesafe.ai/primitives/advanced.md), and
 [speculative fan-out](https://docs.typesafe.ai/patterns/fan-out.md).
-Adapt SDK examples to Avalanche's fixed declaration and injected callable;
+Adapt SDK examples to Avalanche's injected callable and per-call snapshots;
 do not replace the native integration with a custom client.
 
 ## Browser UI and operator

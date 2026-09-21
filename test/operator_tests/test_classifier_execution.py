@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import copy
 import json
 import os
 import queue
@@ -15,7 +16,12 @@ from textwrap import dedent, indent
 
 import pytest
 
-from avalanche.classifier.models import ClassificationResult, ClassifierInvocation
+from avalanche.classifier.models import (
+    ClassificationResult,
+    ClassifierDeclaration,
+    ClassifierInvocation,
+    validate_questions,
+)
 from runtime.operator import Operator
 from runtime.operator.models import NodeStatus, RunState, RunStatus
 from runtime.operator.operator import RunResultUnavailableError
@@ -128,8 +134,13 @@ def typesafe_service(monkeypatch):
         thread.join(timeout=5)
 
 
-def write_workflow(root: Path, body: str, *, questions=None) -> Path:
+def write_workflow(root: Path, body: str, *, questions=QUESTIONS) -> Path:
     workflow = root / "classifier_flow.py"
+    decorator = (
+        "@ava.classifier_step()\n"
+        if questions is None
+        else f"@ava.classifier_step(questions={questions!r})\n"
+    )
     workflow.write_text(
         "import asyncio\n"
         "import os\n"
@@ -137,8 +148,8 @@ def write_workflow(root: Path, body: str, *, questions=None) -> Path:
         "@ava.source\n"
         "def load():\n"
         "    return {'private_ticket': 'operator-private-state'}\n"
-        f"@ava.classifier_step(questions={QUESTIONS if questions is None else questions!r})\n"
-        "async def classify(ticket, *, classifier: ava.Classifier):\n"
+        + decorator
+        + "async def classify(ticket, *, classifier: ava.Classifier):\n"
         + indent(dedent(body).strip(), "    ")
         + "\n@ava.workflow(classifier_defaults={"
         "'model': 'operator-request-model', 'timeout': 10.0})\n"
@@ -218,6 +229,96 @@ def test_spawned_local_workflow_returns_all_answer_types(tmp_path, typesafe_serv
             record.model_dump_json() for record in records
         )
         assert operator.list_agent_events(run.run_id, classifier_node(run)).events == ()
+    finally:
+        operator.close()
+
+
+@pytest.mark.parametrize("dynamic_only", [False, True])
+def test_spawned_calls_snapshot_per_call_questions(tmp_path, typesafe_service, dynamic_only):
+    revised = copy.deepcopy(QUESTIONS)
+    revised["urgent"]["instructions"] = {"ask": ["Is this a production incident?"]}
+    revised["severity"]["criteria"] = ["cosmetic", {"impact": ["all customers"]}]
+    defaults = None if dynamic_only else {"default": {"type": "noul"}}
+    workflow = write_workflow(
+        tmp_path,
+        f"questions = [{QUESTIONS!r}, {revised!r}]\n"
+        "results = await asyncio.gather(*(\n"
+        "    classifier(\n"
+        "        state={**ticket, 'concurrent': True, 'call': index}, questions=rubric\n"
+        "    )\n"
+        "    for index, rubric in enumerate(questions)\n"
+        "))\n"
+        "questions[0]['urgent']['instructions'] = 'mutated after response'\n"
+        "return [result.scores['severity'].legend for result in results]",
+        questions=defaults,
+    )
+    operator = Operator([str(workflow)], executor_backend="local", watch=False, schedule=False)
+    try:
+        run = wait_terminal(operator, operator.start_run("flow"))
+        assert run.status == RunStatus.SUCCESS
+        assert operator.get_run_result(run.run_id) == [
+            {"0": rubric["severity"]["criteria"][0], "1": rubric["severity"]["criteria"][1]}
+            for rubric in (QUESTIONS, revised)
+        ]
+        prepared = ClassifierDeclaration.model_validate_json(
+            dict(run.topology.classifier_metadata_json)[classifier_node(run)]
+        )
+        assert prepared.questions == (
+            None if defaults is None else validate_questions(defaults)
+        )
+        sent = [typesafe_service.requests.get(timeout=5) for _ in range(2)]
+        assert {
+            request["state"]["call"]: validate_questions(request["questions"])
+            for request in sent
+        } == {0: validate_questions(QUESTIONS), 1: validate_questions(revised)}
+        grouped: dict[str, list[ClassifierInvocation]] = defaultdict(list)
+        for record in read_invocations(operator, run):
+            grouped[record.invocation_id].append(record)
+        assert len(grouped) == 2
+        assert {records[0].invocation_index for records in grouped.values()} == {0, 1}
+        for records in grouped.values():
+            running, successful = records
+            assert [running.status, successful.status] == ["running", "success"]
+            expected = validate_questions((QUESTIONS, revised)[running.invocation_index])
+            assert running.declaration == successful.declaration
+            assert successful.declaration.questions == expected
+            assert successful.result is not None
+            assert set(successful.result.answers) == set(expected)
+    finally:
+        operator.close()
+
+
+@pytest.mark.parametrize(
+    ("defaults", "call"),
+    [
+        (None, "classifier(state=ticket)"),
+        (QUESTIONS, "classifier(state=ticket, questions={})"),
+        (
+            QUESTIONS,
+            "classifier(state=ticket, questions={'broken': {'type': 'choice'}})",
+        ),
+    ],
+    ids=["missing-dynamic-questions", "empty-override", "malformed-override"],
+)
+def test_invalid_call_questions_retain_failed_evidence_without_network(
+    tmp_path, typesafe_service, defaults, call
+):
+    workflow = write_workflow(tmp_path, f"return await {call}", questions=defaults)
+    operator = Operator([str(workflow)], executor_backend="local", watch=False, schedule=False)
+    try:
+        run = wait_terminal(operator, operator.start_run("flow"))
+        assert run.status == RunStatus.FAILED
+        assert run.nodes[classifier_node(run)].status == NodeStatus.FAILED
+        records = read_invocations(operator, run)
+        assert [record.status for record in records] == ["running", "failed"]
+        assert records[0].invocation_id == records[1].invocation_id
+        assert records[0].declaration == records[1].declaration
+        assert all(record.declaration.questions is None for record in records)
+        assert all(record.result is None for record in records)
+        assert records[1].error
+        assert typesafe_service.requests.empty()
+        with pytest.raises(RunResultUnavailableError):
+            operator.get_run_result(run.run_id)
     finally:
         operator.close()
 

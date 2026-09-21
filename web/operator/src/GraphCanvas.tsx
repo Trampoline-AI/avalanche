@@ -659,8 +659,10 @@ function GraphCanvasView({
           try {
             const declaration = decodeClassifierDeclaration(raw);
             const counts = { choice: 0, noul: 0, score: 0 };
-            for (const question of Object.values(declaration.questions)) {
-              counts[question.type] += 1;
+            if (declaration.questions !== null) {
+              for (const question of Object.values(declaration.questions)) {
+                counts[question.type] += 1;
+              }
             }
             const kinds = [
               counts.choice ? `${counts.choice} Choice` : "",
@@ -676,7 +678,14 @@ function GraphCanvasView({
               })),
               outputs: [{ name: "return", type: declaration.step_output.type_name }],
             };
-            return [nodeId, { summary: kinds, fields }];
+            return [
+              nodeId,
+              {
+                summary:
+                  declaration.questions === null ? "Runtime questions" : `Defaults: ${kinds}`,
+                fields,
+              },
+            ];
           } catch {
             return [nodeId, { summary: "Question definition unavailable", fields: undefined }];
           }

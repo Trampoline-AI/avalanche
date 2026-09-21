@@ -1,8 +1,9 @@
 # Classifier steps
 
-`@ava.classifier_step` is an ordinary Avalanche step with fixed
+`@ava.classifier_step` is an ordinary Avalanche step with
 [TypeSafe](https://typesafe.ai/) questions and an injected, awaitable
-`ava.Classifier`. Its Python body prepares state, calls the classifier, and
+`ava.Classifier`. Questions can be decorator defaults or supplied per call.
+Its Python body prepares state and questions, calls the classifier, and
 chooses what to return or persist. It is not an agent loop: there are no tools,
 automatic routes, confidence thresholds, or implicit table writes.
 
@@ -63,8 +64,9 @@ if __name__ == "__main__":
 
 The required keyword-only `classifier: ava.Classifier` parameter has no default
 and is injected by Avalanche. Workflow callers pass only ordinary inputs; they
-cannot supply their own classifier. A call accepts only `state=`, containing a
-string, JSON object, or JSON array. Nested values must also be JSON-compatible:
+cannot supply their own classifier. A call accepts `state=` and optional
+`questions=`. State is a string, JSON object, or JSON array.
+Nested values must also be JSON-compatible:
 string keys, finite numbers, booleans, null, objects, and arrays. Python-only
 objects such as sets, datetimes, or Pydantic models must be converted explicitly.
 
@@ -149,17 +151,66 @@ passed as JSON and displayed as structured values, not converted to a Python
 string representation. Extra question fields and unknown question types are
 rejected.
 
-Declarations are validated and snapshotted when the decorator runs. Later
+Default questions are validated and snapshotted when the decorator runs. Later
 mutation of the original dictionary, including nested instructions or criteria,
-does not change the step. Questions cannot be overridden on an invocation;
-call the same fixed questions with different state, or declare another step.
-Keep runtime input out of the static declaration.
+does not change those defaults. Runtime questions are validated and snapshotted
+for each invocation before any service request.
+
+### Runtime questions
+
+Use `@ava.classifier_step()` without defaults when candidate options, question
+IDs, or rubrics depend on runtime inputs. Build the mapping inside the step or
+receive it from an upstream node, then pass it as `questions=`:
+
+```python
+@ava.classifier_step()
+async def select_passage(
+    query: str,
+    passages: list[str],
+    *,
+    classifier: ava.Classifier,
+) -> ava.ClassificationResult:
+    return await classifier(
+        state={"query": query, "passages": passages},
+        questions={
+            "best_match": {
+                "type": "choice",
+                "instructions": (
+                    "Which passage best answers `query`? "
+                    "Select none if no passage answers it."
+                ),
+                "criteria": {
+                    **{
+                        f"passage_{i}": f"The passage at `passages[{i}]`."
+                        for i in range(len(passages))
+                    },
+                    "none": "None of the supplied passages answers the query.",
+                },
+            },
+        },
+    )
+```
+
+| Decorator questions | Call questions | Behavior |
+| --- | --- | --- |
+| Provided | Omitted or `None` | Use decorator defaults |
+| Omitted or `None` | Provided | Use runtime questions |
+| Provided | Provided | Replace the entire mapping for this call |
+| Omitted or `None` | Omitted or `None` | Fail before client creation |
+
+An explicitly empty or malformed mapping fails; it never falls back to defaults.
+There is no implicit merge. Combine mappings explicitly in Python if desired.
+Overrides do not alter defaults or other concurrent calls. A second call can use
+an earlier answer to construct new questions, for example the next level of a
+taxonomy. Runtime work belongs in the step body, not the workflow's DAG builder.
+`model`, `timeout`, and `input_model` remain step/workflow configuration.
 
 ## Configuration and client lifecycle
 
 The complete decorator configuration is:
 
-- `questions=`: required static question dictionary.
+- `questions=`: optional default question dictionary; omitted or `None` requires
+  questions on each call.
 - `input_model=`: optional Pydantic model class for each call's state.
 - `model=`: optional nonblank TypeSafe model name.
 - `timeout=`: optional positive, finite number of seconds.
@@ -225,8 +276,8 @@ probability distribution; Noul has no separate confidence field. Score is a
 fractional, probability-weighted level position, not a rounded or selected
 level. Score legend and probability keys are JSON strings (`"0"`, `"1"`, ...).
 Avalanche validates exact question IDs, answer types, Choice options, and Score
-levels against the declaration, rather than silently dropping or inventing
-answers.
+levels against that invocation's resolved questions, rather than silently
+dropping or inventing answers.
 Distribution totals allow for TypeSafe rounding each probability to two decimal
 places (up to `0.005` per option). Returned probabilities are preserved unchanged,
 not renormalized; totals outside that rounding allowance are rejected.
@@ -248,11 +299,11 @@ primitive never infers them from probabilities.
 
 ## Multiple calls, errors, and evidence
 
-One step may make zero, one, or many calls. Repeated calls use the same declared
-questions, and concurrent calls such as
+One step may make zero, one, or many calls, each with its own questions or the
+decorator defaults. Concurrent calls such as
 `await asyncio.gather(classifier(state=first), classifier(state=second))`
-receive separate invocation IDs. Invocation indexes are zero-based and allocated
-when calls start, not when they finish.
+receive separate invocation IDs and detached question snapshots. Invocation
+indexes are zero-based and allocated when calls start, not when they finish.
 
 Each call emits a `running` snapshot and a terminal `success`, `failed`, or
 `cancelled` snapshot. Evidence includes its invocation ID/index, start/end
@@ -266,9 +317,10 @@ captured input and answers remain inspectable within retention limits. These
 records are independent of what the node returns; they are not inferred from
 its return value or presented as an agent reasoning trace.
 
-Invalid declarations raise `ava.ClassifierStepError`. Missing credentials,
-request failures, invalid state, and malformed or declaration-mismatched answers
-surface as `ava.ClassifierStepExecutionError`; there are no fabricated fallback
+Invalid decorator defaults raise `ava.ClassifierStepError`. Missing credentials,
+missing or invalid runtime questions, request failures, invalid state, and
+malformed or invocation-mismatched answers surface as
+`ava.ClassifierStepExecutionError`; there are no fabricated fallback
 answers. Ordinary errors in the step body remain ordinary node errors.
 `asyncio.CancelledError` propagates as cancellation, with no result invented for
 the cancelled call. Cancellation is cooperative: if an operator worker is
@@ -278,6 +330,10 @@ running invocation as interrupted rather than claiming an answer was returned.
 Invocation evidence retains valid input state, which may contain sensitive
 application data. If state fails validation before capture, the invocation's
 `input` is null; null does not stand for an empty string, array, or object.
+If question resolution fails, `declaration.questions` is null and no input or
+result is captured. This represents an unresolved request, not an empty rubric
+or the decorator defaults. Once resolved, the same questions remain attached to
+both lifecycle records; the operator rejects any mid-call change.
 Avalanche does not capture credentials from the TypeSafe client or environment,
 and exception descriptions remain sanitized. This is not blanket redaction:
 secrets explicitly placed in state, ordinary node inputs/outputs, user logging,
@@ -295,8 +351,9 @@ colors:
   agent cards. These describe the workflow step, not each classifier call's state.
   Compact cards hide the field lists when zoomed out. Historical cards use the
   selected run's retained declaration.
-- **Current workflow:** **Definition** opens by default with questions first,
-  visually grouped with the classifier input beneath them using a cyan accent.
+- **Current workflow:** **Definition** opens with default questions first, or
+  an explanation that questions are supplied at runtime when no defaults exist.
+  Questions are grouped with the classifier input beneath them using a cyan accent.
   A separate **Step interface** panel at the bottom groups the step's inputs
   and output, using the [same panel as other node types](dag-api.md#inspect-step-interfaces).
   Expand a question row to inspect
@@ -325,8 +382,10 @@ colors:
   probability of true with a small filled bar. Score shows the fractional value
   and maximum level. Choice and Score also show confidence.
   Call IDs, timestamps, model names, and token counts remain in the evidence.
-  Expand **Definition** within a call to inspect its retained schemas and questions.
-  These come from that invocation's declaration, not the current workflow code.
+  Expand **Definition** within a call to inspect its retained schemas and actual
+  resolved questions, including overrides. These are not the current workflow's
+  defaults. Failed calls with invalid or missing questions show that the request
+  questions were not resolved.
   Each call has one expandable table row; lifecycle snapshots are grouped together.
   All calls start collapsed. Only explicitly expanded calls fetch full details.
   Full bodies alone use the eight-entry, 8 MiB browser detail cache. Eviction does

@@ -31,8 +31,9 @@ from .test_classifier_execution import (
 )
 
 
-def _write_discovery_workflow(root: Path) -> Path:
+def _write_discovery_workflow(root: Path, *, dynamic_only: bool = False) -> Path:
     workflow = root / "discover_classifier.py"
+    questions_argument = "" if dynamic_only else f"questions={QUESTIONS!r}, "
     workflow.write_text(
         "from __future__ import annotations\n"
         "import os\n"
@@ -51,7 +52,7 @@ def _write_discovery_workflow(root: Path) -> Path:
         "class CallInput(BaseModel):\n"
         "    item: Message\n"
         "    history: list[str] = Field(default_factory=forbidden_input)\n"
-        f"@ava.classifier_step(questions={QUESTIONS!r}, timeout=3.0, input_model=CallInput)\n"
+        f"@ava.classifier_step({questions_argument}timeout=3.0, input_model=CallInput)\n"
         "async def classify(messages: list[Message], *, classifier: ava.Classifier)"
         " -> list[Message]:\n"
         "    raise AssertionError('discovery executed the classifier body')\n"
@@ -90,12 +91,13 @@ def _assert_structured_declaration(declaration: ClassifierDeclaration) -> None:
     assert department.criteria["technical"] is None
 
 
+@pytest.mark.parametrize("dynamic_only", [False, True])
 def test_discovery_and_cache_preserve_ordered_structured_questions_without_key_or_network(
-    tmp_path, monkeypatch
+    tmp_path, monkeypatch, dynamic_only
 ):
     monkeypatch.delenv("TYPESAFE_API_KEY", raising=False)
     monkeypatch.delenv("CLASSIFIER_TEST_FORBID_IMPORT", raising=False)
-    workflow = _write_discovery_workflow(tmp_path)
+    workflow = _write_discovery_workflow(tmp_path, dynamic_only=dynamic_only)
     cache_dir = tmp_path / "cache"
     registry = WorkflowRegistry(cache_dir=cache_dir)
     registry.scan([str(workflow)])
@@ -103,7 +105,10 @@ def test_discovery_and_cache_preserve_ordered_structured_questions_without_key_o
     [descriptor] = registry.descriptors()
     [(node_id, metadata_json)] = descriptor.classifier_metadata_json
     declaration = ClassifierDeclaration.model_validate_json(metadata_json)
-    _assert_structured_declaration(declaration)
+    if dynamic_only:
+        assert declaration.questions is None
+    else:
+        _assert_structured_declaration(declaration)
     assert declaration.runtime.model == "discovery-model"
     assert declaration.runtime.timeout == 3.0
     [step_input] = declaration.step_inputs
@@ -136,7 +141,10 @@ def test_discovery_and_cache_preserve_ordered_structured_questions_without_key_o
     cached = ClassifierDeclaration.model_validate_json(
         catalog_workflow.classifier_metadata_json[node_id]
     )
-    _assert_structured_declaration(cached)
+    if dynamic_only:
+        assert cached.questions is None
+    else:
+        _assert_structured_declaration(cached)
     assert cached.runtime.model == "discovery-model"
     assert cached.runtime.timeout == 3.0
     assert cached.step_inputs == declaration.step_inputs

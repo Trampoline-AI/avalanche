@@ -307,7 +307,22 @@ function QuestionRow({
   );
 }
 
-export function ClassifierQuestions({ declaration }: { declaration: ClassifierDeclaration }) {
+export function ClassifierQuestions({
+  declaration,
+  context = "definition",
+}: {
+  declaration: ClassifierDeclaration;
+  context?: "definition" | "invocation";
+}) {
+  if (declaration.questions === null) {
+    return (
+      <p className="m-0 text-[11px] text-muted">
+        {context === "invocation"
+          ? "Questions were not resolved for this invocation."
+          : "Questions are supplied at runtime for each call."}
+      </p>
+    );
+  }
   return (
     <div className="classifier-questions min-w-0">
       {Object.entries(declaration.questions).map(([id, question]) => (
@@ -317,13 +332,28 @@ export function ClassifierQuestions({ declaration }: { declaration: ClassifierDe
   );
 }
 
-export function ClassifierDefinition({ declaration }: { declaration: ClassifierDeclaration }) {
+export function ClassifierDefinition({
+  declaration,
+  context = "definition",
+}: {
+  declaration: ClassifierDeclaration;
+  context?: "definition" | "invocation";
+}) {
   return (
     <div className="grid min-w-0 gap-5 py-3">
       <section aria-label="Classifier" className="min-w-0 border-l-2 border-classifier/40 pl-3">
         <section aria-label="Questions" className="min-w-0">
-          <h3 className="inspector-section-title">Questions</h3>
-          <ClassifierQuestions declaration={declaration} />
+          <h3 className="inspector-section-title">
+            {context === "definition" && declaration.questions !== null
+              ? "Default questions"
+              : "Questions"}
+          </h3>
+          {context === "definition" && declaration.questions !== null && (
+            <p className="mt-0 mb-2 text-[11px] text-muted">
+              Calls may replace these defaults with their own questions.
+            </p>
+          )}
+          <ClassifierQuestions declaration={declaration} context={context} />
         </section>
         <div className="mt-3 border-t border-line pt-3">
           <section aria-label="Classifier input" className="min-w-0">
@@ -356,6 +386,7 @@ export function ClassifierInvocationDetails({
   const definitionId = useId();
   const status = statusOverride ?? invocation.status;
   const result = invocation.result;
+  const questions = invocation.declaration.questions;
   return (
     <section
       className="classifier-invocation grid min-w-0 gap-3"
@@ -380,7 +411,7 @@ export function ClassifierInvocationDetails({
             {invocation.error}
           </p>
         )}
-        {result === null ? (
+        {result === null || questions === null ? (
           invocation.error === null && (
             <p className="m-0 text-[11px] text-muted" role="status">
               {status === "running"
@@ -398,7 +429,7 @@ export function ClassifierInvocationDetails({
             role="group"
             aria-label="Classification answers"
           >
-            {Object.entries(invocation.declaration.questions).map(([id, question]) => (
+            {Object.entries(questions).map(([id, question]) => (
               <QuestionRow key={id} id={id} question={question} answer={result.answers[id]} />
             ))}
           </div>
@@ -422,7 +453,7 @@ export function ClassifierInvocationDetails({
         </button>
         {definitionExpanded && (
           <div id={definitionId}>
-            <ClassifierDefinition declaration={invocation.declaration} />
+            <ClassifierDefinition declaration={invocation.declaration} context="invocation" />
           </div>
         )}
       </section>

@@ -1979,7 +1979,9 @@ describe("classifier inspection", () => {
     fireEvent.click(
       within(table.getByLabelText("Invocation classification-2")).getAllByRole("cell")[0],
     );
-    expect(await table.findByLabelText("Input state")).toHaveTextContent("input-2");
+    await waitFor(() =>
+      expect(table.getByLabelText("Input state")).toHaveTextContent("input-2"),
+    );
     expect(readJsonDetail).toHaveBeenCalledTimes(2);
   });
 
