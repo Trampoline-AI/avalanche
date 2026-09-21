@@ -62,15 +62,21 @@ def serve(
                 "authentication; use only behind a trusted and authenticated boundary",
                 listen_address,
             )
-        if server.add_insecure_port(listen_address) == 0:
+        bound_port = server.add_insecure_port(listen_address)
+        if bound_port == 0:
             raise RuntimeError(f"Could not bind operator gRPC server to {listen_address}")
+        server._avalanche_bound_port = bound_port
         server.start()
-    except BaseException:
+    except BaseException as failure:
+        if server is not None:
+            try:
+                server.stop(grace=0).wait(timeout=2.0)
+            except Exception as exc:
+                failure.add_note(f"gRPC shutdown also failed: {exc}")
         try:
-            if server is not None:
-                server.stop(grace=0)
-        finally:
             operator.close()
+        except Exception as exc:
+            failure.add_note(f"Operator shutdown also failed: {exc}")
         raise
     logger.info("Operator gRPC server listening on %s", listen_address)
 

@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+- Added a built-in development REST API for flow discovery, run creation,
+  summaries, snapshots, cancellation, output, and activity through the existing
+  operator gRPC service. `ava operator` now serves the browser UI and REST API
+  on loopback port 7435 by default; `--web-port` changes it and `--no-web`
+  preserves gRPC-only operation. `ava dev` and `ava web` expose the same API.
+
 ## 0.5.4
 
 - Updated the locked AnyIO dependency to 4.15.1 to fix TLS hostname validation

@@ -39,6 +39,12 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser.add_argument(
         "--webhook-port", type=int, default=7434, help="loopback webhook HTTP port"
     )
+    parser.add_argument(
+        "--web-port", type=int, default=7435, help="loopback browser UI and REST API HTTP port"
+    )
+    parser.add_argument(
+        "--no-web", action="store_true", help="serve gRPC without the HTTP listener"
+    )
     parser.add_argument("--ray", action="store_true", help="use the Ray executor")
     parser.add_argument(
         "--discovery-timeout",
@@ -56,6 +62,11 @@ def main(argv: Sequence[str] | None = None) -> int:
     )
     args = parser.parse_args(list(argv) if argv is not None else None)
     try:
+        from . import _validate_listener_ports
+
+        _validate_listener_ports(
+            args.port, args.webhook_port, None if args.no_web else args.web_port
+        )
         validate_discovery_timeout(args.discovery_timeout)
         selection = select_workflow_targets(args.flows)
     except ValueError as exc:
@@ -81,6 +92,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             port=args.port,
             host=args.host,
             webhook_port=args.webhook_port,
+            web_port=None if args.no_web else args.web_port,
             discovery_timeout=args.discovery_timeout,
             executor_backend="ray" if args.ray else "local",
         )

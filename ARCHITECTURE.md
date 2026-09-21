@@ -89,16 +89,16 @@ or webhook-triggered runs, observability, or a UI:
 # From the repository root
 uv run ava operator examples --port 7433
 
-# In another terminal
-uv run ava web --connect localhost:7433
-# or
+# Browser UI and REST are already available at http://127.0.0.1:7435.
+# Optional terminal client, in another terminal:
 uv run ava tui --connect localhost:7433
 ```
 
-`ava dev examples` is the browser-oriented convenience command. One process
-owns discovery, the operator gRPC server, and the connected browser UI; it waits
-for gRPC readiness before starting the UI. The browser UI listens on
-`http://127.0.0.1:7435` by default. It does not start the TUI.
+`ava operator` owns discovery, gRPC, and the loopback browser/REST listener;
+`--no-web` retains gRPC-only operation. `ava dev examples` additionally opens the
+browser automatically and waits for gRPC readiness before starting HTTP.
+The browser UI and REST API listen on `http://127.0.0.1:7435` by default;
+`--web-port` changes this port. Neither command starts the TUI.
 
 ## Workflow authoring and runtime
 
@@ -333,7 +333,7 @@ The default ports are:
 | --- | ---: | --- |
 | gRPC operator | `7433` | discovery, run control, snapshots, updates, results |
 | webhook ingress | `7434` | loopback JSON webhook routes when declared |
-| browser UI | `7435` | static browser UI and gRPC-Web proxy |
+| browser UI / REST | `7435` | static UI, gRPC-Web proxy, and `/api/v1` JSON API |
 
 ### Browser UI
 
@@ -341,9 +341,18 @@ The browser UI source lives in `web/operator/` and is built with Vite, React,
 and generated TypeScript protobuf bindings. Packaged static assets live in
 `src/runtime/operator/web_assets/`.
 
-`ava web` starts a loopback HTTP server that serves those assets and proxies
-browser gRPC-Web requests to the configured native gRPC operator. The browser
-does not receive a direct Python or gRPC channel to user workflow code.
+The built-in loopback HTTP server serves those assets and proxies browser
+gRPC-Web requests to the native gRPC operator. `ava web` can also launch it
+separately for a configured operator. The browser does not receive a direct
+Python or gRPC channel to user workflow code.
+
+`src/runtime/operator/rest.py` handles `/api/v1` discovery, run creation,
+summaries, snapshots, cancellation, output, and activity. Requests are validated
+at the HTTP boundary and translated to the same unary `OperatorServiceV2` RPCs.
+Responses use snake_case protobuf JSON, including encoded result documents and
+scope-bound page continuations. This adds no execution state, deployment
+infrastructure, or durable command queue. REST shares the listener's local-trust
+model, not an independent authentication layer. See README for the HTTP contract.
 
 ```text
 Browser SPA
@@ -386,9 +395,9 @@ perform workflow discovery, execute nodes, or manage Ray.
 
 The `ava` CLI is a thin front door:
 
-- `ava operator` starts the local operator;
-- `ava web` starts the browser listener and gRPC-Web proxy;
-- `ava dev` starts both;
+- `ava operator` starts the local operator and HTTP listener (`--no-web` disables HTTP);
+- `ava web` starts a separate browser, REST, and gRPC-Web listener;
+- `ava dev` starts the operator and HTTP listener, then opens the browser;
 - `ava run` sends a run request, including JSON input/context and file or
   workspace attachments;
 - `ava result` downloads a successful operator result;

@@ -47,11 +47,16 @@ _OPERATOR_READY_TIMEOUT_SECONDS = 5.0
 def main(argv: Sequence[str] | None = None) -> int:
     parser = _build_parser()
     args = parser.parse_args(list(argv) if argv is not None else None)
-    if args.command == "dev" and args.port == args.web_port:
-        parser.error("ava dev --port and --web-port must differ")
     if args.command in {"dev", "operator"}:
         try:
             validate_discovery_timeout(args.discovery_timeout)
+            from runtime.operator import _validate_listener_ports
+
+            _validate_listener_ports(
+                args.port,
+                args.webhook_port if args.command == "operator" else 7434,
+                None if args.command == "operator" and args.no_web else args.web_port,
+            )
             if args.command == "dev":
                 selection = select_workflow_targets(args.flows)
                 args.flows = list(selection.paths)
@@ -104,6 +109,12 @@ def _build_parser() -> argparse.ArgumentParser:
     )
     operator.add_argument(
         "--webhook-port", type=int, default=7434, help="loopback webhook HTTP port"
+    )
+    operator.add_argument(
+        "--web-port", type=int, default=7435, help="loopback browser UI and REST API HTTP port"
+    )
+    operator.add_argument(
+        "--no-web", action="store_true", help="serve gRPC without the HTTP listener"
     )
     operator.add_argument(
         "--log-level",
@@ -262,7 +273,9 @@ def _build_parser() -> argparse.ArgumentParser:
         help="workflow Python file or directory; uses workspace configuration when omitted",
     )
     dev.add_argument("--port", type=int, default=7433, help="operator gRPC port")
-    dev.add_argument("--web-port", type=int, default=7435, help="browser UI HTTP port")
+    dev.add_argument(
+        "--web-port", type=int, default=7435, help="browser UI and REST API HTTP port"
+    )
     dev.add_argument("--ray", action="store_true", help="use the Ray executor")
     dev.add_argument(
         "--log-level",
@@ -304,6 +317,8 @@ def _run_operator(args: argparse.Namespace) -> int:
         str(args.port),
         "--webhook-port",
         str(args.webhook_port),
+        "--web-port",
+        str(args.web_port),
         "--log-level",
         args.log_level,
         "--discovery-timeout",
@@ -311,6 +326,8 @@ def _run_operator(args: argparse.Namespace) -> int:
     ]
     if args.ray:
         runtime_args.append("--ray")
+    if args.no_web:
+        runtime_args.append("--no-web")
     return _operator_main(runtime_args)
 
 
@@ -1431,7 +1448,8 @@ def _run_dev(args: argparse.Namespace) -> int:
 
         stage = "operator startup"
         grpc_server = serve_operator(operator, port=args.port, block=False)
-        operator_address = f"127.0.0.1:{args.port}"
+        bound_port = grpc_server._avalanche_bound_port
+        operator_address = f"127.0.0.1:{bound_port}"
         channel = grpc.insecure_channel(operator_address)
         try:
             grpc.channel_ready_future(channel).result(timeout=_OPERATOR_READY_TIMEOUT_SECONDS)
@@ -1442,6 +1460,7 @@ def _run_dev(args: argparse.Namespace) -> int:
         stage = "web UI startup"
         browser_server = start_browser_server(operator_address, port=args.web_port)
         print(f"  Web UI ready: {browser_server.endpoint}")
+        print(f"  REST API ready: {browser_server.endpoint}/api/v1")
         _open_browser(browser_server.endpoint)
         print("Ready. Press Ctrl-C to stop.")
 
