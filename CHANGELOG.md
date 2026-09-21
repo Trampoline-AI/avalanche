@@ -7,6 +7,11 @@
   operator gRPC service. `ava operator` now serves the browser UI and REST API
   on loopback port 7435 by default; `--web-port` changes it and `--no-web`
   preserves gRPC-only operation. `ava dev` and `ava web` expose the same API.
+- REST mutations require JSON content types, including cancellation, so ordinary
+  cross-origin browser form submissions cannot cancel local runs.
+- `ava operator` and `ava dev` keep cleanup non-interruptible by SIGINT/SIGTERM,
+  releasing owned resources and restoring signal handlers even after repeated
+  shutdown signals or a fatal operator failure.
 
 ## 0.5.4
 

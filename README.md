@@ -249,7 +249,8 @@ curl -X POST http://127.0.0.1:7435/api/v1/runs \
 # Use the run_id returned above.
 curl http://127.0.0.1:7435/api/v1/runs/RUN_ID
 curl http://127.0.0.1:7435/api/v1/runs/RUN_ID/output
-curl -X POST http://127.0.0.1:7435/api/v1/runs/RUN_ID/cancel
+curl -X POST http://127.0.0.1:7435/api/v1/runs/RUN_ID/cancel \
+  -H 'Content-Type: application/json'
 ```
 
 Create requests require a nonempty `workflow_selector`. Optional `input_json`
@@ -277,8 +278,11 @@ remain available through gRPC and the existing CLI/UI, not these REST routes.
 Errors are JSON: `{"error":{"code":"NOT_FOUND","message":"..."}}`.
 Invalid JSON or query parameters return `400`, unknown resources `404`,
 unsupported methods `405`, and duplicate runs or unavailable results `409`.
-Create requests require `application/json` (`415` otherwise) and a
-`Content-Length` (`411` otherwise), with a 4 MiB body limit (`413`).
+Create and cancellation requests require `application/json` (`415` otherwise).
+This rejects ordinary browser form submissions; cross-origin JSON requests need
+a CORS preflight, which the local listener does not authorize. Cancellation needs
+no body. Create requests also require `Content-Length` (`411` otherwise), with a
+4 MiB body limit (`413`).
 An unavailable operator returns `503`; an upstream call exceeding 30 seconds
 returns `504`. A timeout does not prove a run was not started: if you supplied
 a run ID, inspect that run before submitting another request.

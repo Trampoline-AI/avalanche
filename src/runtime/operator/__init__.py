@@ -70,9 +70,11 @@ def serve(
     server = None
     browser_server = None
     previous_handlers = {}
+    cleaning_up = False
 
     def request_shutdown(_signum, _frame) -> None:
-        raise KeyboardInterrupt
+        if not cleaning_up:
+            raise KeyboardInterrupt
 
     try:
         if threading.current_thread() is threading.main_thread():
@@ -103,6 +105,7 @@ def serve(
     except KeyboardInterrupt:
         pass
     finally:
+        cleaning_up = True
         primary_error = sys.exception()
         cleanup_error = None
         if browser_server is not None:
