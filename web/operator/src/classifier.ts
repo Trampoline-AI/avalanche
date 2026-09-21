@@ -49,7 +49,7 @@ export type ClassifierAnswer =
 export interface ClassificationResult {
   model: string;
   answers: Record<string, ClassifierAnswer>;
-  usage: { input_tokens: number; output_tokens: number };
+  usage: { input_tokens: number | null; output_tokens: number | null };
 }
 
 export interface ClassifierInvocation {
@@ -320,8 +320,14 @@ function result(value: unknown, declaration: ClassifierDeclaration): Classificat
       ]),
     ),
     usage: {
-      input_tokens: integer(usage.input_tokens, `${path}.usage.input_tokens`),
-      output_tokens: integer(usage.output_tokens, `${path}.usage.output_tokens`),
+      input_tokens:
+        usage.input_tokens === null || usage.input_tokens === undefined
+          ? null
+          : integer(usage.input_tokens, `${path}.usage.input_tokens`),
+      output_tokens:
+        usage.output_tokens === null || usage.output_tokens === undefined
+          ? null
+          : integer(usage.output_tokens, `${path}.usage.output_tokens`),
     },
   };
 }

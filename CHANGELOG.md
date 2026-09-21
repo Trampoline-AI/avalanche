@@ -2,8 +2,18 @@
 
 ## Unreleased
 
+- Classifier answers remain valid when TypeSafe omits either token-usage count or
+  reports it as null; unknown counts remain distinct from zero.
+- Rejected workflow-success events now release already-accepted result payloads,
+  preventing classifier protocol errors from exhausting result-store quotas.
+- Live classifier calls remain reachable after the 500-call descriptor window
+  fills, without moving the currently visible page or prefetching collapsed details.
+- Classifier history pagination preserves its original snapshot cursor as event
+  retention advances, while still rejecting forged or expired continuations.
 - DAG cards now align by their vertical centers, keeping same-row arrows straight
-  when connected cards have different heights.
+  when connected cards have different heights. Row spacing follows measured card
+  heights so tall siblings remain separated when zooming between compact and
+  detailed views.
 - Source, ordinary, destination, and agent steps now share the classifier's
   **Step interface** panel, with annotated inputs, return types, and expandable
   nested schemas. Agent-call fields remain separate. Run views retain the

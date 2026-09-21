@@ -1089,7 +1089,11 @@ class OperatorV2Servicer(pb_grpc.OperatorServiceV2Servicer):
             context.abort(grpc.StatusCode.NOT_FOUND, "Activity target not found")
         except ValueError as exc:
             context.abort(grpc.StatusCode.INVALID_ARGUMENT, str(exc))
-        cursor = self._cursor(page.as_of_sequence)
+        cursor = (
+            self._copy_cursor(request.continuation.cursor)
+            if token
+            else self._cursor(page.as_of_sequence)
+        )
         message = pb.RunActivityPageV2(
             cursor=cursor,
             run_id=page.run_id if request.node_id else request.run_id,

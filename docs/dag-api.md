@@ -73,6 +73,9 @@ change what the function receives or returns.
 At detailed zoom, source, ordinary, and destination DAG cards show their annotated
 inputs and return type in the same two-column layout as classifier cards. Compact
 cards hide these fields. Agent cards keep showing the agent's call fields.
+Cards align by their vertical centers, keeping same-row arrows straight even when
+connected cards have different heights. Row spacing follows measured card heights
+to keep siblings separated as zoom changes.
 
 Current source, ordinary, and destination sidebars open on **Definition**, which
 contains the step interface. **Code** is a separate tab that loads the Python source

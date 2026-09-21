@@ -2198,161 +2198,175 @@ class Operator:
             self._result_store.discard(handle.result_bundle)
 
         discard_stored_result = False
-        with self._lock:
-            run = self._runs.get(run_id)
-            if run is None:
-                discard_stored_result = stored_result is not None
-            else:
-                summary_changed = False
-                changed_node_ids: tuple[str, ...] = ()
-                status_node_ids: tuple[str, ...] | None = None
-                trace_node_ids: tuple[str, ...] = ()
-                finalized_traces: dict[str, bytes] = {}
-                agent_events: dict[str, AgentEvent] = {}
-                classifier_events: dict[str, ClassifierEvent] = {}
-                log_entry: LogEntry | None = None
-                mutated = False
+        try:
+            with self._lock:
+                run = self._runs.get(run_id)
+                if run is None:
+                    discard_stored_result = stored_result is not None
+                else:
+                    summary_changed = False
+                    changed_node_ids: tuple[str, ...] = ()
+                    status_node_ids: tuple[str, ...] | None = None
+                    trace_node_ids: tuple[str, ...] = ()
+                    finalized_traces: dict[str, bytes] = {}
+                    agent_events: dict[str, AgentEvent] = {}
+                    classifier_events: dict[str, ClassifierEvent] = {}
+                    log_entry: LogEntry | None = None
+                    mutated = False
 
-                if event_type == "running":
-                    if run.status != RunStatus.CANCELLED:
-                        run.status = RunStatus.RUNNING
-                        run.started_at = event["timestamp"]
-                        summary_changed = True
-                        mutated = True
-                elif event_type.startswith("node_"):
-                    node = run.nodes.get(event["node_id"])
-                    if node is None:
-                        raise _CoordinatorProtocolError(
-                            "node event references unpublished node "
-                            f"{_bounded_ascii(event['node_id'])}"
-                        )
-                    if run.status != RunStatus.CANCELLED:
-                        status = {
-                            "node_started": NodeStatus.RUNNING,
-                            "node_succeeded": NodeStatus.SUCCESS,
-                            "node_failed": NodeStatus.FAILED,
-                        }[event_type]
-                        node.status = status
-                        if status == NodeStatus.RUNNING:
-                            node.started_at = event["timestamp"]
-                        else:
-                            node.ended_at = event["timestamp"]
-                            node.error = event["error"] if status == NodeStatus.FAILED else None
-                        changed_node_ids = (node.node_id,)
-                        status_node_ids = changed_node_ids
-                        mutated = True
-                elif event_type == "agent_evidence":
-                    node_id = event["node_id"]
-                    if node_id not in run.nodes:
-                        raise _CoordinatorProtocolError(
-                            "agent evidence references unpublished node "
-                            f"{_bounded_ascii(node_id)}"
-                        )
-                    try:
-                        mutation = self._record_agent_evidence_event_locked(
-                            run, node_id, event["event"]
-                        )
-                    except BaseException:
-                        mutation = None
-                    if mutation is not None:
-                        log_entry = mutation.entry
-                        changed_node_ids = (node_id,)
-                        trace_node_ids = (node_id,)
-                        status_node_ids = ()
-                        if mutation.agent_event is not None:
-                            agent_events[node_id] = mutation.agent_event
-                        if mutation.finalized_trace is not None:
-                            finalized_traces[node_id] = mutation.finalized_trace
-                        mutated = True
-                elif event_type == "classifier_evidence":
-                    active_handle = self._active_runs.get(run_id)
-                    if active_handle is not None and active_handle is not handle:
-                        return False
-                    if classifier_invocation is None:
-                        raise _CoordinatorProtocolError(
-                            "missing validated classifier invocation"
-                        )
-                    node_id = event["node_id"]
-                    classifier_event = self._record_classifier_evidence_event_locked(
-                        run, node_id, classifier_invocation
-                    )
-                    if classifier_event is not None:
-                        classifier_events[node_id] = classifier_event
-                        changed_node_ids = (node_id,)
-                        status_node_ids = ()
-                        mutated = True
-                elif event_type == "log":
-                    if run.status in {
-                        RunStatus.SUCCESS,
-                        RunStatus.FAILED,
-                        RunStatus.CANCELLED,
-                    }:
-                        return False
-                    log_node_id = event["node_id"]
-                    if log_node_id not in run.nodes:
-                        matches = (
-                            node.node_id
-                            for node in run.nodes.values()
-                            if node.name == log_node_id
-                        )
-                        matched_node_id = next(matches, None)
-                        if matched_node_id is not None and next(matches, None) is None:
-                            log_node_id = matched_node_id
-                    log_entry = LogEntry(
-                        timestamp=datetime.fromtimestamp(event["timestamp"]),
-                        level=_LEVEL_MAP.get(event["level"], LogLevel.INFO),
-                        node_id=log_node_id,
-                        message=event["message"],
-                    )
-                    self._append_log_locked(run, log_entry)
-                    mutated = True
-                elif terminal:
-                    if run.status != RunStatus.CANCELLED:
-                        effective_status = (
-                            "cancelled"
-                            if event["status"] == "success"
-                            and (cancelled_result or handle.cancel_event.is_set())
-                            else event["status"]
-                        )
-                        if effective_status == "success" and any(
-                            not invocation.terminal
-                            for invocation in self._classifier_invocations.get(
-                                run_id, {}
-                            ).values()
-                        ):
+                    if event_type == "running":
+                        if run.status != RunStatus.CANCELLED:
+                            run.status = RunStatus.RUNNING
+                            run.started_at = event["timestamp"]
+                            summary_changed = True
+                            mutated = True
+                    elif event_type.startswith("node_"):
+                        node = run.nodes.get(event["node_id"])
+                        if node is None:
                             raise _CoordinatorProtocolError(
-                                "workflow success has unfinished classifier invocations"
+                                "node event references unpublished node "
+                                f"{_bounded_ascii(event['node_id'])}"
                             )
-                        run.status = {
-                            "success": RunStatus.SUCCESS,
-                            "failed": RunStatus.FAILED,
-                            "cancelled": RunStatus.CANCELLED,
-                        }[effective_status]
-                        if stored_result is not None and effective_status == "success":
-                            self._stored_results[run_id] = stored_result
+                        if run.status != RunStatus.CANCELLED:
+                            status = {
+                                "node_started": NodeStatus.RUNNING,
+                                "node_succeeded": NodeStatus.SUCCESS,
+                                "node_failed": NodeStatus.FAILED,
+                            }[event_type]
+                            node.status = status
+                            if status == NodeStatus.RUNNING:
+                                node.started_at = event["timestamp"]
+                            else:
+                                node.ended_at = event["timestamp"]
+                                node.error = (
+                                    event["error"] if status == NodeStatus.FAILED else None
+                                )
+                            changed_node_ids = (node.node_id,)
+                            status_node_ids = changed_node_ids
+                            mutated = True
+                    elif event_type == "agent_evidence":
+                        node_id = event["node_id"]
+                        if node_id not in run.nodes:
+                            raise _CoordinatorProtocolError(
+                                "agent evidence references unpublished node "
+                                f"{_bounded_ascii(node_id)}"
+                            )
+                        try:
+                            mutation = self._record_agent_evidence_event_locked(
+                                run, node_id, event["event"]
+                            )
+                        except BaseException:
+                            mutation = None
+                        if mutation is not None:
+                            log_entry = mutation.entry
+                            changed_node_ids = (node_id,)
+                            trace_node_ids = (node_id,)
+                            status_node_ids = ()
+                            if mutation.agent_event is not None:
+                                agent_events[node_id] = mutation.agent_event
+                            if mutation.finalized_trace is not None:
+                                finalized_traces[node_id] = mutation.finalized_trace
+                            mutated = True
+                    elif event_type == "classifier_evidence":
+                        active_handle = self._active_runs.get(run_id)
+                        if active_handle is not None and active_handle is not handle:
+                            return False
+                        if classifier_invocation is None:
+                            raise _CoordinatorProtocolError(
+                                "missing validated classifier invocation"
+                            )
+                        node_id = event["node_id"]
+                        classifier_event = self._record_classifier_evidence_event_locked(
+                            run, node_id, classifier_invocation
+                        )
+                        if classifier_event is not None:
+                            classifier_events[node_id] = classifier_event
+                            changed_node_ids = (node_id,)
+                            status_node_ids = ()
+                            mutated = True
+                    elif event_type == "log":
+                        if run.status in {
+                            RunStatus.SUCCESS,
+                            RunStatus.FAILED,
+                            RunStatus.CANCELLED,
+                        }:
+                            return False
+                        log_node_id = event["node_id"]
+                        if log_node_id not in run.nodes:
+                            matches = (
+                                node.node_id
+                                for node in run.nodes.values()
+                                if node.name == log_node_id
+                            )
+                            matched_node_id = next(matches, None)
+                            if matched_node_id is not None and next(matches, None) is None:
+                                log_node_id = matched_node_id
+                        log_entry = LogEntry(
+                            timestamp=datetime.fromtimestamp(event["timestamp"]),
+                            level=_LEVEL_MAP.get(event["level"], LogLevel.INFO),
+                            node_id=log_node_id,
+                            message=event["message"],
+                        )
+                        self._append_log_locked(run, log_entry)
+                        mutated = True
+                    elif terminal:
+                        if run.status != RunStatus.CANCELLED:
+                            effective_status = (
+                                "cancelled"
+                                if event["status"] == "success"
+                                and (cancelled_result or handle.cancel_event.is_set())
+                                else event["status"]
+                            )
+                            if effective_status == "success" and any(
+                                not invocation.terminal
+                                for invocation in self._classifier_invocations.get(
+                                    run_id, {}
+                                ).values()
+                            ):
+                                raise _CoordinatorProtocolError(
+                                    "workflow success has unfinished classifier invocations"
+                                )
+                            run.status = {
+                                "success": RunStatus.SUCCESS,
+                                "failed": RunStatus.FAILED,
+                                "cancelled": RunStatus.CANCELLED,
+                            }[effective_status]
+                            if stored_result is not None and effective_status == "success":
+                                self._stored_results[run_id] = stored_result
+                            elif stored_result is not None:
+                                discard_stored_result = True
                         elif stored_result is not None:
                             discard_stored_result = True
-                    elif stored_result is not None:
-                        discard_stored_result = True
-                    run.ended_at = time.monotonic()
-                    changed_node_ids = self._skip_unfinished_nodes_locked(run)
-                    status_node_ids = changed_node_ids
-                    summary_changed = True
-                    mutated = True
+                        run.ended_at = time.monotonic()
+                        changed_node_ids = self._skip_unfinished_nodes_locked(run)
+                        status_node_ids = changed_node_ids
+                        summary_changed = True
+                        mutated = True
 
-                if not mutated:
-                    return terminal
-                notifications = self._publish_run_locked(
-                    run,
-                    summary_changed=summary_changed,
-                    changed_node_ids=changed_node_ids,
-                    status_node_ids=status_node_ids,
-                    trace_node_ids=trace_node_ids,
-                    finalized_traces=finalized_traces,
-                    agent_events=agent_events,
-                    classifier_events=classifier_events,
-                    log_entry=log_entry,
-                )
+                    if not mutated:
+                        return terminal
+                    notifications = self._publish_run_locked(
+                        run,
+                        summary_changed=summary_changed,
+                        changed_node_ids=changed_node_ids,
+                        status_node_ids=status_node_ids,
+                        trace_node_ids=trace_node_ids,
+                        finalized_traces=finalized_traces,
+                        agent_events=agent_events,
+                        classifier_events=classifier_events,
+                        log_entry=log_entry,
+                    )
+        except BaseException as error:
+            if stored_result is not None:
+                try:
+                    with self._lock:
+                        if self._stored_results.get(run_id) is stored_result:
+                            self._stored_results.pop(run_id)
+                    self._result_store.discard(stored_result)
+                except Exception as cleanup_error:
+                    error.add_note(f"Rejected workflow result cleanup failed: {cleanup_error}")
+                    logger.exception("Rejected workflow result cleanup failed for %s", run_id)
+            raise
 
         if discard_stored_result and stored_result is not None:
             self._result_store.discard(stored_result)
