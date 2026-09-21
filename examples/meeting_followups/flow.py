@@ -16,6 +16,7 @@ from .schema import (
     Department,
     Destination,
     Extraction,
+    FollowupInput,
     MeetingContext,
     MeetingRecord,
     PlannedIssue,
@@ -59,6 +60,7 @@ async def extract_followups(meeting: MeetingContext, *, agent: ava.Agent) -> Ext
 
 
 @ava.classifier_step(
+    input_model=FollowupInput,
     questions={
         "category": {
             "type": "choice",

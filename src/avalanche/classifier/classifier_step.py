@@ -13,18 +13,29 @@ from contextvars import ContextVar
 from copy import deepcopy
 from dataclasses import dataclass
 from functools import update_wrapper
-from typing import TYPE_CHECKING
+from types import SimpleNamespace, UnionType
+from typing import (
+    TYPE_CHECKING,
+    Annotated,
+    Literal,
+    Union,
+    get_args,
+    get_origin,
+    get_type_hints,
+)
 
-from pydantic import JsonValue, ValidationError
+from pydantic import BaseModel, JsonValue, PydanticUserError, TypeAdapter, ValidationError
+from pydantic.json_schema import JsonSchemaMode
 
-from ..dag import Node, NodeType
+from ..dag import Node, NodeType, _matching_provider, _safe_issubclass
 from .evidence import emit_classifier_evidence
 from .models import (
-    _QUESTIONS,
     ClassificationResult,
     ClassifierDeclaration,
     ClassifierInvocation,
     ClassifierRuntime,
+    ClassifierStepInput,
+    ClassifierStepOutput,
     JSONContent,
     validate_questions,
     validate_runtime_defaults,
@@ -94,9 +105,16 @@ def _adapt_response(
 class Classifier:
     """Injected callable retaining each validated request state in lifecycle evidence."""
 
-    def __init__(self, *, declaration: ClassifierDeclaration, step_name: str) -> None:
+    def __init__(
+        self,
+        *,
+        declaration: ClassifierDeclaration,
+        step_name: str,
+        input_model: type[BaseModel] | None = None,
+    ) -> None:
         self._declaration = declaration
         self._step_name = step_name
+        self._input_model = input_model
         self._client: AsyncTypeSafeClient | None = None
         self._invocation_index = 0
         self._closed = False
@@ -126,6 +144,13 @@ class Classifier:
             try:
                 try:
                     request_state = validate_state(state)
+                    if self._input_model is not None:
+                        validated = self._input_model.model_validate_json(
+                            json.dumps(request_state, ensure_ascii=False, allow_nan=False)
+                        )
+                        request_state = validate_state(
+                            validated.model_dump(mode="json", by_alias=True)
+                        )
                     record = record.model_copy(update={"input": deepcopy(request_state)})
                 finally:
                     # Rejected state still gets a running/failed pair with null input.
@@ -239,7 +264,8 @@ async def _close_classifier(classifier: Classifier) -> None:
 @dataclass(frozen=True)
 class _ClassifierStepSpec:
     user_fn: Callable[..., object]
-    questions_json: str
+    declaration_json: str
+    input_model: type[BaseModel] | None
     runtime_overrides: ClassifierRuntime
     public_signature: inspect.Signature
 
@@ -250,9 +276,9 @@ class _ClassifierStepSpec:
             **validate_runtime_defaults(dict(workflow_defaults or {})),
             **self.runtime_overrides.model_dump(mode="json", exclude_unset=True),
         }
-        return ClassifierDeclaration(
-            questions=_QUESTIONS.validate_json(self.questions_json),
-            runtime=ClassifierRuntime.model_validate(runtime),
+        declaration = ClassifierDeclaration.model_validate_json(self.declaration_json)
+        return declaration.model_copy(
+            update={"runtime": ClassifierRuntime.model_validate(runtime)}
         )
 
     def declaration_metadata(
@@ -265,6 +291,7 @@ class _ClassifierStepSpec:
         return Classifier(
             declaration=self.declaration(_WORKFLOW_CLASSIFIER_DEFAULTS.get()),
             step_name=self.user_fn.__qualname__,
+            input_model=self.input_model,
         )
 
     def with_workflow_defaults(
@@ -288,8 +315,32 @@ class _ClassifierStepSpec:
         return bound
 
 
-def _public_step_signature(user_fn: Callable[..., object]) -> inspect.Signature:
+def _resolved_annotations(
+    user_fn: Callable[..., object], localns: dict[str, object] | None
+) -> dict[str, object]:
+    try:
+        return get_type_hints(user_fn, localns=localns, include_extras=True)
+    except (NameError, TypeError, SyntaxError):
+        # One unresolved annotation must not hide all the other declared types.
+        resolved: dict[str, object] = {}
+        for name, annotation in inspect.get_annotations(user_fn).items():
+            try:
+                resolved[name] = get_type_hints(
+                    SimpleNamespace(__annotations__={name: annotation}),
+                    globalns=user_fn.__globals__,
+                    localns=localns,
+                    include_extras=True,
+                )[name]
+            except (NameError, TypeError, SyntaxError):
+                resolved[name] = annotation
+        return resolved
+
+
+def _public_step_signature(
+    user_fn: Callable[..., object], localns: dict[str, object] | None
+) -> inspect.Signature:
     signature = inspect.signature(user_fn)
+    annotations = _resolved_annotations(user_fn, localns)
     parameter = signature.parameters.get("classifier")
     if parameter is None or parameter.kind is not inspect.Parameter.KEYWORD_ONLY:
         raise ClassifierStepError(
@@ -298,22 +349,79 @@ def _public_step_signature(user_fn: Callable[..., object]) -> inspect.Signature:
         )
     if parameter.default is not inspect.Parameter.empty:
         raise ClassifierStepError("classifier is framework-injected and cannot have a default")
-    try:
-        annotation = inspect.get_annotations(user_fn, eval_str=True).get("classifier")
-    except (NameError, TypeError, ValueError):
-        annotation = parameter.annotation
-    if annotation is not Classifier:
+    if annotations.get("classifier") is not Classifier:
         raise ClassifierStepError("classifier parameter must be annotated ava.Classifier")
     return signature.replace(
         parameters=[
-            value for name, value in signature.parameters.items() if name != "classifier"
-        ]
+            value.replace(annotation=annotations.get(name, value.annotation))
+            for name, value in signature.parameters.items()
+            if name != "classifier"
+        ],
+        return_annotation=annotations.get("return", signature.return_annotation),
     )
+
+
+def _annotation_name(annotation: object) -> str:
+    origin = get_origin(annotation)
+    arguments = get_args(annotation)
+    if origin is Annotated:
+        return _annotation_name(arguments[0])
+    if origin in (Union, UnionType):
+        return " | ".join(_annotation_name(argument) for argument in arguments)
+    if origin is not None and origin is not Literal:
+        parameters = ", ".join(_annotation_name(argument) for argument in arguments)
+        return f"{_annotation_name(origin)}[{parameters}]"
+    if annotation is type(None):
+        return "None"
+    if isinstance(annotation, type):
+        return annotation.__name__
+    if isinstance(annotation, str):
+        return annotation
+    return inspect.formatannotation(annotation)
+
+
+def _annotation_schema(annotation: object, *, mode: JsonSchemaMode) -> ClassifierStepOutput:
+    if annotation is inspect.Signature.empty:
+        return ClassifierStepOutput()
+    type_name = _annotation_name(annotation)
+    try:
+        schema = TypeAdapter(annotation).json_schema(mode=mode)
+    except (PydanticUserError, NameError, TypeError, ValueError):
+        schema = None
+    return ClassifierStepOutput(type_name=type_name, json_schema=schema)
+
+
+def _step_inputs(signature: inspect.Signature) -> list[ClassifierStepInput]:
+    from ..runtime import BaseContext, BaseInput
+    from ..runtime.providers import PROVIDERS
+
+    inputs: list[ClassifierStepInput] = []
+    for parameter in signature.parameters.values():
+        runtime_type = parameter.annotation
+        if get_origin(runtime_type) is Annotated:
+            runtime_type = get_args(runtime_type)[0]
+        if _safe_issubclass(runtime_type, (BaseContext, BaseInput)):
+            continue
+        if _matching_provider(parameter.default, PROVIDERS) is not None:
+            continue
+        annotation = _annotation_schema(parameter.annotation, mode="validation")
+        inputs.append(
+            ClassifierStepInput(
+                name=parameter.name,
+                type_name=annotation.type_name,
+                json_schema=annotation.json_schema,
+                required=parameter.default is inspect.Parameter.empty
+                and parameter.kind
+                not in (inspect.Parameter.VAR_POSITIONAL, inspect.Parameter.VAR_KEYWORD),
+            )
+        )
+    return inputs
 
 
 def classifier_step(
     *,
     questions: Mapping[str, object],
+    input_model: type[BaseModel] | None = None,
     model: str | None = None,
     timeout: float | None = None,
     slug: str | None = None,
@@ -321,32 +429,46 @@ def classifier_step(
     """Declare fixed TypeSafe questions on an ordinary, bodyful workflow step."""
     try:
         validated_questions = validate_questions(questions)
+        if input_model is not None and not _safe_issubclass(input_model, BaseModel):
+            raise TypeError("input_model must be a Pydantic model class")
+        input_schema = (
+            TypeAdapter(input_model).json_schema(mode="serialization")
+            if input_model is not None
+            else None
+        )
         overrides: dict[str, object] = {}
         if model is not None:
             overrides["model"] = model
         if timeout is not None:
             overrides["timeout"] = timeout
         runtime_overrides = ClassifierRuntime.model_validate(overrides)
-        questions_json = json.dumps(
-            {
-                name: question.model_dump(mode="json")
-                for name, question in validated_questions.items()
-            },
-            ensure_ascii=False,
-            allow_nan=False,
-            separators=(",", ":"),
-        )
-    except (ValidationError, ValueError, TypeError) as error:
+    except (PydanticUserError, ValidationError, ValueError, TypeError) as error:
         raise ClassifierStepError(
             f"invalid classifier declaration: {_error_description(error)}"
         ) from None
 
     def decorator(user_fn: Callable[..., object]) -> Node:
+        frame = inspect.currentframe()
+        try:
+            localns = frame.f_back.f_locals if frame is not None and frame.f_back else None
+            public_signature = _public_step_signature(user_fn, localns)
+        finally:
+            del frame
+        declaration = ClassifierDeclaration(
+            questions=validated_questions,
+            runtime=runtime_overrides,
+            input_schema=input_schema,
+            step_inputs=_step_inputs(public_signature),
+            step_output=_annotation_schema(
+                public_signature.return_annotation, mode="serialization"
+            ),
+        )
         spec = _ClassifierStepSpec(
             user_fn=user_fn,
-            questions_json=questions_json,
+            declaration_json=declaration.model_dump_json(),
+            input_model=input_model,
             runtime_overrides=runtime_overrides,
-            public_signature=_public_step_signature(user_fn),
+            public_signature=public_signature,
         )
 
         async def wrapper(*args: object, **kwargs: object) -> object:
