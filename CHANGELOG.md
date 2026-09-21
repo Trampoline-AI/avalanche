@@ -47,36 +47,6 @@
   requesting state. Python client run initialization preserves issued node
   activity bindings for classifier evidence.
 
-## 0.4.1
-
-- Changed Avalanche's license to MIT to match predict-rlm's license. The Python
-  distribution and operator UI ship the MIT license text and metadata; third-party
-  license notices remain intact.
-
-## 0.4.0
-- Late browser run-start responses no longer override newer navigation, retained
-  runs remain inspectable after their current workflow definition disappears, and
-  pending cancellation disables repeat submissions.
-- Open agent trace details take priority over background summary hydration within
-  the bounded browser cache. Evicted details and failed requests expose explicit
-  reload and retry controls instead of remaining stuck in a loading state.
-- Live status updates no longer reset compact timeline scrolling. Mobile workflow
-  drawers keep their last rows reachable, and bundled fonts preserve Markdown italics.
-- The floating and expanded browser timelines now use a subtle, trackless scroll handle over
-  full-width rows, clear of their text. It stays faintly visible when scrollable
-  and reaches full opacity on hover.
-- The expanded run browser now keeps the Timeline name. Both timeline sizes use
-  dark 2px separators above Current, dark 1px separators below it, and lighter
-  1px separators between runs.
-- Local and embedded operator browser interfaces now share one workflow workspace.
-  The timeline switches between Current and historical runs. Selecting the newest
-  run follows new runs; selecting an older run pins it, and Current stops following.
-  Selection intent survives reconnects, and Current keeps node definitions available.
-- Added an all-runs browser beside the workflow graph, with 25-run pages, status
-  and inclusive local-date filters, and run-ID search. The floating timeline expands
-  into a full-height left-hand browser without replacing node inspection. Collapse
-  and Escape restore the compact timeline; pagination covers loaded history only.
-
 ### Operator web interface
 
 - Agent graph nodes now have a violet badge with a robot icon that remains visible
@@ -105,6 +75,40 @@
   with aligned answer, status, and duration columns, 25-call pages, and Previous/Next
   navigation. Calls start at index 1 in ascending order, all collapsed by default.
   Rows expand inline without fetching details for other rows or pages.
+
+## 0.4.1
+
+- Changed Avalanche's license to MIT to match predict-rlm's license. The Python
+  distribution and operator UI ship the MIT license text and metadata; third-party
+  license notices remain intact.
+
+## 0.4.0
+
+- Late browser run-start responses no longer override newer navigation, retained
+  runs remain inspectable after their current workflow definition disappears, and
+  pending cancellation disables repeat submissions.
+- Open agent trace details take priority over background summary hydration within
+  the bounded browser cache. Evicted details and failed requests expose explicit
+  reload and retry controls instead of remaining stuck in a loading state.
+- Live status updates no longer reset compact timeline scrolling. Mobile workflow
+  drawers keep their last rows reachable, and bundled fonts preserve Markdown italics.
+- The floating and expanded browser timelines now use a subtle, trackless scroll handle over
+  full-width rows, clear of their text. It stays faintly visible when scrollable
+  and reaches full opacity on hover.
+- The expanded run browser now keeps the Timeline name. Both timeline sizes use
+  dark 2px separators above Current, dark 1px separators below it, and lighter
+  1px separators between runs.
+- Local and embedded operator browser interfaces now share one workflow workspace.
+  The timeline switches between Current and historical runs. Selecting the newest
+  run follows new runs; selecting an older run pins it, and Current stops following.
+  Selection intent survives reconnects, and Current keeps node definitions available.
+- Added an all-runs browser beside the workflow graph, with 25-run pages, status
+  and inclusive local-date filters, and run-ID search. The floating timeline expands
+  into a full-height left-hand browser without replacing node inspection. Collapse
+  and Escape restore the compact timeline; pagination covers loaded history only.
+
+### Operator web interface
+
 - The operator UI now bundles Delta Console's Nacelle Regular and SemiBold fonts,
   while keeping code and filename references monospace.
 - The local workflow sidebar now follows Delta Console's padded, square-cornered
