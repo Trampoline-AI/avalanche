@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 0.5.1
+
 - Expanded the Avalanche authoring skill with classifier question-object examples
   for routing, overlapping labels, scoring, and evidence checks, plus guidance on
   structured rubrics, candidate selection, batching, and uncertainty.
