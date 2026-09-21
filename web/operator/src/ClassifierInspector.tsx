@@ -123,6 +123,8 @@ function ClassifierHistory({
   const pageController = useRef<AbortController | undefined>(undefined);
   const detailControllers = useRef(new Map<string, AbortController>());
   const selectedBodyToken = useRef<string | undefined>(undefined);
+  // Keep the visible page anchored while the rest of the bounded window follows new calls.
+  const visibleInvocationIds = useRef<string[]>([]);
   const runId = run.summary?.runId ?? "";
   const eventPageToken = node?.eventPageToken ?? "";
   const operatorInstanceId = run.operatorInstanceId;
@@ -158,13 +160,24 @@ function ClassifierHistory({
           setStored((current) => {
             if (current.api !== api) return current;
             const grouped = groupInvocations([...current.page.records, ...page.records]);
+            const retainedIds = current.loaded
+              ? visibleInvocationIds.current
+              : page.records.slice(0, CALL_PAGE_SIZE).map((event) => event.invocationId);
             return {
               ...current,
               loaded: true,
               historyEvicted: current.historyEvicted || grouped.size > DESCRIPTOR_WINDOW_SIZE,
               page: {
                 ...page,
-                records: boundDescriptors(grouped, (event) => event.eventSequence, "newer"),
+                records: boundDescriptors(
+                  grouped,
+                  (event) => event.eventSequence,
+                  "newer",
+                  retainedIds.flatMap((id) => {
+                    const event = grouped.get(id);
+                    return event ? [event.eventSequence] : [];
+                  }),
+                ),
               },
             };
           });
@@ -197,6 +210,7 @@ function ClassifierHistory({
     setPageStartId(null);
     setNextPageAfter(null);
     setStored(emptyHistory(api));
+    visibleInvocationIds.current = [];
     if (eventPageToken && runId) loadPage(eventPageToken);
     else setStored({ ...emptyHistory(api), loaded: true });
     const controllers = detailControllers.current;
@@ -208,10 +222,13 @@ function ClassifierHistory({
     };
   }, [api, eventPageToken, loadPage, runId]);
 
-  const events = useMemo(() => {
-    const grouped = groupInvocations([...state.page.records, ...liveEvents]);
-    return boundDescriptors(grouped, (event) => String(event.invocationIndex), "older");
-  }, [liveEvents, state.page.records]);
+  const events = useMemo(
+    () =>
+      [...state.page.records].sort(
+        (left, right) => left.invocationIndex - right.invocationIndex,
+      ),
+    [state.page.records],
+  );
   const pageOffset =
     pageStartId === null
       ? 0
@@ -223,6 +240,36 @@ function ClassifierHistory({
   const canAdvance =
     pageOffset + CALL_PAGE_SIZE < events.length || Boolean(state.page.nextPageToken);
 
+  useEffect(() => {
+    visibleInvocationIds.current = visibleEvents.map((event) => event.invocationId);
+    if (pageStartId === null && state.loaded && visibleEvents.length) {
+      setPageStartId(visibleEvents[0].invocationId);
+    }
+  }, [pageStartId, state.loaded, visibleEvents]);
+
+  useEffect(() => {
+    if (!liveEvents.length) return;
+    setStored((current) => {
+      if (current.api !== api) return current;
+      const grouped = groupInvocations([...current.page.records, ...liveEvents]);
+      return {
+        ...current,
+        historyEvicted: current.historyEvicted || grouped.size > DESCRIPTOR_WINDOW_SIZE,
+        page: {
+          ...current.page,
+          records: boundDescriptors(
+            grouped,
+            (event) => event.eventSequence,
+            "newer",
+            visibleInvocationIds.current.flatMap((id) => {
+              const event = grouped.get(id);
+              return event ? [event.eventSequence] : [];
+            }),
+          ),
+        },
+      };
+    });
+  }, [api, eventPageToken, liveEvents, loadPage, runId, state.loaded]);
   useEffect(() => {
     if (!state.loaded || state.loading || state.error) return;
     const afterIndex =
@@ -615,7 +662,7 @@ function ClassifierHistory({
             disabled={pageOffset === 0 || state.loading || nextPageAfter !== null}
             onClick={() => {
               const offset = Math.max(0, pageOffset - CALL_PAGE_SIZE);
-              setPageStartId(offset < CALL_PAGE_SIZE ? null : events[offset].invocationId);
+              setPageStartId(events[offset].invocationId);
               setSelection({ api, invocationId: null });
             }}
           >
@@ -645,6 +692,7 @@ function ClassifierHistory({
             onClick={() => {
               for (const controller of detailControllers.current.values()) controller.abort();
               detailControllers.current.clear();
+              visibleInvocationIds.current = [];
               setPageStartId(null);
               setNextPageAfter(null);
               setSelection(undefined);

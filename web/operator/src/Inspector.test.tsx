@@ -2102,7 +2102,109 @@ describe("classifier inspection", () => {
     expect(history.getByLabelText("Invocation classification-0")).toBeVisible();
   }, 15_000);
 
-  it("bounds live descriptors while keeping calls in ascending index order", async () => {
+  it("keeps an older page stable and exposes live calls after exhausting a full history window", async () => {
+    const records = Array.from({ length: 500 }, (_, index) =>
+      classifierEvent(index + 1, index),
+    );
+    const listClassifierEventPage = vi.fn<OperatorApi["listClassifierEventPage"]>(
+      async (request) => {
+        const offset = Number(request.afterEventSequence);
+        const page = records.slice(offset, offset + request.pageSize);
+        return classifierPage(page, offset + page.length < records.length ? "more" : "");
+      },
+    );
+    const readJsonDetail = vi.fn<OperatorApi["readJsonDetail"]>(async (token) =>
+      classifierInvocation(Number(token.slice("classifier-".length)) - 1),
+    );
+    const api = createApi({ listClassifierEventPage, readJsonDetail });
+    const view = render(
+      <Inspector
+        api={api}
+        run={classifierRun}
+        nodeId={node.nodeId}
+        onClose={() => undefined}
+      />,
+    );
+    const history = within(screen.getByLabelText("Classifier invocations"));
+    const table = within(history.getByRole("table", { name: "Classifier calls" }));
+    const callNumbers = () =>
+      table.getAllByRole("button").map((button) => button.getAttribute("aria-label"));
+    await screen.findByRole("button", { name: "Call 1" });
+    const next = history.getByRole("button", { name: "Next page" });
+    for (let page = 1; page < 20; page++) {
+      await act(async () => {
+        fireEvent.click(next);
+      });
+    }
+    expect(callNumbers()).toEqual(
+      Array.from({ length: 25 }, (_, index) => `Call ${index + 476}`),
+    );
+    expect(next).toBeDisabled();
+    expect(listClassifierEventPage).toHaveBeenCalledTimes(5);
+    fireEvent.click(history.getByRole("button", { name: "Previous page" }));
+
+    view.rerender(
+      <Inspector
+        api={api}
+        run={classifierRun}
+        nodeId={node.nodeId}
+        liveClassifierEvents={[classifierEvent(501, 500)]}
+        onClose={() => undefined}
+      />,
+    );
+    expect(callNumbers()).toEqual(
+      Array.from({ length: 25 }, (_, index) => `Call ${index + 451}`),
+    );
+    await act(async () => {
+      fireEvent.click(next);
+    });
+    expect(callNumbers()).toEqual(
+      Array.from({ length: 25 }, (_, index) => `Call ${index + 476}`),
+    );
+    expect(next).toBeEnabled();
+    await act(async () => {
+      fireEvent.click(next);
+    });
+    expect(callNumbers()).toEqual(["Call 501"]);
+    expect(readJsonDetail).not.toHaveBeenCalled();
+    expect(next).toBeDisabled();
+
+    view.rerender(
+      <Inspector
+        api={api}
+        run={RunSnapshotMsg.create({
+          ...classifierRun,
+          summary: { ...classifierRun.summary, status: "success" },
+          nodes: [{ ...node, status: "success" }],
+        })}
+        nodeId={node.nodeId}
+        liveClassifierEvents={[classifierEvent(501, 500), classifierEvent(502, 501)]}
+        onClose={() => undefined}
+      />,
+    );
+    expect(callNumbers()).toEqual(["Call 501", "Call 502"]);
+    expect(history.getByRole("navigation", { name: "Call pagination" })).toHaveTextContent(
+      "of 500 calls",
+    );
+    expect(table.queryByRole("button", { expanded: true })).toBeNull();
+    expect(readJsonDetail).not.toHaveBeenCalled();
+    fireEvent.click(table.getByRole("button", { name: "Call 501" }));
+    expect(await table.findByLabelText("Input state")).toHaveTextContent("input-500");
+    fireEvent.click(table.getByRole("button", { name: "Call 502" }));
+    expect(await table.findByLabelText("Input state")).toHaveTextContent("input-501");
+    expect(readJsonDetail).toHaveBeenCalledTimes(2);
+    expect(next).toBeDisabled();
+    await act(async () => {
+      fireEvent.click(history.getByRole("button", { name: "Return to first invocations" }));
+    });
+    expect(callNumbers()).toEqual(
+      Array.from({ length: 25 }, (_, index) => `Call ${index + 1}`),
+    );
+    expect(table.queryByRole("button", { expanded: true })).toBeNull();
+    expect(readJsonDetail).toHaveBeenCalledTimes(2);
+  });
+
+  it("bounds live descriptors while keeping the newest calls reachable in ascending order", async () => {
     const live = Array.from({ length: 510 }, (_, index) =>
       ClassifierEventDescriptorMsg.create({
         ...classifierEvent(index + 1, index),
@@ -2122,16 +2224,17 @@ describe("classifier inspection", () => {
     });
     const history = within(screen.getByLabelText("Classifier invocations"));
     expect(history.getAllByRole("rowgroup", { name: /^Invocation / })).toHaveLength(25);
-    expect(history.getByLabelText("Invocation classification-0")).toBeVisible();
-    expect(history.queryByLabelText("Invocation classification-509")).toBeNull();
+    expect(history.getByLabelText("Invocation classification-10")).toBeVisible();
+    expect(history.queryByLabelText("Invocation classification-0")).toBeNull();
+    expect(history.getByRole("button", { name: "Return to first invocations" })).toBeEnabled();
     const nextPage = history.getByRole("button", { name: "Next page" });
     for (let page = 1; page < 20; page++) {
       await act(async () => {
         fireEvent.click(nextPage);
       });
     }
-    expect(history.getByLabelText("Invocation classification-499")).toBeVisible();
-    expect(history.queryByLabelText("Invocation classification-509")).toBeNull();
+    expect(history.getByLabelText("Invocation classification-509")).toBeVisible();
+    expect(history.queryByLabelText("Invocation classification-0")).toBeNull();
     expect(nextPage).toBeDisabled();
   });
 

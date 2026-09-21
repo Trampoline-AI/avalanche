@@ -26,6 +26,7 @@ import {
   type Edge,
   type EdgeProps,
   type Node,
+  type NodeChange,
   type NodeProps,
 } from "@xyflow/react";
 
@@ -489,7 +490,7 @@ type TopologyView = Pick<
 
 interface GraphLayout {
   edges: Edge[];
-  positions: Record<string, { x: number; y: number }>;
+  rows: Record<number, string[]>;
 }
 
 function createGraphLayout(topology: Pick<TopologyView, "nodeIds" | "graph">): GraphLayout {
@@ -513,17 +514,6 @@ function createGraphLayout(topology: Pick<TopologyView, "nodeIds" | "graph">): G
     const depth = depths[nodeId] ?? 0;
     (rows[depth] ??= []).push(nodeId);
   }
-  const positions = Object.fromEntries(
-    Object.entries(rows).flatMap(([depth, nodeIds]) =>
-      nodeIds.map((nodeId, row) => [
-        nodeId,
-        {
-          x: Number(depth) * 500,
-          y: row * 220 - (nodeIds.length - 1) * 110,
-        },
-      ]),
-    ),
-  );
   const seen = new Set<string>();
   const edges: Edge[] = [];
   let skipEdgeLane = 0;
@@ -546,7 +536,7 @@ function createGraphLayout(topology: Pick<TopologyView, "nodeIds" | "graph">): G
       });
     }
   }
-  return { edges, positions };
+  return { edges, rows };
 }
 
 interface GraphCanvasProps {
@@ -587,13 +577,64 @@ function GraphCanvasView({
   }, [runTopology, workflow]);
   const topologyNodeIds = topology?.nodeIds;
   const topologyGraph = topology?.graph;
+  const [nodeMeasurements, setNodeMeasurements] = useState<
+    ReadonlyMap<string, { width: number; height: number }>
+  >(() => new Map());
+  const onNodesChange = useCallback(
+    (changes: NodeChange[]) => {
+      setNodeMeasurements((current) => {
+        let next: Map<string, { width: number; height: number }> | undefined;
+        for (const change of changes) {
+          if (change.type !== "dimensions" || !change.dimensions) continue;
+          const previous = current.get(change.id);
+          if (
+            previous?.width === change.dimensions.width &&
+            previous?.height === change.dimensions.height
+          ) {
+            continue;
+          }
+          next ??= new Map(current);
+          next.set(change.id, change.dimensions);
+        }
+        if (!next) return current;
+        const nodeIds = new Set(topologyNodeIds);
+        for (const nodeId of next.keys()) {
+          if (!nodeIds.has(nodeId)) next.delete(nodeId);
+        }
+        return next;
+      });
+    },
+    [topologyNodeIds],
+  );
   const layout = useMemo(
     () =>
       topologyNodeIds && topologyGraph
         ? createGraphLayout({ nodeIds: topologyNodeIds, graph: topologyGraph })
-        : { edges: [], positions: {} },
+        : { edges: [], rows: {} },
     [topologyGraph, topologyNodeIds],
   );
+  const positions = useMemo(() => {
+    // Share row spacing across columns so aligned neighbors keep straight edges.
+    let rowSpacing = 220;
+    for (const nodeIds of Object.values(layout.rows)) {
+      for (let row = 1; row < nodeIds.length; row += 1) {
+        const above = nodeMeasurements.get(nodeIds[row - 1])?.height ?? 130;
+        const below = nodeMeasurements.get(nodeIds[row])?.height ?? 130;
+        rowSpacing = Math.max(rowSpacing, (above + below) / 2 + 40);
+      }
+    }
+    return Object.fromEntries(
+      Object.entries(layout.rows).flatMap(([depth, nodeIds]) =>
+        nodeIds.map((nodeId, row) => [
+          nodeId,
+          {
+            x: Number(depth) * 500,
+            y: (row - (nodeIds.length - 1) / 2) * rowSpacing,
+          },
+        ]),
+      ),
+    );
+  }, [layout.rows, nodeMeasurements]);
   const openCallbacks = useMemo(
     () =>
       Object.fromEntries(
@@ -703,7 +744,8 @@ function GraphCanvasView({
         id: nodeId,
         selected: nodeId === selectedNodeId,
         type: "workflow",
-        position: layout.positions[nodeId],
+        position: positions[nodeId],
+        measured: nodeMeasurements.get(nodeId),
         data: {
           label: labels[nodeId],
           identity:
@@ -732,7 +774,8 @@ function GraphCanvasView({
     classifierCards,
     standardFields,
     inspectionDisabled,
-    layout.positions,
+    nodeMeasurements,
+    positions,
     openCallbacks,
     runNodes,
     runTopology,
@@ -745,6 +788,7 @@ function GraphCanvasView({
     <ReactFlow
       className="[&_.react-flow__edge-path]:stroke-[#87938d] [&_.react-flow__edge-path]:[stroke-width:1.4] [&_.react-flow__arrowhead_polyline]:fill-[#87938d] [&_.react-flow__arrowhead_polyline]:stroke-[#87938d]"
       nodes={nodes}
+      onNodesChange={onNodesChange}
       edges={layout.edges}
       nodeTypes={NODE_TYPES}
       nodeOrigin={NODE_ORIGIN}

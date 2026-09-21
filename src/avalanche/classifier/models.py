@@ -128,8 +128,8 @@ class ClassifierDeclaration(_ClassifierModel):
 
 
 class ClassificationUsage(_ClassifierModel):
-    input_tokens: Annotated[int, Field(ge=0)]
-    output_tokens: Annotated[int, Field(ge=0)]
+    input_tokens: Annotated[int, Field(ge=0)] | None = None
+    output_tokens: Annotated[int, Field(ge=0)] | None = None
 
 
 def _validate_distribution(probabilities: dict[str, float]) -> None:

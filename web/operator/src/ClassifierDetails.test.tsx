@@ -294,6 +294,31 @@ it("renders typed answers without turning Noul into confidence or rounding Score
   ).not.toBeInTheDocument();
 });
 
+it.each([
+  { usage: {}, expected: { input_tokens: null, output_tokens: null } },
+  {
+    usage: { input_tokens: null, output_tokens: null },
+    expected: { input_tokens: null, output_tokens: null },
+  },
+  { usage: { input_tokens: 0 }, expected: { input_tokens: 0, output_tokens: null } },
+  {
+    usage: { input_tokens: null, output_tokens: 47 },
+    expected: { input_tokens: null, output_tokens: 47 },
+  },
+])("renders successful answers with unknown usage: $usage", ({ usage, expected }) => {
+  const value = success();
+  const decoded = decodeClassifierInvocation(
+    JSON.stringify({ ...value, result: { ...value.result, usage } }),
+  );
+  expect(decoded.result?.usage).toEqual(expected);
+  render(<ClassifierInvocationDetails invocation={decoded} />);
+  expect(screen.getByRole("region", { name: "Answer route" })).toHaveTextContent("review");
+  expect(
+    within(screen.getByRole("region", { name: "Answer safe" })).getByRole("meter"),
+  ).toHaveAttribute("aria-valuenow", "0.91");
+  expect(screen.getByRole("region", { name: "Answer urgency" })).toHaveTextContent("0.375");
+});
+
 it("pairs each repeated call's retained input with its own answers", () => {
   const first = success();
   const second = success();
@@ -526,6 +551,20 @@ describe("strict classifier records", () => {
     const value = success();
     delete value.result.answers.safe;
     expect(() => parseClassifierInvocation(value)).toThrow();
+  });
+
+  it.each(["input_tokens", "output_tokens"])("rejects malformed %s counters", (counter) => {
+    const value = success();
+    for (const invalid of [-1, 1.5, true, "1", Number.MAX_SAFE_INTEGER + 1]) {
+      expect(() =>
+        decodeClassifierInvocation(
+          JSON.stringify({
+            ...value,
+            result: { ...value.result, usage: { [counter]: invalid } },
+          }),
+        ),
+      ).toThrow();
+    }
   });
 
   it("renders a valid single-option Choice", () => {

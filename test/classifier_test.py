@@ -212,6 +212,63 @@ async def test_nested_declaration_is_owned_and_all_answer_types_survive(
     assert all(transport.closed for transport in service.transports)
 
 
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("usage", "expected"),
+    [
+        ({}, {"input_tokens": None, "output_tokens": None}),
+        (
+            {"input_tokens": None, "output_tokens": None},
+            {"input_tokens": None, "output_tokens": None},
+        ),
+        ({"input_tokens": 0}, {"input_tokens": 0, "output_tokens": None}),
+        (
+            {"input_tokens": None, "output_tokens": 11},
+            {"input_tokens": None, "output_tokens": 11},
+        ),
+    ],
+    ids=["missing", "null", "input-only-zero", "output-only"],
+)
+async def test_unknown_usage_preserves_answers_and_success_evidence(
+    questions, service, usage, expected
+):
+    service.response_body["usage"] = usage
+
+    @ava.classifier_step(questions=questions)
+    async def classify(*, classifier: ava.Classifier):
+        return await classifier(state="ticket")
+
+    observed = []
+    with capture_classifier_evidence(observed.append):
+        result = await classify.fn()
+
+    assert result.choices["department"].choice == "billing"
+    assert result.nouls["urgent"].noul == 0.91
+    assert result.scores["severity"].score == 0.75
+    assert result.model_dump(mode="json")["usage"] == expected
+    assert [record.status for record in observed] == ["running", "success"]
+    assert json.loads(observed[-1].model_dump_json())["result"]["usage"] == expected
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("counter", ["input_tokens", "output_tokens"])
+@pytest.mark.parametrize("invalid", [-1, 1.5, True, "1"])
+async def test_invalid_usage_rejects_response(questions, service, counter, invalid):
+    service.response_body["usage"] = {counter: invalid}
+
+    @ava.classifier_step(questions=questions)
+    async def classify(*, classifier: ava.Classifier):
+        return await classifier(state="ticket")
+
+    observed = []
+    with capture_classifier_evidence(observed.append):
+        with pytest.raises(ClassifierStepExecutionError):
+            await classify.fn()
+
+    assert [record.status for record in observed] == ["running", "failed"]
+    assert observed[-1].result is None
+
+
 def test_workflow_defaults_do_not_leak_and_step_overrides_win(questions, service):
     @ava.source
     def load():

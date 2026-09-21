@@ -624,6 +624,50 @@ def test_parent_cancellation_wins_after_success_bundle_validation(tmp_path, monk
         operator.close()
 
 
+@pytest.mark.parametrize("rejection", ["unfinished-invocation", "publication-error"])
+def test_rejected_success_publications_release_result_quota(monkeypatch, rejection):
+    operator = Operator([], watch=False, schedule=False)
+    monkeypatch.setattr(result_store_module, "MAX_RETAINED_RESULTS", 1)
+    monkeypatch.setattr(operator_module, "_teardown_process_group", lambda *_a, **_k: True)
+    publish = operator._publish_run_locked
+
+    def publish_unless_rejected(run, **kwargs):
+        if rejection == "publication-error" and run.run_id.startswith("rejected-"):
+            raise RuntimeError("injected publication failure")
+        return publish(run, **kwargs)
+
+    monkeypatch.setattr(operator, "_publish_run_locked", publish_unless_rejected)
+    try:
+        for index in range(3):
+            run_id = f"rejected-{index}"
+            _, handle, event = _provisional_success_run(operator, run_id)
+            if rejection == "unfinished-invocation":
+                operator._classifier_invocations[run_id] = {
+                    "call": operator_module._ClassifierInvocationLifecycle(
+                        node_id="classify",
+                        invocation_index=0,
+                        started_at=1.0,
+                        terminal=False,
+                    )
+                }
+                operator._drain_run_events(run_id, handle, [event])
+                run = operator.get_run(run_id)
+                assert run.status == RunStatus.FAILED
+            else:
+                with pytest.raises(RuntimeError, match="injected publication failure"):
+                    operator._drain_run_events(run_id, handle, [event])
+            with pytest.raises(RunResultUnavailableError):
+                operator.get_run_result(run_id)
+
+        run_id = "accepted-after-rejections"
+        _, handle, event = _provisional_success_run(operator, run_id)
+        operator._drain_run_events(run_id, handle, [event])
+        assert operator.get_run(run_id).status == RunStatus.SUCCESS
+        assert operator.get_run_result(run_id).content == b"stable"
+    finally:
+        operator.close()
+
+
 def test_provisional_success_waits_for_delayed_exit_before_notification(monkeypatch):
     operator = Operator([], watch=False, schedule=False)
     run_id = "run_delayed_exit"

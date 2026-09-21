@@ -208,7 +208,8 @@ Every successful `await classifier(state=...)` returns
 
 - `model`: the model reported by TypeSafe.
 - `answers`: question IDs mapped to `ChoiceAnswer`, `NoulAnswer`, or `ScoreAnswer`.
-- `usage.input_tokens` and `usage.output_tokens`: token counts.
+- `usage.input_tokens` and `usage.output_tokens`: token counts, independently
+  `None` when TypeSafe does not report them. Unknown counts are not treated as zero.
 - `choices`, `nouls`, and `scores`: typed, question-ID-keyed views of the answers.
 
 Answer types are also importable from `avalanche.classifier`. Their fields are:
@@ -312,6 +313,9 @@ colors:
   List rows do not show input previews or fetch full invocation bodies.
   The Current State definition tabs are not rendered in run inspection.
   Editing or reloading the workflow does not replace a call's retained answers.
+  The bounded 500-call descriptor window keeps the visible page in place while
+  admitting live arrivals. **Return to first calls** reloads older history after
+  descriptors have left that window.
 - **Call detail:** Captured input appears as formatted JSON in a read-only code
   editor with syntax highlighting, line numbers, folding, and bounded scrolling.
   Question rows show names, answers, and types without repeating descriptions from

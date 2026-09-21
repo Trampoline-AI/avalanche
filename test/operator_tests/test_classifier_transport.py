@@ -217,6 +217,7 @@ def _read_invocation(service, reference) -> ClassifierInvocation:
 def _page_history(service, run_id: str, continuation, order: int):
     activities = []
     seen = set()
+    cursor = continuation.cursor
     while True:
         assert continuation.continuation_id not in seen
         seen.add(continuation.continuation_id)
@@ -230,9 +231,11 @@ def _page_history(service, run_id: str, continuation, order: int):
             ),
             timeout=5,
         )
+        assert page.cursor == cursor
         activities.extend(page.activities)
         if not page.next_page.continuation_id:
             return activities
+        assert page.next_page.cursor == cursor
         continuation = page.next_page
 
 
@@ -293,6 +296,88 @@ def test_snapshot_paging_retains_classifier_records_without_a_current_workflow(t
     assert [
         _read_invocation(service, item.detail_ref).status for item in latest.activities
     ] == ["running", "success", "running", "failed"]
+
+
+@pytest.mark.parametrize("order", [pb.PAGE_ORDER_V2_FORWARD, pb.PAGE_ORDER_V2_NEWEST_FIRST])
+def test_classifier_snapshot_cursor_survives_retention_floor_advancement(order):
+    operator = Operator([], schedule=False, watch=False, stream_history_capacity=4)
+    try:
+        with _serve(operator) as (service, _):
+            run = _seed_run(operator, "retained-cursor")
+            records = [
+                _invocation(0, "running"),
+                _invocation(0, "success"),
+                _invocation(1, "running"),
+            ]
+            for record in records:
+                _publish(operator, run.run_id, record)
+            snapshot = service.GetRunSnapshot(pb.GetRunSnapshotRequestV2(run_id=run.run_id))
+            continuation = next(
+                node for node in snapshot.nodes if node.node_id == "classify"
+            ).activity_continuation
+            original = pb.ContinuationRefV2()
+            original.CopyFrom(continuation)
+            snapshot_sequence = operator.current_sequence
+            previous_floor, _ = operator.update_history_bounds()
+            activities = []
+            for index in range(len(records)):
+                operator._notify_run(run)
+                floor, _ = operator.update_history_bounds()
+                assert previous_floor < floor <= snapshot_sequence
+                previous_floor = floor
+                page = service.ListRunActivity(
+                    pb.ListRunActivityRequestV2(
+                        run_id=run.run_id,
+                        node_id="classify",
+                        page_size=1,
+                        continuation=continuation,
+                        order=order,
+                    )
+                )
+                assert page.cursor == original.cursor
+                activities.extend(page.activities)
+                if index < len(records) - 1:
+                    assert page.next_page.continuation_id
+                    assert page.next_page.cursor == original.cursor
+                    continuation = page.next_page
+                else:
+                    assert not page.next_page.continuation_id
+            expected = records if order == pb.PAGE_ORDER_V2_FORWARD else records[::-1]
+            assert [_read_invocation(service, item.detail_ref) for item in activities] == (
+                expected
+            )
+
+            forged = pb.ContinuationRefV2()
+            forged.CopyFrom(original)
+            forged.cursor.retained_floor_event_ulid = original.cursor.event_ulid
+            with pytest.raises(grpc.RpcError) as error:
+                service.ListRunActivity(
+                    pb.ListRunActivityRequestV2(
+                        run_id=run.run_id,
+                        node_id="classify",
+                        continuation=forged,
+                        order=order,
+                    )
+                )
+            assert error.value.code() is grpc.StatusCode.FAILED_PRECONDITION
+
+            for _ in range(2):
+                operator._notify_run(run)
+            floor, _ = operator.update_history_bounds()
+            assert floor > snapshot_sequence + 1
+            for expired in (original, continuation):
+                with pytest.raises(grpc.RpcError) as error:
+                    service.ListRunActivity(
+                        pb.ListRunActivityRequestV2(
+                            run_id=run.run_id,
+                            node_id="classify",
+                            continuation=expired,
+                            order=order,
+                        )
+                    )
+                assert error.value.code() is grpc.StatusCode.FAILED_PRECONDITION
+    finally:
+        operator.close()
 
 
 def test_classifier_continuation_rejects_other_runs_nodes_categories_and_scopes(transport):
