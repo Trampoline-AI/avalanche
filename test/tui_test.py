@@ -476,6 +476,12 @@ async def test_delayed_agent_trace_cannot_overwrite_newer_failure_and_recovers()
     fresh_entered = threading.Event()
     fresh_release = threading.Event()
 
+    list_runs = provider.list_runs
+
+    def list_run_summaries(selector):
+        # Like gRPC listings, these do not contain the separately fetched trace body.
+        return [replace(item, details_hydrated=False) for item in list_runs(selector)]
+
     def hydrate_trace(run_id, node_id):
         current = provider.get_run(run_id)
         revision = current.nodes[node_id].trace.revision
@@ -498,6 +504,7 @@ async def test_delayed_agent_trace_cannot_overwrite_newer_failure_and_recovers()
         release.set()
         fresh_release.set()
 
+    provider.list_runs = list_run_summaries
     provider.hydrate_trace = hydrate_trace
     provider.close = close
     app = AvalancheApp(provider=provider, workflow="agent_trace", node="inspect_agent")
@@ -532,11 +539,16 @@ async def test_delayed_agent_trace_cannot_overwrite_newer_failure_and_recovers()
         await _wait_for(
             pilot, lambda: app.store.selected_agent_trace_envelope.get("trace") is not None
         )
+        # Force a history refresh after hydration rather than relying on the timer.
+        _drain_until(app.store, lambda: not app.store._runs_refresh_in_flight)
+        app.store._refresh_runs_cache()
+        _drain_until(app.store, lambda: not app.store._runs_refresh_in_flight)
+        assert app.store.selected_agent_trace_envelope["trace"] == body
         assert app.store.current_run.status is RunStatus.FAILED
         assert app.store.current_run.nodes[node.node_id].status is NodeStatus.FAILED
         assert [entry.message for entry in app.store.logs] == ["new failure"]
         await pilot.press("e")
         assert (
-            "Filter active records"
+            body["steps"][0]["reasoning"]
             in app.screen.query_one("#agent-trace-content").render().plain
         )
