@@ -46,6 +46,13 @@ def feedback_workflow():
     return step1() >> step2()
 ```
 
+Annotate each node's Python inputs and return value. The browser's **Step
+interface** panel uses these annotations for source, ordinary, destination,
+agent, and classifier steps, including nested Pydantic schemas. These are the
+outer workflow values, not an agent signature or classifier call's state.
+Injected runtime parameters are excluded; historical runs retain their own
+interface rather than showing the latest source definition.
+
 `@ava.workflow` declares the builder that the operator discovers. Save this as
 `flow.py` and start it through the operator and browser:
 
