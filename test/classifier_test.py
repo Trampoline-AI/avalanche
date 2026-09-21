@@ -213,6 +213,188 @@ async def test_nested_declaration_is_owned_and_all_answer_types_survive(
 
 
 @pytest.mark.asyncio
+async def test_runtime_questions_replace_defaults_without_changing_later_calls(
+    questions, response_body, service
+):
+    override = {
+        "urgent": {
+            "type": "choice",
+            "instructions": "Choose the review route.",
+            "criteria": {"review": "Needs review", "act": "Ready for action"},
+        }
+    }
+
+    async def respond(request):
+        if json.loads(request.content)["state"] == "override":
+            return httpx2.Response(
+                200,
+                json={
+                    "model": "jev-test-resolved",
+                    "answers": {
+                        "urgent": {
+                            "type": "choice",
+                            "choice": "review",
+                            "probabilities": {"review": 1.0, "act": 0.0},
+                            "confidence": 1.0,
+                        }
+                    },
+                    "usage": {},
+                },
+            )
+        return httpx2.Response(200, json=response_body)
+
+    service.handler = respond
+
+    @ava.classifier_step(questions=questions)
+    async def classify(*, classifier: ava.Classifier):
+        before = await classifier(state="default")
+        replaced = await classifier(state="override", questions=override)
+        after = await classifier(state="default", questions=None)
+        return before, replaced, after
+
+    records = []
+    with capture_classifier_evidence(records.append):
+        before, replaced, after = await classify.fn()
+
+    assert before == after
+    assert before.nouls["urgent"].noul == 0.91
+    assert set(replaced.answers) == {"urgent"}
+    assert replaced.choices["urgent"].choice == "review"
+    completed = [record for record in records if record.status == "success"]
+    assert completed[0].declaration == completed[2].declaration
+    assert completed[1].declaration.questions["urgent"].type == "choice"
+    assert completed[1].result == replaced
+    assert set(json.loads(service.requests[1].content)["questions"]) == {"urgent"}
+
+
+@pytest.mark.asyncio
+async def test_concurrent_runtime_rubrics_are_owned_and_validated_per_invocation(service):
+    call_questions = [
+        {
+            "route": {
+                "type": "choice",
+                "instructions": {"task": ["Select a route"]},
+                "criteria": {"review": "Review", "act": "Act"},
+            }
+        },
+        {
+            "route": {
+                "type": "score",
+                "instructions": "How ready is this request?",
+                "criteria": ["Needs research", {"ready": ["Evidence complete"]}],
+            }
+        },
+    ]
+    original = copy.deepcopy(call_questions)
+    answers = [
+        {
+            "type": "choice",
+            "choice": "review",
+            "probabilities": {"review": 1.0, "act": 0.0},
+            "confidence": 1.0,
+        },
+        {
+            "type": "score",
+            "score": 0.75,
+            "legend": {"0": "Needs research", "1": {"ready": ["Evidence complete"]}},
+            "probabilities": {"0": 0.25, "1": 0.75},
+            "confidence": 0.5,
+        },
+    ]
+    arrived = 0
+    ready = asyncio.Event()
+
+    async def respond(request):
+        nonlocal arrived
+        index = json.loads(request.content)["state"]["index"]
+        arrived += 1
+        if arrived == 2:
+            ready.set()
+        await asyncio.wait_for(ready.wait(), timeout=5)
+        return httpx2.Response(
+            200,
+            json={
+                "model": "jev-test-resolved",
+                "answers": {"route": answers[index]},
+                "usage": {},
+            },
+        )
+
+    service.handler = respond
+    records = []
+
+    def capture(record):
+        records.append(record)
+        if record.status == "running":
+            # Mutation before the HTTP request must affect neither it nor its evidence.
+            call_questions[record.invocation_index]["route"]["criteria"].clear()
+
+    @ava.classifier_step()
+    async def classify(*, classifier: ava.Classifier):
+        return await asyncio.gather(
+            *(
+                classifier(state={"index": index}, questions=question_set)
+                for index, question_set in enumerate(call_questions)
+            )
+        )
+
+    with capture_classifier_evidence(capture):
+        results = await classify.fn()
+
+    assert results[0].choices["route"].choice == "review"
+    assert results[1].scores["route"].score == 0.75
+    for index, expected in enumerate(original):
+        events = [record for record in records if record.invocation_index == index]
+        assert [record.status for record in events] == ["running", "success"]
+        assert events[0].declaration == events[1].declaration
+        assert events[1].result == results[index]
+        sent = next(
+            json.loads(request.content)
+            for request in service.requests
+            if json.loads(request.content)["state"]["index"] == index
+        )
+        assert sent["questions"]["route"]["criteria"] == expected["route"]["criteria"]
+        assert (
+            events[1].declaration.model_dump(mode="json")["questions"]["route"]["criteria"]
+            == expected["route"]["criteria"]
+        )
+    assert all(transport.closed for transport in service.transports)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("has_defaults", "runtime_questions"),
+    [
+        (False, None),
+        (False, {}),
+        (True, {}),
+        (True, {"private-marker": {"type": "score", "criteria": ["only one level"]}}),
+    ],
+    ids=["missing", "empty", "empty-does-not-fallback", "malformed-does-not-fallback"],
+)
+async def test_unresolved_runtime_questions_fail_privately_before_client_creation(
+    questions, service, has_defaults, runtime_questions
+):
+    @ava.classifier_step(questions=questions if has_defaults else None)
+    async def classify(*, classifier: ava.Classifier):
+        return await classifier(state="ticket", questions=runtime_questions)
+
+    records = []
+    with capture_classifier_evidence(records.append):
+        with pytest.raises(ClassifierStepExecutionError) as caught:
+            await classify.fn()
+
+    assert "private-marker" not in str(caught.value)
+    assert [record.status for record in records] == ["running", "failed"]
+    assert all(record.declaration.questions is None for record in records)
+    assert all(record.input is None and record.result is None for record in records)
+    assert records[0].invocation_id == records[1].invocation_id
+    assert "private-marker" not in "".join(record.model_dump_json() for record in records)
+    assert service.transports == []
+    assert service.requests == []
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize(
     ("usage", "expected"),
     [
@@ -334,9 +516,9 @@ async def test_response_must_match_exact_declared_questions(questions, service, 
     else:
         answers["severity"]["legend"]["1"] = "different rubric"
 
-    @ava.classifier_step(questions=questions)
+    @ava.classifier_step()
     async def classify(*, classifier: ava.Classifier):
-        return await classifier(state="ticket")
+        return await classifier(state="ticket", questions=questions)
 
     observed = []
     with capture_classifier_evidence(observed.append):

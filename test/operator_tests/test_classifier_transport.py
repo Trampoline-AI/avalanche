@@ -242,7 +242,11 @@ def _page_history(service, run_id: str, continuation, order: int):
 def test_snapshot_paging_retains_classifier_records_without_a_current_workflow(transport):
     operator, service, _ = transport
     run = _seed_run(operator, "retained")
-    records = [_invocation(0, "running"), _invocation(0, "success"), _invocation(1, "running")]
+    records = [
+        _invocation(0, "running", choice="escalate"),
+        _invocation(0, "success", choice="escalate"),
+        _invocation(1, "running"),
+    ]
     for record in records:
         _publish(operator, run.run_id, record)
     snapshot = service.GetRunSnapshot(pb.GetRunSnapshotRequestV2(run_id=run.run_id))
@@ -277,7 +281,7 @@ def test_snapshot_paging_retains_classifier_records_without_a_current_workflow(t
     assert {item.kind for item in forward} == {"classifier_event"}
     summaries = [classifier_event_descriptor_from_v2(item) for item in forward]
     assert [item.invocation_index for item in summaries] == [0, 0, 1]
-    assert [item.answers for item in summaries] == [(), _answers(), ()]
+    assert [item.answers for item in summaries] == [(), _answers("escalate"), ()]
     assert [item.duration_ms for item in summaries] == [None, 1000, None]
     assert [
         answer.WhichOneof("answer") for answer in forward[1].classifier_summary.answers
@@ -296,6 +300,91 @@ def test_snapshot_paging_retains_classifier_records_without_a_current_workflow(t
     assert [
         _read_invocation(service, item.detail_ref).status for item in latest.activities
     ] == ["running", "success", "running", "failed"]
+
+
+@pytest.mark.parametrize(
+    "field",
+    ["runtime", "input_schema", "step_inputs", "step_output"],
+)
+def test_classifier_invocations_reject_non_question_definition_drift(transport, field):
+    operator, _, _ = transport
+    run = _seed_run(operator, "definition-drift")
+    declaration = _declaration("escalate").model_dump(mode="json")
+    changes = {
+        "runtime": {"model": "unprepared-model", "timeout": 10.0},
+        "input_schema": {"type": "string"},
+        "step_inputs": [
+            {"name": "ticket", "required": True, "json_schema": {"type": "string"}}
+        ],
+        "step_output": {"json_schema": {"type": "string"}},
+    }
+    declaration[field] = changes[field]
+    invocation = _invocation(0, "running").model_copy(
+        update={"declaration": ClassifierDeclaration.model_validate(declaration)}
+    )
+    with pytest.raises(_CoordinatorProtocolError, match="prepared workflow"):
+        _publish(operator, run.run_id, invocation)
+    assert operator.list_classifier_events(run.run_id, "classify").events == ()
+
+
+@pytest.mark.parametrize("evict_details", [False, True])
+@pytest.mark.parametrize("change", ["instructions", "options", "ids", "unresolved"])
+def test_classifier_terminal_events_cannot_change_call_questions(
+    transport, evict_details, change
+):
+    operator, _, _ = transport
+    run = _seed_run(operator, "call-rubric-drift")
+    running = _invocation(0, "running", choice="escalate")
+    _publish(operator, run.run_id, running)
+    if evict_details:
+        with operator._lock:
+            operator._evict_classifier_details_locked(run)
+        assert not operator.list_classifier_events(run.run_id, "classify").events[0].body_token
+    declaration = running.declaration.model_dump(mode="json")
+    questions = declaration["questions"]
+    if change == "instructions":
+        questions["match"]["instructions"] = "A different decision"
+    elif change == "options":
+        questions["route"]["criteria"]["escalate"] = "A different option meaning"
+    elif change == "ids":
+        questions["renamed"] = questions.pop("match")
+    else:
+        declaration["questions"] = None
+    changed = _invocation(0, "failed").model_copy(
+        update={"declaration": ClassifierDeclaration.model_validate(declaration)}
+    )
+    with pytest.raises(_CoordinatorProtocolError, match="invocation identity"):
+        _publish(operator, run.run_id, changed)
+    _publish(operator, run.run_id, _invocation(0, "success", choice="escalate"))
+    events = operator.list_classifier_events(run.run_id, "classify").events
+    assert [event.event_kind for event in events] == ["running", "success"]
+    assert events[-1].answers == _answers("escalate")
+
+
+def test_unresolved_classifier_questions_cannot_become_successful(transport):
+    operator, _, _ = transport
+    run = _seed_run(operator, "unresolved-call")
+    unresolved = _declaration().model_copy(update={"questions": None})
+    _publish(
+        operator,
+        run.run_id,
+        _invocation(0, "running").model_copy(update={"declaration": unresolved}),
+    )
+    with pytest.raises(_CoordinatorProtocolError, match="invalid classifier invocation"):
+        _publish(
+            operator,
+            run.run_id,
+            _invocation(0, "success").model_copy(update={"declaration": unresolved}),
+        )
+    _publish(
+        operator,
+        run.run_id,
+        _invocation(0, "failed").model_copy(update={"declaration": unresolved}),
+    )
+    assert [
+        event.event_kind
+        for event in operator.list_classifier_events(run.run_id, "classify").events
+    ] == ["running", "failed"]
 
 
 @pytest.mark.parametrize("order", [pb.PAGE_ORDER_V2_FORWARD, pb.PAGE_ORDER_V2_NEWEST_FIRST])

@@ -409,8 +409,11 @@ executing environment or your project's `.env` file; exported variables take pre
 Choose `model` and `timeout` on `@ava.classifier_step` or in
 `@ava.workflow(classifier_defaults={...})`. Step values override workflow values;
 otherwise the defaults are `jev-latest` and 10 seconds. No key is needed to
-discover questions before running. See [Classifier steps](docs/classifier-steps.md)
-for the full API, probability semantics, and local evidence retention limits.
+discover questions before running. Declare optional defaults with
+`@ava.classifier_step(questions=...)`, or supply a complete runtime mapping with
+`await classifier(state=..., questions=...)`; call questions replace, not merge
+with, defaults. See [Classifier steps](docs/classifier-steps.md) for the full API,
+probability semantics, and local evidence retention limits.
 
 ## Optional components
 

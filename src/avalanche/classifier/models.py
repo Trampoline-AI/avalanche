@@ -120,7 +120,7 @@ def validate_runtime_defaults(value: object) -> dict[str, JsonValue]:
 
 
 class ClassifierDeclaration(_ClassifierModel):
-    questions: Questions
+    questions: Questions | None
     runtime: ClassifierRuntime
     input_schema: dict[str, JsonValue] | None = None
     step_inputs: list[StepInput] = Field(default_factory=list)
@@ -238,6 +238,8 @@ class ClassificationResult(_ClassifierModel):
         }
 
     def validate_declaration(self, declaration: ClassifierDeclaration) -> None:
+        if declaration.questions is None:
+            raise ValueError("successful classifications require resolved questions")
         if self.answers.keys() != declaration.questions.keys():
             raise ValueError("answers must match exactly the declared question IDs")
         for name, question in declaration.questions.items():

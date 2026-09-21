@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import base64
+import hashlib
 import json
 import logging
 import math
@@ -226,6 +227,7 @@ class _ClassifierInvocationLifecycle:
     node_id: str
     invocation_index: int
     started_at: float
+    declaration_digest: bytes
     terminal: bool
 
 
@@ -1800,7 +1802,7 @@ class Operator:
     def _evict_classifier_details_locked(
         self, run: RunState, *, remove_descriptors: bool = False
     ) -> None:
-        """Release bodies and lifecycle state without erasing historical availability."""
+        """Release bodies while retaining identity checks for historical invocations."""
         released = 0
         for node_id, _ in run.topology.classifier_metadata_json:
             key = (run.run_id, node_id)
@@ -1820,7 +1822,8 @@ class Operator:
                 released += node_bytes
         if released:
             self._run_detail_bytes[run.run_id] -= released
-        self._classifier_invocations.pop(run.run_id, None)
+        if remove_descriptors:
+            self._classifier_invocations.pop(run.run_id, None)
         self._classifier_detail_runs.discard(run.run_id)
 
     def _begin_notification_shutdown(
@@ -2643,6 +2646,9 @@ class Operator:
                 "classifier evidence references a non-classifier node"
             )
         try:
+            prepared_declaration = ClassifierDeclaration.model_validate_json(
+                declaration_json, strict=True
+            )
             invocation_declaration_json = invocation.declaration.model_dump_json()
             event_json = invocation.model_dump_json()
             event_size = len(event_json.encode())
@@ -2650,10 +2656,13 @@ class Operator:
             raise _CoordinatorProtocolError(
                 "classifier invocation is not valid UTF-8 JSON"
             ) from exc
-        if invocation_declaration_json != declaration_json:
+        if invocation.declaration.model_dump_json(
+            exclude={"questions"}
+        ) != prepared_declaration.model_dump_json(exclude={"questions"}):
             raise _CoordinatorProtocolError(
                 "classifier invocation declaration differs from the prepared workflow"
             )
+        declaration_digest = hashlib.sha256(invocation_declaration_json.encode()).digest()
         invocations = self._classifier_invocations.get(run.run_id, {})
         previous = invocations.get(invocation.invocation_id)
         if invocation.status == "running":
@@ -2668,6 +2677,7 @@ class Operator:
             or previous.node_id != node_id
             or previous.invocation_index != invocation.invocation_index
             or previous.started_at != invocation.started_at
+            or previous.declaration_digest != declaration_digest
         ):
             raise _CoordinatorProtocolError(
                 "classifier terminal evidence changes invocation identity"
@@ -2710,6 +2720,7 @@ class Operator:
                 node_id=node_id,
                 invocation_index=invocation.invocation_index,
                 started_at=invocation.started_at,
+                declaration_digest=declaration_digest,
                 terminal=invocation.status != "running",
             )
         )

@@ -113,7 +113,9 @@ class Classifier:
         self._closed = False
         self._pending: set[asyncio.Task[object]] = set()
 
-    async def __call__(self, *, state: JSONContent) -> ClassificationResult:
+    async def __call__(
+        self, *, state: JSONContent, questions: dict[str, JsonValue] | None = None
+    ) -> ClassificationResult:
         if self._closed:
             raise ClassifierStepError("classifier cannot be used after its step has finished")
         invocation_index = self._invocation_index
@@ -125,7 +127,7 @@ class Classifier:
             status="running",
             started_at=started_at,
             ended_at=None,
-            declaration=self._declaration,
+            declaration=self._declaration.model_copy(update={"questions": None}),
             input=None,
             result=None,
             error=None,
@@ -136,6 +138,20 @@ class Classifier:
         try:
             try:
                 try:
+                    resolved_questions = (
+                        self._declaration.questions
+                        if questions is None
+                        else validate_questions(questions)
+                    )
+                    if resolved_questions is None:
+                        raise ClassifierStepError(
+                            "questions must be provided on the classifier call "
+                            "or as classifier_step defaults"
+                        )
+                    declaration = self._declaration.model_copy(
+                        update={"questions": deepcopy(resolved_questions)}
+                    )
+                    record = record.model_copy(update={"declaration": declaration})
                     request_state = validate_state(state)
                     if self._input_model is not None:
                         validated = self._input_model.model_validate_json(
@@ -146,7 +162,7 @@ class Classifier:
                         )
                     record = record.model_copy(update={"input": deepcopy(request_state)})
                 finally:
-                    # Rejected state still gets a running/failed pair with null input.
+                    # Invalid requests still get a running/failed evidence pair.
                     emit_classifier_evidence(record)
                 if self._client is None:
                     self._client = _build_client(self._declaration.runtime)
@@ -154,10 +170,10 @@ class Classifier:
 
                 from .models import ChoiceQuestion, NoulQuestion
 
-                questions: dict[str, Question] = {}
-                for name, question in self._declaration.questions.items():
+                sdk_questions: dict[str, Question] = {}
+                for name, question in declaration.questions.items():
                     if isinstance(question, ChoiceQuestion):
-                        questions[name] = Choice(
+                        sdk_questions[name] = Choice(
                             instructions=question.instructions, criteria=question.criteria
                         )
                     elif isinstance(question, NoulQuestion):
@@ -168,17 +184,17 @@ class Classifier:
                                 criteria["true"] = question.criteria["true"]
                             if "false" in question.criteria:
                                 criteria["false"] = question.criteria["false"]
-                        questions[name] = Noul(
+                        sdk_questions[name] = Noul(
                             instructions=question.instructions, criteria=criteria
                         )
                     else:
-                        questions[name] = Score(
+                        sdk_questions[name] = Score(
                             instructions=question.instructions, criteria=question.criteria
                         )
                 response = await self._client.system_one(
-                    state=request_state, questions=questions
+                    state=request_state, questions=sdk_questions
                 )
-                result = _adapt_response(response, self._declaration)
+                result = _adapt_response(response, declaration)
             except BaseException as error:
                 status = "cancelled" if isinstance(error, asyncio.CancelledError) else "failed"
                 description = _error_description(error)
@@ -331,15 +347,15 @@ def _public_step_signature(
 
 def classifier_step(
     *,
-    questions: Mapping[str, object],
+    questions: dict[str, JsonValue] | None = None,
     input_model: type[BaseModel] | None = None,
     model: str | None = None,
     timeout: float | None = None,
     slug: str | None = None,
 ) -> Callable[[Callable[..., object]], Node]:
-    """Declare fixed TypeSafe questions on an ordinary, bodyful workflow step."""
+    """Declare a bodyful TypeSafe step with optional default questions."""
     try:
-        validated_questions = validate_questions(questions)
+        validated_questions = None if questions is None else validate_questions(questions)
         if input_model is not None and not _safe_issubclass(input_model, BaseModel):
             raise TypeError("input_model must be a Pydantic model class")
         input_schema = (

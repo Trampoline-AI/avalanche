@@ -647,6 +647,7 @@ def test_rejected_success_publications_release_result_quota(monkeypatch, rejecti
                         node_id="classify",
                         invocation_index=0,
                         started_at=1.0,
+                        declaration_digest=b"",
                         terminal=False,
                     )
                 }

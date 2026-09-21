@@ -9,7 +9,7 @@ Avalanche workflows are Python functions that declare a DAG of reusable nodes.
 | `@ava.dest` | Publish or summarize a result |
 | `@ava.workflow` | Build a runnable workflow |
 | `@ava.agent_step` / `@ava.agent.step` | Declare an agent-backed step; see [`agent-steps.md`](agent-steps.md) |
-| `@ava.classifier_step` | Declare fixed TypeSafe questions with typed probability results; see [`classifier-steps.md`](classifier-steps.md) |
+| `@ava.classifier_step` | Ask TypeSafe questions declared as defaults or supplied per call, with typed probability results; see [`classifier-steps.md`](classifier-steps.md) |
 
 Node functions may be `def` or `async def`. Keep workflow bodies declarative:
 call nodes and connect their results there; put runtime work in nodes.

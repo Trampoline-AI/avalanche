@@ -25,7 +25,7 @@ Avalanche turns a desired outcome into a typed, observable agentic workflow. A
 workflow combines deterministic Python nodes, TypeSafe-backed classifier nodes,
 and PredictRLM-backed agent nodes inside one DAG, then runs it through the
 operator with the CLI, browser UI, or TUI. The main design task is deciding where
-fixed-question classification or adaptive agent work belongs, what each stage
+typed classification or adaptive agent work belongs, what each stage
 promises, and how data and artifacts move between stages. Decorators and arrow
 syntax come after that design.
 
@@ -156,9 +156,10 @@ For each stage, choose:
 - `@ava.source` to ingest or construct the first runtime value;
 - `@ava.step` for deterministic parsing, normalization, calculation, lookup,
   validation, conversion, routing, or artifact assembly;
-- `@ava.classifier_step` for fixed Choice, Noul, or Score questions over runtime
-  state; prefer this native TypeSafe integration over a custom client wrapper
-  or an agent whose only task is classification;
+- `@ava.classifier_step` for Choice, Noul, or Score questions over runtime state;
+  declare defaults or supply questions per call when candidates or rubrics vary.
+  Prefer this native TypeSafe integration over a custom client wrapper or an
+  agent whose only task is classification;
 - `@ava.agent_step` when the stage requires adaptive exploration, evidence
   gathering, tool choice, judgment, or synthesis;
 - `@ava.dest` for the final publish, export, notification, or external write.
@@ -429,8 +430,9 @@ for changes, update and re-present the complete plan for approval.
    then define its signature and `@ava.agent_step` body. For classifiers, design
    state, question instructions, and Choice/Noul/Score criteria using the
    [question-design guidance](references/usage.md#structure-the-questions-object).
-   Batch independent judgments, declare the questions on `@ava.classifier_step`,
-   and return the desired typed result from its body.
+   Batch independent judgments, declare defaults on `@ava.classifier_step` or
+   pass runtime `questions=` to the injected classifier, and return the desired
+   typed result from its body.
 5. Declare the DAG at the bottom of `flow.py` as one parenthesized `>>` / `&`
    expression, binding reusable `NodeFuture` values inline with `:=`.
 6. For table-backed flows, define and push the Iceberg or Lance namespace, then
@@ -541,8 +543,10 @@ operator-based execution commands, never a standalone Python runner.
 - `classifier` is framework-injected, keyword-only, annotated `ava.Classifier`,
   and never passed at DAG call sites. `await classifier(state=...)` returns
   `ava.ClassificationResult`; keep probabilities when downstream work needs them.
-- Declare classifier questions statically. Resolve `TYPESAFE_API_KEY` only in
-  the executing environment, never in workflow definitions or metadata.
+- Declare default classifier questions on the decorator or construct runtime
+  questions inside the step body. A call's `questions=` replaces the complete
+  default mapping; it does not merge. Resolve `TYPESAFE_API_KEY` only in the
+  executing environment, never in workflow definitions or metadata.
 - A workflow body defines edges only. No runtime loops, data-dependent branches,
   file/network I/O, or transformations there.
 - Always parenthesize parallel groups: `a() >> (b() & c()) >> d()`.
@@ -554,8 +558,8 @@ operator-based execution commands, never a standalone Python runner.
 
 - `@ava.source`: ingest or construct the first runtime value.
 - `@ava.step`: deterministic transformation.
-- `@ava.classifier_step`: fixed TypeSafe Choice/Noul/Score questions with an
-  injected callable `ava.Classifier`; use an async body to classify runtime state.
+- `@ava.classifier_step`: TypeSafe Choice/Noul/Score questions with an injected
+  callable `ava.Classifier`; use an async body and optional runtime `questions=`.
 - `@ava.agent_step` / `@ava.agent.step`: wrapper around the PredictRLM runtime
   with an injected callable `ava.Agent`.
 - `@ava.dest`: publish, export, or summarize final results.

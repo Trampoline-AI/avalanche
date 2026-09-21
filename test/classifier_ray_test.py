@@ -62,21 +62,45 @@ def typesafe_http_service():
         thread.join(timeout=5)
 
 
+@pytest.mark.parametrize("runtime_questions", [False, True])
 def test_workflow_bound_callable_uses_worker_credentials_and_capture(
-    ray_runtime, typesafe_http_service, monkeypatch
+    ray_runtime, typesafe_http_service, monkeypatch, runtime_questions
 ):
     from ray import cloudpickle
 
     monkeypatch.setenv("TYPESAFE_API_KEY", "driver-must-not-be-used")
 
-    @ava.classifier_step(
-        questions={
-            "urgent": {"type": "noul", "instructions": "Does this require action today?"},
-        }
-    )
+    defaults = {
+        "urgent": {"type": "noul", "instructions": "Does this require action today?"},
+    }
+
+    @ava.classifier_step(questions=None if runtime_questions else defaults)
     async def classify(ticket, *, classifier: ava.Classifier):
-        first = await classifier(state=ticket)
-        second = await classifier(state={"followup": ticket})
+        first = await classifier(
+            state=ticket,
+            questions={
+                "urgent": {
+                    "type": "noul",
+                    "instructions": {"question": "Is action needed?", "reference": ticket},
+                }
+            }
+            if runtime_questions
+            else None,
+        )
+        second = await classifier(
+            state={"followup": ticket},
+            questions={
+                "urgent": {
+                    "type": "noul",
+                    "instructions": {
+                        "question": "Is followup needed?",
+                        "reference": {"followup": ticket},
+                    },
+                }
+            }
+            if runtime_questions
+            else None,
+        )
         return first, second
 
     bound = classify.fn.__classifier_step__.with_workflow_defaults(
@@ -154,4 +178,11 @@ def test_workflow_bound_callable_uses_worker_credentials_and_capture(
         assert body["model"] == "worker-request-model"
         assert body["state"] == expected_input
         assert records[2 * index]["input"] == records[2 * index + 1]["input"] == body["state"]
+        if runtime_questions:
+            assert body["questions"]["urgent"]["instructions"]["reference"] == expected_input
+        assert records[2 * index]["declaration"] == records[2 * index + 1]["declaration"]
+        assert (
+            records[2 * index]["declaration"]["questions"]["urgent"]["instructions"]
+            == (body["questions"]["urgent"]["instructions"])
+        )
     assert requests.empty()

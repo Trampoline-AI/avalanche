@@ -129,6 +129,21 @@ it("retains structured instructions and criteria under their independent questio
   expect(urgency.getByText(/Can wait/)).toBeInTheDocument();
 });
 
+it("keeps runtime-only definitions inspectable and distinguishes replaceable defaults", () => {
+  const runtimeOnly = decodeClassifierDeclaration(
+    JSON.stringify({ ...declaration, questions: null }),
+  );
+  const view = render(<ClassifierDefinition declaration={runtimeOnly} />);
+  expect(screen.getByRole("region", { name: "Questions" })).toHaveTextContent(
+    /supplied at runtime/,
+  );
+  expect(screen.queryByRole("region", { name: /^Question / })).not.toBeInTheDocument();
+  expect(screen.getByRole("region", { name: "Step output" })).toBeVisible();
+  view.rerender(<ClassifierDefinition declaration={declaration} />);
+  expect(screen.getByRole("heading", { name: "Default questions" })).toBeVisible();
+  expect(screen.getByRole("region", { name: "Question route" })).toBeVisible();
+});
+
 it("exposes nested serialized fields, nullable variants, constraints, and finite recursive references", () => {
   const decoded = parseClassifierDeclaration({
     ...declaration,
@@ -319,22 +334,35 @@ it.each([
   expect(screen.getByRole("region", { name: "Answer urgency" })).toHaveTextContent("0.375");
 });
 
-it("pairs each repeated call's retained input with its own answers", () => {
+it("pairs repeated calls with their own input, resolved questions, criteria, and answers", () => {
   const first = success();
   const second = success();
   second.invocation_id = "call-second";
   second.invocation_index = 1;
   second.input = { request: "Second request", context: { policy: ["Policy two"] } };
-  second.result.answers.route = {
-    type: "choice",
-    choice: "accept",
-    probabilities: { review: 0.12, accept: 0.88 },
-    confidence: 0.76,
+  second.declaration = {
+    ...declaration,
+    questions: {
+      priority: {
+        type: "score",
+        instructions: "Assess this request against the current queue",
+        criteria: ["Next week", "Today", "Immediately"],
+      },
+    },
+  };
+  second.result.answers = {
+    priority: {
+      type: "score",
+      score: 1.5,
+      probabilities: { "0": 0, "1": 0.5, "2": 0.5 },
+      legend: { "0": "Next week", "1": "Today", "2": "Immediately" },
+      confidence: 0.25,
+    },
   };
   render(
     <>
-      <ClassifierInvocationDetails invocation={first} />
-      <ClassifierInvocationDetails invocation={second} />
+      <ClassifierInvocationDetails invocation={parseClassifierInvocation(first)} />
+      <ClassifierInvocationDetails invocation={parseClassifierInvocation(second)} />
     </>,
   );
   const firstCall = within(
@@ -352,7 +380,22 @@ it("pairs each repeated call's retained input with its own answers", () => {
   expect(firstInput.getByRole("textbox")).toHaveAttribute("aria-readonly", "true");
   expect(secondInput.queryByText(/Policy one/)).not.toBeInTheDocument();
   expect(firstCall.getByRole("region", { name: "Answer route" })).toHaveTextContent("review");
-  expect(secondCall.getByRole("region", { name: "Answer route" })).toHaveTextContent("accept");
+  expect(secondCall.getByRole("region", { name: "Answer priority" })).toHaveTextContent("1.5");
+  expect(secondCall.queryByRole("region", { name: "Answer route" })).not.toBeInTheDocument();
+  fireEvent.click(secondCall.getByRole("button", { name: "Expand invocation definition" }));
+  const definition = within(secondCall.getByRole("region", { name: "Invocation definition" }));
+  expect(
+    definition.queryByRole("heading", { name: "Default questions" }),
+  ).not.toBeInTheDocument();
+  const priority = within(definition.getByRole("region", { name: "Question priority" }));
+  expect(priority.getByText(/current queue/)).toBeVisible();
+  fireEvent.click(priority.getByRole("button", { expanded: false, name: /criteria/ }));
+  expect(priority.getByRole("list", { name: "priority ordered levels" })).toHaveTextContent(
+    /Next week.*Today.*Immediately/,
+  );
+  expect(
+    definition.queryByRole("region", { name: "Question urgency" }),
+  ).not.toBeInTheDocument();
 });
 
 it("transitions from running to a failed record without fabricating answers or interpreting error HTML", () => {
@@ -361,6 +404,7 @@ it("transitions from running to a failed record without fabricating answers or i
     status: "running",
     ended_at: null,
     result: null,
+    declaration: { ...declaration, questions: null },
   };
   const view = render(
     <ClassifierInvocationDetails invocation={parseClassifierInvocation(running)} />,
@@ -392,6 +436,12 @@ it("transitions from running to a failed record without fabricating answers or i
   expect(
     screen.queryByRole("group", { name: "Classification answers" }),
   ).not.toBeInTheDocument();
+  fireEvent.click(screen.getByRole("button", { name: "Expand invocation definition" }));
+  const definition = within(screen.getByRole("region", { name: "Invocation definition" }));
+  expect(definition.getByRole("region", { name: "Questions" })).toHaveTextContent(
+    /not resolved/,
+  );
+  expect(definition.queryByText(/supplied at runtime/)).not.toBeInTheDocument();
   view.rerender(
     <ClassifierInvocationDetails
       invocation={parseClassifierInvocation({ ...running, status: "cancelled", ended_at: 102 })}
@@ -474,7 +524,7 @@ it("shows the highest probabilities first and reveals every rounded option on ex
 });
 
 describe("strict classifier records", () => {
-  it.each(["input_schema", "step_inputs", "step_output"])(
+  it.each(["questions", "input_schema", "step_inputs", "step_output"])(
     "requires declaration metadata %s at the JSON boundary",
     (key) => {
       expect(() =>
@@ -482,6 +532,21 @@ describe("strict classifier records", () => {
       ).toThrow();
     },
   );
+
+  it("rejects a successful invocation without resolved questions", () => {
+    const value = success();
+    expect(() =>
+      parseClassifierInvocation({
+        ...value,
+        declaration: { ...declaration, questions: null },
+        result: { ...value.result, answers: {} },
+      }),
+    ).toThrow();
+  });
+
+  it.each([{}, [], "runtime"])("rejects invalid question maps: %j", (questions) => {
+    expect(() => parseClassifierDeclaration({ ...declaration, questions })).toThrow();
+  });
 
   it.each([
     { input_schema: [] },
