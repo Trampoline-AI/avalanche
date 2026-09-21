@@ -8,10 +8,13 @@ import json
 import os
 import traceback
 from collections import defaultdict
+from datetime import date
+from typing import Annotated
 
 import httpx2
 import pytest
 import typesafe_sdk
+from pydantic import BaseModel, Field, field_serializer
 
 import avalanche as ava
 from avalanche.classifier import (
@@ -344,6 +347,153 @@ async def test_invalid_probability_totals_still_fail(questions, service, billing
 
     with pytest.raises(ClassifierStepExecutionError):
         await classify.fn()
+
+
+@pytest.mark.asyncio
+async def test_declared_state_model_is_distinct_from_step_types(questions, service):
+    class Ticket(BaseModel):
+        subject: str = Field(min_length=1, description="Customer's request")
+        labels: list[str] = Field(default=["inbox"], max_length=3)
+        deadline: date | None = None
+        priority: int = 0
+
+        @field_serializer("priority")
+        def serialize_priority(self, value: int) -> str:
+            return str(value)
+
+    class CallInput(BaseModel):
+        item: Ticket
+        submitted_by: str = Field(validation_alias="sender", serialization_alias="from")
+
+    @ava.classifier_step(questions=questions, input_model=CallInput)
+    async def classify(tickets: list[Ticket], *, classifier: ava.Classifier) -> Ticket:
+        await classifier(
+            state={"item": tickets[0].model_dump(mode="json"), "sender": "support"}
+        )
+        return tickets[0]
+
+    metadata = classify.fn.__classifier_step__.declaration()
+    [outer] = metadata.step_inputs
+    assert outer.name == "tickets"
+    assert outer.required is True
+    assert outer.json_schema["type"] == "array"
+    assert outer.json_schema["items"] == {"$ref": "#/$defs/Ticket"}
+    outer_ticket = outer.json_schema["$defs"]["Ticket"]["properties"]
+    assert outer_ticket["priority"]["type"] == "integer"
+    assert outer_ticket["subject"]["description"] == "Customer's request"
+    assert outer_ticket["subject"]["minLength"] == 1
+    assert outer_ticket["labels"]["default"] == ["inbox"]
+    assert outer_ticket["labels"]["maxItems"] == 3
+    assert outer_ticket["deadline"]["anyOf"] == [
+        {"format": "date", "type": "string"},
+        {"type": "null"},
+    ]
+    assert metadata.input_schema["properties"]["item"] == {"$ref": "#/$defs/Ticket"}
+    assert set(metadata.input_schema["properties"]) == {"item", "from"}
+    assert metadata.input_schema["$defs"]["Ticket"]["properties"]["priority"]["type"] == (
+        "string"
+    )
+    assert metadata.step_output.json_schema["properties"]["priority"]["type"] == "string"
+    assert service.transports == []
+
+    ticket = Ticket(subject="Charged twice", deadline=date(2030, 1, 2))
+    observed = []
+    with capture_classifier_evidence(observed.append):
+        result = await classify.fn([ticket])
+
+    assert result is ticket
+    expected_state = {
+        "item": {
+            "subject": "Charged twice",
+            "labels": ["inbox"],
+            "deadline": "2030-01-02",
+            "priority": "0",
+        },
+        "from": "support",
+    }
+    assert json.loads(service.requests[0].content)["state"] == expected_state
+    assert observed[-1].input == expected_state
+
+
+def test_step_metadata_keeps_unknown_types_and_excludes_injected_parameters(questions):
+    class Opaque:
+        pass
+
+    class RunInput(ava.BaseInput):
+        limit: int
+
+    class Context(ava.BaseContext):
+        tenant: str
+
+    async def classify(
+        plain,
+        opaque: Opaque,
+        unresolved,
+        context: Annotated[Context, Field(description="Injected execution context")],
+        run_input: RunInput,
+        *extra: int,
+        classifier: ava.Classifier,
+        count: Annotated[int, Field(ge=1)] = 2,
+        logger=ava.Logger(),
+        **options: str,
+    ):
+        raise AssertionError("Schema discovery must not execute the step")
+
+    classify.__annotations__["unresolved"] = "UnavailableType"
+    classify = ava.classifier_step(questions=questions)(classify)
+    declaration = classify.fn.__classifier_step__.declaration()
+    assert declaration.input_schema is None
+    fields = {field.name: field for field in declaration.step_inputs}
+    assert list(fields) == ["plain", "opaque", "unresolved", "extra", "count", "options"]
+    assert fields["plain"].type_name == "Unspecified"
+    assert fields["plain"].json_schema is None
+    assert fields["opaque"].type_name.endswith("Opaque")
+    assert fields["opaque"].json_schema is None
+    assert "UnavailableType" in fields["unresolved"].type_name
+    assert fields["unresolved"].json_schema is None
+    assert fields["count"].type_name == "int"
+    assert fields["count"].json_schema == {"type": "integer", "minimum": 1}
+    assert {name: field.required for name, field in fields.items()} == {
+        "plain": True,
+        "opaque": True,
+        "unresolved": True,
+        "extra": False,
+        "count": False,
+        "options": False,
+    }
+    assert declaration.step_output.type_name == "Unspecified"
+    assert declaration.step_output.json_schema is None
+
+
+@pytest.mark.asyncio
+async def test_invalid_declared_state_never_constructs_client_or_retains_input(
+    questions, service
+):
+    class CallInput(BaseModel):
+        count: int = Field(gt=0)
+
+    secret = "classifier-private-marker"
+
+    @ava.classifier_step(questions=questions, input_model=CallInput)
+    async def classify(*, classifier: ava.Classifier):
+        return await classifier(state={"count": secret})
+
+    observed = []
+    with capture_classifier_evidence(observed.append):
+        try:
+            await classify.fn()
+        except ClassifierStepExecutionError:
+            rendered = traceback.format_exc()
+        else:
+            pytest.fail("state that violates the declared model must fail")
+
+    assert secret not in rendered
+    assert "ValidationError" in rendered
+    assert [record.status for record in observed] == ["running", "failed"]
+    assert all(record.input is None for record in observed)
+    assert secret not in "".join(record.model_dump_json() for record in observed)
+    assert service.transports == []
+    assert service.requests == []
 
 
 @pytest.mark.asyncio

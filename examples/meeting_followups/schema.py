@@ -80,6 +80,12 @@ class Followup(Model):
     stated_deadline: str | None = None
 
 
+class FollowupInput(Model):
+    """The state evaluated by each classifier call, not the step's batch input."""
+
+    item: Followup
+
+
 class Extraction(Model):
     items: list[Followup]
 
