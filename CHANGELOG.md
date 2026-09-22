@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 0.5.3
+
 - Operator viewers automatically select newly arriving runs while viewing Current
   or the latest run, including after starting a run; older selections remain pinned.
 - Operator header breadcrumbs stay centered when space permits, then consume
