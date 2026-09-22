@@ -236,57 +236,6 @@ authentication; do not expose it to an untrusted network. A separately launched
 | GET | `/runs/{run_id}/output` | Retained result value and file descriptors |
 | GET | `/runs/{run_id}/activity` | Paginated log or node-event descriptors |
 
-For example, with the operator running:
-
-```bash
-curl http://127.0.0.1:7435/api/v1/flows
-
-# Copy workflow_selector from discovery; supply your workflow's input fields.
-curl -X POST http://127.0.0.1:7435/api/v1/runs \
-  -H 'Content-Type: application/json' \
-  -d '{"workflow_selector":"flows.py::my_flow","input_json":{"value":41}}'
-
-# Use the run_id returned above.
-curl http://127.0.0.1:7435/api/v1/runs/RUN_ID
-curl http://127.0.0.1:7435/api/v1/runs/RUN_ID/output
-curl -X POST http://127.0.0.1:7435/api/v1/runs/RUN_ID/cancel \
-  -H 'Content-Type: application/json'
-```
-
-Create requests require a nonempty `workflow_selector`. Optional `input_json`
-and `context_json` are JSON objects, not JSON-encoded strings, and default to `{}`.
-Omitting `run_id` generates a new ID; a supplied ID must satisfy the operator's
-run-ID rules. Reusing an existing ID returns `409`; it does not start another run
-or replay an earlier response. Unknown fields are rejected. File uploads and
-Delta's deployment/rerun fields are not part of this API; use the existing
-CLI/gRPC file-input support when needed.
-
-List endpoints accept `page_size` (positive integer, default 100; the operator
-caps pages at 500) and `continuation`. To continue, JSON-encode the complete
-`next_page` object from the response and URL-encode it as `continuation`; omit
-it on the first request. Preserve the same filters throughout the page chain.
-`GET /runs` also accepts `workflow_selector`. Activity accepts `node_id` for
-agent/classifier events and `order=forward|newest_first`; without `node_id` it
-lists run-wide log descriptors.
-
-Responses preserve the existing protobuf JSON contract with snake_case names.
-64-bit integers are JSON strings. `/output` exposes Avalanche's encoded result
-document in `value.value_json`, with its digest and size alongside it; this is
-not a plain workflow-result object. File bodies and activity-detail bodies
-remain available through gRPC and the existing CLI/UI, not these REST routes.
-
-Errors are JSON: `{"error":{"code":"NOT_FOUND","message":"..."}}`.
-Invalid JSON or query parameters return `400`, unknown resources `404`,
-unsupported methods `405`, and duplicate runs or unavailable results `409`.
-Create and cancellation requests require `application/json` (`415` otherwise).
-This rejects ordinary browser form submissions; cross-origin JSON requests need
-a CORS preflight, which the local listener does not authorize. Cancellation needs
-no body. Create requests also require `Content-Length` (`411` otherwise), with a
-4 MiB body limit (`413`).
-An unavailable operator returns `503`; an upstream call exceeding 30 seconds
-returns `504`. A timeout does not prove a run was not started: if you supplied
-a run ID, inspect that run before submitting another request.
-
 ### Embedding the operator UI
 
 `@trampoline-ai/operator-ui` is the embeddable React package for an Avalanche operator
