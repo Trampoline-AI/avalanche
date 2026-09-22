@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+- Operator viewers automatically select newly arriving runs while viewing Current
+  or the latest run, including after starting a run; older selections remain pinned.
+- Operator header breadcrumbs stay centered when space permits, then consume
+  remaining side space before truncating from the left without wrapping or
+  overlapping the brand or connection status.
+- Fixed operator UI builds on case-insensitive filesystems by separating the
+  step-interface component filename from its schema module.
+
 ## 0.5.2
 
 - Classifier calls now accept runtime `questions=` that replace optional decorator

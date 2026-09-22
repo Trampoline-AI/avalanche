@@ -14,7 +14,7 @@ import type {
   ClassifierQuestion,
 } from "./classifier";
 import { ValueView } from "./ValueView";
-import { DeclaredSchema, StepInterfacePanel } from "./StepInterface";
+import { DeclaredSchema, StepInterfacePanel } from "./StepInterfacePanel";
 
 const percent = new Intl.NumberFormat("en-US", { style: "percent", maximumFractionDigits: 0 });
 
