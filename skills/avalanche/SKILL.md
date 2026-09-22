@@ -464,12 +464,27 @@ never scans the current directory by default. Its flags are:
   differ from `--port`;
 - `--ray`: use the Ray executor.
 
-The same HTTP listener exposes the JSON REST API at
-`http://127.0.0.1:7435/api/v1` by default. Use it for flow discovery, creating,
-inspecting, and cancelling runs, and reading their output and activity.
-`ava dev`, `ava operator`, and `ava web` all serve these routes. Mutating
-requests require `Content-Type: application/json`. There is no built-in
-authentication; keep the API local or behind a trusted, authenticated proxy.
+For programmatic control without the UI, send JSON HTTP requests to
+`http://127.0.0.1:7435/api/v1` by default. `ava dev`, `ava operator`, and
+`ava web` all serve this API on their browser listener. Paths below are relative
+to that base URL:
+
+| Method | Path | Purpose |
+| --- | --- | --- |
+| GET | `/flows` | Discover flows and their `workflow_selector` values. |
+| POST | `/runs` | Start a workflow asynchronously; returns `202` with a `run_id`. |
+| GET | `/runs` | List run summaries; optionally filter by `workflow_selector`. |
+| GET | `/runs/{run_id}` | Inspect run status, node states, and topology. |
+| POST | `/runs/{run_id}/cancel` | Request cancellation; poll the run for terminal status. |
+| GET | `/runs/{run_id}/output` | Fetch the encoded result in `value.value_json` and file descriptors. |
+| GET | `/runs/{run_id}/activity` | List log descriptors, or node events with `node_id`; accepts `order=forward\|newest_first`. |
+
+To create a run, POST a JSON object with `workflow_selector` from `/flows`.
+Optional `input_json` and `context_json` are JSON objects; optional `run_id`
+defaults to a generated ID. Both POST routes require
+`Content-Type: application/json`; cancellation needs no body.
+There is no built-in authentication; keep the API local or behind a trusted,
+authenticated proxy.
 
 Use a specific flow file or a clean configured flow-only directory; never pass
 a mixed repository root.
