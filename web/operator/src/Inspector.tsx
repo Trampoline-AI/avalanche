@@ -38,7 +38,7 @@ import { PythonSource } from "./PythonSource";
 import { InspectorFields, InspectorResources } from "./InspectorDefinition";
 import { RetainedAgentValue } from "./RetainedAgentValue";
 import { isUnknownRecord } from "./guards";
-import { StepInterfacePanel } from "./StepInterface";
+import { StepInterfacePanel } from "./StepInterfacePanel";
 import { decodeStepInterface } from "./stepInterface";
 
 interface InspectorProps {

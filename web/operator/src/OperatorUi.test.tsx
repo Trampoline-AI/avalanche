@@ -311,6 +311,55 @@ describe("operator workflows", () => {
     ).toHaveLength(2);
   });
 
+  it("keeps following after starting a run before its creation event arrives", async () => {
+    const publishStarted = Promise.withResolvers<void>();
+    const publishNext = Promise.withResolvers<void>();
+    const third = RunSummaryMsg.create({ ...summary, runId: "run-3", createdSequence: "3" });
+    let cursor = 1;
+    const api = createApi({
+      startRun: async () => secondSummary.runId,
+      getLatestRunSnapshot: async (runId) =>
+        RunSnapshotMsg.create({
+          ...snapshotFor([summary, secondSummary, third].find((run) => run.runId === runId)!),
+          asOfEventUlid: eventUlid(cursor),
+        }),
+      streamUpdates: async function* (_instance, _cursor, signal) {
+        await publishStarted.promise;
+        cursor = 2;
+        yield envelope(2, {
+          oneofKind: "runCreated",
+          runCreated: { summary: secondSummary, nodes: [] },
+        });
+        await publishNext.promise;
+        cursor = 3;
+        yield envelope(3, {
+          oneofKind: "runCreated",
+          runCreated: { summary: third, nodes: [] },
+        });
+        yield* idleUpdates(signal);
+      },
+    });
+    render(<OperatorUi host={{ api, presentation }} />);
+    fireEvent.click(await screen.findByRole("button", { name: "Run" }));
+    await screen.findByRole("button", { name: "Cancel run" });
+    expect(screen.getByRole("button", { name: /run-1,/ })).toHaveAttribute(
+      "aria-pressed",
+      "false",
+    );
+    act(() => publishStarted.resolve());
+    expect(await screen.findByRole("button", { name: /run-2,/ })).toHaveAttribute(
+      "aria-pressed",
+      "true",
+    );
+    act(() => publishNext.resolve());
+    await waitFor(() =>
+      expect(screen.getByRole("button", { name: /run-3,/ })).toHaveAttribute(
+        "aria-pressed",
+        "true",
+      ),
+    );
+  });
+
   it("does not return to a workflow when its start request finishes after navigation", async () => {
     const inventory = FlowInfoMsg.create({
       ...workflow,
@@ -563,6 +612,80 @@ describe.each(["hosted", "local"] as const)("%s shared workspace", (host) => {
     );
   }
 
+  it("follows new runs from Current without selecting baseline runs or another workflow", async () => {
+    const publishOther = Promise.withResolvers<void>();
+    const publishSecond = Promise.withResolvers<void>();
+    const publishThird = Promise.withResolvers<void>();
+    const third = RunSummaryMsg.create({ ...summary, runId: "run-3", createdSequence: "3" });
+    let cursor = 1;
+    const api = createApi({
+      getLatestRunSnapshot: async (runId) =>
+        RunSnapshotMsg.create({
+          ...snapshotFor([summary, secondSummary, third].find((run) => run.runId === runId)!),
+          asOfEventUlid: eventUlid(cursor),
+        }),
+      streamUpdates: async function* (_instance, _cursor, signal) {
+        await publishOther.promise;
+        cursor = 2;
+        yield envelope(2, {
+          oneofKind: "runCreated",
+          runCreated: {
+            summary: RunSummaryMsg.create({
+              ...summary,
+              runId: "other-run",
+              workflowId: "other-workflow",
+              createdSequence: "100",
+            }),
+            nodes: [],
+          },
+        });
+        await publishSecond.promise;
+        cursor = 3;
+        yield envelope(3, {
+          oneofKind: "runCreated",
+          runCreated: { summary: secondSummary, nodes: [] },
+        });
+        await publishThird.promise;
+        cursor = 4;
+        yield envelope(4, {
+          oneofKind: "runCreated",
+          runCreated: { summary: third, nodes: [] },
+        });
+        yield* idleUpdates(signal);
+      },
+    });
+    mount(api);
+    expect(await screen.findByRole("button", { name: "Current" })).toHaveAttribute(
+      "aria-pressed",
+      "true",
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Current" }));
+    await act(async () => publishOther.resolve());
+    expect(screen.getByRole("button", { name: "Current" })).toHaveAttribute(
+      "aria-pressed",
+      "true",
+    );
+    act(() => publishSecond.resolve());
+    await waitFor(() =>
+      expect(screen.getByRole("button", { name: /run-2,/ })).toHaveAttribute(
+        "aria-pressed",
+        "true",
+      ),
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Current" }));
+    expect(screen.getByRole("button", { name: "Current" })).toHaveAttribute(
+      "aria-pressed",
+      "true",
+    );
+    act(() => publishThird.resolve());
+    await waitFor(() =>
+      expect(screen.getByRole("button", { name: /run-3,/ })).toHaveAttribute(
+        "aria-pressed",
+        "true",
+      ),
+    );
+  });
+
   it("follows an explicitly selected latest run through bursts and baselines, but keeps an older run pinned", async () => {
     const ready = Promise.withResolvers<void>();
     const thirdArrives = Promise.withResolvers<void>();
@@ -716,7 +839,7 @@ describe.each(["hosted", "local"] as const)("%s shared workspace", (host) => {
     expect(logs).not.toHaveBeenCalled();
   });
 
-  it("clears loading and failed runs without late snapshots or reconnect restoring selection", async () => {
+  it("clears loading and failed runs, then follows new runs after reconnect", async () => {
     const lateSnapshot = Promise.withResolvers<RunSnapshotMsg>();
     const reset = Promise.withResolvers<void>();
     const third = RunSummaryMsg.create({ ...summary, runId: "run-3", createdSequence: "3" });
@@ -725,9 +848,10 @@ describe.each(["hosted", "local"] as const)("%s shared workspace", (host) => {
     let runs = [summary, secondSummary];
     const api = createApi({
       loadBaseline: async () => ({ ...baseline, runs }),
-      getLatestRunSnapshot: async () => {
+      getLatestRunSnapshot: async (runId) => {
         snapshotRequests += 1;
         if (snapshotRequests === 1) return lateSnapshot.promise;
+        if (runId === third.runId) return snapshotFor(third);
         throw new Error("Snapshot was removed");
       },
       streamUpdates: async function* (_instance, _cursor, signal) {
@@ -770,13 +894,13 @@ describe.each(["hosted", "local"] as const)("%s shared workspace", (host) => {
       runs = [...runs, third];
       reset.resolve();
     });
-    await screen.findByRole("button", { name: /run-3,/ });
-    expect(screen.getByRole("button", { name: "Current" })).toHaveAttribute(
-      "aria-pressed",
-      "true",
+    await waitFor(() =>
+      expect(screen.getByRole("button", { name: /run-3,/ })).toHaveAttribute(
+        "aria-pressed",
+        "true",
+      ),
     );
-    expect(screen.queryByRole("region", { name: "Run logs" })).not.toBeInTheDocument();
-    expect(snapshotRequests).toBe(2);
+    expect(screen.getByRole("region", { name: "Run logs" })).toBeVisible();
   });
 
   it("opens retained step interfaces and agent traces without loading current source in run view", async () => {

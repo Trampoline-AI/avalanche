@@ -104,6 +104,8 @@ export function WorkflowWorkspaceSurface({
   const selection = useRef<{
     workflowId?: string;
     observedRunId?: string;
+    latestRunId?: string;
+    awaitingStartedRunId?: string;
     following: boolean;
     pendingSelection?: { runId?: string };
   }>({ following: false });
@@ -114,6 +116,8 @@ export function WorkflowWorkspaceSurface({
     if (current.workflowId !== workflowId) {
       current.workflowId = workflowId;
       current.observedRunId = selectedRunId;
+      current.latestRunId = latestRunId;
+      current.awaitingStartedRunId = undefined;
       current.following = selectedRunId !== undefined && selectedRunId === latestRunId;
       current.pendingSelection = undefined;
       setInspectedNode(undefined);
@@ -122,11 +126,28 @@ export function WorkflowWorkspaceSurface({
       if (!current.pendingSelection || current.pendingSelection.runId !== selectedRunId) {
         // A host route change, rather than a selection made by this workspace.
         current.following = selectedRunId !== undefined && selectedRunId === latestRunId;
+        current.awaitingStartedRunId = undefined;
       }
       current.observedRunId = selectedRunId;
       current.pendingSelection = undefined;
     }
     if (state.connection !== "live") return;
+    // Current follows arrivals, not the history already present when it was opened.
+    if (
+      selectedRunId === undefined &&
+      !current.pendingSelection &&
+      latestRunId !== undefined &&
+      latestRunId !== current.latestRunId
+    ) {
+      current.following = true;
+    }
+    current.latestRunId = latestRunId;
+    // The start response can precede its creation event. Do not jump back to the
+    // previous latest run while waiting for the started run to enter the timeline.
+    if (current.awaitingStartedRunId && state.runs[current.awaitingStartedRunId]) {
+      current.following = true;
+      current.awaitingStartedRunId = undefined;
+    }
     const desiredRunId =
       current.following && latestRunId !== undefined ? latestRunId : selectedRunId;
     if (
@@ -144,15 +165,18 @@ export function WorkflowWorkspaceSurface({
     selectRun,
     selectedRunId,
     state.connection,
+    state.runs,
     state.selectedRunId,
     workflowId,
   ]);
 
   const selectWorkflowRun = useCallback(
-    (runId: string | undefined) => {
+    (runId: string | undefined, started = false) => {
       navigationGeneration.current += 1;
-      selection.current.pendingSelection = { runId };
+      selection.current.pendingSelection =
+        selection.current.observedRunId === runId ? undefined : { runId };
       selection.current.following = runId !== undefined && runId === latestRunId;
+      selection.current.awaitingStartedRunId = started ? runId : undefined;
       onSelectRun(runId);
       void selectRun(runId);
     },
@@ -162,7 +186,7 @@ export function WorkflowWorkspaceSurface({
     async (workflowSelector: string, input?: Record<string, unknown>) => {
       const generation = navigationGeneration.current;
       const runId = await startRun(workflowSelector, input);
-      if (navigationGeneration.current === generation) selectWorkflowRun(runId);
+      if (navigationGeneration.current === generation) selectWorkflowRun(runId, true);
       return runId;
     },
     [selectWorkflowRun, startRun],

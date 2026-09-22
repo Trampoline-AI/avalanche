@@ -71,7 +71,9 @@ Both hosts share one workspace with an optional selected run. With no run select
 nodes expose their available definitions, without execution badges or logs. Selecting
 a run uses its immutable topology, status, durations, and collapsible logs. Selecting
 the newest run enables following newly created runs; selecting an older run pins it.
-**Current** stops following, including across reconnects. The current
+**Current** shows the workflow definition until a new run arrives, then selects
+that run and follows subsequent arrivals, including runs discovered on reconnect.
+Existing history is not selected when opening Current. The current
 graph and inspector stay visible while another run snapshot loads. The inspected
 node stays selected when its ID exists in the destination topology.
 Loaded historical runs remain available if their current workflow definition is
