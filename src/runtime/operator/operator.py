@@ -35,6 +35,7 @@ from avalanche.classifier.models import (
 from avalanche.step_interface import StepInterface
 
 from ..executor import LocalExecutor, RayExecutor
+from ._signals import shutdown_cleanup
 from .discovery import (
     DEFAULT_DISCOVERY_TIMEOUT,
     raise_for_discovery_diagnostics,
@@ -437,9 +438,13 @@ class Operator:
                     daemon=True,
                 )
                 self._result_cleanup_thread.start()
-        except BaseException:
-            self.close()
-            raise
+        except BaseException as failure:
+            with shutdown_cleanup():
+                try:
+                    self.close()
+                except Exception as exc:
+                    failure.add_note(f"Operator shutdown also failed: {exc}")
+                raise
 
     @property
     def operator_instance_id(self) -> str:

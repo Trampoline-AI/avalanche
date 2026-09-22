@@ -13,6 +13,7 @@ from typing import Any
 import grpc
 
 from ._grpc import _BOUNDED_MESSAGE_OPTIONS
+from ._signals import shutdown_cleanup
 from .operator import Operator
 from .proto import operator_pb2_grpc as pb_grpc
 from .registry import AmbiguousWorkflow
@@ -68,16 +69,17 @@ def serve(
         server._avalanche_bound_port = bound_port
         server.start()
     except BaseException as failure:
-        if server is not None:
+        with shutdown_cleanup():
+            if server is not None:
+                try:
+                    server.stop(grace=0).wait(timeout=2.0)
+                except Exception as exc:
+                    failure.add_note(f"gRPC shutdown also failed: {exc}")
             try:
-                server.stop(grace=0).wait(timeout=2.0)
+                operator.close()
             except Exception as exc:
-                failure.add_note(f"gRPC shutdown also failed: {exc}")
-        try:
-            operator.close()
-        except Exception as exc:
-            failure.add_note(f"Operator shutdown also failed: {exc}")
-        raise
+                failure.add_note(f"Operator shutdown also failed: {exc}")
+            raise
     logger.info("Operator gRPC server listening on %s", listen_address)
 
     if block:

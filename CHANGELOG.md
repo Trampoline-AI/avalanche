@@ -11,7 +11,9 @@
   cross-origin browser form submissions cannot cancel local runs.
 - `ava operator` and `ava dev` keep cleanup non-interruptible by SIGINT/SIGTERM,
   releasing owned resources and restoring signal handlers even after repeated
-  shutdown signals or a fatal operator failure.
+  shutdown signals or a fatal operator failure. Startup rollback uses the same
+  protection, so signals during a gRPC bind failure or operator initialization
+  failure do not leak services or hide the original error.
 
 ## 0.5.4
 
