@@ -690,6 +690,95 @@ def test_signals_during_cleanup_release_listeners_and_restore_handlers(
             close_operator(operator)
 
 
+@pytest.mark.parametrize("command", ("operator", "dev"))
+@pytest.mark.parametrize("failure_stage", ("grpc", "constructor"))
+def test_startup_rollback_ignores_signals_and_preserves_failure(
+    monkeypatch, tmp_path, command, failure_stage
+):
+    from ava_cli import app
+    from runtime.operator.scheduler import Scheduler
+    from runtime.operator.webhooks import WebhookServer
+
+    workflow_path = tmp_path / "ingress.py"
+    workflow_path.write_text(
+        """import avalanche as ava
+
+@ava.source
+def source():
+    return 1
+
+@ava.workflow(webhook=ava.Webhook(path="/ingest"))
+def ingress():
+    return source()
+"""
+    )
+    previous_handlers = {sig: signal.getsignal(sig) for sig in (signal.SIGINT, signal.SIGTERM)}
+    failure = RuntimeError("scheduler startup failed")
+    operators = []
+    ports = []
+    stop_scheduler = Scheduler.stop
+    init_webhooks = WebhookServer.__init__
+
+    def ephemeral_webhooks(self, operator, port):
+        init_webhooks(self, operator, 0)
+
+    def interrupted_stop(self):
+        operator = self._operator
+        operators.append(operator)
+        ports.append(operator._webhooks.port)
+        signal.raise_signal(signal.SIGINT)
+        signal.raise_signal(signal.SIGTERM)
+        stop_scheduler(self)
+
+    def fail_start(self):
+        raise failure
+
+    monkeypatch.setattr(WebhookServer, "__init__", ephemeral_webhooks)
+    monkeypatch.setattr(Scheduler, "stop", interrupted_stop)
+    if failure_stage == "constructor":
+        monkeypatch.setattr(Scheduler, "start", fail_start)
+
+    try:
+        with socket.socket() as occupied:
+            occupied.bind(("127.0.0.1", 0))
+            occupied.listen()
+            argv = [
+                command,
+                str(workflow_path),
+                "--port",
+                str(occupied.getsockname()[1]),
+                "--web-port",
+                "0",
+            ]
+            if command == "operator":
+                with pytest.raises(RuntimeError) as caught:
+                    app.main(argv)
+                if failure_stage == "constructor":
+                    assert caught.value is failure
+            else:
+                assert app.main(argv) == 1
+        for sig, handler in previous_handlers.items():
+            assert signal.getsignal(sig) == handler
+        with socket.socket() as rebound:
+            rebound.bind(("127.0.0.1", ports[0]))
+        operator = operators[0]
+        assert operator._notification_thread is not None
+        assert not operator._notification_thread.is_alive()
+    finally:
+        for sig, handler in previous_handlers.items():
+            signal.signal(sig, handler)
+        # Interrupted first-close cleanup cannot be recovered by close() alone.
+        for operator in operators:
+            stop_scheduler(operator._scheduler)
+            operator._webhooks.close()
+            if operator._watcher_thread is not None:
+                operator._watcher_thread.join(timeout=2.0)
+            if operator._result_cleanup_thread is not None:
+                operator._result_cleanup_thread.join(timeout=2.0)
+            operator._stop_notification_dispatcher()
+            operator._close_result_store()
+
+
 @pytest.mark.parametrize(
     "argv",
     (

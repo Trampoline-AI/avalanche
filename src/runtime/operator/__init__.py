@@ -4,6 +4,7 @@ import signal
 import sys
 import threading
 
+from ._signals import request_shutdown, shutdown_cleanup
 from .models import (
     CatalogView,
     WorkflowDescriptor,
@@ -70,12 +71,6 @@ def serve(
     server = None
     browser_server = None
     previous_handlers = {}
-    cleaning_up = False
-
-    def request_shutdown(_signum, _frame) -> None:
-        if not cleaning_up:
-            raise KeyboardInterrupt
-
     try:
         if threading.current_thread() is threading.main_thread():
             for signum in (signal.SIGINT, signal.SIGTERM):
@@ -105,28 +100,28 @@ def serve(
     except KeyboardInterrupt:
         pass
     finally:
-        cleaning_up = True
-        primary_error = sys.exception()
-        cleanup_error = None
-        if browser_server is not None:
-            try:
-                browser_server.close()
-            except Exception as exc:
-                cleanup_error = exc
-        if server is not None:
-            try:
-                server.stop(grace=1.0).wait(timeout=2.0)
-            except Exception as exc:
-                cleanup_error = cleanup_error or exc
-        if op is not None:
-            try:
-                op.close()
-            except Exception as exc:
-                cleanup_error = cleanup_error or exc
-        for signum, handler in previous_handlers.items():
-            signal.signal(signum, handler)
-        if cleanup_error is not None:
-            if primary_error is not None:
-                primary_error.add_note(f"Shutdown also failed: {cleanup_error}")
-            else:
-                raise cleanup_error
+        with shutdown_cleanup():
+            primary_error = sys.exception()
+            cleanup_error = None
+            if browser_server is not None:
+                try:
+                    browser_server.close()
+                except Exception as exc:
+                    cleanup_error = exc
+            if server is not None:
+                try:
+                    server.stop(grace=1.0).wait(timeout=2.0)
+                except Exception as exc:
+                    cleanup_error = cleanup_error or exc
+            if op is not None:
+                try:
+                    op.close()
+                except Exception as exc:
+                    cleanup_error = cleanup_error or exc
+            for signum, handler in previous_handlers.items():
+                signal.signal(signum, handler)
+            if cleanup_error is not None:
+                if primary_error is not None:
+                    primary_error.add_note(f"Shutdown also failed: {cleanup_error}")
+                else:
+                    raise cleanup_error

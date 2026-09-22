@@ -24,6 +24,7 @@ from pathlib import Path, PurePosixPath
 from typing import TYPE_CHECKING
 from uuid import uuid4
 
+from runtime.operator._signals import request_shutdown, shutdown_cleanup
 from runtime.operator.discovery import (
     DEFAULT_DISCOVERY_TIMEOUT,
     WorkflowDiscoveryError,
@@ -1422,12 +1423,6 @@ def _run_dev(args: argparse.Namespace) -> int:
     browser_server = None
     exit_code = 0
     previous_handlers = {}
-    cleaning_up = False
-
-    def request_shutdown(_signum, _frame) -> None:
-        if not cleaning_up:
-            raise KeyboardInterrupt
-
     if threading.current_thread() is threading.main_thread():
         for signum in (signal.SIGINT, signal.SIGTERM):
             previous_handlers[signum] = signal.getsignal(signum)
@@ -1480,28 +1475,28 @@ def _run_dev(args: argparse.Namespace) -> int:
         _report_dev_failure(stage, exc)
         exit_code = 1
     finally:
-        cleaning_up = True
-        cleanup_error: Exception | None = None
-        if browser_server is not None:
-            try:
-                browser_server.close()
-            except Exception as exc:
-                cleanup_error = exc
-        if grpc_server is not None:
-            try:
-                grpc_server.stop(grace=1.0).wait(timeout=2.0)
-            except Exception as exc:
-                cleanup_error = cleanup_error or exc
-        if operator is not None:
-            try:
-                operator.close()
-            except Exception as exc:
-                cleanup_error = cleanup_error or exc
-        if cleanup_error is not None:
-            _report_dev_failure("shutdown", cleanup_error)
-            exit_code = 1
-        for signum, handler in previous_handlers.items():
-            signal.signal(signum, handler)
+        with shutdown_cleanup():
+            cleanup_error: Exception | None = None
+            if browser_server is not None:
+                try:
+                    browser_server.close()
+                except Exception as exc:
+                    cleanup_error = exc
+            if grpc_server is not None:
+                try:
+                    grpc_server.stop(grace=1.0).wait(timeout=2.0)
+                except Exception as exc:
+                    cleanup_error = cleanup_error or exc
+            if operator is not None:
+                try:
+                    operator.close()
+                except Exception as exc:
+                    cleanup_error = cleanup_error or exc
+            if cleanup_error is not None:
+                _report_dev_failure("shutdown", cleanup_error)
+                exit_code = 1
+            for signum, handler in previous_handlers.items():
+                signal.signal(signum, handler)
     if exit_code == 0:
         print("Stopped.")
     return exit_code
