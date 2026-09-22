@@ -362,7 +362,11 @@ uv run ava dev path/to/flow.py
 ```
 
 `ava dev` starts the operator on `127.0.0.1:7433` and a browser UI connected to
-it at `http://127.0.0.1:7435` by default.
+it at `http://127.0.0.1:7435` by default. The same HTTP listener exposes the
+development JSON REST API under `/api/v1` for discovering flows, creating,
+inspecting, and cancelling runs, and reading output and activity. REST mutations
+require `Content-Type: application/json`. The API has no built-in authentication;
+keep it local or behind a trusted, authenticated proxy.
 
 ```text
 uv run ava dev [FLOW [FLOW ...]] [--port PORT] [--web-port PORT] [--ray]
@@ -374,8 +378,8 @@ uv run ava dev [FLOW [FLOW ...]] [--port PORT] [--web-port PORT] [--ray]
 - Explicit `FLOW` values replace configured targets. Without either source, the
   command fails before starting services; there is no current-directory default.
 - `--port PORT`: operator gRPC port, default `7433`.
-- `--web-port PORT`: browser UI HTTP port, default `7435`. It must differ from
-  `--port`.
+- `--web-port PORT`: browser UI and REST API HTTP port, default `7435`. It must
+  differ from `--port`.
 - `--ray`: use the Ray executor.
 
 Use separate commands instead when the browser listener's host must change or
@@ -388,18 +392,20 @@ custom browser-listener settings:
 
 ```bash
 # terminal 1
-uv run ava operator path/to/flow.py --port 7433
+uv run ava operator path/to/flow.py --port 7433 --no-web
 
 # terminal 2
 uv run ava web --connect localhost:7433
 ```
 
-`ava operator` does **not** accept `--web`. Use `ava dev` or start `ava web`
-separately.
+`ava operator` serves the browser UI and REST API on port `7435` by default.
+Use `--no-web` when starting `ava web` separately to avoid a port conflict.
+The separate `ava web` listener also serves the REST API.
 
 ```text
 uv run ava operator [FLOW [FLOW ...]] [--host HOST] [--port PORT]
-                        [--webhook-port PORT] [--log-level LEVEL] [--ray]
+                        [--webhook-port PORT] [--web-port PORT] [--no-web]
+                        [--log-level LEVEL] [--ray]
 ```
 
 - `FLOW [FLOW ...]`: optional flow discovery targets. Without them, the command
@@ -409,6 +415,8 @@ uv run ava operator [FLOW [FLOW ...]] [--host HOST] [--port PORT]
   requires an external trusted, authenticated boundary.
 - `--port PORT`: gRPC port, default `7433`.
 - `--webhook-port PORT`: loopback webhook HTTP port, default `7434`.
+- `--web-port PORT`: loopback browser UI and REST API HTTP port, default `7435`.
+- `--no-web`: disable that HTTP listener; gRPC and webhooks remain available.
 - `--log-level LEVEL`: one of `DEBUG`, `INFO`, `WARNING`, or `ERROR`; default
   `WARNING`.
 - `--ray`: use the Ray executor.

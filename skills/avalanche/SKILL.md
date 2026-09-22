@@ -452,16 +452,24 @@ For the combined local path, use a specific target or workspace configuration:
 uv run ava dev [<flow-file-or-clean-flow-directory> ...]
 ```
 
-`ava dev` starts the local operator and browser UI. When no `FLOW` is supplied,
-it reads `[tool.avalanche].flow_targets` from the nearest `pyproject.toml`;
+`ava dev` starts the local operator, browser UI, and development REST API.
+When no `FLOW` is supplied, it reads `[tool.avalanche].flow_targets` from the
+nearest `pyproject.toml`;
 relative entries resolve from that file. Explicit `FLOW` values replace the
 configured list. Without either, the command fails before services start and
 never scans the current directory by default. Its flags are:
 
 - `--port PORT`: operator gRPC port, default `7433`;
-- `--web-port PORT`: browser UI HTTP port, default `7435`; it must differ from
-  `--port`;
+- `--web-port PORT`: browser UI and REST API HTTP port, default `7435`; it must
+  differ from `--port`;
 - `--ray`: use the Ray executor.
+
+The same HTTP listener exposes the JSON REST API at
+`http://127.0.0.1:7435/api/v1` by default. Use it for flow discovery, creating,
+inspecting, and cancelling runs, and reading their output and activity.
+`ava dev`, `ava operator`, and `ava web` all serve these routes. Mutating
+requests require `Content-Type: application/json`. There is no built-in
+authentication; keep the API local or behind a trusted, authenticated proxy.
 
 Use a specific flow file or a clean configured flow-only directory; never pass
 a mixed repository root.
@@ -471,13 +479,15 @@ terminals:
 
 ```bash
 uv run ava operator [<flow-file-or-clean-flow-directory> ...] \
-  --host 127.0.0.1 --port 7433 --webhook-port 7434 --log-level WARNING
+  --host 127.0.0.1 --port 7433 --webhook-port 7434 --log-level WARNING --no-web
 uv run ava web --connect localhost:7433 --host 127.0.0.1 --port 7435
 ```
 
-`ava operator` resolves targets with the same explicit-or-configured rule. It
-also accepts `--ray`. Its `--log-level` accepts `DEBUG`, `INFO`, `WARNING`, or
-`ERROR`. `ava web` connects with `--connect HOST:PORT`; use `--trusted-proxy`
+`ava operator` resolves targets with the same explicit-or-configured rule and
+serves the browser UI and REST API on port `7435` by default. Use `--web-port`
+to change that port, or `--no-web` when running `ava web` separately as above.
+It also accepts `--ray`. Its `--log-level` accepts `DEBUG`, `INFO`, `WARNING`,
+or `ERROR`. `ava web` connects with `--connect HOST:PORT`; use `--trusted-proxy`
 only for non-loopback traffic protected by a trusted, authenticated proxy.
 
 Start a discovered workflow with:
