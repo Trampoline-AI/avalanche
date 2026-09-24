@@ -41,9 +41,9 @@
     "format:check": "prettier --check .",
     "lint": "eslint . --max-warnings 0",
     "benchmark": "pnpm run benchmark:unit && pnpm run benchmark:browser",
-    "benchmark:unit": "vitest run src/operator.large-run.benchmark.test.tsx --maxWorkers=1 --minWorkers=1 --no-file-parallelism",
+    "benchmark:unit": "vitest run src/operator.large-run.benchmark.test.tsx --maxWorkers=1 --no-file-parallelism",
     "benchmark:browser": "node scripts/operator-large-run-browser-benchmark.mjs",
-    "test": "NODE_ENV=test vitest run --maxWorkers=1 --minWorkers=1 --no-file-parallelism --exclude src/operator.large-run.benchmark.test.tsx",
+    "test": "NODE_ENV=test vitest run --maxWorkers=1 --no-file-parallelism --exclude src/operator.large-run.benchmark.test.tsx",
     "prepack": "pnpm run build"
   },
   "dependencies": {
@@ -89,6 +89,6 @@
     "typescript": "^5.9.2",
     "typescript-eslint": "^8.67.0",
     "vite": "^7.1.7",
-    "vitest": "^3.2.4"
+    "vitest": "^4.1.11"
   }
 }

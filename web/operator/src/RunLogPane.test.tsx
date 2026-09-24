@@ -1,5 +1,5 @@
 import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 import type { LogDescriptorPage } from "./api";
 import { LogRecordDescriptorMsg, RunSnapshotMsg } from "./model";
@@ -95,7 +95,14 @@ describe("run logs", () => {
       clientHeight: { configurable: true, value: 200 },
       scrollTop: { configurable: true, writable: true, value: 500 },
     });
-    fireEvent.scroll(scroll);
+    vi.useFakeTimers();
+    try {
+      fireEvent.scroll(scroll);
+      // Complete the virtualizer's scroll-end debounce before jsdom teardown.
+      await act(() => vi.runOnlyPendingTimersAsync());
+    } finally {
+      vi.useRealTimers();
+    }
     const following = screen.getByRole("button", { name: "Auto-scroll logs" });
     expect(following).toHaveAttribute("aria-pressed", "false");
     fireEvent.click(screen.getByRole("button", { name: "Load older logs" }));
