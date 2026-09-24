@@ -1593,7 +1593,9 @@ describe("classifier inspection", () => {
       />,
     );
     fireEvent.click(await screen.findByRole("button", { name: "Call 1" }));
-    expect(await screen.findByLabelText("Input state")).toHaveTextContent("input-0");
+    await waitFor(() =>
+      expect(screen.getByLabelText("Input state")).toHaveTextContent("input-0"),
+    );
     expect(screen.getByRole("status", { name: "Invocation status" })).toHaveTextContent(
       "running",
     );
@@ -1672,12 +1674,14 @@ describe("classifier inspection", () => {
       />,
     );
     fireEvent.click(await screen.findByRole("button", { name: "Call 3" }));
-    expect(await screen.findByLabelText("Input state")).toHaveTextContent(/not captured/i);
+    await waitFor(() =>
+      expect(screen.getByLabelText("Input state")).toHaveTextContent(/not captured/i),
+    );
     expect(screen.queryByLabelText("Classification answers")).toBeNull();
     const cancelledCall = screen.getByLabelText("Invocation classification-1");
     fireEvent.click(within(cancelledCall).getByRole("button", { expanded: false }));
-    expect(await within(cancelledCall).findByLabelText("Input state")).toHaveTextContent(
-      "input-1",
+    await waitFor(() =>
+      expect(within(cancelledCall).getByLabelText("Input state")).toHaveTextContent("input-1"),
     );
     expect(
       within(cancelledCall).getByRole("status", { name: "Invocation status" }),
@@ -1685,8 +1689,8 @@ describe("classifier inspection", () => {
     expect(within(cancelledCall).queryByLabelText("Classification answers")).toBeNull();
     const failedCall = screen.getByLabelText("Invocation classification-0");
     fireEvent.click(within(failedCall).getByRole("button", { expanded: false }));
-    expect(await within(failedCall).findByLabelText("Input state")).toHaveTextContent(
-      "input-0",
+    await waitFor(() =>
+      expect(within(failedCall).getByLabelText("Input state")).toHaveTextContent("input-0"),
     );
     expect(within(failedCall).getByRole("alert")).toHaveTextContent(
       "Classification request failed",
@@ -1743,7 +1747,9 @@ describe("classifier inspection", () => {
     expect(bodySignal?.aborted).toBe(true);
     expect(screen.queryByRole("button", { expanded: true })).toBeNull();
     fireEvent.click(await screen.findByRole("button", { name: "Call 2" }));
-    expect(await screen.findByLabelText("Input state")).toHaveTextContent("input-1");
+    await waitFor(() =>
+      expect(screen.getByLabelText("Input state")).toHaveTextContent("input-1"),
+    );
     await act(async () => {
       oldPage.resolve(classifierPage([classifierEvent(1, 0)]));
       oldBody.resolve(classifierInvocation(0));
@@ -1786,7 +1792,9 @@ describe("classifier inspection", () => {
     expect(within(call).getByRole("alert")).toHaveTextContent("Body offline");
     expect(detailAttempts).toBe(1);
     fireEvent.click(screen.getByRole("button", { name: "Retry invocation details" }));
-    expect(await screen.findByLabelText("Input state")).toHaveTextContent("input-0");
+    await waitFor(() =>
+      expect(screen.getByLabelText("Input state")).toHaveTextContent("input-0"),
+    );
     view.rerender(
       <Inspector
         api={createApi()}
@@ -1823,7 +1831,9 @@ describe("classifier inspection", () => {
       />,
     );
     fireEvent.click(await screen.findByRole("button", { name: "Call 5" }));
-    expect(await screen.findByLabelText("Input state")).toHaveTextContent("input-4");
+    await waitFor(() =>
+      expect(screen.getByLabelText("Input state")).toHaveTextContent("input-4"),
+    );
     for (const [index, status] of statuses.entries()) {
       const invocation = screen.getByRole("rowgroup", {
         name: `Invocation classification-${index}`,
@@ -1886,12 +1896,14 @@ describe("classifier inspection", () => {
       <Inspector api={api} run={stoppedRun} nodeId={node.nodeId} onClose={() => undefined} />,
     );
     fireEvent.click(await screen.findByRole("button", { name: "Call 2" }));
-    expect(await screen.findByLabelText("Input state")).toHaveTextContent("input-1");
+    await waitFor(() =>
+      expect(screen.getByLabelText("Input state")).toHaveTextContent("input-1"),
+    );
     expect(screen.getByLabelText("Answer category")).toHaveTextContent("keep");
     const interrupted = screen.getByRole("rowgroup", { name: "Invocation classification-0" });
     fireEvent.click(within(interrupted).getByRole("button", { expanded: false }));
-    expect(await within(interrupted).findByLabelText("Input state")).toHaveTextContent(
-      "input-0",
+    await waitFor(() =>
+      expect(within(interrupted).getByLabelText("Input state")).toHaveTextContent("input-0"),
     );
     expect(
       within(interrupted).getByRole("status", { name: "Invocation status" }),
@@ -1970,7 +1982,9 @@ describe("classifier inspection", () => {
     expect(readJsonDetail).not.toHaveBeenCalled();
     fireEvent.click(screen.getByRole("button", { name: "Previous page" }));
     fireEvent.click(table.getByRole("button", { name: "Call 1" }));
-    expect(await table.findByLabelText("Input state")).toHaveTextContent("input-0");
+    await waitFor(() =>
+      expect(table.getByLabelText("Input state")).toHaveTextContent("input-0"),
+    );
     expect(readJsonDetail).toHaveBeenCalledTimes(1);
     fireEvent.click(table.getByRole("button", { name: "Call 1" }));
     fireEvent.click(table.getByRole("button", { name: "Call 1" }));
@@ -2006,14 +2020,18 @@ describe("classifier inspection", () => {
       />,
     );
     fireEvent.click(await screen.findByRole("button", { name: "Call 2" }));
-    expect(await screen.findByLabelText("Input state")).toHaveTextContent("input-1");
+    await waitFor(() =>
+      expect(screen.getByLabelText("Input state")).toHaveTextContent("input-1"),
+    );
     await waitFor(() =>
       expect(screen.getByRole("button", { name: "Next page" })).toBeDisabled(),
     );
     expect(screen.getAllByRole("rowgroup", { name: /^Invocation / })).toHaveLength(2);
     const first = screen.getByLabelText("Invocation classification-0");
     fireEvent.click(within(first).getByRole("button", { expanded: false }));
-    expect(await screen.findByLabelText("Input state")).toHaveTextContent("input-0");
+    await waitFor(() =>
+      expect(screen.getByLabelText("Input state")).toHaveTextContent("input-0"),
+    );
     const second = screen.getByLabelText("Invocation classification-1");
     fireEvent.click(within(second).getByRole("button", { expanded: false }));
     expect(screen.getByLabelText("Input state")).toHaveTextContent("input-1");
@@ -2191,9 +2209,13 @@ describe("classifier inspection", () => {
     expect(table.queryByRole("button", { expanded: true })).toBeNull();
     expect(readJsonDetail).not.toHaveBeenCalled();
     fireEvent.click(table.getByRole("button", { name: "Call 501" }));
-    expect(await table.findByLabelText("Input state")).toHaveTextContent("input-500");
+    await waitFor(() =>
+      expect(table.getByLabelText("Input state")).toHaveTextContent("input-500"),
+    );
     fireEvent.click(table.getByRole("button", { name: "Call 502" }));
-    expect(await table.findByLabelText("Input state")).toHaveTextContent("input-501");
+    await waitFor(() =>
+      expect(table.getByLabelText("Input state")).toHaveTextContent("input-501"),
+    );
     expect(readJsonDetail).toHaveBeenCalledTimes(2);
     expect(next).toBeDisabled();
     await act(async () => {
@@ -2337,7 +2359,9 @@ describe("classifier inspection", () => {
       />,
     );
     fireEvent.click(await screen.findByRole("button", { name: "Call 2" }));
-    expect(await screen.findByLabelText("Input state")).toHaveTextContent("input-1");
+    await waitFor(() =>
+      expect(screen.getByLabelText("Input state")).toHaveTextContent("input-1"),
+    );
     const first = screen.getByLabelText("Invocation classification-0");
     const second = screen.getByLabelText("Invocation classification-1");
     fireEvent.click(within(first).getByRole("button", { expanded: false }));

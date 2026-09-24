@@ -4,6 +4,8 @@
 
 - Updated the locked AnyIO dependency to 4.15.1 to fix TLS hostname validation
   for internationalized domains and process-worker hangs caused by Python stderr writes.
+- Updated Vitest and its mocker to 4.1.11 to fix development-server file disclosure;
+  migrated test commands and stabilized asynchronous UI test completion for Vitest 4.
 
 ## 0.5.3
 
