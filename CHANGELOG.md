@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- Updated the locked AnyIO dependency to 4.15.1 to fix TLS hostname validation
+  for internationalized domains and process-worker hangs caused by Python stderr writes.
+
 ## 0.5.3
 
 - Operator viewers automatically select newly arriving runs while viewing Current
