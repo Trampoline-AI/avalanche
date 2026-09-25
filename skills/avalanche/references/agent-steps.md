@@ -301,6 +301,128 @@ agent-step runtime kwargs > workflow agent_defaults > PredictRLM defaults
 Workflow defaults cannot define `signature`, `skills`, or `tools`; those are
 capabilities of a specific agent step.
 
+## Native evaluations
+
+Use `@ava.agent_step(..., evaluations=ava.Evaluations(...))` for automatic,
+observation-only quality judgments. Do not create a downstream classifier node
+merely to observe this step, and do not turn native evaluations into workflow
+gates, routing, retries, or self-correction.
+
+Keep the **selected evidence** separate from the **question**. Each metric has a
+synchronous `state` callable and one ordinary TypeSafe question from the native
+classifier format:
+
+```python
+audit_evaluations = ava.Evaluations(
+    metrics={
+        "specific_risks": ava.Metric(
+            state=lambda ctx: ctx.output.model_dump(mode="json"),
+            question={
+                "type": "score",
+                "instructions": "How specifically does the audit describe its risks?",
+                "criteria": [
+                    "Risks are missing or vague",
+                    "Some risks explain a concrete problem",
+                    "Every stated risk explains a concrete problem",
+                ],
+            },
+        ),
+        "actionable": ava.Metric(
+            state=lambda ctx: ctx.output.model_dump(mode="json"),
+            question={
+                "type": "noul",
+                "instructions": "Does the audit explain what needs attention?",
+            },
+        ),
+        "checked_evidence": ava.Metric(
+            state=lambda ctx: ctx.trace,
+            question={
+                "type": "noul",
+                "instructions": (
+                    "Do the recorded agent invocations show that the agent checked "
+                    "the supplied evidence before producing its final answer?"
+                ),
+            },
+        ),
+    },
+    composites={
+        "usefulness": lambda results: (
+            0.7 * (results.scores["specific_risks"].score / 2)
+            + 0.3 * results.nouls["actionable"].noul
+        ),
+    },
+)
+
+
+@ava.agent_step(AuditPackage, evaluations=audit_evaluations)
+async def audit_package(package: PreparedPackage, *, agent: ava.Agent) -> PackageAudit:
+    prediction = await agent(package=package)
+    return PackageAudit.model_validate(prediction.audit)
+```
+
+These selectors reuse the `PackageAudit` return type above; do not introduce
+another input/output/context schema for evaluations:
+
+- `ava.EvalContext.inputs` contains bound step arguments by name, including
+  defaults, excluding injected services such as `agent`.
+- `ctx.output` is the **actual final Python return**, not necessarily the agent's
+  raw prediction or the final model call. Select fields directly from existing
+  Python/Pydantic objects; convert a whole model with `.model_dump(mode="json")`.
+- `ctx.trace` is a JSON-compatible list of terminal events from **every agent
+  invocation in the step**, with invocation IDs, exported trace bodies, and
+  unavailable-trace errors. It is not just the last invocation.
+- Combine relevant inputs and outputs explicitly, for example
+  `{"request": ctx.inputs["question"], "answer": ctx.output.answer}` for a step
+  whose contract has those fields. Optional `ava.EvalContext` annotations aid
+  static checking; no automatic lambda inference is promised.
+- Return text, JSON objects, or JSON arrays with finite nested numbers from
+  selectors. Convert Python-only values explicitly. Native evaluations do not
+  open files, extract content, or evaluate images/media. Paths are not evidence
+  of the referenced file's contents.
+
+Equal selected state with compatible evaluator configuration is batched by
+content, not selector identity. The two audit-output metrics above share a
+request; the trace metric remains separate. Do not combine different states to
+force batching or apply a question-count heuristic. Service limits still apply.
+See [question design](usage.md#structure-the-questions-object) for Choice, Noul,
+and Score formats; a metric takes one question, not a question mapping.
+
+Composites receive `ava.ClassificationResult`. Use `results.answers[name]`,
+`results.choices[name].choice`, `results.nouls[name].noul`, and
+`results.scores[name].score`. Choice/Score preserve `.probabilities` and
+`.confidence`; Score also preserves `.legend`. Noul is probability of yes,
+not a Boolean or separate confidence. An `N`-level Score is in `[0, N - 1]`:
+normalize explicitly using `score / (N - 1)`. The three-level rubric above uses
+`/ 2`. Synchronous composite functions must return finite numbers in `[0, 1]`.
+They make no extra model calls and do not depend on other composites; never
+invent `.normalized` or `.probability` aliases.
+
+Set `TYPESAFE_API_KEY` in the operator environment, in addition to credentials
+for the agent's provider. `ava.Evaluations(model=..., timeout=...)` overrides
+workflow `classifier_defaults`; `None` inherits. Defaults are `jev-latest` and
+a 10-second SDK request timeout. Agent `lm`/`sub_lm` settings do not configure
+Jev. Declarations validate questions but make no model calls during discovery.
+
+Automatic evaluations run only in operator mode after successful step returns.
+Downstream execution and workflow result delivery never wait for them.
+Selectors, invalid state, Jev failures, and invalid composites become independent
+evaluation errors, never fallback scores or workflow failures. Failed steps
+do not schedule evaluations. Embedded Python `.run()` reports **not evaluated**
+and starts no automatic evaluation worker.
+
+The browser's **Evaluations** tab displays separate pending/completed/failed
+records per execution, including reruns. Work survives coordinator completion,
+but records live only in the running operator's memory and disappear on restart.
+Do not promise durable recovery or claim workflow success proves evaluation
+success. Verify real judgments only with actual credentials; controlled SDK
+fixture responses can verify UI behavior but are not live Jev evidence.
+
+Repository example: `examples/evaluations_workflow.py`, run with
+`uv run ava dev examples/evaluations_workflow.py` from the repository root after
+setting `OPENAI_API_KEY` and `TYPESAFE_API_KEY`. It uses genuine agent calls and
+Jev judgments when run. The [illustrated reference](https://github.com/Trampoline-AI/avalanche/blob/main/docs/agent-steps.md#native-evaluations)
+also documents browser results/errors and the record APIs.
+
 ## Verification
 
 - Smoke-call the real decorated workflow with the intended LM credentials.

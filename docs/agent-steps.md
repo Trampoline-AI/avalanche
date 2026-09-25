@@ -284,3 +284,187 @@ PredictRLM defaults
 
 Workflow defaults cannot configure `signature`, `skills`, or `tools`; those are
 agent-definition capabilities.
+
+## Native evaluations
+
+Attach observation-only quality judgments with `evaluations=`. Keep each
+metric's **evidence selector** separate from its **question**: `state` is a
+synchronous Python callable; `question` is one existing TypeSafe Noul, Score,
+or Choice question, using the same format as
+[`classifier_step(questions=...)`](classifier-steps.md).
+
+Using `ReviewSignature` and `Review` from the quick start:
+
+```python
+review_evaluations = ava.Evaluations(
+    metrics={
+        "clarity": ava.Metric(
+            state=lambda ctx: ctx.output.summary,
+            question={
+                "type": "score",
+                "instructions": "How understandable is this summary?",
+                "criteria": ["Confusing", "Mostly clear", "Clear throughout"],
+            },
+        ),
+        "concise": ava.Metric(
+            state=lambda ctx: ctx.output.summary,
+            question={
+                "type": "noul",
+                "instructions": "Is the summary free of unnecessary repetition?",
+            },
+        ),
+        "grounding": ava.Metric(
+            state=lambda ctx: {
+                "document": ctx.inputs["document"],
+                "summary": ctx.output.summary,
+            },
+            question={
+                "type": "choice",
+                "instructions": "How does the summary relate to the document?",
+                "criteria": {
+                    "supported": "All summary claims are supported by the document.",
+                    "unsupported": "At least one claim is unsupported or contradicted.",
+                },
+            },
+        ),
+        "checked_evidence": ava.Metric(
+            state=lambda ctx: ctx.trace,
+            question={
+                "type": "noul",
+                "instructions": (
+                    "Do the recorded agent invocations show that the agent checked "
+                    "the supplied evidence before producing its final answer?"
+                ),
+            },
+        ),
+    },
+    composites={
+        "readability": lambda results: (
+            0.7 * (results.scores["clarity"].score / 2)
+            + 0.3 * results.nouls["concise"].noul
+        ),
+    },
+)
+
+
+@ava.agent_step(ReviewSignature, evaluations=review_evaluations)
+async def review_document(document: str, *, agent: ava.Agent) -> Review:
+    prediction = await agent(document=document)
+    return prediction.review
+```
+
+### Select existing execution evidence
+
+Selectors receive `ava.EvalContext(inputs, output, trace)`:
+
+- `ctx.inputs` is the bound mapping of step arguments, including defaults but
+  excluding injected services such as `agent`.
+- `ctx.output` is the **actual final Python return**, not the last raw agent
+  prediction. If the step returns a Pydantic model, select its fields directly
+  or use `.model_dump(mode="json")` for the whole model.
+- `ctx.trace` is the JSON-compatible list of terminal trace events from **all
+  agent calls in the step**, including invocation IDs, exported trace bodies,
+  and unavailable-trace errors. It is not just the final call's trace.
+
+Reuse the step's existing inputs and return types. There is no mandatory second
+context schema, `input_type`, or `output_type`. Optional selector annotations
+can use `ava.EvalContext`; they do not change runtime validation.
+
+Only selected text, JSON objects, or JSON arrays are sent to Jev. Nested numbers
+must be finite. Convert Python-only values explicitly; arbitrary objects are
+not stringified. Evaluation does not open files, extract document content, or
+evaluate images/media: a path is only text, not file evidence. Select already
+available text/JSON when evaluating a file-producing agent.
+
+### Answers, composites, and batching
+
+Composites are synchronous Python functions receiving one
+`ava.ClassificationResult` containing all metric answers under their names:
+
+| Accessor | Meaning |
+| --- | --- |
+| `results.answers["clarity"]` | The original typed answer |
+| `results.nouls["concise"].noul` | Probability of yes, in `[0, 1]`; not a Boolean or separate confidence |
+| `results.scores["clarity"].score` | Fractional, probability-weighted rubric position |
+| `results.scores["clarity"].legend` | The original ordered rubric |
+| `results.choices["grounding"].choice` | Selected option |
+| `.probabilities`, `.confidence` on Choice/Score answers | Distribution and confidence, preserved without normalization |
+
+An `N`-level Score ranges from `0` to `N - 1`. Normalize explicitly in a
+composite with `score / (N - 1)`; the three-level clarity rubric above uses
+`/ 2`. Every composite must return a finite number in `[0, 1]`. There are no
+`.normalized` or `.probability` aliases, composite dependencies, or extra model
+calls for composites. Raw answers remain unchanged.
+
+Avalanche groups equal selected JSON/text state with compatible evaluator
+settings. Above, clarity and concision share one request; grounding and trace
+evidence remain separate. Equality is based on selected content, not lambda
+identity. Do not merge different states into one large object to force batching:
+that exposes extra evidence to every question. There is no question-count
+heuristic; ordinary service request limits still apply.
+
+### Configure and run
+
+Set `TYPESAFE_API_KEY` in the operator environment, in addition to credentials
+for the PredictRLM agent's model provider. Evaluation configuration follows
+classifier conventions:
+
+```text
+ava.Evaluations(model=..., timeout=...)
+    > @ava.workflow(classifier_defaults={...})
+    > model="jev-latest", timeout=10.0
+```
+
+`timeout` is the positive, finite SDK request timeout in seconds, not a workflow
+deadline. `model=None` and `timeout=None` inherit defaults. Agent `lm`/`sub_lm`
+and `agent_defaults` do not configure Jev. Declarations and discovery make no
+model calls and need no credentials; malformed questions fail at declaration.
+
+Run the repository's real-agent example from the repository root:
+
+```bash
+# Set OPENAI_API_KEY and TYPESAFE_API_KEY in the environment (or project .env).
+uv run ava dev examples/evaluations_workflow.py
+```
+
+Select `evaluations_workflow`, start a run, and inspect the agent step's
+**Evaluations** tab. The example uses OpenAI for both main/sub-agent models
+and TypeSafe for judgments; it has no fake responses or fallback scores.
+
+### Execution, errors, and retention
+
+Automatic evaluations run **only in operator-managed execution**, after a
+successful agent-step return. The operator owns the background worker, so
+evaluation completion is not awaited by downstream steps or workflow result
+delivery. Failed steps do not schedule evaluations. Evaluation errors never
+fail, retry, route, or otherwise gate the workflow.
+
+Each execution has a separate record with `pending`, `completed`, or `failed`
+status. A successful workflow can still have pending or failed evaluations.
+Selectors, invalid selected state, Jev requests, and invalid composites report
+evaluation errors, not fabricated scores. Late results do not reopen or change
+the workflow's terminal status. Reruns retain separate records rather than
+overwriting earlier judgments.
+
+Records survive normal coordinator completion, but are **local, in-memory
+operator state**. They do not survive operator restart; this is not durable
+recovery storage. Embedded Python `.run()` accepts declarations but reports
+**not evaluated** and starts no automatic evaluation worker.
+
+Clients can query `ListEvaluations` with `runId` and optional `nodeId`, or use
+`GET /api/v1/runs/{run_id}/evaluations?node_id=...` on the development REST API.
+The RPC returns separate records; completed records carry `resultJson` with
+`classification` (raw TypeSafe answers) and `composites`. Evaluation records
+are not structural workflow status updates.
+
+### Browser examples
+
+![Native evaluation results in the operator browser UI.](assets/screenshots/native-evaluations-results.png)
+
+*Actual operator browser UI using controlled SDK fixture responses to illustrate
+metric/composite display; these are not live Jev judgments.*
+
+![An evaluation error in the operator browser UI.](assets/screenshots/native-evaluations-error.png)
+
+*Actual operator browser UI: a deliberately failing selector leaves the workflow
+successful. Captured with controlled fixture data, not live Jev verification.*

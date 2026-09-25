@@ -351,6 +351,32 @@ For current prompting guidance and worked patterns, consult the live TypeSafe
 Adapt SDK examples to Avalanche's injected callable and per-call snapshots;
 do not replace the native integration with a custom client.
 
+## Native agent-step evaluations
+
+For observation after an agent step returns, prefer its native `evaluations=`
+declaration over an extra workflow node. Each `ava.Metric` separates a
+synchronous evidence selector from one existing Choice/Noul/Score question.
+`ava.EvalContext` exposes bound inputs (defaults included, injected services
+excluded), the actual final Python return, and terminal traces for all calls.
+No second schema is required. Only selected text/JSON is evaluated, not file or
+media contents.
+
+`ava.Evaluations` batches equal selected state with compatible settings and
+combines metric answers with ordinary synchronous Python functions. Read
+`.answers[name]`, `.choices[name].choice`, `.nouls[name].noul`, and
+`.scores[name].score`; normalize an `N`-level Score as `score / (N - 1)`.
+Composite scores must be finite and within `[0, 1]`.
+
+Set `TYPESAFE_API_KEY` alongside agent provider credentials. Evaluation
+`model`/`timeout` overrides use workflow `classifier_defaults`, otherwise
+`jev-latest` and 10 seconds. Discovery makes no model calls. Automatic evaluation
+requires operator-managed execution; embedded `.run()` reports **not evaluated**.
+The browser shows independent pending/completed/failed records per execution,
+including reruns. Errors never gate workflow progress or change its result.
+Records survive coordinator completion only in operator memory, not restart.
+See [native evaluations](agent-steps.md#native-evaluations) for full examples,
+all-call trace semantics, configuration, and verification guidance.
+
 ## Browser UI and operator
 
 ### Combined local path: `ava dev`

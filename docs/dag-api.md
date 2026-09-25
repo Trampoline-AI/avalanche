@@ -14,6 +14,7 @@ Avalanche workflows are Python functions that declare a DAG of reusable nodes.
 | `@ava.workflow` | Build a runnable workflow |
 | `@ava.agent_step` / `@ava.agent.step` | Declare an agent-backed step; see [`agent-steps.md`](agent-steps.md) |
 | `@ava.classifier_step` | Ask TypeSafe questions declared as defaults or supplied per call, with typed probability results; see [`classifier-steps.md`](classifier-steps.md) |
+| `ava.EvalContext`, `ava.Metric`, `ava.Evaluations` | Declare observation-only agent-step metrics and composites; see [native evaluations](agent-steps.md#native-evaluations) |
 
 Node functions may be `def` or `async def`. Keep workflow bodies declarative:
 call nodes and connect their results there; put runtime work in nodes.
@@ -319,6 +320,11 @@ result = run.result()
 # In async code:
 result = await document_flow().run(executor=ava.LocalExecutor())
 ```
+
+Embedded `.run()` accepts agent-step evaluation declarations but reports them as
+**not evaluated**. Use operator-managed execution for automatic evaluations.
+Evaluation records have their own pending/completed/failed states and never
+gate workflow results; see [evaluation execution and retention](agent-steps.md#execution-errors-and-retention).
 
 Use `ava.LocalExecutor` for concurrent in-process execution. Pass
 `max_workers=1` when a workflow must run serially, or a larger value to bound

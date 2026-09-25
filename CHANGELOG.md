@@ -53,6 +53,13 @@
   with dimmed, disabled nodes and a loading indicator until its run snapshot is ready.
 - Removed the documentation website source files from this repository now that
   they are maintained separately.
+- Added native agent-step evaluations: select final return values, bound inputs,
+  or all agent-call traces with `ava.Metric`, attach `ava.Evaluations`, and combine
+  TypeSafe answers into explicitly normalized scores. Operator-managed evaluations
+  run independently of workflow success, with per-execution pending/results/errors
+  visible in the browser and available through gRPC and REST. Records are local,
+  in-memory state, not restart recovery. Includes a real-agent example and
+  illustrated authoring guidance.
 
 ## 0.6.1
 
