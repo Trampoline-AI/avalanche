@@ -8,6 +8,7 @@ import {
   ActivityDetailRefV2,
   CatalogReloadRequiredV2,
   ClassifierInvocationSummaryV2,
+  EvaluationRecordV2,
   ContinuationRefV2,
   FlowInfoV2,
   FlowListV2,
@@ -854,5 +855,142 @@ describe("operator transport boundary", () => {
     await expect(api.readJsonDetail("classifier-1")).rejects.toThrow(/not bound/i);
     const agent = await api.listAgentEventPage(classifierRequest);
     expect(agent.records[0].invocationId).toBe("classifier-call");
+  });
+
+  it("decodes evaluation answer types and bounded composites at the transport boundary", async () => {
+    const result = {
+      classification: {
+        model: "jev-latest",
+        usage: { input_tokens: 10, output_tokens: 5 },
+        answers: {
+          grounded: { type: "noul", noul: 0.9 },
+          verdict: {
+            type: "choice",
+            choice: "pass",
+            probabilities: { pass: 0.8, fail: 0.2 },
+            confidence: 0.7,
+          },
+          quality: {
+            type: "score",
+            score: 1.5,
+            legend: { "0": "poor", "1": "fair", "2": "good" },
+            probabilities: { "0": 0.1, "1": 0.3, "2": 0.6 },
+            confidence: 0.6,
+          },
+        },
+      },
+      composites: { overall: 0.75 },
+    };
+    const api = apiWith({
+      listEvaluations: () => ({
+        response: Promise.resolve({
+          records: [
+            EvaluationRecordV2.create({
+              evaluationId: "eval-1",
+              runId: "run-1",
+              nodeId: "agent",
+              status: "completed",
+              createdAt: 1,
+              endedAt: 2,
+              resultJson: JSON.stringify(result),
+            }),
+          ],
+        }),
+      }),
+    });
+    expect(await api.listEvaluations("run-1", "agent")).toEqual([
+      {
+        evaluationId: "eval-1",
+        runId: "run-1",
+        nodeId: "agent",
+        status: "completed",
+        createdAt: 1,
+        endedAt: 2,
+        result,
+      },
+    ]);
+  });
+
+  it("rejects evaluation cross-selection leakage, invalid lifecycle evidence, and invalid answers", async () => {
+    const result = {
+      classification: {
+        model: "jev-latest",
+        usage: {},
+        answers: { grounded: { type: "noul", noul: 0.9 } },
+      },
+      composites: { overall: 0.75 },
+    };
+    const base = EvaluationRecordV2.create({
+      evaluationId: "eval-1",
+      runId: "run-1",
+      nodeId: "agent",
+      status: "completed",
+      createdAt: 1,
+      endedAt: 2,
+      resultJson: JSON.stringify(result),
+    });
+    const invalid = [
+      { ...base, runId: "run-2" },
+      { ...base, nodeId: "other" },
+      { ...base, status: "pending" },
+      { ...base, endedAt: 0 },
+      { ...base, resultJson: "{" },
+      { ...base, resultJson: JSON.stringify({ ...result, composites: { overall: 1.01 } }) },
+      {
+        ...base,
+        resultJson: JSON.stringify({
+          ...result,
+          classification: {
+            ...result.classification,
+            answers: { grounded: { type: "noul", noul: -0.1 } },
+          },
+        }),
+      },
+      {
+        ...base,
+        resultJson: JSON.stringify({
+          ...result,
+          classification: {
+            ...result.classification,
+            answers: {
+              verdict: {
+                type: "choice",
+                choice: "pass",
+                probabilities: { pass: 0.2, fail: 0.8 },
+                confidence: 0.7,
+              },
+            },
+          },
+        }),
+      },
+      {
+        ...base,
+        resultJson: JSON.stringify({
+          ...result,
+          classification: {
+            ...result.classification,
+            answers: {
+              quality: {
+                type: "score",
+                score: 0.2,
+                legend: { "0": "poor", "1": "good" },
+                probabilities: { "0": 0.2, "1": 0.8 },
+                confidence: 0.7,
+              },
+            },
+          },
+        }),
+      },
+    ];
+    for (const record of invalid) {
+      const api = apiWith({
+        listEvaluations: () => ({ response: Promise.resolve({ records: [record] }) }),
+      });
+      await expect(api.listEvaluations("run-1", "agent")).rejects.toThrow();
+    }
+    const duplicate = apiWith({
+      listEvaluations: () => ({ response: Promise.resolve({ records: [base, base] }) }),
+    });
+    await expect(duplicate.listEvaluations("run-1", "agent")).rejects.toThrow();
   });
 });

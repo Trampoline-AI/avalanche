@@ -87,7 +87,7 @@ function Probability({ value }: { value: number }) {
   return <span className="shrink-0 tabular-nums">{percent.format(value)}</span>;
 }
 
-function AnswerSummary({
+export function AnswerSummary({
   id,
   answer,
   expanded,

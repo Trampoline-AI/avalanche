@@ -11,6 +11,7 @@ export type {
   OperatorApi,
   StructuralBaseline,
 } from "./api";
+export type { EvaluationRecord, EvaluationResult } from "./evaluations";
 export { OperatorUi } from "./ui/OperatorUi";
 export type {
   OperatorUiHost,

@@ -247,23 +247,28 @@ function equalJson(left: JsonValue, right: JsonValue): boolean {
   return false;
 }
 
-function answer(value: unknown, declared: ClassifierQuestion, path: string): ClassifierAnswer {
+function answer(
+  value: unknown,
+  declared: ClassifierQuestion | undefined,
+  path: string,
+): ClassifierAnswer {
   const item = record(value, path);
-  if (item.type !== declared.type) throw new Error(`${path}.type does not match its question`);
-  switch (declared.type) {
+  if (declared && item.type !== declared.type)
+    throw new Error(`${path}.type does not match its question`);
+  switch (item.type) {
     case "noul":
       fields(item, ["type", "noul"], path);
       return { type: "noul", noul: probability(item.noul, `${path}.noul`) };
     case "choice": {
       fields(item, ["type", "choice", "probabilities", "confidence"], path);
       const choice = string(item.choice, `${path}.choice`);
-      if (!Object.hasOwn(declared.criteria, choice))
-        throw new Error(`${path}.choice is not a declared option`);
-      const distribution = probabilities(
-        item.probabilities,
-        Object.keys(declared.criteria),
-        `${path}.probabilities`,
-      );
+      const options =
+        declared?.type === "choice"
+          ? Object.keys(declared.criteria)
+          : Object.keys(record(item.probabilities, `${path}.probabilities`));
+      if (!options.length || options.some((option) => !option) || !options.includes(choice))
+        throw new Error(`${path}.choice is not a valid option`);
+      const distribution = probabilities(item.probabilities, options, `${path}.probabilities`);
       const maximum = Object.values(distribution).reduce(
         (maximum, value) => Math.max(maximum, value),
         0,
@@ -279,11 +284,22 @@ function answer(value: unknown, declared: ClassifierQuestion, path: string): Cla
     }
     case "score": {
       fields(item, ["type", "score", "legend", "probabilities", "confidence"], path);
-      const levels = declared.criteria.map((_, index) => String(index));
+      const criteria = declared?.type === "score" ? declared.criteria : undefined;
       const legend = entries(item.legend, `${path}.legend`);
+      const levels = Array.from({ length: Object.keys(legend).length }, (_, index) =>
+        String(index),
+      );
+      if (levels.length < 2 || Object.values(legend).some((level) => level === null))
+        throw new Error(`${path}.legend needs at least two ordered levels`);
       matchingKeys(legend, levels, `${path}.legend`);
-      if (declared.criteria.some((level, index) => !equalJson(level, legend[String(index)]))) {
-        throw new Error(`${path}.legend does not match its declared levels`);
+      if (criteria) {
+        matchingKeys(
+          legend,
+          criteria.map((_, index) => String(index)),
+          `${path}.legend`,
+        );
+        if (criteria.some((level, index) => !equalJson(level, legend[String(index)])))
+          throw new Error(`${path}.legend does not match its declared levels`);
       }
       const score = number(item.score, `${path}.score`);
       if (score > levels.length - 1)
@@ -303,25 +319,29 @@ function answer(value: unknown, declared: ClassifierQuestion, path: string): Cla
         confidence: probability(item.confidence, `${path}.confidence`),
       };
     }
+    default:
+      throw new Error(`${path}.type must be choice, noul, or score`);
   }
 }
 
-function result(value: unknown, declaration: ClassifierDeclaration): ClassificationResult {
+export function parseClassificationResult(
+  value: unknown,
+  questions?: Record<string, ClassifierQuestion>,
+): ClassificationResult {
   const path = "classifier result";
-  if (declaration.questions === null) throw new Error(`${path} requires resolved questions`);
   const item = record(value, path);
   fields(item, ["model", "answers", "usage"], path);
   const answers = record(item.answers, `${path}.answers`);
-  matchingKeys(answers, Object.keys(declaration.questions), `${path}.answers`);
+  if (questions) matchingKeys(answers, Object.keys(questions), `${path}.answers`);
   const usage = record(item.usage, `${path}.usage`);
   fields(usage, ["input_tokens", "output_tokens"], `${path}.usage`);
   return {
     model: string(item.model, `${path}.model`),
     answers: Object.fromEntries(
-      Object.entries(declaration.questions).map(([id, declared]) => [
-        id,
-        answer(answers[id], declared, `${path}.answers.${id}`),
-      ]),
+      Object.entries(answers).map(([id, value]) => {
+        string(id, `${path} answer ID`);
+        return [id, answer(value, questions?.[id], `${path}.answers.${id}`)];
+      }),
     ),
     usage: {
       input_tokens:
@@ -377,6 +397,8 @@ export function parseClassifierInvocation(value: unknown): ClassifierInvocation 
     throw new Error(`${path} has an unexpected error`);
   if (status === "failed" && error === null)
     throw new Error(`${path} is missing its failure error`);
+  if (item.result !== null && declaration.questions === null)
+    throw new Error("classifier result requires resolved questions");
   return {
     invocation_id: string(item.invocation_id, `${path}.invocation_id`),
     invocation_index: integer(item.invocation_index, `${path}.invocation_index`),
@@ -385,7 +407,10 @@ export function parseClassifierInvocation(value: unknown): ClassifierInvocation 
     ended_at,
     declaration,
     input,
-    result: item.result === null ? null : result(item.result, declaration),
+    result:
+      item.result === null
+        ? null
+        : parseClassificationResult(item.result, declaration.questions ?? undefined),
     error,
   };
 }

@@ -13,6 +13,7 @@ import {
 
 import type { OperatorApi } from "./api";
 import { ClassifierInspector } from "./ClassifierInspector";
+import { EvaluationPanel } from "./EvaluationPanel";
 import { decodeClassifierDeclaration } from "./classifier";
 import {
   boundDescriptors,
@@ -53,7 +54,8 @@ interface InspectorProps {
   onClose: () => void;
 }
 
-type AgentTab = "trace" | "io";
+type AgentTab = "trace" | "io" | "evaluations";
+const AGENT_TABS: readonly AgentTab[] = ["trace", "io", "evaluations"];
 type StepTab = "definition" | "code";
 const STEP_TABS: readonly StepTab[] = ["definition", "code"];
 type DetailFormat = "json";
@@ -748,7 +750,7 @@ function AgentAndStepInspector({
               role="tablist"
               aria-label="Run agent detail views"
             >
-              {(["trace", "io"] as const).map((item) => (
+              {AGENT_TABS.map((item) => (
                 <button
                   type="button"
                   role="tab"
@@ -762,19 +764,23 @@ function AgentAndStepInspector({
                   onKeyDown={(event) => {
                     if (!["ArrowLeft", "ArrowRight", "Home", "End"].includes(event.key)) return;
                     event.preventDefault();
-                    const next: AgentTab =
-                      event.key === "Home"
-                        ? "trace"
-                        : event.key === "End"
-                          ? "io"
-                          : item === "trace"
-                            ? "io"
-                            : "trace";
+                    const index = AGENT_TABS.indexOf(item);
+                    const next =
+                      AGENT_TABS[
+                        event.key === "Home"
+                          ? 0
+                          : event.key === "End"
+                            ? AGENT_TABS.length - 1
+                            : (index +
+                                (event.key === "ArrowRight" ? 1 : -1) +
+                                AGENT_TABS.length) %
+                              AGENT_TABS.length
+                      ];
                     setSelectedTab(next);
                     document.getElementById(`${tabsId}-${next}`)?.focus();
                   }}
                 >
-                  {item === "trace" ? "Trace" : "Run I/O"}
+                  {item === "trace" ? "Trace" : item === "io" ? "Run I/O" : "Evaluations"}
                 </button>
               ))}
             </div>
@@ -784,7 +790,18 @@ function AgentAndStepInspector({
               id={`${tabsId}-panel`}
               aria-labelledby={`${tabsId}-${tab}`}
             >
-              {tab === "io" ? (
+              {runId && nodeId && (
+                <div hidden={tab !== "evaluations"}>
+                  <EvaluationPanel
+                    key={selectionScope}
+                    api={api}
+                    operatorInstanceId={operatorInstanceId}
+                    runId={runId}
+                    nodeId={nodeId}
+                  />
+                </div>
+              )}
+              {tab === "evaluations" ? null : tab === "io" ? (
                 <div className="grid min-w-0 gap-6">
                   {(["inputs", "outputs"] as const).map((kind) => (
                     <section

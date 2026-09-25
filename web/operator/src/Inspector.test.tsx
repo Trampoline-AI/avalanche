@@ -422,10 +422,6 @@ describe("retained run inspection", () => {
       />,
     );
     expect(screen.queryByText("Follow the current instructions.")).not.toBeInTheDocument();
-    expect(screen.getAllByRole("tab").map((tab) => tab.textContent)).toEqual([
-      "Trace",
-      "Run I/O",
-    ]);
     openRunIo();
     expect(await screen.findByText("Historical question")).toBeInTheDocument();
     expect(screen.queryByText("current_question")).not.toBeInTheDocument();
@@ -461,7 +457,7 @@ describe("retained run inspection", () => {
     );
   });
 
-  it("shows only Trace and Run I/O in run mode and restores the selected run tab", async () => {
+  it("keeps execution tabs separate from definitions and restores the selected run tab", async () => {
     const pages = vi.fn(async () => eventPage([]));
     const api = createApi({ listAgentEventPage: pages });
     const view = render(
@@ -487,10 +483,6 @@ describe("retained run inspection", () => {
         onClose={() => undefined}
       />,
     );
-    expect(screen.getAllByRole("tab").map((tab) => tab.textContent)).toEqual([
-      "Trace",
-      "Run I/O",
-    ]);
     const traceTab = screen.getByRole("tab", { name: "Trace" });
     expect(traceTab).toHaveAttribute("aria-selected", "true");
     expect(screen.getByRole("region", { name: "Agent trace" })).toBeInTheDocument();

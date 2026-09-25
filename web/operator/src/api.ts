@@ -2,6 +2,7 @@ import { GrpcWebFetchTransport } from "@protobuf-ts/grpcweb-transport";
 
 import { PageOrderV2 } from "./generated/operator";
 import { DescriptorPageOrder } from "./model";
+import { parseEvaluationRecords, type EvaluationRecord } from "./evaluations";
 
 import {
   OperatorServiceV2Client,
@@ -126,6 +127,11 @@ export interface OperatorApi {
     request: ClassifierEventPageRequest,
     signal?: AbortSignal,
   ): Promise<ClassifierEventDescriptorPage>;
+  listEvaluations(
+    runId: string,
+    nodeId: string,
+    signal?: AbortSignal,
+  ): Promise<EvaluationRecord[]>;
   readJsonDetail(bodyToken: string, signal?: AbortSignal): Promise<unknown>;
   readTextDetail(bodyToken: string, signal?: AbortSignal): Promise<string>;
   startRun(workflowSelector: string, input?: Record<string, unknown>): Promise<string>;
@@ -207,6 +213,18 @@ export class GrpcWebOperatorApi implements OperatorApi {
       signal ? { abort: signal } : undefined,
     ).response;
     return source.sourceCode;
+  }
+
+  async listEvaluations(
+    runId: string,
+    nodeId: string,
+    signal?: AbortSignal,
+  ): Promise<EvaluationRecord[]> {
+    const response = await this.client.listEvaluations(
+      { runId, nodeId },
+      signal ? { abort: signal } : undefined,
+    ).response;
+    return parseEvaluationRecords(response.records, runId, nodeId);
   }
 
   async loadBaseline(signal?: AbortSignal): Promise<StructuralBaseline> {
