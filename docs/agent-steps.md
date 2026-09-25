@@ -427,9 +427,23 @@ Run the repository's real-agent example from the repository root:
 uv run ava dev examples/evaluations_workflow.py
 ```
 
-Select `evaluations_workflow`, start a run, and inspect the agent step's
-**Evaluations** tab. The example uses OpenAI for both main/sub-agent models
-and TypeSafe for judgments; it has no fake responses or fallback scores.
+Select `evaluations_workflow` and click **Run** without supplying JSON or files.
+The source generates a synthetic checkout incident: error-rate windows, deployment
+events, support tickets, and on-call notes. A real agent prepares an evidence-linked
+handoff, and a deterministic final step renders it as Markdown. No customer message
+is sent and no external system is changed.
+
+Inspect `prepare_incident_handoff` → **Evaluations** for grounding, actionability,
+publication readiness, clarity, and trace-inspection judgments. The `handoff_quality`
+composite combines Noul probability, explicitly normalized Scores, and a Choice
+probability. Three questions share the same source-and-handoff state and can batch
+together; clarity and trace inspection select different evidence.
+
+Inspect `render_handoff` for the finished brief. The scenario deliberately includes
+an unverified duplicate-charge report and too little recovery history to declare
+resolution, so a useful answer must distinguish improvement from proven recovery.
+The input data is synthetic; OpenAI agent calls and TypeSafe judgments are real.
+Evaluation authentication errors remain visible separately from the completed brief.
 
 ### Execution, errors, and retention
 

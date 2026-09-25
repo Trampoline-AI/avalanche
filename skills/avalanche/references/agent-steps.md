@@ -419,8 +419,12 @@ fixture responses can verify UI behavior but are not live Jev evidence.
 
 Repository example: `examples/evaluations_workflow.py`, run with
 `uv run ava dev examples/evaluations_workflow.py` from the repository root after
-setting `OPENAI_API_KEY` and `TYPESAFE_API_KEY`. It uses genuine agent calls and
-Jev judgments when run. The [illustrated reference](https://github.com/Trampoline-AI/avalanche/blob/main/docs/agent-steps.md#native-evaluations)
+setting `OPENAI_API_KEY` and `TYPESAFE_API_KEY`. Click **Run** without supplying
+input. It generates synthetic incident evidence, uses a real agent to prepare a
+cited on-call handoff, and renders a Markdown brief. The agent step demonstrates
+all three question types, shared-state batching, trace selection, and a normalized
+composite; no customer communication is sent. The
+[illustrated reference](https://github.com/Trampoline-AI/avalanche/blob/main/docs/agent-steps.md#native-evaluations)
 also documents browser results/errors and the record APIs.
 
 ## Verification

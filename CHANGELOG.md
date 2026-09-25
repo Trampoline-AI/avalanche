@@ -60,6 +60,9 @@
   visible in the browser and available through gRPC and REST. Records are local,
   in-memory state, not restart recovery. Includes a real-agent example and
   illustrated authoring guidance.
+- Expanded the evaluations example into a no-input incident-handoff workflow:
+  generate synthetic operational evidence, prepare a cited brief with a real
+  agent, and inspect five quality metrics plus a normalized composite.
 
 ## 0.6.1
 
