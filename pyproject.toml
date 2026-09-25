@@ -14,6 +14,7 @@ classifiers = [
     "Programming Language :: Python :: 3.13",
 ]
 dependencies = [
+    "cloudpickle>=3.1,<4",
     "croniter>=6.2.2",
     "dataframely>=1.13.0,<2",
     "fastapi>=0.115,<1",

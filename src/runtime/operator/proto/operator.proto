@@ -19,6 +19,7 @@ service OperatorServiceV2 {
   rpc ListRunSummaries(ListRunSummariesRequestV2) returns (RunSummaryPageV2);
   rpc GetRunSnapshot(GetRunSnapshotRequestV2) returns (RunSnapshotV2);
   rpc ListRunActivity(ListRunActivityRequestV2) returns (RunActivityPageV2);
+  rpc ListEvaluations(ListEvaluationsRequestV2) returns (EvaluationListV2);
   rpc ReadActivityDetail(ReadActivityDetailRequestV2)
       returns (stream ActivityDetailChunkV2);
   rpc GetRunResult(GetRunResultRequestV2) returns (RunResultV2);
@@ -192,6 +193,32 @@ message CancelRunRequestV2 {
 
 message CancelRunResponseV2 {
   string run_id = 1;
+}
+
+// Evaluations are independent of workflow lifecycle: terminal runs may still
+// have pending records. Poll this method to observe late results.
+message ListEvaluationsRequestV2 {
+  string run_id = 1;
+  // Optional node filter within this run.
+  string node_id = 2;
+}
+
+message EvaluationRecordV2 {
+  string evaluation_id = 1;
+  string run_id = 2;
+  string node_id = 3;
+  // One of "pending", "completed", or "failed".
+  string status = 4;
+  // Unix epoch seconds.
+  double created_at = 5;
+  optional double ended_at = 6;
+  // Serialized EvaluationResult, preserving raw classification answers.
+  optional string result_json = 7;
+  optional string error = 8;
+}
+
+message EvaluationListV2 {
+  repeated EvaluationRecordV2 records = 1;
 }
 
 message RunSummaryV2 {

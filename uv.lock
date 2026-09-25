@@ -212,6 +212,7 @@ name = "avalanche-ai"
 version = "0.8.0"
 source = { editable = "." }
 dependencies = [
+    { name = "cloudpickle" },
     { name = "croniter" },
     { name = "dataframely" },
     { name = "fastapi" },
@@ -266,6 +267,7 @@ examples = [
 
 [package.metadata]
 requires-dist = [
+    { name = "cloudpickle", specifier = ">=3.1,<4" },
     { name = "croniter", specifier = ">=6.2.2" },
     { name = "dataframely", specifier = ">=1.13.0,<2" },
     { name = "fastapi", specifier = ">=0.115,<1" },
