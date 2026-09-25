@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 0.6.0
+
 - Added a built-in development REST API for flow discovery, run creation,
   summaries, snapshots, cancellation, output, and activity through the existing
   operator gRPC service. `ava operator` now serves the browser UI and REST API
