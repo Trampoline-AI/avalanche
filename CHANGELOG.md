@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- Removed the documentation website source files from this repository now that
+  they are maintained separately.
+
 ## 0.6.1
 
 - `ava web` now exits cleanly when Ctrl-C arrives during browser listener startup.
