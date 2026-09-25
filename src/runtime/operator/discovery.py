@@ -613,6 +613,7 @@ def _descriptor_to_dict(
     agent_node_ids = []
     agent_metadata_json = []
     classifier_metadata_json: list[list[str]] = []
+    evaluation_metadata_json: list[list[str]] = []
     for node_id in node_ids:
         classifier_spec = getattr(workflow.nodes[node_id].node.fn, "__classifier_step__", None)
         if classifier_spec is not None:
@@ -624,6 +625,11 @@ def _descriptor_to_dict(
         if spec is None:
             continue
         agent_node_ids.append(node_id)
+        if spec.evaluations is not None:
+            evaluation_declaration = spec.evaluations.declaration_metadata(
+                workflow.classifier_defaults
+            )
+            evaluation_metadata_json.append([node_id, evaluation_declaration.model_dump_json()])
         try:
             metadata = spec.declaration_metadata(workflow.agent_defaults)
             agent_metadata_json.append(
@@ -664,6 +670,7 @@ def _descriptor_to_dict(
         "agent_node_ids": agent_node_ids,
         "agent_metadata_json": agent_metadata_json,
         "classifier_metadata_json": classifier_metadata_json,
+        "evaluation_metadata_json": evaluation_metadata_json,
         "step_interface_json": list(step_interface_for_workflow(workflow, node_ids).items()),
         "standard_step_docstring_lines": list(standard_step_docstring_lines.items()),
         "node_source_code": list(node_source_code.items()),
@@ -688,6 +695,9 @@ def _descriptor_from_dict(item: dict[str, Any]) -> WorkflowDescriptor:
         ),
         classifier_metadata_json=tuple(
             (key, value) for key, value in item.get("classifier_metadata_json", ())
+        ),
+        evaluation_metadata_json=tuple(
+            (key, value) for key, value in item["evaluation_metadata_json"]
         ),
         step_interface_json=tuple(
             (key, value) for key, value in item.get("step_interface_json", ())

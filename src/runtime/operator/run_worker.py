@@ -33,6 +33,7 @@ from .registry import (
     agent_field_schemas_for_workflow,
     agent_instruction_lines_for_workflow,
     classifier_metadata_for_workflow,
+    evaluation_metadata_for_workflow,
 )
 from .result_store import (
     ResultPublicationCancelledError,
@@ -362,6 +363,7 @@ def _workflow_metadata(workflow: Workflow) -> dict[str, Any]:
         "agent_field_schemas_json": agent_field_schemas_for_workflow(workflow, node_ids),
         "agent_instruction_lines": agent_instruction_lines_for_workflow(workflow, node_ids),
         "classifier_metadata_json": classifier_metadata_for_workflow(workflow, node_ids),
+        "evaluation_metadata_json": evaluation_metadata_for_workflow(workflow, node_ids),
         "step_interface_json": step_interface_for_workflow(workflow, node_ids),
         "standard_step_docstring_lines": node_docstring_lines_for_workflow(workflow, node_ids),
     }

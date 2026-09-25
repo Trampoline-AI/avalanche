@@ -21,7 +21,7 @@ from .source import iter_source_paths
 
 logger = logging.getLogger(__name__)
 
-_CACHE_SCHEMA_VERSION = 7
+_CACHE_SCHEMA_VERSION = 8
 
 
 class _CacheModel(BaseModel):
@@ -74,6 +74,7 @@ class _CachedDescriptor(_CacheModel):
     agent_node_ids: tuple[str, ...]
     agent_metadata_json: tuple[tuple[str, str], ...]
     classifier_metadata_json: tuple[tuple[str, str], ...]
+    evaluation_metadata_json: tuple[tuple[str, str], ...]
     step_interface_json: tuple[tuple[str, str], ...]
     standard_step_docstring_lines: tuple[tuple[str, str], ...]
     node_source_code: tuple[tuple[str, str], ...]
@@ -94,6 +95,7 @@ class _CachedDescriptor(_CacheModel):
             agent_node_ids=descriptor.agent_node_ids,
             agent_metadata_json=descriptor.agent_metadata_json,
             classifier_metadata_json=descriptor.classifier_metadata_json,
+            evaluation_metadata_json=descriptor.evaluation_metadata_json,
             step_interface_json=descriptor.step_interface_json,
             standard_step_docstring_lines=descriptor.standard_step_docstring_lines,
             node_source_code=descriptor.node_source_code,
@@ -114,6 +116,7 @@ class _CachedDescriptor(_CacheModel):
             agent_node_ids=self.agent_node_ids,
             agent_metadata_json=self.agent_metadata_json,
             classifier_metadata_json=self.classifier_metadata_json,
+            evaluation_metadata_json=self.evaluation_metadata_json,
             step_interface_json=self.step_interface_json,
             standard_step_docstring_lines=self.standard_step_docstring_lines,
             node_source_code=self.node_source_code,
@@ -176,7 +179,7 @@ class _SourceStamp(_CacheModel):
 
 
 class _CacheDocument(_CacheModel):
-    schema_version: Literal[7]
+    schema_version: Literal[8]
     environment: str
     roots: tuple[_CachedRoot, ...]
     watch_roots: tuple[str, ...]

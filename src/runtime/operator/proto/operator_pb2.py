@@ -4,191 +4,198 @@
 # source: operator.proto
 # Protobuf Python Version: 6.31.1
 """Generated protocol buffer code."""
+
 from google.protobuf import descriptor as _descriptor
 from google.protobuf import descriptor_pool as _descriptor_pool
 from google.protobuf import runtime_version as _runtime_version
 from google.protobuf import symbol_database as _symbol_database
 from google.protobuf.internal import builder as _builder
+
 _runtime_version.ValidateProtobufRuntimeVersion(
-    _runtime_version.Domain.PUBLIC,
-    6,
-    31,
-    1,
-    '',
-    'operator.proto'
+    _runtime_version.Domain.PUBLIC, 6, 31, 1, "", "operator.proto"
 )
 # @@protoc_insertion_point(imports)
 
 _sym_db = _symbol_database.Default()
 
 
-
-
-DESCRIPTOR = _descriptor_pool.Default().AddSerializedFile(b'\n\x0eoperator.proto\x12\x12\x61valanche.operator\"%\n\x10ScopeReferenceV2\x12\x11\n\treference\x18\x01 \x01(\t\"\x93\x01\n\x11LifecycleCursorV2\x12\x0e\n\x06stream\x18\x01 \x01(\t\x12\x1c\n\x14topology_fingerprint\x18\x02 \x01(\t\x12\x19\n\x11stream_generation\x18\x03 \x01(\x04\x12!\n\x19retained_floor_event_ulid\x18\x04 \x01(\t\x12\x12\n\nevent_ulid\x18\x05 \x01(\t\"\xd9\x01\n\x16ProjectSummaryCursorV2\x12\x0e\n\x06stream\x18\x01 \x01(\t\x12\x1c\n\x14topology_fingerprint\x18\x02 \x01(\t\x12\x19\n\x11source_generation\x18\x03 \x01(\t\x12\x1f\n\x17retained_floor_sequence\x18\x04 \x01(\x04\x12\x1c\n\x14target_head_sequence\x18\x05 \x01(\x04\x12\x1c\n\x14\x63heckpoint_watermark\x18\x06 \x01(\x04\x12\x19\n\x11\x63heckpoint_digest\x18\x07 \x01(\t\"\xe8\x01\n\x11\x43ontinuationRefV2\x12\x37\n\tscope_ref\x18\x01 \x01(\x0b\x32$.avalanche.operator.ScopeReferenceV2\x12\x17\n\x0f\x63ontinuation_id\x18\x02 \x01(\t\x12\x35\n\x06\x63ursor\x18\x03 \x01(\x0b\x32%.avalanche.operator.LifecycleCursorV2\x12J\n\x16project_summary_cursor\x18\x04 \x01(\x0b\x32*.avalanche.operator.ProjectSummaryCursorV2\"h\n\x16\x44iscoverFlowsRequestV2\x12\x11\n\tpage_size\x18\x01 \x01(\r\x12;\n\x0c\x63ontinuation\x18\x02 \x01(\x0b\x32%.avalanche.operator.ContinuationRefV2\"L\n\x1eGetWorkflowNodeSourceRequestV2\x12\x19\n\x11workflow_selector\x18\x01 \x01(\t\x12\x0f\n\x07node_id\x18\x02 \x01(\t\"@\n\x14WorkflowNodeSourceV2\x12\x18\n\x0bsource_code\x18\x01 \x01(\tH\x00\x88\x01\x01\x42\x0e\n\x0c_source_code\"\x88\x05\n\nFlowInfoV2\x12\x19\n\x11workflow_selector\x18\x01 \x01(\t\x12\x14\n\x0c\x64isplay_name\x18\x02 \x01(\t\x12\x17\n\x0fmanifest_digest\x18\x03 \x01(\t\x12\x10\n\x08node_ids\x18\x04 \x03(\t\x12\x13\n\x0bworkflow_id\x18\x05 \x01(\t\x12\x11\n\tfile_path\x18\x06 \x01(\t\x12\x38\n\x08topology\x18\x07 \x01(\x0b\x32&.avalanche.operator.WorkflowTopologyV2\x12\x16\n\x0e\x61gent_node_ids\x18\x08 \x03(\t\x12R\n\x13\x61gent_metadata_json\x18\t \x03(\x0b\x32\x35.avalanche.operator.FlowInfoV2.AgentMetadataJsonEntry\x12\x0c\n\x04\x63ron\x18\n \x01(\t\x12\x13\n\x0bnext_run_at\x18\x0b \x01(\x01\x12\x13\n\x0blast_run_at\x18\x0c \x01(\x01\x12\x14\n\x0cwebhook_path\x18\r \x01(\t\x12\x13\n\x0bwebhook_url\x18\x0e \x01(\t\x12\x16\n\x0ewebhook_active\x18\x0f \x01(\x08\x12\\\n\x18\x63lassifier_metadata_json\x18\x10 \x03(\x0b\x32:.avalanche.operator.FlowInfoV2.ClassifierMetadataJsonEntry\x1a\x38\n\x16\x41gentMetadataJsonEntry\x12\x0b\n\x03key\x18\x01 \x01(\t\x12\r\n\x05value\x18\x02 \x01(\t:\x02\x38\x01\x1a=\n\x1b\x43lassifierMetadataJsonEntry\x12\x0b\n\x03key\x18\x01 \x01(\t\x12\r\n\x05value\x18\x02 \x01(\t:\x02\x38\x01\"D\n\x15\x44iscoveryDiagnosticV2\x12\x0c\n\x04path\x18\x01 \x01(\t\x12\x0c\n\x04kind\x18\x02 \x01(\t\x12\x0f\n\x07message\x18\x03 \x01(\t\"\xef\x02\n\nFlowListV2\x12\x35\n\x06\x63ursor\x18\x01 \x01(\x0b\x32%.avalanche.operator.LifecycleCursorV2\x12-\n\x05\x66lows\x18\x02 \x03(\x0b\x32\x1e.avalanche.operator.FlowInfoV2\x12\x38\n\tnext_page\x18\x03 \x01(\x0b\x32%.avalanche.operator.ContinuationRefV2\x12>\n\x0b\x64iagnostics\x18\x04 \x03(\x0b\x32).avalanche.operator.DiscoveryDiagnosticV2\x12\x36\n\x0cscan_targets\x18\x05 \x03(\x0b\x32 .avalanche.operator.ScanTargetV2\x12\x37\n\tscope_ref\x18\x06 \x01(\x0b\x32$.avalanche.operator.ScopeReferenceV2\x12\x10\n\x08revision\x18\x07 \x01(\x04\"\x1f\n\x0bNodeEdgesV2\x12\x10\n\x08\x63hildren\x18\x01 \x03(\t\"\xec\t\n\x12WorkflowTopologyV2\x12\x10\n\x08node_ids\x18\x01 \x03(\t\x12@\n\x05graph\x18\x02 \x03(\x0b\x32\x31.avalanche.operator.WorkflowTopologyV2.GraphEntry\x12I\n\nnode_types\x18\x03 \x03(\x0b\x32\x35.avalanche.operator.WorkflowTopologyV2.NodeTypesEntry\x12O\n\rdisplay_names\x18\x04 \x03(\x0b\x32\x38.avalanche.operator.WorkflowTopologyV2.DisplayNamesEntry\x12\x63\n\x18\x61gent_field_schemas_json\x18\x05 \x03(\x0b\x32\x41.avalanche.operator.WorkflowTopologyV2.AgentFieldSchemasJsonEntry\x12\x62\n\x17\x61gent_instruction_lines\x18\x06 \x03(\x0b\x32\x41.avalanche.operator.WorkflowTopologyV2.AgentInstructionLinesEntry\x12m\n\x1dstandard_step_docstring_lines\x18\x07 \x03(\x0b\x32\x46.avalanche.operator.WorkflowTopologyV2.StandardStepDocstringLinesEntry\x12\x64\n\x18\x63lassifier_metadata_json\x18\x08 \x03(\x0b\x32\x42.avalanche.operator.WorkflowTopologyV2.ClassifierMetadataJsonEntry\x12Z\n\x13step_interface_json\x18\t \x03(\x0b\x32=.avalanche.operator.WorkflowTopologyV2.StepInterfaceJsonEntry\x1aM\n\nGraphEntry\x12\x0b\n\x03key\x18\x01 \x01(\t\x12.\n\x05value\x18\x02 \x01(\x0b\x32\x1f.avalanche.operator.NodeEdgesV2:\x02\x38\x01\x1a\x30\n\x0eNodeTypesEntry\x12\x0b\n\x03key\x18\x01 \x01(\t\x12\r\n\x05value\x18\x02 \x01(\t:\x02\x38\x01\x1a\x33\n\x11\x44isplayNamesEntry\x12\x0b\n\x03key\x18\x01 \x01(\t\x12\r\n\x05value\x18\x02 \x01(\t:\x02\x38\x01\x1a<\n\x1a\x41gentFieldSchemasJsonEntry\x12\x0b\n\x03key\x18\x01 \x01(\t\x12\r\n\x05value\x18\x02 \x01(\t:\x02\x38\x01\x1a<\n\x1a\x41gentInstructionLinesEntry\x12\x0b\n\x03key\x18\x01 \x01(\t\x12\r\n\x05value\x18\x02 \x01(\t:\x02\x38\x01\x1a\x41\n\x1fStandardStepDocstringLinesEntry\x12\x0b\n\x03key\x18\x01 \x01(\t\x12\r\n\x05value\x18\x02 \x01(\t:\x02\x38\x01\x1a=\n\x1b\x43lassifierMetadataJsonEntry\x12\x0b\n\x03key\x18\x01 \x01(\t\x12\r\n\x05value\x18\x02 \x01(\t:\x02\x38\x01\x1a\x38\n\x16StepInterfaceJsonEntry\x12\x0b\n\x03key\x18\x01 \x01(\t\x12\r\n\x05value\x18\x02 \x01(\t:\x02\x38\x01\"@\n\x0cScanTargetV2\x12\r\n\x05\x61lias\x18\x01 \x01(\t\x12\x13\n\x0btarget_path\x18\x02 \x01(\t\x12\x0c\n\x04kind\x18\x03 \x01(\t\"\xc1\x01\n\x10\x46ileAttachmentV2\x12\x15\n\rattachment_id\x18\x01 \x01(\t\x12\x12\n\nfield_name\x18\x02 \x01(\t\x12\x0c\n\x04name\x18\x03 \x01(\t\x12\x12\n\nmedia_type\x18\x04 \x01(\t\x12\x12\n\nobject_uri\x18\x05 \x01(\t\x12\x12\n\nobject_key\x18\x06 \x01(\t\x12\x0e\n\x06sha256\x18\x07 \x01(\t\x12\x12\n\nsize_bytes\x18\x08 \x01(\x04\x12\x14\n\x0cinline_bytes\x18\t \x01(\x0c\"\xa3\x01\n\x11StartRunRequestV2\x12\x0e\n\x06run_id\x18\x01 \x01(\t\x12\x19\n\x11workflow_selector\x18\x02 \x01(\t\x12\x12\n\ninput_json\x18\x03 \x01(\t\x12\x14\n\x0c\x63ontext_json\x18\x04 \x01(\t\x12\x39\n\x0binput_files\x18\x05 \x03(\x0b\x32$.avalanche.operator.FileAttachmentV2\"$\n\x12StartRunResponseV2\x12\x0e\n\x06run_id\x18\x01 \x01(\t\"$\n\x12\x43\x61ncelRunRequestV2\x12\x0e\n\x06run_id\x18\x01 \x01(\t\"%\n\x13\x43\x61ncelRunResponseV2\x12\x0e\n\x06run_id\x18\x01 \x01(\t\";\n\x18ListEvaluationsRequestV2\x12\x0e\n\x06run_id\x18\x01 \x01(\t\x12\x0f\n\x07node_id\x18\x02 \x01(\t\"\xdc\x01\n\x12\x45valuationRecordV2\x12\x15\n\revaluation_id\x18\x01 \x01(\t\x12\x0e\n\x06run_id\x18\x02 \x01(\t\x12\x0f\n\x07node_id\x18\x03 \x01(\t\x12\x0e\n\x06status\x18\x04 \x01(\t\x12\x12\n\ncreated_at\x18\x05 \x01(\x01\x12\x15\n\x08\x65nded_at\x18\x06 \x01(\x01H\x00\x88\x01\x01\x12\x18\n\x0bresult_json\x18\x07 \x01(\tH\x01\x88\x01\x01\x12\x12\n\x05\x65rror\x18\x08 \x01(\tH\x02\x88\x01\x01\x42\x0b\n\t_ended_atB\x0e\n\x0c_result_jsonB\x08\n\x06_error\"K\n\x10\x45valuationListV2\x12\x37\n\x07records\x18\x01 \x03(\x0b\x32&.avalanche.operator.EvaluationRecordV2\"\xe6\x01\n\x0cRunSummaryV2\x12\x0e\n\x06run_id\x18\x01 \x01(\t\x12\x19\n\x11workflow_selector\x18\x02 \x01(\t\x12\x1d\n\x15workflow_display_name\x18\x03 \x01(\t\x12\x0e\n\x06status\x18\x04 \x01(\t\x12\x12\n\nstarted_at\x18\x05 \x01(\x01\x12\x10\n\x08\x65nded_at\x18\x06 \x01(\x01\x12\x18\n\x10\x63reated_sequence\x18\x07 \x01(\x04\x12\x10\n\x08revision\x18\x08 \x01(\x04\x12\x14\n\x0ctriggered_by\x18\t \x01(\t\x12\x14\n\x0ctriggered_at\x18\n \x01(\x01\"\x86\x01\n\x19ListRunSummariesRequestV2\x12\x19\n\x11workflow_selector\x18\x01 \x01(\t\x12\x11\n\tpage_size\x18\x02 \x01(\r\x12;\n\x0c\x63ontinuation\x18\x03 \x01(\x0b\x32%.avalanche.operator.ContinuationRefV2\"\xb8\x02\n\x10RunSummaryPageV2\x12\x35\n\x06\x63ursor\x18\x01 \x01(\x0b\x32%.avalanche.operator.LifecycleCursorV2\x12.\n\x04runs\x18\x02 \x03(\x0b\x32 .avalanche.operator.RunSummaryV2\x12\x38\n\tnext_page\x18\x03 \x01(\x0b\x32%.avalanche.operator.ContinuationRefV2\x12\x37\n\tscope_ref\x18\x04 \x01(\x0b\x32$.avalanche.operator.ScopeReferenceV2\x12J\n\x16project_summary_cursor\x18\x05 \x01(\x0b\x32*.avalanche.operator.ProjectSummaryCursorV2\")\n\x17GetRunSnapshotRequestV2\x12\x0e\n\x06run_id\x18\x01 \x01(\t\"\xe6\x02\n\x0eNodeSnapshotV2\x12\x0f\n\x07node_id\x18\x01 \x01(\t\x12\x0c\n\x04name\x18\x02 \x01(\t\x12\x11\n\tnode_type\x18\x03 \x01(\t\x12\x0e\n\x06status\x18\x04 \x01(\t\x12\x12\n\nstarted_at\x18\x05 \x01(\x01\x12\x10\n\x08\x65nded_at\x18\x06 \x01(\x01\x12\x10\n\x08revision\x18\x07 \x01(\x04\x12\x12\n\x05\x65rror\x18\x08 \x01(\tH\x00\x88\x01\x01\x12$\n\x17running_elapsed_seconds\x18\t \x01(\x01H\x01\x88\x01\x01\x12\x34\n\x05trace\x18\n \x01(\x0b\x32%.avalanche.operator.TraceDescriptorV2\x12\x44\n\x15\x61\x63tivity_continuation\x18\x0b \x01(\x0b\x32%.avalanche.operator.ContinuationRefV2B\x08\n\x06_errorB\x1a\n\x18_running_elapsed_seconds\"\xd9\x01\n\rTraceHeaderV2\x12\x0e\n\x06status\x18\x01 \x01(\t\x12\r\n\x05model\x18\x02 \x01(\t\x12\x16\n\tsub_model\x18\x03 \x01(\tH\x00\x88\x01\x01\x12\x12\n\niterations\x18\x04 \x01(\x04\x12\x16\n\x0emax_iterations\x18\x05 \x01(\x04\x12\x13\n\x0b\x64uration_ms\x18\x06 \x01(\x04\x12\x12\n\nusage_json\x18\x07 \x01(\t\x12\x1b\n\x0etelemetry_json\x18\x08 \x01(\tH\x01\x88\x01\x01\x42\x0c\n\n_sub_modelB\x11\n\x0f_telemetry_json\"\x92\x02\n\x11TraceDescriptorV2\x12\x0e\n\x06status\x18\x01 \x01(\t\x12\x10\n\x08revision\x18\x02 \x01(\x04\x12\x11\n\tavailable\x18\x03 \x01(\x08\x12\x10\n\x08\x63omplete\x18\x04 \x01(\x08\x12\x13\n\x0b\x65vent_count\x18\x05 \x01(\x04\x12\x12\n\nsize_bytes\x18\x06 \x01(\x04\x12\x1d\n\x15latest_event_sequence\x18\x07 \x01(\x04\x12\x31\n\x06header\x18\x08 \x01(\x0b\x32!.avalanche.operator.TraceHeaderV2\x12;\n\ndetail_ref\x18\t \x01(\x0b\x32\'.avalanche.operator.ActivityDetailRefV2\"I\n\x0eTerminalSealV2\x12\x17\n\x0fterminal_status\x18\x01 \x01(\t\x12\x13\n\x06reason\x18\x02 \x01(\tH\x00\x88\x01\x01\x42\t\n\x07_reason\"\xc1\x03\n\rRunSnapshotV2\x12\x35\n\x06\x63ursor\x18\x01 \x01(\x0b\x32%.avalanche.operator.LifecycleCursorV2\x12\x31\n\x07summary\x18\x02 \x01(\x0b\x32 .avalanche.operator.RunSummaryV2\x12\x31\n\x05nodes\x18\x03 \x03(\x0b\x32\".avalanche.operator.NodeSnapshotV2\x12\x38\n\x08topology\x18\x04 \x01(\x0b\x32&.avalanche.operator.WorkflowTopologyV2\x12\x37\n\tscope_ref\x18\x05 \x01(\x0b\x32$.avalanche.operator.ScopeReferenceV2\x12\x1b\n\x13latest_log_sequence\x18\x06 \x01(\x04\x12?\n\x10log_continuation\x18\x07 \x01(\x0b\x32%.avalanche.operator.ContinuationRefV2\x12\x42\n\rterminal_seal\x18\x08 \x01(\x0b\x32+.avalanche.operator.RunActivityDescriptorV2\"\xd5\x01\n\x13\x41\x63tivityDetailRefV2\x12\x0e\n\x06run_id\x18\x01 \x01(\t\x12\x37\n\tscope_ref\x18\x02 \x01(\x0b\x32$.avalanche.operator.ScopeReferenceV2\x12\x13\n\x0b\x61\x63tivity_id\x18\x03 \x01(\t\x12\x14\n\x0crun_sequence\x18\x04 \x01(\x04\x12\x12\n\nobject_uri\x18\x05 \x01(\t\x12\x12\n\nobject_key\x18\x06 \x01(\t\x12\x0e\n\x06sha256\x18\x07 \x01(\t\x12\x12\n\nsize_bytes\x18\x08 \x01(\x04\"\xcb\x04\n\x17RunActivityDescriptorV2\x12\x13\n\x0b\x61\x63tivity_id\x18\x01 \x01(\t\x12\x14\n\x0crun_sequence\x18\x02 \x01(\x04\x12\x0c\n\x04kind\x18\x03 \x01(\t\x12\x11\n\ttimestamp\x18\x04 \x01(\x01\x12\x12\n\nsize_bytes\x18\x05 \x01(\x04\x12;\n\ndetail_ref\x18\x06 \x01(\x0b\x32\'.avalanche.operator.ActivityDetailRefV2\x12\x0f\n\x07node_id\x18\x07 \x01(\t\x12\r\n\x05level\x18\x08 \x01(\t\x12\x15\n\rinvocation_id\x18\t \x01(\t\x12\x16\n\titeration\x18\n \x01(\rH\x00\x88\x01\x01\x12\x18\n\x0b\x64uration_ms\x18\x0b \x01(\x04H\x01\x88\x01\x01\x12\r\n\x05\x65rror\x18\x0c \x01(\x08\x12\x12\n\ntool_count\x18\r \x01(\r\x12\x15\n\rpredict_count\x18\x0e \x01(\r\x12\x12\n\nevent_kind\x18\x0f \x01(\t\x12\x34\n\x05trace\x18\x10 \x01(\x0b\x32%.avalanche.operator.TraceDescriptorV2\x12\x39\n\rterminal_seal\x18\x11 \x01(\x0b\x32\".avalanche.operator.TerminalSealV2\x12M\n\x12\x63lassifier_summary\x18\x12 \x01(\x0b\x32\x31.avalanche.operator.ClassifierInvocationSummaryV2B\x0c\n\n_iterationB\x0e\n\x0c_duration_ms\"y\n\x1d\x43lassifierInvocationSummaryV2\x12\x18\n\x10invocation_index\x18\x01 \x01(\r\x12>\n\x07\x61nswers\x18\x02 \x03(\x0b\x32-.avalanche.operator.ClassifierAnswerSummaryV2\"m\n\x19\x43lassifierAnswerSummaryV2\x12\x13\n\x0bquestion_id\x18\x01 \x01(\t\x12\x10\n\x06\x63hoice\x18\x02 \x01(\tH\x00\x12\x0e\n\x04noul\x18\x03 \x01(\x01H\x00\x12\x0f\n\x05score\x18\x04 \x01(\x01H\x00\x42\x08\n\x06\x61nswer\"\xbb\x01\n\x18ListRunActivityRequestV2\x12\x0e\n\x06run_id\x18\x01 \x01(\t\x12\x11\n\tpage_size\x18\x02 \x01(\r\x12;\n\x0c\x63ontinuation\x18\x03 \x01(\x0b\x32%.avalanche.operator.ContinuationRefV2\x12\x0f\n\x07node_id\x18\x04 \x01(\t\x12.\n\x05order\x18\x05 \x01(\x0e\x32\x1f.avalanche.operator.PageOrderV2\"\x8e\x02\n\x11RunActivityPageV2\x12\x35\n\x06\x63ursor\x18\x01 \x01(\x0b\x32%.avalanche.operator.LifecycleCursorV2\x12\x0e\n\x06run_id\x18\x02 \x01(\t\x12?\n\nactivities\x18\x03 \x03(\x0b\x32+.avalanche.operator.RunActivityDescriptorV2\x12\x38\n\tnext_page\x18\x04 \x01(\x0b\x32%.avalanche.operator.ContinuationRefV2\x12\x37\n\tscope_ref\x18\x05 \x01(\x0b\x32$.avalanche.operator.ScopeReferenceV2\"Z\n\x1bReadActivityDetailRequestV2\x12;\n\ndetail_ref\x18\x01 \x01(\x0b\x32\'.avalanche.operator.ActivityDetailRefV2\"G\n\x15\x41\x63tivityDetailChunkV2\x12\x13\n\x0b\x63hunk_index\x18\x01 \x01(\x04\x12\x0c\n\x04\x64\x61ta\x18\x02 \x01(\x0c\x12\x0b\n\x03\x65of\x18\x03 \x01(\x08\"\xd8\x01\n\x16RunOutputArtifactRefV2\x12\x0e\n\x06run_id\x18\x01 \x01(\t\x12\x37\n\tscope_ref\x18\x02 \x01(\x0b\x32$.avalanche.operator.ScopeReferenceV2\x12\x13\n\x0b\x61rtifact_id\x18\x03 \x01(\t\x12\x14\n\x0crun_sequence\x18\x04 \x01(\x04\x12\x12\n\nobject_uri\x18\x05 \x01(\t\x12\x12\n\nobject_key\x18\x06 \x01(\t\x12\x0e\n\x06sha256\x18\x07 \x01(\t\x12\x12\n\nsize_bytes\x18\x08 \x01(\x04\"G\n\rResultValueV2\x12\x12\n\nvalue_json\x18\x01 \x01(\t\x12\x0e\n\x06sha256\x18\x02 \x01(\t\x12\x12\n\nsize_bytes\x18\x03 \x01(\x04\"\x9e\x01\n\x16ResultFileDescriptorV2\x12@\n\x0c\x61rtifact_ref\x18\x01 \x01(\x0b\x32*.avalanche.operator.RunOutputArtifactRefV2\x12\x11\n\x04name\x18\x02 \x01(\tH\x00\x88\x01\x01\x12\x17\n\nmedia_type\x18\x03 \x01(\tH\x01\x88\x01\x01\x42\x07\n\x05_nameB\r\n\x0b_media_type\"\'\n\x15GetRunResultRequestV2\x12\x0e\n\x06run_id\x18\x01 \x01(\t\"\xfa\x01\n\x0bRunResultV2\x12\x35\n\x06\x63ursor\x18\x01 \x01(\x0b\x32%.avalanche.operator.LifecycleCursorV2\x12\x0e\n\x06run_id\x18\x02 \x01(\t\x12\x30\n\x05value\x18\x03 \x01(\x0b\x32!.avalanche.operator.ResultValueV2\x12\x39\n\x05\x66iles\x18\x04 \x03(\x0b\x32*.avalanche.operator.ResultFileDescriptorV2\x12\x37\n\tscope_ref\x18\x05 \x01(\x0b\x32$.avalanche.operator.ScopeReferenceV2\"\xa5\x01\n\x1dRunOutputArtifactDescriptorV2\x12@\n\x0c\x61rtifact_ref\x18\x01 \x01(\x0b\x32*.avalanche.operator.RunOutputArtifactRefV2\x12\x11\n\x04name\x18\x02 \x01(\tH\x00\x88\x01\x01\x12\x17\n\nmedia_type\x18\x03 \x01(\tH\x01\x88\x01\x01\x42\x07\n\x05_nameB\r\n\x0b_media_type\"\x81\x01\n\x1fListRunOutputArtifactsRequestV2\x12\x0e\n\x06run_id\x18\x01 \x01(\t\x12\x11\n\tpage_size\x18\x02 \x01(\r\x12;\n\x0c\x63ontinuation\x18\x03 \x01(\x0b\x32%.avalanche.operator.ContinuationRefV2\"\x99\x02\n\x17RunOutputArtifactPageV2\x12\x35\n\x06\x63ursor\x18\x01 \x01(\x0b\x32%.avalanche.operator.LifecycleCursorV2\x12\x0e\n\x06run_id\x18\x02 \x01(\t\x12\x44\n\tartifacts\x18\x03 \x03(\x0b\x32\x31.avalanche.operator.RunOutputArtifactDescriptorV2\x12\x38\n\tnext_page\x18\x04 \x01(\x0b\x32%.avalanche.operator.ContinuationRefV2\x12\x37\n\tscope_ref\x18\x05 \x01(\x0b\x32$.avalanche.operator.ScopeReferenceV2\"b\n\x1eReadRunOutputArtifactRequestV2\x12@\n\x0c\x61rtifact_ref\x18\x01 \x01(\x0b\x32*.avalanche.operator.RunOutputArtifactRefV2\"J\n\x18RunOutputArtifactChunkV2\x12\x13\n\x0b\x63hunk_index\x18\x01 \x01(\x04\x12\x0c\n\x04\x64\x61ta\x18\x02 \x01(\x0c\x12\x0b\n\x03\x65of\x18\x03 \x01(\x08\"\x8f\x01\n\x17WatchRunStatusRequestV2\x12;\n\x0c\x61\x66ter_cursor\x18\x01 \x01(\x0b\x32%.avalanche.operator.LifecycleCursorV2\x12\x37\n\tscope_ref\x18\x02 \x01(\x0b\x32$.avalanche.operator.ScopeReferenceV2\"\xae\x01\n\x0cRunCreatedV2\x12\x31\n\x07summary\x18\x01 \x01(\x0b\x32 .avalanche.operator.RunSummaryV2\x12\x31\n\x05nodes\x18\x02 \x03(\x0b\x32\".avalanche.operator.NodeSnapshotV2\x12\x38\n\x08topology\x18\x03 \x01(\x0b\x32&.avalanche.operator.WorkflowTopologyV2\"G\n\x12RunStatusChangedV2\x12\x31\n\x07summary\x18\x01 \x01(\x0b\x32 .avalanche.operator.RunSummaryV2\"W\n\x13NodeStatusChangedV2\x12\x0e\n\x06run_id\x18\x01 \x01(\t\x12\x30\n\x04node\x18\x02 \x01(\x0b\x32\".avalanche.operator.NodeSnapshotV2\"c\n\x12\x41\x63tivityAppendedV2\x12\x0e\n\x06run_id\x18\x01 \x01(\t\x12=\n\x08\x61\x63tivity\x18\x02 \x01(\x0b\x32+.avalanche.operator.RunActivityDescriptorV2\"F\n\x11\x46lowListChangedV2\x12\x31\n\tflow_list\x18\x01 \x01(\x0b\x32\x1e.avalanche.operator.FlowListV2\"0\n\x17\x43\x61talogReloadRequiredV2\x12\x15\n\rdeployment_id\x18\x01 \x01(\t\"\'\n\x12\x46lowReloadStatusV2\x12\x11\n\treloading\x18\x01 \x01(\x08\"\x8d\x01\n\x0fResetRequiredV2\x12<\n\rhistory_floor\x18\x01 \x01(\x0b\x32%.avalanche.operator.LifecycleCursorV2\x12<\n\rlatest_cursor\x18\x02 \x01(\x0b\x32%.avalanche.operator.LifecycleCursorV2\"\xc9\x05\n\x13RunStatusEnvelopeV2\x12\x12\n\nevent_ulid\x18\x01 \x01(\t\x12\x37\n\x0brun_created\x18\x02 \x01(\x0b\x32 .avalanche.operator.RunCreatedV2H\x00\x12\x44\n\x12run_status_changed\x18\x03 \x01(\x0b\x32&.avalanche.operator.RunStatusChangedV2H\x00\x12=\n\x0ereset_required\x18\x04 \x01(\x0b\x32#.avalanche.operator.ResetRequiredV2H\x00\x12\x46\n\x13node_status_changed\x18\x06 \x01(\x0b\x32\'.avalanche.operator.NodeStatusChangedV2H\x00\x12\x43\n\x11\x61\x63tivity_appended\x18\x07 \x01(\x0b\x32&.avalanche.operator.ActivityAppendedV2H\x00\x12\x42\n\x11\x66low_list_changed\x18\x08 \x01(\x0b\x32%.avalanche.operator.FlowListChangedV2H\x00\x12\x44\n\x12\x66low_reload_status\x18\t \x01(\x0b\x32&.avalanche.operator.FlowReloadStatusV2H\x00\x12N\n\x17\x63\x61talog_reload_required\x18\x0b \x01(\x0b\x32+.avalanche.operator.CatalogReloadRequiredV2H\x00\x12\x35\n\x06\x63ursor\x18\x05 \x01(\x0b\x32%.avalanche.operator.LifecycleCursorV2\x12\x37\n\tscope_ref\x18\n \x01(\x0b\x32$.avalanche.operator.ScopeReferenceV2B\t\n\x07payload*H\n\x0bPageOrderV2\x12\x19\n\x15PAGE_ORDER_V2_FORWARD\x10\x00\x12\x1e\n\x1aPAGE_ORDER_V2_NEWEST_FIRST\x10\x01\x32\xed\n\n\x11OperatorServiceV2\x12[\n\rDiscoverFlows\x12*.avalanche.operator.DiscoverFlowsRequestV2\x1a\x1e.avalanche.operator.FlowListV2\x12u\n\x15GetWorkflowNodeSource\x12\x32.avalanche.operator.GetWorkflowNodeSourceRequestV2\x1a(.avalanche.operator.WorkflowNodeSourceV2\x12Y\n\x08StartRun\x12%.avalanche.operator.StartRunRequestV2\x1a&.avalanche.operator.StartRunResponseV2\x12\\\n\tCancelRun\x12&.avalanche.operator.CancelRunRequestV2\x1a\'.avalanche.operator.CancelRunResponseV2\x12g\n\x10ListRunSummaries\x12-.avalanche.operator.ListRunSummariesRequestV2\x1a$.avalanche.operator.RunSummaryPageV2\x12`\n\x0eGetRunSnapshot\x12+.avalanche.operator.GetRunSnapshotRequestV2\x1a!.avalanche.operator.RunSnapshotV2\x12\x66\n\x0fListRunActivity\x12,.avalanche.operator.ListRunActivityRequestV2\x1a%.avalanche.operator.RunActivityPageV2\x12\x65\n\x0fListEvaluations\x12,.avalanche.operator.ListEvaluationsRequestV2\x1a$.avalanche.operator.EvaluationListV2\x12r\n\x12ReadActivityDetail\x12/.avalanche.operator.ReadActivityDetailRequestV2\x1a).avalanche.operator.ActivityDetailChunkV20\x01\x12Z\n\x0cGetRunResult\x12).avalanche.operator.GetRunResultRequestV2\x1a\x1f.avalanche.operator.RunResultV2\x12z\n\x16ListRunOutputArtifacts\x12\x33.avalanche.operator.ListRunOutputArtifactsRequestV2\x1a+.avalanche.operator.RunOutputArtifactPageV2\x12{\n\x15ReadRunOutputArtifact\x12\x32.avalanche.operator.ReadRunOutputArtifactRequestV2\x1a,.avalanche.operator.RunOutputArtifactChunkV20\x01\x12h\n\x0eWatchRunStatus\x12+.avalanche.operator.WatchRunStatusRequestV2\x1a\'.avalanche.operator.RunStatusEnvelopeV20\x01\x62\x06proto3')
+DESCRIPTOR = _descriptor_pool.Default().AddSerializedFile(
+    b'\n\x0eoperator.proto\x12\x12\x61valanche.operator"%\n\x10ScopeReferenceV2\x12\x11\n\treference\x18\x01 \x01(\t"\x93\x01\n\x11LifecycleCursorV2\x12\x0e\n\x06stream\x18\x01 \x01(\t\x12\x1c\n\x14topology_fingerprint\x18\x02 \x01(\t\x12\x19\n\x11stream_generation\x18\x03 \x01(\x04\x12!\n\x19retained_floor_event_ulid\x18\x04 \x01(\t\x12\x12\n\nevent_ulid\x18\x05 \x01(\t"\xd9\x01\n\x16ProjectSummaryCursorV2\x12\x0e\n\x06stream\x18\x01 \x01(\t\x12\x1c\n\x14topology_fingerprint\x18\x02 \x01(\t\x12\x19\n\x11source_generation\x18\x03 \x01(\t\x12\x1f\n\x17retained_floor_sequence\x18\x04 \x01(\x04\x12\x1c\n\x14target_head_sequence\x18\x05 \x01(\x04\x12\x1c\n\x14\x63heckpoint_watermark\x18\x06 \x01(\x04\x12\x19\n\x11\x63heckpoint_digest\x18\x07 \x01(\t"\xe8\x01\n\x11\x43ontinuationRefV2\x12\x37\n\tscope_ref\x18\x01 \x01(\x0b\x32$.avalanche.operator.ScopeReferenceV2\x12\x17\n\x0f\x63ontinuation_id\x18\x02 \x01(\t\x12\x35\n\x06\x63ursor\x18\x03 \x01(\x0b\x32%.avalanche.operator.LifecycleCursorV2\x12J\n\x16project_summary_cursor\x18\x04 \x01(\x0b\x32*.avalanche.operator.ProjectSummaryCursorV2"h\n\x16\x44iscoverFlowsRequestV2\x12\x11\n\tpage_size\x18\x01 \x01(\r\x12;\n\x0c\x63ontinuation\x18\x02 \x01(\x0b\x32%.avalanche.operator.ContinuationRefV2"L\n\x1eGetWorkflowNodeSourceRequestV2\x12\x19\n\x11workflow_selector\x18\x01 \x01(\t\x12\x0f\n\x07node_id\x18\x02 \x01(\t"@\n\x14WorkflowNodeSourceV2\x12\x18\n\x0bsource_code\x18\x01 \x01(\tH\x00\x88\x01\x01\x42\x0e\n\x0c_source_code"\xa5\x06\n\nFlowInfoV2\x12\x19\n\x11workflow_selector\x18\x01 \x01(\t\x12\x14\n\x0c\x64isplay_name\x18\x02 \x01(\t\x12\x17\n\x0fmanifest_digest\x18\x03 \x01(\t\x12\x10\n\x08node_ids\x18\x04 \x03(\t\x12\x13\n\x0bworkflow_id\x18\x05 \x01(\t\x12\x11\n\tfile_path\x18\x06 \x01(\t\x12\x38\n\x08topology\x18\x07 \x01(\x0b\x32&.avalanche.operator.WorkflowTopologyV2\x12\x16\n\x0e\x61gent_node_ids\x18\x08 \x03(\t\x12R\n\x13\x61gent_metadata_json\x18\t \x03(\x0b\x32\x35.avalanche.operator.FlowInfoV2.AgentMetadataJsonEntry\x12\x0c\n\x04\x63ron\x18\n \x01(\t\x12\x13\n\x0bnext_run_at\x18\x0b \x01(\x01\x12\x13\n\x0blast_run_at\x18\x0c \x01(\x01\x12\x14\n\x0cwebhook_path\x18\r \x01(\t\x12\x13\n\x0bwebhook_url\x18\x0e \x01(\t\x12\x16\n\x0ewebhook_active\x18\x0f \x01(\x08\x12\\\n\x18\x63lassifier_metadata_json\x18\x10 \x03(\x0b\x32:.avalanche.operator.FlowInfoV2.ClassifierMetadataJsonEntry\x12\\\n\x18\x65valuation_metadata_json\x18\x11 \x03(\x0b\x32:.avalanche.operator.FlowInfoV2.EvaluationMetadataJsonEntry\x1a\x38\n\x16\x41gentMetadataJsonEntry\x12\x0b\n\x03key\x18\x01 \x01(\t\x12\r\n\x05value\x18\x02 \x01(\t:\x02\x38\x01\x1a=\n\x1b\x43lassifierMetadataJsonEntry\x12\x0b\n\x03key\x18\x01 \x01(\t\x12\r\n\x05value\x18\x02 \x01(\t:\x02\x38\x01\x1a=\n\x1b\x45valuationMetadataJsonEntry\x12\x0b\n\x03key\x18\x01 \x01(\t\x12\r\n\x05value\x18\x02 \x01(\t:\x02\x38\x01"D\n\x15\x44iscoveryDiagnosticV2\x12\x0c\n\x04path\x18\x01 \x01(\t\x12\x0c\n\x04kind\x18\x02 \x01(\t\x12\x0f\n\x07message\x18\x03 \x01(\t"\xef\x02\n\nFlowListV2\x12\x35\n\x06\x63ursor\x18\x01 \x01(\x0b\x32%.avalanche.operator.LifecycleCursorV2\x12-\n\x05\x66lows\x18\x02 \x03(\x0b\x32\x1e.avalanche.operator.FlowInfoV2\x12\x38\n\tnext_page\x18\x03 \x01(\x0b\x32%.avalanche.operator.ContinuationRefV2\x12>\n\x0b\x64iagnostics\x18\x04 \x03(\x0b\x32).avalanche.operator.DiscoveryDiagnosticV2\x12\x36\n\x0cscan_targets\x18\x05 \x03(\x0b\x32 .avalanche.operator.ScanTargetV2\x12\x37\n\tscope_ref\x18\x06 \x01(\x0b\x32$.avalanche.operator.ScopeReferenceV2\x12\x10\n\x08revision\x18\x07 \x01(\x04"\x1f\n\x0bNodeEdgesV2\x12\x10\n\x08\x63hildren\x18\x01 \x03(\t"\x91\x0b\n\x12WorkflowTopologyV2\x12\x10\n\x08node_ids\x18\x01 \x03(\t\x12@\n\x05graph\x18\x02 \x03(\x0b\x32\x31.avalanche.operator.WorkflowTopologyV2.GraphEntry\x12I\n\nnode_types\x18\x03 \x03(\x0b\x32\x35.avalanche.operator.WorkflowTopologyV2.NodeTypesEntry\x12O\n\rdisplay_names\x18\x04 \x03(\x0b\x32\x38.avalanche.operator.WorkflowTopologyV2.DisplayNamesEntry\x12\x63\n\x18\x61gent_field_schemas_json\x18\x05 \x03(\x0b\x32\x41.avalanche.operator.WorkflowTopologyV2.AgentFieldSchemasJsonEntry\x12\x62\n\x17\x61gent_instruction_lines\x18\x06 \x03(\x0b\x32\x41.avalanche.operator.WorkflowTopologyV2.AgentInstructionLinesEntry\x12m\n\x1dstandard_step_docstring_lines\x18\x07 \x03(\x0b\x32\x46.avalanche.operator.WorkflowTopologyV2.StandardStepDocstringLinesEntry\x12\x64\n\x18\x63lassifier_metadata_json\x18\x08 \x03(\x0b\x32\x42.avalanche.operator.WorkflowTopologyV2.ClassifierMetadataJsonEntry\x12Z\n\x13step_interface_json\x18\t \x03(\x0b\x32=.avalanche.operator.WorkflowTopologyV2.StepInterfaceJsonEntry\x12\x64\n\x18\x65valuation_metadata_json\x18\n \x03(\x0b\x32\x42.avalanche.operator.WorkflowTopologyV2.EvaluationMetadataJsonEntry\x1aM\n\nGraphEntry\x12\x0b\n\x03key\x18\x01 \x01(\t\x12.\n\x05value\x18\x02 \x01(\x0b\x32\x1f.avalanche.operator.NodeEdgesV2:\x02\x38\x01\x1a\x30\n\x0eNodeTypesEntry\x12\x0b\n\x03key\x18\x01 \x01(\t\x12\r\n\x05value\x18\x02 \x01(\t:\x02\x38\x01\x1a\x33\n\x11\x44isplayNamesEntry\x12\x0b\n\x03key\x18\x01 \x01(\t\x12\r\n\x05value\x18\x02 \x01(\t:\x02\x38\x01\x1a<\n\x1a\x41gentFieldSchemasJsonEntry\x12\x0b\n\x03key\x18\x01 \x01(\t\x12\r\n\x05value\x18\x02 \x01(\t:\x02\x38\x01\x1a<\n\x1a\x41gentInstructionLinesEntry\x12\x0b\n\x03key\x18\x01 \x01(\t\x12\r\n\x05value\x18\x02 \x01(\t:\x02\x38\x01\x1a\x41\n\x1fStandardStepDocstringLinesEntry\x12\x0b\n\x03key\x18\x01 \x01(\t\x12\r\n\x05value\x18\x02 \x01(\t:\x02\x38\x01\x1a=\n\x1b\x43lassifierMetadataJsonEntry\x12\x0b\n\x03key\x18\x01 \x01(\t\x12\r\n\x05value\x18\x02 \x01(\t:\x02\x38\x01\x1a\x38\n\x16StepInterfaceJsonEntry\x12\x0b\n\x03key\x18\x01 \x01(\t\x12\r\n\x05value\x18\x02 \x01(\t:\x02\x38\x01\x1a=\n\x1b\x45valuationMetadataJsonEntry\x12\x0b\n\x03key\x18\x01 \x01(\t\x12\r\n\x05value\x18\x02 \x01(\t:\x02\x38\x01"@\n\x0cScanTargetV2\x12\r\n\x05\x61lias\x18\x01 \x01(\t\x12\x13\n\x0btarget_path\x18\x02 \x01(\t\x12\x0c\n\x04kind\x18\x03 \x01(\t"\xc1\x01\n\x10\x46ileAttachmentV2\x12\x15\n\rattachment_id\x18\x01 \x01(\t\x12\x12\n\nfield_name\x18\x02 \x01(\t\x12\x0c\n\x04name\x18\x03 \x01(\t\x12\x12\n\nmedia_type\x18\x04 \x01(\t\x12\x12\n\nobject_uri\x18\x05 \x01(\t\x12\x12\n\nobject_key\x18\x06 \x01(\t\x12\x0e\n\x06sha256\x18\x07 \x01(\t\x12\x12\n\nsize_bytes\x18\x08 \x01(\x04\x12\x14\n\x0cinline_bytes\x18\t \x01(\x0c"\xa3\x01\n\x11StartRunRequestV2\x12\x0e\n\x06run_id\x18\x01 \x01(\t\x12\x19\n\x11workflow_selector\x18\x02 \x01(\t\x12\x12\n\ninput_json\x18\x03 \x01(\t\x12\x14\n\x0c\x63ontext_json\x18\x04 \x01(\t\x12\x39\n\x0binput_files\x18\x05 \x03(\x0b\x32$.avalanche.operator.FileAttachmentV2"$\n\x12StartRunResponseV2\x12\x0e\n\x06run_id\x18\x01 \x01(\t"$\n\x12\x43\x61ncelRunRequestV2\x12\x0e\n\x06run_id\x18\x01 \x01(\t"%\n\x13\x43\x61ncelRunResponseV2\x12\x0e\n\x06run_id\x18\x01 \x01(\t";\n\x18ListEvaluationsRequestV2\x12\x0e\n\x06run_id\x18\x01 \x01(\t\x12\x0f\n\x07node_id\x18\x02 \x01(\t"\xdc\x01\n\x12\x45valuationRecordV2\x12\x15\n\revaluation_id\x18\x01 \x01(\t\x12\x0e\n\x06run_id\x18\x02 \x01(\t\x12\x0f\n\x07node_id\x18\x03 \x01(\t\x12\x0e\n\x06status\x18\x04 \x01(\t\x12\x12\n\ncreated_at\x18\x05 \x01(\x01\x12\x15\n\x08\x65nded_at\x18\x06 \x01(\x01H\x00\x88\x01\x01\x12\x18\n\x0bresult_json\x18\x07 \x01(\tH\x01\x88\x01\x01\x12\x12\n\x05\x65rror\x18\x08 \x01(\tH\x02\x88\x01\x01\x42\x0b\n\t_ended_atB\x0e\n\x0c_result_jsonB\x08\n\x06_error"K\n\x10\x45valuationListV2\x12\x37\n\x07records\x18\x01 \x03(\x0b\x32&.avalanche.operator.EvaluationRecordV2"\xe6\x01\n\x0cRunSummaryV2\x12\x0e\n\x06run_id\x18\x01 \x01(\t\x12\x19\n\x11workflow_selector\x18\x02 \x01(\t\x12\x1d\n\x15workflow_display_name\x18\x03 \x01(\t\x12\x0e\n\x06status\x18\x04 \x01(\t\x12\x12\n\nstarted_at\x18\x05 \x01(\x01\x12\x10\n\x08\x65nded_at\x18\x06 \x01(\x01\x12\x18\n\x10\x63reated_sequence\x18\x07 \x01(\x04\x12\x10\n\x08revision\x18\x08 \x01(\x04\x12\x14\n\x0ctriggered_by\x18\t \x01(\t\x12\x14\n\x0ctriggered_at\x18\n \x01(\x01"\x86\x01\n\x19ListRunSummariesRequestV2\x12\x19\n\x11workflow_selector\x18\x01 \x01(\t\x12\x11\n\tpage_size\x18\x02 \x01(\r\x12;\n\x0c\x63ontinuation\x18\x03 \x01(\x0b\x32%.avalanche.operator.ContinuationRefV2"\xb8\x02\n\x10RunSummaryPageV2\x12\x35\n\x06\x63ursor\x18\x01 \x01(\x0b\x32%.avalanche.operator.LifecycleCursorV2\x12.\n\x04runs\x18\x02 \x03(\x0b\x32 .avalanche.operator.RunSummaryV2\x12\x38\n\tnext_page\x18\x03 \x01(\x0b\x32%.avalanche.operator.ContinuationRefV2\x12\x37\n\tscope_ref\x18\x04 \x01(\x0b\x32$.avalanche.operator.ScopeReferenceV2\x12J\n\x16project_summary_cursor\x18\x05 \x01(\x0b\x32*.avalanche.operator.ProjectSummaryCursorV2")\n\x17GetRunSnapshotRequestV2\x12\x0e\n\x06run_id\x18\x01 \x01(\t"\xe6\x02\n\x0eNodeSnapshotV2\x12\x0f\n\x07node_id\x18\x01 \x01(\t\x12\x0c\n\x04name\x18\x02 \x01(\t\x12\x11\n\tnode_type\x18\x03 \x01(\t\x12\x0e\n\x06status\x18\x04 \x01(\t\x12\x12\n\nstarted_at\x18\x05 \x01(\x01\x12\x10\n\x08\x65nded_at\x18\x06 \x01(\x01\x12\x10\n\x08revision\x18\x07 \x01(\x04\x12\x12\n\x05\x65rror\x18\x08 \x01(\tH\x00\x88\x01\x01\x12$\n\x17running_elapsed_seconds\x18\t \x01(\x01H\x01\x88\x01\x01\x12\x34\n\x05trace\x18\n \x01(\x0b\x32%.avalanche.operator.TraceDescriptorV2\x12\x44\n\x15\x61\x63tivity_continuation\x18\x0b \x01(\x0b\x32%.avalanche.operator.ContinuationRefV2B\x08\n\x06_errorB\x1a\n\x18_running_elapsed_seconds"\xd9\x01\n\rTraceHeaderV2\x12\x0e\n\x06status\x18\x01 \x01(\t\x12\r\n\x05model\x18\x02 \x01(\t\x12\x16\n\tsub_model\x18\x03 \x01(\tH\x00\x88\x01\x01\x12\x12\n\niterations\x18\x04 \x01(\x04\x12\x16\n\x0emax_iterations\x18\x05 \x01(\x04\x12\x13\n\x0b\x64uration_ms\x18\x06 \x01(\x04\x12\x12\n\nusage_json\x18\x07 \x01(\t\x12\x1b\n\x0etelemetry_json\x18\x08 \x01(\tH\x01\x88\x01\x01\x42\x0c\n\n_sub_modelB\x11\n\x0f_telemetry_json"\x92\x02\n\x11TraceDescriptorV2\x12\x0e\n\x06status\x18\x01 \x01(\t\x12\x10\n\x08revision\x18\x02 \x01(\x04\x12\x11\n\tavailable\x18\x03 \x01(\x08\x12\x10\n\x08\x63omplete\x18\x04 \x01(\x08\x12\x13\n\x0b\x65vent_count\x18\x05 \x01(\x04\x12\x12\n\nsize_bytes\x18\x06 \x01(\x04\x12\x1d\n\x15latest_event_sequence\x18\x07 \x01(\x04\x12\x31\n\x06header\x18\x08 \x01(\x0b\x32!.avalanche.operator.TraceHeaderV2\x12;\n\ndetail_ref\x18\t \x01(\x0b\x32\'.avalanche.operator.ActivityDetailRefV2"I\n\x0eTerminalSealV2\x12\x17\n\x0fterminal_status\x18\x01 \x01(\t\x12\x13\n\x06reason\x18\x02 \x01(\tH\x00\x88\x01\x01\x42\t\n\x07_reason"\xc1\x03\n\rRunSnapshotV2\x12\x35\n\x06\x63ursor\x18\x01 \x01(\x0b\x32%.avalanche.operator.LifecycleCursorV2\x12\x31\n\x07summary\x18\x02 \x01(\x0b\x32 .avalanche.operator.RunSummaryV2\x12\x31\n\x05nodes\x18\x03 \x03(\x0b\x32".avalanche.operator.NodeSnapshotV2\x12\x38\n\x08topology\x18\x04 \x01(\x0b\x32&.avalanche.operator.WorkflowTopologyV2\x12\x37\n\tscope_ref\x18\x05 \x01(\x0b\x32$.avalanche.operator.ScopeReferenceV2\x12\x1b\n\x13latest_log_sequence\x18\x06 \x01(\x04\x12?\n\x10log_continuation\x18\x07 \x01(\x0b\x32%.avalanche.operator.ContinuationRefV2\x12\x42\n\rterminal_seal\x18\x08 \x01(\x0b\x32+.avalanche.operator.RunActivityDescriptorV2"\xd5\x01\n\x13\x41\x63tivityDetailRefV2\x12\x0e\n\x06run_id\x18\x01 \x01(\t\x12\x37\n\tscope_ref\x18\x02 \x01(\x0b\x32$.avalanche.operator.ScopeReferenceV2\x12\x13\n\x0b\x61\x63tivity_id\x18\x03 \x01(\t\x12\x14\n\x0crun_sequence\x18\x04 \x01(\x04\x12\x12\n\nobject_uri\x18\x05 \x01(\t\x12\x12\n\nobject_key\x18\x06 \x01(\t\x12\x0e\n\x06sha256\x18\x07 \x01(\t\x12\x12\n\nsize_bytes\x18\x08 \x01(\x04"\xcb\x04\n\x17RunActivityDescriptorV2\x12\x13\n\x0b\x61\x63tivity_id\x18\x01 \x01(\t\x12\x14\n\x0crun_sequence\x18\x02 \x01(\x04\x12\x0c\n\x04kind\x18\x03 \x01(\t\x12\x11\n\ttimestamp\x18\x04 \x01(\x01\x12\x12\n\nsize_bytes\x18\x05 \x01(\x04\x12;\n\ndetail_ref\x18\x06 \x01(\x0b\x32\'.avalanche.operator.ActivityDetailRefV2\x12\x0f\n\x07node_id\x18\x07 \x01(\t\x12\r\n\x05level\x18\x08 \x01(\t\x12\x15\n\rinvocation_id\x18\t \x01(\t\x12\x16\n\titeration\x18\n \x01(\rH\x00\x88\x01\x01\x12\x18\n\x0b\x64uration_ms\x18\x0b \x01(\x04H\x01\x88\x01\x01\x12\r\n\x05\x65rror\x18\x0c \x01(\x08\x12\x12\n\ntool_count\x18\r \x01(\r\x12\x15\n\rpredict_count\x18\x0e \x01(\r\x12\x12\n\nevent_kind\x18\x0f \x01(\t\x12\x34\n\x05trace\x18\x10 \x01(\x0b\x32%.avalanche.operator.TraceDescriptorV2\x12\x39\n\rterminal_seal\x18\x11 \x01(\x0b\x32".avalanche.operator.TerminalSealV2\x12M\n\x12\x63lassifier_summary\x18\x12 \x01(\x0b\x32\x31.avalanche.operator.ClassifierInvocationSummaryV2B\x0c\n\n_iterationB\x0e\n\x0c_duration_ms"y\n\x1d\x43lassifierInvocationSummaryV2\x12\x18\n\x10invocation_index\x18\x01 \x01(\r\x12>\n\x07\x61nswers\x18\x02 \x03(\x0b\x32-.avalanche.operator.ClassifierAnswerSummaryV2"m\n\x19\x43lassifierAnswerSummaryV2\x12\x13\n\x0bquestion_id\x18\x01 \x01(\t\x12\x10\n\x06\x63hoice\x18\x02 \x01(\tH\x00\x12\x0e\n\x04noul\x18\x03 \x01(\x01H\x00\x12\x0f\n\x05score\x18\x04 \x01(\x01H\x00\x42\x08\n\x06\x61nswer"\xbb\x01\n\x18ListRunActivityRequestV2\x12\x0e\n\x06run_id\x18\x01 \x01(\t\x12\x11\n\tpage_size\x18\x02 \x01(\r\x12;\n\x0c\x63ontinuation\x18\x03 \x01(\x0b\x32%.avalanche.operator.ContinuationRefV2\x12\x0f\n\x07node_id\x18\x04 \x01(\t\x12.\n\x05order\x18\x05 \x01(\x0e\x32\x1f.avalanche.operator.PageOrderV2"\x8e\x02\n\x11RunActivityPageV2\x12\x35\n\x06\x63ursor\x18\x01 \x01(\x0b\x32%.avalanche.operator.LifecycleCursorV2\x12\x0e\n\x06run_id\x18\x02 \x01(\t\x12?\n\nactivities\x18\x03 \x03(\x0b\x32+.avalanche.operator.RunActivityDescriptorV2\x12\x38\n\tnext_page\x18\x04 \x01(\x0b\x32%.avalanche.operator.ContinuationRefV2\x12\x37\n\tscope_ref\x18\x05 \x01(\x0b\x32$.avalanche.operator.ScopeReferenceV2"Z\n\x1bReadActivityDetailRequestV2\x12;\n\ndetail_ref\x18\x01 \x01(\x0b\x32\'.avalanche.operator.ActivityDetailRefV2"G\n\x15\x41\x63tivityDetailChunkV2\x12\x13\n\x0b\x63hunk_index\x18\x01 \x01(\x04\x12\x0c\n\x04\x64\x61ta\x18\x02 \x01(\x0c\x12\x0b\n\x03\x65of\x18\x03 \x01(\x08"\xd8\x01\n\x16RunOutputArtifactRefV2\x12\x0e\n\x06run_id\x18\x01 \x01(\t\x12\x37\n\tscope_ref\x18\x02 \x01(\x0b\x32$.avalanche.operator.ScopeReferenceV2\x12\x13\n\x0b\x61rtifact_id\x18\x03 \x01(\t\x12\x14\n\x0crun_sequence\x18\x04 \x01(\x04\x12\x12\n\nobject_uri\x18\x05 \x01(\t\x12\x12\n\nobject_key\x18\x06 \x01(\t\x12\x0e\n\x06sha256\x18\x07 \x01(\t\x12\x12\n\nsize_bytes\x18\x08 \x01(\x04"G\n\rResultValueV2\x12\x12\n\nvalue_json\x18\x01 \x01(\t\x12\x0e\n\x06sha256\x18\x02 \x01(\t\x12\x12\n\nsize_bytes\x18\x03 \x01(\x04"\x9e\x01\n\x16ResultFileDescriptorV2\x12@\n\x0c\x61rtifact_ref\x18\x01 \x01(\x0b\x32*.avalanche.operator.RunOutputArtifactRefV2\x12\x11\n\x04name\x18\x02 \x01(\tH\x00\x88\x01\x01\x12\x17\n\nmedia_type\x18\x03 \x01(\tH\x01\x88\x01\x01\x42\x07\n\x05_nameB\r\n\x0b_media_type"\'\n\x15GetRunResultRequestV2\x12\x0e\n\x06run_id\x18\x01 \x01(\t"\xfa\x01\n\x0bRunResultV2\x12\x35\n\x06\x63ursor\x18\x01 \x01(\x0b\x32%.avalanche.operator.LifecycleCursorV2\x12\x0e\n\x06run_id\x18\x02 \x01(\t\x12\x30\n\x05value\x18\x03 \x01(\x0b\x32!.avalanche.operator.ResultValueV2\x12\x39\n\x05\x66iles\x18\x04 \x03(\x0b\x32*.avalanche.operator.ResultFileDescriptorV2\x12\x37\n\tscope_ref\x18\x05 \x01(\x0b\x32$.avalanche.operator.ScopeReferenceV2"\xa5\x01\n\x1dRunOutputArtifactDescriptorV2\x12@\n\x0c\x61rtifact_ref\x18\x01 \x01(\x0b\x32*.avalanche.operator.RunOutputArtifactRefV2\x12\x11\n\x04name\x18\x02 \x01(\tH\x00\x88\x01\x01\x12\x17\n\nmedia_type\x18\x03 \x01(\tH\x01\x88\x01\x01\x42\x07\n\x05_nameB\r\n\x0b_media_type"\x81\x01\n\x1fListRunOutputArtifactsRequestV2\x12\x0e\n\x06run_id\x18\x01 \x01(\t\x12\x11\n\tpage_size\x18\x02 \x01(\r\x12;\n\x0c\x63ontinuation\x18\x03 \x01(\x0b\x32%.avalanche.operator.ContinuationRefV2"\x99\x02\n\x17RunOutputArtifactPageV2\x12\x35\n\x06\x63ursor\x18\x01 \x01(\x0b\x32%.avalanche.operator.LifecycleCursorV2\x12\x0e\n\x06run_id\x18\x02 \x01(\t\x12\x44\n\tartifacts\x18\x03 \x03(\x0b\x32\x31.avalanche.operator.RunOutputArtifactDescriptorV2\x12\x38\n\tnext_page\x18\x04 \x01(\x0b\x32%.avalanche.operator.ContinuationRefV2\x12\x37\n\tscope_ref\x18\x05 \x01(\x0b\x32$.avalanche.operator.ScopeReferenceV2"b\n\x1eReadRunOutputArtifactRequestV2\x12@\n\x0c\x61rtifact_ref\x18\x01 \x01(\x0b\x32*.avalanche.operator.RunOutputArtifactRefV2"J\n\x18RunOutputArtifactChunkV2\x12\x13\n\x0b\x63hunk_index\x18\x01 \x01(\x04\x12\x0c\n\x04\x64\x61ta\x18\x02 \x01(\x0c\x12\x0b\n\x03\x65of\x18\x03 \x01(\x08"\x8f\x01\n\x17WatchRunStatusRequestV2\x12;\n\x0c\x61\x66ter_cursor\x18\x01 \x01(\x0b\x32%.avalanche.operator.LifecycleCursorV2\x12\x37\n\tscope_ref\x18\x02 \x01(\x0b\x32$.avalanche.operator.ScopeReferenceV2"\xae\x01\n\x0cRunCreatedV2\x12\x31\n\x07summary\x18\x01 \x01(\x0b\x32 .avalanche.operator.RunSummaryV2\x12\x31\n\x05nodes\x18\x02 \x03(\x0b\x32".avalanche.operator.NodeSnapshotV2\x12\x38\n\x08topology\x18\x03 \x01(\x0b\x32&.avalanche.operator.WorkflowTopologyV2"G\n\x12RunStatusChangedV2\x12\x31\n\x07summary\x18\x01 \x01(\x0b\x32 .avalanche.operator.RunSummaryV2"W\n\x13NodeStatusChangedV2\x12\x0e\n\x06run_id\x18\x01 \x01(\t\x12\x30\n\x04node\x18\x02 \x01(\x0b\x32".avalanche.operator.NodeSnapshotV2"c\n\x12\x41\x63tivityAppendedV2\x12\x0e\n\x06run_id\x18\x01 \x01(\t\x12=\n\x08\x61\x63tivity\x18\x02 \x01(\x0b\x32+.avalanche.operator.RunActivityDescriptorV2"F\n\x11\x46lowListChangedV2\x12\x31\n\tflow_list\x18\x01 \x01(\x0b\x32\x1e.avalanche.operator.FlowListV2"0\n\x17\x43\x61talogReloadRequiredV2\x12\x15\n\rdeployment_id\x18\x01 \x01(\t"\'\n\x12\x46lowReloadStatusV2\x12\x11\n\treloading\x18\x01 \x01(\x08"\x8d\x01\n\x0fResetRequiredV2\x12<\n\rhistory_floor\x18\x01 \x01(\x0b\x32%.avalanche.operator.LifecycleCursorV2\x12<\n\rlatest_cursor\x18\x02 \x01(\x0b\x32%.avalanche.operator.LifecycleCursorV2"\xc9\x05\n\x13RunStatusEnvelopeV2\x12\x12\n\nevent_ulid\x18\x01 \x01(\t\x12\x37\n\x0brun_created\x18\x02 \x01(\x0b\x32 .avalanche.operator.RunCreatedV2H\x00\x12\x44\n\x12run_status_changed\x18\x03 \x01(\x0b\x32&.avalanche.operator.RunStatusChangedV2H\x00\x12=\n\x0ereset_required\x18\x04 \x01(\x0b\x32#.avalanche.operator.ResetRequiredV2H\x00\x12\x46\n\x13node_status_changed\x18\x06 \x01(\x0b\x32\'.avalanche.operator.NodeStatusChangedV2H\x00\x12\x43\n\x11\x61\x63tivity_appended\x18\x07 \x01(\x0b\x32&.avalanche.operator.ActivityAppendedV2H\x00\x12\x42\n\x11\x66low_list_changed\x18\x08 \x01(\x0b\x32%.avalanche.operator.FlowListChangedV2H\x00\x12\x44\n\x12\x66low_reload_status\x18\t \x01(\x0b\x32&.avalanche.operator.FlowReloadStatusV2H\x00\x12N\n\x17\x63\x61talog_reload_required\x18\x0b \x01(\x0b\x32+.avalanche.operator.CatalogReloadRequiredV2H\x00\x12\x35\n\x06\x63ursor\x18\x05 \x01(\x0b\x32%.avalanche.operator.LifecycleCursorV2\x12\x37\n\tscope_ref\x18\n \x01(\x0b\x32$.avalanche.operator.ScopeReferenceV2B\t\n\x07payload*H\n\x0bPageOrderV2\x12\x19\n\x15PAGE_ORDER_V2_FORWARD\x10\x00\x12\x1e\n\x1aPAGE_ORDER_V2_NEWEST_FIRST\x10\x01\x32\xed\n\n\x11OperatorServiceV2\x12[\n\rDiscoverFlows\x12*.avalanche.operator.DiscoverFlowsRequestV2\x1a\x1e.avalanche.operator.FlowListV2\x12u\n\x15GetWorkflowNodeSource\x12\x32.avalanche.operator.GetWorkflowNodeSourceRequestV2\x1a(.avalanche.operator.WorkflowNodeSourceV2\x12Y\n\x08StartRun\x12%.avalanche.operator.StartRunRequestV2\x1a&.avalanche.operator.StartRunResponseV2\x12\\\n\tCancelRun\x12&.avalanche.operator.CancelRunRequestV2\x1a\'.avalanche.operator.CancelRunResponseV2\x12g\n\x10ListRunSummaries\x12-.avalanche.operator.ListRunSummariesRequestV2\x1a$.avalanche.operator.RunSummaryPageV2\x12`\n\x0eGetRunSnapshot\x12+.avalanche.operator.GetRunSnapshotRequestV2\x1a!.avalanche.operator.RunSnapshotV2\x12\x66\n\x0fListRunActivity\x12,.avalanche.operator.ListRunActivityRequestV2\x1a%.avalanche.operator.RunActivityPageV2\x12\x65\n\x0fListEvaluations\x12,.avalanche.operator.ListEvaluationsRequestV2\x1a$.avalanche.operator.EvaluationListV2\x12r\n\x12ReadActivityDetail\x12/.avalanche.operator.ReadActivityDetailRequestV2\x1a).avalanche.operator.ActivityDetailChunkV20\x01\x12Z\n\x0cGetRunResult\x12).avalanche.operator.GetRunResultRequestV2\x1a\x1f.avalanche.operator.RunResultV2\x12z\n\x16ListRunOutputArtifacts\x12\x33.avalanche.operator.ListRunOutputArtifactsRequestV2\x1a+.avalanche.operator.RunOutputArtifactPageV2\x12{\n\x15ReadRunOutputArtifact\x12\x32.avalanche.operator.ReadRunOutputArtifactRequestV2\x1a,.avalanche.operator.RunOutputArtifactChunkV20\x01\x12h\n\x0eWatchRunStatus\x12+.avalanche.operator.WatchRunStatusRequestV2\x1a\'.avalanche.operator.RunStatusEnvelopeV20\x01\x62\x06proto3'
+)
 
 _globals = globals()
 _builder.BuildMessageAndEnumDescriptors(DESCRIPTOR, _globals)
-_builder.BuildTopDescriptorsAndMessages(DESCRIPTOR, 'operator_pb2', _globals)
+_builder.BuildTopDescriptorsAndMessages(DESCRIPTOR, "operator_pb2", _globals)
 if not _descriptor._USE_C_DESCRIPTORS:
-  DESCRIPTOR._loaded_options = None
-  _globals['_FLOWINFOV2_AGENTMETADATAJSONENTRY']._loaded_options = None
-  _globals['_FLOWINFOV2_AGENTMETADATAJSONENTRY']._serialized_options = b'8\001'
-  _globals['_FLOWINFOV2_CLASSIFIERMETADATAJSONENTRY']._loaded_options = None
-  _globals['_FLOWINFOV2_CLASSIFIERMETADATAJSONENTRY']._serialized_options = b'8\001'
-  _globals['_WORKFLOWTOPOLOGYV2_GRAPHENTRY']._loaded_options = None
-  _globals['_WORKFLOWTOPOLOGYV2_GRAPHENTRY']._serialized_options = b'8\001'
-  _globals['_WORKFLOWTOPOLOGYV2_NODETYPESENTRY']._loaded_options = None
-  _globals['_WORKFLOWTOPOLOGYV2_NODETYPESENTRY']._serialized_options = b'8\001'
-  _globals['_WORKFLOWTOPOLOGYV2_DISPLAYNAMESENTRY']._loaded_options = None
-  _globals['_WORKFLOWTOPOLOGYV2_DISPLAYNAMESENTRY']._serialized_options = b'8\001'
-  _globals['_WORKFLOWTOPOLOGYV2_AGENTFIELDSCHEMASJSONENTRY']._loaded_options = None
-  _globals['_WORKFLOWTOPOLOGYV2_AGENTFIELDSCHEMASJSONENTRY']._serialized_options = b'8\001'
-  _globals['_WORKFLOWTOPOLOGYV2_AGENTINSTRUCTIONLINESENTRY']._loaded_options = None
-  _globals['_WORKFLOWTOPOLOGYV2_AGENTINSTRUCTIONLINESENTRY']._serialized_options = b'8\001'
-  _globals['_WORKFLOWTOPOLOGYV2_STANDARDSTEPDOCSTRINGLINESENTRY']._loaded_options = None
-  _globals['_WORKFLOWTOPOLOGYV2_STANDARDSTEPDOCSTRINGLINESENTRY']._serialized_options = b'8\001'
-  _globals['_WORKFLOWTOPOLOGYV2_CLASSIFIERMETADATAJSONENTRY']._loaded_options = None
-  _globals['_WORKFLOWTOPOLOGYV2_CLASSIFIERMETADATAJSONENTRY']._serialized_options = b'8\001'
-  _globals['_WORKFLOWTOPOLOGYV2_STEPINTERFACEJSONENTRY']._loaded_options = None
-  _globals['_WORKFLOWTOPOLOGYV2_STEPINTERFACEJSONENTRY']._serialized_options = b'8\001'
-  _globals['_PAGEORDERV2']._serialized_start=11120
-  _globals['_PAGEORDERV2']._serialized_end=11192
-  _globals['_SCOPEREFERENCEV2']._serialized_start=38
-  _globals['_SCOPEREFERENCEV2']._serialized_end=75
-  _globals['_LIFECYCLECURSORV2']._serialized_start=78
-  _globals['_LIFECYCLECURSORV2']._serialized_end=225
-  _globals['_PROJECTSUMMARYCURSORV2']._serialized_start=228
-  _globals['_PROJECTSUMMARYCURSORV2']._serialized_end=445
-  _globals['_CONTINUATIONREFV2']._serialized_start=448
-  _globals['_CONTINUATIONREFV2']._serialized_end=680
-  _globals['_DISCOVERFLOWSREQUESTV2']._serialized_start=682
-  _globals['_DISCOVERFLOWSREQUESTV2']._serialized_end=786
-  _globals['_GETWORKFLOWNODESOURCEREQUESTV2']._serialized_start=788
-  _globals['_GETWORKFLOWNODESOURCEREQUESTV2']._serialized_end=864
-  _globals['_WORKFLOWNODESOURCEV2']._serialized_start=866
-  _globals['_WORKFLOWNODESOURCEV2']._serialized_end=930
-  _globals['_FLOWINFOV2']._serialized_start=933
-  _globals['_FLOWINFOV2']._serialized_end=1581
-  _globals['_FLOWINFOV2_AGENTMETADATAJSONENTRY']._serialized_start=1462
-  _globals['_FLOWINFOV2_AGENTMETADATAJSONENTRY']._serialized_end=1518
-  _globals['_FLOWINFOV2_CLASSIFIERMETADATAJSONENTRY']._serialized_start=1520
-  _globals['_FLOWINFOV2_CLASSIFIERMETADATAJSONENTRY']._serialized_end=1581
-  _globals['_DISCOVERYDIAGNOSTICV2']._serialized_start=1583
-  _globals['_DISCOVERYDIAGNOSTICV2']._serialized_end=1651
-  _globals['_FLOWLISTV2']._serialized_start=1654
-  _globals['_FLOWLISTV2']._serialized_end=2021
-  _globals['_NODEEDGESV2']._serialized_start=2023
-  _globals['_NODEEDGESV2']._serialized_end=2054
-  _globals['_WORKFLOWTOPOLOGYV2']._serialized_start=2057
-  _globals['_WORKFLOWTOPOLOGYV2']._serialized_end=3317
-  _globals['_WORKFLOWTOPOLOGYV2_GRAPHENTRY']._serialized_start=2825
-  _globals['_WORKFLOWTOPOLOGYV2_GRAPHENTRY']._serialized_end=2902
-  _globals['_WORKFLOWTOPOLOGYV2_NODETYPESENTRY']._serialized_start=2904
-  _globals['_WORKFLOWTOPOLOGYV2_NODETYPESENTRY']._serialized_end=2952
-  _globals['_WORKFLOWTOPOLOGYV2_DISPLAYNAMESENTRY']._serialized_start=2954
-  _globals['_WORKFLOWTOPOLOGYV2_DISPLAYNAMESENTRY']._serialized_end=3005
-  _globals['_WORKFLOWTOPOLOGYV2_AGENTFIELDSCHEMASJSONENTRY']._serialized_start=3007
-  _globals['_WORKFLOWTOPOLOGYV2_AGENTFIELDSCHEMASJSONENTRY']._serialized_end=3067
-  _globals['_WORKFLOWTOPOLOGYV2_AGENTINSTRUCTIONLINESENTRY']._serialized_start=3069
-  _globals['_WORKFLOWTOPOLOGYV2_AGENTINSTRUCTIONLINESENTRY']._serialized_end=3129
-  _globals['_WORKFLOWTOPOLOGYV2_STANDARDSTEPDOCSTRINGLINESENTRY']._serialized_start=3131
-  _globals['_WORKFLOWTOPOLOGYV2_STANDARDSTEPDOCSTRINGLINESENTRY']._serialized_end=3196
-  _globals['_WORKFLOWTOPOLOGYV2_CLASSIFIERMETADATAJSONENTRY']._serialized_start=1520
-  _globals['_WORKFLOWTOPOLOGYV2_CLASSIFIERMETADATAJSONENTRY']._serialized_end=1581
-  _globals['_WORKFLOWTOPOLOGYV2_STEPINTERFACEJSONENTRY']._serialized_start=3261
-  _globals['_WORKFLOWTOPOLOGYV2_STEPINTERFACEJSONENTRY']._serialized_end=3317
-  _globals['_SCANTARGETV2']._serialized_start=3319
-  _globals['_SCANTARGETV2']._serialized_end=3383
-  _globals['_FILEATTACHMENTV2']._serialized_start=3386
-  _globals['_FILEATTACHMENTV2']._serialized_end=3579
-  _globals['_STARTRUNREQUESTV2']._serialized_start=3582
-  _globals['_STARTRUNREQUESTV2']._serialized_end=3745
-  _globals['_STARTRUNRESPONSEV2']._serialized_start=3747
-  _globals['_STARTRUNRESPONSEV2']._serialized_end=3783
-  _globals['_CANCELRUNREQUESTV2']._serialized_start=3785
-  _globals['_CANCELRUNREQUESTV2']._serialized_end=3821
-  _globals['_CANCELRUNRESPONSEV2']._serialized_start=3823
-  _globals['_CANCELRUNRESPONSEV2']._serialized_end=3860
-  _globals['_LISTEVALUATIONSREQUESTV2']._serialized_start=3862
-  _globals['_LISTEVALUATIONSREQUESTV2']._serialized_end=3921
-  _globals['_EVALUATIONRECORDV2']._serialized_start=3924
-  _globals['_EVALUATIONRECORDV2']._serialized_end=4144
-  _globals['_EVALUATIONLISTV2']._serialized_start=4146
-  _globals['_EVALUATIONLISTV2']._serialized_end=4221
-  _globals['_RUNSUMMARYV2']._serialized_start=4224
-  _globals['_RUNSUMMARYV2']._serialized_end=4454
-  _globals['_LISTRUNSUMMARIESREQUESTV2']._serialized_start=4457
-  _globals['_LISTRUNSUMMARIESREQUESTV2']._serialized_end=4591
-  _globals['_RUNSUMMARYPAGEV2']._serialized_start=4594
-  _globals['_RUNSUMMARYPAGEV2']._serialized_end=4906
-  _globals['_GETRUNSNAPSHOTREQUESTV2']._serialized_start=4908
-  _globals['_GETRUNSNAPSHOTREQUESTV2']._serialized_end=4949
-  _globals['_NODESNAPSHOTV2']._serialized_start=4952
-  _globals['_NODESNAPSHOTV2']._serialized_end=5310
-  _globals['_TRACEHEADERV2']._serialized_start=5313
-  _globals['_TRACEHEADERV2']._serialized_end=5530
-  _globals['_TRACEDESCRIPTORV2']._serialized_start=5533
-  _globals['_TRACEDESCRIPTORV2']._serialized_end=5807
-  _globals['_TERMINALSEALV2']._serialized_start=5809
-  _globals['_TERMINALSEALV2']._serialized_end=5882
-  _globals['_RUNSNAPSHOTV2']._serialized_start=5885
-  _globals['_RUNSNAPSHOTV2']._serialized_end=6334
-  _globals['_ACTIVITYDETAILREFV2']._serialized_start=6337
-  _globals['_ACTIVITYDETAILREFV2']._serialized_end=6550
-  _globals['_RUNACTIVITYDESCRIPTORV2']._serialized_start=6553
-  _globals['_RUNACTIVITYDESCRIPTORV2']._serialized_end=7140
-  _globals['_CLASSIFIERINVOCATIONSUMMARYV2']._serialized_start=7142
-  _globals['_CLASSIFIERINVOCATIONSUMMARYV2']._serialized_end=7263
-  _globals['_CLASSIFIERANSWERSUMMARYV2']._serialized_start=7265
-  _globals['_CLASSIFIERANSWERSUMMARYV2']._serialized_end=7374
-  _globals['_LISTRUNACTIVITYREQUESTV2']._serialized_start=7377
-  _globals['_LISTRUNACTIVITYREQUESTV2']._serialized_end=7564
-  _globals['_RUNACTIVITYPAGEV2']._serialized_start=7567
-  _globals['_RUNACTIVITYPAGEV2']._serialized_end=7837
-  _globals['_READACTIVITYDETAILREQUESTV2']._serialized_start=7839
-  _globals['_READACTIVITYDETAILREQUESTV2']._serialized_end=7929
-  _globals['_ACTIVITYDETAILCHUNKV2']._serialized_start=7931
-  _globals['_ACTIVITYDETAILCHUNKV2']._serialized_end=8002
-  _globals['_RUNOUTPUTARTIFACTREFV2']._serialized_start=8005
-  _globals['_RUNOUTPUTARTIFACTREFV2']._serialized_end=8221
-  _globals['_RESULTVALUEV2']._serialized_start=8223
-  _globals['_RESULTVALUEV2']._serialized_end=8294
-  _globals['_RESULTFILEDESCRIPTORV2']._serialized_start=8297
-  _globals['_RESULTFILEDESCRIPTORV2']._serialized_end=8455
-  _globals['_GETRUNRESULTREQUESTV2']._serialized_start=8457
-  _globals['_GETRUNRESULTREQUESTV2']._serialized_end=8496
-  _globals['_RUNRESULTV2']._serialized_start=8499
-  _globals['_RUNRESULTV2']._serialized_end=8749
-  _globals['_RUNOUTPUTARTIFACTDESCRIPTORV2']._serialized_start=8752
-  _globals['_RUNOUTPUTARTIFACTDESCRIPTORV2']._serialized_end=8917
-  _globals['_LISTRUNOUTPUTARTIFACTSREQUESTV2']._serialized_start=8920
-  _globals['_LISTRUNOUTPUTARTIFACTSREQUESTV2']._serialized_end=9049
-  _globals['_RUNOUTPUTARTIFACTPAGEV2']._serialized_start=9052
-  _globals['_RUNOUTPUTARTIFACTPAGEV2']._serialized_end=9333
-  _globals['_READRUNOUTPUTARTIFACTREQUESTV2']._serialized_start=9335
-  _globals['_READRUNOUTPUTARTIFACTREQUESTV2']._serialized_end=9433
-  _globals['_RUNOUTPUTARTIFACTCHUNKV2']._serialized_start=9435
-  _globals['_RUNOUTPUTARTIFACTCHUNKV2']._serialized_end=9509
-  _globals['_WATCHRUNSTATUSREQUESTV2']._serialized_start=9512
-  _globals['_WATCHRUNSTATUSREQUESTV2']._serialized_end=9655
-  _globals['_RUNCREATEDV2']._serialized_start=9658
-  _globals['_RUNCREATEDV2']._serialized_end=9832
-  _globals['_RUNSTATUSCHANGEDV2']._serialized_start=9834
-  _globals['_RUNSTATUSCHANGEDV2']._serialized_end=9905
-  _globals['_NODESTATUSCHANGEDV2']._serialized_start=9907
-  _globals['_NODESTATUSCHANGEDV2']._serialized_end=9994
-  _globals['_ACTIVITYAPPENDEDV2']._serialized_start=9996
-  _globals['_ACTIVITYAPPENDEDV2']._serialized_end=10095
-  _globals['_FLOWLISTCHANGEDV2']._serialized_start=10097
-  _globals['_FLOWLISTCHANGEDV2']._serialized_end=10167
-  _globals['_CATALOGRELOADREQUIREDV2']._serialized_start=10169
-  _globals['_CATALOGRELOADREQUIREDV2']._serialized_end=10217
-  _globals['_FLOWRELOADSTATUSV2']._serialized_start=10219
-  _globals['_FLOWRELOADSTATUSV2']._serialized_end=10258
-  _globals['_RESETREQUIREDV2']._serialized_start=10261
-  _globals['_RESETREQUIREDV2']._serialized_end=10402
-  _globals['_RUNSTATUSENVELOPEV2']._serialized_start=10405
-  _globals['_RUNSTATUSENVELOPEV2']._serialized_end=11118
-  _globals['_OPERATORSERVICEV2']._serialized_start=11195
-  _globals['_OPERATORSERVICEV2']._serialized_end=12584
+    DESCRIPTOR._loaded_options = None
+    _globals["_FLOWINFOV2_AGENTMETADATAJSONENTRY"]._loaded_options = None
+    _globals["_FLOWINFOV2_AGENTMETADATAJSONENTRY"]._serialized_options = b"8\001"
+    _globals["_FLOWINFOV2_CLASSIFIERMETADATAJSONENTRY"]._loaded_options = None
+    _globals["_FLOWINFOV2_CLASSIFIERMETADATAJSONENTRY"]._serialized_options = b"8\001"
+    _globals["_FLOWINFOV2_EVALUATIONMETADATAJSONENTRY"]._loaded_options = None
+    _globals["_FLOWINFOV2_EVALUATIONMETADATAJSONENTRY"]._serialized_options = b"8\001"
+    _globals["_WORKFLOWTOPOLOGYV2_GRAPHENTRY"]._loaded_options = None
+    _globals["_WORKFLOWTOPOLOGYV2_GRAPHENTRY"]._serialized_options = b"8\001"
+    _globals["_WORKFLOWTOPOLOGYV2_NODETYPESENTRY"]._loaded_options = None
+    _globals["_WORKFLOWTOPOLOGYV2_NODETYPESENTRY"]._serialized_options = b"8\001"
+    _globals["_WORKFLOWTOPOLOGYV2_DISPLAYNAMESENTRY"]._loaded_options = None
+    _globals["_WORKFLOWTOPOLOGYV2_DISPLAYNAMESENTRY"]._serialized_options = b"8\001"
+    _globals["_WORKFLOWTOPOLOGYV2_AGENTFIELDSCHEMASJSONENTRY"]._loaded_options = None
+    _globals["_WORKFLOWTOPOLOGYV2_AGENTFIELDSCHEMASJSONENTRY"]._serialized_options = b"8\001"
+    _globals["_WORKFLOWTOPOLOGYV2_AGENTINSTRUCTIONLINESENTRY"]._loaded_options = None
+    _globals["_WORKFLOWTOPOLOGYV2_AGENTINSTRUCTIONLINESENTRY"]._serialized_options = b"8\001"
+    _globals["_WORKFLOWTOPOLOGYV2_STANDARDSTEPDOCSTRINGLINESENTRY"]._loaded_options = None
+    _globals[
+        "_WORKFLOWTOPOLOGYV2_STANDARDSTEPDOCSTRINGLINESENTRY"
+    ]._serialized_options = b"8\001"
+    _globals["_WORKFLOWTOPOLOGYV2_CLASSIFIERMETADATAJSONENTRY"]._loaded_options = None
+    _globals["_WORKFLOWTOPOLOGYV2_CLASSIFIERMETADATAJSONENTRY"]._serialized_options = b"8\001"
+    _globals["_WORKFLOWTOPOLOGYV2_STEPINTERFACEJSONENTRY"]._loaded_options = None
+    _globals["_WORKFLOWTOPOLOGYV2_STEPINTERFACEJSONENTRY"]._serialized_options = b"8\001"
+    _globals["_WORKFLOWTOPOLOGYV2_EVALUATIONMETADATAJSONENTRY"]._loaded_options = None
+    _globals["_WORKFLOWTOPOLOGYV2_EVALUATIONMETADATAJSONENTRY"]._serialized_options = b"8\001"
+    _globals["_PAGEORDERV2"]._serialized_start = 11442
+    _globals["_PAGEORDERV2"]._serialized_end = 11514
+    _globals["_SCOPEREFERENCEV2"]._serialized_start = 38
+    _globals["_SCOPEREFERENCEV2"]._serialized_end = 75
+    _globals["_LIFECYCLECURSORV2"]._serialized_start = 78
+    _globals["_LIFECYCLECURSORV2"]._serialized_end = 225
+    _globals["_PROJECTSUMMARYCURSORV2"]._serialized_start = 228
+    _globals["_PROJECTSUMMARYCURSORV2"]._serialized_end = 445
+    _globals["_CONTINUATIONREFV2"]._serialized_start = 448
+    _globals["_CONTINUATIONREFV2"]._serialized_end = 680
+    _globals["_DISCOVERFLOWSREQUESTV2"]._serialized_start = 682
+    _globals["_DISCOVERFLOWSREQUESTV2"]._serialized_end = 786
+    _globals["_GETWORKFLOWNODESOURCEREQUESTV2"]._serialized_start = 788
+    _globals["_GETWORKFLOWNODESOURCEREQUESTV2"]._serialized_end = 864
+    _globals["_WORKFLOWNODESOURCEV2"]._serialized_start = 866
+    _globals["_WORKFLOWNODESOURCEV2"]._serialized_end = 930
+    _globals["_FLOWINFOV2"]._serialized_start = 933
+    _globals["_FLOWINFOV2"]._serialized_end = 1738
+    _globals["_FLOWINFOV2_AGENTMETADATAJSONENTRY"]._serialized_start = 1556
+    _globals["_FLOWINFOV2_AGENTMETADATAJSONENTRY"]._serialized_end = 1612
+    _globals["_FLOWINFOV2_CLASSIFIERMETADATAJSONENTRY"]._serialized_start = 1614
+    _globals["_FLOWINFOV2_CLASSIFIERMETADATAJSONENTRY"]._serialized_end = 1675
+    _globals["_FLOWINFOV2_EVALUATIONMETADATAJSONENTRY"]._serialized_start = 1677
+    _globals["_FLOWINFOV2_EVALUATIONMETADATAJSONENTRY"]._serialized_end = 1738
+    _globals["_DISCOVERYDIAGNOSTICV2"]._serialized_start = 1740
+    _globals["_DISCOVERYDIAGNOSTICV2"]._serialized_end = 1808
+    _globals["_FLOWLISTV2"]._serialized_start = 1811
+    _globals["_FLOWLISTV2"]._serialized_end = 2178
+    _globals["_NODEEDGESV2"]._serialized_start = 2180
+    _globals["_NODEEDGESV2"]._serialized_end = 2211
+    _globals["_WORKFLOWTOPOLOGYV2"]._serialized_start = 2214
+    _globals["_WORKFLOWTOPOLOGYV2"]._serialized_end = 3639
+    _globals["_WORKFLOWTOPOLOGYV2_GRAPHENTRY"]._serialized_start = 3084
+    _globals["_WORKFLOWTOPOLOGYV2_GRAPHENTRY"]._serialized_end = 3161
+    _globals["_WORKFLOWTOPOLOGYV2_NODETYPESENTRY"]._serialized_start = 3163
+    _globals["_WORKFLOWTOPOLOGYV2_NODETYPESENTRY"]._serialized_end = 3211
+    _globals["_WORKFLOWTOPOLOGYV2_DISPLAYNAMESENTRY"]._serialized_start = 3213
+    _globals["_WORKFLOWTOPOLOGYV2_DISPLAYNAMESENTRY"]._serialized_end = 3264
+    _globals["_WORKFLOWTOPOLOGYV2_AGENTFIELDSCHEMASJSONENTRY"]._serialized_start = 3266
+    _globals["_WORKFLOWTOPOLOGYV2_AGENTFIELDSCHEMASJSONENTRY"]._serialized_end = 3326
+    _globals["_WORKFLOWTOPOLOGYV2_AGENTINSTRUCTIONLINESENTRY"]._serialized_start = 3328
+    _globals["_WORKFLOWTOPOLOGYV2_AGENTINSTRUCTIONLINESENTRY"]._serialized_end = 3388
+    _globals["_WORKFLOWTOPOLOGYV2_STANDARDSTEPDOCSTRINGLINESENTRY"]._serialized_start = 3390
+    _globals["_WORKFLOWTOPOLOGYV2_STANDARDSTEPDOCSTRINGLINESENTRY"]._serialized_end = 3455
+    _globals["_WORKFLOWTOPOLOGYV2_CLASSIFIERMETADATAJSONENTRY"]._serialized_start = 1614
+    _globals["_WORKFLOWTOPOLOGYV2_CLASSIFIERMETADATAJSONENTRY"]._serialized_end = 1675
+    _globals["_WORKFLOWTOPOLOGYV2_STEPINTERFACEJSONENTRY"]._serialized_start = 3520
+    _globals["_WORKFLOWTOPOLOGYV2_STEPINTERFACEJSONENTRY"]._serialized_end = 3576
+    _globals["_WORKFLOWTOPOLOGYV2_EVALUATIONMETADATAJSONENTRY"]._serialized_start = 1677
+    _globals["_WORKFLOWTOPOLOGYV2_EVALUATIONMETADATAJSONENTRY"]._serialized_end = 1738
+    _globals["_SCANTARGETV2"]._serialized_start = 3641
+    _globals["_SCANTARGETV2"]._serialized_end = 3705
+    _globals["_FILEATTACHMENTV2"]._serialized_start = 3708
+    _globals["_FILEATTACHMENTV2"]._serialized_end = 3901
+    _globals["_STARTRUNREQUESTV2"]._serialized_start = 3904
+    _globals["_STARTRUNREQUESTV2"]._serialized_end = 4067
+    _globals["_STARTRUNRESPONSEV2"]._serialized_start = 4069
+    _globals["_STARTRUNRESPONSEV2"]._serialized_end = 4105
+    _globals["_CANCELRUNREQUESTV2"]._serialized_start = 4107
+    _globals["_CANCELRUNREQUESTV2"]._serialized_end = 4143
+    _globals["_CANCELRUNRESPONSEV2"]._serialized_start = 4145
+    _globals["_CANCELRUNRESPONSEV2"]._serialized_end = 4182
+    _globals["_LISTEVALUATIONSREQUESTV2"]._serialized_start = 4184
+    _globals["_LISTEVALUATIONSREQUESTV2"]._serialized_end = 4243
+    _globals["_EVALUATIONRECORDV2"]._serialized_start = 4246
+    _globals["_EVALUATIONRECORDV2"]._serialized_end = 4466
+    _globals["_EVALUATIONLISTV2"]._serialized_start = 4468
+    _globals["_EVALUATIONLISTV2"]._serialized_end = 4543
+    _globals["_RUNSUMMARYV2"]._serialized_start = 4546
+    _globals["_RUNSUMMARYV2"]._serialized_end = 4776
+    _globals["_LISTRUNSUMMARIESREQUESTV2"]._serialized_start = 4779
+    _globals["_LISTRUNSUMMARIESREQUESTV2"]._serialized_end = 4913
+    _globals["_RUNSUMMARYPAGEV2"]._serialized_start = 4916
+    _globals["_RUNSUMMARYPAGEV2"]._serialized_end = 5228
+    _globals["_GETRUNSNAPSHOTREQUESTV2"]._serialized_start = 5230
+    _globals["_GETRUNSNAPSHOTREQUESTV2"]._serialized_end = 5271
+    _globals["_NODESNAPSHOTV2"]._serialized_start = 5274
+    _globals["_NODESNAPSHOTV2"]._serialized_end = 5632
+    _globals["_TRACEHEADERV2"]._serialized_start = 5635
+    _globals["_TRACEHEADERV2"]._serialized_end = 5852
+    _globals["_TRACEDESCRIPTORV2"]._serialized_start = 5855
+    _globals["_TRACEDESCRIPTORV2"]._serialized_end = 6129
+    _globals["_TERMINALSEALV2"]._serialized_start = 6131
+    _globals["_TERMINALSEALV2"]._serialized_end = 6204
+    _globals["_RUNSNAPSHOTV2"]._serialized_start = 6207
+    _globals["_RUNSNAPSHOTV2"]._serialized_end = 6656
+    _globals["_ACTIVITYDETAILREFV2"]._serialized_start = 6659
+    _globals["_ACTIVITYDETAILREFV2"]._serialized_end = 6872
+    _globals["_RUNACTIVITYDESCRIPTORV2"]._serialized_start = 6875
+    _globals["_RUNACTIVITYDESCRIPTORV2"]._serialized_end = 7462
+    _globals["_CLASSIFIERINVOCATIONSUMMARYV2"]._serialized_start = 7464
+    _globals["_CLASSIFIERINVOCATIONSUMMARYV2"]._serialized_end = 7585
+    _globals["_CLASSIFIERANSWERSUMMARYV2"]._serialized_start = 7587
+    _globals["_CLASSIFIERANSWERSUMMARYV2"]._serialized_end = 7696
+    _globals["_LISTRUNACTIVITYREQUESTV2"]._serialized_start = 7699
+    _globals["_LISTRUNACTIVITYREQUESTV2"]._serialized_end = 7886
+    _globals["_RUNACTIVITYPAGEV2"]._serialized_start = 7889
+    _globals["_RUNACTIVITYPAGEV2"]._serialized_end = 8159
+    _globals["_READACTIVITYDETAILREQUESTV2"]._serialized_start = 8161
+    _globals["_READACTIVITYDETAILREQUESTV2"]._serialized_end = 8251
+    _globals["_ACTIVITYDETAILCHUNKV2"]._serialized_start = 8253
+    _globals["_ACTIVITYDETAILCHUNKV2"]._serialized_end = 8324
+    _globals["_RUNOUTPUTARTIFACTREFV2"]._serialized_start = 8327
+    _globals["_RUNOUTPUTARTIFACTREFV2"]._serialized_end = 8543
+    _globals["_RESULTVALUEV2"]._serialized_start = 8545
+    _globals["_RESULTVALUEV2"]._serialized_end = 8616
+    _globals["_RESULTFILEDESCRIPTORV2"]._serialized_start = 8619
+    _globals["_RESULTFILEDESCRIPTORV2"]._serialized_end = 8777
+    _globals["_GETRUNRESULTREQUESTV2"]._serialized_start = 8779
+    _globals["_GETRUNRESULTREQUESTV2"]._serialized_end = 8818
+    _globals["_RUNRESULTV2"]._serialized_start = 8821
+    _globals["_RUNRESULTV2"]._serialized_end = 9071
+    _globals["_RUNOUTPUTARTIFACTDESCRIPTORV2"]._serialized_start = 9074
+    _globals["_RUNOUTPUTARTIFACTDESCRIPTORV2"]._serialized_end = 9239
+    _globals["_LISTRUNOUTPUTARTIFACTSREQUESTV2"]._serialized_start = 9242
+    _globals["_LISTRUNOUTPUTARTIFACTSREQUESTV2"]._serialized_end = 9371
+    _globals["_RUNOUTPUTARTIFACTPAGEV2"]._serialized_start = 9374
+    _globals["_RUNOUTPUTARTIFACTPAGEV2"]._serialized_end = 9655
+    _globals["_READRUNOUTPUTARTIFACTREQUESTV2"]._serialized_start = 9657
+    _globals["_READRUNOUTPUTARTIFACTREQUESTV2"]._serialized_end = 9755
+    _globals["_RUNOUTPUTARTIFACTCHUNKV2"]._serialized_start = 9757
+    _globals["_RUNOUTPUTARTIFACTCHUNKV2"]._serialized_end = 9831
+    _globals["_WATCHRUNSTATUSREQUESTV2"]._serialized_start = 9834
+    _globals["_WATCHRUNSTATUSREQUESTV2"]._serialized_end = 9977
+    _globals["_RUNCREATEDV2"]._serialized_start = 9980
+    _globals["_RUNCREATEDV2"]._serialized_end = 10154
+    _globals["_RUNSTATUSCHANGEDV2"]._serialized_start = 10156
+    _globals["_RUNSTATUSCHANGEDV2"]._serialized_end = 10227
+    _globals["_NODESTATUSCHANGEDV2"]._serialized_start = 10229
+    _globals["_NODESTATUSCHANGEDV2"]._serialized_end = 10316
+    _globals["_ACTIVITYAPPENDEDV2"]._serialized_start = 10318
+    _globals["_ACTIVITYAPPENDEDV2"]._serialized_end = 10417
+    _globals["_FLOWLISTCHANGEDV2"]._serialized_start = 10419
+    _globals["_FLOWLISTCHANGEDV2"]._serialized_end = 10489
+    _globals["_CATALOGRELOADREQUIREDV2"]._serialized_start = 10491
+    _globals["_CATALOGRELOADREQUIREDV2"]._serialized_end = 10539
+    _globals["_FLOWRELOADSTATUSV2"]._serialized_start = 10541
+    _globals["_FLOWRELOADSTATUSV2"]._serialized_end = 10580
+    _globals["_RESETREQUIREDV2"]._serialized_start = 10583
+    _globals["_RESETREQUIREDV2"]._serialized_end = 10724
+    _globals["_RUNSTATUSENVELOPEV2"]._serialized_start = 10727
+    _globals["_RUNSTATUSENVELOPEV2"]._serialized_end = 11440
+    _globals["_OPERATORSERVICEV2"]._serialized_start = 11517
+    _globals["_OPERATORSERVICEV2"]._serialized_end = 12906
 # @@protoc_insertion_point(module_scope)

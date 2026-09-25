@@ -9,7 +9,7 @@ from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field
 from typing import Generic, TypeVar
 
-from pydantic import BaseModel, ConfigDict, JsonValue
+from pydantic import BaseModel, ConfigDict, JsonValue, field_validator
 
 from .classifier.classifier_step import Classifier, _close_classifier, _error_description
 from .classifier.models import (
@@ -19,6 +19,8 @@ from .classifier.models import (
     ClassifierDeclaration,
     ClassifierRuntime,
     JSONContent,
+    NonemptyString,
+    Questions,
     validate_questions,
     validate_runtime_defaults,
     validate_state,
@@ -79,6 +81,23 @@ class Metric(Generic[InputT, OutputT]):
         return json.loads(self._question_json)
 
 
+class EvaluationDeclaration(BaseModel):
+    """Safe, owned rendering metadata; selectors and composites remain executable code."""
+
+    model_config = ConfigDict(extra="forbid", strict=True, frozen=True, allow_inf_nan=False)
+
+    metrics: Questions
+    composites: tuple[NonemptyString, ...]
+    runtime: ClassifierRuntime
+
+    @field_validator("composites")
+    @classmethod
+    def unique_composites(cls, value: tuple[str, ...]) -> tuple[str, ...]:
+        if len(value) != len(set(value)):
+            raise ValueError("composite names must be unique")
+        return value
+
+
 class EvaluationResult(BaseModel):
     """Raw TypeSafe answers and explicitly normalized, author-defined composites."""
 
@@ -135,15 +154,21 @@ class Evaluations(Generic[InputT, OutputT]):
         object.__setattr__(self, "_composites", owned_composites)
         object.__setattr__(self, "_runtime_overrides", runtime)
 
-    async def evaluate(
-        self,
-        context: EvalContext[InputT, OutputT],
-        *,
-        runtime_defaults: Mapping[str, JsonValue] | None = None,
-    ) -> EvaluationResult:
-        """Select evidence, batch equivalent states, then compute ordinary composites."""
+    def declaration_metadata(
+        self, runtime_defaults: Mapping[str, JsonValue] | None = None
+    ) -> EvaluationDeclaration:
+        """Describe effective questions and settings without selecting or judging evidence."""
+        return EvaluationDeclaration(
+            metrics=validate_questions(
+                {name: metric.question for name, metric in self._metrics}
+            ),
+            composites=tuple(name for name, _ in self._composites),
+            runtime=self._runtime(runtime_defaults),
+        )
+
+    def _runtime(self, runtime_defaults: Mapping[str, JsonValue] | None) -> ClassifierRuntime:
         try:
-            runtime = ClassifierRuntime.model_validate(
+            return ClassifierRuntime.model_validate(
                 {
                     **validate_runtime_defaults(dict(runtime_defaults or {})),
                     **self._runtime_overrides.model_dump(mode="json", exclude_unset=True),
@@ -154,6 +179,15 @@ class Evaluations(Generic[InputT, OutputT]):
                 f"Evaluation runtime defaults failed: {type(error).__name__}; "
                 "check classifier model and timeout settings"
             ) from None
+
+    async def evaluate(
+        self,
+        context: EvalContext[InputT, OutputT],
+        *,
+        runtime_defaults: Mapping[str, JsonValue] | None = None,
+    ) -> EvaluationResult:
+        """Select evidence, batch equivalent states, then compute ordinary composites."""
+        runtime = self._runtime(runtime_defaults)
 
         batches: dict[str, tuple[JSONContent, dict[str, JsonValue]]] = {}
         for name, metric in self._metrics:

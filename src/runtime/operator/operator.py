@@ -35,6 +35,7 @@ from avalanche.classifier.models import (
     ClassifierInvocation,
     NoulAnswer,
 )
+from avalanche.evaluations import EvaluationDeclaration
 from avalanche.step_interface import StepInterface
 
 from ..executor import LocalExecutor, RayExecutor
@@ -2132,6 +2133,9 @@ class Operator:
             classifier_metadata_json=tuple(
                 _classifier_metadata_mapping(prepared["classifier_metadata_json"]).items()
             ),
+            evaluation_metadata_json=tuple(
+                _evaluation_metadata_mapping(prepared["evaluation_metadata_json"]).items()
+            ),
             step_interface_json=tuple(
                 (node_id, prepared["step_interface_json"][node_id]) for node_id in node_ids
             ),
@@ -3693,6 +3697,8 @@ _MAX_EVENT_AGENT_FIELD_SCHEMA_BYTES = 1024 * 1024
 _MAX_EVENT_AGENT_FIELD_SCHEMAS_TOTAL_BYTES = 16 * 1024 * 1024
 _MAX_EVENT_CLASSIFIER_METADATA_BYTES = 1024 * 1024
 _MAX_EVENT_CLASSIFIER_METADATA_TOTAL_BYTES = 16 * 1024 * 1024
+_MAX_EVENT_EVALUATION_METADATA_BYTES = 1024 * 1024
+_MAX_EVENT_EVALUATION_METADATA_TOTAL_BYTES = 16 * 1024 * 1024
 _MAX_EVENT_STEP_INTERFACE_BYTES = 1024 * 1024
 _MAX_EVENT_STEP_INTERFACES_TOTAL_BYTES = 16 * 1024 * 1024
 _MAX_EVENT_TRACEBACK_LENGTH = 262_144
@@ -3804,6 +3810,42 @@ def _classifier_metadata_mapping(value: object) -> dict[str, str]:
     return metadata
 
 
+def _evaluation_metadata_mapping(value: object) -> dict[str, str]:
+    if not isinstance(value, dict) or len(value) > _MAX_EVENT_NODES:
+        raise _CoordinatorProtocolError("evaluation metadata must be a bounded node mapping")
+    metadata: dict[str, str] = {}
+    total_bytes = 0
+    for node_id, declaration_json in value.items():
+        if (
+            not isinstance(node_id, str)
+            or len(node_id) > _MAX_EVENT_FIELD_LENGTH
+            or not isinstance(declaration_json, str)
+        ):
+            raise _CoordinatorProtocolError(
+                "evaluation metadata must map node IDs to JSON strings"
+            )
+        try:
+            if len(declaration_json.encode()) > _MAX_EVENT_EVALUATION_METADATA_BYTES:
+                raise _CoordinatorProtocolError("evaluation declaration exceeds its byte limit")
+            declaration = EvaluationDeclaration.model_validate_json(
+                declaration_json, strict=True
+            )
+            canonical = declaration.model_dump_json()
+            canonical_size = len(canonical.encode())
+            if canonical_size > _MAX_EVENT_EVALUATION_METADATA_BYTES:
+                raise _CoordinatorProtocolError("evaluation declaration exceeds its byte limit")
+            total_bytes += canonical_size
+            if total_bytes > _MAX_EVENT_EVALUATION_METADATA_TOTAL_BYTES:
+                raise _CoordinatorProtocolError(
+                    "evaluation metadata exceeds its total byte limit"
+                )
+        except (ValueError, TypeError, RecursionError):
+            # Validation errors can include credential-like extra fields from the payload.
+            raise _CoordinatorProtocolError("invalid evaluation declaration metadata") from None
+        metadata[node_id] = canonical
+    return metadata
+
+
 def _trace_header_from_trace(trace: RunTrace) -> TraceHeader:
     """Project the validated SDK trace without retaining its iteration body."""
     return TraceHeader(
@@ -3838,6 +3880,7 @@ def _validate_preparation_event(event: object) -> str:
                 "agent_instruction_lines",
                 "standard_step_docstring_lines",
                 "classifier_metadata_json",
+                "evaluation_metadata_json",
                 "step_interface_json",
             },
         )
@@ -3864,6 +3907,9 @@ def _validate_preparation_event(event: object) -> str:
         classifier_metadata_json = _classifier_metadata_mapping(
             event["classifier_metadata_json"]
         )
+        evaluation_metadata_json = _evaluation_metadata_mapping(
+            event["evaluation_metadata_json"]
+        )
         step_interface_json = _step_interface_mapping(event)
         unknown_interface_nodes = set(step_interface_json).difference(node_ids)
         if unknown_interface_nodes:
@@ -3876,6 +3922,12 @@ def _validate_preparation_event(event: object) -> str:
             raise _CoordinatorProtocolError(
                 "field 'classifier_metadata_json' references unknown node "
                 f"{_bounded_ascii(min(unknown_classifier_nodes))}"
+            )
+        unknown_evaluation_nodes = set(evaluation_metadata_json).difference(node_ids)
+        if unknown_evaluation_nodes:
+            raise _CoordinatorProtocolError(
+                "field 'evaluation_metadata_json' references unknown node "
+                f"{_bounded_ascii(min(unknown_evaluation_nodes))}"
             )
         for node_id in node_ids:
             if node_id not in node_types:

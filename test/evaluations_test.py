@@ -13,7 +13,13 @@ import pytest
 import typesafe_sdk
 from pydantic import BaseModel
 
-from avalanche.evaluations import EvalContext, EvaluationError, Evaluations, Metric
+from avalanche.evaluations import (
+    EvalContext,
+    EvaluationDeclaration,
+    EvaluationError,
+    Evaluations,
+    Metric,
+)
 
 pytest_plugins = ["classifier_test"]
 
@@ -277,14 +283,65 @@ def test_discovery_requires_neither_credentials_nor_context_values(monkeypatch):
     monkeypatch.delenv("TYPESAFE_API_KEY", raising=False)
 
     def forbidden(*args, **kwargs):
-        pytest.fail("declaration must not select state or create a client")
+        pytest.fail("metadata must not select state, run composites, or construct a client")
 
     monkeypatch.setattr(typesafe_sdk, "AsyncTypeSafeClient", forbidden)
-    Evaluations(
+    evaluations = Evaluations(
         metrics={"opaque": noul(forbidden)},
         composites={"score": forbidden},
         model="discovery-model",
     )
+    declaration = evaluations.declaration_metadata({"model": "workflow-model", "timeout": 8})
+    assert declaration == EvaluationDeclaration.model_validate_json(
+        '{"metrics":{"opaque":{"type":"noul","instructions":"Is it supported?",'
+        '"criteria":null}},"composites":["score"],'
+        '"runtime":{"model":"discovery-model","timeout":8}}'
+    )
+
+
+def test_declaration_runtime_precedence_does_not_mutate_workflow_defaults():
+    defaults = {"model": "workflow-model", "timeout": 8}
+    evaluations = Evaluations(metrics={"fact": noul(lambda ctx: ctx.output)}, timeout=3)
+    inherited = evaluations.declaration_metadata(defaults)
+    assert inherited.runtime.model == "workflow-model"
+    assert inherited.runtime.timeout == 3
+    assert defaults == {"model": "workflow-model", "timeout": 8}
+    independent = evaluations.declaration_metadata()
+    assert independent.runtime.model == "jev-latest"
+    assert independent.runtime.timeout == 3
+    assert (
+        Evaluations(metrics={"fact": noul(lambda ctx: ctx.output)})
+        .declaration_metadata()
+        .runtime.timeout
+        == 10
+    )
+
+
+def test_declaration_metadata_owns_nested_questions_and_public_collections():
+    question = {
+        "type": "choice",
+        "instructions": {"ask": ["Choose the supported conclusion"]},
+        "criteria": {"supported": {"evidence": ["cited"]}, "unsupported": None},
+    }
+    metrics = {"grounded": Metric(state=lambda ctx: ctx.output, question=question)}
+    composites = {"score": lambda answers: 0.5}
+    evaluations = Evaluations(metrics=metrics, composites=composites)
+    original = evaluations.declaration_metadata().model_dump_json()
+    question["instructions"]["ask"].clear()
+    metrics.clear()
+    composites.clear()
+    exported = evaluations.declaration_metadata()
+    exported.metrics["grounded"].instructions["ask"].append("mutated metadata")
+    exported.metrics["grounded"].criteria.clear()
+    exported.metrics.clear()
+    retained = EvaluationDeclaration.model_validate_json(
+        evaluations.declaration_metadata().model_dump_json()
+    )
+    assert retained.model_dump_json() == original
+    assert retained.composites == ("score",)
+    assert retained.metrics["grounded"].instructions == {
+        "ask": ["Choose the supported conclusion"]
+    }
 
 
 @pytest.mark.asyncio
