@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 0.6.1
+
 - `ava web` now exits cleanly when Ctrl-C arrives during browser listener startup.
   If upstream gRPC initialization fails or is interrupted after the HTTP socket
   opens, the listener is closed instead of leaking its port.

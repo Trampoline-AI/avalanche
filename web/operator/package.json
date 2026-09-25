@@ -1,6 +1,6 @@
 {
   "name": "@trampoline-ai/operator-ui",
-  "version": "0.6.0",
+  "version": "0.6.1",
   "description": "Embeddable React UI for Avalanche operators",
   "license": "MIT",
   "repository": {
