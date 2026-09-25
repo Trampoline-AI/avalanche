@@ -335,20 +335,22 @@ def _run_operator(args: argparse.Namespace) -> int:
 def _run_web(args: argparse.Namespace) -> int:
     from runtime.operator.web import start_browser_server
 
-    server = start_browser_server(
-        args.connect,
-        host=args.host,
-        port=args.port,
-        trust_non_loopback=args.trusted_proxy,
-    )
-    print(f"Avalanche web UI: {server.endpoint}")
+    server = None
     try:
+        server = start_browser_server(
+            args.connect,
+            host=args.host,
+            port=args.port,
+            trust_non_loopback=args.trusted_proxy,
+        )
+        print(f"Avalanche web UI: {server.endpoint}")
         _open_browser(server.endpoint)
         server.wait()
     except KeyboardInterrupt:
         return 0
     finally:
-        server.close()
+        if server is not None:
+            server.close()
     return 0
 
 

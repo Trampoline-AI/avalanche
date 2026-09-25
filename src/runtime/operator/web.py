@@ -76,7 +76,16 @@ class _BrowserHTTPServer(ThreadingHTTPServer):
         self.operator_port = _operator_port(operator_address)
         self.stopping = threading.Event()
         super().__init__(server_address, _BrowserRequestHandler)
-        self.channel = grpc.insecure_channel(operator_address, options=_BOUNDED_MESSAGE_OPTIONS)
+        try:
+            self.channel = grpc.insecure_channel(
+                operator_address, options=_BOUNDED_MESSAGE_OPTIONS
+            )
+        except BaseException as failure:
+            try:
+                self.server_close()
+            except Exception as exc:
+                failure.add_note(f"HTTP socket cleanup also failed: {exc}")
+            raise
 
 
 class _BrowserRequestHandler(BaseHTTPRequestHandler):
