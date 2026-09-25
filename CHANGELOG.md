@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- `ava web` now exits cleanly when Ctrl-C arrives during browser listener startup.
+  If upstream gRPC initialization fails or is interrupted after the HTTP socket
+  opens, the listener is closed instead of leaking its port.
+
 ## 0.6.0
 
 - Added a built-in development REST API for flow discovery, run creation,
