@@ -433,10 +433,12 @@ uv run ava dev examples/evaluations_workflow.py
 ```
 
 Before running, the agent node shows an **Evaluations** badge with its metric
-count, including when zoomed out. Select the node in **Current** to inspect its
-named metrics, question types, expandable criteria, composite names, and effective
-Jev model and timeout. This is configuration, not completed judgments. Historical
-run graphs retain the declarations captured for that run, even after source edits.
+count, including when zoomed out. Select the node in **Current**, then **Evals**,
+to inspect its named metrics, question types, expandable criteria, composite names,
+and effective Jev model and timeout. **Agent definition** contains instructions,
+agent inputs/outputs, models, and resources; **Step definition** contains only the
+step interface card. These tabs describe configuration, not completed judgments.
+Historical run graphs retain their captured declarations after source edits.
 
 Select `evaluations_workflow` and click **Run** without supplying JSON or files.
 The source generates a synthetic checkout incident: error-rate windows, deployment

@@ -389,7 +389,7 @@ describe("retained run inspection", () => {
     expect(screen.getByRole("region", { name: "Agent trace" })).toBeInTheDocument();
   });
 
-  it("separates the tabless current definition from historical run schemas", async () => {
+  it("separates current agent and step definitions from historical run schemas", async () => {
     const api = createApi();
     const view = render(
       <Inspector
@@ -400,16 +400,30 @@ describe("retained run inspection", () => {
       />,
     );
     const definition = screen.getByRole("complementary", { name: "Node declaration" });
-    expect(within(definition).queryByRole("tab")).not.toBeInTheDocument();
+    expect(
+      within(definition)
+        .getAllByRole("tab")
+        .map((tab) => tab.textContent),
+    ).toEqual(["Agent definition", "Evals", "Step definition"]);
     expect(definition.querySelector("header")).toHaveTextContent("Agent · Current state");
     expect(definition).toHaveTextContent("Follow the current instructions.");
     const schemaGroup = screen.getByRole("region", { name: "Inputs and outputs" });
     expect(schemaGroup).toHaveTextContent("current_question");
     expect(schemaGroup).toHaveTextContent("current_answer");
+    expect(schemaGroup).not.toHaveTextContent("current_payload");
+    expect(screen.queryByRole("region", { name: "Step interface" })).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole("tab", { name: "Step definition" }));
+    expect(
+      screen.queryByRole("region", { name: "Inputs and outputs" }),
+    ).not.toBeInTheDocument();
     const currentInterface = screen.getByRole("region", { name: "Step interface" });
     expect(currentInterface).toHaveTextContent("current_payload");
     expect(currentInterface).not.toHaveTextContent("current_question");
-    expect(schemaGroup).not.toHaveTextContent("current_payload");
+    expect(screen.queryByText("Follow the current instructions.")).not.toBeInTheDocument();
+    fireEvent.keyDown(screen.getByRole("tab", { name: "Step definition" }), { key: "Home" });
+    expect(screen.getByRole("tab", { name: "Agent definition" })).toHaveFocus();
+    expect(screen.getByRole("region", { name: "Inputs and outputs" })).toBeVisible();
+    expect(screen.queryByRole("region", { name: "Step interface" })).not.toBeInTheDocument();
     expect(screen.queryByText("running")).not.toBeInTheDocument();
 
     view.rerender(
@@ -469,7 +483,10 @@ describe("retained run inspection", () => {
       />,
     );
     const definition = screen.getByRole("complementary", { name: "Node declaration" });
-    expect(within(definition).queryByRole("tab")).not.toBeInTheDocument();
+    expect(within(definition).getByRole("tab", { name: "Agent definition" })).toHaveAttribute(
+      "aria-selected",
+      "true",
+    );
     expect(definition).toHaveTextContent("Follow the current instructions.");
     expect(definition).toHaveTextContent("current_question");
     expect(pages).not.toHaveBeenCalled();
@@ -506,7 +523,10 @@ describe("retained run inspection", () => {
         onClose={() => undefined}
       />,
     );
-    expect(screen.queryByRole("tab")).not.toBeInTheDocument();
+    expect(screen.getByRole("tab", { name: "Agent definition" })).toHaveAttribute(
+      "aria-selected",
+      "true",
+    );
     expect(screen.getByText("Follow the current instructions.")).toBeInTheDocument();
     expect(screen.getByText("current_question")).toBeInTheDocument();
 
@@ -605,7 +625,10 @@ describe("retained run inspection", () => {
         onClose={() => undefined}
       />,
     );
-    expect(screen.queryByRole("tab")).not.toBeInTheDocument();
+    expect(screen.getByRole("tab", { name: "Agent definition" })).toHaveAttribute(
+      "aria-selected",
+      "true",
+    );
     expect(screen.getByRole("complementary", { name: "Node declaration" })).toHaveTextContent(
       "review_question",
     );
@@ -2430,6 +2453,18 @@ describe("evaluation declarations before execution", () => {
         onClose={() => undefined}
       />,
     );
+    expect(
+      screen.queryByRole("region", { name: "Evaluation declaration" }),
+    ).not.toBeInTheDocument();
+    fireEvent.keyDown(screen.getByRole("tab", { name: "Agent definition" }), {
+      key: "ArrowRight",
+    });
+    expect(screen.getByRole("tab", { name: "Evals" })).toHaveFocus();
+    expect(screen.getByRole("tabpanel", { name: "Evals" })).toBeVisible();
+    expect(
+      screen.queryByRole("region", { name: "Inputs and outputs" }),
+    ).not.toBeInTheDocument();
+    expect(screen.queryByRole("region", { name: "Step interface" })).not.toBeInTheDocument();
     const section = within(screen.getByRole("region", { name: "Evaluation declaration" }));
     expect(section.getByRole("heading", { name: "Evaluations" })).toBeVisible();
     expect(section.getByText(evaluationDeclaration.runtime.model)).toBeVisible();
@@ -2465,9 +2500,12 @@ describe("evaluation declarations before execution", () => {
         onClose={() => undefined}
       />,
     );
+    fireEvent.click(screen.getByRole("tab", { name: "Evals" }));
+    expect(screen.getByRole("status")).toBeVisible();
     expect(
       screen.queryByRole("region", { name: "Evaluation declaration" }),
     ).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole("tab", { name: "Agent definition" }));
     expect(screen.getByText("Follow the current instructions.")).toBeVisible();
   });
 
@@ -2492,8 +2530,11 @@ describe("evaluation declarations before execution", () => {
         onClose={() => undefined}
       />,
     );
-    expect(screen.getByRole("alert")).toBeVisible();
     expect(screen.getByText("Follow the current instructions.")).toBeVisible();
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole("tab", { name: "Evals" }));
+    expect(screen.getByRole("alert")).toBeVisible();
+    expect(screen.queryByText("Follow the current instructions.")).not.toBeInTheDocument();
     expect(screen.queryByText("overall_quality")).not.toBeInTheDocument();
   });
 

@@ -415,8 +415,10 @@ do not schedule evaluations. Embedded Python `.run()` reports **not evaluated**
 and starts no automatic evaluation worker.
 
 Before execution, graph nodes show an **Evaluations** badge with the metric count,
-including compact zoom. The current-definition inspector shows named metrics,
-types, expandable criteria, composite names, and the effective Jev model/timeout.
+including compact zoom. The current-definition inspector's **Evals** tab shows
+named metrics, types, expandable criteria, composite names, and the effective Jev
+model/timeout. **Agent definition** retains instructions, agent inputs/outputs,
+models, and resources; **Step definition** contains only the step interface card.
 Historical run graphs use their captured declarations, not later source edits.
 Metadata discovery never executes evidence selectors or composite functions.
 

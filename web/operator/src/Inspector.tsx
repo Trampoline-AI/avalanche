@@ -59,6 +59,8 @@ type AgentTab = "trace" | "io" | "evaluations";
 const AGENT_TABS: readonly AgentTab[] = ["trace", "io", "evaluations"];
 type StepTab = "definition" | "code";
 const STEP_TABS: readonly StepTab[] = ["definition", "code"];
+type AgentDefinitionTab = "agent" | "evals" | "step";
+const AGENT_DEFINITION_TABS: readonly AgentDefinitionTab[] = ["agent", "evals", "step"];
 type DetailFormat = "json";
 
 interface ScopedResult<T> {
@@ -167,6 +169,10 @@ function AgentAndStepInspector({
 }: InspectorProps) {
   const [selectedTab, setSelectedTab] = useState<AgentTab>("trace");
   const [selectedStepTab, setSelectedStepTab] = useState<{ scope: string; tab: StepTab }>();
+  const [selectedDefinitionTab, setSelectedDefinitionTab] = useState<{
+    scope: string;
+    tab: AgentDefinitionTab;
+  }>();
   const [eventPage, setEventPage] =
     useState<DescriptorPageState<AgentEventDescriptorMsg>>(EMPTY_EVENT_PAGE);
   const [eventPageScope, setEventPageScope] = useState<string>();
@@ -203,6 +209,8 @@ function AgentAndStepInspector({
   const stepTabScope = `${workflow?.workflowId ?? workflow?.name ?? ""}\0${selectionScope}`;
   const stepTab =
     !run && selectedStepTab?.scope === stepTabScope ? selectedStepTab.tab : "definition";
+  const definitionTab =
+    !run && selectedDefinitionTab?.scope === stepTabScope ? selectedDefinitionTab.tab : "agent";
   const descriptorScope = `${selectionScope}\0${asOfEventUlid}\0${eventPageToken}`;
   const rawStepInterface =
     nodeId === undefined
@@ -878,80 +886,137 @@ function AgentAndStepInspector({
             </div>
           </>
         ) : (
-          <div className="inspector-definition inspector-body inspector-body-full min-h-0 min-w-0 flex-1 overflow-auto px-5 pt-[18px] pb-[30px] [scrollbar-gutter:stable]">
-            <div className="grid min-w-0 gap-6">
-              {definitionUnavailable ? (
-                <p className="text-[11px] text-muted">{definitionUnavailable}</p>
-              ) : workflowDeclaration ? (
-                <>
-                  <section>
-                    <h3 className="inspector-section-title">Instructions</h3>
-                    <Markdown className="instructions text-xs leading-[1.65] whitespace-normal text-secondary [&>:first-child]:mt-0 [&>:last-child]:mb-0">
-                      {instructions}
-                    </Markdown>
-                  </section>
-                  <section aria-label="Inputs and outputs" className="min-w-0">
-                    <h3 className="inspector-section-title">Inputs & outputs</h3>
-                    <div className="grid min-w-0 gap-5">
-                      {(["inputs", "outputs"] as const).map((kind) => (
-                        <section
-                          key={kind}
-                          aria-label={kind === "inputs" ? "Inputs" : "Outputs"}
-                          className="min-w-0"
-                        >
-                          <h4 className="m-0 mb-2 font-mono text-[9px] tracking-[.08em] text-muted uppercase">
-                            {kind === "inputs" ? "Inputs" : "Outputs"}
-                          </h4>
-                          <InspectorFields fields={workflowDeclaration[kind]} />
-                        </section>
-                      ))}
-                    </div>
-                  </section>
-                  {(declaredMainModel || declaredSubModel) && (
-                    <section aria-label="Models">
-                      <h3 className="inspector-section-title">Models</h3>
-                      <div className="grid min-w-0 gap-3">
-                        {(
-                          [
-                            ["Main", declaredMainModel],
-                            ["Sub", declaredSubModel],
-                          ] as const
-                        ).flatMap(([label, model]) =>
-                          model
-                            ? [
-                                <div className="min-w-0" key={label}>
-                                  <span className="block font-mono text-[8px] text-muted uppercase">
-                                    {label}
-                                  </span>
-                                  <strong className="mt-0.5 block text-[10px] text-ink [overflow-wrap:anywhere]">
-                                    {model}
-                                  </strong>
-                                </div>,
-                              ]
-                            : [],
-                        )}
+          <>
+            <div
+              className="inspector-tabs flex shrink-0 overflow-x-auto border-b border-line px-2.5"
+              role="tablist"
+              aria-label="Agent definition views"
+            >
+              {AGENT_DEFINITION_TABS.map((item) => (
+                <button
+                  key={item}
+                  type="button"
+                  role="tab"
+                  id={`${tabsId}-definition-${item}`}
+                  aria-controls={`${tabsId}-definition-panel`}
+                  aria-selected={definitionTab === item}
+                  tabIndex={definitionTab === item ? 0 : -1}
+                  className={`flex-[1_0_auto] cursor-pointer border-0 border-b-2 bg-transparent px-[9px] pt-[11px] pb-[9px] font-mono text-[9px] uppercase focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-acid ${definitionTab === item ? "active border-acid text-acid" : "border-transparent text-muted"}`}
+                  onClick={() => setSelectedDefinitionTab({ scope: stepTabScope, tab: item })}
+                  onKeyDown={(event) => {
+                    if (!["ArrowLeft", "ArrowRight", "Home", "End"].includes(event.key)) return;
+                    event.preventDefault();
+                    const index = AGENT_DEFINITION_TABS.indexOf(item);
+                    const next =
+                      AGENT_DEFINITION_TABS[
+                        event.key === "Home"
+                          ? 0
+                          : event.key === "End"
+                            ? AGENT_DEFINITION_TABS.length - 1
+                            : (index +
+                                (event.key === "ArrowRight" ? 1 : -1) +
+                                AGENT_DEFINITION_TABS.length) %
+                              AGENT_DEFINITION_TABS.length
+                      ];
+                    setSelectedDefinitionTab({ scope: stepTabScope, tab: next });
+                    document.getElementById(`${tabsId}-definition-${next}`)?.focus();
+                  }}
+                >
+                  {item === "agent"
+                    ? "Agent definition"
+                    : item === "evals"
+                      ? "Evals"
+                      : "Step definition"}
+                </button>
+              ))}
+            </div>
+            <div
+              key={`${stepTabScope}\0${definitionTab}`}
+              className="inspector-definition inspector-body inspector-body-full min-h-0 min-w-0 flex-1 overflow-auto px-5 pt-[18px] pb-[30px] [scrollbar-gutter:stable]"
+              role="tabpanel"
+              id={`${tabsId}-definition-panel`}
+              aria-labelledby={`${tabsId}-definition-${definitionTab}`}
+            >
+              <div className="grid min-w-0 gap-6">
+                {definitionTab === "step" ? (
+                  stepInterfacePanel
+                ) : definitionUnavailable ? (
+                  <p className="text-[11px] text-muted">{definitionUnavailable}</p>
+                ) : definitionTab === "evals" ? (
+                  workflow?.evaluationMetadataJson[nodeId] === undefined ? (
+                    <p role="status" className="text-[11px] text-muted">
+                      No evaluations are configured for this agent.
+                    </p>
+                  ) : (
+                    <EvaluationDefinition
+                      key={selectionScope}
+                      raw={workflow.evaluationMetadataJson[nodeId]}
+                    />
+                  )
+                ) : workflowDeclaration ? (
+                  <>
+                    <section>
+                      <h3 className="inspector-section-title">Instructions</h3>
+                      <Markdown className="instructions text-xs leading-[1.65] whitespace-normal text-secondary [&>:first-child]:mt-0 [&>:last-child]:mb-0">
+                        {instructions}
+                      </Markdown>
+                    </section>
+                    <section aria-label="Inputs and outputs" className="min-w-0">
+                      <h3 className="inspector-section-title">Inputs & outputs</h3>
+                      <div className="grid min-w-0 gap-5">
+                        {(["inputs", "outputs"] as const).map((kind) => (
+                          <section
+                            key={kind}
+                            aria-label={kind === "inputs" ? "Inputs" : "Outputs"}
+                            className="min-w-0"
+                          >
+                            <h4 className="m-0 mb-2 font-mono text-[9px] tracking-[.08em] text-muted uppercase">
+                              {kind === "inputs" ? "Inputs" : "Outputs"}
+                            </h4>
+                            <InspectorFields fields={workflowDeclaration[kind]} />
+                          </section>
+                        ))}
                       </div>
                     </section>
-                  )}
-                  <InspectorResources
-                    key={`${selectionScope}\0${workflow?.workflowId}`}
-                    declaration={workflowDeclaration}
-                  />
-                </>
-              ) : (
-                <p className="text-[11px] text-muted">
-                  This node has no agent declaration metadata.
-                </p>
-              )}
-              {!definitionUnavailable && (
-                <EvaluationDefinition
-                  key={selectionScope}
-                  raw={workflow?.evaluationMetadataJson[nodeId]}
-                />
-              )}
-              {stepInterfacePanel}
+                    {(declaredMainModel || declaredSubModel) && (
+                      <section aria-label="Models">
+                        <h3 className="inspector-section-title">Models</h3>
+                        <div className="grid min-w-0 gap-3">
+                          {(
+                            [
+                              ["Main", declaredMainModel],
+                              ["Sub", declaredSubModel],
+                            ] as const
+                          ).flatMap(([label, model]) =>
+                            model
+                              ? [
+                                  <div className="min-w-0" key={label}>
+                                    <span className="block font-mono text-[8px] text-muted uppercase">
+                                      {label}
+                                    </span>
+                                    <strong className="mt-0.5 block text-[10px] text-ink [overflow-wrap:anywhere]">
+                                      {model}
+                                    </strong>
+                                  </div>,
+                                ]
+                              : [],
+                          )}
+                        </div>
+                      </section>
+                    )}
+                    <InspectorResources
+                      key={`${selectionScope}\0${workflow?.workflowId}`}
+                      declaration={workflowDeclaration}
+                    />
+                  </>
+                ) : (
+                  <p className="text-[11px] text-muted">
+                    This node has no agent declaration metadata.
+                  </p>
+                )}
+              </div>
             </div>
-          </div>
+          </>
         )
       ) : (
         <>

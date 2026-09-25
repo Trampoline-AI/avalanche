@@ -67,6 +67,9 @@
   metric-count badge, and the current-definition inspector shows questions,
   criteria, composite names, and effective Jev settings. Historical run graphs
   retain their original declarations after workflow edits.
+- Split the current agent inspector into Agent definition, Evals, and Step
+  definition tabs, separating evaluation declarations and the step interface
+  from the rest of the agent configuration.
 
 ## 0.6.1
 
