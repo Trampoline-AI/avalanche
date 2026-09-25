@@ -71,6 +71,10 @@ _LAZY_EXPORTS: dict[str, str] = {
     "ClassifierStepError": "classifier",
     "ClassifierStepExecutionError": "classifier",
     "classifier_step": "classifier",
+    # Evaluations
+    "EvalContext": "evaluations",
+    "Metric": "evaluations",
+    "Evaluations": "evaluations",
     # Iceberg backend
     "IcebergAppendScan": "iceberg",
     "IcebergNamespace": "iceberg",
@@ -148,6 +152,9 @@ __all__ = [
     "ClassificationResult",
     "ClassifierStepError",
     "ClassifierStepExecutionError",
+    "EvalContext",
+    "Metric",
+    "Evaluations",
     "SnapshotState",
     "SnapshotMetadata",
     "Json",

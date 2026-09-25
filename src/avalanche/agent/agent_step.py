@@ -17,9 +17,11 @@ from typing import (
     TYPE_CHECKING,
     Any,
     Callable,
+    Generic,
     Mapping,
     Sequence,
     TypeAlias,
+    TypeVar,
     Union,
     get_args,
     get_origin,
@@ -33,6 +35,7 @@ from .._agent_evidence import (
     emit_agent_evidence,
 )
 from ..dag import Node, NodeType
+from ..evaluations import Evaluations
 from ..step_interface import (
     decoration_namespace,
     resolve_step_signature,
@@ -45,6 +48,9 @@ if TYPE_CHECKING:
     from predict_rlm import IterationStep, RunEvent, RunEvidence, RunTrace
 
     from .._agent_trace import AgentEvidenceMetadata
+
+InputT = TypeVar("InputT")
+OutputT = TypeVar("OutputT")
 
 
 class AgentStepError(RuntimeError):
@@ -581,7 +587,7 @@ class Agent:
             )
 
 
-class _AgentStepSpec:
+class _AgentStepSpec(Generic[InputT, OutputT]):
     """Immutable declaration data plus per-invocation runtime binding."""
 
     def __init__(
@@ -593,6 +599,7 @@ class _AgentStepSpec:
         skills: Sequence[Any] | object,
         tools: Sequence[Callable[..., Any]] | object,
         public_signature: inspect.Signature,
+        evaluations: Evaluations[InputT, OutputT] | None,
     ) -> None:
         self.user_fn = user_fn
         self.step_name = user_fn.__name__
@@ -601,6 +608,7 @@ class _AgentStepSpec:
         self.skills = skills
         self.tools = tools
         self.public_signature = public_signature
+        self.evaluations = evaluations
 
     def make_agent(self) -> Agent:
         defaults = _WORKFLOW_AGENT_DEFAULTS.get()
@@ -673,16 +681,29 @@ class _AgentStepSpec:
         }
 
     def with_workflow_defaults(
-        self, fn: Callable[..., Any], defaults: Mapping[str, Any]
+        self,
+        fn: Callable[..., Any],
+        defaults: Mapping[str, Any],
+        *,
+        classifier_defaults: Mapping[str, JsonValue] | None = None,
+        injected_params: frozenset[str] = frozenset(),
     ) -> Callable[..., Any]:
+        owned_classifier_defaults = dict(classifier_defaults or {})
+
         async def bound(*args: Any, **kwargs: Any) -> Any:
             # Resolve process-local state on execution; Ray serializes this closure by value.
             from avalanche.agent.agent_step import _WORKFLOW_AGENT_DEFAULTS
+            from avalanche.classifier.classifier_step import _WORKFLOW_CLASSIFIER_DEFAULTS
+            from avalanche.evaluation_capture import _EVALUATION_INJECTED_PARAMS
 
             token = _WORKFLOW_AGENT_DEFAULTS.set(defaults)
+            classifier_token = _WORKFLOW_CLASSIFIER_DEFAULTS.set(owned_classifier_defaults)
+            inputs_token = _EVALUATION_INJECTED_PARAMS.set(injected_params)
             try:
                 return await fn(*args, **kwargs)
             finally:
+                _EVALUATION_INJECTED_PARAMS.reset(inputs_token)
+                _WORKFLOW_CLASSIFIER_DEFAULTS.reset(classifier_token)
                 _WORKFLOW_AGENT_DEFAULTS.reset(token)
 
         update_wrapper(bound, fn)
@@ -934,6 +955,7 @@ def agent_step(
     max_iterations: Any = UNSET,
     skills: Sequence[Any] | object = UNSET,
     tools: Sequence[Callable[..., Any]] | object = UNSET,
+    evaluations: Evaluations[InputT, OutputT] | None = None,
     **predictor_kwargs: Any,
 ) -> Callable[[Callable[..., Any]], Node]:
     """Register a bodyful workflow step with an injected callable Agent.
@@ -944,6 +966,8 @@ def agent_step(
     """
     if signature is None:
         raise TypeError("ava.agent_step requires a Signature as its first argument")
+    if evaluations is not None and not isinstance(evaluations, Evaluations):
+        raise TypeError("ava.agent_step evaluations must be an ava.Evaluations declaration")
     if skills is not UNSET and not isinstance(skills, Sequence):
         raise TypeError("ava.agent_step skills must be a sequence")
     if tools is not UNSET:
@@ -967,6 +991,8 @@ def agent_step(
 
     def decorator(user_fn: Callable[..., Any]) -> Node:
         public_signature = _public_step_signature(user_fn, decoration_namespace())
+        step_interface = step_interface_from_signature(public_signature)
+        evaluation_input_names = frozenset(item.name for item in step_interface.step_inputs)
         spec = _AgentStepSpec(
             user_fn,
             signature=signature,
@@ -974,13 +1000,30 @@ def agent_step(
             skills=skills,
             tools=tools,
             public_signature=public_signature,
+            evaluations=evaluations,
         )
 
         async def wrapper(*args: Any, **kwargs: Any) -> Any:
-            result = user_fn(*args, **kwargs, agent=spec.make_agent())
-            if inspect.isawaitable(result):
-                return await result
-            return result
+            if spec.evaluations is None:
+                result = user_fn(*args, **kwargs, agent=spec.make_agent())
+                return await result if inspect.isawaitable(result) else result
+
+            # Resolve process-local capture state only after reaching the worker.
+            from avalanche.evaluation_capture import capture_step_evaluations
+
+            with capture_step_evaluations(
+                spec.evaluations,
+                step_name=spec.step_name,
+                signature=spec.public_signature,
+                input_names=evaluation_input_names,
+                args=args,
+                kwargs=kwargs,
+            ) as capture:
+                result = user_fn(*args, **kwargs, agent=spec.make_agent())
+                if inspect.isawaitable(result):
+                    result = await result
+                capture.submit(result)
+                return result
 
         update_wrapper(wrapper, user_fn)
         wrapper.__signature__ = spec.public_signature  # type: ignore[attr-defined]
@@ -989,7 +1032,7 @@ def agent_step(
             wrapper,
             NodeType.STEP,
             num_returns=1,
-            step_interface=step_interface_from_signature(public_signature),
+            step_interface=step_interface,
         )
 
     return decorator
