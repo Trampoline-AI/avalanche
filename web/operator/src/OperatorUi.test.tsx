@@ -1,7 +1,8 @@
 import type * as ReactFlowModule from "@xyflow/react";
+import { useViewport } from "@xyflow/react";
 import { StrictMode, type ComponentType, type ReactNode, useState } from "react";
 import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 // jsdom has no graph viewport. Keep the real cards, controls, inspector, and projection;
 // replace only React Flow's layout host, not application components or live state.
@@ -11,7 +12,7 @@ vi.mock("@xyflow/react", async (importOriginal) => ({
   Controls: () => null,
   Handle: () => null,
   Panel: ({ children }: { children: ReactNode }) => <div>{children}</div>,
-  useViewport: () => ({ x: 0, y: 0, zoom: 1 }),
+  useViewport: vi.fn(() => ({ x: 0, y: 0, zoom: 1 })),
   useReactFlow: () => ({
     screenToFlowPosition: () => ({ x: 0, y: 0 }),
     setCenter: () => undefined,
@@ -41,6 +42,7 @@ import { OperatorUi, WorkflowWorkspace } from "./index";
 import type { OperatorUiSelection } from "./index";
 import type { OperatorApi } from "./api";
 import { Explorer } from "./Explorer";
+import { GraphCanvas } from "./GraphCanvas";
 import {
   CatalogSnapshotMsg,
   FlowInfoMsg,
@@ -55,6 +57,7 @@ import {
   createApi,
   envelope,
   eventUlid,
+  evaluationDeclaration,
   idleUpdates,
   snapshotFor,
   secondSummary,
@@ -1222,5 +1225,85 @@ describe.each(["hosted", "local"] as const)("%s shared workspace", (host) => {
     fireEvent.click(within(allRuns).getByRole("button", { name: "Collapse timeline" }));
     expect(screen.getByRole("region", { name: "Timeline" })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Expand timeline" })).toHaveFocus();
+  });
+});
+
+describe("graph evaluation declarations", () => {
+  const evaluatedWorkflow = FlowInfoMsg.create({
+    ...workflow,
+    nodeIds: ["fetch", "review"],
+    graph: { fetch: { children: ["review"] }, review: { children: [] } },
+    displayNames: { fetch: "Fetch", review: "Review" },
+    agentNodeIds: ["fetch", "review"],
+    evaluationMetadataJson: { fetch: JSON.stringify(evaluationDeclaration) },
+  });
+  afterEach(() => {
+    vi.mocked(useViewport).mockReturnValue({ x: 0, y: 0, zoom: 1 });
+  });
+
+  it.each([1.2, 0.6])(
+    "shows the configured metric count but no badge for unconfigured agents at zoom %s",
+    (zoom) => {
+      vi.mocked(useViewport).mockReturnValue({ x: 0, y: 0, zoom });
+      render(<GraphCanvas workflow={evaluatedWorkflow} onOpenNode={() => undefined} />);
+      const configured = screen.getByRole("button", { name: "Inspect Fetch" });
+      expect(configured).toHaveAccessibleDescription(/\b3\b/);
+      expect(within(configured.closest("article")!).getByText(/\b3\b/)).toBeVisible();
+      const unconfigured = screen.getByRole("button", { name: "Inspect Review" });
+      expect(
+        within(unconfigured.closest("article")!).queryByText(/Evaluations/),
+      ).not.toBeInTheDocument();
+    },
+  );
+
+  it("uses historical metric counts and never inherits current evaluations when topology omits them", () => {
+    const historical = WorkflowTopologyMsg.create({
+      ...snapshotFor().topology,
+      agentFieldSchemasJson: { fetch: JSON.stringify({ inputs: [], outputs: [] }) },
+      evaluationMetadataJson: {
+        fetch: JSON.stringify({
+          ...evaluationDeclaration,
+          metrics: { retained_quality: evaluationDeclaration.metrics.quality },
+        }),
+      },
+    });
+    const onOpenNode = () => undefined;
+    const view = render(
+      <GraphCanvas
+        workflow={evaluatedWorkflow}
+        runTopology={historical}
+        onOpenNode={onOpenNode}
+      />,
+    );
+    expect(screen.getByText(/\b1\b/)).toBeVisible();
+    expect(screen.queryByText(/\b3\b/)).not.toBeInTheDocument();
+    view.rerender(
+      <GraphCanvas
+        workflow={evaluatedWorkflow}
+        runTopology={WorkflowTopologyMsg.create({ ...historical, evaluationMetadataJson: {} })}
+        onOpenNode={onOpenNode}
+      />,
+    );
+    expect(screen.queryByText(/Evaluations ·/)).not.toBeInTheDocument();
+  });
+
+  it("marks malformed declarations unavailable without inventing a metric count or hiding the node", () => {
+    render(
+      <GraphCanvas
+        workflow={FlowInfoMsg.create({
+          ...evaluatedWorkflow,
+          evaluationMetadataJson: {
+            fetch: JSON.stringify({
+              ...evaluationDeclaration,
+              metrics: { broken: { type: "unknown" } },
+            }),
+          },
+        })}
+        onOpenNode={() => undefined}
+      />,
+    );
+    expect(screen.getByText(/unavailable/)).toBeVisible();
+    expect(screen.getByRole("button", { name: "Inspect Fetch" })).toBeEnabled();
+    expect(screen.queryByText(/\b3\b/)).not.toBeInTheDocument();
   });
 });

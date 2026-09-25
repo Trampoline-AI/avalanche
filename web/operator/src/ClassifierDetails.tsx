@@ -311,7 +311,7 @@ export function ClassifierQuestions({
   declaration,
   context = "definition",
 }: {
-  declaration: ClassifierDeclaration;
+  declaration: Pick<ClassifierDeclaration, "questions">;
   context?: "definition" | "invocation";
 }) {
   if (declaration.questions === null) {

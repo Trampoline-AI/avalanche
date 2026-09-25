@@ -63,6 +63,10 @@
 - Expanded the evaluations example into a no-input incident-handoff workflow:
   generate synthetic operational evidence, prepare a cited brief with a real
   agent, and inspect five quality metrics plus a normalized composite.
+- Evaluation declarations are now visible before execution: graph nodes show a
+  metric-count badge, and the current-definition inspector shows questions,
+  criteria, composite names, and effective Jev settings. Historical run graphs
+  retain their original declarations after workflow edits.
 
 ## 0.6.1
 

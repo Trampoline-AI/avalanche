@@ -420,6 +420,11 @@ deadline. `model=None` and `timeout=None` inherit defaults. Agent `lm`/`sub_lm`
 and `agent_defaults` do not configure Jev. Declarations and discovery make no
 model calls and need no credentials; malformed questions fail at declaration.
 
+A TypeSafe HTTP 401 means authentication was rejected, not that the output failed
+a quality check. Verify `TYPESAFE_API_KEY`; an exported value takes precedence
+over `.env`. After changing credentials, restart the operator and run again.
+Do not paste keys into logs or issue reports.
+
 Run the repository's real-agent example from the repository root:
 
 ```bash
@@ -427,13 +432,19 @@ Run the repository's real-agent example from the repository root:
 uv run ava dev examples/evaluations_workflow.py
 ```
 
+Before running, the agent node shows an **Evaluations** badge with its metric
+count, including when zoomed out. Select the node in **Current** to inspect its
+named metrics, question types, expandable criteria, composite names, and effective
+Jev model and timeout. This is configuration, not completed judgments. Historical
+run graphs retain the declarations captured for that run, even after source edits.
+
 Select `evaluations_workflow` and click **Run** without supplying JSON or files.
 The source generates a synthetic checkout incident: error-rate windows, deployment
 events, support tickets, and on-call notes. A real agent prepares an evidence-linked
 handoff, and a deterministic final step renders it as Markdown. No customer message
 is sent and no external system is changed.
 
-Inspect `prepare_incident_handoff` → **Evaluations** for grounding, actionability,
+After running, inspect `prepare_incident_handoff` → **Evaluations** for grounding, actionability,
 publication readiness, clarity, and trace-inspection judgments. The `handoff_quality`
 composite combines Noul probability, explicitly normalized Scores, and a Choice
 probability. Three questions share the same source-and-handoff state and can batch

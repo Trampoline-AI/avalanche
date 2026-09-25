@@ -17,7 +17,7 @@ import {
   FlowInfoMsg,
   RunSnapshotMsg,
 } from "./model";
-import { createApi, node, snapshotFor, workflow } from "./test/fixtures";
+import { createApi, evaluationDeclaration, node, snapshotFor, workflow } from "./test/fixtures";
 
 const schemas = {
   inputs: [{ name: "question", type: "str", description: "Historical question" }],
@@ -2412,5 +2412,105 @@ describe("classifier inspection", () => {
     );
     expect(screen.getByLabelText("Input state")).not.toHaveTextContent("input-1");
     expect(readJsonDetail).toHaveBeenCalledTimes(3);
+  });
+});
+
+describe("evaluation declarations before execution", () => {
+  const evaluatedWorkflow = FlowInfoMsg.create({
+    ...agentWorkflow,
+    evaluationMetadataJson: { [node.nodeId]: JSON.stringify(evaluationDeclaration) },
+  });
+
+  it("shows named typed metrics, expandable rubrics, composites, and effective runtime without a run", () => {
+    render(
+      <Inspector
+        api={createApi()}
+        workflow={evaluatedWorkflow}
+        nodeId={node.nodeId}
+        onClose={() => undefined}
+      />,
+    );
+    const section = within(screen.getByRole("region", { name: "Evaluation declaration" }));
+    expect(section.getByRole("heading", { name: "Evaluations" })).toBeVisible();
+    expect(section.getByText(evaluationDeclaration.runtime.model)).toBeVisible();
+    expect(section.getByText("12s")).toBeVisible();
+    expect(section.getByText("overall_quality")).toBeVisible();
+    expect(section.getByRole("region", { name: "Question grounded" })).toHaveTextContent(
+      "Is the answer grounded in the supplied evidence?",
+    );
+    expect(section.getByRole("region", { name: "Question grounded" })).toHaveTextContent(
+      "Noul",
+    );
+    expect(section.getByRole("region", { name: "Question quality" })).toHaveTextContent(
+      "Score",
+    );
+    expect(section.getByRole("region", { name: "Question category" })).toHaveTextContent(
+      "Choice",
+    );
+    fireEvent.click(section.getByRole("button", { name: "Expand grounded criteria" }));
+    fireEvent.click(section.getByRole("button", { name: "Expand quality criteria" }));
+    fireEvent.click(section.getByRole("button", { name: "Expand category criteria" }));
+    expect(section.getByText("Every claim is supported.")).toBeVisible();
+    expect(section.getByText("A complete, clear answer.")).toBeVisible();
+    expect(section.getByText("Addresses the request.")).toBeVisible();
+    expect(screen.queryByRole("tab", { name: "Evaluations" })).not.toBeInTheDocument();
+  });
+
+  it("does not show configured evaluations for agents without a declaration", () => {
+    render(
+      <Inspector
+        api={createApi()}
+        workflow={agentWorkflow}
+        nodeId={node.nodeId}
+        onClose={() => undefined}
+      />,
+    );
+    expect(
+      screen.queryByRole("region", { name: "Evaluation declaration" }),
+    ).not.toBeInTheDocument();
+    expect(screen.getByText("Follow the current instructions.")).toBeVisible();
+  });
+
+  it.each([
+    "{",
+    JSON.stringify({
+      ...evaluationDeclaration,
+      metrics: {
+        quality: { type: "score", instructions: "Rate it", criteria: ["Only one level"] },
+      },
+    }),
+    JSON.stringify({ ...evaluationDeclaration, runtime: { model: "jev", timeout: 0 } }),
+  ])("isolates malformed evaluation metadata from the agent definition (%s)", (raw) => {
+    render(
+      <Inspector
+        api={createApi()}
+        workflow={FlowInfoMsg.create({
+          ...evaluatedWorkflow,
+          evaluationMetadataJson: { [node.nodeId]: raw },
+        })}
+        nodeId={node.nodeId}
+        onClose={() => undefined}
+      />,
+    );
+    expect(screen.getByRole("alert")).toBeVisible();
+    expect(screen.getByText("Follow the current instructions.")).toBeVisible();
+    expect(screen.queryByText("overall_quality")).not.toBeInTheDocument();
+  });
+
+  it("keeps current evaluation configuration out of retained run inspection", () => {
+    render(
+      <Inspector
+        api={createApi()}
+        workflow={evaluatedWorkflow}
+        run={run}
+        nodeId={node.nodeId}
+        onClose={() => undefined}
+      />,
+    );
+    expect(
+      screen.queryByRole("region", { name: "Evaluation declaration" }),
+    ).not.toBeInTheDocument();
+    expect(screen.queryByText(evaluationDeclaration.runtime.model)).not.toBeInTheDocument();
+    expect(screen.getByRole("tab", { name: "Evaluations" })).toBeVisible();
   });
 });

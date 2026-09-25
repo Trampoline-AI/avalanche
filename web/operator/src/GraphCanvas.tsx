@@ -8,7 +8,7 @@ import {
   useRef,
   useState,
 } from "react";
-import { Bot, Check, ListFilter, X } from "lucide-react";
+import { Bot, Check, FlaskConical, ListFilter, X } from "lucide-react";
 
 import {
   Background,
@@ -32,7 +32,7 @@ import {
 
 import type { FlowInfoMsg, NodeSnapshotMsg, WorkflowTopologyMsg } from "./model";
 import { isUnknownRecord } from "./guards";
-import { decodeClassifierDeclaration } from "./classifier";
+import { decodeClassifierDeclaration, decodeEvaluationDeclaration } from "./classifier";
 import { decodeStepInterface } from "./stepInterface";
 
 interface FieldMetadata {
@@ -71,6 +71,8 @@ interface CardData extends Record<string, unknown> {
   isAgent: boolean;
   isClassifier: boolean;
   classifierSummary?: string;
+  evaluationCount?: number;
+  evaluationDeclarationError?: boolean;
   identity?: string;
   status?: string;
   error?: string;
@@ -305,6 +307,13 @@ const WorkflowNodeCard = memo(({ data, selected }: NodeProps<Node<CardData>>) =>
         onClick={openAndFocusNode}
         disabled={data.inspectionDisabled}
         aria-label={`Inspect ${data.label}${data.identity ? ` ${data.identity}` : ""}`}
+        aria-description={
+          data.evaluationDeclarationError
+            ? "Evaluation declaration unavailable"
+            : data.evaluationCount !== undefined
+              ? `${data.evaluationCount} evaluation ${data.evaluationCount === 1 ? "metric" : "metrics"} configured`
+              : undefined
+        }
       />
       <header
         className={`node-header relative ${
@@ -364,6 +373,21 @@ const WorkflowNodeCard = memo(({ data, selected }: NodeProps<Node<CardData>>) =>
           </span>
         )}
       </header>
+      {(data.evaluationCount !== undefined || data.evaluationDeclarationError) && (
+        <span
+          className={`node-evaluation-badge inline-flex items-center gap-1 rounded border border-classifier/20 bg-classifier-light px-1.5 py-0.5 font-mono text-[9px] text-classifier ${isCompact ? "mt-1.5 self-center" : "self-start"}`}
+          title={
+            data.evaluationDeclarationError
+              ? "Evaluation declaration unavailable"
+              : "Configured operator-only evaluations; not a run result"
+          }
+        >
+          <FlaskConical aria-hidden="true" className="size-3" />
+          {data.evaluationDeclarationError
+            ? "Evaluations · unavailable"
+            : `Evaluations · ${data.evaluationCount}`}
+        </span>
+      )}
       {data.startedAt && (
         <NodeDuration
           startedAt={data.startedAt}
@@ -485,6 +509,7 @@ type TopologyView = Pick<
   | "agentInstructionLines"
   | "standardStepDocstringLines"
   | "classifierMetadataJson"
+  | "evaluationMetadataJson"
   | "stepInterfaceJson"
 >;
 
@@ -572,6 +597,7 @@ function GraphCanvasView({
       agentInstructionLines: {},
       standardStepDocstringLines: workflow.standardStepDocstringLines,
       classifierMetadataJson: workflow.classifierMetadataJson,
+      evaluationMetadataJson: workflow.evaluationMetadataJson,
       stepInterfaceJson: workflow.stepInterfaceJson,
     };
   }, [runTopology, workflow]);
@@ -693,6 +719,21 @@ function GraphCanvasView({
       ),
     [classifierMetadata],
   );
+  const evaluationMetadata = topology?.evaluationMetadataJson;
+  const evaluationCards = useMemo<Record<string, { count?: number; error: boolean }>>(
+    () =>
+      Object.fromEntries(
+        Object.entries(evaluationMetadata ?? {}).map(([nodeId, raw]) => {
+          try {
+            const declaration = decodeEvaluationDeclaration(raw);
+            return [nodeId, { count: Object.keys(declaration.metrics).length, error: false }];
+          } catch {
+            return [nodeId, { count: undefined, error: true }];
+          }
+        }),
+      ),
+    [evaluationMetadata],
+  );
   const stepInterfaces = topology?.stepInterfaceJson;
   const standardFields = useMemo(
     () =>
@@ -765,6 +806,8 @@ function GraphCanvasView({
           isAgent: agentNodeIds.has(nodeId),
           isClassifier: Object.hasOwn(topology.classifierMetadataJson, nodeId),
           classifierSummary: classifierCard?.summary,
+          evaluationCount: evaluationCards[nodeId]?.count,
+          evaluationDeclarationError: evaluationCards[nodeId]?.error,
           status: runtimeNode?.status,
           error: runtimeNode?.error,
           startedAt: runtimeNode?.startedAt || undefined,
@@ -781,6 +824,7 @@ function GraphCanvasView({
   }, [
     agentNodeIds,
     classifierCards,
+    evaluationCards,
     standardFields,
     inspectionDisabled,
     nodeMeasurements,

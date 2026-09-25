@@ -30,6 +30,12 @@ export interface ClassifierDeclaration extends StepInterface {
   input_schema: JsonSchema | null;
 }
 
+export interface EvaluationDeclaration {
+  metrics: Record<string, ClassifierQuestion>;
+  composites: string[];
+  runtime: ClassifierDeclaration["runtime"];
+}
+
 export type ClassifierAnswer =
   | {
       type: "choice";
@@ -158,6 +164,34 @@ function array(value: unknown, path: string): unknown[] {
   return value;
 }
 
+function declarationRuntime(value: unknown, path: string): ClassifierDeclaration["runtime"] {
+  const runtime = record(value, path);
+  fields(runtime, ["model", "timeout"], path);
+  const timeout = number(runtime.timeout, `${path}.timeout`);
+  if (timeout === 0) throw new Error(`${path}.timeout must be positive`);
+  return { model: string(runtime.model, `${path}.model`), timeout };
+}
+
+export function decodeEvaluationDeclaration(raw: string): EvaluationDeclaration {
+  const value: unknown = JSON.parse(raw);
+  const path = "evaluation declaration";
+  const item = record(value, path);
+  fields(item, ["metrics", "composites", "runtime"], path);
+  const metrics = Object.fromEntries(
+    Object.entries(record(item.metrics, `${path}.metrics`)).map(([name, value]) => {
+      string(name, `${path} metric name`);
+      return [name, question(value, `${path}.metrics.${name}`)];
+    }),
+  );
+  if (Object.keys(metrics).length === 0) throw new Error(`${path} needs at least one metric`);
+  const composites = array(item.composites, `${path}.composites`).map((name, index) =>
+    string(name, `${path}.composites[${index}]`),
+  );
+  if (new Set(composites).size !== composites.length)
+    throw new Error(`${path}.composites must have unique names`);
+  return { metrics, composites, runtime: declarationRuntime(item.runtime, `${path}.runtime`) };
+}
+
 export function parseClassifierDeclaration(value: unknown): ClassifierDeclaration {
   const path = "classifier declaration";
   const item = record(value, path);
@@ -173,13 +207,9 @@ export function parseClassifierDeclaration(value: unknown): ClassifierDeclaratio
         );
   if (questions !== null && Object.keys(questions).length === 0)
     throw new Error(`${path} needs at least one question`);
-  const runtime = record(item.runtime, `${path}.runtime`);
-  fields(runtime, ["model", "timeout"], `${path}.runtime`);
-  const timeout = number(runtime.timeout, `${path}.runtime.timeout`);
-  if (timeout === 0) throw new Error(`${path}.runtime.timeout must be positive`);
   return {
     questions,
-    runtime: { model: string(runtime.model, `${path}.runtime.model`), timeout },
+    runtime: declarationRuntime(item.runtime, `${path}.runtime`),
     input_schema: parseNullableSchema(item.input_schema, `${path}.input_schema`),
     step_inputs: array(item.step_inputs, `${path}.step_inputs`).map((value, index) =>
       parseStepInput(value, `${path}.step_inputs[${index}]`),

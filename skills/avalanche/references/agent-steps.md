@@ -403,12 +403,22 @@ workflow `classifier_defaults`; `None` inherits. Defaults are `jev-latest` and
 a 10-second SDK request timeout. Agent `lm`/`sub_lm` settings do not configure
 Jev. Declarations validate questions but make no model calls during discovery.
 
+TypeSafe HTTP 401 indicates rejected authentication, not a quality judgment.
+Verify `TYPESAFE_API_KEY`, including exported values that override `.env`; restart
+the operator after changing credentials and run again. Never print the key.
+
 Automatic evaluations run only in operator mode after successful step returns.
 Downstream execution and workflow result delivery never wait for them.
 Selectors, invalid state, Jev failures, and invalid composites become independent
 evaluation errors, never fallback scores or workflow failures. Failed steps
 do not schedule evaluations. Embedded Python `.run()` reports **not evaluated**
 and starts no automatic evaluation worker.
+
+Before execution, graph nodes show an **Evaluations** badge with the metric count,
+including compact zoom. The current-definition inspector shows named metrics,
+types, expandable criteria, composite names, and the effective Jev model/timeout.
+Historical run graphs use their captured declarations, not later source edits.
+Metadata discovery never executes evidence selectors or composite functions.
 
 The browser's **Evaluations** tab displays separate pending/completed/failed
 records per execution, including reruns. Work survives coordinator completion,

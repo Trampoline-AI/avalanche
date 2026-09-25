@@ -1,4 +1,5 @@
 import type { OperatorApi, StructuralBaseline } from "../api";
+import type { EvaluationDeclaration } from "../classifier";
 import {
   CatalogSnapshotMsg,
   FlowInfoMsg,
@@ -24,6 +25,28 @@ export const workflow = FlowInfoMsg.create({
   nodeTypes: { fetch: "step" },
   displayNames: { fetch: "Fetch" },
 });
+
+export const evaluationDeclaration: EvaluationDeclaration = {
+  metrics: {
+    grounded: {
+      type: "noul",
+      instructions: "Is the answer grounded in the supplied evidence?",
+      criteria: { true: "Every claim is supported.", false: "Some claims are unsupported." },
+    },
+    quality: {
+      type: "score",
+      instructions: "Rate the answer quality.",
+      criteria: ["Missing the requested answer.", "A complete, clear answer."],
+    },
+    category: {
+      type: "choice",
+      instructions: "Classify the answer.",
+      criteria: { useful: "Addresses the request.", unrelated: "Does not address it." },
+    },
+  },
+  composites: ["overall_quality"],
+  runtime: { model: "jev-evaluation-model", timeout: 12 },
+};
 export const summary = RunSummaryMsg.create({
   runId: "run-1",
   workflowId: workflow.workflowId,

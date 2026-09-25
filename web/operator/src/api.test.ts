@@ -27,7 +27,7 @@ import {
 } from "./generated/operator";
 import type { IOperatorServiceV2Client } from "./generated/operator.client";
 import { DescriptorPageOrder } from "./model";
-import { eventUlid } from "./test/fixtures";
+import { evaluationDeclaration, eventUlid } from "./test/fixtures";
 
 function apiWith(client: Partial<Record<keyof IOperatorServiceV2Client, unknown>>) {
   return new GrpcWebOperatorApi("http://operator.test", client as IOperatorServiceV2Client);
@@ -96,6 +96,7 @@ const classifierSnapshot = RunSnapshotV2.create({
   topology: {
     nodeIds: ["classify"],
     classifierMetadataJson: { classify: JSON.stringify(classifierDeclaration) },
+    evaluationMetadataJson: { classify: JSON.stringify(evaluationDeclaration) },
   },
 });
 const classifierRequest: ClassifierEventPageRequest = {
@@ -350,7 +351,7 @@ describe("operator transport boundary", () => {
     await expect(api.readTextDetail("unregistered")).rejects.toThrow();
   });
 
-  it("keeps historical classifier declarations pinned when the current catalog changes", async () => {
+  it("keeps historical classifier and evaluation declarations pinned when the current catalog changes", async () => {
     const revisedDeclaration: ClassifierDeclaration = {
       ...classifierDeclaration,
       input_schema: { type: "object", properties: { revised: { type: "number" } } },
@@ -367,6 +368,11 @@ describe("operator transport boundary", () => {
         accepted: { type: "noul", instructions: "Revised decision", criteria: null },
       },
     };
+    const revisedEvaluations = {
+      ...evaluationDeclaration,
+      metrics: { revised_metric: evaluationDeclaration.metrics.quality },
+      runtime: { model: "revised-evaluation-model", timeout: 25 },
+    };
     const api = apiWith({
       discoverFlows: () => ({
         response: Promise.resolve(
@@ -377,8 +383,10 @@ describe("operator transport boundary", () => {
               FlowInfoV2.create({
                 workflowSelector: "orders",
                 classifierMetadataJson: { classify: JSON.stringify(revisedDeclaration) },
+                evaluationMetadataJson: { classify: JSON.stringify(revisedEvaluations) },
                 topology: WorkflowTopologyV2.create({
                   classifierMetadataJson: { classify: JSON.stringify(revisedDeclaration) },
+                  evaluationMetadataJson: { classify: JSON.stringify(revisedEvaluations) },
                 }),
               }),
             ],
@@ -412,6 +420,12 @@ describe("operator transport boundary", () => {
     expect(JSON.parse(historical.topology!.classifierMetadataJson.classify)).toEqual(
       classifierDeclaration,
     );
+    expect(JSON.parse(current.workflows[0].evaluationMetadataJson.classify)).toEqual(
+      revisedEvaluations,
+    );
+    expect(JSON.parse(historical.topology!.evaluationMetadataJson.classify)).toEqual(
+      evaluationDeclaration,
+    );
     const createdUpdates = api.streamUpdates("operator-1", eventUlid(8));
     const created = await createdUpdates[Symbol.asyncIterator]().next();
     expect(created.value?.payload).toMatchObject({
@@ -419,7 +433,10 @@ describe("operator transport boundary", () => {
         change: {
           oneofKind: "runCreated",
           runCreated: {
-            topology: { classifierMetadataJson: historical.topology!.classifierMetadataJson },
+            topology: {
+              classifierMetadataJson: historical.topology!.classifierMetadataJson,
+              evaluationMetadataJson: historical.topology!.evaluationMetadataJson,
+            },
           },
         },
       },

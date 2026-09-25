@@ -14,6 +14,7 @@ import {
 import type { OperatorApi } from "./api";
 import { ClassifierInspector } from "./ClassifierInspector";
 import { EvaluationPanel } from "./EvaluationPanel";
+import { EvaluationDefinition } from "./EvaluationDefinition";
 import { decodeClassifierDeclaration } from "./classifier";
 import {
   boundDescriptors,
@@ -941,6 +942,12 @@ function AgentAndStepInspector({
                 <p className="text-[11px] text-muted">
                   This node has no agent declaration metadata.
                 </p>
+              )}
+              {!definitionUnavailable && (
+                <EvaluationDefinition
+                  key={selectionScope}
+                  raw={workflow?.evaluationMetadataJson[nodeId]}
+                />
               )}
               {stepInterfacePanel}
             </div>
