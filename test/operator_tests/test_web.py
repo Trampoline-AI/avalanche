@@ -307,6 +307,28 @@ def test_rest_routes_never_fall_back_to_the_spa(proxy):
 
 
 @pytest.mark.parametrize(
+    ("path", "allowed"),
+    (
+        ("/api/v1/runs", {"GET", "POST"}),
+        ("/api/v1/flows", {"GET"}),
+        ("/api/v1/runs/run%2Fpart%25/cancel", {"POST"}),
+    ),
+)
+def test_rest_method_errors_advertise_all_allowed_methods(proxy, path, allowed):
+    _, server = proxy
+    connection = http.client.HTTPConnection(server.host, server.port, timeout=5)
+    try:
+        connection.request("DELETE", path)
+        response = connection.getresponse()
+        _assert_rest_error(
+            (response.status, json.loads(response.read())), 405, "METHOD_NOT_ALLOWED"
+        )
+        assert set(response.getheader("Allow").split(", ")) == allowed
+    finally:
+        connection.close()
+
+
+@pytest.mark.parametrize(
     ("headers", "status"),
     (
         ({"Content-Type": "text/plain", "Content-Length": "0"}, 415),

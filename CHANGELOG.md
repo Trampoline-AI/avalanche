@@ -9,6 +9,7 @@
   Existing `/api/v1` endpoints still call the operator's gRPC service;
   interactive docs and OpenAPI are available at `/api/docs` and `/api/openapi.json`.
   Malformed HTTP framing is rejected by Uvicorn before API validation.
+  Method-not-allowed responses list every supported method for the requested REST path.
 
 ## 0.6.1
 
