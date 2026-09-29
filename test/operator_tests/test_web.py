@@ -9,7 +9,7 @@ import struct
 import time
 from datetime import datetime
 from pathlib import Path
-from urllib.parse import urlencode
+from urllib.parse import quote, urlencode
 
 import pytest
 
@@ -137,6 +137,32 @@ def test_browser_disconnect_cancels_idle_upstream_stream(proxy):
     finally:
         connection.close()
     assert _wait_for_subscriber_count(operator, 0)
+
+
+def test_browser_shutdown_releases_idle_stream_and_listener(proxy):
+    operator, server = proxy
+    connection = http.client.HTTPConnection(server.host, server.port, timeout=5)
+    try:
+        connection.request(
+            "POST",
+            f"{_SERVICE}WatchRunStatus",
+            body=_frame(pb.WatchRunStatusRequestV2()),
+            headers={"Content-Type": _CONTENT_TYPE},
+        )
+        response = connection.getresponse()
+        assert response.status == 200
+        assert _wait_for_subscriber_count(operator, 1)
+        # An idle stream must not occupy the HTTP event loop.
+        status, page = _rest(server, "GET", "/api/v1/flows")
+        assert status == 200
+        assert page["flows"] == []
+        server.close()
+        assert _wait_for_subscriber_count(operator, 0)
+        with socket.socket() as rebound:
+            rebound.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+            rebound.bind((server.host, server.port))
+    finally:
+        connection.close()
 
 
 def test_asset_and_request_boundaries_reject_unsafe_http(tmp_path: Path):
@@ -335,6 +361,19 @@ def _seed_rest_run(operator: Operator, run_id: str, log_count: int = 0):
         operator._runs[run_id] = run
         operator._logs[run_id] = entries
     operator._notify_run(run)
+
+
+def test_rest_encoded_run_identifier_remains_one_path_segment(proxy):
+    operator, server = proxy
+    run_id = "run/percent%2Fvalue/activity"
+    _seed_rest_run(operator, run_id, log_count=1)
+    path = f"/api/v1/runs/{quote(run_id, safe='')}"
+    status, snapshot = _rest(server, "GET", path)
+    assert status == 200
+    assert snapshot["summary"]["run_id"] == run_id
+    status, activity = _rest(server, "GET", f"{path}/activity")
+    assert status == 200
+    assert [item["run_sequence"] for item in activity["activities"]] == ["1"]
 
 
 def test_rest_run_pages_retain_snapshot_and_reject_changed_filter(proxy):

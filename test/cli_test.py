@@ -60,30 +60,21 @@ def test_ava_web_interrupt_during_startup_releases_listener(monkeypatch):
     from ava_cli import app
     from runtime.operator import web
 
-    servers = []
-    activate = web._BrowserHTTPServer.server_activate
-
-    def record_listener(server):
-        activate(server)
-        servers.append(server)
+    with socket.socket() as available:
+        available.bind(("127.0.0.1", 0))
+        port = available.getsockname()[1]
 
     def interrupt_upstream_startup(*args, **kwargs):
-        with socket.create_connection(servers[0].server_address, timeout=1):
-            signal.raise_signal(signal.SIGINT)
+        signal.raise_signal(signal.SIGINT)
 
-    monkeypatch.setattr(web._BrowserHTTPServer, "server_activate", record_listener)
     monkeypatch.setattr(web.grpc, "insecure_channel", interrupt_upstream_startup)
 
     try:
-        try:
-            assert app.main(["web", "--port", "0"]) == 0
-        except KeyboardInterrupt:
-            pytest.fail("SIGINT escaped the web startup boundary")
-        with socket.socket() as rebound:
-            rebound.bind(servers[0].server_address)
-    finally:
-        for server in servers:
-            server.server_close()
+        assert app.main(["web", "--port", str(port)]) == 0
+    except KeyboardInterrupt:
+        pytest.fail("SIGINT escaped the web startup boundary")
+    with socket.socket() as rebound:
+        rebound.bind(("127.0.0.1", port))
 
 
 def test_ava_result_materializes_nested_workspace_tree(monkeypatch, tmp_path, capsys):

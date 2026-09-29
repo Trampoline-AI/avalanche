@@ -222,6 +222,11 @@ to change the HTTP port; `ava web` uses `--port` instead.
 The built-in API is available under `/api/v1` on the same listener as the Web UI.
 It translates JSON requests into the existing operator gRPC calls; it does not
 add a deployment service, separate run store, or durable recovery.
+FastAPI defines the REST routes, and Uvicorn serves the shared HTTP listener.
+Both are regular runtime dependencies installed with Avalanche, not contributor-only
+development dependencies. Interactive API documentation is available at `/api/docs`,
+with the OpenAPI schema at `/api/openapi.json`.
+
 `ava operator` and `ava dev` bind HTTP to loopback. There is no built-in
 authentication; do not expose it to an untrusted network. A separately launched
 `ava web --host ... --trusted-proxy` requires an external authenticated boundary.
@@ -235,6 +240,10 @@ authentication; do not expose it to an untrusted network. A separately launched
 | POST | `/runs/{run_id}/cancel` | `200` acknowledging cancellation; poll for terminal state |
 | GET | `/runs/{run_id}/output` | Retained result value and file descriptors |
 | GET | `/runs/{run_id}/activity` | Paginated log or node-event descriptors |
+
+Percent-encode run IDs when placing them in URL paths. Application errors use a
+JSON `error` object with `code` and `message`; malformed HTTP framing can be
+rejected by Uvicorn before the request reaches the API.
 
 ### Embedding the operator UI
 

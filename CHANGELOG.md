@@ -4,6 +4,11 @@
 
 - Removed the documentation website source files from this repository now that
   they are maintained separately.
+- Replaced the built-in REST API's handwritten routing with FastAPI and moved
+  the shared browser/REST listener to Uvicorn. Both are runtime dependencies.
+  Existing `/api/v1` endpoints still call the operator's gRPC service;
+  interactive docs and OpenAPI are available at `/api/docs` and `/api/openapi.json`.
+  Malformed HTTP framing is rejected by Uvicorn before API validation.
 
 ## 0.6.1
 
