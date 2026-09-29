@@ -227,7 +227,7 @@ def create_rest_app(channel: grpc.Channel) -> FastAPI:
             message = "Method not allowed"
             # Starlette reports the first matching route, not every method for its path.
             allowed: set[str] = set()
-            for route in app.routes:
+            for route in router.routes:
                 if (
                     isinstance(route, APIRoute)
                     and route.matches(request.scope)[0] == Match.PARTIAL
