@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- The operator UI keeps the full workflow DAG visible while a run is requesting,
+  with dimmed, disabled nodes and a loading indicator until its run snapshot is ready.
 - Removed the documentation website source files from this repository now that
   they are maintained separately.
 

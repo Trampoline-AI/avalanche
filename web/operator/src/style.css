@@ -137,8 +137,13 @@
 .avalanche-operator-ui .node-card[aria-disabled="true"] {
   cursor: default;
   opacity: 0.6;
+  filter: grayscale(1);
   transform: none;
   border-color: var(--color-line);
+}
+
+.avalanche-operator-ui .node-card[aria-disabled="true"] .node-title {
+  color: var(--color-muted);
 }
 
 .avalanche-operator-ui .node-card-action:disabled {

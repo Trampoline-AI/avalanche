@@ -48,6 +48,7 @@ import {
   RunSnapshotMsg,
   RunSummaryMsg,
   OperatorUpdateEnvelope,
+  WorkflowTopologyMsg,
 } from "./model";
 import {
   baseline,
@@ -156,6 +157,104 @@ describe("operator workflows", () => {
     expect(
       screen.queryByRole("button", { name: "Inspect Recorded fetch" }),
     ).not.toBeInTheDocument();
+  });
+
+  it("keeps the full DAG disabled while requesting until the prepared topology arrives", async () => {
+    const started = Promise.withResolvers<void>();
+    const prepare = Promise.withResolvers<void>();
+    const preparedSnapshot = Promise.withResolvers<RunSnapshotMsg>();
+    const requesting = RunSummaryMsg.create({ ...summary, status: "requesting" });
+    const definition = FlowInfoMsg.create({
+      ...workflow,
+      nodeIds: ["fetch", "save"],
+      graph: { fetch: { children: ["save"] }, save: { children: [] } },
+      displayNames: { fetch: "Fetch", save: "Save" },
+    });
+    const snapshots = vi
+      .fn<OperatorApi["getLatestRunSnapshot"]>()
+      .mockResolvedValueOnce(
+        RunSnapshotMsg.create({
+          ...snapshotFor(requesting),
+          asOfEventUlid: eventUlid(2),
+          nodes: [],
+          topology: WorkflowTopologyMsg.create(),
+        }),
+      )
+      .mockImplementationOnce(() => preparedSnapshot.promise);
+    const api = createApi({
+      loadBaseline: async () => ({
+        ...baseline,
+        catalog: CatalogSnapshotMsg.create({
+          ...baseline.catalog,
+          workflows: [definition],
+        }),
+        runs: [],
+      }),
+      startRun: async () => {
+        started.resolve();
+        return requesting.runId;
+      },
+      getLatestRunSnapshot: snapshots,
+      streamUpdates: async function* (_instance, _cursor, signal) {
+        await started.promise;
+        yield envelope(2, {
+          oneofKind: "runCreated",
+          runCreated: { summary: requesting, nodes: [] },
+        });
+        await prepare.promise;
+        yield envelope(3, {
+          oneofKind: "runStatusChanged",
+          runStatusChanged: {
+            runId: requesting.runId,
+            status: "pending",
+            startedAt: 0,
+            endedAt: 0,
+            revision: "2",
+          },
+        });
+        yield* idleUpdates(signal);
+      },
+    });
+    render(<OperatorUi host={{ api, presentation }} />);
+    fireEvent.click(await screen.findByRole("button", { name: "Inspect Fetch" }));
+    fireEvent.click(screen.getByRole("button", { name: "Run" }));
+
+    expect(await screen.findByRole("status", { name: "Run preparation" })).toBeVisible();
+    expect(screen.getByRole("button", { name: /run-1, requesting/ })).toHaveAttribute(
+      "aria-pressed",
+      "true",
+    );
+    for (const name of ["Inspect Fetch", "Inspect Save"]) {
+      const node = screen.getByRole("button", { name });
+      expect(node).toBeDisabled();
+      fireEvent.click(node);
+      expect(
+        screen.queryByRole("complementary", { name: "Run inspector" }),
+      ).not.toBeInTheDocument();
+    }
+    expect(screen.getByRole("button", { name: "Cancel run" })).toBeEnabled();
+
+    act(() => prepare.resolve());
+    await waitFor(() => expect(snapshots).toHaveBeenCalledTimes(2));
+    expect(screen.getByRole("status", { name: "Run preparation" })).toBeVisible();
+    expect(screen.getByRole("button", { name: "Inspect Save" })).toBeDisabled();
+    act(() =>
+      preparedSnapshot.resolve(
+        RunSnapshotMsg.create({
+          ...snapshotFor({ ...requesting, status: "pending", revision: "2" }),
+          asOfEventUlid: eventUlid(3),
+          topology: WorkflowTopologyMsg.create({
+            ...snapshotFor().topology,
+            displayNames: { fetch: "Recorded fetch" },
+          }),
+        }),
+      ),
+    );
+    expect(await screen.findByRole("button", { name: "Inspect Recorded fetch" })).toBeEnabled();
+    expect(screen.queryByRole("button", { name: "Inspect Save" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("status", { name: "Run preparation" })).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Inspect Recorded fetch" }));
+    expect(screen.getByRole("complementary", { name: "Run inspector" })).toBeVisible();
   });
 
   it.each(["operator", "workspace"] as const)(

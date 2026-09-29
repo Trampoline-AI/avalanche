@@ -79,6 +79,11 @@ node stays selected when its ID exists in the destination topology.
 Loaded historical runs remain available if their current workflow definition is
 removed from the catalog. Completing a run-start request selects the new run only
 if workflow/run navigation has not changed in the meantime.
+While a run is **Requesting**, its nodes remain visible but dimmed and unavailable
+for inspection, alongside a loading indicator. Until the run's own topology arrives,
+the graph previews the current workflow definition; it does not represent execution
+state. The preview stays visible through the prepared-snapshot refresh, then switches
+to the run's topology and enables inspection.
 The floating **Timeline** shows Current followed by at most the 20 newest runs.
 Current scrolls with the run entries rather than staying pinned. When 20 runs are
 shown, a final **View all** row opens the expanded history browser; the header
