@@ -341,14 +341,19 @@ The browser UI source lives in `web/operator/` and is built with Vite, React,
 and generated TypeScript protobuf bindings. Packaged static assets live in
 `src/runtime/operator/web_assets/`.
 
-The built-in loopback HTTP server serves those assets and proxies browser
-gRPC-Web requests to the native gRPC operator. `ava web` can also launch it
+The built-in loopback Uvicorn server hosts the static assets, a FastAPI REST
+application mounted at `/api`, and the gRPC-Web proxy to the native operator.
+`ava web` can also launch it
 separately for a configured operator. The browser does not receive a direct
 Python or gRPC channel to user workflow code.
 
 `src/runtime/operator/rest.py` handles `/api/v1` discovery, run creation,
 summaries, snapshots, cancellation, output, and activity. Requests are validated
 at the HTTP boundary and translated to the same unary `OperatorServiceV2` RPCs.
+FastAPI supplies route declarations, request schemas, and OpenAPI documentation;
+blocking RPC calls run in worker threads rather than on the HTTP event loop.
+The listener owns the shared gRPC channel. Browser disconnects cancel upstream
+stream calls, and shutdown closes the channel before draining HTTP requests.
 Responses use snake_case protobuf JSON, including encoded result documents and
 scope-bound page continuations. This adds no execution state, deployment
 infrastructure, or durable command queue. REST shares the listener's local-trust

@@ -5,25 +5,33 @@ from __future__ import annotations
 import logging
 import mimetypes
 import re
-import select
 import socket
 import struct
 import threading
-from collections.abc import Iterator
+from collections.abc import AsyncIterator, Iterator
+from contextlib import contextmanager
 from dataclasses import dataclass
 from http import HTTPStatus
-from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from types import MappingProxyType
-from urllib.parse import unquote, urlsplit
+from urllib.parse import urlsplit
 
+import anyio
 import grpc
+import uvicorn
 from google.protobuf import message_factory
 from google.protobuf.message import DecodeError, Message
+from starlette.applications import Starlette
+from starlette.concurrency import run_in_threadpool
+from starlette.middleware import Middleware
+from starlette.requests import Request
+from starlette.responses import JSONResponse, Response, StreamingResponse
+from starlette.routing import Mount, Route
+from starlette.types import ASGIApp, Receive, Scope, Send
 
 from ._grpc import _BOUNDED_MESSAGE_OPTIONS
 from .proto import operator_pb2 as pb
-from .rest import serve_rest
+from .rest import create_rest_app
 
 logger = logging.getLogger(__name__)
 
@@ -33,7 +41,10 @@ _GRPC_WEB_CONTENT_TYPE = "application/grpc-web+proto"
 _GRPC_SERVICE_PATH = "/avalanche.operator.OperatorServiceV2/"
 _FRAME_HEADER_BYTES = 5
 _MAX_REQUEST_BYTES = 4 * 1024 * 1024
-_CLIENT_DISCONNECT_POLL_SECONDS = 0.1
+_STARTUP_TIMEOUT_SECONDS = 10.0
+_SHUTDOWN_TIMEOUT_SECONDS = 2.0
+_HTTP_METHODS = ["GET", "HEAD", "POST", "PUT", "PATCH", "DELETE", "OPTIONS", "TRACE", "CONNECT"]
+_GRPC_HEADERS = {"X-Content-Type-Options": "nosniff", "Cache-Control": "no-store"}
 _OPERATOR_PORT_META = re.compile(
     rb'(<meta\b[^>]*\bcontent=")[^"]+("(?=[^>]*\bdata-avalanche-operator-port\b))'
 )
@@ -63,275 +74,317 @@ def _rpc_methods() -> MappingProxyType[str, _RpcMethod]:
 _RPC_METHODS = _rpc_methods()
 
 
-class _BrowserHTTPServer(ThreadingHTTPServer):
-    daemon_threads = True
+class _GrpcWebStreamResponse(StreamingResponse):
+    def __init__(self, responses: Iterator[Message], call: grpc.Call) -> None:
+        self._call = call
+        super().__init__(
+            _stream_frames(responses), media_type=_GRPC_WEB_CONTENT_TYPE, headers=_GRPC_HEADERS
+        )
 
-    def __init__(
-        self,
-        server_address: tuple[str, int],
-        operator_address: str,
-        asset_root: Path,
-    ) -> None:
-        self.asset_root = asset_root
-        self.operator_port = _operator_port(operator_address)
-        self.stopping = threading.Event()
-        super().__init__(server_address, _BrowserRequestHandler)
-        try:
-            self.channel = grpc.insecure_channel(
-                operator_address, options=_BOUNDED_MESSAGE_OPTIONS
-            )
-        except BaseException as failure:
+    async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
+        # An idle gRPC iterator cannot observe a failed send. Always listen for the
+        # ASGI disconnect, including on ASGI 2.4+, and cancel gRPC before waiting
+        # for the thread running next() to exit.
+        async with anyio.create_task_group() as tasks:
+
+            async def send_stream() -> None:
+                try:
+                    await self.stream_response(send)
+                except OSError:
+                    pass
+                finally:
+                    self._call.cancel()
+                    tasks.cancel_scope.cancel()
+
+            tasks.start_soon(send_stream)
             try:
-                self.server_close()
-            except Exception as exc:
-                failure.add_note(f"HTTP socket cleanup also failed: {exc}")
-            raise
+                await self.listen_for_disconnect(receive)
+            finally:
+                self._call.cancel()
+                tasks.cancel_scope.cancel()
 
 
-class _BrowserRequestHandler(BaseHTTPRequestHandler):
-    protocol_version = "HTTP/1.1"
-    server: _BrowserHTTPServer
+async def _stream_frames(responses: Iterator[Message]) -> AsyncIterator[bytes]:
+    # A subscription occupies a worker while idle; do not consume the shared
+    # thread limiter used by REST requests and asset responses.
+    limiter = anyio.CapacityLimiter(1)
+    try:
+        while (
+            response := await anyio.to_thread.run_sync(
+                _next_response, responses, limiter=limiter
+            )
+        ) is not None:
+            yield _data_frame(response)
+    except grpc.RpcError as exc:
+        trailer = _trailer_frame(exc.code(), exc.details())
+    except Exception:
+        logger.exception("Unhandled gRPC-Web stream proxy failure")
+        trailer = _trailer_frame(grpc.StatusCode.INTERNAL, "internal proxy error")
+    else:
+        trailer = _trailer_frame(grpc.StatusCode.OK, "")
+    yield trailer
 
-    def do_GET(self) -> None:  # noqa: N802
-        if self._is_rest_request():
-            serve_rest(self, self.server.channel)
-            return
-        self._serve_asset()
 
-    def do_POST(self) -> None:  # noqa: N802
-        if self._is_rest_request():
-            serve_rest(self, self.server.channel)
-            return
-        method_name = urlsplit(self.path).path.removeprefix(_GRPC_SERVICE_PATH)
+def _next_response(responses: Iterator[Message]) -> Message | None:
+    return next(responses, None)
+
+
+async def _request_body(request: Request) -> bytes:
+    if request.headers.get("transfer-encoding") is not None:
+        raise ValueError("Transfer-Encoding is not supported")
+    lengths = request.headers.getlist("content-length")
+    if not lengths:
+        raise ValueError("Content-Length is required")
+    if len(lengths) != 1 or not lengths[0].isascii() or not lengths[0].isdigit():
+        raise ValueError("Content-Length must be an integer")
+    length = int(lengths[0])
+    if length > _MAX_REQUEST_BYTES:
+        raise ValueError(f"request body exceeds {_MAX_REQUEST_BYTES} byte limit")
+    chunks: list[bytes] = []
+    received = 0
+    async for chunk in request.stream():
+        received += len(chunk)
+        if received > length:
+            raise ValueError("request body exceeds its Content-Length")
+        chunks.append(chunk)
+    if received != length:
+        raise ValueError("request body is truncated")
+    return b"".join(chunks)
+
+
+def _grpc_response(data: bytes, *, close: bool = False) -> Response:
+    headers = {**_GRPC_HEADERS, "Connection": "close"} if close else _GRPC_HEADERS
+    return Response(data, media_type=_GRPC_WEB_CONTENT_TYPE, headers=headers)
+
+
+def _api_root(request: Request) -> Response:
+    return JSONResponse(
+        {"error": {"code": "NOT_FOUND", "message": "Unknown API route"}},
+        status_code=HTTPStatus.NOT_FOUND,
+        headers={**_GRPC_HEADERS, "Connection": "close"},
+    )
+
+
+def _options_response() -> Response:
+    return Response(status_code=HTTPStatus.NO_CONTENT, headers={"Allow": "GET, POST, OPTIONS"})
+
+
+class _OptionsMiddleware:
+    def __init__(self, app: ASGIApp) -> None:
+        self.app = app
+
+    async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
+        if scope["type"] == "http" and scope["method"] == "OPTIONS":
+            await _options_response()(scope, receive, send)
+        else:
+            await self.app(scope, receive, send)
+
+
+def _serve_asset(request: Request, asset_root: Path, operator_port: int) -> Response:
+    if request.method != "GET":
+        status = (
+            HTTPStatus.NOT_FOUND if request.method == "POST" else HTTPStatus.METHOD_NOT_ALLOWED
+        )
+        return Response(status_code=status)
+    # ASGI paths have already been percent-decoded by the HTTP server.
+    relative = request.url.path.lstrip("/") or "index.html"
+    candidate = (asset_root / relative).resolve()
+    if not candidate.is_relative_to(asset_root):
+        return Response(status_code=HTTPStatus.NOT_FOUND)
+    if not candidate.is_file() and "." not in Path(relative).name:
+        candidate = (asset_root / "index.html").resolve()
+    if not candidate.is_relative_to(asset_root) or not candidate.is_file():
+        return Response(status_code=HTTPStatus.NOT_FOUND)
+    data = candidate.read_bytes()
+    if candidate.name == "index.html":
+        data = _OPERATOR_PORT_META.sub(
+            rb"\g<1>" + str(operator_port).encode() + rb"\g<2>", data, count=1
+        )
+    content_type = mimetypes.guess_type(candidate.name)[0] or "application/octet-stream"
+    return Response(
+        data,
+        headers={
+            "Content-Type": content_type,
+            "X-Content-Type-Options": "nosniff",
+            "Cache-Control": (
+                "no-store"
+                if candidate.name == "index.html"
+                else "public, max-age=31536000, immutable"
+            ),
+        },
+    )
+
+
+def _create_browser_app(
+    channel: grpc.Channel, asset_root: Path, operator_port: int
+) -> Starlette:
+    async def grpc_web(request: Request) -> Response:
+        method_name = request.path_params["method_name"]
         method = _RPC_METHODS.get(method_name)
-        if method is None or urlsplit(self.path).path != f"{_GRPC_SERVICE_PATH}{method_name}":
-            self.send_error(HTTPStatus.NOT_FOUND)
-            return
-        if self.headers.get_content_type() != _GRPC_WEB_CONTENT_TYPE:
-            self.send_error(HTTPStatus.UNSUPPORTED_MEDIA_TYPE)
-            return
+        if method is None:
+            return Response(status_code=HTTPStatus.NOT_FOUND)
+        if (
+            request.headers.get("content-type", "").split(";", 1)[0].strip().lower()
+            != _GRPC_WEB_CONTENT_TYPE
+        ):
+            return Response(
+                status_code=HTTPStatus.UNSUPPORTED_MEDIA_TYPE, headers={"Connection": "close"}
+            )
         try:
-            request = _decode_request(self.rfile.read(self._request_content_length()), method)
+            message = _decode_request(await _request_body(request), method)
         except (DecodeError, ValueError) as exc:
-            self._send_grpc_error(grpc.StatusCode.INVALID_ARGUMENT, str(exc))
-            return
+            return _grpc_response(
+                _trailer_frame(grpc.StatusCode.INVALID_ARGUMENT, str(exc)), close=True
+            )
         try:
             if method.server_streaming:
-                self._send_stream(self._stream_remote(method_name, method, request))
-            else:
-                self._send_unary(self._call_remote(method_name, method, request))
+                stream = channel.unary_stream(
+                    f"{_GRPC_SERVICE_PATH}{method_name}",
+                    request_serializer=_serialize_message,
+                    response_deserializer=method.response_type.FromString,
+                )(message)
+                if not isinstance(stream, grpc.Call):
+                    raise TypeError("A gRPC response stream must support cancellation")
+                return _GrpcWebStreamResponse(stream, stream)
+            call = channel.unary_unary(
+                f"{_GRPC_SERVICE_PATH}{method_name}",
+                request_serializer=_serialize_message,
+                response_deserializer=method.response_type.FromString,
+            )
+            response = await run_in_threadpool(call, message)
+            return _grpc_response(
+                _data_frame(response) + _trailer_frame(grpc.StatusCode.OK, "")
+            )
         except grpc.RpcError as exc:
-            self._send_grpc_error(exc.code(), exc.details())
-        except (BrokenPipeError, ConnectionResetError):
-            return
+            return _grpc_response(_trailer_frame(exc.code(), exc.details()))
         except Exception:
             logger.exception("Unhandled gRPC-Web proxy failure: %s", method_name)
-            self._send_grpc_error(grpc.StatusCode.INTERNAL, "internal proxy error")
-
-    def _is_rest_request(self) -> bool:
-        path = urlsplit(self.path).path
-        return path == "/api" or path.startswith("/api/")
-
-    def do_PUT(self) -> None:  # noqa: N802
-        if self._is_rest_request():
-            serve_rest(self, self.server.channel)
-        else:
-            self.send_error(HTTPStatus.METHOD_NOT_ALLOWED)
-
-    def do_PATCH(self) -> None:  # noqa: N802
-        self.do_PUT()
-
-    def do_DELETE(self) -> None:  # noqa: N802
-        self.do_PUT()
-
-    def do_HEAD(self) -> None:  # noqa: N802
-        self.do_PUT()
-
-    def do_OPTIONS(self) -> None:  # noqa: N802
-        self.send_response(HTTPStatus.NO_CONTENT)
-        self.send_header("Allow", "GET, POST, OPTIONS")
-        self.send_header("Content-Length", "0")
-        self.end_headers()
-
-    def _request_content_length(self) -> int:
-        raw = self.headers.get("Content-Length")
-        if raw is None:
-            raise ValueError("Content-Length is required")
-        try:
-            length = int(raw)
-        except ValueError as exc:
-            raise ValueError("Content-Length must be an integer") from exc
-        if not 0 <= length <= _MAX_REQUEST_BYTES:
-            raise ValueError(f"request body exceeds {_MAX_REQUEST_BYTES} byte limit")
-        return length
-
-    def _call_remote(self, method_name: str, method: _RpcMethod, request: Message) -> Message:
-        call = self.server.channel.unary_unary(
-            f"{_GRPC_SERVICE_PATH}{method_name}",
-            request_serializer=_serialize_message,
-            response_deserializer=method.response_type.FromString,
-        )
-        return call(request)
-
-    def _stream_remote(
-        self,
-        method_name: str,
-        method: _RpcMethod,
-        request: Message,
-    ) -> Iterator[Message]:
-        call = self.server.channel.unary_stream(
-            f"{_GRPC_SERVICE_PATH}{method_name}",
-            request_serializer=_serialize_message,
-            response_deserializer=method.response_type.FromString,
-        )
-        return call(request)
-
-    def _send_unary(self, response: Message) -> None:
-        body = _data_frame(response) + _trailer_frame(grpc.StatusCode.OK, "")
-        self.send_response(HTTPStatus.OK)
-        self._send_grpc_headers()
-        self.send_header("Content-Length", str(len(body)))
-        self.end_headers()
-        self.wfile.write(body)
-
-    def _send_stream(self, responses: Iterator[Message]) -> None:
-        self.send_response(HTTPStatus.OK)
-        self._send_grpc_headers()
-        self.send_header("Transfer-Encoding", "chunked")
-        self.end_headers()
-        call = responses if isinstance(responses, grpc.Call) else None
-        stream_complete = threading.Event() if call is not None else None
-        client_disconnected = threading.Event() if call is not None else None
-        monitor = None
-        if call is not None and stream_complete is not None and client_disconnected is not None:
-            monitor = threading.Thread(
-                target=_cancel_when_client_disconnects,
-                args=(self.connection, call, stream_complete, client_disconnected),
-                name="avalanche-browser-stream-monitor",
-                daemon=True,
+            return _grpc_response(
+                _trailer_frame(grpc.StatusCode.INTERNAL, "internal proxy error")
             )
-            monitor.start()
-        try:
-            try:
-                for response in responses:
-                    self._write_chunk(_data_frame(response))
-            except grpc.RpcError as exc:
-                if client_disconnected is not None and client_disconnected.is_set():
-                    return
-                trailer = _trailer_frame(exc.code(), exc.details())
-            except (BrokenPipeError, ConnectionResetError):
-                return
-            except Exception:
-                if client_disconnected is not None and client_disconnected.is_set():
-                    return
-                logger.exception("Unhandled gRPC-Web stream proxy failure")
-                trailer = _trailer_frame(grpc.StatusCode.INTERNAL, "internal proxy error")
-            else:
-                trailer = _trailer_frame(grpc.StatusCode.OK, "")
-            try:
-                self._write_chunk(trailer)
-                self.wfile.write(b"0\r\n\r\n")
-                self.wfile.flush()
-            except (BrokenPipeError, ConnectionResetError):
-                return
-        finally:
-            if stream_complete is not None:
-                stream_complete.set()
-            if call is not None:
-                call.cancel()
-            if monitor is not None:
-                monitor.join()
 
-    def _send_grpc_error(self, code: grpc.StatusCode, detail: str) -> None:
-        if self.wfile.closed:
-            return
-        body = _trailer_frame(code, detail)
-        self.send_response(HTTPStatus.OK)
-        self._send_grpc_headers()
-        self.send_header("Content-Length", str(len(body)))
-        self.end_headers()
-        self.wfile.write(body)
+    def asset(request: Request) -> Response:
+        return _serve_asset(request, asset_root, operator_port)
 
-    def _send_grpc_headers(self) -> None:
-        self.send_header("Content-Type", _GRPC_WEB_CONTENT_TYPE)
-        self.send_header("X-Content-Type-Options", "nosniff")
-        self.send_header("Cache-Control", "no-store")
+    app = Starlette(
+        routes=[
+            Route("/api", _api_root, methods=_HTTP_METHODS),
+            Mount("/api", app=create_rest_app(channel)),
+            Route(f"{_GRPC_SERVICE_PATH}{{method_name}}", grpc_web, methods=["POST"]),
+            Route("/{path:path}", asset, methods=_HTTP_METHODS),
+        ],
+        middleware=[Middleware(_OptionsMiddleware)],
+    )
+    app.router.redirect_slashes = False
+    return app
 
-    def _write_chunk(self, data: bytes) -> None:
-        self.wfile.write(f"{len(data):x}\r\n".encode("ascii"))
-        self.wfile.write(data)
-        self.wfile.write(b"\r\n")
-        self.wfile.flush()
 
-    def _serve_asset(self) -> None:
-        request_path = unquote(urlsplit(self.path).path)
-        relative = request_path.lstrip("/") or "index.html"
-        candidate = (self.server.asset_root / relative).resolve()
-        try:
-            candidate.relative_to(self.server.asset_root)
-        except ValueError:
-            self.send_error(HTTPStatus.NOT_FOUND)
-            return
-        if not candidate.is_file() and "." not in Path(relative).name:
-            candidate = self.server.asset_root / "index.html"
-        if not candidate.is_file():
-            self.send_error(HTTPStatus.NOT_FOUND)
-            return
-        data = candidate.read_bytes()
-        if candidate.name == "index.html":
-            data = _OPERATOR_PORT_META.sub(
-                rb"\g<1>" + str(self.server.operator_port).encode() + rb"\g<2>",
-                data,
-                count=1,
-            )
-        content_type = mimetypes.guess_type(candidate.name)[0] or "application/octet-stream"
-        self.send_response(HTTPStatus.OK)
-        self.send_header("Content-Type", content_type)
-        self.send_header("Content-Length", str(len(data)))
-        if candidate.name == "index.html":
-            self.send_header("Cache-Control", "no-store")
-        else:
-            self.send_header("Cache-Control", "public, max-age=31536000, immutable")
-        self.send_header("X-Content-Type-Options", "nosniff")
-        self.end_headers()
-        self.wfile.write(data)
+class _BrowserUvicornServer(uvicorn.Server):
+    def __init__(self, config: uvicorn.Config) -> None:
+        super().__init__(config)
+        self.ready = threading.Event()
+        self.failure: BaseException | None = None
 
-    def log_message(self, format: str, *args: object) -> None:
-        logger.debug("Browser listener: " + format, *args)
+    @contextmanager
+    def capture_signals(self) -> Iterator[None]:
+        # The owning CLI, not this background listener, owns process signals.
+        yield
+
+    async def startup(self, sockets: list[socket.socket] | None = None) -> None:
+        await super().startup(sockets=sockets)
+        self.ready.set()
 
 
 class BrowserServer:
     """Owned browser listener serving the SPA and proxying gRPC-Web to an operator."""
 
-    def __init__(self, server: _BrowserHTTPServer, thread: threading.Thread) -> None:
+    def __init__(
+        self, server: _BrowserUvicornServer, listener: socket.socket, channel: grpc.Channel
+    ) -> None:
         self._server = server
-        self._thread = thread
+        self._listener = listener
+        self._channel = channel
+        address = listener.getsockname()
+        self._host: str = address[0]
+        self._port: int = address[1]
+        self._close_lock = threading.Lock()
+        self._closed = False
+        self._thread = threading.Thread(
+            target=self._run, name="avalanche-browser-listener", daemon=True
+        )
 
     @property
     def host(self) -> str:
-        return str(self._server.server_address[0])
+        return self._host
 
     @property
     def port(self) -> int:
-        return int(self._server.server_address[1])
+        return self._port
 
     @property
     def endpoint(self) -> str:
         host = f"[{self.host}]" if ":" in self.host else self.host
         return f"http://{host}:{self.port}"
 
+    def _run(self) -> None:
+        try:
+            self._server.run(sockets=[self._listener])
+        except BaseException as exc:
+            self._server.failure = exc
+        finally:
+            self._server.ready.set()
+
+    def _start(self) -> None:
+        self._thread.start()
+        if not self._server.ready.wait(timeout=_STARTUP_TIMEOUT_SECONDS):
+            raise TimeoutError("Browser listener did not become ready")
+        if self._server.failure is not None:
+            raise self._server.failure
+        if not self._server.started:
+            raise RuntimeError("Browser listener stopped before becoming ready")
+
     def wait(self) -> None:
         while self._thread.is_alive():
             self._thread.join(timeout=0.1)
+        if self._server.failure is not None:
+            raise self._server.failure
 
     def close(self) -> None:
-        if self._server.stopping.is_set():
-            return
-        self._server.stopping.set()
-        self._server.shutdown()
-        self._server.server_close()
-        self._server.channel.close()
-        self._thread.join(timeout=2.0)
+        with self._close_lock:
+            if self._closed:
+                return
+            self._closed = True
+        self._server.should_exit = True
+        try:
+            # Closing the shared channel cancels REST calls and idle subscriptions
+            # before Uvicorn waits for their request tasks and worker threads.
+            self._channel.close()
+        finally:
+            try:
+                if self._thread.ident is not None:
+                    self._thread.join(timeout=_SHUTDOWN_TIMEOUT_SECONDS)
+                    if self._thread.is_alive():
+                        self._server.force_exit = True
+                        self._thread.join(timeout=0.5)
+            finally:
+                self._listener.close()
+
+
+def _bind_listener(host: str, port: int) -> socket.socket:
+    normalized = host[1:-1] if host.startswith("[") and host.endswith("]") else host
+    family = socket.AF_INET6 if ":" in normalized else socket.AF_INET
+    listener = socket.socket(family, socket.SOCK_STREAM)
+    try:
+        listener.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        listener.bind((normalized, port))
+        listener.listen(socket.SOMAXCONN)
+    except BaseException as failure:
+        try:
+            listener.close()
+        except BaseException as exc:
+            failure.add_note(f"HTTP socket cleanup also failed: {exc}")
+        raise
+    return listener
 
 
 def start_browser_server(
@@ -349,25 +402,40 @@ def start_browser_server(
             "external trusted, authenticated boundary"
         )
     root = (asset_root or Path(__file__).with_name("web_assets")).resolve()
-    server = _BrowserHTTPServer((host, port), operator_address, root)
-    thread = threading.Thread(
-        target=server.serve_forever,
-        name="avalanche-browser-listener",
-        daemon=True,
-    )
+    operator_port = _operator_port(operator_address)
+    listener = _bind_listener(host, port)
+    channel: grpc.Channel | None = None
+    browser_server: BrowserServer | None = None
     try:
-        thread.start()
+        channel = grpc.insecure_channel(operator_address, options=_BOUNDED_MESSAGE_OPTIONS)
+        app = _create_browser_app(channel, root, operator_port)
+        config = uvicorn.Config(
+            app,
+            loop="asyncio",
+            http="h11",
+            ws="none",
+            lifespan="off",
+            log_config=None,
+            access_log=False,
+            proxy_headers=False,
+            server_header=False,
+            timeout_graceful_shutdown=1.0,
+        )
+        browser_server = BrowserServer(_BrowserUvicornServer(config), listener, channel)
+        browser_server._start()
     except BaseException as failure:
         try:
-            server.server_close()
-        except Exception as exc:
-            failure.add_note(f"HTTP socket cleanup also failed: {exc}")
-        try:
-            server.channel.close()
-        except Exception as exc:
-            failure.add_note(f"HTTP upstream cleanup also failed: {exc}")
+            if browser_server is not None:
+                browser_server.close()
+            else:
+                try:
+                    if channel is not None:
+                        channel.close()
+                finally:
+                    listener.close()
+        except BaseException as exc:
+            failure.add_note(f"Browser listener cleanup also failed: {exc}")
         raise
-    browser_server = BrowserServer(server, thread)
     logger.info(
         "Browser UI listening on %s for operator %s",
         browser_server.endpoint,
@@ -405,40 +473,12 @@ def _trailer_frame(code: grpc.StatusCode, detail: str) -> bytes:
     return struct.pack(">BI", 0x80, len(payload)) + payload
 
 
-def _cancel_when_client_disconnects(
-    connection: socket.socket,
-    call: grpc.Call,
-    stream_complete: threading.Event,
-    client_disconnected: threading.Event,
-) -> None:
-    while not stream_complete.wait(_CLIENT_DISCONNECT_POLL_SECONDS):
-        if _client_disconnected(connection):
-            client_disconnected.set()
-            call.cancel()
-            return
-
-
-def _client_disconnected(connection: socket.socket) -> bool:
-    try:
-        readable, _, _ = select.select((connection,), (), (), 0)
-    except (OSError, ValueError):
-        return True
-    if not readable:
-        return False
-    try:
-        return connection.recv(1, socket.MSG_PEEK) == b""
-    except (BlockingIOError, InterruptedError, TimeoutError):
-        return False
-    except OSError:
-        return True
-
-
 def _is_loopback_host(host: str) -> bool:
     normalized = host[1:-1] if host.startswith("[") and host.endswith("]") else host
-    if normalized.lower() == "localhost":
+    if normalized.lower() == "localhost" or normalized == "::1":
         return True
     try:
-        return socket.gethostbyname(normalized).startswith("127.") or normalized == "::1"
+        return socket.gethostbyname(normalized).startswith("127.")
     except OSError:
         return False
 
