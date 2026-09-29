@@ -251,11 +251,21 @@ export function WorkflowWorkspaceSurface({
   const run =
     loadedRun ??
     (historical && retainedRun?.summary?.workflowId === workflowId ? retainedRun : undefined);
-  const topologyNodeIds = run
-    ? run.topology?.nodeIds
-    : historical
-      ? undefined
-      : workflow?.nodeIds;
+  const requestingRun =
+    run?.summary?.status === "requesting" ||
+    (run !== undefined &&
+      run === loadedRun &&
+      state.selectedRunStructureRepairEventUlid !== undefined);
+  // Requesting snapshots have no run-pinned graph yet. Keep the definition visible
+  // through the status update and the subsequent prepared-snapshot refresh.
+  const previewWorkflow = requestingRun && !run?.topology?.nodeIds.length;
+  const topologyNodeIds = previewWorkflow
+    ? workflow?.nodeIds
+    : run
+      ? run.topology?.nodeIds
+      : historical
+        ? undefined
+        : workflow?.nodeIds;
   useEffect(() => {
     if (!topologyNodeIds) return;
     setInspectedNode((current) =>
@@ -265,7 +275,7 @@ export function WorkflowWorkspaceSurface({
   const inspectedNodeAvailable =
     !inspectedNode || !topologyNodeIds || topologyNodeIds.includes(inspectedNode);
   const inspectorOpen = Boolean(
-    inspectedNode && inspectedNodeAvailable && (!historical || run),
+    inspectedNode && inspectedNodeAvailable && !requestingRun && (!historical || run),
   );
   const runListPanel = workflowId ? (
     <RunListPanel
@@ -315,9 +325,10 @@ export function WorkflowWorkspaceSurface({
               <>
                 <div className="run-graph-shell relative min-h-0 min-w-0 flex-1 overflow-hidden">
                   <GraphCanvas
-                    workflow={run ? undefined : workflow}
-                    runTopology={run?.topology}
-                    runNodes={run?.nodes}
+                    workflow={!run || previewWorkflow ? workflow : undefined}
+                    runTopology={previewWorkflow ? undefined : run?.topology}
+                    runNodes={requestingRun ? undefined : run?.nodes}
+                    inspectionDisabled={requestingRun}
                     selectedNodeId={inspectedNode}
                     onClearNode={closePanel}
                     onOpenNode={openNode}
@@ -340,12 +351,29 @@ export function WorkflowWorkspaceSurface({
                       )}
                     </div>
                   )}
-                  {run && (
+                  {requestingRun ? (
+                    <div
+                      className="pointer-events-none absolute top-[18px] right-[18px] z-[5] max-w-[240px] rounded-lg border border-line bg-panel px-3 py-2.5 text-xs text-secondary shadow-sm max-[700px]:top-auto max-[700px]:bottom-16"
+                      role="status"
+                      aria-label="Run preparation"
+                    >
+                      <span className="flex items-center gap-2 font-medium text-ink">
+                        <span
+                          className="size-3 animate-spin rounded-full border-2 border-line border-t-amber motion-reduce:animate-none"
+                          aria-hidden="true"
+                        />
+                        Requesting run
+                      </span>
+                      <span className="mt-1 block">
+                        Preparing execution. Nodes will become available when ready.
+                      </span>
+                    </div>
+                  ) : run ? (
                     <div className="historical-badge pointer-events-none absolute top-[18px] right-[18px] z-[5] rounded-lg border border-[#dfc99e] bg-[rgba(255,252,245,.96)] px-3 py-[9px] text-[9px] text-[#766548] shadow-[0_4px_14px_rgba(54,44,25,.08)] max-[700px]:hidden [&>span]:mb-[3px] [&>span]:block [&>span]:font-mono [&>span]:text-[8px] [&>span]:text-amber [&>span]:uppercase">
                       <span>Viewing a run snapshot</span>This view does not represent the
                       workflow&apos;s current state.
                     </div>
-                  )}
+                  ) : null}
                 </div>
                 {run && (
                   <RunLogPane
