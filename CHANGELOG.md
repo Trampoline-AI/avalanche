@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 0.7.0
+
 - Replaced the built-in REST API's handwritten routing with FastAPI and moved
   the shared browser/REST listener to Uvicorn. Both are runtime dependencies.
   Existing `/api/v1` endpoints still call the operator's gRPC service;
