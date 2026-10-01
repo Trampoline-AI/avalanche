@@ -2,18 +2,19 @@
 
 ## Unreleased
 
-## 0.6.2
-
-- The operator UI keeps the full workflow DAG visible while a run is requesting,
-  with dimmed, disabled nodes and a loading indicator until its run snapshot is ready.
-- Removed the documentation website source files from this repository now that
-  they are maintained separately.
 - Replaced the built-in REST API's handwritten routing with FastAPI and moved
   the shared browser/REST listener to Uvicorn. Both are runtime dependencies.
   Existing `/api/v1` endpoints still call the operator's gRPC service;
   interactive docs and OpenAPI are available at `/api/docs` and `/api/openapi.json`.
   Malformed HTTP framing is rejected by Uvicorn before API validation.
   Method-not-allowed responses list every supported method for the requested REST path.
+
+## 0.6.2
+
+- The operator UI keeps the full workflow DAG visible while a run is requesting,
+  with dimmed, disabled nodes and a loading indicator until its run snapshot is ready.
+- Removed the documentation website source files from this repository now that
+  they are maintained separately.
 
 ## 0.6.1
 
