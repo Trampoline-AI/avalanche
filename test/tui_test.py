@@ -9,6 +9,7 @@ import time
 from dataclasses import replace
 from datetime import datetime
 
+import grpc
 import pytest
 from predict_rlm import RunTrace
 from pydantic import ValidationError
@@ -19,6 +20,7 @@ from avalanche._agent_trace import (
     AgentTerminalDetail,
     AgentTraceEnvelope,
 )
+from runtime.operator.client import OperatorCallError
 from runtime.operator.models import (
     AgentEvent,
     AgentEventDetailAppended,
@@ -60,6 +62,89 @@ def _drain_until(store: UIStore, predicate) -> None:
             return
         assert time.monotonic() < deadline, "Background update did not complete"
         time.sleep(0.005)
+
+
+class _RecordingTraceProvider(MockStateProvider):
+    def __init__(self) -> None:
+        super().__init__(include_agent_trace=True)
+        run = self.get_run("run_agent")
+        assert run is not None
+        node = run.nodes["inspect_agent_1"]
+        envelope = AgentTraceEnvelope.model_validate_json(node.agent_trace_json)
+        self.body = AgentTerminalDetail(trace=envelope.trace, evidence=envelope.evidence)
+        self.trace_body_json = self.body.model_dump_json()
+        pending = replace(
+            node,
+            trace=TraceDescriptor(available=True, revision=1),
+            agent_trace_json=envelope.model_copy(
+                update={"trace": None, "evidence": None}
+            ).model_dump_json(),
+        )
+        second = replace(pending, node_id="second_agent_1", name="second_agent")
+        workflow = self._workflows["agent_trace"]
+        self._workflows = {
+            workflow.selector: replace(
+                workflow,
+                node_ids=[pending.node_id, second.node_id],
+                graph={pending.node_id: [], second.node_id: []},
+                node_types={pending.node_id: "step", second.node_id: "step"},
+                display_names={
+                    pending.node_id: "inspect_agent",
+                    second.node_id: "second_agent",
+                },
+                agent_node_ids=[pending.node_id, second.node_id],
+            )
+        }
+        run = replace(
+            run,
+            operator_instance_id="operator-1",
+            created_sequence=7,
+            revision=1,
+            nodes={pending.node_id: pending, second.node_id: second},
+        )
+        older = replace(run, run_id="older-agent-run", created_sequence=6)
+        self._runs = {older.run_id: older, run.run_id: run}
+        self.calls: list[tuple[str, str]] = []
+        self.failures: dict[int, Exception] = {}
+        self.gates: dict[int, tuple[threading.Event, threading.Event]] = {}
+
+    def list_runs(self, workflow_selector: str) -> list[RunState]:
+        return [
+            replace(run, details_hydrated=False) for run in super().list_runs(workflow_selector)
+        ]
+
+    def gate(self, attempt: int) -> tuple[threading.Event, threading.Event]:
+        gate = (threading.Event(), threading.Event())
+        self.gates[attempt] = gate
+        return gate
+
+    def hydrate_trace(self, run_id: str, node_id: str) -> TraceDetail:
+        self.calls.append((run_id, node_id))
+        attempt = len(self.calls)
+        gate = self.gates.get(attempt)
+        if gate is not None:
+            entered, release = gate
+            entered.set()
+            release.wait()
+        failure = self.failures.get(attempt)
+        if failure is not None:
+            raise failure
+        run = self.get_run(run_id)
+        assert run is not None
+        descriptor = run.nodes[node_id].trace
+        assert descriptor is not None
+        return TraceDetail(
+            operator_instance_id=run.operator_instance_id,
+            run_id=run_id,
+            created_sequence=run.created_sequence,
+            node_id=node_id,
+            descriptor_revision=descriptor.revision,
+            trace_body=AgentTerminalDetail.model_validate(json.loads(self.trace_body_json)),
+        )
+
+    def close(self) -> None:
+        for _, release in self.gates.values():
+            release.set()
 
 
 @pytest.fixture
@@ -582,6 +667,145 @@ async def test_delayed_agent_trace_cannot_overwrite_newer_failure_and_recovers()
             body.trace.steps[0].reasoning
             in app.screen.query_one("#agent-trace-content").render().plain
         )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "status", [grpc.StatusCode.UNAVAILABLE, grpc.StatusCode.DEADLINE_EXCEEDED]
+)
+async def test_trace_transport_failure_retries_after_backoff_without_duplicate_fetches(status):
+    provider = _RecordingTraceProvider()
+    provider.failures[1] = OperatorCallError(status, "temporary connection failure")
+    first_entered, first_release = provider.gate(1)
+    retry_entered, retry_release = provider.gate(2)
+    app = AvalancheApp(provider=provider, workflow="agent_trace", node="inspect_agent")
+    now = [100.0]
+    app._trace_hydration_now = lambda: now[0]
+    key = ("run_agent", "inspect_agent_1", 1)
+    async with app.run_test(size=(120, 40)) as pilot:
+        await _wait_for(pilot, lambda: app.store.current_run is not None)
+        await pilot.press("enter")
+        assert await asyncio.to_thread(first_entered.wait, 1)
+        for _ in range(3):
+            app._hydrate_selected_trace()
+        first_release.set()
+        await _wait_for(pilot, lambda: key in app._trace_hydration_retry)
+        assert not app._trace_hydration_attempts
+        assert not app._trace_hydration_in_flight
+        retry_deadline = app._trace_hydration_retry[key][1]
+        assert retry_deadline > now[0]
+        assert app.store.selected_agent_trace_envelope.trace is None
+
+        now[0] = retry_deadline - 0.001
+        app._hydrate_selected_trace()
+        await pilot.pause(0.05)
+        assert provider.calls == [key[:2]]
+        now[0] = retry_deadline
+        app._hydrate_selected_trace()
+        assert await asyncio.to_thread(retry_entered.wait, 1)
+        for _ in range(3):
+            app._hydrate_selected_trace()
+        retry_release.set()
+        await _wait_for(
+            pilot, lambda: app.store.selected_agent_trace_envelope.trace == provider.body.trace
+        )
+        app._hydrate_selected_trace()
+        await pilot.pause(0.05)
+        assert provider.calls == [key[:2], key[:2]]
+        assert not app._trace_hydration_attempts
+        assert not app._trace_hydration_in_flight
+        assert key not in app._trace_hydration_retry
+        await pilot.press("e")
+        inspector = app.screen.query_one("#agent-trace-content", AgentTraceInspector)
+        assert provider.body.trace.steps[0].reasoning in inspector.render().plain
+
+
+@pytest.mark.asyncio
+async def test_failed_trace_fetch_releases_changed_node_and_run_contexts():
+    provider = _RecordingTraceProvider()
+    provider.failures[1] = OperatorCallError(grpc.StatusCode.UNAVAILABLE, "disconnected")
+    entered, release = provider.gate(1)
+    app = AvalancheApp(provider=provider, workflow="agent_trace", node="inspect_agent")
+    app._trace_hydration_now = lambda: 100.0
+    async with app.run_test(size=(120, 40)) as pilot:
+        await _wait_for(pilot, lambda: app.store.current_run is not None)
+        await pilot.press("enter")
+        assert await asyncio.to_thread(entered.wait, 1)
+        app.select_node(
+            next(node for node in app.store.all_nodes if node.name == "second_agent_1")
+        )
+        await pilot.press("enter")
+        app._hydrate_selected_trace()
+        assert provider.calls == [("run_agent", "inspect_agent_1")]
+        release.set()
+        await _wait_for(
+            pilot, lambda: app.store.selected_agent_trace_envelope.trace == provider.body.trace
+        )
+        assert provider.calls == [
+            ("run_agent", "inspect_agent_1"),
+            ("run_agent", "second_agent_1"),
+        ]
+
+        await pilot.press("alt+down")
+        await _wait_for(pilot, lambda: app.store.selected_run_id == "older-agent-run")
+        await _wait_for(
+            pilot, lambda: app.store.selected_agent_trace_envelope.trace == provider.body.trace
+        )
+        assert provider.calls == [
+            ("run_agent", "inspect_agent_1"),
+            ("run_agent", "second_agent_1"),
+            ("older-agent-run", "second_agent_1"),
+        ]
+        assert not app._trace_hydration_attempts
+        assert not app._trace_hydration_in_flight
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("body_json", "failure", "error_type"),
+    [
+        ("{", None, json.JSONDecodeError),
+        ('{"trace": null}', None, ValidationError),
+        (
+            None,
+            OperatorCallError(grpc.StatusCode.DATA_LOSS, "trace chunk offset is invalid"),
+            OperatorCallError,
+        ),
+        (
+            None,
+            ValueError("trace checksum mismatch"),
+            ValueError,
+        ),
+        (
+            None,
+            OperatorCallError(grpc.StatusCode.PERMISSION_DENIED, "trace access denied"),
+            OperatorCallError,
+        ),
+        (
+            None,
+            RuntimeError("UNAVAILABLE is not a transport status"),
+            RuntimeError,
+        ),
+    ],
+)
+async def test_invalid_trace_detail_surfaces_in_textual_after_attempt_cleanup(
+    body_json, failure, error_type
+):
+    provider = _RecordingTraceProvider()
+    if body_json is not None:
+        provider.trace_body_json = body_json
+    if failure is not None:
+        provider.failures[1] = failure
+    app = AvalancheApp(provider=provider, workflow="agent_trace", node="inspect_agent")
+    with pytest.raises(error_type):
+        async with app.run_test(size=(120, 40)) as pilot:
+            await _wait_for(pilot, lambda: app.store.current_run is not None)
+            await pilot.press("enter")
+            await asyncio.wait_for(app._exception_event.wait(), 1)
+            assert not app._trace_hydration_attempts
+            assert not app._trace_hydration_in_flight
+            assert not app._trace_hydration_retry
+    assert provider.calls == [("run_agent", "inspect_agent_1")]
 
 
 @pytest.mark.parametrize("with_trace", [False, True])

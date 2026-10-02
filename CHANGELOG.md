@@ -9,6 +9,11 @@
   details, including failures and cancellations before a trace exists.
   Trace details now use the SDK's typed schema and require the three evidence
   metadata fields; malformed details raise instead of being silently discarded.
+- Fixed agent inspection regressions: large recorded iteration payloads are
+  bounded without failing otherwise valid runs, live operator snapshots retain
+  events before terminal evidence, and the terminal inspector retries transient
+  trace-fetch failures without leaving attempts stuck. Malformed details still
+  raise after attempt cleanup.
 
 ## 0.7.0
 

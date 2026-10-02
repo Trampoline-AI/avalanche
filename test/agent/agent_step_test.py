@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import importlib
 import json
+import threading
 from types import SimpleNamespace
 from typing import Literal
 
@@ -446,3 +447,198 @@ async def test_successful_agent_prediction_requires_sdk_trace_and_evidence(missi
         with pytest.raises(AttributeError):
             await agent(person=Person(id=1, name="Ada"))
     assert observed == []
+
+
+def _iteration_with_details(payloads):
+    from predict_rlm import IterationStep
+    from predict_rlm.trace import PredictCallDetail, PredictCallGroup, TokenUsage
+
+    return IterationStep(
+        iteration=1,
+        reasoning="Inspect the calls.",
+        code="answer = predict(question)",
+        output="answer ready",
+        untruncated_output="answer ready",
+        duration_ms=12,
+        predict_calls=[
+            PredictCallGroup(
+                signature="question -> answer",
+                model="test-model",
+                calls=[
+                    PredictCallDetail(
+                        duration_ms=3,
+                        input={"question": payload},
+                        output={"answer": "ready"},
+                        usage=TokenUsage(input_tokens=10, output_tokens=2),
+                    )
+                    for payload in payloads
+                ],
+            )
+        ],
+    )
+
+
+def _retain_iteration(step):
+    from predict_rlm import IterationStep, RunEvent, RunEventKind
+
+    from runtime.operator import Operator
+    from runtime.operator.models import NodeState, NodeStatus, RunState
+
+    event = agent_module._project_evidence_event(
+        RunEvent("sdk-run", 1, RunEventKind.ITERATION_RECORDED, 1, {"step": step}),
+        invocation_id="invocation",
+    )
+    IterationStep.model_validate(event["data"]["step"], strict=True)
+    operator = Operator([], watch=False, schedule=False)
+    run = RunState(run_id="bounded-detail-run", flow_name="agent-flow")
+    run.nodes["agent"] = NodeState("agent", "agent", "step", status=NodeStatus.RUNNING)
+    operator._runs[run.run_id] = run
+    handle = SimpleNamespace(
+        cancel_event=threading.Event(), result_bundle=None, success_quiesced=False
+    )
+    try:
+        for evidence in (
+            event,
+            {
+                "kind": "trace_finished",
+                "invocation_id": "invocation",
+                "trace": _trace().model_copy(update={"iterations": 1}).model_dump(mode="json"),
+                "evidence": {
+                    "run_id": "sdk-run",
+                    "complete": True,
+                    "terminal_outcome": "completed",
+                },
+            },
+        ):
+            operator._apply_event(
+                run.run_id,
+                handle,
+                {"type": "agent_evidence", "node_id": "agent", "event": evidence},
+            )
+        detail = json.loads(operator.get_run(run.run_id).nodes["agent"].agent_trace_json)
+        hydrated = RunTrace.model_validate(detail["trace"], strict=True)
+        assert len(hydrated.steps) == 1
+        assert detail["evidence"]["terminal_outcome"] == "completed"
+        return hydrated.steps[0], detail["events"][0]["data"]
+    finally:
+        operator.close()
+
+
+@pytest.mark.parametrize(
+    "payloads",
+    [
+        ["small question"],
+        ["x" * (9 * 1024 * 1024)],
+        ["x" * (1536 * 1024)] * 2,
+        ["x" * (1536 * 1024)] * 3,
+    ],
+    ids=["unchanged", "oversized-subcall", "aggregate-below-limit", "aggregate-above-limit"],
+)
+def test_iteration_detail_survives_operator_retention_and_hydration(payloads):
+    step = _iteration_with_details(payloads)
+    original = step.model_copy(deep=True)
+    hydrated, data = _retain_iteration(step)
+
+    assert step == original
+    assert hydrated.iteration == 1
+    assert hydrated.duration_ms == 12
+    assert hydrated.code == step.code
+    assert hydrated.output == step.output
+    assert hydrated.usage == step.usage
+    assert hydrated.predict_calls[0].signature == "question -> answer"
+    assert data["predict_count"] == len(payloads)
+    assert [call.usage for call in hydrated.predict_calls[0].calls] == [
+        call.usage for call in step.predict_calls[0].calls
+    ]
+    assert len(json.dumps(data["step"], separators=(",", ":")).encode()) <= (
+        agent_module._MAX_EVIDENCE_VALUE_BYTES
+    )
+    if len(json.dumps(step.model_dump(mode="json"), separators=(",", ":")).encode()) <= (
+        agent_module._MAX_EVIDENCE_VALUE_BYTES
+    ):
+        assert hydrated == step
+    else:
+        inputs = [call.input for call in hydrated.predict_calls[0].calls]
+        assert any(value.get("kind") == "unavailable" for value in inputs)
+        assert [call.output for call in hydrated.predict_calls[0].calls] == [
+            {"answer": "ready"}
+        ] * len(payloads)
+        if len(payloads) > 1:
+            assert sum(value == {"question": payloads[0]} for value in inputs) == 2
+
+
+def test_iteration_bounds_tool_payloads_and_text_without_changing_sdk_values():
+    from predict_rlm.trace import ToolCall
+
+    step = _iteration_with_details(["small question"])
+    huge = "x" * (9 * 1024 * 1024)
+    step.reasoning = huge
+    step.untruncated_output = huge
+    step.tool_calls = [
+        ToolCall(
+            name="lookup",
+            args=[huge],
+            kwargs={"query": huge},
+            result={"document": huge},
+            duration_ms=7,
+            error="lookup failed",
+        )
+    ]
+    original = step.model_copy(deep=True)
+    hydrated, data = _retain_iteration(step)
+
+    assert step == original
+    assert "unavailable" in hydrated.reasoning
+    assert "unavailable" in hydrated.untruncated_output
+    assert hydrated.code == step.code
+    assert hydrated.output == step.output
+    tool = hydrated.tool_calls[0]
+    assert (tool.name, tool.duration_ms, tool.error) == ("lookup", 7, "lookup failed")
+    assert tool.args[0]["kind"] == "unavailable"
+    assert tool.kwargs["kind"] == "unavailable"
+    assert tool.result["kind"] == "unavailable"
+    assert data["tool_count"] == 1
+
+
+def test_iteration_call_overflow_reports_omitted_counts(monkeypatch):
+    from predict_rlm.trace import ToolCall
+
+    monkeypatch.setattr(agent_module, "_MAX_EVIDENCE_VALUE_BYTES", 1200)
+    step = _iteration_with_details(["small question"] * 12)
+    step.tool_calls = [
+        ToolCall(name=f"tool_{index}", duration_ms=index, result=index) for index in range(12)
+    ]
+    original = step.model_copy(deep=True)
+    hydrated, data = _retain_iteration(step)
+
+    assert step == original
+    assert hydrated.iteration == step.iteration
+    assert hydrated.duration_ms == step.duration_ms
+    assert hydrated.usage == step.usage
+    assert data["tool_count"] == 12
+    assert data["predict_count"] == 12
+    omissions = data["omissions"]
+    assert "unavailable" in hydrated.reasoning
+    assert omissions["tool_count"] + len(hydrated.tool_calls) == 12
+    assert (
+        omissions["predict_count"] + sum(len(group.calls) for group in hydrated.predict_calls)
+        == 12
+    )
+    assert len(json.dumps(data["step"], separators=(",", ":")).encode()) <= 1200
+
+
+def test_iteration_rejects_unrepresentable_metadata_budget_without_fabricating_usage(
+    monkeypatch,
+):
+    from predict_rlm import RunEvent, RunEventKind
+
+    monkeypatch.setattr(agent_module, "_MAX_EVIDENCE_VALUE_BYTES", 128)
+    step = _iteration_with_details([])
+    step.usage.main.input_tokens = 10**200
+    original = step.model_copy(deep=True)
+    with pytest.raises(ValueError):
+        agent_module._project_evidence_event(
+            RunEvent("sdk-run", 1, RunEventKind.ITERATION_RECORDED, 1, {"step": step}),
+            invocation_id="invocation",
+        )
+    assert step == original

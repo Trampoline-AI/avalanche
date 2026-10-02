@@ -38,7 +38,7 @@ from .config import UNSET, validate_runtime_kwargs
 from .signature import resolve_signature
 
 if TYPE_CHECKING:
-    from predict_rlm import RunEvent, RunEvidence, RunTrace
+    from predict_rlm import IterationStep, RunEvent, RunEvidence, RunTrace
 
     from .._agent_trace import AgentEvidenceMetadata
 
@@ -173,6 +173,134 @@ def _bounded_agent_value(value: object) -> JsonValue:
     return projected
 
 
+def _bounded_iteration_step(
+    step: IterationStep,
+) -> tuple[dict[str, JsonValue], dict[str, JsonValue]]:
+    """Keep an SDK-shaped step within the aggregate inspection-data budget."""
+
+    def fields(model: BaseModel, *, exclude: set[str]) -> dict[str, JsonValue]:
+        value = _project_agent_value(model.model_dump(mode="json", exclude=exclude))
+        assert isinstance(value, dict)
+        return value
+
+    projected = fields(step, exclude={"tool_calls", "predict_calls"})
+    tools: list[JsonValue] = []
+    groups: list[JsonValue] = []
+    projected["tool_calls"] = tools
+    projected["predict_calls"] = groups
+    for tool in step.tool_calls:
+        detail = fields(tool, exclude={"args", "kwargs", "result"})
+        args = _project_agent_value(tool.args)
+        detail["args"] = args if isinstance(args, list) else [args]
+        detail["kwargs"] = _project_agent_value(tool.kwargs)
+        detail["result"] = _project_agent_value(tool.result)
+        tools.append(detail)
+    for group in step.predict_calls:
+        detail = fields(group, exclude={"calls"})
+        calls: list[JsonValue] = []
+        detail["calls"] = calls
+        for call in group.calls:
+            call_detail = fields(call, exclude={"input", "output"})
+            call_detail["input"] = _project_agent_value(call.input)
+            call_detail["output"] = _project_agent_value(call.output)
+            calls.append(call_detail)
+        groups.append(detail)
+
+    def size(value: JsonValue) -> int:
+        return len(json.dumps(value, separators=(",", ":")).encode())
+
+    remaining = size(projected) - _MAX_EVIDENCE_VALUE_BYTES
+    if remaining <= 0:
+        return projected, {}
+
+    # Omit the largest inspection fields first, leaving small detail and SDK
+    # identity/timing/usage intact. Replacements retain each field's SDK type.
+    marker = _unavailable_value("iteration detail exceeds byte limit")
+    text_marker = "[unavailable: iteration detail exceeds byte limit]"
+    candidates: list[tuple[int, dict[str, JsonValue], str, JsonValue]] = []
+
+    def collect(value: JsonValue) -> None:
+        if isinstance(value, list):
+            for item in value:
+                collect(item)
+        elif isinstance(value, dict):
+            for key, item in value.items():
+                replacement: JsonValue
+                if isinstance(item, str):
+                    replacement = text_marker
+                elif key in {"input", "output", "kwargs", "result"}:
+                    replacement = marker
+                elif key == "args":
+                    replacement = [marker]
+                else:
+                    collect(item)
+                    continue
+                saving = size(item) - size(replacement)
+                if saving > 0:
+                    candidates.append((saving, value, key, replacement))
+
+    collect(projected)
+    for saving, container, key, replacement in sorted(
+        candidates, key=lambda candidate: candidate[0], reverse=True
+    ):
+        container[key] = replacement
+        remaining -= saving
+        if remaining <= 0:
+            return projected, {}
+
+    # Even call identities can exceed the fixed budget. Keep a prefix and
+    # expose omitted counts both on the event and in SDK-only inspection.
+    reasoning = projected["reasoning"]
+    assert isinstance(reasoning, str)
+
+    def omission_note(tool_count: int, predict_count: int, group_count: int) -> str:
+        return (
+            "\n[unavailable: iteration detail exceeds byte limit; omitted "
+            f"{tool_count} tool calls, {predict_count} predict calls, "
+            f"and {group_count} predict groups]"
+        )
+
+    # Reserve the longest possible count note before trimming call collections.
+    reserved_reasoning = reasoning + omission_note(
+        len(step.tool_calls),
+        sum(len(group.calls) for group in step.predict_calls),
+        len(step.predict_calls),
+    )
+    projected["reasoning"] = reserved_reasoning
+    remaining += size(reserved_reasoning) - size(reasoning)
+    omitted_tools = 0
+    omitted_predicts = 0
+    omitted_groups = 0
+    while tools and remaining > 0:
+        remaining -= size(tools.pop()) + (1 if tools else 0)
+        omitted_tools += 1
+    for group_detail in reversed(groups):
+        assert isinstance(group_detail, dict)
+        group_calls = group_detail["calls"]
+        assert isinstance(group_calls, list)
+        while group_calls and remaining > 0:
+            remaining -= size(group_calls.pop()) + (1 if group_calls else 0)
+            omitted_predicts += 1
+        if remaining <= 0:
+            break
+    while groups and remaining > 0:
+        remaining -= size(groups.pop()) + (1 if groups else 0)
+        omitted_groups += 1
+    projected["reasoning"] = reasoning + omission_note(
+        omitted_tools, omitted_predicts, omitted_groups
+    )
+    if size(projected) > _MAX_EVIDENCE_VALUE_BYTES:
+        # Required numeric SDK metadata cannot be replaced by an omission
+        # marker without inventing measurements or breaking the SDK schema.
+        raise ValueError("iteration inspection metadata exceeds byte limit")
+    return projected, {
+        "reason": "iteration detail exceeds byte limit",
+        "tool_count": omitted_tools,
+        "predict_count": omitted_predicts,
+        "predict_group_count": omitted_groups,
+    }
+
+
 def _project_evidence_event(
     event: RunEvent,
     *,
@@ -192,14 +320,17 @@ def _project_evidence_event(
         from predict_rlm import IterationStep
 
         step = IterationStep.model_validate(data["step"], strict=True)
+        bounded_step, omissions = _bounded_iteration_step(step)
         projected = {
             "iteration": step.iteration,
             "duration_ms": step.duration_ms,
             "error": step.error,
             "tool_count": len(step.tool_calls),
             "predict_count": sum(len(group.calls) for group in step.predict_calls),
-            "step": step.model_dump(mode="json"),
+            "step": bounded_step,
         }
+        if omissions:
+            projected["omissions"] = omissions
     elif event_kind == "predict.started":
         projected = {
             key: data[key] for key in ("call_id", "signature", "instructions", "model")

@@ -252,7 +252,7 @@ class _RunDetailCapture:
     events: Mapping[str, tuple[AgentEvent, ...]]
     trace_bodies: Mapping[str, bytes]
     trace_errors: Mapping[str, str | None]
-    trace_invocation_ids: Mapping[str, str]
+    trace_invocation_ids: Mapping[str, str | None]
 
 
 def _bound_reload_log_text(text: str) -> str:
@@ -1290,7 +1290,7 @@ class Operator:
                 if body is not None:
                     trace_bodies[node_id] = body
             trace_errors[node_id] = self._trace_errors.get(key)
-            trace_invocation_ids[node_id] = self._trace_invocation_ids.get(key, "")
+            trace_invocation_ids[node_id] = self._trace_invocation_ids.get(key)
         return _RunDetailCapture(
             run=captured_run,
             logs=tuple(self._logs.get(run.run_id, ())),

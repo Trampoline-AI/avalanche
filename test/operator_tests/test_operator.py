@@ -180,7 +180,7 @@ def test_agent_evidence_deduplicates_per_invocation_and_materializes_references(
     agent_trace, iteration_step
 ):
     operator = Operator([], watch=False, schedule=False)
-    run = RunState(run_id="run-agent", flow_name="agent-flow")
+    run = RunState(run_id="run-agent", flow_name="agent-flow", status=RunStatus.RUNNING)
     run.nodes["agent_1"] = NodeState("agent_1", "agent", "step", status=NodeStatus.RUNNING)
     operator._runs[run.run_id] = run
     handle = SimpleNamespace(
@@ -207,6 +207,15 @@ def test_agent_evidence_deduplicates_per_invocation_and_materializes_references(
             }
             apply(event)
             apply(event)
+            if invocation == "first":
+                for live_run in (
+                    operator.get_run(run.run_id),
+                    operator.list_runs("")[0],
+                ):
+                    live_trace = json.loads(live_run.nodes["agent_1"].agent_trace_json)
+                    assert [item["data"]["output"] for item in live_trace["events"]] == ["one"]
+                    assert live_trace["trace"] is None
+                    assert live_trace["evidence"] is None
             apply(
                 {
                     "kind": "trace_finished",
