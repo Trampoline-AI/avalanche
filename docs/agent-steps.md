@@ -67,12 +67,12 @@ workflow values. The step body is asynchronous because the model call is
 awaitable. `Workflow.run()` returns an awaitable run handle; `.result()` is the
 explicit synchronous wait above.
 
-The browser's **Step interface** panel describes `review_document`'s Python
-parameters and return annotation, excluding the injected `agent`. It is separate
-from **Inputs & outputs**, which describes `ReviewSignature` and each agent call.
-The two contracts can differ when the step batches calls or transforms a prediction.
-Current definitions show the step interface below the agent configuration;
-historical **Run I/O** shows the interface captured for that run. See
+The browser's **Step definition** tab contains the **Step interface** panel for
+`review_document`'s Python parameters and return annotation, excluding the injected
+`agent`. **Agent definition** shows the separate **Inputs & outputs** contract for
+`ReviewSignature` and each agent call. These contracts can differ when the step
+batches calls or transforms a prediction. Historical **Run I/O** shows retained
+agent-call inputs and outputs, not the step interface. See
 [step interface inspection](dag-api.md#inspect-step-interfaces) for schema details.
 
 Use `ava.input` when the value arrives at run time instead of being fixed in the
@@ -453,8 +453,9 @@ uv run ava dev examples/evaluations_workflow.py
 ```
 
 Before running, the agent node shows an **Evaluations** badge with its metric
-count, including when zoomed out. Select the node in **Current**, then **Evals**,
-to inspect its named metrics, question types, expandable criteria, composite names,
+count. When zoomed out, the badge shows only its icon and count. Select the node
+in **Current**, then **Evals**, to inspect named metrics, question types,
+expandable criteria, composite names,
 and effective Jev model and timeout. **Agent definition** contains instructions,
 agent inputs/outputs, models, and resources; **Step definition** contains only the
 step interface card. These tabs describe configuration, not completed judgments.
@@ -509,6 +510,29 @@ are not structural workflow status updates.
 Python validates classification answers and composites before publishing results.
 The browser decodes and displays those values; it does not recalculate scores or
 repeat the result validation rules.
+
+The selected agent step's Evaluations tab shows one execution result, with status
+and model followed by two flat, equally styled sections: **Composites** first,
+then **Metrics**. Composite results are omitted when none are declared. There are
+no numbered evaluation containers or boxed metric cards. Choice results list
+option percentages once, with only the winner bold and turquoise. Other choice
+percentages, score-level probabilities, and confidence stay neutral. Noul values
+and their bars keep the value gradient. Composite values in the tab use the same
+one-decimal percentage format and gradient as the node and header summaries.
+
+Completed composites also appear on run DAG nodes, right-aligned beside the
+evaluation badge, and in the selected agent's sidebar header on every run tab.
+One composite shows `label: 85.6%`; multiple composites show the first three
+percentages in declaration order, such as `85.6% : 77.0% : 90.0%`. Percentages
+use a continuous red–yellow–green scale: red at 0%, yellow at 50%, and the success
+color (`#22c55e`) at 100%. Labels share the same color in the node and sidebar.
+These summaries use one decimal place and do not show
+scores for pending or failed evaluations. Compact nodes omit composite names;
+their percentages and evaluation pill counts match the duration label's size.
+The compact Agent label uses the same text size, with an icon matching the
+evaluation pill's icon size. Detailed node labels retain their smaller sizing.
+Graph and sidebar share a single run-level evaluation poll so late results update
+both surfaces.
 
 ### Browser examples
 

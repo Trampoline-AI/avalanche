@@ -127,11 +127,7 @@ export interface OperatorApi {
     request: ClassifierEventPageRequest,
     signal?: AbortSignal,
   ): Promise<ClassifierEventDescriptorPage>;
-  listEvaluations(
-    runId: string,
-    nodeId: string,
-    signal?: AbortSignal,
-  ): Promise<EvaluationRecord[]>;
+  listRunEvaluations(runId: string, signal?: AbortSignal): Promise<EvaluationRecord[]>;
   readJsonDetail(bodyToken: string, signal?: AbortSignal): Promise<unknown>;
   readTextDetail(bodyToken: string, signal?: AbortSignal): Promise<string>;
   startRun(workflowSelector: string, input?: Record<string, unknown>): Promise<string>;
@@ -215,15 +211,14 @@ export class GrpcWebOperatorApi implements OperatorApi {
     return source.sourceCode;
   }
 
-  async listEvaluations(
-    runId: string,
-    nodeId: string,
-    signal?: AbortSignal,
-  ): Promise<EvaluationRecord[]> {
+  async listRunEvaluations(runId: string, signal?: AbortSignal): Promise<EvaluationRecord[]> {
     const response = await this.client.listEvaluations(
-      { runId, nodeId },
+      { runId, nodeId: "" },
       signal ? { abort: signal } : undefined,
     ).response;
+    const nodeIds = new Set(response.records.map((record) => record.nodeId));
+    if (nodeIds.size !== response.records.length)
+      throw new Error("Expected one evaluation per agent step");
     return response.records.map(mapEvaluationRecord);
   }
 

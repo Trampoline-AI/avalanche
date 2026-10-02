@@ -67,9 +67,14 @@
   metric-count badge, and the current-definition inspector shows questions,
   criteria, composite names, and effective Jev settings. Historical run graphs
   retain their original declarations after workflow edits.
+- Centered compact graph node names independently of the evaluation badge, so
+  configured agent labels remain centered on their cards.
 - Split the current agent inspector into Agent definition, Evals, and Step
   definition tabs, separating evaluation declarations and the step interface
   from the rest of the agent configuration.
+- Removed the step interface card from agent run **Run I/O**; it now shows only
+  recorded agent inputs and outputs. The current **Step definition** tab keeps
+  the interface card, and other step inspectors are unchanged.
 - The incident-handoff example sends source facts and observable agent actions
   for trace inspection instead of duplicate full-trace copies, avoiding a
   TypeSafe context-limit error on the documented path. Classifier responses now
@@ -79,9 +84,24 @@
 - Browser classifier and evaluation results now display the values validated by
   Python without repeating score, probability, composite, or lifecycle checks
   in the consumer.
+- Simplified the agent run evaluation tab to show one result directly, without
+  a numbered outer card, repeated heading, or boxed metric cards.
+- Completed evaluation composites now appear beside run-node badges and in the
+  agent sidebar header as one-decimal percentages, showing one named score or
+  up to three scores in declaration order. Both surfaces share run-level polling.
 - Evaluation metrics now show Trace, Output, and Input source labels with selected
   field paths derived from Python selector syntax without executing selectors or
   exposing raw evidence. Opaque selectors show their callable identity.
+- Composite and Noul percentages use a red–yellow–green value scale, with colon-separated
+  composite summaries and matching node/sidebar label colors. Compact nodes show
+  percentages without names and icon/count evaluation pills at the duration's size.
+- The evaluation tab places Composites above Metrics as equally styled, unboxed
+  sections. Composite tab values match node/header percentages and colors. Choice
+  results list probabilities once with only the winner bold and turquoise;
+  other choice percentages, score-level probabilities, and confidence stay neutral.
+- Run inspector composite scores are left-aligned beneath the step title.
+- Compact DAG nodes enlarge the Agent label and its icon to match the evaluation
+  pill's text and icon sizes; detailed nodes keep their existing sizing.
 
 ## 0.6.1
 

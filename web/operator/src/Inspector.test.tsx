@@ -1,5 +1,6 @@
 import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
+import type { ComponentProps } from "react";
 
 import type {
   AgentEventDescriptorPage,
@@ -8,6 +9,8 @@ import type {
 } from "./api";
 import type { ClassifierDeclaration, ClassifierInvocation } from "./classifier";
 import { Inspector } from "./Inspector";
+import type { EvaluationRecord } from "./evaluations";
+import { useRunEvaluations } from "./useRunEvaluations";
 import type { StepInterface } from "./stepInterface";
 import { DETAIL_CACHE_MAX_BYTES } from "./detailProjection";
 import {
@@ -182,6 +185,216 @@ const secondarySections = [
 function openRunIo() {
   fireEvent.click(screen.getByRole("tab", { name: "Run I/O" }));
 }
+
+function RunEvaluationInspector(props: ComponentProps<typeof Inspector>) {
+  const evaluationState = useRunEvaluations(
+    props.api,
+    props.run?.operatorInstanceId ?? "",
+    props.run?.summary?.runId,
+  );
+  return <Inspector {...props} evaluationState={evaluationState} />;
+}
+
+function completedEvaluation(
+  composites: Record<string, number>,
+  nodeId = node.nodeId,
+  runId = run.summary!.runId,
+): EvaluationRecord {
+  return {
+    evaluationId: `${runId}-${nodeId}`,
+    runId,
+    nodeId,
+    createdAt: 1,
+    endedAt: 2,
+    status: "completed",
+    result: {
+      composites,
+      classification: {
+        model: "evaluation-model",
+        answers: {},
+        usage: { input_tokens: 0, output_tokens: 0 },
+      },
+    },
+  };
+}
+
+describe("run agent header evaluations", () => {
+  it("keeps the selected agent's completed summary visible across run tabs", async () => {
+    const api = createApi({
+      listRunEvaluations: async () => [completedEvaluation({ quality: 0.856 })],
+    });
+    render(
+      <RunEvaluationInspector
+        api={api}
+        run={run}
+        nodeId={node.nodeId}
+        onClose={() => undefined}
+      />,
+    );
+    const header = screen.getByRole("heading", { name: run.nodes[0].name }).closest("header")!;
+    expect(await within(header).findByText("85.6%")).toBeVisible();
+    openRunIo();
+    expect(within(header).getByText("85.6%")).toBeVisible();
+    fireEvent.click(screen.getByRole("tab", { name: "Evaluations" }));
+    expect(within(header).getByText("85.6%")).toBeVisible();
+    expect(screen.getByText("evaluation-model")).toBeVisible();
+    fireEvent.click(screen.getByRole("tab", { name: "Trace" }));
+    expect(within(header).getByText("85.6%")).toBeVisible();
+  });
+
+  it("changes summaries with the selected node and clears the prior run while loading", async () => {
+    const reviewId = "review";
+    const otherRunId = "other-evaluation-run";
+    const nextRecords = Promise.withResolvers<EvaluationRecord[]>();
+    const api = createApi({
+      listRunEvaluations: async (runId) =>
+        runId === otherRunId
+          ? nextRecords.promise
+          : [
+              completedEvaluation({
+                quality: 0.856,
+                safety: 0.77,
+                relevance: 0.9,
+                fourth: 0.1,
+              }),
+              completedEvaluation({ review: 0.5 }, reviewId),
+            ],
+    });
+    const multiAgentRun = RunSnapshotMsg.create({
+      ...run,
+      topology: {
+        ...run.topology,
+        agentFieldSchemasJson: {
+          ...run.topology!.agentFieldSchemasJson,
+          [reviewId]: JSON.stringify(schemas),
+        },
+      },
+      nodes: [...run.nodes, { ...run.nodes[0], nodeId: reviewId, name: "Review" }],
+    });
+    const view = render(
+      <RunEvaluationInspector
+        api={api}
+        run={multiAgentRun}
+        nodeId={node.nodeId}
+        onClose={() => undefined}
+      />,
+    );
+    const header = within(
+      screen.getByRole("complementary", { name: "Run inspector" }).querySelector("header")!,
+    );
+    expect(await header.findByText("90.0%")).toBeVisible();
+    view.rerender(
+      <RunEvaluationInspector
+        api={api}
+        run={multiAgentRun}
+        nodeId={reviewId}
+        onClose={() => undefined}
+      />,
+    );
+    expect(header.queryByText("90.0%")).not.toBeInTheDocument();
+    expect(header.getByText("50.0%")).toBeVisible();
+    const otherRun = RunSnapshotMsg.create({
+      ...multiAgentRun,
+      summary: { ...multiAgentRun.summary, runId: otherRunId },
+    });
+    view.rerender(
+      <RunEvaluationInspector
+        api={api}
+        run={otherRun}
+        nodeId={reviewId}
+        onClose={() => undefined}
+      />,
+    );
+    expect(header.queryByText("50.0%")).not.toBeInTheDocument();
+    await act(async () => {
+      nextRecords.resolve([completedEvaluation({ current: 0.3 }, reviewId, otherRunId)]);
+    });
+    expect(await header.findByText("30.0%")).toBeVisible();
+    view.rerender(
+      <RunEvaluationInspector
+        api={api}
+        run={otherRun}
+        nodeId={node.nodeId}
+        onClose={() => undefined}
+      />,
+    );
+    expect(header.queryByText("30.0%")).not.toBeInTheDocument();
+  });
+
+  it.each(["pending", "failed", "empty", "absent"] as const)(
+    "does not invent a header score for %s evaluations",
+    (status) => {
+      const completed = completedEvaluation({});
+      const record: EvaluationRecord | undefined =
+        status === "pending"
+          ? {
+              evaluationId: completed.evaluationId,
+              nodeId: completed.nodeId,
+              runId: completed.runId,
+              createdAt: 1,
+              status,
+            }
+          : status === "failed"
+            ? {
+                evaluationId: completed.evaluationId,
+                nodeId: completed.nodeId,
+                runId: completed.runId,
+                createdAt: 1,
+                endedAt: 2,
+                status,
+                error: "Evaluator failed",
+              }
+            : status === "empty"
+              ? completed
+              : undefined;
+      render(
+        <Inspector
+          api={createApi()}
+          run={run}
+          nodeId={node.nodeId}
+          evaluationState={{ records: record ? { [node.nodeId]: record } : {}, loading: false }}
+          onClose={() => undefined}
+        />,
+      );
+      const header = screen
+        .getByRole("heading", { name: run.nodes[0].name })
+        .closest("header")!;
+      expect(within(header).queryByText(/%/)).not.toBeInTheDocument();
+    },
+  );
+
+  it("keeps completed scores out of current definitions and run step headers", () => {
+    const api = createApi();
+    const evaluationState = {
+      records: { [node.nodeId]: completedEvaluation({ quality: 0.856 }) },
+      loading: false,
+    };
+    const view = render(
+      <Inspector
+        api={api}
+        workflow={agentWorkflow}
+        nodeId={node.nodeId}
+        evaluationState={evaluationState}
+        onClose={() => undefined}
+      />,
+    );
+    expect(screen.queryByLabelText(/^Evaluation composites:/)).not.toBeInTheDocument();
+    view.rerender(
+      <Inspector
+        api={api}
+        run={RunSnapshotMsg.create({
+          ...run,
+          topology: { ...run.topology, agentFieldSchemasJson: {} },
+        })}
+        nodeId={node.nodeId}
+        evaluationState={evaluationState}
+        onClose={() => undefined}
+      />,
+    );
+    expect(screen.queryByLabelText(/^Evaluation composites:/)).not.toBeInTheDocument();
+    expect(screen.queryByRole("tab", { name: "Evaluations" })).not.toBeInTheDocument();
+  });
+});
 
 describe("retained run inspection", () => {
   it("hydrates input and output independently and cancels both directions when the run changes", async () => {
@@ -439,11 +652,9 @@ describe("retained run inspection", () => {
     openRunIo();
     expect(await screen.findByText("Historical question")).toBeInTheDocument();
     expect(screen.queryByText("current_question")).not.toBeInTheDocument();
-    const retainedInterface = screen.getByRole("region", { name: "Step interface" });
-    expect(retainedInterface).toHaveTextContent("retained_payload");
-    expect(retainedInterface).not.toHaveTextContent("current_payload");
-    expect(retainedInterface).not.toHaveTextContent("Historical question");
-    expect(screen.getByRole("region", { name: "Step output" })).toHaveTextContent("bool");
+    expect(screen.queryByRole("region", { name: "Step interface" })).not.toBeInTheDocument();
+    expect(screen.queryByText("retained_payload")).not.toBeInTheDocument();
+    expect(screen.queryByText("current_payload")).not.toBeInTheDocument();
 
     view.rerender(
       <Inspector
@@ -466,9 +677,7 @@ describe("retained run inspection", () => {
     expect(
       screen.getByText("Historical output schema unavailable for this run."),
     ).toBeInTheDocument();
-    expect(screen.getByRole("region", { name: "Step interface" })).toHaveTextContent(
-      "retained_payload",
-    );
+    expect(screen.queryByRole("region", { name: "Step interface" })).not.toBeInTheDocument();
   });
 
   it("keeps execution tabs separate from definitions and restores the selected run tab", async () => {
@@ -2442,7 +2651,6 @@ describe("evaluation declarations before execution", () => {
     ).not.toBeInTheDocument();
     expect(screen.queryByRole("region", { name: "Step interface" })).not.toBeInTheDocument();
     const section = within(screen.getByRole("region", { name: "Evaluation declaration" }));
-    expect(section.getByRole("heading", { name: "Evaluations" })).toBeVisible();
     expect(section.getByText(evaluationDeclaration.runtime.model)).toBeVisible();
     expect(section.getByText("12s")).toBeVisible();
     expect(section.getByText("overall_quality")).toBeVisible();
@@ -2584,6 +2792,77 @@ describe("evaluation declarations before execution", () => {
     );
     fireEvent.click(screen.getByRole("tab", { name: "Evals" }));
     expect(screen.getByRole("region", { name: "Question grounded" })).toBeVisible();
+    expect(screen.queryByRole("list", { name: "Metric sources" })).not.toBeInTheDocument();
+  });
+
+  it("pins metric sources to the selected run and never falls back to the current catalog", async () => {
+    const record: EvaluationRecord = {
+      evaluationId: "historical-evaluation",
+      runId: run.summary!.runId,
+      nodeId: node.nodeId,
+      createdAt: 1,
+      endedAt: 2,
+      status: "completed",
+      result: {
+        composites: {},
+        classification: {
+          model: "retained-evaluator",
+          answers: { grounded: { type: "noul", noul: 0.9 } },
+          usage: { input_tokens: 1, output_tokens: 1 },
+        },
+      },
+    };
+    const api = createApi({ listRunEvaluations: async () => [record] });
+    const historicalRun = RunSnapshotMsg.create({
+      ...run,
+      topology: {
+        ...run.topology,
+        evaluationMetadataJson: {
+          [node.nodeId]: JSON.stringify({
+            ...evaluationDeclaration,
+            metric_inputs: {
+              grounded: [{ source: "input", selector: '["historical_request"]' }],
+            },
+          }),
+        },
+      },
+    });
+    const props = {
+      api,
+      workflow: evaluatedWorkflow,
+      run: historicalRun,
+      nodeId: node.nodeId,
+      onClose: () => undefined,
+    };
+    const view = render(<RunEvaluationInspector {...props} />);
+    fireEvent.click(screen.getByRole("tab", { name: "Evaluations" }));
+    const metric = within(await screen.findByRole("region", { name: "Metric grounded" }));
+    expect(metric.getByText("Input")).toBeVisible();
+    expect(metric.getByText('["historical_request"]')).toBeVisible();
+    expect(metric.queryByText("Trace")).not.toBeInTheDocument();
+
+    view.rerender(
+      <RunEvaluationInspector
+        {...props}
+        run={RunSnapshotMsg.create({
+          ...historicalRun,
+          topology: {
+            ...historicalRun.topology,
+            evaluationMetadataJson: {
+              [node.nodeId]: JSON.stringify({
+                metrics: evaluationDeclaration.metrics,
+                composites: evaluationDeclaration.composites,
+                runtime: evaluationDeclaration.runtime,
+              }),
+            },
+          },
+        })}
+      />,
+    );
+    expect(screen.getByRole("region", { name: "Metric grounded" })).toBeVisible();
+    expect(screen.queryByRole("list", { name: "Metric sources" })).not.toBeInTheDocument();
+    view.rerender(<RunEvaluationInspector {...props} run={run} />);
+    expect(screen.getByRole("region", { name: "Metric grounded" })).toBeVisible();
     expect(screen.queryByRole("list", { name: "Metric sources" })).not.toBeInTheDocument();
   });
 

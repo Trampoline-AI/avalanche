@@ -420,8 +420,9 @@ evaluation errors, never fallback scores or workflow failures. Failed steps
 do not schedule evaluations. Embedded Python `.run()` reports **not evaluated**
 and starts no automatic evaluation worker.
 
-Before execution, graph nodes show an **Evaluations** badge with the metric count,
-including compact zoom. The current-definition inspector's **Evals** tab shows
+Before execution, graph nodes show an **Evaluations** badge with the metric count.
+Compact nodes show only its icon and count. The current-definition inspector's
+**Evals** tab shows
 named metrics, types, expandable criteria, composite names, and the effective Jev
 model/timeout. **Agent definition** retains instructions, agent inputs/outputs,
 models, and resources; **Step definition** contains only the step interface card.
@@ -430,12 +431,24 @@ Metadata discovery never executes evidence selectors or composite functions.
 
 Each metric shows statically visible Trace, Output, or Input sources and relative
 field paths; opaque selectors show Custom with their callable identity. This is
-selection metadata, not raw evidence or execution of the selector. Historical
+selection metadata, not raw evidence or execution of the selector. Completed
+composites appear beside run-node evaluation badges and in the agent sidebar
+header: one uses `label: 85.6%`, multiple use up to three one-decimal percentages
+separated by colons in declaration order. Percentages blend red at 0%, yellow at
+50%, and the success green (`#22c55e`) at 100%; labels have matching node/sidebar
+colors. Compact nodes omit composite
+names and match percentages and pill counts to the duration's size. Historical
 views use their captured selector metadata.
 
-The browser's **Evaluations** tab displays separate pending/completed/failed
-records per execution, including reruns. Work survives coordinator completion,
-but records live only in the running operator's memory and disappear on restart.
+The selected run agent step's **Evaluations** tab shows one
+pending/completed/failed result directly. Composites precede Metrics as equally
+styled top-level sections without boxes. Choice options list their percentages
+once, with only the winner bold and turquoise; other choice percentages,
+score-level probabilities, and confidence stay neutral. Noul values and bars
+keep the value gradient. Composite tab values match the node/header percentage
+format and gradient. Reruns have separate results on their own run snapshots. Work survives
+coordinator completion, but records live only in the running operator's memory
+and disappear on restart.
 Do not promise durable recovery or claim workflow success proves evaluation
 success. Verify real judgments only with actual credentials; controlled SDK
 fixture responses can verify UI behavior but are not live Jev evidence.

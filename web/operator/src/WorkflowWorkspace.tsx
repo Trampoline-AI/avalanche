@@ -20,6 +20,7 @@ import { compareNewestRun, RunListPanel } from "./RunListPanel";
 import type { OperatorProjection } from "./state";
 import { useOperatorProjection } from "./state";
 import { WorkspaceDivider } from "./WorkspaceDivider";
+import { useRunEvaluations } from "./useRunEvaluations";
 
 const INSPECTOR_MIN_WIDTH = 320;
 const INSPECTOR_MAX_WIDTH = 640;
@@ -251,6 +252,11 @@ export function WorkflowWorkspaceSurface({
   const run =
     loadedRun ??
     (historical && retainedRun?.summary?.workflowId === workflowId ? retainedRun : undefined);
+  const evaluationState = useRunEvaluations(
+    api,
+    run?.operatorInstanceId ?? "",
+    run?.summary?.runId,
+  );
   const requestingRun =
     run?.summary?.status === "requesting" ||
     (run !== undefined &&
@@ -329,6 +335,7 @@ export function WorkflowWorkspaceSurface({
                     runTopology={previewWorkflow ? undefined : run?.topology}
                     runNodes={requestingRun ? undefined : run?.nodes}
                     inspectionDisabled={requestingRun}
+                    evaluations={evaluationState.records}
                     selectedNodeId={inspectedNode}
                     onClearNode={closePanel}
                     onOpenNode={openNode}
@@ -336,6 +343,14 @@ export function WorkflowWorkspaceSurface({
                       bottomRightPanel === undefined ? runControlsPanel : bottomRightPanel
                     }
                   />
+                  {evaluationState.error && (
+                    <p
+                      role="alert"
+                      className="absolute bottom-4 left-4 z-10 m-0 text-xs text-danger"
+                    >
+                      {evaluationState.error}
+                    </p>
+                  )}
                   {historical && !loadedRun && (
                     <div
                       className="absolute right-3 top-3 max-w-[240px] rounded-lg border border-line bg-panel p-3 text-xs text-secondary"
@@ -425,6 +440,7 @@ export function WorkflowWorkspaceSurface({
                 workflow={workflow}
                 run={run}
                 nodeId={inspectedNode}
+                evaluationState={evaluationState}
                 liveEvents={state.liveEvents[liveEventDescriptorKey]}
                 liveClassifierEvents={state.liveClassifierEvents[liveEventDescriptorKey]}
                 onClose={closePanel}

@@ -915,7 +915,7 @@ describe("operator transport boundary", () => {
         }),
       }),
     });
-    expect(await api.listEvaluations("run-1", "agent")).toEqual([
+    expect(await api.listRunEvaluations("run-1")).toEqual([
       {
         evaluationId: "eval-1",
         runId: "run-1",
@@ -928,4 +928,45 @@ describe("operator transport boundary", () => {
     ]);
   });
 
+  it("returns no evaluation before submission and rejects multiple records for one step", async () => {
+    const api = apiWith({
+      listEvaluations: () => ({ response: Promise.resolve({ records: [] }) }),
+    });
+    expect(await api.listRunEvaluations("run-1")).toEqual([]);
+    const multiple = apiWith({
+      listEvaluations: () => ({
+        response: Promise.resolve({
+          records: [
+            EvaluationRecordV2.create({
+              evaluationId: "first",
+              nodeId: "agent",
+              status: "pending",
+            }),
+            EvaluationRecordV2.create({
+              evaluationId: "second",
+              nodeId: "agent",
+              status: "pending",
+            }),
+          ],
+        }),
+      }),
+    });
+    await expect(multiple.listRunEvaluations("run-1")).rejects.toThrow();
+  });
+
+  it("loads evaluations for distinct steps in a single run request", async () => {
+    const records = ["first", "second"].map((nodeId) =>
+      EvaluationRecordV2.create({
+        evaluationId: nodeId,
+        nodeId,
+        runId: "run-1",
+        status: "pending",
+      }),
+    );
+    const api = apiWith({
+      listEvaluations: () => ({ response: Promise.resolve({ records }) }),
+    });
+    const evaluations = await api.listRunEvaluations("run-1");
+    expect(evaluations.map((record) => record.nodeId)).toEqual(["first", "second"]);
+  });
 });

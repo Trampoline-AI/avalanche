@@ -18,7 +18,6 @@ export function EvaluationDefinition({ raw }: { raw: string | undefined }) {
   const declaration = parsed.declaration;
   return (
     <section aria-label="Evaluation declaration" className="min-w-0">
-      <h3 className="inspector-section-title">Evaluations</h3>
       <p className="mt-0 mb-3 text-[11px] leading-relaxed text-muted">
         Operator-only, nonblocking evaluations run after the agent succeeds. They do not gate
         workflow execution or change its result. This is configuration, not a run result.

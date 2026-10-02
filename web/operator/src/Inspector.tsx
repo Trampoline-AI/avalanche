@@ -15,7 +15,9 @@ import type { OperatorApi } from "./api";
 import { ClassifierInspector } from "./ClassifierInspector";
 import { EvaluationPanel } from "./EvaluationPanel";
 import { EvaluationDefinition } from "./EvaluationDefinition";
-import { decodeClassifierDeclaration } from "./classifier";
+import { CompositeSummary } from "./CompositeSummary";
+import { EMPTY_RUN_EVALUATIONS, type RunEvaluationState } from "./useRunEvaluations";
+import { decodeClassifierDeclaration, decodeEvaluationDeclaration } from "./classifier";
 import {
   boundDescriptors,
   DESCRIPTOR_PAGE_SIZE,
@@ -48,6 +50,7 @@ interface InspectorProps {
   workflow?: FlowInfoMsg;
   run?: RunSnapshotMsg;
   nodeId?: string;
+  evaluationState?: RunEvaluationState;
   liveEvents?: AgentEventDescriptorMsg[];
   liveClassifierEvents?: ClassifierEventDescriptorMsg[];
   embedded?: boolean;
@@ -162,6 +165,7 @@ function AgentAndStepInspector({
   workflow,
   run,
   nodeId,
+  evaluationState = EMPTY_RUN_EVALUATIONS,
   liveEvents = EMPTY_EVENTS,
   embedded = false,
   definitionLabel = "Current definition",
@@ -241,6 +245,19 @@ function AgentAndStepInspector({
       ? Object.hasOwn(run.topology.agentFieldSchemasJson, nodeId ?? "")
       : Boolean(node?.trace)
     : isWorkflowAgentNode;
+  const evaluationRecord =
+    run && isAgentNode ? evaluationState.records[nodeId ?? ""] : undefined;
+  const rawEvaluationDeclaration = run?.topology?.evaluationMetadataJson[nodeId ?? ""];
+  const evaluationDeclaration = useMemo(() => {
+    if (rawEvaluationDeclaration === undefined) return undefined;
+    try {
+      return decodeEvaluationDeclaration(rawEvaluationDeclaration);
+    } catch {
+      return undefined;
+    }
+  }, [rawEvaluationDeclaration]);
+  const composites =
+    evaluationRecord?.status === "completed" ? evaluationRecord.result.composites : undefined;
   const rawAgentDeclaration =
     !run && isWorkflowAgentNode ? workflow?.agentMetadataJson[nodeId ?? ""] : undefined;
   const rawHistoricalFieldSchemas = run?.topology?.agentFieldSchemasJson[nodeId ?? ""];
@@ -718,6 +735,12 @@ function AgentAndStepInspector({
               <span className="font-mono text-[9px] text-muted">{headerDuration}</span>
             )}
           </div>
+          {composites && (
+            <CompositeSummary
+              composites={composites}
+              className="mt-1 block min-w-0 text-left font-mono text-[10px] [overflow-wrap:anywhere]"
+            />
+          )}
           {run && traceHeader && (
             <div className="mt-2 grid min-w-0 gap-0.5 font-mono text-[8px] leading-[1.5]">
               <p className="m-0 whitespace-normal text-secondary [overflow-wrap:anywhere]">
@@ -803,10 +826,10 @@ function AgentAndStepInspector({
                 <div hidden={tab !== "evaluations"}>
                   <EvaluationPanel
                     key={selectionScope}
-                    api={api}
-                    operatorInstanceId={operatorInstanceId}
-                    runId={runId}
-                    nodeId={nodeId}
+                    record={evaluationRecord}
+                    declaration={evaluationDeclaration}
+                    loading={evaluationState.loading}
+                    error={evaluationState.error}
                   />
                 </div>
               )}
@@ -844,7 +867,6 @@ function AgentAndStepInspector({
                       )}
                     </section>
                   ))}
-                  {stepInterfacePanel}
                 </div>
               ) : node?.trace ? (
                 <AgentTraceExplorer

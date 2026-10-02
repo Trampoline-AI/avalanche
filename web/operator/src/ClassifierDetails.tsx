@@ -17,6 +17,7 @@ import type {
 import { ValueView } from "./ValueView";
 import { DeclaredSchema, StepInterfacePanel } from "./StepInterfacePanel";
 import { MetricInputSummary } from "./MetricInputSummary";
+import { Percentage, percentageColor } from "./Percentage";
 
 const percent = new Intl.NumberFormat("en-US", { style: "percent", maximumFractionDigits: 0 });
 
@@ -85,10 +86,6 @@ function DefinitionValue({ value }: { value: ClassifierEntry }) {
   );
 }
 
-function Probability({ value }: { value: number }) {
-  return <span className="shrink-0 tabular-nums">{percent.format(value)}</span>;
-}
-
 export function AnswerSummary({
   id,
   answer,
@@ -102,7 +99,9 @@ export function AnswerSummary({
     return (
       <div className="grid gap-1.5">
         <div className="text-xs tabular-nums">
-          <span className="font-semibold text-classifier">{percent.format(answer.noul)}</span>{" "}
+          <span className="font-semibold">
+            <Percentage value={answer.noul} gradient />
+          </span>{" "}
           <span className="text-muted">true</span>
         </div>
         <div
@@ -115,8 +114,11 @@ export function AnswerSummary({
           className="h-1 w-24 max-w-full overflow-hidden rounded-full bg-line"
         >
           <span
-            className="block h-full rounded-full bg-classifier"
-            style={{ width: `${answer.noul * 100}%` }}
+            className="block h-full rounded-full"
+            style={{
+              width: `${answer.noul * 100}%`,
+              backgroundColor: percentageColor(answer.noul),
+            }}
           />
         </div>
       </div>
@@ -135,10 +137,10 @@ export function AnswerSummary({
             .map(([option, probability]) => (
               <li
                 key={option}
-                className={`flex min-w-0 items-baseline justify-between gap-2 text-[11px] ${option === answer.choice ? "font-semibold text-ink" : "text-secondary"}`}
+                className={`flex min-w-0 items-baseline justify-between gap-2 text-[11px] ${option === answer.choice ? "font-semibold text-classifier" : "text-secondary"}`}
               >
                 <span className="min-w-0 [overflow-wrap:anywhere]">{option}</span>
-                <Probability value={probability} />
+                <Percentage value={probability} />
               </li>
             ))}
         </ul>
@@ -149,7 +151,7 @@ export function AnswerSummary({
         </div>
       )}
       <p className="m-0 text-[10px] text-muted">
-        Confidence: {percent.format(answer.confidence)}
+        Confidence: <Percentage value={answer.confidence} />
       </p>
     </div>
   );
@@ -202,7 +204,7 @@ function QuestionCriteria({
       </h5>
       {answer && answer.type !== "noul" && (
         <span className="text-[11px]">
-          <Probability value={answer.probabilities[option]} />
+          <Percentage value={answer.probabilities[option]} />
         </span>
       )}
       {!answer && criterion !== null && (

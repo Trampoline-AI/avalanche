@@ -153,7 +153,7 @@ export function createApi(overrides: Partial<OperatorApi> = {}): OperatorApi {
       nextPageToken: "",
       nextCursor: "0",
     }),
-    listEvaluations: async () => [],
+    listRunEvaluations: async () => [],
     readJsonDetail: async () => undefined,
     readTextDetail: async (token, signal) =>
       JSON.stringify(await overrides.readJsonDetail?.(token, signal)),

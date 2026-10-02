@@ -43,6 +43,7 @@ import type { OperatorUiSelection } from "./index";
 import type { OperatorApi } from "./api";
 import { Explorer } from "./Explorer";
 import { GraphCanvas } from "./GraphCanvas";
+import type { EvaluationRecord } from "./evaluations";
 import {
   CatalogSnapshotMsg,
   FlowInfoMsg,
@@ -1237,6 +1238,39 @@ describe("graph evaluation declarations", () => {
     agentNodeIds: ["fetch", "review"],
     evaluationMetadataJson: { fetch: JSON.stringify(evaluationDeclaration) },
   });
+  const historical = WorkflowTopologyMsg.create({
+    ...snapshotFor().topology,
+    nodeIds: evaluatedWorkflow.nodeIds,
+    graph: evaluatedWorkflow.graph,
+    displayNames: evaluatedWorkflow.displayNames,
+    agentFieldSchemasJson: {
+      fetch: JSON.stringify({ inputs: [], outputs: [] }),
+      review: JSON.stringify({ inputs: [], outputs: [] }),
+    },
+    evaluationMetadataJson: evaluatedWorkflow.evaluationMetadataJson,
+  });
+  const pending = {
+    evaluationId: "eval-fetch",
+    runId: summary.runId,
+    nodeId: "fetch",
+    createdAt: 1,
+    status: "pending",
+  } satisfies EvaluationRecord;
+  function completed(composites: Record<string, number>): EvaluationRecord {
+    return {
+      ...pending,
+      status: "completed",
+      endedAt: 2,
+      result: {
+        classification: {
+          model: "jev-latest",
+          usage: { input_tokens: 10, output_tokens: 5 },
+          answers: {},
+        },
+        composites,
+      },
+    };
+  }
   afterEach(() => {
     vi.mocked(useViewport).mockReturnValue({ x: 0, y: 0, zoom: 1 });
   });
@@ -1255,6 +1289,96 @@ describe("graph evaluation declarations", () => {
       ).not.toBeInTheDocument();
     },
   );
+
+  describe.each([1.2, 0.6])("run composites at zoom %s", (zoom) => {
+    it.each<{ composites: Record<string, number>; expected: string }>([
+      { composites: { quality: 0.856 }, expected: "85.6%" },
+      {
+        composites: { quality: 0.856, accuracy: 0.77 },
+        expected: "77.0%",
+      },
+      {
+        composites: { quality: 0.856, accuracy: 0.77, grounded: 0.9 },
+        expected: "90.0%",
+      },
+      {
+        composites: { quality: 0.856, accuracy: 0.77, grounded: 0.9, omitted: 0.12 },
+        expected: "90.0%",
+      },
+    ])("shows $expected beside the evaluation badge", ({ composites, expected }) => {
+      vi.mocked(useViewport).mockReturnValue({ x: 0, y: 0, zoom });
+      render(
+        <GraphCanvas
+          workflow={evaluatedWorkflow}
+          runTopology={historical}
+          evaluations={{ fetch: completed(composites) }}
+          onOpenNode={() => undefined}
+        />,
+      );
+      const fetch = within(
+        screen.getByRole("button", { name: "Inspect Fetch" }).closest("article")!,
+      );
+      expect(fetch.getByLabelText(/3 evaluation metrics/)).toBeVisible();
+      expect(fetch.getByText(expected)).toBeVisible();
+      expect(fetch.queryByText(/12\.0%/)).not.toBeInTheDocument();
+      const review = within(
+        screen.getByRole("button", { name: "Inspect Review" }).closest("article")!,
+      );
+      expect(review.queryByText(/%/)).not.toBeInTheDocument();
+    });
+
+    it.each<{ state: string; record: EvaluationRecord | undefined }>([
+      { state: "pending", record: pending },
+      {
+        state: "failed",
+        record: { ...pending, status: "failed", endedAt: 2, error: "Evaluator failed" },
+      },
+      { state: "no record", record: undefined },
+      { state: "empty composites", record: completed({}) },
+    ])("keeps the badge without a fabricated score for $state", ({ record }) => {
+      vi.mocked(useViewport).mockReturnValue({ x: 0, y: 0, zoom });
+      render(
+        <GraphCanvas
+          workflow={evaluatedWorkflow}
+          runTopology={historical}
+          evaluations={record ? { fetch: record } : {}}
+          onOpenNode={() => undefined}
+        />,
+      );
+      expect(screen.getByLabelText(/3 evaluation metrics/)).toBeVisible();
+      expect(screen.queryByText(/%/)).not.toBeInTheDocument();
+    });
+
+    it("does not display run composites in the current workflow definition", () => {
+      vi.mocked(useViewport).mockReturnValue({ x: 0, y: 0, zoom });
+      render(
+        <GraphCanvas
+          workflow={evaluatedWorkflow}
+          evaluations={{ fetch: completed({ quality: 0.856 }) }}
+          onOpenNode={() => undefined}
+        />,
+      );
+      expect(screen.getByLabelText(/3 evaluation metrics/)).toBeVisible();
+      expect(screen.queryByText(/%/)).not.toBeInTheDocument();
+    });
+
+    it("keeps the full long composite label accessible", () => {
+      vi.mocked(useViewport).mockReturnValue({ x: 0, y: 0, zoom });
+      const label = "Quality of the complete generated answer against all reference material";
+      render(
+        <GraphCanvas
+          workflow={evaluatedWorkflow}
+          runTopology={historical}
+          evaluations={{ fetch: completed({ [label]: 0.856 }) }}
+          onOpenNode={() => undefined}
+        />,
+      );
+      expect(
+        screen.getByLabelText(new RegExp(`Evaluation composites: ${label}`)),
+      ).toBeVisible();
+      expect(screen.getByLabelText(/3 evaluation metrics/)).toBeVisible();
+    });
+  });
 
   it("uses historical metric counts and never inherits current evaluations when topology omits them", () => {
     const historical = WorkflowTopologyMsg.create({

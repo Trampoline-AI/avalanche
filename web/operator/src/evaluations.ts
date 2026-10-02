@@ -46,3 +46,20 @@ export function mapEvaluationRecord(record: EvaluationRecordV2): EvaluationRecor
   }
 }
 
+const compositePercent = new Intl.NumberFormat("en-US", {
+  style: "percent",
+  minimumFractionDigits: 1,
+  maximumFractionDigits: 1,
+});
+
+export function formatCompositeSummary(composites: Record<string, number>): string {
+  const entries = Object.entries(composites);
+  if (entries.length === 1) {
+    const [name, value] = entries[0];
+    return `${name}: ${compositePercent.format(value)}`;
+  }
+  return entries
+    .slice(0, 3)
+    .map(([, value]) => compositePercent.format(value))
+    .join(" : ");
+}

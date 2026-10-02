@@ -3,10 +3,37 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 
 import type { OperatorApi } from "./api";
 import { EvaluationPanel } from "./EvaluationPanel";
-import type { EvaluationRecord } from "./evaluations";
+import { mapEvaluationRecord, type EvaluationRecord } from "./evaluations";
 import { Inspector } from "./Inspector";
 import { RunSnapshotMsg } from "./model";
+import { EvaluationRecordV2 } from "./generated/operator";
 import { createApi, node, snapshotFor } from "./test/fixtures";
+import { useRunEvaluations } from "./useRunEvaluations";
+
+function PollingPanel(props: {
+  api: OperatorApi;
+  operatorInstanceId: string;
+  runId: string;
+  nodeId: string;
+}) {
+  const state = useRunEvaluations(props.api, props.operatorInstanceId, props.runId);
+  return (
+    <EvaluationPanel
+      record={state.records[props.nodeId]}
+      loading={state.loading}
+      error={state.error}
+    />
+  );
+}
+
+function PollingInspector(props: Parameters<typeof Inspector>[0]) {
+  const state = useRunEvaluations(
+    props.api,
+    props.run?.operatorInstanceId ?? "",
+    props.run?.summary?.runId,
+  );
+  return <Inspector {...props} evaluationState={state} />;
+}
 
 const pending: EvaluationRecord = {
   evaluationId: "eval-1",
@@ -33,9 +60,9 @@ const completed: EvaluationRecord = {
         },
         quality: {
           type: "score",
-          score: 1.5,
+          score: 1.57,
           legend: { "0": "poor", "1": "fair", "2": "good" },
-          probabilities: { "0": 0.1, "1": 0.3, "2": 0.6 },
+          probabilities: { "0": 0.01, "1": 0.42, "2": 0.57 },
           confidence: 0.6,
         },
       },
@@ -58,12 +85,24 @@ afterEach(() => {
 describe("execution evaluations", () => {
   it("receives late pending and completed results without reopening a terminal agent run", async () => {
     vi.useFakeTimers();
-    const listEvaluations = vi
-      .fn<OperatorApi["listEvaluations"]>()
+    const listRunEvaluations = vi
+      .fn<OperatorApi["listRunEvaluations"]>()
       .mockResolvedValueOnce([])
       .mockResolvedValueOnce([pending])
-      .mockResolvedValue([completed]);
-    const api = createApi({ listEvaluations });
+      .mockResolvedValue([
+        mapEvaluationRecord(
+          EvaluationRecordV2.create({
+            evaluationId: completed.evaluationId,
+            runId: completed.runId,
+            nodeId: completed.nodeId,
+            createdAt: completed.createdAt,
+            endedAt: completed.endedAt,
+            status: completed.status,
+            resultJson: JSON.stringify(completed.result),
+          }),
+        ),
+      ]);
+    const api = createApi({ listRunEvaluations });
     const run = RunSnapshotMsg.create({
       ...snapshotFor(),
       summary: { ...snapshotFor().summary, status: "success" },
@@ -74,7 +113,9 @@ describe("execution evaluations", () => {
       },
     });
     await act(async () => {
-      render(<Inspector api={api} run={run} nodeId={node.nodeId} onClose={() => undefined} />);
+      render(
+        <PollingInspector api={api} run={run} nodeId={node.nodeId} onClose={() => undefined} />,
+      );
     });
     // The independent poll is alive even while the trace tab is selected.
     await tick();
@@ -82,6 +123,11 @@ describe("execution evaluations", () => {
     expect(screen.getByRole("status")).toBeInTheDocument();
     await tick();
     expect(screen.queryByRole("status")).not.toBeInTheDocument();
+    const panel = screen.getByRole("region", { name: "Execution evaluations" });
+    expect(within(panel).queryByRole("article")).not.toBeInTheDocument();
+    expect(
+      within(panel).queryByRole("heading", { name: "Evaluations" }),
+    ).not.toBeInTheDocument();
     expect(screen.getByRole("meter", { name: "grounded probability of true" })).toHaveAttribute(
       "aria-valuenow",
       "0.9",
@@ -92,11 +138,11 @@ describe("execution evaluations", () => {
     ).toHaveTextContent("80%");
     expect(choice).toHaveTextContent("70%");
     const score = screen.getByRole("region", { name: "Metric quality" });
-    expect(score).toHaveTextContent("1.5");
+    expect(score).toHaveTextContent("1.57");
     expect(
       within(score).getByRole("list", { name: "quality level probabilities" }),
-    ).toHaveTextContent("60%");
-    expect(screen.getByRole("region", { name: "Composites" })).toHaveTextContent("0.75");
+    ).toHaveTextContent("57%");
+    expect(screen.getByRole("region", { name: "Composites" })).toHaveTextContent("75.0%");
     expect(
       screen.getByRole("complementary", { name: "Run inspector" }).querySelector("header"),
     ).toHaveTextContent("success");
@@ -110,15 +156,15 @@ describe("execution evaluations", () => {
       endedAt: 2,
       error: "Judge unavailable",
     };
-    const listEvaluations = vi
-      .fn<OperatorApi["listEvaluations"]>()
+    const listRunEvaluations = vi
+      .fn<OperatorApi["listRunEvaluations"]>()
       .mockResolvedValueOnce([failed])
       .mockRejectedValueOnce(new Error("Connection interrupted"))
       .mockResolvedValue([completed]);
     await act(async () => {
       render(
-        <EvaluationPanel
-          api={createApi({ listEvaluations })}
+        <PollingPanel
+          api={createApi({ listRunEvaluations })}
           operatorInstanceId="operator-1"
           runId="run-1"
           nodeId={node.nodeId}
@@ -139,7 +185,7 @@ describe("execution evaluations", () => {
       const old = Promise.withResolvers<EvaluationRecord[]>();
       let oldSignal: AbortSignal | undefined;
       const firstApi = createApi({
-        listEvaluations: (_run, _node, signal) => {
+        listRunEvaluations: (_run, signal) => {
           oldSignal = signal;
           return old.promise;
         },
@@ -150,8 +196,8 @@ describe("execution evaluations", () => {
         runId: "run-1",
         nodeId: node.nodeId,
       };
-      const view = render(<EvaluationPanel {...props} />);
-      const replacement = createApi({ listEvaluations: async () => [] });
+      const view = render(<PollingPanel {...props} />);
+      const replacement = createApi({ listRunEvaluations: async () => [] });
       const next = {
         ...props,
         api: change === "api" ? replacement : firstApi,
@@ -159,11 +205,11 @@ describe("execution evaluations", () => {
         nodeId: change === "node" ? "other" : props.nodeId,
         operatorInstanceId: change === "operator" ? "operator-2" : props.operatorInstanceId,
       };
-      if (change !== "api") firstApi.listEvaluations = async () => [];
+      if (change !== "api" && change !== "node") firstApi.listRunEvaluations = async () => [];
       await act(async () => {
-        view.rerender(<EvaluationPanel {...next} />);
+        view.rerender(<PollingPanel {...next} />);
       });
-      expect(oldSignal?.aborted).toBe(true);
+      expect(oldSignal?.aborted).toBe(change !== "node");
       await act(async () => {
         old.resolve([completed]);
       });
