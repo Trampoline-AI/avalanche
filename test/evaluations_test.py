@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import copy
 import json
+import runpy
 import traceback
 from datetime import date
 from pathlib import Path
@@ -11,7 +12,7 @@ from pathlib import Path
 import httpx2
 import pytest
 import typesafe_sdk
-from pydantic import BaseModel
+from pydantic import BaseModel, ValidationError
 
 from avalanche.evaluations import (
     EvalContext,
@@ -19,6 +20,7 @@ from avalanche.evaluations import (
     EvaluationError,
     Evaluations,
     Metric,
+    MetricInput,
 )
 
 pytest_plugins = ["classifier_test"]
@@ -292,11 +294,13 @@ def test_discovery_requires_neither_credentials_nor_context_values(monkeypatch):
         model="discovery-model",
     )
     declaration = evaluations.declaration_metadata({"model": "workflow-model", "timeout": 8})
-    assert declaration == EvaluationDeclaration.model_validate_json(
-        '{"metrics":{"opaque":{"type":"noul","instructions":"Is it supported?",'
-        '"criteria":null}},"composites":["score"],'
-        '"runtime":{"model":"discovery-model","timeout":8}}'
-    )
+    assert declaration.metrics["opaque"].instructions == "Is it supported?"
+    assert declaration.composites == ("score",)
+    assert declaration.runtime.model == "discovery-model"
+    assert declaration.runtime.timeout == 8
+    assert declaration.metric_inputs == {
+        "opaque": (MetricInput(source="custom", selector=forbidden.__qualname__),)
+    }
 
 
 def test_declaration_runtime_precedence_does_not_mutate_workflow_defaults():
@@ -334,6 +338,7 @@ def test_declaration_metadata_owns_nested_questions_and_public_collections():
     exported.metrics["grounded"].instructions["ask"].append("mutated metadata")
     exported.metrics["grounded"].criteria.clear()
     exported.metrics.clear()
+    exported.metric_inputs.clear()
     retained = EvaluationDeclaration.model_validate_json(
         evaluations.declaration_metadata().model_dump_json()
     )
@@ -342,6 +347,132 @@ def test_declaration_metadata_owns_nested_questions_and_public_collections():
     assert retained.metrics["grounded"].instructions == {
         "ask": ["Choose the supported conclusion"]
     }
+
+
+def test_adjacent_lambdas_describe_only_their_own_context_reads():
+    first, second = lambda ctx: ctx.output.summary, lambda ctx: ctx.inputs["packet"]
+    evaluations = Evaluations(
+        metrics={
+            "first": noul(first),
+            "second": noul(second),
+            "combined": noul(
+                lambda ctx: {
+                    "fake_source_path": ctx.output.customer_update_draft,
+                    "summary_again": ctx.output.summary,
+                    "duplicate": ctx.output.summary,
+                    "events": ctx.trace,
+                }
+            ),
+        }
+    )
+    assert evaluations.declaration_metadata().metric_inputs == {
+        "first": (MetricInput(source="output", selector="summary"),),
+        "second": (MetricInput(source="input", selector="['packet']"),),
+        "combined": (
+            MetricInput(source="output", selector="customer_update_draft"),
+            MetricInput(source="output", selector="summary"),
+            MetricInput(source="trace", selector=""),
+        ),
+    }
+
+
+def test_named_helpers_describe_explicit_reads_not_dict_keys_or_methods():
+    def grounded(ctx):
+        return {
+            "source": ctx.inputs["packet"].model_dump(mode="json"),
+            "handoff": ctx.output.model_dump(mode="json"),
+        }
+
+    def inspected(ctx):
+        actions = [event["output"] for event in ctx.trace]
+        return {"actions": actions, "source": ctx.inputs["packet"].model_dump(mode="json")}
+
+    def nested(ctx):
+        return ctx.output.items[0].text, ctx.inputs["packet"].facts["observed"]
+
+    declaration = Evaluations(
+        metrics={
+            "grounded": noul(grounded),
+            "inspected": noul(inspected),
+            "nested": noul(nested),
+        }
+    ).declaration_metadata()
+    assert declaration.metric_inputs == {
+        "grounded": (
+            MetricInput(source="input", selector="['packet']"),
+            MetricInput(source="output", selector=""),
+        ),
+        "inspected": (
+            MetricInput(source="trace", selector=""),
+            MetricInput(source="input", selector="['packet']"),
+        ),
+        "nested": (
+            MetricInput(source="output", selector="items[0].text"),
+            MetricInput(source="input", selector="['packet'].facts['observed']"),
+        ),
+    }
+
+
+def test_incident_example_selector_sources_match_selected_evidence():
+    module = runpy.run_path(str(Path(__file__).parents[1] / "examples/evaluations_workflow.py"))
+    evaluations = module["handoff_evaluations"]
+    assert isinstance(evaluations, Evaluations)
+    inputs = evaluations.declaration_metadata().metric_inputs
+    assert inputs["clarity"] == (
+        MetricInput(source="output", selector="summary"),
+        MetricInput(source="output", selector="customer_update_draft"),
+    )
+    assert inputs["inspected_evidence"] == (
+        MetricInput(source="trace", selector=""),
+        MetricInput(source="input", selector="['packet']"),
+    )
+    assert inputs["grounded"] == (
+        MetricInput(source="input", selector="['packet']"),
+        MetricInput(source="output", selector=""),
+    )
+
+
+def test_opaque_or_delegating_selectors_do_not_invent_context_provenance():
+    def helper(ctx):
+        return ctx.trace
+
+    def delegated(ctx):
+        return helper(ctx)
+
+    class Opaque:
+        def __call__(self, ctx):
+            return ctx.output
+
+    unavailable = eval("lambda ctx: ctx.output", {"__builtins__": {}})
+    declaration = Evaluations(
+        metrics={
+            "delegated": noul(delegated),
+            "object": noul(Opaque()),
+            "unavailable": noul(unavailable),
+        }
+    ).declaration_metadata()
+    assert declaration.metric_inputs == {
+        "delegated": (MetricInput(source="custom", selector=delegated.__qualname__),),
+        "object": (
+            MetricInput(source="custom", selector=f"{Opaque.__module__}.{Opaque.__qualname__}"),
+        ),
+        "unavailable": (MetricInput(source="custom", selector="<lambda>"),),
+    }
+
+
+def test_historic_metadata_defaults_to_no_provenance_and_new_fields_are_strict():
+    historic = EvaluationDeclaration.model_validate_json(
+        '{"metrics":{"fact":{"type":"noul","instructions":"Is it true?"}},'
+        '"composites":[],"runtime":{"model":"jev-latest","timeout":10}}'
+    )
+    assert historic.metric_inputs == {}
+    for invalid in (
+        {"source": "payload", "selector": ""},
+        {"source": "output", "selector": 1},
+        {"source": "trace", "selector": "", "code": "private source"},
+    ):
+        with pytest.raises(ValidationError):
+            MetricInput.model_validate(invalid)
 
 
 @pytest.mark.asyncio

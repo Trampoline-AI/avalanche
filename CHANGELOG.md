@@ -79,6 +79,9 @@
 - Browser classifier and evaluation results now display the values validated by
   Python without repeating score, probability, composite, or lifecycle checks
   in the consumer.
+- Evaluation metrics now show Trace, Output, and Input source labels with selected
+  field paths derived from Python selector syntax without executing selectors or
+  exposing raw evidence. Opaque selectors show their callable identity.
 
 ## 0.6.1
 

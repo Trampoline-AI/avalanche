@@ -34,7 +34,10 @@ export function EvaluationDefinition({ raw }: { raw: string | undefined }) {
             <dd className="m-0">{declaration.runtime.timeout}s</dd>
           </dl>
           <h4 className="inspector-section-title">Metrics</h4>
-          <ClassifierQuestions declaration={{ questions: declaration.metrics }} />
+          <ClassifierQuestions
+            declaration={{ questions: declaration.metrics }}
+            metricInputs={declaration.metric_inputs}
+          />
           {declaration.composites.length > 0 && (
             <section aria-label="Composite evaluations" className="mt-3">
               <h4 className="inspector-section-title">Composites</h4>

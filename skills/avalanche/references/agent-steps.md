@@ -428,6 +428,11 @@ models, and resources; **Step definition** contains only the step interface card
 Historical run graphs use their captured declarations, not later source edits.
 Metadata discovery never executes evidence selectors or composite functions.
 
+Each metric shows statically visible Trace, Output, or Input sources and relative
+field paths; opaque selectors show Custom with their callable identity. This is
+selection metadata, not raw evidence or execution of the selector. Historical
+views use their captured selector metadata.
+
 The browser's **Evaluations** tab displays separate pending/completed/failed
 records per execution, including reruns. Work survives coordinator completion,
 but records live only in the running operator's memory and disappear on restart.

@@ -30,10 +30,16 @@ export interface ClassifierDeclaration extends StepInterface {
   input_schema: JsonSchema | null;
 }
 
+export interface MetricInput {
+  source: "trace" | "output" | "input" | "custom";
+  selector: string;
+}
+
 export interface EvaluationDeclaration {
   metrics: Record<string, ClassifierQuestion>;
   composites: string[];
   runtime: ClassifierDeclaration["runtime"];
+  metric_inputs?: Record<string, MetricInput[]>;
 }
 
 export type ClassifierAnswer =

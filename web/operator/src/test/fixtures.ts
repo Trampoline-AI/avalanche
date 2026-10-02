@@ -45,6 +45,11 @@ export const evaluationDeclaration: EvaluationDeclaration = {
     },
   },
   composites: ["overall_quality"],
+  metric_inputs: {
+    grounded: [{ source: "trace", selector: "" }],
+    quality: [{ source: "output", selector: "summary" }],
+    category: [{ source: "output", selector: "customer_update_draft" }],
+  },
   runtime: { model: "jev-evaluation-model", timeout: 12 },
 };
 export const summary = RunSummaryMsg.create({

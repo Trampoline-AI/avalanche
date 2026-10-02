@@ -12,9 +12,11 @@ import type {
   ClassifierEntry,
   ClassifierInvocation,
   ClassifierQuestion,
+  MetricInput,
 } from "./classifier";
 import { ValueView } from "./ValueView";
 import { DeclaredSchema, StepInterfacePanel } from "./StepInterfacePanel";
+import { MetricInputSummary } from "./MetricInputSummary";
 
 const percent = new Intl.NumberFormat("en-US", { style: "percent", maximumFractionDigits: 0 });
 
@@ -225,10 +227,12 @@ function QuestionRow({
   id,
   question,
   answer,
+  metricInputs,
 }: {
   id: string;
   question: ClassifierQuestion;
   answer?: ClassifierAnswer;
+  metricInputs?: readonly MetricInput[];
 }) {
   const [expanded, setExpanded] = useState(false);
   const detailsId = useId();
@@ -269,6 +273,7 @@ function QuestionRow({
         className={`classifier-question-prompt min-w-0 ${answer ? "" : "classifier-question-prompt-only"}`}
       >
         <h4 className="m-0 text-[13px] font-semibold [overflow-wrap:anywhere]">{id}</h4>
+        <MetricInputSummary inputs={metricInputs} />
         {!answer && question.instructions !== null && (
           <div className="mt-1">
             <DefinitionValue value={question.instructions} />
@@ -310,9 +315,11 @@ function QuestionRow({
 export function ClassifierQuestions({
   declaration,
   context = "definition",
+  metricInputs,
 }: {
   declaration: Pick<ClassifierDeclaration, "questions">;
   context?: "definition" | "invocation";
+  metricInputs?: Record<string, MetricInput[]>;
 }) {
   if (declaration.questions === null) {
     return (
@@ -326,7 +333,7 @@ export function ClassifierQuestions({
   return (
     <div className="classifier-questions min-w-0">
       {Object.entries(declaration.questions).map(([id, question]) => (
-        <QuestionRow key={id} id={id} question={question} />
+        <QuestionRow key={id} id={id} question={question} metricInputs={metricInputs?.[id]} />
       ))}
     </div>
   );

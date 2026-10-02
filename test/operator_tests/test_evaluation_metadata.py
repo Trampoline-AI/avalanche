@@ -10,6 +10,7 @@ from textwrap import dedent
 import pytest
 
 import avalanche as ava
+from avalanche._evaluation_inputs import MetricInput
 from avalanche.evaluations import EvaluationDeclaration
 from runtime.operator import Operator, WorkflowRegistry
 from runtime.operator.convert_v2 import (
@@ -54,6 +55,10 @@ def _declaration(*, revised: bool = False) -> EvaluationDeclaration:
         json.dumps(
             {
                 "metrics": _questions(revised=revised),
+                "metric_inputs": {
+                    name: [{"source": "custom", "selector": "forbidden"}]
+                    for name in _questions(revised=revised)
+                },
                 "composites": ["revised_overall" if revised else "overall"],
                 "runtime": {
                     "model": "workflow-revised" if revised else "workflow-original",
@@ -148,6 +153,7 @@ def test_discovery_cache_and_catalog_expose_evaluations_without_credentials_or_e
         current.evaluation_metadata_json[node_id]
     )
     exported.metrics.clear()
+    exported.metric_inputs.clear()
     catalog.evaluation_metadata_json.clear()
     current.evaluation_metadata_json.clear()
     [retained] = restarted.list_workflows()
@@ -155,7 +161,7 @@ def test_discovery_cache_and_catalog_expose_evaluations_without_credentials_or_e
     assert dict(restarted.descriptors()[0].evaluation_metadata_json) == {node_id: metadata}
 
 
-def test_pre_evaluation_cache_schema_is_rediscovered_instead_of_hiding_declarations(
+def test_pre_selector_cache_schema_is_rediscovered_instead_of_hiding_provenance(
     tmp_path, monkeypatch
 ):
     monkeypatch.delenv("TYPESAFE_API_KEY", raising=False)
@@ -165,10 +171,15 @@ def test_pre_evaluation_cache_schema_is_rediscovered_instead_of_hiding_declarati
     registry.scan([str(workflow)])
     [cache_file] = cache_dir.glob("*.json")
     cached = json.loads(cache_file.read_text())
-    cached["schema_version"] = 7
+    cached["schema_version"] = 8
     for result in cached["files"]:
         for descriptor in result["descriptors"]:
-            descriptor.pop("evaluation_metadata_json")
+            older_metadata = []
+            for node_id, metadata in descriptor["evaluation_metadata_json"]:
+                declaration = json.loads(metadata)
+                declaration.pop("metric_inputs")
+                older_metadata.append([node_id, json.dumps(declaration)])
+            descriptor["evaluation_metadata_json"] = older_metadata
     cache_file.write_text(json.dumps(cached))
 
     restarted = WorkflowRegistry(cache_dir=cache_dir)
@@ -256,7 +267,13 @@ def test_manual_catalog_and_prepared_topology_own_evaluation_declarations():
     run = Operator._run_from_prepared("run", "flow", "flow", "manual", 100.0, event)
     [(node_id, metadata)] = run.topology.evaluation_metadata_json
     assert catalog.evaluation_metadata_json == {node_id: metadata}
-    assert EvaluationDeclaration.model_validate_json(metadata) == _declaration()
+    declaration = EvaluationDeclaration.model_validate_json(metadata)
+    assert declaration.model_dump(exclude={"metric_inputs"}) == _declaration().model_dump(
+        exclude={"metric_inputs"}
+    )
+    assert declaration.metric_inputs == {
+        name: (MetricInput(source="output", selector=""),) for name in _questions()
+    }
     event["evaluation_metadata_json"].clear()
     catalog.evaluation_metadata_json.clear()
     assert dict(run.topology.evaluation_metadata_json) == {node_id: metadata}

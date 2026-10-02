@@ -9,8 +9,9 @@ from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field
 from typing import Generic, TypeVar
 
-from pydantic import BaseModel, ConfigDict, JsonValue, field_validator
+from pydantic import BaseModel, ConfigDict, Field, JsonValue, field_validator
 
+from ._evaluation_inputs import MetricInput, metric_inputs
 from .classifier.classifier_step import Classifier, _close_classifier, _error_description
 from .classifier.models import (
     Answer,
@@ -89,6 +90,7 @@ class EvaluationDeclaration(BaseModel):
     metrics: Questions
     composites: tuple[NonemptyString, ...]
     runtime: ClassifierRuntime
+    metric_inputs: dict[str, tuple[MetricInput, ...]] = Field(default_factory=dict)
 
     @field_validator("composites")
     @classmethod
@@ -164,6 +166,7 @@ class Evaluations(Generic[InputT, OutputT]):
             ),
             composites=tuple(name for name, _ in self._composites),
             runtime=self._runtime(runtime_defaults),
+            metric_inputs={name: metric_inputs(metric.state) for name, metric in self._metrics},
         )
 
     def _runtime(self, runtime_defaults: Mapping[str, JsonValue] | None) -> ClassifierRuntime:

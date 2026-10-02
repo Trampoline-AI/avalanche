@@ -2458,6 +2458,25 @@ describe("evaluation declarations before execution", () => {
     expect(section.getByRole("region", { name: "Question category" })).toHaveTextContent(
       "Choice",
     );
+    const groundedSources = within(
+      within(section.getByRole("region", { name: "Question grounded" })).getByRole("list", {
+        name: "Metric sources",
+      }),
+    );
+    expect(groundedSources.getByText("Trace")).toBeVisible();
+    expect(groundedSources.queryByText("Output")).not.toBeInTheDocument();
+    const qualitySources = within(
+      within(section.getByRole("region", { name: "Question quality" })).getByRole("list", {
+        name: "Metric sources",
+      }),
+    );
+    expect(qualitySources.getByText("Output")).toBeVisible();
+    expect(qualitySources.getByText("summary")).toBeVisible();
+    expect(
+      within(section.getByRole("region", { name: "Question category" })).getByText(
+        "customer_update_draft",
+      ),
+    ).toBeVisible();
     fireEvent.click(section.getByRole("button", { name: "Expand grounded criteria" }));
     fireEvent.click(section.getByRole("button", { name: "Expand quality criteria" }));
     fireEvent.click(section.getByRole("button", { name: "Expand category criteria" }));
@@ -2503,6 +2522,69 @@ describe("evaluation declarations before execution", () => {
     expect(screen.getByRole("alert")).toBeVisible();
     expect(screen.queryByText("Follow the current instructions.")).not.toBeInTheDocument();
     expect(screen.queryByText("overall_quality")).not.toBeInTheDocument();
+  });
+
+  it("shows every declared compound source and opaque callable identity without interpreting paths", () => {
+    render(
+      <Inspector
+        api={createApi()}
+        workflow={FlowInfoMsg.create({
+          ...evaluatedWorkflow,
+          evaluationMetadataJson: {
+            [node.nodeId]: JSON.stringify({
+              ...evaluationDeclaration,
+              metric_inputs: {
+                grounded: [
+                  { source: "trace", selector: "steps" },
+                  { source: "output", selector: "summary" },
+                  { source: "input", selector: '["customer"].request' },
+                  { source: "custom", selector: "selectors.build_evidence" },
+                ],
+              },
+            }),
+          },
+        })}
+        nodeId={node.nodeId}
+        onClose={() => undefined}
+      />,
+    );
+    fireEvent.click(screen.getByRole("tab", { name: "Evals" }));
+    const sources = within(
+      within(screen.getByRole("region", { name: "Question grounded" })).getByRole("list", {
+        name: "Metric sources",
+      }),
+    );
+    expect(sources.getByText("Trace")).toBeVisible();
+    expect(sources.getByText("steps")).toBeVisible();
+    expect(sources.getByText("Output")).toBeVisible();
+    expect(sources.getByText("summary")).toBeVisible();
+    expect(sources.getByText("Input")).toBeVisible();
+    expect(sources.getByText('["customer"].request')).toBeVisible();
+    expect(sources.getByText("Custom")).toBeVisible();
+    expect(sources.getByText("selectors.build_evidence")).toBeVisible();
+  });
+
+  it("does not invent selectors for configuration without source metadata", () => {
+    render(
+      <Inspector
+        api={createApi()}
+        workflow={FlowInfoMsg.create({
+          ...evaluatedWorkflow,
+          evaluationMetadataJson: {
+            [node.nodeId]: JSON.stringify({
+              metrics: evaluationDeclaration.metrics,
+              composites: evaluationDeclaration.composites,
+              runtime: evaluationDeclaration.runtime,
+            }),
+          },
+        })}
+        nodeId={node.nodeId}
+        onClose={() => undefined}
+      />,
+    );
+    fireEvent.click(screen.getByRole("tab", { name: "Evals" }));
+    expect(screen.getByRole("region", { name: "Question grounded" })).toBeVisible();
+    expect(screen.queryByRole("list", { name: "Metric sources" })).not.toBeInTheDocument();
   });
 
   it("keeps current evaluation configuration out of retained run inspection", () => {
