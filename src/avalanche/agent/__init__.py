@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from typing import TYPE_CHECKING
+
 from .agent_step import Agent, AgentStepError, AgentStepExecutionError, agent_step, step
 from .evidence import (
     AgentEvidenceEvent,
@@ -15,6 +17,9 @@ from .evidence import (
 )
 from .signature import InputField, OutputField, Signature
 
+if TYPE_CHECKING:
+    from predict_rlm import RunTrace as AgentTrace
+
 __all__ = [
     "Agent",
     "AgentEvidenceEvent",
@@ -23,6 +28,7 @@ __all__ = [
     "AgentInvocationId",
     "AgentStepError",
     "AgentStepExecutionError",
+    "AgentTrace",
     "AgentTraceFinishedEvent",
     "AgentTraceUnavailableEvent",
     "File",
@@ -41,6 +47,10 @@ __all__ = [
 def __getattr__(name: str):
     if name == "skills":
         import predict_rlm.skills as value
+    elif name == "AgentTrace":
+        from predict_rlm import RunTrace
+
+        value = RunTrace
     elif name in {"Skill", "File"}:
         import predict_rlm
 

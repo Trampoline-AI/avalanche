@@ -7,10 +7,13 @@ from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from typing import Any
 
+from predict_rlm.trace import IterationStep, PredictCallGroup, TokenUsage, ToolCall
 from rich.syntax import Syntax
 from rich.text import Text
 from textual.strip import Strip
 from textual.widgets import Static
+
+from avalanche._agent_trace import AgentEvidenceMetadata, AgentLifecycleEvent
 
 from ..models import NodeStatus
 
@@ -32,37 +35,27 @@ def _json(value: Any) -> str:
     return json.dumps(value, indent=2, default=str, ensure_ascii=False)
 
 
-def _event_kind(event: dict[str, Any]) -> str:
-    return str(event.get("event_kind") or event.get("kind") or "unknown")
+def _event_kind(event: AgentLifecycleEvent) -> str:
+    return event.event_kind
 
 
-def _event_data(event: dict[str, Any]) -> dict[str, Any]:
-    data = event.get("data")
-    return data if isinstance(data, dict) else {}
+def _event_data(event: AgentLifecycleEvent):
+    return event.data
 
 
-def _usage_label(usage: Any) -> str:
-    if not isinstance(usage, dict):
-        return "0 in / 0 out · 0 cache · $0.000000"
+def _usage_label(usage: TokenUsage) -> str:
     return (
-        f"{usage.get('input_tokens', 0)} in / {usage.get('output_tokens', 0)} out"
-        f" · {usage.get('cache_hits', 0)} cache"
-        f" · ${float(usage.get('cost', 0) or 0):.6f}"
+        f"{usage.input_tokens} in / {usage.output_tokens} out"
+        f" · {usage.cache_hits} cache · ${usage.cost:.6f}"
     )
 
 
-def _duration_seconds(duration_ms: Any) -> str:
-    """Render declared millisecond trace durations in user-scale seconds."""
-    if isinstance(duration_ms, bool) or not isinstance(duration_ms, (int, float)):
-        return "—"
+def _duration_seconds(duration_ms: int) -> str:
     return f"{duration_ms / 1000:.1f}s"
 
 
-def _count_predict_calls(step: dict[str, Any]) -> int:
-    groups = step.get("predict_calls")
-    if not isinstance(groups, list):
-        return 0
-    return sum(len(group.get("calls") or []) for group in groups if isinstance(group, dict))
+def _count_predict_calls(step: IterationStep) -> int:
+    return sum(len(group.calls) for group in step.predict_calls)
 
 
 def _append_tabs(text: Text, active: str) -> None:
@@ -401,7 +394,7 @@ class _VirtualInspector(Static):
             parent.scroll_to(y=max(0, end - max(1, parent.size.height)), animate=False)
 
 
-def _append_live_status(text: Text, events: list[dict[str, Any]]) -> None:
+def _append_live_status(text: Text, events: list[AgentLifecycleEvent]) -> None:
     """Summarize recent live evidence without materializing event payloads."""
     text.append(f"LIVE AGENT STATUS · {len(events)} update(s)\n", style="bold #b38cff")
     labels = {
@@ -420,10 +413,11 @@ def _append_live_status(text: Text, events: list[dict[str, Any]]) -> None:
     for event in events[-16:]:
         kind = _event_kind(event)
         data = _event_data(event)
-        iteration = data.get("iteration")
-        recorded_step = data.get("step")
-        if iteration is None and isinstance(recorded_step, dict):
-            iteration = recorded_step.get("iteration")
+        iteration = (
+            IterationStep.model_validate(data["step"]).iteration
+            if kind == "iteration.recorded"
+            else data.get("iteration")
+        )
         detail = f" · turn {iteration}" if iteration is not None else ""
         name = data.get("name") or data.get("signature")
         if name:
@@ -435,7 +429,16 @@ def _append_live_status(text: Text, events: list[dict[str, Any]]) -> None:
         )
 
 
-def _trace_leading(store: Any) -> tuple[Text, list[dict[str, Any]], bool]:
+def _append_evidence_status(text: Text, evidence: AgentEvidenceMetadata | None) -> None:
+    if evidence is not None:
+        text.append(
+            f"Live record: {'complete' if evidence.complete else 'incomplete'}"
+            f" · terminal={evidence.terminal_outcome}\n",
+            style="green" if evidence.complete else "yellow",
+        )
+
+
+def _trace_leading(store: Any) -> tuple[Text, list[IterationStep], bool]:
     node_id = store.selected_agent_node_id
     workflow = store.current_workflow
     display_name = (
@@ -444,10 +447,16 @@ def _trace_leading(store: Any) -> tuple[Text, list[dict[str, Any]], bool]:
         else "Agent step"
     )
     envelope = store.selected_agent_trace_envelope
+    evidence = envelope.evidence if envelope is not None else None
+    run_id = (
+        evidence.run_id
+        if evidence is not None
+        else (envelope.run_id if envelope is not None else None)
+    )
     text = Text()
     _append_tabs(text, "trace")
     text.append(f"AGENT TRACE · {display_name}\n", style="bold #60dce4")
-    if envelope is None or not isinstance(envelope.get("trace"), dict):
+    if envelope is None or envelope.trace is None:
         state = store.selected_agent_inspector_state
         messages = {
             "pending": ("This agent step has not run yet for this run.\n", "yellow"),
@@ -463,8 +472,11 @@ def _trace_leading(store: Any) -> tuple[Text, list[dict[str, Any]], bool]:
         }
         message, style = messages[state]
         text.append(message, style=style)
-        if envelope is not None and isinstance(envelope.get("error"), str):
-            text.append(f"Error: {envelope['error']}\n", style="bold red")
+        if evidence is not None:
+            text.append(f"Run: {run_id}\n")
+            _append_evidence_status(text, evidence)
+        if envelope is not None and envelope.error is not None:
+            text.append(f"Error: {envelope.error}\n", style="bold red")
         if state in {"live", "hydrating", "completed_with_output", "failed"}:
             _append_live_status(text, store.selected_agent_events)
         steps = store.selected_agent_live_steps
@@ -473,14 +485,9 @@ def _trace_leading(store: Any) -> tuple[Text, list[dict[str, Any]], bool]:
             text.append(_TRACE_CONTROLS, style="dim")
         return text, steps, state in {"live", "hydrating"}
 
-    trace = envelope["trace"]
+    trace = envelope.trace
     inspector_state = store.selected_agent_inspector_state
-    evidence = trace.get("evidence") if isinstance(trace.get("evidence"), dict) else None
-    run_id = envelope.get("run_id") or (evidence or {}).get("run_id") or "—"
-    declared_status = envelope.get("status")
-    if not isinstance(declared_status, str) or not declared_status:
-        declared_status = trace.get("status")
-    status = declared_status if isinstance(declared_status, str) and declared_status else ""
+    status = envelope.status
     if inspector_state == "pending":
         status = "pending"
     elif inspector_state == "live":
@@ -489,10 +496,6 @@ def _trace_leading(store: Any) -> tuple[Text, list[dict[str, Any]], bool]:
         status = "hydrating"
     elif inspector_state == "failed":
         status = "failed"
-    elif inspector_state.startswith("completed") and not status:
-        status = "completed"
-    elif not status:
-        status = "unavailable"
     status_style = (
         "green"
         if inspector_state.startswith("completed") and status == "completed"
@@ -502,24 +505,16 @@ def _trace_leading(store: Any) -> tuple[Text, list[dict[str, Any]], bool]:
         status_style = "bold red"
     text.append(f"Status: {status}", style=status_style)
     text.append(f" · Run: {run_id}\n")
-    if envelope.get("error"):
-        text.append(f"Error: {envelope['error']}\n", style="bold red")
-    usage = trace.get("usage") if isinstance(trace.get("usage"), dict) else {}
+    if envelope.error is not None:
+        text.append(f"Error: {envelope.error}\n", style="bold red")
+    text.append(f"Model: {trace.model} · Sub-model: {trace.sub_model}\n")
     text.append(
-        f"Model: {trace.get('model', '—')} · Sub-model: {trace.get('sub_model') or '—'}\n"
+        f"Turns: {trace.iterations}/{trace.max_iterations}"
+        f" · Duration: {_duration_seconds(trace.duration_ms)}\n"
     )
-    text.append(
-        f"Turns: {trace.get('iterations', 0)}/{trace.get('max_iterations', '—')}"
-        f" · Duration: {_duration_seconds(trace.get('duration_ms'))}\n"
-    )
-    text.append(f"Main: {_usage_label(usage.get('main'))}\n")
-    text.append(f"Sub:  {_usage_label(usage.get('sub'))}\n")
-    if evidence is not None:
-        text.append(
-            f"Live record: {'complete' if evidence.get('complete') else 'incomplete'}"
-            f" · terminal={evidence.get('terminal_outcome') or 'unknown'}\n",
-            style="green" if evidence.get("complete") else "yellow",
-        )
+    text.append(f"Main: {_usage_label(trace.usage.main)}\n")
+    text.append(f"Sub:  {_usage_label(trace.usage.sub)}\n")
+    _append_evidence_status(text, evidence)
     steps = store.selected_agent_steps
     text.append(f"\nSTRUCTURED TRACE · {len(steps)} turn(s)\n", style="bold #b38cff")
     text.append(_TRACE_CONTROLS, style="dim")
@@ -537,24 +532,27 @@ class AgentTraceInspector(_VirtualInspector):
 
         def build() -> tuple[Text, list[_InspectorRow]]:
             leading, steps, live = _trace_leading(store)
-            if not steps:
+            envelope = store.selected_agent_trace_envelope
+            live_rows = (
+                self._live_event_rows(store, steps)
+                if (envelope is None or envelope.trace is None)
+                else []
+            )
+            if not steps and not live_rows:
                 leading.append("No executable turn captured yet.\n", style="dim")
                 return leading, []
-            envelope = store.selected_agent_trace_envelope
-            trace = envelope.get("trace") if isinstance(envelope, dict) else None
-            max_turns = (
-                trace.get("max_iterations") or len(steps)
-                if isinstance(trace, dict)
-                else len(steps)
-            )
+            if live_rows and not steps:
+                leading.append(_TRACE_CONTROLS, style="dim")
+            trace = envelope.trace if envelope is not None else None
+            max_turns = trace.max_iterations if trace is not None else len(steps)
             node = (
                 store.current_run.nodes.get(store.selected_agent_node_id)
                 if store.current_run is not None and store.selected_agent_node_id is not None
                 else None
             )
             submitted = (
-                isinstance(trace, dict)
-                and trace.get("status") == "completed"
+                trace is not None
+                and trace.status == "completed"
                 and node is not None
                 and node.status is NodeStatus.SUCCESS
             )
@@ -564,9 +562,55 @@ class AgentTraceInspector(_VirtualInspector):
                 max_turns=max_turns,
                 live=live,
                 submitted=submitted,
-            )
+            ) + live_rows
 
         return self._render_indexed(store, _layout_key(store, "trace"), build)
+
+    @classmethod
+    def _live_event_rows(
+        cls,
+        store: Any,
+        steps: list[IterationStep],
+    ) -> list[_InspectorRow]:
+        """Expose pending execution as lifecycle evidence, not a synthetic SDK turn."""
+        recorded = {step.iteration for step in steps}
+        rows: list[_InspectorRow] = []
+        body_token = (store.selected_agent_trace_content_token, store.trace_show_full_output)
+        for event in store.selected_agent_events:
+            if event.event_kind not in {"code.generated", "code.executed"}:
+                continue
+            iteration = event.data["iteration"]
+            if iteration in recorded:
+                continue
+            path = ("live", str(event.sequence))
+            if event.event_kind == "code.generated":
+                label = f"AGENT TURN {iteration} · LIVE · awaiting execution"
+                value = event.data["code"]
+                section = "Code"
+                python = True
+            elif "error" in event.data:
+                label = f"AGENT TURN {iteration} · LIVE · execution failed"
+                value = event.data["error"]
+                section = "Error"
+                python = False
+            else:
+                label = f"AGENT TURN {iteration} · LIVE · awaiting iteration record"
+                value = event.data["output"]
+                section = "Output"
+                python = False
+            rows.append(_InspectorRow(path, label, 0, "bold #60dce4"))
+            rows.extend(
+                cls._section(
+                    path + (section.lower(),),
+                    section,
+                    2,
+                    value,
+                    store=store,
+                    python=python,
+                    body_token=body_token,
+                )
+            )
+        return rows
 
     @classmethod
     def _section(
@@ -784,7 +828,7 @@ class AgentTraceInspector(_VirtualInspector):
     def _rows(
         cls,
         store: Any,
-        steps: list[dict[str, Any]],
+        steps: list[IterationStep],
         *,
         max_turns: int,
         live: bool,
@@ -795,21 +839,15 @@ class AgentTraceInspector(_VirtualInspector):
         for index, step in enumerate(steps):
             turn_path = ("turn", str(index))
             collapsed = index in store.trace_collapsed_turns
-            tool_calls = (
-                step.get("tool_calls") if isinstance(step.get("tool_calls"), list) else []
-            )
-            tool_count = step.get("tool_count")
-            tool_count = tool_count if isinstance(tool_count, int) else len(tool_calls)
-            predict_count = step.get("predict_count")
-            predict_count = (
-                predict_count if isinstance(predict_count, int) else _count_predict_calls(step)
-            )
+            tool_calls = step.tool_calls
+            tool_count = len(tool_calls)
+            predict_count = _count_predict_calls(step)
             is_submitted = submitted and index == len(steps) - 1
             label = (
-                f"AGENT TURN {step.get('iteration', index + 1)}/{max_turns}"
-                f" · {_duration_seconds(step.get('duration_ms'))} · "
+                f"AGENT TURN {step.iteration}/{max_turns}"
+                f" · {_duration_seconds(step.duration_ms)} · "
                 f"{tool_count} tool · {predict_count} predict"
-                f"{' · LIVE' if live else ''}{' · ERROR' if step.get('error') else ''}"
+                f"{' · LIVE' if live else ''}{' · ERROR' if step.error else ''}"
                 f"{' · submitted' if is_submitted else ''}"
             )
             rows.append(
@@ -819,20 +857,20 @@ class AgentTraceInspector(_VirtualInspector):
                     0,
                     "bold green"
                     if is_submitted
-                    else ("bold red" if step.get("error") else "bold #60dce4"),
+                    else ("bold red" if step.error else "bold #60dce4"),
                     True,
                     not collapsed,
                 )
             )
             if collapsed:
                 continue
-            if step.get("reasoning") is not None:
+            if step.reasoning:
                 rows.extend(
                     cls._section(
                         turn_path + ("reasoning",),
                         "Reasoning",
                         2,
-                        step["reasoning"],
+                        step.reasoning,
                         store=store,
                         style="dim italic",
                         body_token=body_token,
@@ -843,35 +881,29 @@ class AgentTraceInspector(_VirtualInspector):
                     turn_path + ("code",),
                     "Code",
                     2,
-                    step.get("code"),
+                    step.code,
                     store=store,
                     python=True,
                     body_token=body_token,
                 )
             )
-            output_key = "untruncated_output" if store.trace_show_full_output else "output"
             output_label = "Output (full)" if store.trace_show_full_output else "Output"
             rows.extend(
                 cls._section(
                     turn_path + ("output",),
                     output_label,
                     2,
-                    step.get(output_key) or "(no output)",
+                    (step.untruncated_output if store.trace_show_full_output else step.output),
                     store=store,
-                    style="red" if step.get("error") else "green",
+                    style="red" if step.error else "green",
                     body_token=body_token,
                 )
             )
             rows.extend(cls._tool_rows(store, turn_path, tool_calls, body_token))
-            groups = (
-                step.get("predict_calls") if isinstance(step.get("predict_calls"), list) else []
-            )
-            rows.extend(cls._predict_rows(store, turn_path, groups, body_token))
+            rows.extend(cls._predict_rows(store, turn_path, step.predict_calls, body_token))
             metadata = {
-                "finish_reason": step.get("lm", {}).get("finish_reason")
-                if isinstance(step.get("lm"), dict)
-                else None,
-                "usage": step.get("usage") if isinstance(step.get("usage"), dict) else {},
+                "finish_reason": step.lm.finish_reason if step.lm is not None else None,
+                "usage": step.usage.model_dump(),
             }
             rows.extend(
                 cls._section(
@@ -890,7 +922,7 @@ class AgentTraceInspector(_VirtualInspector):
         cls,
         store: Any,
         turn_path: InspectorPath,
-        calls: list[Any],
+        calls: list[ToolCall],
         body_token: tuple[str, bool],
     ) -> list[_InspectorRow]:
         path = turn_path + ("tools",)
@@ -899,14 +931,12 @@ class AgentTraceInspector(_VirtualInspector):
         if not store.trace_path_materialized(path):
             return rows
         for index, call in enumerate(calls):
-            if not isinstance(call, dict):
-                continue
             call_path = path + (str(index),)
             call_expanded = store.trace_path_expanded(call_path)
             rows.append(
                 _InspectorRow(
                     call_path,
-                    f"Tool · {call.get('name', 'unknown')}",
+                    f"Tool · {call.name}",
                     4,
                     "bold magenta",
                     True,
@@ -919,7 +949,7 @@ class AgentTraceInspector(_VirtualInspector):
                         call_path + ("input",),
                         "Input",
                         6,
-                        {key: call.get(key) for key in ("args", "kwargs") if call.get(key)},
+                        {"args": call.args, "kwargs": call.kwargs},
                         store=store,
                         body_token=body_token,
                     )
@@ -927,11 +957,11 @@ class AgentTraceInspector(_VirtualInspector):
                 rows.extend(
                     cls._section(
                         call_path + ("result",),
-                        "Error" if call.get("error") else "Result",
+                        "Error" if call.error is not None else "Result",
                         6,
-                        call.get("error") or call.get("result"),
+                        call.error if call.error is not None else call.result,
                         store=store,
-                        style="red" if call.get("error") else "dim",
+                        style="red" if call.error is not None else "dim",
                         body_token=body_token,
                     )
                 )
@@ -942,14 +972,12 @@ class AgentTraceInspector(_VirtualInspector):
         cls,
         store: Any,
         turn_path: InspectorPath,
-        groups: list[Any],
+        groups: list[PredictCallGroup],
         body_token: tuple[str, bool],
     ) -> list[_InspectorRow]:
         path = turn_path + ("predict",)
         expanded = store.trace_path_expanded(path)
-        predict_calls = sum(
-            len(group.get("calls") or []) for group in groups if isinstance(group, dict)
-        )
+        predict_calls = sum(len(group.calls) for group in groups)
         rows = [
             _InspectorRow(
                 path,
@@ -963,17 +991,12 @@ class AgentTraceInspector(_VirtualInspector):
         if not store.trace_path_materialized(path):
             return rows
         for group_index, group in enumerate(groups):
-            if not isinstance(group, dict):
-                continue
             group_path = path + (str(group_index),)
             group_expanded = store.trace_path_expanded(group_path)
             rows.append(
                 _InspectorRow(
                     group_path,
-                    (
-                        f"Predict · {group.get('signature', 'unknown')}"
-                        f" · {group.get('model', '—')}"
-                    ),
+                    (f"Predict · {group.signature}" f" · {group.model}"),
                     4,
                     "bold magenta",
                     True,
@@ -982,10 +1005,7 @@ class AgentTraceInspector(_VirtualInspector):
             )
             if not store.trace_path_materialized(group_path):
                 continue
-            calls = group.get("calls") if isinstance(group.get("calls"), list) else []
-            for call_index, call in enumerate(calls):
-                if not isinstance(call, dict):
-                    continue
+            for call_index, call in enumerate(group.calls):
                 call_path = group_path + (str(call_index),)
                 call_expanded = store.trace_path_expanded(call_path)
                 rows.append(
@@ -999,7 +1019,7 @@ class AgentTraceInspector(_VirtualInspector):
                             call_path + ("input",),
                             "Input",
                             8,
-                            call.get("input"),
+                            call.input,
                             store=store,
                             body_token=body_token,
                         )
@@ -1007,11 +1027,11 @@ class AgentTraceInspector(_VirtualInspector):
                     rows.extend(
                         cls._section(
                             call_path + ("output",),
-                            "Error" if call.get("error") else "Output",
+                            "Error" if call.error is not None else "Output",
                             8,
-                            call.get("error") or call.get("output"),
+                            call.error if call.error is not None else call.output,
                             store=store,
-                            style="red" if call.get("error") else "dim",
+                            style="red" if call.error is not None else "dim",
                             body_token=body_token,
                         )
                     )
@@ -1060,17 +1080,7 @@ class AgentOutputInspector(_VirtualInspector):
                 leading.append(message, style=style)
                 return leading, []
             metadata = store.selected_agent_metadata
-            signature = metadata.get("signature") if isinstance(metadata, dict) else None
-            fields = signature.get("outputs") if isinstance(signature, dict) else None
-            declared = (
-                [
-                    field
-                    for field in fields
-                    if isinstance(field, dict) and isinstance(field.get("name"), str)
-                ]
-                if isinstance(fields, list)
-                else []
-            )
+            declared = metadata["signature"]["outputs"] if metadata is not None else []
             names = [field["name"] for field in declared] or list(outputs)
             names.extend(name for name in outputs if name not in names)
             descriptions = {field["name"]: field for field in declared}
@@ -1080,9 +1090,9 @@ class AgentOutputInspector(_VirtualInspector):
                 field = descriptions.get(name)
                 label = name
                 if field is not None:
-                    if isinstance(field.get("annotation"), str) and field["annotation"]:
+                    if field["annotation"]:
                         label += f": {field['annotation']}"
-                    if isinstance(field.get("description"), str) and field["description"]:
+                    if field["description"]:
                         label += f" — {field['description']}"
                 rows.extend(
                     AgentTraceInspector._section(
@@ -1150,55 +1160,33 @@ class AgentMetadataInspector(_VirtualInspector):
                     f"Metadata declaration failed: {metadata_error}\n", style="bold red"
                 )
                 return leading, []
-            signature = metadata.get("signature")
-            signature = signature if isinstance(signature, Mapping) else {}
-            signature_name = signature.get("name")
-            runtime = metadata.get("runtime")
-            runtime = runtime if isinstance(runtime, Mapping) else {}
-            models = metadata.get("models")
-            if not isinstance(models, Mapping):
-                models = {
-                    "main": (
-                        {"identity": runtime["lm"], "source": "effective runtime"}
-                        if "lm" in runtime
-                        else {"source": "PredictRLM default"}
-                    ),
-                    "sub": (
-                        {"identity": runtime["sub_lm"], "source": "effective runtime"}
-                        if "sub_lm" in runtime
-                        else {"source": "PredictRLM default"}
-                    ),
+            signature = metadata["signature"]
+            runtime = metadata["runtime"]
+            models = metadata["models"]
+            skill_records = {
+                skill["name"]: {
+                    "instructions": skill["instructions"],
+                    "packages": skill["packages"],
+                    "modules": skill["modules"],
+                    "tools": skill["tools"],
                 }
-            skills = metadata.get("skills")
-            skill_records = (
-                {
-                    skill["name"]: {
-                        "instructions": skill.get("instructions", ""),
-                        "packages": skill.get("packages", []),
-                        "modules": skill.get("modules", []),
-                        "tools": skill.get("tools", []),
-                    }
-                    for skill in skills
-                    if isinstance(skill, Mapping) and isinstance(skill.get("name"), str)
-                }
-                if isinstance(skills, list)
-                else {}
-            )
+                for skill in metadata["skills"]
+            }
             values: dict[str, Any] = {
                 "signature": {
-                    "instructions": signature.get("instructions", ""),
-                    "name": signature_name if isinstance(signature_name, str) else "",
+                    "instructions": signature["instructions"],
+                    "name": signature["name"],
                 },
-                "inputs": signature.get("inputs", []),
-                "outputs": signature.get("outputs", []),
+                "inputs": signature["inputs"],
+                "outputs": signature["outputs"],
                 "skills": skill_records,
                 "models": models,
                 "runtime": {
                     key: value for key, value in runtime.items() if key not in {"lm", "sub_lm"}
                 },
-                "packages": metadata.get("packages", []),
-                "modules": metadata.get("modules", []),
-                "tools": metadata.get("tools", []),
+                "packages": metadata["packages"],
+                "modules": metadata["modules"],
+                "tools": metadata["tools"],
             }
             rows: list[_InspectorRow] = []
             body_token = (store.selected_agent_metadata_content_token, False)

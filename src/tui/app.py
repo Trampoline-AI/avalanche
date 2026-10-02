@@ -6,11 +6,14 @@ import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
 
+import grpc
 from textual.app import App, ComposeResult
 from textual.binding import Binding
 from textual.css.query import NoMatches
 from textual.timer import Timer
 from textual.widgets import Header
+
+from runtime.operator.client import OperatorCallError
 
 from .dag_layout import DagNode
 from .mock import MockStateProvider
@@ -463,21 +466,26 @@ class AvalancheApp(App):
             if active_key != key:
                 self._trace_hydration_superseded.add(attempt)
 
+    def _release_trace_hydration_attempt(self, attempt: int) -> TraceHydrationKey | None:
+        active_key = next(
+            (
+                key
+                for key, active in self._trace_hydration_attempts.items()
+                if active == attempt
+            ),
+            None,
+        )
+        if active_key is not None:
+            self._trace_hydration_attempts.pop(active_key)
+            self._trace_hydration_in_flight.discard(active_key)
+            self._trace_hydration_superseded.discard(attempt)
+        return active_key
+
     def _apply_trace_hydration_completions(self) -> None:
         for completion, applied in self.store.take_trace_hydration_completions():
-            active_key = next(
-                (
-                    key
-                    for key, attempt in self._trace_hydration_attempts.items()
-                    if attempt == completion.attempt
-                ),
-                None,
-            )
+            active_key = self._release_trace_hydration_attempt(completion.attempt)
             if active_key is None:
                 continue
-            self._trace_hydration_attempts.pop(active_key, None)
-            self._trace_hydration_in_flight.discard(active_key)
-            self._trace_hydration_superseded.discard(completion.attempt)
             if applied:
                 self._trace_hydration_retry.pop(active_key, None)
                 continue
@@ -554,7 +562,9 @@ class AvalancheApp(App):
         if key is None:
             return
         envelope = self.store.selected_agent_trace_envelope
-        if envelope is not None and isinstance(envelope.get("trace"), dict):
+        if envelope is not None and (
+            envelope.trace is not None or envelope.evidence is not None
+        ):
             self._trace_hydration_retry.pop(key, None)
             return
         if self._trace_hydration_attempts or self._trace_hydration_closed:
@@ -562,9 +572,7 @@ class AvalancheApp(App):
         retry = self._trace_hydration_retry.get(key)
         if retry is not None and self._trace_hydration_now() < retry[1]:
             return
-        hydrate = getattr(self.store.provider, "hydrate_trace", None)
-        if not callable(hydrate):
-            return
+        hydrate = self.store.provider.hydrate_trace
         run = self.store.current_run
         if run is None:
             return
@@ -578,10 +586,16 @@ class AvalancheApp(App):
 
         def _hydrate() -> None:
             hydrated = None
+            failure = None
             try:
                 hydrated = hydrate(run_id, node_id)
-            except Exception:
-                pass
+            except Exception as error:
+                if not (
+                    isinstance(error, OperatorCallError)
+                    and error.status
+                    in {grpc.StatusCode.UNAVAILABLE, grpc.StatusCode.DEADLINE_EXCEEDED}
+                ):
+                    failure = error
             finally:
                 completion = self._trace_detail_completion(
                     attempt=attempt,
@@ -592,9 +606,24 @@ class AvalancheApp(App):
                     descriptor_revision=descriptor_revision,
                     hydrated=hydrated,
                 )
-                self.store.enqueue_trace_hydration_completion(completion)
+                if failure is None:
+                    self.store.enqueue_trace_hydration_completion(completion)
+                else:
+                    # Fatal details must not enter the transport-retry reducer.
+                    self.call_later(self._raise_trace_hydration_error, failure, completion)
 
         self._trace_hydration_executor.submit(_hydrate)
+
+    def _raise_trace_hydration_error(
+        self, error: Exception, completion: TraceDetailCompletion
+    ) -> None:
+        self._trace_hydration_closed = True
+        key = (completion.run_id, completion.node_id, completion.descriptor_revision)
+        active_attempt = self._trace_hydration_attempts.get(key)
+        if active_attempt is None or active_attempt == completion.attempt:
+            self._release_trace_hydration_attempt(completion.attempt)
+            self._trace_hydration_retry.pop(key, None)
+        raise error
 
     # ── Connection monitoring ───────────────────────────────────────
 

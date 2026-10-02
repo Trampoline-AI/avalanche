@@ -13,7 +13,7 @@ from copy import deepcopy
 from dataclasses import dataclass, replace
 from enum import Enum
 from numbers import Real
-from typing import Any, Callable
+from typing import TYPE_CHECKING, Any, Callable
 from uuid import uuid4
 
 import grpc
@@ -78,6 +78,9 @@ from .results import (
     ResultFileAttachment,
     decode_workflow_result,
 )
+
+if TYPE_CHECKING:
+    from avalanche._agent_trace import AgentLifecycleEvent, AgentTerminalDetail
 
 DEFAULT_UNARY_TIMEOUT_SECONDS = 10.0
 DETAIL_HYDRATION_PAGE_SIZE = 100
@@ -366,8 +369,8 @@ class GrpcStateProvider:
         self._activity_continuations: dict[tuple[str, str, str], pb.ContinuationRefV2] = {}
         self._detail_refs_by_key: dict[str, pb.ActivityDetailRefV2] = {}
         self._trace_detail_refs: dict[tuple[str, str, int], pb.ActivityDetailRefV2] = {}
-        self._agent_events: dict[tuple[str, str], list[Any]] = {}
-        self._trace_bodies: dict[tuple[str, str], dict[str, Any]] = {}
+        self._agent_events: dict[tuple[str, str], list[AgentLifecycleEvent]] = {}
+        self._trace_bodies: dict[tuple[str, str], AgentTerminalDetail] = {}
         self._detail_cache_usage: OrderedDict[_DetailCacheKey, tuple[int, int]] = OrderedDict()
         self._retained_detail_count = 0
         self._retained_detail_bytes = 0
@@ -820,9 +823,9 @@ class GrpcStateProvider:
 
             hydrated_agent_nodes: set[tuple[str, str]] = set()
             agent_sequences: dict[tuple[str, str], int] = {}
-            agent_events: dict[tuple[str, str], list[Any]] = {}
+            agent_events: dict[tuple[str, str], list[AgentLifecycleEvent]] = {}
             agent_event_bytes: dict[tuple[str, str], int] = {}
-            trace_bodies: dict[tuple[str, str], dict[str, Any]] = {}
+            trace_bodies: dict[tuple[str, str], AgentTerminalDetail] = {}
             trace_body_bytes: dict[tuple[str, str], int] = {}
             if reuse_cached and cached is not None:
                 for node_id, node in run.nodes.items():
@@ -841,7 +844,7 @@ class GrpcStateProvider:
                             (
                                 len(agent_events[key]),
                                 sum(
-                                    len(json.dumps(event, default=str).encode())
+                                    len(event.model_dump_json().encode())
                                     for event in agent_events[key]
                                 ),
                             ),
@@ -1080,8 +1083,9 @@ class GrpcStateProvider:
 
     def _validate_detail_body_size(self, size_bytes: int) -> None:
         if size_bytes < 0 or size_bytes > self._max_detail_body_bytes:
-            raise _DetailHydrationRaceError(
-                "detail body exceeds the configured hydration byte limit"
+            raise _ClientBudgetExceededError(
+                grpc.StatusCode.RESOURCE_EXHAUSTED,
+                "detail body exceeds the configured hydration byte limit",
             )
 
     @staticmethod
@@ -1563,23 +1567,23 @@ class GrpcStateProvider:
             for expected_index, chunk in enumerate(chunks):
                 if saw_eof:
                     self._cancel_detail_stream(chunks)
-                    raise _DetailHydrationRaceError("detail stream continued after eof")
+                    raise ValueError("detail stream continued after eof")
                 if chunk.chunk_index != expected_index:
                     self._cancel_detail_stream(chunks)
-                    raise _DetailHydrationRaceError("detail chunk identity changed")
+                    raise ValueError("detail chunk identity changed")
                 if len(chunk.data) > size_bytes - len(data):
                     self._cancel_detail_stream(chunks)
-                    raise _DetailHydrationRaceError("detail body exceeded its advertised size")
+                    raise ValueError("detail body exceeded its advertised size")
                 data.extend(chunk.data)
                 saw_eof = chunk.eof
         except grpc.RpcError as error:
             raise self._record_unary_error(error) from error
         self._record_unary_success()
         if not saw_eof or len(data) != size_bytes:
-            raise _DetailHydrationRaceError("detail body does not match its descriptor")
+            raise ValueError("detail body does not match its descriptor")
         resolved = bytes(data)
         if hashlib.sha256(resolved).hexdigest() != detail_ref.sha256:
-            raise _DetailHydrationRaceError("detail body digest does not match its descriptor")
+            raise ValueError("detail body digest does not match its descriptor")
         return resolved
 
     def _detail_rpc_kwargs(self) -> dict[str, Any]:
@@ -1616,9 +1620,9 @@ class GrpcStateProvider:
         log_bytes: int,
         hydrated_agent_nodes: set[tuple[str, str]],
         agent_sequences: dict[tuple[str, str], int],
-        agent_events: dict[tuple[str, str], list[Any]],
+        agent_events: dict[tuple[str, str], list[AgentLifecycleEvent]],
         agent_event_bytes: dict[tuple[str, str], int],
-        trace_bodies: dict[tuple[str, str], dict[str, Any]],
+        trace_bodies: dict[tuple[str, str], AgentTerminalDetail],
         trace_body_bytes: dict[tuple[str, str], int],
     ) -> RunState:
         with self._state_lock:
@@ -1825,28 +1829,25 @@ class GrpcStateProvider:
             for expected_index, chunk in enumerate(chunks):
                 if saw_eof:
                     self._cancel_detail_stream(chunks)
-                    raise _DetailHydrationRaceError("trace stream continued after eof")
+                    raise ValueError("trace stream continued after eof")
                 if chunk.chunk_index != expected_index:
                     self._cancel_detail_stream(chunks)
-                    raise _DetailHydrationRaceError("trace chunk identity changed")
+                    raise ValueError("trace chunk identity changed")
                 if len(chunk.data) > descriptor.size_bytes - len(data):
                     self._cancel_detail_stream(chunks)
-                    raise _DetailHydrationRaceError("trace body exceeded its advertised size")
+                    raise ValueError("trace body exceeded its advertised size")
                 data.extend(chunk.data)
                 saw_eof = chunk.eof
         except grpc.RpcError as error:
             raise self._record_unary_error(error) from error
         self._record_unary_success()
         if not saw_eof or len(data) != descriptor.size_bytes:
-            raise _DetailHydrationRaceError("trace body does not match its descriptor")
+            raise ValueError("trace body does not match its descriptor")
         if hashlib.sha256(bytes(data)).hexdigest() != detail_ref.sha256:
-            raise _DetailHydrationRaceError("trace body digest does not match its descriptor")
-        try:
-            trace = json.loads(data)
-        except (TypeError, ValueError) as error:
-            raise _DetailHydrationRaceError("trace body is not valid JSON") from error
-        if not isinstance(trace, dict):
-            raise _DetailHydrationRaceError("trace body is not a JSON object")
+            raise ValueError("trace body digest does not match its descriptor")
+        from avalanche._agent_trace import AgentTerminalDetail
+
+        trace = AgentTerminalDetail.model_validate_json(data, strict=True)
 
         with self._state_lock:
             if self._closed:
@@ -3096,14 +3097,14 @@ def _trace_detail_from_run(run: RunState | None, node_id: str) -> TraceDetail | 
         return None
     node = run.nodes.get(node_id)
     descriptor = node.trace if node is not None else None
-    if node is None or descriptor is None or not node.agent_trace_json:
+    if node is None or descriptor is None or node.agent_trace_json is None:
         return None
-    try:
-        envelope = json.loads(node.agent_trace_json)
-    except (TypeError, ValueError):
-        return None
-    trace_body = envelope.get("trace") if isinstance(envelope, dict) else None
-    if not isinstance(trace_body, dict):
+    from avalanche._agent_trace import AgentTerminalDetail, AgentTraceEnvelope
+
+    envelope = AgentTraceEnvelope.model_validate_json(node.agent_trace_json, strict=True)
+    if envelope.evidence is None:
+        if envelope.trace is not None:
+            raise ValueError("hydrated terminal trace is missing lifecycle metadata")
         return None
     return TraceDetail(
         operator_instance_id=run.operator_instance_id,
@@ -3111,64 +3112,54 @@ def _trace_detail_from_run(run: RunState | None, node_id: str) -> TraceDetail | 
         created_sequence=run.created_sequence,
         node_id=node_id,
         descriptor_revision=descriptor.revision,
-        trace_body=deepcopy(trace_body),
+        trace_body=AgentTerminalDetail(trace=envelope.trace, evidence=envelope.evidence),
     )
 
 
-def _append_agent_event(events: list[Any], event_json: str) -> None:
-    try:
-        event = json.loads(event_json)
-    except json.JSONDecodeError:
-        event = {"raw": event_json}
+def _append_agent_event(events: list[AgentLifecycleEvent], event_json: str) -> None:
+    from predict_rlm import IterationStep
+
+    from avalanche._agent_trace import AgentLifecycleEvent
+
+    event = AgentLifecycleEvent.model_validate_json(event_json, strict=True)
+    if event.event_kind == "iteration.recorded":
+        IterationStep.model_validate(event.data["step"], strict=True)
     events.append(event)
 
 
 def _materialize_agent_trace_json(
-    events: Sequence[Any],
+    events: Sequence[AgentLifecycleEvent],
     *,
     status: str,
-    trace_body: dict[str, Any] | None,
+    trace_body: AgentTerminalDetail | None,
 ) -> str:
-    reconstructed = deepcopy(trace_body) if trace_body is not None else None
-    if reconstructed is not None:
-        steps = []
-        evidence_events = []
-        for event in events:
-            if not isinstance(event, dict):
-                continue
-            event_kind = event.get("event_kind")
-            data = event.get("data")
-            if event_kind == "iteration.recorded" and isinstance(data, dict):
-                step = data.get("step")
-                if isinstance(step, dict):
-                    steps.append(step)
-            evidence_events.append(
-                {
-                    "sequence": event.get("sequence"),
-                    "kind": event_kind,
-                    "timestamp_ns": event.get("timestamp_ns"),
-                    "data": data if isinstance(data, dict) else {},
-                }
-            )
-        reconstructed["steps"] = steps
-        evidence = reconstructed.get("evidence")
-        if isinstance(evidence, dict):
-            evidence["events"] = evidence_events
+    from predict_rlm import IterationStep
 
-    envelope: dict[str, Any] = {
-        "schema_version": 1,
-        "status": status,
-        "run_id": None,
-        "events": events,
-        "trace": reconstructed,
-        "error": None,
-    }
-    if reconstructed is not None:
-        envelope["status"] = str(reconstructed.get("status") or status)
-        evidence = reconstructed.get("evidence")
-        if isinstance(evidence, dict):
-            envelope["run_id"] = evidence.get("run_id")
-    return json.dumps(envelope, default=str)
+    from avalanche._agent_trace import AgentTraceEnvelope
+
+    trace = (
+        trace_body.trace.model_copy(deep=True)
+        if trace_body is not None and trace_body.trace is not None
+        else None
+    )
+    evidence = trace_body.evidence if trace_body is not None else None
+    if trace is not None:
+        trace.steps = [
+            IterationStep.model_validate(event.data["step"], strict=True)
+            for event in events
+            if event.event_kind == "iteration.recorded"
+        ]
+    envelope = AgentTraceEnvelope(
+        schema_version=1,
+        invocation_id=events[-1].invocation_id if events else None,
+        status=trace.status if trace is not None else status,
+        run_id=evidence.run_id if evidence is not None else None,
+        events=list(events),
+        trace=trace,
+        evidence=evidence,
+        error=None,
+    )
+    return envelope.model_dump_json()
 
 
 def _json_payload(payload: Mapping[str, Any] | BaseModel | None) -> str:

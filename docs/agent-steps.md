@@ -181,6 +181,26 @@ contracts. Use the inline form for compact local contracts.
 `await agent(...)` always returns the raw DSPy prediction. Avalanche never
 selects an output, derives a table, or appends automatically.
 
+`ava.agent.AgentTrace` is a lazy re-export of PredictRLM's `RunTrace` model, not a
+subclass or a separate schema. `prediction.trace` is already an instance of this
+model. Lifecycle evidence remains separate in `prediction.evidence`.
+
+Avalanche retains only `run_id`, `complete`, and `terminal_outcome` from final
+evidence, alongside the existing sanitized lifecycle events. Evidence remains
+available when an agent fails before creating a trace. Operator and inspector
+details use the SDK trace schema; malformed required fields raise rather than
+appearing as missing details.
+
+Operator inspection has a 4 MiB budget per recorded iteration. Oversized text,
+tool payloads, and prediction inputs or outputs are explicitly marked
+unavailable. If call collections must be shortened, the event and turn reasoning
+report omitted counts. This does not change the prediction result or the SDK
+trace returned by `await agent(...)`.
+
+Live events remain available before terminal evidence arrives. The terminal
+inspector retries temporary gRPC unavailability and deadline failures using its
+existing backoff; malformed detail still raises after fetch-attempt cleanup.
+
 ```python
 class DraftArtifactsSig(ava.Signature):
     """Render proposal artifacts from an approved plan."""
