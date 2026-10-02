@@ -70,7 +70,9 @@
 - Split the current agent inspector into Agent definition, Evals, and Step
   definition tabs, separating evaluation declarations and the step interface
   from the rest of the agent configuration.
-- Classifier responses now
+- The incident-handoff example sends source facts and observable agent actions
+  for trace inspection instead of duplicate full-trace copies, avoiding a
+  TypeSafe context-limit error on the documented path. Classifier responses now
   allow rounding differences between Score and its reported probabilities, and
   HTTP 400 context-limit errors identify `max_tokens_exceeded` without logging
   the private request body.

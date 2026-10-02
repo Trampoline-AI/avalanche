@@ -376,6 +376,12 @@ not stringified. Evaluation does not open files, extract document content, or
 evaluate images/media: a path is only text, not file evidence. Select already
 available text/JSON when evaluating a file-producing agent.
 
+The full `ctx.trace` may repeat agent steps in both `steps` and `evidence.events`,
+and may include an output again as `untruncated_output`. Large traces can exceed
+[Jev's context budget](https://docs.typesafe.ai/models). Select the source facts
+and observable actions needed for your question instead of sending both copies
+or silently truncating evidence.
+
 ### Answers, composites, and batching
 
 Composites are synchronous Python functions receiving one
@@ -455,7 +461,9 @@ After running, inspect `prepare_incident_handoff` → **Evaluations** for ground
 publication readiness, clarity, and trace-inspection judgments. The `handoff_quality`
 composite combines Noul probability, explicitly normalized Scores, and a Choice
 probability. Three questions share the same source-and-handoff state and can batch
-together; clarity and trace inspection select different evidence.
+together; clarity selects two text fields, while trace inspection selects source
+records and observed per-iteration code and output once rather than duplicating
+the complete terminal trace.
 
 Inspect `render_handoff` for the finished brief. The scenario deliberately includes
 an unverified duplicate-charge report and too little recovery history to declare

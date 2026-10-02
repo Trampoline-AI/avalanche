@@ -380,6 +380,12 @@ another input/output/context schema for evaluations:
   open files, extract content, or evaluate images/media. Paths are not evidence
   of the referenced file's contents.
 
+Full terminal traces may repeat steps under `evidence.events` and repeat each
+output as `untruncated_output`. For trace-quality judgments, select the source
+and observable action fields needed for the question instead of sending every
+copy. Jev can return HTTP 400 `max_tokens_exceeded` for oversized state; Avalanche
+exposes the machine code but not the potentially private request body.
+
 Equal selected state with compatible evaluator configuration is batched by
 content, not selector identity. The two audit-output metrics above share a
 request; the trace metric remains separate. Do not combine different states to

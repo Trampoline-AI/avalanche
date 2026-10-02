@@ -66,6 +66,39 @@ def handoff_evidence(
     }
 
 
+def handoff_trace_evidence(
+    ctx: ava.EvalContext[IncidentPacket, IncidentHandoff],
+) -> dict[str, JsonValue]:
+    """Keep observed actions and source facts without the trace's duplicate copies."""
+    actions: list[JsonValue] = []
+    for event in ctx.trace:
+        if event["kind"] == "trace_unavailable":
+            actions.append(event)
+        elif event["kind"] == "trace_finished":
+            actions.append(
+                {
+                    "kind": "trace_finished",
+                    "invocation_id": event["invocation_id"],
+                    "actions": [
+                        {
+                            "iteration": step["iteration"],
+                            "code": step["code"],
+                            "output": step["output"],
+                            "tool_calls": step["tool_calls"],
+                            "predict_calls": step["predict_calls"],
+                        }
+                        for step in event["trace"]["steps"]
+                    ],
+                }
+            )
+        else:
+            raise ValueError(f"Unsupported agent trace event: {event['kind']!r}")
+    return {
+        "source": ctx.inputs["packet"].model_dump(mode="json"),
+        "agent_actions": actions,
+    }
+
+
 handoff_evaluations = ava.Evaluations(
     metrics={
         "grounded": ava.Metric(
@@ -133,7 +166,7 @@ handoff_evaluations = ava.Evaluations(
             },
         ),
         "inspected_evidence": ava.Metric(
-            state=lambda ctx: ctx.trace,
+            state=handoff_trace_evidence,
             question={
                 "type": "noul",
                 "instructions": (
