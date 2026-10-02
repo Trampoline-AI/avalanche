@@ -1286,24 +1286,4 @@ describe("graph evaluation declarations", () => {
     );
     expect(screen.queryByText(/Evaluations ·/)).not.toBeInTheDocument();
   });
-
-  it("marks malformed declarations unavailable without inventing a metric count or hiding the node", () => {
-    render(
-      <GraphCanvas
-        workflow={FlowInfoMsg.create({
-          ...evaluatedWorkflow,
-          evaluationMetadataJson: {
-            fetch: JSON.stringify({
-              ...evaluationDeclaration,
-              metrics: { broken: { type: "unknown" } },
-            }),
-          },
-        })}
-        onOpenNode={() => undefined}
-      />,
-    );
-    expect(screen.getByText(/unavailable/)).toBeVisible();
-    expect(screen.getByRole("button", { name: "Inspect Fetch" })).toBeEnabled();
-    expect(screen.queryByText(/\b3\b/)).not.toBeInTheDocument();
-  });
 });

@@ -150,7 +150,8 @@ export function createApi(overrides: Partial<OperatorApi> = {}): OperatorApi {
     }),
     listEvaluations: async () => [],
     readJsonDetail: async () => undefined,
-    readTextDetail: async () => "",
+    readTextDetail: async (token, signal) =>
+      JSON.stringify(await overrides.readJsonDetail?.(token, signal)),
     startRun: async () => "run-3",
     cancelRun: async () => undefined,
     ...overrides,

@@ -76,6 +76,9 @@
   allow rounding differences between Score and its reported probabilities, and
   HTTP 400 context-limit errors identify `max_tokens_exceeded` without logging
   the private request body.
+- Browser classifier and evaluation results now display the values validated by
+  Python without repeating score, probability, composite, or lifecycle checks
+  in the consumer.
 
 ## 0.6.1
 

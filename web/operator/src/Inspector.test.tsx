@@ -1872,30 +1872,6 @@ describe("classifier inspection", () => {
     expect(readJsonDetail).toHaveBeenCalledTimes(1);
   });
 
-  it("does not substitute current questions when retained declaration or detail is malformed", async () => {
-    const malformedRun = RunSnapshotMsg.create({
-      ...classifierRun,
-      topology: { ...classifierRun.topology, classifierMetadataJson: { [node.nodeId]: "{}" } },
-    });
-    render(
-      <Inspector
-        api={createApi({
-          listClassifierEventPage: async () => classifierPage([classifierEvent(1, 0)]),
-          readJsonDetail: async () => classifierInvocation(1),
-        })}
-        workflow={classifierWorkflow}
-        run={malformedRun}
-        nodeId={node.nodeId}
-        onClose={() => undefined}
-      />,
-    );
-    expect(screen.queryByRole("tab", { name: "Definition" })).toBeNull();
-    fireEvent.click(await screen.findByRole("button", { name: "Call 1" }));
-    expect(await screen.findByText(/does not match its invocation descriptor/)).toBeVisible();
-    expect(screen.queryByLabelText("Question category")).toBeNull();
-    expect(screen.queryByLabelText("Classification answers")).toBeNull();
-  });
-
   it("derives interruption from terminal node state while retaining successful calls after postprocessing failure", async () => {
     const api = createApi({
       listClassifierEventPage: async () =>
@@ -2509,22 +2485,13 @@ describe("evaluation declarations before execution", () => {
     expect(screen.getByText("Follow the current instructions.")).toBeVisible();
   });
 
-  it.each([
-    "{",
-    JSON.stringify({
-      ...evaluationDeclaration,
-      metrics: {
-        quality: { type: "score", instructions: "Rate it", criteria: ["Only one level"] },
-      },
-    }),
-    JSON.stringify({ ...evaluationDeclaration, runtime: { model: "jev", timeout: 0 } }),
-  ])("isolates malformed evaluation metadata from the agent definition (%s)", (raw) => {
+  it("isolates malformed evaluation JSON from the agent definition", () => {
     render(
       <Inspector
         api={createApi()}
         workflow={FlowInfoMsg.create({
           ...evaluatedWorkflow,
-          evaluationMetadataJson: { [node.nodeId]: raw },
+          evaluationMetadataJson: { [node.nodeId]: "{" },
         })}
         nodeId={node.nodeId}
         onClose={() => undefined}

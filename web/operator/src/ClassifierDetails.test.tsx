@@ -5,7 +5,6 @@ import {
   decodeClassifierDeclaration,
   decodeClassifierInvocation,
   parseClassifierDeclaration,
-  parseClassifierInvocation,
   type ClassificationResult,
   type ClassifierDeclaration,
   type ClassifierInvocation,
@@ -310,12 +309,14 @@ it("renders typed answers without turning Noul into confidence or rounding Score
 });
 
 it.each([
-  { usage: {}, expected: { input_tokens: null, output_tokens: null } },
   {
     usage: { input_tokens: null, output_tokens: null },
     expected: { input_tokens: null, output_tokens: null },
   },
-  { usage: { input_tokens: 0 }, expected: { input_tokens: 0, output_tokens: null } },
+  {
+    usage: { input_tokens: 0, output_tokens: null },
+    expected: { input_tokens: 0, output_tokens: null },
+  },
   {
     usage: { input_tokens: null, output_tokens: 47 },
     expected: { input_tokens: null, output_tokens: 47 },
@@ -361,8 +362,8 @@ it("pairs repeated calls with their own input, resolved questions, criteria, and
   };
   render(
     <>
-      <ClassifierInvocationDetails invocation={parseClassifierInvocation(first)} />
-      <ClassifierInvocationDetails invocation={parseClassifierInvocation(second)} />
+      <ClassifierInvocationDetails invocation={first} />
+      <ClassifierInvocationDetails invocation={second} />
     </>,
   );
   const firstCall = within(
@@ -406,9 +407,7 @@ it("transitions from running to a failed record without fabricating answers or i
     result: null,
     declaration: { ...declaration, questions: null },
   };
-  const view = render(
-    <ClassifierInvocationDetails invocation={parseClassifierInvocation(running)} />,
-  );
+  const view = render(<ClassifierInvocationDetails invocation={running} />);
   expect(screen.getByRole("status")).toBeInTheDocument();
   expect(
     within(screen.getByRole("region", { name: "Input state" })).getByText(/First request/),
@@ -420,12 +419,12 @@ it("transitions from running to a failed record without fabricating answers or i
     'Classifier request failed: <img src="https://tracker.invalid" onerror="alert(1)">';
   view.rerender(
     <ClassifierInvocationDetails
-      invocation={parseClassifierInvocation({
+      invocation={{
         ...running,
         status: "failed",
         ended_at: 102,
         error,
-      })}
+      }}
     />,
   );
   expect(screen.getByRole("alert")).toHaveTextContent(error);
@@ -444,7 +443,7 @@ it("transitions from running to a failed record without fabricating answers or i
   expect(definition.queryByText(/supplied at runtime/)).not.toBeInTheDocument();
   view.rerender(
     <ClassifierInvocationDetails
-      invocation={parseClassifierInvocation({ ...running, status: "cancelled", ended_at: 102 })}
+      invocation={{ ...running, status: "cancelled", ended_at: 102 }}
     />,
   );
   expect(screen.getByRole("status")).toHaveTextContent(/cancelled/i);
@@ -504,7 +503,7 @@ it("shows the highest probabilities first and reveals every rounded option on ex
       confidence: 0.36,
     },
   };
-  render(<ClassifierInvocationDetails invocation={parseClassifierInvocation(value)} />);
+  render(<ClassifierInvocationDetails invocation={value} />);
   const answer = within(screen.getByRole("region", { name: "Answer route" }));
   expect(answer.getAllByRole("listitem").map((item) => item.textContent)).toEqual([
     "problem56%",
@@ -532,17 +531,6 @@ describe("strict classifier records", () => {
       ).toThrow();
     },
   );
-
-  it("rejects a successful invocation without resolved questions", () => {
-    const value = success();
-    expect(() =>
-      parseClassifierInvocation({
-        ...value,
-        declaration: { ...declaration, questions: null },
-        result: { ...value.result, answers: {} },
-      }),
-    ).toThrow();
-  });
 
   it.each([{}, [], "runtime"])("rejects invalid question maps: %j", (questions) => {
     expect(() => parseClassifierDeclaration({ ...declaration, questions })).toThrow();
@@ -599,42 +587,9 @@ describe("strict classifier records", () => {
     expect(decoded.input_schema?.["__proto__"]).toEqual({ type: "number" });
   });
 
-  it("requires a JSON state entry, rejects scalar state, and preserves nested JSON", () => {
-    const value = success();
-    const { input, ...withoutInput } = value;
-    expect(() => parseClassifierInvocation(withoutInput)).toThrow();
-    expect(() => parseClassifierInvocation({ ...value, input: false })).toThrow();
-    expect(() => parseClassifierInvocation({ ...value, input: 42 })).toThrow();
-    expect(parseClassifierInvocation(value).input).toEqual(input);
-    expect(
-      parseClassifierInvocation({ ...value, input: { enabled: false, attempts: 42 } }).input,
-    ).toEqual({ enabled: false, attempts: 42 });
-    expect(() => parseClassifierInvocation({ ...value, input: { score: Infinity } })).toThrow();
-  });
-
-  it("rejects partial answers rather than presenting a completed classification", () => {
-    const value = success();
-    delete value.result.answers.safe;
-    expect(() => parseClassifierInvocation(value)).toThrow();
-  });
-
-  it.each(["input_tokens", "output_tokens"])("rejects malformed %s counters", (counter) => {
-    const value = success();
-    for (const invalid of [-1, 1.5, true, "1", Number.MAX_SAFE_INTEGER + 1]) {
-      expect(() =>
-        decodeClassifierInvocation(
-          JSON.stringify({
-            ...value,
-            result: { ...value.result, usage: { [counter]: invalid } },
-          }),
-        ),
-      ).toThrow();
-    }
-  });
-
   it("renders a valid single-option Choice", () => {
     const value = success();
-    const parsed = parseClassifierInvocation({
+    const parsed: ClassifierInvocation = {
       ...value,
       declaration: {
         ...declaration,
@@ -652,112 +607,13 @@ describe("strict classifier records", () => {
           },
         },
       },
-    });
+    };
     render(<ClassifierInvocationDetails invocation={parsed} />);
     expect(screen.getByRole("region", { name: "Answer only" })).toHaveTextContent("retain");
   });
 
-  it.each([
-    { type: "choice", choice: "review", probabilities: { review: 1 }, confidence: 1 },
-    {
-      type: "choice",
-      choice: "unknown",
-      probabilities: { review: 0.72, accept: 0.28 },
-      confidence: 0.44,
-    },
-    {
-      type: "choice",
-      choice: "review",
-      probabilities: { review: 0.4, accept: 0.3 },
-      confidence: 0.44,
-    },
-    {
-      type: "choice",
-      choice: "accept",
-      probabilities: { review: 0.72, accept: 0.28 },
-      confidence: 0.44,
-    },
-    { type: "noul", noul: 0.72 },
-  ])("rejects an answer inconsistent with its declared Choice: %j", (answer) => {
-    const value = success();
-    expect(() =>
-      parseClassifierInvocation({
-        ...value,
-        result: { ...value.result, answers: { ...value.result.answers, route: answer } },
-      }),
-    ).toThrow();
-  });
-
-  it("rejects confidence on Noul and out-of-range probability", () => {
-    const value = success();
-    const answers = value.result.answers;
-    expect(() =>
-      parseClassifierInvocation({
-        ...value,
-        result: {
-          ...value.result,
-          answers: { ...answers, safe: { type: "noul", noul: 0.5, confidence: 0.8 } },
-        },
-      }),
-    ).toThrow();
-    expect(() =>
-      parseClassifierInvocation({
-        ...value,
-        result: {
-          ...value.result,
-          answers: { ...answers, safe: { type: "noul", noul: 1.01 } },
-        },
-      }),
-    ).toThrow();
-  });
-
-  it("rejects a Score legend that no longer describes the historical criteria", () => {
-    const value = success();
-    const answer = value.result.answers.urgency;
-    expect(() =>
-      parseClassifierInvocation({
-        ...value,
-        result: {
-          ...value.result,
-          answers: {
-            ...value.result.answers,
-            urgency: { ...answer, legend: { "0": "New definition", "1": "Urgent" } },
-          },
-        },
-      }),
-    ).toThrow();
-  });
-
-  it("rejects a Score inconsistent with its distribution", () => {
-    const value = success();
-    const answer = value.result.answers.urgency;
-    expect(() =>
-      parseClassifierInvocation({
-        ...value,
-        result: {
-          ...value.result,
-          answers: { ...value.result.answers, urgency: { ...answer, score: 1 } },
-        },
-      }),
-    ).toThrow();
-  });
-
-  it("rejects incomplete lifecycle records and unexpected fields", () => {
-    const value = success();
-    expect(() => parseClassifierInvocation({ ...value, result: null })).toThrow();
-    expect(() => parseClassifierInvocation({ ...value, status: "running" })).toThrow();
-    expect(() => parseClassifierInvocation({ ...value, ended_at: 99 })).toThrow();
-    expect(() =>
-      parseClassifierInvocation({
-        ...value,
-        state: { request: "Use the required input field" },
-      }),
-    ).toThrow();
-  });
-
   it("rejects malformed declarations and JSON instead of omitting them", () => {
     expect(() => decodeClassifierDeclaration("{broken")).toThrow();
-    expect(() => decodeClassifierInvocation("null")).toThrow();
     expect(() =>
       parseClassifierDeclaration({
         ...declaration,

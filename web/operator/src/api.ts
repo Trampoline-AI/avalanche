@@ -2,7 +2,7 @@ import { GrpcWebFetchTransport } from "@protobuf-ts/grpcweb-transport";
 
 import { PageOrderV2 } from "./generated/operator";
 import { DescriptorPageOrder } from "./model";
-import { parseEvaluationRecords, type EvaluationRecord } from "./evaluations";
+import { mapEvaluationRecord, type EvaluationRecord } from "./evaluations";
 
 import {
   OperatorServiceV2Client,
@@ -224,7 +224,7 @@ export class GrpcWebOperatorApi implements OperatorApi {
       { runId, nodeId },
       signal ? { abort: signal } : undefined,
     ).response;
-    return parseEvaluationRecords(response.records, runId, nodeId);
+    return response.records.map(mapEvaluationRecord);
   }
 
   async loadBaseline(signal?: AbortSignal): Promise<StructuralBaseline> {

@@ -497,6 +497,10 @@ The RPC returns separate records; completed records carry `resultJson` with
 `classification` (raw TypeSafe answers) and `composites`. Evaluation records
 are not structural workflow status updates.
 
+Python validates classification answers and composites before publishing results.
+The browser decodes and displays those values; it does not recalculate scores or
+repeat the result validation rules.
+
 ### Browser examples
 
 ![Native evaluation results in the operator browser UI.](assets/screenshots/native-evaluations-results.png)
