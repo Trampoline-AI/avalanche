@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- Evaluation metrics now group selector source paths under a collapsed **Input**
+  section instead of separate source badges. Paths such as `input.packet`,
+  `output.summary`, `output`, and `trace` distinguish step arguments, returned
+  fields or the full result, and agent traces without crowding evaluation answers.
 - Added a workflow-author API reference for step decorators, graph operations,
   runs, inputs/context, files/workspaces, agents, classifiers, Iceberg/Lance
   storage, streams, cursors, and CLI commands. The workflow primitive list links

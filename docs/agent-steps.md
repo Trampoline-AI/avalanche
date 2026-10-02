@@ -366,14 +366,15 @@ Selectors receive `ava.EvalContext(inputs, output, trace)`:
   agent calls in the step**, including invocation IDs, exported trace bodies,
   and unavailable-trace errors. It is not just the final call's trace.
 
-Metric rows label statically visible selector sources as **Trace**, **Output**, or
-**Input**, followed by the relative field path. For example, `ctx.output.summary`
-appears as **Output** `summary`; a selector using source text and output shows both
-sources. Python inspects selector syntax without executing it. Opaque or
-uninspectable callables show **Custom** and their identity rather than inferred
-fields. These labels describe selection, not the raw evidence sent to TypeSafe.
+Each metric has a collapsed **Input** section listing qualified source paths,
+such as `input.packet`, `output.summary`, `output`, or `trace`. **Input** refers to
+Jev's input; path roots refer to the evaluated step's arguments, returned result,
+or agent execution trace. Bare source names have no selected field path.
+Python inspects selector syntax without executing it. Opaque or uninspectable
+callables show `custom: qualified_name` rather than inferred fields. These paths
+describe selection metadata, not the serialized state sent to TypeSafe.
 Run views use captured declarations; older declarations without this metadata
-do not invent source labels.
+do not invent input paths.
 
 Reuse the step's existing inputs and return types. There is no mandatory second
 context schema, `input_type`, or `output_type`. Optional selector annotations

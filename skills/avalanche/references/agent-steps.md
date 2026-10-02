@@ -429,9 +429,11 @@ models, and resources; **Step definition** contains only the step interface card
 Historical run graphs use their captured declarations, not later source edits.
 Metadata discovery never executes evidence selectors or composite functions.
 
-Each metric shows statically visible Trace, Output, or Input sources and relative
-field paths; opaque selectors show Custom with their callable identity. This is
-selection metadata, not raw evidence or execution of the selector. Completed
+Each metric has a collapsed **Input** section listing statically visible source
+paths such as `input.packet`, `output.summary`, `output`, and `trace`. Path roots
+refer to the evaluated step's arguments, result, and agent trace; opaque selectors
+show `custom: qualified_name`. This is selection metadata, not the serialized
+state sent to Jev or execution of the selector. Completed
 composites appear beside run-node evaluation badges and in the agent sidebar
 header: one uses `label: 85.6%`, multiple use up to three one-decimal percentages
 separated by colons in declaration order. Percentages blend red at 0%, yellow at
