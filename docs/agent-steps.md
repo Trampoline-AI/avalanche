@@ -425,6 +425,11 @@ a quality check. Verify `TYPESAFE_API_KEY`; an exported value takes precedence
 over `.env`. After changing credentials, restart the operator and run again.
 Do not paste keys into logs or issue reports.
 
+An HTTP 400 with `max_tokens_exceeded` means the selected state and questions
+exceeded TypeSafe's model context. Avalanche shows that machine-readable error
+code without logging the request body, which can contain private source records,
+agent code, and outputs. Reduce the evidence selected for that metric and rerun.
+
 Run the repository's real-agent example from the repository root:
 
 ```bash

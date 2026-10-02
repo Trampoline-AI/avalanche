@@ -59,7 +59,15 @@ def _error_description(error: BaseException) -> str:
     if isinstance(error, (ClassifierStepError, ClassifierStepExecutionError)):
         return str(error)
     if isinstance(error, TypeSafeAPIError):
-        return f"{type(error).__name__} (HTTP {error.status})"
+        # The service may echo state in its message; surface only this known,
+        # payload-free machine code, never the response body.
+        detail = error.body.get("detail") if isinstance(error.body, dict) else None
+        suffix = (
+            "; max_tokens_exceeded"
+            if isinstance(detail, dict) and detail.get("error_type") == "max_tokens_exceeded"
+            else ""
+        )
+        return f"{type(error).__name__} (HTTP {error.status}{suffix})"
     # Validation messages and locations can also contain input values or keys.
     return type(error).__name__
 

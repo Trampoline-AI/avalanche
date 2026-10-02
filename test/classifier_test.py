@@ -574,6 +574,46 @@ async def test_rounded_probabilities_preserve_answers_and_success_evidence(
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(("score", "accepted"), [(1.57, True), (1.62, False)])
+async def test_rounded_score_and_probabilities_allow_only_rounding_differences(
+    service, score, accepted
+):
+    probabilities = {"0": 0.01, "1": 0.42, "2": 0.57}
+    service.response_body["answers"] = {
+        "clarity": {
+            "type": "score",
+            "score": score,
+            "legend": {"0": "Unclear", "1": "Adequate", "2": "Clear"},
+            "probabilities": probabilities,
+            "confidence": 0.35,
+        }
+    }
+
+    @ava.classifier_step(
+        questions={
+            "clarity": {
+                "type": "score",
+                "criteria": ["Unclear", "Adequate", "Clear"],
+            }
+        }
+    )
+    async def classify(*, classifier: ava.Classifier):
+        return await classifier(state="Synthetic incident handoff")
+
+    observed = []
+    with capture_classifier_evidence(observed.append):
+        if accepted:
+            result = await classify.fn()
+            assert result.scores["clarity"].score == score
+            assert result.scores["clarity"].probabilities == probabilities
+            assert [record.status for record in observed] == ["running", "success"]
+        else:
+            with pytest.raises(ClassifierStepExecutionError):
+                await classify.fn()
+            assert [record.status for record in observed] == ["running", "failed"]
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize("billing_probability", [0.78, 0.82])
 async def test_invalid_probability_totals_still_fail(questions, service, billing_probability):
     service.response_body["answers"]["department"]["probabilities"]["billing"] = (
@@ -784,7 +824,15 @@ async def test_http_failure_does_not_leak_response_body_or_credentials(
             "state": json.loads(request.content)["state"],
             "authorization": request.headers["authorization"],
         }
-        return httpx2.Response(400, json={"message": json.dumps(payload)})
+        return httpx2.Response(
+            400,
+            json={
+                "detail": {
+                    "error_type": "max_tokens_exceeded",
+                    "message": json.dumps(payload),
+                }
+            },
+        )
 
     service.handler = reject
 
@@ -803,10 +851,12 @@ async def test_http_failure_does_not_leak_response_body_or_credentials(
 
     assert "TypeSafeBadRequestError" in rendered
     assert "HTTP 400" in rendered
+    assert "max_tokens_exceeded" in rendered
     assert [record.status for record in observed] == ["running", "failed"]
     assert observed[-1].result is None
     assert "TypeSafeBadRequestError" in observed[-1].error
     assert "HTTP 400" in observed[-1].error
+    assert "max_tokens_exceeded" in observed[-1].error
     assert all(record.input == {"secret": secret} for record in observed)
     errors = "".join(record.model_dump_json(exclude={"input"}) for record in observed)
     for value in (secret, credential):

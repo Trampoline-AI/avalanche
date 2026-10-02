@@ -70,6 +70,10 @@
 - Split the current agent inspector into Agent definition, Evals, and Step
   definition tabs, separating evaluation declarations and the step interface
   from the rest of the agent configuration.
+- Classifier responses now
+  allow rounding differences between Score and its reported probabilities, and
+  HTTP 400 context-limit errors identify `max_tokens_exceeded` without logging
+  the private request body.
 
 ## 0.6.1
 

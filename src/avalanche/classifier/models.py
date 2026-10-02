@@ -185,7 +185,10 @@ class ScoreAnswer(_ClassifierModel):
         if not 0 <= self.score <= len(levels) - 1:
             raise ValueError("score must be within the declared levels")
         expected = sum(index * self.probabilities[str(index)] for index in range(len(levels)))
-        if not math.isclose(self.score, expected, rel_tol=1e-5, abs_tol=1e-5):
+        # The service rounds every probability and the final score independently
+        # to two decimals. Bound their cumulative weighted rounding error.
+        rounding_tolerance = 0.005 * (1 + len(levels) * (len(levels) - 1) / 2) + 1e-12
+        if not math.isclose(self.score, expected, rel_tol=0, abs_tol=rounding_tolerance):
             raise ValueError("score must equal the probability-weighted level")
         return self
 
