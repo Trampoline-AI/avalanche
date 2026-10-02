@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Added `ava.agent.AgentTrace` as a lazy re-export of PredictRLM's `RunTrace` model.
+
 ## 0.7.0
 
 - Replaced the built-in REST API's handwritten routing with FastAPI and moved
