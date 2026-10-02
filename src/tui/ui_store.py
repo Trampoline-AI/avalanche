@@ -10,8 +10,14 @@ from collections.abc import Iterator, Mapping, Sequence
 from concurrent.futures import ThreadPoolExecutor
 from copy import copy
 from dataclasses import dataclass, field
+from functools import lru_cache
 from queue import Empty
 from typing import Any, Callable, Literal
+
+from predict_rlm.trace import IterationStep
+from pydantic import ValidationError
+
+from avalanche._agent_trace import AgentLifecycleEvent, AgentTerminalDetail, AgentTraceEnvelope
 
 from .dag_layout import DagNode, SeqGroup, build_nav_grid, nav_move, workflow_to_layout
 from .models import (
@@ -29,6 +35,12 @@ from .models import (
     WorkflowInfo,
 )
 from .state import StateProvider, get_stream_state
+
+
+@lru_cache(maxsize=128)
+def _parse_agent_envelope(raw: str) -> AgentTraceEnvelope:
+    return AgentTraceEnvelope.model_validate_json(raw)
+
 
 RESET_RECONCILIATION_INITIAL_BACKOFF_SECONDS = 0.1
 RESET_RECONCILIATION_MAX_BACKOFF_SECONDS = 2.0
@@ -60,7 +72,7 @@ class TraceDetailCompletion:
     created_sequence: int
     node_id: str
     descriptor_revision: int
-    trace_body: dict[str, Any] | None
+    trace_body: AgentTerminalDetail | None
 
 
 @dataclass
@@ -280,7 +292,9 @@ class UIStore:
         self._trace_hydration_completions: list[tuple[TraceDetailCompletion, bool]] = []
         self._log_details: dict[tuple[str, str, int], list[LogEntry]] = {}
         self._log_detail_sequences: dict[tuple[str, str, int], int] = {}
-        self._agent_event_details: dict[tuple[str, str, int, str], list[dict[str, Any]]] = {}
+        self._agent_event_details: dict[
+            tuple[str, str, int, str], list[AgentLifecycleEvent]
+        ] = {}
         self._agent_event_sequences: dict[tuple[str, str, int, str], int] = {}
         self._detail_hydrations_in_flight: dict[RunDetailKey, int] = {}
         self._detail_hydration_requirements: dict[
@@ -504,25 +518,20 @@ class UIStore:
         metadata_json = self.selected_agent_metadata_json
         if not metadata_json:
             return None
-        try:
-            metadata = json.loads(metadata_json)
-        except (TypeError, ValueError):
-            return None
-        return metadata if isinstance(metadata, dict) else None
+        metadata = json.loads(metadata_json)
+        if not isinstance(metadata, dict):
+            raise TypeError("Agent metadata must be an object")
+        return metadata
 
     @property
-    def selected_agent_trace_envelope(self) -> dict | None:
+    def selected_agent_trace_envelope(self) -> AgentTraceEnvelope | None:
         node_id = self.selected_agent_node_id
         if node_id is None or self.current_run is None:
             return None
         state = self.current_run.nodes.get(node_id)
-        if state is None or not state.agent_trace_json:
+        if state is None or state.agent_trace_json is None:
             return None
-        try:
-            envelope = json.loads(state.agent_trace_json)
-        except (TypeError, ValueError):
-            return None
-        return envelope if isinstance(envelope, dict) else None
+        return _parse_agent_envelope(state.agent_trace_json)
 
     @property
     def selected_agent_trace_content_token(self) -> str:
@@ -531,7 +540,9 @@ class UIStore:
         if node_id is None or self.current_run is None:
             return ""
         state = self.current_run.nodes.get(node_id)
-        return "" if state is None else state.agent_trace_json or ""
+        raw = "" if state is None else state.agent_trace_json or ""
+        key = (*self._detail_key(self.current_run), node_id)
+        return f"{self._agent_event_sequences.get(key, 0)}:{raw}"
 
     @property
     def selected_agent_inspector_state(self) -> str:
@@ -543,24 +554,9 @@ class UIStore:
         state = run.nodes.get(node_id)
         if state is None or state.status is NodeStatus.PENDING:
             return "pending"
-        raw = state.agent_trace_json
-        envelope: dict[str, Any] | None = None
-        if raw:
-            try:
-                decoded = json.loads(raw)
-            except (TypeError, ValueError):
-                return "malformed"
-            if not isinstance(decoded, dict):
-                return "malformed"
-            envelope = decoded
-            if (
-                "trace" in envelope
-                and envelope["trace"] is not None
-                and not isinstance(envelope["trace"], dict)
-            ):
-                return "malformed"
+        envelope = self.selected_agent_trace_envelope
         if state.status is NodeStatus.FAILED or (
-            envelope is not None and envelope.get("error")
+            envelope is not None and envelope.error is not None
         ):
             return "failed"
         if state.status is NodeStatus.RUNNING:
@@ -568,14 +564,14 @@ class UIStore:
         if (
             state.trace is not None
             and state.trace.available
-            and not self._node_has_trace_body(state)
+            and not self._node_has_trace_detail(state)
         ):
             return "hydrating"
         outputs = self.selected_agent_outputs
         return "completed_with_output" if outputs else "completed_without_output"
 
     @property
-    def selected_agent_events(self) -> list[dict]:
+    def selected_agent_events(self) -> list[AgentLifecycleEvent]:
         run = self.current_run
         node_id = self.selected_agent_node_id
         if run is None or node_id is None:
@@ -590,121 +586,38 @@ class UIStore:
         if cached is not None:
             return cached
         envelope = self.selected_agent_trace_envelope
-        events: list[dict[str, Any]] = []
-        if envelope is not None:
-            trace = envelope.get("trace")
-            if isinstance(trace, dict):
-                evidence = trace.get("evidence")
-                if isinstance(evidence, dict) and isinstance(evidence.get("events"), list):
-                    events = [event for event in evidence["events"] if isinstance(event, dict)]
-            if not events:
-                raw_events = envelope.get("events")
-                if isinstance(raw_events, list):
-                    events = [event for event in raw_events if isinstance(event, dict)]
+        events = list(envelope.events) if envelope is not None else []
         self._agent_event_details[key] = events
-        self._agent_event_sequences[key] = max(
-            (
-                event.get("sequence", 0)
-                for event in events
-                if isinstance(event.get("sequence"), int)
-            ),
-            default=0,
-        )
+        self._agent_event_sequences[key] = self._event_sequence(events)
         return events
 
     @property
     def selected_agent_outputs(self) -> dict[str, Any] | None:
         """Return the newest terminal outputs from hydrated or live evidence."""
-        envelope = self.selected_agent_trace_envelope
-        trace = envelope.get("trace") if envelope is not None else None
-        events: list[Any] = []
-        if isinstance(trace, dict):
-            evidence = trace.get("evidence")
-            if isinstance(evidence, dict) and isinstance(evidence.get("events"), list):
-                events = evidence["events"]
-        if (
-            not events
-            and isinstance(envelope, dict)
-            and isinstance(envelope.get("events"), list)
-        ):
-            events = envelope["events"]
-        if not events:
-            events = self.selected_agent_events
-        for event in reversed(events):
-            if not isinstance(event, dict):
-                continue
-            if (event.get("event_kind") or event.get("kind")) != "run.succeeded":
-                continue
-            data = event.get("data")
-            if not isinstance(data, dict):
-                continue
-            outputs = data.get("outputs")
-            return outputs if isinstance(outputs, dict) else None
+        for event in reversed(self.selected_agent_events):
+            if event.event_kind == "run.succeeded":
+                outputs = event.data["outputs"]
+                if not isinstance(outputs, dict):
+                    raise TypeError("run.succeeded outputs must be an object")
+                return outputs
         return None
 
     @property
-    def selected_agent_steps(self) -> list[dict]:
+    def selected_agent_steps(self) -> list[IterationStep]:
         envelope = self.selected_agent_trace_envelope
-        trace = envelope.get("trace") if envelope is not None else None
-        if not isinstance(trace, dict):
-            steps = self.selected_agent_live_steps
-        else:
-            raw_steps = trace.get("steps")
-            steps = (
-                [step for step in raw_steps if isinstance(step, dict)]
-                if isinstance(raw_steps, list)
-                else []
-            )
+        trace = envelope.trace if envelope is not None else None
+        steps = trace.steps if trace is not None else self.selected_agent_live_steps
         self._reconcile_trace_turns(len(steps))
         return steps
 
     @property
-    def selected_agent_live_steps(self) -> list[dict]:
-        """Build partial turn records from ordered live agent evidence."""
-        steps_by_iteration: dict[int, dict] = {}
-        for event in self.selected_agent_events:
-            kind = event.get("event_kind") or event.get("kind")
-            data = event.get("data")
-            if not isinstance(kind, str) or not isinstance(data, dict):
-                continue
-            recorded_step = data.get("step")
-            iteration = data.get("iteration")
-            if iteration is None and isinstance(recorded_step, dict):
-                iteration = recorded_step.get("iteration")
-            if not isinstance(iteration, int):
-                continue
-            step = steps_by_iteration.setdefault(
-                iteration,
-                {
-                    "iteration": iteration,
-                    "reasoning": None,
-                    "code": "",
-                    "output": None,
-                    "error": None,
-                    "duration_ms": 0,
-                    "tool_calls": [],
-                    "predict_calls": [],
-                    "lm": {},
-                    "usage": {},
-                },
-            )
-            if kind == "code.generated":
-                step["code"] = data.get("code") or ""
-            elif kind == "code.executed":
-                step["output"] = data.get("output")
-                step["error"] = data.get("error")
-            elif kind == "iteration.recorded":
-                source = recorded_step if isinstance(recorded_step, dict) else data
-                for field in (
-                    "reasoning",
-                    "duration_ms",
-                    "error",
-                    "tool_count",
-                    "predict_count",
-                ):
-                    if field in source:
-                        step[field] = source[field]
-        return [steps_by_iteration[key] for key in sorted(steps_by_iteration)]
+    def selected_agent_live_steps(self) -> list[IterationStep]:
+        """Render completed iteration records using the upstream schema."""
+        return [
+            IterationStep.model_validate(event.data["step"])
+            for event in self.selected_agent_events
+            if event.event_kind == "iteration.recorded"
+        ]
 
     @staticmethod
     def _detail_key(run: RunState) -> RunDetailKey:
@@ -727,46 +640,22 @@ class UIStore:
             self._runs_cache[cache_index] = run
 
     @staticmethod
-    def _events_from_node(run: RunState, node_id: str) -> list[dict[str, Any]]:
+    def _events_from_node(run: RunState, node_id: str) -> list[AgentLifecycleEvent]:
         node = run.nodes.get(node_id)
-        if node is None or not node.agent_trace_json:
+        if node is None or node.agent_trace_json is None:
             return []
-        try:
-            envelope = json.loads(node.agent_trace_json)
-        except (TypeError, ValueError):
-            return []
-        if not isinstance(envelope, dict):
-            return []
-        trace = envelope.get("trace")
-        if isinstance(trace, dict):
-            evidence = trace.get("evidence")
-            if isinstance(evidence, dict) and isinstance(evidence.get("events"), list):
-                return [event for event in evidence["events"] if isinstance(event, dict)]
-        events = envelope.get("events")
-        if not isinstance(events, list):
-            return []
-        return [event for event in events if isinstance(event, dict)]
+        return list(_parse_agent_envelope(node.agent_trace_json).events)
 
     @staticmethod
-    def _event_sequence(events: list[dict[str, Any]]) -> int:
-        return max(
-            (
-                event.get("sequence", 0)
-                for event in events
-                if isinstance(event.get("sequence"), int)
-            ),
-            default=0,
-        )
+    def _event_sequence(events: list[AgentLifecycleEvent]) -> int:
+        return max((event.sequence for event in events), default=0)
 
     @staticmethod
-    def _node_has_trace_body(node: NodeState) -> bool:
-        if not node.agent_trace_json:
+    def _node_has_trace_detail(node: NodeState) -> bool:
+        if node.agent_trace_json is None:
             return False
-        try:
-            envelope = json.loads(node.agent_trace_json)
-        except (TypeError, ValueError):
-            return False
-        return isinstance(envelope, dict) and isinstance(envelope.get("trace"), dict)
+        envelope = _parse_agent_envelope(node.agent_trace_json)
+        return envelope.trace is not None or envelope.evidence is not None
 
     def _remember_run_details(self, run: RunState) -> set[str]:
         """Adopt explicit detail containers only when their watermark advances."""
@@ -827,8 +716,8 @@ class UIStore:
                             revision == prior_revision
                             and node_id not in adopted_event_nodes
                             and (
-                                not self._node_has_trace_body(node)
-                                or self._node_has_trace_body(prior)
+                                not self._node_has_trace_detail(node)
+                                or self._node_has_trace_detail(prior)
                             )
                         )
                     )
@@ -946,6 +835,9 @@ class UIStore:
         """Read one full detail baseline on the lifecycle-owned worker."""
         try:
             fresh = self.provider.get_run(run_id)
+        except (ValidationError, ValueError, TypeError, KeyError) as error:
+            self._background_updates.put(("detail_hydration_error", error))
+            return
         except Exception:
             fresh = None
         if self._shutdown.is_set():
@@ -1189,12 +1081,7 @@ class UIStore:
         known_sequence = self._agent_event_sequences.get(agent_key, 0)
         if detail.event.event_sequence <= known_sequence:
             return True
-        try:
-            event = json.loads(detail.event.event_json)
-        except (TypeError, ValueError):
-            return False
-        if not isinstance(event, dict):
-            return False
+        event = AgentLifecycleEvent.model_validate_json(detail.event.event_json)
         events.append(event)
         self._agent_event_sequences[agent_key] = detail.event.event_sequence
         return True
@@ -1232,7 +1119,7 @@ class UIStore:
         return completions
 
     def _apply_trace_detail_completion(self, completion: TraceDetailCompletion) -> bool:
-        """Install only a trace body when its structural identity is still exact."""
+        """Install terminal trace/evidence detail only while its identity is exact."""
         run = self.current_run
         if (
             completion.trace_body is None
@@ -1251,19 +1138,43 @@ class UIStore:
             or descriptor.revision != completion.descriptor_revision
         ):
             return False
-        try:
-            envelope = json.loads(node.agent_trace_json) if node.agent_trace_json else {}
-        except (TypeError, ValueError):
-            envelope = {}
-        if not isinstance(envelope, dict):
-            envelope = {}
-        envelope["trace"] = completion.trace_body
+        detail = completion.trace_body
+        envelope = (
+            _parse_agent_envelope(node.agent_trace_json)
+            if node.agent_trace_json is not None
+            else AgentTraceEnvelope(
+                schema_version=1,
+                invocation_id=None,
+                status=detail.evidence.terminal_outcome,
+                run_id=detail.evidence.run_id,
+                events=self._agent_event_details.get(
+                    (*self._detail_key(run), completion.node_id), []
+                ),
+                trace=None,
+                evidence=None,
+                error=None,
+            )
+        )
+        envelope = envelope.model_copy(
+            update={"trace": detail.trace, "evidence": detail.evidence}
+        )
         updated_node = copy(node)
-        updated_node.agent_trace_json = json.dumps(envelope, default=str)
+        updated_node.agent_trace_json = envelope.model_dump_json()
         updated_run = copy(run)
         updated_run.nodes = dict(run.nodes)
         updated_run.nodes[completion.node_id] = updated_node
         self._replace_run_references(updated_run)
+        events = self._events_from_node(updated_run, completion.node_id)
+        event_key = (*self._detail_key(updated_run), completion.node_id)
+        event_sequence = self._event_sequence(events)
+        if (
+            event_key not in self._agent_event_details
+            or event_key in self._invalid_agent_event_details
+            or event_sequence > self._agent_event_sequences.get(event_key, -1)
+        ):
+            self._agent_event_details[event_key] = events
+            self._agent_event_sequences[event_key] = event_sequence
+            self._invalid_agent_event_details.discard(event_key)
         return True
 
     def enqueue_polled_run_update(
@@ -1641,54 +1552,33 @@ class UIStore:
         metadata = self.selected_agent_metadata
         if metadata is None:
             return {}
-        signature = metadata.get("signature")
-        signature = signature if isinstance(signature, Mapping) else {}
-        runtime = metadata.get("runtime")
-        runtime = runtime if isinstance(runtime, Mapping) else {}
-        models = metadata.get("models")
-        if not isinstance(models, Mapping):
-            models = {
-                "main": (
-                    {"identity": runtime["lm"], "source": "effective runtime"}
-                    if "lm" in runtime
-                    else {"source": "PredictRLM default"}
-                ),
-                "sub": (
-                    {"identity": runtime["sub_lm"], "source": "effective runtime"}
-                    if "sub_lm" in runtime
-                    else {"source": "PredictRLM default"}
-                ),
+        signature = metadata["signature"]
+        runtime = metadata["runtime"]
+        models = metadata["models"]
+        skill_records = {
+            skill["name"]: {
+                "instructions": skill["instructions"],
+                "packages": skill["packages"],
+                "modules": skill["modules"],
+                "tools": skill["tools"],
             }
-        skills = metadata.get("skills")
-        skill_records = (
-            {
-                skill["name"]: {
-                    "instructions": skill.get("instructions", ""),
-                    "packages": skill.get("packages", []),
-                    "modules": skill.get("modules", []),
-                    "tools": skill.get("tools", []),
-                }
-                for skill in skills
-                if isinstance(skill, Mapping) and isinstance(skill.get("name"), str)
-            }
-            if isinstance(skills, list)
-            else {}
-        )
+            for skill in metadata["skills"]
+        }
         return {
             "signature": {
-                "instructions": signature.get("instructions", ""),
-                "name": signature.get("name", ""),
+                "instructions": signature["instructions"],
+                "name": signature["name"],
             },
-            "inputs": signature.get("inputs", []),
-            "outputs": signature.get("outputs", []),
+            "inputs": signature["inputs"],
+            "outputs": signature["outputs"],
             "skills": skill_records,
             "models": models,
             "runtime": {
                 key: value for key, value in runtime.items() if key not in {"lm", "sub_lm"}
             },
-            "packages": metadata.get("packages", []),
-            "modules": metadata.get("modules", []),
-            "tools": metadata.get("tools", []),
+            "packages": metadata["packages"],
+            "modules": metadata["modules"],
+            "tools": metadata["tools"],
         }
 
     def trace_inspector_navigation_paths(self) -> list[tuple[str, ...]]:
@@ -1700,17 +1590,8 @@ class UIStore:
             if outputs is None:
                 return []
             metadata = self.selected_agent_metadata
-            signature = metadata.get("signature") if isinstance(metadata, Mapping) else None
-            declared = signature.get("outputs") if isinstance(signature, Mapping) else None
-            names = (
-                [
-                    field["name"]
-                    for field in declared
-                    if isinstance(field, Mapping) and isinstance(field.get("name"), str)
-                ]
-                if isinstance(declared, list)
-                else []
-            )
+            declared = metadata["signature"]["outputs"] if metadata is not None else []
+            names = [field["name"] for field in declared]
             names = names or list(outputs)
             names.extend(name for name in outputs if name not in names)
             paths = [("output", name) for name in names]
@@ -1773,25 +1654,23 @@ class UIStore:
             if index in self.trace_collapsed_turns:
                 continue
             sections = ["code", "output"]
-            if step.get("reasoning") is not None:
+            if step.reasoning:
                 sections.insert(0, "reasoning")
             paths.extend(turn + (section,) for section in sections)
-            if step.get("reasoning") is not None:
+            if step.reasoning:
                 self._append_value_navigation_paths(
-                    paths, turn + ("reasoning",), step["reasoning"]
+                    paths, turn + ("reasoning",), step.reasoning
                 )
             self._append_value_navigation_paths(
                 paths,
                 turn + ("output",),
-                step.get("untruncated_output" if self.trace_show_full_output else "output"),
+                step.untruncated_output if self.trace_show_full_output else step.output,
             )
             tools = turn + ("tools",)
             paths.append(tools)
-            calls = step.get("tool_calls")
-            if self.trace_path_materialized(tools) and isinstance(calls, list):
+            calls = step.tool_calls
+            if self.trace_path_materialized(tools):
                 for call_index, call in enumerate(calls):
-                    if not isinstance(call, dict):
-                        continue
                     tool = tools + (str(call_index),)
                     paths.append(tool)
                     if self.trace_path_materialized(tool):
@@ -1801,39 +1680,34 @@ class UIStore:
                         self._append_value_navigation_paths(
                             paths,
                             input_path,
-                            {key: call.get(key) for key in ("args", "kwargs") if call.get(key)},
+                            {"args": call.args, "kwargs": call.kwargs},
                         )
                         self._append_value_navigation_paths(
-                            paths, result_path, call.get("error") or call.get("result")
+                            paths,
+                            result_path,
+                            call.error if call.error is not None else call.result,
                         )
             predict = turn + ("predict",)
             paths.append(predict)
-            groups = step.get("predict_calls")
-            if self.trace_path_materialized(predict) and isinstance(groups, list):
+            groups = step.predict_calls
+            if self.trace_path_materialized(predict):
                 for group_index, group in enumerate(groups):
-                    if not isinstance(group, dict):
-                        continue
                     group_path = predict + (str(group_index),)
                     paths.append(group_path)
                     if not self.trace_path_materialized(group_path):
                         continue
-                    calls = group.get("calls")
-                    if not isinstance(calls, list):
-                        continue
-                    for call_index, call in enumerate(calls):
-                        if not isinstance(call, dict):
-                            continue
+                    for call_index, call in enumerate(group.calls):
                         call_path = group_path + (str(call_index),)
                         paths.append(call_path)
                         if self.trace_path_materialized(call_path):
                             input_path = call_path + ("input",)
                             output_path = call_path + ("output",)
                             paths.extend((input_path, output_path))
+                            self._append_value_navigation_paths(paths, input_path, call.input)
                             self._append_value_navigation_paths(
-                                paths, input_path, call.get("input")
-                            )
-                            self._append_value_navigation_paths(
-                                paths, output_path, call.get("error") or call.get("output")
+                                paths,
+                                output_path,
+                                call.error if call.error is not None else call.output,
                             )
             metadata_path = turn + ("metadata",)
             paths.append(metadata_path)
@@ -1841,12 +1715,28 @@ class UIStore:
                 paths,
                 metadata_path,
                 {
-                    "finish_reason": step.get("lm", {}).get("finish_reason")
-                    if isinstance(step.get("lm"), dict)
-                    else None,
-                    "usage": step.get("usage") if isinstance(step.get("usage"), dict) else {},
+                    "finish_reason": step.lm.finish_reason if step.lm is not None else None,
+                    "usage": step.usage.model_dump(),
                 },
             )
+        recorded = {step.iteration for step in self.selected_agent_steps}
+        envelope = self.selected_agent_trace_envelope
+        if envelope is None or envelope.trace is None:
+            for event in self.selected_agent_events:
+                if event.event_kind not in {"code.generated", "code.executed"}:
+                    continue
+                if event.data["iteration"] in recorded:
+                    continue
+                root = ("live", str(event.sequence))
+                paths.append(root)
+                section = (
+                    "code"
+                    if event.event_kind == "code.generated"
+                    else "error"
+                    if "error" in event.data
+                    else "output"
+                )
+                paths.append(root + (section,))
         return paths
 
     def _set_trace_selection(self, path: tuple[str, ...] | None) -> None:
@@ -2343,6 +2233,8 @@ class UIStore:
                 kind, payload = self._background_updates.get()
             except Empty:
                 break
+            if kind == "detail_hydration_error":
+                raise payload
             if kind == "stream_handoff_overflow":
                 self._repair_stream_handoff_overflow(*payload)
                 continue

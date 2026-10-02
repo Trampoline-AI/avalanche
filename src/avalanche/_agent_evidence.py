@@ -6,6 +6,8 @@ from contextlib import contextmanager
 from contextvars import ContextVar
 from typing import Any, Callable, Iterator, Literal, TypeAlias, TypedDict
 
+from pydantic import JsonValue
+
 AgentInvocationId: TypeAlias = str
 
 
@@ -26,6 +28,7 @@ class AgentTraceFinishedEvent(TypedDict):
     kind: Literal["trace_finished"]
     invocation_id: AgentInvocationId
     trace: dict[str, Any]
+    evidence: dict[str, JsonValue]
 
 
 class AgentTraceUnavailableEvent(TypedDict):
@@ -34,6 +37,7 @@ class AgentTraceUnavailableEvent(TypedDict):
     kind: Literal["trace_unavailable"]
     invocation_id: AgentInvocationId
     error: str
+    evidence: dict[str, JsonValue]
 
 
 AgentEvidenceObserverEvent: TypeAlias = (

@@ -54,7 +54,9 @@ def test_terminal_runs_discovered_workflow(tmp_path):
             "200",
             "-y",
             "50",
-            shlex.join(["uv", "run", "ava", "operator", str(workflow), "--port", str(port)]),
+            shlex.join(
+                ["uv", "run", "ava", "operator", str(workflow), "--port", str(port), "--no-web"]
+            ),
         )
         deadline = time.monotonic() + 20
         while True:

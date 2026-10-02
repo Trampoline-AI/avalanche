@@ -185,6 +185,12 @@ selects an output, derives a table, or appends automatically.
 subclass or a separate schema. `prediction.trace` is already an instance of this
 model. Lifecycle evidence remains separate in `prediction.evidence`.
 
+Avalanche retains only `run_id`, `complete`, and `terminal_outcome` from final
+evidence, alongside the existing sanitized lifecycle events. Evidence remains
+available when an agent fails before creating a trace. Operator and inspector
+details use the SDK trace schema; malformed required fields raise rather than
+appearing as missing details.
+
 ```python
 class DraftArtifactsSig(ava.Signature):
     """Render proposal artifacts from an approved plan."""

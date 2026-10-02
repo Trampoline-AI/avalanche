@@ -6,6 +6,7 @@ import asyncio
 import importlib
 from types import SimpleNamespace
 
+from predict_rlm import RunEvidence, RunTrace
 from ray import cloudpickle
 
 import avalanche as ava
@@ -21,7 +22,19 @@ def _agent_node(monkeypatch):
 
     class Predictor:
         async def acall(self, *, text):
-            return SimpleNamespace(answer=text.upper())
+            return SimpleNamespace(
+                answer=text.upper(),
+                trace=RunTrace(
+                    status="completed",
+                    model="test-model",
+                    iterations=0,
+                    max_iterations=1,
+                    duration_ms=1,
+                ),
+                evidence=RunEvidence(
+                    run_id="echo-run", complete=True, terminal_outcome="completed"
+                ),
+            )
 
     monkeypatch.setattr(agent_module, "_build_predictor", lambda *args, **kwargs: Predictor())
 

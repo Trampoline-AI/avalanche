@@ -4,6 +4,12 @@
 
 - Added `ava.agent.AgentTrace` as a lazy re-export of PredictRLM's `RunTrace` model.
 
+- Upgraded PredictRLM to 0.9.0. Agent lifecycle evidence is retained separately
+  from traces, preserving run IDs and completeness in operator and inspector
+  details, including failures and cancellations before a trace exists.
+  Trace details now use the SDK's typed schema and require the three evidence
+  metadata fields; malformed details raise instead of being silently discarded.
+
 ## 0.7.0
 
 - Replaced the built-in REST API's handwritten routing with FastAPI and moved

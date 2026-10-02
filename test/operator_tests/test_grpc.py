@@ -1,5 +1,6 @@
 """Core client/server behavior over real gRPC, plus reset ownership races."""
 
+import hashlib
 import json
 import os
 import socket
@@ -9,6 +10,7 @@ from types import SimpleNamespace
 
 import grpc
 import pytest
+from pydantic import ValidationError
 
 from avalanche.runtime import File
 from runtime.operator import Operator
@@ -282,7 +284,7 @@ def test_canonical_and_ambiguous_grpc_selection(tmp_path):
         operator.close()
 
 
-def _seed_hydration_run(operator, run_id: str) -> RunState:
+def _seed_hydration_run(operator, run_id: str, agent_trace, iteration_step) -> RunState:
     run = RunState(run_id=run_id, flow_name="flow")
     run.nodes["agent-1"] = NodeState(
         node_id="agent-1",
@@ -302,9 +304,14 @@ def _seed_hydration_run(operator, run_id: str) -> RunState:
                     "kind": "evidence",
                     "invocation_id": "test-invocation",
                     "sequence": sequence,
-                    "event_kind": "code.executed",
+                    "event_kind": "iteration.recorded",
                     "timestamp_ns": sequence,
-                    "data": {"iteration": sequence},
+                    "data": {
+                        "iteration": sequence,
+                        "step": iteration_step(sequence, f"print({sequence})").model_dump(
+                            mode="json"
+                        ),
+                    },
                 },
             },
         )
@@ -317,10 +324,17 @@ def _seed_hydration_run(operator, run_id: str) -> RunState:
             "event": {
                 "kind": "trace_finished",
                 "invocation_id": "test-invocation",
-                "trace": {
-                    "status": "completed",
-                    "evidence": {"run_id": run_id, "complete": True},
-                    "payload": "x" * (2 * 1024 * 1024 + 17),
+                "trace": agent_trace(
+                    steps=[
+                        iteration_step(sequence, f"print({sequence})")
+                        for sequence in range(1, 6)
+                    ],
+                    telemetry_ref={"payload": "x" * (2 * 1024 * 1024 + 17)},
+                ).model_dump(mode="json"),
+                "evidence": {
+                    "run_id": f"sdk-{run_id}",
+                    "complete": True,
+                    "terminal_outcome": "completed",
                 },
             },
         },
@@ -329,11 +343,11 @@ def _seed_hydration_run(operator, run_id: str) -> RunState:
 
 
 def test_paged_details_and_chunked_trace_materialize_without_cross_run_invalidation(
-    monkeypatch,
+    monkeypatch, agent_trace, iteration_step
 ):
     monkeypatch.setattr("runtime.operator.client.DETAIL_HYDRATION_PAGE_SIZE", 2)
     operator = Operator([], watch=False, schedule=False)
-    run = _seed_hydration_run(operator, "run-target")
+    run = _seed_hydration_run(operator, "run-target", agent_trace, iteration_step)
     unrelated = RunState(run_id="run-unrelated", flow_name="flow")
     operator._runs[unrelated.run_id] = unrelated
     operator._notify_run(unrelated)
@@ -360,19 +374,31 @@ def test_paged_details_and_chunked_trace_materialize_without_cross_run_invalidat
         assert envelope["trace"] is None
         assert len(hydrated.logs) == 6
         trace = provider.hydrate_trace(run.run_id, "agent-1")
-        assert trace.trace_body["payload"] == "x" * (2 * 1024 * 1024 + 17)
+        assert trace.trace_body.trace.telemetry_ref == {"payload": "x" * (2 * 1024 * 1024 + 17)}
+        assert trace.trace_body.trace.steps == [
+            iteration_step(sequence, f"print({sequence})") for sequence in range(1, 6)
+        ]
+        assert trace.trace_body.evidence.run_id == "sdk-run-target"
+        assert trace.trace_body.evidence.complete is True
+        assert trace.trace_body.evidence.terminal_outcome == "completed"
+        trace.trace_body.trace.steps[0].output = "changed-by-caller"
+        again_detail = provider.hydrate_trace(run.run_id, "agent-1")
+        assert again_detail.trace_body.trace.steps[0].output == "Output for iteration 1"
         hydrated.logs.clear()
         envelope["events"].clear()
         again = provider.get_run(run.run_id)
         assert len(again.logs) == 6
         assert len(json.loads(again.nodes["agent-1"].agent_trace_json)["events"]) == 5
+        again_envelope = json.loads(again.nodes["agent-1"].agent_trace_json)
+        assert again_envelope["run_id"] == "sdk-run-target"
+        assert again_envelope["evidence"] == trace.trace_body.evidence.model_dump(mode="json")
     finally:
         provider.close()
         server.stop(grace=0).wait()
         operator.close()
 
 
-def test_grpc_discards_hydration_after_epoch_reset(monkeypatch):
+def test_grpc_discards_hydration_after_epoch_reset(monkeypatch, agent_trace, iteration_step):
     monkeypatch.setattr(
         "runtime.operator.client.DETAIL_HYDRATION_PAGE_SIZE",
         2,
@@ -385,7 +411,7 @@ def test_grpc_discards_hydration_after_epoch_reset(monkeypatch):
     results = []
     errors = []
     try:
-        run = _seed_hydration_run(operator, "run-stale-hydration")
+        run = _seed_hydration_run(operator, "run-stale-hydration", agent_trace, iteration_step)
         port = _unused_port()
         server = serve(operator, port=port, block=False)
         provider = GrpcStateProvider(f"localhost:{port}")
@@ -569,3 +595,103 @@ def test_concurrent_close_and_stream_start_leave_no_live_thread_or_calls():
     assert thread is None or not thread.is_alive()
     assert stub.calls <= 1
     assert stub.post_close_calls == 0
+
+
+@pytest.mark.parametrize(
+    ("terminal_outcome", "complete"), [("error", True), ("cancelled", False)]
+)
+def test_grpc_hydrates_pre_trace_terminal_evidence(terminal_outcome, complete):
+    operator = Operator([], watch=False, schedule=False)
+    run = RunState(run_id="run-pre-trace", flow_name="flow")
+    run.nodes["agent-1"] = NodeState("agent-1", "Agent", "step")
+    operator._runs[run.run_id] = run
+    operator._notify_run(run)
+    evidence = {
+        "run_id": "sdk-pre-trace",
+        "complete": complete,
+        "terminal_outcome": terminal_outcome,
+    }
+    operator._apply_event(
+        run.run_id,
+        _event_handle(),
+        {
+            "type": "agent_evidence",
+            "node_id": "agent-1",
+            "event": {
+                "kind": "trace_unavailable",
+                "invocation_id": "pre-trace-invocation",
+                "error": "Stopped before the first iteration",
+                "evidence": evidence,
+            },
+        },
+    )
+    server = serve(operator, port=(port := _unused_port()), block=False)
+    provider = GrpcStateProvider(f"localhost:{port}")
+    try:
+        detail = provider.hydrate_trace(run.run_id, "agent-1")
+        assert detail is not None
+        assert detail.trace_body.trace is None
+        assert detail.trace_body.evidence.model_dump(mode="json") == evidence
+        hydrated = provider.get_run(run.run_id)
+        assert hydrated.nodes["agent-1"].trace.complete is complete
+        envelope = json.loads(hydrated.nodes["agent-1"].agent_trace_json)
+        assert envelope["status"] == "unavailable"
+        assert envelope["trace"] is None
+        assert envelope["run_id"] == "sdk-pre-trace"
+        assert envelope["evidence"] == evidence
+        detail.trace_body.evidence = detail.trace_body.evidence.model_copy(
+            update={"run_id": "changed-by-caller"}
+        )
+        again = provider.hydrate_trace(run.run_id, "agent-1")
+        assert again.trace_body.evidence.run_id == "sdk-pre-trace"
+    finally:
+        provider.close()
+        server.stop(grace=0).wait()
+        operator.close()
+
+
+@pytest.mark.parametrize(
+    "body",
+    [
+        b'{"trace":null}',
+        b'{"trace":null,"evidence":null}',
+        b'{"trace":{"status":"completed"},"evidence":{"run_id":"sdk-corrupt",'
+        b'"complete":true,"terminal_outcome":"completed"}}',
+        b'{"trace":',
+    ],
+)
+def test_corrupt_terminal_body_is_not_treated_as_a_hydration_race(
+    body, agent_trace, iteration_step
+):
+    operator = Operator([], watch=False, schedule=False)
+    run = _seed_hydration_run(operator, "run-corrupt", agent_trace, iteration_step)
+    server = serve(operator, port=(port := _unused_port()), block=False)
+    provider = GrpcStateProvider(f"localhost:{port}")
+    delegate = provider._stub
+
+    class CorruptingStub:
+        def __getattr__(self, name):
+            return getattr(delegate, name)
+
+        def GetRunSnapshot(self, request, **kwargs):  # noqa: N802
+            response = delegate.GetRunSnapshot(request, **kwargs)
+            trace = response.nodes[0].trace
+            trace.size_bytes = len(body)
+            trace.detail_ref.size_bytes = len(body)
+            trace.detail_ref.sha256 = hashlib.sha256(body).hexdigest()
+            return response
+
+        def ReadActivityDetail(self, request, **kwargs):  # noqa: N802
+            if request.detail_ref.activity_id.startswith("trace:"):
+                return iter([pb.ActivityDetailChunkV2(chunk_index=0, data=body, eof=True)])
+            return delegate.ReadActivityDetail(request, **kwargs)
+
+    provider._stub = CorruptingStub()
+    try:
+        with pytest.raises(ValidationError):
+            provider.hydrate_trace(run.run_id, "agent-1")
+        assert (run.run_id, "agent-1") not in provider._trace_bodies
+    finally:
+        provider.close()
+        server.stop(grace=0).wait()
+        operator.close()

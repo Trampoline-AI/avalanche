@@ -23,8 +23,10 @@ from dataclasses import dataclass, replace
 from datetime import datetime
 from functools import partial
 from types import MappingProxyType
-from typing import Any, Callable, Literal, TypeAlias, TypeVar
+from typing import TYPE_CHECKING, Any, Callable, Literal, TypeAlias, TypeVar
 from uuid import uuid4
+
+from pydantic import JsonValue
 
 from avalanche.classifier.models import (
     ChoiceAnswer,
@@ -107,6 +109,9 @@ from .run_worker import run_worker
 from .source import is_watch_path_included, resolve_live_source, resolve_watch_roots
 from .webhooks import DEFAULT_WEBHOOK_PORT, WebhookServer, routes_for
 from .windows_job import WindowsJob, assign_process, close_job, create_kill_on_close_job
+
+if TYPE_CHECKING:
+    from predict_rlm import RunTrace
 
 _LEVEL_MAP = {
     logging.DEBUG: LogLevel.DEBUG,
@@ -2259,12 +2264,9 @@ class Operator:
                                 "agent evidence references unpublished node "
                                 f"{_bounded_ascii(node_id)}"
                             )
-                        try:
-                            mutation = self._record_agent_evidence_event_locked(
-                                run, node_id, event["event"]
-                            )
-                        except BaseException:
-                            mutation = None
+                        mutation = self._record_agent_evidence_event_locked(
+                            run, node_id, event["event"]
+                        )
                         if mutation is not None:
                             log_entry = mutation.entry
                             changed_node_ids = (node_id,)
@@ -2387,55 +2389,49 @@ class Operator:
         self,
         run: RunState,
         node_id: str,
-        event: dict[str, Any],
+        event: dict[str, JsonValue],
     ) -> LogEntry | None:
-        """Atomically project one best-effort agent event and publish its watermark."""
-        try:
-            with self._lock:
-                mutation = self._record_agent_evidence_event_locked(run, node_id, event)
-                if mutation is None:
-                    return None
-                finalized_traces = (
-                    {node_id: mutation.finalized_trace}
-                    if mutation.finalized_trace is not None
-                    else {}
-                )
-                notifications = self._publish_run_locked(
-                    run,
-                    summary_changed=False,
-                    changed_node_ids=(node_id,),
-                    status_node_ids=(),
-                    trace_node_ids=(node_id,),
-                    finalized_traces=finalized_traces,
-                    agent_events=(
-                        {node_id: mutation.agent_event}
-                        if mutation.agent_event is not None
-                        else {}
-                    ),
-                    log_entry=mutation.entry,
-                )
-            self._wait_for_notifications(notifications)
-            return mutation.entry
-        except BaseException:
-            return None
+        """Atomically validate, retain, and publish one agent event."""
+        with self._lock:
+            mutation = self._record_agent_evidence_event_locked(run, node_id, event)
+            if mutation is None:
+                return None
+            finalized_traces = (
+                {node_id: mutation.finalized_trace}
+                if mutation.finalized_trace is not None
+                else {}
+            )
+            notifications = self._publish_run_locked(
+                run,
+                summary_changed=False,
+                changed_node_ids=(node_id,),
+                status_node_ids=(),
+                trace_node_ids=(node_id,),
+                finalized_traces=finalized_traces,
+                agent_events=(
+                    {node_id: mutation.agent_event} if mutation.agent_event is not None else {}
+                ),
+                log_entry=mutation.entry,
+            )
+        self._wait_for_notifications(notifications)
+        return mutation.entry
 
     def _record_agent_evidence_event_locked(
         self,
         run: RunState,
         node_id: str,
-        event: dict[str, Any],
+        event: dict[str, JsonValue],
     ) -> _AgentEvidenceMutation | None:
-        if node_id not in run.nodes or not isinstance(event, dict):
-            return None
+        from predict_rlm import IterationStep
 
+        from avalanche._agent_trace import AgentLifecycleEvent, AgentTerminalDetail
+
+        if node_id not in run.nodes:
+            raise _CoordinatorProtocolError("agent evidence references unpublished node")
+        invocation_id = _string_field(event, "invocation_id")
+        if not invocation_id:
+            raise _CoordinatorProtocolError("agent invocation ID must not be empty")
         key = (run.run_id, node_id)
-        invocation_id = event.get("invocation_id")
-        if (
-            not isinstance(invocation_id, str)
-            or not invocation_id
-            or len(invocation_id) > _MAX_EVENT_FIELD_LENGTH
-        ):
-            return None
         projected_events = self._agent_events.setdefault(key, [])
         previous_descriptor = self._trace_descriptors.get(
             key, TraceDescriptor(status="in_progress")
@@ -2443,74 +2439,98 @@ class Operator:
         finalized_trace: bytes | None = None
         projected_agent_event: AgentEvent | None = None
         invocation_sequence_key: tuple[str, str, str] | None = None
-        kind = event.get("kind")
+        kind = _string_field(event, "kind")
         level = LogLevel.INFO
         error = self._trace_errors.get(key)
         if kind == "evidence":
-            sequence = event.get("sequence")
-            event_kind = event.get("event_kind")
-            timestamp_ns = event.get("timestamp_ns")
-            data = event.get("data", {})
-            if (
-                not isinstance(sequence, int)
-                or sequence < 1
-                or not isinstance(event_kind, str)
-                or not isinstance(timestamp_ns, int)
-                or not isinstance(data, dict)
-            ):
-                return None
+            _require_exact_event_keys(
+                event,
+                {"kind", "invocation_id", "sequence", "event_kind", "timestamp_ns", "data"},
+            )
+            _validate_agent_detail_depth(event)
+            try:
+                lifecycle = AgentLifecycleEvent.model_validate(
+                    {name: value for name, value in event.items() if name != "kind"},
+                    strict=True,
+                )
+                step = (
+                    IterationStep.model_validate(lifecycle.data["step"], strict=True)
+                    if lifecycle.event_kind == "iteration.recorded"
+                    else None
+                )
+            except (KeyError, ValueError, TypeError, RecursionError) as exc:
+                raise _CoordinatorProtocolError("invalid agent lifecycle event") from exc
+            sequence = lifecycle.sequence
+            event_kind = lifecycle.event_kind
+            data = lifecycle.data
+            if sequence < 1:
+                raise _CoordinatorProtocolError("agent sequence must be positive")
             invocation_sequence_key = (run.run_id, node_id, invocation_id)
             if sequence <= self._agent_invocation_sequences.get(invocation_sequence_key, 0):
                 return None
-            projected = {
-                "sequence": sequence,
-                "event_kind": event_kind,
-                "timestamp_ns": timestamp_ns,
-                "data": data,
-                "invocation_id": invocation_id,
-            }
-            _validate_agent_detail_depth(projected)
-            event_json = json.dumps(
-                projected,
-                default=str,
-                separators=(",", ":"),
-            )
+            event_json = lifecycle.model_dump_json()
             event_size = len(event_json.encode())
             if event_size > self._max_agent_event_bytes:
                 raise _CoordinatorProtocolError(
                     f"agent event exceeds {self._max_agent_event_bytes} byte limit"
                 )
-            iteration = data.get("iteration")
-            duration_ms = data.get("duration_ms")
-            tool_count = data.get("tool_count")
-            predict_count = data.get("predict_count")
+            error_text: str | None = None
+            if step is not None:
+                iteration = step.iteration
+                duration_ms = step.duration_ms
+                event_error = step.error
+                tool_count = len(step.tool_calls)
+                predict_count = sum(len(group.calls) for group in step.predict_calls)
+            else:
+                if event_kind in {"code.generated", "code.executed"}:
+                    iteration = _required_field(data, "iteration")
+                else:
+                    iteration = data["iteration"] if "iteration" in data else None
+                duration_ms = data["duration_ms"] if "duration_ms" in data else None
+                tool_count = data["tool_count"] if "tool_count" in data else 0
+                predict_count = data["predict_count"] if "predict_count" in data else 0
+                for field in ("iteration", "duration_ms", "tool_count", "predict_count"):
+                    if field in data and type(data[field]) is not int:
+                        raise _CoordinatorProtocolError(
+                            f"agent summary field {field!r} must be an integer"
+                        )
+                if event_kind in {"run.failed", "run.cancelled"} or "error" in data:
+                    error_text = _string_field(
+                        data, "error", maximum_length=_MAX_EVENT_MESSAGE_LENGTH
+                    )
+                    event_error = True
+                else:
+                    event_error = False
             projected_agent_event = AgentEvent(
                 invocation_id=invocation_id,
                 event_sequence=len(projected_events) + 1,
                 event_json=event_json,
                 size_bytes=event_size,
                 event_kind=event_kind,
-                iteration=iteration if isinstance(iteration, int) else None,
-                duration_ms=duration_ms if isinstance(duration_ms, int) else None,
-                error=bool(data.get("error")),
-                tool_count=tool_count if isinstance(tool_count, int) else 0,
-                predict_count=predict_count if isinstance(predict_count, int) else 0,
+                iteration=iteration,
+                duration_ms=duration_ms,
+                error=event_error,
+                tool_count=tool_count,
+                predict_count=predict_count,
             )
             detail = []
-            if data.get("iteration") is not None:
-                detail.append(f"iteration={data['iteration']}")
-            if data.get("duration_ms") is not None:
-                detail.append(f"duration={data['duration_ms']}ms")
-            if data.get("error"):
-                detail.append(f"error={data['error']}")
+            if iteration is not None:
+                detail.append(f"iteration={iteration}")
+            if duration_ms is not None:
+                detail.append(f"duration={duration_ms}ms")
+            if step is not None and step.error:
+                detail.append(f"error={step.error}")
+            elif error_text is not None:
+                detail.append(f"error={error_text}")
             message = f"Agent {event_kind}"
             if detail:
                 message += " " + " ".join(detail)
             status = previous_descriptor.status
-            if data.get("error") or event_kind in {"run.failed", "run.cancelled"}:
+            if event_error:
                 level = LogLevel.ERROR
                 status = "error"
-                error = str(data.get("error") or event_kind)
+                if error_text is not None:
+                    error = error_text
             descriptor = replace(
                 previous_descriptor,
                 status=status,
@@ -2518,29 +2538,24 @@ class Operator:
                 latest_event_sequence=len(projected_events) + 1,
             )
         elif kind == "trace_finished":
-            trace = event.get("trace")
-            if not isinstance(trace, dict):
-                return None
-            _validate_agent_detail_depth(trace)
-            header = _trace_header_from_payload(trace)
-            trace_header = {
-                name: value
-                for name, value in trace.items()
-                if name not in {"steps", "evidence"}
-            }
-            evidence = trace.get("evidence")
-            if isinstance(evidence, dict):
-                trace_header["evidence"] = {
-                    name: value for name, value in evidence.items() if name != "events"
-                }
-            finalized_trace = json.dumps(
-                trace_header,
-                default=str,
-                separators=(",", ":"),
+            _require_exact_event_keys(event, {"kind", "invocation_id", "trace", "evidence"})
+            _validate_agent_detail_depth(event)
+            try:
+                terminal_detail = AgentTerminalDetail.model_validate(
+                    {"trace": event["trace"], "evidence": event["evidence"]}, strict=True
+                )
+            except (ValueError, TypeError, RecursionError) as exc:
+                raise _CoordinatorProtocolError("invalid agent terminal detail") from exc
+            trace = terminal_detail.trace
+            if trace is None:
+                raise _CoordinatorProtocolError("finished agent trace must not be null")
+            header = _trace_header_from_trace(trace)
+            finalized_trace = terminal_detail.model_dump_json(
+                exclude={"trace": {"steps"}}
             ).encode()
             if len(finalized_trace) > self._max_trace_body_bytes:
                 raise _CoordinatorProtocolError(
-                    f"agent trace header exceeds {self._max_trace_body_bytes} byte limit"
+                    f"agent terminal detail exceeds {self._max_trace_body_bytes} byte limit"
                 )
             versions = self._trace_bodies.get(key, {})
             if (
@@ -2549,13 +2564,13 @@ class Operator:
                 and versions.get(previous_descriptor.revision) == finalized_trace
             ):
                 return None
-            status = str(trace.get("status") or "unavailable")[:80]
+            status = trace.status
             error = None
             descriptor = TraceDescriptor(
                 status=status,
                 revision=previous_descriptor.revision,
                 available=True,
-                complete=bool(isinstance(evidence, dict) and evidence.get("complete")),
+                complete=terminal_detail.evidence.complete,
                 event_count=len(projected_events),
                 size_bytes=len(finalized_trace),
                 latest_event_sequence=(
@@ -2567,13 +2582,26 @@ class Operator:
             if status == "error":
                 level = LogLevel.ERROR
         elif kind == "trace_unavailable":
-            error = str(event.get("error") or "Agent trace unavailable")
+            _require_exact_event_keys(event, {"kind", "invocation_id", "error", "evidence"})
+            error = _string_field(event, "error", maximum_length=_MAX_EVENT_MESSAGE_LENGTH)
+            try:
+                terminal_detail = AgentTerminalDetail.model_validate(
+                    {"trace": None, "evidence": event["evidence"]}, strict=True
+                )
+            except (ValueError, TypeError, RecursionError) as exc:
+                raise _CoordinatorProtocolError("invalid agent terminal detail") from exc
+            finalized_trace = terminal_detail.model_dump_json().encode()
+            if len(finalized_trace) > self._max_trace_body_bytes:
+                raise _CoordinatorProtocolError(
+                    f"agent terminal detail exceeds {self._max_trace_body_bytes} byte limit"
+                )
             descriptor = TraceDescriptor(
                 status="unavailable",
                 revision=previous_descriptor.revision,
-                available=False,
-                complete=False,
+                available=True,
+                complete=terminal_detail.evidence.complete,
                 event_count=len(projected_events),
+                size_bytes=len(finalized_trace),
                 latest_event_sequence=(
                     projected_events[-1].event_sequence if projected_events else 0
                 ),
@@ -2581,7 +2609,7 @@ class Operator:
             message = f"Agent trace unavailable: {error}"
             level = LogLevel.WARN
         else:
-            return None
+            raise _CoordinatorProtocolError("unknown agent evidence event kind")
 
         entry = LogEntry(
             timestamp=datetime.now(),
@@ -3496,65 +3524,48 @@ def _materialize_run_detail(capture: _RunDetailCapture) -> RunState:
     run = capture.run
     run.logs = [deepcopy(item.entry) for item in capture.logs]
     for node_id, node in run.nodes.items():
-        trace_invocation_id = capture.trace_invocation_ids.get(node_id)
-        projected_events = []
-        for event in capture.events.get(node_id, ()):
-            if trace_invocation_id and event.invocation_id != trace_invocation_id:
-                continue
-            try:
-                projected = json.loads(event.event_json)
-            except (TypeError, ValueError):
-                continue
-            if isinstance(projected, dict):
-                projected_events.append(projected)
-                projected["invocation_id"] = event.invocation_id
         descriptor = node.trace
+        retained_events = capture.events.get(node_id, ())
+        if descriptor is None and not retained_events:
+            continue
+        from predict_rlm import IterationStep
+
+        from avalanche._agent_trace import (
+            AgentLifecycleEvent,
+            AgentTerminalDetail,
+            AgentTraceEnvelope,
+        )
+
+        trace_invocation_id = capture.trace_invocation_ids.get(node_id)
+        projected_events = [
+            AgentLifecycleEvent.model_validate_json(event.event_json, strict=True)
+            for event in retained_events
+            if trace_invocation_id is None or event.invocation_id == trace_invocation_id
+        ]
         trace = None
+        evidence = None
         body = capture.trace_bodies.get(node_id)
         if body is not None:
-            try:
-                decoded = json.loads(body)
-            except (TypeError, ValueError):
-                decoded = None
-            if isinstance(decoded, dict):
-                trace = decoded
-                steps = []
-                evidence_events = []
-                for projected in projected_events:
-                    data = projected.get("data")
-                    if (
-                        projected.get("event_kind") == "iteration.recorded"
-                        and isinstance(data, dict)
-                        and isinstance(data.get("step"), dict)
-                    ):
-                        steps.append(data["step"])
-                    evidence_events.append(
-                        {
-                            "sequence": projected.get("sequence"),
-                            "kind": projected.get("event_kind"),
-                            "timestamp_ns": projected.get("timestamp_ns"),
-                            "data": data if isinstance(data, dict) else {},
-                        }
-                    )
-                trace["steps"] = steps
-                evidence = trace.get("evidence")
-                if isinstance(evidence, dict):
-                    evidence["events"] = evidence_events
-        envelope = {
-            "schema_version": 1,
-            "invocation_id": trace_invocation_id or None,
-            "status": descriptor.status if descriptor is not None else "in_progress",
-            "run_id": (
-                trace.get("evidence", {}).get("run_id")
-                if isinstance(trace, dict) and isinstance(trace.get("evidence"), dict)
-                else None
-            ),
-            "events": projected_events,
-            "trace": trace,
-            "error": capture.trace_errors.get(node_id),
-        }
-        if descriptor is not None or projected_events:
-            node.agent_trace_json = json.dumps(envelope, default=str)
+            terminal = AgentTerminalDetail.model_validate_json(body, strict=True)
+            trace = terminal.trace
+            evidence = terminal.evidence
+            if trace is not None:
+                trace.steps = [
+                    IterationStep.model_validate(projected.data["step"], strict=True)
+                    for projected in projected_events
+                    if projected.event_kind == "iteration.recorded"
+                ]
+        envelope = AgentTraceEnvelope(
+            schema_version=1,
+            invocation_id=trace_invocation_id,
+            status=descriptor.status if descriptor is not None else "in_progress",
+            run_id=evidence.run_id if evidence is not None else None,
+            events=projected_events,
+            trace=trace,
+            evidence=evidence,
+            error=capture.trace_errors.get(node_id),
+        )
+        node.agent_trace_json = envelope.model_dump_json()
     return run
 
 
@@ -3698,64 +3709,20 @@ def _classifier_metadata_mapping(value: object) -> dict[str, str]:
     return metadata
 
 
-def _trace_header_from_payload(trace: dict[str, Any]) -> TraceHeader | None:
-    """Validate the stable PredictRLM RunTrace header at the coordinator boundary."""
-    if "model" not in trace:
-        return None
-
-    status = trace.get("status")
-    if type(status) is not str or not status or len(status) > _MAX_EVENT_FIELD_LENGTH:
-        raise _CoordinatorProtocolError(
-            "agent trace header field 'status' must be a non-empty bounded string"
-        )
-    model = trace.get("model")
-    if type(model) is not str or not model or len(model) > _MAX_EVENT_FIELD_LENGTH:
-        raise _CoordinatorProtocolError(
-            "agent trace header field 'model' must be a non-empty bounded string"
-        )
-    sub_model = trace.get("sub_model")
-    if sub_model is not None and (
-        type(sub_model) is not str or len(sub_model) > _MAX_EVENT_FIELD_LENGTH
-    ):
-        raise _CoordinatorProtocolError(
-            "agent trace header field 'sub_model' must be a bounded string or null"
-        )
-
-    iterations = trace.get("iterations")
-    if type(iterations) is not int or iterations < 0:
-        raise _CoordinatorProtocolError(
-            "agent trace header field 'iterations' must be a non-negative integer"
-        )
-    max_iterations = trace.get("max_iterations")
-    if type(max_iterations) is not int or max_iterations < 0:
-        raise _CoordinatorProtocolError(
-            "agent trace header field 'max_iterations' must be a non-negative integer"
-        )
-    duration_ms = trace.get("duration_ms")
-    if type(duration_ms) is not int or duration_ms < 0:
-        raise _CoordinatorProtocolError(
-            "agent trace header field 'duration_ms' must be a non-negative integer"
-        )
-
-    usage = trace.get("usage")
-    if not isinstance(usage, dict):
-        raise _CoordinatorProtocolError("agent trace header field 'usage' must be an object")
-    telemetry = trace.get("telemetry_ref")
-    if telemetry is not None and not isinstance(telemetry, dict):
-        raise _CoordinatorProtocolError(
-            "agent trace header field 'telemetry_ref' must be an object or null"
-        )
-
+def _trace_header_from_trace(trace: RunTrace) -> TraceHeader:
+    """Project the validated SDK trace without retaining its iteration body."""
     return TraceHeader(
-        status=status,
-        model=model,
-        sub_model=sub_model,
-        iterations=iterations,
-        max_iterations=max_iterations,
-        duration_ms=duration_ms,
-        usage_json=json.dumps(usage, separators=(",", ":")),
+        status=trace.status,
+        model=trace.model,
+        sub_model=trace.sub_model,
+        iterations=trace.iterations,
+        max_iterations=trace.max_iterations,
+        duration_ms=trace.duration_ms,
+        usage_json=trace.usage.model_dump_json(),
         telemetry_json=(
-            json.dumps(telemetry, separators=(",", ":")) if telemetry is not None else None
+            json.dumps(trace.telemetry_ref, separators=(",", ":"))
+            if trace.telemetry_ref is not None
+            else None
         ),
     )
 

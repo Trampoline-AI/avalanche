@@ -6,8 +6,10 @@ import asyncio
 import importlib
 import json
 from types import SimpleNamespace
+from typing import Literal
 
 import pytest
+from predict_rlm import RunEvidence, RunEvidenceEvent, RunTrace
 from pydantic import BaseModel
 
 import avalanche as ava
@@ -54,6 +56,10 @@ def test_bodyful_agent_invokes_service_and_owns_structured_result(monkeypatch, s
             return SimpleNamespace(
                 summary=Summary(headline=f"about {person.name}", person_count=1),
                 note=f"review {person.id}",
+                trace=_trace(),
+                evidence=RunEvidence(
+                    run_id="summary-run", complete=True, terminal_outcome="completed"
+                ),
             )
 
     monkeypatch.setattr(agent_module, "_build_predictor", lambda *args, **kwargs: Predictor())
@@ -84,6 +90,7 @@ async def test_agent_rejects_bad_inputs_before_invocation_and_preserves_service_
 ):
     calls = []
     failure = ValueError("provider unavailable")
+    failure.evidence = RunEvidence(run_id="failed-run", complete=True, terminal_outcome="error")
 
     class Predictor:
         async def acall(self, **inputs):
@@ -102,19 +109,16 @@ async def test_agent_rejects_bad_inputs_before_invocation_and_preserves_service_
     assert calls == [{"person": person}]
 
 
-class Trace:
-    def __init__(self, run_id="run", status="completed"):
-        self.run_id = run_id
-        self.status = status
-
-    def to_exportable_json(self):
-        return json.dumps(
-            {
-                "status": self.status,
-                "evidence": {"run_id": self.run_id, "complete": True},
-                "steps": [],
-            }
-        )
+def _trace(
+    status: Literal["in_progress", "completed", "max_iterations", "error"] = "completed",
+) -> RunTrace:
+    return RunTrace(
+        status=status,
+        model="test-model",
+        iterations=0,
+        max_iterations=1,
+        duration_ms=1,
+    )
 
 
 @pytest.mark.asyncio
@@ -126,7 +130,16 @@ async def test_live_evidence_redacts_tool_and_model_secrets_without_losing_event
             sink = agent_module._AvalancheEvidenceSink()
             events = [
                 (RunEventKind.RUN_STARTED, {"inputs": inputs}),
-                (RunEventKind.PREDICT_STARTED, {"call_id": "p", "input": "model-secret"}),
+                (
+                    RunEventKind.PREDICT_STARTED,
+                    {
+                        "call_id": "p",
+                        "signature": "question -> answer",
+                        "instructions": None,
+                        "model": "test-model",
+                        "input": "model-secret",
+                    },
+                ),
                 (RunEventKind.PREDICT_FINISHED, {"call_id": "p", "output": "model-secret"}),
                 (
                     RunEventKind.TOOL_STARTED,
@@ -143,7 +156,23 @@ async def test_live_evidence_redacts_tool_and_model_secrets_without_losing_event
             ]
             for sequence, (kind, data) in enumerate(events, 1):
                 await sink.emit(RunEvent("run", sequence, kind, sequence, data))
-            return SimpleNamespace(note="reviewed", trace=Trace())
+            return SimpleNamespace(
+                note="reviewed",
+                trace=_trace(),
+                evidence=RunEvidence(
+                    run_id="run",
+                    complete=True,
+                    terminal_outcome="completed",
+                    events=[
+                        RunEvidenceEvent(
+                            sequence=1,
+                            kind="tool.finished",
+                            timestamp_ns=1,
+                            data={"result": "tool-secret"},
+                        )
+                    ],
+                ),
+            )
 
     agent = ava.Agent(signature=SummarySignature, step_name="summarize", runtime_kwargs={})
     agent._predictor = Predictor()
@@ -159,6 +188,12 @@ async def test_live_evidence_redacts_tool_and_model_secrets_without_losing_event
     assert "model-secret" not in json.dumps(observed)
     assert "tool-secret" not in json.dumps(observed)
     assert observed[-1]["kind"] == "trace_finished"
+    assert observed[-1]["evidence"] == {
+        "run_id": "run",
+        "complete": True,
+        "terminal_outcome": "completed",
+    }
+    assert "evidence" not in observed[-1]["trace"]
     assert len({event["invocation_id"] for event in observed}) == 1
 
 
@@ -180,15 +215,34 @@ async def test_concurrent_agent_invocations_keep_evidence_and_traces_correlated(
                     1,
                     RunEventKind.PREDICT_STARTED,
                     1,
-                    {"call_id": name, "invocation_id": f"caller-{name}"},
+                    {
+                        "call_id": name,
+                        "invocation_id": f"caller-{name}",
+                        "signature": "question -> answer",
+                        "instructions": None,
+                        "model": "test-model",
+                    },
                 )
             )
             self.arrivals += 1
             if self.arrivals == 2:
                 self.ready.set()
             await asyncio.wait_for(self.ready.wait(), timeout=5)
-            await sink.close(name, RunEvent(name, 2, RunEventKind.RUN_SUCCEEDED, 2, {}))
-            return SimpleNamespace(note=name, trace=Trace(run_id=name))
+            await sink.close(
+                name,
+                RunEvent(
+                    name,
+                    2,
+                    RunEventKind.RUN_SUCCEEDED,
+                    2,
+                    {"status": "completed", "outputs": {"note": name}},
+                ),
+            )
+            return SimpleNamespace(
+                note=name,
+                trace=_trace(),
+                evidence=RunEvidence(run_id=name, complete=True, terminal_outcome="completed"),
+            )
 
     agent = ava.Agent(signature=SummarySignature, step_name="summarize", runtime_kwargs={})
     agent._predictor = Predictor()
@@ -206,7 +260,7 @@ async def test_concurrent_agent_invocations_keep_evidence_and_traces_correlated(
     assert not set(grouped) & {"left", "right", "caller-left", "caller-right"}
     for events in grouped.values():
         assert [event["kind"] for event in events] == ["evidence", "evidence", "trace_finished"]
-        assert events[0]["data"]["call_id"] == events[-1]["trace"]["evidence"]["run_id"]
+        assert events[0]["data"]["call_id"] == events[-1]["evidence"]["run_id"]
         assert "invocation_id" not in events[0]["data"]
 
 
@@ -228,8 +282,16 @@ async def test_real_recorder_propagates_strict_observer_failures(failure_kind):
             recorder = EvidenceRecorder(
                 RunContext(predictor.runtime_spec, inputs), predictor.runtime_spec.events
             )
-            await recorder.emit(RunEventKind.RUN_STARTED, inputs=inputs)
-            return SimpleNamespace(note="recorded")
+            try:
+                await recorder.emit(RunEventKind.RUN_STARTED, inputs=inputs)
+            except BaseException as error:
+                await recorder.finish_failure(error)
+                predictor._attach_runtime_evidence(error, recorder)
+                raise
+            result = SimpleNamespace(note="recorded", trace=_trace())
+            await recorder.finish_success(status="completed", outputs={"note": "recorded"})
+            predictor._attach_runtime_evidence(result, recorder)
+            return result
 
     def broken_listener(event):
         if event["kind"] == "evidence":
@@ -256,8 +318,11 @@ async def test_agent_cancellation_emits_one_terminal_and_preserves_cancellation(
     exportable_trace,
 ):
     cancellation = asyncio.CancelledError("cancelled by caller")
+    cancellation.evidence = RunEvidence(
+        run_id="cancelled-run", complete=True, terminal_outcome="cancelled"
+    )
     if exportable_trace:
-        cancellation.trace = Trace(status="cancelled")
+        cancellation.trace = _trace(status="error")
 
     class Predictor:
         async def acall(self, **inputs):
@@ -271,9 +336,14 @@ async def test_agent_cancellation_emits_one_terminal_and_preserves_cancellation(
             await agent(person=Person(id=1, name="Ada"))
     assert raised.value is cancellation
     assert len(observed) == 1
+    assert observed[0]["evidence"] == {
+        "run_id": "cancelled-run",
+        "complete": True,
+        "terminal_outcome": "cancelled",
+    }
     if exportable_trace:
         assert observed[0]["kind"] == "trace_finished"
-        assert observed[0]["trace"]["status"] == "cancelled"
+        assert observed[0]["trace"]["status"] == "error"
     else:
         assert observed[0]["kind"] == "trace_unavailable"
 
@@ -282,7 +352,12 @@ async def test_agent_cancellation_emits_one_terminal_and_preserves_cancellation(
 async def test_terminal_persistence_failure_is_not_reclassified_as_agent_failure():
     class Predictor:
         async def acall(self, **inputs):
-            return SimpleNamespace(trace=Trace())
+            return SimpleNamespace(
+                trace=_trace(),
+                evidence=RunEvidence(
+                    run_id="terminal-run", complete=True, terminal_outcome="completed"
+                ),
+            )
 
     agent = ava.Agent(signature=SummarySignature, step_name="summarize", runtime_kwargs={})
     agent._predictor = Predictor()
@@ -298,3 +373,76 @@ async def test_terminal_persistence_failure_is_not_reclassified_as_agent_failure
             await agent(person=Person(id=1, name="Ada"))
     assert raised.value is failure
     assert [event["kind"] for event in observed] == ["trace_finished"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("exportable_trace", [False, True])
+async def test_agent_failure_retains_separate_evidence_without_exposing_raw_events(
+    exportable_trace,
+):
+    failure = ValueError("provider unavailable")
+    failure.evidence = RunEvidence(
+        run_id="failed-run",
+        complete=False,
+        terminal_outcome="error",
+        events=[
+            RunEvidenceEvent(
+                sequence=1,
+                kind="predict.started",
+                timestamp_ns=1,
+                data={"input": "private-model-input"},
+            )
+        ],
+    )
+    if exportable_trace:
+        failure.trace = _trace(status="error")
+
+    class Predictor:
+        async def acall(self, **inputs):
+            raise failure
+
+    agent = ava.Agent(signature=SummarySignature, step_name="summarize", runtime_kwargs={})
+    agent._predictor = Predictor()
+    observed = []
+    with capture_agent_evidence(observed.append, errors="raise"):
+        with pytest.raises(AgentStepExecutionError) as raised:
+            await agent(person=Person(id=1, name="Ada"))
+
+    assert raised.value.__cause__ is failure
+    assert len(observed) == 1
+    assert observed[0]["kind"] == (
+        "trace_finished" if exportable_trace else "trace_unavailable"
+    )
+    assert observed[0]["evidence"] == {
+        "run_id": "failed-run",
+        "complete": False,
+        "terminal_outcome": "error",
+    }
+    if exportable_trace:
+        assert observed[0]["trace"]["status"] == "error"
+    assert "private-model-input" not in json.dumps(observed)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("missing_field", ["trace", "evidence"])
+async def test_successful_agent_prediction_requires_sdk_trace_and_evidence(missing_field):
+    prediction = SimpleNamespace(
+        note="reviewed",
+        trace=_trace(),
+        evidence=RunEvidence(
+            run_id="contract-run", complete=True, terminal_outcome="completed"
+        ),
+    )
+    delattr(prediction, missing_field)
+
+    class Predictor:
+        async def acall(self, **inputs):
+            return prediction
+
+    agent = ava.Agent(signature=SummarySignature, step_name="summarize", runtime_kwargs={})
+    agent._predictor = Predictor()
+    observed = []
+    with capture_agent_evidence(observed.append, errors="raise"):
+        with pytest.raises(AttributeError):
+            await agent(person=Person(id=1, name="Ada"))
+    assert observed == []
