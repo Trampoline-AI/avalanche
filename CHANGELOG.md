@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Added `ava.agent.AgentTrace` as a lazy re-export of PredictRLM's `RunTrace` model.
+
 ## 0.7.2
 
 - `import avalanche` no longer imports Polars or PyArrow. The public types,

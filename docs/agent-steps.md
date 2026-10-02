@@ -181,6 +181,10 @@ contracts. Use the inline form for compact local contracts.
 `await agent(...)` always returns the raw DSPy prediction. Avalanche never
 selects an output, derives a table, or appends automatically.
 
+`ava.agent.AgentTrace` is a lazy re-export of PredictRLM's `RunTrace` model, not a
+subclass or a separate schema. `prediction.trace` is already an instance of this
+model. Lifecycle evidence remains separate in `prediction.evidence`.
+
 ```python
 class DraftArtifactsSig(ava.Signature):
     """Render proposal artifacts from an approved plan."""
