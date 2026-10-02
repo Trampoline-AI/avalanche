@@ -13,7 +13,17 @@ from contextvars import ContextVar
 from enum import Enum
 from functools import update_wrapper
 from pathlib import Path
-from typing import Any, Callable, Mapping, Sequence, TypeAlias, Union, get_args, get_origin
+from typing import (
+    TYPE_CHECKING,
+    Any,
+    Callable,
+    Mapping,
+    Sequence,
+    TypeAlias,
+    Union,
+    get_args,
+    get_origin,
+)
 
 from pydantic import BaseModel
 
@@ -26,6 +36,11 @@ from ..step_interface import (
 )
 from .config import UNSET, validate_runtime_kwargs
 from .signature import resolve_signature
+
+if TYPE_CHECKING:
+    from predict_rlm import RunEvent, RunEvidence, RunTrace
+
+    from .._agent_trace import AgentEvidenceMetadata
 
 
 class AgentStepError(RuntimeError):
@@ -61,7 +76,7 @@ class _AvalancheEvidenceSink:
 
     strict = True
 
-    async def emit(self, event: Any) -> None:
+    async def emit(self, event: RunEvent) -> None:
         state = _current_invocation_state()
         projected = _project_evidence_event(
             event,
@@ -72,7 +87,7 @@ class _AvalancheEvidenceSink:
     async def flush(self, run_id: str) -> None:
         return None
 
-    async def close(self, run_id: str, terminal_event: Any | None = None) -> None:
+    async def close(self, run_id: str, terminal_event: RunEvent | None = None) -> None:
         if terminal_event is not None:
             state = _current_invocation_state()
             projected = _project_evidence_event(
@@ -159,117 +174,108 @@ def _bounded_agent_value(value: object) -> JsonValue:
 
 
 def _project_evidence_event(
-    event: Any,
+    event: RunEvent,
     *,
     invocation_id: AgentInvocationId,
 ) -> dict[str, Any]:
-    kind_value = getattr(getattr(event, "kind", None), "value", None)
-    event_kind = kind_value if isinstance(kind_value, str) else str(getattr(event, "kind", ""))
-    raw_data = getattr(event, "data", {})
-    data = dict(raw_data) if isinstance(raw_data, Mapping) else {}
+    event_kind = event.kind.value
+    data = event.data
     projected: dict[str, Any] = {}
 
     if event_kind == "run.started":
-        inputs = data.get("inputs")
-        projected_inputs = _bounded_agent_value(inputs) if isinstance(inputs, Mapping) else {}
+        inputs = data["inputs"]
         projected = {
-            "input_fields": sorted(inputs) if isinstance(inputs, Mapping) else [],
-            "inputs": projected_inputs,
+            "input_fields": sorted(inputs),
+            "inputs": _bounded_agent_value(inputs),
         }
     elif event_kind == "iteration.recorded":
-        step = data.get("step")
-        step = step if isinstance(step, Mapping) else {}
+        from predict_rlm import IterationStep
+
+        step = IterationStep.model_validate(data["step"], strict=True)
         projected = {
-            "iteration": step.get("iteration"),
-            "duration_ms": step.get("duration_ms"),
-            "error": step.get("error"),
-            "tool_count": len(step.get("tool_calls") or []),
-            "predict_count": sum(
-                len(group.get("calls") or [])
-                for group in (step.get("predict_calls") or [])
-                if isinstance(group, Mapping)
-            ),
-            "step": _bounded_agent_value(step),
+            "iteration": step.iteration,
+            "duration_ms": step.duration_ms,
+            "error": step.error,
+            "tool_count": len(step.tool_calls),
+            "predict_count": sum(len(group.calls) for group in step.predict_calls),
+            "step": step.model_dump(mode="json"),
         }
     elif event_kind == "predict.started":
         projected = {
-            key: data.get(key)
-            for key in ("call_id", "signature", "instructions", "model")
-            if data.get(key) is not None
+            key: data[key] for key in ("call_id", "signature", "instructions", "model")
         }
     elif event_kind == "predict.finished":
-        projected = {
-            key: data.get(key) for key in ("call_id", "error") if data.get(key) is not None
-        }
+        projected = {"call_id": data["call_id"]}
+        if "error" in data:
+            projected["error"] = data["error"]
     elif event_kind in {"tool.started", "tool.finished"}:
-        projected = {
-            key: data.get(key)
-            for key in ("call_id", "name", "error")
-            if data.get(key) is not None
-        }
+        projected = {"call_id": data["call_id"], "name": data["name"]}
+        if "error" in data:
+            projected["error"] = data["error"]
     elif event_kind == "code.generated":
-        projected = {
-            key: data.get(key) for key in ("iteration", "code") if data.get(key) is not None
-        }
+        projected = {"iteration": data["iteration"], "code": data["code"]}
     elif event_kind == "code.executed":
-        projected = {
-            key: data.get(key)
-            for key in ("iteration", "output", "error")
-            if data.get(key) is not None
-        }
+        projected = {"iteration": data["iteration"]}
+        for key in ("output", "error"):
+            if key in data:
+                projected[key] = data[key]
     elif event_kind == "run.succeeded":
         projected = {
-            "status": data.get("status"),
-            "outputs": _bounded_agent_value(data.get("outputs", {})),
+            "status": data["status"],
+            "outputs": _bounded_agent_value(data["outputs"]),
         }
     elif event_kind in {"run.failed", "run.cancelled"}:
-        projected = {
-            key: data.get(key) for key in ("error_type", "error") if data.get(key) is not None
-        }
+        projected = {"error_type": data["error_type"], "error": data["error"]}
 
     return {
         "kind": "evidence",
         "invocation_id": invocation_id,
-        "sequence": int(getattr(event, "sequence", 0)),
+        "sequence": event.sequence,
         "event_kind": event_kind,
-        "timestamp_ns": int(getattr(event, "timestamp_ns", 0)),
+        "timestamp_ns": event.timestamp_ns,
         "data": projected,
     }
 
 
+def _evidence_metadata(evidence: RunEvidence) -> AgentEvidenceMetadata:
+    from .._agent_trace import AgentEvidenceMetadata
+
+    return AgentEvidenceMetadata(
+        run_id=evidence.run_id,
+        complete=evidence.complete,
+        terminal_outcome=evidence.terminal_outcome,
+    )
+
+
 def _emit_terminal_trace(
-    trace: Any,
+    trace: RunTrace,
     *,
     invocation_id: AgentInvocationId,
-) -> bool:
-    try:
-        exported = trace.to_exportable_json()
-        parsed = json.loads(exported)
-        if not isinstance(parsed, dict):
-            raise TypeError("exported trace is not a JSON object")
-    except Exception as exc:
-        _emit_trace_unavailable(exc, invocation_id=invocation_id)
-        return False
+    evidence: AgentEvidenceMetadata,
+) -> None:
+    parsed = json.loads(trace.to_exportable_json())
     emit_agent_evidence(
         {
             "kind": "trace_finished",
             "invocation_id": invocation_id,
             "trace": parsed,
+            "evidence": evidence.model_dump(mode="json"),
         }
     )
-    return True
 
 
 def _emit_trace_unavailable(
-    error: Any,
+    error: BaseException,
     *,
     invocation_id: AgentInvocationId,
+    evidence: AgentEvidenceMetadata,
 ) -> None:
     emit_agent_evidence(
         {
             "kind": "trace_unavailable",
             "invocation_id": invocation_id,
             "error": str(error),
+            "evidence": evidence.model_dump(mode="json"),
         }
     )
 
@@ -309,32 +315,44 @@ class Agent:
                 **self._runtime_kwargs,
             )
 
+        from predict_rlm.trace import extract_trace_from_exc
+
         state = _AgentInvocationState(uuid.uuid4().hex)
         invocation_token = _AGENT_INVOCATION_STATE.set(state)
+
         try:
             try:
                 prediction = await self._predictor.acall(**inputs)
             except asyncio.CancelledError as exc:
-                trace = getattr(exc, "trace", None)
+                trace = extract_trace_from_exc(exc)
+                evidence = _evidence_metadata(exc.evidence)
                 try:
                     if trace is None:
-                        _emit_trace_unavailable(exc, invocation_id=state.invocation_id)
+                        _emit_trace_unavailable(
+                            exc, invocation_id=state.invocation_id, evidence=evidence
+                        )
                     else:
-                        _emit_terminal_trace(trace, invocation_id=state.invocation_id)
+                        _emit_terminal_trace(
+                            trace, invocation_id=state.invocation_id, evidence=evidence
+                        )
                 except Exception as evidence_error:
-                    try:
-                        setattr(exc, "evidence_error", evidence_error)
-                    except Exception:
-                        pass
+                    exc.add_note(
+                        f"Failed to retain agent cancellation detail: {evidence_error}"
+                    )
                 raise
             except Exception as exc:
                 if state.listener_base_exception is not None:
                     raise state.listener_base_exception
-                trace = getattr(exc, "trace", None)
+                trace = extract_trace_from_exc(exc)
+                evidence = _evidence_metadata(exc.evidence)
                 if trace is None:
-                    _emit_trace_unavailable(exc, invocation_id=state.invocation_id)
+                    _emit_trace_unavailable(
+                        exc, invocation_id=state.invocation_id, evidence=evidence
+                    )
                 else:
-                    _emit_terminal_trace(trace, invocation_id=state.invocation_id)
+                    _emit_terminal_trace(
+                        trace, invocation_id=state.invocation_id, evidence=evidence
+                    )
                 input_types = {name: type(value).__name__ for name, value in inputs.items()}
                 raise AgentStepExecutionError(
                     f"agent step {self._step_name!r} failed calling "
@@ -342,14 +360,11 @@ class Agent:
                     f"input types: {input_types}."
                 ) from exc
 
-            trace = getattr(prediction, "trace", None)
-            if trace is None:
-                _emit_trace_unavailable(
-                    "Agent trace unavailable",
-                    invocation_id=state.invocation_id,
-                )
-            else:
-                _emit_terminal_trace(trace, invocation_id=state.invocation_id)
+            _emit_terminal_trace(
+                prediction.trace,
+                invocation_id=state.invocation_id,
+                evidence=_evidence_metadata(prediction.evidence),
+            )
             return prediction
         finally:
             _AGENT_INVOCATION_STATE.reset(invocation_token)

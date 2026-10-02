@@ -533,30 +533,27 @@ def _with_agent_evidence(
 ) -> Callable[..., Any]:
     """Forward agent evidence through the coordinator's event protocol."""
 
-    def emit(event: dict[str, Any]) -> None:
-        try:
-            event_queue.put(
-                {
-                    "type": "agent_evidence",
-                    "node_id": node_id,
-                    "event": event,
-                }
-            )
-        except BaseException:
-            pass
+    def emit(event: dict[str, JsonValue]) -> None:
+        event_queue.put(
+            {
+                "type": "agent_evidence",
+                "node_id": node_id,
+                "event": event,
+            }
+        )
 
     if inspect.iscoroutinefunction(fn):
 
         @wraps(fn)
         async def async_wrapper(*args: Any, **kwargs: Any) -> Any:
-            with capture_agent_evidence(emit), capture_agent_log_node(node_id):
+            with capture_agent_evidence(emit, errors="raise"), capture_agent_log_node(node_id):
                 return await fn(*args, **kwargs)
 
         return async_wrapper
 
     @wraps(fn)
     def wrapper(*args: Any, **kwargs: Any) -> Any:
-        with capture_agent_evidence(emit), capture_agent_log_node(node_id):
+        with capture_agent_evidence(emit, errors="raise"), capture_agent_log_node(node_id):
             return fn(*args, **kwargs)
 
     return wrapper

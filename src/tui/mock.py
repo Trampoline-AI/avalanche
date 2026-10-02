@@ -9,6 +9,11 @@ from datetime import datetime
 from typing import Callable
 from uuid import uuid4
 
+from predict_rlm import RunTrace
+from predict_rlm.trace import IterationStep
+
+from avalanche._agent_trace import AgentTerminalDetail, AgentTraceEnvelope
+
 from .models import (
     CatalogSnapshot,
     DetailUpdate,
@@ -298,6 +303,10 @@ AGENT_TRACE_METADATA = {
         "lm": "main-model",
         "sub_lm": "sub-model",
         "max_iterations": 4,
+    },
+    "models": {
+        "main": {"identity": "main-model", "source": "agent runtime"},
+        "sub": {"identity": "sub-model", "source": "agent runtime"},
     },
     "skills": [
         {
@@ -681,12 +690,16 @@ class MockStateProvider:
             "lm": {"finish_reason": "stop"},
             "usage": {"main": {}, "sub": {}},
         }
+        trace_step = IterationStep.model_validate(trace_step).model_dump()
+        trace_events[2]["data"] = {"step": trace_step}
         trace_envelope = {
             "schema_version": 1,
+            "invocation_id": "agent-mock",
             "status": "completed",
             "run_id": "agent-mock",
             "events": [
                 {
+                    "invocation_id": "agent-mock",
                     "sequence": event["sequence"],
                     "event_kind": event["kind"],
                     "timestamp_ns": event["timestamp_ns"],
@@ -703,15 +716,16 @@ class MockStateProvider:
                 "duration_ms": 20,
                 "usage": {"main": {}, "sub": {}},
                 "steps": [trace_step],
-                "evidence": {
-                    "run_id": "agent-mock",
-                    "complete": True,
-                    "terminal_outcome": "completed",
-                    "events": trace_events,
-                },
+            },
+            "evidence": {
+                "run_id": "agent-mock",
+                "complete": True,
+                "terminal_outcome": "completed",
             },
             "error": None,
         }
+        trace_envelope["trace"] = RunTrace.model_validate(trace_envelope["trace"]).model_dump()
+        trace_envelope = AgentTraceEnvelope.model_validate(trace_envelope)
         agent_run = RunState(
             run_id="run_agent",
             flow_name="agent_trace",
@@ -726,7 +740,7 @@ class MockStateProvider:
             status=NodeStatus.SUCCESS,
             started_at=base_time,
             ended_at=base_time + 1,
-            agent_trace_json=json.dumps(trace_envelope),
+            agent_trace_json=trace_envelope.model_dump_json(),
         )
         agent_run.logs.extend(
             [
@@ -766,13 +780,10 @@ class MockStateProvider:
         descriptor = node.trace if node is not None else None
         if run is None or node is None or descriptor is None or not node.agent_trace_json:
             return None
-        try:
-            envelope = json.loads(node.agent_trace_json)
-        except (TypeError, ValueError):
+        envelope = AgentTraceEnvelope.model_validate_json(node.agent_trace_json)
+        if envelope.evidence is None:
             return None
-        trace_body = envelope.get("trace") if isinstance(envelope, dict) else None
-        if not isinstance(trace_body, dict):
-            return None
+        trace_body = AgentTerminalDetail(trace=envelope.trace, evidence=envelope.evidence)
         return TraceDetail(
             operator_instance_id=run.operator_instance_id,
             run_id=run.run_id,

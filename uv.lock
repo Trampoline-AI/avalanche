@@ -272,7 +272,7 @@ requires-dist = [
     { name = "filelock", specifier = ">=3.20,<4" },
     { name = "grpcio", specifier = ">=1.75.1" },
     { name = "polars", specifier = ">=1.34,<1.35" },
-    { name = "predict-rlm", extras = ["codex-lm"], specifier = ">=0.8.0" },
+    { name = "predict-rlm", extras = ["codex-lm"], specifier = ">=0.9.0" },
     { name = "protobuf", specifier = ">=6.31.1" },
     { name = "pydantic", specifier = ">=2,<3" },
     { name = "pyiceberg", extras = ["glue", "pandas", "pyarrow", "s3fs", "sql-sqlite"], specifier = ">=0.9,<0.11" },
@@ -297,7 +297,7 @@ dev = [
     { name = "marimo", specifier = ">=0.23.9,<0.24" },
     { name = "moto", extras = ["s3", "server"], specifier = ">=5,<6" },
     { name = "pre-commit", specifier = ">=4,<5" },
-    { name = "predict-rlm", specifier = ">=0.8.0" },
+    { name = "predict-rlm", specifier = ">=0.9.0" },
     { name = "pylance", specifier = ">=0.24.0" },
     { name = "pytest", specifier = ">=9.0.3,<10" },
     { name = "pytest-asyncio", specifier = ">=1.4.0,<2" },
@@ -2494,7 +2494,7 @@ wheels = [
 
 [[package]]
 name = "predict-rlm"
-version = "0.8.0"
+version = "0.9.0"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "deno" },
@@ -2504,9 +2504,9 @@ dependencies = [
     { name = "pygments" },
     { name = "tenacity" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/09/ca/32c961c1a99c515d3e820bd625d042a43dc68c7a912b480a674bf1a77c24/predict_rlm-0.8.0.tar.gz", hash = "sha256:be2d131eedf7b34faeae0202c2999a3d5d33d34e4ac456125a2a9f44544ddc30", size = 300223, upload-time = "2026-08-05T20:58:11.226Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/00/5a/50ec7ad9eedb714b6d6a7374ea664f79fb1a10423c3b0335ca616c20675d/predict_rlm-0.9.0.tar.gz", hash = "sha256:166ffd871ac4e8ca19f9d4e3d0cc667bdfa3a63f5dea2f2e1a26fb1d949b961f", size = 304602, upload-time = "2026-10-02T17:22:29.019Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/ad/23/d51ef1ea493eeb6f42579fd2ab6d9fc613fb03add99967ee2747ec87073c/predict_rlm-0.8.0-py3-none-any.whl", hash = "sha256:304a2fc65fb60de3b20c8b9f845a02296274fb22757514e7892226dfa1c2f016", size = 334729, upload-time = "2026-08-05T20:58:09.895Z" },
+    { url = "https://files.pythonhosted.org/packages/ea/14/37ccacb3b91fbf7dda639f3901fbefc9d5d3681188bb2717cbacc3cd2d13/predict_rlm-0.9.0-py3-none-any.whl", hash = "sha256:41192ab2b866e86dd900bab898adf98b82e13244e8eee97ac05a3a1c8307d32b", size = 339226, upload-time = "2026-10-02T17:22:27.471Z" },
 ]
 
 [package.optional-dependencies]

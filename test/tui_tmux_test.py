@@ -92,7 +92,10 @@ def test_terminal_start_cancel_and_select_history(tui_session):
 def test_terminal_agent_drilldown_and_return(tui_session):
     _wait_for(tui_session, lambda text: "inspect_agent" in text and "run_agent" in text)
     _tmux("send-keys", "-t", tui_session, "Enter")
-    _wait_for(tui_session, lambda text: "AGENT TURN" in text)
+    screen = _wait_for(tui_session, lambda text: "AGENT TURN" in text)
+    assert "Run: agent-mock" in screen
+    assert "Live record: complete" in screen
+    assert "terminal=completed" in screen
     _tmux("send-keys", "-t", tui_session, "e")
     _wait_for(tui_session, lambda text: "Filter active records" in text)
     _tmux("send-keys", "-t", tui_session, "Right", "Enter")

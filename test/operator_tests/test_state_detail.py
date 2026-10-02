@@ -17,6 +17,7 @@ from runtime.operator.models import (
     RunStatus,
     RunStatusChanged,
 )
+from runtime.operator.operator import _CoordinatorProtocolError
 from runtime.operator.proto import operator_pb2 as pb
 from runtime.operator.proto import operator_pb2_grpc as pb_grpc
 from runtime.operator.server import serve
@@ -472,7 +473,7 @@ def test_close_keeps_dispatcher_alive_for_notification_from_delayed_drain():
         operator.close()
 
 
-def test_read_trace_rejects_reused_identity_from_previous_operator_epoch():
+def test_read_trace_rejects_reused_identity_from_previous_operator_epoch(agent_trace):
     first = Operator(watch=False, schedule=False)
     second = Operator(watch=False, schedule=False)
     server = None
@@ -490,10 +491,11 @@ def test_read_trace_rejects_reused_identity_from_previous_operator_epoch():
                 "event": {
                     "kind": "trace_finished",
                     "invocation_id": "test-invocation",
-                    "trace": {
-                        "status": "completed",
-                        "evidence": {"complete": True},
-                        "marker": marker,
+                    "trace": agent_trace(model=marker).model_dump(mode="json"),
+                    "evidence": {
+                        "run_id": f"sdk-{marker}",
+                        "complete": True,
+                        "terminal_outcome": "completed",
                     },
                 },
             },
@@ -533,7 +535,12 @@ def test_read_trace_rejects_reused_identity_from_previous_operator_epoch():
             stub.ReadActivityDetail(pb.ReadActivityDetailRequestV2(detail_ref=detail_ref))
         )
         trace = json.loads(b"".join(chunk.data for chunk in chunks))
-        assert trace["marker"] == "second"
+        assert trace["trace"]["model"] == "second"
+        assert trace["evidence"] == {
+            "run_id": "sdk-second",
+            "complete": True,
+            "terminal_outcome": "completed",
+        }
     finally:
         if channel is not None:
             channel.close()
@@ -541,3 +548,308 @@ def test_read_trace_rejects_reused_identity_from_previous_operator_epoch():
             server.stop(grace=0).wait()
         first.close()
         second.close()
+
+
+@pytest.mark.parametrize(
+    ("terminal_outcome", "complete"), [("error", True), ("cancelled", False)]
+)
+def test_unavailable_trace_retains_pre_trace_evidence(terminal_outcome, complete):
+    operator = Operator(watch=False, schedule=False)
+    run = _add_run(operator, "run-pre-trace")
+    evidence = {
+        "run_id": "sdk-pre-trace",
+        "complete": complete,
+        "terminal_outcome": terminal_outcome,
+    }
+    try:
+        operator._apply_event(
+            run.run_id,
+            _event_handle(),
+            {
+                "type": "agent_evidence",
+                "node_id": "agent_1",
+                "event": {
+                    "kind": "trace_unavailable",
+                    "invocation_id": "pre-trace-invocation",
+                    "error": "Stopped before the first iteration",
+                    "evidence": evidence,
+                },
+            },
+        )
+        materialized = operator.get_run(run.run_id)
+        descriptor = materialized.nodes["agent_1"].trace
+        assert descriptor.status == "unavailable"
+        assert descriptor.available is True
+        assert descriptor.complete is complete
+        retained = operator.read_trace(
+            run.run_id, "agent_1", operator_instance_id=operator.operator_instance_id
+        )
+        assert descriptor.size_bytes == len(retained.data)
+        assert json.loads(retained.data) == {"trace": None, "evidence": evidence}
+        envelope = json.loads(materialized.nodes["agent_1"].agent_trace_json)
+        assert envelope["trace"] is None
+        assert envelope["run_id"] == "sdk-pre-trace"
+        assert envelope["evidence"] == evidence
+        assert envelope["error"] == "Stopped before the first iteration"
+    finally:
+        operator.close()
+
+
+def test_terminal_evidence_completeness_changes_publish_a_new_retained_revision(agent_trace):
+    operator = Operator(watch=False, schedule=False)
+    run = _add_run(operator, "run-evidence-revision")
+    event = {
+        "kind": "trace_finished",
+        "invocation_id": "test-invocation",
+        "trace": agent_trace().model_dump(mode="json"),
+        "evidence": {
+            "run_id": "sdk-revision",
+            "complete": False,
+            "terminal_outcome": "completed",
+        },
+    }
+    try:
+
+        def apply():
+            operator._apply_event(
+                run.run_id,
+                _event_handle(),
+                {"type": "agent_evidence", "node_id": "agent_1", "event": event},
+            )
+
+        apply()
+        original = operator.read_trace(
+            run.run_id, "agent_1", operator_instance_id=operator.operator_instance_id
+        )
+        apply()
+        assert operator.get_run(run.run_id).nodes["agent_1"].trace.revision == original.revision
+        event["evidence"] = {
+            "run_id": "sdk-revision",
+            "complete": True,
+            "terminal_outcome": "completed",
+        }
+        apply()
+        current = operator.get_run(run.run_id).nodes["agent_1"].trace
+        assert current.complete is True
+        assert current.revision > original.revision
+        assert (
+            json.loads(
+                operator.read_trace(
+                    run.run_id,
+                    "agent_1",
+                    operator_instance_id=operator.operator_instance_id,
+                    revision=original.revision,
+                ).data
+            )["evidence"]["complete"]
+            is False
+        )
+    finally:
+        operator.close()
+
+
+@pytest.mark.parametrize("kind", ["trace_finished", "trace_unavailable"])
+def test_terminal_detail_byte_limit_includes_separate_evidence(kind, agent_trace):
+    operator = Operator(watch=False, schedule=False, max_trace_body_bytes=64)
+    run = _add_run(operator, "run-terminal-limit")
+    event = {
+        "kind": kind,
+        "invocation_id": "test-invocation",
+        "evidence": {
+            "run_id": "sdk-" + "x" * 128,
+            "complete": True,
+            "terminal_outcome": "completed",
+        },
+    }
+    if kind == "trace_finished":
+        event["trace"] = agent_trace().model_dump(mode="json")
+    else:
+        event["error"] = "Stopped before the first iteration"
+    try:
+        with pytest.raises(_CoordinatorProtocolError, match="terminal detail exceeds"):
+            operator._apply_event(
+                run.run_id,
+                _event_handle(),
+                {"type": "agent_evidence", "node_id": "agent_1", "event": event},
+            )
+    finally:
+        operator.close()
+
+
+@pytest.mark.parametrize("kind", ["trace_finished", "trace_unavailable"])
+@pytest.mark.parametrize(
+    "metadata",
+    [
+        None,
+        {"run_id": "sdk-invalid", "complete": True},
+        {"run_id": 1, "complete": True, "terminal_outcome": "completed"},
+        {"run_id": "sdk-invalid", "complete": 1, "terminal_outcome": "completed"},
+        {"run_id": "sdk-invalid", "complete": True, "terminal_outcome": None},
+        {"run_id": "sdk-invalid", "complete": True, "terminal_outcome": "failed"},
+        {
+            "run_id": "sdk-invalid",
+            "complete": True,
+            "terminal_outcome": "completed",
+            "events": [{"data": {"raw": "must not reach retained detail"}}],
+        },
+    ],
+)
+def test_invalid_terminal_metadata_reaches_the_caller(kind, metadata, agent_trace):
+    operator = Operator(watch=False, schedule=False)
+    run = _add_run(operator, "run-invalid-metadata")
+    event = {"kind": kind, "invocation_id": "test-invocation", "evidence": metadata}
+    if kind == "trace_finished":
+        event["trace"] = agent_trace().model_dump(mode="json")
+    else:
+        event["error"] = "Stopped before the first iteration"
+    try:
+        with pytest.raises(_CoordinatorProtocolError, match="invalid agent terminal detail"):
+            operator._apply_event(
+                run.run_id,
+                _event_handle(),
+                {"type": "agent_evidence", "node_id": "agent_1", "event": event},
+            )
+    finally:
+        operator.close()
+
+
+@pytest.mark.parametrize("kind", ["trace_finished", "trace_unavailable"])
+def test_missing_terminal_metadata_reaches_the_caller(kind, agent_trace):
+    operator = Operator(watch=False, schedule=False)
+    run = _add_run(operator, "run-missing-metadata")
+    event = {"kind": kind, "invocation_id": "test-invocation"}
+    if kind == "trace_finished":
+        event["trace"] = agent_trace().model_dump(mode="json")
+    else:
+        event["error"] = "Stopped before the first iteration"
+    try:
+        with pytest.raises(_CoordinatorProtocolError, match="missing required field"):
+            operator._apply_event(
+                run.run_id,
+                _event_handle(),
+                {"type": "agent_evidence", "node_id": "agent_1", "event": event},
+            )
+    finally:
+        operator.close()
+
+
+def test_invalid_trace_reaches_the_caller():
+    operator = Operator(watch=False, schedule=False)
+    run = _add_run(operator, "run-invalid-trace")
+    try:
+        with pytest.raises(_CoordinatorProtocolError, match="invalid agent terminal detail"):
+            operator._record_agent_evidence_event(
+                run,
+                "agent_1",
+                {
+                    "kind": "trace_finished",
+                    "invocation_id": "test-invocation",
+                    "trace": {"status": "completed"},
+                    "evidence": {
+                        "run_id": "sdk-invalid",
+                        "complete": True,
+                        "terminal_outcome": "completed",
+                    },
+                },
+            )
+    finally:
+        operator.close()
+
+
+@pytest.mark.parametrize("asynchronous", [False, True])
+def test_agent_event_publication_failure_reaches_the_workflow(asynchronous):
+    from avalanche._agent_evidence import emit_agent_evidence
+    from runtime.operator.run_worker import _with_agent_evidence
+
+    class BrokenQueue:
+        def put(self, event):
+            raise OSError("agent event transport disconnected")
+
+    event = {
+        "kind": "trace_unavailable",
+        "invocation_id": "test-invocation",
+        "error": "Stopped before the first iteration",
+        "evidence": {
+            "run_id": "sdk-failure",
+            "complete": True,
+            "terminal_outcome": "error",
+        },
+    }
+
+    def run_agent():
+        emit_agent_evidence(event)
+
+    async def run_async_agent():
+        emit_agent_evidence(event)
+
+    fn = run_async_agent if asynchronous else run_agent
+    wrapped = _with_agent_evidence("agent_1", fn, BrokenQueue())
+    with pytest.raises(OSError, match="agent event transport disconnected"):
+        if asynchronous:
+            import asyncio
+
+            asyncio.run(wrapped())
+        else:
+            wrapped()
+
+
+@pytest.mark.parametrize(
+    ("event_kind", "data"),
+    [
+        ("run.failed", {}),
+        ("run.cancelled", {"error": None}),
+        ("code.executed", {"iteration": True}),
+        ("predict.finished", {"call_id": "call", "error": 0}),
+        ("tool.finished", {"call_id": "call", "name": "tool", "duration_ms": None}),
+    ],
+)
+def test_malformed_lifecycle_summary_reaches_the_caller(event_kind, data):
+    operator = Operator(watch=False, schedule=False)
+    run = _add_run(operator, "run-invalid-lifecycle")
+    try:
+        with pytest.raises(_CoordinatorProtocolError):
+            operator._record_agent_evidence_event(
+                run,
+                "agent_1",
+                {
+                    "kind": "evidence",
+                    "invocation_id": "test-invocation",
+                    "sequence": 1,
+                    "event_kind": event_kind,
+                    "timestamp_ns": 1,
+                    "data": data,
+                },
+            )
+    finally:
+        operator.close()
+
+
+@pytest.mark.parametrize("failed", [False, True])
+def test_empty_exception_message_remains_a_failure_not_a_success(failed):
+    operator = Operator(watch=False, schedule=False)
+    run = _add_run(operator, "run-empty-exception")
+    data = {"call_id": "call"}
+    if failed:
+        data["error"] = ""
+    try:
+        operator._record_agent_evidence_event(
+            run,
+            "agent_1",
+            {
+                "kind": "evidence",
+                "invocation_id": "test-invocation",
+                "sequence": 1,
+                "event_kind": "predict.finished",
+                "timestamp_ns": 1,
+                "data": data,
+            },
+        )
+        envelope = json.loads(operator.get_run(run.run_id).nodes["agent_1"].agent_trace_json)
+        assert envelope["status"] == ("error" if failed else "in_progress")
+        assert envelope["error"] == ("" if failed else None)
+        snapshot = operator.get_latest_run_snapshot(
+            run.run_id, operator_instance_id=operator.operator_instance_id
+        )
+        page = operator.list_agent_events(page_token=snapshot.nodes[0].event_page_token)
+        assert page.events[0].error is failed
+    finally:
+        operator.close()
