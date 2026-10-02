@@ -7,7 +7,10 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from enum import Enum
 from types import MappingProxyType
-from typing import Any, Literal, Mapping
+from typing import TYPE_CHECKING, Literal, Mapping
+
+if TYPE_CHECKING:
+    from avalanche._agent_trace import AgentTerminalDetail
 
 
 class NodeStatus(Enum):
@@ -149,14 +152,14 @@ class TerminalSealDescriptor:
 
 @dataclass(frozen=True)
 class TraceDetail:
-    """One immutable trace body pinned to structural run and node identity."""
+    """Terminal trace/evidence detail pinned to structural run and node identity."""
 
     operator_instance_id: str
     run_id: str
     created_sequence: int
     node_id: str
     descriptor_revision: int
-    trace_body: dict[str, Any]
+    trace_body: AgentTerminalDetail
 
 
 @dataclass(frozen=True)

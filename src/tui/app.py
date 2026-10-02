@@ -554,7 +554,9 @@ class AvalancheApp(App):
         if key is None:
             return
         envelope = self.store.selected_agent_trace_envelope
-        if envelope is not None and isinstance(envelope.get("trace"), dict):
+        if envelope is not None and (
+            envelope.trace is not None or envelope.evidence is not None
+        ):
             self._trace_hydration_retry.pop(key, None)
             return
         if self._trace_hydration_attempts or self._trace_hydration_closed:
@@ -562,9 +564,7 @@ class AvalancheApp(App):
         retry = self._trace_hydration_retry.get(key)
         if retry is not None and self._trace_hydration_now() < retry[1]:
             return
-        hydrate = getattr(self.store.provider, "hydrate_trace", None)
-        if not callable(hydrate):
-            return
+        hydrate = self.store.provider.hydrate_trace
         run = self.store.current_run
         if run is None:
             return
@@ -580,9 +580,10 @@ class AvalancheApp(App):
             hydrated = None
             try:
                 hydrated = hydrate(run_id, node_id)
-            except Exception:
-                pass
-            finally:
+            except Exception as error:
+                self.call_from_thread(self._raise_trace_hydration_error, error)
+                return
+            else:
                 completion = self._trace_detail_completion(
                     attempt=attempt,
                     operator_instance_id=operator_instance_id,
@@ -595,6 +596,10 @@ class AvalancheApp(App):
                 self.store.enqueue_trace_hydration_completion(completion)
 
         self._trace_hydration_executor.submit(_hydrate)
+
+    @staticmethod
+    def _raise_trace_hydration_error(error: Exception) -> None:
+        raise error
 
     # ── Connection monitoring ───────────────────────────────────────
 

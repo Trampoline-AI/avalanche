@@ -6,6 +6,7 @@ from datetime import datetime
 
 import pytest
 
+from avalanche._agent_trace import AgentLifecycleEvent
 from runtime.operator.client import GrpcStateProvider, _RunUpdateResetError
 from runtime.operator.models import (
     AgentEvent,
@@ -243,13 +244,21 @@ def test_mutating_callbacks_cannot_corrupt_other_consumers_or_retained_state():
         assert observed_logs[0].message == "original"
         assert provider._log_entries["run-1"][0].message == "original"
 
-        event = AgentEvent(
+        lifecycle = AgentLifecycleEvent(
             invocation_id="test-invocation",
-            event_sequence=1,
-            event_json='{"sequence":1,"event_kind":"original"}',
-            size_bytes=46,
+            sequence=1,
+            event_kind="original",
+            timestamp_ns=1,
+            data={},
         )
-        provider._agent_events[("run-1", "node-1")] = [event]
+        event_json = lifecycle.model_dump_json()
+        event = AgentEvent(
+            invocation_id=lifecycle.invocation_id,
+            event_sequence=1,
+            event_json=event_json,
+            size_bytes=len(event_json.encode()),
+        )
+        provider._agent_events[("run-1", "node-1")] = [lifecycle]
         event_detail = AgentEventDetailAppended(
             operator_instance_id="operator-1",
             run_id="run-1",
@@ -261,10 +270,7 @@ def test_mutating_callbacks_cannot_corrupt_other_consumers_or_retained_state():
         provider._notify_detail_callbacks(event_detail)
 
         assert json.loads(observed_details[1].event.event_json)["event_kind"] == "original"
-        assert (
-            json.loads(provider._agent_events[("run-1", "node-1")][0].event_json)["event_kind"]
-            == "original"
-        )
+        assert provider._agent_events[("run-1", "node-1")][0].event_kind == "original"
     finally:
         provider.close()
 

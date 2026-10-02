@@ -10,7 +10,15 @@ from dataclasses import replace
 from datetime import datetime
 
 import pytest
+from predict_rlm import RunTrace
+from pydantic import ValidationError
 
+from avalanche._agent_trace import (
+    AgentEvidenceMetadata,
+    AgentLifecycleEvent,
+    AgentTerminalDetail,
+    AgentTraceEnvelope,
+)
 from runtime.operator.models import (
     AgentEvent,
     AgentEventDetailAppended,
@@ -32,7 +40,7 @@ from tui.models import (
     StreamResetNotice,
     WorkflowInfo,
 )
-from tui.ui_store import UIStore
+from tui.ui_store import TraceDetailCompletion, UIStore
 from tui.widgets.agent_trace import AgentOutputInspector, AgentTraceInspector
 from tui.widgets.log_panel import LogWidget
 
@@ -295,7 +303,13 @@ def test_live_details_survive_summary_updates_and_repair_missing_history(store):
         log=log,
     )
     event_json = json.dumps(
-        {"sequence": 1, "event_kind": "code.executed", "data": {"output": "done"}}
+        {
+            "invocation_id": "invocation",
+            "timestamp_ns": 1,
+            "sequence": 1,
+            "event_kind": "code.executed",
+            "data": {"output": "done"},
+        }
     )
     store.enqueue_detail_update(detail)
     store.enqueue_detail_update(detail)
@@ -312,7 +326,7 @@ def test_live_details_survive_summary_updates_and_repair_missing_history(store):
     store.enqueue_run_update(replace(run, revision=4, latest_log_sequence=1))
     store._apply_background_updates()
     assert [entry.message for entry in store.logs] == ["first detail"]
-    assert store.selected_agent_events[0]["data"]["output"] == "done"
+    assert store.selected_agent_events[0].data["output"] == "done"
 
     # Missing sequence two is recovered by a snapshot, not silently skipped.
     recovered_logs = [
@@ -435,6 +449,12 @@ async def test_agent_drilldown_separates_trace_output_and_returns_to_logs():
     app = AvalancheApp(workflow="agent_trace", node="inspect_agent")
     async with app.run_test(size=(120, 40)) as pilot:
         await _wait_for(pilot, lambda: app.store.current_run is not None)
+        await pilot.press("enter")
+        summary = (
+            app.screen.query_one("#agent-trace-content", AgentTraceInspector).render().plain
+        )
+        assert "agent-mock" in summary
+        await pilot.press("escape")
         logs = [entry.message for entry in app.store.logs]
         await pilot.press("enter", "enter", "down", "enter")
         trace = app.screen.query_one("#agent-trace-content", AgentTraceInspector)
@@ -463,11 +483,14 @@ async def test_delayed_agent_trace_cannot_overwrite_newer_failure_and_recovers()
     provider = MockStateProvider(include_agent_trace=True)
     run = provider.get_run("run_agent")
     node = run.nodes["inspect_agent_1"]
-    body = json.loads(node.agent_trace_json)["trace"]
+    envelope = json.loads(node.agent_trace_json)
+    body = AgentTerminalDetail.model_validate(
+        {"trace": envelope["trace"], "evidence": envelope["evidence"]}
+    )
     pending = replace(
         node,
         trace=TraceDescriptor(available=True, revision=1),
-        agent_trace_json=json.dumps({"trace": None}),
+        agent_trace_json=json.dumps({**envelope, "trace": None, "evidence": None}),
     )
     run = replace(run, revision=1, nodes={node.node_id: pending})
     provider._runs[run.run_id] = run
@@ -532,23 +555,289 @@ async def test_delayed_agent_trace_cannot_overwrite_newer_failure_and_recovers()
         await _wait_for(pilot, lambda: app.store.current_run.status is RunStatus.FAILED)
         release.set()
         await _wait_for(pilot, fresh_entered.is_set)
-        assert app.store.selected_agent_trace_envelope["trace"] is None
+        assert app.store.selected_agent_trace_envelope.trace is None
         assert [entry.message for entry in app.store.logs] == ["new failure"]
 
         fresh_release.set()
         await _wait_for(
-            pilot, lambda: app.store.selected_agent_trace_envelope.get("trace") is not None
+            pilot, lambda: app.store.selected_agent_trace_envelope.trace is not None
         )
         # Force a history refresh after hydration rather than relying on the timer.
         _drain_until(app.store, lambda: not app.store._runs_refresh_in_flight)
         app.store._refresh_runs_cache()
         _drain_until(app.store, lambda: not app.store._runs_refresh_in_flight)
-        assert app.store.selected_agent_trace_envelope["trace"] == body
+        hydrated = app.store.selected_agent_trace_envelope
+        assert hydrated.trace == body.trace
+        assert hydrated.evidence == body.evidence
+        assert app.store.selected_agent_outputs == {
+            "summary": {"active_count": 1, "ready": False},
+            "labels": ["reviewed"],
+            "note": None,
+        }
         assert app.store.current_run.status is RunStatus.FAILED
         assert app.store.current_run.nodes[node.node_id].status is NodeStatus.FAILED
         assert [entry.message for entry in app.store.logs] == ["new failure"]
         await pilot.press("e")
         assert (
-            body["steps"][0]["reasoning"]
+            body.trace.steps[0].reasoning
             in app.screen.query_one("#agent-trace-content").render().plain
         )
+
+
+@pytest.mark.parametrize("with_trace", [False, True])
+def test_terminal_hydration_keeps_existing_history(store, with_trace):
+    run = store.current_run
+    node = run.nodes["agent"]
+    events = [
+        AgentLifecycleEvent(
+            invocation_id="sdk-run",
+            sequence=1,
+            timestamp_ns=1,
+            event_kind="run.succeeded",
+            data={"outputs": {"ready": False}},
+        )
+    ]
+    node.status = NodeStatus.FAILED
+    node.trace = TraceDescriptor(available=True, revision=3)
+    envelope = AgentTraceEnvelope(
+        schema_version=1,
+        invocation_id="sdk-run",
+        status="failed",
+        run_id="sdk-run",
+        events=events,
+        trace=None,
+        evidence=None,
+        error="sandbox stopped",
+    )
+    node.agent_trace_json = envelope.model_dump_json()
+    store.select_node(store.all_nodes[0])
+    evidence = AgentEvidenceMetadata(run_id="sdk-run", complete=False, terminal_outcome="error")
+    trace = (
+        RunTrace(
+            status="error",
+            model="test",
+            iterations=0,
+            max_iterations=1,
+            duration_ms=1,
+        )
+        if with_trace
+        else None
+    )
+    completion = TraceDetailCompletion(
+        attempt=1,
+        operator_instance_id=run.operator_instance_id,
+        run_id=run.run_id,
+        created_sequence=run.created_sequence,
+        node_id=node.node_id,
+        descriptor_revision=3,
+        trace_body=AgentTerminalDetail(trace=trace, evidence=evidence),
+    )
+    store.enqueue_trace_hydration_completion(completion)
+    store._apply_background_updates()
+    hydrated = store.selected_agent_trace_envelope
+    assert hydrated.trace == trace
+    assert hydrated.evidence == evidence
+    assert hydrated.status == "failed"
+    assert hydrated.error == "sandbox stopped"
+    assert hydrated.events == events
+    assert store.selected_agent_events == events
+    assert store.selected_agent_outputs == {"ready": False}
+    assert store.selected_agent_inspector_state == "failed"
+
+
+def test_missing_envelope_fields_fail_loudly(store):
+    store.select_node(store.all_nodes[0])
+    store.current_run.nodes["agent"].agent_trace_json = '{"trace": null}'
+    with pytest.raises(ValidationError, match="Field required"):
+        _ = store.selected_agent_trace_envelope
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("failed", [False, True])
+async def test_agent_evidence_without_trace_remains_visible_and_retains_outputs(failed):
+    provider = MockStateProvider(include_agent_trace=True)
+    run = provider.get_run("run_agent")
+    node = run.nodes["inspect_agent_1"]
+    envelope = json.loads(node.agent_trace_json)
+    events = [AgentLifecycleEvent.model_validate(event) for event in envelope["events"]]
+    envelope["trace"] = None
+    envelope["evidence"]["complete"] = not failed
+    envelope["evidence"]["terminal_outcome"] = "error" if failed else "completed"
+    evidence = AgentEvidenceMetadata.model_validate(envelope["evidence"])
+    envelope["evidence"] = None
+    envelope["error"] = "sandbox stopped" if failed else None
+    envelope["status"] = "failed" if failed else "completed"
+    provider._runs[run.run_id] = replace(
+        run,
+        status=RunStatus.FAILED if failed else RunStatus.SUCCESS,
+        nodes={
+            node.node_id: replace(
+                node,
+                status=NodeStatus.FAILED if failed else NodeStatus.SUCCESS,
+                trace=TraceDescriptor(available=True, revision=1),
+                agent_trace_json=json.dumps(envelope),
+            )
+        },
+    )
+    list_runs = provider.list_runs
+
+    def list_run_summaries(selector):
+        return [replace(item, details_hydrated=False) for item in list_runs(selector)]
+
+    provider.list_runs = list_run_summaries
+    hydrate_calls = []
+
+    def hydrate_trace(run_id, node_id):
+        hydrate_calls.append((run_id, node_id))
+        return TraceDetail(
+            operator_instance_id=run.operator_instance_id,
+            run_id=run_id,
+            created_sequence=run.created_sequence,
+            node_id=node_id,
+            descriptor_revision=1,
+            trace_body=AgentTerminalDetail(trace=None, evidence=evidence),
+        )
+
+    provider.hydrate_trace = hydrate_trace
+    app = AvalancheApp(provider=provider, workflow="agent_trace", node="inspect_agent")
+    async with app.run_test(size=(120, 40)) as pilot:
+        await _wait_for(pilot, lambda: app.store.current_run is not None)
+        await pilot.press("enter")
+        await _wait_for(
+            pilot, lambda: app.store.selected_agent_trace_envelope.evidence == evidence
+        )
+        app._hydrate_selected_trace()
+        app._hydrate_selected_trace()
+        await pilot.pause(0.05)
+        assert hydrate_calls == [(run.run_id, node.node_id)]
+        trace = app.screen.query_one("#agent-trace-content", AgentTraceInspector)
+        rendered = trace.render().plain
+        assert evidence.run_id in rendered
+        assert evidence.terminal_outcome in rendered
+        assert ("incomplete" if failed else "complete") in rendered
+        if failed:
+            assert "sandbox stopped" in rendered
+        else:
+            assert app.store.selected_agent_inspector_state == "completed_with_output"
+        assert app.store.selected_agent_events == events
+        await pilot.press("right", "enter")
+        output = (
+            app.screen.query_one("#agent-output-content", AgentOutputInspector).render().plain
+        )
+        assert '"active_count": 1' in output
+        assert '"ready": false' in output
+        assert "SANDBOX_STDOUT_SENTINEL" not in output
+
+
+@pytest.mark.asyncio
+async def test_live_execution_remains_inspectable_before_iteration_record():
+    provider = MockStateProvider(include_agent_trace=True)
+    run = provider.get_run("run_agent")
+    node = run.nodes["inspect_agent_1"]
+    envelope = AgentTraceEnvelope.model_validate_json(node.agent_trace_json)
+    generated = envelope.events[0]
+    envelope = envelope.model_copy(
+        update={
+            "status": "running",
+            "trace": None,
+            "evidence": None,
+            "events": [generated],
+        }
+    )
+    provider._runs[run.run_id] = replace(
+        run,
+        status=RunStatus.RUNNING,
+        nodes={
+            node.node_id: replace(
+                node,
+                status=NodeStatus.RUNNING,
+                agent_trace_json=envelope.model_dump_json(),
+            ),
+        },
+    )
+    app = AvalancheApp(provider=provider, workflow="agent_trace", node="inspect_agent")
+    async with app.run_test(size=(120, 40)) as pilot:
+        await _wait_for(pilot, lambda: app.store.current_run is not None)
+        await pilot.press("enter", "e")
+        inspector = app.screen.query_one("#agent-trace-content", AgentTraceInspector)
+        assert "awaiting execution" in inspector.render().plain
+        assert "records = [item" in inspector.render().plain
+        assert app.store.selected_agent_steps == []
+        executed = AgentLifecycleEvent(
+            invocation_id=generated.invocation_id,
+            sequence=2,
+            timestamp_ns=2,
+            event_kind="code.executed",
+            data={"iteration": 1, "output": "LIVE_EXECUTION_RESULT", "final": False},
+        )
+        event_json = executed.model_dump_json()
+        app.store.enqueue_detail_update(
+            AgentEventDetailAppended(
+                operator_instance_id=run.operator_instance_id,
+                run_id=run.run_id,
+                created_sequence=run.created_sequence,
+                sequence=2,
+                node_id=node.node_id,
+                event=AgentEvent(generated.invocation_id, 2, event_json, len(event_json)),
+            )
+        )
+        await _wait_for(pilot, lambda: "awaiting iteration record" in inspector.render().plain)
+        await pilot.press("down", "down", "e")
+        assert "LIVE_EXECUTION_RESULT" in inspector.render().plain
+        assert app.store.selected_agent_steps == []
+
+
+def test_live_append_does_not_leak_between_stores_parsing_identical_json(store):
+    run = store.current_run
+    generated = AgentLifecycleEvent(
+        invocation_id="isolated-run",
+        sequence=1,
+        timestamp_ns=1,
+        event_kind="code.generated",
+        data={"iteration": 1, "code": "print('isolated')"},
+    )
+    envelope = AgentTraceEnvelope(
+        schema_version=1,
+        invocation_id="isolated-run",
+        status="running",
+        run_id="isolated-run",
+        events=[generated],
+        trace=None,
+        evidence=None,
+        error=None,
+    )
+    run.nodes["agent"].agent_trace_json = envelope.model_dump_json()
+    store.select_node(store.all_nodes[0])
+    assert store.selected_agent_events == [generated]
+    run.details_hydrated = True
+    other = UIStore(store.provider)
+    try:
+        _drain_until(other, lambda: other.current_run is not None)
+        other.select_node(other.all_nodes[0])
+        assert other.selected_agent_events == [generated]
+        executed = AgentLifecycleEvent(
+            invocation_id="isolated-run",
+            sequence=2,
+            timestamp_ns=2,
+            event_kind="code.executed",
+            data={"iteration": 1, "output": "isolated result"},
+        )
+        event_json = executed.model_dump_json()
+        store.enqueue_detail_update(
+            AgentEventDetailAppended(
+                operator_instance_id=run.operator_instance_id,
+                run_id=run.run_id,
+                created_sequence=run.created_sequence,
+                sequence=2,
+                node_id="agent",
+                event=AgentEvent("isolated-run", 2, event_json, len(event_json)),
+            )
+        )
+        store._apply_background_updates()
+        assert store.selected_agent_events == [generated, executed]
+        assert other.selected_agent_events == [generated]
+        assert other.selected_agent_live_steps == []
+        assert store.selected_agent_trace_envelope.events == [generated]
+        assert other.selected_agent_trace_envelope.events == [generated]
+    finally:
+        other.shutdown()
