@@ -2,6 +2,17 @@
 
 ## Unreleased
 
+- `import avalanche` no longer eagerly loads the Iceberg and Lance storage
+  backends. The `Iceberg*` and `Lance*` names exported from the package (and
+  the `avalanche.iceberg` / `avalanche.lance` submodules) are resolved on first
+  attribute access, the same way `avalanche.agent` already was. Programs that
+  only use the DAG, executor, and runtime API skip importing pyiceberg's catalog
+  stack, pyarrow, pandas, SQLAlchemy, and the object-store clients, which
+  accounted for roughly three quarters of the package import time. Explicit
+  `from avalanche.iceberg import ...` / `from avalanche.lance import ...`
+  imports, `from avalanche import IcebergTable`, and `ava.IcebergNs` attribute
+  access are unchanged.
+
 ## 0.7.0
 
 - Replaced the built-in REST API's handwritten routing with FastAPI and moved
