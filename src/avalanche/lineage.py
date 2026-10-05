@@ -4,13 +4,19 @@ from __future__ import annotations
 
 import json
 from datetime import UTC, datetime
+from functools import cache
 from typing import TYPE_CHECKING, Any
 
-import polars as pl
-import pyarrow as pa
-
 if TYPE_CHECKING:
+    import polars as pl
+    import pyarrow as pa
+
     from .runtime import RunContext
+else:
+    from ._lazy_imports import lazy_module
+
+    pl = lazy_module("polars")
+    pa = lazy_module("pyarrow")
 
 ROW_LINEAGE_COLUMNS: tuple[str, ...] = (
     "_ava_updated_at",
@@ -24,17 +30,20 @@ ROW_LINEAGE_COLUMNS: tuple[str, ...] = (
     "_ava_ctx_metadata",
 )
 
-ROW_LINEAGE_ARROW_FIELDS: tuple[pa.Field, ...] = (
-    pa.field("_ava_updated_at", pa.timestamp("us")),
-    pa.field("_ava_run_id", pa.string()),
-    pa.field("_ava_rerun_of", pa.string()),
-    pa.field("_ava_workflow_name", pa.string()),
-    pa.field("_ava_node_id", pa.string()),
-    pa.field("_ava_node_name", pa.string()),
-    pa.field("_ava_node_slug", pa.string()),
-    pa.field("_ava_lineage_vector", pa.string()),
-    pa.field("_ava_ctx_metadata", pa.string()),
-)
+
+@cache
+def _row_lineage_arrow_fields() -> tuple[pa.Field, ...]:
+    return (
+        pa.field("_ava_updated_at", pa.timestamp("us")),
+        pa.field("_ava_run_id", pa.string()),
+        pa.field("_ava_rerun_of", pa.string()),
+        pa.field("_ava_workflow_name", pa.string()),
+        pa.field("_ava_node_id", pa.string()),
+        pa.field("_ava_node_name", pa.string()),
+        pa.field("_ava_node_slug", pa.string()),
+        pa.field("_ava_lineage_vector", pa.string()),
+        pa.field("_ava_ctx_metadata", pa.string()),
+    )
 
 
 def validate_no_reserved_row_lineage_columns(field_names: tuple[str, ...]) -> None:
@@ -50,13 +59,13 @@ def validate_no_reserved_row_lineage_columns(field_names: tuple[str, ...]) -> No
 
 def row_lineage_arrow_fields() -> tuple[pa.Field, ...]:
     """Return PyArrow fields for framework-owned row lineage columns."""
-    return ROW_LINEAGE_ARROW_FIELDS
+    return _row_lineage_arrow_fields()
 
 
 def add_row_lineage_to_arrow_schema(schema: pa.Schema) -> pa.Schema:
     """Return schema with Avalanche row lineage columns appended."""
     validate_no_reserved_row_lineage_columns(tuple(schema.names))
-    return pa.schema([*schema, *ROW_LINEAGE_ARROW_FIELDS])
+    return pa.schema([*schema, *_row_lineage_arrow_fields()])
 
 
 def _to_arrow(data: pl.DataFrame | pa.Table | pa.RecordBatch) -> pa.Table:
@@ -119,10 +128,11 @@ def add_row_lineage_to_data(
         table = table.drop(existing_lineage_columns)
 
     values = _lineage_values(context)
+    lineage_fields = _row_lineage_arrow_fields()
     arrays = [
         pa.array([values[field.name]] * table.num_rows, type=field.type)
-        for field in ROW_LINEAGE_ARROW_FIELDS
+        for field in lineage_fields
     ]
-    for field, array in zip(ROW_LINEAGE_ARROW_FIELDS, arrays):
+    for field, array in zip(lineage_fields, arrays):
         table = table.append_column(field, array)
     return table

@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+- `import avalanche` no longer imports Polars or PyArrow. The public types,
+  storage, lineage, model-frame, and stream modules bind them lazily and load
+  them on first use, so a process that only uses the DAG, runtime, and
+  pydantic-typed I/O never loads the dataframe stack or starts its native
+  worker threads (OpenBLAS, jemalloc, the Polars pool). Type-checker views are
+  unchanged; every frame-accepting or frame-returning API behaves as before.
+
 ## 0.7.1
 
 - `import avalanche` no longer eagerly loads the Iceberg and Lance storage
