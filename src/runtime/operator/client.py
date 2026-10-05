@@ -3106,13 +3106,19 @@ def _trace_detail_from_run(run: RunState | None, node_id: str) -> TraceDetail | 
         if envelope.trace is not None:
             raise ValueError("hydrated terminal trace is missing lifecycle metadata")
         return None
+    if envelope.invocation_id is None:
+        raise ValueError("hydrated terminal trace is missing invocation identity")
     return TraceDetail(
         operator_instance_id=run.operator_instance_id,
         run_id=run.run_id,
         created_sequence=run.created_sequence,
         node_id=node_id,
         descriptor_revision=descriptor.revision,
-        trace_body=AgentTerminalDetail(trace=envelope.trace, evidence=envelope.evidence),
+        trace_body=AgentTerminalDetail(
+            invocation_id=envelope.invocation_id,
+            trace=envelope.trace,
+            evidence=envelope.evidence,
+        ),
     )
 
 
@@ -3143,15 +3149,16 @@ def _materialize_agent_trace_json(
         else None
     )
     evidence = trace_body.evidence if trace_body is not None else None
+    invocation_id = trace_body.invocation_id if trace_body is not None else None
     if trace is not None:
         trace.steps = [
             IterationStep.model_validate(event.data["step"], strict=True)
             for event in events
-            if event.event_kind == "iteration.recorded"
+            if event.event_kind == "iteration.recorded" and event.invocation_id == invocation_id
         ]
     envelope = AgentTraceEnvelope(
         schema_version=1,
-        invocation_id=events[-1].invocation_id if events else None,
+        invocation_id=invocation_id,
         status=trace.status if trace is not None else status,
         run_id=evidence.run_id if evidence is not None else None,
         events=list(events),

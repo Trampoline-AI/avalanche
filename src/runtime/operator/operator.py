@@ -28,6 +28,7 @@ from uuid import uuid4
 
 from pydantic import JsonValue
 
+from avalanche._agent_evidence import AGENT_ERROR_CHARACTER_LIMIT
 from avalanche.classifier.models import (
     ChoiceAnswer,
     ClassifierDeclaration,
@@ -252,7 +253,6 @@ class _RunDetailCapture:
     events: Mapping[str, tuple[AgentEvent, ...]]
     trace_bodies: Mapping[str, bytes]
     trace_errors: Mapping[str, str | None]
-    trace_invocation_ids: Mapping[str, str]
 
 
 def _bound_reload_log_text(text: str) -> str:
@@ -394,7 +394,6 @@ class Operator:
         self._trace_bodies: dict[tuple[str, str], dict[int, bytes]] = {}
         self._trace_errors: dict[tuple[str, str], str | None] = {}
         self._agent_invocation_sequences: dict[tuple[str, str, str], int] = {}
-        self._trace_invocation_ids: dict[tuple[str, str], str] = {}
         self._run_log_bytes: dict[str, int] = {}
         self._run_detail_bytes: dict[str, int] = {}
         self._node_detail_bytes: dict[tuple[str, str], int] = {}
@@ -1278,7 +1277,6 @@ class Operator:
         captured_run = deepcopy(run)
         trace_bodies = {}
         trace_errors = {}
-        trace_invocation_ids = {}
         events = {}
         for node_id in run.nodes:
             key = (run.run_id, node_id)
@@ -1290,14 +1288,12 @@ class Operator:
                 if body is not None:
                     trace_bodies[node_id] = body
             trace_errors[node_id] = self._trace_errors.get(key)
-            trace_invocation_ids[node_id] = self._trace_invocation_ids.get(key, "")
         return _RunDetailCapture(
             run=captured_run,
             logs=tuple(self._logs.get(run.run_id, ())),
             events=MappingProxyType(events),
             trace_bodies=MappingProxyType(trace_bodies),
             trace_errors=MappingProxyType(trace_errors),
-            trace_invocation_ids=MappingProxyType(trace_invocation_ids),
         )
 
     def _resolve_summary_workflow_id(
@@ -2468,8 +2464,12 @@ class Operator:
             invocation_sequence_key = (run.run_id, node_id, invocation_id)
             if sequence <= self._agent_invocation_sequences.get(invocation_sequence_key, 0):
                 return None
-            event_json = lifecycle.model_dump_json()
-            event_size = len(event_json.encode())
+            try:
+                event_json = lifecycle.model_dump_json()
+                event_size = len(event_json.encode())
+            except (ValueError, TypeError, RecursionError) as exc:
+                # Python validation permits strings that cannot be serialized as UTF-8.
+                raise _CoordinatorProtocolError("invalid agent lifecycle event") from exc
             if event_size > self._max_agent_event_bytes:
                 raise _CoordinatorProtocolError(
                     f"agent event exceeds {self._max_agent_event_bytes} byte limit"
@@ -2479,8 +2479,16 @@ class Operator:
                 iteration = step.iteration
                 duration_ms = step.duration_ms
                 event_error = step.error
-                tool_count = len(step.tool_calls)
-                predict_count = sum(len(group.calls) for group in step.predict_calls)
+                tool_count = _required_field(data, "tool_count")
+                predict_count = _required_field(data, "predict_count")
+                for field, count in (
+                    ("tool_count", tool_count),
+                    ("predict_count", predict_count),
+                ):
+                    if type(count) is not int or count < 0:
+                        raise _CoordinatorProtocolError(
+                            f"agent summary field {field!r} must be a nonnegative integer"
+                        )
             else:
                 if event_kind in {"code.generated", "code.executed"}:
                     iteration = _required_field(data, "iteration")
@@ -2496,7 +2504,7 @@ class Operator:
                         )
                 if event_kind in {"run.failed", "run.cancelled"} or "error" in data:
                     error_text = _string_field(
-                        data, "error", maximum_length=_MAX_EVENT_MESSAGE_LENGTH
+                        data, "error", maximum_length=AGENT_ERROR_CHARACTER_LIMIT
                     )
                     event_error = True
                 else:
@@ -2542,17 +2550,22 @@ class Operator:
             _validate_agent_detail_depth(event)
             try:
                 terminal_detail = AgentTerminalDetail.model_validate(
-                    {"trace": event["trace"], "evidence": event["evidence"]}, strict=True
+                    {
+                        "invocation_id": invocation_id,
+                        "trace": event["trace"],
+                        "evidence": event["evidence"],
+                    },
+                    strict=True,
                 )
+                trace = terminal_detail.trace
+                if trace is None:
+                    raise _CoordinatorProtocolError("finished agent trace must not be null")
+                header = _trace_header_from_trace(trace)
+                finalized_trace = terminal_detail.model_dump_json(
+                    exclude={"trace": {"steps"}}
+                ).encode()
             except (ValueError, TypeError, RecursionError) as exc:
                 raise _CoordinatorProtocolError("invalid agent terminal detail") from exc
-            trace = terminal_detail.trace
-            if trace is None:
-                raise _CoordinatorProtocolError("finished agent trace must not be null")
-            header = _trace_header_from_trace(trace)
-            finalized_trace = terminal_detail.model_dump_json(
-                exclude={"trace": {"steps"}}
-            ).encode()
             if len(finalized_trace) > self._max_trace_body_bytes:
                 raise _CoordinatorProtocolError(
                     f"agent terminal detail exceeds {self._max_trace_body_bytes} byte limit"
@@ -2560,7 +2573,6 @@ class Operator:
             versions = self._trace_bodies.get(key, {})
             if (
                 previous_descriptor.available
-                and self._trace_invocation_ids.get(key) == invocation_id
                 and versions.get(previous_descriptor.revision) == finalized_trace
             ):
                 return None
@@ -2583,14 +2595,21 @@ class Operator:
                 level = LogLevel.ERROR
         elif kind == "trace_unavailable":
             _require_exact_event_keys(event, {"kind", "invocation_id", "error", "evidence"})
-            error = _string_field(event, "error", maximum_length=_MAX_EVENT_MESSAGE_LENGTH)
+            error = _string_field(event, "error", maximum_length=AGENT_ERROR_CHARACTER_LIMIT)
             try:
                 terminal_detail = AgentTerminalDetail.model_validate(
-                    {"trace": None, "evidence": event["evidence"]}, strict=True
+                    {
+                        "invocation_id": invocation_id,
+                        "trace": None,
+                        "evidence": event["evidence"],
+                    },
+                    strict=True,
                 )
+                # The error is retained separately and later materialized with the body.
+                error.encode()
+                finalized_trace = terminal_detail.model_dump_json().encode()
             except (ValueError, TypeError, RecursionError) as exc:
                 raise _CoordinatorProtocolError("invalid agent terminal detail") from exc
-            finalized_trace = terminal_detail.model_dump_json().encode()
             if len(finalized_trace) > self._max_trace_body_bytes:
                 raise _CoordinatorProtocolError(
                     f"agent terminal detail exceeds {self._max_trace_body_bytes} byte limit"
@@ -2634,8 +2653,6 @@ class Operator:
             projected_events.append(projected_agent_event)
             assert invocation_sequence_key is not None
             self._agent_invocation_sequences[invocation_sequence_key] = sequence
-        if kind != "evidence":
-            self._trace_invocation_ids[key] = invocation_id
         self._trace_descriptors[key] = descriptor
         self._trace_errors[key] = error
         self._append_log_unchecked_locked(run, entry, log_size)
@@ -3536,7 +3553,13 @@ def _materialize_run_detail(capture: _RunDetailCapture) -> RunState:
             AgentTraceEnvelope,
         )
 
-        trace_invocation_id = capture.trace_invocation_ids.get(node_id)
+        body = capture.trace_bodies.get(node_id)
+        terminal = (
+            AgentTerminalDetail.model_validate_json(body, strict=True)
+            if body is not None
+            else None
+        )
+        trace_invocation_id = terminal.invocation_id if terminal is not None else None
         projected_events = [
             AgentLifecycleEvent.model_validate_json(event.event_json, strict=True)
             for event in retained_events
@@ -3544,9 +3567,7 @@ def _materialize_run_detail(capture: _RunDetailCapture) -> RunState:
         ]
         trace = None
         evidence = None
-        body = capture.trace_bodies.get(node_id)
-        if body is not None:
-            terminal = AgentTerminalDetail.model_validate_json(body, strict=True)
+        if terminal is not None:
             trace = terminal.trace
             evidence = terminal.evidence
             if trace is not None:

@@ -691,7 +691,14 @@ class MockStateProvider:
             "usage": {"main": {}, "sub": {}},
         }
         trace_step = IterationStep.model_validate(trace_step).model_dump()
-        trace_events[2]["data"] = {"step": trace_step}
+        trace_events[2]["data"] = {
+            "iteration": trace_step["iteration"],
+            "duration_ms": trace_step["duration_ms"],
+            "error": trace_step["error"],
+            "tool_count": len(trace_step["tool_calls"]),
+            "predict_count": sum(len(group["calls"]) for group in trace_step["predict_calls"]),
+            "step": trace_step,
+        }
         trace_envelope = {
             "schema_version": 1,
             "invocation_id": "agent-mock",
@@ -783,7 +790,12 @@ class MockStateProvider:
         envelope = AgentTraceEnvelope.model_validate_json(node.agent_trace_json)
         if envelope.evidence is None:
             return None
-        trace_body = AgentTerminalDetail(trace=envelope.trace, evidence=envelope.evidence)
+        assert envelope.invocation_id is not None
+        trace_body = AgentTerminalDetail(
+            invocation_id=envelope.invocation_id,
+            trace=envelope.trace,
+            evidence=envelope.evidence,
+        )
         return TraceDetail(
             operator_instance_id=run.operator_instance_id,
             run_id=run.run_id,

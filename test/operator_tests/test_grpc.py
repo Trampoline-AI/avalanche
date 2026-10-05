@@ -308,6 +308,8 @@ def _seed_hydration_run(operator, run_id: str, agent_trace, iteration_step) -> R
                     "timestamp_ns": sequence,
                     "data": {
                         "iteration": sequence,
+                        "tool_count": 0,
+                        "predict_count": 0,
                         "step": iteration_step(sequence, f"print({sequence})").model_dump(
                             mode="json"
                         ),
@@ -371,9 +373,11 @@ def test_paged_details_and_chunked_trace_materialize_without_cross_run_invalidat
         assert hydrated.details_hydrated
         envelope = json.loads(hydrated.nodes["agent-1"].agent_trace_json)
         assert [event["sequence"] for event in envelope["events"]] == [1, 2, 3, 4, 5]
+        assert envelope["invocation_id"] is None
         assert envelope["trace"] is None
         assert len(hydrated.logs) == 6
         trace = provider.hydrate_trace(run.run_id, "agent-1")
+        assert trace.trace_body.invocation_id == "test-invocation"
         assert trace.trace_body.trace.telemetry_ref == {"payload": "x" * (2 * 1024 * 1024 + 17)}
         assert trace.trace_body.trace.steps == [
             iteration_step(sequence, f"print({sequence})") for sequence in range(1, 6)
@@ -392,6 +396,102 @@ def test_paged_details_and_chunked_trace_materialize_without_cross_run_invalidat
         again_envelope = json.loads(again.nodes["agent-1"].agent_trace_json)
         assert again_envelope["run_id"] == "sdk-run-target"
         assert again_envelope["evidence"] == trace.trace_body.evidence.model_dump(mode="json")
+        assert again_envelope["invocation_id"] == "test-invocation"
+    finally:
+        provider.close()
+        server.stop(grace=0).wait()
+        operator.close()
+
+
+def test_grpc_terminal_hydration_selects_body_invocation_across_event_pages(
+    monkeypatch, agent_trace, iteration_step
+):
+    monkeypatch.setattr("runtime.operator.client.DETAIL_HYDRATION_PAGE_SIZE", 1)
+    operator = Operator([], watch=False, schedule=False)
+    run = RunState(run_id="run-multiple-invocations", flow_name="flow")
+    run.nodes["agent-1"] = NodeState("agent-1", "Agent", "step")
+    operator._runs[run.run_id] = run
+    operator._notify_run(run)
+    step_a = iteration_step(1, "call_a()")
+    step_b = iteration_step(1, "call_b()")
+    for invocation_id, step, tool_count, predict_count in (
+        ("call-a", step_a, 2, 3),
+        ("call-b", step_b, 7, 11),
+    ):
+        operator._apply_event(
+            run.run_id,
+            _event_handle(),
+            {
+                "type": "agent_evidence",
+                "node_id": "agent-1",
+                "event": {
+                    "kind": "evidence",
+                    "invocation_id": invocation_id,
+                    "sequence": 1,
+                    "event_kind": "iteration.recorded",
+                    "timestamp_ns": 1,
+                    "data": {
+                        "iteration": 1,
+                        "tool_count": tool_count,
+                        "predict_count": predict_count,
+                        "step": step.model_dump(mode="json", exclude_unset=True),
+                    },
+                },
+            },
+        )
+    operator._apply_event(
+        run.run_id,
+        _event_handle(),
+        {
+            "type": "agent_evidence",
+            "node_id": "agent-1",
+            "event": {
+                "kind": "trace_finished",
+                "invocation_id": "call-a",
+                "trace": agent_trace(steps=[step_a]).model_dump(mode="json"),
+                "evidence": {
+                    "run_id": "sdk-call-a",
+                    "complete": True,
+                    "terminal_outcome": "completed",
+                },
+            },
+        },
+    )
+    server = serve(operator, port=(port := _unused_port()), block=False)
+    provider = GrpcStateProvider(f"localhost:{port}")
+    try:
+        live = provider.get_run(run.run_id)
+        envelope = json.loads(live.nodes["agent-1"].agent_trace_json)
+        assert envelope["invocation_id"] is None
+        assert [event["invocation_id"] for event in envelope["events"]] == [
+            "call-a",
+            "call-b",
+        ]
+        detail = provider.hydrate_trace(run.run_id, "agent-1")
+        assert detail.trace_body.invocation_id == "call-a"
+        assert detail.trace_body.trace.steps == [step_a]
+        assert detail.trace_body.evidence.run_id == "sdk-call-a"
+        hydrated = provider.get_run(run.run_id)
+        envelope = json.loads(hydrated.nodes["agent-1"].agent_trace_json)
+        assert envelope["invocation_id"] == "call-a"
+        assert [step["code"] for step in envelope["trace"]["steps"]] == ["call_a()"]
+        assert [
+            (
+                event["invocation_id"],
+                event["data"]["tool_count"],
+                event["data"]["predict_count"],
+            )
+            for event in envelope["events"]
+        ] == [("call-a", 2, 3), ("call-b", 7, 11)]
+        in_process = operator.get_run(run.run_id)
+        local_envelope = json.loads(in_process.nodes["agent-1"].agent_trace_json)
+        assert local_envelope["invocation_id"] == "call-a"
+        assert local_envelope["trace"] == envelope["trace"]
+        retained = operator.read_trace(
+            run.run_id, "agent-1", operator_instance_id=operator.operator_instance_id
+        )
+        assert json.loads(retained.data)["invocation_id"] == "call-a"
+        assert hydrated.nodes["agent-1"].trace.size_bytes == len(retained.data)
     finally:
         provider.close()
         server.stop(grace=0).wait()
@@ -630,11 +730,13 @@ def test_grpc_hydrates_pre_trace_terminal_evidence(terminal_outcome, complete):
     try:
         detail = provider.hydrate_trace(run.run_id, "agent-1")
         assert detail is not None
+        assert detail.trace_body.invocation_id == "pre-trace-invocation"
         assert detail.trace_body.trace is None
         assert detail.trace_body.evidence.model_dump(mode="json") == evidence
         hydrated = provider.get_run(run.run_id)
         assert hydrated.nodes["agent-1"].trace.complete is complete
         envelope = json.loads(hydrated.nodes["agent-1"].agent_trace_json)
+        assert envelope["invocation_id"] == "pre-trace-invocation"
         assert envelope["status"] == "unavailable"
         assert envelope["trace"] is None
         assert envelope["run_id"] == "sdk-pre-trace"
@@ -643,6 +745,7 @@ def test_grpc_hydrates_pre_trace_terminal_evidence(terminal_outcome, complete):
             update={"run_id": "changed-by-caller"}
         )
         again = provider.hydrate_trace(run.run_id, "agent-1")
+        assert again.trace_body.invocation_id == "pre-trace-invocation"
         assert again.trace_body.evidence.run_id == "sdk-pre-trace"
     finally:
         provider.close()
@@ -653,10 +756,12 @@ def test_grpc_hydrates_pre_trace_terminal_evidence(terminal_outcome, complete):
 @pytest.mark.parametrize(
     "body",
     [
-        b'{"trace":null}',
-        b'{"trace":null,"evidence":null}',
-        b'{"trace":{"status":"completed"},"evidence":{"run_id":"sdk-corrupt",'
-        b'"complete":true,"terminal_outcome":"completed"}}',
+        b'{"invocation_id":"test-invocation","trace":null}',
+        b'{"invocation_id":"test-invocation","trace":null,"evidence":null}',
+        b'{"invocation_id":"test-invocation","trace":{"status":"completed"},'
+        b'"evidence":{"run_id":"sdk-corrupt","complete":true,"terminal_outcome":"completed"}}',
+        b'{"trace":null,"evidence":{"run_id":"sdk-corrupt",'
+        b'"complete":true,"terminal_outcome":"error"}}',
         b'{"trace":',
     ],
 )
