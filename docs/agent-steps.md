@@ -4,26 +4,12 @@ For the author-facing decorator parameters, call signature, configuration, and
 errors, see the [agent API reference](api/agents.md).
 See the [package API index](api/README.md) for other interfaces.
 
-`@ava.agent_step` is an ordinary Avalanche workflow step with an injected,
-callable agent. The body maps workflow values into model inputs, calls the
-agent, validates or composes the raw prediction, and explicitly persists its
-own result.
+Use inline `ava.agent.step(...)` for one direct agent call. Use a decorated agent
+function when you need custom preparation, transformation, or persistence.
 
 Agent execution is implemented on top of
 [PredictRLM](https://github.com/Trampoline-AI/predict-rlm). Avalanche lazily
-constructs a PredictRLM predictor when the injected agent is first called, while
-the surrounding function remains an ordinary Avalanche step.
-
-
-The public surface has two equivalent entry points:
-
-```python
-ava.Signature is ava.agent.Signature
-ava.agent_step is ava.agent.step
-```
-
-Use root aliases for typed signature classes and `ava.agent` for the agent
-integration namespace, skills, files, and inline signature factory.
+constructs predictors during execution, not workflow construction.
 
 ## Quick start
 
@@ -93,6 +79,20 @@ result = review_flow().run(
     input=ReviewRequest(document="Text supplied by this workflow run."),
 ).result()
 ```
+
+## Inline agent calls
+
+Reuse `ReviewSignature` above with your `load_document()` source, which returns
+document text:
+
+```python
+@ava.workflow(agent_defaults={"lm": "openai/gpt-5.5"})
+def inline_review_flow():
+    return load_document() >> ava.agent.step(ReviewSignature)
+```
+
+The workflow returns a validated `Review`. No `review_document` function is needed
+for this form.
 
 ## Typed signature class
 
@@ -182,8 +182,9 @@ contracts. Use the inline form for compact local contracts.
 
 ## Raw predictions and multiple outputs
 
-`await agent(...)` always returns the raw DSPy prediction. Avalanche never
-selects an output, derives a table, or appends automatically.
+In a decorated body, `await agent(...)` still returns the raw DSPy prediction.
+The body chooses its own output and validates or transforms it explicitly.
+Neither form derives a table or appends automatically.
 
 `prediction.trace` contains the agent's execution trace. Its type,
 `ava.agent.AgentTrace`, is the same as PredictRLM's `RunTrace`.
@@ -213,10 +214,10 @@ async def render_artifacts(
     )
 ```
 
-Keep local extraction, file selection, validation, logging, and output
-composition in the body beside the call. Create a separate plain `@ava.step`
-only when work becomes a reusable durable artifact, deserves its own
-retry/rerun boundary, fans out independently, or has substantial I/O.
+Use inline invocation for one direct agent call with signature-shaped outputs.
+Keep input mapping, batching, custom validation, logging, output composition, and
+persistence in a decorated body when needed. Create a separate plain `@ava.step`
+when work deserves an independent durable, retry/rerun, or I/O boundary.
 
 ## Skills and tools
 
@@ -231,7 +232,7 @@ quick_answer_sig = ava.agent.Signature(
 )
 ```
 
-Configure every capability where the signature is used:
+Configure capabilities where the signature is used, in either form:
 
 ```python
 @ava.agent_step(
@@ -253,8 +254,8 @@ PredictRLM skills.
 Workflow-scoped defaults configure shared PredictRLM execution policy:
 
 Agent steps are quiet by default (`verbose=False`); set `verbose=True` on an
-individual `@ava.agent_step` or in `agent_defaults` when live PredictRLM trace
-output is needed.
+individual inline invocation or decorator, or in `agent_defaults`, when live
+PredictRLM trace output is needed.
 
 ```python
 @ava.workflow(
@@ -282,5 +283,6 @@ agent-step runtime kwargs > workflow agent_defaults > Avalanche agent defaults >
 PredictRLM defaults
 ```
 
-Workflow defaults cannot configure `signature`, `skills`, or `tools`; those are
-agent-definition capabilities.
+Both forms share this resolution order and accept `lm`, `sub_lm`,
+`max_iterations`, and the existing predictor kwargs. Workflow defaults cannot
+configure `signature`, `skills`, or `tools`; those are per-node capabilities.
