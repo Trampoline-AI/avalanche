@@ -41,6 +41,19 @@ def _wait_inactive(operator: Operator, run_id: str, timeout: float = 5.0) -> Non
     raise AssertionError(f"coordinator for {run_id} was not reaped")
 
 
+def _edit_source(path: Path, text: str) -> None:
+    """Rewrite a source file so a later import cannot reuse stale bytecode.
+
+    Python validates cached bytecode by the source's size and integer mtime. The
+    edit here keeps the size and, with fast discovery, lands within the same
+    second as discovery's import, so the stale ``.pyc`` would be served to the
+    run workers. Advancing the mtime makes the edit observable.
+    """
+    path.write_text(text)
+    stat = path.stat()
+    os.utime(path, (stat.st_atime, stat.st_mtime + 2))
+
+
 def _write_standalone(root: Path, *, deferred: bool = False, body: str | None = None) -> Path:
     (root / "helper.py").write_text("VALUE = 1\n")
     import_line = "" if deferred else "from helper import VALUE\n"
@@ -67,7 +80,7 @@ def test_current_and_later_runs_use_live_source(tmp_path, deferred):
     operator = Operator([str(workflow)], watch=False, schedule=False)
     try:
         run_a = operator.start_run("flow")
-        (tmp_path / "helper.py").write_text("VALUE = 2\n")
+        _edit_source(tmp_path / "helper.py", "VALUE = 2\n")
         operator._refresh_workflows()
         run_b = operator.start_run("flow")
 
