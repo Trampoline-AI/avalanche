@@ -3,7 +3,15 @@ Avalanche - Pythonic data workflows on Iceberg and Lance.
 
 Provides a DAG-based framework for building data transformation workflows
 with local and distributed execution.
+
+The Iceberg and Lance storage backends, the agent module, and the classifier
+module are imported lazily on first attribute access, so ``import avalanche``
+does not load the catalog and columnar stacks (pyiceberg, pyarrow, pandas,
+SQLAlchemy, object-store clients) for programs that only use the DAG,
+executor, and runtime API.
 """
+
+from importlib import import_module
 
 # DAG primitives
 # Execution engines
@@ -17,24 +25,7 @@ from .execution_services import (
     ExecutionServicesSpec,
     ExecutionTaskSpec,
 )
-
-# Iceberg backend
-from .iceberg import (
-    IcebergAppendScan,
-    IcebergNamespace,
-    IcebergNs,
-    IcebergNsConfig,
-    IcebergTable,
-    IcebergTableGroup,
-)
 from .input_ref import INPUT as input  # noqa: N811
-from .lance import (
-    LanceNamespace,
-    LanceNamespaceConfig,
-    LanceNs,
-    LanceNsConfig,
-    LanceTable,
-)
 from .model_frame import Json
 
 # Progress tracking
@@ -65,35 +56,51 @@ from .webhook import Webhook
 
 __version__ = "0.7.0"
 
+# Submodules and names resolved lazily on first attribute access (see __getattr__).
+_LAZY_SUBMODULES = frozenset({"agent", "classifier", "iceberg", "lance"})
+_LAZY_EXPORTS: dict[str, str] = {
+    # Agent
+    "Agent": "agent",
+    "InputField": "agent",
+    "OutputField": "agent",
+    "Signature": "agent",
+    "agent_step": "agent",
+    # Classifier
+    "Classifier": "classifier",
+    "ClassificationResult": "classifier",
+    "ClassifierStepError": "classifier",
+    "ClassifierStepExecutionError": "classifier",
+    "classifier_step": "classifier",
+    # Iceberg backend
+    "IcebergAppendScan": "iceberg",
+    "IcebergNamespace": "iceberg",
+    "IcebergNs": "iceberg",
+    "IcebergNsConfig": "iceberg",
+    "IcebergTable": "iceberg",
+    "IcebergTableGroup": "iceberg",
+    # Lance backend
+    "LanceNamespace": "lance",
+    "LanceNamespaceConfig": "lance",
+    "LanceNs": "lance",
+    "LanceNsConfig": "lance",
+    "LanceTable": "lance",
+}
+
 
 def __getattr__(name: str):
-    if name == "agent":
-        import avalanche.agent as value
-    elif name in {
-        "Agent",
-        "InputField",
-        "OutputField",
-        "Signature",
-        "agent_step",
-    }:
-        import avalanche.agent
-
-        value = getattr(avalanche.agent, name)
-    elif name in {
-        "Classifier",
-        "ClassificationResult",
-        "ClassifierStepError",
-        "ClassifierStepExecutionError",
-        "classifier_step",
-    }:
-        import avalanche.classifier
-
-        value = getattr(avalanche.classifier, name)
+    if name in _LAZY_SUBMODULES:
+        value = import_module(f"{__name__}.{name}")
+    elif name in _LAZY_EXPORTS:
+        value = getattr(import_module(f"{__name__}.{_LAZY_EXPORTS[name]}"), name)
     else:
         raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
 
     globals()[name] = value
     return value
+
+
+def __dir__() -> list[str]:
+    return sorted(set(globals()) | set(__all__) | _LAZY_SUBMODULES)
 
 
 __all__ = [
