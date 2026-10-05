@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 0.7.1
+
 - `import avalanche` no longer eagerly loads the Iceberg and Lance storage
   backends. The `Iceberg*` and `Lance*` names exported from the package (and
   the `avalanche.iceberg` / `avalanche.lance` submodules) are resolved on first
