@@ -444,8 +444,8 @@ for changes, update and re-present the complete plan for approval.
    Batch independent judgments, declare defaults on `@ava.classifier_step` or
    pass runtime `questions=` to the injected classifier, and return the desired
    typed result from its body.
-5. Declare the DAG at the bottom of `flow.py` as one parenthesized `>>` / `&`
-   expression, binding reusable `NodeFuture` values inline with `:=`.
+5. Declare the DAG at the bottom of `flow.py` as one returned, parenthesized
+   `>>` / `&` expression. Bind futures with `:=` only for explicit dependencies.
 6. For table-backed flows, define and push the Iceberg or Lance namespace, then
    connect table and stream providers to the DAG.
 

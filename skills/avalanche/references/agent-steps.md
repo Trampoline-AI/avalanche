@@ -155,9 +155,14 @@ signature. For the inline factory form, the second argument to
 `ava.agent.Signature(fields, instructions)` supplies the instruction text because
 there is no class docstring.
 
-`flow.py`:
+If the stage needs domain checks beyond field validation and durable storage,
+keep a body. Put the custom validator and persistence helper in `util.py`;
+`validate_package_audit` returns a `PackageAudit` after checking package coverage:
 
 ```python
+from .util import persist_audit, validate_package_audit
+
+
 @ava.agent_step(
     AuditPackage,
     skills=[ava.agent.skills.pdf],
@@ -170,7 +175,9 @@ async def audit_package(
     agent: ava.Agent,
 ) -> PackageAudit:
     prediction = await agent(package=package)
-    return PackageAudit.model_validate(prediction.audit)
+    audit = validate_package_audit(package, prediction.audit)
+    await persist_audit(audit)
+    return audit
 ```
 
 Rules:

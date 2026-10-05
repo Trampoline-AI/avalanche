@@ -6,79 +6,55 @@ See the [package API index](api/README.md) for other interfaces.
 
 Use inline `ava.agent.step(...)` for one direct agent call. Use a decorated agent
 function when you need custom preparation, transformation, or persistence.
+Both run on [PredictRLM](https://github.com/Trampoline-AI/predict-rlm); model calls
+happen during execution, not workflow construction.
 
-Agent execution is implemented on top of
-[PredictRLM](https://github.com/Trampoline-AI/predict-rlm). Avalanche lazily
-constructs predictors during execution, not workflow construction.
-
-## Quick start
-
-Configure the credentials required by your PredictRLM model, then declare the
-model contract, the agent-backed step, and the workflow:
+## Inline typed extraction
 
 ```python
 import avalanche as ava
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 
-class Review(BaseModel):
-    summary: str
-    approved: bool
+class KeyItem(BaseModel):
+    title: str = Field(min_length=1)
+    page: int = Field(ge=1)
 
 
-class ReviewSignature(ava.Signature):
-    """Review a document for publication."""
-
-    document: str = ava.InputField(desc="Document text to review.")
-    review: Review = ava.OutputField(desc="Publication decision and summary.")
+class KeyItems(BaseModel):
+    items: list[KeyItem] = Field(min_length=1)
 
 
-@ava.agent_step(ReviewSignature, lm="openai/gpt-5.5")
-async def review_document(document: str, *, agent: ava.Agent) -> Review:
-    prediction = await agent(document=document)
-    return prediction.review
+class ExtractItems(ava.Signature):
+    """Extract the document's key items, citing their page numbers."""
+
+    file: ava.File = ava.InputField(desc="PDF to read.")
+    key_items: KeyItems = ava.OutputField(desc="Items grounded in the PDF.")
 
 
-@ava.workflow
-def review_flow():
-    return review_document("Avalanche composes durable data and agent steps.")
+@ava.source
+def load_pdf() -> ava.File:
+    with open("brief.pdf", "rb") as pdf:
+        return ava.File(name="brief.pdf", content=pdf.read())
 
 
-result = review_flow().run(executor=ava.LocalExecutor()).result()
-print(result.summary, result.approved)
+@ava.dest
+def publish(items: KeyItems) -> KeyItems:
+    return items
+
+
+@ava.workflow(agent_defaults={"lm": "openai/gpt-5.5"})
+def extraction_flow():
+    return (
+        load_pdf()
+        >> ava.agent.step(ExtractItems, skills=[ava.agent.skills.pdf])
+        >> publish()
+    )
 ```
 
-The `agent` argument is injected by Avalanche; callers pass only ordinary
-workflow values. The step body is asynchronous because the model call is
-awaitable. `Workflow.run()` returns an awaitable run handle; `.result()` is the
-explicit synchronous wait above.
-
-The browser's **Step interface** panel describes `review_document`'s Python
-parameters and return annotation, excluding the injected `agent`. It is separate
-from **Inputs & outputs**, which describes `ReviewSignature` and each agent call.
-The two contracts can differ when the step batches calls or transforms a prediction.
-Current definitions show the step interface below the agent configuration;
-historical **Run I/O** shows the interface captured for that run. See
-[step interface inspection](dag-api.md#inspect-step-interfaces) for schema details.
-
-Use `ava.input` when the value arrives at run time instead of being fixed in the
-workflow declaration:
-
-```python
-class ReviewRequest(ava.BaseInput):
-    document: str
-
-
-@ava.workflow(input=ReviewRequest)
-def review_flow():
-    return review_document(ava.input.document)
-
-
-result = review_flow().run(
-    executor=ava.LocalExecutor(),
-    input=ReviewRequest(document="Text supplied by this workflow run."),
-).result()
-```
+Inline agent steps bind upstream values in signature input order and return
+validated signature outputs: one field becomes its value, multiple fields become
+an ordered tuple. Here `publish` receives `KeyItems`, not a raw prediction.
 
 ## Inline agent calls
 
@@ -96,13 +72,11 @@ for this form.
 
 ## Typed signature class
 
-`ava.Signature` intentionally mirrors
-[DSPy's Signature API](https://dspy.ai/api/signatures/Signature/). It subclasses
-`dspy.Signature`; `ava.InputField` and `ava.OutputField` are direct re-exports of
-the DSPy field helpers; and the inline string form delegates to DSPy's signature
-factory. Type annotations carry field types, while the field helpers mark input
-and output direction and optionally describe each field. Native DSPy signature
-classes are also accepted directly.
+Use `@ava.agent_step` (or `@ava.agent.step` outside a workflow) when the function
+does more than call the agent. Here it also writes the result to a table:
+
+Define inputs and outputs with `ava.Signature`, `ava.InputField`, and
+`ava.OutputField`, following [DSPy's Signature API](https://dspy.ai/api/signatures/Signature/).
 
 ```python
 import avalanche as ava
@@ -153,38 +127,29 @@ def proposal_flow():
 
 ## Inline string signature
 
-For a small local contract, build the native DSPy signature inline:
+For a small signature, write it directly in the agent call:
 
 ```python
-quick_answer_sig = ava.agent.Signature(
-    "question: str, context: str -> answer: str, citations: list[str]",
-    "Answer the question from context and cite the supporting passages.",
-)
-
-
-@ava.agent.step(
-    quick_answer_sig,
-    skills=[ava.agent.skills.pdf],
-    tools=[search_internal_knowledge_base],
-)
-async def answer_question(
-    question: str,
-    context: str,
-    *,
-    agent: ava.Agent,
-) -> str:
-    prediction = await agent(question=question, context=context)
-    return prediction.answer
+@ava.workflow
+def answer_flow():
+    return (
+        (load_question() & load_context())
+        >> ava.agent.step(
+            ava.Signature(
+                "question: str, context: str -> answer: str, citations: list[str]",
+                "Answer from the supplied context and cite supporting passages.",
+            )
+        )
+        >> publish_answer()
+    )
 ```
 
-Use a typed class for substantial, shared, or independently tested prompt
-contracts. Use the inline form for compact local contracts.
+`publish_answer` receives `answer` and `citations` in that order.
 
 ## Raw predictions and multiple outputs
 
-In a decorated body, `await agent(...)` still returns the raw DSPy prediction.
-The body chooses its own output and validates or transforms it explicitly.
-Neither form derives a table or appends automatically.
+In a decorated function, `await agent(...)` returns the raw DSPy prediction.
+The function chooses what to return or save. Neither form saves outputs automatically.
 
 `prediction.trace` contains the agent's execution trace. Its type,
 `ava.agent.AgentTrace`, is the same as PredictRLM's `RunTrace`.
@@ -214,75 +179,48 @@ async def render_artifacts(
     )
 ```
 
-Use inline invocation for one direct agent call with signature-shaped outputs.
-Keep input mapping, batching, custom validation, logging, output composition, and
-persistence in a decorated body when needed. Create a separate plain `@ava.step`
-when work deserves an independent durable, retry/rerun, or I/O boundary.
 
 ## Skills and tools
 
-Skills and tools are execution capabilities of a specific agent step, not
-signature metadata. A reusable signature therefore remains only the model input
-and output contract:
+Pass `skills=` and `tools=` on the agent call or decorator, not on the signature:
 
 ```python
-quick_answer_sig = ava.agent.Signature(
-    "question: str -> answer: str",
-    "Answer accurately.",
-)
+@ava.workflow
+def extraction_flow():
+    return (
+        load_pdf()
+        >> ava.agent.step(
+            ExtractItems,
+            skills=[ava.agent.skills.pdf],
+            tools=[search_contract_repository],
+        )
+        >> publish()
+    )
 ```
 
-Configure capabilities where the signature is used, in either form:
-
-```python
-@ava.agent_step(
-    quick_answer_sig,
-    skills=[ava.agent.skills.pdf, ava.agent.skills.docx],
-    tools=[search_contract_repository],
-)
-async def answer_contract_question(..., *, agent: ava.Agent):
-    ...
-```
-
-Tools are ordinary callables with unique stable `__name__` values.
-`ava.agent.skills.pdf`, `.docx`, and `.spreadsheet` are lazy,
-identity-preserving PredictRLM re-exports. `ava.agent.Skill` constructs custom
-PredictRLM skills.
+Tools are ordinary Python functions with unique names. Built-in skills include
+`ava.agent.skills.pdf`, `.docx`, and `.spreadsheet`.
 
 ## Runtime configuration
 
-Workflow-scoped defaults configure shared PredictRLM execution policy:
-
-Agent steps are quiet by default (`verbose=False`); set `verbose=True` on an
-individual inline invocation or decorator, or in `agent_defaults`, when live
-PredictRLM trace output is needed.
+Set shared model options with `agent_defaults`; override them on individual calls:
 
 ```python
 @ava.workflow(
-    input=PreparedInputs,
-    agent_defaults={
-        "lm": "openai/gpt-5.5",
-        "sub_lm": "gemini/gemini-3.5-flash",
-        "max_iterations": 30,
-        "verbose": False,
-    },
+    agent_defaults={"lm": "openai/gpt-5.5", "max_iterations": 30},
 )
-def proposal_flow():
-    return audit_rfp(documents=ava.input.rfp_documents)
-
-
-@ava.agent_step(AuditRfpSig, max_iterations=60)
-async def expensive_audit(..., *, agent: ava.Agent):
-    ...
+def extraction_flow():
+    return (
+        load_pdf()
+        >> ava.agent.step(
+            ExtractItems,
+            skills=[ava.agent.skills.pdf],
+            max_iterations=60,
+        )
+        >> publish()
+    )
 ```
 
-Resolution order:
-
-```text
-agent-step runtime kwargs > workflow agent_defaults > Avalanche agent defaults >
-PredictRLM defaults
-```
-
-Both forms share this resolution order and accept `lm`, `sub_lm`,
-`max_iterations`, and the existing predictor kwargs. Workflow defaults cannot
-configure `signature`, `skills`, or `tools`; those are per-node capabilities.
+The same options work on agent decorators. Set `verbose=True` to show the
+PredictRLM trace. Set signatures, skills, and tools on each step, not in workflow
+defaults.
