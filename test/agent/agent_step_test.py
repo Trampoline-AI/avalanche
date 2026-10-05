@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import importlib
 import json
+import threading
 from types import SimpleNamespace
 from typing import Literal
 
@@ -349,6 +350,36 @@ async def test_agent_cancellation_emits_one_terminal_and_preserves_cancellation(
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("phase", ["start", "end"])
+async def test_dspy_callback_cancellation_without_sdk_evidence_preserves_cancelled_task(phase):
+    import dspy
+    from dspy.utils.callback import BaseCallback
+
+    cancellation = asyncio.CancelledError("cancelled by callback")
+
+    class CancelCallback(BaseCallback):
+        def on_module_start(self, call_id, instance, inputs):
+            if phase == "start":
+                raise cancellation
+
+        def on_module_end(self, call_id, outputs, exception=None):
+            if phase == "end":
+                raise cancellation
+
+    class Predictor(dspy.Module):
+        async def aforward(self, person):
+            return dspy.Prediction(note="completed")
+
+    agent = ava.Agent(signature=SummarySignature, step_name="summarize", runtime_kwargs={})
+    agent._predictor = Predictor(callbacks=[CancelCallback()])
+    task = asyncio.create_task(agent(person=Person(id=1, name="Ada")))
+    with pytest.raises(asyncio.CancelledError) as raised:
+        await task
+    assert raised.value is cancellation
+    assert task.cancelled()
+
+
+@pytest.mark.asyncio
 async def test_terminal_persistence_failure_is_not_reclassified_as_agent_failure():
     class Predictor:
         async def acall(self, **inputs):
@@ -446,3 +477,411 @@ async def test_successful_agent_prediction_requires_sdk_trace_and_evidence(missi
         with pytest.raises(AttributeError):
             await agent(person=Person(id=1, name="Ada"))
     assert observed == []
+
+
+def _iteration_with_details(payloads):
+    from predict_rlm import IterationStep
+    from predict_rlm.trace import PredictCallDetail, PredictCallGroup, TokenUsage
+
+    return IterationStep(
+        iteration=1,
+        reasoning="Inspect the calls.",
+        code="answer = predict(question)",
+        output="answer ready",
+        untruncated_output="answer ready",
+        duration_ms=12,
+        predict_calls=[
+            PredictCallGroup(
+                signature="question -> answer",
+                model="test-model",
+                calls=[
+                    PredictCallDetail(
+                        duration_ms=3,
+                        input={"question": payload},
+                        output={"answer": "ready"},
+                        usage=TokenUsage(input_tokens=10, output_tokens=2),
+                    )
+                    for payload in payloads
+                ],
+            )
+        ],
+    )
+
+
+def _retain_iteration(step):
+    from predict_rlm import IterationStep, RunEvent, RunEventKind
+
+    from runtime.operator import Operator
+    from runtime.operator.models import AgentEventAppended, NodeState, NodeStatus, RunState
+
+    event = agent_module._project_evidence_event(
+        RunEvent("sdk-run", 1, RunEventKind.ITERATION_RECORDED, 1, {"step": step}),
+        invocation_id="invocation",
+    )
+    IterationStep.model_validate(event["data"]["step"], strict=True)
+    operator = Operator([], watch=False, schedule=False)
+    run = RunState(run_id="bounded-detail-run", flow_name="agent-flow")
+    run.nodes["agent"] = NodeState("agent", "agent", "step", status=NodeStatus.RUNNING)
+    operator._runs[run.run_id] = run
+    operator._notify_run(run)
+    handle = SimpleNamespace(
+        cancel_event=threading.Event(), result_bundle=None, success_quiesced=False
+    )
+    subscription = operator.subscribe_operator_updates(
+        operator.operator_instance_id, operator.current_sequence
+    )
+    expected_counts = (
+        len(step.tool_calls),
+        sum(len(group.calls) for group in step.predict_calls),
+    )
+    original_trace = _trace().model_copy(update={"iterations": 1, "steps": [step]})
+    terminal_events = []
+    with capture_agent_evidence(terminal_events.append, errors="raise"):
+        agent_module._emit_terminal_trace(
+            original_trace,
+            invocation_id="invocation",
+            evidence=agent_module._evidence_metadata(
+                RunEvidence(run_id="sdk-run", complete=True, terminal_outcome="completed")
+            ),
+        )
+    try:
+        for evidence in (
+            event,
+            *terminal_events,
+        ):
+            operator._apply_event(
+                run.run_id,
+                handle,
+                {"type": "agent_evidence", "node_id": "agent", "event": evidence},
+            )
+            if evidence["kind"] == "evidence":
+                while True:
+                    update = subscription.get(timeout=5).update
+                    if isinstance(update.change, AgentEventAppended):
+                        break
+                summary = update.change.event
+                assert (summary.tool_count, summary.predict_count) == expected_counts
+                assert (summary.iteration, summary.duration_ms, summary.error) == (
+                    step.iteration,
+                    step.duration_ms,
+                    step.error,
+                )
+        snapshot = operator.get_latest_run_snapshot(
+            run.run_id,
+            operator_instance_id=operator.operator_instance_id,
+        )
+        page = operator.list_agent_events(page_token=snapshot.nodes[0].event_page_token)
+        summary = page.events[0]
+        assert (summary.tool_count, summary.predict_count) == expected_counts
+        detail = json.loads(operator.get_run(run.run_id).nodes["agent"].agent_trace_json)
+        hydrated = RunTrace.model_validate(detail["trace"], strict=True)
+        assert len(hydrated.steps) == 1
+        assert detail["evidence"]["terminal_outcome"] == "completed"
+        assert original_trace.steps[0] is step
+        return hydrated.steps[0], detail["events"][0]["data"]
+    finally:
+        operator.unsubscribe_operator_updates(subscription)
+        operator.close()
+
+
+@pytest.mark.parametrize(
+    "payloads",
+    [
+        ["small question"],
+        ["x" * (9 * 1024 * 1024)],
+        ["x" * (1536 * 1024)] * 2,
+        ["x" * (1536 * 1024)] * 3,
+    ],
+    ids=["unchanged", "oversized-subcall", "aggregate-below-limit", "aggregate-above-limit"],
+)
+def test_iteration_detail_survives_operator_retention_and_hydration(payloads):
+    step = _iteration_with_details(payloads)
+    original = step.model_copy(deep=True)
+    hydrated, data = _retain_iteration(step)
+
+    assert step == original
+    assert hydrated.iteration == 1
+    assert hydrated.duration_ms == 12
+    assert hydrated.code == step.code
+    assert hydrated.output == step.output
+    assert hydrated.usage == step.usage
+    assert hydrated.predict_calls[0].signature == "question -> answer"
+    assert data["predict_count"] == len(payloads)
+    assert [call.usage for call in hydrated.predict_calls[0].calls] == [
+        call.usage for call in step.predict_calls[0].calls
+    ]
+    assert len(json.dumps(data["step"], separators=(",", ":")).encode()) <= (
+        agent_module._MAX_EVIDENCE_VALUE_BYTES
+    )
+    if len(json.dumps(step.model_dump(mode="json"), separators=(",", ":")).encode()) <= (
+        agent_module._MAX_EVIDENCE_VALUE_BYTES
+    ):
+        assert hydrated == step
+    else:
+        inputs = [call.input for call in hydrated.predict_calls[0].calls]
+        assert any(value.get("kind") == "unavailable" for value in inputs)
+        assert [call.output for call in hydrated.predict_calls[0].calls] == [
+            {"answer": "ready"}
+        ] * len(payloads)
+        if len(payloads) > 1:
+            assert sum(value == {"question": payloads[0]} for value in inputs) == 2
+
+
+def test_iteration_bounds_tool_payloads_and_text_without_changing_sdk_values():
+    from predict_rlm.trace import ToolCall
+
+    step = _iteration_with_details(["small question"])
+    huge = "x" * (9 * 1024 * 1024)
+    step.reasoning = huge
+    step.untruncated_output = huge
+    step.tool_calls = [
+        ToolCall(
+            name="lookup",
+            args=[huge],
+            kwargs={"query": huge},
+            result={"document": huge},
+            duration_ms=7,
+            error="lookup failed",
+        )
+    ]
+    original = step.model_copy(deep=True)
+    hydrated, data = _retain_iteration(step)
+
+    assert step == original
+    assert "unavailable" in hydrated.reasoning
+    assert "unavailable" in hydrated.untruncated_output
+    assert hydrated.code == step.code
+    assert hydrated.output == step.output
+    tool = hydrated.tool_calls[0]
+    assert (tool.name, tool.duration_ms, tool.error) == ("lookup", 7, "lookup failed")
+    assert tool.args[0]["kind"] == "unavailable"
+    assert tool.kwargs["kind"] == "unavailable"
+    assert tool.result["kind"] == "unavailable"
+    assert data["tool_count"] == 1
+
+
+def test_iteration_call_overflow_reports_omitted_counts(monkeypatch):
+    from predict_rlm.trace import ToolCall
+
+    monkeypatch.setattr(agent_module, "_MAX_EVIDENCE_VALUE_BYTES", 1200)
+    step = _iteration_with_details(["small question"] * 12)
+    step.tool_calls = [
+        ToolCall(name=f"tool_{index}", duration_ms=index, result=index) for index in range(12)
+    ]
+    original = step.model_copy(deep=True)
+    hydrated, data = _retain_iteration(step)
+
+    assert step == original
+    assert hydrated.iteration == step.iteration
+    assert hydrated.duration_ms == step.duration_ms
+    assert hydrated.usage == step.usage
+    assert data["tool_count"] == 12
+    assert data["predict_count"] == 12
+    omissions = data["omissions"]
+    assert "unavailable" in hydrated.reasoning
+    assert omissions["tool_count"] + len(hydrated.tool_calls) == 12
+    assert (
+        omissions["predict_count"] + sum(len(group.calls) for group in hydrated.predict_calls)
+        == 12
+    )
+    assert omissions["tool_count"] > 0
+    assert omissions["predict_count"] > 0
+    assert len(json.dumps(data["step"], separators=(",", ":")).encode()) <= 1200
+
+
+def test_iteration_rejects_unrepresentable_metadata_budget_without_fabricating_usage(
+    monkeypatch,
+):
+    from predict_rlm import RunEvent, RunEventKind
+
+    monkeypatch.setattr(agent_module, "_MAX_EVIDENCE_VALUE_BYTES", 128)
+    step = _iteration_with_details([])
+    step.usage.main.input_tokens = 10**200
+    original = step.model_copy(deep=True)
+    with pytest.raises(ValueError):
+        agent_module._project_evidence_event(
+            RunEvent("sdk-run", 1, RunEventKind.ITERATION_RECORDED, 1, {"step": step}),
+            invocation_id="invocation",
+        )
+    assert step == original
+
+
+_LIVE_OUTPUT_OVERHEAD = len(
+    json.dumps({"iteration": 1, "output": ""}, separators=(",", ":")).encode()
+)
+
+
+@pytest.mark.parametrize(
+    ("output", "omitted", "error"),
+    [
+        ("printed output", False, None),
+        ("x" * (agent_module._MAX_EVIDENCE_VALUE_BYTES - _LIVE_OUTPUT_OVERHEAD), False, None),
+        (
+            "x" * (agent_module._MAX_EVIDENCE_VALUE_BYTES - _LIVE_OUTPUT_OVERHEAD + 1),
+            True,
+            None,
+        ),
+        ("x" * (9 * 1024 * 1024), True, None),
+        ("é" * (agent_module._MAX_EVIDENCE_VALUE_BYTES // 6 + 1), True, None),
+        ("x" * (9 * 1024 * 1024), True, "execution failed"),
+    ],
+    ids=[
+        "small",
+        "exact-budget",
+        "over-budget",
+        "large",
+        "escaped-bytes",
+        "error",
+    ],
+)
+def test_live_execution_output_is_bounded_before_operator_retention(output, omitted, error):
+    from predict_rlm import RunEvent, RunEventKind
+
+    from avalanche._agent_trace import AgentTraceEnvelope
+    from runtime.operator import Operator
+    from runtime.operator.models import NodeState, NodeStatus, RunState, RunStatus
+
+    data = {"iteration": 1, "output": output}
+    if error is not None:
+        data["error"] = error
+    event = RunEvent("sdk-run", 1, RunEventKind.CODE_EXECUTED, 1, data)
+    projected = agent_module._project_evidence_event(event, invocation_id="invocation")
+    operator = Operator([], watch=False, schedule=False)
+    run = RunState(run_id="live-output-run", flow_name="agent-flow", status=RunStatus.RUNNING)
+    run.nodes["agent"] = NodeState("agent", "agent", "step", status=NodeStatus.RUNNING)
+    operator._runs[run.run_id] = run
+    try:
+        operator._record_agent_evidence_event(run, "agent", projected)
+        snapshot = operator.get_run(run.run_id)
+        envelope = AgentTraceEnvelope.model_validate_json(
+            snapshot.nodes["agent"].agent_trace_json
+        )
+        retained = envelope.events[0]
+        assert snapshot.status is RunStatus.RUNNING
+        assert envelope.trace is None
+        assert envelope.evidence is None
+        assert retained.event_kind == "code.executed"
+        if omitted:
+            assert retained.data["output"]["kind"] == "unavailable"
+        else:
+            assert retained.data["output"] == output
+        if error is not None:
+            assert retained.data["error"] == error
+            assert envelope.error == retained.data["error"]
+            assert event.data["error"] == error
+        else:
+            assert "error" not in retained.data
+            assert envelope.error is None
+        assert event.data["output"] == output
+        assert len(json.dumps(retained.data["output"]).encode()) <= (
+            agent_module._MAX_EVIDENCE_VALUE_BYTES
+        )
+    finally:
+        operator.close()
+
+
+@pytest.mark.parametrize(
+    "event_kind",
+    ["tool.finished", "predict.finished", "code.executed", "run.failed", "run.cancelled"],
+)
+@pytest.mark.parametrize(
+    "error",
+    ["", "x" * 65_536, "x" * 65_537, "é" * 70_000],
+    ids=["empty", "exact-limit", "over-limit", "unicode"],
+)
+def test_all_lifecycle_errors_obey_operator_contract(event_kind, error):
+    from predict_rlm import RunEvent, RunEventKind
+
+    data = {
+        "call_id": "call",
+        "name": "tool",
+        "iteration": 1,
+        "error_type": "ValueError",
+        "error": error,
+    }
+    event = RunEvent("sdk-run", 1, RunEventKind(event_kind), 1, data)
+    projected = agent_module._project_evidence_event(event, invocation_id="invocation")
+    retained = _retain_live_event(projected)
+    assert retained.event_kind == event_kind
+    if len(error) > 65_536:
+        assert retained.data["error"].startswith(error[:128])
+        assert "unavailable" in retained.data["error"][-128:]
+        assert len(retained.data["error"]) <= 65_536
+    else:
+        assert retained.data["error"] == error
+    assert event.data["error"] == error
+
+
+def _retain_live_event(projected):
+    from avalanche._agent_trace import AgentTraceEnvelope
+    from runtime.operator import Operator
+    from runtime.operator.models import NodeState, NodeStatus, RunState, RunStatus
+
+    operator = Operator([], watch=False, schedule=False)
+    run = RunState(run_id="contract-run", flow_name="agent-flow", status=RunStatus.RUNNING)
+    run.nodes["agent"] = NodeState("agent", "agent", "step", status=NodeStatus.RUNNING)
+    operator._runs[run.run_id] = run
+    try:
+        operator._record_agent_evidence_event(run, "agent", projected)
+        snapshot = operator.get_run(run.run_id)
+        assert snapshot.status is RunStatus.RUNNING
+        envelope = AgentTraceEnvelope.model_validate_json(
+            snapshot.nodes["agent"].agent_trace_json
+        )
+        return envelope.events[0]
+    finally:
+        operator.close()
+
+
+@pytest.mark.parametrize(
+    ("event_kind", "data", "omitted_field"),
+    [
+        ("code.generated", {"iteration": 1, "code": "x" * (9 * 1024 * 1024)}, "code"),
+        (
+            "predict.started",
+            {
+                "call_id": "call",
+                "model": "test",
+                "signature": "x" * (3 * 1024 * 1024),
+                "instructions": "y" * (3 * 1024 * 1024),
+            },
+            "signature",
+        ),
+        ("run.started", {"inputs": {"question": "x" * (9 * 1024 * 1024)}}, "inputs"),
+        (
+            "run.succeeded",
+            {
+                "status": "completed",
+                "outputs": {"answer": "x" * (9 * 1024 * 1024)},
+            },
+            "outputs",
+        ),
+        ("tool.started", {"call_id": "call", "name": "x" * (9 * 1024 * 1024)}, "name"),
+    ],
+)
+def test_live_inspection_budget_covers_whole_event(event_kind, data, omitted_field):
+    from predict_rlm import RunEvent, RunEventKind
+
+    event = RunEvent("sdk-run", 1, RunEventKind(event_kind), 1, data)
+    projected = agent_module._project_evidence_event(event, invocation_id="invocation")
+    retained = _retain_live_event(projected)
+    value = retained.data[omitted_field]
+    if isinstance(value, str):
+        assert "unavailable" in value
+    else:
+        assert value["kind"] == "unavailable"
+    assert len(json.dumps(retained.data, separators=(",", ":")).encode()) <= (
+        agent_module._MAX_EVIDENCE_VALUE_BYTES
+    )
+    assert "unavailable" not in event.data[omitted_field]
+
+
+def test_deep_iteration_payload_does_not_reenter_transport_at_terminal():
+    payload = {"value": "original"}
+    for _ in range(80):
+        payload = {"nested": payload}
+    step = _iteration_with_details([payload])
+    retained, _ = _retain_iteration(step)
+    bounded = retained.predict_calls[0].calls[0].input
+    assert "unavailable" in json.dumps(bounded)
+    assert step.predict_calls[0].calls[0].input == {"question": payload}

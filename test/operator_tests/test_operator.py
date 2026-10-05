@@ -180,7 +180,7 @@ def test_agent_evidence_deduplicates_per_invocation_and_materializes_references(
     agent_trace, iteration_step
 ):
     operator = Operator([], watch=False, schedule=False)
-    run = RunState(run_id="run-agent", flow_name="agent-flow")
+    run = RunState(run_id="run-agent", flow_name="agent-flow", status=RunStatus.RUNNING)
     run.nodes["agent_1"] = NodeState("agent_1", "agent", "step", status=NodeStatus.RUNNING)
     operator._runs[run.run_id] = run
     handle = SimpleNamespace(
@@ -202,11 +202,22 @@ def test_agent_evidence_deduplicates_per_invocation_and_materializes_references(
                 "timestamp_ns": 1,
                 "data": {
                     "output": output,
+                    "tool_count": 0,
+                    "predict_count": 0,
                     "step": iteration_step(1, output).model_dump(mode="json"),
                 },
             }
             apply(event)
             apply(event)
+            if invocation == "first":
+                for live_run in (
+                    operator.get_run(run.run_id),
+                    operator.list_runs("")[0],
+                ):
+                    live_trace = json.loads(live_run.nodes["agent_1"].agent_trace_json)
+                    assert [item["data"]["output"] for item in live_trace["events"]] == ["one"]
+                    assert live_trace["trace"] is None
+                    assert live_trace["evidence"] is None
             apply(
                 {
                     "kind": "trace_finished",
@@ -249,15 +260,75 @@ def test_agent_evidence_deduplicates_per_invocation_and_materializes_references(
                 run.run_id, "agent_1", operator_instance_id=operator.operator_instance_id
             ).data
         )
-        assert retained == {
-            "trace": agent_trace(steps=[iteration_step(99, "not retained")]).model_dump(
-                mode="json", exclude={"steps"}
-            ),
-            "evidence": {
-                "run_id": "sdk-second",
-                "complete": True,
-                "terminal_outcome": "completed",
-            },
-        }
+        assert retained["invocation_id"] == "second"
+        assert retained["evidence"]["run_id"] == "sdk-second"
+        assert "steps" not in retained["trace"]
+    finally:
+        operator.close()
+
+
+@pytest.mark.parametrize("field", ["tool_count", "predict_count"])
+@pytest.mark.parametrize("value", [True, 1.5, "1", None, -1])
+def test_iteration_summary_rejects_malformed_counts(iteration_step, field, value):
+    from runtime.operator.operator import _CoordinatorProtocolError
+
+    operator = Operator([], watch=False, schedule=False)
+    run = RunState(run_id="invalid-counts", flow_name="agent-flow")
+    run.nodes["agent"] = NodeState("agent", "agent", "step")
+    operator._runs[run.run_id] = run
+    data = {
+        "step": iteration_step(1, "pass").model_dump(mode="json"),
+        "tool_count": 0,
+        "predict_count": 0,
+    }
+    data[field] = value
+    try:
+        with pytest.raises(_CoordinatorProtocolError):
+            operator._record_agent_evidence_event(
+                run,
+                "agent",
+                {
+                    "kind": "evidence",
+                    "invocation_id": "invocation",
+                    "sequence": 1,
+                    "event_kind": "iteration.recorded",
+                    "timestamp_ns": 1,
+                    "data": data,
+                },
+            )
+        assert operator.get_run(run.run_id).nodes["agent"].agent_trace_json is None
+    finally:
+        operator.close()
+
+
+@pytest.mark.parametrize("field", ["tool_count", "predict_count"])
+def test_iteration_summary_requires_executed_counts(iteration_step, field):
+    from runtime.operator.operator import _CoordinatorProtocolError
+
+    operator = Operator([], watch=False, schedule=False)
+    run = RunState(run_id="missing-counts", flow_name="agent-flow")
+    run.nodes["agent"] = NodeState("agent", "agent", "step")
+    operator._runs[run.run_id] = run
+    data = {
+        "step": iteration_step(1, "pass").model_dump(mode="json"),
+        "tool_count": 0,
+        "predict_count": 0,
+    }
+    del data[field]
+    try:
+        with pytest.raises(_CoordinatorProtocolError):
+            operator._record_agent_evidence_event(
+                run,
+                "agent",
+                {
+                    "kind": "evidence",
+                    "invocation_id": "invocation",
+                    "sequence": 1,
+                    "event_kind": "iteration.recorded",
+                    "timestamp_ns": 1,
+                    "data": data,
+                },
+            )
+        assert operator.get_run(run.run_id).nodes["agent"].agent_trace_json is None
     finally:
         operator.close()

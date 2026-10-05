@@ -63,6 +63,16 @@ MappingSource = tuple[tuple[str, ...], ...]
 
 
 @dataclass(frozen=True)
+class AgentInspectionTurn:
+    """An SDK step paired with its source invocation and executed totals."""
+
+    invocation_id: str | None
+    step: IterationStep
+    tool_count: int
+    predict_count: int
+
+
+@dataclass(frozen=True)
 class TraceDetailCompletion:
     """One trace body read, isolated from mutable structural run state."""
 
@@ -603,20 +613,63 @@ class UIStore:
         return None
 
     @property
-    def selected_agent_steps(self) -> list[IterationStep]:
+    def selected_agent_turns(self) -> list[AgentInspectionTurn]:
         envelope = self.selected_agent_trace_envelope
         trace = envelope.trace if envelope is not None else None
-        steps = trace.steps if trace is not None else self.selected_agent_live_steps
-        self._reconcile_trace_turns(len(steps))
-        return steps
-
-    @property
-    def selected_agent_live_steps(self) -> list[IterationStep]:
-        """Render completed iteration records using the upstream schema."""
-        return [
-            IterationStep.model_validate(event.data["step"])
+        records = [
+            event
             for event in self.selected_agent_events
             if event.event_kind == "iteration.recorded"
+        ]
+        totals = {
+            (event.invocation_id, event.data["step"]["iteration"]): event.data
+            for event in records
+        }
+        sources = (
+            [(envelope.invocation_id, step) for step in trace.steps]
+            if trace is not None
+            else [
+                (event.invocation_id, IterationStep.model_validate(event.data["step"]))
+                for event in records
+            ]
+        )
+        turns = []
+        for invocation_id, step in sources:
+            counts = totals.get((invocation_id, step.iteration))
+            turns.append(
+                AgentInspectionTurn(
+                    invocation_id=invocation_id,
+                    step=step,
+                    tool_count=(
+                        counts["tool_count"] if counts is not None else len(step.tool_calls)
+                    ),
+                    predict_count=(
+                        counts["predict_count"]
+                        if counts is not None
+                        else sum(len(group.calls) for group in step.predict_calls)
+                    ),
+                )
+            )
+        self._reconcile_trace_turns(len(turns))
+        return turns
+
+    @property
+    def selected_agent_pending_events(self) -> list[AgentLifecycleEvent]:
+        """Keep pending execution evidence scoped to its SDK invocation."""
+        events = self.selected_agent_events
+        recorded = {
+            (
+                event.invocation_id,
+                event.data["step"]["iteration"],
+            )
+            for event in events
+            if event.event_kind == "iteration.recorded"
+        }
+        return [
+            event
+            for event in events
+            if event.event_kind in {"code.generated", "code.executed"}
+            and (event.invocation_id, event.data["iteration"]) not in recorded
         ]
 
     @staticmethod
@@ -930,7 +983,8 @@ class UIStore:
         if self._log_detail_sequences.get(key, -1) < requirements.log_sequence:
             return False
         return all(
-            self._agent_event_sequences.get((*key, node_id), -1) >= event_sequence
+            (*key, node_id) not in self._invalid_agent_event_details
+            and self._agent_event_sequences.get((*key, node_id), -1) >= event_sequence
             for node_id, event_sequence in requirements.event_sequences.items()
         )
 
@@ -1144,7 +1198,7 @@ class UIStore:
             if node.agent_trace_json is not None
             else AgentTraceEnvelope(
                 schema_version=1,
-                invocation_id=None,
+                invocation_id=detail.invocation_id,
                 status=detail.evidence.terminal_outcome,
                 run_id=detail.evidence.run_id,
                 events=self._agent_event_details.get(
@@ -1156,7 +1210,11 @@ class UIStore:
             )
         )
         envelope = envelope.model_copy(
-            update={"trace": detail.trace, "evidence": detail.evidence}
+            update={
+                "invocation_id": detail.invocation_id,
+                "trace": detail.trace,
+                "evidence": detail.evidence,
+            }
         )
         updated_node = copy(node)
         updated_node.agent_trace_json = envelope.model_dump_json()
@@ -1167,14 +1225,13 @@ class UIStore:
         events = self._events_from_node(updated_run, completion.node_id)
         event_key = (*self._detail_key(updated_run), completion.node_id)
         event_sequence = self._event_sequence(events)
-        if (
+        # Trace-only detail cannot certify event history after a stream gap.
+        if event_key not in self._invalid_agent_event_details and (
             event_key not in self._agent_event_details
-            or event_key in self._invalid_agent_event_details
             or event_sequence > self._agent_event_sequences.get(event_key, -1)
         ):
             self._agent_event_details[event_key] = events
             self._agent_event_sequences[event_key] = event_sequence
-            self._invalid_agent_event_details.discard(event_key)
         return True
 
     def enqueue_polled_run_update(
@@ -1550,7 +1607,7 @@ class UIStore:
 
     def _metadata_inspector_values(self) -> dict[str, Any]:
         metadata = self.selected_agent_metadata
-        if metadata is None:
+        if metadata is None or isinstance(metadata.get("error"), str):
             return {}
         signature = metadata["signature"]
         runtime = metadata["runtime"]
@@ -1590,7 +1647,11 @@ class UIStore:
             if outputs is None:
                 return []
             metadata = self.selected_agent_metadata
-            declared = metadata["signature"]["outputs"] if metadata is not None else []
+            declared = (
+                metadata["signature"]["outputs"]
+                if metadata is not None and not isinstance(metadata.get("error"), str)
+                else []
+            )
             names = [field["name"] for field in declared]
             names = names or list(outputs)
             names.extend(name for name in outputs if name not in names)
@@ -1648,7 +1709,8 @@ class UIStore:
 
     def _trace_navigation_paths(self) -> list[tuple[str, ...]]:
         paths: list[tuple[str, ...]] = []
-        for index, step in enumerate(self.selected_agent_steps):
+        for index, inspection_turn in enumerate(self.selected_agent_turns):
+            step = inspection_turn.step
             turn = ("turn", str(index))
             paths.append(turn)
             if index in self.trace_collapsed_turns:
@@ -1719,15 +1781,10 @@ class UIStore:
                     "usage": step.usage.model_dump(),
                 },
             )
-        recorded = {step.iteration for step in self.selected_agent_steps}
         envelope = self.selected_agent_trace_envelope
         if envelope is None or envelope.trace is None:
-            for event in self.selected_agent_events:
-                if event.event_kind not in {"code.generated", "code.executed"}:
-                    continue
-                if event.data["iteration"] in recorded:
-                    continue
-                root = ("live", str(event.sequence))
+            for event in self.selected_agent_pending_events:
+                root = ("live", event.invocation_id, str(event.sequence))
                 paths.append(root)
                 section = (
                     "code"
@@ -1750,17 +1807,17 @@ class UIStore:
         self.trace_inspector_open = True
         self.trace_inspector_tab = "trace"
         self.focused_pane = "trace"
-        steps = self.selected_agent_steps
-        self.trace_turn_index = max(0, len(steps) - 1)
-        self.trace_collapsed_turns = set(range(len(steps)))
-        self._trace_known_turn_count = len(steps)
+        turns = self.selected_agent_turns
+        self.trace_turn_index = max(0, len(turns) - 1)
+        self.trace_collapsed_turns = set(range(len(turns)))
+        self._trace_known_turn_count = len(turns)
         self.trace_expanded_items.clear()
         self.trace_expanded_subtrees.clear()
         self.trace_collapsed_items.clear()
         self._mapping_page_caches.clear()
         self._mapping_page_cache_token = None
         self.trace_selected_paths = {tab: None for tab in _TRACE_INSPECTOR_TABS}
-        if steps:
+        if turns:
             self._set_trace_selection(("turn", str(self.trace_turn_index)))
         self.trace_show_full_output = False
         self._touch_trace_hierarchy()

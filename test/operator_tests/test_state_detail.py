@@ -2,14 +2,17 @@
 
 import json
 import logging
+import queue
 import socket
 import threading
 from types import SimpleNamespace
 
 import grpc
 import pytest
+from pydantic_core import PydanticSerializationError
 
 from runtime.operator import Operator
+from runtime.operator import operator as operator_module
 from runtime.operator.models import (
     LogDetailAppended,
     NodeState,
@@ -585,8 +588,13 @@ def test_unavailable_trace_retains_pre_trace_evidence(terminal_outcome, complete
             run.run_id, "agent_1", operator_instance_id=operator.operator_instance_id
         )
         assert descriptor.size_bytes == len(retained.data)
-        assert json.loads(retained.data) == {"trace": None, "evidence": evidence}
+        assert json.loads(retained.data) == {
+            "invocation_id": "pre-trace-invocation",
+            "trace": None,
+            "evidence": evidence,
+        }
         envelope = json.loads(materialized.nodes["agent_1"].agent_trace_json)
+        assert envelope["invocation_id"] == "pre-trace-invocation"
         assert envelope["trace"] is None
         assert envelope["run_id"] == "sdk-pre-trace"
         assert envelope["evidence"] == evidence
@@ -671,6 +679,180 @@ def test_terminal_detail_byte_limit_includes_separate_evidence(kind, agent_trace
                 _event_handle(),
                 {"type": "agent_evidence", "node_id": "agent_1", "event": event},
             )
+    finally:
+        operator.close()
+
+
+@pytest.mark.parametrize("kind", ["trace_finished", "trace_unavailable"])
+def test_terminal_detail_byte_limit_counts_invocation_identity(kind, agent_trace):
+    evidence = {"run_id": "sdk-budget", "complete": True, "terminal_outcome": "error"}
+    trace = agent_trace().model_dump(mode="json") if kind == "trace_finished" else None
+    legacy_body = {
+        "trace": {key: value for key, value in trace.items() if key != "steps"}
+        if trace is not None
+        else None,
+        "evidence": evidence,
+    }
+    body_limit = len(json.dumps(legacy_body, separators=(",", ":")).encode())
+    operator = Operator(watch=False, schedule=False, max_trace_body_bytes=body_limit)
+    run = _add_run(operator, "run-invocation-budget")
+    event = {"kind": kind, "invocation_id": "call-" + "a" * 256, "evidence": evidence}
+    if kind == "trace_finished":
+        event["trace"] = trace
+    else:
+        event["error"] = "Stopped before the first iteration"
+    try:
+        with pytest.raises(_CoordinatorProtocolError, match="terminal detail exceeds"):
+            operator._apply_event(
+                run.run_id,
+                _event_handle(),
+                {"type": "agent_evidence", "node_id": "agent_1", "event": event},
+            )
+        assert operator.get_run(run.run_id).nodes["agent_1"].trace is None
+    finally:
+        operator.close()
+
+
+@pytest.fixture(
+    params=[
+        ("evidence", ("data", "input")),
+        ("trace_finished", ("trace", "model")),
+        ("trace_unavailable", ("evidence", "run_id")),
+        ("trace_unavailable", ("error",)),
+        ("trace_finished", ("invocation_id",)),
+        ("trace_unavailable", ("invocation_id",)),
+    ],
+    ids=[
+        "lifecycle-input",
+        "terminal-trace",
+        "unavailable-evidence",
+        "unavailable-error",
+        "terminal-invocation",
+        "unavailable-invocation",
+    ],
+)
+def agent_text_event(request, agent_trace):
+    kind, path = request.param
+
+    def build(text):
+        event = {"kind": kind, "invocation_id": "test-invocation"}
+        if kind == "evidence":
+            event.update(
+                sequence=1,
+                event_kind="run.started",
+                timestamp_ns=1,
+                data={"input": "valid"},
+            )
+        else:
+            event["evidence"] = {
+                "run_id": "sdk-text",
+                "complete": True,
+                "terminal_outcome": "completed" if kind == "trace_finished" else "error",
+            }
+            if kind == "trace_finished":
+                event["trace"] = agent_trace().model_dump(mode="python")
+            else:
+                event["error"] = "Stopped before the first iteration"
+        target = event
+        for name in path[:-1]:
+            target = target[name]
+        target[path[-1]] = text
+        return {"type": "agent_evidence", "node_id": "agent_1", "event": event}
+
+    return build
+
+
+def test_unencodable_agent_detail_is_a_protocol_fault(agent_text_event):
+    operator = Operator(watch=False, schedule=False)
+    run = _add_run(operator, "run-unencodable")
+    try:
+        with pytest.raises(_CoordinatorProtocolError) as error:
+            operator._apply_event(
+                run.run_id, _event_handle(), agent_text_event("private-input-\ud800")
+            )
+        assert isinstance(
+            error.value.__cause__, (PydanticSerializationError, UnicodeEncodeError)
+        )
+        assert str(error.value).isascii()
+        assert "private-input" not in str(error.value)
+        snapshot = operator.get_latest_run_snapshot(
+            run.run_id, operator_instance_id=operator.operator_instance_id
+        )
+        assert snapshot.nodes[0].trace is None
+        assert snapshot.latest_log_sequence == 0
+    finally:
+        operator.close()
+
+
+def test_unencodable_agent_detail_drain_terminalizes_run(agent_text_event, monkeypatch):
+    class EventQueue(queue.Queue):
+        def close(self):
+            pass
+
+    operator = Operator(watch=False, schedule=False)
+    run = _add_run(operator, "run-unencodable-drain")
+    handle = _event_handle()
+    handle.result_bundle = operator._result_store.prepare()
+    handle.event_queue = EventQueue()
+    handle.process = SimpleNamespace(is_alive=lambda: False)
+    handle.windows_job = None
+    handle.publication_event = threading.Event()
+    handle.publication_event.set()
+    monkeypatch.setattr(operator_module, "_teardown_process_group", lambda *_a, **_k: True)
+    operator._active_runs[run.run_id] = handle
+    try:
+        operator._drain_run_events(
+            run.run_id,
+            handle,
+            [
+                {"type": "running", "timestamp": 1.0},
+                agent_text_event("private-input-\ud800"),
+            ],
+        )
+        snapshot = operator.get_latest_run_snapshot(
+            run.run_id, operator_instance_id=operator.operator_instance_id
+        )
+        assert snapshot.summary.status is RunStatus.FAILED
+        assert snapshot.terminal_seal.terminal_status is RunStatus.FAILED
+        assert run.ended_at is not None
+        assert run.run_id not in operator._active_runs
+        assert snapshot.nodes[0].trace is None
+        logs = operator.list_logs(page_token=snapshot.log_page_token)
+        assert len(logs.logs) == 1
+        message = operator.read_detail(logs.logs[0].body_token).decode("utf-8")
+        assert "private-input" not in message
+        assert "\ud800" not in message
+    finally:
+        operator.close()
+
+
+def test_agent_detail_retains_valid_unicode(agent_text_event):
+    operator = Operator(watch=False, schedule=False)
+    run = _add_run(operator, "run-unicode")
+    event = agent_text_event("日本語 café \U0001d11e")
+    try:
+        operator._apply_event(run.run_id, _event_handle(), event)
+        materialized = operator.get_run(run.run_id)
+        envelope = json.loads(materialized.nodes["agent_1"].agent_trace_json)
+        detail = event["event"]
+        assert envelope["invocation_id"] == (
+            None if detail["kind"] == "evidence" else detail["invocation_id"]
+        )
+        if detail["kind"] == "evidence":
+            assert envelope["events"][0]["data"] == detail["data"]
+            assert envelope["events"][0]["invocation_id"] == detail["invocation_id"]
+        else:
+            retained = operator.read_trace(
+                run.run_id, "agent_1", operator_instance_id=operator.operator_instance_id
+            )
+            assert materialized.nodes["agent_1"].trace.size_bytes == len(retained.data)
+            assert json.loads(retained.data)["evidence"] == detail["evidence"]
+            assert json.loads(retained.data)["invocation_id"] == detail["invocation_id"]
+            assert envelope["evidence"] == detail["evidence"]
+            if detail["kind"] == "trace_finished":
+                assert envelope["trace"]["model"] == detail["trace"]["model"]
+            else:
+                assert envelope["error"] == detail["error"]
     finally:
         operator.close()
 

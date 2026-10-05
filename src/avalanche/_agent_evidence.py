@@ -9,6 +9,7 @@ from typing import Any, Callable, Iterator, Literal, TypeAlias, TypedDict
 from pydantic import JsonValue
 
 AgentInvocationId: TypeAlias = str
+AGENT_ERROR_CHARACTER_LIMIT = 65_536
 
 
 class AgentEvidenceEvent(TypedDict):

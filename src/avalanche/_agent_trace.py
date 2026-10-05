@@ -23,6 +23,7 @@ class AgentTerminalDetail(BaseModel):
 
     model_config = ConfigDict(strict=True, extra="forbid")
 
+    invocation_id: str
     trace: RunTrace | None
     evidence: AgentEvidenceMetadata
 
