@@ -7,14 +7,23 @@ Defines core types used throughout the framework:
 - ParameterProvider: Protocol for dependency injection
 """
 
+from __future__ import annotations
+
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from enum import Enum
-from typing import Any, Callable, ClassVar, Generic, TypeVar, Union, cast
+from typing import TYPE_CHECKING, Any, Callable, ClassVar, Generic, TypeVar, Union, cast
 
-import polars as pl
-import pyarrow as pa
 from pydantic import BaseModel
+
+if TYPE_CHECKING:
+    import polars as pl
+    import pyarrow as pa
+else:
+    from ._lazy_imports import lazy_module
+
+    pl = lazy_module("polars")
+    pa = lazy_module("pyarrow")
 
 ModelT = TypeVar("ModelT", bound=BaseModel)
 

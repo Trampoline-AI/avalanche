@@ -4,10 +4,16 @@ from __future__ import annotations
 
 from abc import ABC, abstractmethod
 from collections.abc import Sequence
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
-import polars as pl
-import pyarrow as pa
+if TYPE_CHECKING:
+    import polars as pl
+    import pyarrow as pa
+else:
+    from ._lazy_imports import lazy_module
+
+    pl = lazy_module("polars")
+    pa = lazy_module("pyarrow")
 from pydantic import BaseModel
 
 from .types import AppendResult

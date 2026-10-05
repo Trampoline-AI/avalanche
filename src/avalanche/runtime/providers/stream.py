@@ -4,12 +4,13 @@ Stream provider for incremental data processing.
 Implements the ParameterProvider abstract base class for dependency injection of streaming data.
 """
 
+from __future__ import annotations
+
 import hashlib
 import json
 from contextlib import contextmanager
 from typing import TYPE_CHECKING, Any, Callable, Generator, Generic, Literal, TypeVar
 
-import polars as pl
 from pydantic import BaseModel
 from pyiceberg.exceptions import CommitFailedException
 
@@ -17,12 +18,17 @@ from avalanche.types import ParamContext, ParameterProvider
 from runtime._async import resolve_awaitable
 
 if TYPE_CHECKING:
+    import polars as pl
     from pyiceberg.table import Table
 
     from avalanche.iceberg import IcebergTable
     from avalanche.progress import ProgressStore
     from avalanche.runtime import Rerun, RunContext
     from avalanche.types import AppendResult
+else:
+    from avalanche._lazy_imports import lazy_module
+
+    pl = lazy_module("polars")
 
 T = TypeVar("T")
 ModelT = TypeVar("ModelT", bound=BaseModel)

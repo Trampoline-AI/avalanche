@@ -7,10 +7,16 @@ import types
 from dataclasses import dataclass
 from datetime import date, datetime
 from enum import Enum, IntEnum, StrEnum
-from typing import Annotated, Any, Sequence, Union, final, get_args, get_origin
+from typing import TYPE_CHECKING, Annotated, Any, Sequence, Union, final, get_args, get_origin
 
-import polars as pl
-import pyarrow as pa
+if TYPE_CHECKING:
+    import polars as pl
+    import pyarrow as pa
+else:
+    from ._lazy_imports import lazy_module
+
+    pl = lazy_module("polars")
+    pa = lazy_module("pyarrow")
 from pydantic import BaseModel, TypeAdapter
 
 
