@@ -102,44 +102,18 @@ For example:
 import avalanche as ava
 
 from .agents.package_audit.signature import AuditPackage
-from .agents.proposal_draft.signature import DraftProposal
-from .schema import Audit, Draft, PreparedInputs, ProposalInput
+from .schema import PreparedPackage, ProposalInput
 from .util import normalize_documents
 
 
 @ava.source
-def prepare_inputs(payload: ProposalInput) -> PreparedInputs:
+def prepare_inputs(payload: ProposalInput) -> PreparedPackage:
     return normalize_documents(payload)
-
-
-@ava.agent_step(AuditPackage)
-async def audit_package(
-    prepared: PreparedInputs,
-    *,
-    agent: ava.Agent,
-) -> Audit:
-    prediction = await agent(prepared=prepared)
-    return prediction.audit
-
-
-@ava.agent_step(DraftProposal)
-async def draft_proposal(
-    prepared: PreparedInputs,
-    audit: Audit,
-    *,
-    agent: ava.Agent,
-) -> Draft:
-    prediction = await agent(prepared=prepared, audit=audit)
-    return prediction.draft
 
 
 @ava.workflow(input=ProposalInput)
 def proposal_flow():
-    (
-        (s0 := prepare_inputs())
-        >> (s1 := audit_package(s0))
-        >> draft_proposal(s0, s1)
-    )
+    return prepare_inputs() >> ava.agent.step(AuditPackage)
 ```
 
 Nothing follows the workflow declarations. Do not define models, signature

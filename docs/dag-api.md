@@ -124,8 +124,8 @@ def extraction_flow():
     )
 ```
 
-See [inline agent calls](agent-steps.md#inline-agent-calls) for how inline agents
-return validated outputs.
+See [inline typed extraction](agent-steps.md#inline-typed-extraction) for the
+signature and validated output contract.
 
 Use `&` for branches and parenthesize every parallel group:
 
