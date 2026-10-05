@@ -194,8 +194,7 @@ class Node:
             raise ValueError(f"Duplicate node slug {node_slug!r} in workflow")
         ctx.node_slugs[future_id] = node_slug
 
-        result = NodeFuture(
-            node=self,
+        result = self._make_future(
             future_id=future_id,
             node_slug=node_slug,
             graph_ref=ctx.graph,
@@ -218,6 +217,25 @@ class Node:
                 _add_graph_edge(ctx.graph, kwarg_val.future_id, future_id)
 
         return result
+
+    def _make_future(
+        self,
+        *,
+        future_id: str,
+        node_slug: str,
+        graph_ref: DefaultDict[str, list[str]],
+        args: tuple[Any, ...],
+        kwargs: dict[str, Any],
+    ) -> "NodeFuture":
+        """Construct the invocation before registering it with the workflow."""
+        return NodeFuture(
+            node=self,
+            future_id=future_id,
+            node_slug=node_slug,
+            graph_ref=graph_ref,
+            args=args,
+            kwargs=kwargs,
+        )
 
     def __str__(self) -> str:
         return self.name

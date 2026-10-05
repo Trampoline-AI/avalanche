@@ -24,8 +24,8 @@ launch an operator or UI merely because a workflow was implemented.
 ## Define a workflow
 
 Use deterministic `@ava.step` nodes for ordinary Python work,
-`@ava.classifier_step` for typed classification questions, and `@ava.agent_step`
-for adaptive model-backed work:
+`@ava.classifier_step` for typed classification questions, and inline
+`ava.agent.step(Signature, ...)` for one adaptive invocation. Default to direct `>>` chains:
 
 ```python
 import avalanche as ava
@@ -36,22 +36,25 @@ def step1() -> str:
     return "Hello world"
 
 
-@ava.agent_step(ava.Signature("text: str -> completion: str"))
-async def step2(text: str, *, agent: ava.Agent) -> str:
-    return (await agent(text=text)).completion
-
-
 @ava.workflow
 def feedback_workflow():
-    return step1() >> step2()
+    return (
+        step1()
+        >> ava.agent.step(
+            ava.agent.Signature(
+                "text: str -> completion: str",
+                "Write a concise completion of the supplied text.",
+            )
+        )
+    )
 ```
 
-Annotate each node's Python inputs and return value. The browser's **Step
-interface** panel uses these annotations for source, ordinary, destination,
-agent, and classifier steps, including nested Pydantic schemas. These are the
-outer workflow values, not an agent signature or classifier call's state.
-Injected runtime parameters are excluded; historical runs retain their own
-interface rather than showing the latest source definition.
+Annotate ordinary and decorated nodes' Python inputs and return values. Inline
+agents derive their node interface from the signature: typed required inputs,
+one unwrapped output field, or a tuple of multiple outputs in declaration order.
+The browser's **Step interface** panel shows these node contracts, including
+nested Pydantic schemas. Injected runtime parameters are excluded; historical
+runs retain their own interface rather than showing the latest source definition.
 
 `@ava.workflow` declares the builder that the operator discovers. Save this as
 `flow.py` and start it through the operator and browser:
@@ -60,9 +63,28 @@ interface rather than showing the latest source definition.
 uv run ava dev path/to/flow.py
 ```
 
-The declared `ava.Signature` output names are the prediction attribute names:
-read `.completion` for the signature above, not `.summary`. A signature that is
-not constructed inline inside the step decorator belongs in `signature.py`.
+Inline outputs are strictly validated against every declared field, including
+constraints. Missing or invalid fields raise without coercion, fallback, or
+retry. `>>` fills signature inputs in declaration order; `&` contributes each
+branch's output(s) in branch order. It never guesses by variable name or type.
+Multiple outputs feed the next node in declaration order; no intermediate
+variables or indexing are needed. See [agent steps](agent-steps.md) for a
+parallel-input example.
+
+Use a decorated body for preparation, mapping, batching, custom validation,
+composition, or persistence. Both `@ava.agent_step(Signature, ...)` and
+`@ava.agent.step(Signature, ...)` support this form outside workflows.
+The injected keyword-only `agent: ava.Agent` returns a prediction from
+`await agent(...)`; the body selects, validates, and returns or persists its result.
+Never supply `agent` at a DAG call site or nest agent decorators inside a workflow.
+
+Compact signatures belong directly inside an inline `ava.agent.step(...)` call
+or either decorator. Every named signature belongs in separate `signature.py`;
+models belong in `schema.py` and every helper in `util.py`.
+
+Inline calls declare the graph; agents run only during execution. They share
+workflow `agent_defaults` and per-node overrides with decorated nodes.
+Put `skills=` / `tools=` on the node, not in workflow defaults.
 
 ## Native classifier steps
 

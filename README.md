@@ -132,9 +132,8 @@ npx skills add Trampoline-AI/avalanche
 
 ### Creating a workflow
 
-Avalanche workflows chain deterministic `@ava.step`, agent-backed
-`@ava.agent_step`, and TypeSafe-backed `@ava.classifier_step` nodes inside an
-`@ava.workflow`.
+Avalanche workflows chain deterministic `@ava.step`, agent-backed, and
+TypeSafe-backed `@ava.classifier_step` nodes inside an `@ava.workflow`.
 
 ```python
 @ava.step
@@ -154,10 +153,21 @@ def feedback_workflow():
     return step1() >> step2()
 ```
 
+For one direct agent call, use an inline chain:
+
+```python
+@ava.workflow
+def inline_feedback_workflow():
+    return step1() >> ava.agent.step(ava.Signature("text: str -> completion: str"))
+```
+
+Inline agents return validated signature outputs. Use a decorated function for
+custom preparation, transformation, or persistence.
+
 Use [agent steps](docs/agent-steps.md) for adaptive model work and
 [classifier steps](docs/classifier-steps.md) for fixed Choice, Noul, and Score
-questions with typed probabilities. Both keep input preparation, output
-composition, and persistence in the Python step body.
+questions with typed probabilities. Use decorated bodies for custom input
+mapping, batching, output composition, and persistence.
 
 We recommend using the skill directly in order to have your agent align on a goal and build a workflow for you.
 
@@ -406,9 +416,9 @@ Configure the provider credentials as environment variables documented in
 [LiteLLM&#39;s provider guide](https://docs.litellm.ai/docs/providers); the process
 running the operator must have access to those variables.
 
-We select models on each `@ava.agent_step` with LiteLLM's provider-qualified
-model identifier. `lm` selects the main model and `sub_lm` selects the
-sub-model:
+Select models on either inline `ava.agent.step` calls or agent-step decorators
+with LiteLLM's provider-qualified model identifier. `lm` selects the main model
+and `sub_lm` selects the sub-model:
 
 ```python
 @ava.agent_step(

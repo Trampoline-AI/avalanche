@@ -54,7 +54,7 @@ This skill designs the complete agentic workflow: stage boundaries,
 deterministic work, agent responsibilities, typed handoffs, topology,
 persistence, execution, and end-to-end verification. The agent-step reference
 uses the original PredictRLM skill to design each individual adaptive agent
-before implementing its Avalanche wrapper.
+before implementing its Avalanche inline invocation or decorated body.
 
 ## Design an agentic workflow
 
@@ -167,8 +167,11 @@ For each stage, choose:
   declare defaults or supply questions per call when candidates or rubrics vary.
   Prefer this native TypeSafe integration over a custom client wrapper or an
   agent whose only task is classification;
-- `@ava.agent_step` when the stage requires adaptive exploration, evidence
-  gathering, tool choice, judgment, or synthesis;
+- `ava.agent.step(Signature, ...)` inside the workflow for one direct adaptive
+  agent invocation requiring exploration, evidence, tool choice, judgment, or
+  synthesis; use `@ava.agent_step` or `@ava.agent.step` outside workflow
+  construction when a body adds meaningful preparation, mapping, batching,
+  custom validation or transforms, composition, or persistence;
 - `@ava.dest` for the final publish, export, notification, or external write.
 
 Prefer deterministic code whenever the algorithm is known. The number of agent
@@ -401,11 +404,11 @@ do not omit a section because the design appears simple.
    responsibility, typed input, and typed output. Show data dependencies,
    parallel branches, fan-in, earlier-stage references, and the terminal
    destination. Use a legend or Mermaid classes so `@ava.source`, `@ava.step`,
-   `@ava.classifier_step`, `@ava.agent_step`, and `@ava.dest` remain distinguishable.
+   `@ava.classifier_step`, agent-backed STEP nodes, and `@ava.dest` remain distinguishable.
 4. **Contracts:** complete Pydantic contract sketches for the workflow input,
    each meaningful handoff, and final result, including invariants and
    incomplete/error states at boundaries.
-5. **Agent designs:** an RLM Steps 1–6 design for every `@ava.agent_step`,
+5. **Agent designs:** an RLM Steps 1–6 design for every agent stage,
    including its bounded responsibility and completion condition.
 6. **Tools, Skills, packages, and integrations:** inventory every required
    reusable Skill, host tool, Python package, and external integration. For
@@ -434,8 +437,9 @@ for changes, update and re-present the complete plan for approval.
 2. Choose the package layout before writing `flow.py`.
 3. Implement deterministic `@ava.source`, `@ava.step`, and `@ava.dest` nodes.
 4. For each agent step, follow the bundled RLM reference's design workflow,
-   then define its signature and `@ava.agent_step` body. For classifiers, design
-   state, question instructions, and Choice/Noul/Score criteria using the
+   then define its signature and choose a direct inline `ava.agent.step(...)`
+   invocation or a meaningful decorated body. For classifiers, design state,
+   question instructions, and Choice/Noul/Score criteria using the
    [question-design guidance](references/usage.md#structure-the-questions-object).
    Batch independent judgments, declare defaults on `@ava.classifier_step` or
    pass runtime `questions=` to the injected classifier, and return the desired
@@ -543,9 +547,10 @@ operator-based execution commands, never a standalone Python runner.
 
 ## Non-negotiable conventions
 
-- Use Pydantic `BaseModel` classes as the source of truth for workflow data.
-  Use `ava.BaseInput` for the runtime input model. Do not pass unstructured
-  dictionaries between nodes when a model can express the contract.
+- Use Pydantic `BaseModel` classes as the source of truth for structured workflow
+  data. Use `ava.BaseInput` for the runtime input model. Compact inline signature
+  fields may be scalar types; do not pass unstructured dictionaries between
+  nodes when a model can express the contract.
 - Restrict `flow.py` to imports, decorated node definitions, and workflow
   declarations. Workflow declarations form the final section of the file;
   nothing follows them.
@@ -557,9 +562,10 @@ operator-based execution commands, never a standalone Python runner.
   helpers.
 - Define Pydantic models in `schema.py`; keep signature classes, config loading,
   namespace construction, CLI entry points, and execution code out of `flow.py`.
-- Construct compact inline signatures directly inside `@ava.agent_step(...)`.
-  Every non-inline signature MUST live in a separate `signature.py`, even when
-  used only once. Use a root `signature.py` for a small flow or
+- Construct compact signatures directly inside inline `ava.agent.step(...)`
+  workflow calls or either agent-step decorator. Every named signature MUST live
+  in a separate `signature.py`, even when used only once. Use a root
+  `signature.py` for a small flow or
   `agents/<agent_name>/signature.py` for larger per-agent contracts; keep private
   models in that agent's `schema.py`.
 - The docstring on an `ava.Signature` class is the agent's instruction. Put all
@@ -568,10 +574,15 @@ operator-based execution commands, never a standalone Python runner.
   agent steps. Never create a Skill solely to carry instructions for one agent
   step; keep those instructions in its signature docstring. Pass reusable Skills
   through `skills=` on each agent step that needs them.
-- `agent` is framework-injected, keyword-only, annotated `ava.Agent`, and never
-  passed at DAG call sites.
-- `await agent(...)` returns the raw DSPy prediction. The body must select,
-  validate, compose, and return or persist the intended output explicitly.
+- In decorated bodies, `agent` is framework-injected, keyword-only, annotated
+  `ava.Agent`, and never passed at DAG call sites. `await agent(...)` returns the
+  raw DSPy prediction; the body selects, validates, composes, and returns or
+  persists the intended output explicitly.
+- Use direct returned `>>` chains with `ava.agent.step(Signature, ...)` for
+  a single agent call. Inputs and outputs follow signature order; `&` supplies
+  inputs in branch order. Invalid or missing outputs raise an error.
+- Define agent decorators outside workflows, only when the function adds useful
+  work. Both forms accept the same models, skills, and tools.
 - `classifier` is framework-injected, keyword-only, annotated `ava.Classifier`,
   and never passed at DAG call sites. `await classifier(state=...)` returns
   `ava.ClassificationResult`; keep probabilities when downstream work needs them.
@@ -579,12 +590,13 @@ operator-based execution commands, never a standalone Python runner.
   questions inside the step body. A call's `questions=` replaces the complete
   default mapping; it does not merge. Resolve `TYPESAFE_API_KEY` only in the
   executing environment, never in workflow definitions or metadata.
-- A workflow body defines edges only. No runtime loops, data-dependent branches,
-  file/network I/O, or transformations there.
+- Workflow bodies only declare the graph; agents run later. No runtime loops,
+  data-dependent branches, file/network I/O, or transformations there.
 - Always parenthesize parallel groups: `a() >> (b() & c()) >> d()`.
 - Bind a node future with `:=` when another node must reference it explicitly,
   such as a fan-in or a dependency on an earlier stage:
   `(s0 := prepare()) >> (s1 := analyze(s0)) >> publish(s0, s1)`.
+  Bind the node call itself, not the whole chain.
 
 ## Choosing node types
 
@@ -592,13 +604,15 @@ operator-based execution commands, never a standalone Python runner.
 - `@ava.step`: deterministic transformation.
 - `@ava.classifier_step`: TypeSafe Choice/Noul/Score questions with an injected
   callable `ava.Classifier`; use an async body and optional runtime `questions=`.
-- `@ava.agent_step` / `@ava.agent.step`: wrapper around the PredictRLM runtime
-  with an injected callable `ava.Agent`.
+- `ava.agent.step(Signature, ...)` inside the workflow: one direct PredictRLM
+  invocation with signature-derived inputs and strictly validated outputs.
+- `@ava.agent_step` / `@ava.agent.step` outside workflow construction: a
+  meaningful body around PredictRLM with an injected callable `ava.Agent`.
 - `@ava.dest`: publish, export, or summarize final results.
 
-Functions may be synchronous or asynchronous. Calling a decorated node inside a
-workflow returns a deferred `NodeFuture`, not its runtime value. Passing that
-future to another node creates the dependency.
+Functions may be synchronous or asynchronous. Calling a decorated node or
+inline agent inside a workflow returns a deferred `NodeFuture`, not its runtime
+value. Passing that future to another node creates the dependency.
 
 ## DAG notation
 
@@ -625,6 +639,21 @@ the calls to `analyze_documents()` and `publish_report()` need no explicit
 arguments. `>>` records the dependency and passes the immediate upstream result
 into the next available positional or positional-or-keyword data parameter.
 Framework-injected runtime parameters are skipped.
+
+An inline agent follows the same ordering:
+
+```python
+@ava.workflow
+def document_flow():
+    return (
+        ingest_documents()
+        >> ava.agent.step(AnalyzeDocuments, skills=[ava.agent.skills.pdf])
+        >> publish_report()
+    )
+```
+
+Import `AnalyzeDocuments` from `signature.py`; its input field consumes the
+document batch and its single output field is the strictly validated analysis.
 
 Parallel results also bind positionally in branch order:
 
@@ -684,12 +713,13 @@ the workflow body's expression statement.
 
 - User and agent aligned on goal, authoritative inputs, expected outputs,
   success criteria, boundaries, and approvals before design.
-- Every inter-node data shape is typed with a Pydantic model.
+- Every structured inter-node data shape has a Pydantic model; compact inline
+  signature fields may use scalar types directly.
 - `flow.py` contains only the allowed declarations, has no helper definitions,
   and ends with its workflow declarations.
-- Every agent input/output field matches the keyword arguments used in
-  `await agent(...)` and the prediction fields read afterward.
-- Every non-inline signature lives in a separate `signature.py` and every
+- Inline chains follow signature input/output order. In decorated functions,
+  `await agent(...)` arguments and returned fields match the signature.
+- Every named signature lives in a separate `signature.py` and every
   signature class has an instruction-bearing docstring. Every custom Skill
   represents knowledge or capability reused across agent steps.
 - Every tool has a stable unique function name, typed arguments, a precise

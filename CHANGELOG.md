@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+- Added inline `ava.agent.step(Signature, ...)` calls for direct workflow chains,
+  with typed inputs, validated outputs, and the same skills, tools, and model
+  settings as decorated agents.
+- Agent decorators remain supported outside workflows. Nested agent decorators
+  are rejected; `inputs=` and `slug=` are only supported for inline calls.
+
 - Added a workflow-author API reference for step decorators, graph operations,
   runs, inputs/context, files/workspaces, agents, classifiers, Iceberg/Lance
   storage, streams, cursors, and CLI commands. The workflow primitive list links
@@ -517,13 +523,13 @@ operator clients.
 - Fix: futures passed explicitly as keyword arguments are no longer re-bound
   implicitly by position.
 - See [docs/data-model-api.md](docs/data-model-api.md#define-a-schema).
-- Added bodyful `@ava.agent_step` / `@ava.agent.step` aliases in the base
-  package. Steps receive a callable `ava.Agent`, handle raw DSPy predictions in
-  their own Python body, and explicitly persist their results.
+- Added bodyful `@ava.agent_step` and `@ava.agent.step` decorator spellings in the
+  base package. Steps receive a callable `ava.Agent`, handle raw DSPy predictions
+  in their own Python body, and explicitly persist their results.
 - `ava.Signature` is a subclassable native DSPy contract using
   `ava.InputField()` / `ava.OutputField()`. The identical
   `ava.agent.Signature` also builds inline string signatures; skills and tools
-  are configured only by `@ava.agent_step(...)`.
+  are configured at each agent-step declaration.
 - `@ava.workflow(agent_defaults={...})` supplies workflow-scoped PredictRLM
   runtime defaults; agent-step kwargs override them. Process-global agent
   configuration and automatic agent-step table/output behavior were removed.

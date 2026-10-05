@@ -17,7 +17,7 @@ class _Unset(Enum):
 UNSET = _Unset.VALUE
 
 # These are not agent runtime kwargs. Signatures describe only model inputs and
-# outputs; skills and tools belong to the agent-step decorator.
+# outputs; skills and tools belong to the agent-step declaration.
 _RESERVED_RUNTIME_KWARGS = frozenset({"signature", "skills", "tools"})
 
 
@@ -30,6 +30,7 @@ def validate_runtime_kwargs(kwargs: Mapping[str, Any], *, owner: str) -> dict[st
         rendered = ", ".join(repr(name) for name in reserved)
         raise TypeError(
             f"{owner} cannot configure {rendered}; pass the signature as the "
-            "decorator's first argument and skills/tools on @ava.agent_step(...)."
+            "agent-step declaration's first argument and skills/tools on "
+            "ava.agent.step(...) or @ava.agent_step(...)."
         )
     return dict(kwargs)

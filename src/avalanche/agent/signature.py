@@ -36,14 +36,14 @@ class Signature(dspy.Signature, metaclass=_AvalancheSignatureMeta):
 
         Signature("document: str -> report: str", "Audit the document.")
 
-    Skills and tools are execution capabilities configured exclusively by
-    ``@ava.agent_step(...)``.
+    Skills and tools are execution capabilities configured on
+    ``ava.agent.step(...)`` or ``@ava.agent_step(...)``.
     """
 
 
-def resolve_signature(signature: Any, *, name: str) -> Any:
+def resolve_signature(signature: type[dspy.Signature], *, name: str) -> type[dspy.Signature]:
     """Validate an agent contract."""
-    if not isinstance(signature, type) or not issubclass(signature, dspy.Signature):
+    if not isinstance(signature, SignatureMeta) or not issubclass(signature, dspy.Signature):
         raise TypeError(
             "agent signature must be an ava.Signature subclass, an inline "
             "ava.agent.Signature(...), or another DSPy Signature class"
