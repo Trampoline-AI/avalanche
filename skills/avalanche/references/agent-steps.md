@@ -98,6 +98,9 @@ Default to a returned `>>` chain. Inputs and outputs follow signature declaratio
 order; a single output unwraps to its field value. Every output is strictly
 validated, including nested models and constraints; invalid or missing values
 raise without coercion, fallback, or retry.
+A list or tuple in a single output field remains one downstream argument,
+including empty collections; only multiple signature fields create multiple
+output slots.
 
 With `AuditPackage` from `signature.py`:
 

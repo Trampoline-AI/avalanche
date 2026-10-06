@@ -124,6 +124,9 @@ class Node:
     Use _workflow_context.get() to access the current WorkflowContext.
     """
 
+    # Ordinary Python nodes retain legacy implicit tuple/list unpacking.
+    _expand_single_return: bool = True
+
     def __init__(
         self,
         fn: Callable[..., Any],
@@ -1111,7 +1114,9 @@ def _build_node_binding_plan(
             slot_index=slot_index,
             slot_kind=slot_kind,
             may_expand_single_return=(
-                incoming.tuple_index is None and incoming.node.num_returns == 1
+                incoming.tuple_index is None
+                and incoming.node.num_returns == 1
+                and incoming.node._expand_single_return
             ),
         )
         for slot_index, (slot_kind, incoming) in enumerate(
@@ -1973,6 +1978,7 @@ def _indexed_parent_result(presult: Any, tuple_index: int, executor: Any = None)
 
 def _collect_implicit_parent_results(
     node_ref: NodeFuture,
+    nodes: dict[str, NodeFuture],
     result_refs: dict[str, Any],
     dependencies_map: dict[str, list[str]],
     node_id: str,
@@ -1992,27 +1998,21 @@ def _collect_implicit_parent_results(
     }
     auto_values: list[Any] = []
 
-    # Use _incoming_refs if available (preserves tuple_index info).
-    # Otherwise fall back to dependencies_map.
-    if node_ref._incoming_refs:
-        for incoming in node_ref._incoming_refs:
-            if incoming.future_id in explicit_ids:
-                continue
-            presult = result_refs.get(incoming.future_id)
-            if presult is not None:
-                if incoming.tuple_index is not None:
-                    auto_values.append(
-                        _indexed_parent_result(presult, incoming.tuple_index, executor)
-                    )
-                else:
-                    auto_values.extend(_implicit_items_from_parent_result(presult))
-    else:
-        parent_ids = dependencies_map.get(node_id, [])
-        for pid in parent_ids:
-            if pid in explicit_ids:
-                continue
-            presult = result_refs.get(pid)
-            if presult is not None:
+    incoming_refs = node_ref._incoming_refs or [
+        nodes[pid] for pid in dependencies_map.get(node_id, [])
+    ]
+    for incoming in incoming_refs:
+        if incoming.future_id in explicit_ids:
+            continue
+        presult = result_refs.get(incoming.future_id)
+        if presult is not None:
+            if incoming.tuple_index is not None:
+                auto_values.append(
+                    _indexed_parent_result(presult, incoming.tuple_index, executor)
+                )
+            elif incoming.node.num_returns == 1 and not incoming.node._expand_single_return:
+                auto_values.append(presult)
+            else:
                 auto_values.extend(_implicit_items_from_parent_result(presult))
 
     return auto_values
@@ -2568,6 +2568,7 @@ class Workflow:
             if not node_ref.args and not binding_plan.has_explicit_provider_selectors:
                 upstream_values = _collect_implicit_parent_results(
                     node_ref,
+                    self.nodes,
                     result_refs,
                     dependencies_map,
                     node_id,

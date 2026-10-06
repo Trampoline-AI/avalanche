@@ -55,20 +55,9 @@ def extraction_flow():
 Inline agent steps bind upstream values in signature input order and return
 validated signature outputs: one field becomes its value, multiple fields become
 an ordered tuple. Here `publish` receives `KeyItems`, not a raw prediction.
-
-## Inline agent calls
-
-Reuse `ReviewSignature` above with your `load_document()` source, which returns
-document text:
-
-```python
-@ava.workflow(agent_defaults={"lm": "openai/gpt-5.5"})
-def inline_review_flow():
-    return load_document() >> ava.agent.step(ReviewSignature)
-```
-
-The workflow returns a validated `Review`. No `review_document` function is needed
-for this form.
+A single list- or tuple-valued field stays one downstream argument, including
+when the collection is empty. Multiple fields occupy separate arguments in
+declaration order.
 
 ## Typed signature class
 

@@ -7,6 +7,9 @@
   settings as decorated agents.
 - Agent decorators remain supported outside workflows. Nested agent decorators
   are rejected; `inputs=` and `slug=` are only supported for inline calls.
+- Fixed inline agent chains unpacking a single list- or tuple-valued output into
+  separate downstream arguments. Empty and nonempty collections now retain their
+  signature field boundary; ordinary Python nodes keep their existing behavior.
 
 - Added a workflow-author API reference for step decorators, graph operations,
   runs, inputs/context, files/workspaces, agents, classifiers, Iceberg/Lance

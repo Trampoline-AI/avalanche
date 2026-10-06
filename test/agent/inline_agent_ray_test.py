@@ -36,6 +36,11 @@ class SummarizeWorkerItems(ava.Signature):
     prediction_pid: int = ava.OutputField()
 
 
+class CollectWorkerNames(ava.Signature):
+    items: WorkerItems = ava.InputField()
+    names: list[str] = ava.OutputField()
+
+
 class DeterministicWorkerPredictor:
     def __init__(self, signature, *, skills, tools):
         self.signature = signature
@@ -54,6 +59,8 @@ class DeterministicWorkerPredictor:
                 )
             )
         items = inputs["items"]
+        if tuple(self.signature.output_fields) == ("names",):
+            return dspy.Prediction(names=items.names)
         return dspy.Prediction(
             total=self.tools[0](items.quantities),
             label=items.customer + ":" + "/".join(items.names),
@@ -118,9 +125,12 @@ def test_full_inline_ray_workflow_returns_validated_values_from_real_workers(ray
         return "Ada"
 
     @ava.dest
-    def render(total: int, label: str, extraction_pid: int, prediction_pid: int):
+    def render(
+        total: int, label: str, extraction_pid: int, prediction_pid: int, names: list[str]
+    ):
         return {
             "receipt": f"{label}={total}",
+            "names": names,
             "extraction_pid": extraction_pid,
             "prediction_pid": prediction_pid,
             "render_pid": os.getpid(),
@@ -133,7 +143,8 @@ def test_full_inline_ray_workflow_returns_validated_values_from_real_workers(ray
         summary = ava.agent.step(
             SummarizeWorkerItems, inputs={"items": extracted}, tools=[count_items]
         )
-        return summary >> render()
+        names = ava.agent.step(CollectWorkerNames, inputs={"items": extracted})
+        return (summary & names) >> render()
 
     # Export the test module's import path to workers so the deterministic setup
     # is importable, including under pytest's prepend import mode.
@@ -163,6 +174,7 @@ def test_full_inline_ray_workflow_returns_validated_values_from_real_workers(ray
     )
     assert worker_driver_pid != os.getpid()
     assert result["receipt"] == "Ada:apples/pears=5"
+    assert result["names"] == ["apples", "pears"]
     assert result["extraction_pid"] != os.getpid()
     assert result["prediction_pid"] != os.getpid()
     assert result["render_pid"] != os.getpid()

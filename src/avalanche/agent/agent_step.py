@@ -1032,6 +1032,9 @@ class _InlineAgentFuture(NodeFuture):
 
 
 class _InlineAgentNode(Node):
+    # One signature field is one value, even when that value is a collection.
+    _expand_single_return = False
+
     def _make_future(
         self,
         *,
