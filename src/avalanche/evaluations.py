@@ -1,4 +1,4 @@
-"""Observe completed step values with ordinary selectors and TypeSafe questions."""
+"""Observe agent invocation predictions with ordinary selectors and TypeSafe questions."""
 
 from __future__ import annotations
 
@@ -7,9 +7,10 @@ import json
 import math
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field
-from typing import Generic, TypeVar
+from types import MappingProxyType
+from typing import Annotated, Generic, TypeVar
 
-from pydantic import BaseModel, ConfigDict, Field, JsonValue, field_validator
+from pydantic import BaseModel, ConfigDict, Field, InstanceOf, JsonValue, field_validator
 
 from ._evaluation_inputs import MetricInput, metric_inputs
 from .classifier.classifier_step import Classifier, _close_classifier, _error_description
@@ -37,7 +38,7 @@ class EvaluationError(RuntimeError):
 
 @dataclass(frozen=True)
 class EvalContext(Generic[InputT, OutputT]):
-    """Existing step objects; trace contains serialized terminal invocation events."""
+    """Winning agent call inputs, complete prediction, and exported terminal trace."""
 
     inputs: Mapping[str, InputT]
     output: OutputT
@@ -109,52 +110,44 @@ class EvaluationResult(BaseModel):
     composites: dict[str, float]
 
 
-@dataclass(frozen=True, init=False)
-class Evaluations(Generic[InputT, OutputT]):
+class Evaluations(BaseModel, Generic[InputT, OutputT]):
     """Reusable evaluation declaration, independent of workflow scheduling."""
 
-    _metrics: tuple[tuple[str, Metric[InputT, OutputT]], ...]
-    _composites: tuple[tuple[str, Callable[[ClassificationResult], float]], ...]
-    _runtime_overrides: ClassifierRuntime
+    model_config = ConfigDict(
+        extra="forbid", strict=True, frozen=True, allow_inf_nan=False, validate_default=True
+    )
 
-    def __init__(
-        self,
-        *,
-        metrics: Mapping[str, Metric[InputT, OutputT]],
-        composites: Mapping[str, Callable[[ClassificationResult], float]] | None = None,
-        model: str | None = None,
-        timeout: float | None = None,
-    ) -> None:
-        if not isinstance(metrics, Mapping) or not metrics:
-            raise EvaluationError("Evaluations metrics must be a nonempty mapping")
-        owned_metrics = tuple(metrics.items())
-        for name, metric in owned_metrics:
-            if not isinstance(name, str) or not name:
-                raise EvaluationError("Metric names must be nonempty strings")
-            if not isinstance(metric, Metric):
-                raise EvaluationError(f"Metric {name!r} must be a Metric declaration")
-        if composites is not None and not isinstance(composites, Mapping):
-            raise EvaluationError("Evaluations composites must be a mapping")
-        owned_composites = tuple((composites or {}).items())
-        for name, function in owned_composites:
-            if not isinstance(name, str) or not name:
-                raise EvaluationError("Composite names must be nonempty strings")
+    metrics: Annotated[
+        Mapping[NonemptyString, InstanceOf[Metric[InputT, OutputT]]], Field(min_length=1)
+    ]
+    composites: Mapping[NonemptyString, Callable[[ClassificationResult], float]] = Field(
+        default_factory=dict
+    )
+    model: Annotated[str, Field(min_length=1, pattern=r"\S")] | None = None
+    timeout: Annotated[float, Field(gt=0)] | None = None
+
+    @field_validator("metrics")
+    @classmethod
+    def freeze_metrics(
+        cls, value: Mapping[str, Metric[InputT, OutputT]]
+    ) -> Mapping[str, Metric[InputT, OutputT]]:
+        return MappingProxyType(value)
+
+    @field_validator("composites", mode="before")
+    @classmethod
+    def optional_composites(
+        cls, value: Mapping[str, Callable[[ClassificationResult], float]] | None
+    ) -> Mapping[str, Callable[[ClassificationResult], float]]:
+        return {} if value is None else value
+
+    @field_validator("composites")
+    @classmethod
+    def freeze_composites(
+        cls, value: Mapping[str, Callable[[ClassificationResult], float]]
+    ) -> Mapping[str, Callable[[ClassificationResult], float]]:
+        for name, function in value.items():
             _require_sync(function, f"Composite {name!r}")
-        overrides: dict[str, JsonValue] = {}
-        if model is not None:
-            overrides["model"] = model
-        if timeout is not None:
-            overrides["timeout"] = timeout
-        try:
-            runtime = ClassifierRuntime.model_validate(validate_runtime_defaults(overrides))
-        except Exception as error:
-            raise EvaluationError(
-                f"Invalid evaluation runtime declaration: {type(error).__name__}; "
-                "use classifier model and positive finite timeout settings"
-            ) from None
-        object.__setattr__(self, "_metrics", owned_metrics)
-        object.__setattr__(self, "_composites", owned_composites)
-        object.__setattr__(self, "_runtime_overrides", runtime)
+        return MappingProxyType(value)
 
     def declaration_metadata(
         self, runtime_defaults: Mapping[str, JsonValue] | None = None
@@ -162,21 +155,23 @@ class Evaluations(Generic[InputT, OutputT]):
         """Describe effective questions and settings without selecting or judging evidence."""
         return EvaluationDeclaration(
             metrics=validate_questions(
-                {name: metric.question for name, metric in self._metrics}
+                {name: metric.question for name, metric in self.metrics.items()}
             ),
-            composites=tuple(name for name, _ in self._composites),
+            composites=tuple(self.composites),
             runtime=self._runtime(runtime_defaults),
-            metric_inputs={name: metric_inputs(metric.state) for name, metric in self._metrics},
+            metric_inputs={
+                name: metric_inputs(metric.state) for name, metric in self.metrics.items()
+            },
         )
 
     def _runtime(self, runtime_defaults: Mapping[str, JsonValue] | None) -> ClassifierRuntime:
         try:
-            return ClassifierRuntime.model_validate(
-                {
-                    **validate_runtime_defaults(dict(runtime_defaults or {})),
-                    **self._runtime_overrides.model_dump(mode="json", exclude_unset=True),
-                }
-            )
+            overrides = validate_runtime_defaults(dict(runtime_defaults or {}))
+            if self.model is not None:
+                overrides["model"] = self.model
+            if self.timeout is not None:
+                overrides["timeout"] = self.timeout
+            return ClassifierRuntime.model_validate(overrides)
         except Exception as error:
             raise EvaluationError(
                 f"Evaluation runtime defaults failed: {type(error).__name__}; "
@@ -193,7 +188,7 @@ class Evaluations(Generic[InputT, OutputT]):
         runtime = self._runtime(runtime_defaults)
 
         batches: dict[str, tuple[JSONContent, dict[str, JsonValue]]] = {}
-        for name, metric in self._metrics:
+        for name, metric in self.metrics.items():
             try:
                 selected = metric.state(context)
             except Exception as error:
@@ -272,11 +267,11 @@ class Evaluations(Generic[InputT, OutputT]):
         assert resolved_model is not None
         classification = ClassificationResult(
             model=resolved_model,
-            answers={name: answers[name] for name, _ in self._metrics},
+            answers={name: answers[name] for name in self.metrics},
             usage=ClassificationUsage(input_tokens=input_tokens, output_tokens=output_tokens),
         )
         composites: dict[str, float] = {}
-        for name, function in self._composites:
+        for name, function in self.composites.items():
             try:
                 # Frozen models still contain mutable dictionaries. Author code must not
                 # overwrite raw evidence or influence the next composite's inputs.

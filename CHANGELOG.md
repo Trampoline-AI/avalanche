@@ -2,10 +2,21 @@
 
 ## Unreleased
 
+- `Evaluations` now validates declarations through Pydantic and exposes read-only
+  metric/composite mappings. Invalid fields raise field-specific `ValidationError`s;
+  synchronous-callable checks and independent evaluation execution are unchanged.
 - Evaluation metrics now group selector source paths under a collapsed **Input**
   section instead of separate source badges. Paths such as `input.packet`,
-  `output.summary`, `output`, and `trace` distinguish step arguments, returned
-  fields or the full result, and agent traces without crowding evaluation answers.
+  `output.review.summary`, `output`, and `trace` distinguish agent-call arguments,
+  named prediction fields or the full prediction, and the invocation trace.
+- Trace source paths use the agent accent color inside evaluation Input sections,
+  distinct from neutral input and output paths. In run views, trace labels are
+  shortcuts that underline only on hover. Click, Enter, or Space opens and focuses
+  the same node's Trace tab.
+- Native agent evaluations now capture the first successful agent call to return:
+  its actual arguments, complete DSPy prediction, and only that invocation's trace.
+  Step return values and postprocessing remain separate; later calls run normally
+  without replacing or resubmitting evaluation, even if step postprocessing fails.
 - Added a workflow-author API reference for step decorators, graph operations,
   runs, inputs/context, files/workspaces, agents, classifiers, Iceberg/Lance
   storage, streams, cursors, and CLI commands. The workflow primitive list links

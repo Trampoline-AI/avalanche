@@ -7,7 +7,13 @@ function inputPath({ source, selector }: MetricInput): string {
   return `${source}${path.startsWith("[") ? "" : "."}${path}`;
 }
 
-export function MetricInputSummary({ inputs }: { inputs?: readonly MetricInput[] }) {
+export function MetricInputSummary({
+  inputs,
+  onOpenTrace,
+}: {
+  inputs?: readonly MetricInput[];
+  onOpenTrace?: () => void;
+}) {
   if (!inputs?.length) return null;
   return (
     <details className="mt-1 min-w-0 text-[11px]">
@@ -21,9 +27,20 @@ export function MetricInputSummary({ inputs }: { inputs?: readonly MetricInput[]
         {inputs.map((input, index) => (
           <li
             key={`${input.source}:${input.selector}:${index}`}
-            className="[overflow-wrap:anywhere]"
+            className={`[overflow-wrap:anywhere] ${input.source === "trace" ? "text-agent" : ""}`}
           >
-            {inputPath(input)}
+            {input.source === "trace" && onOpenTrace ? (
+              <button
+                type="button"
+                onClick={onOpenTrace}
+                title="Open Trace tab"
+                className="cursor-pointer border-0 bg-transparent p-0 text-left text-agent underline-offset-2 hover:underline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-agent"
+              >
+                {inputPath(input)}
+              </button>
+            ) : (
+              inputPath(input)
+            )}
           </li>
         ))}
       </ul>

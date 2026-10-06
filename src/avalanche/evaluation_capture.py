@@ -1,18 +1,20 @@
-"""Process-local handoff of successful step evaluations to an operator collector."""
+"""Process-local handoff of first-returned agent evaluations to an operator collector."""
 
 from __future__ import annotations
 
 import inspect
+import json
 import logging
 from collections.abc import Callable, Iterator, Mapping
 from contextlib import contextmanager
 from contextvars import ContextVar
 from dataclasses import dataclass
-from typing import Generic, TypeVar, cast
+from typing import TypeVar, cast
 
+from dspy import Prediction
 from pydantic import JsonValue
 
-from ._agent_evidence import AgentEvidenceObserverEvent, capture_agent_evidence
+from ._agent_evidence import AgentTraceFinishedEvent, AgentTraceUnavailableEvent
 from .evaluations import EvalContext, Evaluations
 
 InputT = TypeVar("InputT")
@@ -23,8 +25,8 @@ OutputT = TypeVar("OutputT")
 class EvaluationSubmission:
     """Live execution objects; the collector must snapshot them before returning."""
 
-    evaluations: Evaluations[object, object]
-    context: EvalContext[object, object] | None
+    evaluations: Evaluations[object, Prediction]
+    context: EvalContext[object, Prediction] | None
     runtime_defaults: Mapping[str, JsonValue]
     error: str | None = None
 
@@ -41,9 +43,6 @@ EvaluationSubmitCallback = Callable[[EvaluationSubmission], None]
 _EVALUATION_COLLECTOR: ContextVar[
     tuple[EvaluationSubmitCallback, list[EvaluationCaptureError]] | None
 ] = ContextVar("avalanche_evaluation_collector", default=None)
-_EVALUATION_INJECTED_PARAMS: ContextVar[frozenset[str]] = ContextVar(
-    "avalanche_evaluation_injected_params", default=frozenset()
-)
 
 
 @contextmanager
@@ -78,20 +77,28 @@ def _diagnostic(message: str) -> None:
         pass
 
 
-class _StepEvaluationCapture(Generic[InputT, OutputT]):
+class _StepEvaluationCapture:
     def __init__(
         self,
-        evaluations: Evaluations[InputT, OutputT],
+        evaluations: Evaluations[object, Prediction],
         step_name: str,
     ) -> None:
         self.evaluations = evaluations
         self.step_name = step_name
         self.collector = _EVALUATION_COLLECTOR.get()
-        self.inputs: dict[str, object] = {}
-        self.trace: list[JsonValue] = []
-        self.error: str | None = None
+        self.claimed = False
 
-    def submit(self, output: object) -> None:
+    def submit(
+        self,
+        inputs: Mapping[str, InputT],
+        output: Prediction,
+        terminal_event: AgentTraceFinishedEvent | AgentTraceUnavailableEvent,
+    ) -> None:
+        if self.claimed:
+            return
+        # No await before or during handoff: the first successful return owns
+        # this slot, including any evaluation-only snapshot/submission failure.
+        self.claimed = True
         if self.collector is None:
             _diagnostic(
                 f"Evaluations for agent step {self.step_name!r} were not evaluated: "
@@ -101,19 +108,37 @@ class _StepEvaluationCapture(Generic[InputT, OutputT]):
 
         from .classifier.classifier_step import _WORKFLOW_CLASSIFIER_DEFAULTS
 
-        context = None
+        context: EvalContext[object, Prediction] | None = None
+        error = None
         runtime_defaults: Mapping[str, JsonValue] = {}
         try:
             runtime_defaults = _WORKFLOW_CLASSIFIER_DEFAULTS.get()
-            if self.error is None:
-                context = EvalContext(inputs=self.inputs, output=output, trace=self.trace)
+            if terminal_event["kind"] == "trace_finished":
+                trace: list[JsonValue] = [
+                    {
+                        "kind": terminal_event["kind"],
+                        "invocation_id": terminal_event["invocation_id"],
+                        # The operator event omits iterations already streamed.
+                        # Evaluations retain the full winning invocation instead.
+                        "trace": json.loads(output.trace.to_exportable_json()),
+                    }
+                ]
+            else:
+                trace = [
+                    {
+                        "kind": terminal_event["kind"],
+                        "invocation_id": terminal_event["invocation_id"],
+                        "error": terminal_event["error"],
+                    }
+                ]
+            context = EvalContext(inputs=inputs, output=output, trace=trace)
         except BaseException as exc:
-            self.error = _error_message(exc)
+            error = _error_message(exc)
         submission = EvaluationSubmission(
-            evaluations=cast(Evaluations[object, object], self.evaluations),
+            evaluations=self.evaluations,
             context=context,
             runtime_defaults=runtime_defaults,
-            error=self.error,
+            error=error,
         )
         callback, errors = self.collector
         try:
@@ -130,57 +155,26 @@ class _StepEvaluationCapture(Generic[InputT, OutputT]):
             )
 
 
+_STEP_EVALUATION_CAPTURE: ContextVar[_StepEvaluationCapture | None] = ContextVar(
+    "avalanche_step_evaluation_capture", default=None
+)
+
+
 @contextmanager
 def capture_step_evaluations(
     evaluations: Evaluations[InputT, OutputT],
     *,
     step_name: str,
-    signature: inspect.Signature,
-    input_names: frozenset[str],
-    args: tuple[object, ...],
-    kwargs: Mapping[str, object],
-) -> Iterator[_StepEvaluationCapture[InputT, OutputT]]:
-    """Collect terminal events while preserving the existing observer's policy."""
-    from ._agent_evidence import _AGENT_EVIDENCE_OBSERVER
-
-    capture = _StepEvaluationCapture(evaluations, step_name)
-    if capture.collector is None:
-        yield capture
-        return
-
+) -> Iterator[None]:
+    """Install one first-successful-return slot for this step's agent calls."""
+    capture = _StepEvaluationCapture(
+        cast(Evaluations[object, Prediction], evaluations), step_name
+    )
+    token = _STEP_EVALUATION_CAPTURE.set(capture)
     try:
-        bound = signature.bind(*args, **kwargs)
-        bound.apply_defaults()
-        excluded = _EVALUATION_INJECTED_PARAMS.get()
-        capture.inputs = {
-            name: value
-            for name, value in bound.arguments.items()
-            if name in input_names and name not in excluded
-        }
-    except BaseException as exc:
-        capture.error = _error_message(exc)
-
-    previous = _AGENT_EVIDENCE_OBSERVER.get()
-
-    def observe(event: AgentEvidenceObserverEvent) -> None:
-        try:
-            if event["kind"] in {"trace_finished", "trace_unavailable"}:
-                # Terminal evidence already uses the existing JSON export boundary.
-                capture.trace.append(cast(JsonValue, event))
-        except BaseException as exc:
-            capture.error = _error_message(exc)
-        if previous is not None:
-            listener, errors = previous
-            if errors == "raise":
-                listener(event)
-            else:
-                try:
-                    listener(event)
-                except Exception:
-                    pass
-
-    with capture_agent_evidence(observe, errors="raise"):
-        yield capture
+        yield
+    finally:
+        _STEP_EVALUATION_CAPTURE.reset(token)
 
 
 __all__ = [

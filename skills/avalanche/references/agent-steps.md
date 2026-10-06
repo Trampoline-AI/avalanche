@@ -316,7 +316,7 @@ classifier format:
 audit_evaluations = ava.Evaluations(
     metrics={
         "specific_risks": ava.Metric(
-            state=lambda ctx: ctx.output.model_dump(mode="json"),
+            state=lambda ctx: ctx.output.audit.model_dump(mode="json"),
             question={
                 "type": "score",
                 "instructions": "How specifically does the audit describe its risks?",
@@ -328,7 +328,7 @@ audit_evaluations = ava.Evaluations(
             },
         ),
         "actionable": ava.Metric(
-            state=lambda ctx: ctx.output.model_dump(mode="json"),
+            state=lambda ctx: ctx.output.audit.model_dump(mode="json"),
             question={
                 "type": "noul",
                 "instructions": "Does the audit explain what needs attention?",
@@ -339,7 +339,7 @@ audit_evaluations = ava.Evaluations(
             question={
                 "type": "noul",
                 "instructions": (
-                    "Do the recorded agent invocations show that the agent checked "
+                    "Do the recorded agent actions show that the agent checked "
                     "the supplied evidence before producing its final answer?"
                 ),
             },
@@ -360,21 +360,29 @@ async def audit_package(package: PreparedPackage, *, agent: ava.Agent) -> Packag
     return PackageAudit.model_validate(prediction.audit)
 ```
 
-These selectors reuse the `PackageAudit` return type above; do not introduce
-another input/output/context schema for evaluations:
+`ava.Evaluations` is a frozen Pydantic declaration with owned, read-only `metrics`
+and `composites` mappings. Invalid fields raise `pydantic.ValidationError` at
+construction; async selectors/composites still raise `EvaluationError`. Create a
+new declaration rather than mutating its mappings. Declaration validation never
+executes selectors or composites; evaluation failures remain independent of the
+workflow.
 
-- `ava.EvalContext.inputs` contains bound step arguments by name, including
-  defaults, excluding injected services such as `agent`.
-- `ctx.output` is the **actual final Python return**, not necessarily the agent's
-  raw prediction or the final model call. Select fields directly from existing
-  Python/Pydantic objects; convert a whole model with `.model_dump(mode="json")`.
-- `ctx.trace` is a JSON-compatible list of terminal events from **every agent
-  invocation in the step**, with invocation IDs, exported trace bodies, and
-  unavailable-trace errors. It is not just the last invocation.
+These selectors reuse the signature's `audit: PackageAudit` field inside the
+complete DSPy prediction; do not introduce another input/output/context schema:
+
+- `ctx.inputs` contains the actual keyword arguments passed to the first successful
+  `await agent(...)` call to return, not the enclosing step's arguments.
+- `ctx.output` is that call's **complete DSPy `Prediction`**. Select named fields,
+  such as `ctx.output.audit`, and use `.model_dump(mode="json")` for a whole
+  Pydantic output. The step's `return prediction.audit` remains separate.
+- `ctx.trace` contains that invocation's single JSON-compatible terminal event:
+  its invocation ID and exported trace or unavailable-trace error. Internal agent
+  iterations and model calls remain part of that trace.
 - Combine relevant inputs and outputs explicitly, for example
-  `{"request": ctx.inputs["question"], "answer": ctx.output.answer}` for a step
-  whose contract has those fields. Optional `ava.EvalContext` annotations aid
-  static checking; no automatic lambda inference is promised.
+  `{"request": ctx.inputs["question"], "answer": ctx.output.answer}` when the
+  agent signature has those fields. Optional `ava.EvalContext[InputType,
+  dspy.Prediction]` annotations aid static checking; no automatic lambda inference
+  is promised.
 - Return text, JSON objects, or JSON arrays with finite nested numbers from
   selectors. Convert Python-only values explicitly. Native evaluations do not
   open files, extract content, or evaluate images/media. Paths are not evidence
@@ -413,12 +421,16 @@ TypeSafe HTTP 401 indicates rejected authentication, not a quality judgment.
 Verify `TYPESAFE_API_KEY`, including exported values that override `.env`; restart
 the operator after changing credentials and run again. Never print the key.
 
-Automatic evaluations run only in operator mode after successful step returns.
-Downstream execution and workflow result delivery never wait for them.
+Automatic evaluations run only in operator mode when the first successful agent
+invocation returns, before the prediction reaches step postprocessing.
+The first successful return wins, not the first start. Later calls still run
+normally but neither overwrite nor resubmit evaluation. Failed or cancelled
+calls do not claim the capture; no successful call means no evaluation record.
+Postprocessing failure or cancellation does not cancel a submitted evaluation.
+Downstream execution and workflow result delivery never wait for evaluation.
 Selectors, invalid state, Jev failures, and invalid composites become independent
-evaluation errors, never fallback scores or workflow failures. Failed steps
-do not schedule evaluations. Embedded Python `.run()` reports **not evaluated**
-and starts no automatic evaluation worker.
+evaluation errors, never fallback scores or workflow failures. Embedded Python
+`.run()` reports **not evaluated** and starts no automatic evaluation worker.
 
 Before execution, graph nodes show an **Evaluations** badge with the metric count.
 Compact nodes show only its icon and count. The current-definition inspector's
@@ -430,9 +442,13 @@ Historical run graphs use their captured declarations, not later source edits.
 Metadata discovery never executes evidence selectors or composite functions.
 
 Each metric has a collapsed **Input** section listing statically visible source
-paths such as `input.packet`, `output.summary`, `output`, and `trace`. Path roots
-refer to the evaluated step's arguments, result, and agent trace; opaque selectors
-show `custom: qualified_name`. This is selection metadata, not the serialized
+paths such as `input.package`, `output.audit`, `output.audit.risks`, and `trace`.
+Trace paths use the agent accent color; input and output paths remain neutral.
+Clickable trace labels underline only on hover.
+In run views, clicking a trace label or pressing Enter/Space opens and focuses
+the same node's **Trace** tab. Current-definition trace paths remain read-only.
+Path roots refer to the captured agent call's arguments, prediction, and trace;
+opaque selectors show `custom: qualified_name`. This is selection metadata, not the serialized
 state sent to Jev or execution of the selector. Completed
 composites appear beside run-node evaluation badges and in the agent sidebar
 header: one uses `label: 85.6%`, multiple use up to three one-decimal percentages

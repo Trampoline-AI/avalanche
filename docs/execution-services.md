@@ -180,11 +180,13 @@ dependency order. Only terminal-node receipts are fetched and exposed through
 ### Native agent-step evaluations
 
 Evaluation observation is separate from the execution-service lifecycle and its
-commit receipts. In operator-managed Local and Ray execution, successful agent
-steps submit their bound user inputs, actual final return, and all terminal
-agent-call traces for background evaluation. Injected services are excluded from
-evaluation inputs. Evidence is snapshotted so later workflow mutations cannot
-change the observed execution.
+commit receipts. In operator-managed Local and Ray execution, the first successful
+agent invocation to return in each step submits its actual call arguments, complete
+DSPy prediction, and its terminal trace event for background evaluation. The step's
+own return value remains separate. Evidence is snapshotted before the prediction
+returns to the step body, so later mutations cannot change the observed execution.
+Later agent calls do not replace or resubmit it; step postprocessing failure does
+not cancel an already-submitted evaluation.
 
 Selectors, Jev calls, and composites run independently of workflow scheduling.
 Their pending/results/errors neither gate downstream work nor change workflow

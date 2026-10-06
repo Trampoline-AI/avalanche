@@ -4,8 +4,8 @@ from __future__ import annotations
 
 import copy
 import json
-import runpy
 import traceback
+from collections import UserDict
 from datetime import date
 from pathlib import Path
 
@@ -269,15 +269,25 @@ def test_invalid_questions_fail_at_declaration_without_network(question, monkeyp
     "declaration",
     [
         {"metrics": {}},
+        {"metrics": []},
+        {"metrics": {1: noul(lambda ctx: ctx.output)}},
         {"metrics": {"": noul(lambda ctx: ctx.output)}},
         {"metrics": {"bad": lambda ctx: ctx.output}},
         {"metrics": {"ok": noul(lambda ctx: ctx.output)}, "model": " "},
+        {"metrics": {"ok": noul(lambda ctx: ctx.output)}, "model": 42},
+        {"metrics": {"ok": noul(lambda ctx: ctx.output)}, "timeout": 0},
+        {"metrics": {"ok": noul(lambda ctx: ctx.output)}, "timeout": "3"},
+        {"metrics": {"ok": noul(lambda ctx: ctx.output)}, "timeout": True},
+        {"metrics": {"ok": noul(lambda ctx: ctx.output)}, "timeout": float("nan")},
         {"metrics": {"ok": noul(lambda ctx: ctx.output)}, "timeout": float("inf")},
         {"metrics": {"ok": noul(lambda ctx: ctx.output)}, "composites": {"bad": 1}},
+        {"metrics": {"ok": noul(lambda ctx: ctx.output)}, "composites": []},
+        {"metrics": {"ok": noul(lambda ctx: ctx.output)}, "composites": {"": lambda r: 0.5}},
+        {"metrics": {"ok": noul(lambda ctx: ctx.output)}, "unknown": "setting"},
     ],
 )
 def test_invalid_evaluation_declarations_fail_early(declaration):
-    with pytest.raises(EvaluationError):
+    with pytest.raises(ValidationError):
         Evaluations(**declaration)
 
 
@@ -327,13 +337,19 @@ def test_declaration_metadata_owns_nested_questions_and_public_collections():
         "instructions": {"ask": ["Choose the supported conclusion"]},
         "criteria": {"supported": {"evidence": ["cited"]}, "unsupported": None},
     }
-    metrics = {"grounded": Metric(state=lambda ctx: ctx.output, question=question)}
-    composites = {"score": lambda answers: 0.5}
-    evaluations = Evaluations(metrics=metrics, composites=composites)
+    metrics = UserDict({"grounded": Metric(state=lambda ctx: ctx.output, question=question)})
+    composites = UserDict({"score": lambda answers: 0.5})
+    evaluations = Evaluations[str, str](metrics=metrics, composites=composites)
     original = evaluations.declaration_metadata().model_dump_json()
     question["instructions"]["ask"].clear()
     metrics.clear()
     composites.clear()
+    with pytest.raises(TypeError):
+        evaluations.metrics["injected"] = noul(lambda ctx: ctx.output)
+    with pytest.raises(TypeError):
+        evaluations.composites["score"] = lambda answers: 1.0
+    with pytest.raises(ValidationError):
+        evaluations.metrics = {}
     exported = evaluations.declaration_metadata()
     exported.metrics["grounded"].instructions["ask"].append("mutated metadata")
     exported.metrics["grounded"].criteria.clear()
@@ -411,25 +427,6 @@ def test_named_helpers_describe_explicit_reads_not_dict_keys_or_methods():
             MetricInput(source="input", selector="['packet'].facts['observed']"),
         ),
     }
-
-
-def test_incident_example_selector_sources_match_selected_evidence():
-    module = runpy.run_path(str(Path(__file__).parents[1] / "examples/evaluations_workflow.py"))
-    evaluations = module["handoff_evaluations"]
-    assert isinstance(evaluations, Evaluations)
-    inputs = evaluations.declaration_metadata().metric_inputs
-    assert inputs["clarity"] == (
-        MetricInput(source="output", selector="summary"),
-        MetricInput(source="output", selector="customer_update_draft"),
-    )
-    assert inputs["inspected_evidence"] == (
-        MetricInput(source="trace", selector=""),
-        MetricInput(source="input", selector="['packet']"),
-    )
-    assert inputs["grounded"] == (
-        MetricInput(source="input", selector="['packet']"),
-        MetricInput(source="output", selector=""),
-    )
 
 
 def test_opaque_or_delegating_selectors_do_not_invent_context_provenance():

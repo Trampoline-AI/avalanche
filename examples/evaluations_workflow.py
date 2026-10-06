@@ -16,6 +16,8 @@ from __future__ import annotations
 
 from typing import Literal
 
+from dspy import Prediction
+from dspy_codex_lm import CodexLM
 from pydantic import BaseModel, JsonValue
 
 import avalanche as ava
@@ -57,17 +59,17 @@ class IncidentHandoff(BaseModel):
 
 
 def handoff_evidence(
-    ctx: ava.EvalContext[IncidentPacket, IncidentHandoff],
+    ctx: ava.EvalContext[IncidentPacket, Prediction],
 ) -> dict[str, JsonValue]:
     """Shared evidence selection lets three independent questions use one request."""
     return {
         "source": ctx.inputs["packet"].model_dump(mode="json"),
-        "handoff": ctx.output.model_dump(mode="json"),
+        "handoff": ctx.output.handoff.model_dump(mode="json"),
     }
 
 
 def handoff_trace_evidence(
-    ctx: ava.EvalContext[IncidentPacket, IncidentHandoff],
+    ctx: ava.EvalContext[IncidentPacket, Prediction],
 ) -> dict[str, JsonValue]:
     """Keep observed actions and source facts without the trace's duplicate copies."""
     actions: list[JsonValue] = []
@@ -152,8 +154,8 @@ handoff_evaluations = ava.Evaluations(
         ),
         "clarity": ava.Metric(
             state=lambda ctx: {
-                "summary": ctx.output.summary,
-                "customer_update": ctx.output.customer_update_draft,
+                "summary": ctx.output.handoff.summary,
+                "customer_update": ctx.output.handoff.customer_update_draft,
             },
             question={
                 "type": "score",
@@ -345,8 +347,8 @@ def render_handoff(handoff: IncidentHandoff) -> str:
 
 @ava.workflow(
     agent_defaults={
-        "lm": "openai/gpt-5.5",
-        "sub_lm": "openai/gpt-5.5",
+        "lm": CodexLM(model="gpt-5.6-terra"),
+        "sub_lm": CodexLM(model="gpt-5.6-terra"),
         "max_iterations": 10,
     },
     classifier_defaults={"model": "jev-latest", "timeout": 30.0},

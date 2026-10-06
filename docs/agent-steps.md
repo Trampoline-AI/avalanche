@@ -239,8 +239,9 @@ Configure every capability where the signature is used:
     skills=[ava.agent.skills.pdf, ava.agent.skills.docx],
     tools=[search_contract_repository],
 )
-async def answer_contract_question(..., *, agent: ava.Agent):
-    ...
+async def answer_contract_question(question: str, *, agent: ava.Agent) -> str:
+    prediction = await agent(question=question)
+    return prediction.answer
 ```
 
 Tools are ordinary callables with unique stable `__name__` values.
@@ -271,8 +272,9 @@ def proposal_flow():
 
 
 @ava.agent_step(AuditRfpSig, max_iterations=60)
-async def expensive_audit(..., *, agent: ava.Agent):
-    ...
+async def expensive_audit(documents: list[File], *, agent: ava.Agent) -> RfpAudit:
+    prediction = await agent(documents=documents)
+    return prediction.audit
 ```
 
 Resolution order:
@@ -299,7 +301,7 @@ Using `ReviewSignature` and `Review` from the quick start:
 review_evaluations = ava.Evaluations(
     metrics={
         "clarity": ava.Metric(
-            state=lambda ctx: ctx.output.summary,
+            state=lambda ctx: ctx.output.review.summary,
             question={
                 "type": "score",
                 "instructions": "How understandable is this summary?",
@@ -307,7 +309,7 @@ review_evaluations = ava.Evaluations(
             },
         ),
         "concise": ava.Metric(
-            state=lambda ctx: ctx.output.summary,
+            state=lambda ctx: ctx.output.review.summary,
             question={
                 "type": "noul",
                 "instructions": "Is the summary free of unnecessary repetition?",
@@ -316,7 +318,7 @@ review_evaluations = ava.Evaluations(
         "grounding": ava.Metric(
             state=lambda ctx: {
                 "document": ctx.inputs["document"],
-                "summary": ctx.output.summary,
+                "summary": ctx.output.review.summary,
             },
             question={
                 "type": "choice",
@@ -332,7 +334,7 @@ review_evaluations = ava.Evaluations(
             question={
                 "type": "noul",
                 "instructions": (
-                    "Do the recorded agent invocations show that the agent checked "
+                    "Do the recorded agent actions show that the agent checked "
                     "the supplied evidence before producing its final answer?"
                 ),
             },
@@ -353,32 +355,52 @@ async def review_document(document: str, *, agent: ava.Agent) -> Review:
     return prediction.review
 ```
 
+`Evaluations` is a frozen Pydantic model. Its `metrics` and `composites` mappings
+are owned, read-only snapshots; changing the dictionaries passed to the constructor
+does not change the declaration. Invalid names, metric types, non-callable composites,
+model/timeout settings, and unknown fields raise `pydantic.ValidationError` during
+construction. Async selectors/composites are still rejected with `EvaluationError`.
+This validates the declaration only: selectors and composites do not run until
+evaluation, and their runtime failures remain separate from workflow execution.
+
 ### Select existing execution evidence
 
 Selectors receive `ava.EvalContext(inputs, output, trace)`:
 
-- `ctx.inputs` is the bound mapping of step arguments, including defaults but
-  excluding injected services such as `agent`.
-- `ctx.output` is the **actual final Python return**, not the last raw agent
-  prediction. If the step returns a Pydantic model, select its fields directly
-  or use `.model_dump(mode="json")` for the whole model.
-- `ctx.trace` is the JSON-compatible list of terminal trace events from **all
-  agent calls in the step**, including invocation IDs, exported trace bodies,
-  and unavailable-trace errors. It is not just the final call's trace.
+- `ctx.inputs` contains the exact keyword arguments passed to the first successful
+  `await agent(...)` call to return, not the enclosing step's arguments.
+- `ctx.output` is that call's **complete DSPy `Prediction`**, preserving every
+  named output field. Here, select `ctx.output.review.summary` or serialize
+  `ctx.output.review.model_dump(mode="json")`; `return prediction.review` only
+  controls the separate value sent to downstream workflow nodes.
+- `ctx.trace` is a JSON-compatible list containing that invocation's single
+  terminal event, with its invocation ID and exported trace or unavailable-trace
+  error. The trace includes the invocation's internal iterations and model calls.
+
+Capture happens before the prediction returns to the step body. The first
+successful agent call to return wins, even if another call started earlier.
+Later calls still execute and return normally but cannot replace the capture
+or trigger another evaluation. Calls that fail or are cancelled do not claim it.
+If no call succeeds, there is no evaluation record. Once submitted, evaluation
+continues even if subsequent step postprocessing fails or is cancelled.
 
 Each metric has a collapsed **Input** section listing qualified source paths,
-such as `input.packet`, `output.summary`, `output`, or `trace`. **Input** refers to
-Jev's input; path roots refer to the evaluated step's arguments, returned result,
-or agent execution trace. Bare source names have no selected field path.
+such as `input.document`, `output.review.summary`, `output`, or `trace`. **Input**
+refers to Jev's input; path roots refer to the captured agent call's arguments,
+complete prediction, or execution trace. Bare source names have no selected field path.
+Trace source paths use the agent accent color; input and output paths stay neutral.
+In run views, trace labels underline only on hover: click or press Enter/Space
+to open the same node's **Trace** tab and focus it. Current definitions without
+execution data keep trace paths read-only.
 Python inspects selector syntax without executing it. Opaque or uninspectable
 callables show `custom: qualified_name` rather than inferred fields. These paths
 describe selection metadata, not the serialized state sent to TypeSafe.
 Run views use captured declarations; older declarations without this metadata
 do not invent input paths.
 
-Reuse the step's existing inputs and return types. There is no mandatory second
-context schema, `input_type`, or `output_type`. Optional selector annotations
-can use `ava.EvalContext`; they do not change runtime validation.
+Reuse the agent signature's existing input and output types. There is no mandatory
+second context schema, `input_type`, or `output_type`. Optional selector annotations
+can use `ava.EvalContext[InputType, dspy.Prediction]`; they do not change runtime validation.
 
 Only selected text, JSON objects, or JSON arrays are sent to Jev. Nested numbers
 must be finite. Convert Python-only values explicitly; arbitrary objects are
@@ -484,11 +506,11 @@ Evaluation authentication errors remain visible separately from the completed br
 
 ### Execution, errors, and retention
 
-Automatic evaluations run **only in operator-managed execution**, after a
-successful agent-step return. The operator owns the background worker, so
-evaluation completion is not awaited by downstream steps or workflow result
-delivery. Failed steps do not schedule evaluations. Evaluation errors never
-fail, retry, route, or otherwise gate the workflow.
+Automatic evaluations run **only in operator-managed execution**, when the first
+successful agent invocation returns, before step postprocessing. The operator
+owns the background worker, so evaluation completion is not awaited by downstream
+steps or workflow result delivery. A submitted evaluation survives later step
+failure. Evaluation errors never fail, retry, route, or otherwise gate the workflow.
 
 Each execution has a separate record with `pending`, `completed`, or `failed`
 status. A successful workflow can still have pending or failed evaluations.

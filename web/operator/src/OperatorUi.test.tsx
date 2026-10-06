@@ -1003,7 +1003,7 @@ describe.each(["hosted", "local"] as const)("%s shared workspace", (host) => {
         "true",
       ),
     );
-    expect(screen.getByRole("region", { name: "Run logs" })).toBeVisible();
+    expect(await screen.findByRole("region", { name: "Run logs" })).toBeVisible();
   });
 
   it("opens retained step interfaces and agent traces without loading current source in run view", async () => {

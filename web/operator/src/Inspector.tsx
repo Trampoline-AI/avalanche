@@ -830,6 +830,10 @@ function AgentAndStepInspector({
                     declaration={evaluationDeclaration}
                     loading={evaluationState.loading}
                     error={evaluationState.error}
+                    onOpenTrace={() => {
+                      setSelectedTab("trace");
+                      document.getElementById(`${tabsId}-trace`)?.focus();
+                    }}
                   />
                 </div>
               )}

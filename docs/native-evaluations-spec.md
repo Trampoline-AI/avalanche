@@ -1,6 +1,6 @@
 # Native agent-step evaluations
 
-**Status:** agreed specification; implementation pending.
+**Status:** implemented contract; context updated to the first successful agent return.
 **Issue:** [AVA-81](https://linear.app/avalanche-ai/issue/AVA-81/native-criterias)
 **Repository:** https://github.com/Trampoline-AI/avalanche
 
@@ -15,27 +15,27 @@
 | Area | Decision |
 | --- | --- |
 | Execution mode | Automatic evaluations in operator mode only |
-| Trigger | Each successful step execution, using its final return value |
-| Traces | Include every agent invocation in that step; reuse existing trace models |
+| Trigger | First successful agent invocation to return in each step, before step postprocessing |
+| Traces | Only that invocation's terminal event; retain its internal iterations and existing trace model |
 | Reruns | Separate evaluation records for each execution |
 | Metric | One state selector + one Jev-format question = one named answer |
-| Context | Existing inputs, returned object, and traces; optional typing, no duplicate schema |
+| Context | Actual agent-call arguments, complete DSPy prediction, and terminal trace; no duplicate schema |
 | Composites | Python functions combining metric results into scores in `[0, 1]` |
 | Batching | Group metrics sharing selected state and compatible evaluator configuration |
 | Errors | Visible on evaluations only; no effect on workflow status or outputs |
 | Evaluator | Jev only initially; requires `TYPESAFE_API_KEY`, like classifier steps |
 | Configuration | Reuse classifier model/timeout conventions and defaults; no new configuration system |
 
-## Proposed API
+## Authoring API
 
-Illustrative Avalanche API; result access follows TypeSafe's existing response API.
-`Report` and `ReportSignature` are author-defined types.
+Result access follows TypeSafe's existing response API.
+`Report` and `ReportSignature` are author-defined types with a `report` output field.
 
 ```python
 evaluations = ava.Evaluations(
     metrics={
         "clarity": ava.Metric(
-            state=lambda ctx: ctx.output.summary,
+            state=lambda ctx: ctx.output.report.summary,
             question={
                 "type": "score",
                 "instructions": "How understandable is this summary?",
@@ -70,10 +70,11 @@ Composites receive the collected answers using TypeSafe's `answers`, `scores`,
 
 ### Context and questions
 
-- `ctx.inputs`: bound user arguments keyed by parameter name, including defaults, excluding injected services.
-- `ctx.output`: the step's returned value—not necessarily the raw agent prediction.
-- `ctx.trace`: existing traces from all calls, retaining invocation IDs and unavailable-trace errors.
-- Select any field or combination, e.g. `{"request": ctx.inputs["topic"], "answer": ctx.output.conclusion}`.
+- `ctx.inputs`: exact keyword arguments passed to the first successful agent call to return.
+- `ctx.output`: that call's complete DSPy `Prediction`, not the enclosing step's return value.
+- `ctx.trace`: only that invocation's terminal event, retaining its invocation ID, full exported trace, or unavailable-trace error.
+- Select any field or combination, e.g. `{"request": ctx.inputs["topic"], "answer": ctx.output.report.conclusion}`.
+- Later agent calls execute normally but neither replace the captured context nor trigger another evaluation. Failed or cancelled calls do not claim the capture; no successful agent return produces no evaluation record.
 - `question` accepts **one entry** from `classifier_step(questions={...})`:
   - **Noul:** probability of yes.
   - **Score:** position on ordered descriptive levels.
@@ -98,8 +99,8 @@ source_check ─── trace state        → separate Jev request
 ## Execution and user experience
 
 ```text
-Workflow:   step completes ───────────────────> downstream steps continue
-                   └── submit evaluation
+Workflow:   agent returns → step postprocessing → downstream steps
+                   └── snapshot and submit evaluation
 Evaluation:            context → metrics → composites → results/errors
 ```
 
@@ -107,6 +108,7 @@ Evaluation:            context → metrics → composites → results/errors
 - No waiting for evaluations before step completion, downstream execution, or workflow result delivery.
 - An **Evaluations** section on each step execution shows metric answers, composite scores, or errors, with separate pending/completed/failed states.
 - A successful workflow may still have pending or failed evaluations. Late results do not reopen it.
+- Submitted evaluations continue even if later step postprocessing fails or is cancelled.
 - Store results against that specific step execution; reruns never overwrite earlier evaluations.
 - Embedded Python accepts declarations but executes no evaluations or background workers; clearly report **not evaluated**, not success or pending.
 - Declaration/discovery performs no model calls.
@@ -135,19 +137,19 @@ Keep evaluation computation separate from reporting/policy so future explicit ga
 - Include real screenshots from the running operator in the feature documentation: metric/composite results and a representative evaluation error. No mockups or placeholders; exclude credentials/private data.
 - Verify the documented example, links, and rendered images. Screenshot capture belongs to the display ticket after implementation.
 
-## Implementation details to resolve
+## Implementation boundaries
 
-Product decisions above are agreed. The following are engineering details, not additional author-facing configuration.
+The following are engineering boundaries, not additional author-facing configuration.
 
-| Topic | Still to specify |
+| Topic | Boundary |
 | --- | --- |
 | Worker integration | Evidence handoff, independent result channel, capacity pressure, operator shutdown |
-| Context handoff | Aggregate existing traces and preserve execution snapshots without additional author schemas |
+| Context handoff | Snapshot the first-returned invocation's arguments, complete prediction, and terminal trace before caller mutation |
 | Jev batching | State equivalence and request limits |
 
 ## Acceptance checks
 
-- Attach metrics/composites; select individual output fields, input/output combinations, and all invocation traces.
+- Attach metrics/composites; select named prediction fields, input/output combinations, and the winning invocation's trace.
 - Preserve existing valid Noul/Score/Choice questions; reject malformed declarations.
 - Verify shared-state batching, separate-state isolation, and correct answer-to-metric mapping.
 - An evaluation failure shows an error describing what failed; workflow execution is unaffected.
@@ -160,12 +162,12 @@ Product decisions above are agreed. The following are engineering details, not a
 
 ### Isolation and lifetime
 
-- Completion hooks submit work only; selectors, validation, model calls, composites, and publication run off the workflow scheduler.
+- Agent-return hooks submit snapshots only; selectors, selected-state validation, model calls, composites, and publication run off the workflow scheduler.
 - Submission overhead is unavoidable; evaluation completion and queue backpressure must never block workflow progress.
 - Reuse existing execution/storage boundaries for stable evidence: downstream mutation must not change evaluation state, and selectors must not mutate workflow data.
 - Use a result channel independent of the coordinator's terminal event channel. Worker process/thread layout is an implementation choice.
 - If evaluation fails, show the error. No fallback scores, special dependency handling, or partial-recovery machinery.
-- Failed workflow steps have no successful final return and do not trigger these evaluations.
+- Only a successful agent return triggers evaluation. Failed/cancelled calls do not; later step failure does not undo an already-submitted evaluation.
 
 ### Typing and validation
 

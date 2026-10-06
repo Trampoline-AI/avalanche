@@ -78,6 +78,7 @@ def _write_workflow(root: Path, *, revised: bool = False, guarded: bool = False)
             import socket
             import typesafe_sdk
             import avalanche as ava
+            import dspy
 
             if os.environ.get("EVALUATION_TEST_FORBID_IMPORT"):
                 raise AssertionError("cached discovery must not import author code")
@@ -106,8 +107,13 @@ def _write_workflow(root: Path, *, revised: bool = False, guarded: bool = False)
                 return value
 
             @ava.agent_step(ava.Signature("query: str -> reply: str"), evaluations=evaluations)
-            def research(value: str, *, agent: ava.Agent) -> str:
-                return value
+            async def research(value: str, *, agent: ava.Agent) -> str:
+                class Predictor:
+                    async def acall(self, *, query):
+                        return dspy.Prediction(reply=query)
+
+                agent._predictor = Predictor()
+                return (await agent(query=value)).reply
 
             @ava.workflow(classifier_defaults={{
                 "model": {'workflow-revised' if revised else 'workflow-original'!r},

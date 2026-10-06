@@ -2529,9 +2529,6 @@ class Workflow:
                     actual_fn,
                     self.agent_defaults,
                     classifier_defaults=self.classifier_defaults,
-                    injected_params=frozenset(
-                        (*inspected_params, *runtime_params, *input_param_names)
-                    ),
                 )
             classifier_step_spec = getattr(actual_fn, "__classifier_step__", None)
             if classifier_step_spec is not None:

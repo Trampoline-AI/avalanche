@@ -611,7 +611,7 @@ def _with_evaluations(
     fn: Callable[..., object],
     event_queue: _RunEventQueue,
 ) -> Callable[..., object]:
-    """Snapshot at the successful return boundary; never evaluate on the scheduler."""
+    """Snapshot at the successful agent return; never evaluate on the scheduler."""
 
     def publish(request: EvaluationRequest) -> None:
         event_queue.put(

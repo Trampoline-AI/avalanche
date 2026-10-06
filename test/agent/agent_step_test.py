@@ -10,6 +10,7 @@ from types import SimpleNamespace
 from typing import Literal
 
 import pytest
+from dspy import Prediction
 from predict_rlm import RunEvidence, RunEvidenceEvent, RunTrace
 from pydantic import BaseModel
 
@@ -54,7 +55,7 @@ def test_bodyful_agent_invokes_service_and_owns_structured_result(monkeypatch, s
         async def acall(self, **inputs):
             person = inputs["person"]
             calls.append(person)
-            return SimpleNamespace(
+            return Prediction(
                 summary=Summary(headline=f"about {person.name}", person_count=1),
                 note=f"review {person.id}",
                 trace=_trace(),
@@ -157,7 +158,7 @@ async def test_live_evidence_redacts_tool_and_model_secrets_without_losing_event
             ]
             for sequence, (kind, data) in enumerate(events, 1):
                 await sink.emit(RunEvent("run", sequence, kind, sequence, data))
-            return SimpleNamespace(
+            return Prediction(
                 note="reviewed",
                 trace=_trace(),
                 evidence=RunEvidence(
@@ -239,7 +240,7 @@ async def test_concurrent_agent_invocations_keep_evidence_and_traces_correlated(
                     {"status": "completed", "outputs": {"note": name}},
                 ),
             )
-            return SimpleNamespace(
+            return Prediction(
                 note=name,
                 trace=_trace(),
                 evidence=RunEvidence(run_id=name, complete=True, terminal_outcome="completed"),
@@ -289,7 +290,7 @@ async def test_real_recorder_propagates_strict_observer_failures(failure_kind):
                 await recorder.finish_failure(error)
                 predictor._attach_runtime_evidence(error, recorder)
                 raise
-            result = SimpleNamespace(note="recorded", trace=_trace())
+            result = Prediction(note="recorded", trace=_trace())
             await recorder.finish_success(status="completed", outputs={"note": "recorded"})
             predictor._attach_runtime_evidence(result, recorder)
             return result
@@ -383,7 +384,7 @@ async def test_dspy_callback_cancellation_without_sdk_evidence_preserves_cancell
 async def test_terminal_persistence_failure_is_not_reclassified_as_agent_failure():
     class Predictor:
         async def acall(self, **inputs):
-            return SimpleNamespace(
+            return Prediction(
                 trace=_trace(),
                 evidence=RunEvidence(
                     run_id="terminal-run", complete=True, terminal_outcome="completed"

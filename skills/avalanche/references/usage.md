@@ -353,11 +353,14 @@ do not replace the native integration with a custom client.
 
 ## Native agent-step evaluations
 
-For observation after an agent step returns, prefer its native `evaluations=`
+For observation of an agent's prediction, prefer its native `evaluations=`
 declaration over an extra workflow node. Each `ava.Metric` separates a
 synchronous evidence selector from one existing Choice/Noul/Score question.
-`ava.EvalContext` exposes bound inputs (defaults included, injected services
-excluded), the actual final Python return, and terminal traces for all calls.
+`ava.EvalContext` exposes the first successful agent call to return: its actual
+keyword arguments, complete DSPy `Prediction`, and its single terminal trace event.
+Select named outputs such as `ctx.output.audit.summary`. The step's own return
+value is separate; later calls run normally without replacing or resubmitting
+evaluation. Submitted evaluation survives step postprocessing failure.
 No second schema is required. Only selected text/JSON is evaluated, not file or
 media contents.
 
@@ -375,7 +378,7 @@ The browser shows independent pending/completed/failed records per execution,
 including reruns. Errors never gate workflow progress or change its result.
 Records survive coordinator completion only in operator memory, not restart.
 See [native evaluations](agent-steps.md#native-evaluations) for full examples,
-all-call trace semantics, configuration, and verification guidance.
+first-return capture semantics, configuration, and verification guidance.
 
 ## Browser UI and operator
 

@@ -27,11 +27,14 @@ from typing import (
     get_origin,
 )
 
+from dspy import Prediction
 from pydantic import BaseModel
 
 from .._agent_evidence import (
     AGENT_ERROR_CHARACTER_LIMIT,
     AgentInvocationId,
+    AgentTraceFinishedEvent,
+    AgentTraceUnavailableEvent,
     emit_agent_evidence,
 )
 from ..dag import Node, NodeType
@@ -435,18 +438,18 @@ def _emit_terminal_trace(
     *,
     invocation_id: AgentInvocationId,
     evidence: AgentEvidenceMetadata,
-) -> None:
+) -> AgentTraceFinishedEvent:
     # Iterations already crossed the bounded event channel. Do not re-send
     # original payloads that the operator would discard after validation.
     parsed = json.loads(trace.model_copy(update={"steps": []}).to_exportable_json())
-    emit_agent_evidence(
-        {
-            "kind": "trace_finished",
-            "invocation_id": invocation_id,
-            "trace": parsed,
-            "evidence": evidence.model_dump(mode="json"),
-        }
-    )
+    event: AgentTraceFinishedEvent = {
+        "kind": "trace_finished",
+        "invocation_id": invocation_id,
+        "trace": parsed,
+        "evidence": evidence.model_dump(mode="json"),
+    }
+    emit_agent_evidence(event)
+    return event
 
 
 def _emit_trace_unavailable(
@@ -454,15 +457,15 @@ def _emit_trace_unavailable(
     *,
     invocation_id: AgentInvocationId,
     evidence: AgentEvidenceMetadata,
-) -> None:
-    emit_agent_evidence(
-        {
-            "kind": "trace_unavailable",
-            "invocation_id": invocation_id,
-            "error": _bounded_agent_error(str(error)),
-            "evidence": evidence.model_dump(mode="json"),
-        }
-    )
+) -> AgentTraceUnavailableEvent:
+    event: AgentTraceUnavailableEvent = {
+        "kind": "trace_unavailable",
+        "invocation_id": invocation_id,
+        "error": _bounded_agent_error(str(error)),
+        "evidence": evidence.model_dump(mode="json"),
+    }
+    emit_agent_evidence(event)
+    return event
 
 
 class Agent:
@@ -487,7 +490,7 @@ class Agent:
         self._skills: tuple[Any, ...] = ()
         self._tools: tuple[Callable[..., Any], ...] = ()
 
-    async def __call__(self, **inputs: Any) -> Any:
+    async def __call__(self, **inputs: Any) -> Prediction:
         """Run the configured agent and return its raw DSPy prediction."""
         dspy_signature = self._resolve_signature()
         self._validate_input_names(dspy_signature, inputs)
@@ -507,7 +510,7 @@ class Agent:
 
         try:
             try:
-                prediction = await self._predictor.acall(**inputs)
+                prediction: Prediction = await self._predictor.acall(**inputs)
             except asyncio.CancelledError as exc:
                 try:
                     trace = extract_trace_from_exc(exc)
@@ -545,11 +548,19 @@ class Agent:
                     f"input types: {input_types}."
                 ) from exc
 
-            _emit_terminal_trace(
+            terminal_event = _emit_terminal_trace(
                 prediction.trace,
                 invocation_id=state.invocation_id,
                 evidence=_evidence_metadata(prediction.evidence),
             )
+
+            # Resolve process-local state only in the executing worker. Existing
+            # observers have already applied their own strict/error policy.
+            from avalanche.evaluation_capture import _STEP_EVALUATION_CAPTURE
+
+            capture = _STEP_EVALUATION_CAPTURE.get()
+            if capture is not None:
+                capture.submit(inputs, prediction, terminal_event)
             return prediction
         finally:
             _AGENT_INVOCATION_STATE.reset(invocation_token)
@@ -686,7 +697,6 @@ class _AgentStepSpec(Generic[InputT, OutputT]):
         defaults: Mapping[str, Any],
         *,
         classifier_defaults: Mapping[str, JsonValue] | None = None,
-        injected_params: frozenset[str] = frozenset(),
     ) -> Callable[..., Any]:
         owned_classifier_defaults = dict(classifier_defaults or {})
 
@@ -694,15 +704,12 @@ class _AgentStepSpec(Generic[InputT, OutputT]):
             # Resolve process-local state on execution; Ray serializes this closure by value.
             from avalanche.agent.agent_step import _WORKFLOW_AGENT_DEFAULTS
             from avalanche.classifier.classifier_step import _WORKFLOW_CLASSIFIER_DEFAULTS
-            from avalanche.evaluation_capture import _EVALUATION_INJECTED_PARAMS
 
             token = _WORKFLOW_AGENT_DEFAULTS.set(defaults)
             classifier_token = _WORKFLOW_CLASSIFIER_DEFAULTS.set(owned_classifier_defaults)
-            inputs_token = _EVALUATION_INJECTED_PARAMS.set(injected_params)
             try:
                 return await fn(*args, **kwargs)
             finally:
-                _EVALUATION_INJECTED_PARAMS.reset(inputs_token)
                 _WORKFLOW_CLASSIFIER_DEFAULTS.reset(classifier_token)
                 _WORKFLOW_AGENT_DEFAULTS.reset(token)
 
@@ -992,7 +999,6 @@ def agent_step(
     def decorator(user_fn: Callable[..., Any]) -> Node:
         public_signature = _public_step_signature(user_fn, decoration_namespace())
         step_interface = step_interface_from_signature(public_signature)
-        evaluation_input_names = frozenset(item.name for item in step_interface.step_inputs)
         spec = _AgentStepSpec(
             user_fn,
             signature=signature,
@@ -1011,19 +1017,9 @@ def agent_step(
             # Resolve process-local capture state only after reaching the worker.
             from avalanche.evaluation_capture import capture_step_evaluations
 
-            with capture_step_evaluations(
-                spec.evaluations,
-                step_name=spec.step_name,
-                signature=spec.public_signature,
-                input_names=evaluation_input_names,
-                args=args,
-                kwargs=kwargs,
-            ) as capture:
+            with capture_step_evaluations(spec.evaluations, step_name=spec.step_name):
                 result = user_fn(*args, **kwargs, agent=spec.make_agent())
-                if inspect.isawaitable(result):
-                    result = await result
-                capture.submit(result)
-                return result
+                return await result if inspect.isawaitable(result) else result
 
         update_wrapper(wrapper, user_fn)
         wrapper.__signature__ = spec.public_signature  # type: ignore[attr-defined]

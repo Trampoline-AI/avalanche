@@ -95,7 +95,7 @@ _MODEL_SOURCE = """
 import os
 from pydantic import BaseModel
 
-class Report(BaseModel):
+class Handoff(BaseModel):
     summary: str
     payload: dict[str, object]
     producer_pid: int
@@ -103,54 +103,95 @@ class Report(BaseModel):
     def selected_summary(self):
         return self.summary
 
+class Report(BaseModel):
+    summary: str
+    payload: dict[str, object]
+    producer_pid: int
+    answers: list[str]
+
 def report_state(ctx):
     return {
-        "summary": ctx.output.selected_summary(),
+        "summary": ctx.output.handoff.selected_summary(),
+        "answer": ctx.output.answer,
         "inputs": dict(ctx.inputs),
-        "payload": ctx.output.payload,
-        "producer_pid": ctx.output.producer_pid,
+        "payload": ctx.output.handoff.payload,
+        "producer_pid": ctx.output.handoff.producer_pid,
         "selector_pid": os.getpid(),
     }
 """
 
 _WORKFLOW_SOURCE = """
 import asyncio
-import json
+from predict_rlm import RunEvidence, RunTrace
+from predict_rlm.trace import IterationStep
 import os
 import threading
 from pathlib import Path
-from types import SimpleNamespace
+import dspy
 import avalanche as ava
 {model_import}
 
 class EchoSignature(ava.Signature):
     text: str = ava.InputField()
+    payload: dict[str, object] = ava.InputField()
     answer: str = ava.OutputField()
-
-class Trace:
-    def __init__(self, text):
-        self.text = text
-
-    def to_exportable_json(self):
-        return json.dumps({{"status": "completed", "steps": [{{"text": self.text}}]}})
+    handoff: Handoff = ava.OutputField()
 
 class Predictor:
-    async def acall(self, *, text):
-        await asyncio.sleep(0)
-        if text == "missing":
-            return SimpleNamespace(answer=text)
-        return SimpleNamespace(answer=text.upper(), trace=Trace(text))
+    def __init__(self):
+        self.world_returning = asyncio.Event()
+
+    async def acall(self, *, text, payload):
+        if text == "failed":
+            failure = ValueError("agent call failed")
+            failure.evidence = RunEvidence(
+                run_id="failed-run", complete=True, terminal_outcome="error"
+            )
+            raise failure
+        if text == "hello":
+            await self.world_returning.wait()
+        handoff = Handoff(
+            summary="agent " + text.upper(),
+            payload=payload,
+            producer_pid=os.getpid(),
+        )
+        {predictor_body}
+        prediction = dspy.Prediction(
+            answer=text.upper(),
+            handoff=handoff,
+            trace=RunTrace(
+                status="completed",
+                model="test-model",
+                iterations=1,
+                max_iterations=1,
+                duration_ms=10,
+                steps=[IterationStep(
+                    iteration=1,
+                    reasoning="Echo the input",
+                    code="SUBMIT(answer=" + repr(text.upper()) + ")",
+                    output=text,
+                    untruncated_output=text,
+                    duration_ms=10,
+                )],
+            ),
+            evidence=RunEvidence(
+                run_id=text + "-run", complete=True, terminal_outcome="completed"
+            ),
+        )
+        if text == "world":
+            self.world_returning.set()
+        return prediction
 
 {extra}
 evaluations = ava.Evaluations(
     metrics={{
         "quality": ava.Metric(
             state={selector},
-            question={{"type": "noul", "instructions": "Is the report useful?"}},
+            question={{"type": "noul", "instructions": "Is the agent handoff useful?"}},
         ),
         "trace": ava.Metric(
             state=lambda ctx: ctx.trace,
-            question={{"type": "noul", "instructions": "Are all invocations supported?"}},
+            question={{"type": "noul", "instructions": "Is this invocation supported?"}},
         ),
     }},
     composites={{"quality": {composite}}},
@@ -164,13 +205,24 @@ def load():
 async def research(ticket: dict, repeat: int = 2, *, agent: ava.Agent,
                    context: ava.RunContext, logger=ava.Logger()) -> Report:
     agent._predictor = Predictor()
-    predictions = await asyncio.gather(agent(text="hello"), agent(text="world"))
-    await agent(text="missing")
+    {before_calls}
+    agent_payload = {{"items": list(ticket["items"])}}
+    predictions = await asyncio.gather(
+        agent(text="hello", payload=agent_payload),
+        agent(text="world", payload=agent_payload),
+    )
+    later = await agent(text="later", payload=agent_payload)
+    predictions[1].handoff.summary = "mutated by caller"
+    predictions[1].handoff.payload["items"].append("caller output mutation")
+    agent_payload["items"].append("caller input mutation")
+    predictions[1].trace.steps[0].output = "mutated trace"
+    predictions[1].trace.steps[0].untruncated_output = "mutated full trace"
     {body}
     return Report(
-        summary=" ".join(p.answer for p in predictions),
+        summary="postprocessed " + " ".join(p.answer for p in predictions),
         payload=ticket,
         producer_pid=os.getpid(),
+        answers=[p.answer for p in predictions] + [later.answer],
     )
 
 @ava.step
@@ -193,13 +245,15 @@ def write_workflow(
     composite: str = 'lambda answers: answers.nouls["quality"].noul',
     extra: str = "",
     body: str = "pass",
+    predictor_body: str = "pass",
+    before_calls: str = "pass",
 ) -> Path:
     if package:
         root = root / "evaluation_package"
         root.mkdir()
         (root / "__init__.py").write_text("")
         (root / "models.py").write_text(dedent(_MODEL_SOURCE))
-        model_import = "from .models import Report, report_state"
+        model_import = "from .models import Handoff, Report, report_state"
     else:
         model_import = dedent(_MODEL_SOURCE)
     workflow = root / "evaluation_flow.py"
@@ -210,6 +264,8 @@ def write_workflow(
             composite=composite,
             extra=extra,
             body=body,
+            predictor_body=predictor_body,
+            before_calls=before_calls,
         )
     )
     workflow.with_suffix(".txt").write_text("original")
@@ -245,31 +301,48 @@ def evaluation_node(run: RunState) -> str:
     return next(node_id for node_id, node in run.nodes.items() if node.name == "research")
 
 
-def assert_original_requests(service: EvaluationService) -> None:
+def assert_original_requests(service: EvaluationService, *, winner: str = "world") -> None:
     requests = [service.requests.get(timeout=10), service.requests.get(timeout=10)]
     report = next(item for item in requests if "quality" in item["questions"])
     assert report["model"] == "evaluation-workflow-model"
-    assert report["state"]["summary"] == "HELLO WORLD"
-    assert report["state"]["inputs"] == {"ticket": {"items": ["original"]}, "repeat": 2}
+    assert report["state"]["summary"] == "agent " + winner.upper()
+    assert report["state"]["answer"] == winner.upper()
+    assert report["state"]["inputs"] == {
+        "text": winner,
+        "payload": {"items": ["original"]},
+    }
     assert report["state"]["payload"] == {"items": ["original"]}
     assert report["state"]["selector_pid"] != report["state"]["producer_pid"]
     assert report["state"]["selector_pid"] != os.getpid()
     trace_request = next(item for item in requests if "trace" in item["questions"])
     traces = trace_request["state"]
-    assert len({item["invocation_id"] for item in traces}) == 3
-    assert [item["trace"]["steps"] for item in traces if item["kind"] == "trace_finished"] == [
-        [{"text": "hello"}],
-        [{"text": "world"}],
-    ]
-    assert [item["error"] for item in traces if item["kind"] == "trace_unavailable"] == [
-        "Agent trace unavailable"
-    ]
+    assert len(traces) == 1
+    assert traces[0]["kind"] == "trace_finished"
+    assert traces[0]["trace"]["status"] == "completed"
+    assert traces[0]["trace"]["iterations"] == 1
+    [iteration] = traces[0]["trace"]["steps"]
+    assert iteration["iteration"] == 1
+    assert iteration["reasoning"] == "Echo the input"
+    assert iteration["code"] == "SUBMIT(answer=" + repr(winner.upper()) + ")"
+    assert iteration["output"] == winner
+    assert iteration["untruncated_output"] == winner
+    assert iteration["duration_ms"] == 10
+    assert iteration["error"] is False
+    assert iteration["tool_calls"] == []
+    assert iteration["predict_calls"] == []
+    assert service.requests.empty()
 
 
+@pytest.mark.parametrize("winner", ["world", "first"])
 def test_slow_evaluation_survives_terminal_and_keeps_owned_evidence(
-    tmp_path, evaluation_service
+    tmp_path, evaluation_service, winner
 ):
-    workflow = write_workflow(tmp_path)
+    workflow = write_workflow(
+        tmp_path,
+        before_calls=(
+            'await agent(text="first", payload=ticket)' if winner == "first" else "pass"
+        ),
+    )
     evaluation_service.release.clear()
     operator = Operator([str(workflow)], watch=False, schedule=False)
     try:
@@ -279,6 +352,7 @@ def test_slow_evaluation_survives_terminal_and_keeps_owned_evidence(
         assert operator.get_run_result(run.run_id)["payload"] == {
             "items": ["original", "downstream"]
         }
+        assert operator.get_run_result(run.run_id)["answers"] == ["HELLO", "WORLD", "LATER"]
         [pending] = operator.list_evaluations(run.run_id, evaluation_node(run))
         assert pending.status == "pending"
         assert pending.result is None and pending.error is None
@@ -294,7 +368,7 @@ def test_slow_evaluation_survives_terminal_and_keeps_owned_evidence(
         assert pending.status == "pending"
         record.result.composites["quality"] = 0
         assert operator.list_evaluations(run.run_id)[0].result.composites == {"quality": 0.8}
-        assert_original_requests(evaluation_service)
+        assert_original_requests(evaluation_service, winner=winner)
     finally:
         evaluation_service.release.set()
         operator.close()
@@ -344,13 +418,9 @@ def test_owned_source_definitions_and_separate_reruns(tmp_path, evaluation_servi
     [
         ({"selector": "lambda ctx: ctx.output.missing"}, "State selector"),
         ({"composite": "lambda answers: 2.0"}, "Composite"),
-        ({"body": 'ticket["unserializable"] = threading.Lock()'}, "Evaluation snapshot failed"),
         (
-            {
-                "body": "from avalanche._agent_evidence import emit_agent_evidence; "
-                "emit_agent_evidence({})"
-            },
-            "KeyError",
+            {"predictor_body": 'handoff.payload["unserializable"] = threading.Lock()'},
+            "Evaluation snapshot failed",
         ),
         (
             {"extra": "def fail_worker(ctx):\n    os._exit(19)", "selector": "fail_worker"},
@@ -361,16 +431,7 @@ def test_owned_source_definitions_and_separate_reruns(tmp_path, evaluation_servi
 def test_evaluation_errors_do_not_fail_workflows(
     tmp_path, evaluation_service, changes, expected_error
 ):
-    # Remove an intentionally unserializable field downstream so workflow result
-    # transport remains valid; the evaluation must still report the snapshot error.
     workflow = write_workflow(tmp_path, **changes)
-    if "body" in changes:
-        source = workflow.read_text().replace(
-            'report.summary = "mutated downstream"',
-            'report.payload.pop("unserializable", None)\n'
-            '    report.summary = "mutated downstream"',
-        )
-        workflow.write_text(source)
     operator = Operator([str(workflow)], watch=False, schedule=False)
     try:
         run = wait_terminal(operator, operator.start_run("flow"))
@@ -490,8 +551,14 @@ def test_project_dotenv_credentials_are_not_loaded_into_operator(
         operator.close()
 
 
-def test_failed_step_has_no_evaluation_record(tmp_path, evaluation_service):
-    workflow = write_workflow(tmp_path, body='raise ValueError("step body failed")')
+@pytest.mark.parametrize(
+    "before_calls",
+    ['raise ValueError("step body failed")', 'await agent(text="failed", payload=ticket)'],
+)
+def test_failure_before_successful_agent_has_no_evaluation_record(
+    tmp_path, evaluation_service, before_calls
+):
+    workflow = write_workflow(tmp_path, before_calls=before_calls)
     operator = Operator([str(workflow)], watch=False, schedule=False)
     try:
         run = wait_terminal(operator, operator.start_run("flow"))
@@ -506,12 +573,56 @@ def test_failed_step_has_no_evaluation_record(tmp_path, evaluation_service):
         operator.close()
 
 
+def test_step_without_agent_call_has_no_evaluation_record(tmp_path, evaluation_service):
+    workflow = write_workflow(
+        tmp_path,
+        before_calls=(
+            'return Report(summary="no agent", payload=ticket, '
+            "producer_pid=os.getpid(), answers=[])"
+        ),
+    )
+    operator = Operator([str(workflow)], watch=False, schedule=False)
+    try:
+        run = wait_terminal(operator, operator.start_run("flow"))
+        assert run.status == RunStatus.SUCCESS
+        assert operator.get_run_result(run.run_id)["summary"] == "mutated downstream"
+        assert operator.list_evaluations(run.run_id) == []
+        assert evaluation_service.requests.empty()
+    finally:
+        operator.close()
+
+
+def test_successful_agent_evaluation_survives_later_step_failure(tmp_path, evaluation_service):
+    evaluation_service.release.clear()
+    workflow = write_workflow(tmp_path, body='raise ValueError("postprocessing failed")')
+    operator = Operator([str(workflow)], watch=False, schedule=False)
+    try:
+        run = wait_terminal(operator, operator.start_run("flow"))
+        assert run.status == RunStatus.FAILED
+        [pending] = operator.list_evaluations(run.run_id)
+        assert pending.status == "pending"
+        sequence = operator.current_sequence
+        terminal = operator.get_run(run.run_id)
+        evaluation_service.release.set()
+        record = wait_evaluation(operator, run.run_id)
+        assert record.status == "completed", record.error
+        assert operator.get_run(run.run_id) == terminal
+        assert operator.current_sequence == sequence
+        assert_original_requests(evaluation_service)
+    finally:
+        evaluation_service.release.set()
+        operator.close()
+
+
 def test_capacity_errors_do_not_backpressure_workflow(tmp_path, evaluation_service):
     evaluation_service.release.clear()
     workflow = tmp_path / "many_evaluations.py"
     workflow.write_text(
         dedent("""
         import avalanche as ava
+        import dspy
+        from predict_rlm import RunEvidence, RunTrace
+        from predict_rlm.trace import IterationStep
 
         class Echo(ava.Signature):
             value: str = ava.InputField()
@@ -519,7 +630,7 @@ def test_capacity_errors_do_not_backpressure_workflow(tmp_path, evaluation_servi
 
         evaluations = ava.Evaluations(metrics={
             "quality": ava.Metric(
-                state=lambda ctx: str(ctx.output),
+                state=lambda ctx: ctx.output.answer,
                 question={"type": "noul", "instructions": "Is this useful?"},
             )
         })
@@ -529,7 +640,35 @@ def test_capacity_errors_do_not_backpressure_workflow(tmp_path, evaluation_servi
             return 0
 
         @ava.agent_step(Echo, evaluations=evaluations)
-        def increment(value: int, *, agent: ava.Agent):
+        async def increment(value: int, *, agent: ava.Agent):
+            class Predictor:
+                async def acall(self, *, value):
+                    return dspy.Prediction(
+                        answer=str(value),
+                        trace=RunTrace(
+                            status="completed",
+                            model="test-model",
+                            iterations=1,
+                            max_iterations=1,
+                            duration_ms=1,
+                            steps=[IterationStep(
+                                iteration=1,
+                                reasoning="Echo the input",
+                                code="SUBMIT(answer=" + repr(value) + ")",
+                                output=value,
+                                untruncated_output=value,
+                                duration_ms=1,
+                            )],
+                        ),
+                        evidence=RunEvidence(
+                            run_id=value + "-run",
+                            complete=True,
+                            terminal_outcome="completed",
+                        ),
+                    )
+
+            agent._predictor = Predictor()
+            await agent(value=str(value))
             return value + 1
 
         @ava.workflow(classifier_defaults={"timeout": 60.0})

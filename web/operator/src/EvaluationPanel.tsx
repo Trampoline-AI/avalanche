@@ -10,9 +10,16 @@ interface EvaluationPanelProps {
   loading: boolean;
   error?: string;
   declaration?: EvaluationDeclaration;
+  onOpenTrace?: () => void;
 }
 
-export function EvaluationPanel({ record, loading, error, declaration }: EvaluationPanelProps) {
+export function EvaluationPanel({
+  record,
+  loading,
+  error,
+  declaration,
+  onOpenTrace,
+}: EvaluationPanelProps) {
   return (
     <section aria-label="Execution evaluations" className="grid min-w-0 gap-5">
       {error && (
@@ -91,7 +98,10 @@ export function EvaluationPanel({ record, loading, error, declaration }: Evaluat
                   <h4 className="m-0 text-xs font-semibold [overflow-wrap:anywhere]">{name}</h4>
                   <span className="font-mono text-[9px] text-muted">{answer.type}</span>
                 </div>
-                <MetricInputSummary inputs={declaration?.metric_inputs?.[name]} />
+                <MetricInputSummary
+                  inputs={declaration?.metric_inputs?.[name]}
+                  onOpenTrace={onOpenTrace}
+                />
                 <AnswerSummary id={name} answer={answer} expanded />
                 {answer.type === "score" && (
                   <ol
