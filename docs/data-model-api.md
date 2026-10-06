@@ -1,5 +1,10 @@
 # Data Model and Storage API
 
+For configuration fields and method contracts, see the
+[Iceberg](api/storage/iceberg.md), [Lance](api/storage/lance.md),
+[stream](api/storage/streams.md), and [cursor](api/storage/cursors.md) references.
+The [package API index](api/README.md) covers the remaining interfaces.
+
 Avalanche tables group schemas in namespaces. Use Iceberg by default, or Lance with
 `uv sync --extra lance`.
 
