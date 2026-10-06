@@ -1,6 +1,6 @@
 # Agents
 
-Avalanche 0.7.0's workflow-author agent API. Dependency behavior below describes the locked PredictRLM 0.8.0 and DSPy 3.2.1 versions. See [workflows](workflows.md) for node calls, composition, and workflow default declarations; [inputs and context](inputs-context.md) for ordinary step injection.
+Workflow-author agent API, including inline agent nodes. Dependency behavior below describes PredictRLM 0.9.0 and DSPy 3.2.1. See [workflows](workflows.md) for node calls, composition, and workflow default declarations; [inputs and context](inputs-context.md) for ordinary step injection.
 
 ## Agent step
 
@@ -38,7 +38,32 @@ The example assumes a signature with input `document` and output `summary`. Elli
 
 The decorator returns a single-output workflow step. The body must declare exactly `*, agent: ava.Agent`, with no default; Avalanche injects it and removes it from the step's public call signature. The remaining Python parameters and return annotation describe the workflow step, independently of the model signature. Synchronous and asynchronous bodies are accepted; an awaitable body result is awaited. Use an asynchronous body to await model calls.
 
-There are no ordinary node-decorator options here: for example, `slug=` would be forwarded to PredictRLM, not interpreted as a node identifier. The body chooses which prediction fields to return and whether to write files or tables; the decorator does not persist the body result to an application table.
+Declare decorated bodies outside workflow construction. Both `@ava.agent_step(...)` and `@ava.agent.step(...)` support this form; nested agent decorators raise `AgentStepError`.
+
+Decorated agent functions do not provide ordinary node-decorator options such as a node slug. The body chooses which prediction fields to return and whether to write files or tables; the decorator does not persist the body result to an application table.
+
+### Inline call
+
+Inside a workflow body, `ava.agent.step(signature, inputs=None, slug=None, ...)`
+declares an inline agent node and returns its deferred result. It accepts the
+same signature, skills, tools, and runtime options listed above. It does not
+execute a model during graph construction or discovery.
+
+| Inline-only parameter | Default and contract |
+| --- | --- |
+| `inputs` | `None`; optionally a mapping from signature input names to values or deferred node outputs. Unknown names raise `AgentStepError`. With implicit `>>` binding, inputs follow signature declaration order. |
+| `slug` | `None`; optionally the node's rerun-addressable identifier, following ordinary node slug rules. |
+
+One output field becomes its validated value; multiple fields become an ordered
+tuple and separate downstream arguments. A single list- or tuple-valued field
+remains one argument under both Local and Ray execution, even when empty.
+Outputs are validated strictly against their field annotations and constraints;
+missing fields raise `AgentStepError`, and invalid values raise Pydantic
+`ValidationError`, without coercion, fallback, or retry.
+
+Outside a workflow, `ava.agent.step(...)` returns a decorator instead.
+Non-`None` `inputs=` or `slug=` in that context raises `TypeError`; these are
+inline node options, not model inputs or predictor settings.
 
 ### Workflow defaults
 
@@ -88,7 +113,7 @@ ava.OutputField(**kwargs) -> FieldInfo
 | Field `desc` | Model-facing field description. `description` supplies it when `desc` is omitted. |
 | Field `default`, `default_factory`, constraints | Ordinary Pydantic field options, forwarded by DSPy. Without a default/factory the descriptor is required. |
 
-The field helpers accept keyword arguments only. They do not add an Avalanche value-validation layer. Malformed declarations or incompatible field options raise DSPy/Pydantic errors, including `ValueError` and `TypeError`. Signature classes expose `instructions`, `input_fields`, and `output_fields` for the declared contract; inherited dependency editing methods are outside this reference.
+The field helpers accept keyword arguments only. Field declarations alone do not validate values; inline agent execution strictly validates outputs, while decorated bodies receive raw predictions. Malformed declarations or incompatible field options raise DSPy/Pydantic errors, including `ValueError` and `TypeError`. Signature classes expose `instructions`, `input_fields`, and `output_fields` for the declared contract; inherited dependency editing methods are outside this reference.
 
 ## Injected Agent call
 
@@ -100,6 +125,9 @@ summary = prediction.summary  # the output name declared by the signature
 `inputs` must contain **exactly** the signature's input names, even for fields with descriptor defaults. Positional input arguments, extra names, and missing names are not supported. Runtime configuration cannot be overridden through this call. Avalanche checks input names, not their value types; PredictRLM/DSPy processes the values.
 
 The return is the dependency's raw DSPy prediction, with outputs accessible by their declared field names. There is no fixed Avalanche result-field schema. For a structured output, callers can explicitly validate the field with their application model, for example `Report.model_validate(prediction.report)`.
+
+PredictRLM also supplies typed `prediction.trace` and `prediction.evidence`
+metadata. `ava.agent.AgentTrace` is the PredictRLM `RunTrace` type.
 
 Each step-body execution receives a fresh injected agent. Its first call constructs the predictor lazily; subsequent calls in that body reuse it. The body can make zero, one, or multiple calls. Calling a decorated step during workflow construction follows [node semantics](workflows.md), not this model-call interface.
 

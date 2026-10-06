@@ -67,23 +67,6 @@ def _write_workflow(root: Path, *, failure: str | None = None, block: bool = Fal
                 score: int = ava.OutputField(ge=0)
                 route: str = ava.OutputField(min_length=1)
 
-            class Trace:
-                def __init__(self, max_iterations):
-                    self.max_iterations = max_iterations
-
-                def to_exportable_json(self):
-                    return json.dumps({{
-                        "status": "completed",
-                        "model": "test-predictor",
-                        "sub_model": None,
-                        "iterations": 1,
-                        "max_iterations": self.max_iterations,
-                        "duration_ms": 1,
-                        "usage": {{"input_tokens": 0, "output_tokens": 0}},
-                        "evidence": {{"run_id": "test-prediction", "complete": True}},
-                        "steps": [],
-                    }})
-
             class TestPredictor:
                 def __init__(self, signature, *, skills=(), tools=(), events=(),
                              lm=None, sub_lm=None, max_iterations=8, verbose=False):
@@ -109,9 +92,20 @@ def _write_workflow(root: Path, *, failure: str | None = None, block: bool = Fal
                     for sink in self.events:
                         await sink.emit(started)
                     if BLOCK:
-                        await asyncio.Event().wait()
+                        try:
+                            await asyncio.Event().wait()
+                        except asyncio.CancelledError as error:
+                            error.evidence = predict_rlm.RunEvidence(
+                                run_id="test-prediction", complete=True,
+                                terminal_outcome="cancelled",
+                            )
+                            raise
                     if FAILURE == "exception":
-                        raise RuntimeError("ticket provider unavailable")
+                        error = RuntimeError("ticket provider unavailable")
+                        error.evidence = predict_rlm.RunEvidence(
+                            run_id="test-prediction", complete=True, terminal_outcome="error",
+                        )
+                        raise error
                     if "decision" in self.signature.output_fields:
                         ticket = inputs["ticket"]
                         decision = Decision(
@@ -134,7 +128,17 @@ def _write_workflow(root: Path, *, failure: str | None = None, block: bool = Fal
                         2, {{"status": "completed", "outputs": outputs}})
                     for sink in self.events:
                         await sink.emit(finished)
-                    return dspy.Prediction(**outputs, trace=Trace(self.max_iterations))
+                    return dspy.Prediction(
+                        **outputs,
+                        trace=predict_rlm.RunTrace(
+                            status="completed", model="test-predictor", iterations=0,
+                            max_iterations=self.max_iterations, duration_ms=1,
+                        ),
+                        evidence=predict_rlm.RunEvidence(
+                            run_id="test-prediction", complete=True,
+                            terminal_outcome="completed",
+                        ),
+                    )
 
             # This replacement exists only in the temporary module's isolated child.
             predict_rlm.PredictRLM = TestPredictor

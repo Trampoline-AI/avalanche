@@ -76,7 +76,20 @@ def test_workflow_bound_inline_callable_serializes_without_predictor_or_contextv
 
         async def acall(self, *, text):
             words = text.split()[: self.max_iterations]
-            return dspy.Prediction(first=words[0].upper(), count=len(words))
+            return dspy.Prediction(
+                first=words[0].upper(),
+                count=len(words),
+                trace=RunTrace(
+                    status="completed",
+                    model="test-model",
+                    iterations=0,
+                    max_iterations=self.max_iterations,
+                    duration_ms=1,
+                ),
+                evidence=RunEvidence(
+                    run_id="inline-run", complete=True, terminal_outcome="completed"
+                ),
+            )
 
     @ava.workflow(agent_defaults={"max_iterations": 2})
     def flow():

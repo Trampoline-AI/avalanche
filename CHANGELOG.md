@@ -5,6 +5,7 @@
 - Added inline `ava.agent.step(Signature, ...)` calls for direct workflow chains,
   with typed inputs, validated outputs, and the same skills, tools, and model
   settings as decorated agents.
+  Both call forms are covered in the mirrored workflow-author API reference.
 - Agent decorators remain supported outside workflows. Nested agent decorators
   are rejected; `inputs=` and `slug=` are only supported for inline calls.
 - Fixed inline agent chains unpacking a single list- or tuple-valued output into
