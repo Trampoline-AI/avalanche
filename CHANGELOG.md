@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 0.9.0
+
 - Added inline `ava.agent.step(Signature, ...)` calls for direct workflow chains,
   with typed inputs, validated outputs, and the same skills, tools, and model
   settings as decorated agents.
