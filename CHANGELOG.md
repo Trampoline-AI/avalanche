@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 0.8.0
+
 - Upgraded PredictRLM to 0.9.0.
 - Added `ava.agent.AgentTrace`, the same type as PredictRLM's `RunTrace`.
 
