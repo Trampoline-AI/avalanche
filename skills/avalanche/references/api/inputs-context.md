@@ -38,7 +38,9 @@ def inspect_request(request: Request, caller: Caller, run: ava.RunContext):
 
 An unbound parameter annotated with a `BaseInput` subclass receives the run input **only when the validated input is an instance of that annotation**. A `BaseContext`-annotated parameter first receives compatible caller context; otherwise it receives compatible system `RunContext`. Thus a custom `Caller` and the system `RunContext` can both be injected into one node. Parameter names do not control injection.
 
-Explicitly bound positional/keyword arguments take precedence. Use resolvable, concrete class annotations: unions such as `Request | None` are not this injection contract. Merely annotating a node does not declare or validate workflow input; use the workflow's `input=` option. When no compatible value is available, the annotation supplies nothing; normal defaults/missing-argument errors apply. Use ordinary or keyword-only parameters for injected values.
+Explicit keyword arguments override annotation injection, for example `inspect_request(request=other_request, caller=other_caller)`. A whole-input selector can also bind an input slot positionally, for example `consume(ava.input)` for `def consume(request: Request)`. Ordinary positional values do **not** override annotated input/context injection: passing `consume(other_request)` can leave the positional value in the call while also injecting `request` by keyword, causing a multiple-values `TypeError`. Use keyword overrides for input/context values.
+
+Use resolvable, concrete class annotations: unions such as `Request | None` are not this injection contract. Merely annotating a node does not declare or validate workflow input; use the workflow's `input=` option. When no compatible value is available, the annotation supplies nothing; normal defaults/missing-argument errors apply. Use ordinary or keyword-only parameters for injected values.
 
 ### Run context
 

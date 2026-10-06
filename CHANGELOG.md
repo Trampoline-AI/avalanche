@@ -8,6 +8,8 @@
   to dedicated agent and classifier references. Topic pages under `docs/api/`
   are mirrored in `skills/avalanche/references/api/` for offline lookup; framework
   internals, operator protocols, and browser embedding are outside this reference.
+  Clarified asynchronous CLI validation, Local/Ray argument binding, supported
+  input/context overrides, and the limits of stream acknowledgment and Lance deletion.
 
 ## 0.8.0
 
