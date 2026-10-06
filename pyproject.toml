@@ -46,7 +46,7 @@ lance = [
 
 [dependency-groups]
 dev = [
-    "boto3>=1.35,<1.36",
+    "boto3>=1.35,<2",
     "pytest>=9.0.3,<10",
     "pytest-asyncio>=1.4.0,<2",
     "ruff>=0.5.6,<0.6",
@@ -57,7 +57,7 @@ dev = [
     "moto[s3,server]>=5,<6",
     "pylance>=0.24.0",
     "ray[default]>=2.50.0",
-    "s3fs>=2023.12.2,<2024",
+    "s3fs>=2026.6.0,<2027",
     "pytest-cov>=7.0.0",
     "textual>=6.2.1",
     "watchfiles>=1.1.1",
