@@ -54,7 +54,7 @@ from .storage import Namespace, NamespaceConfig, ScanResult, Table, TableGroup
 from .types import AppendResult, SnapshotMetadata, SnapshotState
 from .webhook import Webhook
 
-__version__ = "0.7.1"
+__version__ = "0.7.2"
 
 # Submodules and names resolved lazily on first attribute access (see __getattr__).
 _LAZY_SUBMODULES = frozenset({"agent", "classifier", "iceberg", "lance"})

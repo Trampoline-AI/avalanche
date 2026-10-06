@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 0.7.2
+
 - `import avalanche` no longer imports Polars or PyArrow. The public types,
   storage, lineage, model-frame, and stream modules bind them lazily and load
   them on first use, so a process that only uses the DAG, runtime, and
