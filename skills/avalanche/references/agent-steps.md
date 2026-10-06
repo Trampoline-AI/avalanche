@@ -451,8 +451,10 @@ Path roots refer to the captured agent call's arguments, prediction, and trace;
 opaque selectors show `custom: qualified_name`. This is selection metadata, not the serialized
 state sent to Jev or execution of the selector. Completed
 composites appear beside run-node evaluation badges and in the agent sidebar
-header: one uses `label: 85.6%`, multiple use up to three one-decimal percentages
-separated by colons in declaration order. Percentages blend red at 0%, yellow at
+header: one uses `label: 85.6%`, multiple use one-decimal percentages separated
+by centered dots in declaration order. DAG nodes show the first three, followed
+by `and N more` for additional scores; the sidebar header shows all scores and
+wraps onto additional lines. Percentages blend red at 0%, yellow at
 50%, and the success green (`#22c55e`) at 100%; labels have matching node/sidebar
 colors. Compact nodes omit composite
 names and match percentages and pill counts to the duration's size. Historical

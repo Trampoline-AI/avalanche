@@ -410,7 +410,8 @@ const WorkflowNodeCard = memo(({ data, selected }: NodeProps<Node<CardData>>) =>
             <CompositeSummary
               composites={data.composites}
               compact={isCompact}
-              className={`node-composite-summary min-w-0 flex-1 truncate text-right font-mono ${isCompact ? "text-sm" : "text-[9px]"}`}
+              maxVisible={3}
+              className={`node-composite-summary flex min-w-0 flex-1 items-center justify-end gap-1 text-right font-mono ${isCompact ? "text-sm" : "text-[9px]"}`}
             />
           )}
         </div>

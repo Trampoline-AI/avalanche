@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- Composite score summaries use centered dots. DAG nodes show the first three
+  scores plus a black `and N more` label, smaller only when zoomed in. Sidebar
+  headers show every score and wrap as needed.
 - `Evaluations` now validates declarations through Pydantic and exposes read-only
   metric/composite mappings. Invalid fields raise field-specific `ValidationError`s;
   synchronous-callable checks and independent evaluation execution are unchanged.

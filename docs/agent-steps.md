@@ -545,8 +545,10 @@ one-decimal percentage format and gradient as the node and header summaries.
 
 Completed composites also appear on run DAG nodes, right-aligned beside the
 evaluation badge, and in the selected agent's sidebar header on every run tab.
-One composite shows `label: 85.6%`; multiple composites show the first three
-percentages in declaration order, such as `85.6% : 77.0% : 90.0%`. Percentages
+One composite shows `label: 85.6%`; multiple composites use centered dots, such as
+`85.6% · 77.0% · 90.0%`. DAG nodes show the first three scores in declaration order,
+followed by `and N more` when additional scores exist. The sidebar header shows
+every score and wraps onto additional lines as needed. Percentages
 use a continuous red–yellow–green scale: red at 0%, yellow at 50%, and the success
 color (`#22c55e`) at 100%. Labels share the same color in the node and sidebar.
 These summaries use one decimal place and do not show

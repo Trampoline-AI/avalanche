@@ -58,8 +58,5 @@ export function formatCompositeSummary(composites: Record<string, number>): stri
     const [name, value] = entries[0];
     return `${name}: ${compositePercent.format(value)}`;
   }
-  return entries
-    .slice(0, 3)
-    .map(([, value]) => compositePercent.format(value))
-    .join(" : ");
+  return entries.map(([, value]) => compositePercent.format(value)).join(" · ");
 }
