@@ -99,10 +99,14 @@ the operator's canonical selector when names are ambiguous.
 | `--workspace FIELD=DIR` | None; repeatable | Capture a local directory as a top-level `Workspace` input. |
 
 The same field cannot be supplied by JSON, a file attachment, and/or a workspace.
-Invalid JSON, assignment syntax, duplicate fields, invalid model input, or an
-operator submission error fails the command; it does not silently omit inputs.
-Successful submission returns `0`; handled validation/submission errors return
-`1` and print their message to stderr.
+Invalid JSON, assignment syntax, duplicate fields, or an operator submission error
+fails the command; it does not silently omit inputs. Successful submission returns
+`0`; handled parsing/submission errors return `1` and print their message to stderr.
+Submission success does not mean the input/context models have validated or the
+workflow has succeeded. Syntactically valid object JSON with missing required
+fields or invalid model values can receive a run ID and exit status `0`, then fail
+the asynchronous run. Inspect the run outcome, for example with
+`ava result RUN_ID --wait --output-dir PATH`, before treating it as successful.
 
 ## `ava result RUN_ID --output-dir PATH [options]`
 

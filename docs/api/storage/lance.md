@@ -56,7 +56,7 @@ ns.drop(*, drop_tables: bool = False) -> None
 
 `list_tables()` lists declared table names, not datasets discovered on disk.
 
-`drop(drop_tables=True)` recursively deletes declared table directories **including their data**, then attempts to remove the namespace directory. Missing/nonempty namespace-directory removal is ignored. With the default `False`, table contents remain. Undeclared directories are not recursively deleted; other deletion errors propagate.
+`drop(drop_tables=True)` attempts to recursively delete declared table directories **including their data**, then remove the namespace directory. Deletion is best-effort: table-directory deletion ignores filesystem errors, and namespace-directory removal suppresses every `OSError`, including permission failures. A normal return does not prove that datasets or the namespace were deleted; verify their absence when required. With the default `False`, table contents remain. Undeclared directories are not recursively deleted.
 
 ## Table declaration and fields
 
