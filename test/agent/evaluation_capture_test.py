@@ -175,6 +175,87 @@ async def test_actual_call_inputs_and_complete_prediction_replace_step_result(
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("helper_evaluated", [False, True])
+@pytest.mark.parametrize("failure_type", [None, ValueError, asyncio.CancelledError])
+async def test_nested_step_capture_is_isolated_and_restored(
+    evaluations,
+    predictor,
+    helper_evaluated,
+    failure_type,
+):
+    helper_evaluations = (
+        ava.Evaluations(metrics={"helper_quality": evaluations.metrics["quality"]})
+        if helper_evaluated
+        else None
+    )
+    failure = failure_type("helper postprocessing failed") if failure_type else None
+
+    @ava.agent_step(EchoSignature, evaluations=helper_evaluations)
+    async def helper(*, agent: ava.Agent) -> str:
+        prediction = await agent(text="helper")
+        if failure is not None:
+            raise failure
+        return prediction.answer
+
+    @ava.agent_step(EchoSignature, evaluations=evaluations)
+    async def outer(*, agent: ava.Agent) -> str:
+        if failure_type is None:
+            assert await helper.fn() == "HELPER"
+        else:
+            with pytest.raises(failure_type) as raised:
+                await helper.fn()
+            assert raised.value is failure
+        return (await agent(text="outer")).answer
+
+    submissions = []
+    observed = []
+    with capture_agent_evidence(observed.append, errors="raise"):
+        with capture_evaluations(submissions.append) as errors:
+            result = await outer.fn()
+
+    assert result == "OUTER"
+    assert errors == []
+    assert [submission.evaluations for submission in submissions] == (
+        [helper_evaluations, evaluations] if helper_evaluated else [evaluations]
+    )
+    terminals = [event for event in observed if event["kind"] != "evidence"]
+    assert len(terminals) == 2
+    expected_calls = [("helper", terminals[0]), ("outer", terminals[1])]
+    if not helper_evaluated:
+        expected_calls = expected_calls[1:]
+    for submission, (text, terminal) in zip(submissions, expected_calls, strict=True):
+        assert submission.error is None
+        context = submission.context
+        assert context.inputs == {"text": text}
+        assert context.output.answer == text.upper()
+        assert context.output.handoff == Report(summary=f"summary: {text}")
+        assert context.output.evidence.run_id == text
+        assert context.trace[0]["invocation_id"] == terminal["invocation_id"]
+        selected_trace = RunTrace.model_validate(context.trace[0]["trace"], strict=True)
+        assert selected_trace == _trace(text)
+
+
+@pytest.mark.asyncio
+async def test_unevaluated_helper_does_not_create_evaluation_for_no_call_outer(
+    evaluations, predictor
+):
+    @ava.agent_step(EchoSignature)
+    async def helper(*, agent: ava.Agent) -> str:
+        return (await agent(text="helper")).answer
+
+    @ava.agent_step(EchoSignature, evaluations=evaluations)
+    async def outer(*, agent: ava.Agent) -> str:
+        return await helper.fn()
+
+    submissions = []
+    with capture_evaluations(submissions.append) as errors:
+        assert await outer.fn() == "HELPER"
+
+    assert submissions == []
+    assert errors == []
+
+
+@pytest.mark.asyncio
 async def test_first_successful_completion_wins_without_gating_later_calls(
     evaluations,
     monkeypatch,

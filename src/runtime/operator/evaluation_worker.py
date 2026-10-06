@@ -7,7 +7,9 @@ import io
 import multiprocessing
 import os
 import queue
+import site
 import sys
+import sysconfig
 import threading
 import time
 from collections.abc import Callable
@@ -77,18 +79,32 @@ class _SnapshotPickler(cloudpickle.CloudPickler):
 
 def _local_modules(root: Path) -> list[ModuleType]:
     """Capture user definitions by value, including sibling/package model classes."""
-    modules = []
-    installed = Path(sys.prefix).resolve()
-    for name, module in tuple(sys.modules.items()):
-        if module is None or name.split(".", 1)[0] in {"avalanche", "runtime"}:
+    modules: dict[str, ModuleType] = {}
+    paths = sysconfig.get_paths()
+    installed = {
+        Path(path).resolve()
+        for path in (
+            *(paths[key] for key in ("stdlib", "platstdlib", "purelib", "platlib")),
+            *site.getsitepackages(),
+            site.getusersitepackages(),
+        )
+    }
+    root = root.resolve()
+    for module in tuple(sys.modules.values()):
+        if module is None:
+            continue
+        name = module.__name__
+        if name in modules or name.split(".", 1)[0] in {"avalanche", "runtime"}:
             continue
         filename = getattr(module, "__file__", None)
         if not isinstance(filename, str):
             continue
-        path = Path(filename).absolute()
-        if path.is_relative_to(root) and not path.is_relative_to(installed):
-            modules.append(module)
-    return modules
+        path = Path(filename).resolve()
+        if path.is_relative_to(root) and not any(
+            path.is_relative_to(directory) for directory in installed
+        ):
+            modules[name] = module
+    return list(modules.values())
 
 
 def _evaluation_environment() -> dict[str, str]:

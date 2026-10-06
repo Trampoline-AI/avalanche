@@ -1010,10 +1010,6 @@ def agent_step(
         )
 
         async def wrapper(*args: Any, **kwargs: Any) -> Any:
-            if spec.evaluations is None:
-                result = user_fn(*args, **kwargs, agent=spec.make_agent())
-                return await result if inspect.isawaitable(result) else result
-
             # Resolve process-local capture state only after reaching the worker.
             from avalanche.evaluation_capture import capture_step_evaluations
 

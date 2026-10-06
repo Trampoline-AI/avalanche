@@ -1290,6 +1290,23 @@ describe("graph evaluation declarations", () => {
     },
   );
 
+  it("refreshes completed evaluation scores while all other graph props stay unchanged", () => {
+    const props = {
+      workflow: evaluatedWorkflow,
+      runTopology: historical,
+      bottomRightPanel: null,
+      onOpenNode: () => undefined,
+    };
+    const view = render(<GraphCanvas {...props} evaluations={{ fetch: pending }} />);
+    expect(screen.queryByLabelText(/Evaluation composites:/)).not.toBeInTheDocument();
+
+    view.rerender(
+      <GraphCanvas {...props} evaluations={{ fetch: completed({ quality: 0.856 }) }} />,
+    );
+    expect(screen.getByLabelText(/Evaluation composites: quality/)).toBeVisible();
+    expect(screen.getByText("85.6%")).toBeVisible();
+  });
+
   describe.each([1.2, 0.6])("run composites at zoom %s", (zoom) => {
     it.each<{ composites: Record<string, number>; expected: string }>([
       { composites: { quality: 0.856 }, expected: "85.6%" },

@@ -45,9 +45,11 @@ Load only what the task needs:
   PredictRLM skill for the single-step design process, then covers the Avalanche
   integration surface.
 - Native observation-only agent quality metrics and composites:
-  [agent-steps.md](references/agent-steps.md#native-evaluations). Use the existing
-  step inputs, actual final return, and all invocation traces; do not invent a
-  second context schema or a separate evaluation workflow.
+  [agent-steps.md](references/agent-steps.md#native-evaluations). Use the first
+  successful agent call to return: its keyword arguments, complete DSPy
+  `Prediction`, and only that invocation's trace—not the enclosing step's inputs,
+  postprocessed return, or all invocation traces. Do not invent a second context
+  schema or a separate evaluation workflow.
 - Usage, native classifier syntax, question-object design for routing, labels,
   scoring, extraction, and verification, local execution, and CLI flags:
   [usage.md](references/usage.md#native-classifier-steps).

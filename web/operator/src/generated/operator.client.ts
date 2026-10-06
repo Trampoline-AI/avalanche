@@ -37,6 +37,10 @@ import type { RpcOptions } from "@protobuf-ts/runtime-rpc";
 // Breaking migration: the previous full-state run APIs are replaced by bounded
 // summary, snapshot, detail, and typed update APIs below. Remote operators and
 // clients must upgrade together.
+// 
+// TODO: Replace JSON-string transport for Avalanche-owned declarations, questions,
+// and evaluation results with structured protobuf messages and generated types.
+// Keep user-defined payloads and JSON Schema documents as flexible JSON values.
 
 // ── Service ─────────────────────────────────────────────
 
@@ -103,6 +107,10 @@ export interface IOperatorServiceV2Client {
 // Breaking migration: the previous full-state run APIs are replaced by bounded
 // summary, snapshot, detail, and typed update APIs below. Remote operators and
 // clients must upgrade together.
+// 
+// TODO: Replace JSON-string transport for Avalanche-owned declarations, questions,
+// and evaluation results with structured protobuf messages and generated types.
+// Keep user-defined payloads and JSON Schema documents as flexible JSON values.
 
 // ── Service ─────────────────────────────────────────────
 

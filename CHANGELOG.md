@@ -5,6 +5,8 @@
 - Composite score summaries use centered dots. DAG nodes show the first three
   scores plus a black `and N more` label, smaller only when zoomed in. Sidebar
   headers show every score and wrap as needed.
+  Scores now refresh when evaluations finish after the run, including embedded
+  workspaces with hidden or unchanged custom graph controls.
 - `Evaluations` now validates declarations through Pydantic and exposes read-only
   metric/composite mappings. Invalid fields raise field-specific `ValidationError`s;
   synchronous-callable checks and independent evaluation execution are unchanged.
@@ -22,6 +24,13 @@
   without replacing or resubmitting evaluation, even if step postprocessing fails.
   Full PredictRLM 0.9 iteration details remain available to evaluations without
   resending them through the operator's live trace channel.
+  Nested agent steps keep separate capture state, so unevaluated helpers cannot
+  claim the enclosing step's evaluation.
+  Evaluation snapshots also retain workflow-defined selectors and output classes
+  when the project lives under Python's installation prefix, without copying
+  installed libraries.
+- Workflow discovery no longer eagerly loads DSPy through evaluation capture,
+  avoiding unnecessary startup work during scans and hot reloads.
 - Added a workflow-author API reference for step decorators, graph operations,
   runs, inputs/context, files/workspaces, agents, classifiers, Iceberg/Lance
   storage, streams, cursors, and CLI commands. The workflow primitive list links

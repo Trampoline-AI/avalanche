@@ -938,6 +938,7 @@ export const GraphCanvas = memo(
   (left, right) =>
     left.workflow === right.workflow &&
     left.runTopology === right.runTopology &&
+    left.evaluations === right.evaluations &&
     left.bottomRightPanel === right.bottomRightPanel &&
     left.selectedNodeId === right.selectedNodeId &&
     left.onClearNode === right.onClearNode &&

@@ -9,13 +9,15 @@ from collections.abc import Callable, Iterator, Mapping
 from contextlib import contextmanager
 from contextvars import ContextVar
 from dataclasses import dataclass
-from typing import TypeVar, cast
+from typing import TYPE_CHECKING, TypeVar, cast
 
-from dspy import Prediction
 from pydantic import JsonValue
 
 from ._agent_evidence import AgentTraceFinishedEvent, AgentTraceUnavailableEvent
 from .evaluations import EvalContext, Evaluations
+
+if TYPE_CHECKING:
+    from dspy import Prediction
 
 InputT = TypeVar("InputT")
 OutputT = TypeVar("OutputT")
@@ -162,13 +164,15 @@ _STEP_EVALUATION_CAPTURE: ContextVar[_StepEvaluationCapture | None] = ContextVar
 
 @contextmanager
 def capture_step_evaluations(
-    evaluations: Evaluations[InputT, OutputT],
+    evaluations: Evaluations[InputT, OutputT] | None,
     *,
     step_name: str,
 ) -> Iterator[None]:
-    """Install one first-successful-return slot for this step's agent calls."""
-    capture = _StepEvaluationCapture(
-        cast(Evaluations[object, Prediction], evaluations), step_name
+    """Isolate this step's capture slot, including steps without evaluations."""
+    capture = (
+        _StepEvaluationCapture(cast("Evaluations[object, Prediction]", evaluations), step_name)
+        if evaluations is not None
+        else None
     )
     token = _STEP_EVALUATION_CAPTURE.set(capture)
     try:

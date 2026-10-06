@@ -2,18 +2,23 @@
 
 from __future__ import annotations
 
+import importlib.util
 import json
 import multiprocessing
 import os
 import queue
+import site
 import sys
+import sysconfig
 import threading
 import time
 from dataclasses import dataclass, field
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from textwrap import dedent
+from types import SimpleNamespace
 
+import cloudpickle
 import pytest
 
 from avalanche import EvalContext, Evaluations, Metric
@@ -411,6 +416,128 @@ def test_owned_source_definitions_and_separate_reruns(tmp_path, evaluation_servi
     finally:
         evaluation_service.release.set()
         operator.close()
+
+
+@pytest.mark.parametrize("pre_registered", [False, True])
+def test_snapshot_owns_source_under_python_prefix_and_restores_registry(
+    tmp_path, evaluation_service, monkeypatch, pre_registered
+):
+    source_root = tmp_path / "app"
+    source_root.mkdir()
+    source = source_root / "flow.py"
+    source.write_text(dedent(_MODEL_SOURCE))
+    module_name = "_avalanche_run_prefix_flow"
+    spec = importlib.util.spec_from_file_location(module_name, source)
+    module = importlib.util.module_from_spec(spec)
+    with monkeypatch.context() as snapshot_env:
+        snapshot_env.setitem(sys.modules, module_name, module)
+        # Multiprocessing can expose one driver as both __main__ and __mp_main__.
+        # Registration and cleanup must use the module's actual name just once.
+        snapshot_env.setitem(sys.modules, module_name + "_alias", module)
+        spec.loader.exec_module(module)
+        submission = EvaluationSubmission(
+            evaluations=Evaluations(
+                metrics={
+                    "quality": Metric(
+                        state=module.report_state,
+                        question={"type": "noul", "instructions": "Is this useful?"},
+                    )
+                },
+                model="evaluation-workflow-model",
+            ),
+            context=EvalContext(
+                inputs={"text": "original"},
+                output=SimpleNamespace(
+                    handoff=module.Handoff(
+                        summary="owned output",
+                        payload={"items": ["original"]},
+                        producer_pid=os.getpid(),
+                    ),
+                    answer="READY",
+                ),
+            ),
+            runtime_defaults={},
+        )
+        snapshot_env.setattr(sys, "prefix", str(tmp_path))
+        snapshot_env.chdir(source_root)
+        if pre_registered:
+            cloudpickle.register_pickle_by_value(module)
+        try:
+            registered = cloudpickle.list_registry_pickle_by_value()
+            request = snapshot_evaluation(submission)
+            assert request.error is None, request.error
+            assert cloudpickle.list_registry_pickle_by_value() == registered
+        finally:
+            if pre_registered:
+                cloudpickle.unregister_pickle_by_value(module)
+
+    source.unlink()
+    assert module_name not in sys.modules
+    outcomes = queue.Queue()
+    workers = EvaluationWorkers(lambda run_id, evaluation_id, outcome: outcomes.put(outcome))
+    try:
+        workers.submit("source-under-prefix", request)
+        outcome = outcomes.get(timeout=30)
+        assert outcome.error is None, outcome.error
+        assert outcome.result.classification.nouls["quality"].noul == 0.8
+        report = evaluation_service.requests.get(timeout=10)
+        assert report["model"] == "evaluation-workflow-model"
+        assert report["state"].pop("selector_pid") != os.getpid()
+        assert report["state"] == {
+            "summary": "owned output",
+            "answer": "READY",
+            "inputs": {"text": "original"},
+            "payload": {"items": ["original"]},
+            "producer_pid": os.getpid(),
+        }
+    finally:
+        workers.close()
+
+
+@pytest.mark.parametrize(
+    "library_kind", ["stdlib", "platstdlib", "purelib", "platlib", "site", "user_site"]
+)
+def test_snapshot_keeps_installed_library_selectors_by_reference(
+    tmp_path, monkeypatch, library_kind
+):
+    paths = {
+        kind: str(tmp_path / "installed" / kind)
+        for kind in ("stdlib", "platstdlib", "purelib", "platlib")
+    }
+    monkeypatch.setattr(sysconfig, "get_paths", lambda: paths)
+    monkeypatch.setattr(site, "getsitepackages", lambda: [str(tmp_path / "installed" / "site")])
+    monkeypatch.setattr(
+        site, "getusersitepackages", lambda: str(tmp_path / "installed" / "user_site")
+    )
+    monkeypatch.setattr(sys, "prefix", str(tmp_path))
+    monkeypatch.chdir(tmp_path)
+    library = tmp_path / "installed" / library_kind / "dependency.py"
+    library.parent.mkdir(parents=True)
+    library.write_text("def select_output(ctx):\n    return ctx.output\n")
+    module_name = "_evaluation_installed_dependency"
+    spec = importlib.util.spec_from_file_location(module_name, library)
+    module = importlib.util.module_from_spec(spec)
+    monkeypatch.setitem(sys.modules, module_name, module)
+    spec.loader.exec_module(module)
+    registered = cloudpickle.list_registry_pickle_by_value()
+    request = snapshot_evaluation(
+        EvaluationSubmission(
+            evaluations=Evaluations(
+                metrics={
+                    "quality": Metric(
+                        state=module.select_output,
+                        question={"type": "noul", "instructions": "Is this useful?"},
+                    )
+                }
+            ),
+            context=EvalContext(inputs={}, output="completed report"),
+            runtime_defaults={},
+        )
+    )
+    assert request.error is None, request.error
+    restored = cloudpickle.loads(request.payload)
+    assert restored.submission.evaluations.metrics["quality"].state is module.select_output
+    assert cloudpickle.list_registry_pickle_by_value() == registered
 
 
 @pytest.mark.parametrize(
