@@ -207,7 +207,8 @@ def test_discovery_and_cached_current_metadata_do_not_execute_inline_agents(
     before_modules = {
         name: module
         for name, module in sys.modules.items()
-        if name == "inline_agent_flow" or name.startswith("inline_agent_flow.")
+        if (module_file := getattr(module, "__file__", None)) is not None
+        and Path(module_file).resolve() == workflow.resolve()
     }
     registry = WorkflowRegistry(cache_dir=tmp_path / "cache")
     registry.scan([str(workflow)])
@@ -246,7 +247,8 @@ def test_discovery_and_cached_current_metadata_do_not_execute_inline_agents(
     assert {
         name: module
         for name, module in sys.modules.items()
-        if name == "inline_agent_flow" or name.startswith("inline_agent_flow.")
+        if (module_file := getattr(module, "__file__", None)) is not None
+        and Path(module_file).resolve() == workflow.resolve()
     } == before_modules
 
 

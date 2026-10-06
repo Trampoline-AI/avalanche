@@ -53,6 +53,14 @@ class Ready(ava.Signature):
     answer: str = ava.OutputField()
 
 
+class ListTags(ava.Signature):
+    tags: list[str] = ava.OutputField()
+
+
+class TupleTags(ava.Signature):
+    tags: tuple[str, ...] = ava.OutputField()
+
+
 class PositiveCount(ava.Signature):
     text: str = ava.InputField()
     count: int = ava.OutputField(gt=0)
@@ -146,6 +154,72 @@ def test_pydantic_single_output_preserves_named_and_ordered_inputs(extract_predi
     assert flow().run(executor=ava.LocalExecutor()).result() == Items(
         customer="Ada", items=[Item(name="apples", quantity=3)]
     )
+
+
+@pytest.mark.parametrize(
+    ("signature", "tags"),
+    [
+        (ListTags, []),
+        (ListTags, ["a"]),
+        (ListTags, ["a", "b"]),
+        (TupleTags, ()),
+        (TupleTags, ("a",)),
+        (TupleTags, ("a", "b")),
+    ],
+)
+@pytest.mark.parametrize("binding", ["chain", "fan_in", "dependency_ids", "explicit"])
+def test_single_collection_output_preserves_its_field_boundary(
+    predictor_factory, signature, tags, binding
+):
+    predictor_factory(lambda signature, config, inputs: dspy.Prediction(tags=tags))
+
+    @ava.source
+    def prefix() -> str:
+        return "tags"
+
+    @ava.dest
+    def consume(tags):
+        return type(tags).__name__, tags
+
+    @ava.dest
+    def combine(prefix: str, tags):
+        return prefix, type(tags).__name__, tags
+
+    @ava.workflow
+    def flow():
+        produced = ava.agent.step(signature)
+        if binding == "explicit":
+            return consume(tags=produced)
+        if binding == "fan_in":
+            return (prefix() & produced) >> combine()
+        consumer = consume()
+        result = produced >> consumer
+        if binding == "dependency_ids":
+            consumer._incoming_refs.clear()
+        return result
+
+    expected = (type(tags).__name__, tags)
+    if binding == "fan_in":
+        expected = ("tags", *expected)
+    assert flow().run(executor=ava.LocalExecutor()).result() == expected
+
+
+@pytest.mark.parametrize("signature", [ListTags, TupleTags])
+def test_indexed_single_collection_output_still_selects_an_element(
+    predictor_factory, signature
+):
+    tags = ["first", "second"] if signature is ListTags else ("first", "second")
+    predictor_factory(lambda signature, config, inputs: dspy.Prediction(tags=tags))
+
+    @ava.dest
+    def consume(tag: str) -> str:
+        return tag.upper()
+
+    @ava.workflow
+    def flow():
+        return ava.agent.step(signature)[1] >> consume()
+
+    assert flow().run(executor=ava.LocalExecutor()).result() == "SECOND"
 
 
 @pytest.mark.parametrize("binding", ["indexed", "automatic"])
