@@ -1,4 +1,4 @@
-"""Bodyful ``@ava.agent_step`` workflow nodes."""
+"""Bodyful and inline agent workflow nodes."""
 
 from __future__ import annotations
 
@@ -17,8 +17,10 @@ from typing import (
     TYPE_CHECKING,
     Any,
     Callable,
+    DefaultDict,
     Generic,
     Mapping,
+    Never,
     Sequence,
     TypeAlias,
     TypeVar,
@@ -27,8 +29,9 @@ from typing import (
     get_origin,
 )
 
+import dspy
 from dspy import Prediction
-from pydantic import BaseModel
+from pydantic import BaseModel, TypeAdapter
 
 from .._agent_evidence import (
     AGENT_ERROR_CHARACTER_LIMIT,
@@ -37,7 +40,7 @@ from .._agent_evidence import (
     AgentTraceUnavailableEvent,
     emit_agent_evidence,
 )
-from ..dag import Node, NodeType
+from ..dag import Node, NodeFuture, NodeType, _workflow_context
 from ..evaluations import Evaluations
 from ..step_interface import (
     decoration_namespace,
@@ -474,7 +477,7 @@ class Agent:
     def __init__(
         self,
         *,
-        signature: Any,
+        signature: type[dspy.Signature],
         step_name: str,
         runtime_kwargs: Mapping[str, Any],
         skills: Sequence[Any] | object = UNSET,
@@ -486,7 +489,7 @@ class Agent:
         self._skills_override = skills
         self._tools_override = tools
         self._predictor: Any | None = None
-        self._dspy_signature: Any | None = None
+        self._dspy_signature: type[dspy.Signature] | None = None
         self._skills: tuple[Any, ...] = ()
         self._tools: tuple[Callable[..., Any], ...] = ()
 
@@ -565,7 +568,7 @@ class Agent:
         finally:
             _AGENT_INVOCATION_STATE.reset(invocation_token)
 
-    def _resolve_signature(self) -> Any:
+    def _resolve_signature(self) -> type[dspy.Signature]:
         if self._dspy_signature is None:
             self._dspy_signature = resolve_signature(
                 self._signature_declaration, name=self._step_name
@@ -576,14 +579,10 @@ class Agent:
             self._tools = () if self._tools_override is UNSET else tuple(self._tools_override)
         return self._dspy_signature
 
-    def _validate_input_names(self, dspy_signature: Any, inputs: Mapping[str, Any]) -> None:
-        expected_fields = getattr(dspy_signature, "input_fields", None)
-        if not isinstance(expected_fields, dict):
-            raise AgentStepError(
-                f"agent step {self._step_name!r} resolved an invalid DSPy signature"
-            )
-
-        expected = set(expected_fields)
+    def _validate_input_names(
+        self, dspy_signature: type[dspy.Signature], inputs: Mapping[str, Any]
+    ) -> None:
+        expected = set(dspy_signature.input_fields)
         received = set(inputs)
         missing = sorted(expected - received)
         unexpected = sorted(received - expected)
@@ -603,17 +602,16 @@ class _AgentStepSpec(Generic[InputT, OutputT]):
 
     def __init__(
         self,
-        user_fn: Callable[..., Any],
+        step_name: str,
         *,
-        signature: Any,
+        signature: type[dspy.Signature],
         runtime_kwargs: Mapping[str, Any],
         skills: Sequence[Any] | object,
         tools: Sequence[Callable[..., Any]] | object,
         public_signature: inspect.Signature,
         evaluations: Evaluations[InputT, OutputT] | None,
     ) -> None:
-        self.user_fn = user_fn
-        self.step_name = user_fn.__name__
+        self.step_name = step_name
         self.signature = signature
         self.runtime_kwargs = dict(runtime_kwargs)
         self.skills = skills
@@ -954,6 +952,46 @@ def _is_sensitive_key(name: str) -> bool:
     return any(part in lowered for part in _SECRET_KEY_PARTS)
 
 
+def _reject_nested_agent_decorator() -> None:
+    if _workflow_context.get() is not None:
+        raise AgentStepError(
+            "Agent decorators cannot be declared inside a workflow body; "
+            "use ava.agent.step(Signature, inputs=...) for an inline agent."
+        )
+
+
+def _agent_runtime_configuration(
+    *,
+    owner: str,
+    lm: Any,
+    sub_lm: Any,
+    max_iterations: Any,
+    skills: Sequence[Any] | object,
+    tools: Sequence[Callable[..., Any]] | object,
+    predictor_kwargs: Mapping[str, Any],
+) -> dict[str, Any]:
+    if skills is not UNSET and not isinstance(skills, Sequence):
+        raise TypeError(f"{owner} skills must be a sequence")
+    if tools is not UNSET:
+        if not isinstance(tools, Sequence):
+            raise TypeError(f"{owner} tools must be a sequence")
+        for tool in tools:
+            if not callable(tool):
+                raise TypeError(f"{owner} tools must be callable")
+
+    runtime_kwargs = {
+        name: value
+        for name, value in (
+            ("lm", lm),
+            ("sub_lm", sub_lm),
+            ("max_iterations", max_iterations),
+        )
+        if value is not UNSET
+    }
+    runtime_kwargs.update(predictor_kwargs)
+    return validate_runtime_kwargs(runtime_kwargs, owner=owner)
+
+
 def agent_step(
     signature: Any = None,
     *,
@@ -968,39 +1006,29 @@ def agent_step(
     """Register a bodyful workflow step with an injected callable Agent.
 
     The first positional argument is a subclassed ``ava.Signature``, an inline
-    ``ava.agent.Signature(...)``, or another DSPy Signature class. Skills and
-    tools are configured only on this decorator.
+    ``ava.agent.Signature(...)``, or another DSPy Signature class.
     """
+    _reject_nested_agent_decorator()
     if signature is None:
         raise TypeError("ava.agent_step requires a Signature as its first argument")
     if evaluations is not None and not isinstance(evaluations, Evaluations):
         raise TypeError("ava.agent_step evaluations must be an ava.Evaluations declaration")
-    if skills is not UNSET and not isinstance(skills, Sequence):
-        raise TypeError("ava.agent_step skills must be a sequence")
-    if tools is not UNSET:
-        if not isinstance(tools, Sequence):
-            raise TypeError("ava.agent_step tools must be a sequence")
-        for tool in tools:
-            if not callable(tool):
-                raise TypeError("ava.agent_step tools must be callable")
-
-    runtime_kwargs = {
-        name: value
-        for name, value in (
-            ("lm", lm),
-            ("sub_lm", sub_lm),
-            ("max_iterations", max_iterations),
-        )
-        if value is not UNSET
-    }
-    runtime_kwargs.update(predictor_kwargs)
-    runtime_kwargs = validate_runtime_kwargs(runtime_kwargs, owner="ava.agent_step")
+    runtime_kwargs = _agent_runtime_configuration(
+        owner="ava.agent_step",
+        lm=lm,
+        sub_lm=sub_lm,
+        max_iterations=max_iterations,
+        skills=skills,
+        tools=tools,
+        predictor_kwargs=predictor_kwargs,
+    )
 
     def decorator(user_fn: Callable[..., Any]) -> Node:
+        _reject_nested_agent_decorator()
         public_signature = _public_step_signature(user_fn, decoration_namespace())
         step_interface = step_interface_from_signature(public_signature)
         spec = _AgentStepSpec(
-            user_fn,
+            user_fn.__name__,
             signature=signature,
             runtime_kwargs=runtime_kwargs,
             skills=skills,
@@ -1030,8 +1058,137 @@ def agent_step(
     return decorator
 
 
-# ``ava.agent.step`` is intentionally the same decorator, not another mode.
-step = agent_step
+class _InlineAgentFuture(NodeFuture):
+    def __call__(self, user_fn: Callable[..., Any]) -> Never:
+        raise AgentStepError(
+            "ava.agent.step(...) inside a workflow returns an inline node future, "
+            "not a decorator. Declare bodyful agent decorators outside the workflow."
+        )
+
+
+class _InlineAgentNode(Node):
+    # One signature field is one value, even when that value is a collection.
+    _expand_single_return = False
+
+    def _make_future(
+        self,
+        *,
+        future_id: str,
+        node_slug: str,
+        graph_ref: DefaultDict[str, list[str]],
+        args: tuple[Any, ...],
+        kwargs: dict[str, Any],
+    ) -> NodeFuture:
+        return _InlineAgentFuture(
+            node=self,
+            future_id=future_id,
+            node_slug=node_slug,
+            graph_ref=graph_ref,
+            args=args,
+            kwargs=kwargs,
+        )
+
+
+def step(
+    signature: type[dspy.Signature],
+    *,
+    inputs: Mapping[str, Any] | None = None,
+    slug: str | None = None,
+    lm: Any = UNSET,
+    sub_lm: Any = UNSET,
+    max_iterations: Any = UNSET,
+    skills: Sequence[Any] | object = UNSET,
+    tools: Sequence[Callable[..., Any]] | object = UNSET,
+    **predictor_kwargs: Any,
+) -> NodeFuture | Callable[[Callable[..., Any]], Node]:
+    """Invoke an inline agent in a workflow, or declare a bodyful agent outside it."""
+    if _workflow_context.get() is None:
+        if inputs is not None or slug is not None:
+            raise TypeError("ava.agent.step inputs= and slug= require a workflow body")
+        return agent_step(
+            signature,
+            lm=lm,
+            sub_lm=sub_lm,
+            max_iterations=max_iterations,
+            skills=skills,
+            tools=tools,
+            **predictor_kwargs,
+        )
+
+    signature = resolve_signature(signature, name="inline agent")
+    if inputs is not None:
+        if not isinstance(inputs, Mapping):
+            raise TypeError("ava.agent.step inputs must be a mapping")
+        unexpected = [name for name in inputs if name not in signature.input_fields]
+        if unexpected:
+            raise AgentStepError(f"inline agent has unexpected input fields {unexpected}")
+    runtime_kwargs = _agent_runtime_configuration(
+        owner="ava.agent.step",
+        lm=lm,
+        sub_lm=sub_lm,
+        max_iterations=max_iterations,
+        skills=skills,
+        tools=tools,
+        predictor_kwargs=predictor_kwargs,
+    )
+    output_fields = signature.output_fields
+    output_adapters = tuple(
+        (name, TypeAdapter(field.rebuild_annotation())) for name, field in output_fields.items()
+    )
+    output_annotations = tuple(field.rebuild_annotation() for field in output_fields.values())
+    public_signature = inspect.Signature(
+        parameters=[
+            inspect.Parameter(
+                name,
+                inspect.Parameter.POSITIONAL_OR_KEYWORD,
+                annotation=field.rebuild_annotation(),
+            )
+            for name, field in signature.input_fields.items()
+        ],
+        return_annotation=(
+            output_annotations[0] if len(output_annotations) == 1 else tuple[output_annotations]
+        ),
+    )
+    spec = _AgentStepSpec(
+        signature.__name__,
+        signature=signature,
+        runtime_kwargs=runtime_kwargs,
+        skills=skills,
+        tools=tools,
+        public_signature=public_signature,
+        evaluations=None,
+    )
+
+    async def invoke(*args: Any, **kwargs: Any) -> Any:
+        from avalanche.evaluation_capture import capture_step_evaluations
+
+        with capture_step_evaluations(None, step_name=spec.step_name):
+            bound = public_signature.bind(*args, **kwargs)
+            prediction: dspy.Prediction = await spec.make_agent()(**bound.arguments)
+            values = []
+            for name, adapter in output_adapters:
+                try:
+                    value = prediction[name]
+                except KeyError as exc:
+                    raise AgentStepError(
+                        f"inline agent {spec.step_name!r} is missing output field {name!r}"
+                    ) from exc
+                values.append(adapter.validate_python(value, strict=True))
+            return values[0] if len(values) == 1 else tuple(values)
+
+    invoke.__name__ = spec.step_name
+    invoke.__qualname__ = spec.step_name
+    invoke.__doc__ = signature.instructions
+    invoke.__signature__ = public_signature  # type: ignore[attr-defined]
+    invoke.__agent_step__ = spec  # type: ignore[attr-defined]
+    node = _InlineAgentNode(
+        invoke,
+        NodeType.STEP,
+        num_returns=len(output_fields),
+        slug=slug,
+        step_interface=step_interface_from_signature(public_signature),
+    )
+    return node(**inputs) if inputs is not None else node()
 
 
 def _public_step_signature(
@@ -1065,7 +1222,7 @@ def _public_step_signature(
 
 
 def _build_predictor(
-    signature: Any,
+    signature: type[dspy.Signature],
     *,
     skills: tuple[Any, ...],
     tools: tuple[Callable[..., Any], ...],
@@ -1084,11 +1241,7 @@ def _build_predictor(
     )
 
 
-def _describe_signature(dspy_signature: Any) -> str:
-    name = getattr(dspy_signature, "__name__", type(dspy_signature).__name__)
-    try:
-        inputs = ", ".join(dspy_signature.input_fields)
-        outputs = ", ".join(dspy_signature.output_fields)
-    except Exception:
-        return f"signature {name}"
-    return f"signature {name}({inputs}) -> ({outputs})"
+def _describe_signature(dspy_signature: type[dspy.Signature]) -> str:
+    inputs = ", ".join(dspy_signature.input_fields)
+    outputs = ", ".join(dspy_signature.output_fields)
+    return f"signature {dspy_signature.__name__}({inputs}) -> ({outputs})"

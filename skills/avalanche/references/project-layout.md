@@ -2,12 +2,13 @@
 
 `flow.py` is the readable index of the DAG, not a general implementation module.
 It contains imports, decorated node definitions, and the workflow declarations
-at the end. A compact inline signature belongs inside its `@ava.agent_step`
-decorator rather than in a standalone module variable. Every non-inline signature
-MUST live in a separate `signature.py`, even if it is small or used only once.
-Schemas carry contracts; `util.py` carries every helper; agent directories carry
-large model contracts. Workflows run through the operator, never standalone
-runner scripts, `main()`/`__main__` blocks, or direct `.run()` entry points.
+at the end, including inline `ava.agent.step(...)` graph calls. Construct a
+compact signature inside that call or either agent-step decorator, never as a
+standalone module variable. Every named signature MUST live in a separate
+`signature.py`, even if small or used once. Schemas carry models; `util.py`
+carries every helper; agent directories carry large model contracts.
+Workflows run through the operator, never standalone runner scripts,
+`main()`/`__main__` blocks, or direct `.run()` entry points.
 
 ## Small flow
 
@@ -27,30 +28,29 @@ A flow with a named signature also has `signature.py` beside `flow.py`. Larger
 flows may put it under `agents/<agent_name>/signature.py`; the separation is
 required regardless of signature size.
 
-
-Construct a compact inline signature directly in the agent-step decorator:
+Construct a compact signature directly in the workflow for a direct invocation:
 
 ```python
-@ava.agent_step(
-    ava.agent.Signature(
-        "question: str, context: str -> answer: str, citations: list[str]",
-        "Answer only from the supplied context and cite supporting passages.",
+@ava.workflow
+def answer_flow():
+    return (
+        (load_question() & load_context())
+        >> ava.agent.step(
+            ava.agent.Signature(
+                "question: str, context: str -> answer: str, citations: list[str]",
+                "Answer only from the supplied context and cite supporting passages.",
+            )
+        )
+        >> publish_answer()
     )
-)
-async def answer_question(
-    request: QuestionRequest,
-    *,
-    agent: ava.Agent,
-) -> Answer:
-    prediction = await agent(
-        question=request.question,
-        context=request.context,
-    )
-    return Answer(answer=prediction.answer, citations=prediction.citations)
 ```
 
-The signature may have scalar fields because DSPy owns that call boundary; the
-workflow node still receives and returns Pydantic models.
+Inputs and outputs follow signature order: `publish_answer` receives `answer`,
+then `citations`. Put structured Pydantic payload models in `schema.py`.
+
+Keep a decorated agent body when it adds meaningful preparation, mapping,
+batching, custom validation or transforms, composition, or persistence. Such
+helpers still belong in `util.py`, and models still belong in `schema.py`.
 
 ## Larger flow with several agents
 
@@ -90,10 +90,11 @@ when the DAG topology already communicates ordering.
 Use this strict top-to-bottom order:
 
 1. imports from `schema.py`, `util.py`, agent modules, skills, and namespaces;
-2. decorated `@ava.source`, `@ava.step`, `@ava.agent_step`, and `@ava.dest`
-   definitions, with compact signatures constructed inside their agent-step
-   decorators;
-3. `@ava.workflow` declarations as the final section.
+2. decorated `@ava.source`, `@ava.step`, `@ava.agent_step` or
+   `@ava.agent.step` functions, and `@ava.dest` definitions, with compact signatures
+   constructed inside their decorators;
+3. `@ava.workflow` declarations as the final section, including inline
+   `ava.agent.step(Signature, ...)` nodes and their compact signature factories.
 
 For example:
 
@@ -101,44 +102,18 @@ For example:
 import avalanche as ava
 
 from .agents.package_audit.signature import AuditPackage
-from .agents.proposal_draft.signature import DraftProposal
-from .schema import Audit, Draft, PreparedInputs, ProposalInput
+from .schema import PreparedPackage, ProposalInput
 from .util import normalize_documents
 
 
 @ava.source
-def prepare_inputs(payload: ProposalInput) -> PreparedInputs:
+def prepare_inputs(payload: ProposalInput) -> PreparedPackage:
     return normalize_documents(payload)
-
-
-@ava.agent_step(AuditPackage)
-async def audit_package(
-    prepared: PreparedInputs,
-    *,
-    agent: ava.Agent,
-) -> Audit:
-    prediction = await agent(prepared=prepared)
-    return prediction.audit
-
-
-@ava.agent_step(DraftProposal)
-async def draft_proposal(
-    prepared: PreparedInputs,
-    audit: Audit,
-    *,
-    agent: ava.Agent,
-) -> Draft:
-    prediction = await agent(prepared=prepared, audit=audit)
-    return prediction.draft
 
 
 @ava.workflow(input=ProposalInput)
 def proposal_flow():
-    (
-        (s0 := prepare_inputs())
-        >> (s1 := audit_package(s0))
-        >> draft_proposal(s0, s1)
-    )
+    return prepare_inputs() >> ava.agent.step(AuditPackage)
 ```
 
 Nothing follows the workflow declarations. Do not define models, signature
@@ -168,9 +143,9 @@ produces a durable artifact. Keep trivial mapping and output composition inside
 the relevant node body, delegated to helpers in `util.py` when it would distract
 from the flow.
 
-The workflow builder itself must remain edge-only. Runtime values are
-`NodeFuture` objects there, so do not inspect them, iterate them, branch on them,
-or perform I/O with them.
+Workflow bodies only declare the graph. Use direct returned `>>` chains by
+default; agents run later. Do not inspect future values, branch on them, perform
+I/O, or nest agent decorators in the workflow body.
 
 ## Anti-patterns
 
@@ -178,6 +153,7 @@ or perform I/O with them.
 - Any undecorated helper, model, configuration, namespace, or runner in `flow.py`.
 - Untyped `dict[str, object]` payloads crossing node boundaries.
 - Agent directories for two-line inline signatures.
-- Any non-inline signature defined outside its separate `signature.py`.
+- Any named signature defined outside its separate `signature.py`.
 - Skills or tools declared as signature metadata.
+- A body whose only purpose is one direct agent call and output-field forwarding.
 - Unparenthesized parallel expressions such as `a() >> b() & c()`.

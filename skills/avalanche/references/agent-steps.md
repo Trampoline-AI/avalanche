@@ -6,13 +6,9 @@ Install the standard wheel in the target UV project:
 uv add avalanche-ai
 ```
 
-`@ava.agent_step` wraps the PredictRLM runtime and injects a callable
-`ava.Agent` into the step body. The two public spellings are equivalent:
-
-```python
-ava.agent_step
-ava.agent.step
-```
+Use `ava.agent.step(Signature, ...)` in a returned workflow chain for one agent
+invocation. Use `@ava.agent_step(Signature, ...)` or `@ava.agent.step(Signature, ...)`
+outside workflows when a body adds useful work.
 
 ## Design one agent step with the PredictRLM skill
 
@@ -40,17 +36,17 @@ results rather than rediscovering or re-deciding them, and it must not perform
 work assigned to later stages. If portions could be accepted, retried, reused,
 or changed independently, they belong in separate Avalanche nodes.
 
-Load that reference when deciding how one `@ava.agent_step` should work. It is
-not the design process for the complete Avalanche workflow or DAG; the main
-Avalanche skill owns stage decomposition, topology, deterministic nodes,
-persistence, and execution. Once the single RLM step is designed through Steps
-1–6 of the original skill, return here to implement its Avalanche signature,
-decorator, injected `ava.Agent` call, validation, and return value.
+Load that reference when deciding how one agent step should work. It is not the
+design process for the complete Avalanche workflow or DAG; the main Avalanche
+skill owns stage decomposition, topology, deterministic nodes, persistence, and
+execution. Once the single RLM step is designed through Steps 1–6 of the original
+skill, return here to implement its signature and either an inline invocation or
+a decorated body with an injected `ava.Agent`.
 
 ## Typed signature: the default
 
 Use a class for substantial, shared, or independently tested contracts.
-Every non-inline signature MUST be defined in a separate `signature.py`, not in
+Every named signature MUST be defined in a separate `signature.py`, not in
 `flow.py`, regardless of size or reuse. For one agent, a root `signature.py` is
 sufficient; use per-agent directories for larger flows.
 
@@ -96,6 +92,59 @@ class AuditPackage(ava.Signature):
     )
 ```
 
+## Inline agent node for one direct invocation
+
+Default to a returned `>>` chain. Inputs and outputs follow signature declaration
+order; a single output unwraps to its field value. Every output is strictly
+validated, including nested models and constraints; invalid or missing values
+raise without coercion, fallback, or retry.
+A list or tuple in a single output field remains one downstream argument,
+including empty collections; only multiple signature fields create multiple
+output slots.
+
+With `AuditPackage` from `signature.py`:
+
+```python
+@ava.workflow(input=ProposalInput)
+def proposal_flow():
+    return (
+        prepare_inputs()
+        >> ava.agent.step(
+            AuditPackage,
+            skills=[ava.agent.skills.pdf],
+            tools=[lookup_policy],
+        )
+        >> publish_audit()
+    )
+```
+
+`>>` binds available inputs in signature order. A parallel `&` group contributes
+each branch's output(s) in branch order, not by variable name or type. For a
+two-input, two-output contract:
+
+```python
+@ava.workflow
+def comparison_flow():
+    return (
+        (load_original() & load_revision())
+        >> ava.agent.step(
+            ava.agent.Signature(
+                "original: str, revised: str -> summary: str, changes: list[str]",
+                "Compare both texts; summarize the revision and list its changes.",
+            )
+        )
+        >> publish_comparison()
+    )
+```
+
+Each loader returns one string; together they fill `original` then `revised`.
+The consumer receives `summary` then `changes`.
+
+Inline calls declare the graph; agents run only during execution. They share
+defaults, capabilities, and execution behavior with decorated agents. Use a
+decorated body when it adds preparation, mapping, batching, validation,
+composition, or persistence. Define decorators outside workflow bodies.
+
 ## Signature instructions are docstrings
 
 The class docstring is the signature's instruction text consumed by DSPy and
@@ -109,9 +158,14 @@ signature. For the inline factory form, the second argument to
 `ava.agent.Signature(fields, instructions)` supplies the instruction text because
 there is no class docstring.
 
-`flow.py`:
+If the stage needs domain checks beyond field validation and durable storage,
+keep a body. Put the custom validator and persistence helper in `util.py`;
+`validate_package_audit` returns a `PackageAudit` after checking package coverage:
 
 ```python
+from .util import persist_audit, validate_package_audit
+
+
 @ava.agent_step(
     AuditPackage,
     skills=[ava.agent.skills.pdf],
@@ -124,7 +178,9 @@ async def audit_package(
     agent: ava.Agent,
 ) -> PackageAudit:
     prediction = await agent(package=package)
-    return PackageAudit.model_validate(prediction.audit)
+    audit = validate_package_audit(package, prediction.audit)
+    await persist_audit(audit)
+    return audit
 ```
 
 Rules:
@@ -134,14 +190,16 @@ Rules:
 - Keep the `agent` parameter keyword-only, without a default, annotated
   `ava.Agent`.
 - Never pass `agent` at a DAG call site; Avalanche injects it at execution.
-- The body owns all selection, mapping, validation, composition, and persistence.
+- A decorated body owns its selection, mapping, custom validation, composition,
+  and persistence; inline nodes already perform strict signature-field validation.
 - An agent-step body may be `def` or `async def`, but model calls are awaitable,
   so normal bodies are asynchronous.
 
 ## Inline signature for a small local contract
 
-Construct the signature directly in the agent-step decorator when creating a
-directory and class would be more ceremony than clarity:
+Construct a compact signature directly inside `ava.agent.step(...)` in the
+workflow, or inside either agent-step decorator when a body adds useful work.
+Do not bind the signature factory result to a standalone module variable:
 
 ```python
 @ava.agent_step(
@@ -200,13 +258,11 @@ Pass the same reusable Skill to each agent step that needs the capability:
 
 ```python
 @ava.agent_step(AuditPackage, skills=[evidence_grounding_skill])
-async def audit_package(request: AuditRequest, *, agent: ava.Agent):
-    ...
+async def audit_package(request: AuditRequest, *, agent: ava.Agent): ...
 
 
 @ava.agent_step(DraftProposal, skills=[evidence_grounding_skill])
-async def draft_proposal(request: ProposalRequest, *, agent: ava.Agent):
-    ...
+async def draft_proposal(request: ProposalRequest, *, agent: ava.Agent): ...
 ```
 
 A PredictRLM `Skill` can provide:
@@ -235,15 +291,14 @@ Custom skill configuration:
 
 ## Tools
 
-Avalanche's decorator takes a sequence of callable tools:
+Both inline calls and decorators take a sequence of callable tools:
 
 ```python
 @ava.agent_step(
     DraftProposal,
     tools=[search_requirements, fetch_approved_fact],
 )
-async def draft_proposal(request: ProposalRequest, *, agent: ava.Agent):
-    ...
+async def draft_proposal(request: ProposalRequest, *, agent: ava.Agent): ...
 ```
 
 Put reusable tool functions in `util.py` or a dedicated `tools/` package. Each
@@ -280,17 +335,21 @@ Shared execution policy belongs on the workflow:
         "verbose": False,
     },
 )
-def proposal_flow():
-    ...
+def proposal_flow(): ...
 ```
 
-Override exceptional steps on their decorator:
+Both forms accept `lm`, `sub_lm`, `max_iterations`, and the existing predictor
+runtime kwargs; `skills` and `tools` configure that node's capabilities.
+
+Override exceptional steps on their inline call or decorator:
 
 ```python
 @ava.agent_step(AuditPackage, max_iterations=60)
-async def audit_package(package: PreparedPackage, *, agent: ava.Agent):
-    ...
+async def audit_package(package: PreparedPackage, *, agent: ava.Agent): ...
 ```
+
+For an inline node, the same override is
+`ava.agent.step(AuditPackage, max_iterations=60)` inside the workflow.
 
 Resolution order is:
 
@@ -485,10 +544,11 @@ also documents browser results/errors and the record APIs.
 
 ## Verification
 
-- Smoke-call the real decorated workflow with the intended LM credentials.
+- Run the authored workflow through the operator with the intended LM credentials.
 - Exercise every input/output field and model validation path.
 - Exercise host tools against real bounded fixtures, not placeholder returns.
 - For file-modifying agents, inspect the produced artifact using the appropriate
   PredictRLM skill's required verification procedure.
-- Treat the raw prediction as untrusted until the step has validated it into the
-  declared Pydantic output model.
+- Inline nodes validate each declared output field automatically. In a decorated
+  body, treat the raw prediction as untrusted until the intended output has been
+  validated; `await agent(...)` still returns the raw prediction.

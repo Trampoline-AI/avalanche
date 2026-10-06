@@ -132,32 +132,25 @@ npx skills add Trampoline-AI/avalanche
 
 ### Creating a workflow
 
-Avalanche workflows chain deterministic `@ava.step`, agent-backed
-`@ava.agent_step`, and TypeSafe-backed `@ava.classifier_step` nodes inside an
-`@ava.workflow`.
+Connect Python steps and agent calls with `>>` inside an `@ava.workflow`:
 
 ```python
-@ava.step
-def step1() -> str:
+@ava.source
+def load_text() -> str:
     return "Hello world"
-```
 
-```python
-@ava.agent_step(ava.Signature("text: str -> completion: str"))
-async def step2(text: str, *, agent: ava.Agent) -> str:
-    return (await agent(text=text)).completion
-```
 
-```python
 @ava.workflow
 def feedback_workflow():
-    return step1() >> step2()
+    return load_text() >> ava.agent.step(
+        ava.Signature("text: str -> completion: str")
+    )
 ```
 
-Use [agent steps](docs/agent-steps.md) for adaptive model work and
-[classifier steps](docs/classifier-steps.md) for fixed Choice, Noul, and Score
-questions with typed probabilities. Both keep input preparation, output
-composition, and persistence in the Python step body.
+Inline agents return validated signature outputs. Use a decorated agent function
+when you need custom preparation, transformation, or persistence.
+See [agent steps](docs/agent-steps.md) or
+[classifier steps](docs/classifier-steps.md) for fixed-choice classification.
 
 We recommend using the skill directly in order to have your agent align on a goal and build a workflow for you.
 
@@ -406,32 +399,20 @@ Configure the provider credentials as environment variables documented in
 [LiteLLM&#39;s provider guide](https://docs.litellm.ai/docs/providers); the process
 running the operator must have access to those variables.
 
-We select models on each `@ava.agent_step` with LiteLLM's provider-qualified
-model identifier. `lm` selects the main model and `sub_lm` selects the
-sub-model:
-
-```python
-@ava.agent_step(
-    ExtractThemes,
-    lm="openai/gpt-5.6-terra",
-    sub_lm="gemini/gemini-3.5-flash",
-)
-async def extract_themes(..., *, agent: ava.Agent) -> ThemeReport:
-    ...
-```
-
-When a workflow's agent steps share models, we set them once with
-`@ava.workflow(agent_defaults=...)`:
+Set `lm` for the main model and `sub_lm` for the sub-model. Shared settings go
+on the workflow:
 
 ```python
 @ava.workflow(
     agent_defaults={
-        "lm": "openai/gpt-5.6-terra",
+        "lm": "openai/gpt-5.5",
         "sub_lm": "gemini/gemini-3.5-flash",
     }
 )
 def feedback_workflow():
-    return extract_themes()
+    return load_text() >> ava.agent.step(
+        ava.Signature("text: str -> completion: str")
+    )
 ```
 
 An `lm` or `sub_lm` passed to an individual agent step overrides the same

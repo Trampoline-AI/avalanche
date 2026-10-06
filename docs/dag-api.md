@@ -6,13 +6,14 @@ This page is the workflow usage guide.
 
 Avalanche workflows are Python functions that declare a DAG of reusable nodes.
 
-| Decorator | Use |
+| API | Use |
 | --- | --- |
 | `@ava.source` | Ingest or create data |
 | `@ava.step` | Transform data (`@ava.transform` is an alias) |
 | `@ava.dest` | Publish or summarize a result |
 | `@ava.workflow` | Build a runnable workflow |
-| `@ava.agent_step` / `@ava.agent.step` | Declare an agent-backed step; see [`agent-steps.md`](agent-steps.md) |
+| `@ava.agent_step` / `@ava.agent.step` outside workflows | Decorate an agent-backed function; see [`agent-steps.md`](agent-steps.md) |
+| `ava.agent.step(Signature, ...)` inside workflows | Call an agent directly, returning validated signature outputs |
 | `@ava.classifier_step` | Ask TypeSafe questions declared as defaults or supplied per call, with typed probability results; see [`classifier-steps.md`](classifier-steps.md) |
 | `ava.EvalContext`, `ava.Metric`, `ava.Evaluations` | Declare observation-only agent-step metrics and composites; see [native evaluations](agent-steps.md#native-evaluations) |
 
@@ -59,9 +60,10 @@ node creates a dependency; its result is supplied when the workflow runs.
 ## Inspect step interfaces
 
 The browser inspector shows a **Step interface** panel for source, ordinary,
-destination, agent, and classifier steps. It describes the Python function's
-annotated parameters and return value, not an agent or classifier call inside
-that function.
+destination, agent, and classifier steps. For decorated nodes it describes the
+Python function's annotated parameters and return value, not an agent or
+classifier call inside that function. For inline agents, it shows the signature's
+inputs and outputs.
 
 Inputs show their names, types, and whether the function requires them. Nested
 Pydantic models, collections, unions, descriptions, and constraints can be
@@ -72,8 +74,8 @@ run context/input objects, and provider defaults such as `ava.Logger()`.
 
 An unannotated value appears as **Unspecified**. An annotation that cannot be
 represented as JSON Schema keeps its type name with an unavailable-schema notice.
-These schemas are inspection metadata: they do not add runtime validation or
-change what the function receives or returns.
+For decorated functions, this display does not change runtime validation.
+Inline agents validate their outputs against the signature.
 
 At detailed zoom, source, ordinary, and destination DAG cards show their annotated
 inputs and return type in the same two-column layout as classifier cards. Compact
@@ -111,6 +113,21 @@ arguments.
 def document_flow():
     return load_documents() >> chunk_documents() >> publish_chunks()
 ```
+
+Inline agents use the same pipeline syntax, binding inputs in signature order:
+
+```python
+@ava.workflow
+def extraction_flow():
+    return (
+        load_pdf()
+        >> ava.agent.step(ExtractItems, skills=[ava.agent.skills.pdf])
+        >> publish()
+    )
+```
+
+See [inline typed extraction](agent-steps.md#inline-typed-extraction) for the
+signature and validated output contract.
 
 Use `&` for branches and parenthesize every parallel group:
 

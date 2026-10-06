@@ -24,13 +24,22 @@
   without replacing or resubmitting evaluation, even if step postprocessing fails.
   Full PredictRLM 0.9 iteration details remain available to evaluations without
   resending them through the operator's live trace channel.
-  Nested agent steps keep separate capture state, so unevaluated helpers cannot
-  claim the enclosing step's evaluation.
+  Nested agent steps keep separate capture state, so unevaluated helpers—including
+  inline agents—cannot claim the enclosing step's evaluation.
   Evaluation snapshots also retain workflow-defined selectors and output classes
   when the project lives under Python's installation prefix, without copying
   installed libraries.
 - Workflow discovery no longer eagerly loads DSPy through evaluation capture,
   avoiding unnecessary startup work during scans and hot reloads.
+- Added inline `ava.agent.step(Signature, ...)` calls for direct workflow chains,
+  with typed inputs, validated outputs, and the same skills, tools, and model
+  settings as decorated agents.
+  Both call forms are covered in the mirrored workflow-author API reference.
+- Agent decorators remain supported outside workflows. Nested agent decorators
+  are rejected; `inputs=` and `slug=` are only supported for inline calls.
+- Fixed inline agent chains unpacking a single list- or tuple-valued output into
+  separate downstream arguments. Empty and nonempty collections now retain their
+  signature field boundary; ordinary Python nodes keep their existing behavior.
 - Added a workflow-author API reference for step decorators, graph operations,
   runs, inputs/context, files/workspaces, agents, classifiers, Iceberg/Lance
   storage, streams, cursors, and CLI commands. The workflow primitive list links
@@ -595,13 +604,13 @@ operator clients.
 - Fix: futures passed explicitly as keyword arguments are no longer re-bound
   implicitly by position.
 - See [docs/data-model-api.md](docs/data-model-api.md#define-a-schema).
-- Added bodyful `@ava.agent_step` / `@ava.agent.step` aliases in the base
-  package. Steps receive a callable `ava.Agent`, handle raw DSPy predictions in
-  their own Python body, and explicitly persist their results.
+- Added bodyful `@ava.agent_step` and `@ava.agent.step` decorator spellings in the
+  base package. Steps receive a callable `ava.Agent`, handle raw DSPy predictions
+  in their own Python body, and explicitly persist their results.
 - `ava.Signature` is a subclassable native DSPy contract using
   `ava.InputField()` / `ava.OutputField()`. The identical
   `ava.agent.Signature` also builds inline string signatures; skills and tools
-  are configured only by `@ava.agent_step(...)`.
+  are configured at each agent-step declaration.
 - `@ava.workflow(agent_defaults={...})` supplies workflow-scoped PredictRLM
   runtime defaults; agent-step kwargs override them. Process-global agent
   configuration and automatic agent-step table/output behavior were removed.

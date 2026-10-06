@@ -256,6 +256,34 @@ async def test_unevaluated_helper_does_not_create_evaluation_for_no_call_outer(
 
 
 @pytest.mark.asyncio
+async def test_inline_helper_cannot_claim_enclosing_step_evaluation(evaluations, predictor):
+    @ava.workflow
+    def helper_flow():
+        return ava.agent.step(EchoSignature, inputs={"text": "helper"})
+
+    inline_call = next(iter(helper_flow().nodes.values())).node.fn
+
+    @ava.agent_step(EchoSignature, evaluations=evaluations)
+    async def outer(*, agent: ava.Agent) -> str:
+        answer, report = await inline_call(text="helper")
+        assert answer == "HELPER"
+        assert report == Report(summary="summary: helper")
+        return (await agent(text="outer")).answer
+
+    submissions = []
+    with capture_evaluations(submissions.append) as errors:
+        assert await outer.fn() == "OUTER"
+
+    assert errors == []
+    [submission] = submissions
+    assert submission.context.inputs == {"text": "outer"}
+    assert submission.context.output.answer == "OUTER"
+    assert RunTrace.model_validate(submission.context.trace[0]["trace"], strict=True) == _trace(
+        "outer"
+    )
+
+
+@pytest.mark.asyncio
 async def test_first_successful_completion_wins_without_gating_later_calls(
     evaluations,
     monkeypatch,

@@ -5,6 +5,8 @@ from __future__ import annotations
 import asyncio
 import importlib
 
+import dspy
+import pytest
 from dspy import Prediction
 from predict_rlm import RunEvidence, RunTrace
 from ray import cloudpickle
@@ -57,3 +59,59 @@ def test_workflow_bound_agent_callable_survives_serialization(monkeypatch):
     bound = node.fn.__agent_step__.with_workflow_defaults(node.fn, {"max_iterations": 2})
     restored = cloudpickle.loads(cloudpickle.dumps(bound))
     assert asyncio.run(restored("bound workflow")) == "BOUND WORKFLOW"
+
+
+class InlineSplitSignature(ava.Signature):
+    text: str = ava.InputField()
+    first: str = ava.OutputField()
+    count: int = ava.OutputField()
+
+
+def test_workflow_bound_inline_callable_serializes_without_predictor_or_contextvar(monkeypatch):
+    agent_module = importlib.import_module("avalanche.agent.agent_step")
+
+    class Predictor:
+        def __init__(self, max_iterations):
+            self.max_iterations = max_iterations
+
+        async def acall(self, *, text):
+            words = text.split()[: self.max_iterations]
+            return dspy.Prediction(
+                first=words[0].upper(),
+                count=len(words),
+                trace=RunTrace(
+                    status="completed",
+                    model="test-model",
+                    iterations=0,
+                    max_iterations=self.max_iterations,
+                    duration_ms=1,
+                ),
+                evidence=RunEvidence(
+                    run_id="inline-run", complete=True, terminal_outcome="completed"
+                ),
+            )
+
+    @ava.workflow(agent_defaults={"max_iterations": 2})
+    def flow():
+        return ava.agent.step(InlineSplitSignature, inputs={"text": "red green blue"})
+
+    def forbidden_build(*args, **kwargs):
+        raise AssertionError("declaration and serialization must not create a predictor")
+
+    with pytest.MonkeyPatch.context() as patch:
+        patch.setattr(agent_module, "_build_predictor", forbidden_build)
+        workflow = flow()
+        node = next(iter(workflow.nodes.values())).node
+        bound = node.fn.__agent_step__.with_workflow_defaults(node.fn, workflow.agent_defaults)
+        serialized_callable = cloudpickle.dumps(bound)
+        serialized_workflow = cloudpickle.dumps(workflow)
+
+    monkeypatch.setattr(
+        agent_module,
+        "_build_predictor",
+        lambda signature, **config: Predictor(config["max_iterations"]),
+    )
+    restored = cloudpickle.loads(serialized_callable)
+    assert asyncio.run(restored(text="blue yellow pink")) == ("BLUE", 2)
+    restored_workflow = cloudpickle.loads(serialized_workflow)
+    assert restored_workflow.run(executor=ava.LocalExecutor()).result() == ("RED", 2)
