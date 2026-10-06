@@ -31,6 +31,9 @@
   installed libraries.
 - Workflow discovery no longer eagerly loads DSPy through evaluation capture,
   avoiding unnecessary startup work during scans and hot reloads.
+
+## 0.9.0
+
 - Added inline `ava.agent.step(Signature, ...)` calls for direct workflow chains,
   with typed inputs, validated outputs, and the same skills, tools, and model
   settings as decorated agents.
@@ -40,6 +43,11 @@
 - Fixed inline agent chains unpacking a single list- or tuple-valued output into
   separate downstream arguments. Empty and nonempty collections now retain their
   signature field boundary; ordinary Python nodes keep their existing behavior.
+
+- Updated locked Python and browser-tooling dependencies to address 15 known
+  security findings, including a coordinated fsspec/s3fs/AWS-client upgrade.
+  DiskCache remains unpatched upstream.
+
 - Added a workflow-author API reference for step decorators, graph operations,
   runs, inputs/context, files/workspaces, agents, classifiers, Iceberg/Lance
   storage, streams, cursors, and CLI commands. The workflow primitive list links
