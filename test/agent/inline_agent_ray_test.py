@@ -8,6 +8,7 @@ import sys
 
 import dspy
 import pytest
+from predict_rlm import RunEvidence, RunTrace
 from pydantic import BaseModel
 
 import avalanche as ava
@@ -48,6 +49,16 @@ class DeterministicWorkerPredictor:
         self.tools = tools
 
     async def acall(self, **inputs):
+        trace = RunTrace(
+            status="completed",
+            model="test-model",
+            iterations=0,
+            max_iterations=1,
+            duration_ms=1,
+        )
+        evidence = RunEvidence(
+            run_id="worker-run", complete=True, terminal_outcome="completed"
+        )
         if tuple(self.signature.input_fields) == ("transcript", "customer"):
             names, quantities = self.skills[0].tools["parse_orders"](inputs["transcript"])
             return dspy.Prediction(
@@ -56,16 +67,20 @@ class DeterministicWorkerPredictor:
                     names=names,
                     quantities=quantities,
                     worker_pid=os.getpid(),
-                )
+                ),
+                trace=trace,
+                evidence=evidence,
             )
         items = inputs["items"]
         if tuple(self.signature.output_fields) == ("names",):
-            return dspy.Prediction(names=items.names)
+            return dspy.Prediction(names=items.names, trace=trace, evidence=evidence)
         return dspy.Prediction(
             total=self.tools[0](items.quantities),
             label=items.customer + ":" + "/".join(items.names),
             extraction_pid=items.worker_pid,
             prediction_pid=os.getpid(),
+            trace=trace,
+            evidence=evidence,
         )
 
 

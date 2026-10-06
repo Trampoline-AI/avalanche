@@ -15,6 +15,9 @@ import avalanche as ava
 | `@ava.classifier_step(...)` | Classifier-backed node; declaration, options, and results: [Classifiers](classifiers.md#classifier-step). |
 | `@ava.workflow(...)` | Runnable graph declaration; options are listed [below](#workflow-declaration). |
 
+For a direct agent invocation inside the workflow, use
+[`ava.agent.step(...)`](agents.md#inline-call) rather than a decorated body.
+
 The three ordinary node decorators have these signatures:
 
 ```python
@@ -82,6 +85,7 @@ Operators accept only deferred node calls/chains and parallel groups (`TypeError
 
 - `>>` supplies upstream data implicitly when the consumer has no explicit positional arguments or explicit upstream-provider selector. Parents already supplied as explicit deferred arguments are excluded from implicit values.
 - With `LocalExecutor`, materialized implicit tuple/list outputs flatten one level into ordinary argument slots, and an implicit [AppendResult](storage/iceberg.md#append-result) supplies its `.data`. Ray keeps a single-return tuple/list in one remote payload reference, so it supplies one argument rather than flattening the container into multiple slots. For portable multi-slot binding, declare `num_returns=2` (or the required output count), then chain the outputs or pass explicit indexed arguments such as `consume(values[0], values[1])`. Indexing a single-return container is not a portable substitute: explicit indexed arguments can fail locally when the result carries lineage metadata. Explicit unindexed deferred arguments preserve the whole result, including lists, tuples, and append results.
+- Inline agent nodes preserve signature field boundaries instead of the ordinary-node unpacking rule above. A single list/tuple field remains one argument in both executors; multiple fields supply arguments in signature order.
 - Input/context injections and non-upstream provider defaults do not consume ordinary upstream slots. [Stream](storage/streams.md) parameters consume their corresponding upstream positions. An explicit deferred argument for a stream-default parameter selects its producer rather than replacing the stream.
 - Explicit positional arguments or explicit provider selectors suppress implicit chain-data binding, but preserve ordering. An ordinary explicit keyword that collides with an implicit positional value raises `TypeError`; values are not shifted to another slot.
 - Missing, conflicting, or excess arguments fail at execution with ordinary Python/binding errors.

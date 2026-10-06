@@ -6,6 +6,7 @@ import importlib
 
 import dspy
 import pytest
+from predict_rlm import RunEvidence, RunTrace
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, model_validator
 
 import avalanche as ava
@@ -97,7 +98,18 @@ def predictor_factory(monkeypatch):
     def install(evaluate):
         class Predictor:
             async def acall(self, **inputs):
-                return evaluate(self.signature, self.config, inputs)
+                prediction = evaluate(self.signature, self.config, inputs)
+                prediction.trace = RunTrace(
+                    status="completed",
+                    model="test-model",
+                    iterations=0,
+                    max_iterations=1,
+                    duration_ms=1,
+                )
+                prediction.evidence = RunEvidence(
+                    run_id="inline-run", complete=True, terminal_outcome="completed"
+                )
+                return prediction
 
         def build(signature, **config):
             predictor = Predictor()
