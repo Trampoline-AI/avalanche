@@ -14,9 +14,7 @@
 
 - Updated locked Python and browser-tooling dependencies to address 15 known
   security findings, including a coordinated fsspec/s3fs/AWS-client upgrade.
-  Documented each finding, compatibility risks, verification, and the remaining
-  unpatched DiskCache advisory with cache-isolation mitigations in
-  [the dependency security audit](docs/security-audit.md).
+  DiskCache remains unpatched upstream.
 
 - Added a workflow-author API reference for step decorators, graph operations,
   runs, inputs/context, files/workspaces, agents, classifiers, Iceberg/Lance
