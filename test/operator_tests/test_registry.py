@@ -4,6 +4,7 @@ import os
 import signal
 import sys
 import time
+from pathlib import Path
 
 import pytest
 
@@ -56,6 +57,19 @@ def test_same_named_packages_and_workflows_execute_in_their_own_roots(tmp_path):
         operator.close()
 
 
+def _edit_source(path: Path, text: str) -> None:
+    """Rewrite a source file so a later import cannot reuse stale bytecode.
+
+    Python validates cached bytecode by the source's size and integer mtime.
+    The edits below keep the size and, with fast discovery, land within the
+    same second as the previous scan's import, so the stale ``.pyc`` would be
+    served to the next rescan. Advancing the mtime makes the edit observable.
+    """
+    path.write_text(text)
+    stat = path.stat()
+    os.utime(path, (stat.st_atime, stat.st_mtime + 2))
+
+
 def test_cached_catalog_recovers_from_dependency_errors_additions_and_deletions(tmp_path):
     root = tmp_path / "flows"
     root.mkdir()
@@ -73,12 +87,12 @@ def test_cached_catalog_recovers_from_dependency_errors_additions_and_deletions(
     restarted.scan([str(root)])
     assert restarted.resolve("scheduled").cron == "1 * * * *"
 
-    helper.write_text("invalid Python !!!\n")
+    _edit_source(helper, "invalid Python !!!\n")
     restarted.rescan((str(helper),))
     assert restarted.resolve("scheduled").cron == "1 * * * *"
     assert [item.kind for item in restarted.list_diagnostics()] == ["import_error"]
 
-    helper.write_text('CRON = "2 * * * *"\n')
+    _edit_source(helper, 'CRON = "2 * * * *"\n')
     restarted.rescan((str(helper),))
     assert restarted.resolve("scheduled").cron == "2 * * * *"
     assert restarted.list_diagnostics() == []
