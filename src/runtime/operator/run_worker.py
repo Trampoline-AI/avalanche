@@ -16,6 +16,7 @@ from typing import Any, Callable, Protocol
 from uuid import uuid4
 
 from avalanche._agent_evidence import (
+    AgentEvidenceObserverEvent,
     capture_agent_evidence,
     capture_agent_log_node,
     current_agent_log_node_id,
@@ -544,7 +545,7 @@ def _with_agent_evidence(
 ) -> Callable[..., Any]:
     """Forward agent evidence through the coordinator's event protocol."""
 
-    def emit(event: dict[str, JsonValue]) -> None:
+    def emit(event: AgentEvidenceObserverEvent) -> None:
         event_queue.put(
             {
                 "type": "agent_evidence",

@@ -20,6 +20,8 @@
   its actual arguments, complete DSPy prediction, and only that invocation's trace.
   Step return values and postprocessing remain separate; later calls run normally
   without replacing or resubmitting evaluation, even if step postprocessing fails.
+  Full PredictRLM 0.9 iteration details remain available to evaluations without
+  resending them through the operator's live trace channel.
 - Added a workflow-author API reference for step decorators, graph operations,
   runs, inputs/context, files/workspaces, agents, classifiers, Iceberg/Lance
   storage, streams, cursors, and CLI commands. The workflow primitive list links

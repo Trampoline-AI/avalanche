@@ -88,9 +88,7 @@ def predictor(monkeypatch):
                 answer=text.upper(),
                 handoff=Report(summary=f"summary: {text}"),
                 trace=_trace(text),
-                evidence=RunEvidence(
-                    run_id=text, complete=True, terminal_outcome="completed"
-                ),
+                evidence=RunEvidence(run_id=text, complete=True, terminal_outcome="completed"),
             )
 
     monkeypatch.setattr(agent_module, "_build_predictor", lambda *a, **kw: Predictor())
@@ -197,9 +195,7 @@ async def test_first_successful_completion_wins_without_gating_later_calls(
                 answer=text.upper(),
                 handoff=Report(summary=text),
                 trace=_trace(text),
-                evidence=RunEvidence(
-                    run_id=text, complete=True, terminal_outcome="completed"
-                ),
+                evidence=RunEvidence(run_id=text, complete=True, terminal_outcome="completed"),
             )
 
     monkeypatch.setattr(agent_module, "_build_predictor", lambda *a, **kw: Predictor())
@@ -261,9 +257,7 @@ async def test_failed_earlier_call_does_not_claim_capture_and_observers_keep_all
                 answer=text,
                 handoff=Report(summary=text),
                 trace=_trace(text),
-                evidence=RunEvidence(
-                    run_id=text, complete=True, terminal_outcome="completed"
-                ),
+                evidence=RunEvidence(run_id=text, complete=True, terminal_outcome="completed"),
             )
 
     monkeypatch.setattr(agent_module, "_build_predictor", lambda *a, **kw: Predictor())
@@ -414,9 +408,7 @@ async def test_no_successful_agent_return_means_no_evaluation(evaluations, monke
             else:
                 failure = ValueError("provider failed")
                 outcome = "error"
-            failure.evidence = RunEvidence(
-                run_id=text, complete=True, terminal_outcome=outcome
-            )
+            failure.evidence = RunEvidence(run_id=text, complete=True, terminal_outcome=outcome)
             raise failure
 
     monkeypatch.setattr(agent_module, "_build_predictor", lambda *a, **kw: Predictor())
@@ -671,8 +663,6 @@ async def test_ray_serialization_uses_worker_context_and_synchronous_owned_snaps
     assert submission.context.inputs == {"payload": ["prepared initial"]}
     assert submission.context.output.trace.steps == _trace("prepared initial").steps
     assert submission.context.output.evidence.complete is True
-    selected_trace = RunTrace.model_validate(
-        submission.context.trace[0]["trace"], strict=True
-    )
+    selected_trace = RunTrace.model_validate(submission.context.trace[0]["trace"], strict=True)
     assert selected_trace.steps == _trace("prepared initial").steps
     assert submission.runtime_defaults == {"model": "worker-model", "timeout": 2.0}

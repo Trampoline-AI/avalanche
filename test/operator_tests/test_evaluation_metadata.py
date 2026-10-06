@@ -79,6 +79,7 @@ def _write_workflow(root: Path, *, revised: bool = False, guarded: bool = False)
             import typesafe_sdk
             import avalanche as ava
             import dspy
+            from predict_rlm import RunEvidence, RunTrace
 
             if os.environ.get("EVALUATION_TEST_FORBID_IMPORT"):
                 raise AssertionError("cached discovery must not import author code")
@@ -110,7 +111,17 @@ def _write_workflow(root: Path, *, revised: bool = False, guarded: bool = False)
             async def research(value: str, *, agent: ava.Agent) -> str:
                 class Predictor:
                     async def acall(self, *, query):
-                        return dspy.Prediction(reply=query)
+                        return dspy.Prediction(
+                            reply=query,
+                            trace=RunTrace(
+                                status="completed", model="test-model", iterations=0,
+                                max_iterations=1, duration_ms=1,
+                            ),
+                            evidence=RunEvidence(
+                                run_id="metadata-run", complete=True,
+                                terminal_outcome="completed",
+                            ),
+                        )
 
                 agent._predictor = Predictor()
                 return (await agent(query=value)).reply
