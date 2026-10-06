@@ -1,5 +1,9 @@
 # Classifier steps
 
+For all decorator parameters, question/result fields, and errors, see the
+[classifier API reference](api/classifiers.md).
+See the [package API index](api/README.md) for other interfaces.
+
 `@ava.classifier_step` is an ordinary Avalanche step with
 [TypeSafe](https://typesafe.ai/) questions and an injected, awaitable
 `ava.Classifier`. Questions can be decorator defaults or supplied per call.

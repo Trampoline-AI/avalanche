@@ -1,5 +1,9 @@
 # Agent steps
 
+For the author-facing decorator parameters, call signature, configuration, and
+errors, see the [agent API reference](api/agents.md).
+See the [package API index](api/README.md) for other interfaces.
+
 `@ava.agent_step` is an ordinary Avalanche workflow step with an injected,
 callable agent. The body maps workflow values into model inputs, calls the
 agent, validates or composes the raw prediction, and explicitly persists its

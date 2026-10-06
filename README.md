@@ -24,6 +24,15 @@ Avalanche makes agents first-class steps in typed data pipelines. Compose adapti
 > [!NOTE]
 > Avalanche is an early release candidate intended for local development and experimentation. APIs and operational behavior may change before a stable release.
 
+## API reference
+
+The [API reference](docs/api/README.md) covers the interfaces used to write and run
+workflows: step decorators, graph operations, run handles, inputs and context,
+files and workspaces, agents, classifiers, Iceberg/Lance storage, streams,
+cursors, and CLI commands. Entries list parameters, fields, returns, and errors.
+The same reference is bundled in the [Avalanche skill](skills/avalanche/SKILL.md)
+for offline API lookup.
+
 ## Requirements
 
 - Python 3.11, 3.12, or 3.13.

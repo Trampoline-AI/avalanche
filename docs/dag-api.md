@@ -1,5 +1,9 @@
 # DAG API
 
+For workflow-author parameters, defaults, and return contracts, see the
+[workflow reference](api/workflows.md) and [package API index](api/README.md).
+This page is the workflow usage guide.
+
 Avalanche workflows are Python functions that declare a DAG of reusable nodes.
 
 | Decorator | Use |

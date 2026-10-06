@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+- Added a workflow-author API reference for step decorators, graph operations,
+  runs, inputs/context, files/workspaces, agents, classifiers, Iceberg/Lance
+  storage, streams, cursors, and CLI commands. The workflow primitive list links
+  to dedicated agent and classifier references. Topic pages under `docs/api/`
+  are mirrored in `skills/avalanche/references/api/` for offline lookup; framework
+  internals, operator protocols, and browser embedding are outside this reference.
+
 ## 0.8.0
 
 - Upgraded PredictRLM to 0.9.0.
