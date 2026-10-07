@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- Agent steps that use Codex LM now show their model as `codex/<model>` instead of
+  `openai/<model>` in the operator UI's definition and run views, and in run traces
+  sent to evaluations. Codex LM sends requests through a ChatGPT login, not the
+  OpenAI API, so the old label named the wrong provider. Cost tracking is unchanged.
 - Composite score summaries use centered dots. DAG nodes show the first three
   scores plus a black `and N more` label, smaller only when zoomed in. Sidebar
   headers show every score and wrap as needed.
