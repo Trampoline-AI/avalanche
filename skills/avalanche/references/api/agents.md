@@ -16,6 +16,7 @@ import avalanche as ava
     skills=...,
     tools=...,
     output_dir=...,
+    evaluations=...,
     **predictor_kwargs,
 )
 async def analyze(document: str, *, agent: ava.Agent) -> str:
@@ -34,6 +35,7 @@ The example assumes a signature with input `document` and output `summary`. Elli
 | `skills` | Sequence of `ava.agent.Skill`; omitted gives none | Capability bundles, configured on this step only. Avalanche checks that the value is a sequence, not each member's type. |
 | `tools` | Sequence of callables; omitted gives none | Additional tools; every member must be callable. Neither `tools=None` nor `skills=None` means an empty sequence. |
 | `output_dir` | `str \| pathlib.Path \| None`; omitted inherits, dependency default `None` | Collect generated agent `File` outputs under `<output_dir>/<field>/`, otherwise in a temporary directory. Does not redirect scalar outputs or logs. |
+| `evaluations` | `ava.Evaluations \| None`; default `None` | Observation-only quality judgments of the first successful agent call, run by the operator. See [native evaluations](../agent-steps.md#native-evaluations). Any other value raises `TypeError`. |
 | `**predictor_kwargs` | Additional PredictRLM constructor keyword arguments | Forwarded to the installed dependency; see its constructor documentation for options and compatibility constraints. Avalanche does not validate this entire upstream surface. |
 
 The decorator returns a single-output workflow step. The body must declare exactly `*, agent: ava.Agent`, with no default; Avalanche injects it and removes it from the step's public call signature. The remaining Python parameters and return annotation describe the workflow step, independently of the model signature. Synchronous and asynchronous bodies are accepted; an awaitable body result is awaited. Use an asynchronous body to await model calls.
@@ -46,7 +48,8 @@ Decorated agent functions do not provide ordinary node-decorator options such as
 
 Inside a workflow body, `ava.agent.step(signature, inputs=None, slug=None, ...)`
 declares an inline agent node and returns its deferred result. It accepts the
-same signature, skills, tools, and runtime options listed above. It does not
+same signature, skills, tools, runtime options, and `evaluations` listed above;
+evaluations judge the node's single agent call. It does not
 execute a model during graph construction or discovery.
 
 | Inline-only parameter | Default and contract |

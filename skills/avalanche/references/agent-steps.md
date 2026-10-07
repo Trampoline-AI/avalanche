@@ -362,8 +362,9 @@ capabilities of a specific agent step.
 
 ## Native evaluations
 
-Use `@ava.agent_step(..., evaluations=ava.Evaluations(...))` for automatic,
-observation-only quality judgments. Do not create a downstream classifier node
+Use `@ava.agent_step(..., evaluations=ava.Evaluations(...))`, or
+`ava.agent.step(Signature, inputs=..., evaluations=...)` for an inline agent node,
+for automatic, observation-only quality judgments. Do not create a downstream classifier node
 merely to observe this step, and do not turn native evaluations into workflow
 gates, routing, retries, or self-correction.
 

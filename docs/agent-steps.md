@@ -216,7 +216,8 @@ defaults.
 
 ## Native evaluations
 
-Attach observation-only quality judgments to a decorated agent with `evaluations=`.
+Attach observation-only quality judgments to an agent with `evaluations=`, on either
+a decorated agent step or an inline `ava.agent.step(...)` call.
 Keep each metric's **evidence selector** separate from its **question**: `state` is a
 synchronous Python callable; `question` is one existing TypeSafe Noul, Score,
 or Choice question, using the same format as
@@ -291,6 +292,18 @@ review_evaluations = ava.Evaluations(
 async def review_document(document: str, *, agent: ava.Agent) -> Review:
     prediction = await agent(document=document)
     return prediction.review
+```
+
+An inline agent takes the same declaration:
+
+```python
+@ava.workflow
+def review_flow():
+    return ava.agent.step(
+        ReviewSignature,
+        inputs={"document": "Quarterly revenue rose 4% on higher renewals."},
+        evaluations=review_evaluations,
+    )
 ```
 
 `Evaluations` is a frozen Pydantic model. Its `metrics` and `composites` mappings

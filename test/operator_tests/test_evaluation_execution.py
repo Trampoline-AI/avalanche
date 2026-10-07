@@ -889,3 +889,77 @@ def test_ray_evaluation_survives_ray_and_coordinator_shutdown(tmp_path, evaluati
     finally:
         evaluation_service.release.set()
         operator.close()
+
+
+_INLINE_WORKFLOW_SOURCE = """
+import dspy
+import predict_rlm
+import avalanche as ava
+
+class Draft(ava.Signature):
+    \"\"\"Draft a reply.\"\"\"
+    text: str = ava.InputField()
+    answer: str = ava.OutputField()
+
+class TestPredictor:
+    def __init__(self, signature, *, skills=(), tools=(), events=(), **kwargs):
+        self.max_iterations = kwargs.get("max_iterations", 2)
+
+    async def acall(self, **inputs):
+        return dspy.Prediction(
+            answer=inputs["text"].upper(),
+            trace=predict_rlm.RunTrace(
+                status="completed", model="test-predictor", iterations=0,
+                max_iterations=self.max_iterations, duration_ms=1,
+            ),
+            evidence=predict_rlm.RunEvidence(
+                run_id="inline-run", complete=True, terminal_outcome="completed"
+            ),
+        )
+
+# This replacement exists only in the temporary module's isolated child.
+predict_rlm.PredictRLM = TestPredictor
+
+evaluations = ava.Evaluations(metrics={"quality": ava.Metric(
+    state=lambda ctx: {"inputs": dict(ctx.inputs), "answer": ctx.output.answer},
+    question={"type": "noul", "instructions": "Is the draft useful?"},
+)})
+
+@ava.source
+def load() -> str:
+    return "hello"
+
+@ava.step
+def finish(answer: str) -> str:
+    return answer + "!"
+
+@ava.workflow(classifier_defaults={"model": "evaluation-workflow-model", "timeout": 120.0})
+def flow():
+    drafted = ava.agent.step(
+        Draft, inputs={"text": load()}, slug="draft", evaluations=evaluations
+    )
+    return finish(drafted)
+"""
+
+
+def test_inline_agent_evaluation_runs_in_operator(tmp_path, evaluation_service):
+    workflow = tmp_path / "inline_evaluation_flow.py"
+    workflow.write_text(dedent(_INLINE_WORKFLOW_SOURCE))
+    operator = Operator([str(workflow)], watch=False, schedule=False)
+    try:
+        [info] = operator.list_workflows()
+        [draft_node] = info.agent_node_ids
+        assert list(info.evaluation_metadata_json) == [draft_node]
+
+        run = wait_terminal(operator, operator.start_run("flow"))
+        assert run.status == RunStatus.SUCCESS
+        assert operator.get_run_result(run.run_id) == "HELLO!"
+        record = wait_evaluation(operator, run.run_id)
+        assert record.status == "completed", record.error
+        assert record.node_id == draft_node
+        request = evaluation_service.requests.get(timeout=10)
+        assert request["model"] == "evaluation-workflow-model"
+        assert request["state"] == {"inputs": {"text": "hello"}, "answer": "HELLO"}
+        assert evaluation_service.requests.empty()
+    finally:
+        operator.close()

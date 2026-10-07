@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+- Inline agent nodes accept `evaluations=` too:
+  `ava.agent.step(Signature, inputs=..., evaluations=ava.Evaluations(...))` inside a
+  workflow now records operator evaluations for that node, the same way decorated
+  agent steps do. Before, the argument was passed on to PredictRLM as an unknown
+  setting and no evaluation ran.
 - Agent steps that use Codex LM now show their model as `codex/<model>` instead of
   `openai/<model>` in the operator UI's definition and run views, and in run traces
   sent to evaluations. Codex LM sends requests through a ChatGPT login, not the

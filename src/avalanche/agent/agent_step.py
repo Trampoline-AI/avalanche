@@ -1134,6 +1134,7 @@ def step(
     max_iterations: Any = UNSET,
     skills: Sequence[Any] | object = UNSET,
     tools: Sequence[Callable[..., Any]] | object = UNSET,
+    evaluations: Evaluations[InputT, OutputT] | None = None,
     **predictor_kwargs: Any,
 ) -> NodeFuture | Callable[[Callable[..., Any]], Node]:
     """Invoke an inline agent in a workflow, or declare a bodyful agent outside it."""
@@ -1147,9 +1148,12 @@ def step(
             max_iterations=max_iterations,
             skills=skills,
             tools=tools,
+            evaluations=evaluations,
             **predictor_kwargs,
         )
 
+    if evaluations is not None and not isinstance(evaluations, Evaluations):
+        raise TypeError("ava.agent.step evaluations must be an ava.Evaluations declaration")
     signature = resolve_signature(signature, name="inline agent")
     if inputs is not None:
         if not isinstance(inputs, Mapping):
@@ -1191,13 +1195,13 @@ def step(
         skills=skills,
         tools=tools,
         public_signature=public_signature,
-        evaluations=None,
+        evaluations=evaluations,
     )
 
     async def invoke(*args: Any, **kwargs: Any) -> Any:
         from avalanche.evaluation_capture import capture_step_evaluations
 
-        with capture_step_evaluations(None, step_name=spec.step_name):
+        with capture_step_evaluations(spec.evaluations, step_name=spec.step_name):
             bound = public_signature.bind(*args, **kwargs)
             prediction: dspy.Prediction = await spec.make_agent()(**bound.arguments)
             values = []
