@@ -1,9 +1,12 @@
 import os
 from pathlib import Path
 
+from model_selection import select_models
+
 PACKAGE_ROOT = Path(__file__).parent
-MODEL = os.getenv("CUSTOMER_FEEDBACK_REVIEW_MODEL", "openai/gpt-5.6-terra")
-SUB_MODEL = os.getenv("CUSTOMER_FEEDBACK_REVIEW_SUB_MODEL", "gemini/gemini-3.5-flash")
+_models = select_models()
+MODEL = os.getenv("CUSTOMER_FEEDBACK_REVIEW_MODEL") or _models.lm
+SUB_MODEL = os.getenv("CUSTOMER_FEEDBACK_REVIEW_SUB_MODEL") or _models.sub_lm
 FEEDBACK_WORKBOOK_PATH = PACKAGE_ROOT / "feedback_workbook.xlsx"
 
 _example_root = os.getenv("AVALANCHE_EXAMPLE_ROOT")

@@ -11,6 +11,7 @@ def _():
     import ast
     import importlib.util
     import os
+    import sys
     from pathlib import Path
     from typing import Literal
 
@@ -19,9 +20,13 @@ def _():
     from openpyxl import load_workbook
     from predict_rlm import File, PredictRLM
     from pydantic import BaseModel, Field
-    from skills import evidence_coding_skill
 
     import avalanche as ava
+    from skills import evidence_coding_skill
+
+    # The shared example model picker lives one directory up, in examples/.
+    sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+    from model_selection import select_models
 
     return (
         BaseModel,
@@ -38,15 +43,17 @@ def _():
         load_workbook,
         mo,
         os,
+        select_models,
     )
 
 
 @app.cell(hide_code=True)
-def _(Path, ast, importlib, load_dotenv, os):
+def _(Path, ast, importlib, load_dotenv, os, select_models):
     load_dotenv()
 
-    MODEL = os.getenv("CUSTOMER_FEEDBACK_REVIEW_MODEL", "openai/gpt-5.6-terra")
-    SUB_MODEL = os.getenv("CUSTOMER_FEEDBACK_REVIEW_SUB_MODEL", "gemini/gemini-3.5-flash")
+    _models = select_models()
+    MODEL = os.getenv("CUSTOMER_FEEDBACK_REVIEW_MODEL") or _models.lm
+    SUB_MODEL = os.getenv("CUSTOMER_FEEDBACK_REVIEW_SUB_MODEL") or _models.sub_lm
     FEEDBACK_WORKBOOK_PATH = Path(__file__).with_name("feedback_workbook.xlsx")
     WORKFLOW_DAG_PATH = Path(__file__).with_name("workflowdag.jpg")
     WORKFLOW_NODE_TYPES_DAG_PATH = Path(__file__).with_name("workflowdag2.jpg")

@@ -1,13 +1,13 @@
 """Operator-discovered meeting workflow: uv run ava dev examples/meeting_followups/flow.py."""
 
-import os
-
 import avalanche as ava
 
 from .config import (
     DESTINATIONS,
     MEETING_DATE,
     MEETING_TITLE,
+    MODEL,
+    SUB_MODEL,
     TRANSCRIPT_PATH,
 )
 from .schema import (
@@ -43,8 +43,8 @@ def load_meeting() -> MeetingContext:
 
 @ava.agent_step(
     ExtractFollowups,
-    lm=os.getenv("MEETING_FOLLOWUPS_MODEL", "openai/gpt-5.4"),
-    sub_lm=os.getenv("MEETING_FOLLOWUPS_SUB_MODEL", "openai/gpt-5.4-mini"),
+    lm=MODEL,
+    sub_lm=SUB_MODEL,
     max_iterations=20,
 )
 async def extract_followups(meeting: MeetingContext, *, agent: ava.Agent) -> Extraction:

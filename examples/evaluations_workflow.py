@@ -1,6 +1,7 @@
 """Generate a synthetic checkout incident and prepare an evidence-linked handoff.
 
-Set OPENAI_API_KEY and TYPESAFE_API_KEY in the environment or project .env, then:
+Log in with `codex-lm auth login NAME`, or set OPENAI_API_KEY or ANTHROPIC_API_KEY
+(see model_selection.py), plus TYPESAFE_API_KEY in the environment or project .env:
     uv run ava dev examples/evaluations_workflow.py
 
 Select evaluations_workflow and hit Run: no JSON input or files are required.
@@ -17,10 +18,12 @@ from __future__ import annotations
 from typing import Literal
 
 from dspy import Prediction
-from dspy_codex_lm import CodexLM
+from model_selection import select_models
 from pydantic import BaseModel, JsonValue
 
 import avalanche as ava
+
+MODELS = select_models()
 
 
 class Evidence(BaseModel):
@@ -347,8 +350,8 @@ def render_handoff(handoff: IncidentHandoff) -> str:
 
 @ava.workflow(
     agent_defaults={
-        "lm": CodexLM(model="gpt-5.6-terra"),
-        "sub_lm": CodexLM(model="gpt-5.6-terra"),
+        "lm": MODELS.lm,
+        "sub_lm": MODELS.sub_lm,
         "max_iterations": 10,
     },
     classifier_defaults={"model": "jev-latest", "timeout": 30.0},
