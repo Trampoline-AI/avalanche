@@ -51,9 +51,12 @@ def _():
 def _(Path, ast, importlib, load_dotenv, os, select_models):
     load_dotenv()
 
-    _models = select_models()
-    MODEL = os.getenv("CUSTOMER_FEEDBACK_REVIEW_MODEL") or _models.lm
-    SUB_MODEL = os.getenv("CUSTOMER_FEEDBACK_REVIEW_SUB_MODEL") or _models.sub_lm
+    _models = select_models(
+        lm_env="CUSTOMER_FEEDBACK_REVIEW_MODEL",
+        sub_lm_env="CUSTOMER_FEEDBACK_REVIEW_SUB_MODEL",
+    )
+    MODEL = _models.lm
+    SUB_MODEL = _models.sub_lm
     FEEDBACK_WORKBOOK_PATH = Path(__file__).with_name("feedback_workbook.xlsx")
     WORKFLOW_DAG_PATH = Path(__file__).with_name("workflowdag.jpg")
     WORKFLOW_NODE_TYPES_DAG_PATH = Path(__file__).with_name("workflowdag2.jpg")
