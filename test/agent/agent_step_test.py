@@ -544,6 +544,7 @@ def _retain_iteration(step):
             evidence=agent_module._evidence_metadata(
                 RunEvidence(run_id="sdk-run", complete=True, terminal_outcome="completed")
             ),
+            runtime_kwargs={},
         )
     try:
         for evidence in (
@@ -886,3 +887,52 @@ def test_deep_iteration_payload_does_not_reenter_transport_at_terminal():
     bounded = retained.predict_calls[0].calls[0].input
     assert "unavailable" in json.dumps(bounded)
     assert step.predict_calls[0].calls[0].input == {"question": payload}
+
+
+@pytest.mark.asyncio
+async def test_codex_lm_is_named_codex_in_declaration_and_run_trace(monkeypatch):
+    from dspy_codex_lm import CodexLM
+
+    codex = CodexLM(model="gpt-5.6-terra")
+
+    class Predictor:
+        async def acall(self, **inputs):
+            return Prediction(
+                summary=Summary(headline="about Ada", person_count=1),
+                trace=_trace().model_copy(
+                    update={"model": codex.model, "sub_model": codex.model}
+                ),
+                evidence=RunEvidence(
+                    run_id="codex-run", complete=True, terminal_outcome="completed"
+                ),
+            )
+
+    monkeypatch.setattr(agent_module, "_build_predictor", lambda *args, **kwargs: Predictor())
+
+    @ava.agent_step(SummarySignature, lm=codex, sub_lm=codex)
+    async def summarize(person: Person, *, agent: ava.Agent):
+        return (await agent(person=person)).summary
+
+    models = summarize.__agent_step__.declaration_metadata()["models"]
+    assert [models[role]["identity"]["name"] for role in ("main", "sub")] == [
+        "codex/gpt-5.6-terra",
+        "codex/gpt-5.6-terra",
+    ]
+
+    observed = []
+    with capture_agent_evidence(observed.append, errors="raise"):
+        await summarize.__agent_step__.make_agent()(person=Person(id=1, name="Ada"))
+    (finished,) = [event for event in observed if event["kind"] == "trace_finished"]
+    assert (finished["trace"]["model"], finished["trace"]["sub_model"]) == (
+        "codex/gpt-5.6-terra",
+        "codex/gpt-5.6-terra",
+    )
+
+
+def test_string_models_keep_their_litellm_ids_in_declaration():
+    @ava.agent_step(SummarySignature, lm="openai/gpt-5.6-terra")
+    async def summarize(person: Person, *, agent: ava.Agent):
+        return (await agent(person=person)).summary
+
+    models = summarize.__agent_step__.declaration_metadata()["models"]
+    assert models["main"]["identity"] == "openai/gpt-5.6-terra"

@@ -441,10 +441,19 @@ def _emit_terminal_trace(
     *,
     invocation_id: AgentInvocationId,
     evidence: AgentEvidenceMetadata,
+    runtime_kwargs: Mapping[str, Any],
 ) -> AgentTraceFinishedEvent:
     # Iterations already crossed the bounded event channel. Do not re-send
     # original payloads that the operator would discard after validation.
-    parsed = json.loads(trace.model_copy(update={"steps": []}).to_exportable_json())
+    update: dict[str, Any] = {"steps": []}
+    main_label = _model_display_name(runtime_kwargs.get("lm"))
+    if main_label is not None:
+        update["model"] = main_label
+    sub_label = _model_display_name(runtime_kwargs.get("sub_lm"))
+    # PredictRLM omits the sub-model when it shares the main LM.
+    if sub_label is not None and trace.sub_model is not None:
+        update["sub_model"] = sub_label
+    parsed = json.loads(trace.model_copy(update=update).to_exportable_json())
     event: AgentTraceFinishedEvent = {
         "kind": "trace_finished",
         "invocation_id": invocation_id,
@@ -524,7 +533,10 @@ class Agent:
                         )
                     else:
                         _emit_terminal_trace(
-                            trace, invocation_id=state.invocation_id, evidence=evidence
+                            trace,
+                            invocation_id=state.invocation_id,
+                            evidence=evidence,
+                            runtime_kwargs=self._runtime_kwargs,
                         )
                 except Exception as evidence_error:
                     exc.add_note(
@@ -542,7 +554,10 @@ class Agent:
                     )
                 else:
                     _emit_terminal_trace(
-                        trace, invocation_id=state.invocation_id, evidence=evidence
+                        trace,
+                        invocation_id=state.invocation_id,
+                        evidence=evidence,
+                        runtime_kwargs=self._runtime_kwargs,
                     )
                 input_types = {name: type(value).__name__ for name, value in inputs.items()}
                 raise AgentStepExecutionError(
@@ -555,6 +570,7 @@ class Agent:
                 prediction.trace,
                 invocation_id=state.invocation_id,
                 evidence=_evidence_metadata(prediction.evidence),
+                runtime_kwargs=self._runtime_kwargs,
             )
 
             # Resolve process-local state only in the executing worker. Existing
@@ -861,6 +877,22 @@ def _effective_model_metadata(
     return models
 
 
+def _model_display_name(value: Any) -> str | None:
+    """Name LMs whose LiteLLM model id hides the provider they actually call.
+
+    Codex LM reports ``openai/<model>`` for LiteLLM pricing, but it sends requests
+    through a ChatGPT login rather than the OpenAI API, so show ``codex/<model>``.
+    """
+    from dspy_codex_lm import CodexHTTPLM
+
+    if not isinstance(value, CodexHTTPLM):
+        return None
+    provider, separator, model = value.model.partition("/")
+    if provider != "openai" or not separator:
+        raise AgentStepError(f"unexpected Codex LM model id {value.model!r}")
+    return f"codex/{model}"
+
+
 def _strict_model_metadata_value(value: Any, runtime_key: str, path: str = "") -> Any:
     """Serialize explicit model descriptors without silently omitting nested values."""
     if value is None or isinstance(value, (str, bool, int)):
@@ -893,7 +925,10 @@ def _strict_model_metadata_value(value: Any, runtime_key: str, path: str = "") -
     value_type = type(value)
     module = value_type.__module__
     descriptor = {"type": f"{module}.{value_type.__qualname__}"}
-    if module == "dspy" or module.startswith(("dspy.", "predict_rlm.")):
+    display_name = _model_display_name(value)
+    if display_name is not None:
+        descriptor["name"] = display_name
+    elif module == "dspy" or module.startswith(("dspy.", "predict_rlm.")):
         instance_name = getattr(value, "model", None) or getattr(value, "name", None)
         if isinstance(instance_name, str):
             descriptor["name"] = instance_name
