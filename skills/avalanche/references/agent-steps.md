@@ -542,7 +542,7 @@ cited on-call handoff, and renders a Markdown brief. The agent step demonstrates
 all three question types, shared-state batching, trace selection, and a normalized
 composite; no customer communication is sent. The
 [illustrated reference](https://github.com/Trampoline-AI/avalanche/blob/main/docs/agent-steps.md#native-evaluations)
-also documents browser results/errors and the record APIs.
+also documents operator inspection and the record APIs.
 
 ## Verification
 

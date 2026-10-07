@@ -512,14 +512,3 @@ evaluation pill's icon size. Detailed node labels retain their smaller sizing.
 Graph and sidebar share a single run-level evaluation poll so late results update
 both surfaces.
 
-### Browser examples
-
-![Native evaluation results in the operator browser UI.](assets/screenshots/native-evaluations-results.png)
-
-*Actual operator browser UI using controlled SDK fixture responses to illustrate
-metric/composite display; these are not live Jev judgments.*
-
-![An evaluation error in the operator browser UI.](assets/screenshots/native-evaluations-error.png)
-
-*Actual operator browser UI: a deliberately failing selector leaves the workflow
-successful. Captured with controlled fixture data, not live Jev verification.*
