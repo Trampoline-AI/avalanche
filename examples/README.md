@@ -23,8 +23,9 @@ parallel demo destination steps named Linear, Attio, and Jira. The included
 synthetic cross-functional transcript contains repeated topics, corrections, rejected
 proposals, resolved items, and explicitly unresolved ownership.
 
-Run through the operator. From the repository root, with `OPENAI_API_KEY` and
-`TYPESAFE_API_KEY` set in the operator environment:
+Run through the operator. From the repository root, with model credentials (see
+[Model selection](#model-selection)) and `TYPESAFE_API_KEY` set in the operator
+environment:
 
 ```bash
 uv run ava dev examples/meeting_followups/flow.py
@@ -51,7 +52,7 @@ in Linear, Attio, and Jira order. Each plan names its destination and contains t
 routed issues, including an empty list for unused destinations. These service names
 are illustrative: the example has no clients, credentials, or live publishing mode
 for them. There are no canned AI answers or offline substitutes.
-Agent defaults are `openai/gpt-5.4` and `openai/gpt-5.4-mini`; override them with
+Agent models come from [model selection](#model-selection); override them with
 `MEETING_FOLLOWUPS_MODEL` and `MEETING_FOLLOWUPS_SUB_MODEL` in the operator
 environment and supply the selected provider's credentials. The classifier uses
 Avalanche's default `jev-latest`.
@@ -139,3 +140,59 @@ with the other examples when `uv run ava dev` runs from this directory.
   with one unique key per consumer edge. `key` is only valid with `append_scan`.
 - Local example artifacts are ignored by git through `.avalanche/`.
 - The standalone scripts listed here are part of the smoke-tested onboarding path.
+
+## Model selection
+
+The agent examples (`meeting_followups/`, `customer_feedback_review/`, and
+`evaluations_workflow.py`) do not hard-code a model provider. When an example loads,
+[`model_selection.py`](model_selection.py) checks what is set up on the machine and
+picks the first available option, in this order:
+
+| Order | Provider | Selected when | Model |
+| --- | --- | --- | --- |
+| 1 | Codex LM | A `codex-lm` login is found | `gpt-5.6-terra` |
+| 2 | OpenAI | `OPENAI_API_KEY` is set | `openai/gpt-5.6-terra` |
+| 3 | Anthropic | `ANTHROPIC_API_KEY` is set | `anthropic/claude-sonnet-5-5` |
+
+Each option uses the same model for the main agent (`lm`) and its sub-model
+(`sub_lm`). If both API keys are set and Codex LM is not, OpenAI wins. The operator
+UI shows Codex LM models as `codex/gpt-5.6-terra`, so you can tell them apart from
+the OpenAI API.
+
+**Codex LM detection.** Codex LM uses a ChatGPT subscription instead of an API key.
+The example asks `codex-lm` to resolve its auth profile exactly as a model call
+would: the `CODEX_LM_AUTH_PROFILE` override, saved-profile rotation, or the active
+profile. It counts as set up when that profile's `auth.json` exists. The Codex CLI's
+own `~/.codex/auth.json` counts only when `CODEX_LM_ENABLE_LEGACY_AUTH_FALLBACK=1`.
+To create a profile:
+
+```bash
+uv run codex-lm auth login NAME
+```
+
+**API keys.** Keys can be exported or placed in the project `.env`. The example loads
+`.env` without overriding values already in the environment, as classifier steps do.
+
+**Nothing set up.** Codex LM stays selected. The example still loads, so the operator
+can discover it, but the first agent call fails with Codex LM's login instructions.
+Classifier steps and evaluations separately need `TYPESAFE_API_KEY`.
+
+**Overrides.** Per-example variables replace the automatic choice. Give any LiteLLM
+model ID and set that provider's credentials:
+
+| Example | Main model | Sub-model |
+| --- | --- | --- |
+| `meeting_followups/` | `MEETING_FOLLOWUPS_MODEL` | `MEETING_FOLLOWUPS_SUB_MODEL` |
+| `customer_feedback_review/` | `CUSTOMER_FEEDBACK_REVIEW_MODEL` | `CUSTOMER_FEEDBACK_REVIEW_SUB_MODEL` |
+
+`evaluations_workflow.py` has no override variables. To use a different provider for
+it, unset the higher-priority credentials.
+
+Each run imports the example in a fresh process, so selection happens again for every
+run. A new Codex LM login or `.env` change applies to the next run. Exported variables
+come from the operator's environment, so restart the operator after changing them. To
+see which provider will be picked, run from `examples/`:
+
+```bash
+uv run python -c "from model_selection import select_models; print(select_models().provider)"
+```

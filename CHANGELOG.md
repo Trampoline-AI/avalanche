@@ -6,6 +6,11 @@
   `openai/<model>` in the operator UI's definition and run views, and in run traces
   sent to evaluations. Codex LM sends requests through a ChatGPT login, not the
   OpenAI API, so the old label named the wrong provider. Cost tracking is unchanged.
+- Agent examples now choose their models from what is set up: Codex LM first, then
+  OpenAI when `OPENAI_API_KEY` is set, then Anthropic Claude when `ANTHROPIC_API_KEY`
+  is set. Keys in the project `.env` count, and per-example model variables still
+  override the choice. The customer feedback example no longer needs a Gemini key
+  for its sub-model.
 - Composite score summaries use centered dots. DAG nodes show the first three
   scores plus a black `and N more` label, smaller only when zoomed in. Sidebar
   headers show every score and wrap as needed.
