@@ -534,7 +534,8 @@ fixture responses can verify UI behavior but are not live Jev evidence.
 
 Repository example: `examples/evaluations_workflow.py`, run with
 `uv run ava dev examples/evaluations_workflow.py` from the repository root after
-setting `OPENAI_API_KEY` and `TYPESAFE_API_KEY`. Click **Run** without supplying
+logging in to Codex LM (`uv run codex-lm auth login NAME`) or setting
+`OPENAI_API_KEY` or `ANTHROPIC_API_KEY`, plus `TYPESAFE_API_KEY`. Click **Run** without supplying
 input. It generates synthetic incident evidence, uses a real agent to prepare a
 cited on-call handoff, and renders a Markdown brief. The agent step demonstrates
 all three question types, shared-state batching, trace selection, and a normalized
