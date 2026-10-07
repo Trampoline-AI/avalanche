@@ -86,6 +86,12 @@ class OperatorServiceV2Stub(object):
             response_deserializer=operator__pb2.RunActivityPageV2.FromString,
             _registered_method=True,
         )
+        self.ListEvaluations = channel.unary_unary(
+            "/avalanche.operator.OperatorServiceV2/ListEvaluations",
+            request_serializer=operator__pb2.ListEvaluationsRequestV2.SerializeToString,
+            response_deserializer=operator__pb2.EvaluationListV2.FromString,
+            _registered_method=True,
+        )
         self.ReadActivityDetail = channel.unary_stream(
             "/avalanche.operator.OperatorServiceV2/ReadActivityDetail",
             request_serializer=operator__pb2.ReadActivityDetailRequestV2.SerializeToString,
@@ -171,6 +177,12 @@ class OperatorServiceV2Servicer(object):
         context.set_details("Method not implemented!")
         raise NotImplementedError("Method not implemented!")
 
+    def ListEvaluations(self, request, context):
+        """Missing associated documentation comment in .proto file."""
+        context.set_code(grpc.StatusCode.UNIMPLEMENTED)
+        context.set_details("Method not implemented!")
+        raise NotImplementedError("Method not implemented!")
+
     def ReadActivityDetail(self, request, context):
         """Missing associated documentation comment in .proto file."""
         context.set_code(grpc.StatusCode.UNIMPLEMENTED)
@@ -238,6 +250,11 @@ def add_OperatorServiceV2Servicer_to_server(servicer, server):
             servicer.ListRunActivity,
             request_deserializer=operator__pb2.ListRunActivityRequestV2.FromString,
             response_serializer=operator__pb2.RunActivityPageV2.SerializeToString,
+        ),
+        "ListEvaluations": grpc.unary_unary_rpc_method_handler(
+            servicer.ListEvaluations,
+            request_deserializer=operator__pb2.ListEvaluationsRequestV2.FromString,
+            response_serializer=operator__pb2.EvaluationListV2.SerializeToString,
         ),
         "ReadActivityDetail": grpc.unary_stream_rpc_method_handler(
             servicer.ReadActivityDetail,
@@ -485,6 +502,36 @@ class OperatorServiceV2(object):
             "/avalanche.operator.OperatorServiceV2/ListRunActivity",
             operator__pb2.ListRunActivityRequestV2.SerializeToString,
             operator__pb2.RunActivityPageV2.FromString,
+            options,
+            channel_credentials,
+            insecure,
+            call_credentials,
+            compression,
+            wait_for_ready,
+            timeout,
+            metadata,
+            _registered_method=True,
+        )
+
+    @staticmethod
+    def ListEvaluations(
+        request,
+        target,
+        options=(),
+        channel_credentials=None,
+        call_credentials=None,
+        insecure=False,
+        compression=None,
+        wait_for_ready=None,
+        timeout=None,
+        metadata=None,
+    ):
+        return grpc.experimental.unary_unary(
+            request,
+            target,
+            "/avalanche.operator.OperatorServiceV2/ListEvaluations",
+            operator__pb2.ListEvaluationsRequestV2.SerializeToString,
+            operator__pb2.EvaluationListV2.FromString,
             options,
             channel_credentials,
             insecure,

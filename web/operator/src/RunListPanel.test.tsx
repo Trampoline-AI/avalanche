@@ -1,10 +1,22 @@
-import { fireEvent, render, screen, within } from "@testing-library/react";
+import { act, fireEvent, render, screen, within } from "@testing-library/react";
 import { useState } from "react";
 import { expect, it, vi } from "vitest";
 
 import { RunListPanel } from "./RunListPanel";
 import { RunSummaryMsg } from "./model";
 import { summary, workflow } from "./test/fixtures";
+
+async function scrollTimelineTo(element: HTMLElement, top: number) {
+  vi.useFakeTimers();
+  try {
+    element.scrollTop = top;
+    fireEvent.scroll(element);
+    // Complete the virtualizer's scroll-end debounce before jsdom teardown.
+    await act(() => vi.runOnlyPendingTimersAsync());
+  } finally {
+    vi.useRealTimers();
+  }
+}
 
 it("paginates filtered runs and recovers when live history shrinks", async () => {
   const runs = Object.fromEntries(
@@ -143,15 +155,13 @@ it("caps the compact timeline at twenty runs, with Current and the history actio
   );
   await screen.findByRole("button", { name: /run-18,/ });
   const scroll = view.container.querySelector<HTMLElement>(".run-list-scroll")!;
-  scroll.scrollTop = 20 * 32 - 192;
-  fireEvent.scroll(scroll);
+  await scrollTimelineTo(scroll, 20 * 32 - 192);
   await within(scroll).findByRole("button", { name: /run-0,/ });
   expect(within(scroll).queryByRole("button", { name: "View all" })).not.toBeInTheDocument();
   expect(screen.queryByRole("button", { name: "Current" })).not.toBeInTheDocument();
 
   view.rerender(<RunListPanel {...props} runs={Object.fromEntries(entries.slice(0, 20))} />);
-  scroll.scrollTop = 22 * 32 - 192;
-  fireEvent.scroll(scroll);
+  await scrollTimelineTo(scroll, 22 * 32 - 192);
   expect(await within(scroll).findByRole("button", { name: "View all" })).toBeInTheDocument();
 
   view.rerender(<RunListPanel {...props} runs={Object.fromEntries(entries)} />);
@@ -160,12 +170,10 @@ it("caps the compact timeline at twenty runs, with Current and the history actio
   fireEvent.click(within(scroll).getByRole("button", { name: "View all" }));
   expect(onViewAll).toHaveBeenCalledOnce();
 
-  scroll.scrollTop = 0;
-  fireEvent.scroll(scroll);
+  await scrollTimelineTo(scroll, 0);
   expect(await screen.findByRole("button", { name: "Current" })).toBeInTheDocument();
   view.rerender(<RunListPanel {...props} expanded runs={Object.fromEntries(entries)} />);
-  scroll.scrollTop = 22 * 56 - 192;
-  fireEvent.scroll(scroll);
+  await scrollTimelineTo(scroll, 22 * 56 - 192);
   expect(await within(scroll).findByRole("button", { name: /run-0,/ })).toBeInTheDocument();
   expect(screen.queryByRole("button", { name: "View all" })).not.toBeInTheDocument();
 });
@@ -191,8 +199,7 @@ it("preserves compact timeline scrolling across status and unrelated workflow up
   await screen.findByRole("button", { name: /run-19,/ });
   const scroll = view.container.querySelector<HTMLElement>(".run-list-scroll")!;
   const bottom = 22 * 32 - 192;
-  scroll.scrollTop = bottom;
-  fireEvent.scroll(scroll);
+  await scrollTimelineTo(scroll, bottom);
   await within(scroll).findByRole("button", { name: "View all" });
 
   const updatedRuns = {

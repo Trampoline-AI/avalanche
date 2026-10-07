@@ -18,24 +18,30 @@ from typing import (
     Any,
     Callable,
     DefaultDict,
+    Generic,
     Mapping,
     Never,
     Sequence,
     TypeAlias,
+    TypeVar,
     Union,
     get_args,
     get_origin,
 )
 
 import dspy
+from dspy import Prediction
 from pydantic import BaseModel, TypeAdapter
 
 from .._agent_evidence import (
     AGENT_ERROR_CHARACTER_LIMIT,
     AgentInvocationId,
+    AgentTraceFinishedEvent,
+    AgentTraceUnavailableEvent,
     emit_agent_evidence,
 )
 from ..dag import Node, NodeFuture, NodeType, _workflow_context
+from ..evaluations import Evaluations
 from ..step_interface import (
     decoration_namespace,
     resolve_step_signature,
@@ -48,6 +54,9 @@ if TYPE_CHECKING:
     from predict_rlm import IterationStep, RunEvent, RunEvidence, RunTrace
 
     from .._agent_trace import AgentEvidenceMetadata
+
+InputT = TypeVar("InputT")
+OutputT = TypeVar("OutputT")
 
 
 class AgentStepError(RuntimeError):
@@ -432,18 +441,27 @@ def _emit_terminal_trace(
     *,
     invocation_id: AgentInvocationId,
     evidence: AgentEvidenceMetadata,
-) -> None:
+    runtime_kwargs: Mapping[str, Any],
+) -> AgentTraceFinishedEvent:
     # Iterations already crossed the bounded event channel. Do not re-send
     # original payloads that the operator would discard after validation.
-    parsed = json.loads(trace.model_copy(update={"steps": []}).to_exportable_json())
-    emit_agent_evidence(
-        {
-            "kind": "trace_finished",
-            "invocation_id": invocation_id,
-            "trace": parsed,
-            "evidence": evidence.model_dump(mode="json"),
-        }
-    )
+    update: dict[str, Any] = {"steps": []}
+    main_label = _model_display_name(runtime_kwargs.get("lm"))
+    if main_label is not None:
+        update["model"] = main_label
+    sub_label = _model_display_name(runtime_kwargs.get("sub_lm"))
+    # PredictRLM omits the sub-model when it shares the main LM.
+    if sub_label is not None and trace.sub_model is not None:
+        update["sub_model"] = sub_label
+    parsed = json.loads(trace.model_copy(update=update).to_exportable_json())
+    event: AgentTraceFinishedEvent = {
+        "kind": "trace_finished",
+        "invocation_id": invocation_id,
+        "trace": parsed,
+        "evidence": evidence.model_dump(mode="json"),
+    }
+    emit_agent_evidence(event)
+    return event
 
 
 def _emit_trace_unavailable(
@@ -451,15 +469,15 @@ def _emit_trace_unavailable(
     *,
     invocation_id: AgentInvocationId,
     evidence: AgentEvidenceMetadata,
-) -> None:
-    emit_agent_evidence(
-        {
-            "kind": "trace_unavailable",
-            "invocation_id": invocation_id,
-            "error": _bounded_agent_error(str(error)),
-            "evidence": evidence.model_dump(mode="json"),
-        }
-    )
+) -> AgentTraceUnavailableEvent:
+    event: AgentTraceUnavailableEvent = {
+        "kind": "trace_unavailable",
+        "invocation_id": invocation_id,
+        "error": _bounded_agent_error(str(error)),
+        "evidence": evidence.model_dump(mode="json"),
+    }
+    emit_agent_evidence(event)
+    return event
 
 
 class Agent:
@@ -484,7 +502,7 @@ class Agent:
         self._skills: tuple[Any, ...] = ()
         self._tools: tuple[Callable[..., Any], ...] = ()
 
-    async def __call__(self, **inputs: Any) -> Any:
+    async def __call__(self, **inputs: Any) -> Prediction:
         """Run the configured agent and return its raw DSPy prediction."""
         dspy_signature = self._resolve_signature()
         self._validate_input_names(dspy_signature, inputs)
@@ -504,7 +522,7 @@ class Agent:
 
         try:
             try:
-                prediction = await self._predictor.acall(**inputs)
+                prediction: Prediction = await self._predictor.acall(**inputs)
             except asyncio.CancelledError as exc:
                 try:
                     trace = extract_trace_from_exc(exc)
@@ -515,7 +533,10 @@ class Agent:
                         )
                     else:
                         _emit_terminal_trace(
-                            trace, invocation_id=state.invocation_id, evidence=evidence
+                            trace,
+                            invocation_id=state.invocation_id,
+                            evidence=evidence,
+                            runtime_kwargs=self._runtime_kwargs,
                         )
                 except Exception as evidence_error:
                     exc.add_note(
@@ -533,7 +554,10 @@ class Agent:
                     )
                 else:
                     _emit_terminal_trace(
-                        trace, invocation_id=state.invocation_id, evidence=evidence
+                        trace,
+                        invocation_id=state.invocation_id,
+                        evidence=evidence,
+                        runtime_kwargs=self._runtime_kwargs,
                     )
                 input_types = {name: type(value).__name__ for name, value in inputs.items()}
                 raise AgentStepExecutionError(
@@ -542,11 +566,20 @@ class Agent:
                     f"input types: {input_types}."
                 ) from exc
 
-            _emit_terminal_trace(
+            terminal_event = _emit_terminal_trace(
                 prediction.trace,
                 invocation_id=state.invocation_id,
                 evidence=_evidence_metadata(prediction.evidence),
+                runtime_kwargs=self._runtime_kwargs,
             )
+
+            # Resolve process-local state only in the executing worker. Existing
+            # observers have already applied their own strict/error policy.
+            from avalanche.evaluation_capture import _STEP_EVALUATION_CAPTURE
+
+            capture = _STEP_EVALUATION_CAPTURE.get()
+            if capture is not None:
+                capture.submit(inputs, prediction, terminal_event)
             return prediction
         finally:
             _AGENT_INVOCATION_STATE.reset(invocation_token)
@@ -580,7 +613,7 @@ class Agent:
             )
 
 
-class _AgentStepSpec:
+class _AgentStepSpec(Generic[InputT, OutputT]):
     """Immutable declaration data plus per-invocation runtime binding."""
 
     def __init__(
@@ -592,6 +625,7 @@ class _AgentStepSpec:
         skills: Sequence[Any] | object,
         tools: Sequence[Callable[..., Any]] | object,
         public_signature: inspect.Signature,
+        evaluations: Evaluations[InputT, OutputT] | None,
     ) -> None:
         self.step_name = step_name
         self.signature = signature
@@ -599,6 +633,7 @@ class _AgentStepSpec:
         self.skills = skills
         self.tools = tools
         self.public_signature = public_signature
+        self.evaluations = evaluations
 
     def make_agent(self) -> Agent:
         defaults = _WORKFLOW_AGENT_DEFAULTS.get()
@@ -671,16 +706,25 @@ class _AgentStepSpec:
         }
 
     def with_workflow_defaults(
-        self, fn: Callable[..., Any], defaults: Mapping[str, Any]
+        self,
+        fn: Callable[..., Any],
+        defaults: Mapping[str, Any],
+        *,
+        classifier_defaults: Mapping[str, JsonValue] | None = None,
     ) -> Callable[..., Any]:
+        owned_classifier_defaults = dict(classifier_defaults or {})
+
         async def bound(*args: Any, **kwargs: Any) -> Any:
             # Resolve process-local state on execution; Ray serializes this closure by value.
             from avalanche.agent.agent_step import _WORKFLOW_AGENT_DEFAULTS
+            from avalanche.classifier.classifier_step import _WORKFLOW_CLASSIFIER_DEFAULTS
 
             token = _WORKFLOW_AGENT_DEFAULTS.set(defaults)
+            classifier_token = _WORKFLOW_CLASSIFIER_DEFAULTS.set(owned_classifier_defaults)
             try:
                 return await fn(*args, **kwargs)
             finally:
+                _WORKFLOW_CLASSIFIER_DEFAULTS.reset(classifier_token)
                 _WORKFLOW_AGENT_DEFAULTS.reset(token)
 
         update_wrapper(bound, fn)
@@ -833,6 +877,22 @@ def _effective_model_metadata(
     return models
 
 
+def _model_display_name(value: Any) -> str | None:
+    """Name LMs whose LiteLLM model id hides the provider they actually call.
+
+    Codex LM reports ``openai/<model>`` for LiteLLM pricing, but it sends requests
+    through a ChatGPT login rather than the OpenAI API, so show ``codex/<model>``.
+    """
+    from dspy_codex_lm import CodexHTTPLM
+
+    if not isinstance(value, CodexHTTPLM):
+        return None
+    provider, separator, model = value.model.partition("/")
+    if provider != "openai" or not separator:
+        raise AgentStepError(f"unexpected Codex LM model id {value.model!r}")
+    return f"codex/{model}"
+
+
 def _strict_model_metadata_value(value: Any, runtime_key: str, path: str = "") -> Any:
     """Serialize explicit model descriptors without silently omitting nested values."""
     if value is None or isinstance(value, (str, bool, int)):
@@ -865,7 +925,10 @@ def _strict_model_metadata_value(value: Any, runtime_key: str, path: str = "") -
     value_type = type(value)
     module = value_type.__module__
     descriptor = {"type": f"{module}.{value_type.__qualname__}"}
-    if module == "dspy" or module.startswith(("dspy.", "predict_rlm.")):
+    display_name = _model_display_name(value)
+    if display_name is not None:
+        descriptor["name"] = display_name
+    elif module == "dspy" or module.startswith(("dspy.", "predict_rlm.")):
         instance_name = getattr(value, "model", None) or getattr(value, "name", None)
         if isinstance(instance_name, str):
             descriptor["name"] = instance_name
@@ -972,6 +1035,7 @@ def agent_step(
     max_iterations: Any = UNSET,
     skills: Sequence[Any] | object = UNSET,
     tools: Sequence[Callable[..., Any]] | object = UNSET,
+    evaluations: Evaluations[InputT, OutputT] | None = None,
     **predictor_kwargs: Any,
 ) -> Callable[[Callable[..., Any]], Node]:
     """Register a bodyful workflow step with an injected callable Agent.
@@ -982,6 +1046,8 @@ def agent_step(
     _reject_nested_agent_decorator()
     if signature is None:
         raise TypeError("ava.agent_step requires a Signature as its first argument")
+    if evaluations is not None and not isinstance(evaluations, Evaluations):
+        raise TypeError("ava.agent_step evaluations must be an ava.Evaluations declaration")
     runtime_kwargs = _agent_runtime_configuration(
         owner="ava.agent_step",
         lm=lm,
@@ -995,6 +1061,7 @@ def agent_step(
     def decorator(user_fn: Callable[..., Any]) -> Node:
         _reject_nested_agent_decorator()
         public_signature = _public_step_signature(user_fn, decoration_namespace())
+        step_interface = step_interface_from_signature(public_signature)
         spec = _AgentStepSpec(
             user_fn.__name__,
             signature=signature,
@@ -1002,13 +1069,16 @@ def agent_step(
             skills=skills,
             tools=tools,
             public_signature=public_signature,
+            evaluations=evaluations,
         )
 
         async def wrapper(*args: Any, **kwargs: Any) -> Any:
-            result = user_fn(*args, **kwargs, agent=spec.make_agent())
-            if inspect.isawaitable(result):
-                return await result
-            return result
+            # Resolve process-local capture state only after reaching the worker.
+            from avalanche.evaluation_capture import capture_step_evaluations
+
+            with capture_step_evaluations(spec.evaluations, step_name=spec.step_name):
+                result = user_fn(*args, **kwargs, agent=spec.make_agent())
+                return await result if inspect.isawaitable(result) else result
 
         update_wrapper(wrapper, user_fn)
         wrapper.__signature__ = spec.public_signature  # type: ignore[attr-defined]
@@ -1017,7 +1087,7 @@ def agent_step(
             wrapper,
             NodeType.STEP,
             num_returns=1,
-            step_interface=step_interface_from_signature(public_signature),
+            step_interface=step_interface,
         )
 
     return decorator
@@ -1064,6 +1134,7 @@ def step(
     max_iterations: Any = UNSET,
     skills: Sequence[Any] | object = UNSET,
     tools: Sequence[Callable[..., Any]] | object = UNSET,
+    evaluations: Evaluations[InputT, OutputT] | None = None,
     **predictor_kwargs: Any,
 ) -> NodeFuture | Callable[[Callable[..., Any]], Node]:
     """Invoke an inline agent in a workflow, or declare a bodyful agent outside it."""
@@ -1077,9 +1148,12 @@ def step(
             max_iterations=max_iterations,
             skills=skills,
             tools=tools,
+            evaluations=evaluations,
             **predictor_kwargs,
         )
 
+    if evaluations is not None and not isinstance(evaluations, Evaluations):
+        raise TypeError("ava.agent.step evaluations must be an ava.Evaluations declaration")
     signature = resolve_signature(signature, name="inline agent")
     if inputs is not None:
         if not isinstance(inputs, Mapping):
@@ -1121,21 +1195,25 @@ def step(
         skills=skills,
         tools=tools,
         public_signature=public_signature,
+        evaluations=evaluations,
     )
 
     async def invoke(*args: Any, **kwargs: Any) -> Any:
-        bound = public_signature.bind(*args, **kwargs)
-        prediction: dspy.Prediction = await spec.make_agent()(**bound.arguments)
-        values = []
-        for name, adapter in output_adapters:
-            try:
-                value = prediction[name]
-            except KeyError as exc:
-                raise AgentStepError(
-                    f"inline agent {spec.step_name!r} is missing output field {name!r}"
-                ) from exc
-            values.append(adapter.validate_python(value, strict=True))
-        return values[0] if len(values) == 1 else tuple(values)
+        from avalanche.evaluation_capture import capture_step_evaluations
+
+        with capture_step_evaluations(spec.evaluations, step_name=spec.step_name):
+            bound = public_signature.bind(*args, **kwargs)
+            prediction: dspy.Prediction = await spec.make_agent()(**bound.arguments)
+            values = []
+            for name, adapter in output_adapters:
+                try:
+                    value = prediction[name]
+                except KeyError as exc:
+                    raise AgentStepError(
+                        f"inline agent {spec.step_name!r} is missing output field {name!r}"
+                    ) from exc
+                values.append(adapter.validate_python(value, strict=True))
+            return values[0] if len(values) == 1 else tuple(values)
 
     invoke.__name__ = spec.step_name
     invoke.__qualname__ = spec.step_name

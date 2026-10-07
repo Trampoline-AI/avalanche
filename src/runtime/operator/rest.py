@@ -90,6 +90,10 @@ class _ActivityQuery(_PageQuery):
     order: Literal["forward", "newest_first"] = "forward"
 
 
+class _EvaluationsQuery(_Query):
+    node_id: str = ""
+
+
 class _ErrorDetail(BaseModel):
     code: str
     message: str
@@ -329,6 +333,15 @@ def create_rest_app(channel: grpc.Channel) -> FastAPI:
                         else pb.PAGE_ORDER_V2_FORWARD
                     ),
                 ),
+                timeout=_RPC_TIMEOUT_SECONDS,
+            )
+        )
+
+    @router.get("/v1/runs/{run_id}/evaluations", summary="List run evaluations")
+    def list_evaluations(run_id: str, query: Annotated[_EvaluationsQuery, Query()]) -> Response:
+        return _protobuf_response(
+            stub.ListEvaluations(
+                pb.ListEvaluationsRequestV2(run_id=run_id, node_id=query.node_id),
                 timeout=_RPC_TIMEOUT_SECONDS,
             )
         )

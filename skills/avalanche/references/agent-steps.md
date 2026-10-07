@@ -360,6 +360,190 @@ agent-step runtime kwargs > workflow agent_defaults > PredictRLM defaults
 Workflow defaults cannot define `signature`, `skills`, or `tools`; those are
 capabilities of a specific agent step.
 
+## Native evaluations
+
+Use `@ava.agent_step(..., evaluations=ava.Evaluations(...))`, or
+`ava.agent.step(Signature, inputs=..., evaluations=...)` for an inline agent node,
+for automatic, observation-only quality judgments. Do not create a downstream classifier node
+merely to observe this step, and do not turn native evaluations into workflow
+gates, routing, retries, or self-correction.
+
+Keep the **selected evidence** separate from the **question**. Each metric has a
+synchronous `state` callable and one ordinary TypeSafe question from the native
+classifier format:
+
+```python
+audit_evaluations = ava.Evaluations(
+    metrics={
+        "specific_risks": ava.Metric(
+            state=lambda ctx: ctx.output.audit.model_dump(mode="json"),
+            question={
+                "type": "score",
+                "instructions": "How specifically does the audit describe its risks?",
+                "criteria": [
+                    "Risks are missing or vague",
+                    "Some risks explain a concrete problem",
+                    "Every stated risk explains a concrete problem",
+                ],
+            },
+        ),
+        "actionable": ava.Metric(
+            state=lambda ctx: ctx.output.audit.model_dump(mode="json"),
+            question={
+                "type": "noul",
+                "instructions": "Does the audit explain what needs attention?",
+            },
+        ),
+        "checked_evidence": ava.Metric(
+            state=lambda ctx: ctx.trace,
+            question={
+                "type": "noul",
+                "instructions": (
+                    "Do the recorded agent actions show that the agent checked "
+                    "the supplied evidence before producing its final answer?"
+                ),
+            },
+        ),
+    },
+    composites={
+        "usefulness": lambda results: (
+            0.7 * (results.scores["specific_risks"].score / 2)
+            + 0.3 * results.nouls["actionable"].noul
+        ),
+    },
+)
+
+
+@ava.agent_step(AuditPackage, evaluations=audit_evaluations)
+async def audit_package(package: PreparedPackage, *, agent: ava.Agent) -> PackageAudit:
+    prediction = await agent(package=package)
+    return PackageAudit.model_validate(prediction.audit)
+```
+
+`ava.Evaluations` is a frozen Pydantic declaration with owned, read-only `metrics`
+and `composites` mappings. Invalid fields raise `pydantic.ValidationError` at
+construction; async selectors/composites still raise `EvaluationError`. Create a
+new declaration rather than mutating its mappings. Declaration validation never
+executes selectors or composites; evaluation failures remain independent of the
+workflow.
+
+These selectors reuse the signature's `audit: PackageAudit` field inside the
+complete DSPy prediction; do not introduce another input/output/context schema:
+
+- `ctx.inputs` contains the actual keyword arguments passed to the first successful
+  `await agent(...)` call to return, not the enclosing step's arguments.
+- `ctx.output` is that call's **complete DSPy `Prediction`**. Select named fields,
+  such as `ctx.output.audit`, and use `.model_dump(mode="json")` for a whole
+  Pydantic output. The step's `return prediction.audit` remains separate.
+- `ctx.trace` contains that invocation's single JSON-compatible terminal event:
+  its invocation ID and exported trace or unavailable-trace error. Internal agent
+  iterations and model calls remain part of that trace.
+- Combine relevant inputs and outputs explicitly, for example
+  `{"request": ctx.inputs["question"], "answer": ctx.output.answer}` when the
+  agent signature has those fields. Optional `ava.EvalContext[InputType,
+  dspy.Prediction]` annotations aid static checking; no automatic lambda inference
+  is promised.
+- Return text, JSON objects, or JSON arrays with finite nested numbers from
+  selectors. Convert Python-only values explicitly. Native evaluations do not
+  open files, extract content, or evaluate images/media. Paths are not evidence
+  of the referenced file's contents.
+
+Full terminal traces may repeat steps under `evidence.events` and repeat each
+output as `untruncated_output`. For trace-quality judgments, select the source
+and observable action fields needed for the question instead of sending every
+copy. Jev can return HTTP 400 `max_tokens_exceeded` for oversized state; Avalanche
+exposes the machine code but not the potentially private request body.
+
+Equal selected state with compatible evaluator configuration is batched by
+content, not selector identity. The two audit-output metrics above share a
+request; the trace metric remains separate. Do not combine different states to
+force batching or apply a question-count heuristic. Service limits still apply.
+See [question design](usage.md#structure-the-questions-object) for Choice, Noul,
+and Score formats; a metric takes one question, not a question mapping.
+
+Composites receive `ava.ClassificationResult`. Use `results.answers[name]`,
+`results.choices[name].choice`, `results.nouls[name].noul`, and
+`results.scores[name].score`. Choice/Score preserve `.probabilities` and
+`.confidence`; Score also preserves `.legend`. Noul is probability of yes,
+not a Boolean or separate confidence. An `N`-level Score is in `[0, N - 1]`:
+normalize explicitly using `score / (N - 1)`. The three-level rubric above uses
+`/ 2`. Synchronous composite functions must return finite numbers in `[0, 1]`.
+They make no extra model calls and do not depend on other composites; never
+invent `.normalized` or `.probability` aliases.
+
+Set `TYPESAFE_API_KEY` in the operator environment, in addition to credentials
+for the agent's provider. `ava.Evaluations(model=..., timeout=...)` overrides
+workflow `classifier_defaults`; `None` inherits. Defaults are `jev-latest` and
+a 10-second SDK request timeout. Agent `lm`/`sub_lm` settings do not configure
+Jev. Declarations validate questions but make no model calls during discovery.
+
+TypeSafe HTTP 401 indicates rejected authentication, not a quality judgment.
+Verify `TYPESAFE_API_KEY`, including exported values that override `.env`; restart
+the operator after changing credentials and run again. Never print the key.
+
+Automatic evaluations run only in operator mode when the first successful agent
+invocation returns, before the prediction reaches step postprocessing.
+The first successful return wins, not the first start. Later calls still run
+normally but neither overwrite nor resubmit evaluation. Failed or cancelled
+calls do not claim the capture; no successful call means no evaluation record.
+Postprocessing failure or cancellation does not cancel a submitted evaluation.
+Downstream execution and workflow result delivery never wait for evaluation.
+Selectors, invalid state, Jev failures, and invalid composites become independent
+evaluation errors, never fallback scores or workflow failures. Embedded Python
+`.run()` reports **not evaluated** and starts no automatic evaluation worker.
+
+Before execution, graph nodes show an **Evaluations** badge with the metric count.
+Compact nodes show only its icon and count. The current-definition inspector's
+**Evals** tab shows
+named metrics, types, expandable criteria, composite names, and the effective Jev
+model/timeout. **Agent definition** retains instructions, agent inputs/outputs,
+models, and resources; **Step definition** contains only the step interface card.
+Historical run graphs use their captured declarations, not later source edits.
+Metadata discovery never executes evidence selectors or composite functions.
+
+Each metric has a collapsed **Input** section listing statically visible source
+paths such as `input.package`, `output.audit`, `output.audit.risks`, and `trace`.
+Trace paths use the agent accent color; input and output paths remain neutral.
+Clickable trace labels underline only on hover.
+In run views, clicking a trace label or pressing Enter/Space opens and focuses
+the same node's **Trace** tab. Current-definition trace paths remain read-only.
+Path roots refer to the captured agent call's arguments, prediction, and trace;
+opaque selectors show `custom: qualified_name`. This is selection metadata, not the serialized
+state sent to Jev or execution of the selector. Completed
+composites appear beside run-node evaluation badges and in the agent sidebar
+header: one uses `label: 85.6%`, multiple use one-decimal percentages separated
+by centered dots in declaration order. DAG nodes show the first three, followed
+by `and N more` for additional scores; the sidebar header shows all scores and
+wraps onto additional lines. Percentages blend red at 0%, yellow at
+50%, and the success green (`#22c55e`) at 100%; labels have matching node/sidebar
+colors. Compact nodes omit composite
+names and match percentages and pill counts to the duration's size. Historical
+views use their captured selector metadata.
+
+The selected run agent step's **Evaluations** tab shows one
+pending/completed/failed result directly. Composites precede Metrics as equally
+styled top-level sections without boxes. Choice options list their percentages
+once, with only the winner bold and turquoise; other choice percentages,
+score-level probabilities, and confidence stay neutral. Noul values and bars
+keep the value gradient. Composite tab values match the node/header percentage
+format and gradient. Reruns have separate results on their own run snapshots. Work survives
+coordinator completion, but records live only in the running operator's memory
+and disappear on restart.
+Do not promise durable recovery or claim workflow success proves evaluation
+success. Verify real judgments only with actual credentials; controlled SDK
+fixture responses can verify UI behavior but are not live Jev evidence.
+
+Repository example: `examples/evaluations_workflow.py`, run with
+`uv run ava dev examples/evaluations_workflow.py` from the repository root after
+logging in to Codex LM (`uv run codex-lm auth login NAME`) or setting
+`OPENAI_API_KEY` or `ANTHROPIC_API_KEY`, plus `TYPESAFE_API_KEY`. Click **Run** without supplying
+input. It generates synthetic incident evidence, uses a real agent to prepare a
+cited on-call handoff, and renders a Markdown brief. The agent step demonstrates
+all three question types, shared-state batching, trace selection, and a normalized
+composite; no customer communication is sent. The
+[illustrated reference](https://github.com/Trampoline-AI/avalanche/blob/main/docs/agent-steps.md#native-evaluations)
+also documents operator inspection and the record APIs.
+
 ## Verification
 
 - Run the authored workflow through the operator with the intended LM credentials.

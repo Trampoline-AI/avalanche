@@ -13,10 +13,10 @@ import traceback
 from functools import wraps
 from pathlib import Path
 from typing import Any, Callable, Protocol
-
-from pydantic import JsonValue
+from uuid import uuid4
 
 from avalanche._agent_evidence import (
+    AgentEvidenceObserverEvent,
     capture_agent_evidence,
     capture_agent_log_node,
     current_agent_log_node_id,
@@ -24,14 +24,17 @@ from avalanche._agent_evidence import (
 from avalanche.classifier import capture_classifier_evidence
 from avalanche.classifier.models import ClassifierInvocation
 from avalanche.dag import Workflow
+from avalanche.evaluation_capture import capture_evaluations
 
 from ..executor import Executor, LocalExecutor, RayExecutor
+from .evaluation_worker import EvaluationRequest, _local_modules, snapshot_evaluation
 from .hooks import RunHooks
 from .models import display_name_from_id
 from .registry import (
     agent_field_schemas_for_workflow,
     agent_instruction_lines_for_workflow,
     classifier_metadata_for_workflow,
+    evaluation_metadata_for_workflow,
 )
 from .result_store import (
     ResultPublicationCancelledError,
@@ -176,6 +179,13 @@ def _run_worker(
                 return _with_local_node_observers(node_id, fn, stdout, stderr, event_queue)
         elif executor_mode == "ray":
             ray = _import_isolated_ray()
+            from ray import cloudpickle as ray_cloudpickle
+
+            # Standalone modules have synthetic import names. Ship their named
+            # selectors/models (and package siblings) with the task rather than
+            # asking Ray workers to import a coordinator-only module name.
+            for local_module in _local_modules(root):
+                ray_cloudpickle.register_pickle_by_value(local_module)
 
             if ray.is_initialized():
                 raise RuntimeError(
@@ -354,6 +364,7 @@ def _workflow_metadata(workflow: Workflow) -> dict[str, Any]:
         "agent_field_schemas_json": agent_field_schemas_for_workflow(workflow, node_ids),
         "agent_instruction_lines": agent_instruction_lines_for_workflow(workflow, node_ids),
         "classifier_metadata_json": classifier_metadata_for_workflow(workflow, node_ids),
+        "evaluation_metadata_json": evaluation_metadata_for_workflow(workflow, node_ids),
         "step_interface_json": step_interface_for_workflow(workflow, node_ids),
         "standard_step_docstring_lines": node_docstring_lines_for_workflow(workflow, node_ids),
     }
@@ -482,6 +493,7 @@ def _with_local_node_observers(
 ) -> Callable[..., Any]:
     if getattr(fn, "__agent_step__", None) is not None:
         fn = _with_agent_evidence(node_id, fn, event_queue)
+        fn = _with_evaluations(node_id, fn, event_queue)
     if getattr(fn, "__classifier_step__", None) is not None:
         fn = _with_classifier_evidence(node_id, fn, event_queue)
     return _with_node_streams(node_id, fn, stdout, stderr)
@@ -533,7 +545,7 @@ def _with_agent_evidence(
 ) -> Callable[..., Any]:
     """Forward agent evidence through the coordinator's event protocol."""
 
-    def emit(event: dict[str, JsonValue]) -> None:
+    def emit(event: AgentEvidenceObserverEvent) -> None:
         event_queue.put(
             {
                 "type": "agent_evidence",
@@ -560,7 +572,7 @@ def _with_agent_evidence(
 
 
 class _RunEventQueue(Protocol):
-    def put(self, event: dict[str, JsonValue]) -> None: ...
+    def put(self, event: dict[str, object]) -> None: ...
 
 
 def _with_classifier_evidence(
@@ -571,7 +583,7 @@ def _with_classifier_evidence(
     """Publish owned, typed invocation snapshots before returning to user code."""
 
     def emit(invocation: ClassifierInvocation) -> None:
-        event: dict[str, JsonValue] = {
+        event: dict[str, object] = {
             "type": "classifier_evidence",
             "node_id": node_id,
             "event": invocation.model_dump(mode="json"),
@@ -595,6 +607,63 @@ def _with_classifier_evidence(
     return wrapper
 
 
+def _with_evaluations(
+    node_id: str,
+    fn: Callable[..., object],
+    event_queue: _RunEventQueue,
+) -> Callable[..., object]:
+    """Snapshot at the successful agent return; never evaluate on the scheduler."""
+
+    def publish(request: EvaluationRequest) -> None:
+        event_queue.put(
+            {
+                "type": "evaluation_submitted",
+                "node_id": node_id,
+                "submission": request.model_dump(),
+            }
+        )
+
+    def report_errors(errors: list[str]) -> None:
+        for error in errors:
+            try:
+                publish(
+                    EvaluationRequest(
+                        evaluation_id=uuid4().hex,
+                        created_at=time.time(),
+                        error=f"Evaluation submission failed: {error}",
+                    )
+                )
+            except BaseException:
+                # A broken coordinator transport cannot report its own failure.
+                # Capture already logged the handoff failure; do not recursively
+                # write to that same transport or affect the step's return.
+                pass
+
+    if inspect.iscoroutinefunction(fn):
+
+        @wraps(fn)
+        async def async_wrapper(*args: object, **kwargs: object) -> object:
+            with capture_evaluations(
+                lambda value: publish(snapshot_evaluation(value))
+            ) as errors:
+                try:
+                    return await fn(*args, **kwargs)
+                finally:
+                    report_errors([error.error for error in errors])
+
+        return async_wrapper
+
+    @wraps(fn)
+    def wrapper(*args: object, **kwargs: object) -> object:
+        with capture_evaluations(lambda value: publish(snapshot_evaluation(value))) as errors:
+            try:
+                return fn(*args, **kwargs)
+            finally:
+                report_errors([error.error for error in errors])
+
+    return wrapper
+
+
 _RAY_LOG_STOP = {"type": "_ray_log_stop"}
 
 
@@ -605,6 +674,7 @@ def _with_ray_node_observers(
 ) -> Callable[..., Any]:
     if getattr(fn, "__agent_step__", None) is not None:
         fn = _with_agent_evidence(node_id, fn, ray_log_queue)
+        fn = _with_evaluations(node_id, fn, ray_log_queue)
     if getattr(fn, "__classifier_step__", None) is not None:
         fn = _with_classifier_evidence(node_id, fn, ray_log_queue)
     return _with_ray_node_streams(node_id, fn, ray_log_queue)

@@ -12,7 +12,10 @@ import avalanche as ava
 @pytest.fixture(autouse=True)
 def example_import_path(monkeypatch):
     # Examples are intentionally not part of the installed Avalanche package.
-    monkeypatch.syspath_prepend(str(Path(__file__).resolve().parents[1]))
+    repo_root = Path(__file__).resolve().parents[1]
+    monkeypatch.syspath_prepend(str(repo_root))
+    # Example packages share examples/model_selection.py as a top-level module.
+    monkeypatch.syspath_prepend(str(repo_root / "examples"))
 
 
 def test_extraction_rejects_wrong_source_location_and_fabricated_quote():

@@ -1,7 +1,8 @@
 import type * as ReactFlowModule from "@xyflow/react";
+import { useViewport } from "@xyflow/react";
 import { StrictMode, type ComponentType, type ReactNode, useState } from "react";
 import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 // jsdom has no graph viewport. Keep the real cards, controls, inspector, and projection;
 // replace only React Flow's layout host, not application components or live state.
@@ -11,7 +12,7 @@ vi.mock("@xyflow/react", async (importOriginal) => ({
   Controls: () => null,
   Handle: () => null,
   Panel: ({ children }: { children: ReactNode }) => <div>{children}</div>,
-  useViewport: () => ({ x: 0, y: 0, zoom: 1 }),
+  useViewport: vi.fn(() => ({ x: 0, y: 0, zoom: 1 })),
   useReactFlow: () => ({
     screenToFlowPosition: () => ({ x: 0, y: 0 }),
     setCenter: () => undefined,
@@ -41,6 +42,8 @@ import { OperatorUi, WorkflowWorkspace } from "./index";
 import type { OperatorUiSelection } from "./index";
 import type { OperatorApi } from "./api";
 import { Explorer } from "./Explorer";
+import { GraphCanvas } from "./GraphCanvas";
+import type { EvaluationRecord } from "./evaluations";
 import {
   CatalogSnapshotMsg,
   FlowInfoMsg,
@@ -55,6 +58,7 @@ import {
   createApi,
   envelope,
   eventUlid,
+  evaluationDeclaration,
   idleUpdates,
   snapshotFor,
   secondSummary,
@@ -999,7 +1003,7 @@ describe.each(["hosted", "local"] as const)("%s shared workspace", (host) => {
         "true",
       ),
     );
-    expect(screen.getByRole("region", { name: "Run logs" })).toBeVisible();
+    expect(await screen.findByRole("region", { name: "Run logs" })).toBeVisible();
   });
 
   it("opens retained step interfaces and agent traces without loading current source in run view", async () => {
@@ -1222,5 +1226,205 @@ describe.each(["hosted", "local"] as const)("%s shared workspace", (host) => {
     fireEvent.click(within(allRuns).getByRole("button", { name: "Collapse timeline" }));
     expect(screen.getByRole("region", { name: "Timeline" })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Expand timeline" })).toHaveFocus();
+  });
+});
+
+describe("graph evaluation declarations", () => {
+  const evaluatedWorkflow = FlowInfoMsg.create({
+    ...workflow,
+    nodeIds: ["fetch", "review"],
+    graph: { fetch: { children: ["review"] }, review: { children: [] } },
+    displayNames: { fetch: "Fetch", review: "Review" },
+    agentNodeIds: ["fetch", "review"],
+    evaluationMetadataJson: { fetch: JSON.stringify(evaluationDeclaration) },
+  });
+  const historical = WorkflowTopologyMsg.create({
+    ...snapshotFor().topology,
+    nodeIds: evaluatedWorkflow.nodeIds,
+    graph: evaluatedWorkflow.graph,
+    displayNames: evaluatedWorkflow.displayNames,
+    agentFieldSchemasJson: {
+      fetch: JSON.stringify({ inputs: [], outputs: [] }),
+      review: JSON.stringify({ inputs: [], outputs: [] }),
+    },
+    evaluationMetadataJson: evaluatedWorkflow.evaluationMetadataJson,
+  });
+  const pending = {
+    evaluationId: "eval-fetch",
+    runId: summary.runId,
+    nodeId: "fetch",
+    createdAt: 1,
+    status: "pending",
+  } satisfies EvaluationRecord;
+  function completed(composites: Record<string, number>): EvaluationRecord {
+    return {
+      ...pending,
+      status: "completed",
+      endedAt: 2,
+      result: {
+        classification: {
+          model: "jev-latest",
+          usage: { input_tokens: 10, output_tokens: 5 },
+          answers: {},
+        },
+        composites,
+      },
+    };
+  }
+  afterEach(() => {
+    vi.mocked(useViewport).mockReturnValue({ x: 0, y: 0, zoom: 1 });
+  });
+
+  it.each([1.2, 0.6])(
+    "shows the configured metric count but no badge for unconfigured agents at zoom %s",
+    (zoom) => {
+      vi.mocked(useViewport).mockReturnValue({ x: 0, y: 0, zoom });
+      render(<GraphCanvas workflow={evaluatedWorkflow} onOpenNode={() => undefined} />);
+      const configured = screen.getByRole("button", { name: "Inspect Fetch" });
+      expect(configured).toHaveAccessibleDescription(/\b3\b/);
+      expect(within(configured.closest("article")!).getByText(/\b3\b/)).toBeVisible();
+      const unconfigured = screen.getByRole("button", { name: "Inspect Review" });
+      expect(
+        within(unconfigured.closest("article")!).queryByText(/Evaluations/),
+      ).not.toBeInTheDocument();
+    },
+  );
+
+  it("refreshes completed evaluation scores while all other graph props stay unchanged", () => {
+    const props = {
+      workflow: evaluatedWorkflow,
+      runTopology: historical,
+      bottomRightPanel: null,
+      onOpenNode: () => undefined,
+    };
+    const view = render(<GraphCanvas {...props} evaluations={{ fetch: pending }} />);
+    expect(screen.queryByLabelText(/Evaluation composites:/)).not.toBeInTheDocument();
+
+    view.rerender(
+      <GraphCanvas {...props} evaluations={{ fetch: completed({ quality: 0.856 }) }} />,
+    );
+    expect(screen.getByLabelText(/Evaluation composites: quality/)).toBeVisible();
+    expect(screen.getByText("85.6%")).toBeVisible();
+  });
+
+  describe.each([1.2, 0.6])("run composites at zoom %s", (zoom) => {
+    it.each<{ composites: Record<string, number>; expected: string }>([
+      { composites: { quality: 0.856 }, expected: "85.6%" },
+      {
+        composites: { quality: 0.856, accuracy: 0.77 },
+        expected: "77.0%",
+      },
+      {
+        composites: { quality: 0.856, accuracy: 0.77, grounded: 0.9 },
+        expected: "90.0%",
+      },
+      {
+        composites: { quality: 0.856, accuracy: 0.77, grounded: 0.9, omitted: 0.12 },
+        expected: "90.0%",
+      },
+    ])("shows $expected beside the evaluation badge", ({ composites, expected }) => {
+      vi.mocked(useViewport).mockReturnValue({ x: 0, y: 0, zoom });
+      render(
+        <GraphCanvas
+          workflow={evaluatedWorkflow}
+          runTopology={historical}
+          evaluations={{ fetch: completed(composites) }}
+          onOpenNode={() => undefined}
+        />,
+      );
+      const fetch = within(
+        screen.getByRole("button", { name: "Inspect Fetch" }).closest("article")!,
+      );
+      expect(fetch.getByLabelText(/3 evaluation metrics/)).toBeVisible();
+      expect(fetch.getByText(expected)).toBeVisible();
+      expect(fetch.queryByText(/12\.0%/)).not.toBeInTheDocument();
+      const review = within(
+        screen.getByRole("button", { name: "Inspect Review" }).closest("article")!,
+      );
+      expect(review.queryByText(/%/)).not.toBeInTheDocument();
+    });
+
+    it.each<{ state: string; record: EvaluationRecord | undefined }>([
+      { state: "pending", record: pending },
+      {
+        state: "failed",
+        record: { ...pending, status: "failed", endedAt: 2, error: "Evaluator failed" },
+      },
+      { state: "no record", record: undefined },
+      { state: "empty composites", record: completed({}) },
+    ])("keeps the badge without a fabricated score for $state", ({ record }) => {
+      vi.mocked(useViewport).mockReturnValue({ x: 0, y: 0, zoom });
+      render(
+        <GraphCanvas
+          workflow={evaluatedWorkflow}
+          runTopology={historical}
+          evaluations={record ? { fetch: record } : {}}
+          onOpenNode={() => undefined}
+        />,
+      );
+      expect(screen.getByLabelText(/3 evaluation metrics/)).toBeVisible();
+      expect(screen.queryByText(/%/)).not.toBeInTheDocument();
+    });
+
+    it("does not display run composites in the current workflow definition", () => {
+      vi.mocked(useViewport).mockReturnValue({ x: 0, y: 0, zoom });
+      render(
+        <GraphCanvas
+          workflow={evaluatedWorkflow}
+          evaluations={{ fetch: completed({ quality: 0.856 }) }}
+          onOpenNode={() => undefined}
+        />,
+      );
+      expect(screen.getByLabelText(/3 evaluation metrics/)).toBeVisible();
+      expect(screen.queryByText(/%/)).not.toBeInTheDocument();
+    });
+
+    it("keeps the full long composite label accessible", () => {
+      vi.mocked(useViewport).mockReturnValue({ x: 0, y: 0, zoom });
+      const label = "Quality of the complete generated answer against all reference material";
+      render(
+        <GraphCanvas
+          workflow={evaluatedWorkflow}
+          runTopology={historical}
+          evaluations={{ fetch: completed({ [label]: 0.856 }) }}
+          onOpenNode={() => undefined}
+        />,
+      );
+      expect(
+        screen.getByLabelText(new RegExp(`Evaluation composites: ${label}`)),
+      ).toBeVisible();
+      expect(screen.getByLabelText(/3 evaluation metrics/)).toBeVisible();
+    });
+  });
+
+  it("uses historical metric counts and never inherits current evaluations when topology omits them", () => {
+    const historical = WorkflowTopologyMsg.create({
+      ...snapshotFor().topology,
+      agentFieldSchemasJson: { fetch: JSON.stringify({ inputs: [], outputs: [] }) },
+      evaluationMetadataJson: {
+        fetch: JSON.stringify({
+          ...evaluationDeclaration,
+          metrics: { retained_quality: evaluationDeclaration.metrics.quality },
+        }),
+      },
+    });
+    const onOpenNode = () => undefined;
+    const view = render(
+      <GraphCanvas
+        workflow={evaluatedWorkflow}
+        runTopology={historical}
+        onOpenNode={onOpenNode}
+      />,
+    );
+    expect(screen.getByText(/\b1\b/)).toBeVisible();
+    expect(screen.queryByText(/\b3\b/)).not.toBeInTheDocument();
+    view.rerender(
+      <GraphCanvas
+        workflow={evaluatedWorkflow}
+        runTopology={WorkflowTopologyMsg.create({ ...historical, evaluationMetadataJson: {} })}
+        onOpenNode={onOpenNode}
+      />,
+    );
+    expect(screen.queryByText(/Evaluations ·/)).not.toBeInTheDocument();
   });
 });

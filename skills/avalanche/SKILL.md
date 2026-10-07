@@ -44,6 +44,12 @@ Load only what the task needs:
   [agent-steps.md](references/agent-steps.md). It loads the vendored original
   PredictRLM skill for the single-step design process, then covers the Avalanche
   integration surface.
+- Native observation-only agent quality metrics and composites:
+  [agent-steps.md](references/agent-steps.md#native-evaluations). Use the first
+  successful agent call to return: its keyword arguments, complete DSPy
+  `Prediction`, and only that invocation's trace—not the enclosing step's inputs,
+  postprocessed return, or all invocation traces. Do not invent a second context
+  schema or a separate evaluation workflow.
 - Usage, native classifier syntax, question-object design for routing, labels,
   scoring, extraction, and verification, local execution, and CLI flags:
   [usage.md](references/usage.md#native-classifier-steps).
@@ -216,6 +222,22 @@ PredictRLM skill for Steps 1–6:
 The signature docstring is that agent's instruction. Do not move
 agent-specific instructions into a one-off Skill. A Skill represents reusable
 knowledge or capability shared by multiple agents.
+
+When the agreed success criteria call for quality observation, attach
+`ava.Evaluations` with named `ava.Metric(state=..., question=...)` declarations.
+Selectors choose evidence; TypeSafe Choice/Noul/Score questions judge it.
+Composites use the existing answer accessors and explicitly normalize an
+`N`-level Score with `score / (N - 1)`. Equal selected state is batched without
+merging unrelated evidence. Follow the
+[native evaluation reference](references/agent-steps.md#native-evaluations).
+
+Native evaluations are operator-only and never gate the workflow. They require
+`TYPESAFE_API_KEY` separately from agent credentials, use classifier
+model/timeout defaults, and expose independent pending/results/errors per
+execution. They survive coordinator completion, not operator restart.
+Embedded execution reports **not evaluated**. Never promise file/media
+evaluation or durable recovery, and never describe controlled fixture responses
+as live model judgments.
 
 ### Step 6: Draw the dependency graph
 

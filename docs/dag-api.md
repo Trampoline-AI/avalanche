@@ -15,6 +15,7 @@ Avalanche workflows are Python functions that declare a DAG of reusable nodes.
 | `@ava.agent_step` / `@ava.agent.step` outside workflows | Decorate an agent-backed function; see [`agent-steps.md`](agent-steps.md) |
 | `ava.agent.step(Signature, ...)` inside workflows | Call an agent directly, returning validated signature outputs |
 | `@ava.classifier_step` | Ask TypeSafe questions declared as defaults or supplied per call, with typed probability results; see [`classifier-steps.md`](classifier-steps.md) |
+| `ava.EvalContext`, `ava.Metric`, `ava.Evaluations` | Declare observation-only agent-step metrics and composites; see [native evaluations](agent-steps.md#native-evaluations) |
 
 Node functions may be `def` or `async def`. Keep workflow bodies declarative:
 call nodes and connect their results there; put runtime work in nodes.
@@ -85,11 +86,12 @@ to keep siblings separated as zoom changes.
 
 Current source, ordinary, and destination sidebars open on **Definition**, which
 contains the step interface. **Code** is a separate tab that loads the Python source
-only when opened. For agents, the panel follows the agent definition and appears in
-**Run I/O** when inspecting a run; the agent's own call fields remain separate.
-Run interfaces are captured from the prepared workflow and do not change when
-source is edited, reloaded, or removed. Older runs without this metadata show it
-as unavailable; they never substitute the current definition. Historical Python
+only when opened. For agents, **Step definition** contains the interface card;
+**Agent definition** shows the agent call fields. A historical agent's **Run I/O**
+shows recorded agent inputs and outputs, not the step interface. Run interfaces
+for other step types are captured from the prepared workflow and do not change
+when source is edited, reloaded, or removed. Older runs without this metadata show
+it as unavailable; they never substitute the current definition. Historical Python
 source is not retained by this feature.
 
 ## Connect nodes
@@ -336,6 +338,11 @@ result = run.result()
 # In async code:
 result = await document_flow().run(executor=ava.LocalExecutor())
 ```
+
+Embedded `.run()` accepts agent-step evaluation declarations but reports them as
+**not evaluated**. Use operator-managed execution for automatic evaluations.
+Evaluation records have their own pending/completed/failed states and never
+gate workflow results; see [evaluation execution and retention](agent-steps.md#execution-errors-and-retention).
 
 Use `ava.LocalExecutor` for concurrent in-process execution. Pass
 `max_workers=1` when a workflow must run serially, or a larger value to bound

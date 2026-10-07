@@ -30,6 +30,18 @@ export interface ClassifierDeclaration extends StepInterface {
   input_schema: JsonSchema | null;
 }
 
+export interface MetricInput {
+  source: "trace" | "output" | "input" | "custom";
+  selector: string;
+}
+
+export interface EvaluationDeclaration {
+  metrics: Record<string, ClassifierQuestion>;
+  composites: string[];
+  runtime: ClassifierDeclaration["runtime"];
+  metric_inputs?: Record<string, MetricInput[]>;
+}
+
 export type ClassifierAnswer =
   | {
       type: "choice";
@@ -89,18 +101,6 @@ function number(value: unknown, path: string, minimum = 0): number {
   return value;
 }
 
-function integer(value: unknown, path: string): number {
-  const parsed = number(value, path);
-  if (!Number.isSafeInteger(parsed)) throw new Error(`${path} must be a safe integer`);
-  return parsed;
-}
-
-function probability(value: unknown, path: string): number {
-  const parsed = number(value, path);
-  if (parsed > 1) throw new Error(`${path} must be at most 1`);
-  return parsed;
-}
-
 function entry(value: unknown, path: string): ClassifierEntry {
   const parsed = parseJsonValue(value, path);
   if (typeof parsed === "boolean" || typeof parsed === "number") {
@@ -158,6 +158,18 @@ function array(value: unknown, path: string): unknown[] {
   return value;
 }
 
+function declarationRuntime(value: unknown, path: string): ClassifierDeclaration["runtime"] {
+  const runtime = record(value, path);
+  fields(runtime, ["model", "timeout"], path);
+  const timeout = number(runtime.timeout, `${path}.timeout`);
+  if (timeout === 0) throw new Error(`${path}.timeout must be positive`);
+  return { model: string(runtime.model, `${path}.model`), timeout };
+}
+
+export function decodeEvaluationDeclaration(raw: string): EvaluationDeclaration {
+  return JSON.parse(raw);
+}
+
 export function parseClassifierDeclaration(value: unknown): ClassifierDeclaration {
   const path = "classifier declaration";
   const item = record(value, path);
@@ -173,220 +185,14 @@ export function parseClassifierDeclaration(value: unknown): ClassifierDeclaratio
         );
   if (questions !== null && Object.keys(questions).length === 0)
     throw new Error(`${path} needs at least one question`);
-  const runtime = record(item.runtime, `${path}.runtime`);
-  fields(runtime, ["model", "timeout"], `${path}.runtime`);
-  const timeout = number(runtime.timeout, `${path}.runtime.timeout`);
-  if (timeout === 0) throw new Error(`${path}.runtime.timeout must be positive`);
   return {
     questions,
-    runtime: { model: string(runtime.model, `${path}.runtime.model`), timeout },
+    runtime: declarationRuntime(item.runtime, `${path}.runtime`),
     input_schema: parseNullableSchema(item.input_schema, `${path}.input_schema`),
     step_inputs: array(item.step_inputs, `${path}.step_inputs`).map((value, index) =>
       parseStepInput(value, `${path}.step_inputs[${index}]`),
     ),
     step_output: parseStepOutput(item.step_output, `${path}.step_output`),
-  };
-}
-
-function matchingKeys(value: Record<string, unknown>, expected: string[], path: string) {
-  if (
-    Object.keys(value).length !== expected.length ||
-    expected.some((key) => !Object.hasOwn(value, key))
-  ) {
-    throw new Error(`${path} must match the declared keys`);
-  }
-}
-
-function numericallyEqual(left: number, right: number): boolean {
-  // Match the classifier domain model's relative and absolute tolerance.
-  return (
-    Math.abs(left - right) <= Math.max(1e-5, 1e-5 * Math.max(Math.abs(left), Math.abs(right)))
-  );
-}
-
-function probabilities(value: unknown, keys: string[], path: string): Record<string, number> {
-  const item = record(value, path);
-  matchingKeys(item, keys, path);
-  let total = 0;
-  const parsed = Object.fromEntries(
-    keys.map((key) => {
-      const parsed = probability(item[key], `${path}.${key}`);
-      total += parsed;
-      return [key, parsed];
-    }),
-  );
-  // Match the API's independently rounded, two-decimal probabilities.
-  if (total <= 0 || Math.abs(total - 1) > 0.005 * keys.length + 1e-12)
-    throw new Error(`${path} must sum to 1 within rounding precision`);
-  return parsed;
-}
-
-function equalJson(left: JsonValue, right: JsonValue): boolean {
-  if (left === right) return true;
-  if (Array.isArray(left)) {
-    return (
-      Array.isArray(right) &&
-      left.length === right.length &&
-      left.every((value, index) => equalJson(value, right[index]))
-    );
-  }
-  if (
-    typeof left === "object" &&
-    left !== null &&
-    typeof right === "object" &&
-    right !== null &&
-    !Array.isArray(right)
-  ) {
-    return (
-      Object.keys(left).length === Object.keys(right).length &&
-      Object.entries(left).every(
-        ([key, value]) => Object.hasOwn(right, key) && equalJson(value, right[key]),
-      )
-    );
-  }
-  return false;
-}
-
-function answer(value: unknown, declared: ClassifierQuestion, path: string): ClassifierAnswer {
-  const item = record(value, path);
-  if (item.type !== declared.type) throw new Error(`${path}.type does not match its question`);
-  switch (declared.type) {
-    case "noul":
-      fields(item, ["type", "noul"], path);
-      return { type: "noul", noul: probability(item.noul, `${path}.noul`) };
-    case "choice": {
-      fields(item, ["type", "choice", "probabilities", "confidence"], path);
-      const choice = string(item.choice, `${path}.choice`);
-      if (!Object.hasOwn(declared.criteria, choice))
-        throw new Error(`${path}.choice is not a declared option`);
-      const distribution = probabilities(
-        item.probabilities,
-        Object.keys(declared.criteria),
-        `${path}.probabilities`,
-      );
-      const maximum = Object.values(distribution).reduce(
-        (maximum, value) => Math.max(maximum, value),
-        0,
-      );
-      if (!numericallyEqual(distribution[choice], maximum))
-        throw new Error(`${path}.choice must have maximum probability`);
-      return {
-        type: "choice",
-        choice,
-        probabilities: distribution,
-        confidence: probability(item.confidence, `${path}.confidence`),
-      };
-    }
-    case "score": {
-      fields(item, ["type", "score", "legend", "probabilities", "confidence"], path);
-      const levels = declared.criteria.map((_, index) => String(index));
-      const legend = entries(item.legend, `${path}.legend`);
-      matchingKeys(legend, levels, `${path}.legend`);
-      if (declared.criteria.some((level, index) => !equalJson(level, legend[String(index)]))) {
-        throw new Error(`${path}.legend does not match its declared levels`);
-      }
-      const score = number(item.score, `${path}.score`);
-      if (score > levels.length - 1)
-        throw new Error(`${path}.score is outside its declared levels`);
-      const distribution = probabilities(item.probabilities, levels, `${path}.probabilities`);
-      const expected = levels.reduce(
-        (sum, level) => sum + Number(level) * distribution[level],
-        0,
-      );
-      if (!numericallyEqual(score, expected))
-        throw new Error(`${path}.score must match its probability-weighted levels`);
-      return {
-        type: "score",
-        score,
-        legend,
-        probabilities: distribution,
-        confidence: probability(item.confidence, `${path}.confidence`),
-      };
-    }
-  }
-}
-
-function result(value: unknown, declaration: ClassifierDeclaration): ClassificationResult {
-  const path = "classifier result";
-  if (declaration.questions === null) throw new Error(`${path} requires resolved questions`);
-  const item = record(value, path);
-  fields(item, ["model", "answers", "usage"], path);
-  const answers = record(item.answers, `${path}.answers`);
-  matchingKeys(answers, Object.keys(declaration.questions), `${path}.answers`);
-  const usage = record(item.usage, `${path}.usage`);
-  fields(usage, ["input_tokens", "output_tokens"], `${path}.usage`);
-  return {
-    model: string(item.model, `${path}.model`),
-    answers: Object.fromEntries(
-      Object.entries(declaration.questions).map(([id, declared]) => [
-        id,
-        answer(answers[id], declared, `${path}.answers.${id}`),
-      ]),
-    ),
-    usage: {
-      input_tokens:
-        usage.input_tokens === null || usage.input_tokens === undefined
-          ? null
-          : integer(usage.input_tokens, `${path}.usage.input_tokens`),
-      output_tokens:
-        usage.output_tokens === null || usage.output_tokens === undefined
-          ? null
-          : integer(usage.output_tokens, `${path}.usage.output_tokens`),
-    },
-  };
-}
-
-export function parseClassifierInvocation(value: unknown): ClassifierInvocation {
-  const path = "classifier invocation";
-  const item = record(value, path);
-  fields(
-    item,
-    [
-      "invocation_id",
-      "invocation_index",
-      "status",
-      "started_at",
-      "ended_at",
-      "declaration",
-      "input",
-      "result",
-      "error",
-    ],
-    path,
-  );
-  const input = entry(item.input, `${path}.input`);
-  const declaration = parseClassifierDeclaration(item.declaration);
-  const status = item.status;
-  if (
-    status !== "running" &&
-    status !== "success" &&
-    status !== "failed" &&
-    status !== "cancelled"
-  ) {
-    throw new Error(`${path}.status is unsupported`);
-  }
-  const started_at = number(item.started_at, `${path}.started_at`);
-  const ended_at =
-    item.ended_at === null ? null : number(item.ended_at, `${path}.ended_at`, started_at);
-  const error = item.error === null ? null : string(item.error, `${path}.error`);
-  if (status === "running" ? ended_at !== null : ended_at === null)
-    throw new Error(`${path} has inconsistent lifecycle timestamps`);
-  if (status === "success" ? item.result === null : item.result !== null)
-    throw new Error(`${path} has an inconsistent result`);
-  if ((status === "running" || status === "success") && error !== null)
-    throw new Error(`${path} has an unexpected error`);
-  if (status === "failed" && error === null)
-    throw new Error(`${path} is missing its failure error`);
-  return {
-    invocation_id: string(item.invocation_id, `${path}.invocation_id`),
-    invocation_index: integer(item.invocation_index, `${path}.invocation_index`),
-    status,
-    started_at,
-    ended_at,
-    declaration,
-    input,
-    result: item.result === null ? null : result(item.result, declaration),
-    error,
   };
 }
 
@@ -396,6 +202,5 @@ export function decodeClassifierDeclaration(raw: string): ClassifierDeclaration 
 }
 
 export function decodeClassifierInvocation(raw: string): ClassifierInvocation {
-  const value: unknown = JSON.parse(raw);
-  return parseClassifierInvocation(value);
+  return JSON.parse(raw);
 }

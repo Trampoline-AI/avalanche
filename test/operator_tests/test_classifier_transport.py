@@ -126,6 +126,7 @@ def _seed_run(
             "classifier_metadata_json": {
                 node_id: declaration_json for node_id in ("classify", "other")
             },
+            "evaluation_metadata_json": {},
             "step_interface_json": {
                 node_id: StepInterface(
                     step_inputs=[], step_output=StepOutput()

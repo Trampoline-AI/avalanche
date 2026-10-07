@@ -35,6 +35,7 @@ from avalanche.classifier.models import (
     ClassifierInvocation,
     NoulAnswer,
 )
+from avalanche.evaluations import EvaluationDeclaration
 from avalanche.step_interface import StepInterface
 
 from ..executor import LocalExecutor, RayExecutor
@@ -43,6 +44,8 @@ from .discovery import (
     DEFAULT_DISCOVERY_TIMEOUT,
     raise_for_discovery_diagnostics,
 )
+from .evaluation_models import EvaluationRecord
+from .evaluation_worker import EvaluationOutcome, EvaluationRequest, EvaluationWorkers
 from .models import (
     AgentEvent,
     AgentEventAppended,
@@ -390,6 +393,7 @@ class Operator:
         self._classifier_events: dict[tuple[str, str], list[ClassifierEvent]] = {}
         self._classifier_invocations: dict[str, dict[str, _ClassifierInvocationLifecycle]] = {}
         self._classifier_detail_runs: set[str] = set()
+        self._evaluations: dict[str, dict[str, EvaluationRecord]] = {}
         self._trace_descriptors: dict[tuple[str, str], TraceDescriptor] = {}
         self._trace_bodies: dict[tuple[str, str], dict[int, bytes]] = {}
         self._trace_errors: dict[tuple[str, str], str | None] = {}
@@ -409,6 +413,7 @@ class Operator:
         self._structural_baseline_capacity = structural_baseline_capacity
         self._structural_baselines: OrderedDict[int, _StructuralBaseline] = OrderedDict()
         self._lock = threading.RLock()
+        self._evaluation_workers = EvaluationWorkers(self._complete_evaluation)
         self._watcher_stop = threading.Event()
         self._watcher_ready = threading.Event()
         self._watcher_thread: threading.Thread | None = None
@@ -532,6 +537,69 @@ class Operator:
             captures = [self._capture_run_detail_locked(run) for run in self._runs.values()]
         runs = [_materialize_run_detail(capture) for capture in captures]
         return self._matching_runs(runs, workflow_selector)
+
+    def list_evaluations(self, run_id: str, node_id: str = "") -> list[EvaluationRecord]:
+        """Return owned execution records independently of structural run lifecycle."""
+        with self._lock:
+            run = self._runs.get(run_id)
+            if run is None:
+                raise KeyError(run_id)
+            if node_id and node_id not in run.nodes:
+                raise KeyError(node_id)
+            return [
+                record.model_copy(deep=True)
+                for record in self._evaluations.get(run_id, {}).values()
+                if not node_id or record.node_id == node_id
+            ]
+
+    def _submit_evaluation(self, run_id: str, node_id: str, request: EvaluationRequest) -> None:
+        with self._lock:
+            run = self._runs[run_id]
+            if node_id not in run.nodes:
+                raise _CoordinatorProtocolError("Evaluation references an unpublished node")
+            records = self._evaluations.setdefault(run_id, {})
+            if request.evaluation_id in records:
+                raise _CoordinatorProtocolError("Duplicate evaluation submission")
+            records[request.evaluation_id] = EvaluationRecord(
+                evaluation_id=request.evaluation_id,
+                run_id=run_id,
+                node_id=node_id,
+                status="pending",
+                created_at=request.created_at,
+            )
+        if request.error is not None:
+            self._complete_evaluation(
+                run_id, request.evaluation_id, EvaluationOutcome(error=request.error)
+            )
+            return
+        try:
+            self._evaluation_workers.submit(run_id, request)
+        except Exception as error:
+            self._complete_evaluation(
+                run_id,
+                request.evaluation_id,
+                EvaluationOutcome(
+                    error=f"Evaluation submission failed: {type(error).__name__}: {error}"
+                ),
+            )
+
+    def _complete_evaluation(
+        self, run_id: str, evaluation_id: str, outcome: EvaluationOutcome
+    ) -> None:
+        # This is deliberately not _apply_event / _publish_run_locked: a late
+        # evaluation must not reopen a coordinator channel or advance lifecycle.
+        with self._lock:
+            previous = self._evaluations[run_id][evaluation_id]
+            self._evaluations[run_id][evaluation_id] = EvaluationRecord(
+                evaluation_id=evaluation_id,
+                run_id=run_id,
+                node_id=previous.node_id,
+                status="completed" if outcome.result is not None else "failed",
+                created_at=previous.created_at,
+                ended_at=max(previous.created_at, time.time()),
+                result=outcome.result,
+                error=outcome.error,
+            )
 
     def get_run(self, run_id: str) -> RunState | None:
         with self._lock:
@@ -1732,6 +1800,7 @@ class Operator:
                 self._watcher_thread.join(timeout=2.0)
             if self._result_cleanup_thread is not None:
                 self._result_cleanup_thread.join(timeout=2.0)
+            self._evaluation_workers.close()
 
         for _, handle in handles:
             handle.cancel_event.set()
@@ -2064,6 +2133,9 @@ class Operator:
             classifier_metadata_json=tuple(
                 _classifier_metadata_mapping(prepared["classifier_metadata_json"]).items()
             ),
+            evaluation_metadata_json=tuple(
+                _evaluation_metadata_mapping(prepared["evaluation_metadata_json"]).items()
+            ),
             step_interface_json=tuple(
                 (node_id, prepared["step_interface_json"][node_id]) for node_id in node_ids
             ),
@@ -2170,6 +2242,11 @@ class Operator:
         event: dict[str, Any],
     ) -> bool:
         event_type = _validate_run_event(event, validate_result=False)
+        if event_type == "evaluation_submitted":
+            self._submit_evaluation(
+                run_id, event["node_id"], EvaluationRequest.model_validate(event["submission"])
+            )
+            return False
         classifier_invocation = (
             _classifier_invocation_from_payload(event["event"])
             if event_type == "classifier_evidence"
@@ -3606,6 +3683,7 @@ _RUN_EVENT_TYPES = {
     "node_failed",
     "agent_evidence",
     "classifier_evidence",
+    "evaluation_submitted",
     "log",
     "terminal",
 }
@@ -3619,6 +3697,8 @@ _MAX_EVENT_AGENT_FIELD_SCHEMA_BYTES = 1024 * 1024
 _MAX_EVENT_AGENT_FIELD_SCHEMAS_TOTAL_BYTES = 16 * 1024 * 1024
 _MAX_EVENT_CLASSIFIER_METADATA_BYTES = 1024 * 1024
 _MAX_EVENT_CLASSIFIER_METADATA_TOTAL_BYTES = 16 * 1024 * 1024
+_MAX_EVENT_EVALUATION_METADATA_BYTES = 1024 * 1024
+_MAX_EVENT_EVALUATION_METADATA_TOTAL_BYTES = 16 * 1024 * 1024
 _MAX_EVENT_STEP_INTERFACE_BYTES = 1024 * 1024
 _MAX_EVENT_STEP_INTERFACES_TOTAL_BYTES = 16 * 1024 * 1024
 _MAX_EVENT_TRACEBACK_LENGTH = 262_144
@@ -3730,6 +3810,42 @@ def _classifier_metadata_mapping(value: object) -> dict[str, str]:
     return metadata
 
 
+def _evaluation_metadata_mapping(value: object) -> dict[str, str]:
+    if not isinstance(value, dict) or len(value) > _MAX_EVENT_NODES:
+        raise _CoordinatorProtocolError("evaluation metadata must be a bounded node mapping")
+    metadata: dict[str, str] = {}
+    total_bytes = 0
+    for node_id, declaration_json in value.items():
+        if (
+            not isinstance(node_id, str)
+            or len(node_id) > _MAX_EVENT_FIELD_LENGTH
+            or not isinstance(declaration_json, str)
+        ):
+            raise _CoordinatorProtocolError(
+                "evaluation metadata must map node IDs to JSON strings"
+            )
+        try:
+            if len(declaration_json.encode()) > _MAX_EVENT_EVALUATION_METADATA_BYTES:
+                raise _CoordinatorProtocolError("evaluation declaration exceeds its byte limit")
+            declaration = EvaluationDeclaration.model_validate_json(
+                declaration_json, strict=True
+            )
+            canonical = declaration.model_dump_json()
+            canonical_size = len(canonical.encode())
+            if canonical_size > _MAX_EVENT_EVALUATION_METADATA_BYTES:
+                raise _CoordinatorProtocolError("evaluation declaration exceeds its byte limit")
+            total_bytes += canonical_size
+            if total_bytes > _MAX_EVENT_EVALUATION_METADATA_TOTAL_BYTES:
+                raise _CoordinatorProtocolError(
+                    "evaluation metadata exceeds its total byte limit"
+                )
+        except (ValueError, TypeError, RecursionError):
+            # Validation errors can include credential-like extra fields from the payload.
+            raise _CoordinatorProtocolError("invalid evaluation declaration metadata") from None
+        metadata[node_id] = canonical
+    return metadata
+
+
 def _trace_header_from_trace(trace: RunTrace) -> TraceHeader:
     """Project the validated SDK trace without retaining its iteration body."""
     return TraceHeader(
@@ -3764,6 +3880,7 @@ def _validate_preparation_event(event: object) -> str:
                 "agent_instruction_lines",
                 "standard_step_docstring_lines",
                 "classifier_metadata_json",
+                "evaluation_metadata_json",
                 "step_interface_json",
             },
         )
@@ -3790,6 +3907,9 @@ def _validate_preparation_event(event: object) -> str:
         classifier_metadata_json = _classifier_metadata_mapping(
             event["classifier_metadata_json"]
         )
+        evaluation_metadata_json = _evaluation_metadata_mapping(
+            event["evaluation_metadata_json"]
+        )
         step_interface_json = _step_interface_mapping(event)
         unknown_interface_nodes = set(step_interface_json).difference(node_ids)
         if unknown_interface_nodes:
@@ -3802,6 +3922,12 @@ def _validate_preparation_event(event: object) -> str:
             raise _CoordinatorProtocolError(
                 "field 'classifier_metadata_json' references unknown node "
                 f"{_bounded_ascii(min(unknown_classifier_nodes))}"
+            )
+        unknown_evaluation_nodes = set(evaluation_metadata_json).difference(node_ids)
+        if unknown_evaluation_nodes:
+            raise _CoordinatorProtocolError(
+                "field 'evaluation_metadata_json' references unknown node "
+                f"{_bounded_ascii(min(unknown_evaluation_nodes))}"
             )
         for node_id in node_ids:
             if node_id not in node_types:
@@ -3883,6 +4009,13 @@ def _validate_run_event(event: object, *, validate_result: bool = True) -> str:
         agent_event = _required_field(event, "event")
         if type(agent_event) is not dict:
             raise _CoordinatorProtocolError("field 'event' must be a dict")
+    elif event_type == "evaluation_submitted":
+        _require_exact_event_keys(event, {"type", "node_id", "submission"})
+        _string_field(event, "node_id", maximum_length=_MAX_EVENT_FIELD_LENGTH)
+        try:
+            EvaluationRequest.model_validate(_required_field(event, "submission"))
+        except (TypeError, ValueError) as error:
+            raise _CoordinatorProtocolError("Invalid evaluation submission") from error
     elif event_type == "log":
         _require_exact_event_keys(
             event,

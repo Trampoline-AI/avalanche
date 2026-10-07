@@ -2544,7 +2544,9 @@ class Workflow:
             agent_step_spec = getattr(actual_fn, "__agent_step__", None)
             if agent_step_spec is not None:
                 actual_fn = agent_step_spec.with_workflow_defaults(
-                    actual_fn, self.agent_defaults
+                    actual_fn,
+                    self.agent_defaults,
+                    classifier_defaults=self.classifier_defaults,
                 )
             classifier_step_spec = getattr(actual_fn, "__classifier_step__", None)
             if classifier_step_spec is not None:

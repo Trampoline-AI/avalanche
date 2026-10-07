@@ -157,6 +157,8 @@ export interface FlowInfoMsg {
   };
   /** Validated classifier declarations keyed by node ID. */
   classifierMetadataJson: Record<string, string>;
+  /** Evaluation declarations keyed by node ID, separate from execution results. */
+  evaluationMetadataJson: Record<string, string>;
   /** Python callable interfaces keyed by node ID. */
   stepInterfaceJson: Record<string, string>;
   /**
@@ -199,6 +201,7 @@ export const FlowInfoMsg = {
       agentNodeIds: [],
       agentMetadataJson: {},
       classifierMetadataJson: {},
+      evaluationMetadataJson: {},
       stepInterfaceJson: {},
       standardStepDocstringLines: {},
       webhookPath: "",
@@ -565,6 +568,8 @@ export interface WorkflowTopologyMsg {
   };
   /** Classifier declarations pinned to the executing workflow definition. */
   classifierMetadataJson: Record<string, string>;
+  /** Evaluation declarations pinned to the executing workflow definition. */
+  evaluationMetadataJson: Record<string, string>;
   /** Python callable interfaces pinned to the executing workflow definition. */
   stepInterfaceJson: Record<string, string>;
 }
@@ -580,6 +585,7 @@ export const WorkflowTopologyMsg = {
       agentInstructionLines: {},
       standardStepDocstringLines: {},
       classifierMetadataJson: {},
+      evaluationMetadataJson: {},
       stepInterfaceJson: {},
       ...value,
     } as WorkflowTopologyMsg;

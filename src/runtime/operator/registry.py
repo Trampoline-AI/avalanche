@@ -94,6 +94,18 @@ def classifier_metadata_for_workflow(workflow: Workflow, node_ids: list[str]) ->
     return metadata_by_node
 
 
+def evaluation_metadata_for_workflow(workflow: Workflow, node_ids: list[str]) -> dict[str, str]:
+    """Snapshot evaluation declarations without running selectors, composites, or clients."""
+    metadata_by_node: dict[str, str] = {}
+    for node_id in node_ids:
+        spec = getattr(workflow.nodes[node_id].node.fn, "__agent_step__", None)
+        if spec is None or spec.evaluations is None:
+            continue
+        declaration = spec.evaluations.declaration_metadata(workflow.classifier_defaults)
+        metadata_by_node[node_id] = declaration.model_dump_json()
+    return metadata_by_node
+
+
 def agent_field_schemas_for_workflow(workflow: Workflow, node_ids: list[str]) -> dict[str, str]:
     """Serialize only agent invocation field schemas for immutable run topology."""
     schemas_by_node: dict[str, str] = {}
@@ -156,6 +168,7 @@ def workflow_to_info(
         agent_node_ids=agent_node_ids,
         agent_metadata_json=agent_metadata_json,
         classifier_metadata_json=classifier_metadata_for_workflow(workflow, node_ids),
+        evaluation_metadata_json=evaluation_metadata_for_workflow(workflow, node_ids),
         step_interface_json=step_interface_for_workflow(workflow, node_ids),
         standard_step_docstring_lines=standard_step_docstring_lines,
         node_source_code=node_source_code,
@@ -182,6 +195,7 @@ def descriptor_to_info(descriptor: WorkflowDescriptor) -> WorkflowInfo:
         agent_node_ids=list(descriptor.agent_node_ids),
         agent_metadata_json=dict(descriptor.agent_metadata_json),
         classifier_metadata_json=dict(descriptor.classifier_metadata_json),
+        evaluation_metadata_json=dict(descriptor.evaluation_metadata_json),
         step_interface_json=dict(descriptor.step_interface_json),
         standard_step_docstring_lines=dict(descriptor.standard_step_docstring_lines),
         node_source_code=dict(descriptor.node_source_code),

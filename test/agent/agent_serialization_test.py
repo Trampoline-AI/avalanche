@@ -4,10 +4,10 @@ from __future__ import annotations
 
 import asyncio
 import importlib
-from types import SimpleNamespace
 
 import dspy
 import pytest
+from dspy import Prediction
 from predict_rlm import RunEvidence, RunTrace
 from ray import cloudpickle
 
@@ -24,7 +24,7 @@ def _agent_node(monkeypatch):
 
     class Predictor:
         async def acall(self, *, text):
-            return SimpleNamespace(
+            return Prediction(
                 answer=text.upper(),
                 trace=RunTrace(
                     status="completed",

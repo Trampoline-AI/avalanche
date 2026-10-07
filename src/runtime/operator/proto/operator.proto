@@ -5,6 +5,10 @@ package avalanche.operator;
 // Breaking migration: the previous full-state run APIs are replaced by bounded
 // summary, snapshot, detail, and typed update APIs below. Remote operators and
 // clients must upgrade together.
+//
+// TODO: Replace JSON-string transport for Avalanche-owned declarations, questions,
+// and evaluation results with structured protobuf messages and generated types.
+// Keep user-defined payloads and JSON Schema documents as flexible JSON values.
 
 // ── Service ─────────────────────────────────────────────
 
@@ -19,6 +23,7 @@ service OperatorServiceV2 {
   rpc ListRunSummaries(ListRunSummariesRequestV2) returns (RunSummaryPageV2);
   rpc GetRunSnapshot(GetRunSnapshotRequestV2) returns (RunSnapshotV2);
   rpc ListRunActivity(ListRunActivityRequestV2) returns (RunActivityPageV2);
+  rpc ListEvaluations(ListEvaluationsRequestV2) returns (EvaluationListV2);
   rpc ReadActivityDetail(ReadActivityDetailRequestV2)
       returns (stream ActivityDetailChunkV2);
   rpc GetRunResult(GetRunResultRequestV2) returns (RunResultV2);
@@ -112,6 +117,7 @@ message FlowInfoV2 {
   string webhook_url = 14;
   bool webhook_active = 15;
   map<string, string> classifier_metadata_json = 16;
+  map<string, string> evaluation_metadata_json = 17;
 }
 
 message DiscoveryDiagnosticV2 {
@@ -146,6 +152,7 @@ message WorkflowTopologyV2 {
   map<string, string> standard_step_docstring_lines = 7;
   map<string, string> classifier_metadata_json = 8;
   map<string, string> step_interface_json = 9;
+  map<string, string> evaluation_metadata_json = 10;
 }
 
 message ScanTargetV2 {
@@ -192,6 +199,32 @@ message CancelRunRequestV2 {
 
 message CancelRunResponseV2 {
   string run_id = 1;
+}
+
+// Evaluations are independent of workflow lifecycle: terminal runs may still
+// have pending records. Poll this method to observe late results.
+message ListEvaluationsRequestV2 {
+  string run_id = 1;
+  // Optional node filter within this run.
+  string node_id = 2;
+}
+
+message EvaluationRecordV2 {
+  string evaluation_id = 1;
+  string run_id = 2;
+  string node_id = 3;
+  // One of "pending", "completed", or "failed".
+  string status = 4;
+  // Unix epoch seconds.
+  double created_at = 5;
+  optional double ended_at = 6;
+  // Serialized EvaluationResult, preserving raw classification answers.
+  optional string result_json = 7;
+  optional string error = 8;
+}
+
+message EvaluationListV2 {
+  repeated EvaluationRecordV2 records = 1;
 }
 
 message RunSummaryV2 {

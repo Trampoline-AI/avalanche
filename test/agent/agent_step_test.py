@@ -10,6 +10,7 @@ from types import SimpleNamespace
 from typing import Literal
 
 import pytest
+from dspy import Prediction
 from predict_rlm import RunEvidence, RunEvidenceEvent, RunTrace
 from pydantic import BaseModel
 
@@ -54,7 +55,7 @@ def test_bodyful_agent_invokes_service_and_owns_structured_result(monkeypatch, s
         async def acall(self, **inputs):
             person = inputs["person"]
             calls.append(person)
-            return SimpleNamespace(
+            return Prediction(
                 summary=Summary(headline=f"about {person.name}", person_count=1),
                 note=f"review {person.id}",
                 trace=_trace(),
@@ -157,7 +158,7 @@ async def test_live_evidence_redacts_tool_and_model_secrets_without_losing_event
             ]
             for sequence, (kind, data) in enumerate(events, 1):
                 await sink.emit(RunEvent("run", sequence, kind, sequence, data))
-            return SimpleNamespace(
+            return Prediction(
                 note="reviewed",
                 trace=_trace(),
                 evidence=RunEvidence(
@@ -239,7 +240,7 @@ async def test_concurrent_agent_invocations_keep_evidence_and_traces_correlated(
                     {"status": "completed", "outputs": {"note": name}},
                 ),
             )
-            return SimpleNamespace(
+            return Prediction(
                 note=name,
                 trace=_trace(),
                 evidence=RunEvidence(run_id=name, complete=True, terminal_outcome="completed"),
@@ -289,7 +290,7 @@ async def test_real_recorder_propagates_strict_observer_failures(failure_kind):
                 await recorder.finish_failure(error)
                 predictor._attach_runtime_evidence(error, recorder)
                 raise
-            result = SimpleNamespace(note="recorded", trace=_trace())
+            result = Prediction(note="recorded", trace=_trace())
             await recorder.finish_success(status="completed", outputs={"note": "recorded"})
             predictor._attach_runtime_evidence(result, recorder)
             return result
@@ -383,7 +384,7 @@ async def test_dspy_callback_cancellation_without_sdk_evidence_preserves_cancell
 async def test_terminal_persistence_failure_is_not_reclassified_as_agent_failure():
     class Predictor:
         async def acall(self, **inputs):
-            return SimpleNamespace(
+            return Prediction(
                 trace=_trace(),
                 evidence=RunEvidence(
                     run_id="terminal-run", complete=True, terminal_outcome="completed"
@@ -543,6 +544,7 @@ def _retain_iteration(step):
             evidence=agent_module._evidence_metadata(
                 RunEvidence(run_id="sdk-run", complete=True, terminal_outcome="completed")
             ),
+            runtime_kwargs={},
         )
     try:
         for evidence in (
@@ -885,3 +887,52 @@ def test_deep_iteration_payload_does_not_reenter_transport_at_terminal():
     bounded = retained.predict_calls[0].calls[0].input
     assert "unavailable" in json.dumps(bounded)
     assert step.predict_calls[0].calls[0].input == {"question": payload}
+
+
+@pytest.mark.asyncio
+async def test_codex_lm_is_named_codex_in_declaration_and_run_trace(monkeypatch):
+    from dspy_codex_lm import CodexLM
+
+    codex = CodexLM(model="gpt-5.6-terra")
+
+    class Predictor:
+        async def acall(self, **inputs):
+            return Prediction(
+                summary=Summary(headline="about Ada", person_count=1),
+                trace=_trace().model_copy(
+                    update={"model": codex.model, "sub_model": codex.model}
+                ),
+                evidence=RunEvidence(
+                    run_id="codex-run", complete=True, terminal_outcome="completed"
+                ),
+            )
+
+    monkeypatch.setattr(agent_module, "_build_predictor", lambda *args, **kwargs: Predictor())
+
+    @ava.agent_step(SummarySignature, lm=codex, sub_lm=codex)
+    async def summarize(person: Person, *, agent: ava.Agent):
+        return (await agent(person=person)).summary
+
+    models = summarize.__agent_step__.declaration_metadata()["models"]
+    assert [models[role]["identity"]["name"] for role in ("main", "sub")] == [
+        "codex/gpt-5.6-terra",
+        "codex/gpt-5.6-terra",
+    ]
+
+    observed = []
+    with capture_agent_evidence(observed.append, errors="raise"):
+        await summarize.__agent_step__.make_agent()(person=Person(id=1, name="Ada"))
+    (finished,) = [event for event in observed if event["kind"] == "trace_finished"]
+    assert (finished["trace"]["model"], finished["trace"]["sub_model"]) == (
+        "codex/gpt-5.6-terra",
+        "codex/gpt-5.6-terra",
+    )
+
+
+def test_string_models_keep_their_litellm_ids_in_declaration():
+    @ava.agent_step(SummarySignature, lm="openai/gpt-5.6-terra")
+    async def summarize(person: Person, *, agent: ava.Agent):
+        return (await agent(person=person)).summary
+
+    models = summarize.__agent_step__.declaration_metadata()["models"]
+    assert models["main"]["identity"] == "openai/gpt-5.6-terra"

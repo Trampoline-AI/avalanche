@@ -2,6 +2,7 @@ import { GrpcWebFetchTransport } from "@protobuf-ts/grpcweb-transport";
 
 import { PageOrderV2 } from "./generated/operator";
 import { DescriptorPageOrder } from "./model";
+import { mapEvaluationRecord, type EvaluationRecord } from "./evaluations";
 
 import {
   OperatorServiceV2Client,
@@ -126,6 +127,7 @@ export interface OperatorApi {
     request: ClassifierEventPageRequest,
     signal?: AbortSignal,
   ): Promise<ClassifierEventDescriptorPage>;
+  listRunEvaluations(runId: string, signal?: AbortSignal): Promise<EvaluationRecord[]>;
   readJsonDetail(bodyToken: string, signal?: AbortSignal): Promise<unknown>;
   readTextDetail(bodyToken: string, signal?: AbortSignal): Promise<string>;
   startRun(workflowSelector: string, input?: Record<string, unknown>): Promise<string>;
@@ -207,6 +209,17 @@ export class GrpcWebOperatorApi implements OperatorApi {
       signal ? { abort: signal } : undefined,
     ).response;
     return source.sourceCode;
+  }
+
+  async listRunEvaluations(runId: string, signal?: AbortSignal): Promise<EvaluationRecord[]> {
+    const response = await this.client.listEvaluations(
+      { runId, nodeId: "" },
+      signal ? { abort: signal } : undefined,
+    ).response;
+    const nodeIds = new Set(response.records.map((record) => record.nodeId));
+    if (nodeIds.size !== response.records.length)
+      throw new Error("Expected one evaluation per agent step");
+    return response.records.map(mapEvaluationRecord);
   }
 
   async loadBaseline(signal?: AbortSignal): Promise<StructuralBaseline> {
@@ -1152,6 +1165,7 @@ function mapFlowInfo(flow: FlowInfoV2): FlowInfoMsg {
     agentNodeIds: flow.agentNodeIds,
     agentMetadataJson: flow.agentMetadataJson,
     classifierMetadataJson: flow.classifierMetadataJson,
+    evaluationMetadataJson: flow.evaluationMetadataJson,
     stepInterfaceJson: flow.topology?.stepInterfaceJson ?? {},
     webhookPath: flow.webhookPath,
     webhookUrl: flow.webhookUrl,

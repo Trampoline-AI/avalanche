@@ -974,6 +974,35 @@ class OperatorV2Servicer(pb_grpc.OperatorServiceV2Servicer):
             context.abort(grpc.StatusCode.NOT_FOUND, f"Run {request.run_id} not found")
         return self._run_snapshot_message(snapshot, context)
 
+    def ListEvaluations(  # noqa: N802
+        self, request: pb.ListEvaluationsRequestV2, context: grpc.ServicerContext
+    ) -> pb.EvaluationListV2:
+        if not request.run_id:
+            context.abort(grpc.StatusCode.INVALID_ARGUMENT, "run_id is required")
+        try:
+            records = self._op.list_evaluations(request.run_id, request.node_id)
+        except KeyError:
+            context.abort(grpc.StatusCode.NOT_FOUND, "Evaluation target not found")
+        except ValueError as exc:
+            context.abort(grpc.StatusCode.INVALID_ARGUMENT, str(exc))
+        return pb.EvaluationListV2(
+            records=[
+                pb.EvaluationRecordV2(
+                    evaluation_id=record.evaluation_id,
+                    run_id=record.run_id,
+                    node_id=record.node_id,
+                    status=record.status,
+                    created_at=record.created_at,
+                    ended_at=record.ended_at,
+                    result_json=(
+                        record.result.model_dump_json() if record.result is not None else None
+                    ),
+                    error=record.error,
+                )
+                for record in records
+            ]
+        )
+
     # ── Activity ──────────────────────────────────────────
 
     def ListRunActivity(self, request, context):  # noqa: N802

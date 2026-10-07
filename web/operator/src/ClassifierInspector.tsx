@@ -6,7 +6,7 @@ import { ClassifierDefinition, ClassifierInvocationDetails } from "./ClassifierD
 import {
   type ClassifierDeclaration,
   type ClassifierInvocation,
-  parseClassifierInvocation,
+  decodeClassifierInvocation,
 } from "./classifier";
 import {
   boundDescriptors,
@@ -351,18 +351,11 @@ function ClassifierHistory({
             },
       );
       void api
-        .readJsonDetail(token, controller.signal)
+        .readTextDetail(token, controller.signal)
         .then((body) => {
           if (controller.signal.aborted) return;
-          const invocation = parseClassifierInvocation(body);
-          if (
-            invocation.invocation_id !== event.invocationId ||
-            invocation.invocation_index !== event.invocationIndex ||
-            invocation.status !== event.eventKind
-          ) {
-            throw new Error("Classifier detail does not match its invocation descriptor");
-          }
-          const byteCost = measuredByteCost(body, event.sizeBytes);
+          const invocation = decodeClassifierInvocation(body);
+          const byteCost = measuredByteCost(invocation, event.sizeBytes);
           setStored((current) => {
             if (current.api !== api) return current;
             const details = new Map(current.details);

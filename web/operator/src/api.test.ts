@@ -8,6 +8,7 @@ import {
   ActivityDetailRefV2,
   CatalogReloadRequiredV2,
   ClassifierInvocationSummaryV2,
+  EvaluationRecordV2,
   ContinuationRefV2,
   FlowInfoV2,
   FlowListV2,
@@ -26,7 +27,7 @@ import {
 } from "./generated/operator";
 import type { IOperatorServiceV2Client } from "./generated/operator.client";
 import { DescriptorPageOrder } from "./model";
-import { eventUlid } from "./test/fixtures";
+import { evaluationDeclaration, eventUlid } from "./test/fixtures";
 
 function apiWith(client: Partial<Record<keyof IOperatorServiceV2Client, unknown>>) {
   return new GrpcWebOperatorApi("http://operator.test", client as IOperatorServiceV2Client);
@@ -95,6 +96,7 @@ const classifierSnapshot = RunSnapshotV2.create({
   topology: {
     nodeIds: ["classify"],
     classifierMetadataJson: { classify: JSON.stringify(classifierDeclaration) },
+    evaluationMetadataJson: { classify: JSON.stringify(evaluationDeclaration) },
   },
 });
 const classifierRequest: ClassifierEventPageRequest = {
@@ -349,7 +351,7 @@ describe("operator transport boundary", () => {
     await expect(api.readTextDetail("unregistered")).rejects.toThrow();
   });
 
-  it("keeps historical classifier declarations pinned when the current catalog changes", async () => {
+  it("keeps historical classifier and evaluation declarations pinned when the current catalog changes", async () => {
     const revisedDeclaration: ClassifierDeclaration = {
       ...classifierDeclaration,
       input_schema: { type: "object", properties: { revised: { type: "number" } } },
@@ -366,6 +368,11 @@ describe("operator transport boundary", () => {
         accepted: { type: "noul", instructions: "Revised decision", criteria: null },
       },
     };
+    const revisedEvaluations = {
+      ...evaluationDeclaration,
+      metrics: { revised_metric: evaluationDeclaration.metrics.quality },
+      runtime: { model: "revised-evaluation-model", timeout: 25 },
+    };
     const api = apiWith({
       discoverFlows: () => ({
         response: Promise.resolve(
@@ -376,8 +383,10 @@ describe("operator transport boundary", () => {
               FlowInfoV2.create({
                 workflowSelector: "orders",
                 classifierMetadataJson: { classify: JSON.stringify(revisedDeclaration) },
+                evaluationMetadataJson: { classify: JSON.stringify(revisedEvaluations) },
                 topology: WorkflowTopologyV2.create({
                   classifierMetadataJson: { classify: JSON.stringify(revisedDeclaration) },
+                  evaluationMetadataJson: { classify: JSON.stringify(revisedEvaluations) },
                 }),
               }),
             ],
@@ -411,6 +420,12 @@ describe("operator transport boundary", () => {
     expect(JSON.parse(historical.topology!.classifierMetadataJson.classify)).toEqual(
       classifierDeclaration,
     );
+    expect(JSON.parse(current.workflows[0].evaluationMetadataJson.classify)).toEqual(
+      revisedEvaluations,
+    );
+    expect(JSON.parse(historical.topology!.evaluationMetadataJson.classify)).toEqual(
+      evaluationDeclaration,
+    );
     const createdUpdates = api.streamUpdates("operator-1", eventUlid(8));
     const created = await createdUpdates[Symbol.asyncIterator]().next();
     expect(created.value?.payload).toMatchObject({
@@ -418,7 +433,10 @@ describe("operator transport boundary", () => {
         change: {
           oneofKind: "runCreated",
           runCreated: {
-            topology: { classifierMetadataJson: historical.topology!.classifierMetadataJson },
+            topology: {
+              classifierMetadataJson: historical.topology!.classifierMetadataJson,
+              evaluationMetadataJson: historical.topology!.evaluationMetadataJson,
+            },
           },
         },
       },
@@ -854,5 +872,101 @@ describe("operator transport boundary", () => {
     await expect(api.readJsonDetail("classifier-1")).rejects.toThrow(/not bound/i);
     const agent = await api.listAgentEventPage(classifierRequest);
     expect(agent.records[0].invocationId).toBe("classifier-call");
+  });
+
+  it("displays backend score values without recomputing from rounded probabilities", async () => {
+    const result = {
+      classification: {
+        model: "jev-latest",
+        usage: { input_tokens: 10, output_tokens: 5 },
+        answers: {
+          grounded: { type: "noul", noul: 0.9 },
+          verdict: {
+            type: "choice",
+            choice: "pass",
+            probabilities: { pass: 0.8, fail: 0.2 },
+            confidence: 0.7,
+          },
+          quality: {
+            type: "score",
+            score: 1.57,
+            legend: { "0": "poor", "1": "fair", "2": "good" },
+            probabilities: { "0": 0.01, "1": 0.42, "2": 0.57 },
+            confidence: 0.6,
+          },
+        },
+      },
+      composites: { overall: 0.75 },
+    };
+    const api = apiWith({
+      listEvaluations: () => ({
+        response: Promise.resolve({
+          records: [
+            EvaluationRecordV2.create({
+              evaluationId: "eval-1",
+              runId: "run-1",
+              nodeId: "agent",
+              status: "completed",
+              createdAt: 1,
+              endedAt: 2,
+              resultJson: JSON.stringify(result),
+            }),
+          ],
+        }),
+      }),
+    });
+    expect(await api.listRunEvaluations("run-1")).toEqual([
+      {
+        evaluationId: "eval-1",
+        runId: "run-1",
+        nodeId: "agent",
+        status: "completed",
+        createdAt: 1,
+        endedAt: 2,
+        result,
+      },
+    ]);
+  });
+
+  it("returns no evaluation before submission and rejects multiple records for one step", async () => {
+    const api = apiWith({
+      listEvaluations: () => ({ response: Promise.resolve({ records: [] }) }),
+    });
+    expect(await api.listRunEvaluations("run-1")).toEqual([]);
+    const multiple = apiWith({
+      listEvaluations: () => ({
+        response: Promise.resolve({
+          records: [
+            EvaluationRecordV2.create({
+              evaluationId: "first",
+              nodeId: "agent",
+              status: "pending",
+            }),
+            EvaluationRecordV2.create({
+              evaluationId: "second",
+              nodeId: "agent",
+              status: "pending",
+            }),
+          ],
+        }),
+      }),
+    });
+    await expect(multiple.listRunEvaluations("run-1")).rejects.toThrow();
+  });
+
+  it("loads evaluations for distinct steps in a single run request", async () => {
+    const records = ["first", "second"].map((nodeId) =>
+      EvaluationRecordV2.create({
+        evaluationId: nodeId,
+        nodeId,
+        runId: "run-1",
+        status: "pending",
+      }),
+    );
+    const api = apiWith({
+      listEvaluations: () => ({ response: Promise.resolve({ records }) }),
+    });
+    const evaluations = await api.listRunEvaluations("run-1");
+    expect(evaluations.map((record) => record.nodeId)).toEqual(["first", "second"]);
   });
 });

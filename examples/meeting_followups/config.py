@@ -3,7 +3,15 @@
 from datetime import date
 from pathlib import Path
 
+from model_selection import select_models
+
 from .schema import Department, Destination
+
+_models = select_models(
+    lm_env="MEETING_FOLLOWUPS_MODEL", sub_lm_env="MEETING_FOLLOWUPS_SUB_MODEL"
+)
+MODEL = _models.lm
+SUB_MODEL = _models.sub_lm
 
 TRANSCRIPT_PATH = Path(__file__).with_name("meeting.txt")
 MEETING_TITLE = "Atlas cross-functional launch review"

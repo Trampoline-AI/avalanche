@@ -147,6 +147,7 @@ class FlowInfoV2(_message.Message):
         "webhook_url",
         "webhook_active",
         "classifier_metadata_json",
+        "evaluation_metadata_json",
     )
     class AgentMetadataJsonEntry(_message.Message):
         __slots__ = ("key", "value")
@@ -157,6 +158,14 @@ class FlowInfoV2(_message.Message):
         def __init__(self, key: _Optional[str] = ..., value: _Optional[str] = ...) -> None: ...
 
     class ClassifierMetadataJsonEntry(_message.Message):
+        __slots__ = ("key", "value")
+        KEY_FIELD_NUMBER: _ClassVar[int]
+        VALUE_FIELD_NUMBER: _ClassVar[int]
+        key: str
+        value: str
+        def __init__(self, key: _Optional[str] = ..., value: _Optional[str] = ...) -> None: ...
+
+    class EvaluationMetadataJsonEntry(_message.Message):
         __slots__ = ("key", "value")
         KEY_FIELD_NUMBER: _ClassVar[int]
         VALUE_FIELD_NUMBER: _ClassVar[int]
@@ -180,6 +189,7 @@ class FlowInfoV2(_message.Message):
     WEBHOOK_URL_FIELD_NUMBER: _ClassVar[int]
     WEBHOOK_ACTIVE_FIELD_NUMBER: _ClassVar[int]
     CLASSIFIER_METADATA_JSON_FIELD_NUMBER: _ClassVar[int]
+    EVALUATION_METADATA_JSON_FIELD_NUMBER: _ClassVar[int]
     workflow_selector: str
     display_name: str
     manifest_digest: str
@@ -196,6 +206,7 @@ class FlowInfoV2(_message.Message):
     webhook_url: str
     webhook_active: bool
     classifier_metadata_json: _containers.ScalarMap[str, str]
+    evaluation_metadata_json: _containers.ScalarMap[str, str]
     def __init__(
         self,
         workflow_selector: _Optional[str] = ...,
@@ -214,6 +225,7 @@ class FlowInfoV2(_message.Message):
         webhook_url: _Optional[str] = ...,
         webhook_active: bool = ...,
         classifier_metadata_json: _Optional[_Mapping[str, str]] = ...,
+        evaluation_metadata_json: _Optional[_Mapping[str, str]] = ...,
     ) -> None: ...
 
 class DiscoveryDiagnosticV2(_message.Message):
@@ -283,6 +295,7 @@ class WorkflowTopologyV2(_message.Message):
         "standard_step_docstring_lines",
         "classifier_metadata_json",
         "step_interface_json",
+        "evaluation_metadata_json",
     )
     class GraphEntry(_message.Message):
         __slots__ = ("key", "value")
@@ -352,6 +365,14 @@ class WorkflowTopologyV2(_message.Message):
         value: str
         def __init__(self, key: _Optional[str] = ..., value: _Optional[str] = ...) -> None: ...
 
+    class EvaluationMetadataJsonEntry(_message.Message):
+        __slots__ = ("key", "value")
+        KEY_FIELD_NUMBER: _ClassVar[int]
+        VALUE_FIELD_NUMBER: _ClassVar[int]
+        key: str
+        value: str
+        def __init__(self, key: _Optional[str] = ..., value: _Optional[str] = ...) -> None: ...
+
     NODE_IDS_FIELD_NUMBER: _ClassVar[int]
     GRAPH_FIELD_NUMBER: _ClassVar[int]
     NODE_TYPES_FIELD_NUMBER: _ClassVar[int]
@@ -361,6 +382,7 @@ class WorkflowTopologyV2(_message.Message):
     STANDARD_STEP_DOCSTRING_LINES_FIELD_NUMBER: _ClassVar[int]
     CLASSIFIER_METADATA_JSON_FIELD_NUMBER: _ClassVar[int]
     STEP_INTERFACE_JSON_FIELD_NUMBER: _ClassVar[int]
+    EVALUATION_METADATA_JSON_FIELD_NUMBER: _ClassVar[int]
     node_ids: _containers.RepeatedScalarFieldContainer[str]
     graph: _containers.MessageMap[str, NodeEdgesV2]
     node_types: _containers.ScalarMap[str, str]
@@ -370,6 +392,7 @@ class WorkflowTopologyV2(_message.Message):
     standard_step_docstring_lines: _containers.ScalarMap[str, str]
     classifier_metadata_json: _containers.ScalarMap[str, str]
     step_interface_json: _containers.ScalarMap[str, str]
+    evaluation_metadata_json: _containers.ScalarMap[str, str]
     def __init__(
         self,
         node_ids: _Optional[_Iterable[str]] = ...,
@@ -381,6 +404,7 @@ class WorkflowTopologyV2(_message.Message):
         standard_step_docstring_lines: _Optional[_Mapping[str, str]] = ...,
         classifier_metadata_json: _Optional[_Mapping[str, str]] = ...,
         step_interface_json: _Optional[_Mapping[str, str]] = ...,
+        evaluation_metadata_json: _Optional[_Mapping[str, str]] = ...,
     ) -> None: ...
 
 class ScanTargetV2(_message.Message):
@@ -479,6 +503,61 @@ class CancelRunResponseV2(_message.Message):
     RUN_ID_FIELD_NUMBER: _ClassVar[int]
     run_id: str
     def __init__(self, run_id: _Optional[str] = ...) -> None: ...
+
+class ListEvaluationsRequestV2(_message.Message):
+    __slots__ = ("run_id", "node_id")
+    RUN_ID_FIELD_NUMBER: _ClassVar[int]
+    NODE_ID_FIELD_NUMBER: _ClassVar[int]
+    run_id: str
+    node_id: str
+    def __init__(self, run_id: _Optional[str] = ..., node_id: _Optional[str] = ...) -> None: ...
+
+class EvaluationRecordV2(_message.Message):
+    __slots__ = (
+        "evaluation_id",
+        "run_id",
+        "node_id",
+        "status",
+        "created_at",
+        "ended_at",
+        "result_json",
+        "error",
+    )
+    EVALUATION_ID_FIELD_NUMBER: _ClassVar[int]
+    RUN_ID_FIELD_NUMBER: _ClassVar[int]
+    NODE_ID_FIELD_NUMBER: _ClassVar[int]
+    STATUS_FIELD_NUMBER: _ClassVar[int]
+    CREATED_AT_FIELD_NUMBER: _ClassVar[int]
+    ENDED_AT_FIELD_NUMBER: _ClassVar[int]
+    RESULT_JSON_FIELD_NUMBER: _ClassVar[int]
+    ERROR_FIELD_NUMBER: _ClassVar[int]
+    evaluation_id: str
+    run_id: str
+    node_id: str
+    status: str
+    created_at: float
+    ended_at: float
+    result_json: str
+    error: str
+    def __init__(
+        self,
+        evaluation_id: _Optional[str] = ...,
+        run_id: _Optional[str] = ...,
+        node_id: _Optional[str] = ...,
+        status: _Optional[str] = ...,
+        created_at: _Optional[float] = ...,
+        ended_at: _Optional[float] = ...,
+        result_json: _Optional[str] = ...,
+        error: _Optional[str] = ...,
+    ) -> None: ...
+
+class EvaluationListV2(_message.Message):
+    __slots__ = ("records",)
+    RECORDS_FIELD_NUMBER: _ClassVar[int]
+    records: _containers.RepeatedCompositeFieldContainer[EvaluationRecordV2]
+    def __init__(
+        self, records: _Optional[_Iterable[_Union[EvaluationRecordV2, _Mapping]]] = ...
+    ) -> None: ...
 
 class RunSummaryV2(_message.Message):
     __slots__ = (

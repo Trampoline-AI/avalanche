@@ -177,6 +177,25 @@ For a fan-in node, `open(..., upstream_receipts=...)` receives parent receipts i
 dependency order. Only terminal-node receipts are fetched and exposed through
 `RunHandle.execution_receipts()`.
 
+### Native agent-step evaluations
+
+Evaluation observation is separate from the execution-service lifecycle and its
+commit receipts. In operator-managed Local and Ray execution, the first successful
+agent invocation to return in each step submits its actual call arguments, complete
+DSPy prediction, and its terminal trace event for background evaluation. The step's
+own return value remains separate. Evidence is snapshotted before the prediction
+returns to the step body, so later mutations cannot change the observed execution.
+Later agent calls do not replace or resubmit it; step postprocessing failure does
+not cancel an already-submitted evaluation.
+
+Selectors, Jev calls, and composites run independently of workflow scheduling.
+Their pending/results/errors neither gate downstream work nor change workflow
+status. Records remain available after the coordinator completes, but only in
+the running operator's memory; there is no restart recovery. Embedded `.run()`
+reports declarations as **not evaluated**. See
+[native evaluations](agent-steps.md#native-evaluations) for authoring, credentials,
+result accessors, and browser examples.
+
 ## Failure and cleanup contract
 
 The lifecycle is strict:

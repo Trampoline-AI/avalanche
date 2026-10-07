@@ -8,7 +8,7 @@ import {
   useRef,
   useState,
 } from "react";
-import { Bot, Check, ListFilter, X } from "lucide-react";
+import { Bot, Check, FlaskConical, ListFilter, X } from "lucide-react";
 
 import {
   Background,
@@ -32,8 +32,10 @@ import {
 
 import type { FlowInfoMsg, NodeSnapshotMsg, WorkflowTopologyMsg } from "./model";
 import { isUnknownRecord } from "./guards";
-import { decodeClassifierDeclaration } from "./classifier";
+import { decodeClassifierDeclaration, decodeEvaluationDeclaration } from "./classifier";
 import { decodeStepInterface } from "./stepInterface";
+import type { EvaluationRecord } from "./evaluations";
+import { CompositeSummary } from "./CompositeSummary";
 
 interface FieldMetadata {
   name: string;
@@ -71,6 +73,9 @@ interface CardData extends Record<string, unknown> {
   isAgent: boolean;
   isClassifier: boolean;
   classifierSummary?: string;
+  evaluationCount?: number;
+  evaluationDeclarationError?: boolean;
+  composites?: Record<string, number>;
   identity?: string;
   status?: string;
   error?: string;
@@ -241,6 +246,8 @@ const WorkflowNodeCard = memo(({ data, selected }: NodeProps<Node<CardData>>) =>
   const { screenToFlowPosition, setCenter } = useReactFlow();
   const { zoom } = useViewport();
   const isCompact = zoom < NODE_DETAIL_ZOOM_THRESHOLD;
+  const hasEvaluations = data.evaluationCount !== undefined || data.evaluationDeclarationError;
+  const hasEvaluationRow = hasEvaluations || Boolean(data.composites);
   const openAndFocusNode = useCallback(
     (event: MouseEvent<HTMLButtonElement>) => {
       const bounds = event.currentTarget.getBoundingClientRect();
@@ -281,7 +288,7 @@ const WorkflowNodeCard = memo(({ data, selected }: NodeProps<Node<CardData>>) =>
           : "blueprint";
   return (
     <article
-      className={`node-card ${isCompact ? "node-card--compact min-h-[100px] justify-center gap-0 px-4 py-3" : "min-h-[130px] gap-2 p-4"} relative flex w-[360px] cursor-pointer flex-col items-stretch rounded-xl border border-line bg-panel text-left shadow-[0_8px_24px_rgba(25,39,32,.08)] transition-[border-color,box-shadow,transform] duration-150 ease-out hover:-translate-y-px hover:border-acid hover:shadow-[0_10px_28px_rgba(25,39,32,.12)] motion-reduce:transition-none ${selected && data.status !== "running" ? "border-acid!" : ""} ${designationClass} ${statusClass}`}
+      className={`node-card ${isCompact ? `node-card--compact ${hasEvaluationRow ? "min-h-[130px]" : "min-h-[100px]"} justify-center gap-0 px-4 py-3` : "min-h-[130px] gap-2 p-4"} relative flex w-[360px] cursor-pointer flex-col items-stretch rounded-xl border border-line bg-panel text-left shadow-[0_8px_24px_rgba(25,39,32,.08)] transition-[border-color,box-shadow,transform] duration-150 ease-out hover:-translate-y-px hover:border-acid hover:shadow-[0_10px_28px_rgba(25,39,32,.12)] motion-reduce:transition-none ${selected && data.status !== "running" ? "border-acid!" : ""} ${designationClass} ${statusClass}`}
       data-node-kind={data.isClassifier ? "classifier" : data.isAgent ? "agent" : "standard"}
       aria-disabled={data.inspectionDisabled || undefined}
     >
@@ -305,6 +312,13 @@ const WorkflowNodeCard = memo(({ data, selected }: NodeProps<Node<CardData>>) =>
         onClick={openAndFocusNode}
         disabled={data.inspectionDisabled}
         aria-label={`Inspect ${data.label}${data.identity ? ` ${data.identity}` : ""}`}
+        aria-description={
+          data.evaluationDeclarationError
+            ? "Evaluation declaration unavailable"
+            : data.evaluationCount !== undefined
+              ? `${data.evaluationCount} evaluation ${data.evaluationCount === 1 ? "metric" : "metrics"} configured`
+              : undefined
+        }
       />
       <header
         className={`node-header relative ${
@@ -314,12 +328,12 @@ const WorkflowNodeCard = memo(({ data, selected }: NodeProps<Node<CardData>>) =>
         }`}
       >
         <span
-          className={`${data.isClassifier || data.isAgent ? `mb-1 inline-flex items-center gap-1 rounded px-1.5 py-0.5 ${data.isClassifier ? "node-classifier-identity bg-classifier-light text-classifier" : "node-agent-identity bg-agent/10 text-agent"}` : "node-card-meta text-secondary"} node-kicker font-mono text-[8px] tracking-[.12em] uppercase`}
+          className={`${data.isClassifier || data.isAgent ? `mb-1 inline-flex items-center gap-1 rounded px-1.5 py-0.5 ${data.isClassifier ? "node-classifier-identity bg-classifier-light text-classifier" : "node-agent-identity bg-agent/10 text-agent"}` : "node-card-meta text-secondary"} node-kicker font-mono ${isCompact && data.isAgent ? "text-sm" : "text-[8px]"} tracking-[.12em] uppercase`}
         >
           {data.isClassifier ? (
             <ListFilter aria-hidden="true" className="size-3" />
           ) : data.isAgent ? (
-            <Bot aria-hidden="true" className="size-3" />
+            <Bot aria-hidden="true" className={isCompact ? "size-4" : "size-3"} />
           ) : null}
           {data.isClassifier ? "Classifier" : data.isAgent ? "Agent" : data.nodeType}
         </span>
@@ -364,6 +378,44 @@ const WorkflowNodeCard = memo(({ data, selected }: NodeProps<Node<CardData>>) =>
           </span>
         )}
       </header>
+      {hasEvaluationRow && (
+        <div
+          className={`node-evaluation-row flex min-w-0 items-center gap-2 ${isCompact ? "absolute inset-x-4 bottom-3" : "self-stretch"}`}
+        >
+          {hasEvaluations && (
+            <span
+              className={`node-evaluation-badge inline-flex shrink-0 items-center gap-1 rounded border border-classifier/20 bg-classifier-light px-1.5 py-0.5 font-mono text-classifier ${isCompact ? "text-sm" : "text-[9px]"}`}
+              aria-label={
+                data.evaluationDeclarationError
+                  ? "Evaluation declaration unavailable"
+                  : `${data.evaluationCount} evaluation metrics configured`
+              }
+              title={
+                data.evaluationDeclarationError
+                  ? "Evaluation declaration unavailable"
+                  : "Configured operator-only evaluations; not a run result"
+              }
+            >
+              <FlaskConical aria-hidden="true" className={isCompact ? "size-4" : "size-3"} />
+              {data.evaluationDeclarationError
+                ? isCompact
+                  ? "!"
+                  : "Evaluations · unavailable"
+                : isCompact
+                  ? data.evaluationCount
+                  : `Evaluations · ${data.evaluationCount}`}
+            </span>
+          )}
+          {data.composites && (
+            <CompositeSummary
+              composites={data.composites}
+              compact={isCompact}
+              maxVisible={3}
+              className={`node-composite-summary flex min-w-0 flex-1 items-center justify-end gap-1 text-right font-mono ${isCompact ? "text-sm" : "text-[9px]"}`}
+            />
+          )}
+        </div>
+      )}
       {data.startedAt && (
         <NodeDuration
           startedAt={data.startedAt}
@@ -485,6 +537,7 @@ type TopologyView = Pick<
   | "agentInstructionLines"
   | "standardStepDocstringLines"
   | "classifierMetadataJson"
+  | "evaluationMetadataJson"
   | "stepInterfaceJson"
 >;
 
@@ -543,6 +596,7 @@ interface GraphCanvasProps {
   workflow?: FlowInfoMsg;
   runTopology?: WorkflowTopologyMsg;
   runNodes?: NodeSnapshotMsg[];
+  evaluations?: Record<string, EvaluationRecord>;
   bottomRightPanel?: ReactNode;
   selectedNodeId?: string;
   onClearNode?: () => void;
@@ -554,6 +608,7 @@ function GraphCanvasView({
   workflow,
   runTopology,
   runNodes = [],
+  evaluations,
   bottomRightPanel,
   selectedNodeId,
   onClearNode,
@@ -572,6 +627,7 @@ function GraphCanvasView({
       agentInstructionLines: {},
       standardStepDocstringLines: workflow.standardStepDocstringLines,
       classifierMetadataJson: workflow.classifierMetadataJson,
+      evaluationMetadataJson: workflow.evaluationMetadataJson,
       stepInterfaceJson: workflow.stepInterfaceJson,
     };
   }, [runTopology, workflow]);
@@ -693,6 +749,21 @@ function GraphCanvasView({
       ),
     [classifierMetadata],
   );
+  const evaluationMetadata = topology?.evaluationMetadataJson;
+  const evaluationCards = useMemo<Record<string, { count?: number; error: boolean }>>(
+    () =>
+      Object.fromEntries(
+        Object.entries(evaluationMetadata ?? {}).map(([nodeId, raw]) => {
+          try {
+            const declaration = decodeEvaluationDeclaration(raw);
+            return [nodeId, { count: Object.keys(declaration.metrics).length, error: false }];
+          } catch {
+            return [nodeId, { count: undefined, error: true }];
+          }
+        }),
+      ),
+    [evaluationMetadata],
+  );
   const stepInterfaces = topology?.stepInterfaceJson;
   const standardFields = useMemo(
     () =>
@@ -749,6 +820,7 @@ function GraphCanvasView({
         topology.agentInstructionLines[nodeId] ||
         topology.standardStepDocstringLines[nodeId] ||
         (!runTopology ? firstInstructionLine(agentDeclaration?.instructions) : undefined);
+      const evaluation = runTopology ? evaluations?.[nodeId] : undefined;
       return {
         id: nodeId,
         selected: nodeId === selectedNodeId,
@@ -765,6 +837,10 @@ function GraphCanvasView({
           isAgent: agentNodeIds.has(nodeId),
           isClassifier: Object.hasOwn(topology.classifierMetadataJson, nodeId),
           classifierSummary: classifierCard?.summary,
+          evaluationCount: evaluationCards[nodeId]?.count,
+          evaluationDeclarationError: evaluationCards[nodeId]?.error,
+          composites:
+            evaluation?.status === "completed" ? evaluation.result.composites : undefined,
           status: runtimeNode?.status,
           error: runtimeNode?.error,
           startedAt: runtimeNode?.startedAt || undefined,
@@ -781,6 +857,8 @@ function GraphCanvasView({
   }, [
     agentNodeIds,
     classifierCards,
+    evaluationCards,
+    evaluations,
     standardFields,
     inspectionDisabled,
     nodeMeasurements,
@@ -860,6 +938,7 @@ export const GraphCanvas = memo(
   (left, right) =>
     left.workflow === right.workflow &&
     left.runTopology === right.runTopology &&
+    left.evaluations === right.evaluations &&
     left.bottomRightPanel === right.bottomRightPanel &&
     left.selectedNodeId === right.selectedNodeId &&
     left.onClearNode === right.onClearNode &&
