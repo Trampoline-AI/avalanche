@@ -164,6 +164,8 @@ The example asks `codex-lm` to resolve its auth profile exactly as a model call
 would: the `CODEX_LM_AUTH_PROFILE` override, saved-profile rotation, or the active
 profile. It counts as set up when that profile's `auth.json` exists. The Codex CLI's
 own `~/.codex/auth.json` counts only when `CODEX_LM_ENABLE_LEGACY_AUTH_FALLBACK=1`.
+A disabled profile, or rotation with no enabled profiles, counts as not set up, so
+the API keys are tried next.
 To create a profile:
 
 ```bash
@@ -177,7 +179,8 @@ uv run codex-lm auth login NAME
 can discover it, but the first agent call fails with Codex LM's login instructions.
 Classifier steps and evaluations separately need `TYPESAFE_API_KEY`.
 
-**Overrides.** Per-example variables replace the automatic choice. Give any LiteLLM
+**Overrides.** Per-example variables replace the automatic choice and are checked
+first; with both set, Codex LM and the API keys are not checked at all. Give any LiteLLM
 model ID and set that provider's credentials:
 
 | Example | Main model | Sub-model |

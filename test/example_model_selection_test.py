@@ -60,3 +60,41 @@ def test_select_models_reads_keys_from_project_dotenv(select_models, monkeypatch
     (tmp_path / ".env").write_text("ANTHROPIC_API_KEY=from-dotenv\n", encoding="utf-8")
 
     assert select_models().provider == "anthropic"
+
+
+def _enable_rotation_without_profiles(home: Path) -> None:
+    # codex-lm raises ValueError for this unusable state, as for a disabled profile.
+    state = home / ".codex-lm" / "rotation.json"
+    state.parent.mkdir()
+    state.write_text('{"enabled": true}', encoding="utf-8")
+
+
+def test_unusable_codex_profile_falls_back_to_api_key(select_models, monkeypatch, tmp_path):
+    _enable_rotation_without_profiles(tmp_path)
+    monkeypatch.setenv("OPENAI_API_KEY", "k")
+
+    assert select_models().provider == "openai"
+
+
+def test_overrides_win_without_probing_codex(select_models, monkeypatch, tmp_path):
+    _enable_rotation_without_profiles(tmp_path)
+    monkeypatch.setenv("EXAMPLE_MODEL", "openai/custom")
+    monkeypatch.setenv("EXAMPLE_SUB_MODEL", "openai/custom-mini")
+
+    selection = select_models(lm_env="EXAMPLE_MODEL", sub_lm_env="EXAMPLE_SUB_MODEL")
+
+    assert (selection.provider, selection.lm, selection.sub_lm) == (
+        "override",
+        "openai/custom",
+        "openai/custom-mini",
+    )
+
+
+def test_single_override_keeps_automatic_choice_for_the_other_model(select_models, monkeypatch):
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "k")
+    monkeypatch.setenv("EXAMPLE_SUB_MODEL", "openai/custom-mini")
+
+    selection = select_models(lm_env="EXAMPLE_MODEL", sub_lm_env="EXAMPLE_SUB_MODEL")
+
+    assert (selection.provider, selection.sub_lm) == ("anthropic", "openai/custom-mini")
+    assert selection.lm.startswith("anthropic/")
