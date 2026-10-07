@@ -284,6 +284,35 @@ async def test_inline_helper_cannot_claim_enclosing_step_evaluation(evaluations,
 
 
 @pytest.mark.asyncio
+async def test_inline_agent_captures_its_own_evaluation(evaluations, predictor):
+    @ava.workflow
+    def flow():
+        return ava.agent.step(EchoSignature, inputs={"text": "inline"}, evaluations=evaluations)
+
+    inline_call = next(iter(flow().nodes.values())).node.fn
+    assert inline_call.__agent_step__.evaluations is evaluations
+
+    submissions = []
+    with capture_evaluations(submissions.append) as errors:
+        assert await inline_call(text="inline") == ("INLINE", Report(summary="summary: inline"))
+
+    assert errors == []
+    [submission] = submissions
+    assert submission.evaluations is evaluations
+    assert submission.context.inputs == {"text": "inline"}
+    assert submission.context.output.answer == "INLINE"
+
+
+def test_inline_agent_rejects_non_evaluations_declaration():
+    @ava.workflow
+    def flow():
+        return ava.agent.step(EchoSignature, inputs={"text": "x"}, evaluations={"quality": 1})
+
+    with pytest.raises(TypeError, match="ava.Evaluations"):
+        flow()
+
+
+@pytest.mark.asyncio
 async def test_first_successful_completion_wins_without_gating_later_calls(
     evaluations,
     monkeypatch,
