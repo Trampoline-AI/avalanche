@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 0.10.0
+
 - Inline agent nodes accept `evaluations=` too:
   `ava.agent.step(Signature, inputs=..., evaluations=ava.Evaluations(...))` inside a
   workflow now records operator evaluations for that node, the same way decorated
