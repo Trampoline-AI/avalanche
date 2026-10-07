@@ -409,7 +409,9 @@ agent code, and outputs. Reduce the evidence selected for that metric and rerun.
 Run the repository's real-agent example from the repository root:
 
 ```bash
-# Set OPENAI_API_KEY and TYPESAFE_API_KEY in the environment (or project .env).
+# Log in with `uv run codex-lm auth login NAME`, or set OPENAI_API_KEY or
+# ANTHROPIC_API_KEY (see examples/README.md#model-selection), plus TYPESAFE_API_KEY,
+# in the environment or project .env.
 uv run ava dev examples/evaluations_workflow.py
 ```
 
