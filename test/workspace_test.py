@@ -23,6 +23,188 @@ def _workspace_files(workspace: ava.Workspace) -> dict[str, bytes]:
     }
 
 
+def test_workspace_value_pickle_state_is_unchanged():
+    workspace = ava.Workspace()
+    state = {
+        "__dict__": {"entries": ()},
+        "__pydantic_extra__": None,
+        "__pydantic_fields_set__": set(),
+        "__pydantic_private__": {
+            "_materialized_path": None,
+            "_materialized_identity": None,
+        },
+    }
+    assert workspace.__getstate__() == state
+    restored = ava.Workspace.__new__(ava.Workspace)
+    restored.__setstate__(state)
+    for value in (restored, pickle.loads(pickle.dumps(workspace))):
+        assert value.reference is None
+        assert not value.is_reference
+        assert value.model_dump() == {"version": 1, "entries": []}
+        assert value.__getstate__() == state
+        with pytest.raises(RuntimeError):
+            _ = value.path
+
+
+def test_directory_workspace_uses_host_path_without_capture(tmp_path, monkeypatch):
+    (tmp_path / "keep.txt").write_text("host-owned")
+    alias = tmp_path / "alias"
+    alias.symlink_to(tmp_path, target_is_directory=True)
+    path = alias / ".." / tmp_path.name
+
+    def unexpected_capture(*args, **kwargs):
+        raise AssertionError("reference workspace attempted to capture or materialize")
+
+    monkeypatch.setattr(ava.Workspace, "from_path", unexpected_capture)
+    monkeypatch.setattr(workspace_module.tempfile, "mkdtemp", unexpected_capture)
+    monkeypatch.setattr(workspace_module._MaterializationOwner, "register", unexpected_capture)
+    workspace = ava.Workspace.from_directory(path, reference="opaque: host / data")
+    assert workspace.path == path
+    assert workspace.reference == "opaque: host / data"
+    assert workspace.is_reference
+    assert workspace.entries == ()
+    assert workspace.snapshot().path == path
+    assert workspace.snapshot().reference == workspace.reference
+    assert (
+        workspace_module.run_workspace_invocation(lambda value: value, workspace) is workspace
+    )
+    assert workspace.path.joinpath("keep.txt").read_text() == "host-owned"
+    assert ava.Workspace().reference is None
+    assert not ava.Workspace().is_reference
+
+
+@pytest.mark.parametrize("kind", ["relative", "missing", "file"])
+def test_directory_workspace_requires_existing_absolute_directory(tmp_path, kind):
+    path = tmp_path / kind
+    if kind == "relative":
+        path = Path(".")
+    elif kind == "file":
+        path.write_text("file")
+    with pytest.raises(ValueError):
+        ava.Workspace.from_directory(path, reference="valid")
+
+
+@pytest.mark.parametrize("reference", ["", "x" * 1025, "null\x00byte", None, 1, b"bytes"])
+def test_directory_workspace_rejects_invalid_reference(tmp_path, reference):
+    with pytest.raises(ValueError):
+        ava.Workspace.from_directory(tmp_path, reference=reference)
+    with pytest.raises(ValueError):
+        ava.Workspace.model_validate({"version": 1, "reference": reference})
+
+
+def test_reference_workspace_serialization_is_path_free_and_unbound(tmp_path):
+    reference = "\u00e9" * 1024
+    workspace = ava.Workspace.from_directory(str(tmp_path), reference=reference)
+    manifest = {"version": 1, "reference": reference}
+
+    def unexpected_serializer(value):
+        raise AssertionError("reference workspace called the value serializer hook")
+
+    for mode in ("python", "json"):
+        assert workspace.model_dump(mode=mode) == manifest
+        assert (
+            workspace.model_dump(
+                mode=mode,
+                context={
+                    workspace_module._WORKSPACE_SERIALIZER_CONTEXT_KEY: unexpected_serializer
+                },
+            )
+            == manifest
+        )
+    assert workspace.manifest() == manifest
+    assert workspace.__getstate__() == manifest
+    assert json.loads(workspace.model_dump_json()) == manifest
+    assert str(tmp_path).encode() not in pickle.dumps(workspace)
+    for restored in (
+        ava.Workspace.model_validate(manifest),
+        ava.Workspace.model_validate_json(workspace.model_dump_json()),
+        ava.Workspace.from_manifest(manifest),
+        pickle.loads(pickle.dumps(workspace)),
+    ):
+        assert restored.reference == reference
+        assert restored.is_reference
+        assert restored.entries == ()
+        with pytest.raises(
+            RuntimeError, match="^workspace reference is not bound to a directory$"
+        ):
+            _ = restored.path
+        with pytest.raises(
+            RuntimeError, match="^workspace reference is not bound to a directory$"
+        ):
+            restored.snapshot()
+    assert workspace.path == tmp_path
+    assert tmp_path.is_dir()
+
+
+@pytest.mark.parametrize("entries", [(), (WorkspaceEntry(path="empty", kind="directory"),)])
+def test_reference_workspace_rejects_entries(entries):
+    with pytest.raises(ValueError):
+        ava.Workspace(entries=entries, reference="ref")
+    with pytest.raises(ValueError):
+        ava.Workspace.model_validate({"version": 1, "reference": "ref", "entries": []})
+
+
+def test_reference_workspace_transport_emits_no_attachments(tmp_path):
+    class Request(ava.BaseInput):
+        workspace: ava.Workspace
+
+    workspace = ava.Workspace.from_directory(tmp_path, reference="host-managed:example")
+    manifest = {"version": 1, "reference": workspace.reference}
+    request = Request(workspace=workspace)
+    assert json.loads(_json_payload(request))["workspace"] == manifest
+    for value in (workspace, request, {"workspace": workspace}):
+        encoded = encode_workflow_result(value)
+        assert encoded.files == ()
+        assert str(tmp_path) not in encoded.value_json
+        assert "host-managed:example" in encoded.value_json
+    restored = decode_workflow_result(encode_workflow_result({"workspace": workspace}))
+    assert restored["workspace"].manifest() == manifest
+
+
+@pytest.mark.parametrize("fail", [False, True])
+def test_reference_workspace_local_workflow_preserves_host_directory(tmp_path, fail):
+    workspace = ava.Workspace.from_directory(tmp_path, reference="host-managed:workflow")
+
+    class Result(BaseModel):
+        workspaces: list[ava.Workspace]
+
+    @ava.source
+    def write():
+        workspace.path.joinpath("created.txt").write_text("created")
+        return {"result": Result(workspaces=[workspace])}
+
+    @ava.step
+    def read(result):
+        received = result["result"].workspaces[0]
+        assert received is workspace
+        assert received.path.joinpath("created.txt").read_text() == "created"
+        if fail:
+            raise RuntimeError("node failed")
+        return received
+
+    @ava.workflow
+    def flow():
+        return read(write())
+
+    if fail:
+        with pytest.raises(RuntimeError, match="node failed"):
+            flow().run(executor=ava.LocalExecutor()).result()
+    else:
+        assert flow().run(executor=ava.LocalExecutor()).result() is workspace
+    assert workspace.path == tmp_path
+    assert tmp_path.joinpath("created.txt").read_text() == "created"
+
+
+def test_unbound_reference_passes_return_capture_without_binding():
+    from runtime.executor import _normalize_distributed_result
+
+    workspace = ava.Workspace.model_validate({"version": 1, "reference": "remote:example"})
+    assert (
+        workspace_module.run_workspace_invocation(lambda value: value, workspace) is workspace
+    )
+    assert _normalize_distributed_result(workspace) is workspace
+
+
 def test_workspace_rejects_source_and_child_symlinks(tmp_path):
     source = tmp_path / "source"
     source.mkdir()

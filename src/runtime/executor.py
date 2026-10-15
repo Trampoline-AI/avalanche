@@ -64,7 +64,7 @@ def _normalize_distributed_result(value: Any) -> Any:
             table_identity=value.table_identity,
         )
     if isinstance(value, Workspace):
-        return value.snapshot()
+        return value if value.is_reference else value.snapshot()
     if isinstance(value, tuple):
         return tuple(_normalize_distributed_result(v) for v in value)
     if isinstance(value, list):

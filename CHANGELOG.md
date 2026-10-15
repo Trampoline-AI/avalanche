@@ -2,6 +2,18 @@
 
 ## Unreleased
 
+- Add directory-backed reference workspaces for host-managed storage; see 0.11.0.
+
+## 0.11.0
+
+- Add `Workspace.from_directory(path, reference=...)` to use an existing absolute
+  directory without copying its contents. Reference workspaces keep their host-owned
+  lifetime across node success and failure; value workspaces are unchanged.
+- Serialize reference workspaces as a versioned, opaque reference without paths or
+  file contents. Deserialized references are unbound until the host supplies a directory.
+- Document both workspace forms and add a repeatable two-step peak-RSS benchmark
+  comparing reference and value workspaces with a 200 MB file.
+
 ## 0.10.0
 
 - Inline agent nodes accept `evaluations=` too:
