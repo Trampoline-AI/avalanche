@@ -630,7 +630,12 @@ class Workspace(BaseModel):
             return self.manifest()
         self._manifest_for_serialization()
         state = super().__getstate__()
+        fields = dict(state["__dict__"])
+        fields.pop("reference")
+        state["__dict__"] = fields
+        state["__pydantic_fields_set__"] = state["__pydantic_fields_set__"] - {"reference"}
         private = dict(state.get("__pydantic_private__") or {})
+        private.pop("_directory_path")
         private["_materialized_path"] = None
         private["_materialized_identity"] = None
         state["__pydantic_private__"] = private
@@ -641,6 +646,11 @@ class Workspace(BaseModel):
             restored = type(self).from_manifest(state)
             super().__setstate__(BaseModel.__getstate__(restored))
             return
+        state = {
+            **state,
+            "__dict__": {**state["__dict__"], "reference": None},
+            "__pydantic_private__": {**state["__pydantic_private__"], "_directory_path": None},
+        }
         super().__setstate__(state)
 
 

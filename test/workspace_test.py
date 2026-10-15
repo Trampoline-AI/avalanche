@@ -23,6 +23,29 @@ def _workspace_files(workspace: ava.Workspace) -> dict[str, bytes]:
     }
 
 
+def test_workspace_value_pickle_state_is_unchanged():
+    workspace = ava.Workspace()
+    state = {
+        "__dict__": {"entries": ()},
+        "__pydantic_extra__": None,
+        "__pydantic_fields_set__": set(),
+        "__pydantic_private__": {
+            "_materialized_path": None,
+            "_materialized_identity": None,
+        },
+    }
+    assert workspace.__getstate__() == state
+    restored = ava.Workspace.__new__(ava.Workspace)
+    restored.__setstate__(state)
+    for value in (restored, pickle.loads(pickle.dumps(workspace))):
+        assert value.reference is None
+        assert not value.is_reference
+        assert value.model_dump() == {"version": 1, "entries": []}
+        assert value.__getstate__() == state
+        with pytest.raises(RuntimeError):
+            _ = value.path
+
+
 def test_directory_workspace_uses_host_path_without_capture(tmp_path, monkeypatch):
     (tmp_path / "keep.txt").write_text("host-owned")
     alias = tmp_path / "alias"
