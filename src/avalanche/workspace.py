@@ -1,4 +1,4 @@
-"""Portable directory trees used as Avalanche workflow values."""
+"""Portable directory trees and host-managed directory references."""
 
 from __future__ import annotations
 
@@ -239,6 +239,15 @@ def _normalized_path(value: str) -> str:
     return value
 
 
+def _validated_reference(value: str) -> str:
+    if type(value) is not str or not value or len(value) > 1024 or "\x00" in value:
+        raise ValueError(
+            "Workspace reference must be a non-empty string of at most 1024 "
+            "characters without NUL"
+        )
+    return value
+
+
 class WorkspaceEntry(BaseModel):
     """One regular file or explicit directory in a portable workspace tree."""
 
@@ -285,10 +294,11 @@ class WorkspaceEntry(BaseModel):
 
 
 class Workspace(BaseModel):
-    """A portable recursive collection of regular files.
+    """A portable file tree or a reference to a directory provided by the host.
 
-    ``path`` exists only while an executor is running user node code. The
-    serialized value is the manifest and file contents, never that local path.
+    Value workspaces expose a temporary ``path`` during node execution. Bound
+    reference workspaces expose the host directory without copying or owning it.
+    Neither form serializes a host-local path.
     """
 
     model_config = ConfigDict(
@@ -299,6 +309,8 @@ class Workspace(BaseModel):
     )
 
     entries: tuple[WorkspaceEntry, ...] = ()
+    reference: str | None = None
+    _directory_path: Path | None = PrivateAttr(default=None)
     _materialized_path: Path | None = PrivateAttr(default=None)
     _materialized_identity: tuple[int, int] | None = PrivateAttr(default=None)
 
@@ -307,14 +319,20 @@ class Workspace(BaseModel):
     def _decode_manifest(cls, value: Any) -> Any:
         if isinstance(value, cls):
             return value
-        if type(value) is not dict or "version" not in value:
+        if type(value) is not dict:
+            return value
+        if value.get("reference") is not None and "entries" in value:
+            raise ValueError("Workspace cannot have both entries and a reference")
+        if "version" not in value:
             return value
         if (
-            set(value) != {"version", "entries"}
+            set(value) not in ({"version", "entries"}, {"version", "reference"})
             or type(value["version"]) is not int
             or value["version"] != _MANIFEST_VERSION
         ):
             raise ValueError("Unsupported workspace manifest")
+        if "reference" in value:
+            return {"reference": _validated_reference(value["reference"])}
         raw_entries = value["entries"]
         if type(raw_entries) is not list:
             raise ValueError("Workspace manifest entries must be a list")
@@ -349,6 +367,10 @@ class Workspace(BaseModel):
 
     @model_validator(mode="after")
     def _validate_tree(self) -> "Workspace":
+        if self.reference is not None:
+            _validated_reference(self.reference)
+            if self.entries:
+                raise ValueError("Workspace cannot have both entries and a reference")
         paths: dict[str, WorkspaceEntry] = {}
         for entry in self.entries:
             if entry.path in paths:
@@ -366,6 +388,22 @@ class Workspace(BaseModel):
         entries = tuple(sorted(self.entries, key=lambda item: item.path))
         object.__setattr__(self, "entries", entries)
         return self
+
+    @property
+    def is_reference(self) -> bool:
+        return self.reference is not None
+
+    @classmethod
+    def from_directory(cls, path: str | Path, *, reference: str) -> "Workspace":
+        """Bind a host-owned directory without capturing its contents or lifetime."""
+        workspace = cls(reference=_validated_reference(reference))
+        root = Path(path)
+        if not root.is_absolute():
+            raise ValueError("Workspace directory path must be absolute")
+        if not root.is_dir():
+            raise ValueError("Workspace directory must be an existing directory")
+        workspace._directory_path = root
+        return workspace
 
     @classmethod
     def from_path(cls, path: str | Path) -> "Workspace":
@@ -466,7 +504,7 @@ class Workspace(BaseModel):
     def from_manifest(cls, manifest: dict[str, Any]) -> "Workspace":
         if (
             type(manifest) is not dict
-            or set(manifest) != {"version", "entries"}
+            or set(manifest) not in ({"version", "entries"}, {"version", "reference"})
             or type(manifest["version"]) is not int
             or manifest["version"] != _MANIFEST_VERSION
         ):
@@ -474,6 +512,13 @@ class Workspace(BaseModel):
         return cls.model_validate(manifest)
 
     def manifest(self) -> dict[str, Any]:
+        if self.is_reference:
+            if self.entries:
+                raise ValueError("Workspace cannot have both entries and a reference")
+            return {
+                "version": _MANIFEST_VERSION,
+                "reference": _validated_reference(self.reference),
+            }
         manifest = {
             "version": _MANIFEST_VERSION,
             "entries": [entry.manifest_item() for entry in self.entries],
@@ -485,6 +530,8 @@ class Workspace(BaseModel):
 
     @model_serializer(mode="wrap")
     def _serialize(self, handler, info):
+        if self.is_reference:
+            return self.manifest()
         context = info.context
         serializer = None
         if isinstance(context, dict):
@@ -495,6 +542,10 @@ class Workspace(BaseModel):
 
     @property
     def path(self) -> Path:
+        if self.is_reference:
+            if self._directory_path is None:
+                raise RuntimeError("workspace reference is not bound to a directory")
+            return self._directory_path
         owner = _current_materialization_owner.get()
         if owner is None:
             raise RuntimeError(
@@ -523,7 +574,10 @@ class Workspace(BaseModel):
         return self._materialized_path
 
     def snapshot(self) -> "Workspace":
-        """Capture writes made through ``path`` for the next executor boundary."""
+        """Capture a value tree, or retain the same host-owned directory reference."""
+        if self.is_reference:
+            _ = self.path
+            return self
         if self._materialized_path is None:
             return type(self).from_manifest(self.manifest())
         return type(self).from_path(self._materialized_path)
@@ -553,6 +607,8 @@ class Workspace(BaseModel):
                 )
 
     def _cleanup_materialization(self) -> None:
+        if self.is_reference:
+            return
         root = self._materialized_path
         identity = self._materialized_identity
         if root is None:
@@ -570,6 +626,8 @@ class Workspace(BaseModel):
         self._materialized_identity = None
 
     def __getstate__(self):
+        if self.is_reference:
+            return self.manifest()
         self._manifest_for_serialization()
         state = super().__getstate__()
         private = dict(state.get("__pydantic_private__") or {})
@@ -577,6 +635,13 @@ class Workspace(BaseModel):
         private["_materialized_identity"] = None
         state["__pydantic_private__"] = private
         return state
+
+    def __setstate__(self, state):
+        if "version" in state:
+            restored = type(self).from_manifest(state)
+            super().__setstate__(BaseModel.__getstate__(restored))
+            return
+        super().__setstate__(state)
 
 
 class _MaterializationOwner:
@@ -612,6 +677,8 @@ def _copy_workspaces_for_invocation(value: Any, memo: dict[int, Any]) -> Any:
     if identity in memo:
         return memo[identity]
     if isinstance(value, Workspace):
+        if value.is_reference:
+            return value
         copied = type(value).from_manifest(value._manifest_for_serialization())
         memo[identity] = copied
         return copied
@@ -693,7 +760,7 @@ def run_workspace_invocation(fn, /, *args: Any, **kwargs: Any) -> Any:
 def snapshot_workspaces(value: Any) -> Any:
     """Capture every workspace in a supported workflow return shape."""
     if isinstance(value, Workspace):
-        return value.snapshot()
+        return value if value.is_reference else value.snapshot()
     from .types import LineagedResult
 
     if isinstance(value, LineagedResult):
