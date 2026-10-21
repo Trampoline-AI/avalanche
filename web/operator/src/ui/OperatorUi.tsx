@@ -2,6 +2,7 @@ import { type CSSProperties, useCallback, useEffect, useState } from "react";
 import { LoaderCircle, PanelLeft } from "lucide-react";
 
 import { Explorer } from "../Explorer";
+import { useExplorerPinned } from "../useExplorerPinned";
 import { WorkflowWorkspaceSurface } from "../WorkflowWorkspace";
 import { WorkspaceDivider } from "../WorkspaceDivider";
 import { useOperatorProjection } from "../state";
@@ -30,7 +31,7 @@ export function OperatorUi({ host, navigation }: OperatorUiProps) {
     [navigation],
   );
   const [explorerOpen, setExplorerOpen] = useState(false);
-  const [explorerPinned, setExplorerPinned] = useState(true);
+  const [explorerPinned, setExplorerPinned] = useExplorerPinned();
   const [explorerHovered, setExplorerHovered] = useState(false);
   const [explorerWidth, setExplorerWidth] = useState(EXPLORER_DEFAULT_WIDTH);
   useEffect(() => {
@@ -48,7 +49,7 @@ export function OperatorUi({ host, navigation }: OperatorUiProps) {
   const toggleExplorerPin = useCallback(() => {
     setExplorerPinned((pinned) => !pinned);
     setExplorerHovered(false);
-  }, []);
+  }, [setExplorerPinned]);
   const previewExplorer = useCallback(() => {
     if (!explorerPinned) setExplorerHovered(true);
   }, [explorerPinned]);

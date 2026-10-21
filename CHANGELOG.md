@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- Remember the workflow sidebar’s open/collapsed preference locally. Show a clickable
+  two-letter badge per workflow in the collapsed rail, with a 1px gray border and
+  blue text for the active workflow.
+
 ## 0.13.0
 
 - Releases: the operator UI package is now published to GitHub Packages only after
