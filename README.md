@@ -35,7 +35,7 @@ for offline API lookup.
 
 ## Requirements
 
-- Python 3.11, 3.12, or 3.13.
+- Python 3.13.
 - A LLM provider API key or Codex subscription for agent steps.
 - uv (recommended, https://docs.astral.sh/uv/)
 
@@ -60,6 +60,15 @@ You can then use the provided avalanche skill to create your own workflow by des
 
 ```bash
 /avalanche <outcome>
+```
+
+The starter project also installs the `delta` CLI for deploying workflows to Delta
+Cloud. Sign in, link the project once, then deploy:
+
+```bash
+uv run delta login
+uv run delta init --org <ORG_ID> --project proj_<name>
+uv run delta deploy
 ```
 
 ## Installation

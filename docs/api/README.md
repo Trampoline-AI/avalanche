@@ -43,7 +43,7 @@ and result definitions. Other pages likewise link the APIs they accept or return
   PredictRLM APIs are not reproduced here. Returned fields and methods needed to
   use Avalanche are documented with the API that produces them.
 
-Python 3.11–3.13 is supported. Agent and classifier support is included in the
+Python 3.13 is required. Agent and classifier support is included in the
 base installation; Lance storage needs `uv add 'avalanche-ai[lance]'`. Avalanche
 remains an early-release, local-development toolkit.
 
