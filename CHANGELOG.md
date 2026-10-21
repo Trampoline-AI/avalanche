@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- Releases: the operator UI package is now published to GitHub Packages only after
+  the PyPI publish succeeds, so rejecting or failing the PyPI approval no longer
+  leaves a UI release without a matching Python release.
 - Security: update locked dependencies to patched versions: `certifi` 2026.10.19
   (drops root certificates whose intermediate keys were compromised), `aiohttp`
   3.14.5, `virtualenv` 21.14.12, and Vite 7.3.7 for the browser UI build. The

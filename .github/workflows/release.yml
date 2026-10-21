@@ -201,7 +201,8 @@ jobs:
 
   publish-ui:
     name: Publish operator UI to GitHub Packages
-    needs: [validate, build]
+    # Publish only after PyPI succeeds, so its approval gate covers both packages.
+    needs: [validate, build, publish]
     runs-on: ubuntu-latest
     permissions:
       contents: read
