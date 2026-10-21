@@ -189,11 +189,11 @@ choose_model() {
   done
 }
 
-choose_litellm_model() {
+choose_model_id() {
   while true; do
-    read -r -p 'LiteLLM model string (for example, provider/model): ' model
+    read -r -p 'Model ID (for example, provider/model): ' model
     [[ -n "$model" ]] && return
-    printf 'A LiteLLM model string is required.\n' >&2
+    printf 'A model ID is required.\n' >&2
   done
 }
 
@@ -214,7 +214,7 @@ select_provider() {
   printf '  3) Anthropic API\n'
   printf '  4) Gemini API\n'
   printf '  5) Kimi (Moonshot AI) API\n'
-  printf '  6) Other LiteLLM-compatible API\n'
+  printf '  6) Other provider (DSPy model ID)\n'
   choice=$(choose_option 'Selection [1-6]: ')
 
   case "$choice" in
@@ -226,32 +226,32 @@ select_provider() {
     ;;
   2)
     provider_name="OpenAI API"
-    provider_key="litellm"
+    provider_key="model-id"
     model=$(choose_model 'Selection [1-4]: ' "openai/gpt-5.6-terra" "openai/gpt-5.6-sol" "openai/gpt-5.6-luna" "openai/gpt-5.5")
     credential_env="OPENAI_API_KEY"
     ;;
   3)
     provider_name="Anthropic API"
-    provider_key="litellm"
+    provider_key="model-id"
     model=$(choose_model 'Selection [1-3]: ' "anthropic/claude-sonnet-5" "anthropic/claude-opus-5" "anthropic/claude-haiku-4-5")
     credential_env="ANTHROPIC_API_KEY"
     ;;
   4)
     provider_name="Gemini API"
-    provider_key="litellm"
+    provider_key="model-id"
     model=$(choose_model 'Selection [1-4]: ' "gemini/gemini-2.5-pro" "gemini/gemini-2.0-flash" "gemini/gemini-3.5-flash" "gemini/gemini-3.6-flash")
     credential_env="GEMINI_API_KEY"
     ;;
   5)
     provider_name="Kimi (Moonshot AI) API"
-    provider_key="litellm"
+    provider_key="model-id"
     model=$(choose_model 'Selection [1-3]: ' "moonshot/kimi-k3" "moonshot/kimi-k2.7-code" "moonshot/kimi-k2.6")
     credential_env="MOONSHOT_API_KEY"
     ;;
   6)
-    provider_name="Other LiteLLM-compatible API"
-    provider_key="litellm"
-    choose_litellm_model
+    provider_name="Other provider"
+    provider_key="model-id"
+    choose_model_id
     choose_credential_env
     ;;
   esac
@@ -435,8 +435,8 @@ EOF
 
   cat >>"$staging_root/pyproject.toml" <<'EOF'
 dependencies = [
-    "avalanche-ai>=0.11",
-    "predict-rlm",
+    "avalanche-ai>=0.13",
+    "predict-rlm>=0.10",
 ]
 
 [dependency-groups]
@@ -447,6 +447,10 @@ EOF
 
 [tool.avalanche]
 flow_targets = ["src"]
+
+[tool.uv]
+# DSPy still declares litellm; model calls use DSPy's native engines.
+exclude-dependencies = ["litellm"]
 EOF
 
   cat >>"$staging_root/pyproject.toml" <<'EOF'

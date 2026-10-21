@@ -402,11 +402,17 @@ See [`examples/README.md`](examples/README.md) for how to run each example.
 
 ## LLM providers and models
 
-Avalanche sends agent-model requests through [LiteLLM](https://www.litellm.ai/).
-Any provider and model supported by LiteLLM is therefore supported by Avalanche.
-Configure the provider credentials as environment variables documented in
-[LiteLLM&#39;s provider guide](https://docs.litellm.ai/docs/providers); the process
-running the operator must have access to those variables.
+Avalanche sends agent-model requests through DSPy's native model engines, using
+`provider/model` IDs such as `openai/gpt-5.5`, `anthropic/claude-sonnet-5`,
+`gemini/gemini-3.5-flash`, or `moonshot/kimi-k3`. Avalanche does not install
+LiteLLM. Set the provider's standard credential variable (for example
+`OPENAI_API_KEY`, `ANTHROPIC_API_KEY`, or `GEMINI_API_KEY`); the process running
+the operator must have access to it.
+
+Routes that DSPy serves only through LiteLLM (for example `bedrock/` or
+`vertex_ai/`) need `dspy[litellm]` installed in your project. If you use uv, add
+`exclude-dependencies = ["litellm"]` under `[tool.uv]` in your own project to keep
+LiteLLM out, since DSPy still declares it as a dependency.
 
 Set `lm` for the main model and `sub_lm` for the sub-model. Shared settings go
 on the workflow:
@@ -428,7 +434,7 @@ An `lm` or `sub_lm` passed to an individual agent step overrides the same
 workflow default. `agent_defaults` configures runtime options only; signatures, skills, and
 tools remain defined on each agent step.
 
-Classifier steps use TypeSafe directly, not LiteLLM. Set `TYPESAFE_API_KEY` in the
+Classifier steps use TypeSafe directly, not DSPy. Set `TYPESAFE_API_KEY` in the
 executing environment or your project's `.env` file; exported variables take precedence.
 Choose `model` and `timeout` on `@ava.classifier_step` or in
 `@ava.workflow(classifier_defaults={...})`. Step values override workflow values;

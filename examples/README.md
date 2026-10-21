@@ -180,8 +180,8 @@ can discover it, but the first agent call fails with Codex LM's login instructio
 Classifier steps and evaluations separately need `TYPESAFE_API_KEY`.
 
 **Overrides.** Per-example variables replace the automatic choice and are checked
-first; with both set, Codex LM and the API keys are not checked at all. Give any LiteLLM
-model ID and set that provider's credentials:
+first; with both set, Codex LM and the API keys are not checked at all. Give any DSPy
+`provider/model` ID and set that provider's credentials:
 
 | Example | Main model | Sub-model |
 | --- | --- | --- |

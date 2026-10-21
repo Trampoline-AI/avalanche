@@ -6,6 +6,11 @@
   (drops root certificates whose intermediate keys were compromised), `aiohttp`
   3.14.5, `virtualenv` 21.14.12, and Vite 7.3.7 for the browser UI build. The
   browser UI now requires Vite 7.3.7 or newer.
+- Remove LiteLLM after the compromised `litellm` 1.107.0 release. Require
+  `predict-rlm>=0.10.0`, which uses DSPy 3.4.1's native engines, and exclude
+  `litellm` from uv resolution here and in workspaces created by `init.sh`. Routes
+  that DSPy serves only through LiteLLM (for example `bedrock/`) now need
+  `dspy[litellm]`.
 
 ## 0.12.0
 
