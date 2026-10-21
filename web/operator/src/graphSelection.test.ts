@@ -17,45 +17,44 @@ const topology = {
 describe.each(["horizontal", "vertical"] as const)(
   "%s connection highlights",
   (orientation) => {
-    it("traces ancestors and descendants, including skip edges, without highlighting sibling branches", () => {
+    it("highlights only direct connections in blue and dashes all other edges", () => {
       const { edges } = createGraphLayout(topology, orientation);
       const highlighted = highlightConnectedEdges(edges, "selected");
       expect(
         highlighted
-          .filter((edge) => edge.className?.includes("upstream"))
+          .filter((edge) => edge.className?.includes("connected"))
           .map((edge) => edge.id),
-      ).toEqual(["root->before", "root->selected", "before->selected"]);
-      expect(
-        highlighted
-          .filter((edge) => edge.className?.includes("downstream"))
-          .map((edge) => edge.id),
-      ).toEqual(["selected->after", "after->end"]);
-      const upstream = highlighted.find((edge) => edge.id === "root->selected")!;
-      const downstream = highlighted.find((edge) => edge.id === "selected->after")!;
-      expect(upstream.type).toBe("skip");
-      expect(upstream.style?.stroke).not.toBe(downstream.style?.stroke);
-      expect(upstream.markerEnd).toMatchObject({ color: upstream.style?.stroke });
-      expect(downstream.markerEnd).toMatchObject({ color: downstream.style?.stroke });
-      expect(highlighted.find((edge) => edge.id === "sibling->end")?.style?.strokeWidth).toBe(
-        1.4,
-      );
+      ).toEqual(["root->selected", "before->selected", "selected->after"]);
+      for (const edge of highlighted) {
+        const connected = edge.source === "selected" || edge.target === "selected";
+        expect(edge.style).toMatchObject({
+          stroke: connected ? "#2563eb" : "#87938d",
+          strokeDasharray: connected ? undefined : "6 4",
+        });
+        expect(edge.markerEnd).toMatchObject({ color: edge.style?.stroke });
+      }
+      expect(highlighted.find((edge) => edge.id === "root->selected")?.type).toBe("skip");
       expect(edges.every((edge) => !edge.style)).toBe(true);
     });
 
-    it("clears highlights on deselection and recomputes them for a different node", () => {
+    it("restores solid gray edges on deselection and updates direct neighbors on reselection", () => {
       const { edges } = createGraphLayout(topology, orientation);
-      for (const selected of [undefined, "other"]) {
-        expect(
-          highlightConnectedEdges(edges, selected).every(
-            (edge) => edge.style?.strokeWidth === 1.4,
-          ),
-        ).toBe(true);
-      }
       expect(
-        highlightConnectedEdges(edges, "root").every((edge) =>
-          edge.className?.includes("downstream"),
+        highlightConnectedEdges(edges).every(
+          (edge) =>
+            edge.style?.stroke === "#87938d" && edge.style.strokeDasharray === undefined,
         ),
       ).toBe(true);
+      expect(
+        highlightConnectedEdges(edges, "other").every(
+          (edge) => edge.style?.strokeDasharray === "6 4",
+        ),
+      ).toBe(true);
+      expect(
+        highlightConnectedEdges(edges, "root")
+          .filter((edge) => edge.className?.includes("connected"))
+          .map((edge) => edge.id),
+      ).toEqual(["root->before", "root->selected", "root->sibling"]);
     });
   },
 );
