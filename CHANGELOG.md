@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 0.13.0
+
 - Releases: the operator UI package is now published to GitHub Packages only after
   the PyPI publish succeeds, so rejecting or failing the PyPI approval no longer
   leaves a UI release without a matching Python release.
