@@ -3,6 +3,13 @@
 ## Unreleased
 
 - Add directory-backed reference workspaces for host-managed storage; see 0.11.0.
+- Breaking: Avalanche now requires Python 3.13. Python 3.11 and 3.12 were never
+  tested in CI, and the `delta` CLI used to deploy workflows to Delta Cloud
+  requires 3.13. Projects on older Python versions stay on Avalanche 0.11.x.
+- The starter project from `ava init` now uses Python 3.13, requires
+  `avalanche-ai>=0.11`, and installs the `delta` CLI in its `dev` dependency
+  group, so `uv run delta deploy` works without a separate install. Its
+  `AGENTS.md` documents the sign-in, deploy, and run commands.
 
 ## 0.11.0
 

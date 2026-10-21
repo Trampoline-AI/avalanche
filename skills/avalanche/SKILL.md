@@ -8,7 +8,7 @@ description: >-
   selecting operator/browser/TUI execution, using Iceberg or Lance persistence,
   or looking up Avalanche workflow-author API signatures, fields, and behavior.
 compatibility: >-
-  Requires Python 3.11 through 3.13 and avalanche-ai. Agent and classifier steps
+  Requires Python 3.13 and avalanche-ai. Agent and classifier steps
   are included in the base package. Includes a vendored copy of PredictRLM's RLM-design skill
   as a reference; check its upstream source for updates when access is available.
 metadata:

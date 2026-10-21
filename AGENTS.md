@@ -63,7 +63,7 @@ narrow file or directory.
 
 ## Code Conventions & Common Patterns
 
-- Target Python 3.11–3.13. Use modern precise annotations, `Protocol`,
+- Target Python 3.13. Use modern precise annotations, `Protocol`,
   dataclasses, and Pydantic models. Treat the declared domain schema as the only
   valid in-process shape.
 - Ruff enforces `E`, `F`, `W`, `I`, and `N`; line length is 96. Keep imports first-party-aware for `avalanche`, `ava_cli`, `runtime`, and `tui`.

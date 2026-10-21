@@ -66,8 +66,8 @@ check_prerequisites() {
       fail "Cannot reach the PredictRLM repository on GitHub. Check network access."
   fi
 
-  printf 'Checking Python 3.11 availability through UV...\n'
-  uv python find 3.11 >/dev/null 2>&1 || uv python install 3.11
+  printf 'Checking Python 3.13 availability through UV...\n'
+  uv python find 3.13 >/dev/null 2>&1 || uv python install 3.13
 
   local parent
   parent=$(dirname "$workspace_root")
@@ -314,7 +314,7 @@ write_api_key() {
 authenticate_codex() {
   [[ "$needs_codex_lm" == true ]] || return 0
 
-  uv sync --no-dev --extra codex-lm --directory "$workspace_root"
+  uv sync --extra codex-lm --directory "$workspace_root"
 
   local response
   read -r -p 'Set up Codex subscription authentication now? [Y/n] ' response
@@ -388,6 +388,20 @@ To scan one flow instead of the configured workspace target:
 ```bash
 uv run ava dev src/binary_converter/flow.py
 ```
+
+## Deploying to Delta Cloud
+
+The `dev` dependency group installs the `delta` CLI into the workspace
+environment; it is not part of the deployed workflow dependencies. Sign in once,
+link the workspace to an organization and project, then deploy:
+
+```bash
+uv run delta login
+uv run delta init --org <ORG_ID> --project proj_<name>   # writes delta.toml once
+uv run delta deploy
+uv run delta flows list
+uv run delta runs start --flow <FLOW> --input '{}'
+```
 EOF
 
   if [[ "$use_editable_dependencies" == true ]]; then
@@ -411,29 +425,23 @@ EOF
 }
 
 initialize_workspace() {
-  uv init --bare --name "$PROJECT_NAME" --python 3.11 --vcs git --no-workspace "$staging_root"
+  uv init --bare --name "$PROJECT_NAME" --python 3.13 --vcs git --no-workspace "$staging_root"
   cat >"$staging_root/pyproject.toml" <<'EOF'
 [project]
 name = "avalanche-workspace"
 version = "0.1.0"
-requires-python = ">=3.11,<3.14"
+requires-python = ">=3.13,<3.14"
 EOF
 
-  if [[ "$use_editable_dependencies" == true ]]; then
-    cat >>"$staging_root/pyproject.toml" <<'EOF'
+  cat >>"$staging_root/pyproject.toml" <<'EOF'
 dependencies = [
-    "avalanche-ai",
+    "avalanche-ai>=0.11",
     "predict-rlm",
 ]
+
+[dependency-groups]
+dev = ["trampoline-delta>=0.3.4"]
 EOF
-  else
-    cat >>"$staging_root/pyproject.toml" <<'EOF'
-dependencies = [
-    "avalanche-ai",
-    "predict-rlm",
-]
-EOF
-  fi
 
   cat >>"$staging_root/pyproject.toml" <<'EOF'
 
@@ -470,7 +478,7 @@ EOF
   chmod 600 "$staging_root/.env"
 
   write_starter_flow
-  uv sync --no-dev --directory "$staging_root"
+  uv sync --directory "$staging_root"
 
   write_provider_configurator
   write_workspace_guidance
@@ -515,6 +523,7 @@ print(flow_path)
 
     .venv/bin/ava operator --help >/dev/null
     .venv/bin/ava run --help >/dev/null
+    .venv/bin/delta version >/dev/null
     git check-ignore .env >/dev/null
     test -f AGENTS.md
     test -x scripts/configure-provider.sh
@@ -534,7 +543,7 @@ commit_workspace() {
 
 rebuild_workspace_environment() {
   # Virtual-environment entry points embed their installation path.
-  uv sync --reinstall --no-dev --directory "$workspace_root"
+  uv sync --reinstall --directory "$workspace_root"
 }
 
 report_success() {
