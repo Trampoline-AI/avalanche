@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Inspect nodes without zooming or recentering the canvas, and highlight their
+  upstream and downstream connections.
 - Workflow graphs open in a horizontal layout on wide canvases and a vertical layout
   on narrow ones. The choice is made once when the graph loads; resizing the window
   or opening the inspector never changes it. A unified navpanel includes a toggle to
