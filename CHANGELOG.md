@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 0.12.0
+
 - Add directory-backed reference workspaces for host-managed storage; see 0.11.0.
 - Contributors: project agent skills in `.agents/skills/` are tracked again, and
   `.claude` links to `.agents` so Claude Code loads the same skills, starting with
