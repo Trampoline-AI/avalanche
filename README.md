@@ -412,7 +412,9 @@ the operator must have access to it.
 Routes that DSPy serves only through LiteLLM (for example `bedrock/` or
 `vertex_ai/`) need `dspy[litellm]` installed in your project. If you use uv, add
 `exclude-dependencies = ["litellm"]` under `[tool.uv]` in your own project to keep
-LiteLLM out, since DSPy still declares it as a dependency.
+LiteLLM out, since DSPy still declares it as a dependency. Workspaces created by
+`init.sh` include this exclusion; remove it before adding `dspy[litellm]`, because
+uv drops excluded packages even when another requirement asks for them.
 
 Set `lm` for the main model and `sub_lm` for the sub-model. Shared settings go
 on the workflow:

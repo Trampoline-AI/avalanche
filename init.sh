@@ -450,6 +450,8 @@ flow_targets = ["src"]
 
 [tool.uv]
 # DSPy still declares litellm; model calls use DSPy's native engines.
+# Routes served only through LiteLLM (for example bedrock/, vertex_ai/) need this
+# exclusion removed and dspy[litellm] added.
 exclude-dependencies = ["litellm"]
 EOF
 
