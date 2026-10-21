@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- Workflow graphs adapt between horizontal and vertical layouts to fit the available
+  width. A unified navpanel includes an orientation toggle and a persistent lock
+  that slides out to the right.
 - Remember the workflow sidebar’s open/collapsed preference locally. Show a clickable
   two-letter badge per workflow in the collapsed rail, with a 1px gray border and
   blue text for the active workflow.
