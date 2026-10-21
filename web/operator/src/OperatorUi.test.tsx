@@ -73,6 +73,8 @@ const presentation = {
   workflowReloadDescription: "Reloading workflows",
 };
 
+afterEach(() => window.localStorage.removeItem("avalanche.explorer-pinned"));
+
 describe("operator workflows", () => {
   it("starts and selects a run, inspects its node, and cancels it", async () => {
     const inventory = FlowInfoMsg.create({
@@ -354,6 +356,61 @@ describe("operator workflows", () => {
       "aria-expanded",
       "true",
     );
+  });
+
+  it("restores the sidebar preference and selects workflows from their icons", async () => {
+    window.localStorage.removeItem("avalanche.explorer-pinned");
+    const sidebarApi = () =>
+      createApi({
+        loadBaseline: async () => ({
+          ...baseline,
+          catalog: CatalogSnapshotMsg.create({
+            ...baseline.catalog,
+            workflows: [
+              workflow,
+              FlowInfoMsg.create({
+                ...workflow,
+                workflowId: "inventory.py::inventory",
+                displayName: "Inventory",
+                relativeFile: "inventory.py",
+              }),
+            ],
+          }),
+        }),
+      });
+    const view = render(<OperatorUi host={{ api: sidebarApi(), presentation }} />);
+    fireEvent.click(await screen.findByRole("button", { name: "Collapse Explorer" }));
+    fireEvent.mouseEnter(screen.getByRole("complementary", { name: "Explorer" }));
+    view.unmount();
+
+    const restored = render(<OperatorUi host={{ api: sidebarApi(), presentation }} />);
+    const icon = await screen.findByRole("button", { name: "Orders" });
+    expect(icon).toBeVisible();
+    expect(icon).toHaveTextContent("Or");
+    await waitFor(() => expect(icon).toHaveAttribute("aria-current", "true"));
+    expect(
+      screen.queryByRole("button", { name: /Orders\s*flows\.py/ }),
+    ).not.toBeInTheDocument();
+    const inventoryIcon = screen.getByRole("button", { name: "Inventory" });
+    expect(inventoryIcon).toHaveTextContent("In");
+    expect(inventoryIcon).toHaveAttribute("title", "Inventory\ninventory.py");
+    fireEvent.click(inventoryIcon);
+    expect(inventoryIcon).toHaveAttribute("aria-current", "true");
+    expect(icon).not.toHaveAttribute("aria-current");
+    expect(screen.getByRole("button", { name: "Pin Explorer open" })).toHaveAttribute(
+      "aria-expanded",
+      "false",
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Pin Explorer open" }));
+    expect(screen.getByRole("button", { name: /Orders\s*flows\.py/ })).toBeVisible();
+    restored.unmount();
+
+    render(<OperatorUi host={{ api: sidebarApi(), presentation }} />);
+    expect(await screen.findByRole("button", { name: "Collapse Explorer" })).toHaveAttribute(
+      "aria-expanded",
+      "true",
+    );
+    window.localStorage.removeItem("avalanche.explorer-pinned");
   });
 
   it("groups only an unambiguous scan target and keeps all workflows when targets change", () => {
