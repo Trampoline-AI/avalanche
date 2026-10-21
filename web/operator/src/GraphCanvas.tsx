@@ -8,7 +8,17 @@ import {
   useRef,
   useState,
 } from "react";
-import { Bot, Check, FlaskConical, ListFilter, X } from "lucide-react";
+import {
+  ArrowDown,
+  ArrowRight,
+  Bot,
+  Check,
+  FlaskConical,
+  ListFilter,
+  LockKeyhole,
+  LockKeyholeOpen,
+  X,
+} from "lucide-react";
 
 import {
   Background,
@@ -16,7 +26,6 @@ import {
   BaseEdge,
   Controls,
   Handle,
-  MarkerType,
   Panel,
   Position,
   ReactFlow,
@@ -25,6 +34,7 @@ import {
   useViewport,
   type Edge,
   type EdgeProps,
+  type FitViewOptions,
   type Node,
   type NodeChange,
   type NodeProps,
@@ -36,6 +46,8 @@ import { decodeClassifierDeclaration, decodeEvaluationDeclaration } from "./clas
 import { decodeStepInterface } from "./stepInterface";
 import type { EvaluationRecord } from "./evaluations";
 import { CompositeSummary } from "./CompositeSummary";
+import { createGraphLayout, graphPositions } from "./graphLayout";
+import { useGraphOrientation, type GraphOrientation } from "./useGraphOrientation";
 
 interface FieldMetadata {
   name: string;
@@ -306,6 +318,20 @@ const WorkflowNodeCard = memo(({ data, selected }: NodeProps<Node<CardData>>) =>
         position={Position.Bottom}
         isConnectable={false}
       />
+      <Handle
+        id="target-top"
+        className="node-handle pointer-events-none size-px! min-h-0! min-w-0! border-0! bg-transparent! opacity-0"
+        type="target"
+        position={Position.Top}
+        isConnectable={false}
+      />
+      <Handle
+        id="target-right"
+        className="node-handle pointer-events-none size-px! min-h-0! min-w-0! border-0! bg-transparent! opacity-0"
+        type="target"
+        position={Position.Right}
+        isConnectable={false}
+      />
       <button
         type="button"
         className="node-card-action absolute inset-0 z-[2] cursor-pointer rounded-[inherit] border-0 bg-transparent p-0 focus-visible:outline-3 focus-visible:outline-offset-3 focus-visible:outline-acid"
@@ -490,6 +516,7 @@ WorkflowNodeCard.displayName = "WorkflowNodeCard";
 
 interface SkipEdgeData extends Record<string, unknown> {
   lane: number;
+  orientation: GraphOrientation;
 }
 
 type SkipEdge = Edge<SkipEdgeData, "skip">;
@@ -499,19 +526,23 @@ const SKIP_EDGE_LANE_GAP = 32;
 
 const SkipEdge = memo(
   ({ data, markerEnd, sourceX, sourceY, style, targetX, targetY }: EdgeProps<SkipEdge>) => {
-    const graphBottom = useStore((state) =>
+    const vertical = data?.orientation === "vertical";
+    const graphExtent = useStore((state) =>
       Math.max(
-        ...Array.from(
-          state.nodeLookup.values(),
-          (node) => node.internals.positionAbsolute.y + (node.measured.height ?? 0),
+        ...Array.from(state.nodeLookup.values(), (node) =>
+          vertical
+            ? node.internals.positionAbsolute.x + (node.measured.width ?? 360)
+            : node.internals.positionAbsolute.y + (node.measured.height ?? 130),
         ),
       ),
     );
     if (data === undefined) {
       throw new Error("Skip edge is missing its routing lane");
     }
-    const routeY = graphBottom + SKIP_EDGE_CLEARANCE + data.lane * SKIP_EDGE_LANE_GAP;
-    const path = `M ${sourceX},${sourceY} L ${sourceX},${routeY} L ${targetX},${routeY} L ${targetX},${targetY}`;
+    const route = graphExtent + SKIP_EDGE_CLEARANCE + data.lane * SKIP_EDGE_LANE_GAP;
+    const path = vertical
+      ? `M ${sourceX},${sourceY} L ${route},${sourceY} L ${route},${targetY} L ${targetX},${targetY}`
+      : `M ${sourceX},${sourceY} L ${sourceX},${route} L ${targetX},${route} L ${targetX},${targetY}`;
 
     return <BaseEdge path={path} markerEnd={markerEnd} style={style} />;
   },
@@ -522,6 +553,10 @@ const NODE_TYPES = { workflow: WorkflowNodeCard };
 const NODE_ORIGIN: [number, number] = [0, 0.5];
 const EDGE_TYPES = { skip: SkipEdge };
 const FIT_VIEW_OPTIONS = { padding: 0.24 };
+// Leave room for the floating timeline above a top-to-bottom graph.
+const VERTICAL_FIT_VIEW_OPTIONS: FitViewOptions = {
+  padding: { top: "160px", bottom: "90px", left: "40px", right: "80px" },
+};
 
 function invocationIdentity(nodeId: string, label: string): string {
   const suffix = nodeId.startsWith(`${label}_`) ? nodeId.slice(label.length + 1) : "";
@@ -540,57 +575,6 @@ type TopologyView = Pick<
   | "evaluationMetadataJson"
   | "stepInterfaceJson"
 >;
-
-interface GraphLayout {
-  edges: Edge[];
-  rows: Record<number, string[]>;
-}
-
-function createGraphLayout(topology: Pick<TopologyView, "nodeIds" | "graph">): GraphLayout {
-  const incoming = Object.fromEntries(topology.nodeIds.map((nodeId) => [nodeId, 0]));
-  for (const edges of Object.values(topology.graph)) {
-    for (const child of edges.children) incoming[child] = (incoming[child] ?? 0) + 1;
-  }
-  const depths: Record<string, number> = {};
-  const queue = topology.nodeIds.filter((nodeId) => incoming[nodeId] === 0);
-  for (const nodeId of queue) depths[nodeId] = 0;
-  for (let index = 0; index < queue.length; index += 1) {
-    const parent = queue[index];
-    for (const child of topology.graph[parent]?.children ?? []) {
-      depths[child] = Math.max(depths[child] ?? 0, depths[parent] + 1);
-      incoming[child] -= 1;
-      if (incoming[child] === 0) queue.push(child);
-    }
-  }
-  const rows: Record<number, string[]> = {};
-  for (const nodeId of topology.nodeIds) {
-    const depth = depths[nodeId] ?? 0;
-    (rows[depth] ??= []).push(nodeId);
-  }
-  const seen = new Set<string>();
-  const edges: Edge[] = [];
-  let skipEdgeLane = 0;
-  for (const [source, children] of Object.entries(topology.graph)) {
-    for (const target of children.children) {
-      const id = `${source}->${target}`;
-      if (seen.has(id)) continue;
-      seen.add(id);
-      const isSkipEdge = depths[target] !== (depths[source] ?? 0) + 1;
-      edges.push({
-        id,
-        source,
-        target,
-        sourceHandle: isSkipEdge ? "source-bottom" : "source-right",
-        targetHandle: isSkipEdge ? "target-bottom" : "target-left",
-        markerEnd: { type: MarkerType.ArrowClosed },
-        type: isSkipEdge ? "skip" : "step",
-        data: isSkipEdge ? { lane: skipEdgeLane++ } : undefined,
-        className: "dag-edge",
-      });
-    }
-  }
-  return { edges, rows };
-}
 
 interface GraphCanvasProps {
   workflow?: FlowInfoMsg;
@@ -615,6 +599,8 @@ function GraphCanvasView({
   onOpenNode,
   inspectionDisabled = false,
 }: GraphCanvasProps) {
+  const { containerRef, orientation, locked, chooseOrientation, toggleLock } =
+    useGraphOrientation();
   const isCurrentWorkflow = workflow !== undefined && runTopology === undefined;
   const topology = useMemo<TopologyView | undefined>(() => {
     if (runTopology) return runTopology;
@@ -665,32 +651,14 @@ function GraphCanvasView({
   const layout = useMemo(
     () =>
       topologyNodeIds && topologyGraph
-        ? createGraphLayout({ nodeIds: topologyNodeIds, graph: topologyGraph })
+        ? createGraphLayout({ nodeIds: topologyNodeIds, graph: topologyGraph }, orientation)
         : { edges: [], rows: {} },
-    [topologyGraph, topologyNodeIds],
+    [topologyGraph, topologyNodeIds, orientation],
   );
-  const positions = useMemo(() => {
-    // Share row spacing across columns so aligned neighbors keep straight edges.
-    let rowSpacing = 220;
-    for (const nodeIds of Object.values(layout.rows)) {
-      for (let row = 1; row < nodeIds.length; row += 1) {
-        const above = nodeMeasurements.get(nodeIds[row - 1])?.height ?? 130;
-        const below = nodeMeasurements.get(nodeIds[row])?.height ?? 130;
-        rowSpacing = Math.max(rowSpacing, (above + below) / 2 + 40);
-      }
-    }
-    return Object.fromEntries(
-      Object.entries(layout.rows).flatMap(([depth, nodeIds]) =>
-        nodeIds.map((nodeId, row) => [
-          nodeId,
-          {
-            x: Number(depth) * 500,
-            y: (row - (nodeIds.length - 1) / 2) * rowSpacing,
-          },
-        ]),
-      ),
-    );
-  }, [layout.rows, nodeMeasurements]);
+  const positions = useMemo(
+    () => graphPositions(layout.rows, nodeMeasurements, orientation),
+    [layout.rows, nodeMeasurements, orientation],
+  );
   const openCallbacks = useMemo(
     () =>
       Object.fromEntries(
@@ -872,43 +840,88 @@ function GraphCanvasView({
   ]);
 
   return (
-    <ReactFlow
-      className="[&_.react-flow__edge-path]:stroke-[#87938d] [&_.react-flow__edge-path]:[stroke-width:1.4] [&_.react-flow__arrowhead_polyline]:fill-[#87938d] [&_.react-flow__arrowhead_polyline]:stroke-[#87938d]"
-      nodes={nodes}
-      onNodesChange={onNodesChange}
-      edges={layout.edges}
-      nodeTypes={NODE_TYPES}
-      nodeOrigin={NODE_ORIGIN}
-      edgeTypes={EDGE_TYPES}
-      fitView
-      fitViewOptions={FIT_VIEW_OPTIONS}
-      minZoom={0.25}
-      maxZoom={1.8}
-      nodesDraggable={false}
-      nodesConnectable={false}
-      elementsSelectable={!inspectionDisabled}
-      onPaneClick={onClearNode}
-      proOptions={{ hideAttribution: true }}
-    >
-      {bottomRightPanel && (
-        <Panel
-          position="bottom-right"
-          className="dag-panel dag-actions-panel nodrag nopan m-3.5 rounded-[9px] border border-line bg-[rgba(255,255,255,.96)] p-[7px] shadow-[0_6px_20px_rgba(20,31,26,.1)]"
+    <div ref={containerRef} className="graph-viewport" data-orientation={orientation}>
+      <ReactFlow
+        key={orientation}
+        className="[&_.react-flow__edge-path]:stroke-[#87938d] [&_.react-flow__edge-path]:[stroke-width:1.4] [&_.react-flow__arrowhead_polyline]:fill-[#87938d] [&_.react-flow__arrowhead_polyline]:stroke-[#87938d]"
+        nodes={nodes}
+        onNodesChange={onNodesChange}
+        edges={layout.edges}
+        nodeTypes={NODE_TYPES}
+        nodeOrigin={NODE_ORIGIN}
+        edgeTypes={EDGE_TYPES}
+        fitView
+        fitViewOptions={
+          orientation === "vertical" ? VERTICAL_FIT_VIEW_OPTIONS : FIT_VIEW_OPTIONS
+        }
+        minZoom={0.25}
+        maxZoom={1.8}
+        nodesDraggable={false}
+        nodesConnectable={false}
+        elementsSelectable={!inspectionDisabled}
+        onPaneClick={onClearNode}
+        proOptions={{ hideAttribution: true }}
+      >
+        {bottomRightPanel && (
+          <Panel
+            position="bottom-right"
+            className="dag-panel dag-actions-panel nodrag nopan m-3.5 rounded-[9px] border border-line bg-[rgba(255,255,255,.96)] p-[7px] shadow-[0_6px_20px_rgba(20,31,26,.1)]"
+          >
+            {bottomRightPanel}
+          </Panel>
+        )}
+        <Background
+          color={isCurrentWorkflow ? "#dfe4e1" : "rgba(255,255,255,.06)"}
+          variant={BackgroundVariant.Dots}
+          gap={isCurrentWorkflow ? 18 : 24}
+          size={isCurrentWorkflow ? 2.5 : 1}
+        />
+        <Controls
+          fitViewOptions={
+            orientation === "vertical" ? VERTICAL_FIT_VIEW_OPTIONS : FIT_VIEW_OPTIONS
+          }
+          aria-label="Navpanel"
+          className={`navpanel ${locked ? "is-locked" : ""}`}
+          showInteractive={false}
         >
-          {bottomRightPanel}
-        </Panel>
-      )}
-      <Background
-        color={isCurrentWorkflow ? "#dfe4e1" : "rgba(255,255,255,.06)"}
-        variant={BackgroundVariant.Dots}
-        gap={isCurrentWorkflow ? 18 : 24}
-        size={isCurrentWorkflow ? 2.5 : 1}
-      />
-      <Controls
-        className="overflow-hidden rounded-lg border! border-line! bg-white! shadow-[0_4px_14px_rgba(20,31,26,.08)]! [&_.react-flow__controls-button]:border-b-line! [&_.react-flow__controls-button]:bg-white! [&_.react-flow__controls-button]:fill-secondary! [&_.react-flow__controls-button:hover]:bg-[#f1f4f2]!"
-        showInteractive={false}
-      />
-    </ReactFlow>
+          <div role="group" aria-label="Workflow orientation" className="navpanel-orientation">
+            <button
+              type="button"
+              className="graph-orientation-lock"
+              aria-label="Lock workflow orientation"
+              aria-pressed={locked}
+              title={
+                locked
+                  ? "Unlock to adapt to the available width"
+                  : "Lock this orientation when the viewport changes"
+              }
+              onClick={toggleLock}
+            >
+              {locked ? (
+                <LockKeyhole aria-hidden="true" size={16} />
+              ) : (
+                <LockKeyholeOpen aria-hidden="true" size={16} />
+              )}
+            </button>
+            <button
+              type="button"
+              className="graph-orientation-toggle"
+              aria-label={`Switch to ${orientation === "vertical" ? "horizontal" : "vertical"} workflow`}
+              title={`${orientation === "vertical" ? "Vertical" : "Horizontal"} layout${locked ? " (locked)" : " (adapts to width)"}. Click to switch.`}
+              onClick={() =>
+                chooseOrientation(orientation === "vertical" ? "horizontal" : "vertical")
+              }
+            >
+              {orientation === "vertical" ? (
+                <ArrowDown aria-hidden="true" size={17} />
+              ) : (
+                <ArrowRight aria-hidden="true" size={17} />
+              )}
+            </button>
+          </div>
+        </Controls>
+      </ReactFlow>
+    </div>
   );
 }
 

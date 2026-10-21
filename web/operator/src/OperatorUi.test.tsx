@@ -9,7 +9,9 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 vi.mock("@xyflow/react", async (importOriginal) => ({
   ...(await importOriginal<typeof ReactFlowModule>()),
   Background: () => null,
-  Controls: () => null,
+  Controls: ({ children }: { children: ReactNode }) => (
+    <div aria-label="Navpanel">{children}</div>
+  ),
   Handle: () => null,
   Panel: ({ children }: { children: ReactNode }) => <div>{children}</div>,
   useViewport: vi.fn(() => ({ x: 0, y: 0, zoom: 1 })),
@@ -74,6 +76,30 @@ const presentation = {
 };
 
 afterEach(() => window.localStorage.removeItem("avalanche.explorer-pinned"));
+
+describe("graph orientation controls", () => {
+  it("cycles orientation from one button and keeps the lock active when switching", () => {
+    window.localStorage.clear();
+    const open = vi.fn();
+    const view = render(<GraphCanvas workflow={workflow} onOpenNode={open} />);
+    fireEvent.click(screen.getByRole("button", { name: "Switch to horizontal workflow" }));
+    expect(screen.getByRole("button", { name: "Switch to vertical workflow" })).toBeVisible();
+    fireEvent.click(screen.getByRole("button", { name: "Lock workflow orientation" }));
+    expect(screen.getByRole("button", { name: "Lock workflow orientation" })).toHaveAttribute(
+      "aria-pressed",
+      "true",
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Switch to vertical workflow" }));
+    expect(screen.getByRole("button", { name: "Lock workflow orientation" })).toHaveAttribute(
+      "aria-pressed",
+      "true",
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Inspect Fetch" }));
+    expect(open).toHaveBeenCalledWith("fetch");
+    view.unmount();
+    window.localStorage.clear();
+  });
+});
 
 describe("operator workflows", () => {
   it("starts and selects a run, inspects its node, and cancels it", async () => {
