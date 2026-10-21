@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+- Security: update locked dependencies to patched versions: `certifi` 2026.10.19
+  (drops root certificates whose intermediate keys were compromised), `aiohttp`
+  3.14.5, `virtualenv` 21.14.12, and Vite 7.3.7 for the browser UI build. The
+  browser UI now requires Vite 7.3.7 or newer.
+
 ## 0.12.0
 
 - Add directory-backed reference workspaces for host-managed storage; see 0.11.0.
