@@ -3,6 +3,9 @@
 ## Unreleased
 
 - Add directory-backed reference workspaces for host-managed storage; see 0.11.0.
+- Contributors: project agent skills in `.agents/skills/` are tracked again, and
+  `.claude` links to `.agents` so Claude Code loads the same skills, starting with
+  `release-prep`.
 - Breaking: Avalanche now requires Python 3.13. Python 3.11 and 3.12 were never
   tested in CI, and the `delta` CLI used to deploy workflows to Delta Cloud
   requires 3.13. Projects on older Python versions stay on Avalanche 0.11.x.
