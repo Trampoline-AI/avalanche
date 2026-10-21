@@ -1,13 +1,4 @@
-import {
-  memo,
-  type MouseEvent,
-  type ReactNode,
-  useCallback,
-  useEffect,
-  useMemo,
-  useRef,
-  useState,
-} from "react";
+import { memo, type ReactNode, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { ArrowDown, ArrowRight, Bot, Check, FlaskConical, ListFilter, X } from "lucide-react";
 
 import {
@@ -19,7 +10,6 @@ import {
   Panel,
   Position,
   ReactFlow,
-  useReactFlow,
   useStore,
   useViewport,
   type Edge,
@@ -37,6 +27,7 @@ import { decodeStepInterface } from "./stepInterface";
 import type { EvaluationRecord } from "./evaluations";
 import { CompositeSummary } from "./CompositeSummary";
 import { createGraphLayout, graphPositions } from "./graphLayout";
+import { highlightConnectedEdges } from "./graphSelection";
 import { useGraphOrientation, type GraphOrientation } from "./useGraphOrientation";
 
 interface FieldMetadata {
@@ -185,7 +176,6 @@ function firstInstructionLine(instructions: string | undefined): string | undefi
 }
 
 const NODE_DETAIL_ZOOM_THRESHOLD = 1.0;
-const FOCUSED_NODE_ZOOM = 1.2;
 
 const NodeDuration = memo(
   ({
@@ -245,30 +235,10 @@ const NodeDuration = memo(
 NodeDuration.displayName = "NodeDuration";
 
 const WorkflowNodeCard = memo(({ data, selected }: NodeProps<Node<CardData>>) => {
-  const { screenToFlowPosition, setCenter } = useReactFlow();
   const { zoom } = useViewport();
   const isCompact = zoom < NODE_DETAIL_ZOOM_THRESHOLD;
   const hasEvaluations = data.evaluationCount !== undefined || data.evaluationDeclarationError;
   const hasEvaluationRow = hasEvaluations || Boolean(data.composites);
-  const openAndFocusNode = useCallback(
-    (event: MouseEvent<HTMLButtonElement>) => {
-      const bounds = event.currentTarget.getBoundingClientRect();
-      const nodeCenter = screenToFlowPosition({
-        x: bounds.left + bounds.width / 2,
-        y: bounds.top + bounds.height / 2,
-      });
-      data.onOpen();
-      window.requestAnimationFrame(() => {
-        window.requestAnimationFrame(() => {
-          void setCenter(nodeCenter.x, nodeCenter.y, {
-            zoom: FOCUSED_NODE_ZOOM,
-            duration: 200,
-          });
-        });
-      });
-    },
-    [data.onOpen, screenToFlowPosition, setCenter],
-  );
   const designationClass = data.isClassifier
     ? "node-classifier before:pointer-events-none before:absolute before:inset-y-3 before:left-0 before:w-[3px] before:rounded-r-full before:bg-classifier before:content-['']"
     : data.isAgent
@@ -325,7 +295,7 @@ const WorkflowNodeCard = memo(({ data, selected }: NodeProps<Node<CardData>>) =>
       <button
         type="button"
         className="node-card-action absolute inset-0 z-[2] cursor-pointer rounded-[inherit] border-0 bg-transparent p-0 focus-visible:outline-3 focus-visible:outline-offset-3 focus-visible:outline-acid"
-        onClick={openAndFocusNode}
+        onClick={data.onOpen}
         disabled={data.inspectionDisabled}
         aria-label={`Inspect ${data.label}${data.identity ? ` ${data.identity}` : ""}`}
         aria-description={
@@ -644,6 +614,10 @@ function GraphCanvasView({
         : { edges: [], rows: {} },
     [topologyGraph, topologyNodeIds, orientation],
   );
+  const edges = useMemo(
+    () => highlightConnectedEdges(layout.edges, selectedNodeId),
+    [layout.edges, selectedNodeId],
+  );
   const positions = useMemo(
     () => graphPositions(layout.rows, nodeMeasurements, orientation),
     [layout.rows, nodeMeasurements, orientation],
@@ -832,10 +806,9 @@ function GraphCanvasView({
     <div ref={containerRef} className="graph-viewport" data-orientation={orientation}>
       <ReactFlow
         key={orientation}
-        className="[&_.react-flow__edge-path]:stroke-[#87938d] [&_.react-flow__edge-path]:[stroke-width:1.4] [&_.react-flow__arrowhead_polyline]:fill-[#87938d] [&_.react-flow__arrowhead_polyline]:stroke-[#87938d]"
         nodes={nodes}
         onNodesChange={onNodesChange}
-        edges={layout.edges}
+        edges={edges}
         nodeTypes={NODE_TYPES}
         nodeOrigin={NODE_ORIGIN}
         edgeTypes={EDGE_TYPES}

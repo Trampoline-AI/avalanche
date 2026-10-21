@@ -4,6 +4,8 @@ import { StrictMode, type ComponentType, type ReactNode, useState } from "react"
 import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
+const { setCenter } = vi.hoisted(() => ({ setCenter: vi.fn() }));
+
 // jsdom has no graph viewport. Keep the real cards, controls, inspector, and projection;
 // replace only React Flow's layout host, not application components or live state.
 vi.mock("@xyflow/react", async (importOriginal) => ({
@@ -17,7 +19,7 @@ vi.mock("@xyflow/react", async (importOriginal) => ({
   useViewport: vi.fn(() => ({ x: 0, y: 0, zoom: 1 })),
   useReactFlow: () => ({
     screenToFlowPosition: () => ({ x: 0, y: 0 }),
-    setCenter: () => undefined,
+    setCenter,
   }),
   ReactFlow: ({
     nodes,
@@ -76,6 +78,22 @@ const presentation = {
 };
 
 afterEach(() => window.localStorage.removeItem("avalanche.explorer-pinned"));
+
+describe("node inspection viewport", () => {
+  it("opens a node without moving or zooming the viewport", async () => {
+    const open = vi.fn();
+    setCenter.mockClear();
+    render(<GraphCanvas workflow={workflow} onOpenNode={open} />);
+    fireEvent.click(screen.getByRole("button", { name: "Inspect Fetch" }));
+    await act(async () => {
+      await new Promise<void>((resolve) => {
+        requestAnimationFrame(() => requestAnimationFrame(() => resolve()));
+      });
+    });
+    expect(open).toHaveBeenCalledWith("fetch");
+    expect(setCenter).not.toHaveBeenCalled();
+  });
+});
 
 describe("graph orientation controls", () => {
   it.each([
@@ -260,7 +278,7 @@ describe("operator workflows", () => {
     fireEvent.click(screen.getByRole("button", { name: "Run" }));
 
     expect(await screen.findByRole("status", { name: "Run preparation" })).toBeVisible();
-    expect(screen.getByRole("button", { name: /run-1, requesting/ })).toHaveAttribute(
+    expect(await screen.findByRole("button", { name: /run-1, requesting/ })).toHaveAttribute(
       "aria-pressed",
       "true",
     );
