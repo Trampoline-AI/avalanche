@@ -19,7 +19,8 @@ corresponding `v`-prefixed tag. Normalize it to:
 
 Avalanche and `@trampoline-ai/operator-ui` always release together from this tag.
 Never create a separate operator UI tag or bump only the UI package. The `Release`
-workflow validates and builds both packages before publishing either, then creates
+workflow validates and builds both packages, publishes to PyPI after approval of the
+`pypi` environment, publishes the operator UI only after PyPI succeeds, and creates
 the GitHub Release only after both publishes succeed.
 
 Do not perform any release action until all preflight checks pass and the user
