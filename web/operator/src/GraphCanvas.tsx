@@ -261,6 +261,9 @@ const WorkflowNodeCard = memo(({ data, selected }: NodeProps<Node<CardData>>) =>
   return (
     <article
       className={`node-card ${isCompact ? `node-card--compact ${hasEvaluationRow ? "min-h-[130px]" : "min-h-[100px]"} justify-center gap-0 px-4 py-3` : "min-h-[130px] gap-2 p-4"} relative flex w-[360px] cursor-pointer flex-col items-stretch rounded-xl border border-line bg-panel text-left shadow-[0_8px_24px_rgba(25,39,32,.08)] transition-[border-color,box-shadow,transform] duration-150 ease-out hover:-translate-y-px hover:border-acid hover:shadow-[0_10px_28px_rgba(25,39,32,.12)] motion-reduce:transition-none ${selected && data.status !== "running" ? "border-acid!" : ""} ${designationClass} ${statusClass}`}
+      style={
+        selected && isCompact ? { outline: `${2 / zoom}px solid var(--color-acid)` } : undefined
+      }
       data-node-kind={data.isClassifier ? "classifier" : data.isAgent ? "agent" : "standard"}
       aria-disabled={data.inspectionDisabled || undefined}
     >
