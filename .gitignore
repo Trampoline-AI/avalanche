@@ -117,4 +117,5 @@ presentation_artifacts/
 __marimo__
 
 .vite
-.agents
+# .claude is a symlink to .agents; keep personal Claude Code settings untracked.
+.agents/settings.local.json
