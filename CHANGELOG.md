@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- Agents: add internal, not yet used models for running agent steps on runtimes
+  other than PredictRLM: a runtime-neutral request, result and trace format. Agent
+  steps behave exactly as before.
+
 ## 0.15.1 — 2026-10-24
 
 ### Protocol
