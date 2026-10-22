@@ -12,7 +12,7 @@ from pydantic import BaseModel, ConfigDict, Field, ValidationError, model_valida
 import avalanche as ava
 from avalanche.agent import AgentStepError
 
-agent_module = importlib.import_module("avalanche.agent.agent_step")
+predict_rlm_runtime = importlib.import_module("avalanche.runtimes.predict_rlm.runtime")
 
 
 class Item(BaseModel):
@@ -117,7 +117,7 @@ def predictor_factory(monkeypatch):
             predictor.config = config
             return predictor
 
-        monkeypatch.setattr(agent_module, "_build_predictor", build)
+        monkeypatch.setattr(predict_rlm_runtime, "_build_predictor", build)
 
     return install
 
@@ -431,7 +431,7 @@ def test_zero_input_signature_and_lazy_predictor_creation(predictor_factory):
         def forbidden_build(*args, **kwargs):
             raise AssertionError("predictor built while declaring workflow")
 
-        patch.setattr(agent_module, "_build_predictor", forbidden_build)
+        patch.setattr(predict_rlm_runtime, "_build_predictor", forbidden_build)
         declared = flow()
     assert declared.run(executor=ava.LocalExecutor()).result() == "ready"
 
