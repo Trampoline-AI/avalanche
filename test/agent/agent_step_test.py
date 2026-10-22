@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import functools
 import importlib
 import json
 import threading
@@ -131,6 +132,41 @@ async def test_agent_rejects_wrongly_typed_inputs_before_invocation(monkeypatch)
     with pytest.raises(AgentStepError, match="person"):
         await agent(person="Ada")
     assert calls == []
+
+
+@pytest.mark.asyncio
+async def test_tools_without_a_name_reach_the_predictor(monkeypatch):
+    class Predictor:
+        async def acall(self, **inputs):
+            return Prediction(
+                summary=Summary(headline="h", person_count=1),
+                note="n",
+                trace=_trace(),
+                evidence=RunEvidence(run_id="run", complete=True, terminal_outcome="completed"),
+            )
+
+    built = []
+
+    def build(signature, **config):
+        built.append(config["tools"])
+        return Predictor()
+
+    def lookup(term: str, *, scope: str) -> str:
+        return term
+
+    class Search:
+        def __call__(self, term: str) -> str:
+            return term
+
+    tools = [functools.partial(lookup, scope="all"), Search()]
+    monkeypatch.setattr(predict_rlm_runtime, "_build_predictor", build)
+    agent = ava.Agent(
+        signature=SummarySignature, step_name="summarize", runtime_kwargs={}, tools=tools
+    )
+
+    await agent(person=Person(id=1, name="Ada"))
+
+    assert built == [tuple(tools)]
 
 
 def _use_predictor(monkeypatch, predictor):
