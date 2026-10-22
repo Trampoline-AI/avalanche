@@ -35,6 +35,11 @@ describe.each(["horizontal", "vertical"] as const)(
       }
       expect(highlighted.find((edge) => edge.id === "root->selected")?.type).toBe("skip");
       expect(edges.every((edge) => !edge.style)).toBe(true);
+      const selectedBranch = highlighted.find((edge) => edge.id === "root->selected")!;
+      const siblingBranch = highlighted.find((edge) => edge.id === "root->sibling")!;
+      expect(selectedBranch.data?.nextRowIds).toEqual(siblingBranch.data?.targetRowIds);
+      expect(selectedBranch.zIndex).toBeGreaterThan(siblingBranch.zIndex!);
+      expect(siblingBranch.style?.strokeDasharray).toBe("6 4");
     });
 
     it("restores solid gray edges on deselection and updates direct neighbors on reselection", () => {

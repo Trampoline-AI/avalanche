@@ -35,6 +35,13 @@ export function createGraphLayout(
   const edges: Edge[] = [];
   let skipEdgeLane = 0;
   for (const [source, children] of Object.entries(topology.graph)) {
+    // Only long connections use the outer trunk. Adjacent destinations stay
+    // local, sharing the same junction in the gap after the source row.
+    const usesOuterTrunk = children.children.some(
+      (target) => depths[target] !== (depths[source] ?? 0) + 1,
+    );
+    const lane = usesOuterTrunk ? skipEdgeLane++ : undefined;
+    const branches = new Set(children.children).size > 1;
     for (const target of children.children) {
       const id = `${source}->${target}`;
       if (seen.has(id)) continue;
@@ -44,25 +51,25 @@ export function createGraphLayout(
         id,
         source,
         target,
-        sourceHandle:
-          orientation === "vertical"
-            ? isSkipEdge
-              ? "source-right"
-              : "source-bottom"
-            : isSkipEdge
-              ? "source-bottom"
-              : "source-right",
-        targetHandle:
-          orientation === "vertical"
-            ? isSkipEdge
-              ? "target-right"
-              : "target-top"
-            : isSkipEdge
-              ? "target-bottom"
-              : "target-left",
+        sourceHandle: orientation === "vertical" ? "source-bottom" : "source-right",
+        targetHandle: orientation === "vertical" ? "target-top" : "target-left",
         markerEnd: { type: MarkerType.ArrowClosed },
-        type: isSkipEdge ? "skip" : "step",
-        data: isSkipEdge ? { lane: skipEdgeLane++, orientation } : undefined,
+        type: isSkipEdge ? "skip" : branches ? "branch" : "step",
+        data: isSkipEdge
+          ? {
+              lane,
+              orientation,
+              sourceRowIds: rows[depths[source] ?? 0],
+              nextRowIds: rows[(depths[source] ?? 0) + 1],
+              targetRowIds: rows[depths[target] ?? 0],
+            }
+          : branches
+            ? {
+                orientation,
+                sourceRowIds: rows[depths[source] ?? 0],
+                targetRowIds: rows[depths[target] ?? 0],
+              }
+            : undefined,
         className: "dag-edge",
       });
     }

@@ -26,7 +26,7 @@ describe("workflow orientation layout", () => {
       }
       expect(positions.left[forward]).toBe(positions.right[forward]);
       expect(positions.left[across]).not.toBe(positions.right[across]);
-      const direct = edges.find((edge) => edge.id === "source->left")!;
+      const direct = edges.find((edge) => edge.id === "left->sink")!;
       expect([direct.sourceHandle, direct.targetHandle]).toEqual(
         orientation === "vertical"
           ? ["source-bottom", "target-top"]
@@ -36,10 +36,63 @@ describe("workflow orientation layout", () => {
       expect(skip.type).toBe("skip");
       expect([skip.sourceHandle, skip.targetHandle]).toEqual(
         orientation === "vertical"
-          ? ["source-right", "target-right"]
-          : ["source-bottom", "target-bottom"],
+          ? ["source-bottom", "target-top"]
+          : ["source-right", "target-left"],
       );
       expect(skip.data).toMatchObject({ orientation });
+      const fanOut = edges.filter((edge) => edge.source === "source");
+      expect(fanOut.filter((edge) => edge.type === "skip").map((edge) => edge.target)).toEqual([
+        "sink",
+      ]);
+      expect(
+        fanOut.filter((edge) => edge.type === "branch").map((edge) => edge.target),
+      ).toEqual(["left", "right"]);
+      expect(skip.data?.nextRowIds).toEqual(["left", "right"]);
+      expect(new Set(fanOut.map((edge) => edge.sourceHandle)).size).toBe(1);
+      expect(fanOut.find((edge) => edge.target === "left")?.data?.targetRowIds).toEqual([
+        "left",
+        "right",
+      ]);
+    },
+  );
+
+  it.each(["horizontal", "vertical"] as const)(
+    "keeps unrelated trunks separate and preserves every dependency in %s layout",
+    (orientation) => {
+      const { edges } = createGraphLayout(
+        {
+          nodeIds: ["a", "b", "c", "d", "e"],
+          graph: {
+            a: { children: ["b", "c", "d", "e", "e"] },
+            b: { children: ["c", "d", "e"] },
+            c: { children: ["d"] },
+            d: { children: ["e"] },
+          },
+        },
+        orientation,
+      );
+      expect(edges).toHaveLength(9);
+      const fromA = edges.filter((edge) => edge.source === "a" && edge.type === "skip");
+      const fromB = edges.filter((edge) => edge.source === "b" && edge.type === "skip");
+      expect(new Set(fromA.map((edge) => edge.data?.lane)).size).toBe(1);
+      expect(new Set(fromB.map((edge) => edge.data?.lane)).size).toBe(1);
+      expect(fromA[0].data?.lane).not.toBe(fromB[0].data?.lane);
+      expect(edges.find((edge) => edge.source === "c")?.type).toBe("step");
+    },
+  );
+
+  it.each(["horizontal", "vertical"] as const)(
+    "branches locally when all destinations are on the next level in %s layout",
+    (orientation) => {
+      const { edges } = createGraphLayout(
+        {
+          nodeIds: ["source", "left", "right"],
+          graph: { source: { children: ["left", "right"] } },
+        },
+        orientation,
+      );
+      expect(edges.every((edge) => edge.type === "branch")).toBe(true);
+      expect(edges.every((edge) => edge.data?.orientation === orientation)).toBe(true);
     },
   );
 

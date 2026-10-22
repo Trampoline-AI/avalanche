@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- Group outgoing workflow connections into shared trunks in both orientations,
+  keeping adjacent nodes connected directly and branching longer connections
+  from the midpoint between rows.
+
 - Inspect nodes without zooming or recentering the canvas, and highlight their
   direct connections in blue while other edges become gray and dashed. Selected
   nodes keep a visible blue outline when zoomed out.
