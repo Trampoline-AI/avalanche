@@ -113,7 +113,14 @@ class Agent:
                 resolve_signature(self._signature_declaration, name=self._step_name)
             )
             tools = () if self._tools_override is UNSET else tuple(self._tools_override)
-            self._tools = tuple(ToolSpec.from_callable(tool) for tool in tools)
+            self._tools = tuple(
+                ToolSpec(
+                    name=_callable_name(tool),
+                    description=inspect.getdoc(tool),
+                    function=tool,
+                )
+                for tool in tools
+            )
         return self._signature
 
     def _resolve_runtime(self) -> PredictRLM:
