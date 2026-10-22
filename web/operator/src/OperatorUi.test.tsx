@@ -78,26 +78,34 @@ const presentation = {
 afterEach(() => window.localStorage.removeItem("avalanche.explorer-pinned"));
 
 describe("graph orientation controls", () => {
-  it("cycles orientation from one button and keeps the lock active when switching", () => {
-    window.localStorage.clear();
+  it.each([
+    [1200, "vertical"],
+    [600, "horizontal"],
+  ])("starts from a %ipx canvas and switches only from the toggle", (width, next) => {
+    let canvasWidth = width;
+    vi.spyOn(HTMLElement.prototype, "getBoundingClientRect").mockImplementation(
+      () => new DOMRect(0, 0, canvasWidth, 800),
+    );
     const open = vi.fn();
     const view = render(<GraphCanvas workflow={workflow} onOpenNode={open} />);
-    fireEvent.click(screen.getByRole("button", { name: "Switch to horizontal workflow" }));
-    expect(screen.getByRole("button", { name: "Switch to vertical workflow" })).toBeVisible();
-    fireEvent.click(screen.getByRole("button", { name: "Lock workflow orientation" }));
-    expect(screen.getByRole("button", { name: "Lock workflow orientation" })).toHaveAttribute(
-      "aria-pressed",
-      "true",
-    );
-    fireEvent.click(screen.getByRole("button", { name: "Switch to vertical workflow" }));
-    expect(screen.getByRole("button", { name: "Lock workflow orientation" })).toHaveAttribute(
-      "aria-pressed",
-      "true",
+    const toggle = () => screen.getByRole("group", { name: "Workflow orientation" });
+    const initial = within(toggle()).getByRole("button", {
+      name: `Switch to ${next} workflow`,
+    });
+    canvasWidth = width > 900 ? 600 : 1200;
+    act(() => {
+      window.dispatchEvent(new Event("resize"));
+    });
+    expect(within(toggle()).getByRole("button")).toBe(initial);
+    expect(initial).toHaveAccessibleName(`Switch to ${next} workflow`);
+    fireEvent.click(initial);
+    expect(within(toggle()).getByRole("button")).not.toHaveAccessibleName(
+      `Switch to ${next} workflow`,
     );
     fireEvent.click(screen.getByRole("button", { name: "Inspect Fetch" }));
     expect(open).toHaveBeenCalledWith("fetch");
     view.unmount();
-    window.localStorage.clear();
+    vi.restoreAllMocks();
   });
 });
 

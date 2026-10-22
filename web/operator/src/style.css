@@ -30,62 +30,19 @@
 .navpanel > .react-flow__controls-button:first-child {
   border-radius: 7px 7px 0 0;
 }
-.navpanel-orientation {
-  position: relative;
-}
 .navpanel-orientation .graph-orientation-toggle {
-  position: relative;
-  z-index: 1;
   border-bottom: 0;
   border-radius: 0 0 7px 7px;
 }
 .navpanel-orientation svg {
   fill: none;
 }
-.navpanel-orientation .graph-orientation-lock {
-  position: absolute;
-  left: 100%;
-  bottom: -1px;
-  width: 34px;
-  height: 32px;
-  border: 1px solid var(--color-line);
-  border-radius: 0 7px 7px 0;
-  opacity: 0;
-  pointer-events: none;
-  transform: translateX(-30px);
-  transition:
-    transform 160ms ease-out,
-    opacity 160ms ease-out;
-}
-.navpanel-orientation:hover .graph-orientation-lock,
-.navpanel-orientation:has(:focus-visible) .graph-orientation-lock,
-.navpanel.is-locked .graph-orientation-lock {
-  opacity: 1;
-  pointer-events: auto;
-  transform: translateX(0);
-}
 .navpanel button:hover {
   background: #f1f4f2;
-}
-.navpanel button[aria-pressed="true"] {
-  color: var(--color-sidebar-primary);
-  background: #efefff;
 }
 .navpanel button:focus-visible {
   outline: 2px solid var(--color-sidebar-primary);
   outline-offset: 2px;
-}
-@media (hover: none) {
-  .navpanel-orientation .graph-orientation-lock {
-    opacity: 1;
-    pointer-events: auto;
-    transform: none;
-  }
-}
-@media (prefers-reduced-motion: reduce) {
-  .navpanel-orientation .graph-orientation-lock {
-    transition: none;
-  }
 }
 
 /* Nacelle's SIL Open Font License is distributed in Nacelle-LICENSE.txt. */

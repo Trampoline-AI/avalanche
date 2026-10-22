@@ -2,9 +2,10 @@
 
 ## Unreleased
 
-- Workflow graphs adapt between horizontal and vertical layouts to fit the available
-  width. A unified navpanel includes an orientation toggle and a persistent lock
-  that slides out to the right.
+- Workflow graphs open in a horizontal layout on wide canvases and a vertical layout
+  on narrow ones. The choice is made once when the graph loads; resizing the window
+  or opening the inspector never changes it. A unified navpanel includes a toggle to
+  switch between horizontal and vertical layouts.
 - Remember the workflow sidebar’s open/collapsed preference locally. Show a clickable
   two-letter badge per workflow in the collapsed rail, with a 1px gray border and
   blue text for the active workflow.
