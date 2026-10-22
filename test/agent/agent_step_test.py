@@ -13,7 +13,7 @@ from typing import Literal
 import pytest
 from dspy import Prediction
 from predict_rlm import RunEvidence, RunEvidenceEvent, RunTrace
-from pydantic import BaseModel
+from pydantic import BaseModel, ValidationError
 
 import avalanche as ava
 from avalanche.agent import AgentStepError, AgentStepExecutionError, capture_agent_evidence
@@ -167,6 +167,21 @@ async def test_tools_without_a_name_reach_the_predictor(monkeypatch):
     await agent(person=Person(id=1, name="Ada"))
 
     assert built == [tuple(tools)]
+
+
+@pytest.mark.asyncio
+async def test_invalid_tool_fails_every_call_instead_of_being_dropped(monkeypatch):
+    _use_predictor(monkeypatch, object())
+    agent = ava.Agent(
+        signature=SummarySignature,
+        step_name="summarize",
+        runtime_kwargs={},
+        tools=["not callable"],
+    )
+
+    for _ in range(2):
+        with pytest.raises(ValidationError):
+            await agent(person=Person(id=1, name="Ada"))
 
 
 def _use_predictor(monkeypatch, predictor):

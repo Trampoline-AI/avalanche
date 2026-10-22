@@ -4,6 +4,9 @@ from __future__ import annotations
 
 import importlib
 import inspect
+import subprocess
+import sys
+import textwrap
 
 import predict_rlm
 import pytest
@@ -126,6 +129,27 @@ def test_descriptor_fields_mirror_the_predict_rlm_constructor():
     }
 
     assert {name: field.default for name, field in PredictRLM.model_fields.items()} == mirrored
+
+
+def test_runtime_imports_without_the_optional_sandbox_extra():
+    # ``websockets`` ships only with predict-rlm's optional ``sbx`` extra.
+    script = textwrap.dedent(
+        """
+        import importlib.abc, sys
+
+        class Block(importlib.abc.MetaPathFinder):
+            def find_spec(self, name, path, target=None):
+                if name.split(".")[0] == "websockets":
+                    raise ImportError(name)
+
+        sys.meta_path.insert(0, Block())
+        from avalanche.runtimes import PredictRLM
+
+        PredictRLM(lm="openai/gpt-5.5")
+        """
+    )
+
+    subprocess.run([sys.executable, "-c", script], check=True)
 
 
 def test_descriptor_rejects_options_predict_rlm_does_not_have():

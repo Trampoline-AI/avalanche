@@ -27,16 +27,19 @@ class Answer(ava.Signature):
 
 @dataclass(frozen=True)
 class RuntimeCase:
+    """``install`` fakes the runtime's backend and returns a log of its builds and calls."""
+
     make_runtime: Callable[[], AgentRuntime]
     install: Callable[[pytest.MonkeyPatch, bool], list[str]]
 
 
 def _install_predict_rlm(monkeypatch: pytest.MonkeyPatch, succeed: bool) -> list[str]:
+    """Install a fake backend; the returned list records each build and call."""
     calls: list[str] = []
 
     class Predictor:
         async def acall(self, **inputs):
-            calls.append(inputs["question"])
+            calls.append(f"call {inputs['question']}")
             if not succeed:
                 error = ValueError("provider unavailable")
                 error.evidence = RunEvidence(
@@ -56,7 +59,12 @@ def _install_predict_rlm(monkeypatch: pytest.MonkeyPatch, succeed: bool) -> list
             )
 
     runtime_module = importlib.import_module("avalanche.runtimes.predict_rlm.runtime")
-    monkeypatch.setattr(runtime_module, "_build_predictor", lambda *args, **kwargs: Predictor())
+
+    def build(*args, **kwargs):
+        calls.append("build")
+        return Predictor()
+
+    monkeypatch.setattr(runtime_module, "_build_predictor", build)
     return calls
 
 
