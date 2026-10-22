@@ -4,6 +4,9 @@
 
 - Keep input and output names whole on browser UI step cards; long types now wrap
   between words and show the full name and type on hover.
+- Agents: add internal, not yet used models for running agent steps on runtimes
+  other than PredictRLM: a runtime-neutral request, result and trace format. Agent
+  steps behave exactly as before.
 
 ## 0.15.1 — 2026-10-24
 
