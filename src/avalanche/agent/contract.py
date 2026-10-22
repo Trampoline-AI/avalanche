@@ -26,7 +26,14 @@ from pydantic.fields import FieldInfo
 
 from .trace import AgentTraceRecord, RuntimeKind, Turn
 
-_STRICT = ConfigDict(strict=True, frozen=True, extra="forbid")
+# Serialized bodies always carry defaulted fields such as ``kind``; their
+# exported JSON Schema says so.
+_STRICT = ConfigDict(
+    strict=True,
+    frozen=True,
+    extra="forbid",
+    json_schema_serialization_defaults_required=True,
+)
 _LIVE = ConfigDict(strict=True, frozen=True, extra="forbid", arbitrary_types_allowed=True)
 
 # DSPy field metadata that carries no meaning beyond the description: the role

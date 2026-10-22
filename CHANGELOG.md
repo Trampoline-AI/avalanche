@@ -11,6 +11,9 @@
   the agent starts (a wrong type raises `AgentStepError`), and `ava.File` and
   `ava.Workspace` inputs appear in agent traces as name, size and checksum (or a
   workspace's entry count, total size, or reference) instead of "unavailable".
+- Operator UI: `make web-proto` now also generates TypeScript types and validators
+  for the runtime-neutral agent trace from the Python models
+  (`scripts/export_agent_schemas.py`). The UI does not use them yet.
 
 ## 0.13.0
 
