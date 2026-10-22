@@ -109,18 +109,21 @@ class Agent:
 
     def _resolve_signature(self) -> SignatureSpec:
         if self._signature is None:
-            self._signature = SignatureSpec.from_dspy(
+            signature = SignatureSpec.from_dspy(
                 resolve_signature(self._signature_declaration, name=self._step_name)
             )
-            tools = () if self._tools_override is UNSET else tuple(self._tools_override)
-            self._tools = tuple(
+            declared_tools = (
+                () if self._tools_override is UNSET else tuple(self._tools_override)
+            )
+            tools = tuple(
                 ToolSpec(
                     name=_callable_name(tool),
                     description=inspect.getdoc(tool),
                     function=tool,
                 )
-                for tool in tools
+                for tool in declared_tools
             )
+            self._signature, self._tools = signature, tools
         return self._signature
 
     def _resolve_runtime(self) -> PredictRLM:

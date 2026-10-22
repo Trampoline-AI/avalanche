@@ -22,7 +22,6 @@ from predict_rlm import (
     RuntimeHook,
     RuntimeHookEvent,
     SbxConfig,
-    SbxPool,
     Skill,
     SubmitConfirmationContext,
 )
@@ -30,7 +29,7 @@ from predict_rlm import PredictRLM as _PredictRLMPredictor
 from predict_rlm.backends.base import SupervisorClient
 from predict_rlm.runtime import RuntimeModule
 from predict_rlm.telemetry import TelemetryContext
-from pydantic import BaseModel, ConfigDict, GetCoreSchemaHandler, PrivateAttr
+from pydantic import BaseModel, ConfigDict, GetCoreSchemaHandler, PlainValidator, PrivateAttr
 from pydantic_core import CoreSchema, core_schema
 
 from ..._agent_evidence import AgentTraceFinishedEvent
@@ -45,6 +44,8 @@ from ...agent.contract import (
     AgentRequest,
     AgentRunOutcome,
     PythonOutputs,
+    SignatureSpec,
+    ToolSpec,
 )
 from ...agent.trace import RuntimeKind
 from .events import _AGENT_INVOCATION_STATE, _AgentInvocationState, _AvalancheEvidenceSink
@@ -274,6 +275,18 @@ _DspyAdapter = Annotated[dspy.Adapter, _IsInstance(dspy.Adapter)]
 _SupervisorClient = Annotated[SupervisorClient, _IsInstance(SupervisorClient)]
 
 
+def _check_sbx_pool(value: object) -> object:
+    # SbxPool needs predict-rlm's optional ``sbx`` extra; import it only when one is passed.
+    from predict_rlm import SbxPool
+
+    if not isinstance(value, SbxPool):
+        raise ValueError(f"sbx_pool must be a predict_rlm.SbxPool, got {type(value).__name__}")
+    return value
+
+
+_SbxPool = Annotated[object, PlainValidator(_check_sbx_pool)]
+
+
 @dataclass(frozen=True)
 class PredictRLMCall:
     """A finished PredictRLM call and the v1 terminal event already emitted for it."""
@@ -304,7 +317,7 @@ class PredictRLM(BaseModel):
     interpreter: CodeInterpreter | _SupervisorClient | None = None
     sandbox_backend: str | None = None
     sbx_config: _SbxConfig | None = None
-    sbx_pool: SbxPool | None = None
+    sbx_pool: _SbxPool | None = None
     allowed_domains: Sequence[str] | None = None
     skills: Sequence[_Skill] | None = None
     debug: bool = False
@@ -322,9 +335,9 @@ class PredictRLM(BaseModel):
     events: Sequence[EventSink] = ()
     run_export_root: str | Path | None = None
 
-    # Built predictors, keyed by the request contract they were built for.
-    _predictors: list[tuple[AgentRequest, _PredictRLMPredictor]] = PrivateAttr(
-        default_factory=list
+    # Built predictors, keyed by the signature and tools they were built for.
+    _predictors: list[tuple[SignatureSpec, tuple[ToolSpec, ...], _PredictRLMPredictor]] = (
+        PrivateAttr(default_factory=list)
     )
 
     def __getstate__(self) -> dict[str, object]:
@@ -448,11 +461,11 @@ class PredictRLM(BaseModel):
             _AGENT_INVOCATION_STATE.reset(invocation_token)
 
     def _predictor_for(self, request: AgentRequest) -> _PredictRLMPredictor:
-        for built_for, predictor in self._predictors:
-            if built_for.signature is request.signature and built_for.tools == request.tools:
+        for signature, tools, predictor in self._predictors:
+            if signature is request.signature and tools == request.tools:
                 return predictor
         predictor = self._build_for(request, request.signature.dspy_signature)
-        self._predictors.append((request, predictor))
+        self._predictors.append((request.signature, request.tools, predictor))
         return predictor
 
     def _build_for(
