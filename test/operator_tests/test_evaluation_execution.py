@@ -209,7 +209,8 @@ def load():
 @ava.agent_step(EchoSignature, evaluations=evaluations)
 async def research(ticket: dict, repeat: int = 2, *, agent: ava.Agent,
                    context: ava.RunContext, logger=ava.Logger()) -> Report:
-    agent._predictor = Predictor()
+    import avalanche.runtimes.predict_rlm.runtime as predict_rlm_runtime
+    predict_rlm_runtime._build_predictor = lambda *args, **kwargs: Predictor()
     {before_calls}
     agent_payload = {{"items": list(ticket["items"])}}
     predictions = await asyncio.gather(
@@ -794,7 +795,9 @@ def test_capacity_errors_do_not_backpressure_workflow(tmp_path, evaluation_servi
                         ),
                     )
 
-            agent._predictor = Predictor()
+            import avalanche.runtimes.predict_rlm.runtime as predict_rlm_runtime
+
+            predict_rlm_runtime._build_predictor = lambda *args, **kwargs: Predictor()
             await agent(value=str(value))
             return value + 1
 

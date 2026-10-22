@@ -5,6 +5,12 @@
 - Agents: add internal, not yet used models for running agent steps on runtimes
   other than PredictRLM: a runtime-neutral request, result and trace format. Agent
   steps behave exactly as before.
+- Agents: PredictRLM now runs behind that runtime interface. Agent steps return the
+  same PredictRLM prediction and send the same live events as before, with two
+  visible differences: agent inputs are type-checked against the signature before
+  the agent starts (a wrong type raises `AgentStepError`), and `ava.File` and
+  `ava.Workspace` inputs appear in agent traces as name, size and checksum (or a
+  workspace's entry count, total size, or reference) instead of "unavailable".
 
 ## 0.13.0
 

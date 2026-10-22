@@ -20,7 +20,7 @@ class EchoSignature(ava.Signature):
 
 
 def _agent_node(monkeypatch):
-    agent_module = importlib.import_module("avalanche.agent.agent_step")
+    runtime_module = importlib.import_module("avalanche.runtimes.predict_rlm.runtime")
 
     class Predictor:
         async def acall(self, *, text):
@@ -38,7 +38,7 @@ def _agent_node(monkeypatch):
                 ),
             )
 
-    monkeypatch.setattr(agent_module, "_build_predictor", lambda *args, **kwargs: Predictor())
+    monkeypatch.setattr(runtime_module, "_build_predictor", lambda *args, **kwargs: Predictor())
 
     @ava.agent_step(EchoSignature)
     async def echo(text: str, *, agent: ava.Agent) -> str:
@@ -68,7 +68,7 @@ class InlineSplitSignature(ava.Signature):
 
 
 def test_workflow_bound_inline_callable_serializes_without_predictor_or_contextvar(monkeypatch):
-    agent_module = importlib.import_module("avalanche.agent.agent_step")
+    runtime_module = importlib.import_module("avalanche.runtimes.predict_rlm.runtime")
 
     class Predictor:
         def __init__(self, max_iterations):
@@ -99,7 +99,7 @@ def test_workflow_bound_inline_callable_serializes_without_predictor_or_contextv
         raise AssertionError("declaration and serialization must not create a predictor")
 
     with pytest.MonkeyPatch.context() as patch:
-        patch.setattr(agent_module, "_build_predictor", forbidden_build)
+        patch.setattr(runtime_module, "_build_predictor", forbidden_build)
         workflow = flow()
         node = next(iter(workflow.nodes.values())).node
         bound = node.fn.__agent_step__.with_workflow_defaults(node.fn, workflow.agent_defaults)
@@ -107,7 +107,7 @@ def test_workflow_bound_inline_callable_serializes_without_predictor_or_contextv
         serialized_workflow = cloudpickle.dumps(workflow)
 
     monkeypatch.setattr(
-        agent_module,
+        runtime_module,
         "_build_predictor",
         lambda signature, **config: Predictor(config["max_iterations"]),
     )

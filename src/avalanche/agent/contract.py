@@ -8,7 +8,6 @@ validation path.
 
 from __future__ import annotations
 
-import inspect
 from collections.abc import Callable, Mapping
 from typing import Annotated, ClassVar, Literal, Protocol, Self
 
@@ -24,7 +23,6 @@ from pydantic import (
     model_validator,
 )
 from pydantic.fields import FieldInfo
-from pydantic_core import PydanticUndefined
 
 from .trace import AgentTraceRecord, RuntimeKind, Turn
 
@@ -58,6 +56,8 @@ class SignatureSpec(BaseModel):
     instructions: str
     input_model: type[BaseModel]
     output_model: type[BaseModel]
+    # The source signature, for runtimes that are themselves built on DSPy.
+    dspy_signature: type[dspy.Signature]
 
     @classmethod
     def from_dspy(cls, signature: type[dspy.Signature]) -> Self:
@@ -69,6 +69,7 @@ class SignatureSpec(BaseModel):
             instructions=signature.instructions,
             input_model=_fields_model(f"{name}Inputs", signature, signature.input_fields),
             output_model=_fields_model(f"{name}Outputs", signature, signature.output_fields),
+            dspy_signature=signature,
         )
 
     @property
@@ -107,14 +108,10 @@ def _fields_model(
                 f"agent signature {signature.__name__} field {field_name!r} uses "
                 f"unsupported DSPy field options {unsupported}"
             )
-        if field.default is not PydanticUndefined or field.default_factory is not None:
-            raise TypeError(
-                f"agent signature {signature.__name__} field {field_name!r} declares a "
-                "default; agent signature fields are always required"
-            )
         description = extra.get("desc")
         if not isinstance(description, str) or description == f"${{{field_name}}}":
             description = None
+        # Agent signature fields are always required; a DSPy default is not applied.
         definitions[field_name] = (_constrained(field), Field(description=description))
     return create_model(model_name, __config__=_LIVE, **definitions)
 
@@ -170,14 +167,6 @@ class ToolSpec(BaseModel):
     name: str
     description: str | None
     function: Callable[..., object]
-
-    @classmethod
-    def from_callable(cls, function: Callable[..., object]) -> Self:
-        return cls(
-            name=function.__name__,
-            description=inspect.getdoc(function),
-            function=function,
-        )
 
 
 class AgentRequest(BaseModel):

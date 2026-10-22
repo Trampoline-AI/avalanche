@@ -123,7 +123,9 @@ def _write_workflow(root: Path, *, revised: bool = False, guarded: bool = False)
                             ),
                         )
 
-                agent._predictor = Predictor()
+                import avalanche.runtimes.predict_rlm.runtime as predict_rlm_runtime
+
+                predict_rlm_runtime._build_predictor = lambda *args, **kwargs: Predictor()
                 return (await agent(query=value)).reply
 
             @ava.workflow(classifier_defaults={{
