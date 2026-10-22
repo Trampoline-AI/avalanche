@@ -228,6 +228,43 @@ async def test_live_predict_rlm_events_reach_the_runtime_sink_as_common_events(m
 
 
 @pytest.mark.asyncio
+async def test_a_base_exception_from_the_runtime_sink_propagates_unchanged(monkeypatch):
+    class Stop(BaseException):
+        pass
+
+    class StoppingSink:
+        async def emit(self, event: object) -> None:
+            raise Stop
+
+    class Predictor:
+        async def acall(self, **inputs):
+            sink = events_module._AvalancheEvidenceSink()
+            try:
+                await sink.emit(
+                    RunEvent(
+                        "run",
+                        1,
+                        RunEventKind.CODE_GENERATED,
+                        1,
+                        {"iteration": 1, "code": "x"},
+                    )
+                )
+            except BaseException as exc:
+                # A strict PredictRLM sink failure surfaces as an ordinary error.
+                error = RuntimeError("strict evidence sink failed")
+                error.evidence = RunEvidence(
+                    run_id="run", complete=False, terminal_outcome="error"
+                )
+                raise error from exc
+            return _prediction()
+
+    _use_predictor(monkeypatch, Predictor())
+
+    with pytest.raises(Stop):
+        await PredictRLM().invoke(_request(), StoppingSink())
+
+
+@pytest.mark.asyncio
 async def test_predictor_is_built_once_per_request_contract(monkeypatch):
     class Predictor:
         async def acall(self, **inputs):

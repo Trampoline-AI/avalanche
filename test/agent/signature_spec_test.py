@@ -149,7 +149,7 @@ def test_request_passes_file_and_workspace_inputs_unchanged():
         step_name="triage",
         signature=spec,
         inputs=spec.input_model(document=document, workspace=workspace),
-        tools=(ToolSpec.from_callable(lookup),),
+        tools=(ToolSpec(name="lookup", description="Look a term up.", function=lookup),),
     )
 
     assert request.inputs.document is document

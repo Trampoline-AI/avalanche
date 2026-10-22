@@ -55,7 +55,12 @@ class _AvalancheEvidenceSink:
 
             common = common_event(event)
             if common is not None:
-                await state.events.emit(common)
+                try:
+                    await state.events.emit(common)
+                except BaseException as exc:
+                    if not isinstance(exc, Exception) and state.listener_base_exception is None:
+                        state.listener_base_exception = exc
+                    raise
 
     async def flush(self, run_id: str) -> None:
         return None
