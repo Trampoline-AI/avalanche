@@ -27,6 +27,7 @@ import { decodeStepInterface } from "./stepInterface";
 import type { EvaluationRecord } from "./evaluations";
 import { CompositeSummary } from "./CompositeSummary";
 import { createGraphLayout, graphPositions } from "./graphLayout";
+import { branchEdgePath, branchJunction, outerTrunkPath } from "./graphEdgePaths";
 import { highlightConnectedEdges } from "./graphSelection";
 import { useGraphOrientation, type GraphOrientation } from "./useGraphOrientation";
 
@@ -477,15 +478,38 @@ const WorkflowNodeCard = memo(({ data, selected }: NodeProps<Node<CardData>>) =>
 });
 WorkflowNodeCard.displayName = "WorkflowNodeCard";
 
+// React Flow can render edges while node measurements are still arriving.
+// Fall back to the handle coordinate until that row's cards are available.
+function useRowBoundary(
+  nodeIds: readonly string[] | undefined,
+  vertical: boolean,
+  end: boolean,
+  fallback: number,
+): number {
+  return useStore((state) => {
+    const bounds = (nodeIds ?? []).flatMap((id) => {
+      const node = state.nodeLookup.get(id);
+      if (!node) return [];
+      const start = vertical
+        ? node.internals.positionAbsolute.y
+        : node.internals.positionAbsolute.x;
+      const size = vertical ? (node.measured.height ?? 130) : (node.measured.width ?? 360);
+      return [start + (end ? size : 0)];
+    });
+    if (bounds.length === 0) return fallback;
+    return end ? Math.max(...bounds) : Math.min(...bounds);
+  });
+}
+
 interface SkipEdgeData extends Record<string, unknown> {
   lane: number;
   orientation: GraphOrientation;
+  sourceRowIds: string[];
+  nextRowIds: string[];
+  targetRowIds: string[];
 }
 
 type SkipEdge = Edge<SkipEdgeData, "skip">;
-
-const SKIP_EDGE_CLEARANCE = 56;
-const SKIP_EDGE_LANE_GAP = 32;
 
 const SkipEdge = memo(
   ({ data, markerEnd, sourceX, sourceY, style, targetX, targetY }: EdgeProps<SkipEdge>) => {
@@ -499,22 +523,89 @@ const SkipEdge = memo(
         ),
       ),
     );
+    const sourceRowEnd = useRowBoundary(
+      data?.sourceRowIds,
+      vertical,
+      true,
+      vertical ? sourceY : sourceX,
+    );
+    const nextRowStart = useRowBoundary(
+      data?.nextRowIds,
+      vertical,
+      false,
+      vertical ? targetY : targetX,
+    );
+    const targetRowStart = useRowBoundary(
+      data?.targetRowIds,
+      vertical,
+      false,
+      vertical ? targetY : targetX,
+    );
     if (data === undefined) {
       throw new Error("Skip edge is missing its routing lane");
     }
-    const route = graphExtent + SKIP_EDGE_CLEARANCE + data.lane * SKIP_EDGE_LANE_GAP;
-    const path = vertical
-      ? `M ${sourceX},${sourceY} L ${route},${sourceY} L ${route},${targetY} L ${targetX},${targetY}`
-      : `M ${sourceX},${sourceY} L ${sourceX},${route} L ${targetX},${route} L ${targetX},${targetY}`;
+    const path = outerTrunkPath(
+      { sourceX, sourceY, targetX, targetY },
+      data.orientation,
+      graphExtent,
+      data.lane,
+      branchJunction(sourceRowEnd, nextRowStart),
+      targetRowStart,
+    );
 
     return <BaseEdge path={path} markerEnd={markerEnd} style={style} />;
   },
 );
 SkipEdge.displayName = "SkipEdge";
 
+interface BranchEdgeData extends Record<string, unknown> {
+  orientation: GraphOrientation;
+  sourceRowIds: string[];
+  targetRowIds: string[];
+}
+
+const BranchEdge = memo(
+  ({
+    data,
+    markerEnd,
+    sourceX,
+    sourceY,
+    style,
+    targetX,
+    targetY,
+  }: EdgeProps<Edge<BranchEdgeData, "branch">>) => {
+    const vertical = data?.orientation === "vertical";
+    const sourceRowEnd = useRowBoundary(
+      data?.sourceRowIds,
+      vertical,
+      true,
+      vertical ? sourceY : sourceX,
+    );
+    const targetRowStart = useRowBoundary(
+      data?.targetRowIds,
+      vertical,
+      false,
+      vertical ? targetY : targetX,
+    );
+    if (data === undefined) throw new Error("Branch edge is missing its orientation");
+    return (
+      <BaseEdge
+        path={branchEdgePath(
+          { sourceX, sourceY, targetX, targetY },
+          data.orientation,
+          branchJunction(sourceRowEnd, targetRowStart),
+        )}
+        markerEnd={markerEnd}
+        style={style}
+      />
+    );
+  },
+);
+BranchEdge.displayName = "BranchEdge";
+
 const NODE_TYPES = { workflow: WorkflowNodeCard };
 const NODE_ORIGIN: [number, number] = [0, 0.5];
-const EDGE_TYPES = { skip: SkipEdge };
+const EDGE_TYPES = { skip: SkipEdge, branch: BranchEdge };
 const FIT_VIEW_OPTIONS = { padding: 0.24 };
 // Leave room for the floating timeline above a top-to-bottom graph.
 const VERTICAL_FIT_VIEW_OPTIONS: FitViewOptions = {
