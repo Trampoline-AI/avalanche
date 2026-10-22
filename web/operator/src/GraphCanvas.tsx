@@ -8,17 +8,7 @@ import {
   useRef,
   useState,
 } from "react";
-import {
-  ArrowDown,
-  ArrowRight,
-  Bot,
-  Check,
-  FlaskConical,
-  ListFilter,
-  LockKeyhole,
-  LockKeyholeOpen,
-  X,
-} from "lucide-react";
+import { ArrowDown, ArrowRight, Bot, Check, FlaskConical, ListFilter, X } from "lucide-react";
 
 import {
   Background,
@@ -599,8 +589,7 @@ function GraphCanvasView({
   onOpenNode,
   inspectionDisabled = false,
 }: GraphCanvasProps) {
-  const { containerRef, orientation, locked, chooseOrientation, toggleLock } =
-    useGraphOrientation();
+  const { containerRef, orientation, toggleOrientation } = useGraphOrientation();
   const isCurrentWorkflow = workflow !== undefined && runTopology === undefined;
   const topology = useMemo<TopologyView | undefined>(() => {
     if (runTopology) return runTopology;
@@ -881,36 +870,16 @@ function GraphCanvasView({
             orientation === "vertical" ? VERTICAL_FIT_VIEW_OPTIONS : FIT_VIEW_OPTIONS
           }
           aria-label="Navpanel"
-          className={`navpanel ${locked ? "is-locked" : ""}`}
+          className="navpanel"
           showInteractive={false}
         >
           <div role="group" aria-label="Workflow orientation" className="navpanel-orientation">
             <button
               type="button"
-              className="graph-orientation-lock"
-              aria-label="Lock workflow orientation"
-              aria-pressed={locked}
-              title={
-                locked
-                  ? "Unlock to adapt to the available width"
-                  : "Lock this orientation when the viewport changes"
-              }
-              onClick={toggleLock}
-            >
-              {locked ? (
-                <LockKeyhole aria-hidden="true" size={16} />
-              ) : (
-                <LockKeyholeOpen aria-hidden="true" size={16} />
-              )}
-            </button>
-            <button
-              type="button"
               className="graph-orientation-toggle"
               aria-label={`Switch to ${orientation === "vertical" ? "horizontal" : "vertical"} workflow`}
-              title={`${orientation === "vertical" ? "Vertical" : "Horizontal"} layout${locked ? " (locked)" : " (adapts to width)"}. Click to switch.`}
-              onClick={() =>
-                chooseOrientation(orientation === "vertical" ? "horizontal" : "vertical")
-              }
+              title={`${orientation === "vertical" ? "Vertical" : "Horizontal"} layout. Click to switch.`}
+              onClick={toggleOrientation}
             >
               {orientation === "vertical" ? (
                 <ArrowDown aria-hidden="true" size={17} />
