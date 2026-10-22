@@ -56,9 +56,7 @@ class DeterministicWorkerPredictor:
             max_iterations=1,
             duration_ms=1,
         )
-        evidence = RunEvidence(
-            run_id="worker-run", complete=True, terminal_outcome="completed"
-        )
+        evidence = RunEvidence(run_id="worker-run", complete=True, terminal_outcome="completed")
         if tuple(self.signature.input_fields) == ("transcript", "customer"):
             names, quantities = self.skills[0].tools["parse_orders"](inputs["transcript"])
             return dspy.Prediction(
@@ -93,7 +91,7 @@ def _build_worker_predictor(signature, **config):
 def _install_worker_predictor():
     # This setup is restricted to this remote driver's runtime environment; its
     # child Ray tasks inherit that environment. The pytest driver is untouched.
-    module = importlib.import_module("avalanche.agent.agent_step")
+    module = importlib.import_module("avalanche.runtimes.predict_rlm.runtime")
     module._build_predictor = _build_worker_predictor
 
 
@@ -112,8 +110,8 @@ def test_full_inline_ray_workflow_returns_validated_values_from_real_workers(ray
     from ray import cloudpickle
     from ray._private.runtime_env.setup_hook import export_setup_func_module
 
-    agent_module = importlib.import_module("avalanche.agent.agent_step")
-    driver_builder = agent_module._build_predictor
+    runtime_module = importlib.import_module("avalanche.runtimes.predict_rlm.runtime")
+    driver_builder = runtime_module._build_predictor
 
     def parse_orders(transcript: str) -> tuple[list[str], list[int]]:
         orders = [entry.split() for entry in transcript.split(",")]
@@ -196,4 +194,4 @@ def test_full_inline_ray_workflow_returns_validated_values_from_real_workers(ray
     assert result["extraction_pid"] != worker_driver_pid
     assert result["prediction_pid"] != worker_driver_pid
     assert result["render_pid"] != worker_driver_pid
-    assert agent_module._build_predictor is driver_builder
+    assert runtime_module._build_predictor is driver_builder
