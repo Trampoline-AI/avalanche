@@ -8,7 +8,6 @@ validation path.
 
 from __future__ import annotations
 
-import inspect
 from collections.abc import Callable, Mapping
 from typing import Annotated, ClassVar, Literal, Protocol, Self
 
@@ -168,14 +167,6 @@ class ToolSpec(BaseModel):
     name: str
     description: str | None
     function: Callable[..., object]
-
-    @classmethod
-    def from_callable(cls, function: Callable[..., object]) -> Self:
-        return cls(
-            name=function.__name__,
-            description=inspect.getdoc(function),
-            function=function,
-        )
 
 
 class AgentRequest(BaseModel):
