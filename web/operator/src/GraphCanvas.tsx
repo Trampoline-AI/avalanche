@@ -507,6 +507,7 @@ interface SkipEdgeData extends Record<string, unknown> {
   sourceRowIds: string[];
   nextRowIds: string[];
   targetRowIds: string[];
+  intermediateRows: string[][];
 }
 
 type SkipEdge = Edge<SkipEdgeData, "skip">;
@@ -514,14 +515,36 @@ type SkipEdge = Edge<SkipEdgeData, "skip">;
 const SkipEdge = memo(
   ({ data, markerEnd, sourceX, sourceY, style, targetX, targetY }: EdgeProps<SkipEdge>) => {
     const vertical = data?.orientation === "vertical";
-    const graphExtent = useStore((state) =>
-      Math.max(
-        ...Array.from(state.nodeLookup.values(), (node) =>
-          vertical
-            ? node.internals.positionAbsolute.x + (node.measured.width ?? 360)
-            : node.internals.positionAbsolute.y + (node.measured.height ?? 130),
+    const routingRows = useStore(
+      (state) =>
+        (data?.intermediateRows ?? []).flatMap((ids) => {
+          const bounds = ids.flatMap((id) => {
+            const node = state.nodeLookup.get(id);
+            if (!node) return [];
+            return [
+              {
+                start: vertical
+                  ? node.internals.positionAbsolute.y
+                  : node.internals.positionAbsolute.x,
+                extent: vertical
+                  ? node.internals.positionAbsolute.x + (node.measured.width ?? 360)
+                  : node.internals.positionAbsolute.y + (node.measured.height ?? 130),
+              },
+            ];
+          });
+          if (bounds.length === 0) return [];
+          return [
+            {
+              start: Math.min(...bounds.map((bound) => bound.start)),
+              extent: Math.max(...bounds.map((bound) => bound.extent)),
+            },
+          ];
+        }),
+      (previous, next) =>
+        previous.length === next.length &&
+        previous.every(
+          (row, index) => row.start === next[index].start && row.extent === next[index].extent,
         ),
-      ),
     );
     const sourceRowEnd = useRowBoundary(
       data?.sourceRowIds,
@@ -547,7 +570,7 @@ const SkipEdge = memo(
     const path = outerTrunkPath(
       { sourceX, sourceY, targetX, targetY },
       data.orientation,
-      graphExtent,
+      routingRows,
       data.lane,
       branchJunction(sourceRowEnd, nextRowStart),
       targetRowStart,

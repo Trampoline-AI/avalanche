@@ -16,8 +16,9 @@ export function createGraphLayout(
     for (const child of edges.children) incoming[child] = (incoming[child] ?? 0) + 1;
   }
   const depths: Record<string, number> = {};
-  const queue = topology.nodeIds.filter((nodeId) => incoming[nodeId] === 0);
-  for (const nodeId of queue) depths[nodeId] = 0;
+  const roots = topology.nodeIds.filter((nodeId) => incoming[nodeId] === 0);
+  const queue = [...roots];
+  for (const nodeId of roots) depths[nodeId] = 0;
   for (let index = 0; index < queue.length; index += 1) {
     const parent = queue[index];
     for (const child of topology.graph[parent]?.children ?? []) {
@@ -26,8 +27,23 @@ export function createGraphLayout(
       if (incoming[child] === 0) queue.push(child);
     }
   }
+  // Independent inputs belong beside the work that prepares their first consumer,
+  // rather than at the top with a long connection past unrelated earlier steps.
+  // These are presentation ranks only; the workflow's dependencies never change.
+  const deferredInputs = new Set<string>();
+  for (const root of roots) {
+    const consumers = topology.graph[root]?.children ?? [];
+    if (consumers.length === 0) continue;
+    depths[root] = Math.min(...consumers.map((id) => depths[id])) - 1;
+    if (depths[root] > 0) deferredInputs.add(root);
+  }
   const rows: Record<number, string[]> = {};
-  for (const nodeId of topology.nodeIds) {
+  // Keep the existing preparation steps first and place supporting inputs beside them.
+  const layoutNodeIds = [
+    ...topology.nodeIds.filter((id) => !deferredInputs.has(id)),
+    ...deferredInputs,
+  ];
+  for (const nodeId of layoutNodeIds) {
     const depth = depths[nodeId] ?? 0;
     (rows[depth] ??= []).push(nodeId);
   }
@@ -62,6 +78,10 @@ export function createGraphLayout(
               sourceRowIds: rows[depths[source] ?? 0],
               nextRowIds: rows[(depths[source] ?? 0) + 1],
               targetRowIds: rows[depths[target] ?? 0],
+              intermediateRows: Array.from(
+                { length: depths[target] - depths[source] - 1 },
+                (_, index) => rows[depths[source] + index + 1],
+              ),
             }
           : branches
             ? {

@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+- Keep shared connection trunks close to the intervening nodes, widening only
+  where a wider row requires clearance instead of detouring around the whole graph.
+
+- Place independent workflow inputs just before their first consumer in the graph,
+  keeping supporting inputs beside the relevant preparation steps.
+
 - Group outgoing workflow connections into shared trunks in both orientations,
   keeping adjacent nodes connected directly and branching longer connections
   from the midpoint between rows.
