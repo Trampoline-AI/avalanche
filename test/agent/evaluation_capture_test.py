@@ -20,7 +20,8 @@ from avalanche._agent_evidence import capture_agent_evidence, emit_agent_evidenc
 from avalanche.agent import AgentStepExecutionError
 from avalanche.evaluation_capture import capture_evaluations
 
-agent_module = importlib.import_module("avalanche.agent.agent_step")
+predict_rlm_runtime = importlib.import_module("avalanche.runtimes.predict_rlm.runtime")
+predict_rlm_events = importlib.import_module("avalanche.runtimes.predict_rlm.events")
 capture_module = importlib.import_module("avalanche.evaluation_capture")
 
 
@@ -91,11 +92,11 @@ def predictor(monkeypatch):
                 evidence=RunEvidence(run_id=text, complete=True, terminal_outcome="completed"),
             )
 
-    monkeypatch.setattr(agent_module, "_build_predictor", lambda *a, **kw: Predictor())
+    monkeypatch.setattr(predict_rlm_runtime, "_build_predictor", lambda *a, **kw: Predictor())
 
 
 def test_declaration_and_discovery_do_not_execute_evaluations(evaluations, monkeypatch):
-    monkeypatch.setattr(agent_module, "_build_predictor", forbidden_evaluation)
+    monkeypatch.setattr(predict_rlm_runtime, "_build_predictor", forbidden_evaluation)
 
     @ava.agent_step(EchoSignature, evaluations=evaluations)
     async def echo(text: str, *, agent: ava.Agent) -> str:
@@ -336,7 +337,7 @@ async def test_first_successful_completion_wins_without_gating_later_calls(
                 evidence=RunEvidence(run_id=text, complete=True, terminal_outcome="completed"),
             )
 
-    monkeypatch.setattr(agent_module, "_build_predictor", lambda *a, **kw: Predictor())
+    monkeypatch.setattr(predict_rlm_runtime, "_build_predictor", lambda *a, **kw: Predictor())
     submissions = []
 
     @ava.agent_step(EchoSignature, evaluations=evaluations)
@@ -379,7 +380,7 @@ async def test_failed_earlier_call_does_not_claim_capture_and_observers_keep_all
 ):
     class Predictor:
         async def acall(self, *, text):
-            sink = agent_module._AvalancheEvidenceSink()
+            sink = predict_rlm_events._AvalancheEvidenceSink()
             await sink.emit(
                 RunEvent(text, 1, RunEventKind.RUN_STARTED, 1, {"inputs": {"text": text}})
             )
@@ -398,7 +399,7 @@ async def test_failed_earlier_call_does_not_claim_capture_and_observers_keep_all
                 evidence=RunEvidence(run_id=text, complete=True, terminal_outcome="completed"),
             )
 
-    monkeypatch.setattr(agent_module, "_build_predictor", lambda *a, **kw: Predictor())
+    monkeypatch.setattr(predict_rlm_runtime, "_build_predictor", lambda *a, **kw: Predictor())
 
     @ava.agent_step(EchoSignature, evaluations=evaluations)
     async def echo(*, agent: ava.Agent) -> list[str]:
@@ -549,7 +550,7 @@ async def test_no_successful_agent_return_means_no_evaluation(evaluations, monke
             failure.evidence = RunEvidence(run_id=text, complete=True, terminal_outcome=outcome)
             raise failure
 
-    monkeypatch.setattr(agent_module, "_build_predictor", lambda *a, **kw: Predictor())
+    monkeypatch.setattr(predict_rlm_runtime, "_build_predictor", lambda *a, **kw: Predictor())
 
     @ava.agent_step(EchoSignature, evaluations=evaluations)
     async def echo(*, agent: ava.Agent) -> str:
@@ -764,7 +765,7 @@ async def test_ray_serialization_uses_worker_context_and_synchronous_owned_snaps
                 ),
             )
 
-    monkeypatch.setattr(agent_module, "_build_predictor", lambda *a, **kw: Predictor())
+    monkeypatch.setattr(predict_rlm_runtime, "_build_predictor", lambda *a, **kw: Predictor())
 
     @ava.agent_step(SnapshotSignature, evaluations=evaluations)
     async def echo(text: str, *, agent: ava.Agent) -> Prediction:

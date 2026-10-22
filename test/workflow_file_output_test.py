@@ -1,6 +1,7 @@
 """Embedded file values survive workflow output handling without data loss."""
 
 import hashlib
+import json
 
 import pytest
 from pydantic import BaseModel
@@ -206,3 +207,58 @@ def test_file_reference_validation_and_per_node_rebinding(tmp_path):
         return read(produce())
 
     assert flow().run(executor=ava.LocalExecutor()).result(timeout=5) == b"%PDF-\xff"
+
+
+def test_agent_file_step_traces_record_input_references_not_mounted_paths(tmp_path):
+    from dspy import JSONAdapter
+    from dspy.utils import DummyLM
+    from predict_rlm.backends import DirectPythonBackend
+
+    from avalanche.agent import capture_agent_evidence
+
+    class Count(ava.Signature):
+        document: ava.File = ava.InputField()
+        size: int = ava.OutputField()
+
+    source = tmp_path / "input.txt"
+    source.write_bytes(b"hello")
+    workspace = ava.Workspace.from_directory(tmp_path, reference="snapshot:test")
+    file = ava.File.from_path(source, workspace=workspace)
+    lm = DummyLM(
+        [{"plan": "Count bytes.", "code": "SUBMIT(size=len(open(document, 'rb').read()))"}],
+        adapter=JSONAdapter(),
+    )
+
+    @ava.agent_step(
+        Count,
+        lm=lm,
+        sub_lm=lm,
+        interpreter=DirectPythonBackend(
+            workdir=str(tmp_path),
+            runner_path=str(tmp_path / "runner.py"),
+        ),
+        max_iterations=1,
+        verbose=False,
+    )
+    async def count(document: ava.File, *, agent: ava.Agent) -> int:
+        return (await agent(document=document)).size
+
+    @ava.workflow
+    def flow():
+        return count(file)
+
+    observed = []
+    with (
+        capture_agent_evidence(observed.append, errors="raise"),
+        ava.file_reference_context(workspace, attempt="attempt-1"),
+    ):
+        assert flow().run(executor=ava.LocalExecutor()).result(timeout=20) == 5
+
+    started = next(
+        event["data"]
+        for event in observed
+        if event["kind"] == "evidence" and event["event_kind"] == "run.started"
+    )
+    assert started["inputs"]["document"]["workspace"] == "snapshot:test"
+    assert started["inputs"]["document"]["path"] == "input.txt"
+    assert str(tmp_path) not in json.dumps(started)

@@ -69,23 +69,23 @@ def test_from_dspy_rejects_signatures_without_outputs():
         SignatureSpec.from_dspy(dspy.Signature({"question": (str, ava.InputField())}))
 
 
-@pytest.mark.parametrize(
-    "field",
-    [
-        # DSPy still records its deprecated, no-op ``format`` option.
-        pytest.param(
-            lambda: ava.OutputField(format=str),
-            id="unsupported-option",
-            marks=pytest.mark.filterwarnings("ignore::DeprecationWarning"),
-        ),
-        pytest.param(lambda: ava.OutputField(default=1), id="default"),
-    ],
-)
-def test_from_dspy_rejects_field_options_it_cannot_carry(field):
-    signature = dspy.Signature({"question": (str, ava.InputField()), "answer": (int, field())})
+def test_from_dspy_rejects_field_options_it_cannot_carry():
+    # DSPy still records its deprecated, no-op ``format`` option.
+    with pytest.warns(DeprecationWarning):
+        answer = ava.OutputField(format=str)
+    signature = dspy.Signature({"question": (str, ava.InputField()), "answer": (int, answer)})
 
     with pytest.raises(TypeError, match="answer"):
         SignatureSpec.from_dspy(signature)
+
+
+def test_dspy_defaults_do_not_make_fields_optional():
+    signature = dspy.Signature(
+        {"question": (str, ava.InputField()), "answer": (int, ava.OutputField(default=1))}
+    )
+
+    with pytest.raises(ValidationError, match="answer"):
+        SignatureSpec.from_dspy(signature).validate_outputs(JsonOutputs(text="{}"))
 
 
 def test_python_outputs_validate_strictly():
