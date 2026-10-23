@@ -1,15 +1,13 @@
 from pathlib import Path
 from shutil import copy2
 
-from predict_rlm import File
+from avalanche import File
 
 from .schema import PublishedReviewPack
 
 
 def _validated_file_path(file: File, *, label: str, suffix: str) -> Path:
-    if file.path is None:
-        raise ValueError(f"{label} did not return a host file path")
-    path = Path(file.path)
+    path = file.path
     if not path.is_file():
         raise ValueError(f"{label} output does not exist: {path}")
     if path.suffix.lower() != suffix:

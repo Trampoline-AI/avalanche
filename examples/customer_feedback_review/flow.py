@@ -1,14 +1,11 @@
-from predict_rlm import File
-
 import avalanche as ava
+from avalanche import File
 
 from .config import (
-    BRIEF_OUTPUT_DIR,
     FEEDBACK_WORKBOOK_PATH,
     MODEL,
     PUBLISHED_OUTPUT_DIR,
     SUB_MODEL,
-    WORKBOOK_OUTPUT_DIR,
 )
 from .schema import ProductReview, PublishedReviewPack, RiskReport, ThemeReport
 from .signature import (
@@ -24,7 +21,7 @@ from .util import publish_review_pack_files
 @ava.source
 def load_feedback_workbook() -> File:
     """Load the customer feedback workbook."""
-    return File(path=str(FEEDBACK_WORKBOOK_PATH))
+    return File.from_path(FEEDBACK_WORKBOOK_PATH)
 
 
 @ava.agent_step(
@@ -85,7 +82,6 @@ def compose_product_review(
     lm=MODEL,
     sub_lm=SUB_MODEL,
     skills=[ava.agent.skills.spreadsheet],
-    output_dir=WORKBOOK_OUTPUT_DIR,
 )
 async def build_review_workbook(
     source_workbook: File,
@@ -102,7 +98,6 @@ async def build_review_workbook(
     lm=MODEL,
     sub_lm=SUB_MODEL,
     skills=[ava.agent.skills.docx],
-    output_dir=BRIEF_OUTPUT_DIR,
 )
 async def write_executive_brief(
     review: ProductReview,

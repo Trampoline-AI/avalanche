@@ -522,21 +522,18 @@ def _materialize_result(run_id: str, value, output_directory: Path) -> dict:
     def materialize(item):
         if isinstance(item, File):
             index = len(files) + 1
-            digest = hashlib.sha256(item.content).hexdigest()
+            item.snapshot()
+            digest = item.sha256
             if item.sha256 != digest:
                 raise ValueError("Result file digest does not match its content")
             filename = _generated_result_filename(index, item.name)
-            _write_exclusive_file(
-                filename,
-                item.content,
-                staging_fd,
-            )
+            _write_reference_file(filename, item, staging_fd)
             metadata = {
                 "path": filename,
                 "name": item.name,
                 "media_type": item.content_type,
                 "sha256": digest,
-                "size": len(item.content),
+                "size": item.size,
             }
             files.append(metadata)
             return {"file": metadata}
@@ -551,7 +548,7 @@ def _materialize_result(run_id: str, value, output_directory: Path) -> dict:
             workspace_identities[root_name] = root_identity
             metadata = {
                 "path": root_name,
-                "entries": len(item.entries),
+                "entries": len(manifest["entries"]),
                 "sha256": hashlib.sha256(
                     json.dumps(manifest, sort_keys=True, separators=(",", ":")).encode()
                 ).hexdigest(),
@@ -931,6 +928,77 @@ def _write_exclusive_file(
         os.close(descriptor)
 
 
+def _write_reference_file(name, file, directory_fd):
+    """Stream a bound file into anchored output storage and verify its identity."""
+    file.snapshot()
+    flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0)
+    descriptor = os.open(name, flags, 0o600, dir_fd=directory_fd)
+    try:
+        with file.open() as source:
+            while chunk := source.read(1024 * 1024):
+                view = memoryview(chunk)
+                while view:
+                    written = os.write(descriptor, view)
+                    if written <= 0:
+                        raise OSError("Result materialization made no write progress")
+                    view = view[written:]
+        os.fsync(descriptor)
+        digest, size = _hash_output_file(name, directory_fd, maximum_bytes=file.size)
+        if digest != file.sha256 or size != file.size:
+            raise ValueError("Materialized reference file failed digest verification")
+    except BaseException:
+        _unlink_output_file(name, directory_fd)
+        raise
+    finally:
+        os.close(descriptor)
+
+
+def _materialize_reference_workspace(workspace, root_name, staging_fd):
+    """Export a bound host tree instead of treating empty reference entries as data."""
+    from avalanche import File
+
+    source_root = workspace.path
+    os.mkdir(root_name, mode=0o700, dir_fd=staging_fd)
+    root_fd, root_identity = _open_private_directory(staging_fd, root_name, label="workspace")
+    identities = {"": root_identity}
+    entries = []
+    try:
+        for parent, directories, filenames, source_fd in os.fwalk(source_root):
+            relative = Path(parent).relative_to(source_root).as_posix()
+            relative = "" if relative == "." else relative
+            destination_fd = _open_workspace_directory(root_fd, relative, identities)
+            try:
+                for name in sorted(directories):
+                    metadata = os.stat(name, dir_fd=source_fd, follow_symlinks=False)
+                    if not stat.S_ISDIR(metadata.st_mode):
+                        raise ValueError("Workspace export rejects symlinks and special files")
+                    os.mkdir(name, mode=0o700, dir_fd=destination_fd)
+                    child_fd, identity = _open_private_directory(
+                        destination_fd, name, label="workspace"
+                    )
+                    os.close(child_fd)
+                    path = f"{relative}/{name}" if relative else name
+                    identities[path] = identity
+                    entries.append({"path": path, "kind": "directory"})
+                for name in sorted(filenames):
+                    metadata = os.stat(name, dir_fd=source_fd, follow_symlinks=False)
+                    if not stat.S_ISREG(metadata.st_mode):
+                        raise ValueError("Workspace export rejects symlinks and special files")
+                    path = f"{relative}/{name}" if relative else name
+                    file = File.from_path(source_root / path, workspace=workspace)
+                    _write_reference_file(name, file, destination_fd)
+                    entries.append(
+                        {"path": path, "kind": "file", "sha256": file.sha256, "size": file.size}
+                    )
+                os.fsync(destination_fd)
+            finally:
+                os.close(destination_fd)
+        os.fsync(root_fd)
+    finally:
+        os.close(root_fd)
+    return {"version": 1, "entries": entries}, root_identity
+
+
 def _materialize_workspace_tree(
     workspace,
     root_name: str,
@@ -939,6 +1007,8 @@ def _materialize_workspace_tree(
     """Write, verify, and recursively sync one validated workspace tree."""
     from avalanche.workspace import Workspace
 
+    if workspace.is_reference:
+        return _materialize_reference_workspace(workspace, root_name, staging_fd)
     manifest = workspace.manifest()
     validated = Workspace.from_manifest(manifest)
     os.mkdir(root_name, mode=0o700, dir_fd=staging_fd)

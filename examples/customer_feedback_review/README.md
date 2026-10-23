@@ -13,7 +13,7 @@ We define the steps below. The source loads the bundled workbook as a typed
 ```python
 @ava.source
 def load_feedback_workbook() -> File:
-    return File(path=str(FEEDBACK_WORKBOOK_PATH))
+    return File.from_path(FEEDBACK_WORKBOOK_PATH)
 ```
 
 We define two agent steps that analyze the same workbook. Each receives the
@@ -67,8 +67,13 @@ def compose_product_review(
     )
 ```
 
-We render the approved review with two further agent steps. Each writes to its
-own `output_dir`:
+We render the approved review with two further agent steps. Avalanche reserves
+each call's outputs inside the run workspace; returned values use the same
+`ava.File` reference type as inputs (import `File` from `avalanche`).
+File steps need a mount-capable PredictRLM backend; JSPI and pooled/named SBX
+fail closed rather than copying. DirectPythonBackend is host-path passthrough
+with advisory read-only inputs, not a security sandbox. See the
+[reference guide](../../docs/file-references.md) for host binding and output lifetime.
 
 ```python
 @ava.agent_step(
@@ -76,7 +81,6 @@ own `output_dir`:
     lm=MODEL,
     sub_lm=SUB_MODEL,
     skills=[ava.agent.skills.spreadsheet],
-    output_dir=WORKBOOK_OUTPUT_DIR,
 )
 async def build_review_workbook(
     source_workbook: File,
@@ -93,7 +97,6 @@ async def build_review_workbook(
     lm=MODEL,
     sub_lm=SUB_MODEL,
     skills=[ava.agent.skills.docx],
-    output_dir=BRIEF_OUTPUT_DIR,
 )
 async def write_executive_brief(
     review: ProductReview,

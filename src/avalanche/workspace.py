@@ -8,6 +8,7 @@ import os
 import shutil
 import stat
 import tempfile
+import warnings
 from contextvars import ContextVar
 from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
@@ -325,6 +326,19 @@ class Workspace(BaseModel):
             raise ValueError("Workspace cannot have both entries and a reference")
         if "version" not in value:
             return value
+        if value.get("kind") == "workspace":
+            if set(value) != {"kind", "version", "reference"}:
+                raise ValueError("Unsupported workspace reference")
+            value = {key: item for key, item in value.items() if key != "kind"}
+        elif "kind" in value:
+            raise ValueError("Unsupported workspace kind")
+        elif set(value) == {"version", "reference"}:
+            warnings.warn(
+                "Untagged Workspace references are deprecated; include kind=workspace. "
+                "Support is removed in the next minor release.",
+                DeprecationWarning,
+                stacklevel=2,
+            )
         if (
             set(value) not in ({"version", "entries"}, {"version", "reference"})
             or type(value["version"]) is not int
@@ -504,7 +518,12 @@ class Workspace(BaseModel):
     def from_manifest(cls, manifest: dict[str, Any]) -> "Workspace":
         if (
             type(manifest) is not dict
-            or set(manifest) not in ({"version", "entries"}, {"version", "reference"})
+            or set(manifest)
+            not in (
+                {"version", "entries"},
+                {"version", "reference"},
+                {"kind", "version", "reference"},
+            )
             or type(manifest["version"]) is not int
             or manifest["version"] != _MANIFEST_VERSION
         ):
@@ -516,6 +535,7 @@ class Workspace(BaseModel):
             if self.entries:
                 raise ValueError("Workspace cannot have both entries and a reference")
             return {
+                "kind": "workspace",
                 "version": _MANIFEST_VERSION,
                 "reference": _validated_reference(self.reference),
             }
@@ -530,8 +550,6 @@ class Workspace(BaseModel):
 
     @model_serializer(mode="wrap")
     def _serialize(self, handler, info):
-        if self.is_reference:
-            return self.manifest()
         context = info.context
         serializer = None
         if isinstance(context, dict):
@@ -771,8 +789,11 @@ def snapshot_workspaces(value: Any) -> Any:
     """Capture every workspace in a supported workflow return shape."""
     if isinstance(value, Workspace):
         return value if value.is_reference else value.snapshot()
+    from .file import File
     from .types import LineagedResult
 
+    if isinstance(value, File):
+        return value.snapshot()
     if isinstance(value, LineagedResult):
         snapshotted = snapshot_workspaces(value.value)
         return (

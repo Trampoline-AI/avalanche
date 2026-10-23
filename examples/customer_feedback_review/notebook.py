@@ -18,10 +18,10 @@ def _():
     import marimo as mo
     from dotenv import load_dotenv
     from openpyxl import load_workbook
-    from predict_rlm import File, PredictRLM
     from pydantic import BaseModel, Field
 
     import avalanche as ava
+    from avalanche import File
     from skills import evidence_coding_skill
 
     # The shared example model picker lives one directory up, in examples/.
@@ -34,7 +34,6 @@ def _():
         File,
         Literal,
         Path,
-        PredictRLM,
         ast,
         ava,
         evidence_coding_skill,
@@ -410,20 +409,19 @@ async def _(
     FEEDBACK_WORKBOOK_PATH,
     File,
     MODEL,
-    PredictRLM,
     SUB_MODEL,
     ava,
     evidence_coding_skill,
     mo,
 ):
-    _workbook = File(path=str(FEEDBACK_WORKBOOK_PATH))
-    _rlm = PredictRLM(
-        ExtractThemes,
-        lm=MODEL,
-        sub_lm=SUB_MODEL,
+    _workbook = File.from_path(FEEDBACK_WORKBOOK_PATH)
+    _rlm = ava.Agent(
+        signature=ExtractThemes,
+        step_name="extract_themes",
+        runtime_kwargs={"lm": MODEL, "sub_lm": SUB_MODEL},
         skills=[ava.agent.skills.spreadsheet, evidence_coding_skill],
     )
-    _result = await _rlm.acall(workbook=_workbook)
+    _result = await _rlm(workbook=_workbook)
 
     mo.vstack(
         (
@@ -604,7 +602,7 @@ def _(
     @ava.source
     def load_feedback_workbook() -> File:
         """Load the customer feedback workbook."""
-        return File(path=str(FEEDBACK_WORKBOOK_PATH))
+        return File.from_path(FEEDBACK_WORKBOOK_PATH)
 
     class ExtractThemes(ava.Signature):
         """Find recurring cross-account product needs in the feedback workbook.
@@ -667,7 +665,6 @@ def _(
         lm=MODEL,
         sub_lm=SUB_MODEL,
         skills=[ava.agent.skills.spreadsheet],
-        output_dir=WORKBOOK_OUTPUT_DIR,
     )
     async def build_review_workbook(
         source_workbook: File,
@@ -690,7 +687,6 @@ def _(
         lm=MODEL,
         sub_lm=SUB_MODEL,
         skills=[ava.agent.skills.docx],
-        output_dir=BRIEF_OUTPUT_DIR,
     )
     async def write_executive_brief(
         review: ProductReview,

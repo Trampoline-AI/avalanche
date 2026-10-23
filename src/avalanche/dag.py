@@ -48,6 +48,7 @@ When a workflow runs:
 
 from __future__ import annotations
 
+import inspect
 from collections import defaultdict
 from concurrent.futures import FIRST_COMPLETED, CancelledError, Future, ThreadPoolExecutor, wait
 from contextvars import ContextVar, copy_context
@@ -63,7 +64,12 @@ from ulid import ULID
 
 from .input_ref import InputRef
 from .run_handle import RunHandle
-from .step_interface import StepInterface, decoration_namespace, step_interface_for_function
+from .step_interface import (
+    StepInterface,
+    decoration_namespace,
+    resolve_step_signature,
+    step_interface_for_function,
+)
 from .webhook import Webhook
 
 if TYPE_CHECKING:
@@ -594,6 +600,7 @@ def source(
 
     def decorator(f: F) -> Node:
         namespace = localns if fn is not None else decoration_namespace()
+        f.__signature__ = resolve_step_signature(f, namespace)
         return Node(
             f,
             NodeType.SOURCE,
@@ -630,6 +637,7 @@ def step(
 
     def decorator(f: F) -> Node:
         namespace = localns if fn is not None else decoration_namespace()
+        f.__signature__ = resolve_step_signature(f, namespace)
         return Node(
             f,
             NodeType.STEP,
@@ -669,6 +677,7 @@ def dest(
 
     def decorator(f: F) -> Node:
         namespace = localns if fn is not None else decoration_namespace()
+        f.__signature__ = resolve_step_signature(f, namespace)
         return Node(
             f,
             NodeType.DEST,
@@ -1698,8 +1707,28 @@ def _with_current_run_context(
     back into ``AppendResult`` here (worker-side) so user code and Stream
     wrappers never see the internal transport type.
     """
+    from .references import LocalReferenceBinder, rebind_arguments
     from .runtime import RunContext
     from .runtime.context import _run_with_context
+
+    def rebuild(args, kwargs):
+        signature = inspect.signature(fn)
+        has_extra_kwargs = any(
+            p.kind is inspect.Parameter.VAR_KEYWORD for p in signature.parameters.values()
+        )
+        hidden = (
+            {}
+            if has_extra_kwargs
+            else {
+                name: value
+                for name, value in kwargs.items()
+                if name not in signature.parameters
+            }
+        )
+        declared = {name: value for name, value in kwargs.items() if name not in hidden}
+        bound = signature.bind_partial(*args, **declared)
+        bound.arguments.update(rebind_arguments(fn, bound.arguments, LocalReferenceBinder()))
+        return bound.args, {**bound.kwargs, **hidden}
 
     if not isinstance(context, RunContext):
         # Still unwrap parent envelopes so non-context nodes never receive an
@@ -1710,7 +1739,8 @@ def _with_current_run_context(
             kwargs = _materialize_worker_kwargs(kwargs)
             for name in context_param_names:
                 kwargs[name] = context
-            return fn(*_unwrap_lineaged_tree(args), **_unwrap_lineaged_tree(kwargs))
+            args, kwargs = rebuild(_unwrap_lineaged_tree(args), _unwrap_lineaged_tree(kwargs))
+            return fn(*args, **kwargs)
 
         return plain
 
@@ -1736,6 +1766,7 @@ def _with_current_run_context(
 
         unwrapped_args = _unwrap_lineaged_tree(args)
         unwrapped_kwargs = _unwrap_lineaged_tree(kwargs)
+        unwrapped_args, unwrapped_kwargs = rebuild(unwrapped_args, unwrapped_kwargs)
         result = _run_with_context(context, fn, *unwrapped_args, **unwrapped_kwargs)
         return _wrap_lineaged_result(result, context, num_returns=num_returns)
 

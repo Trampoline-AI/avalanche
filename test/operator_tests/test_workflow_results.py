@@ -42,6 +42,22 @@ from runtime.operator.results import (
 from runtime.operator.server import serve
 
 
+def _attachment_payload(content: bytes, name: str | None = None):
+    """Exercise low-level legacy bundle storage, independently of public File encoding."""
+    return EncodedWorkflowResult(
+        value_json='{"version":1,"value":{"kind":"file","attachment_id":"file_0"}}',
+        files=(
+            ResultFileAttachment(
+                attachment_id="file_0",
+                content=content,
+                name=name,
+                media_type=None,
+                sha256=hashlib.sha256(content).hexdigest(),
+            ),
+        ),
+    )
+
+
 def _spawn_publish_with_transferred_descriptor(
     transferred_descriptor,
     identity,
@@ -58,7 +74,7 @@ def _spawn_publish_with_transferred_descriptor(
         if not start.wait(timeout=10):
             raise TimeoutError("publication gate was not released")
         digest = publish_workflow_result(
-            encode_workflow_result(File(content=b"inode-bound")),
+            _attachment_payload(b"inode-bound"),
             descriptor,
             identity,
             _NeverCancelled(),
@@ -265,6 +281,9 @@ def test_spawned_results_materialize_nested_files_workspaces_and_large_payloads(
     operator, client = result_client
     run_id = client.start_run("result_bundle")
     assert _wait_for_terminal(client, run_id, timeout=20).status == RunStatus.SUCCESS
+    payload = operator._get_run_result_payload(run_id)
+    assert payload.files == ()
+    assert len(payload.value_json) < 4096
     for result in (operator.get_run_result(run_id), client.get_run_result(run_id)):
         assert result["json"] == {"count": 3, "ok": True, "items": [None, "value", 2.5]}
         assert result["report"]["title"] == "weekly"
@@ -311,7 +330,7 @@ def test_failed_and_cancelled_runs_never_expose_results_or_leave_pending_files(r
 
 def test_result_codec_rejects_corrupt_file_content():
     content = b"expected"
-    encoded = encode_workflow_result(File(name="data.bin", content=content))
+    encoded = _attachment_payload(content, "data.bin")
     attachment = encoded.files[0]
     corrupted = EncodedWorkflowResult(
         value_json=encoded.value_json,
@@ -393,7 +412,7 @@ def test_accept_is_immutable_after_namespace_discovery_and_same_user_mutation(tm
     store = ResultStore(tmp_path)
     pending = store.prepare()
     digest = publish_workflow_result(
-        encode_workflow_result(File(content=b"stable")),
+        _attachment_payload(b"stable"),
         pending.descriptor,
         (pending.device, pending.inode),
         _NeverCancelled(),
@@ -491,7 +510,7 @@ def test_result_store_enforces_aggregate_result_and_byte_caps(tmp_path, monkeypa
 def test_result_store_uses_private_modes_and_rejects_symlink_substitution(tmp_path):
     store = ResultStore(tmp_path)
     pending = store.prepare()
-    encoded = encode_workflow_result(File(name="safe.bin", content=b"safe"))
+    encoded = _attachment_payload(b"safe", "safe.bin")
     digest = publish_workflow_result(
         encoded,
         pending.descriptor,
@@ -563,7 +582,7 @@ def test_spawned_publication_cannot_be_relocated_by_path_replacement(tmp_path, r
 def test_result_publication_cancellation_never_publishes_partial_manifest(tmp_path):
     store = ResultStore(tmp_path)
     pending = store.prepare()
-    encoded = encode_workflow_result(File(content=b"x" * (5 * 1024 * 1024)))
+    encoded = _attachment_payload(b"x" * (5 * 1024 * 1024))
     try:
         with pytest.raises(ResultPublicationCancelledError):
             publish_workflow_result(

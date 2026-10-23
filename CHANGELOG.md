@@ -2,6 +2,27 @@
 
 ## Unreleased
 
+### 0.14.0
+
+- Make `ava.File` a path-backed workspace reference: streaming read-only `open()`,
+  `.path`, explicit `read_bytes()`, lazy SHA-256 and no file bodies on new wires.
+  `File(content=...)`, byte inputs, `.content` and `ava.agent.File` warn and are
+  removed next minor; migrate to `ava.File.from_path`.
+- Tag File and reference Workspace wire values; reject unknown File targets.
+  Untagged Workspace references warn for one release. Expose `ReferenceBinder`,
+  `LocalReferenceBinder`, `rebind_arguments` and `file_reference_context` for hosts
+  to reconstruct and bind every step's arguments against its declared types.
+- Mount File/Workspace inputs at agent boundaries without copying. Reserve agent
+  File outputs inside the run workspace per step/attempt and return public refs.
+  Unsupported backends fail closed; DirectPython read-only mounts are advisory.
+- Operator inputs/results now carry File references instead of file bodies. Fix
+  reference Workspace decoding at the root and inside models, and CLI export of
+  bound reference workspaces. CLI file export streams and input binding is lazy.
+- Port file examples to the single public type. See [File references](docs/file-references.md)
+  for wire examples, host binding signatures, temporary local lifetime and migration.
+  This candidate pins unreleased PredictRLM PR #74; replace with its released
+  version before merging.
+
 - Keep shared connection trunks close to the intervening nodes, widening only
   where a wider row requires clearance instead of detouring around the whole graph.
 

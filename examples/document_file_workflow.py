@@ -1,5 +1,7 @@
 """Document input/output example for the operator CLI."""
 
+import tempfile
+from pathlib import Path
 from typing import Any, cast
 
 from pydantic import BaseModel
@@ -21,16 +23,11 @@ class DocumentReport(BaseModel):
 def build_document_report(payload: DocumentInput) -> DocumentReport:
     """Build a report and processed copy of the input document."""
     text = payload.document.read_bytes().decode("utf-8")
-    content = f"value={payload.value}\n{text}".encode()
+    output = Path(tempfile.mkdtemp(prefix="document-report-")) / "processed-document.txt"
+    output.write_text(f"value={payload.value}\n{text}")
     return DocumentReport(
         summary=f"Processed {payload.document.name or 'document'}",
-        files=[
-            ava.File(
-                name="processed-document.txt",
-                content=content,
-                content_type="text/plain",
-            )
-        ],
+        files=[ava.File.from_path(output, content_type="text/plain")],
     )
 
 
@@ -40,12 +37,14 @@ def document_file_workflow():
 
 
 if __name__ == "__main__":
+    document = Path(tempfile.mkdtemp(prefix="document-input-")) / "doc.txt"
+    document.write_text("hello")
     workflow = cast(Any, document_file_workflow)()
     result = workflow.run(
         executor=ava.LocalExecutor(),
         input={
             "value": 41,
-            "document": ava.File(name="doc.txt", content=b"hello"),
+            "document": ava.File.from_path(document),
         },
     ).result()
     print(result)
