@@ -36,7 +36,7 @@
     "build": "tsc --noEmit -p tsconfig.app.json && tsc --noEmit -p tsconfig.node.json && vite build && tsc -p tsconfig.build.json && pnpm run rewrite:declarations",
     "rewrite:declarations": "node scripts/rewrite-declaration-specifiers.mjs",
     "dev": "vite build --watch",
-    "generate": "uv run python -m grpc_tools.protoc -I../../src/runtime/operator/proto --plugin=protoc-gen-ts=./node_modules/.bin/protoc-gen-ts --ts_out=src/generated --ts_opt=long_type_string ../../src/runtime/operator/proto/operator.proto",
+    "generate": "uv run python -m grpc_tools.protoc -I../../src/runtime/operator/proto --plugin=protoc-gen-ts=./node_modules/.bin/protoc-gen-ts --ts_out=src/generated --ts_opt=long_type_string ../../src/runtime/operator/proto/operator.proto && uv run python ../../scripts/export_agent_schemas.py && node scripts/generate-agent-schemas.mjs",
     "format": "prettier --write .",
     "format:check": "prettier --check .",
     "lint": "eslint . --max-warnings 0",
@@ -59,7 +59,8 @@
     "@uiw/codemirror-theme-github": "^4.25.11",
     "@xyflow/react": "^12.9.2",
     "lucide-react": "^1.28.0",
-    "react-markdown": "^10.1.0"
+    "react-markdown": "^10.1.0",
+    "zod": "^4.4.3"
   },
   "peerDependencies": {
     "react": "^19.1.1",

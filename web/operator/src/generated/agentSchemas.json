@@ -1,0 +1,748 @@
+{
+  "$defs": {
+    "AgentEvent": {
+      "discriminator": {
+        "mapping": {
+          "code.generated": "#/$defs/CodeGenerated",
+          "model.finished": "#/$defs/ModelFinished",
+          "model.started": "#/$defs/ModelStarted",
+          "tool.finished": "#/$defs/ToolFinished",
+          "tool.started": "#/$defs/ToolStarted",
+          "turn.finished": "#/$defs/TurnFinished"
+        },
+        "propertyName": "kind"
+      },
+      "oneOf": [
+        {
+          "$ref": "#/$defs/TurnFinished"
+        },
+        {
+          "$ref": "#/$defs/ModelStarted"
+        },
+        {
+          "$ref": "#/$defs/ModelFinished"
+        },
+        {
+          "$ref": "#/$defs/ToolStarted"
+        },
+        {
+          "$ref": "#/$defs/ToolFinished"
+        },
+        {
+          "$ref": "#/$defs/CodeGenerated"
+        }
+      ]
+    },
+    "AgentTraceHeader": {
+      "additionalProperties": false,
+      "description": "Summary every runtime reports for one agent invocation.",
+      "properties": {
+        "duration_ms": {
+          "minimum": 0,
+          "title": "Duration Ms",
+          "type": "integer"
+        },
+        "external_run_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "External Run Id"
+        },
+        "model": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Model"
+        },
+        "runtime_kind": {
+          "const": "predict_rlm",
+          "title": "Runtime Kind",
+          "type": "string"
+        },
+        "session_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Session Id"
+        },
+        "status": {
+          "enum": [
+            "succeeded",
+            "failed",
+            "cancelled"
+          ],
+          "title": "Status",
+          "type": "string"
+        },
+        "stop_reason": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Stop Reason"
+        },
+        "tool_call_count": {
+          "minimum": 0,
+          "title": "Tool Call Count",
+          "type": "integer"
+        },
+        "trace_format": {
+          "title": "Trace Format",
+          "type": "string"
+        },
+        "turn_count": {
+          "minimum": 0,
+          "title": "Turn Count",
+          "type": "integer"
+        },
+        "usage": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/TokenUsage"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "runtime_kind",
+        "trace_format",
+        "status",
+        "stop_reason",
+        "model",
+        "duration_ms",
+        "usage",
+        "turn_count",
+        "tool_call_count",
+        "external_run_id",
+        "session_id"
+      ],
+      "title": "AgentTraceHeader",
+      "type": "object"
+    },
+    "AgentTraceRecord": {
+      "additionalProperties": false,
+      "description": "The complete trace of one agent invocation.\n\nWhen ``turns_streamed`` is true, turns travelled as live events and the\nrecord carries none; the header still states how many there were.",
+      "properties": {
+        "header": {
+          "$ref": "#/$defs/AgentTraceHeader"
+        },
+        "native": {
+          "$ref": "#/$defs/PredictRLMNativeTrace"
+        },
+        "schema_version": {
+          "const": 2,
+          "default": 2,
+          "title": "Schema Version",
+          "type": "integer"
+        },
+        "turns": {
+          "items": {
+            "$ref": "#/$defs/Turn"
+          },
+          "title": "Turns",
+          "type": "array"
+        },
+        "turns_streamed": {
+          "title": "Turns Streamed",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "schema_version",
+        "header",
+        "turns",
+        "native",
+        "turns_streamed"
+      ],
+      "title": "AgentTraceRecord",
+      "type": "object"
+    },
+    "CodeExecutionAction": {
+      "additionalProperties": false,
+      "description": "Code the agent wrote and executed during a turn.",
+      "properties": {
+        "code": {
+          "title": "Code",
+          "type": "string"
+        },
+        "error": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Error"
+        },
+        "kind": {
+          "const": "code_execution",
+          "default": "code_execution",
+          "title": "Kind",
+          "type": "string"
+        },
+        "language": {
+          "title": "Language",
+          "type": "string"
+        },
+        "output": {
+          "title": "Output",
+          "type": "string"
+        }
+      },
+      "required": [
+        "kind",
+        "language",
+        "code",
+        "output",
+        "error"
+      ],
+      "title": "CodeExecutionAction",
+      "type": "object"
+    },
+    "CodeGenerated": {
+      "additionalProperties": false,
+      "properties": {
+        "code": {
+          "title": "Code",
+          "type": "string"
+        },
+        "kind": {
+          "const": "code.generated",
+          "default": "code.generated",
+          "title": "Kind",
+          "type": "string"
+        },
+        "turn": {
+          "exclusiveMinimum": 0,
+          "title": "Turn",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "kind",
+        "turn",
+        "code"
+      ],
+      "title": "CodeGenerated",
+      "type": "object"
+    },
+    "JsonValue": {},
+    "ModelCallAction": {
+      "additionalProperties": false,
+      "description": "A nested model call made during a turn, for example a sub-model query.",
+      "properties": {
+        "call_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Call Id"
+        },
+        "caller": {
+          "enum": [
+            "model",
+            "code"
+          ],
+          "title": "Caller",
+          "type": "string"
+        },
+        "duration_ms": {
+          "anyOf": [
+            {
+              "minimum": 0,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Duration Ms"
+        },
+        "error": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Error"
+        },
+        "kind": {
+          "const": "model_call",
+          "default": "model_call",
+          "title": "Kind",
+          "type": "string"
+        },
+        "model": {
+          "title": "Model",
+          "type": "string"
+        },
+        "usage": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/TokenUsage"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "kind",
+        "call_id",
+        "caller",
+        "model",
+        "duration_ms",
+        "usage",
+        "error"
+      ],
+      "title": "ModelCallAction",
+      "type": "object"
+    },
+    "ModelFinished": {
+      "additionalProperties": false,
+      "properties": {
+        "call_id": {
+          "title": "Call Id",
+          "type": "string"
+        },
+        "error": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Error"
+        },
+        "kind": {
+          "const": "model.finished",
+          "default": "model.finished",
+          "title": "Kind",
+          "type": "string"
+        }
+      },
+      "required": [
+        "kind",
+        "call_id",
+        "error"
+      ],
+      "title": "ModelFinished",
+      "type": "object"
+    },
+    "ModelStarted": {
+      "additionalProperties": false,
+      "properties": {
+        "call_id": {
+          "title": "Call Id",
+          "type": "string"
+        },
+        "kind": {
+          "const": "model.started",
+          "default": "model.started",
+          "title": "Kind",
+          "type": "string"
+        },
+        "model": {
+          "title": "Model",
+          "type": "string"
+        }
+      },
+      "required": [
+        "kind",
+        "call_id",
+        "model"
+      ],
+      "title": "ModelStarted",
+      "type": "object"
+    },
+    "PredictRLMNativeTrace": {
+      "additionalProperties": false,
+      "description": "PredictRLM run details that have no common-layer equivalent.",
+      "properties": {
+        "cache_hits": {
+          "minimum": 0,
+          "title": "Cache Hits",
+          "type": "integer"
+        },
+        "format": {
+          "const": "predict_rlm.run/v1",
+          "default": "predict_rlm.run/v1",
+          "title": "Format",
+          "type": "string"
+        },
+        "max_iterations": {
+          "exclusiveMinimum": 0,
+          "title": "Max Iterations",
+          "type": "integer"
+        },
+        "sub_model": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Sub Model"
+        }
+      },
+      "required": [
+        "format",
+        "sub_model",
+        "max_iterations",
+        "cache_hits"
+      ],
+      "title": "PredictRLMNativeTrace",
+      "type": "object"
+    },
+    "TokenUsage": {
+      "additionalProperties": false,
+      "description": "Token counts for one or more model calls; absent figures were not reported.",
+      "properties": {
+        "cache_creation_input_tokens": {
+          "anyOf": [
+            {
+              "minimum": 0,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Cache Creation Input Tokens"
+        },
+        "cache_read_input_tokens": {
+          "anyOf": [
+            {
+              "minimum": 0,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Cache Read Input Tokens"
+        },
+        "cost_usd": {
+          "anyOf": [
+            {
+              "minimum": 0,
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Cost Usd"
+        },
+        "input_tokens": {
+          "minimum": 0,
+          "title": "Input Tokens",
+          "type": "integer"
+        },
+        "output_tokens": {
+          "minimum": 0,
+          "title": "Output Tokens",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "input_tokens",
+        "output_tokens",
+        "cache_read_input_tokens",
+        "cache_creation_input_tokens",
+        "cost_usd"
+      ],
+      "title": "TokenUsage",
+      "type": "object"
+    },
+    "ToolCallAction": {
+      "additionalProperties": false,
+      "description": "A tool invoked by the model directly or by code the agent ran.",
+      "properties": {
+        "arguments": {
+          "$ref": "#/$defs/JsonValue"
+        },
+        "call_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Call Id"
+        },
+        "caller": {
+          "enum": [
+            "model",
+            "code"
+          ],
+          "title": "Caller",
+          "type": "string"
+        },
+        "duration_ms": {
+          "anyOf": [
+            {
+              "minimum": 0,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Duration Ms"
+        },
+        "error": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Error"
+        },
+        "kind": {
+          "const": "tool_call",
+          "default": "tool_call",
+          "title": "Kind",
+          "type": "string"
+        },
+        "name": {
+          "title": "Name",
+          "type": "string"
+        },
+        "result": {
+          "$ref": "#/$defs/JsonValue"
+        }
+      },
+      "required": [
+        "kind",
+        "call_id",
+        "caller",
+        "name",
+        "arguments",
+        "result",
+        "error",
+        "duration_ms"
+      ],
+      "title": "ToolCallAction",
+      "type": "object"
+    },
+    "ToolFinished": {
+      "additionalProperties": false,
+      "properties": {
+        "call_id": {
+          "title": "Call Id",
+          "type": "string"
+        },
+        "error": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Error"
+        },
+        "kind": {
+          "const": "tool.finished",
+          "default": "tool.finished",
+          "title": "Kind",
+          "type": "string"
+        },
+        "name": {
+          "title": "Name",
+          "type": "string"
+        }
+      },
+      "required": [
+        "kind",
+        "call_id",
+        "name",
+        "error"
+      ],
+      "title": "ToolFinished",
+      "type": "object"
+    },
+    "ToolStarted": {
+      "additionalProperties": false,
+      "properties": {
+        "call_id": {
+          "title": "Call Id",
+          "type": "string"
+        },
+        "kind": {
+          "const": "tool.started",
+          "default": "tool.started",
+          "title": "Kind",
+          "type": "string"
+        },
+        "name": {
+          "title": "Name",
+          "type": "string"
+        }
+      },
+      "required": [
+        "kind",
+        "call_id",
+        "name"
+      ],
+      "title": "ToolStarted",
+      "type": "object"
+    },
+    "Turn": {
+      "additionalProperties": false,
+      "description": "One model response and the actions that followed it.",
+      "properties": {
+        "actions": {
+          "items": {
+            "discriminator": {
+              "mapping": {
+                "code_execution": "#/$defs/CodeExecutionAction",
+                "model_call": "#/$defs/ModelCallAction",
+                "tool_call": "#/$defs/ToolCallAction"
+              },
+              "propertyName": "kind"
+            },
+            "oneOf": [
+              {
+                "$ref": "#/$defs/ToolCallAction"
+              },
+              {
+                "$ref": "#/$defs/CodeExecutionAction"
+              },
+              {
+                "$ref": "#/$defs/ModelCallAction"
+              }
+            ]
+          },
+          "title": "Actions",
+          "type": "array"
+        },
+        "duration_ms": {
+          "anyOf": [
+            {
+              "minimum": 0,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Duration Ms"
+        },
+        "index": {
+          "exclusiveMinimum": 0,
+          "title": "Index",
+          "type": "integer"
+        },
+        "reasoning": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Reasoning"
+        },
+        "text": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Text"
+        },
+        "usage": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/TokenUsage"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "index",
+        "text",
+        "reasoning",
+        "actions",
+        "duration_ms",
+        "usage"
+      ],
+      "title": "Turn",
+      "type": "object"
+    },
+    "TurnFinished": {
+      "additionalProperties": false,
+      "properties": {
+        "kind": {
+          "const": "turn.finished",
+          "default": "turn.finished",
+          "title": "Kind",
+          "type": "string"
+        },
+        "turn": {
+          "$ref": "#/$defs/Turn"
+        }
+      },
+      "required": [
+        "kind",
+        "turn"
+      ],
+      "title": "TurnFinished",
+      "type": "object"
+    }
+  }
+}

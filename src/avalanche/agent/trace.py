@@ -24,7 +24,14 @@ from pydantic import (
 from ..runtime.context import File
 from ..workspace import Workspace
 
-_STRICT = ConfigDict(strict=True, frozen=True, extra="forbid")
+# Serialized bodies always carry defaulted fields such as ``kind``; their
+# exported JSON Schema says so.
+_STRICT = ConfigDict(
+    strict=True,
+    frozen=True,
+    extra="forbid",
+    json_schema_serialization_defaults_required=True,
+)
 
 RuntimeKind = Literal["predict_rlm"]
 AgentTraceStatus = Literal["succeeded", "failed", "cancelled"]
