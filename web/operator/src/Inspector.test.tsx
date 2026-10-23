@@ -20,7 +20,14 @@ import {
   FlowInfoMsg,
   RunSnapshotMsg,
 } from "./model";
-import { createApi, evaluationDeclaration, node, snapshotFor, workflow } from "./test/fixtures";
+import {
+  agentDeclarationJson,
+  createApi,
+  evaluationDeclaration,
+  node,
+  snapshotFor,
+  workflow,
+} from "./test/fixtures";
 
 const schemas = {
   inputs: [{ name: "question", type: "str", description: "Historical question" }],
@@ -52,15 +59,11 @@ const agentWorkflow = FlowInfoMsg.create({
   ...workflow,
   agentNodeIds: [node.nodeId],
   stepInterfaceJson: { [node.nodeId]: JSON.stringify(currentStepInterface) },
-  agentMetadataJson: {
-    [node.nodeId]: JSON.stringify({
-      signature: {
-        instructions: "Follow the current instructions.",
-        inputs: [{ name: "current_question", type: "str" }],
-        outputs: [{ name: "current_answer", type: "str" }],
-      },
-      skills: [],
-      tools: [],
+  agentDeclarationsJson: {
+    [node.nodeId]: agentDeclarationJson({
+      instructions: "Follow the current instructions.",
+      inputs: [{ name: "current_question", annotation: "str" }],
+      outputs: [{ name: "current_answer", annotation: "str" }],
     }),
   },
 });
@@ -770,16 +773,12 @@ describe("retained run inspection", () => {
       nodeTypes: { ...agentWorkflow.nodeTypes, [reviewNodeId]: "agent" },
       displayNames: { ...agentWorkflow.displayNames, [reviewNodeId]: "Review" },
       agentNodeIds: [node.nodeId, reviewNodeId],
-      agentMetadataJson: {
-        ...agentWorkflow.agentMetadataJson,
-        [reviewNodeId]: JSON.stringify({
-          signature: {
-            instructions: "Review the current result.",
-            inputs: [{ name: "review_question", type: "str" }],
-            outputs: [{ name: "review_answer", type: "str" }],
-          },
-          skills: [],
-          tools: [],
+      agentDeclarationsJson: {
+        ...agentWorkflow.agentDeclarationsJson,
+        [reviewNodeId]: agentDeclarationJson({
+          instructions: "Review the current result.",
+          inputs: [{ name: "review_question", annotation: "str" }],
+          outputs: [{ name: "review_answer", annotation: "str" }],
         }),
       },
     });
@@ -914,22 +913,9 @@ describe("retained run inspection", () => {
   it("opens skill Markdown separately while tool source and runtime stay inline", async () => {
     const declaration = FlowInfoMsg.create({
       ...agentWorkflow,
-      agentMetadataJson: {
-        [node.nodeId]: JSON.stringify({
-          signature: { instructions: "Review the record." },
-          models: {
-            main: { identity: { name: "configured-main" } },
-            sub: { identity: "configured-sub" },
-          },
-          skills: [
-            {
-              name: "Review",
-              instructions: `Review every source record.\n\n\`\`\`text\n${"Retained source line.\n".repeat(300)}END_CODE\n\`\`\`\n\n## Final rule\n\nVerify the last record.`,
-              packages: ["openpyxl>=3.1", "pandas==2.2.3"],
-              modules: ["workbook_helpers", "evidence_utils"],
-            },
-            { name: "Instructions only", instructions: "Check the record." },
-          ],
+      agentDeclarationsJson: {
+        [node.nodeId]: agentDeclarationJson({
+          instructions: "Review the record.",
           tools: [
             {
               name: "Lookup",
@@ -937,7 +923,29 @@ describe("retained run inspection", () => {
                 'def lookup(record_id: str):\n    """Retrieve the source evidence."""\n    return records[record_id]',
             },
           ],
-          runtime: { max_iterations: 7 },
+          runtime: {
+            settings: { max_iterations: 7 },
+            models: {
+              main: { source: "step override", identity: { name: "configured-main" } },
+              sub: { source: "step override", identity: "configured-sub" },
+            },
+            skills: [
+              {
+                name: "Review",
+                instructions: `Review every source record.\n\n\`\`\`text\n${"Retained source line.\n".repeat(300)}END_CODE\n\`\`\`\n\n## Final rule\n\nVerify the last record.`,
+                packages: ["openpyxl>=3.1", "pandas==2.2.3"],
+                modules: ["workbook_helpers", "evidence_utils"],
+                tools: [],
+              },
+              {
+                name: "Instructions only",
+                instructions: "Check the record.",
+                packages: [],
+                modules: [],
+                tools: [],
+              },
+            ],
+          },
         }),
       },
     });

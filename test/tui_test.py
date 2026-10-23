@@ -1484,16 +1484,12 @@ def test_trace_completion_cannot_repair_overflow_event_history(
 
 
 @pytest.mark.asyncio
-async def test_error_only_agent_metadata_keeps_metadata_and_output_navigation_usable():
+async def test_missing_agent_declaration_keeps_output_navigation_usable():
     from tui.widgets.agent_trace import AgentMetadataInspector
 
     provider = MockStateProvider(include_agent_trace=True)
     workflow = provider._workflows["agent_trace"]
-    declaration_error = "Unable to resolve inspection signature"
-    provider._workflows[workflow.selector] = replace(
-        workflow,
-        agent_metadata_json={"inspect_agent_1": json.dumps({"error": declaration_error})},
-    )
+    provider._workflows[workflow.selector] = replace(workflow, agent_declarations={})
     run = provider.get_run("run_agent")
     node = run.nodes["inspect_agent_1"]
     envelope = AgentTraceEnvelope.model_validate_json(node.agent_trace_json)
@@ -1523,7 +1519,7 @@ async def test_error_only_agent_metadata_keeps_metadata_and_output_navigation_us
         await _wait_for(pilot, lambda: app.store.current_run is not None)
         await pilot.press("enter", "left", "down", "enter")
         metadata = app.screen.query_one("#agent-metadata-content", AgentMetadataInspector)
-        assert declaration_error in metadata.render().plain
+        assert "not published" in metadata.render().plain
         assert app.store.trace_inspector_navigation_paths() == []
         await pilot.press("left")
         assert app.store.trace_inspector_navigation_paths() == [
@@ -1539,36 +1535,7 @@ async def test_error_only_agent_metadata_keeps_metadata_and_output_navigation_us
         assert retained_outputs["audit_label"] in output.render().plain
         assert app.store.selected_agent_outputs == retained_outputs
         await pilot.press("right")
-        assert declaration_error in metadata.render().plain
-
-
-@pytest.mark.parametrize("metadata", [{}, {"error": None}, {"error": 7}])
-def test_non_error_agent_declarations_still_require_signature(store, metadata):
-    store.current_workflow.agent_metadata_json["agent"] = json.dumps(metadata)
-    store.current_run.nodes["agent"].agent_trace_json = AgentTraceEnvelope(
-        schema_version=1,
-        invocation_id="strict-metadata-run",
-        status="completed",
-        run_id="strict-metadata-run",
-        events=[
-            AgentLifecycleEvent(
-                invocation_id="strict-metadata-run",
-                sequence=1,
-                timestamp_ns=1,
-                event_kind="run.succeeded",
-                data={"outputs": {"ready": False}},
-            )
-        ],
-        trace=None,
-        evidence=None,
-        error=None,
-    ).model_dump_json()
-    store.select_node(store.all_nodes[0])
-    with pytest.raises(KeyError):
-        store._metadata_inspector_values()
-    store.trace_inspector_tab = "output"
-    with pytest.raises(KeyError):
-        store.trace_inspector_navigation_paths()
+        assert "not published" in metadata.render().plain
 
 
 @pytest.mark.asyncio

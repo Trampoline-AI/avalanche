@@ -14,6 +14,7 @@ from typing import Literal
 from pydantic import BaseModel, ConfigDict, ValidationError
 
 from avalanche import __version__ as avalanche_version
+from avalanche.agent.declaration import AgentDeclaration
 
 from .discovery import ConfiguredRoot, FileDiscoveryResult
 from .models import WorkflowDescriptor, WorkflowDiscoveryDiagnostic, WorkflowLocator
@@ -21,7 +22,7 @@ from .source import iter_source_paths
 
 logger = logging.getLogger(__name__)
 
-_CACHE_SCHEMA_VERSION = 9
+_CACHE_SCHEMA_VERSION = 10
 
 
 class _CacheModel(BaseModel):
@@ -72,7 +73,7 @@ class _CachedDescriptor(_CacheModel):
     node_types: tuple[tuple[str, str], ...]
     display_names: tuple[tuple[str, str], ...]
     agent_node_ids: tuple[str, ...]
-    agent_metadata_json: tuple[tuple[str, str], ...]
+    agent_declarations: tuple[tuple[str, AgentDeclaration], ...]
     classifier_metadata_json: tuple[tuple[str, str], ...]
     evaluation_metadata_json: tuple[tuple[str, str], ...]
     step_interface_json: tuple[tuple[str, str], ...]
@@ -93,7 +94,7 @@ class _CachedDescriptor(_CacheModel):
             node_types=descriptor.node_types,
             display_names=descriptor.display_names,
             agent_node_ids=descriptor.agent_node_ids,
-            agent_metadata_json=descriptor.agent_metadata_json,
+            agent_declarations=descriptor.agent_declarations,
             classifier_metadata_json=descriptor.classifier_metadata_json,
             evaluation_metadata_json=descriptor.evaluation_metadata_json,
             step_interface_json=descriptor.step_interface_json,
@@ -114,7 +115,7 @@ class _CachedDescriptor(_CacheModel):
             node_types=self.node_types,
             display_names=self.display_names,
             agent_node_ids=self.agent_node_ids,
-            agent_metadata_json=self.agent_metadata_json,
+            agent_declarations=self.agent_declarations,
             classifier_metadata_json=self.classifier_metadata_json,
             evaluation_metadata_json=self.evaluation_metadata_json,
             step_interface_json=self.step_interface_json,
@@ -179,7 +180,7 @@ class _SourceStamp(_CacheModel):
 
 
 class _CacheDocument(_CacheModel):
-    schema_version: Literal[9]
+    schema_version: Literal[10]
     environment: str
     roots: tuple[_CachedRoot, ...]
     watch_roots: tuple[str, ...]

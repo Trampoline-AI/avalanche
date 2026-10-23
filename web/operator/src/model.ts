@@ -149,10 +149,8 @@ export interface FlowInfoMsg {
    * @generated from protobuf field: repeated string agent_node_ids = 15
    */
   agentNodeIds: string[];
-  /**
-   * @generated from protobuf field: map<string, string> agent_metadata_json = 16
-   */
-  agentMetadataJson: {
+  /** Agent declarations keyed by node ID, as JSON validated by `parseAgentDeclaration`. */
+  agentDeclarationsJson: {
     [key: string]: string;
   };
   /** Validated classifier declarations keyed by node ID. */
@@ -199,7 +197,7 @@ export const FlowInfoMsg = {
       relativeFile: "",
       builderSymbol: "",
       agentNodeIds: [],
-      agentMetadataJson: {},
+      agentDeclarationsJson: {},
       classifierMetadataJson: {},
       evaluationMetadataJson: {},
       stepInterfaceJson: {},

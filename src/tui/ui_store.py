@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import json
 import threading
 import time
 from collections import OrderedDict, deque
@@ -18,6 +17,7 @@ from predict_rlm.trace import IterationStep
 from pydantic import ValidationError
 
 from avalanche._agent_trace import AgentLifecycleEvent, AgentTerminalDetail, AgentTraceEnvelope
+from avalanche.agent.declaration import AgentDeclaration
 
 from .dag_layout import DagNode, SeqGroup, build_nav_grid, nav_move, workflow_to_layout
 from .models import (
@@ -362,6 +362,7 @@ class UIStore:
         self._trace_known_turn_count: int = 0
         self._mapping_page_caches: dict[tuple[str, MappingSource], _MappingPageCache] = {}
         self._mapping_page_cache_token: str | None = None
+        self._declaration_token: tuple[AgentDeclaration, str] | None = None
         self.trace_hierarchy_revision: int = 0
 
         self.trace_show_full_output: bool = False
@@ -511,27 +512,24 @@ class UIStore:
         return node.name
 
     @property
-    def selected_agent_metadata_json(self) -> str | None:
+    def selected_agent_declaration(self) -> AgentDeclaration | None:
         workflow = self.current_workflow
         node_id = self.selected_agent_node_id
         if workflow is None or node_id is None:
             return None
-        return workflow.agent_metadata_json.get(node_id)
+        return workflow.agent_declarations.get(node_id)
 
     @property
     def selected_agent_metadata_content_token(self) -> str:
         """Stable metadata source token for virtual inspector body caches."""
-        return self.selected_agent_metadata_json or ""
-
-    @property
-    def selected_agent_metadata(self) -> dict | None:
-        metadata_json = self.selected_agent_metadata_json
-        if not metadata_json:
-            return None
-        metadata = json.loads(metadata_json)
-        if not isinstance(metadata, dict):
-            raise TypeError("Agent metadata must be an object")
-        return metadata
+        declaration = self.selected_agent_declaration
+        if declaration is None:
+            return ""
+        cached = self._declaration_token
+        if cached is None or cached[0] is not declaration:
+            cached = (declaration, declaration.model_dump_json())
+            self._declaration_token = cached
+        return cached[1]
 
     @property
     def selected_agent_trace_envelope(self) -> AgentTraceEnvelope | None:
@@ -1605,22 +1603,13 @@ class UIStore:
                     include_scalar_leaves=include_scalar_leaves,
                 )
 
-    def _metadata_inspector_values(self) -> dict[str, Any]:
-        metadata = self.selected_agent_metadata
-        if metadata is None or isinstance(metadata.get("error"), str):
+    def agent_declaration_sections(self) -> dict[str, Any]:
+        """The metadata inspector's sections for the selected agent step, as plain values."""
+        declaration = self.selected_agent_declaration
+        if declaration is None:
             return {}
-        signature = metadata["signature"]
-        runtime = metadata["runtime"]
-        models = metadata["models"]
-        skill_records = {
-            skill["name"]: {
-                "instructions": skill["instructions"],
-                "packages": skill["packages"],
-                "modules": skill["modules"],
-                "tools": skill["tools"],
-            }
-            for skill in metadata["skills"]
-        }
+        signature = declaration.signature.model_dump(mode="json")
+        runtime = declaration.runtime.model_dump(mode="json")
         return {
             "signature": {
                 "instructions": signature["instructions"],
@@ -1628,14 +1617,16 @@ class UIStore:
             },
             "inputs": signature["inputs"],
             "outputs": signature["outputs"],
-            "skills": skill_records,
-            "models": models,
+            "skills": {skill.pop("name"): skill for skill in runtime["skills"]},
+            "models": runtime["models"],
             "runtime": {
-                key: value for key, value in runtime.items() if key not in {"lm", "sub_lm"}
+                key: value
+                for key, value in runtime["settings"].items()
+                if key not in {"lm", "sub_lm"}
             },
-            "packages": metadata["packages"],
-            "modules": metadata["modules"],
-            "tools": metadata["tools"],
+            "packages": runtime["packages"],
+            "modules": runtime["modules"],
+            "tools": declaration.model_dump(mode="json")["tools"],
         }
 
     def trace_inspector_navigation_paths(self) -> list[tuple[str, ...]]:
@@ -1646,13 +1637,9 @@ class UIStore:
             outputs = self.selected_agent_outputs
             if outputs is None:
                 return []
-            metadata = self.selected_agent_metadata
-            declared = (
-                metadata["signature"]["outputs"]
-                if metadata is not None and not isinstance(metadata.get("error"), str)
-                else []
-            )
-            names = [field["name"] for field in declared]
+            declaration = self.selected_agent_declaration
+            declared = declaration.signature.outputs if declaration is not None else ()
+            names = [field.name for field in declared]
             names = names or list(outputs)
             names.extend(name for name in outputs if name not in names)
             paths = [("output", name) for name in names]
@@ -1661,7 +1648,7 @@ class UIStore:
                     self._append_value_navigation_paths(paths, ("output", name), outputs[name])
             return paths
         paths: list[tuple[str, ...]] = []
-        for key, value in self._metadata_inspector_values().items():
+        for key, value in self.agent_declaration_sections().items():
             path = ("metadata", key)
             paths.append(path)
             self._append_value_navigation_paths(

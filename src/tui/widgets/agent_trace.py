@@ -1071,25 +1071,21 @@ class AgentOutputInspector(_VirtualInspector):
                 message, style = messages[state]
                 leading.append(message, style=style)
                 return leading, []
-            metadata = store.selected_agent_metadata
-            declared = (
-                metadata["signature"]["outputs"]
-                if metadata is not None and not isinstance(metadata.get("error"), str)
-                else []
-            )
-            names = [field["name"] for field in declared] or list(outputs)
+            declaration = store.selected_agent_declaration
+            declared = declaration.signature.outputs if declaration is not None else ()
+            names = [field.name for field in declared] or list(outputs)
             names.extend(name for name in outputs if name not in names)
-            descriptions = {field["name"]: field for field in declared}
+            descriptions = {field.name: field for field in declared}
             trace_token = store.selected_agent_trace_content_token
             rows: list[_InspectorRow] = []
             for name in names:
                 field = descriptions.get(name)
                 label = name
                 if field is not None:
-                    if field["annotation"]:
-                        label += f": {field['annotation']}"
-                    if field["description"]:
-                        label += f" — {field['description']}"
+                    if field.annotation:
+                        label += f": {field.annotation}"
+                    if field.description:
+                        label += f" — {field.description}"
                 rows.extend(
                     AgentTraceInspector._section(
                         ("output", name),
@@ -1138,52 +1134,14 @@ class AgentMetadataInspector(_VirtualInspector):
             _append_tabs(leading, "metadata")
             leading.append(f"AGENT METADATA · {display_name}\n", style="bold #60dce4")
             leading.append(_TRACE_CONTROLS, style="dim")
-            metadata_json = store.selected_agent_metadata_json
-            metadata = store.selected_agent_metadata
-            if metadata is None:
-                if metadata_json:
-                    leading.append("Metadata payload is malformed.\n", style="bold red")
-                else:
-                    leading.append(
-                        "Metadata was not published by the operator. Restart the operator "
-                        "to refresh workflow declarations.\n",
-                        style="yellow",
-                    )
-                return leading, []
-            metadata_error = metadata.get("error")
-            if isinstance(metadata_error, str):
+            if store.selected_agent_declaration is None:
                 leading.append(
-                    f"Metadata declaration failed: {metadata_error}\n", style="bold red"
+                    "Metadata was not published by the operator. Restart the operator "
+                    "to refresh workflow declarations.\n",
+                    style="yellow",
                 )
                 return leading, []
-            signature = metadata["signature"]
-            runtime = metadata["runtime"]
-            models = metadata["models"]
-            skill_records = {
-                skill["name"]: {
-                    "instructions": skill["instructions"],
-                    "packages": skill["packages"],
-                    "modules": skill["modules"],
-                    "tools": skill["tools"],
-                }
-                for skill in metadata["skills"]
-            }
-            values: dict[str, Any] = {
-                "signature": {
-                    "instructions": signature["instructions"],
-                    "name": signature["name"],
-                },
-                "inputs": signature["inputs"],
-                "outputs": signature["outputs"],
-                "skills": skill_records,
-                "models": models,
-                "runtime": {
-                    key: value for key, value in runtime.items() if key not in {"lm", "sub_lm"}
-                },
-                "packages": metadata["packages"],
-                "modules": metadata["modules"],
-                "tools": metadata["tools"],
-            }
+            values = store.agent_declaration_sections()
             rows: list[_InspectorRow] = []
             body_token = (store.selected_agent_metadata_content_token, False)
             for key, label in self._SECTION_LABELS:

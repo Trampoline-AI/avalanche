@@ -14,6 +14,13 @@
 - Operator UI: `make web-proto` now also generates zod schemas and TypeScript types
   for the runtime-neutral agent trace from the Python models
   (`scripts/export_agent_schemas.py`). The UI does not use them yet.
+- Operator: agent step declarations (signature, tools, runtime settings) are now one
+  typed model, validated once by discovery and again by the client, TUI and web UI.
+  An agent step whose declaration cannot be built now fails discovery for its file
+  with a diagnostic, instead of showing an error in the agent metadata panel. The
+  declaration JSON has a new shape (PredictRLM settings, models and skills move under
+  `runtime`), so the operator, its clients and `@trampoline-ai/operator-ui` must be
+  upgraded together. Cached discovery results from older versions are rebuilt.
 
 ## 0.13.0
 
