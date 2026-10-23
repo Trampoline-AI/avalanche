@@ -387,8 +387,8 @@ def quickstart_signature(mo, source_code):
         (
             mo.md("## Putting it together: creating the agent"),
             mo.md(
-                "`@ava.agent_step(...)` combines the signature with its model "
-                "configuration and reusable skills. Avalanche injects the configured "
+                "`@ava.agent_step(...)` combines the signature with its runtime: "
+                "PredictRLM, its models and reusable skills. Avalanche injects the configured "
                 "`ava.Agent`; the function passes it the file and validates the returned "
                 "report."
             ),
@@ -480,7 +480,7 @@ def _(mo):
                 "configured `ava.Agent` through dependency injection."
             ),
             mo.ui.code_editor(
-                value="@ava.agent_step(AnalyzeWorkbook, skills=[ava.agent.skills.spreadsheet])\nasync def analyze_workbook(\n    workbook: File, *, agent: ava.Agent\n) -> WorkbookAnalysis:\n    return (await agent(workbook=workbook)).analysis",
+                value="@ava.agent_step(\n    AnalyzeWorkbook,\n    runtime=ava.runtimes.PredictRLM(skills=[ava.agent.skills.spreadsheet]),\n)\nasync def analyze_workbook(\n    workbook: File, *, agent: ava.Agent\n) -> WorkbookAnalysis:\n    return (await agent(workbook=workbook)).analysis",
                 language="python",
                 disabled=True,
                 show_copy_button=True,
@@ -617,9 +617,11 @@ def _(
 
     @ava.agent_step(
         ExtractThemes,
-        lm=MODEL,
-        sub_lm=SUB_MODEL,
-        skills=[ava.agent.skills.spreadsheet, evidence_coding_skill],
+        runtime=ava.runtimes.PredictRLM(
+            lm=MODEL,
+            sub_lm=SUB_MODEL,
+            skills=[ava.agent.skills.spreadsheet, evidence_coding_skill],
+        ),
     )
     async def extract_themes(workbook: File, *, agent: ava.Agent) -> ThemeReport:
         return ThemeReport.model_validate((await agent(workbook=workbook)).report)
@@ -632,9 +634,11 @@ def _(
 
     @ava.agent_step(
         DetectRisks,
-        lm=MODEL,
-        sub_lm=SUB_MODEL,
-        skills=[ava.agent.skills.spreadsheet, evidence_coding_skill],
+        runtime=ava.runtimes.PredictRLM(
+            lm=MODEL,
+            sub_lm=SUB_MODEL,
+            skills=[ava.agent.skills.spreadsheet, evidence_coding_skill],
+        ),
     )
     async def detect_risks(workbook: File, *, agent: ava.Agent) -> RiskReport:
         return RiskReport.model_validate((await agent(workbook=workbook)).report)
@@ -662,9 +666,11 @@ def _(
 
     @ava.agent_step(
         BuildReviewWorkbook,
-        lm=MODEL,
-        sub_lm=SUB_MODEL,
-        skills=[ava.agent.skills.spreadsheet],
+        runtime=ava.runtimes.PredictRLM(
+            lm=MODEL,
+            sub_lm=SUB_MODEL,
+            skills=[ava.agent.skills.spreadsheet],
+        ),
     )
     async def build_review_workbook(
         source_workbook: File,
@@ -684,9 +690,11 @@ def _(
 
     @ava.agent_step(
         WriteExecutiveBrief,
-        lm=MODEL,
-        sub_lm=SUB_MODEL,
-        skills=[ava.agent.skills.docx],
+        runtime=ava.runtimes.PredictRLM(
+            lm=MODEL,
+            sub_lm=SUB_MODEL,
+            skills=[ava.agent.skills.docx],
+        ),
     )
     async def write_executive_brief(
         review: ProductReview,

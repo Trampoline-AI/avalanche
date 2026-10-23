@@ -126,10 +126,10 @@ export function parseAgentDeclaration(raw: string | undefined): AgentDeclaration
       packages,
       modules,
     })),
-    tools: declaration.tools.map(({ name, source_code }) => ({
-      name,
-      sourceCode: source_code || undefined,
-    })),
+    // Skill tools first, then the step's own, as the agent sees them.
+    tools: [...declaration.runtime.skill_tools, ...declaration.tools].map(
+      ({ name, source_code }) => ({ name, sourceCode: source_code || undefined }),
+    ),
   };
 }
 

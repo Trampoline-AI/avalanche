@@ -10,6 +10,7 @@ if TYPE_CHECKING:
     from predict_rlm import RunTrace as AgentTrace
 
     from ..file import File
+    from .defaults import AgentDefaults
     from .evidence import (
         AgentEvidenceEvent,
         AgentEvidenceListener,
@@ -39,6 +40,7 @@ _EXPORTS = {
     "AgentTraceUnavailableEvent": ".evidence",
     "ListenerErrorPolicy": ".evidence",
     "capture_agent_evidence": ".evidence",
+    "AgentDefaults": ".defaults",
     "InputField": ".signature",
     "OutputField": ".signature",
     "Signature": ".signature",
@@ -46,6 +48,7 @@ _EXPORTS = {
 
 __all__ = [
     "Agent",
+    "AgentDefaults",
     "AgentEvidenceEvent",
     "AgentEvidenceListener",
     "AgentEvidenceObserverEvent",

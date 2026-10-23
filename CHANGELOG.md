@@ -40,6 +40,28 @@
   trace body. The protobuf messages change, so the operator, its clients and
   `@trampoline-ai/operator-ui` must be upgraded together. BREAKING-PROTOCOL: part
   of Delta protocol 2.0 (trace header and agent activity fields replaced).
+- **Breaking** — Agents: agent steps now take a `runtime=` instead of PredictRLM
+  arguments. `lm=`, `sub_lm=`, `max_iterations=`, `skills=` and any other PredictRLM
+  keyword move into `ava.runtimes.PredictRLM(...)`; passing them to
+  `ava.agent.step(...)` or `@ava.agent_step(...)` raises a `TypeError` naming the
+  replacement. Workflow defaults move the same way:
+
+  ```python
+  # before
+  @ava.workflow(agent_defaults={"lm": MODEL, "max_iterations": 10})
+  @ava.agent_step(Review, sub_lm=SUB_MODEL, skills=[ava.agent.skills.docx])
+
+  # after
+  @ava.workflow(agent_defaults={"runtime": ava.runtimes.PredictRLM(lm=MODEL, max_iterations=10)})
+  @ava.agent_step(Review, runtime=ava.runtimes.PredictRLM(sub_lm=SUB_MODEL, skills=[ava.agent.skills.docx]))
+  ```
+
+  A step's PredictRLM settings are merged over the workflow default field by field;
+  with neither, the step uses `ava.runtimes.PredictRLM()`. `tools=` and
+  `evaluations=` stay on the step. `ava.runtimes` is now importable from `ava`.
+  Steps with `ava.File` or `ava.Workspace` fields still reserve their file outputs in
+  the run workspace and reject `output_dir`. BREAKING-PROTOCOL: part of Delta
+  protocol 2.0 (agent step arguments change).
 
 ## 0.15.1 — 2026-10-24
 

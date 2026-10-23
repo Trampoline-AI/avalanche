@@ -43,9 +43,7 @@ def load_meeting() -> MeetingContext:
 
 @ava.agent_step(
     ExtractFollowups,
-    lm=MODEL,
-    sub_lm=SUB_MODEL,
-    max_iterations=20,
+    runtime=ava.runtimes.PredictRLM(lm=MODEL, sub_lm=SUB_MODEL, max_iterations=20),
 )
 async def extract_followups(meeting: MeetingContext, *, agent: ava.Agent) -> Extraction:
     prediction = await agent(

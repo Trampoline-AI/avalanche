@@ -11,6 +11,7 @@ from pydantic import BaseModel, ConfigDict, Field, ValidationError, model_valida
 
 import avalanche as ava
 from avalanche.agent import AgentStepError
+from avalanche.runtimes import PredictRLM
 
 predict_rlm_runtime = importlib.import_module("avalanche.runtimes.predict_rlm.runtime")
 
@@ -449,7 +450,7 @@ def test_signature_inputs_can_share_configuration_parameter_names(predictor_fact
         return ava.agent.step(
             ConfigInputs,
             inputs={"lm": "x", "tools": "y", "max_iterations": 2},
-            max_iterations=7,
+            runtime=PredictRLM(max_iterations=7),
         )
 
     assert flow().run(executor=ava.LocalExecutor()).result() == "x/yx/y"
@@ -465,16 +466,16 @@ def test_workflow_defaults_apply_and_inline_overrides_win(predictor_factory):
 
     predictor_factory(predict)
 
-    @ava.workflow(agent_defaults={"lm": "default", "sub_lm": "upper", "max_iterations": 2})
+    @ava.workflow(
+        agent_defaults={"runtime": PredictRLM(lm="default", sub_lm="upper", max_iterations=2)}
+    )
     def flow():
         return (
             ava.agent.step(Echo, inputs={"text": "one two three"}),
             ava.agent.step(
                 Echo,
                 inputs={"text": "one two three"},
-                lm="override",
-                sub_lm="lower",
-                max_iterations=1,
+                runtime=PredictRLM(lm="override", sub_lm="lower", max_iterations=1),
             ),
         )
 

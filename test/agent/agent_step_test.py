@@ -17,6 +17,7 @@ from pydantic import BaseModel, ValidationError
 
 import avalanche as ava
 from avalanche.agent import AgentStepError, AgentStepExecutionError, capture_agent_evidence
+from avalanche.runtimes import PredictRLM
 
 predict_rlm_runtime = importlib.import_module("avalanche.runtimes.predict_rlm.runtime")
 predict_rlm_events = importlib.import_module("avalanche.runtimes.predict_rlm.events")
@@ -107,7 +108,7 @@ async def test_agent_rejects_bad_inputs_before_invocation_and_preserves_service_
     monkeypatch.setattr(
         predict_rlm_runtime, "_build_predictor", lambda *args, **kwargs: Predictor()
     )
-    agent = ava.Agent(signature=SummarySignature, step_name="summarize", runtime_kwargs={})
+    agent = ava.Agent(signature=SummarySignature, step_name="summarize")
     with pytest.raises(AgentStepError):
         await agent(extra="not in signature")
     assert calls == []
@@ -127,7 +128,7 @@ async def test_agent_rejects_wrongly_typed_inputs_before_invocation(monkeypatch)
             calls.append(inputs)
 
     _use_predictor(monkeypatch, Predictor())
-    agent = ava.Agent(signature=SummarySignature, step_name="summarize", runtime_kwargs={})
+    agent = ava.Agent(signature=SummarySignature, step_name="summarize")
 
     with pytest.raises(AgentStepError, match="person"):
         await agent(person="Ada")
@@ -160,9 +161,7 @@ async def test_tools_without_a_name_reach_the_predictor(monkeypatch):
 
     tools = [functools.partial(lookup, scope="all"), Search()]
     monkeypatch.setattr(predict_rlm_runtime, "_build_predictor", build)
-    agent = ava.Agent(
-        signature=SummarySignature, step_name="summarize", runtime_kwargs={}, tools=tools
-    )
+    agent = ava.Agent(signature=SummarySignature, step_name="summarize", tools=tools)
 
     await agent(person=Person(id=1, name="Ada"))
 
@@ -175,7 +174,6 @@ async def test_invalid_tool_fails_every_call_instead_of_being_dropped(monkeypatc
     agent = ava.Agent(
         signature=SummarySignature,
         step_name="summarize",
-        runtime_kwargs={},
         tools=["not callable"],
     )
 
@@ -257,7 +255,7 @@ async def test_live_evidence_redacts_tool_and_model_secrets_without_losing_event
                 ),
             )
 
-    agent = ava.Agent(signature=SummarySignature, step_name="summarize", runtime_kwargs={})
+    agent = ava.Agent(signature=SummarySignature, step_name="summarize")
     _use_predictor(monkeypatch, Predictor())
     observed = []
     with capture_agent_evidence(observed.append, errors="raise"):
@@ -327,7 +325,7 @@ async def test_concurrent_agent_invocations_keep_evidence_and_traces_correlated(
                 evidence=RunEvidence(run_id=name, complete=True, terminal_outcome="completed"),
             )
 
-    agent = ava.Agent(signature=SummarySignature, step_name="summarize", runtime_kwargs={})
+    agent = ava.Agent(signature=SummarySignature, step_name="summarize")
     _use_predictor(monkeypatch, Predictor())
     observed = []
     with capture_agent_evidence(observed.append, errors="raise"):
@@ -380,7 +378,7 @@ async def test_real_recorder_propagates_strict_observer_failures(monkeypatch, fa
         if event["kind"] == "evidence":
             raise failure
 
-    agent = ava.Agent(signature=SummarySignature, step_name="summarize", runtime_kwargs={})
+    agent = ava.Agent(signature=SummarySignature, step_name="summarize")
     _use_predictor(monkeypatch, RecorderPredictor())
     expected = AgentStepExecutionError if failure_kind == "persistence" else type(failure)
     with capture_agent_evidence(broken_listener, errors="raise"):
@@ -412,7 +410,7 @@ async def test_agent_cancellation_emits_one_terminal_and_preserves_cancellation(
         async def acall(self, **inputs):
             raise cancellation
 
-    agent = ava.Agent(signature=SummarySignature, step_name="summarize", runtime_kwargs={})
+    agent = ava.Agent(signature=SummarySignature, step_name="summarize")
     _use_predictor(monkeypatch, Predictor())
     observed = []
     with capture_agent_evidence(observed.append, errors="raise"):
@@ -455,7 +453,7 @@ async def test_dspy_callback_cancellation_without_sdk_evidence_preserves_cancell
         async def aforward(self, person):
             return dspy.Prediction(note="completed")
 
-    agent = ava.Agent(signature=SummarySignature, step_name="summarize", runtime_kwargs={})
+    agent = ava.Agent(signature=SummarySignature, step_name="summarize")
     _use_predictor(monkeypatch, Predictor(callbacks=[CancelCallback()]))
     task = asyncio.create_task(agent(person=Person(id=1, name="Ada")))
     with pytest.raises(asyncio.CancelledError) as raised:
@@ -475,7 +473,7 @@ async def test_terminal_persistence_failure_is_not_reclassified_as_agent_failure
                 ),
             )
 
-    agent = ava.Agent(signature=SummarySignature, step_name="summarize", runtime_kwargs={})
+    agent = ava.Agent(signature=SummarySignature, step_name="summarize")
     _use_predictor(monkeypatch, Predictor())
     failure = RuntimeError("terminal persistence failed")
     observed = []
@@ -518,7 +516,7 @@ async def test_agent_failure_retains_separate_evidence_without_exposing_raw_even
         async def acall(self, **inputs):
             raise failure
 
-    agent = ava.Agent(signature=SummarySignature, step_name="summarize", runtime_kwargs={})
+    agent = ava.Agent(signature=SummarySignature, step_name="summarize")
     _use_predictor(monkeypatch, Predictor())
     observed = []
     with capture_agent_evidence(observed.append, errors="raise"):
@@ -558,7 +556,7 @@ async def test_successful_agent_prediction_requires_sdk_trace_and_evidence(
         async def acall(self, **inputs):
             return prediction
 
-    agent = ava.Agent(signature=SummarySignature, step_name="summarize", runtime_kwargs={})
+    agent = ava.Agent(signature=SummarySignature, step_name="summarize")
     _use_predictor(monkeypatch, Predictor())
     observed = []
     with capture_agent_evidence(observed.append, errors="raise"):
@@ -1002,7 +1000,7 @@ async def test_codex_lm_is_named_codex_in_declaration_and_run_trace(monkeypatch)
         predict_rlm_runtime, "_build_predictor", lambda *args, **kwargs: Predictor()
     )
 
-    @ava.agent_step(SummarySignature, lm=codex, sub_lm=codex)
+    @ava.agent_step(SummarySignature, runtime=PredictRLM(lm=codex, sub_lm=codex))
     async def summarize(person: Person, *, agent: ava.Agent):
         return (await agent(person=person)).summary
 
@@ -1023,21 +1021,10 @@ async def test_codex_lm_is_named_codex_in_declaration_and_run_trace(monkeypatch)
 
 
 def test_string_models_keep_their_litellm_ids_in_declaration():
-    @ava.agent_step(SummarySignature, lm="openai/gpt-5.6-terra")
+    @ava.agent_step(SummarySignature, runtime=PredictRLM(lm="openai/gpt-5.6-terra"))
     async def summarize(person: Person, *, agent: ava.Agent):
         return (await agent(person=person)).summary
 
     models = summarize.__agent_step__.declaration().runtime.models
     assert models.main.identity == "openai/gpt-5.6-terra"
 
-
-def test_declaration_names_extra_predict_rlm_options_and_keeps_json_values():
-    @ava.agent_step(SummarySignature, future_limit=3, future_hook=print)
-    async def summarize(person: Person, *, agent: ava.Agent):
-        return (await agent(person=person)).summary
-
-    runtime = summarize.__agent_step__.declaration({"future_mode": "fast"}).runtime
-    assert runtime.extra_options == ("future_hook", "future_limit", "future_mode")
-    assert runtime.settings["future_limit"] == 3
-    assert runtime.settings["future_mode"] == "fast"
-    assert "future_hook" not in runtime.settings
