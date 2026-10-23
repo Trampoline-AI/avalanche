@@ -9,6 +9,9 @@ runtime's extra installed. Credentials never enter a declaration.
 
 from __future__ import annotations
 
+import inspect
+import textwrap
+from collections.abc import Callable, Mapping
 from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, JsonValue
@@ -93,7 +96,8 @@ class PredictRLMDeclaration(BaseModel):
     ``settings`` holds the effective constructor options that serialize to JSON,
     without credentials or callables. ``extra_options`` names the options
     Avalanche has no field for and passes unchanged to PredictRLM; their values
-    appear in ``settings`` only under the same rules.
+    appear in ``settings`` only under the same rules. ``skill_instructions``,
+    ``skill_tools``, ``packages`` and ``modules`` are what the skills add, merged.
     """
 
     model_config = _STRICT
@@ -103,7 +107,8 @@ class PredictRLMDeclaration(BaseModel):
     extra_options: tuple[str, ...]
     models: PredictRLMModels
     skills: tuple[PredictRLMSkillDeclaration, ...]
-    aggregated_static_instructions: str
+    skill_instructions: str
+    skill_tools: tuple[ToolDeclaration, ...]
     packages: tuple[str, ...]
     modules: tuple[str, ...]
 
@@ -113,10 +118,32 @@ RuntimeDeclaration = PredictRLMDeclaration
 
 
 class AgentDeclaration(BaseModel):
-    """Everything discovery publishes about one agent step."""
+    """Everything discovery publishes about one agent step.
+
+    ``tools`` are the step's own tools; tools a runtime adds, such as PredictRLM
+    skill tools, are in its ``runtime`` section.
+    """
 
     model_config = _STRICT
 
     signature: SignatureDeclaration
     tools: tuple[ToolDeclaration, ...]
     runtime: RuntimeDeclaration
+
+
+def tool_declarations(
+    tools: Mapping[str, Callable[..., object]],
+) -> tuple[ToolDeclaration, ...]:
+    """Describe tools by name, docstring and source; source is empty when unreadable."""
+    declarations = []
+    for name, tool in tools.items():
+        try:
+            source_code = textwrap.dedent(inspect.getsource(tool)).rstrip()
+        except (OSError, TypeError):
+            source_code = ""
+        declarations.append(
+            ToolDeclaration(
+                name=name, description=inspect.getdoc(tool) or "", source_code=source_code
+            )
+        )
+    return tuple(declarations)

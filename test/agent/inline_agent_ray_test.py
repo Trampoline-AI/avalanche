@@ -12,6 +12,7 @@ from predict_rlm import RunEvidence, RunTrace
 from pydantic import BaseModel
 
 import avalanche as ava
+from avalanche.runtimes import PredictRLM
 
 pytestmark = pytest.mark.ray
 
@@ -151,7 +152,7 @@ def test_full_inline_ray_workflow_returns_validated_values_from_real_workers(ray
 
     @ava.workflow
     def flow():
-        extracted = ava.agent.step(ExtractWorkerItems, skills=[order_skill])
+        extracted = ava.agent.step(ExtractWorkerItems, runtime=PredictRLM(skills=[order_skill]))
         (recording() & account()) >> extracted
         summary = ava.agent.step(
             SummarizeWorkerItems, inputs={"items": extracted}, tools=[count_items]

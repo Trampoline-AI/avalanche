@@ -12,6 +12,8 @@ from predict_rlm import RunEvidence, RunTrace
 from ray import cloudpickle
 
 import avalanche as ava
+from avalanche.agent.defaults import AgentDefaults
+from avalanche.runtimes import PredictRLM
 
 
 class EchoSignature(ava.Signature):
@@ -56,7 +58,9 @@ def test_agent_omitted_skills_and_tools_survive_serialization(monkeypatch):
 
 def test_workflow_bound_agent_callable_survives_serialization(monkeypatch):
     node = _agent_node(monkeypatch)
-    bound = node.fn.__agent_step__.with_workflow_defaults(node.fn, {"max_iterations": 2})
+    bound = node.fn.__agent_step__.with_workflow_defaults(
+        node.fn, AgentDefaults(runtime=PredictRLM(max_iterations=2))
+    )
     restored = cloudpickle.loads(cloudpickle.dumps(bound))
     assert asyncio.run(restored("bound workflow")) == "BOUND WORKFLOW"
 
@@ -91,7 +95,7 @@ def test_workflow_bound_inline_callable_serializes_without_predictor_or_contextv
                 ),
             )
 
-    @ava.workflow(agent_defaults={"max_iterations": 2})
+    @ava.workflow(agent_defaults={"runtime": PredictRLM(max_iterations=2)})
     def flow():
         return ava.agent.step(InlineSplitSignature, inputs={"text": "red green blue"})
 

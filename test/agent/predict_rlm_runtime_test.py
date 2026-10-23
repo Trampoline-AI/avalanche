@@ -130,6 +130,8 @@ def test_descriptor_fields_mirror_the_predict_rlm_constructor():
         if name not in {"self", "signature", "tools"}
     }
 
+    # Avalanche's one deliberate default: agent steps run quietly.
+    mirrored["verbose"] = False
     assert {name: field.default for name, field in PredictRLM.model_fields.items()} == mirrored
 
 
@@ -327,7 +329,7 @@ async def test_predictor_is_built_once_per_request_contract(monkeypatch):
     await runtime.invoke(_request(spec), _Recorder())
     await runtime.invoke(_request(), _Recorder())
 
-    assert builds == [{"skills": (), "tools": (), "max_iterations": 4}] * 2
+    assert builds == [{"skills": (), "tools": (), "max_iterations": 4, "verbose": False}] * 2
 
 
 def test_file_and_workspace_inputs_are_recorded_without_bytes(tmp_path):
