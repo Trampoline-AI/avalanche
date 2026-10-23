@@ -498,6 +498,10 @@ class UIStore:
         provider = self.provider
         workflow_selector = self.current_workflow.selector
         if workflow_selector in self._runs_refresh_in_flight:
+            # Reselecting a workflow can supersede its pending read's context.
+            # Queue one replacement: the old completion will be rejected, and
+            # there is no periodic history poll to fill the resulting empty pane.
+            self._runs_refresh_requested = True
             return
         if len(self._runs_refresh_in_flight) >= 4:
             self._runs_refresh_requested = True
