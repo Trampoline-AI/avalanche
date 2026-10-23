@@ -187,6 +187,16 @@ def current_rss_bytes() -> int:
 
 async def measure_large_fixture(samples: int) -> dict:
     """Fixed synthetic rendering workload; no backend or network claim."""
+    import os
+
+    progress = {}
+
+    def checkpoint(**values) -> None:
+        progress.update(values)
+        path = os.environ.get("TUI_BENCH_PROGRESS")
+        if path:
+            Path(path).write_text(json.dumps(progress, indent=2))
+
     from tui.mock import MockStateProvider
     from tui.models import NodeState, NodeStatus, RunState, RunStatus, WorkflowInfo
 
@@ -244,11 +254,24 @@ async def measure_large_fixture(samples: int) -> dict:
             await pilot.press("right")
             await app.wait_for_refresh()
             inputs.append((time.perf_counter() - started) * 1000)
+        checkpoint(
+            input_to_paint_p95_ms=percentile(inputs, 0.95),
+            dirty_refresh_p95_ms=percentile(dirty, 0.95),
+            samples={"input_to_paint_ms": inputs, "dirty_refresh_ms": dirty},
+            rss_bytes=current_rss_bytes(),
+            app_cache_bytes=retained_bytes(
+                {k: v for k, v in vars(app.store).items() if k != "provider"}
+            ),
+            log_window_records=len(app.store.logs),
+            log_window_bytes=retained_bytes(app.store.logs),
+            queued_updates=app.store._background_updates.qsize(),
+        )
         started = time.perf_counter()
         app.store.search_query = "xxxx"
         app._refresh_widgets()
         await app.wait_for_refresh()
         search.append((time.perf_counter() - started) * 1000)
+        checkpoint(search_ms=search)
         app.store.clear_search()
         app.store.select_node(app.store.all_nodes[0])
         started = time.perf_counter()
@@ -336,12 +359,17 @@ def main() -> int:
         print(json.dumps(asyncio.run(measure_large_fixture(args.samples))))
         return 0
     if args.large_fixture:
+        import os
         import platform
         import subprocess
         import sys
 
         results = []
         for repetition in range(args.repetitions):
+            progress_path = (
+                args.json or Path(os.environ["TMPDIR"]) / "tui-bench.json"
+            ).with_suffix(f".rep{repetition + 1}.json")
+            environment = dict(os.environ, TUI_BENCH_PROGRESS=str(progress_path))
             try:
                 result = json.loads(
                     subprocess.check_output(
@@ -354,10 +382,15 @@ def main() -> int:
                         ],
                         text=True,
                         timeout=300,
+                        env=environment,
                     )
                 )
             except subprocess.TimeoutExpired:
+                partial = (
+                    json.loads(progress_path.read_text()) if progress_path.exists() else {}
+                )
                 result = {
+                    **partial,
                     "status": "DNF",
                     "deadline_seconds": 300,
                     "reason": "fixed large fixture did not finish; metrics unmeasured",
@@ -394,7 +427,7 @@ def main() -> int:
         if args.assert_budget:
             return int(
                 any(
-                    result[key] > target
+                    result.get("status") == "DNF" or result[key] > target
                     for result in results
                     for key, target in report["targets"].items()
                 )
