@@ -11,6 +11,7 @@ from typing import TYPE_CHECKING, Literal, Mapping
 
 if TYPE_CHECKING:
     from avalanche._agent_trace import AgentTerminalDetail
+    from avalanche.agent.declaration import AgentDeclaration
 
 
 class NodeStatus(Enum):
@@ -589,7 +590,7 @@ class WorkflowInfo:
     node_types: dict[str, str]  # node_id -> "source" | "step" | "dest"
     display_names: dict[str, str] = field(default_factory=dict)  # node_id -> display name
     agent_node_ids: list[str] = field(default_factory=list)
-    agent_metadata_json: dict[str, str] = field(default_factory=dict)
+    agent_declarations: dict[str, AgentDeclaration] = field(default_factory=dict)
     classifier_metadata_json: dict[str, str] = field(default_factory=dict)
     evaluation_metadata_json: dict[str, str] = field(default_factory=dict)
     step_interface_json: dict[str, str] = field(default_factory=dict)
@@ -689,7 +690,7 @@ class WorkflowDescriptor:
     node_types: tuple[tuple[str, str], ...]
     display_names: tuple[tuple[str, str], ...]
     agent_node_ids: tuple[str, ...] = ()
-    agent_metadata_json: tuple[tuple[str, str], ...] = ()
+    agent_declarations: tuple[tuple[str, AgentDeclaration], ...] = ()
     classifier_metadata_json: tuple[tuple[str, str], ...] = ()
     evaluation_metadata_json: tuple[tuple[str, str], ...] = ()
     step_interface_json: tuple[tuple[str, str], ...] = ()

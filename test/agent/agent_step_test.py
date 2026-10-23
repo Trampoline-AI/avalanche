@@ -1006,8 +1006,8 @@ async def test_codex_lm_is_named_codex_in_declaration_and_run_trace(monkeypatch)
     async def summarize(person: Person, *, agent: ava.Agent):
         return (await agent(person=person)).summary
 
-    models = summarize.__agent_step__.declaration_metadata()["models"]
-    assert [models[role]["identity"]["name"] for role in ("main", "sub")] == [
+    models = summarize.__agent_step__.declaration().runtime.models
+    assert [model.identity["name"] for model in (models.main, models.sub)] == [
         "codex/gpt-5.6-terra",
         "codex/gpt-5.6-terra",
     ]
@@ -1027,5 +1027,5 @@ def test_string_models_keep_their_litellm_ids_in_declaration():
     async def summarize(person: Person, *, agent: ava.Agent):
         return (await agent(person=person)).summary
 
-    models = summarize.__agent_step__.declaration_metadata()["models"]
-    assert models["main"]["identity"] == "openai/gpt-5.6-terra"
+    models = summarize.__agent_step__.declaration().runtime.models
+    assert models.main.identity == "openai/gpt-5.6-terra"

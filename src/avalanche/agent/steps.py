@@ -36,6 +36,12 @@ from ..step_interface import (
 )
 from .config import UNSET, validate_runtime_kwargs
 from .contract import AgentRequest, SignatureSpec, ToolSpec
+from .declaration import (
+    AgentDeclaration,
+    FieldDeclaration,
+    SignatureDeclaration,
+    ToolDeclaration,
+)
 from .signature import resolve_signature
 
 if TYPE_CHECKING:
@@ -205,50 +211,36 @@ class _AgentStepSpec(Generic[InputT, OutputT]):
             "",
         )
 
-    def declaration_metadata(
+    def declaration(
         self, workflow_defaults: Mapping[str, Any] | None = None
-    ) -> dict[str, Any]:
-        """Serialize static agent declaration state without building a predictor."""
+    ) -> AgentDeclaration:
+        """Describe the step statically, without building a predictor."""
         signature = resolve_signature(self.signature, name=self.step_name)
         skills = () if self.skills is UNSET else tuple(self.skills)
         tools = () if self.tools is UNSET else tuple(self.tools)
 
-        from predict_rlm.rlm_skills import merge_skills
+        from ..runtimes.predict_rlm.runtime import predict_rlm_declaration
 
-        from ..runtimes.predict_rlm.runtime import (
-            _effective_model_metadata,
-            _effective_runtime_metadata,
-            _serialize_skill,
-        )
-
-        skill_instructions, packages, modules, skill_tools = merge_skills(list(skills))
         signature_instructions = str(getattr(signature, "instructions", "") or "")
-        aggregated_instructions = signature_instructions
-        if skill_instructions:
-            aggregated_instructions += (
-                "\n\n" if aggregated_instructions else ""
-            ) + skill_instructions
-
-        return {
-            "signature": {
-                "name": getattr(signature, "__name__", type(signature).__name__),
-                "instructions": signature_instructions,
-                "inputs": _serialize_signature_fields(signature.input_fields),
-                "outputs": _serialize_signature_fields(signature.output_fields),
-            },
-            "runtime": _effective_runtime_metadata(
-                workflow_defaults or {}, self.runtime_kwargs
+        runtime, skill_tools = predict_rlm_declaration(
+            workflow_defaults or {},
+            self.runtime_kwargs,
+            skills=skills,
+            signature_instructions=signature_instructions,
+        )
+        return AgentDeclaration(
+            signature=SignatureDeclaration(
+                name=getattr(signature, "__name__", type(signature).__name__),
+                instructions=signature_instructions,
+                inputs=_field_declarations(signature.input_fields),
+                outputs=_field_declarations(signature.output_fields),
             ),
-            "models": _effective_model_metadata(workflow_defaults or {}, self.runtime_kwargs),
-            "skills": [_serialize_skill(skill) for skill in skills],
-            "aggregated_static_instructions": aggregated_instructions,
-            "packages": packages,
-            "modules": list(modules),
-            "tools": [
-                *_serialize_tools(skill_tools),
-                *_serialize_tools({_callable_name(tool): tool for tool in tools}),
-            ],
-        }
+            tools=(
+                *_tool_declarations(skill_tools),
+                *_tool_declarations({_callable_name(tool): tool for tool in tools}),
+            ),
+            runtime=runtime,
+        )
 
     def with_workflow_defaults(
         self,
@@ -261,7 +253,7 @@ class _AgentStepSpec(Generic[InputT, OutputT]):
 
         async def bound(*args: Any, **kwargs: Any) -> Any:
             # Resolve process-local state on execution; Ray serializes this closure by value.
-            from avalanche.agent.agent_step import _WORKFLOW_AGENT_DEFAULTS
+            from avalanche.agent.steps import _WORKFLOW_AGENT_DEFAULTS
             from avalanche.classifier.classifier_step import _WORKFLOW_CLASSIFIER_DEFAULTS
 
             token = _WORKFLOW_AGENT_DEFAULTS.set(defaults)
@@ -280,20 +272,31 @@ class _AgentStepSpec(Generic[InputT, OutputT]):
 def _serialize_signature_fields(
     fields: Mapping[str, Any], *, type_key: str = "annotation"
 ) -> list[dict[str, str]]:
-    serialized = []
+    return [
+        {
+            "name": field.name,
+            type_key: field.annotation,
+            "description": field.description,
+        }
+        for field in _field_declarations(fields)
+    ]
+
+
+def _field_declarations(fields: Mapping[str, Any]) -> tuple[FieldDeclaration, ...]:
+    declarations = []
     for name, field in fields.items():
         extra = getattr(field, "json_schema_extra", None)
         description = getattr(field, "description", None)
         if not isinstance(description, str) and isinstance(extra, Mapping):
             description = extra.get("desc")
-        serialized.append(
-            {
-                "name": name,
-                type_key: _annotation_name(getattr(field, "annotation", Any)),
-                "description": description if isinstance(description, str) else "",
-            }
+        declarations.append(
+            FieldDeclaration(
+                name=name,
+                annotation=_annotation_name(getattr(field, "annotation", Any)),
+                description=description if isinstance(description, str) else "",
+            )
         )
-    return serialized
+    return tuple(declarations)
 
 
 def _annotation_name(annotation: Any) -> str:
@@ -323,23 +326,19 @@ def _annotation_name(annotation: Any) -> str:
     )
 
 
-def _serialize_tools(tools: Mapping[str, Callable[..., Any]]) -> list[dict[str, str]]:
-    serialized = []
+def _tool_declarations(tools: Mapping[str, Callable[..., Any]]) -> tuple[ToolDeclaration, ...]:
+    declarations = []
     for name, tool in tools.items():
-        if not isinstance(name, str) or not callable(tool):
-            continue
         try:
             source_code = textwrap.dedent(inspect.getsource(tool)).rstrip()
         except (OSError, TypeError):
             source_code = ""
-        serialized.append(
-            {
-                "name": name,
-                "description": inspect.getdoc(tool) or "",
-                "source_code": source_code,
-            }
+        declarations.append(
+            ToolDeclaration(
+                name=name, description=inspect.getdoc(tool) or "", source_code=source_code
+            )
         )
-    return serialized
+    return tuple(declarations)
 
 
 def _callable_name(value: Callable[..., Any]) -> str:

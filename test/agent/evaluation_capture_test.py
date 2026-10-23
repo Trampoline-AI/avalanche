@@ -108,8 +108,8 @@ def test_declaration_and_discovery_do_not_execute_evaluations(evaluations, monke
 
     assert "evaluations" in inspect.signature(ava.agent_step).parameters
     assert echo.fn.__agent_step__.evaluations is evaluations
-    metadata = echo.fn.__agent_step__.declaration_metadata()
-    assert [field["name"] for field in metadata["signature"]["inputs"]] == ["text"]
+    declaration = echo.fn.__agent_step__.declaration()
+    assert [field.name for field in declaration.signature.inputs] == ["text"]
     assert list(inspect.signature(echo.fn).parameters) == ["text"]
     assert flow().name == "flow"
 

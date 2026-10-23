@@ -33,7 +33,7 @@ from pydantic import BaseModel, ConfigDict, GetCoreSchemaHandler, PlainValidator
 from pydantic_core import CoreSchema, core_schema
 
 from ..._agent_evidence import AgentTraceFinishedEvent
-from ...agent.agent_step import (
+from ...agent.steps import (
     _AGENT_RUNTIME_DEFAULTS,
     AgentStepError,
     AgentStepExecutionError,
@@ -46,6 +46,14 @@ from ...agent.contract import (
     PythonOutputs,
     SignatureSpec,
     ToolSpec,
+)
+from ...agent.declaration import (
+    PredictRLMConfiguredModel,
+    PredictRLMDeclaration,
+    PredictRLMDefaultModel,
+    PredictRLMModel,
+    PredictRLMModels,
+    PredictRLMSkillDeclaration,
 )
 from ...agent.trace import RuntimeKind
 from .events import _AGENT_INVOCATION_STATE, _AgentInvocationState, _AvalancheEvidenceSink
@@ -73,18 +81,41 @@ _OMITTED_RUNTIME_KEYS = frozenset(
 _SECRET_KEY_PARTS = ("api_key", "auth", "credential", "password", "secret", "token")
 
 
-def _serialize_skill(skill: Any) -> dict[str, Any]:
-    tools = getattr(skill, "tools", {})
-    modules = getattr(skill, "modules", {})
-    return {
-        "name": str(getattr(skill, "name", type(skill).__name__)),
-        "instructions": str(getattr(skill, "instructions", "") or ""),
-        "packages": [
-            package for package in getattr(skill, "packages", ()) if isinstance(package, str)
-        ],
-        "modules": [name for name in modules if isinstance(name, str)],
-        "tools": [name for name in tools if isinstance(name, str)],
-    }
+def _skill_declaration(skill: Skill) -> PredictRLMSkillDeclaration:
+    return PredictRLMSkillDeclaration(
+        name=skill.name,
+        instructions=skill.instructions,
+        packages=tuple(skill.packages),
+        modules=tuple(skill.modules),
+        tools=tuple(skill.tools),
+    )
+
+
+def predict_rlm_declaration(
+    workflow_defaults: Mapping[str, Any],
+    step_overrides: Mapping[str, Any],
+    *,
+    skills: tuple[Skill, ...],
+    signature_instructions: str,
+) -> tuple[PredictRLMDeclaration, dict[str, Callable[..., Any]]]:
+    """Describe a step's effective PredictRLM settings and return its skills' tools."""
+    from predict_rlm.rlm_skills import merge_skills
+
+    skill_instructions, packages, modules, skill_tools = merge_skills(list(skills))
+    aggregated_instructions = signature_instructions
+    if skill_instructions:
+        aggregated_instructions += (
+            "\n\n" if aggregated_instructions else ""
+        ) + skill_instructions
+    declaration = PredictRLMDeclaration(
+        settings=_effective_runtime_metadata(workflow_defaults, step_overrides),
+        models=_effective_model_metadata(workflow_defaults, step_overrides),
+        skills=tuple(_skill_declaration(skill) for skill in skills),
+        aggregated_static_instructions=aggregated_instructions,
+        packages=tuple(packages),
+        modules=tuple(modules),
+    )
+    return declaration, dict(skill_tools)
 
 
 def _effective_runtime_metadata(
@@ -114,24 +145,23 @@ def _effective_runtime_metadata(
 
 def _effective_model_metadata(
     workflow_defaults: Mapping[str, Any], step_overrides: Mapping[str, Any]
-) -> dict[str, dict[str, Any]]:
+) -> PredictRLMModels:
     """Describe only declaratively supported model sources; never probe DSPy globals."""
-    models: dict[str, dict[str, Any]] = {}
+    models: dict[str, PredictRLMModel] = {}
     for runtime_key, label in (("lm", "main"), ("sub_lm", "sub")):
         if runtime_key in step_overrides:
-            value = step_overrides[runtime_key]
             source = "step override"
+            value = step_overrides[runtime_key]
         elif runtime_key in workflow_defaults:
-            value = workflow_defaults[runtime_key]
             source = "workflow default"
+            value = workflow_defaults[runtime_key]
         else:
-            models[label] = {"source": "PredictRLM default"}
+            models[label] = PredictRLMDefaultModel()
             continue
-        models[label] = {
-            "source": source,
-            "identity": _strict_model_metadata_value(value, runtime_key),
-        }
-    return models
+        models[label] = PredictRLMConfiguredModel(
+            source=source, identity=_strict_model_metadata_value(value, runtime_key)
+        )
+    return PredictRLMModels(main=models["main"], sub=models["sub"])
 
 
 def _strict_model_metadata_value(value: Any, runtime_key: str, path: str = "") -> Any:

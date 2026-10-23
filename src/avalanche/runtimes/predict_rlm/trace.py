@@ -11,7 +11,7 @@ from ..._agent_evidence import (
     AgentTraceUnavailableEvent,
     emit_agent_evidence,
 )
-from ...agent.agent_step import AgentStepError
+from ...agent.steps import AgentStepError
 from ...agent.trace import (
     AgentTraceHeader,
     AgentTraceRecord,
