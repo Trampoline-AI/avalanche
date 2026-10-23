@@ -10,6 +10,7 @@ from textual.app import App, ComposeResult, SystemCommand
 from textual.binding import Binding
 from textual.css.query import NoMatches
 from textual.timer import Timer
+from textual.widget import Widget
 from textual.widgets import Header
 
 from runtime.operator.client import OperatorCallError
@@ -613,7 +614,7 @@ class AvalancheApp(App):
                 if workflow is not None and node_id is not None
                 else "Agent step"
             )
-            inspector.border_title = f"Agent {display_name}"
+            self._set_border_title(inspector, f"Agent {display_name}")
         except NoMatches:
             pass
         try:
@@ -734,7 +735,7 @@ class AvalancheApp(App):
         run_suffix = f" · {run_id}" if run_id else ""
         try:
             dag = self._screen.query_one("#dag-container")
-            dag.border_title = f"DAG{run_suffix}"
+            self._set_border_title(dag, f"DAG{run_suffix}")
             # Show center button only when DAG is scrollable
             btn = self._screen.query_one("#dag-center-btn")
             btn.display = dag.max_scroll_x > 0 or dag.max_scroll_y > 0
@@ -744,11 +745,13 @@ class AvalancheApp(App):
             from .widgets.run_history import _cron_description, _next_run_label
 
             rh = self._screen.query_one("#run-history")
-            rh.border_subtitle = (
+            subtitle = (
                 f"{self.store.history_evicted:,} older runs outside loaded window"
                 if self.store.history_evicted
                 else ""
             )
+            if rh.border_subtitle != subtitle:
+                rh.border_subtitle = subtitle
             n_runs = len(self.store.runs_for_current_workflow)
             left = f"{n_runs} Run{'s' if n_runs != 1 else ''}" if n_runs else "Runs"
 
@@ -768,9 +771,9 @@ class AvalancheApp(App):
                     "#60dce4" if self.store.focused_pane == "run-history" else "#5a4f80"
                 )
                 line = f"[{line_color}]{'─' * (pad - 2)}[/]"
-                rh.border_title = f"{left} {line} {right}"
+                self._set_border_title(rh, f"{left} {line} {right}")
             else:
-                rh.border_title = left
+                self._set_border_title(rh, left)
         except NoMatches:
             pass
         # Log panel border title + toggle hints + wrap width
@@ -801,7 +804,7 @@ class AvalancheApp(App):
             # Line color matches border: bright when focused, dim when not
             line_color = "#60dce4" if self.store.focused_pane == "log" else "#5a4f80"
             line = f"[{line_color}]{'─' * (pad - 2)}[/]"
-            lp.border_title = f"{left} {line} {right}"
+            self._set_border_title(lp, f"{left} {line} {right}")
 
             log_w = self._screen.query_one("#log-content", LogWidget)
             # Subtract 2: 1 for the scrollbar gutter + 1 for breathing room
@@ -816,6 +819,16 @@ class AvalancheApp(App):
             self._screen.query_one("#status-bar").refresh()
         except NoMatches:
             pass
+
+    def _set_border_title(self, widget: Widget, title: str) -> None:
+        # Textual refreshes the entire widget even when an identical title is
+        # assigned. Compare source markup rather than its normalized getter;
+        # include widget identity so a remounted pane receives its title.
+        key = f"border-title:{widget.id}"
+        token = (id(widget), title)
+        if self._widget_tokens.get(key) != token:
+            self._widget_tokens[key] = token
+            widget.border_title = title
 
     def _refresh_projection(
         self, widget_id: str, token: tuple, *, layout: bool = False
