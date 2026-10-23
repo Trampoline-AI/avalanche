@@ -191,6 +191,7 @@ class InputForm(ModalScreen):
         properties = schema.get("properties", {})
         self.properties = properties if isinstance(properties, Mapping) else {}
         self._payload: Object | None = None
+        self._validated_token: tuple | None = None
         self._names: list[str] = []
 
     def compose(self) -> ComposeResult:
@@ -240,7 +241,18 @@ class InputForm(ModalScreen):
         validate_input(payload, self.schema)
         return payload
 
+    def _input_token(self) -> tuple:
+        return (
+            self.query_one("#raw-input", TextArea).text,
+            *(self.query_one(f"#field-{i}", Input).value for i in range(len(self._names))),
+        )
+
     def on_input_changed(self) -> None:
+        # A queued Changed event may arrive after a Preview click. Do not erase
+        # a preview for the exact values that were just validated.
+        if self._validated_token is not None and self._input_token() == self._validated_token:
+            return
+        self._validated_token = None
         self._payload = None
         self.query_one("#form-submit", Button).disabled = True
 
@@ -254,12 +266,16 @@ class InputForm(ModalScreen):
         elif event.button.id == "form-validate":
             try:
                 self._payload = self._input()
+                self._validated_token = self._input_token()
             except (ValueError, KeyError) as error:
                 self.query_one("#form-preview", Static).update(str(error))
                 return
             self.query_one("#form-preview", Static).update(json.dumps(self._payload, indent=2))
             self.query_one("#form-submit", Button).disabled = False
         elif event.button.id == "form-submit" and self._payload is not None:
+            if self._validated_token != self._input_token():
+                self.on_input_changed()
+                return
             payload = self._payload
             self.dismiss()
             if self.context == self.app.extension_context:
