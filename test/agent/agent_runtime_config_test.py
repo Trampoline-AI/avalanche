@@ -140,6 +140,19 @@ def test_removed_step_arguments_name_their_replacement(removed):
         flow()
 
 
+@pytest.mark.parametrize("name", ["tools", "lm_model"])
+def test_workflow_default_keys_that_are_not_runtime_settings_get_no_runtime_hint(name):
+    with pytest.raises(TypeError, match="unexpected") as raised:
+        ava.workflow(agent_defaults={name: "x"})
+    assert "PredictRLM(" not in str(raised.value)
+
+
+def test_unknown_step_keywords_get_no_runtime_hint():
+    with pytest.raises(TypeError, match="unexpected keyword arguments lm_model=") as raised:
+        ava.agent_step(Echo, lm_model="x")
+    assert "PredictRLM(" not in str(raised.value)
+
+
 def test_removed_workflow_default_keys_name_their_replacement():
     with pytest.raises(TypeError, match=r"\{'runtime': ava\.runtimes\.PredictRLM\(lm=\.\.\."):
         ava.workflow(agent_defaults={"lm": "x"})
