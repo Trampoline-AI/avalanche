@@ -100,12 +100,18 @@ _STOP_REASONS = {"completed": "submit", "max_iterations": "max_iterations"}
 
 
 def trace_header(
-    trace: RunTrace, evidence: RunEvidence, *, model: str | None
+    trace: RunTrace,
+    evidence: RunEvidence,
+    *,
+    model: str | None,
+    turn_count: int,
+    tool_call_count: int,
 ) -> AgentTraceHeader:
     """The common header for one PredictRLM run, without converting its turns.
 
-    ``model`` is a display name that replaces PredictRLM's model id when set
-    (see ``_model_display_name``).
+    The counts are passed in because a terminal trace sent after live events
+    carries no steps. ``model`` is a display name that replaces PredictRLM's
+    model id when set (see ``_model_display_name``).
     """
     from .mapping import common_usage
 
@@ -122,8 +128,8 @@ def trace_header(
         model=trace.model if model is None else model,
         duration_ms=trace.duration_ms,
         usage=common_usage(trace.usage.main, trace.usage.sub),
-        turn_count=len(trace.steps),
-        tool_call_count=sum(len(step.tool_calls) for step in trace.steps),
+        turn_count=turn_count,
+        tool_call_count=tool_call_count,
         external_run_id=evidence.run_id,
         session_id=None,
     )
@@ -145,7 +151,13 @@ def trace_record(
 
     usage = trace.usage
     return AgentTraceRecord(
-        header=trace_header(trace, evidence, model=model),
+        header=trace_header(
+            trace,
+            evidence,
+            model=model,
+            turn_count=len(trace.steps),
+            tool_call_count=sum(len(step.tool_calls) for step in trace.steps),
+        ),
         turns=tuple(turn_from_step(step) for step in trace.steps),
         native=PredictRLMNativeTrace(
             sub_model=_sub_model_name(trace, sub_model),

@@ -2640,7 +2640,18 @@ class Operator:
                 trace = terminal_detail.trace
                 if trace is None:
                     raise _CoordinatorProtocolError("finished agent trace must not be null")
-                header = _trace_header(trace, terminal_detail.evidence)
+                # The terminal trace carries no steps once they crossed as live
+                # events, so tool calls are counted from this invocation's turns.
+                header = _trace_header(
+                    trace,
+                    terminal_detail.evidence,
+                    tool_call_count=sum(
+                        item.tool_call_count
+                        for item in projected_events
+                        if item.invocation_id == invocation_id
+                        and item.agent_event_kind == "turn.finished"
+                    ),
+                )
                 finalized_trace = terminal_detail.model_dump_json(
                     exclude={"trace": {"steps"}}
                 ).encode()
@@ -3849,11 +3860,19 @@ def _evaluation_metadata_mapping(value: object) -> dict[str, str]:
     return metadata
 
 
-def _trace_header(trace: RunTrace, evidence: RunEvidence) -> TraceHeader:
+def _trace_header(
+    trace: RunTrace, evidence: RunEvidence, *, tool_call_count: int
+) -> TraceHeader:
     """Keep the common header; the turns and native details stay in the trace body."""
     from avalanche.runtimes.predict_rlm.trace import trace_header
 
-    header = trace_header(trace, evidence, model=None)
+    header = trace_header(
+        trace,
+        evidence,
+        model=None,
+        turn_count=trace.iterations,
+        tool_call_count=tool_call_count,
+    )
     return TraceHeader(
         status=header.status,
         runtime_kind=header.runtime_kind,
