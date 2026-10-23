@@ -117,6 +117,18 @@ class LogWidget(ScrollView, can_focus=False):
             self._wrap_width,
         )
         total = logs.evicted + len(logs)
+        if (
+            logs is not self._logs_ref
+            and self._logs_ref is not None
+            and filters == self._filters
+            and logs.evicted == self._logs_ref.evicted
+            and logs == self._logs_ref
+        ):
+            # A detached but equal provider snapshot does not invalidate the row
+            # index or rendered viewport. Reuse both, while tracking the new
+            # window's revision for subsequent in-place stream appends.
+            self._logs_ref = logs
+            self._seen_revision = logs.revision
         changed = logs is not self._logs_ref or filters != self._filters
         if changed:
             self._rows.clear()
