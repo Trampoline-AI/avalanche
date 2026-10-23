@@ -121,6 +121,31 @@ def test_queue_stream_keeps_parallel_node_output_separate():
         ("left_1", "left-done"),
         ("right_1", "right-done"),
     }
+    assert len({event["attempt"] for event in events}) == 2
+    assert {event["channel"] for event in events} == {"stdout"}
+
+    # Async nodes share a thread, but must not share partial lines or bindings.
+    import asyncio
+
+    async def emit_async(label):
+        stdout.write(f"{label}-")
+        await asyncio.sleep(0)
+        stdout.write("done\n")
+
+    async def concurrent_nodes():
+        left = _with_node_streams("async_left_1", emit_async, stdout, stderr)
+        right = _with_node_streams("async_right_1", emit_async, stdout, stderr)
+        await asyncio.gather(left("left"), right("right"))
+
+    asyncio.run(concurrent_nodes())
+    events = [event_queue.get_nowait(), event_queue.get_nowait()]
+    assert {(event["node_id"], event["message"]) for event in events} == {
+        ("async_left_1", "left-done"),
+        ("async_right_1", "right-done"),
+    }
+    assert len({event["attempt"] for event in events}) == 2
+    stdout.write("after-nodes\n")
+    assert event_queue.get_nowait()["node_id"] == "operator"
 
 
 @pytest.mark.ray
