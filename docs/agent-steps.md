@@ -43,11 +43,14 @@ def publish(items: KeyItems) -> KeyItems:
     return items
 
 
-@ava.workflow(agent_defaults={"lm": "openai/gpt-5.5"})
+@ava.workflow(agent_defaults={"runtime": ava.runtimes.PredictRLM(lm="openai/gpt-5.5")})
 def extraction_flow():
     return (
         load_pdf()
-        >> ava.agent.step(ExtractItems, skills=[ava.agent.skills.pdf])
+        >> ava.agent.step(
+            ExtractItems,
+            runtime=ava.runtimes.PredictRLM(skills=[ava.agent.skills.pdf]),
+        )
         >> publish()
     )
 ```
@@ -92,7 +95,7 @@ class AuditRfpSig(ava.Signature):
 # `ns.audit_results` is this belt's model-declared audit table.
 @ava.agent_step(
     AuditRfpSig,
-    skills=[ava.agent.skills.pdf],
+    runtime=ava.runtimes.PredictRLM(skills=[ava.agent.skills.pdf]),
 )
 async def audit_rfp(
     documents: list[File],
@@ -171,7 +174,8 @@ async def render_artifacts(
 
 ## Skills and tools
 
-Pass `skills=` and `tools=` on the agent call or decorator, not on the signature:
+Pass `tools=` on the agent call or decorator and skills on its PredictRLM
+runtime, not on the signature:
 
 ```python
 @ava.workflow
@@ -180,7 +184,7 @@ def extraction_flow():
         load_pdf()
         >> ava.agent.step(
             ExtractItems,
-            skills=[ava.agent.skills.pdf],
+            runtime=ava.runtimes.PredictRLM(skills=[ava.agent.skills.pdf]),
             tools=[search_contract_repository],
         )
         >> publish()
@@ -192,27 +196,34 @@ Tools are ordinary Python functions with unique names. Built-in skills include
 
 ## Runtime configuration
 
-Set shared model options with `agent_defaults`; override them on individual calls:
+An agent step's settings live on its runtime, `ava.runtimes.PredictRLM(...)`.
+Set shared settings with a workflow-default runtime; a step's runtime is merged
+over it field by field, so a step sets only what differs:
 
 ```python
 @ava.workflow(
-    agent_defaults={"lm": "openai/gpt-5.5", "max_iterations": 30},
+    agent_defaults={
+        "runtime": ava.runtimes.PredictRLM(lm="openai/gpt-5.5", max_iterations=30)
+    },
 )
 def extraction_flow():
     return (
         load_pdf()
         >> ava.agent.step(
             ExtractItems,
-            skills=[ava.agent.skills.pdf],
-            max_iterations=60,
+            runtime=ava.runtimes.PredictRLM(
+                skills=[ava.agent.skills.pdf], max_iterations=60
+            ),
         )
         >> publish()
     )
 ```
 
-The same options work on agent decorators. Set `verbose=True` to show the
-PredictRLM trace. Set signatures, skills, and tools on each step, not in workflow
-defaults.
+The extraction step above runs with `lm="openai/gpt-5.5"`, the PDF skill and 60
+iterations. The same `runtime=` works on agent decorators. Set `verbose=True` on
+the runtime to show the PredictRLM trace. Set signatures and tools on each step.
+Passing `lm=`, `skills=` or another PredictRLM setting directly to the step
+raises `TypeError` naming the `runtime=` replacement.
 
 ## Native evaluations
 
@@ -405,7 +416,7 @@ ava.Evaluations(model=..., timeout=...)
 ```
 
 `timeout` is the positive, finite SDK request timeout in seconds, not a workflow
-deadline. `model=None` and `timeout=None` inherit defaults. Agent `lm`/`sub_lm`
+deadline. `model=None` and `timeout=None` inherit defaults. Agent runtimes
 and `agent_defaults` do not configure Jev. Declarations and discovery make no
 model calls and need no credentials; malformed questions fail at declaration.
 

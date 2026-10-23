@@ -198,14 +198,21 @@ class _AgentStepSpec(Generic[InputT, OutputT]):
         """Describe the step statically, without building a predictor."""
         signature = resolve_signature(self.signature, name=self.step_name)
         default = (workflow_defaults or AgentDefaults()).runtime
-        if self.runtime is None:
-            runtime_declaration = effective_runtime(
-                None, AgentDefaults(runtime=default)
-            ).declaration(workflow_default=None)
-        elif default is not None and default.kind == self.runtime.kind:
-            runtime_declaration = self.runtime.declaration(workflow_default=default)
+        step_runtime = self.runtime
+        if step_runtime is None:
+            from ..runtimes.predict_rlm import PredictRLM
+
+            # A step without a runtime declares as an empty PredictRLM merged over
+            # a PredictRLM default, so models are attributed to the workflow.
+            if default is None or default.kind == PredictRLM.kind:
+                step_runtime = PredictRLM()
+            else:
+                step_runtime = default
+                default = None
+        if default is not None and default.kind == step_runtime.kind:
+            runtime_declaration = step_runtime.declaration(workflow_default=default)
         else:
-            runtime_declaration = self.runtime.declaration(workflow_default=None)
+            runtime_declaration = step_runtime.declaration(workflow_default=None)
         return AgentDeclaration(
             signature=SignatureDeclaration(
                 name=getattr(signature, "__name__", type(signature).__name__),

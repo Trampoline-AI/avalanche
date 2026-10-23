@@ -51,9 +51,25 @@ def test_effective_runtime(step, default, expected):
 
 
 def test_a_step_runtime_of_another_kind_replaces_the_workflow_default():
-    other = OtherRuntime()
+    class Other(OtherRuntime):
+        def merged_over(self, base):
+            return self
+
+    other = Other()
 
     assert effective_runtime(other, AgentDefaults(runtime=PredictRLM(lm="x"))) is other
+
+
+@pytest.mark.parametrize("where", ["step", "workflow"])
+def test_each_agent_gets_its_own_runtime_instance(where):
+    declared = PredictRLM(lm="x")
+    step = declared if where == "step" else None
+    defaults = AgentDefaults(runtime=declared if where == "workflow" else None)
+
+    first, second = effective_runtime(step, defaults), effective_runtime(step, defaults)
+
+    assert first == declared and second == declared
+    assert first is not declared and second is not first
 
 
 def test_merged_runtime_remembers_only_fields_someone_set():
@@ -79,6 +95,20 @@ def test_declaration_names_where_each_model_came_from():
         source="step override", identity="step-sub"
     )
     assert declaration.runtime.settings["max_iterations"] == 4
+
+
+def test_declaration_attributes_inherited_models_to_the_workflow():
+    @ava.agent_step(Echo)
+    async def echo(text: str, *, agent: ava.Agent) -> str:
+        return (await agent(text=text)).answer
+
+    runtime = echo.fn.__agent_step__.declaration(
+        AgentDefaults(runtime=PredictRLM(lm="workflow-main"))
+    ).runtime
+
+    assert runtime.models.main == PredictRLMConfiguredModel(
+        source="workflow default", identity="workflow-main"
+    )
 
 
 def test_declaration_without_runtime_or_defaults_uses_predict_rlm_defaults():

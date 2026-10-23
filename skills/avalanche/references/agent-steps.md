@@ -111,7 +111,7 @@ def proposal_flow():
         prepare_inputs()
         >> ava.agent.step(
             AuditPackage,
-            skills=[ava.agent.skills.pdf],
+            runtime=ava.runtimes.PredictRLM(skills=[ava.agent.skills.pdf]),
             tools=[lookup_policy],
         )
         >> publish_audit()
@@ -168,9 +168,8 @@ from .util import persist_audit, validate_package_audit
 
 @ava.agent_step(
     AuditPackage,
-    skills=[ava.agent.skills.pdf],
+    runtime=ava.runtimes.PredictRLM(skills=[ava.agent.skills.pdf], max_iterations=30),
     tools=[lookup_policy],
-    max_iterations=30,
 )
 async def audit_package(
     package: PreparedPackage,
@@ -226,9 +225,9 @@ strategy instructions, reuse, or its own tests.
 ## PredictRLM skills
 
 Avalanche creates and invokes the PredictRLM runtime behind `ava.Agent`. Flow
-authors configure its capabilities with `Skill` objects passed through
-`skills=`. Skills are passed through unchanged, and built-ins are lazy
-re-exports:
+authors configure its capabilities with `Skill` objects passed through the
+runtime, `runtime=ava.runtimes.PredictRLM(skills=[...])`. Skills are passed
+through unchanged, and built-ins are lazy re-exports:
 
 ```python
 ava.agent.skills.pdf
@@ -257,11 +256,15 @@ or drafts from an evidence package.
 Pass the same reusable Skill to each agent step that needs the capability:
 
 ```python
-@ava.agent_step(AuditPackage, skills=[evidence_grounding_skill])
+@ava.agent_step(
+    AuditPackage, runtime=ava.runtimes.PredictRLM(skills=[evidence_grounding_skill])
+)
 async def audit_package(request: AuditRequest, *, agent: ava.Agent): ...
 
 
-@ava.agent_step(DraftProposal, skills=[evidence_grounding_skill])
+@ava.agent_step(
+    DraftProposal, runtime=ava.runtimes.PredictRLM(skills=[evidence_grounding_skill])
+)
 async def draft_proposal(request: ProposalRequest, *, agent: ava.Agent): ...
 ```
 
@@ -329,36 +332,41 @@ Shared execution policy belongs on the workflow:
 @ava.workflow(
     input=ProposalInput,
     agent_defaults={
-        "lm": "openai/gpt-5.5",
-        "sub_lm": "gemini/gemini-3.5-flash",
-        "max_iterations": 30,
-        "verbose": False,
+        "runtime": ava.runtimes.PredictRLM(
+            lm="openai/gpt-5.5",
+            sub_lm="gemini/gemini-3.5-flash",
+            max_iterations=30,
+        ),
     },
 )
 def proposal_flow(): ...
 ```
 
-Both forms accept `lm`, `sub_lm`, `max_iterations`, and the existing predictor
-runtime kwargs; `skills` and `tools` configure that node's capabilities.
+`ava.runtimes.PredictRLM(...)` accepts `lm`, `sub_lm`, `max_iterations`,
+`skills`, and the other PredictRLM constructor options; `tools` stay on the
+agent step. Passing a PredictRLM option directly to an agent step raises
+`TypeError`.
 
-Override exceptional steps on their inline call or decorator:
+Override exceptional steps on their inline call or decorator; only the fields a
+step sets replace the workflow default:
 
 ```python
-@ava.agent_step(AuditPackage, max_iterations=60)
+@ava.agent_step(AuditPackage, runtime=ava.runtimes.PredictRLM(max_iterations=60))
 async def audit_package(package: PreparedPackage, *, agent: ava.Agent): ...
 ```
 
 For an inline node, the same override is
-`ava.agent.step(AuditPackage, max_iterations=60)` inside the workflow.
+`ava.agent.step(AuditPackage, runtime=ava.runtimes.PredictRLM(max_iterations=60))`
+inside the workflow.
 
-Resolution order is:
+Resolution order, field by field, is:
 
 ```text
-agent-step runtime kwargs > workflow agent_defaults > PredictRLM defaults
+agent-step runtime fields > workflow agent_defaults runtime fields > PredictRLM defaults
 ```
 
-Workflow defaults cannot define `signature`, `skills`, or `tools`; those are
-capabilities of a specific agent step.
+Workflow defaults hold only a runtime; signatures and tools belong to a
+specific agent step.
 
 ## Native evaluations
 
