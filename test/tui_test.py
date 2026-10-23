@@ -1705,3 +1705,427 @@ async def test_concurrent_recorded_turn_totals_stay_with_their_invocation(
         rendered = inspector.render().plain
         assert first_summary in rendered
         assert second_summary not in rendered
+
+
+class _ExtensionFixture:
+    protocol_version = (1, 0)
+    features = frozenset({"paged-resources", "json-schema-forms", "invalidations"})
+
+    def __init__(self, provider):
+        self.provider = provider
+        self.callbacks = []
+        self.calls = []
+        self.unsubscribed = False
+        self.fail_reads = False
+        self.gate = None
+        self.revision = "r1"
+
+    def describe(self, context):
+        from types import MappingProxyType
+
+        from tui.state import ActionDescriptor, ExtensionDescription, PanelDescriptor
+
+        schema = MappingProxyType(
+            {
+                "type": "object",
+                "required": ["count"],
+                "properties": {
+                    "count": {"type": "integer", "default": 3, "minimum": 1},
+                    "options": {"type": ["object", "null"], "default": None},
+                },
+                "additionalProperties": False,
+            }
+        )
+        actions = (
+            ActionDescriptor(
+                "run.start",
+                "Start typed run",
+                "run:create",
+                True,
+                None,
+                True,
+                "Confirm exact input",
+                schema,
+            ),
+        )
+        panels = tuple(
+            PanelDescriptor(
+                f"fixture.{renderer}",
+                f"Fixture {renderer}",
+                "run",
+                "fixture",
+                renderer,
+                ("id", "value"),
+            )
+            for renderer in ("table", "tree", "json", "diff")
+        )
+        return ExtensionDescription(
+            context, self.protocol_version, self.features, self.revision, (), actions, panels
+        )
+
+    def read(self, resource, context, *, cursor=None, limit=100, byte_limit=262144):
+        from types import MappingProxyType
+
+        from tui.state import ExtensionPage, TuiExtensionError
+
+        self.calls.append(("read", context, cursor, limit, byte_limit))
+        if self.gate is not None:
+            entered, release = self.gate
+            entered.set()
+            release.wait(3)
+        if self.fail_reads:
+            raise TuiExtensionError("unavailable", "Resource unavailable")
+        items = () if cursor == "empty" else (MappingProxyType({"id": "row", "value": 7}),)
+        return ExtensionPage(
+            context, items, "empty" if cursor is None else None, False, self.revision
+        )
+
+    def invoke(self, action, context, payload, *, intent_id):
+        from tui.state import ActionResult
+
+        self.calls.append(("invoke", context, dict(payload), intent_id))
+        run_id = self.provider.start_run(context.flow, **payload)
+        return ActionResult(context, intent_id, "accepted", self.revision, {"run_id": run_id})
+
+    def subscribe(self, callback):
+        self.callbacks.append(callback)
+
+        def unsubscribe():
+            self.unsubscribed = True
+            self.callbacks.remove(callback)
+
+        return unsubscribe
+
+
+class _RevampProvider(MockStateProvider):
+    def __init__(self, *, extensions=False):
+        super().__init__(include_agent_trace=True)
+        self.reads = []
+        self.starts = []
+        if extensions:
+            self.tui_extensions = _ExtensionFixture(self)
+
+    def list_workflows(self):
+        self.reads.append("catalog")
+        return super().list_workflows()
+
+    def list_runs(self, selector):
+        self.reads.append("history")
+        return super().list_runs(selector)
+
+    def get_run(self, run_id):
+        self.reads.append("run")
+        return super().get_run(run_id)
+
+    def ping(self):
+        self.reads.append("ping")
+        return True
+
+    def start_run(self, selector, **kwargs):
+        self.starts.append((selector, kwargs))
+        return "accepted-fixture-run"
+
+
+@pytest.mark.asyncio
+async def test_revamp_catalog_is_event_driven_without_health_or_run_polling():
+    provider = _RevampProvider()
+    app = AvalancheApp(provider=provider)
+    async with app.run_test(size=(160, 50)) as pilot:
+        await _wait_for(pilot, lambda: app.store.current_run is not None)
+        await pilot.pause(0.2)
+        before = list(provider.reads)
+        await pilot.press("c")
+        assert app.store.sidebar_visible
+        await pilot.pause(2.2)
+        assert provider.reads == before
+        assert "ping" not in provider.reads
+        assert app.screen.query_one("#breadcrumbs").render().plain
+
+
+@pytest.mark.asyncio
+async def test_revamp_history_virtualizes_ten_thousand_rows_and_uses_real_dates():
+    from tui.widgets.run_history import RunHistoryWidget
+
+    app = AvalancheApp()
+    async with app.run_test(size=(160, 50)) as pilot:
+        await _wait_for(pilot, lambda: app.store.current_run is not None)
+        run = app.store.current_run
+        runs = [
+            replace(run, run_id=f"historical-{i}", triggered_at=1577836800 + i)
+            for i in range(10000)
+        ]
+        app.store._set_runs_cache(runs)
+        app.store.switch_run(runs[-1])
+        app._refresh_widgets()
+        await pilot.pause()
+        widget = app.screen.query_one("#run-history-content", RunHistoryWidget)
+        assert widget.get_content_height(None, None, 100) == 10000
+        assert len(widget.render().plain.splitlines()) <= widget.parent.size.height
+        expected_date = datetime.fromtimestamp(runs[-1].triggered_at).strftime("%Y-%m-%d")
+        assert expected_date in widget._row(0).plain
+        await pilot.press("alt+down")
+        assert app.store.selected_run_id == "historical-9998"
+        app.store._set_runs_cache([])
+        app._refresh_widgets()
+        await pilot.pause()
+        assert widget.get_content_height(None, None, 100) == 1
+
+
+@pytest.mark.asyncio
+async def test_revamp_large_dag_collapses_and_renders_only_the_viewport_on_resize():
+    provider = _RevampProvider()
+    ids = [f"n{i}" for i in range(1000)]
+    flow = WorkflowInfo(
+        name="large",
+        file_path="large.py",
+        node_ids=ids,
+        graph={},
+        node_types={nid: "step" for nid in ids},
+    )
+    provider._workflows = {flow.selector: flow}
+    provider._runs = {}
+    app = AvalancheApp(provider=provider)
+    async with app.run_test(size=(160, 50)) as pilot:
+        await _wait_for(pilot, lambda: len(app.store.all_nodes) == 1000)
+        dag = app.screen.query_one("#dag-panel")
+        dag.render()
+        assert len(dag._large_rows) == 20
+        await pilot.press("e")
+        assert len(dag._large_rows) > 1000
+        await pilot.press("z")
+        assert len(dag._large_rows) == 20
+        await pilot.resize_terminal(80, 24)
+        assert len(dag.render().plain.splitlines()) <= dag.parent.size.height
+
+
+@pytest.mark.asyncio
+async def test_revamp_node_attempt_detail_and_context_help_are_readable():
+    from tui.screens.tools import InspectionScreen
+
+    app = AvalancheApp(workflow="agent_trace", node="inspect_agent")
+    async with app.run_test(size=(160, 50)) as pilot:
+        await _wait_for(pilot, lambda: app.store.current_run is not None)
+        await pilot.press("i")
+        assert isinstance(app.screen, InspectionScreen)
+        assert json.loads(app.screen.content)["node"] == "inspect_agent_1"
+        await pilot.press("escape", "?")
+        assert isinstance(app.screen, InspectionScreen)
+        assert app.store.selected_run_id in app.screen.content
+        await pilot.press("escape", "enter")
+        assert app.store.trace_inspector_open
+        assert app.screen.query_one("#agent-trace-content").render().plain
+
+
+@pytest.mark.asyncio
+async def test_revamp_streaming_log_window_follow_pause_search_and_all_filters():
+    from tui.models import LogWindow, StreamLogEntry
+    from tui.screens.tools import LogFilterScreen
+
+    provider = _RevampProvider()
+    run = provider.list_runs("order_workflow")[0]
+    run.logs = [
+        StreamLogEntry(
+            datetime(2020, 1, 1),
+            LogLevel.INFO,
+            "fetch_orders_1",
+            f"message-{i}",
+            channel="stdout",
+            attempt="attempt-1",
+        )
+        for i in range(10020)
+    ]
+    run.latest_log_sequence = 10020
+    app = AvalancheApp(provider=provider, workflow="order_workflow")
+    async with app.run_test(size=(160, 50)) as pilot:
+        await _wait_for(pilot, lambda: app.store.current_run is not None)
+        widget = app.screen.query_one("#log-content", LogWidget)
+        assert isinstance(app.store.logs, LogWindow)
+        assert len(app.store.logs) == 10000
+        assert "evicted" in widget._marker
+        await pilot.press("s")
+        assert not app._log_autoscroll
+        detail = LogDetailAppended(
+            run.operator_instance_id,
+            run.run_id,
+            run.created_sequence,
+            10021,
+            10021,
+            StreamLogEntry(
+                datetime(2020, 1, 1),
+                LogLevel.ERROR,
+                "fetch_orders_1",
+                "needle",
+                channel="stderr",
+                attempt="attempt-2",
+            ),
+        )
+        for callback in provider._detail_callbacks:
+            callback(detail)
+        await _wait_for(pilot, lambda: app.store.logs[-1].message == "needle")
+        await pilot.press("/", *"needle", "enter")
+        assert app.store.match_count == 1
+        await pilot.press("escape", "f")
+        assert isinstance(app.screen, LogFilterScreen)
+        app.screen.query_one("#filter-channel").value = "stderr"
+        app.screen.query_one("#filter-attempt").value = "attempt-2"
+        await pilot.click("#filter-apply")
+        assert len(widget._rows) == 1
+        assert widget._rows[0][1].message == "needle"
+        assert app.store.logs.retained_bytes <= 8 * 1024 * 1024
+
+
+@pytest.mark.asyncio
+async def test_revamp_schema_start_form_preserves_typed_kwargs_and_confirms():
+    from tui.screens.input_form import InputForm
+
+    provider = _RevampProvider(extensions=True)
+    app = AvalancheApp(provider=provider, workflow="order_workflow")
+    async with app.run_test(size=(160, 50)) as pilot:
+        await _wait_for(
+            pilot,
+            lambda: app.extension_session.description is not None
+            and app.extension_session.context == app.extension_context,
+        )
+        await pilot.press("r")
+        assert isinstance(app.screen, InputForm)
+        app.screen.query_one("#field-0").value = "0"
+        await pilot.click("#form-validate")
+        assert app.screen.query_one("#form-submit").disabled
+        app.screen.query_one("#field-0").value = "7"
+        await pilot.click("#form-validate")
+        assert not app.screen.query_one("#form-submit").disabled
+        assert provider.starts == []
+        await pilot.click("#form-submit")
+        await _wait_for(pilot, lambda: bool(provider.starts))
+        assert provider.starts == [("order_workflow", {"count": 7, "options": None})]
+        assert provider.tui_extensions.calls[-1][0] == "invoke"
+    assert provider.tui_extensions.unsubscribed
+
+
+@pytest.mark.asyncio
+async def test_revamp_schedules_inspection_never_offers_a_simulated_toggle():
+    from tui.screens.tools import InspectionScreen
+
+    app = AvalancheApp()
+    async with app.run_test(size=(120, 40)) as pilot:
+        await pilot.press("ctrl+s")
+        assert isinstance(app.screen, InspectionScreen)
+        assert app.screen.query_one("#inspection-content").read_only
+        assert len(app.screen.query("Button")) == 1
+        await pilot.press("escape")
+        assert app.screen is app._screen
+
+
+@pytest.mark.asyncio
+async def test_revamp_palette_and_read_only_block_keyboard_and_direct_mutations():
+    provider = _RevampProvider(extensions=True)
+    app = AvalancheApp(provider=provider, read_only=True)
+    async with app.run_test(size=(160, 50)) as pilot:
+        await _wait_for(pilot, lambda: app.extension_session.description is not None)
+        await pilot.press("r", "x", "ctrl+p")
+        assert app.screen is not app._screen
+        await pilot.press("escape")
+        action = app.extension_session.description.actions[0]
+        app.invoke_extension_action(action)
+        app.action_start_run()
+        app.action_cancel_run()
+        assert not app.store.start_run_async(count=2)
+        assert app.store.start_run() is None
+        from tui.state import TuiExtensionError
+
+        with pytest.raises(TuiExtensionError) as rejected:
+            app.store.provider.start_run("order_workflow")
+        assert rejected.value.code == "read_only"
+        with pytest.raises(TuiExtensionError):
+            app.store.provider.cancel_run("run-1")
+        with pytest.raises(TuiExtensionError):
+            app.store.provider.tui_extensions.invoke(
+                action.id, app.extension_context, {}, intent_id="read-only-intent"
+            )
+        assert not app.can_start_run()
+        assert provider.starts == []
+        assert all(call[0] != "invoke" for call in provider.tui_extensions.calls)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("renderer", ["table", "tree", "json", "diff"])
+async def test_revamp_resource_panels_page_empty_error_and_reject_stale_context(renderer):
+    from tui.screens.tools import ResourceScreen
+
+    provider = _RevampProvider(extensions=True)
+    app = AvalancheApp(provider=provider)
+    async with app.run_test(size=(160, 50)) as pilot:
+        await _wait_for(
+            pilot,
+            lambda: app.extension_session.description is not None
+            and app.extension_session.context == app.extension_context,
+        )
+        panel = next(
+            p for p in app.extension_session.description.panels if p.renderer == renderer
+        )
+        app.open_extension_panel(panel)
+        assert isinstance(app.screen, ResourceScreen)
+        await _wait_for(pilot, lambda: app.screen._next_cursor is not None)
+        await pilot.click("#resource-next")
+        await _wait_for(pilot, lambda: app.screen._next_cursor is None)
+        provider.tui_extensions.fail_reads = True
+        await pilot.click("#resource-reload")
+        await _wait_for(
+            pilot,
+            lambda: "unavailable" in app.screen.query_one("#resource-status").render().plain,
+        )
+        app.store.switch_workflow(app.store.workflows[-1])
+        await pilot.click("#resource-reload")
+        assert "Stale" in app.screen.query_one("#resource-status").render().plain
+
+
+@pytest.mark.asyncio
+async def test_revamp_extension_completion_cannot_repaint_after_context_switch():
+    provider = _RevampProvider(extensions=True)
+    app = AvalancheApp(provider=provider)
+    async with app.run_test(size=(160, 50)) as pilot:
+        await _wait_for(
+            pilot,
+            lambda: app.extension_session.description is not None
+            and app.extension_session.context == app.extension_context,
+        )
+        entered, release = threading.Event(), threading.Event()
+        provider.tui_extensions.gate = (entered, release)
+        panel = app.extension_session.description.panels[0]
+        app.open_extension_panel(panel)
+        try:
+            await _wait_for(pilot, entered.is_set)
+            screen = app.screen
+            app.store.switch_workflow(app.store.workflows[-1])
+            await pilot.pause(0.1)
+            release.set()
+            await pilot.pause(0.1)
+            assert screen._revision is None
+            assert screen.context != app.extension_context
+        finally:
+            release.set()
+
+
+@pytest.mark.asyncio
+async def test_revamp_run_deep_link_resolves_once_and_rejects_wrong_flow():
+    provider = _RevampProvider()
+    run = provider.list_runs("order_workflow")[0]
+    app = AvalancheApp(
+        provider=provider,
+        workflow="order_workflow",
+        run=run.run_id,
+        node="validate_1",
+        read_only=True,
+    )
+    async with app.run_test(size=(160, 50)) as pilot:
+        await _wait_for(
+            pilot,
+            lambda: app.store.selected_run_id == run.run_id
+            and app.store.selected_node is not None,
+        )
+        assert app.store.selected_node.name == "validate_1"
+        assert provider.reads.count("run") == 1
+    wrong = AvalancheApp(provider=provider, workflow="ingest_workflow", run=run.run_id)
+    async with wrong.run_test(size=(160, 50)) as pilot:
+        await _wait_for(pilot, lambda: bool(wrong.store.run_error))
+        assert wrong.store.selected_run_id != run.run_id

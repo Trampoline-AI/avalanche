@@ -421,6 +421,7 @@ class WorkflowDetailScreen(Screen):
 
     def compose(self) -> ComposeResult:
         yield Header()
+        yield Static(id="breadcrumbs", markup=False)
         with Horizontal(id="main-layout"):
             yield Sidebar(id="sidebar")
             with Vertical(id="right-pane"):

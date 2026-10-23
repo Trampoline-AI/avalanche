@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from rich.text import Text
+from textual.strip import Strip
 from textual.widgets import Static
 
 from ..dag_layout import DagNode, render_dag_rich
@@ -18,11 +19,104 @@ class DagWidget(Static, can_focus=False):
         self._hit_regions: list[tuple[int, int, int, DagNode]] = []
         self._test_store = None
         self._last_scrolled_node: DagNode | None = None
+        self._expanded_groups: set[int] = set()
+        self._large_rows: list[DagNode | int] = []
+        self._large_token: tuple | None = None
+        self._node_lines: dict[str, tuple[tuple, Text]] = {}
+
+    def _large_index(self, store) -> None:
+        selected = store.selected_node
+        selected_index = store.all_nodes.index(selected) if selected is not None else -1
+        selected_group = selected_index // 50 if selected_index >= 0 else -1
+        token = (id(store.dag), selected_group, frozenset(self._expanded_groups))
+        if token == self._large_token:
+            return
+        self._large_token = token
+        rows: list[DagNode | int] = []
+        for start in range(0, len(store.all_nodes), 50):
+            group = start // 50
+            rows.append(group)
+            if group in self._expanded_groups or group == selected_group:
+                rows.extend(store.all_nodes[start : start + 50])
+        self._large_rows = rows
+        self.refresh(layout=True)
+        if selected is not None and self.parent is not None:
+            row = next((i for i, item in enumerate(rows) if item is selected), None)
+            if row is not None:
+                self.parent.scroll_to(
+                    y=max(0, row - self.parent.content_size.height // 2), animate=False
+                )
+        self._node_lines.clear()
+        self.styles.min_width = 90
+
+    def expand_all(self, expanded: bool) -> None:
+        store = self._test_store or self.app.store
+        self._expanded_groups = (
+            set(range((len(store.all_nodes) + 49) // 50)) if expanded else set()
+        )
+        self._large_token = None
+        self.refresh(layout=True)
+
+    def _large_row(self, store, index: int) -> Text:
+        self._large_index(store)
+        if index < 0 or index >= len(self._large_rows):
+            return Text()
+        item = self._large_rows[index]
+        if isinstance(item, int):
+            start = item * 50
+            return Text(
+                f"  Nodes {start + 1}–{min(start + 50, len(store.all_nodes))} "
+                "[click to expand/collapse; e/z all]",
+                style="dim",
+            )
+        state = store.current_run.nodes.get(item.name) if store.current_run else None
+        status = state.status.value if state else "PENDING"
+        selected = item is store.selected_node
+        revision = state.revision if state else -1
+        token = (status, revision, selected)
+        cached = self._node_lines.get(item.name)
+        if cached is not None and cached[0] == token:
+            return cached[1]
+        workflow = store.current_workflow
+        children = workflow.graph.get(item.name, []) if workflow else []
+        edges = ", ".join(children[:4]) + (" …" if len(children) > 4 else "")
+        line = Text(
+            f"  {'▶' if selected else ' '} {item.display_name}  {status}  → {edges}",
+            style="reverse" if selected else "",
+        )
+        self._node_lines[item.name] = (token, line)
+        if len(self._node_lines) > 256:
+            del self._node_lines[next(iter(self._node_lines))]
+        return line
+
+    def get_content_height(self, container, viewport, width: int) -> int:
+        store = self._test_store or self.app.store
+        if len(store.all_nodes) > 200:
+            self._large_index(store)
+            return len(self._large_rows)
+        return super().get_content_height(container, viewport, width)
+
+    def render_line(self, y: int) -> Strip:
+        store = self._test_store or self.app.store
+        if len(store.all_nodes) <= 200:
+            return super().render_line(y)
+        options = self.app.console.options.update(width=self.size.width, height=1)
+        return Strip.from_lines(
+            self.app.console.render_lines(self._large_row(store, y), options)
+        )[0]
 
     def render(self) -> Text:
         store = self._test_store or self.app.store
         if store.dag is None:
             return Text()
+        if len(store.all_nodes) > 200:
+            self._large_index(store)
+            start = int(self.parent.scroll_y) if self.parent else 0
+            height = self.parent.size.height if self.parent else 24
+            return Text("\n").join(
+                self._large_row(store, i)
+                for i in range(start, min(len(self._large_rows), start + height))
+            )
         lines = render_dag_rich(
             store.dag,
             store.node_statuses,
@@ -100,6 +194,21 @@ class DagWidget(Static, can_focus=False):
             pass
 
     def on_click(self, event) -> None:
+        store = self.app.store
+        if len(store.all_nodes) > 200:
+            self._large_index(store)
+            if 0 <= event.y < len(self._large_rows):
+                item = self._large_rows[event.y]
+                if isinstance(item, int):
+                    if item in self._expanded_groups:
+                        self._expanded_groups.remove(item)
+                    else:
+                        self._expanded_groups.add(item)
+                    self._large_token = None
+                    self.refresh(layout=True)
+                else:
+                    self.app.select_node(item)
+            return
         click_row = event.y
         click_col = event.x
         for row_idx, col_start, col_end, node in self._hit_regions:

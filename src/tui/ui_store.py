@@ -7,7 +7,7 @@ import threading
 import time
 from collections import OrderedDict, deque
 from collections.abc import Iterator, Mapping, Sequence
-from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import Future, ThreadPoolExecutor
 from copy import copy
 from dataclasses import dataclass, field
 from functools import lru_cache
@@ -26,6 +26,7 @@ from .models import (
     DetailUpdate,
     LogDetailAppended,
     LogEntry,
+    LogWindow,
     NodeState,
     NodeStatus,
     ResetBaseline,
@@ -33,11 +34,12 @@ from .models import (
     RunStatus,
     StreamResetNotice,
     WorkflowInfo,
+    bound_run,
 )
 from .state import StateProvider, get_stream_state
 
 
-@lru_cache(maxsize=128)
+@lru_cache(maxsize=1)
 def _parse_agent_envelope(raw: str) -> AgentTraceEnvelope:
     return AgentTraceEnvelope.model_validate_json(raw)
 
@@ -83,6 +85,7 @@ class TraceDetailCompletion:
     node_id: str
     descriptor_revision: int
     trace_body: AgentTerminalDetail | None
+    context_generation: int = 0
 
 
 @dataclass
@@ -285,8 +288,20 @@ class UIStore:
         *,
         defer_initial_catalog: bool = False,
         reset_baseline_loader: Callable[[StreamResetNotice], ResetBaseline] | None = None,
+        read_only: bool = False,
     ) -> None:
         self.provider = provider
+        self.read_only = read_only
+        self._empty_logs = LogWindow()
+        self.log_node_filter: str | None = None
+        self.log_level_filter: str | None = None
+        self.log_channel_filter: str | None = None
+        self.log_attempt_filter: str | None = None
+        self.history_evicted = 0
+        self._initial_catalog_requested = False
+        self._layout_cache: OrderedDict[str, tuple[WorkflowInfo, SeqGroup, list[DagNode]]] = (
+            OrderedDict()
+        )
 
         # ── Workflow / Run ──────────────────────────────────────────
         self.workflows: list[WorkflowInfo] = (
@@ -314,6 +329,8 @@ class UIStore:
         self._detail_hydration_failures: dict[RunDetailKey, int] = {}
         self._invalid_agent_event_details: set[tuple[str, str, int, str]] = set()
         self._runs_refresh_in_flight: set[str] = set()
+        self._runs_refresh_requested = False
+        self._catalog_refresh_requested = False
         self._status_refresh_in_flight = False
         self._catalog_refresh_in_flight = False
         self._catalog_refresh_generation = 0
@@ -336,6 +353,7 @@ class UIStore:
             thread_name_prefix="avalanche-detail-hydration",
         )
         self._detail_hydration_executor_closed = False
+        self._detail_futures: list[Future] = []
         provider.on_stream_reset(self._on_stream_reset)
 
         # ── DAG layout (derived from current_workflow) ─────────────
@@ -429,9 +447,13 @@ class UIStore:
         return {nid: ns.elapsed for nid, ns in self.current_run.nodes.items()}
 
     @property
-    def logs(self) -> list[LogEntry]:
+    def logs(self) -> LogWindow:
         if self.current_run is None:
-            return []
+            return self._empty_logs
+        if not isinstance(self.current_run.logs, LogWindow):
+            bounded = copy(self.current_run)
+            bounded.logs = LogWindow(self.current_run.logs)
+            self._replace_run_references(bounded)
         return self.current_run.logs
 
     @property
@@ -477,6 +499,10 @@ class UIStore:
         workflow_selector = self.current_workflow.selector
         if workflow_selector in self._runs_refresh_in_flight:
             return
+        if len(self._runs_refresh_in_flight) >= 4:
+            self._runs_refresh_requested = True
+            return
+        self._runs_refresh_requested = False
         self._runs_refresh_in_flight.add(workflow_selector)
         data_revision = self._run_data_revision(workflow_selector)
         context_epoch = self._workflow_context_epoch
@@ -562,6 +588,12 @@ class UIStore:
         if node_id is None or run is None:
             return "pending"
         state = run.nodes.get(node_id)
+        if (
+            state is not None
+            and state.trace is not None
+            and state.trace.status == "ui_truncated"
+        ):
+            return "truncated"
         if state is None or state.status is NodeStatus.PENDING:
             return "pending"
         envelope = self.selected_agent_trace_envelope
@@ -678,9 +710,23 @@ class UIStore:
 
     def _set_runs_cache(self, runs: list[RunState]) -> None:
         """Replace run history and rebuild its constant-time identity index."""
-        self._runs_cache = runs
+        self.history_evicted = max(0, len(runs) - 10000)
+        bounded = []
+        selected_id = self.selected_run_id
+        latest_id = runs[-1].run_id if runs else None
+        for run in runs[-10000:]:
+            item = copy(run)
+            if run.run_id in {selected_id, latest_id}:
+                item = bound_run(run)
+            else:
+                item.logs = []
+                item.nodes = {}
+                item.topology = type(run.topology)()
+                item.details_hydrated = False
+            bounded.append(item)
+        self._runs_cache = bounded
         self._run_cache_indexes = {
-            self._detail_key(run): index for index, run in enumerate(runs)
+            self._detail_key(run): index for index, run in enumerate(self._runs_cache)
         }
 
     def _replace_run_references(self, run: RunState) -> None:
@@ -718,7 +764,7 @@ class UIStore:
         key = self._detail_key(run)
         known_log_sequence = self._log_detail_sequences.get(key, -1)
         if key not in self._log_details or run.latest_log_sequence > known_log_sequence:
-            self._log_details[key] = run.logs
+            self._log_details[key] = LogWindow(run.logs)
             self._log_detail_sequences[key] = run.latest_log_sequence
 
         for node_id, node in run.nodes.items():
@@ -740,6 +786,7 @@ class UIStore:
         return adopted_event_nodes
 
     def _merge_cached_details(self, run: RunState, previous: RunState | None) -> RunState:
+        run = bound_run(run)
         adopted_event_nodes = self._remember_run_details(run)
         result = run
         key = self._detail_key(result)
@@ -806,6 +853,13 @@ class UIStore:
 
     def _cancel_detail_hydration_repairs(self) -> None:
         """Supersede all attempts and UI-loop retry deadlines."""
+        for future in self._detail_futures:
+            future.cancel()
+        self._log_details.clear()
+        self._log_detail_sequences.clear()
+        self._agent_event_details.clear()
+        self._agent_event_sequences.clear()
+        self._invalid_agent_event_details.clear()
         self._detail_hydrations_in_flight.clear()
         self._detail_hydration_requirements.clear()
         self._detail_hydration_retries.clear()
@@ -844,6 +898,9 @@ class UIStore:
 
     def _start_detail_hydration(self, run: RunState, key: RunDetailKey) -> None:
         """Submit one repair using the current structural epoch and requirements."""
+        self._detail_futures = [future for future in self._detail_futures if not future.done()]
+        if len(self._detail_futures) >= 2:
+            return
         workflow = self.current_workflow
         requirements = self._detail_hydration_requirements.get(key)
         if (
@@ -860,7 +917,7 @@ class UIStore:
         generation = self._detail_hydration_generation
         self._detail_hydrations_in_flight[key] = generation
         try:
-            self._detail_hydration_executor.submit(
+            future = self._detail_hydration_executor.submit(
                 self._load_detail_hydration,
                 run.run_id,
                 selector,
@@ -871,6 +928,7 @@ class UIStore:
                 requirements.version,
                 run.revision,
             )
+            self._detail_futures.append(future)
         except RuntimeError:
             self._detail_hydrations_in_flight.pop(key, None)
 
@@ -1089,7 +1147,7 @@ class UIStore:
                         run, required_log_sequence=detail.log_sequence
                     )
                     return False
-                logs = list(run.logs)
+                logs = LogWindow(run.logs)
                 known_sequence = run.latest_log_sequence if run.details_hydrated else 0
                 self._log_details[key] = logs
                 self._log_detail_sequences[key] = known_sequence
@@ -1146,15 +1204,31 @@ class UIStore:
         """Advance frame and refresh workflow statuses."""
         self.frame += 1
         self._apply_background_updates()
-        # Refresh provider data every ~1s in background threads (not every tick)
-        if self.frame % 30 == 1:
-            self._refresh_workflow_catalog()
-            self._refresh_workflow_statuses()
+        if self.current_run is not None and not self.current_run.details_hydrated:
+            self._schedule_detail_hydration(
+                self.current_run, required_log_sequence=self.current_run.latest_log_sequence
+            )
+        if self._runs_refresh_requested:
             self._refresh_runs_cache()
+        if self._catalog_refresh_requested and not self._catalog_refresh_in_flight:
+            self._refresh_workflow_catalog()
+        # The render clock never polls provider data. Selection, committed stream
+        # updates and explicit invalidations are the only read triggers.
+        if not self._initial_catalog_requested:
+            self._initial_catalog_requested = True
+            self._refresh_workflow_catalog()
 
     def enqueue_run_update(self, run: RunState) -> None:
-        """Queue provider data for application on the UI thread."""
-        self._background_updates.put(("run", run))
+        """Queue bounded presentation data, never retain unrelated run bodies."""
+        bounded = copy(run)
+        if run.run_id == self.selected_run_id:
+            bounded = bound_run(run)
+        else:
+            bounded.logs = []
+            bounded.nodes = {}
+            bounded.topology = type(run.topology)()
+            bounded.details_hydrated = False
+        self._background_updates.put(("run", bounded))
 
     def enqueue_detail_update(self, detail: DetailUpdate) -> None:
         """Queue one identity-pinned detail append for the UI-thread reducer."""
@@ -1176,7 +1250,11 @@ class UIStore:
         """Install terminal trace/evidence detail only while its identity is exact."""
         run = self.current_run
         if (
-            completion.trace_body is None
+            (
+                completion.context_generation != 0
+                and completion.context_generation != self._run_interaction_generation
+            )
+            or completion.trace_body is None
             or run is None
             or run.operator_instance_id != completion.operator_instance_id
             or run.run_id != completion.run_id
@@ -1334,7 +1412,9 @@ class UIStore:
 
     def _refresh_workflow_catalog(self) -> None:
         if self._catalog_refresh_in_flight:
+            self._catalog_refresh_requested = True
             return
+        self._catalog_refresh_requested = False
         self._catalog_refresh_in_flight = True
         provider = self.provider
         context_epoch = self._workflow_context_epoch
@@ -1388,7 +1468,24 @@ class UIStore:
         self._cancel_detail_hydration_repairs()
         self.close_trace_inspector()
         self.current_workflow = workflow
-        self.dag, self.all_nodes = workflow_to_layout(workflow)
+        cached = self._layout_cache.get(workflow.selector)
+        same_topology = (
+            cached is not None
+            and cached[0].node_ids == workflow.node_ids
+            and cached[0].graph == workflow.graph
+            and cached[0].node_types == workflow.node_types
+            and cached[0].display_names == workflow.display_names
+            and cached[0].agent_node_ids == workflow.agent_node_ids
+        )
+        if not same_topology:
+            dag, nodes = workflow_to_layout(workflow)
+            self._layout_cache[workflow.selector] = (workflow, dag, nodes)
+        else:
+            _, dag, nodes = cached
+        self._layout_cache.move_to_end(workflow.selector)
+        while len(self._layout_cache) > 4:
+            self._layout_cache.popitem(last=False)
+        self.dag, self.all_nodes = dag, nodes
         self.nav_grid = build_nav_grid(self.dag)
         self.selected_node = None
         self.preferred_row = 0
@@ -1401,6 +1498,7 @@ class UIStore:
         self._refresh_runs_cache()
 
     def switch_run(self, run: RunState) -> None:
+        run = bound_run(run)
         self._run_interaction_generation += 1
         self._cancel_detail_hydration_repairs()
         self.close_trace_inspector()
@@ -1968,7 +2066,7 @@ class UIStore:
     # ── Mutation: run control ──────────────────────────────────────
 
     def start_run(self) -> str | None:
-        if not self.current_workflow:
+        if self.read_only or not self.current_workflow:
             return None
         selector = self.current_workflow.selector
         try:
@@ -1991,10 +2089,10 @@ class UIStore:
         self.run_error = ""
         return run_id
 
-    def start_run_async(self) -> bool:
+    def start_run_async(self, **kwargs) -> bool:
         """Launch the complete start/get/list sequence off the UI thread."""
         workflow = self.current_workflow
-        if workflow is None or self._start_run_in_flight:
+        if self.read_only or workflow is None or self._start_run_in_flight:
             return False
 
         import threading
@@ -2015,7 +2113,7 @@ class UIStore:
             runs = None
             error = ""
             try:
-                run_id = provider.start_run(workflow_selector)
+                run_id = provider.start_run(workflow_selector, **kwargs)
                 if not run_id:
                     error = "Run failed to start"
                 else:
@@ -2514,6 +2612,7 @@ class UIStore:
         previous_selectors = {workflow.selector for workflow in self.workflows}
         baseline_selectors = {workflow.selector for workflow in baseline.catalog.workflows}
         self._workflow_context_epoch += 1
+        self._run_interaction_generation += 1
         self._catalog_refresh_generation += 1
         for selector in previous_selectors | baseline_selectors:
             self._advance_run_data_revision(selector)

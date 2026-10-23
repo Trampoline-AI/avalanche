@@ -8,6 +8,7 @@ from datetime import datetime
 from rich.style import Style
 from rich.text import Text
 from textual.message import Message
+from textual.strip import Strip
 from textual.widgets import Static
 
 from ..models import RunState, RunStatus
@@ -74,79 +75,68 @@ class RunHistoryWidget(Static):
         text.append("  " + "─" * 51, DIM_STYLE)
         return text
 
-    def render(self) -> Text:
+    def _row(self, index: int) -> Text:
         store = self._test_store or self.app.store
         runs = store.runs_for_current_workflow
-        selected_run_id = store.selected_run_id
-        frame = store.frame
-
-        text = Text()
-
         if not runs:
-            text.append("  No runs yet.\n", DIM_STYLE)
-            self._display_order = []
-            return text
-
-        self._display_order = list(reversed(runs))
-
-        for run in self._display_order:
-            is_selected = run.run_id == selected_run_id
-            style = RUN_STATUS_STYLES[run.status]
-
-            if run.status == RunStatus.RUNNING:
-                icon = SPINNER_FRAMES[frame % len(SPINNER_FRAMES)]
-            else:
-                icon = RUN_STATUS_ICONS[run.status]
-
-            ts = (
-                datetime.now().strftime("%Y-%m-%d %H:%M")
-                if run.started_at is not None
-                else "                "
-            )
-            elapsed = run.elapsed
-            dur_str = f"{_fmt_time(elapsed):>7}" if elapsed is not None else "      —"
-            status_str = f"{run.status.value} {icon}"
-
-            if is_selected:
-                bg = _SELECTED_BG
-                text.append("  ", bg)
-                text.append(f"{run.run_id:<14}", Style(color=ICE_FROST, bold=True) + bg)
-                text.append(f"{ts}  ", DIM_STYLE + bg)
-                text.append(dur_str, DIM_STYLE + bg)
-                text.append("   ", bg)
-                text.append(status_str, style + bg)
-                text.append("\n")
-            else:
-                text.append("  ")
-                text.append(f"{run.run_id:<14}", Style(color=ICE_FROST))
-                text.append(f"{ts}  ", DIM_STYLE)
-                text.append(dur_str, DIM_STYLE)
-                text.append("   ")
-                text.append(status_str, style)
-                text.append("\n")
-
+            return Text("  No runs yet.", DIM_STYLE)
+        if index < 0 or index >= len(runs):
+            return Text()
+        run = runs[-index - 1]
+        selected = run.run_id == store.selected_run_id
+        style = RUN_STATUS_STYLES[run.status]
+        icon = (
+            SPINNER_FRAMES[store.frame % len(SPINNER_FRAMES)]
+            if run.status == RunStatus.RUNNING
+            else RUN_STATUS_ICONS[run.status]
+        )
+        # started_at is a process-monotonic duration clock, not a calendar date.
+        # triggered_at is the provider's wall-clock creation time; absent is unknown.
+        ts = (
+            datetime.fromtimestamp(run.triggered_at).strftime("%Y-%m-%d %H:%M")
+            if run.triggered_at is not None
+            else "unknown         "
+        )
+        elapsed = run.elapsed
+        duration = f"{_fmt_time(elapsed):>7}" if elapsed is not None else "      —"
+        bg = _SELECTED_BG if selected else Style()
+        text = Text("  ", bg)
+        text.append(f"{run.run_id:<14}", Style(color=ICE_FROST, bold=selected) + bg)
+        text.append(f"{ts}  {duration}   ", DIM_STYLE + bg)
+        text.append(f"{run.status.value} {icon}", style + bg)
         return text
 
+    def get_content_height(self, container, viewport, width: int) -> int:
+        store = self._test_store or self.app.store
+        return max(1, len(store.runs_for_current_workflow))
+
+    def render(self) -> Text:
+        parent = self.parent
+        start = int(parent.scroll_y) if parent else 0
+        height = max(1, parent.size.height) if parent else 24
+        store = self._test_store or self.app.store
+        end = min(max(1, len(store.runs_for_current_workflow)), start + height)
+        return Text("\n").join(self._row(index) for index in range(start, end))
+
+    def render_line(self, y: int) -> Strip:
+        options = self.app.console.options.update(width=self.size.width, height=1)
+        return Strip.from_lines(self.app.console.render_lines(self._row(y), options))[0]
+
     def on_click(self, event) -> None:
-        self.app.store.focused_pane = "run-history"
-        row = event.y
-        if 0 <= row < len(self._display_order):
-            run = self._display_order[row]
-            self.post_message(self.RunSelected(run=run))
+        store = self.app.store
+        store.focused_pane = "run-history"
+        runs = store.runs_for_current_workflow
+        if 0 <= event.y < len(runs):
+            self.post_message(self.RunSelected(run=runs[-event.y - 1]))
 
     def scroll_to_selected(self) -> None:
-        """Scroll the parent container so the selected run is centered."""
         store = self._test_store or self.app.store
-        selected_id = store.selected_run_id
-        if not selected_id or not self._display_order:
-            return
-        for i, run in enumerate(self._display_order):
-            if run.run_id == selected_id:
-                y = _HEADER_LINES + i
-                container = self.parent
-                if container is not None:
-                    half = container.content_size.height // 2
-                    container.scroll_to(y=max(0, y - half), animate=False)
+        runs = store.runs_for_current_workflow
+        for i, run in enumerate(reversed(runs)):
+            if run.run_id == store.selected_run_id:
+                if self.parent is not None:
+                    half = self.parent.content_size.height // 2
+                    self.parent.scroll_to(y=max(0, i - half), animate=False)
                 return
 
 

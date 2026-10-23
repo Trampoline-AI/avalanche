@@ -270,7 +270,15 @@ class _VirtualInspector(Static):
         if cached is not None and cached[0] == body_token:
             return cached[1]
         body = Text("\n").join(self._wrap_body(row.body()))
+        if len(body.plain.encode("utf-8")) > 1024 * 1024:
+            body = Text(body.plain[:262144] + "\n[body truncated; inspect a narrower range]")
         self._body_cache[row.path] = (body_token, body)
+        while (
+            len(self._body_cache) > 64
+            or sum(len(item[1].plain.encode("utf-8")) for item in self._body_cache.values())
+            > 4 * 1024 * 1024
+        ):
+            del self._body_cache[next(iter(self._body_cache))]
         return body
 
     def _wrap_body(self, body: Text) -> list[Text]:
@@ -456,6 +464,10 @@ def _trace_leading(store: Any) -> tuple[Text, list[AgentInspectionTurn], bool]:
     if envelope is None or envelope.trace is None:
         state = store.selected_agent_inspector_state
         messages = {
+            "truncated": (
+                "Trace body exceeds the UI budget; use a bounded resource panel.\n",
+                "yellow",
+            ),
             "pending": ("This agent step has not run yet for this run.\n", "yellow"),
             "live": ("Status: running · waiting for live updates\n", "yellow"),
             "hydrating": ("Status: hydrating delayed trace detail\n", "yellow"),
@@ -1055,6 +1067,10 @@ class AgentOutputInspector(_VirtualInspector):
             if outputs is None:
                 state = store.selected_agent_inspector_state
                 messages = {
+                    "truncated": (
+                        "Trace body exceeds the UI budget; use a bounded resource panel.\n",
+                        "yellow",
+                    ),
                     "pending": ("This agent step has not run yet for this run.\n", "yellow"),
                     "live": (
                         "Output will be available after this agent step completes.\n",
