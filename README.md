@@ -366,7 +366,7 @@ def generate_binary() -> str:
     ava.Signature(
         "binary: str -> decimal: str",
     ),
-    lm="openai/gpt-5.6-terra",
+    runtime=ava.runtimes.PredictRLM(lm="openai/gpt-5.6-terra"),
 )
 async def convert_binary(binary: str, *, agent: ava.Agent) -> str:
     return (await agent(binary=binary)).decimal
@@ -416,14 +416,16 @@ LiteLLM out, since DSPy still declares it as a dependency. Workspaces created by
 `init.sh` include this exclusion; remove it before adding `dspy[litellm]`, because
 uv drops excluded packages even when another requirement asks for them.
 
-Set `lm` for the main model and `sub_lm` for the sub-model. Shared settings go
-on the workflow:
+Agent settings live on the step's runtime, `ava.runtimes.PredictRLM(...)`: set
+`lm` for the main model and `sub_lm` for the sub-model. Shared settings go on the
+workflow's default runtime:
 
 ```python
 @ava.workflow(
     agent_defaults={
-        "lm": "openai/gpt-5.5",
-        "sub_lm": "gemini/gemini-3.5-flash",
+        "runtime": ava.runtimes.PredictRLM(
+            lm="openai/gpt-5.5", sub_lm="gemini/gemini-3.5-flash"
+        )
     }
 )
 def feedback_workflow():
@@ -432,9 +434,9 @@ def feedback_workflow():
     )
 ```
 
-An `lm` or `sub_lm` passed to an individual agent step overrides the same
-workflow default. `agent_defaults` configures runtime options only; signatures, skills, and
-tools remain defined on each agent step.
+A step's own `runtime=ava.runtimes.PredictRLM(...)` is merged over the workflow
+default field by field, so a step sets only what differs. `agent_defaults` holds
+only the runtime; signatures and tools remain defined on each agent step.
 
 Classifier steps use TypeSafe directly, not DSPy. Set `TYPESAFE_API_KEY` in the
 executing environment or your project's `.env` file; exported variables take precedence.

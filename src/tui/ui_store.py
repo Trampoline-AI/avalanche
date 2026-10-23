@@ -1626,7 +1626,11 @@ class UIStore:
             },
             "packages": runtime["packages"],
             "modules": runtime["modules"],
-            "tools": declaration.model_dump(mode="json")["tools"],
+            # Skill tools first, then the step's own, as the agent sees them.
+            "tools": [
+                *runtime["skill_tools"],
+                *(tool.model_dump(mode="json") for tool in declaration.tools),
+            ],
         }
 
     def trace_inspector_navigation_paths(self) -> list[tuple[str, ...]]:

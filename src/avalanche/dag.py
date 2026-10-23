@@ -67,9 +67,12 @@ from .step_interface import StepInterface, decoration_namespace, step_interface_
 from .webhook import Webhook
 
 if TYPE_CHECKING:
+    from collections.abc import Mapping
+
     from runtime.executor import Executor
     from runtime.operator.hooks import RunHooks
 
+    from .agent.defaults import AgentDefaults
     from .execution_services import ExecutionServicesSpec
 
 F = TypeVar("F", bound=Callable[..., Any])
@@ -2134,7 +2137,7 @@ class Workflow:
         webhook: Webhook | bool | None = None,
         input_type: type | None = None,
         context_type: type | None = None,
-        agent_defaults: dict[str, Any] | None = None,
+        agent_defaults: AgentDefaults | None = None,
         classifier_defaults: dict[str, JsonValue] | None = None,
     ):
         """
@@ -2159,7 +2162,7 @@ class Workflow:
         _validate_workflow_types(input_type, context_type)
         self.input_type = input_type
         self.context_type = context_type
-        self.agent_defaults = dict(agent_defaults or {})
+        self.agent_defaults = agent_defaults
         from .classifier.models import validate_runtime_defaults
 
         self.classifier_defaults = validate_runtime_defaults(
@@ -3087,7 +3090,7 @@ def workflow(
     input: type | None = None,
     context: type | None = None,
     ctx: type | None = None,
-    agent_defaults: dict[str, Any] | None = None,
+    agent_defaults: AgentDefaults | Mapping[str, object] | None = None,
     classifier_defaults: dict[str, JsonValue] | None = None,
 ) -> Callable[[], Workflow] | Callable[[Callable[[], None]], Callable[[], Workflow]]:
     """
@@ -3111,6 +3114,9 @@ def workflow(
 
     Args:
         cron: Optional cron expression for scheduled execution.
+        agent_defaults: Optional ``{"runtime": ava.runtimes.PredictRLM(...)}`` (or an
+            ``AgentDefaults``) shared by agent steps; a step's runtime of the same
+            kind is merged over it field by field.
         input: Optional BaseInput subclass validated at run start.
         context: Optional BaseContext subclass validated at run start.
         ctx: Alias for context.
@@ -3123,12 +3129,11 @@ def workflow(
         raise ValueError("Use either context= or ctx=, not both")
     context_type = context or ctx
     webhook = _normalize_webhook(webhook)
+    validated_agent_defaults: AgentDefaults | None = None
     if agent_defaults is not None:
-        from .agent.config import validate_runtime_kwargs
+        from .agent.defaults import agent_defaults_from
 
-        agent_defaults = validate_runtime_kwargs(
-            agent_defaults, owner="ava.workflow(agent_defaults=...)"
-        )
+        validated_agent_defaults = agent_defaults_from(agent_defaults)
     if classifier_defaults is not None:
         from .classifier.models import validate_runtime_defaults
 
@@ -3153,7 +3158,7 @@ def workflow(
                     webhook=webhook,
                     input_type=input,
                     context_type=context_type,
-                    agent_defaults=agent_defaults,
+                    agent_defaults=validated_agent_defaults,
                     classifier_defaults=classifier_defaults,
                 )
             finally:

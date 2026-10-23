@@ -3,13 +3,11 @@
 from __future__ import annotations
 
 import inspect
-import textwrap
 import types
 import uuid
 from contextvars import ContextVar
 from functools import update_wrapper
 from typing import (
-    TYPE_CHECKING,
     Any,
     Callable,
     DefaultDict,
@@ -34,18 +32,15 @@ from ..step_interface import (
     resolve_step_signature,
     step_interface_from_signature,
 )
-from .config import UNSET, validate_runtime_kwargs
-from .contract import AgentRequest, SignatureSpec, ToolSpec
+from .contract import AgentRequest, AgentRuntime, SignatureSpec, ToolSpec
 from .declaration import (
     AgentDeclaration,
     FieldDeclaration,
     SignatureDeclaration,
-    ToolDeclaration,
+    tool_declarations,
 )
+from .defaults import AgentDefaults, effective_runtime, reject_removed_arguments
 from .signature import resolve_signature
-
-if TYPE_CHECKING:
-    from ..runtimes.predict_rlm import PredictRLM
 
 InputT = TypeVar("InputT")
 OutputT = TypeVar("OutputT")
@@ -59,11 +54,9 @@ class AgentStepExecutionError(RuntimeError):
     """An agent invocation failed inside an agent step."""
 
 
-_WORKFLOW_AGENT_DEFAULTS: ContextVar[Mapping[str, Any]] = ContextVar(
-    "avalanche_agent_workflow_defaults", default={}
+_WORKFLOW_AGENT_DEFAULTS: ContextVar[AgentDefaults] = ContextVar(
+    "avalanche_agent_workflow_defaults", default=AgentDefaults()
 )
-
-_AGENT_RUNTIME_DEFAULTS: Mapping[str, bool] = types.MappingProxyType({"verbose": False})
 
 
 class Agent:
@@ -74,18 +67,16 @@ class Agent:
         *,
         signature: type[dspy.Signature],
         step_name: str,
-        runtime_kwargs: Mapping[str, Any],
-        skills: Sequence[Any] | object = UNSET,
-        tools: Sequence[Callable[..., Any]] | object = UNSET,
+        runtime: AgentRuntime | None = None,
+        tools: tuple[Callable[..., Any], ...] = (),
     ) -> None:
         self._signature_declaration = signature
         self._step_name = step_name
-        self._runtime_kwargs = dict(runtime_kwargs)
-        self._skills_override = skills
-        self._tools_override = tools
+        # PredictRLM when no runtime is given; built lazily, so nothing loads here.
+        self._runtime = runtime
+        self._declared_tools = tools
         self._signature: SignatureSpec | None = None
         self._tools: tuple[ToolSpec, ...] = ()
-        self._runtime: PredictRLM | None = None
 
     async def __call__(self, **inputs: Any) -> Prediction:
         """Run the configured agent and return its raw DSPy prediction."""
@@ -102,7 +93,18 @@ class Agent:
             inputs=validated_inputs,
             tools=self._tools,
         )
-        call = await self._resolve_runtime().predict(request)
+        from ..runtimes.predict_rlm import PredictRLM
+
+        # Until agent steps return typed results, the step still hands back the
+        # PredictRLM prediction, so only PredictRLM can run one.
+        if self._runtime is None:
+            self._runtime = PredictRLM()
+        if not isinstance(self._runtime, PredictRLM):
+            raise AgentStepError(
+                f"agent step {self._step_name!r}: runtime {self._runtime.kind!r} "
+                "cannot run agent steps yet"
+            )
+        call = await self._runtime.predict(request)
 
         # Resolve process-local state only in the executing worker. Existing
         # observers have already applied their own strict/error policy.
@@ -118,27 +120,16 @@ class Agent:
             signature = SignatureSpec.from_dspy(
                 resolve_signature(self._signature_declaration, name=self._step_name)
             )
-            declared_tools = (
-                () if self._tools_override is UNSET else tuple(self._tools_override)
-            )
             tools = tuple(
                 ToolSpec(
                     name=_callable_name(tool),
                     description=inspect.getdoc(tool),
                     function=tool,
                 )
-                for tool in declared_tools
+                for tool in self._declared_tools
             )
             self._signature, self._tools = signature, tools
         return self._signature
-
-    def _resolve_runtime(self) -> PredictRLM:
-        if self._runtime is None:
-            from ..runtimes.predict_rlm import PredictRLM
-
-            skills = () if self._skills_override is UNSET else tuple(self._skills_override)
-            self._runtime = PredictRLM.from_runtime_kwargs(self._runtime_kwargs, skills=skills)
-        return self._runtime
 
     def _validate_input_names(
         self, dspy_signature: type[dspy.Signature], inputs: Mapping[str, Any]
@@ -166,31 +157,23 @@ class _AgentStepSpec(Generic[InputT, OutputT]):
         step_name: str,
         *,
         signature: type[dspy.Signature],
-        runtime_kwargs: Mapping[str, Any],
-        skills: Sequence[Any] | object,
-        tools: Sequence[Callable[..., Any]] | object,
+        runtime: AgentRuntime | None,
+        tools: tuple[Callable[..., Any], ...],
         public_signature: inspect.Signature,
         evaluations: Evaluations[InputT, OutputT] | None,
     ) -> None:
         self.step_name = step_name
         self.signature = signature
-        self.runtime_kwargs = dict(runtime_kwargs)
-        self.skills = skills
+        self.runtime = runtime
         self.tools = tools
         self.public_signature = public_signature
         self.evaluations = evaluations
 
     def make_agent(self) -> Agent:
-        defaults = _WORKFLOW_AGENT_DEFAULTS.get()
         return Agent(
             signature=self.signature,
             step_name=self.step_name,
-            runtime_kwargs={
-                **_AGENT_RUNTIME_DEFAULTS,
-                **defaults,
-                **self.runtime_kwargs,
-            },
-            skills=self.skills,
+            runtime=effective_runtime(self.runtime, _WORKFLOW_AGENT_DEFAULTS.get()),
             tools=self.tools,
         )
 
@@ -211,41 +194,40 @@ class _AgentStepSpec(Generic[InputT, OutputT]):
             "",
         )
 
-    def declaration(
-        self, workflow_defaults: Mapping[str, Any] | None = None
-    ) -> AgentDeclaration:
+    def declaration(self, workflow_defaults: AgentDefaults | None = None) -> AgentDeclaration:
         """Describe the step statically, without building a predictor."""
         signature = resolve_signature(self.signature, name=self.step_name)
-        skills = () if self.skills is UNSET else tuple(self.skills)
-        tools = () if self.tools is UNSET else tuple(self.tools)
+        default = (workflow_defaults or AgentDefaults()).runtime
+        step_runtime = self.runtime
+        if step_runtime is None:
+            from ..runtimes.predict_rlm import PredictRLM
 
-        from ..runtimes.predict_rlm.runtime import predict_rlm_declaration
-
-        signature_instructions = str(getattr(signature, "instructions", "") or "")
-        runtime, skill_tools = predict_rlm_declaration(
-            workflow_defaults or {},
-            self.runtime_kwargs,
-            skills=skills,
-            signature_instructions=signature_instructions,
-        )
+            # A step without a runtime declares as an empty PredictRLM merged over
+            # a PredictRLM default, so models are attributed to the workflow.
+            if default is None or default.kind == PredictRLM.kind:
+                step_runtime = PredictRLM()
+            else:
+                step_runtime = default
+                default = None
+        if default is not None and default.kind == step_runtime.kind:
+            runtime_declaration = step_runtime.declaration(workflow_default=default)
+        else:
+            runtime_declaration = step_runtime.declaration(workflow_default=None)
         return AgentDeclaration(
             signature=SignatureDeclaration(
                 name=getattr(signature, "__name__", type(signature).__name__),
-                instructions=signature_instructions,
+                instructions=str(getattr(signature, "instructions", "") or ""),
                 inputs=_field_declarations(signature.input_fields),
                 outputs=_field_declarations(signature.output_fields),
             ),
-            tools=(
-                *_tool_declarations(skill_tools),
-                *_tool_declarations({_callable_name(tool): tool for tool in tools}),
-            ),
-            runtime=runtime,
+            tools=tool_declarations({_callable_name(tool): tool for tool in self.tools}),
+            runtime=runtime_declaration,
         )
 
     def with_workflow_defaults(
         self,
         fn: Callable[..., Any],
-        defaults: Mapping[str, Any],
+        defaults: AgentDefaults | None,
         *,
         classifier_defaults: Mapping[str, JsonValue] | None = None,
     ) -> Callable[..., Any]:
@@ -256,7 +238,7 @@ class _AgentStepSpec(Generic[InputT, OutputT]):
             from avalanche.agent.steps import _WORKFLOW_AGENT_DEFAULTS
             from avalanche.classifier.classifier_step import _WORKFLOW_CLASSIFIER_DEFAULTS
 
-            token = _WORKFLOW_AGENT_DEFAULTS.set(defaults)
+            token = _WORKFLOW_AGENT_DEFAULTS.set(defaults or AgentDefaults())
             classifier_token = _WORKFLOW_CLASSIFIER_DEFAULTS.set(owned_classifier_defaults)
             try:
                 return await fn(*args, **kwargs)
@@ -326,21 +308,6 @@ def _annotation_name(annotation: Any) -> str:
     )
 
 
-def _tool_declarations(tools: Mapping[str, Callable[..., Any]]) -> tuple[ToolDeclaration, ...]:
-    declarations = []
-    for name, tool in tools.items():
-        try:
-            source_code = textwrap.dedent(inspect.getsource(tool)).rstrip()
-        except (OSError, TypeError):
-            source_code = ""
-        declarations.append(
-            ToolDeclaration(
-                name=name, description=inspect.getdoc(tool) or "", source_code=source_code
-            )
-        )
-    return tuple(declarations)
-
-
 def _callable_name(value: Callable[..., Any]) -> str:
     return str(getattr(value, "__name__", type(value).__name__))
 
@@ -353,67 +320,44 @@ def _reject_nested_agent_decorator() -> None:
         )
 
 
-def _agent_runtime_configuration(
-    *,
-    owner: str,
-    lm: Any,
-    sub_lm: Any,
-    max_iterations: Any,
-    skills: Sequence[Any] | object,
-    tools: Sequence[Callable[..., Any]] | object,
-    predictor_kwargs: Mapping[str, Any],
-) -> dict[str, Any]:
-    if skills is not UNSET and not isinstance(skills, Sequence):
-        raise TypeError(f"{owner} skills must be a sequence")
-    if tools is not UNSET:
-        if not isinstance(tools, Sequence):
-            raise TypeError(f"{owner} tools must be a sequence")
-        for tool in tools:
-            if not callable(tool):
-                raise TypeError(f"{owner} tools must be callable")
-
-    runtime_kwargs = {
-        name: value
-        for name, value in (
-            ("lm", lm),
-            ("sub_lm", sub_lm),
-            ("max_iterations", max_iterations),
+def _step_configuration(
+    *, owner: str, runtime: object, tools: object, removed: Mapping[str, object]
+) -> tuple[AgentRuntime | None, tuple[Callable[..., Any], ...]]:
+    reject_removed_arguments(owner, removed)
+    if runtime is not None and not isinstance(runtime, AgentRuntime):
+        raise TypeError(
+            f"{owner} runtime must be an agent runtime such as "
+            f"ava.runtimes.PredictRLM(...), not {type(runtime).__name__}"
         )
-        if value is not UNSET
-    }
-    runtime_kwargs.update(predictor_kwargs)
-    return validate_runtime_kwargs(runtime_kwargs, owner=owner)
+    if not isinstance(tools, Sequence) or isinstance(tools, str):
+        raise TypeError(f"{owner} tools must be a sequence")
+    for tool in tools:
+        if not callable(tool):
+            raise TypeError(f"{owner} tools must be callable")
+    return runtime, tuple(tools)
 
 
 def agent_step(
     signature: Any = None,
     *,
-    lm: Any = UNSET,
-    sub_lm: Any = UNSET,
-    max_iterations: Any = UNSET,
-    skills: Sequence[Any] | object = UNSET,
-    tools: Sequence[Callable[..., Any]] | object = UNSET,
+    runtime: AgentRuntime | None = None,
+    tools: Sequence[Callable[..., Any]] = (),
     evaluations: Evaluations[InputT, OutputT] | None = None,
-    **predictor_kwargs: Any,
+    **removed: object,
 ) -> Callable[[Callable[..., Any]], Node]:
     """Register a bodyful workflow step with an injected callable Agent.
 
     The first positional argument is a subclassed ``ava.Signature``, an inline
-    ``ava.agent.Signature(...)``, or another DSPy Signature class.
+    ``ava.agent.Signature(...)``, or another DSPy Signature class. ``runtime``
+    defaults to the workflow's ``agent_defaults`` runtime, else PredictRLM.
     """
     _reject_nested_agent_decorator()
     if signature is None:
         raise TypeError("ava.agent_step requires a Signature as its first argument")
     if evaluations is not None and not isinstance(evaluations, Evaluations):
         raise TypeError("ava.agent_step evaluations must be an ava.Evaluations declaration")
-    runtime_kwargs = _agent_runtime_configuration(
-        owner="ava.agent_step",
-        lm=lm,
-        sub_lm=sub_lm,
-        max_iterations=max_iterations,
-        skills=skills,
-        tools=tools,
-        predictor_kwargs=predictor_kwargs,
+    step_runtime, step_tools = _step_configuration(
+        owner="ava.agent_step", runtime=runtime, tools=tools, removed=removed
     )
 
     def decorator(user_fn: Callable[..., Any]) -> Node:
@@ -423,9 +367,8 @@ def agent_step(
         spec = _AgentStepSpec(
             user_fn.__name__,
             signature=signature,
-            runtime_kwargs=runtime_kwargs,
-            skills=skills,
-            tools=tools,
+            runtime=step_runtime,
+            tools=step_tools,
             public_signature=public_signature,
             evaluations=evaluations,
         )
@@ -487,27 +430,17 @@ def step(
     *,
     inputs: Mapping[str, Any] | None = None,
     slug: str | None = None,
-    lm: Any = UNSET,
-    sub_lm: Any = UNSET,
-    max_iterations: Any = UNSET,
-    skills: Sequence[Any] | object = UNSET,
-    tools: Sequence[Callable[..., Any]] | object = UNSET,
+    runtime: AgentRuntime | None = None,
+    tools: Sequence[Callable[..., Any]] = (),
     evaluations: Evaluations[InputT, OutputT] | None = None,
-    **predictor_kwargs: Any,
+    **removed: object,
 ) -> NodeFuture | Callable[[Callable[..., Any]], Node]:
     """Invoke an inline agent in a workflow, or declare a bodyful agent outside it."""
     if _workflow_context.get() is None:
         if inputs is not None or slug is not None:
             raise TypeError("ava.agent.step inputs= and slug= require a workflow body")
         return agent_step(
-            signature,
-            lm=lm,
-            sub_lm=sub_lm,
-            max_iterations=max_iterations,
-            skills=skills,
-            tools=tools,
-            evaluations=evaluations,
-            **predictor_kwargs,
+            signature, runtime=runtime, tools=tools, evaluations=evaluations, **removed
         )
 
     if evaluations is not None and not isinstance(evaluations, Evaluations):
@@ -519,14 +452,8 @@ def step(
         unexpected = [name for name in inputs if name not in signature.input_fields]
         if unexpected:
             raise AgentStepError(f"inline agent has unexpected input fields {unexpected}")
-    runtime_kwargs = _agent_runtime_configuration(
-        owner="ava.agent.step",
-        lm=lm,
-        sub_lm=sub_lm,
-        max_iterations=max_iterations,
-        skills=skills,
-        tools=tools,
-        predictor_kwargs=predictor_kwargs,
+    step_runtime, step_tools = _step_configuration(
+        owner="ava.agent.step", runtime=runtime, tools=tools, removed=removed
     )
     output_fields = signature.output_fields
     output_adapters = tuple(
@@ -549,9 +476,8 @@ def step(
     spec = _AgentStepSpec(
         signature.__name__,
         signature=signature,
-        runtime_kwargs=runtime_kwargs,
-        skills=skills,
-        tools=tools,
+        runtime=step_runtime,
+        tools=step_tools,
         public_signature=public_signature,
         evaluations=evaluations,
     )

@@ -121,7 +121,9 @@ Inline agents use the same pipeline syntax, binding inputs in signature order:
 def extraction_flow():
     return (
         load_pdf()
-        >> ava.agent.step(ExtractItems, skills=[ava.agent.skills.pdf])
+        >> ava.agent.step(
+            ExtractItems, runtime=ava.runtimes.PredictRLM(skills=[ava.agent.skills.pdf])
+        )
         >> publish()
     )
 ```
