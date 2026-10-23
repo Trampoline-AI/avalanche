@@ -32,11 +32,6 @@ from pydantic import BaseModel, ConfigDict, GetCoreSchemaHandler, PlainValidator
 from pydantic_core import CoreSchema, core_schema
 
 from ..._agent_evidence import AgentTraceFinishedEvent
-from ...agent.steps import (
-    _AGENT_RUNTIME_DEFAULTS,
-    AgentStepExecutionError,
-    _describe_signature,
-)
 from ...agent.contract import (
     AgentEventSink,
     AgentRequest,
@@ -52,6 +47,11 @@ from ...agent.declaration import (
     PredictRLMModel,
     PredictRLMModels,
     PredictRLMSkillDeclaration,
+)
+from ...agent.steps import (
+    _AGENT_RUNTIME_DEFAULTS,
+    AgentStepExecutionError,
+    _describe_signature,
 )
 from ...agent.trace import RuntimeKind
 from .events import _AGENT_INVOCATION_STATE, _AgentInvocationState, _AvalancheEvidenceSink
