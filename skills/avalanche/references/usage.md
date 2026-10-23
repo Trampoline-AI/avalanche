@@ -83,8 +83,9 @@ or either decorator. Every named signature belongs in separate `signature.py`;
 models belong in `schema.py` and every helper in `util.py`.
 
 Inline calls declare the graph; agents run only during execution. They share
-workflow `agent_defaults` and per-node overrides with decorated nodes.
-Put `skills=` / `tools=` on the node, not in workflow defaults.
+the workflow `agent_defaults` runtime and per-node `runtime=` overrides with
+decorated nodes. Put model, skill and other PredictRLM settings on
+`ava.runtimes.PredictRLM(...)`, and `tools=` on the node.
 
 ## Native classifier steps
 
