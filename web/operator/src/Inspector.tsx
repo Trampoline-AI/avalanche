@@ -39,7 +39,11 @@ import {
 } from "./model";
 import { Markdown } from "./Markdown";
 import { PythonSource } from "./PythonSource";
-import { InspectorFields, InspectorResources } from "./InspectorDefinition";
+import {
+  InspectorAgentSummary,
+  InspectorFields,
+  InspectorResources,
+} from "./InspectorDefinition";
 import { RetainedAgentValue } from "./RetainedAgentValue";
 import { isUnknownRecord } from "./guards";
 import { StepInterfacePanel } from "./StepInterfacePanel";
@@ -735,6 +739,14 @@ function AgentAndStepInspector({
               <span className="font-mono text-[9px] text-muted">{headerDuration}</span>
             )}
           </div>
+          {isAgentNode && (
+            <InspectorAgentSummary
+              key={stepTabScope}
+              mainModel={run ? mainModel : declaredMainModel}
+              subModel={run ? subModel : declaredSubModel}
+              skills={workflowDeclaration?.skills}
+            />
+          )}
           {composites && (
             <CompositeSummary
               composites={composites}
@@ -745,15 +757,13 @@ function AgentAndStepInspector({
             <div className="mt-2 grid min-w-0 gap-0.5 font-mono text-[8px] leading-[1.5]">
               <p className="m-0 whitespace-normal text-secondary [overflow-wrap:anywhere]">
                 <span className="mr-1.5 text-muted uppercase">Main</span>
-                {mainModel ?? "—"}
                 {traceUsage &&
-                  ` · ${TOKEN_NUMBER_FORMAT.format(traceUsage.main.inputTokens)} in / ${TOKEN_NUMBER_FORMAT.format(traceUsage.main.outputTokens)} out · $${traceUsage.main.cost.toFixed(4)}`}
+                  `${TOKEN_NUMBER_FORMAT.format(traceUsage.main.inputTokens)} in / ${TOKEN_NUMBER_FORMAT.format(traceUsage.main.outputTokens)} out · $${traceUsage.main.cost.toFixed(4)}`}
               </p>
               <p className="m-0 whitespace-normal text-secondary [overflow-wrap:anywhere]">
                 <span className="mr-1.5 text-muted uppercase">Sub</span>
-                {subModel ?? "—"}
                 {traceUsage &&
-                  ` · ${TOKEN_NUMBER_FORMAT.format(traceUsage.sub.inputTokens)} in / ${TOKEN_NUMBER_FORMAT.format(traceUsage.sub.outputTokens)} out · $${traceUsage.sub.cost.toFixed(4)}`}
+                  `${TOKEN_NUMBER_FORMAT.format(traceUsage.sub.inputTokens)} in / ${TOKEN_NUMBER_FORMAT.format(traceUsage.sub.outputTokens)} out · $${traceUsage.sub.cost.toFixed(4)}`}
               </p>
               <p className="m-0 text-muted">
                 <span className="text-secondary">
@@ -1004,32 +1014,6 @@ function AgentAndStepInspector({
                         ))}
                       </div>
                     </section>
-                    {(declaredMainModel || declaredSubModel) && (
-                      <section aria-label="Models">
-                        <h3 className="inspector-section-title">Models</h3>
-                        <div className="grid min-w-0 gap-3">
-                          {(
-                            [
-                              ["Main", declaredMainModel],
-                              ["Sub", declaredSubModel],
-                            ] as const
-                          ).flatMap(([label, model]) =>
-                            model
-                              ? [
-                                  <div className="min-w-0" key={label}>
-                                    <span className="block font-mono text-[8px] text-muted uppercase">
-                                      {label}
-                                    </span>
-                                    <strong className="mt-0.5 block text-[10px] text-ink [overflow-wrap:anywhere]">
-                                      {model}
-                                    </strong>
-                                  </div>,
-                                ]
-                              : [],
-                          )}
-                        </div>
-                      </section>
-                    )}
                     <InspectorResources
                       key={`${selectionScope}\0${workflow?.workflowId}`}
                       declaration={workflowDeclaration}

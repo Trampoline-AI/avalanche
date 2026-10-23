@@ -2,6 +2,7 @@ import { type CSSProperties, useCallback, useEffect, useState } from "react";
 import { LoaderCircle, PanelLeft } from "lucide-react";
 
 import { Explorer } from "../Explorer";
+import { SkillCatalog } from "../SkillCatalog";
 import { useExplorerPinned } from "../useExplorerPinned";
 import { WorkflowWorkspaceSurface } from "../WorkflowWorkspace";
 import { WorkspaceDivider } from "../WorkspaceDivider";
@@ -16,6 +17,10 @@ export function OperatorUi({ host, navigation }: OperatorUiProps) {
   const { api, presentation } = host;
   const { state, startRun, cancelRun, selectRun } = useOperatorProjection(api);
   const [localSelection, setLocalSelection] = useState<OperatorUiSelection>();
+  const [nodeInspectionRequest, setNodeInspectionRequest] = useState<{
+    workflowId: string;
+    nodeId: string;
+  }>();
   const selection = navigation ? navigation.selection : localSelection;
   const workflow = state.catalog?.workflows.find(
     (item) => item.workflowId === selection?.workflowId,
@@ -58,6 +63,7 @@ export function OperatorUi({ host, navigation }: OperatorUiProps) {
   }, [explorerPinned]);
   const select = useCallback(
     (next: OperatorUiSelection) => {
+      setNodeInspectionRequest(undefined);
       if (next.workflowId !== selection?.workflowId) void selectRun(undefined);
       setSelection(next);
       setExplorerOpen(false);
@@ -67,6 +73,7 @@ export function OperatorUi({ host, navigation }: OperatorUiProps) {
   const selectWorkflowRun = useCallback(
     (runId: string | undefined) => {
       if (!workflow) return;
+      setNodeInspectionRequest(undefined);
       setSelection(
         runId
           ? { kind: "run", workflowId: workflow.workflowId, runId }
@@ -158,11 +165,20 @@ export function OperatorUi({ host, navigation }: OperatorUiProps) {
               )}
             </bdi>
           </div>
-          <div
-            className={`connection flex items-center justify-self-end gap-2 font-mono text-[11px] whitespace-nowrap capitalize [&>span]:size-[7px] [&>span]:rounded-full ${state.connection === "live" ? "[&>span]:bg-mint" : "[&>span]:bg-amber"} connection-${state.connection}`}
-          >
-            <span />
-            {state.connection === "live" ? "Live" : state.connection}
+          <div className="flex items-center justify-self-end gap-4">
+            <SkillCatalog
+              workflows={state.catalog.workflows}
+              onOpenNode={(workflowId, nodeId) => {
+                select({ kind: "workflow", workflowId });
+                setNodeInspectionRequest({ workflowId, nodeId });
+              }}
+            />
+            <div
+              className={`connection flex items-center justify-self-end gap-2 font-mono text-[11px] whitespace-nowrap capitalize [&>span]:size-[7px] [&>span]:rounded-full ${state.connection === "live" ? "[&>span]:bg-mint" : "[&>span]:bg-amber"} connection-${state.connection}`}
+            >
+              <span />
+              {state.connection === "live" ? "Live" : state.connection}
+            </div>
           </div>
           <button
             type="button"
@@ -213,6 +229,12 @@ export function OperatorUi({ host, navigation }: OperatorUiProps) {
               state={state}
               workflowId={selection?.workflowId}
               workflow={workflow}
+              nodeInspectionRequest={
+                selection?.kind === "workflow" &&
+                nodeInspectionRequest?.workflowId === selection.workflowId
+                  ? nodeInspectionRequest
+                  : undefined
+              }
               selectedRunId={selection?.kind === "run" ? selection.runId : undefined}
               onSelectRun={selectWorkflowRun}
               selectRun={selectRun}

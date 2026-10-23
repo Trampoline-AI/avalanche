@@ -1,5 +1,6 @@
 import { memo, useState } from "react";
 import ReactMarkdown from "react-markdown";
+import remarkGfm from "remark-gfm";
 
 export const MARKDOWN_SOURCE_CHUNK_CHARACTERS = 4_000;
 export const NODE_MARKDOWN_EXCERPT_CHARACTERS = 480;
@@ -22,6 +23,12 @@ const MARKDOWN_ALLOWED_ELEMENTS = [
   "p",
   "pre",
   "strong",
+  "table",
+  "thead",
+  "tbody",
+  "tr",
+  "th",
+  "td",
   "ul",
 ];
 
@@ -34,7 +41,20 @@ interface MarkdownProps {
 }
 
 const MarkdownChunk = memo(({ source }: { source: string }) => (
-  <ReactMarkdown allowedElements={MARKDOWN_ALLOWED_ELEMENTS} skipHtml>
+  <ReactMarkdown
+    remarkPlugins={[remarkGfm]}
+    allowedElements={MARKDOWN_ALLOWED_ELEMENTS}
+    skipHtml
+    components={{
+      table: ({ children }) => (
+        <div className="my-3 max-w-full overflow-x-auto">
+          <table className="w-full border-collapse text-left text-xs [&_td]:border [&_td]:border-line [&_td]:px-3 [&_td]:py-2 [&_th]:border [&_th]:border-line [&_th]:bg-canvas [&_th]:px-3 [&_th]:py-2 [&_th]:font-semibold">
+            {children}
+          </table>
+        </div>
+      ),
+    }}
+  >
     {source}
   </ReactMarkdown>
 ));

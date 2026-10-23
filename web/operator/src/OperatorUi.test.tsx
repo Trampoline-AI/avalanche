@@ -76,6 +76,47 @@ const presentation = {
 afterEach(() => window.localStorage.removeItem("avalanche.explorer-pinned"));
 
 describe("operator workflows", () => {
+  it("opens a skill's node in its workflow and can reopen it after closing the inspector", async () => {
+    const otherWorkflow = FlowInfoMsg.create({
+      ...workflow,
+      workflowId: "research.py::research",
+      displayName: "Research",
+      displayNames: { fetch: "Gather sources" },
+      agentMetadataJson: {
+        fetch: JSON.stringify({ skills: [{ name: "PDF", instructions: "Read the source." }] }),
+      },
+    });
+    const api = createApi({
+      loadBaseline: async () => ({
+        ...baseline,
+        catalog: CatalogSnapshotMsg.create({
+          ...baseline.catalog,
+          workflows: [workflow, otherWorkflow],
+        }),
+        runs: [],
+      }),
+    });
+    render(<OperatorUi host={{ api, presentation }} />);
+    const skills = await screen.findByRole("button", { name: "Skills: 1" });
+    await screen.findByRole("button", { name: "View current state for Orders" });
+    for (let attempt = 0; attempt < 2; attempt += 1) {
+      fireEvent.click(skills);
+      fireEvent.click(
+        within(screen.getByRole("dialog")).getByRole("button", { name: "Gather sources" }),
+      );
+      const inspector = await screen.findByRole("complementary", { name: "Node declaration" });
+      expect(within(inspector).getByRole("heading", { name: "Gather sources" })).toBeVisible();
+      expect(
+        screen.getByRole("button", { name: "View current state for Research" }),
+      ).toBeVisible();
+      expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+      fireEvent.click(within(inspector).getByRole("button", { name: "Close" }));
+      expect(
+        screen.queryByRole("complementary", { name: "Node declaration" }),
+      ).not.toBeInTheDocument();
+    }
+  });
+
   it("starts and selects a run, inspects its node, and cancels it", async () => {
     const inventory = FlowInfoMsg.create({
       ...workflow,

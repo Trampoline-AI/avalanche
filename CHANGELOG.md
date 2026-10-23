@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- Inspect agent models and skills beneath the node title, reveal full model names
+  inline, and browse shared skills beside the connection status with links to
+  their nodes. Skill documents support Markdown tables.
+
 - Remember the workflow sidebar’s open/collapsed preference locally. Show a clickable
   two-letter badge per workflow in the collapsed rail, with a 1px gray border and
   blue text for the active workflow.

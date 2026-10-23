@@ -42,6 +42,7 @@ export interface WorkflowWorkspaceProps {
 }
 
 interface WorkflowWorkspaceSurfaceProps {
+  nodeInspectionRequest?: { nodeId: string };
   api: OperatorApi;
   state: OperatorProjection;
   workflowId?: string;
@@ -60,6 +61,7 @@ interface WorkflowWorkspaceSurfaceProps {
 
 /** Both hosts share selection policy, graph, run controls, and the inspector column. */
 export function WorkflowWorkspaceSurface({
+  nodeInspectionRequest,
   api,
   state,
   workflowId,
@@ -193,6 +195,9 @@ export function WorkflowWorkspaceSurface({
     [selectWorkflowRun, startRun],
   );
   const closePanel = useCallback(() => setInspectedNode(undefined), []);
+  useEffect(() => {
+    if (nodeInspectionRequest) setInspectedNode(nodeInspectionRequest.nodeId);
+  }, [nodeInspectionRequest]);
   const openNode = useCallback((nodeId: string) => setInspectedNode(nodeId), []);
   const toggleTimeline = useCallback((expanded: boolean) => {
     timelineBounds.current = timelineElement.current?.getBoundingClientRect();
