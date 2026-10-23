@@ -10,7 +10,7 @@ import sys
 import threading
 import time
 import traceback
-from contextvars import ContextVar
+from contextvars import ContextVar, Token
 from functools import wraps
 from pathlib import Path
 from typing import Any, Callable, Protocol
@@ -721,6 +721,14 @@ def _with_ray_node_observers(
     return _with_ray_node_streams(node_id, fn, ray_log_queue)
 
 
+def _begin_log_attempt() -> Token[str]:
+    return _log_attempt.set(uuid4().hex)
+
+
+def _end_log_attempt(token: Token[str]) -> None:
+    _log_attempt.reset(token)
+
+
 def _with_ray_node_streams(
     node_id: str,
     fn: Callable[..., Any],
@@ -733,7 +741,7 @@ def _with_ray_node_streams(
 
         @wraps(fn)
         async def async_wrapper(*args: Any, **kwargs: Any) -> Any:
-            attempt_token = _log_attempt.set(uuid4().hex)
+            attempt_token = _begin_log_attempt()
             capture_queue = _SealableEventQueue(ray_log_queue)
             stdout = _QueueStream(capture_queue, name, logging.INFO)
             stderr = _QueueStream(capture_queue, name, logging.ERROR)
@@ -752,13 +760,13 @@ def _with_ray_node_streams(
                 sys.stdout, sys.stderr = old_stdout, old_stderr
                 root_logger.removeHandler(handler)
                 root_logger.setLevel(old_level)
-                _log_attempt.reset(attempt_token)
+                _end_log_attempt(attempt_token)
 
         return async_wrapper
 
     @wraps(fn)
     def wrapper(*args: Any, **kwargs: Any) -> Any:
-        attempt_token = _log_attempt.set(uuid4().hex)
+        attempt_token = _begin_log_attempt()
         capture_queue = _SealableEventQueue(ray_log_queue)
         stdout = _QueueStream(capture_queue, name, logging.INFO)
         stderr = _QueueStream(capture_queue, name, logging.ERROR)
@@ -777,7 +785,7 @@ def _with_ray_node_streams(
             sys.stdout, sys.stderr = old_stdout, old_stderr
             root_logger.removeHandler(handler)
             root_logger.setLevel(old_level)
-            _log_attempt.reset(attempt_token)
+            _end_log_attempt(attempt_token)
 
     return wrapper
 
