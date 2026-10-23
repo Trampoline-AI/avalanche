@@ -136,10 +136,11 @@ composes, and persists its own result. Agent execution is implemented through
 PredictRLM; the step's signature, skills, tools, and runtime model settings
 remain explicit declaration data.
 
-Workflow-level `agent_defaults` supply shared runtime settings such as `lm` and
-`sub_lm`. A value declared on an individual agent step wins over the workflow
-default, which wins over Avalanche and PredictRLM defaults. Signatures, skills,
-and tools stay step-local capabilities.
+Each agent step runs on a runtime, a frozen descriptor such as
+`ava.runtimes.PredictRLM(lm=..., sub_lm=...)`. A workflow-level
+`agent_defaults={"runtime": ...}` supplies shared settings; a step's runtime of
+the same kind is merged over it field by field, and with neither the step uses
+`PredictRLM()`. Signatures and tools stay step-local.
 
 ### Executors
 
