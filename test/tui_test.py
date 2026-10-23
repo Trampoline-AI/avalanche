@@ -1992,6 +1992,11 @@ async def test_revamp_schema_start_form_preserves_typed_kwargs_and_confirms():
         await pilot.click("#form-validate")
         assert app.screen.query_one("#form-submit").disabled
         app.screen.query_one("#field-0").value = "7"
+        # Textual ignores repeat clicks during the button's active animation;
+        # wait for that actual UI state rather than depending on machine speed.
+        await _wait_for(
+            pilot, lambda: not app.screen.query_one("#form-validate").has_class("-active")
+        )
         await pilot.click("#form-validate")
         assert not app.screen.query_one("#form-submit").disabled
         assert provider.starts == []
