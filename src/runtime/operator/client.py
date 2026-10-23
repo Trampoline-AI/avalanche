@@ -1056,12 +1056,13 @@ class GrpcStateProvider:
                         event_sequence=descriptor.event_sequence,
                         event_json=event_json,
                         size_bytes=descriptor.size_bytes,
-                        event_kind=descriptor.event_kind,
-                        iteration=descriptor.iteration,
+                        native_event_kind=descriptor.native_event_kind,
+                        agent_event_kind=descriptor.agent_event_kind,
+                        turn=descriptor.turn,
                         duration_ms=descriptor.duration_ms,
                         error=descriptor.error,
-                        tool_count=descriptor.tool_count,
-                        predict_count=descriptor.predict_count,
+                        tool_call_count=descriptor.tool_call_count,
+                        model_call_count=descriptor.model_call_count,
                     )
                 )
                 cursor = descriptor.event_sequence
@@ -2568,12 +2569,13 @@ class GrpcStateProvider:
                     descriptor.body_token,
                     descriptor.size_bytes,
                 ).decode(),
-                event_kind=descriptor.event_kind,
-                iteration=descriptor.iteration,
+                native_event_kind=descriptor.native_event_kind,
+                agent_event_kind=descriptor.agent_event_kind,
+                turn=descriptor.turn,
                 duration_ms=descriptor.duration_ms,
                 error=descriptor.error,
-                tool_count=descriptor.tool_count,
-                predict_count=descriptor.predict_count,
+                tool_call_count=descriptor.tool_call_count,
+                model_call_count=descriptor.model_call_count,
                 size_bytes=descriptor.size_bytes,
             )
         elif isinstance(update.change, ClassifierEventAppended):

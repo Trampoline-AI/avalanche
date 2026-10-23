@@ -176,6 +176,139 @@ def test_refresh_reconciliation_failure_rolls_back_and_can_retry(
         operator.close()
 
 
+def test_agent_trace_header_and_events_carry_common_fields_over_protobuf(
+    agent_trace, iteration_step
+):
+    from avalanche.agent.trace import TokenUsage
+    from runtime.operator.convert_v2 import (
+        agent_event_activity_to_v2,
+        agent_event_descriptor_from_v2,
+        trace_header_from_v2,
+        trace_header_to_v2,
+    )
+    from runtime.operator.proto import operator_pb2 as pb
+
+    operator = Operator([], watch=False, schedule=False)
+    run = RunState(run_id="run-agent", flow_name="agent-flow", status=RunStatus.RUNNING)
+    run.nodes["agent_1"] = NodeState("agent_1", "agent", "step", status=NodeStatus.RUNNING)
+    operator._runs[run.run_id] = run
+    handle = SimpleNamespace(
+        cancel_event=threading.Event(), result_bundle=None, success_quiesced=False
+    )
+
+    def apply(event):
+        operator._apply_event(
+            run.run_id, handle, {"type": "agent_evidence", "node_id": "agent_1", "event": event}
+        )
+
+    step = iteration_step(1, "x = 1")
+    try:
+        for sequence, event_kind, data in (
+            (1, "session.started", {}),
+            (
+                2,
+                "iteration.recorded",
+                {"tool_count": 2, "predict_count": 1, "step": step.model_dump(mode="json")},
+            ),
+        ):
+            apply(
+                {
+                    "kind": "evidence",
+                    "invocation_id": "inv",
+                    "sequence": sequence,
+                    "event_kind": event_kind,
+                    "timestamp_ns": sequence,
+                    "data": data,
+                }
+            )
+        apply(
+            {
+                "kind": "trace_finished",
+                "invocation_id": "inv",
+                # Steps crossed as live events, so the terminal trace carries none.
+                "trace": agent_trace(steps=[])
+                .model_copy(update={"iterations": 1})
+                .model_dump(mode="json"),
+                "evidence": {
+                    "run_id": "sdk-run",
+                    "complete": True,
+                    "terminal_outcome": "completed",
+                },
+            }
+        )
+        summaries = operator.list_run_summaries()
+        snapshot = operator.get_run_snapshot(
+            run.run_id,
+            operator_instance_id=summaries.operator_instance_id,
+            as_of_sequence=summaries.as_of_sequence,
+        )
+        header = snapshot.nodes[0].trace.header
+        assert (header.status, header.runtime_kind, header.trace_format) == (
+            "succeeded",
+            "predict_rlm",
+            "predict_rlm.run/v1",
+        )
+        assert (header.model, header.turn_count, header.stop_reason) == (
+            "test-model",
+            1,
+            "submit",
+        )
+        assert header.usage == TokenUsage(input_tokens=0, output_tokens=0, cost_usd=0.0)
+        assert header.tool_call_count == 2
+        assert header.external_run_id == "sdk-run"
+        assert (
+            trace_header_from_v2(
+                pb.TraceHeaderV2.FromString(trace_header_to_v2(header).SerializeToString())
+            )
+            == header
+        )
+
+        page = operator.list_agent_events(page_token=snapshot.nodes[0].event_page_token)
+        setup, turn = page.events
+        assert (setup.native_event_kind, setup.agent_event_kind, setup.turn) == (
+            "session.started",
+            "native",
+            None,
+        )
+        assert (turn.native_event_kind, turn.agent_event_kind, turn.turn) == (
+            "iteration.recorded",
+            "turn.finished",
+            1,
+        )
+        assert (turn.tool_call_count, turn.model_call_count) == (2, 1)
+        wire = agent_event_activity_to_v2(
+            turn, run_id=run.run_id, node_id="agent_1", detail_ref=pb.ActivityDetailRefV2()
+        )
+        decoded = agent_event_descriptor_from_v2(
+            pb.RunActivityDescriptorV2.FromString(wire.SerializeToString())
+        )
+        assert (decoded.agent_event_kind, decoded.turn, decoded.model_call_count) == (
+            "turn.finished",
+            1,
+            1,
+        )
+    finally:
+        operator.close()
+
+
+@pytest.mark.parametrize(
+    "field, value",
+    [("status", 0), ("status", 99), ("runtime_kind", "")],
+)
+def test_trace_header_from_protobuf_rejects_unknown_status_and_missing_runtime(field, value):
+    from runtime.operator.convert_v2 import trace_header_from_v2
+    from runtime.operator.proto import operator_pb2 as pb
+
+    message = pb.TraceHeaderV2(
+        status=pb.AGENT_TRACE_STATUS_V2_SUCCEEDED,
+        runtime_kind="predict_rlm",
+        trace_format="predict_rlm.run/v1",
+    )
+    setattr(message, field, value)
+    with pytest.raises(ValueError):
+        trace_header_from_v2(message)
+
+
 def test_agent_evidence_deduplicates_per_invocation_and_materializes_references(
     agent_trace, iteration_step
 ):

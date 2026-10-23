@@ -128,8 +128,20 @@ function parseLmUsage(value: unknown, path: string): TraceLmUsage {
   };
 }
 
-export function parseAgentTraceUsage(value: unknown): TraceLmUsage {
-  return parseLmUsage(value, "agent trace usage");
+/** PredictRLM details kept in its final trace body rather than the common header. */
+export interface PredictRlmTraceSummary {
+  subModel?: string;
+  maxIterations: number;
+  usage: TraceLmUsage;
+}
+
+export function parsePredictRlmTraceSummary(value: unknown): PredictRlmTraceSummary {
+  const trace = record(record(value, "agent trace body").trace, "agent trace body.trace");
+  return {
+    subModel: optionalString(trace.sub_model, "agent trace sub_model"),
+    maxIterations: nonNegativeInteger(trace.max_iterations, "agent trace max_iterations"),
+    usage: parseLmUsage(trace.usage, "agent trace usage"),
+  };
 }
 
 function parseLmFinish(value: unknown, path: string): TraceLmFinish | undefined {

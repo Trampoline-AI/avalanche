@@ -84,6 +84,17 @@ def turn_from_step(step: IterationStep) -> Turn:
     )
 
 
+# PredictRLM event kinds that have a common live event; the rest are native only.
+COMMON_EVENT_KINDS = {
+    "iteration.recorded": "turn.finished",
+    "predict.started": "model.started",
+    "predict.finished": "model.finished",
+    "tool.started": "tool.started",
+    "tool.finished": "tool.finished",
+    "code.generated": "code.generated",
+}
+
+
 def common_event(event: RunEvent) -> AgentEvent | None:
     """The common live event for a PredictRLM event; run lifecycle has none."""
     data = event.data

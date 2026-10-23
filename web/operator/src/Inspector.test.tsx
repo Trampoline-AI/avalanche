@@ -20,6 +20,7 @@ import {
   FlowInfoMsg,
   RunSnapshotMsg,
 } from "./model";
+import type { AgentEventKind } from "./model";
 import {
   agentDeclarationJson,
   createApi,
@@ -80,26 +81,35 @@ const run = RunSnapshotMsg.create({
       trace: {
         available: true,
         header: {
-          status: "completed",
+          status: "succeeded",
+          runtimeKind: "predict_rlm",
+          traceFormat: "predict_rlm.run/v1",
           model: "retained-model",
-          subModel: "retained-sub-model",
-          iterations: "2",
-          maxIterations: "4",
+          turnCount: "2",
+          toolCallCount: "0",
           durationMs: "125",
-          usageJson:
-            '{"main":{"input_tokens":12,"output_tokens":3,"cost":0.01,"cache_hits":0},"sub":{"input_tokens":0,"output_tokens":0,"cost":0,"cache_hits":0}}',
+          usage: { inputTokens: "12", outputTokens: "3", costUsd: 0.01 },
         },
       },
     },
   ],
 });
-function event(sequence: number, eventKind = "iteration.recorded") {
+const COMMON_EVENT_KINDS: Record<string, AgentEventKind> = {
+  "iteration.recorded": "turn.finished",
+  "code.generated": "code.generated",
+  "tool.started": "tool.started",
+  "tool.finished": "tool.finished",
+  "predict.started": "model.started",
+  "predict.finished": "model.finished",
+};
+function event(sequence: number, nativeEventKind = "iteration.recorded") {
   return AgentEventDescriptorMsg.create({
     eventSequence: String(sequence),
-    eventKind,
+    nativeEventKind,
+    agentEventKind: COMMON_EVENT_KINDS[nativeEventKind] ?? "native",
     bodyToken: `event-${sequence}`,
     sizeBytes: "64",
-    iteration: sequence,
+    turn: sequence,
     invocationId: "invocation-1",
   });
 }
@@ -121,8 +131,8 @@ function eventPage(
 function traceEvent(iteration: number, sizeBytes = "64") {
   return AgentEventDescriptorMsg.create({
     ...event(iteration),
-    toolCount: 1,
-    predictCount: 1,
+    toolCallCount: 1,
+    modelCallCount: 1,
     sizeBytes,
   });
 }
@@ -857,26 +867,92 @@ describe("retained run inspection", () => {
     expect(screen.getByText("historical_review_question")).toBeInTheDocument();
   });
 
-  it("restores separate main and sub model costs and trace duration in the header on every tab", () => {
-    const pricedRun = RunSnapshotMsg.create({
+  it("never shows PredictRLM's combined usage as main-model usage", () => {
+    const pendingRun = RunSnapshotMsg.create({
+      ...run,
+      nodes: [{ ...run.nodes[0], trace: { ...run.nodes[0].trace, bodyToken: "trace-body" } }],
+    });
+    render(
+      <Inspector
+        api={createApi({ readJsonDetail: () => new Promise(() => undefined) })}
+        workflow={agentWorkflow}
+        run={pendingRun}
+        nodeId={node.nodeId}
+        onClose={() => undefined}
+      />,
+    );
+    const header = screen
+      .getByRole("complementary", { name: "Run inspector" })
+      .querySelector("header")!;
+    expect(within(header).getByText("Main").parentElement).toHaveTextContent("retained-model");
+    expect(within(header).getByText("Main").parentElement).not.toHaveTextContent("12 in");
+  });
+
+  it("shows a common header for runtimes without PredictRLM details", () => {
+    const otherRun = RunSnapshotMsg.create({
       ...run,
       nodes: [
         {
           ...run.nodes[0],
           trace: {
             ...run.nodes[0].trace,
+            bodyToken: "trace-body",
             header: {
               ...run.nodes[0].trace!.header!,
-              usageJson:
-                '{"main":{"input_tokens":12,"output_tokens":3,"cost":0.01,"cache_hits":0},"sub":{"input_tokens":9,"output_tokens":1,"cost":0.0025,"cache_hits":0}}',
+              runtimeKind: "other_runtime",
+              traceFormat: "other_runtime.messages/v1",
+              turnCount: "3",
             },
           },
         },
       ],
     });
+    const readJsonDetail = vi.fn<OperatorApi["readJsonDetail"]>(async () => undefined);
     render(
       <Inspector
-        api={createApi()}
+        api={createApi({ readJsonDetail })}
+        workflow={agentWorkflow}
+        run={otherRun}
+        nodeId={node.nodeId}
+        onClose={() => undefined}
+      />,
+    );
+    const header = screen
+      .getByRole("complementary", { name: "Run inspector" })
+      .querySelector("header")!;
+    expect(within(header).getByText("Main").parentElement).toHaveTextContent(
+      "retained-model · 12 in / 3 out · $0.0100",
+    );
+    expect(within(header).queryByText("Sub")).toBeNull();
+    expect(header).toHaveTextContent("3 turns");
+    expect(readJsonDetail).not.toHaveBeenCalledWith("trace-body", expect.anything());
+  });
+
+  it("restores separate main and sub model costs and trace duration in the header on every tab", async () => {
+    const pricedRun = RunSnapshotMsg.create({
+      ...run,
+      nodes: [{ ...run.nodes[0], trace: { ...run.nodes[0].trace, bodyToken: "trace-body" } }],
+    });
+    const usage = (input: number, output: number, cost: number) => ({
+      input_tokens: input,
+      output_tokens: output,
+      cost,
+      cache_hits: 0,
+    });
+    const readJsonDetail = vi.fn<OperatorApi["readJsonDetail"]>(async (token) =>
+      token === "trace-body"
+        ? {
+            trace: {
+              sub_model: "retained-sub-model",
+              max_iterations: 4,
+              usage: { main: usage(12, 3, 0.01), sub: usage(9, 1, 0.0025) },
+            },
+          }
+        : undefined,
+    );
+    render(
+      <Inspector
+        api={createApi({ readJsonDetail })}
         workflow={agentWorkflow}
         run={pricedRun}
         nodeId={node.nodeId}
@@ -888,11 +964,13 @@ describe("retained run inspection", () => {
       const header = screen
         .getByRole("complementary", { name: "Run inspector" })
         .querySelector("header")!;
+      await waitFor(() =>
+        expect(within(header).getByText("Sub").parentElement).toHaveTextContent(
+          "retained-sub-model · 9 in / 1 out · $0.0025",
+        ),
+      );
       expect(within(header).getByText("Main").parentElement).toHaveTextContent(
         "retained-model · 12 in / 3 out · $0.0100",
-      );
-      expect(within(header).getByText("Sub").parentElement).toHaveTextContent(
-        "retained-sub-model · 9 in / 1 out · $0.0025",
       );
       expect(header).toHaveTextContent("2 of 4 iterations");
       expect(header).toHaveTextContent("0.13s");

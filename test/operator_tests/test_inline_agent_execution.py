@@ -350,7 +350,7 @@ def test_spawned_inline_agent_failure_never_publishes_partial_result(
         with pytest.raises(RunResultUnavailableError):
             operator.get_run_result(run.run_id)
         events = operator.list_agent_events(run.run_id, agent_id).events
-        assert events[0].event_kind == "run.started"
+        assert events[0].native_event_kind == "run.started"
     finally:
         operator.close()
 
@@ -374,7 +374,7 @@ def test_spawned_running_inline_agent_cancellation_never_publishes_partial_resul
             time.sleep(0.03)
         while time.monotonic() < deadline:
             events = operator.list_agent_events(run_id, agent_id).events
-            if any(event.event_kind == "run.started" for event in events):
+            if any(event.native_event_kind == "run.started" for event in events):
                 break
             time.sleep(0.03)
         else:
@@ -395,7 +395,7 @@ def test_spawned_running_inline_agent_cancellation_never_publishes_partial_resul
         ]
         assert consumer.status != NodeStatus.SUCCESS
         assert not any(
-            event.event_kind == "run.succeeded"
+            event.native_event_kind == "run.succeeded"
             for event in operator.list_agent_events(run_id, agent_id).events
         )
         with pytest.raises(RunResultUnavailableError):

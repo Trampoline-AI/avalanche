@@ -21,6 +21,14 @@
   declaration JSON has a new shape (PredictRLM settings, models and skills move under
   `runtime`), so the operator, its clients and `@trampoline-ai/operator-ui` must be
   upgraded together. Cached discovery results from older versions are rebuilt.
+- Operator: the agent trace summary sent to clients is now runtime-neutral: status
+  (succeeded, failed or cancelled), runtime kind, trace format, model, total token
+  usage and cost, turn and tool-call counts, and stop reason. Agent live-event
+  summaries carry a common event kind next to the runtime's own kind, the turn, and
+  tool-call and model-call counts. PredictRLM's sub-model, iteration limit and
+  per-model usage are no longer in the summary; the web UI reads them from the
+  trace body. The protobuf messages change, so the operator, its clients and
+  `@trampoline-ai/operator-ui` must be upgraded together.
 
 ## 0.13.0
 
