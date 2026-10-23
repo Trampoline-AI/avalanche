@@ -55,7 +55,7 @@ Bare `@ava.workflow` is also supported. It returns a builder; calling the builde
 | `webhook: ava.Webhook \| bool \| None` | `None`; `True` enables a generated route, `False`/`None` disables it, or provide a `Webhook`. Other types raise `TypeError`. |
 | `input: type \| None` | `None`; optional `BaseInput` subclass for run input validation. Other types raise `TypeError` on construction. |
 | `context: type \| None` | `None`; optional `BaseContext` subclass for caller context validation. Other types raise `TypeError` on construction. |
-| `agent_defaults: dict[str, Any] \| None` | `None`; validated workflow-level [agent defaults](agents.md). |
+| `agent_defaults: Mapping[str, object] \| ava.agent.AgentDefaults \| None` | `None`; `{"runtime": ava.runtimes.PredictRLM(...)}`, the shared runtime each agent step's runtime is merged over. See [agent defaults](agents.md#workflow-defaults). |
 | `classifier_defaults: dict[str, JsonValue] \| None` | `None`; validated workflow-level [classifier defaults](classifiers.md). |
 
 Cycles raise `ValueError` during construction. Start execution with [workflow.run](runs.md#workflow-run); input and context declarations are detailed in [Inputs and context](inputs-context.md).

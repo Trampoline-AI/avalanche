@@ -39,7 +39,7 @@ Model, skill and other PredictRLM settings belong to the runtime. Passing `lm=`,
 | `sub_lm` | `dspy.LM \| str \| None`; default `None` | Model for the agent's structured prediction tool. `None` uses DSPy context configuration. |
 | `max_iterations` | `int`; default `30` | Maximum agent REPL iterations. |
 | `skills` | Sequence of `ava.agent.Skill`; default none | Capability bundles. |
-| `output_dir` | `str \| pathlib.Path \| None`; default `None` | Collect generated agent `File` outputs under `<output_dir>/<field>/`, otherwise in a temporary directory. Does not redirect scalar outputs or logs. |
+| `output_dir` | `str \| pathlib.Path \| None`; default `None` | For steps without `ava.File` or `ava.Workspace` fields: collect PredictRLM `File` outputs under `<output_dir>/<field>/`, otherwise in a temporary directory. Steps with file fields reserve their outputs in the run workspace (see [File references](../file-references.md)) and raise `AgentStepError` when `output_dir` is set. Does not redirect scalar outputs or logs. |
 | `verbose` | `bool`; default `False` | PredictRLM console output. Avalanche runs agents quietly by default; PredictRLM's own default is `True`. |
 
 The remaining fields (`max_llm_calls`, `max_output_chars`, `sandbox_backend`, `allowed_domains`, `runtime_hooks`, and so on) take the same values and defaults as the installed PredictRLM constructor. An unknown field raises a validation error.
