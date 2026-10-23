@@ -1555,7 +1555,13 @@ class AvalancheApp(App):
     def check_action(self, action: str, parameters: tuple) -> bool | None:
         if self.store.searching and action not in {"escape_key", "quit"}:
             return False
-        if self._screen is not None and self.screen is not self._screen and action != "quit":
+        if (
+            self._screen is not None
+            and self.screen is not self._screen
+            and action not in {"quit", "focus", "focus_next", "focus_previous"}
+        ):
+            # Keep dashboard shortcuts out of modals, but preserve Textual's
+            # application-level Tab/Shift+Tab focus traversal inside them.
             return False
         return True
 

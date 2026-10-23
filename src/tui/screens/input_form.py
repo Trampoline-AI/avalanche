@@ -223,6 +223,12 @@ class InputForm(ModalScreen):
             yield Button("Confirm and submit", id="form-submit", disabled=True)
             yield Button("Cancel", id="form-cancel")
 
+    def on_mount(self) -> None:
+        # The dashboard intentionally has no keyboard-focused editor. Establish
+        # modal focus explicitly, including schemas with no property controls.
+        inputs = list(self.query(Input))
+        (inputs[0] if inputs else self.query_one("#raw-input", TextArea)).focus()
+
     def _input(self) -> Object:
         raw = self.query_one("#raw-input", TextArea).text
         payload = (
