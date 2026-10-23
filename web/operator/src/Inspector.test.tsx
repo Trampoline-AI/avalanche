@@ -889,11 +889,14 @@ describe("retained run inspection", () => {
       const header = screen
         .getByRole("complementary", { name: "Run inspector" })
         .querySelector("header")!;
+      const summary = within(header).getByLabelText("Agent configuration");
+      expect(summary).toHaveTextContent("main: retained-model");
+      expect(summary).toHaveTextContent("sub: retained-sub-model");
       expect(within(header).getByText("Main").parentElement).toHaveTextContent(
-        "retained-model · 12 in / 3 out · $0.0100",
+        "12 in / 3 out · $0.0100",
       );
       expect(within(header).getByText("Sub").parentElement).toHaveTextContent(
-        "retained-sub-model · 9 in / 1 out · $0.0025",
+        "9 in / 1 out · $0.0025",
       );
       expect(header).toHaveTextContent("2 of 4 iterations");
       expect(header).toHaveTextContent("0.13s");
@@ -918,8 +921,8 @@ describe("retained run inspection", () => {
         [node.nodeId]: JSON.stringify({
           signature: { instructions: "Review the record." },
           models: {
-            main: { identity: { name: "configured-main" } },
-            sub: { identity: "configured-sub" },
+            main: { identity: { name: "provider/configured-main" } },
+            sub: { identity: "provider/configured-sub" },
           },
           skills: [
             {
@@ -952,12 +955,27 @@ describe("retained run inspection", () => {
     const header = screen
       .getByRole("complementary", { name: "Node declaration" })
       .querySelector("header")!;
-    expect(header).not.toHaveTextContent("configured-main");
-    expect(header).not.toHaveTextContent("configured-sub");
-    const models = screen.getByRole("region", { name: "Models" });
-    expect(models).toHaveTextContent("configured-main");
-    expect(models).toHaveTextContent("configured-sub");
-    expect(models).not.toHaveTextContent("$");
+    const summary = within(header).getByLabelText("Agent configuration");
+    expect(within(summary).getByText("configured-main")).toBeVisible();
+    expect(within(summary).getByText("configured-sub")).toBeVisible();
+    expect(screen.queryByRole("tooltip")).not.toBeInTheDocument();
+    const mainModel = within(summary).getByText("configured-main");
+    fireEvent.mouseEnter(mainModel);
+    expect(screen.getByRole("tooltip")).toHaveTextContent("provider/configured-main");
+    fireEvent.mouseLeave(mainModel);
+    expect(screen.queryByRole("tooltip")).not.toBeInTheDocument();
+    const subModel = within(summary).getByText("configured-sub");
+    fireEvent.focus(subModel);
+    expect(screen.getByRole("tooltip")).toHaveTextContent("provider/configured-sub");
+    fireEvent.keyDown(subModel, { key: "Escape" });
+    expect(screen.queryByRole("tooltip")).not.toBeInTheDocument();
+    fireEvent.blur(subModel);
+    expect(summary).not.toHaveTextContent("$");
+    const skillsToggle = within(summary).getByRole("button", { name: "skills: 2" });
+    expect(skillsToggle).toHaveAttribute("aria-expanded", "false");
+    expect(screen.queryByRole("button", { name: "Review" })).not.toBeInTheDocument();
+    fireEvent.click(skillsToggle);
+    expect(skillsToggle).toHaveAttribute("aria-expanded", "true");
     expect(screen.queryByText("Review every source record.")).not.toBeInTheDocument();
     expect(screen.queryByLabelText("Source code")).not.toBeInTheDocument();
     expect(screen.getByText("max_iterations")).not.toBeVisible();
@@ -1008,6 +1026,8 @@ describe("retained run inspection", () => {
     expect(source).toHaveTextContent("Retrieve the source evidence.");
     fireEvent.click(screen.getByText("Runtime", { selector: "summary" }));
     expect(screen.getByText("max_iterations")).toBeVisible();
+    fireEvent.click(skillsToggle);
+    expect(screen.queryByRole("region", { name: "Skills" })).not.toBeInTheDocument();
   });
 });
 

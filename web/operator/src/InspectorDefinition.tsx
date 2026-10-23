@@ -1,8 +1,13 @@
 import { useEffect, useId, useRef, useState } from "react";
 import { ChevronRight, X } from "lucide-react";
 
-import type { AgentDeclaration, AgentFieldSchemas, ToolMetadata } from "./GraphCanvas";
-import { Markdown } from "./Markdown";
+import type {
+  AgentDeclaration,
+  AgentFieldSchemas,
+  SkillMetadata,
+  ToolMetadata,
+} from "./GraphCanvas";
+import { SkillContent } from "./SkillContent";
 import { PythonSource } from "./PythonSource";
 import { ValueView } from "./ValueView";
 
@@ -92,9 +97,59 @@ function ToolDetails({ tool }: { tool: ToolMetadata }) {
   );
 }
 
-export function InspectorResources({ declaration }: { declaration: AgentDeclaration }) {
+function ModelName({ label, model }: { label: string; model?: string }) {
+  const [revealed, setRevealed] = useState(false);
+  const tooltipId = useId();
+  const separator = model?.indexOf("/") ?? -1;
+  const prefix = model?.slice(0, separator + 1) ?? "";
+  const name = model?.slice(separator + 1) || "—";
+
+  return (
+    <span
+      className="relative min-w-0 flex-1"
+      tabIndex={model ? 0 : undefined}
+      aria-describedby={revealed && model ? tooltipId : undefined}
+      onMouseEnter={() => setRevealed(true)}
+      onMouseLeave={() => setRevealed(false)}
+      onFocus={() => setRevealed(true)}
+      onBlur={() => setRevealed(false)}
+      onKeyDown={(event) => {
+        if (event.key === "Escape") setRevealed(false);
+      }}
+    >
+      <span aria-hidden="true">&nbsp;</span>
+      <span
+        id={tooltipId}
+        role={revealed && model ? "tooltip" : undefined}
+        className={`absolute top-0 left-0 bg-panel ${revealed ? "z-50 pr-2" : "max-w-full overflow-hidden text-ellipsis"}`}
+      >
+        <span className="text-muted">{label}:</span>{" "}
+        <span
+          aria-hidden={!revealed}
+          className="inline-block overflow-hidden align-bottom transition-[width,opacity] duration-150 ease-out motion-reduce:transition-none"
+          style={{ width: revealed ? `${prefix.length}ch` : "0ch", opacity: revealed ? 1 : 0 }}
+        >
+          {prefix}
+        </span>
+        <span>{name}</span>
+      </span>
+    </span>
+  );
+}
+
+export function InspectorAgentSummary({
+  mainModel,
+  subModel,
+  skills,
+}: {
+  mainModel?: string;
+  subModel?: string;
+  skills?: SkillMetadata[];
+}) {
+  const [expanded, setExpanded] = useState(false);
+  const listId = useId();
   const [selectedSkillName, setSelectedSkillName] = useState<string>();
-  const selectedSkill = declaration.skills.find((skill) => skill.name === selectedSkillName);
+  const selectedSkill = skills?.find((skill) => skill.name === selectedSkillName);
   const dialogRef = useRef<HTMLDialogElement>(null);
   const triggerRef = useRef<HTMLButtonElement | null>(null);
   const titleId = useId();
@@ -115,10 +170,32 @@ export function InspectorResources({ declaration }: { declaration: AgentDeclarat
 
   return (
     <>
-      {declaration.skills.length > 0 && (
-        <section aria-label="Skills">
-          <h3 className="inspector-section-title">Skills</h3>
-          {declaration.skills.map((skill) => (
+      <div
+        className="relative mt-2 flex min-w-0 items-center gap-3 whitespace-nowrap font-mono text-[10px] text-secondary"
+        aria-label="Agent configuration"
+      >
+        <ModelName label="main" model={mainModel} />
+        <ModelName label="sub" model={subModel} />
+        {skills ? (
+          <button
+            type="button"
+            aria-expanded={expanded}
+            aria-controls={listId}
+            onClick={() => setExpanded(!expanded)}
+            className="shrink-0 cursor-pointer border-0 bg-transparent p-0 font-[inherit] text-acid hover:underline focus-visible:outline-2 focus-visible:outline-acid"
+          >
+            skills: {skills.length}
+          </button>
+        ) : (
+          <span className="shrink-0" title="Skill metadata was not retained for this run.">
+            skills: —
+          </span>
+        )}
+      </div>
+      {expanded && skills && (
+        <section id={listId} aria-label="Skills" className="mt-3 max-h-48 overflow-y-auto">
+          {skills.length === 0 && <p className="text-xs text-muted">No skills configured.</p>}
+          {skills.map((skill) => (
             <button
               key={skill.name}
               type="button"
@@ -134,24 +211,6 @@ export function InspectorResources({ declaration }: { declaration: AgentDeclarat
             </button>
           ))}
         </section>
-      )}
-      {declaration.tools.length > 0 && (
-        <section aria-label="Tools">
-          <h3 className="inspector-section-title">Tools</h3>
-          {declaration.tools.map((tool) => (
-            <ToolDetails key={tool.name} tool={tool} />
-          ))}
-        </section>
-      )}
-      {declaration.runtime !== undefined && (
-        <details className="min-w-0">
-          <summary className="cursor-pointer text-xs font-medium text-secondary focus-visible:outline-2 focus-visible:outline-acid">
-            Runtime
-          </summary>
-          <div className="pt-3">
-            <ValueView value={declaration.runtime} />
-          </div>
-        </details>
       )}
       <dialog
         ref={dialogRef}
@@ -174,31 +233,34 @@ export function InspectorResources({ declaration }: { declaration: AgentDeclarat
           <X aria-hidden="true" className="size-4" strokeWidth={1.8} />
         </button>
         <div className="skill-markdown-scroll max-h-[calc(85dvh-2px)] overflow-auto overscroll-contain">
-          {selectedSkill && (
-            <div className="grid min-w-0 gap-6 p-6 pr-16">
-              <Markdown full>{selectedSkill.instructions}</Markdown>
-              {(["packages", "modules"] as const).map((kind) =>
-                selectedSkill[kind].length > 0 ? (
-                  <section key={kind} aria-label={kind === "packages" ? "Packages" : "Modules"}>
-                    <h3 className="inspector-section-title">
-                      {kind === "packages" ? "Packages" : "Modules"}
-                    </h3>
-                    <ul className="m-0 grid list-none gap-2 p-0">
-                      {selectedSkill[kind].map((name, index) => (
-                        <li key={`${index}:${name}`} className="min-w-0">
-                          <code className="text-xs text-secondary [overflow-wrap:anywhere]">
-                            {name}
-                          </code>
-                        </li>
-                      ))}
-                    </ul>
-                  </section>
-                ) : null,
-              )}
-            </div>
-          )}
+          {selectedSkill && <SkillContent skill={selectedSkill} />}
         </div>
       </dialog>
+    </>
+  );
+}
+
+export function InspectorResources({ declaration }: { declaration: AgentDeclaration }) {
+  return (
+    <>
+      {declaration.tools.length > 0 && (
+        <section aria-label="Tools">
+          <h3 className="inspector-section-title">Tools</h3>
+          {declaration.tools.map((tool) => (
+            <ToolDetails key={tool.name} tool={tool} />
+          ))}
+        </section>
+      )}
+      {declaration.runtime !== undefined && (
+        <details className="min-w-0">
+          <summary className="cursor-pointer text-xs font-medium text-secondary focus-visible:outline-2 focus-visible:outline-acid">
+            Runtime
+          </summary>
+          <div className="pt-3">
+            <ValueView value={declaration.runtime} />
+          </div>
+        </details>
+      )}
     </>
   );
 }

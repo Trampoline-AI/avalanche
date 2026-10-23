@@ -59,7 +59,8 @@
     "@uiw/codemirror-theme-github": "^4.25.11",
     "@xyflow/react": "^12.9.2",
     "lucide-react": "^1.28.0",
-    "react-markdown": "^10.1.0"
+    "react-markdown": "^10.1.0",
+    "remark-gfm": "^4.0.1"
   },
   "peerDependencies": {
     "react": "^19.1.1",
