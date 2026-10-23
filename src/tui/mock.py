@@ -303,13 +303,7 @@ AGENT_TRACE_DECLARATION = AgentDeclaration(
             ),
         ),
     ),
-    tools=(
-        ToolDeclaration(
-            name="lookup_record",
-            description="Look up a record by identifier.",
-            source_code="",
-        ),
-    ),
+    tools=(),
     runtime=PredictRLMDeclaration(
         settings={"lm": "main-model", "sub_lm": "sub-model", "max_iterations": 4},
         extra_options=(),
@@ -326,9 +320,13 @@ AGENT_TRACE_DECLARATION = AgentDeclaration(
                 tools=("lookup_record",),
             ),
         ),
-        aggregated_static_instructions=(
-            "Inspect records and summarize active entries.\n\n"
-            "## Skill: audit\n\nVerify active status before summarizing."
+        skill_instructions="## Skill: audit\n\nVerify active status before summarizing.",
+        skill_tools=(
+            ToolDeclaration(
+                name="lookup_record",
+                description="Look up a record by identifier.",
+                source_code="",
+            ),
         ),
         packages=("pydantic",),
         modules=("record_helpers",),

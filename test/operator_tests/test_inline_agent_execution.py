@@ -164,14 +164,16 @@ def _write_workflow(root: Path, *, failure: str | None = None, block: bool = Fal
             def consume_route(score: int, route: str) -> dict[str, str | int]:
                 return {{"queue": route, "priority": score + 1}}
 
-            DEFAULTS = {{"lm": "workflow-model", "sub_lm": "workflow-submodel",
-                        "max_iterations": 4, "verbose": True}}
+            DEFAULTS = {{"runtime": ava.runtimes.PredictRLM(
+                lm="workflow-model", sub_lm="workflow-submodel",
+                max_iterations=4, verbose=True)}}
 
             @ava.workflow(agent_defaults=DEFAULTS)
             def single():
                 reviewed = ava.agent.step(
                     Review, inputs={{"ticket": load_ticket(), "threshold": 2}},
-                    slug="review-ticket", lm="inline-model", max_iterations=2)
+                    slug="review-ticket",
+                    runtime=ava.runtimes.PredictRLM(lm="inline-model", max_iterations=2))
                 return consume_decision(reviewed)
 
             @ava.workflow(agent_defaults=DEFAULTS)

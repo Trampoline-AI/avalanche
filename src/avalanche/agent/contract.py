@@ -9,7 +9,7 @@ validation path.
 from __future__ import annotations
 
 from collections.abc import Callable, Mapping
-from typing import Annotated, ClassVar, Literal, Protocol, Self
+from typing import Annotated, ClassVar, Literal, Protocol, Self, runtime_checkable
 
 import dspy
 from pydantic import (
@@ -24,6 +24,7 @@ from pydantic import (
 )
 from pydantic.fields import FieldInfo
 
+from .declaration import RuntimeDeclaration
 from .trace import AgentTraceRecord, RuntimeKind, Turn
 
 # Serialized bodies always carry defaulted fields such as ``kind``; their
@@ -280,10 +281,23 @@ class AgentEventSink(Protocol):
     async def emit(self, event: AgentEvent) -> None: ...
 
 
+@runtime_checkable
 class AgentRuntime(Protocol):
-    """An agent runtime that can run an ``AgentRequest``."""
+    """An agent runtime that can run an ``AgentRequest``.
+
+    Runtimes are frozen descriptors: building one starts nothing, and it can
+    be pickled to a worker.
+    """
 
     kind: ClassVar[RuntimeKind]
+
+    def merged_over(self, base: Self) -> Self:
+        """This runtime with the fields it leaves unset taken from ``base``."""
+        ...
+
+    def declaration(self, *, workflow_default: Self | None) -> RuntimeDeclaration:
+        """Describe this step runtime merged over the workflow default, statically."""
+        ...
 
     async def invoke(
         self, request: AgentRequest, events: AgentEventSink

@@ -183,7 +183,9 @@ def test_agent_step_that_cannot_be_declared_is_a_discovery_diagnostic(tmp_path):
         '    """Echo the text."""\n'
         "    text: str = ava.agent.InputField()\n"
         "    answer: str = ava.agent.OutputField()\n"
-        '@ava.agent_step(Echo, lm={"temperature": float("nan")})\n'
+        "@ava.agent_step(\n"
+        '    Echo, runtime=ava.runtimes.PredictRLM(lm={"temperature": float("nan")})\n'
+        ")\n"
         "async def echo(text: str, *, agent: ava.Agent) -> str:\n"
         "    return (await agent(text=text)).answer\n"
         "@ava.workflow\ndef flow():\n    return echo('hi')\n"
@@ -193,4 +195,4 @@ def test_agent_step_that_cannot_be_declared_is_a_discovery_diagnostic(tmp_path):
 
     assert registry.descriptors() == ()
     [diagnostic] = registry.list_diagnostics()
-    assert "lm model descriptor" in diagnostic.message
+    assert "PredictRLM" in diagnostic.message and "lm" in diagnostic.message

@@ -9,7 +9,7 @@ from collections.abc import Sequence
 from dataclasses import dataclass
 from enum import Enum
 from pathlib import Path
-from typing import Annotated, Any, Callable, ClassVar, Mapping, Self
+from typing import Annotated, Any, Callable, ClassVar, Mapping
 
 import dspy
 from dspy.primitives.code_interpreter import CodeInterpreter
@@ -49,12 +49,7 @@ from ...agent.declaration import (
     PredictRLMModels,
     PredictRLMSkillDeclaration,
 )
-from ...agent.steps import (
-    _AGENT_RUNTIME_DEFAULTS,
-    AgentStepError,
-    AgentStepExecutionError,
-    _describe_signature,
-)
+from ...agent.steps import AgentStepError, AgentStepExecutionError, _describe_signature
 from ...agent.trace import RuntimeKind
 from .events import _AGENT_INVOCATION_STATE, _AgentInvocationState, _AvalancheEvidenceSink
 from .files import AgentFileBridge, mount_inputs, predict_signature
@@ -91,73 +86,29 @@ def _skill_declaration(skill: Skill) -> PredictRLMSkillDeclaration:
     )
 
 
-def predict_rlm_declaration(
-    workflow_defaults: Mapping[str, Any],
-    step_overrides: Mapping[str, Any],
-    *,
-    skills: tuple[Skill, ...],
-    signature_instructions: str,
-) -> tuple[PredictRLMDeclaration, dict[str, Callable[..., Any]]]:
-    """Describe a step's effective PredictRLM settings and return its skills' tools."""
-    from predict_rlm.rlm_skills import merge_skills
-
-    skill_instructions, packages, modules, skill_tools = merge_skills(list(skills))
-    aggregated_instructions = signature_instructions
-    if skill_instructions:
-        aggregated_instructions += (
-            "\n\n" if aggregated_instructions else ""
-        ) + skill_instructions
-    declaration = PredictRLMDeclaration(
-        settings=_effective_runtime_metadata(workflow_defaults, step_overrides),
-        extra_options=tuple(
-            sorted({*workflow_defaults, *step_overrides} - PredictRLM.model_fields.keys())
-        ),
-        models=_effective_model_metadata(workflow_defaults, step_overrides),
-        skills=tuple(_skill_declaration(skill) for skill in skills),
-        aggregated_static_instructions=aggregated_instructions,
-        packages=tuple(packages),
-        modules=tuple(modules),
-    )
-    return declaration, dict(skill_tools)
-
-
-def _effective_runtime_metadata(
-    workflow_defaults: Mapping[str, Any], step_overrides: Mapping[str, Any]
-) -> dict[str, Any]:
-    from predict_rlm import PredictRLM
-
-    constructor = inspect.signature(PredictRLM.__init__)
-    effective = {
-        name: parameter.default
-        for name, parameter in constructor.parameters.items()
-        if name not in {"self", "signature", "skills", "tools"}
-        and parameter.default is not inspect.Parameter.empty
-    }
-    effective.update(_AGENT_RUNTIME_DEFAULTS)
-    effective.update(workflow_defaults)
-    effective.update(step_overrides)
+def _effective_runtime_metadata(runtime: PredictRLM) -> dict[str, Any]:
     serialized: dict[str, Any] = {}
-    for name, value in effective.items():
-        if name in _OMITTED_RUNTIME_KEYS or _is_sensitive_key(name):
+    for name in (*PredictRLM.model_fields, *(runtime.model_extra or {})):
+        if name == "skills" or name in _OMITTED_RUNTIME_KEYS or _is_sensitive_key(name):
             continue
-        safe_value = _safe_runtime_value(value)
+        safe_value = _safe_runtime_value(getattr(runtime, name))
         if safe_value is not _OMIT_METADATA:
             serialized[name] = safe_value
     return serialized
 
 
 def _effective_model_metadata(
-    workflow_defaults: Mapping[str, Any], step_overrides: Mapping[str, Any]
+    step: PredictRLM, workflow_default: PredictRLM | None
 ) -> PredictRLMModels:
-    """Describe only declaratively supported model sources; never probe DSPy globals."""
+    """Describe where each model came from; never probe DSPy globals."""
     models: dict[str, PredictRLMModel] = {}
     for runtime_key, label in (("lm", "main"), ("sub_lm", "sub")):
-        if runtime_key in step_overrides:
+        if runtime_key in step.model_fields_set:
             source = "step override"
-            value = step_overrides[runtime_key]
-        elif runtime_key in workflow_defaults:
+            value = getattr(step, runtime_key)
+        elif workflow_default is not None and runtime_key in workflow_default.model_fields_set:
             source = "workflow default"
-            value = workflow_defaults[runtime_key]
+            value = getattr(workflow_default, runtime_key)
         else:
             models[label] = PredictRLMDefaultModel()
             continue
@@ -348,7 +299,8 @@ class PredictRLM(BaseModel):
     max_iterations: int = 30
     max_llm_calls: int = 50
     max_output_chars: int = 50_000
-    verbose: bool = True
+    # Avalanche runs PredictRLM quietly unless asked; the constructor defaults to True.
+    verbose: bool = False
     interpreter: CodeInterpreter | _SupervisorClient | None = None
     sandbox_backend: str | None = None
     sbx_config: _SbxConfig | None = None
@@ -510,7 +462,9 @@ class PredictRLM(BaseModel):
         **overrides: object,
     ) -> _PredictRLMPredictor:
         # Set fields include pass-through extras; PredictRLM's constructor checks those.
-        options = {name: getattr(self, name) for name in self.model_fields_set - {"skills"}}
+        # ``verbose`` always goes through: Avalanche's default differs from PredictRLM's.
+        passed = (self.model_fields_set | {"verbose"}) - {"skills"}
+        options = {name: getattr(self, name) for name in passed}
         return _build_predictor(
             signature,
             skills=tuple(self.skills or ()),
@@ -518,9 +472,28 @@ class PredictRLM(BaseModel):
             **{**options, **overrides},
         )
 
-    @classmethod
-    def from_runtime_kwargs(
-        cls, runtime_kwargs: Mapping[str, object], *, skills: Sequence[Skill]
-    ) -> Self:
-        """The descriptor for today's ``lm=``/``sub_lm=``/... agent-step arguments."""
-        return cls.model_validate({**runtime_kwargs, "skills": tuple(skills)})
+    def merged_over(self, base: PredictRLM) -> PredictRLM:
+        """This runtime with the fields it leaves unset taken from ``base``."""
+        fields = {name: getattr(base, name) for name in base.model_fields_set}
+        fields.update({name: getattr(self, name) for name in self.model_fields_set})
+        return PredictRLM.model_validate(fields)
+
+    def declaration(self, *, workflow_default: PredictRLM | None) -> PredictRLMDeclaration:
+        """Describe this step runtime merged over the workflow default, statically."""
+        from predict_rlm.rlm_skills import merge_skills
+
+        from ...agent.declaration import tool_declarations
+
+        effective = self if workflow_default is None else self.merged_over(workflow_default)
+        skills = tuple(effective.skills or ())
+        skill_instructions, packages, modules, skill_tools = merge_skills(list(skills))
+        return PredictRLMDeclaration(
+            settings=_effective_runtime_metadata(effective),
+            extra_options=tuple(sorted(effective.model_extra or {})),
+            models=_effective_model_metadata(self, workflow_default),
+            skills=tuple(_skill_declaration(skill) for skill in skills),
+            skill_instructions=skill_instructions,
+            skill_tools=tool_declarations(skill_tools),
+            packages=tuple(packages),
+            modules=tuple(modules),
+        )

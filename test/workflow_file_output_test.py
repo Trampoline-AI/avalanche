@@ -52,14 +52,15 @@ def test_agent_file_mount_and_reserved_outputs(tmp_path):
 
     @ava.agent_step(
         Convert,
-        lm=lm,
-        sub_lm=lm,
-        interpreter=DirectPythonBackend(
-            workdir=str(tmp_path),
-            runner_path=str(tmp_path / "runner.py"),
+        runtime=ava.runtimes.PredictRLM(
+            lm=lm,
+            sub_lm=lm,
+            interpreter=DirectPythonBackend(
+                workdir=str(tmp_path),
+                runner_path=str(tmp_path / "runner.py"),
+            ),
+            max_iterations=1,
         ),
-        max_iterations=1,
-        verbose=False,
     )
     async def convert(document: ava.File, *, agent: ava.Agent) -> ava.File:
         first = await agent(document=document, directory=workspace, documents=[document, None])
@@ -231,14 +232,15 @@ def test_agent_file_step_traces_record_input_references_not_mounted_paths(tmp_pa
 
     @ava.agent_step(
         Count,
-        lm=lm,
-        sub_lm=lm,
-        interpreter=DirectPythonBackend(
-            workdir=str(tmp_path),
-            runner_path=str(tmp_path / "runner.py"),
+        runtime=ava.runtimes.PredictRLM(
+            lm=lm,
+            sub_lm=lm,
+            interpreter=DirectPythonBackend(
+                workdir=str(tmp_path),
+                runner_path=str(tmp_path / "runner.py"),
+            ),
+            max_iterations=1,
         ),
-        max_iterations=1,
-        verbose=False,
     )
     async def count(document: ava.File, *, agent: ava.Agent) -> int:
         return (await agent(document=document)).size

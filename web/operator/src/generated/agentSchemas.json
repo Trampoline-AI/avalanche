@@ -2,7 +2,7 @@
   "$defs": {
     "AgentDeclaration": {
       "additionalProperties": false,
-      "description": "Everything discovery publishes about one agent step.",
+      "description": "Everything discovery publishes about one agent step.\n\n``tools`` are the step's own tools; tools a runtime adds, such as PredictRLM\nskill tools, are in its ``runtime`` section.",
       "properties": {
         "runtime": {
           "$ref": "#/$defs/PredictRLMDeclaration"
@@ -465,12 +465,8 @@
     },
     "PredictRLMDeclaration": {
       "additionalProperties": false,
-      "description": "PredictRLM settings after workflow defaults and step overrides are applied.\n\n``settings`` holds the effective constructor options that serialize to JSON,\nwithout credentials or callables. ``extra_options`` names the options\nAvalanche has no field for and passes unchanged to PredictRLM; their values\nappear in ``settings`` only under the same rules.",
+      "description": "PredictRLM settings after workflow defaults and step overrides are applied.\n\n``settings`` holds the effective constructor options that serialize to JSON,\nwithout credentials or callables. ``extra_options`` names the options\nAvalanche has no field for and passes unchanged to PredictRLM; their values\nappear in ``settings`` only under the same rules. ``skill_instructions``,\n``skill_tools``, ``packages`` and ``modules`` are what the skills add, merged.",
       "properties": {
-        "aggregated_static_instructions": {
-          "title": "Aggregated Static Instructions",
-          "type": "string"
-        },
         "extra_options": {
           "items": {
             "type": "string"
@@ -508,6 +504,17 @@
           "title": "Settings",
           "type": "object"
         },
+        "skill_instructions": {
+          "title": "Skill Instructions",
+          "type": "string"
+        },
+        "skill_tools": {
+          "items": {
+            "$ref": "#/$defs/ToolDeclaration"
+          },
+          "title": "Skill Tools",
+          "type": "array"
+        },
         "skills": {
           "items": {
             "$ref": "#/$defs/PredictRLMSkillDeclaration"
@@ -522,7 +529,8 @@
         "extra_options",
         "models",
         "skills",
-        "aggregated_static_instructions",
+        "skill_instructions",
+        "skill_tools",
         "packages",
         "modules"
       ],

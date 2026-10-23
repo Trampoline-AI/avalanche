@@ -36,8 +36,8 @@ class Signature(dspy.Signature, metaclass=_AvalancheSignatureMeta):
 
         Signature("document: str -> report: str", "Audit the document.")
 
-    Skills and tools are execution capabilities configured on
-    ``ava.agent.step(...)`` or ``@ava.agent_step(...)``.
+    Tools are configured on ``ava.agent.step(...)`` or ``@ava.agent_step(...)``;
+    the model, skills and other settings belong to the step's ``runtime=``.
     """
 
 

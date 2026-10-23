@@ -350,9 +350,9 @@ def render_handoff(handoff: IncidentHandoff) -> str:
 
 @ava.workflow(
     agent_defaults={
-        "lm": MODELS.lm,
-        "sub_lm": MODELS.sub_lm,
-        "max_iterations": 10,
+        "runtime": ava.runtimes.PredictRLM(
+            lm=MODELS.lm, sub_lm=MODELS.sub_lm, max_iterations=10
+        ),
     },
     classifier_defaults={"model": "jev-latest", "timeout": 30.0},
 )

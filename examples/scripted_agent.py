@@ -22,7 +22,7 @@ class SumSignature(ava.Signature):
     answer: int = ava.OutputField()
 
 
-@ava.agent_step(SumSignature, max_iterations=3)
+@ava.agent_step(SumSignature, runtime=ava.runtimes.PredictRLM(max_iterations=3))
 async def sum_numbers(*, agent: Agent) -> dict[str, int]:
     # PredictRLM's action schema uses 'plan', not 'reasoning'. JSONAdapter makes
     # DummyLM serialize each action as JSON, exactly like a structured LM reply.
