@@ -150,7 +150,9 @@ async def test_operator_tui_extensions_live_pilot(tmp_path):
         def publish(count: int):
             path = Path({str(artifact)!r})
             path.write_bytes(b"operator-artifact:" + str(count).encode())
-            return ava.File.from_path(path)
+            file = ava.File.from_path(path)
+            return {{"file": file, "workspace": ava.Workspace.from_directory(
+                path.parent, reference=file.ref.workspace)}}
 
         @ava.workflow(input=Input)
         def typed():
@@ -309,7 +311,21 @@ async def test_operator_tui_extensions_live_pilot(tmp_path):
             page = await asyncio.to_thread(
                 extension.read, "artifacts", context, limit=1, byte_limit=4096
             )
-            assert len(page.items) == 1 and page.next_cursor is None
+            assert len(page.items) == 1 and page.next_cursor is not None
+            workspace_page = await asyncio.to_thread(
+                extension.read,
+                "artifacts",
+                context,
+                cursor=page.next_cursor,
+                limit=1,
+                byte_limit=4096,
+            )
+            assert workspace_page.revision == page.revision
+            assert workspace_page.next_cursor is None
+            assert workspace_page.items[0]["kind"] == "workspace"
+            assert workspace_page.items[0]["downloadable"] is False
+            assert "content" not in workspace_page.items[0]
+            assertions.append("paged_file_and_workspace_descriptors_no_inline_bodies")
             assert "content" not in page.items[0]
             destination = tmp_path / "download.bin"
             result = await asyncio.to_thread(
