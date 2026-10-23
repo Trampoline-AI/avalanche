@@ -4,32 +4,36 @@
 import avalanche as ava
 ```
 
-Use these values in [input models](inputs-context.md#input-and-context-declarations), node arguments, and workflow results. A `File` carries one in-memory byte body; a `Workspace` carries either a portable directory tree or a reference to a directory provided by the host.
+Use these types in [input models](inputs-context.md#input-and-context-declarations),
+node arguments, agent signatures, and workflow results. A `File` is a reference to
+one file in a workspace; a `Workspace` is a portable tree or host directory reference.
 
 ## File
 
 ```python
-ava.File(
-    *, content: bytes, name: str | None = None,
-    content_type: str | None = None, sha256: str | None = None,
-)
 ava.File.from_path(
     path: str | pathlib.Path, *, content_type: str | None = None,
+    workspace: ava.Workspace | None = None,
 ) -> ava.File
+file.path -> pathlib.Path
+file.open(mode="rb")  # real handle, read modes only: r, rt, rb
 file.read_bytes() -> bytes
-file.open() -> io.BytesIO
+file.snapshot() -> ava.File
+file.bind(path: str | pathlib.Path) -> ava.File
 ```
 
-| Field | Required/default and meaning |
-| --- | --- |
-| `content: bytes` | Required; complete in-memory file body. |
-| `name: str \| None` | `None`; optional original/display filename, not an output path. |
-| `content_type: str \| None` | `None`; optional media type, not automatically inferred. |
-| `sha256: str \| None` | Optional on input; computed lowercase SHA-256 of the content. A supplied digest must match case-insensitively and is normalized to lowercase. |
+`from_path` binds without reading; `size` comes from stat, and SHA-256 is streamed
+lazily when snapshotting/serializing. Fields are frozen: `ref` identifies the
+workspace and relative POSIX path, `size` is required, `sha256` is initially lazy
+for local construction, and `name`/`content_type` are optional display metadata.
+Deserialized refs have no host path; access fails until a host authorizes a binding.
+Write modes (`w`, `a`, `x`, `+`) are rejected by `open()`.
 
-Construction returns a file value; invalid field values, unknown fields, or a mismatched digest raise Pydantic validation errors. The model is not frozen. `from_path` reads all bytes immediately, sets `name` to the basename, and propagates filesystem read errors. `read_bytes` returns the stored bytes. Each `open()` returns a fresh in-memory binary stream: writes to it do not modify the `File`.
-
-A file has no local `path` and is not a live filesystem handle. It can be passed/returned directly or inside supported containers/models. For disk-based tools, use a workspace or explicitly write the bytes.
+`File(content=...)`, `.content`, byte inputs and `ava.agent.File` are deprecated
+until the next minor release. They do not create a byte-valued wire form.
+See [File references](../file-references.md) for the tagged wire contract,
+`ReferenceBinder`, `rebind_arguments`, agent mounting/output reservations and
+migration examples.
 
 ## Workspace
 
@@ -88,14 +92,16 @@ unchanged, including supported nested return shapes. These are shared directorie
 not isolated value copies: the host owns persistence, access, and concurrent writes.
 
 Python/JSON model dumps and pickle state contain exactly
-`{"version": 1, "reference": "host-managed:example"}`, never paths or entries.
+`{"kind": "workspace", "version": 1, "reference": "host-managed:example"}`,
+never paths or entries. The untagged legacy form warns for one release.
 Validating this dictionary (including with `from_manifest`) or unpickling gives an
 **unbound** reference. Its `.path` and `snapshot()` raise
 `RuntimeError("workspace reference is not bound to a directory")`. The original
 bound workspace remains usable. A remote executor must resolve the reference and
 construct `Workspace.from_directory(directory, reference=reference)` before code
 accesses `.path`; serialization does not transfer a host-local directory binding.
-There is no implicit reference resolver.
+Local DAGs use `LocalReferenceBinder` for registered local file capabilities.
+Remote hosts supply their own authorized binder; see the reference guide.
 
 For a repeatable 200 MB two-node write/hash comparison in separate processes, run
 `uv run python scripts/benchmark_workspace.py reference` and
@@ -104,7 +110,9 @@ growth across each workflow and requires the reference run to stay below 50 MB.
 
 ## Input and output boundaries
 
-Direct Python runs accept native `File` and `Workspace` values without remote transport limits. A `File` is fully in memory and `Workspace.from_path` eagerly captures its tree, so neither is a lazy reference to a source path. `from_directory` instead retains a host-managed directory reference without reading file contents.
+Direct Python runs accept native File and Workspace values. File inputs are
+lazy path references. `Workspace.from_path` still eagerly captures a value tree;
+`from_directory` retains a host-managed reference without reading file contents.
 
 Reference workspaces cross CLI/remote boundaries as the reference dictionary with no file attachments. Receiving code must bind the reference through the host before using its directory. Existing transport envelope and JSON size limits still apply.
 
@@ -112,4 +120,8 @@ The [CLI](cli.md) accepts file/directory input options and materializes requeste
 
 For CLI/remote results, supported result values include JSON-compatible scalars, lists, tuples, string-keyed dictionaries, Pydantic models, files, and workspaces. Pydantic results are serialized using field aliases; their original Python model class is not preserved. Arbitrary Python objects supported by direct local runs are not necessarily transportable.
 
-Transported results are bounded: at most 8 MiB per file, 1,024 file attachments, 32 MiB total attachment bytes, 4 MiB encoded JSON, and 32 MiB JSON plus attachments. File names are limited to 1,024 characters and media types to 255. These are output transport constraints, not `File` constructor limits. Invalid/oversized outputs fail rather than being silently truncated.
+New File results contain references only, not byte attachments; their body size
+does not count against the 4 MiB result JSON limit. The limit still applies to
+metadata and value-workspace manifests. Legacy attachment bundles remain readable
+with their previous size limits. File names are limited to 1,024 characters and
+media types to 255. Invalid outputs fail rather than being silently truncated.

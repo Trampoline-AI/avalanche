@@ -1,6 +1,5 @@
-from predict_rlm import File
-
 import avalanche as ava
+from avalanche import File
 
 from .schema import ProductReview, RiskReport, ThemeReport
 
