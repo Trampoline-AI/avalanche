@@ -109,7 +109,7 @@ message FlowInfoV2 {
   string file_path = 6;
   WorkflowTopologyV2 topology = 7;
   repeated string agent_node_ids = 8;
-  map<string, string> agent_metadata_json = 9;
+  map<string, string> agent_declarations_json = 9;
   string cron = 10;
   double next_run_at = 11;
   double last_run_at = 12;

@@ -10,6 +10,7 @@ from textwrap import dedent
 
 import pytest
 
+from avalanche.agent.declaration import PredictRLMConfiguredModel, PredictRLMModels
 from avalanche.step_interface import StepInterface
 from runtime.operator import Operator, WorkflowRegistry
 from runtime.operator.convert_v2 import (
@@ -221,18 +222,15 @@ def test_discovery_and_cached_current_metadata_do_not_execute_inline_agents(
     single = descriptors["single"]
     [agent_id] = single.agent_node_ids
     assert dict(single.node_types)[agent_id] == "step"
-    declaration = json.loads(dict(single.agent_metadata_json)[agent_id])
-    assert [field["name"] for field in declaration["signature"]["inputs"]] == [
-        "ticket",
-        "threshold",
-    ]
-    assert [field["name"] for field in declaration["signature"]["outputs"]] == ["decision"]
-    assert declaration["runtime"]["max_iterations"] == 2
-    assert declaration["runtime"]["verbose"] is True
-    assert declaration["models"] == {
-        "main": {"source": "step override", "identity": "inline-model"},
-        "sub": {"source": "workflow default", "identity": "workflow-submodel"},
-    }
+    declaration = dict(single.agent_declarations)[agent_id]
+    assert [field.name for field in declaration.signature.inputs] == ["ticket", "threshold"]
+    assert [field.name for field in declaration.signature.outputs] == ["decision"]
+    assert declaration.runtime.settings["max_iterations"] == 2
+    assert declaration.runtime.settings["verbose"] is True
+    assert declaration.runtime.models == PredictRLMModels(
+        main=PredictRLMConfiguredModel(source="step override", identity="inline-model"),
+        sub=PredictRLMConfiguredModel(source="workflow default", identity="workflow-submodel"),
+    )
     _assert_review_interface(_interface(single.step_interface_json, agent_id))
 
     monkeypatch.setenv("INLINE_AGENT_FORBID_IMPORT", "1")
@@ -244,8 +242,7 @@ def test_discovery_and_cached_current_metadata_do_not_execute_inline_agents(
         pb.FlowInfoV2.FromString(workflow_info_to_v2(current).SerializeToString())
     )
     assert wire.agent_node_ids == [agent_id]
-    assert json.loads(wire.agent_metadata_json[agent_id])["models"] == declaration["models"]
-    assert json.loads(wire.agent_metadata_json[agent_id])["runtime"]["max_iterations"] == 2
+    assert wire.agent_declarations[agent_id] == declaration
     _assert_review_interface(_interface(wire.step_interface_json, agent_id))
     assert not (tmp_path / "calls.jsonl").exists()
     assert {

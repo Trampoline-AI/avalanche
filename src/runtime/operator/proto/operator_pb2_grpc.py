@@ -32,6 +32,10 @@ class OperatorServiceV2Stub(object):
     summary, snapshot, detail, and typed update APIs below. Remote operators and
     clients must upgrade together.
 
+    TODO: Replace JSON-string transport for Avalanche-owned declarations, questions,
+    and evaluation results with structured protobuf messages and generated types.
+    Keep user-defined payloads and JSON Schema documents as flexible JSON values.
+
     ── Service ─────────────────────────────────────────────
 
     V2 is the only served contract. Requests derive their authorization scope
@@ -128,6 +132,10 @@ class OperatorServiceV2Servicer(object):
     """Breaking migration: the previous full-state run APIs are replaced by bounded
     summary, snapshot, detail, and typed update APIs below. Remote operators and
     clients must upgrade together.
+
+    TODO: Replace JSON-string transport for Avalanche-owned declarations, questions,
+    and evaluation results with structured protobuf messages and generated types.
+    Keep user-defined payloads and JSON Schema documents as flexible JSON values.
 
     ── Service ─────────────────────────────────────────────
 
@@ -296,6 +304,10 @@ class OperatorServiceV2(object):
     """Breaking migration: the previous full-state run APIs are replaced by bounded
     summary, snapshot, detail, and typed update APIs below. Remote operators and
     clients must upgrade together.
+
+    TODO: Replace JSON-string transport for Avalanche-owned declarations, questions,
+    and evaluation results with structured protobuf messages and generated types.
+    Keep user-defined payloads and JSON Schema documents as flexible JSON values.
 
     ── Service ─────────────────────────────────────────────
 

@@ -259,7 +259,7 @@ function AgentAndStepInspector({
   const composites =
     evaluationRecord?.status === "completed" ? evaluationRecord.result.composites : undefined;
   const rawAgentDeclaration =
-    !run && isWorkflowAgentNode ? workflow?.agentMetadataJson[nodeId ?? ""] : undefined;
+    !run && isWorkflowAgentNode ? workflow?.agentDeclarationsJson[nodeId ?? ""] : undefined;
   const rawHistoricalFieldSchemas = run?.topology?.agentFieldSchemasJson[nodeId ?? ""];
   const workflowDeclaration = useMemo(
     () => parseAgentDeclaration(rawAgentDeclaration),

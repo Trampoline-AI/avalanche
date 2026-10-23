@@ -139,7 +139,7 @@ class FlowInfoV2(_message.Message):
         "file_path",
         "topology",
         "agent_node_ids",
-        "agent_metadata_json",
+        "agent_declarations_json",
         "cron",
         "next_run_at",
         "last_run_at",
@@ -149,7 +149,7 @@ class FlowInfoV2(_message.Message):
         "classifier_metadata_json",
         "evaluation_metadata_json",
     )
-    class AgentMetadataJsonEntry(_message.Message):
+    class AgentDeclarationsJsonEntry(_message.Message):
         __slots__ = ("key", "value")
         KEY_FIELD_NUMBER: _ClassVar[int]
         VALUE_FIELD_NUMBER: _ClassVar[int]
@@ -181,7 +181,7 @@ class FlowInfoV2(_message.Message):
     FILE_PATH_FIELD_NUMBER: _ClassVar[int]
     TOPOLOGY_FIELD_NUMBER: _ClassVar[int]
     AGENT_NODE_IDS_FIELD_NUMBER: _ClassVar[int]
-    AGENT_METADATA_JSON_FIELD_NUMBER: _ClassVar[int]
+    AGENT_DECLARATIONS_JSON_FIELD_NUMBER: _ClassVar[int]
     CRON_FIELD_NUMBER: _ClassVar[int]
     NEXT_RUN_AT_FIELD_NUMBER: _ClassVar[int]
     LAST_RUN_AT_FIELD_NUMBER: _ClassVar[int]
@@ -198,7 +198,7 @@ class FlowInfoV2(_message.Message):
     file_path: str
     topology: WorkflowTopologyV2
     agent_node_ids: _containers.RepeatedScalarFieldContainer[str]
-    agent_metadata_json: _containers.ScalarMap[str, str]
+    agent_declarations_json: _containers.ScalarMap[str, str]
     cron: str
     next_run_at: float
     last_run_at: float
@@ -217,7 +217,7 @@ class FlowInfoV2(_message.Message):
         file_path: _Optional[str] = ...,
         topology: _Optional[_Union[WorkflowTopologyV2, _Mapping]] = ...,
         agent_node_ids: _Optional[_Iterable[str]] = ...,
-        agent_metadata_json: _Optional[_Mapping[str, str]] = ...,
+        agent_declarations_json: _Optional[_Mapping[str, str]] = ...,
         cron: _Optional[str] = ...,
         next_run_at: _Optional[float] = ...,
         last_run_at: _Optional[float] = ...,

@@ -31,6 +31,10 @@ import {
 } from "@xyflow/react";
 
 import type { FlowInfoMsg, NodeSnapshotMsg, WorkflowTopologyMsg } from "./model";
+import {
+  AgentDeclaration as AgentDeclarationSchema,
+  type FieldDeclaration,
+} from "./generated/agentSchemas";
 import { isUnknownRecord } from "./guards";
 import { decodeClassifierDeclaration, decodeEvaluationDeclaration } from "./classifier";
 import { decodeStepInterface } from "./stepInterface";
@@ -88,42 +92,6 @@ interface CardData extends Record<string, unknown> {
   inspectionDisabled?: boolean;
 }
 
-function strings(value: unknown): string[] {
-  return Array.isArray(value)
-    ? value.filter((item): item is string => typeof item === "string")
-    : [];
-}
-
-function skills(value: unknown): SkillMetadata[] {
-  if (!Array.isArray(value)) return [];
-  return value.flatMap((item) =>
-    isUnknownRecord(item) && typeof item.name === "string"
-      ? [
-          {
-            name: item.name,
-            instructions: typeof item.instructions === "string" ? item.instructions : "",
-            packages: strings(item.packages),
-            modules: strings(item.modules),
-          },
-        ]
-      : [],
-  );
-}
-
-function tools(value: unknown): ToolMetadata[] {
-  if (!Array.isArray(value)) return [];
-  return value.flatMap((item) =>
-    isUnknownRecord(item) && typeof item.name === "string"
-      ? [
-          {
-            name: item.name,
-            sourceCode: typeof item.source_code === "string" ? item.source_code : undefined,
-          },
-        ]
-      : [],
-  );
-}
-
 function fields(value: unknown): FieldMetadata[] {
   if (!Array.isArray(value)) return [];
   return value.flatMap((item) => {
@@ -143,24 +111,32 @@ function fields(value: unknown): FieldMetadata[] {
   });
 }
 
+/** Validate a published agent declaration; malformed declarations throw. */
 export function parseAgentDeclaration(raw: string | undefined): AgentDeclaration | undefined {
   if (!raw) return undefined;
-  try {
-    const metadata: unknown = JSON.parse(raw);
-    if (!isUnknownRecord(metadata)) return undefined;
-    const signature = isUnknownRecord(metadata.signature) ? metadata.signature : {};
-    return {
-      instructions: typeof signature.instructions === "string" ? signature.instructions : "",
-      inputs: fields(signature.inputs),
-      outputs: fields(signature.outputs),
-      model: metadata.models,
-      runtime: metadata.runtime,
-      skills: skills(metadata.skills),
-      tools: tools(metadata.tools),
-    };
-  } catch {
-    return undefined;
-  }
+  const declaration = AgentDeclarationSchema.parse(JSON.parse(raw));
+  const field = ({ name, annotation, description }: FieldDeclaration): FieldMetadata => ({
+    name,
+    type: annotation,
+    description,
+  });
+  return {
+    instructions: declaration.signature.instructions,
+    inputs: declaration.signature.inputs.map(field),
+    outputs: declaration.signature.outputs.map(field),
+    model: declaration.runtime.models,
+    runtime: declaration.runtime.settings,
+    skills: declaration.runtime.skills.map(({ name, instructions, packages, modules }) => ({
+      name,
+      instructions,
+      packages,
+      modules,
+    })),
+    tools: declaration.tools.map(({ name, source_code }) => ({
+      name,
+      sourceCode: source_code || undefined,
+    })),
+  };
 }
 
 export function parseAgentFieldSchemas(raw: string | undefined): AgentFieldSchemas | undefined {
@@ -807,7 +783,7 @@ function GraphCanvasView({
       const runtimeNode = runtimeNodes[nodeId];
       const agentDeclaration = runTopology
         ? undefined
-        : parseAgentDeclaration(workflow?.agentMetadataJson[nodeId]);
+        : parseAgentDeclaration(workflow?.agentDeclarationsJson[nodeId]);
       const classifierCard = classifierCards[nodeId];
       const declaration = classifierCard
         ? classifierCard.fields

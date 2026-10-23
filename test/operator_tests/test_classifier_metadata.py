@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import copy
-import json
 from pathlib import Path
 
 import pytest
@@ -157,10 +156,8 @@ def test_discovery_and_cache_preserve_ordered_structured_questions_without_key_o
         current.display_names[key]: StepInterface.model_validate_json(value)
         for key, value in current.step_interface_json.items()
     } == interfaces
-    [agent_json] = current.agent_metadata_json.values()
-    assert [field["name"] for field in json.loads(agent_json)["signature"]["inputs"]] == [
-        "query"
-    ]
+    [declaration] = current.agent_declarations.values()
+    assert [field.name for field in declaration.signature.inputs] == ["query"]
 
 
 def _run_declaration(run: RunState) -> ClassifierDeclaration:

@@ -1,6 +1,8 @@
 import { describe, expect, it } from "vitest";
 
+import { parseAgentDeclaration } from "./GraphCanvas";
 import { AgentEvent, AgentTraceRecord } from "./generated/agentSchemas";
+import { agentDeclarationJson } from "./test/fixtures";
 
 const record: AgentTraceRecord = {
   schema_version: 2,
@@ -79,5 +81,25 @@ describe("generated agent schemas", () => {
     expect(
       AgentEvent.safeParse({ kind: "unknown", call_id: "t", name: "lookup" }).success,
     ).toBe(false);
+  });
+});
+
+describe("parseAgentDeclaration", () => {
+  it("reads a published declaration", () => {
+    const declaration = parseAgentDeclaration(
+      agentDeclarationJson({
+        instructions: "Answer.",
+        inputs: [{ name: "question", annotation: "str" }],
+        runtime: { settings: { max_iterations: 3 } },
+      }),
+    );
+    expect(declaration?.inputs).toEqual([{ name: "question", type: "str", description: "" }]);
+    expect(declaration?.runtime).toEqual({ max_iterations: 3 });
+  });
+
+  it("throws on a malformed declaration instead of dropping fields", () => {
+    const declaration = JSON.parse(agentDeclarationJson({ instructions: "Answer." }));
+    delete declaration.runtime.kind;
+    expect(() => parseAgentDeclaration(JSON.stringify(declaration))).toThrow();
   });
 });

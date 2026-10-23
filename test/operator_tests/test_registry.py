@@ -174,3 +174,23 @@ def test_successful_discovery_terminates_import_spawned_descendant(tmp_path):
     else:
         os.kill(child_pid, signal.SIGKILL)
         raise AssertionError("discovery descendant remained alive")
+
+
+def test_agent_step_that_cannot_be_declared_is_a_discovery_diagnostic(tmp_path):
+    (tmp_path / "flow.py").write_text(
+        "import avalanche as ava\n"
+        "class Echo(ava.agent.Signature):\n"
+        '    """Echo the text."""\n'
+        "    text: str = ava.agent.InputField()\n"
+        "    answer: str = ava.agent.OutputField()\n"
+        "@ava.agent_step(Echo, lm={\"temperature\": float(\"nan\")})\n"
+        "async def echo(text: str, *, agent: ava.Agent) -> str:\n"
+        "    return (await agent(text=text)).answer\n"
+        "@ava.workflow\ndef flow():\n    return echo('hi')\n"
+    )
+    registry = WorkflowRegistry()
+    registry.scan([str(tmp_path)])
+
+    assert registry.descriptors() == ()
+    [diagnostic] = registry.list_diagnostics()
+    assert "lm model descriptor" in diagnostic.message
