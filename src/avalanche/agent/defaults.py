@@ -62,17 +62,21 @@ def reject_removed_arguments(owner: str, removed: Mapping[str, object]) -> None:
 
 
 def effective_runtime(step: AgentRuntime | None, defaults: AgentDefaults) -> AgentRuntime:
-    """The runtime an agent step runs on: its own, the workflow's, or PredictRLM."""
+    """The runtime an agent step runs on: its own, the workflow's, or PredictRLM.
+
+    The result is always a new instance: runtimes cache what they build, and
+    that cache must live and die with one agent, not with the declaration.
+    """
     default = defaults.runtime
     if step is None:
         if default is not None:
-            return default
+            return default.merged_over(default)
         from ..runtimes.predict_rlm import PredictRLM
 
         return PredictRLM()
     if default is not None and default.kind == step.kind:
         return step.merged_over(default)
-    return step
+    return step.merged_over(step)
 
 
 def _names(names: list[str]) -> str:
