@@ -104,7 +104,7 @@ def generate_binary() -> str:
 
 @ava.agent_step(
     ava.Signature("binary: str -> decimal: str"),
-    lm=starter_lm(),
+    runtime=ava.runtimes.PredictRLM(lm=starter_lm()),
 )
 async def convert_binary(binary: str, *, agent: ava.Agent) -> str:
     return (await agent(binary=binary)).decimal
