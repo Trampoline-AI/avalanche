@@ -10,7 +10,6 @@ if TYPE_CHECKING:
     from predict_rlm import RunTrace as AgentTrace
 
     from ..file import File
-    from .steps import Agent, AgentStepError, AgentStepExecutionError, agent_step, step
     from .evidence import (
         AgentEvidenceEvent,
         AgentEvidenceListener,
@@ -22,6 +21,7 @@ if TYPE_CHECKING:
         capture_agent_evidence,
     )
     from .signature import InputField, OutputField, Signature
+    from .steps import Agent, AgentStepError, AgentStepExecutionError, agent_step, step
 
 # Exports load on first use, so runtime-neutral submodules such as
 # ``declaration`` and ``trace`` import without DSPy or PredictRLM.
