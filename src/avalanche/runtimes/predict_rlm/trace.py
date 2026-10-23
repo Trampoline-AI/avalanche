@@ -17,7 +17,6 @@ from ...agent.trace import (
     AgentTraceRecord,
     AgentTraceStatus,
     PredictRLMNativeTrace,
-    ToolCallAction,
 )
 from .events import _bounded_agent_error
 
@@ -100,6 +99,36 @@ def _model_display_name(value: Any) -> str | None:
 _STOP_REASONS = {"completed": "submit", "max_iterations": "max_iterations"}
 
 
+def trace_header(
+    trace: RunTrace, evidence: RunEvidence, *, model: str | None
+) -> AgentTraceHeader:
+    """The common header for one PredictRLM run, without converting its turns.
+
+    ``model`` is a display name that replaces PredictRLM's model id when set
+    (see ``_model_display_name``).
+    """
+    from .mapping import common_usage
+
+    status: AgentTraceStatus = {
+        "completed": "succeeded",
+        "error": "failed",
+        "cancelled": "cancelled",
+    }[evidence.terminal_outcome]
+    return AgentTraceHeader(
+        runtime_kind="predict_rlm",
+        trace_format="predict_rlm.run/v1",
+        status=status,
+        stop_reason=_STOP_REASONS.get(trace.status),
+        model=trace.model if model is None else model,
+        duration_ms=trace.duration_ms,
+        usage=common_usage(trace.usage.main, trace.usage.sub),
+        turn_count=len(trace.steps),
+        tool_call_count=sum(len(step.tool_calls) for step in trace.steps),
+        external_run_id=evidence.run_id,
+        session_id=None,
+    )
+
+
 def trace_record(
     trace: RunTrace,
     evidence: RunEvidence,
@@ -112,32 +141,12 @@ def trace_record(
     ``model`` and ``sub_model`` are display names that replace PredictRLM's
     model ids when set (see ``_model_display_name``).
     """
-    from .mapping import common_usage, turn_from_step
+    from .mapping import turn_from_step
 
-    status: AgentTraceStatus = {
-        "completed": "succeeded",
-        "error": "failed",
-        "cancelled": "cancelled",
-    }[evidence.terminal_outcome]
-    turns = tuple(turn_from_step(step) for step in trace.steps)
     usage = trace.usage
     return AgentTraceRecord(
-        header=AgentTraceHeader(
-            runtime_kind="predict_rlm",
-            trace_format="predict_rlm.run/v1",
-            status=status,
-            stop_reason=_STOP_REASONS.get(trace.status),
-            model=trace.model if model is None else model,
-            duration_ms=trace.duration_ms,
-            usage=common_usage(usage.main, usage.sub),
-            turn_count=len(turns),
-            tool_call_count=sum(
-                isinstance(action, ToolCallAction) for turn in turns for action in turn.actions
-            ),
-            external_run_id=evidence.run_id,
-            session_id=None,
-        ),
-        turns=turns,
+        header=trace_header(trace, evidence, model=model),
+        turns=tuple(turn_from_step(step) for step in trace.steps),
         native=PredictRLMNativeTrace(
             sub_model=_sub_model_name(trace, sub_model),
             max_iterations=trace.max_iterations,

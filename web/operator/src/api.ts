@@ -1,6 +1,6 @@
 import { GrpcWebFetchTransport } from "@protobuf-ts/grpcweb-transport";
 
-import { PageOrderV2 } from "./generated/operator";
+import { AgentEventKindV2, AgentTraceStatusV2, PageOrderV2 } from "./generated/operator";
 import { DescriptorPageOrder } from "./model";
 import { mapEvaluationRecord, type EvaluationRecord } from "./evaluations";
 
@@ -22,9 +22,14 @@ import type {
   RunSummaryPageV2,
   RunSummaryV2,
   ScopeReferenceV2,
+  TokenUsageV2,
+  TraceDescriptorV2,
+  TraceHeaderV2,
 } from "./generated/operator";
 import type {
   AgentEventDescriptorMsg,
+  AgentEventKind,
+  AgentTraceStatus,
   CatalogSnapshotMsg,
   ClassifierAnswerSummary,
   ClassifierEventDescriptorMsg,
@@ -39,7 +44,63 @@ import type {
   RunSnapshotMsg,
   RunSummaryMsg,
   TerminalSealMsg,
+  TokenUsageMsg,
+  TraceDescriptorMsg,
+  TraceHeaderMsg,
 } from "./model";
+
+const TRACE_STATUSES: Partial<Record<AgentTraceStatusV2, AgentTraceStatus>> = {
+  [AgentTraceStatusV2.SUCCEEDED]: "succeeded",
+  [AgentTraceStatusV2.FAILED]: "failed",
+  [AgentTraceStatusV2.CANCELLED]: "cancelled",
+};
+
+const AGENT_EVENT_KINDS: Partial<Record<AgentEventKindV2, AgentEventKind>> = {
+  [AgentEventKindV2.NATIVE]: "native",
+  [AgentEventKindV2.TURN_FINISHED]: "turn.finished",
+  [AgentEventKindV2.MODEL_STARTED]: "model.started",
+  [AgentEventKindV2.MODEL_FINISHED]: "model.finished",
+  [AgentEventKindV2.TOOL_STARTED]: "tool.started",
+  [AgentEventKindV2.TOOL_FINISHED]: "tool.finished",
+  [AgentEventKindV2.CODE_GENERATED]: "code.generated",
+};
+
+function mapTokenUsage(usage: TokenUsageV2): TokenUsageMsg {
+  const mapped: TokenUsageMsg = {
+    inputTokens: usage.inputTokens,
+    outputTokens: usage.outputTokens,
+  };
+  if (usage.cacheReadInputTokens !== undefined) {
+    mapped.cacheReadInputTokens = usage.cacheReadInputTokens;
+  }
+  if (usage.cacheCreationInputTokens !== undefined) {
+    mapped.cacheCreationInputTokens = usage.cacheCreationInputTokens;
+  }
+  if (usage.costUsd !== undefined) mapped.costUsd = usage.costUsd;
+  return mapped;
+}
+
+function mapTraceHeader(header: TraceHeaderV2): TraceHeaderMsg {
+  const status = TRACE_STATUSES[header.status];
+  if (!status) throw new Error(`Unsupported agent trace status ${header.status}`);
+  if (!header.runtimeKind || !header.traceFormat) {
+    throw new Error("Agent trace header is missing its runtime kind or trace format");
+  }
+  const mapped: TraceHeaderMsg = {
+    status,
+    runtimeKind: header.runtimeKind,
+    traceFormat: header.traceFormat,
+    durationMs: header.durationMs,
+    turnCount: header.turnCount,
+    toolCallCount: header.toolCallCount,
+  };
+  if (header.model !== undefined) mapped.model = header.model;
+  if (header.usage) mapped.usage = mapTokenUsage(header.usage);
+  if (header.externalRunId !== undefined) mapped.externalRunId = header.externalRunId;
+  if (header.stopReason !== undefined) mapped.stopReason = header.stopReason;
+  if (header.telemetryJson !== undefined) mapped.telemetryJson = header.telemetryJson;
+  return mapped;
+}
 
 const MAX_BASELINE_PAGES = 100;
 const MAX_BASELINE_SUMMARIES = 10_000;
@@ -775,7 +836,6 @@ export class GrpcWebOperatorApi implements OperatorApi {
   }
 
   private mapNodeSnapshot(runId: string, node: NodeSnapshotV2): NodeSnapshotMsg {
-    if (node.trace?.detailRef) this.registerDetailRef(node.trace.detailRef);
     const mapped: NodeSnapshotMsg = {
       nodeId: node.nodeId,
       name: node.name,
@@ -786,7 +846,7 @@ export class GrpcWebOperatorApi implements OperatorApi {
       revision: node.revision,
       eventPageToken: this.registerContinuation(node.activityContinuation, runId, node.nodeId),
     };
-    if (node.trace) mapped.trace = node.trace;
+    if (node.trace) mapped.trace = this.mapTraceDescriptor(node.trace);
     if (node.error !== undefined) mapped.error = node.error;
     if (node.runningElapsedSeconds !== undefined) {
       mapped.runningElapsedSeconds = node.runningElapsedSeconds;
@@ -811,6 +871,21 @@ export class GrpcWebOperatorApi implements OperatorApi {
     };
   }
 
+  private mapTraceDescriptor(trace: TraceDescriptorV2): TraceDescriptorMsg {
+    const mapped: TraceDescriptorMsg = {
+      status: trace.status,
+      revision: trace.revision,
+      available: trace.available,
+      complete: trace.complete,
+      eventCount: trace.eventCount,
+      sizeBytes: trace.sizeBytes,
+      latestEventSequence: trace.latestEventSequence,
+    };
+    if (trace.header) mapped.header = mapTraceHeader(trace.header);
+    if (trace.detailRef) mapped.bodyToken = this.registerDetailRef(trace.detailRef);
+    return mapped;
+  }
+
   private mapAgentEventDescriptor(activity: RunActivityDescriptorV2): AgentEventDescriptorMsg {
     if (activity.kind !== "agent_event") {
       throw new Error(
@@ -820,17 +895,22 @@ export class GrpcWebOperatorApi implements OperatorApi {
     if (!activity.detailRef) {
       throw new Error("Agent event activity is missing its detail reference");
     }
+    const agentEventKind = AGENT_EVENT_KINDS[activity.agentEventKind];
+    if (!agentEventKind) {
+      throw new Error(`Unsupported agent event kind ${activity.agentEventKind}`);
+    }
     const mapped: AgentEventDescriptorMsg = {
       eventSequence: activity.runSequence,
       sizeBytes: activity.sizeBytes,
       bodyToken: this.registerDetailRef(activity.detailRef),
       invocationId: activity.invocationId,
-      eventKind: activity.eventKind,
+      nativeEventKind: activity.nativeEventKind,
+      agentEventKind,
       error: activity.error,
-      toolCount: activity.toolCount,
-      predictCount: activity.predictCount,
+      toolCallCount: activity.toolCallCount,
+      modelCallCount: activity.modelCallCount,
     };
-    if (activity.iteration !== undefined) mapped.iteration = activity.iteration;
+    if (activity.turn !== undefined) mapped.turn = activity.turn;
     if (activity.durationMs !== undefined) mapped.durationMs = activity.durationMs;
     return mapped;
   }
@@ -930,11 +1010,13 @@ export class GrpcWebOperatorApi implements OperatorApi {
       activity.nodeId ||
       activity.level ||
       activity.invocationId ||
-      activity.iteration !== undefined ||
+      activity.turn !== undefined ||
       activity.durationMs !== undefined ||
       activity.error ||
-      activity.toolCount !== 0 ||
-      activity.predictCount !== 0 ||
+      activity.toolCallCount !== 0 ||
+      activity.modelCallCount !== 0 ||
+      activity.agentEventKind !== AgentEventKindV2.UNSPECIFIED ||
+      activity.nativeEventKind ||
       activity.eventKind ||
       activity.trace ||
       !seal ||
@@ -1045,13 +1127,12 @@ export class GrpcWebOperatorApi implements OperatorApi {
           if (!activity.trace) {
             throw new Error("Trace activity is missing its descriptor");
           }
-          if (activity.trace.detailRef) this.registerDetailRef(activity.trace.detailRef);
           return update({
             oneofKind: "traceFinalized",
             traceFinalized: {
               runId,
               nodeId: activity.nodeId,
-              trace: activity.trace,
+              trace: this.mapTraceDescriptor(activity.trace),
             },
           });
         }

@@ -649,8 +649,8 @@ def _retain_iteration(step):
                     if isinstance(update.change, AgentEventAppended):
                         break
                 summary = update.change.event
-                assert (summary.tool_count, summary.predict_count) == expected_counts
-                assert (summary.iteration, summary.duration_ms, summary.error) == (
+                assert (summary.tool_call_count, summary.model_call_count) == expected_counts
+                assert (summary.turn, summary.duration_ms, summary.error) == (
                     step.iteration,
                     step.duration_ms,
                     step.error,
@@ -661,7 +661,7 @@ def _retain_iteration(step):
         )
         page = operator.list_agent_events(page_token=snapshot.nodes[0].event_page_token)
         summary = page.events[0]
-        assert (summary.tool_count, summary.predict_count) == expected_counts
+        assert (summary.tool_call_count, summary.model_call_count) == expected_counts
         detail = json.loads(operator.get_run(run.run_id).nodes["agent"].agent_trace_json)
         hydrated = RunTrace.model_validate(detail["trace"], strict=True)
         assert len(hydrated.steps) == 1
