@@ -35,12 +35,17 @@ def agent_defaults_from(value: AgentDefaults | Mapping[str, object]) -> AgentDef
             "ava.workflow(agent_defaults=...) must be a mapping such as "
             "{'runtime': ava.runtimes.PredictRLM(...)}"
         )
-    unknown = sorted(set(value) - {"runtime"})
+    moved, unknown = _split_removed(set(value) - {"runtime"})
+    if moved:
+        raise TypeError(
+            f"ava.workflow(agent_defaults=...) no longer accepts {_names(moved)}; "
+            "set them on the runtime instead: "
+            f"agent_defaults={{'runtime': ava.runtimes.PredictRLM({_assignments(moved)})}}"
+        )
     if unknown:
         raise TypeError(
-            f"ava.workflow(agent_defaults=...) no longer accepts {_names(unknown)}; "
-            "set them on the runtime instead: "
-            f"agent_defaults={{'runtime': ava.runtimes.PredictRLM({_assignments(unknown)})}}"
+            f"ava.workflow(agent_defaults=...) got unexpected keys {_names(unknown)}; "
+            "it accepts only 'runtime', and tools belong on each agent step"
         )
     runtime = value.get("runtime")
     if runtime is not None and not isinstance(runtime, AgentRuntime):
@@ -53,12 +58,14 @@ def agent_defaults_from(value: AgentDefaults | Mapping[str, object]) -> AgentDef
 
 def reject_removed_arguments(owner: str, removed: Mapping[str, object]) -> None:
     """Fail on agent-step arguments that moved to the runtime, naming the replacement."""
-    if removed:
-        names = sorted(removed)
+    moved, unknown = _split_removed(set(removed))
+    if moved:
         raise TypeError(
-            f"{owner} no longer accepts {_names(names)}; pass them to the runtime: "
-            f"runtime=ava.runtimes.PredictRLM({_assignments(names)})"
+            f"{owner} no longer accepts {_names(moved)}; pass them to the runtime: "
+            f"runtime=ava.runtimes.PredictRLM({_assignments(moved)})"
         )
+    if unknown:
+        raise TypeError(f"{owner} got unexpected keyword arguments {_names(unknown)}")
 
 
 def effective_runtime(step: AgentRuntime | None, defaults: AgentDefaults) -> AgentRuntime:
@@ -77,6 +84,14 @@ def effective_runtime(step: AgentRuntime | None, defaults: AgentDefaults) -> Age
     if default is not None and default.kind == step.kind:
         return step.merged_over(default)
     return step.merged_over(step)
+
+
+def _split_removed(names: set[str]) -> tuple[list[str], list[str]]:
+    """Names that are PredictRLM settings, and names that are not settings at all."""
+    from ..runtimes.predict_rlm import PredictRLM
+
+    moved = sorted(name for name in names if name in PredictRLM.model_fields)
+    return moved, sorted(names - set(moved))
 
 
 def _names(names: list[str]) -> str:
