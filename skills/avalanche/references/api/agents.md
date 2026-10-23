@@ -7,36 +7,42 @@ Workflow-author agent API, including inline agent nodes. Dependency behavior bel
 ```python
 import avalanche as ava
 
-# Author-facing call form; omitted runtime options inherit configuration.
 @ava.agent_step(
     signature,
-    lm=...,
-    sub_lm=...,
-    max_iterations=...,
-    skills=...,
+    runtime=ava.runtimes.PredictRLM(lm=..., sub_lm=..., max_iterations=..., skills=...),
     tools=...,
-    output_dir=...,
     evaluations=...,
-    **predictor_kwargs,
 )
 async def analyze(document: str, *, agent: ava.Agent) -> str:
     prediction = await agent(document=document)
     return prediction.summary
 ```
 
-The example assumes a signature with input `document` and output `summary`. Ellipses denote optional arguments to omit or replace, not values to pass. `output_dir` is an upstream option passed through `**predictor_kwargs`, not a separately declared decorator parameter.
+The example assumes a signature with input `document` and output `summary`. Ellipses denote optional arguments to omit or replace, not values to pass.
 
 | Parameter | Accepted value and default | Meaning |
 | --- | --- | --- |
 | `signature` | Required DSPy signature class | An Avalanche `Signature` subclass, the class returned by `Signature(...)`, or a native DSPy signature class. Must declare at least one output. Bare strings are not accepted. |
-| `lm` | `dspy.LM \| str \| None`; omitted inherits | Main code-writing model. Dependency default `None` uses DSPy context configuration. |
-| `sub_lm` | `dspy.LM \| str \| None`; omitted inherits | Model for the agent's structured prediction tool. Dependency default `None` uses DSPy context configuration. |
-| `max_iterations` | `int`; omitted inherits, dependency default `30` | Maximum agent REPL iterations. |
-| `skills` | Sequence of `ava.agent.Skill`; omitted gives none | Capability bundles, configured on this step only. Avalanche checks that the value is a sequence, not each member's type. |
-| `tools` | Sequence of callables; omitted gives none | Additional tools; every member must be callable. Neither `tools=None` nor `skills=None` means an empty sequence. |
-| `output_dir` | `str \| pathlib.Path \| None`; omitted inherits, dependency default `None` | Collect generated agent `File` outputs under `<output_dir>/<field>/`, otherwise in a temporary directory. Does not redirect scalar outputs or logs. |
+| `runtime` | An agent runtime such as `ava.runtimes.PredictRLM(...)`; default `None` | The runtime that runs the agent and its settings. Omitted uses the workflow's `agent_defaults` runtime, else `ava.runtimes.PredictRLM()`. See [runtimes](#runtimes). Any other value raises `TypeError`. |
+| `tools` | Sequence of callables; default none | Additional tools; every member must be callable. |
 | `evaluations` | `ava.Evaluations \| None`; default `None` | Observation-only quality judgments of the first successful agent call, run by the operator. See [native evaluations](../agent-steps.md#native-evaluations). Any other value raises `TypeError`. |
-| `**predictor_kwargs` | Additional PredictRLM constructor keyword arguments | Forwarded to the installed dependency; see its constructor documentation for options and compatibility constraints. Avalanche does not validate this entire upstream surface. |
+
+Model, skill and other PredictRLM settings belong to the runtime. Passing `lm=`, `sub_lm=`, `max_iterations=`, `skills=` or another PredictRLM keyword to the step raises `TypeError` naming the `runtime=ava.runtimes.PredictRLM(...)` replacement.
+
+### Runtimes
+
+`ava.runtimes.PredictRLM(...)` is a frozen, picklable description of PredictRLM settings; it builds nothing until the step runs. Its fields mirror the `predict_rlm.PredictRLM` constructor except the signature and tools, which come from the step:
+
+| Field | Accepted value and default | Meaning |
+| --- | --- | --- |
+| `lm` | `dspy.LM \| str \| None`; default `None` | Main code-writing model. `None` uses DSPy context configuration. |
+| `sub_lm` | `dspy.LM \| str \| None`; default `None` | Model for the agent's structured prediction tool. `None` uses DSPy context configuration. |
+| `max_iterations` | `int`; default `30` | Maximum agent REPL iterations. |
+| `skills` | Sequence of `ava.agent.Skill`; default none | Capability bundles. |
+| `output_dir` | `str \| pathlib.Path \| None`; default `None` | Collect generated agent `File` outputs under `<output_dir>/<field>/`, otherwise in a temporary directory. Does not redirect scalar outputs or logs. |
+| `verbose` | `bool`; default `False` | PredictRLM console output. Avalanche runs agents quietly by default; PredictRLM's own default is `True`. |
+
+The remaining fields (`max_llm_calls`, `max_output_chars`, `sandbox_backend`, `allowed_domains`, `runtime_hooks`, and so on) take the same values and defaults as the installed PredictRLM constructor. An unknown field raises a validation error.
 
 The decorator returns a single-output workflow step. The body must declare exactly `*, agent: ava.Agent`, with no default; Avalanche injects it and removes it from the step's public call signature. The remaining Python parameters and return annotation describe the workflow step, independently of the model signature. Synchronous and asynchronous bodies are accepted; an awaitable body result is awaited. Use an asynchronous body to await model calls.
 
@@ -48,7 +54,7 @@ Decorated agent functions do not provide ordinary node-decorator options such as
 
 Inside a workflow body, `ava.agent.step(signature, inputs=None, slug=None, ...)`
 declares an inline agent node and returns its deferred result. It accepts the
-same signature, skills, tools, runtime options, and `evaluations` listed above;
+same signature, `runtime`, `tools`, and `evaluations` listed above;
 evaluations judge the node's single agent call. It does not
 execute a model during graph construction or discovery.
 
@@ -70,14 +76,14 @@ inline node options, not model inputs or predictor settings.
 
 ### Workflow defaults
 
-Declare `agent_defaults={...}` on [the workflow decorator](workflows.md). Resolution is per runtime key:
+Declare `agent_defaults={"runtime": ava.runtimes.PredictRLM(...)}` (or an `ava.agent.AgentDefaults`) on [the workflow decorator](workflows.md). Each step's effective runtime is:
 
-1. Explicit agent-step value, including explicit `None`.
-2. Workflow `agent_defaults`.
-3. Avalanche's `verbose=False` default.
-4. PredictRLM's constructor default.
+1. The step's `runtime` merged over the workflow runtime when both are the same kind: fields the step sets win, fields only the workflow sets are kept.
+2. The step's `runtime` alone when the workflow runtime is another kind.
+3. The workflow runtime when the step sets none.
+4. `ava.runtimes.PredictRLM()` when neither is set.
 
-`agent_defaults` must be a mapping. `signature`, `skills`, and `tools` are forbidden there; declare them on individual agent steps. Other keys are forwarded to PredictRLM. Model credentials and accepted model configurations follow the installed dependency, not Avalanche's classifier configuration.
+Other `agent_defaults` keys raise `TypeError` naming the `{"runtime": ...}` form. Model credentials and accepted model configurations follow the installed dependency, not Avalanche's classifier configuration.
 
 ## Signature declarations
 
@@ -89,7 +95,7 @@ class Summarize(ava.Signature):
     summary: str = ava.OutputField(desc="Concise factual summary.")
 ```
 
-The class docstring supplies instructions, type annotations describe model inputs and outputs, and the field helpers mark their direction. Authors choose the field names and types, including structured Pydantic output models and [agent files](#agent-files). Skills and tools are decorator configuration, not signature fields.
+The class docstring supplies instructions, type annotations describe model inputs and outputs, and the field helpers mark their direction. Authors choose the field names and types, including structured Pydantic output models and [agent files](#agent-files). Tools and the runtime are step configuration, not signature fields.
 
 The dynamic form returns a **signature class**, not a prediction:
 
@@ -159,7 +165,7 @@ All arguments are keyword-only. This returns a PredictRLM `Skill`; the displayed
 
 Invalid field values raise dependency Pydantic validation errors. Combining skills with duplicate module or tool names raises dependency `ValueError` when the predictor is built. Avalanche does not provide its own skill loader or dependency installer API.
 
-Built-in skill objects are `ava.agent.skills.pdf`, `ava.agent.skills.docx`, and `ava.agent.skills.spreadsheet`. Pass the objects in the decorator's `skills=[...]`; their instructions and package requirements belong to PredictRLM.
+Built-in skill objects are `ava.agent.skills.pdf`, `ava.agent.skills.docx`, and `ava.agent.skills.spreadsheet`. Pass the objects in the runtime's `skills=[...]`, for example `runtime=ava.runtimes.PredictRLM(skills=[ava.agent.skills.pdf])`; their instructions and package requirements belong to PredictRLM.
 
 ## Agent files
 
