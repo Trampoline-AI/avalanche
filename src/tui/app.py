@@ -163,6 +163,8 @@ class AvalancheApp(App):
         self._scope_reload_pending = False
         self._extension_token: tuple | None = None
         self._context_generation = 0
+        self._widget_tokens: dict[str, tuple] = {}
+        self._breadcrumbs = ""
         self._scope: tuple[tuple[str, str], ...] = ()
         self._action_intents: dict[tuple[TuiContext, str], tuple[str, str]] = {}
         self._actions_in_flight: set[tuple[TuiContext, str]] = set()
@@ -624,12 +626,13 @@ class AvalancheApp(App):
             item for item in (scope, context.flow, context.run, context.node) if item
         )
         mode = "READ ONLY" if self.read_only else "interactive"
-        try:
-            self._screen.query_one("#breadcrumbs").update(
-                f"{mode} · {crumbs or 'Catalog'} · Ctrl+P commands · ? help"
-            )
-        except NoMatches:
-            pass
+        breadcrumbs = f"{mode} · {crumbs or 'Catalog'} · Ctrl+P commands · ? help"
+        if breadcrumbs != self._breadcrumbs:
+            self._breadcrumbs = breadcrumbs
+            try:
+                self._screen.query_one("#breadcrumbs").update(breadcrumbs)
+            except NoMatches:
+                pass
         # Show/hide sidebar + grip, sync width
         visible = self.store.sidebar_visible
         try:
@@ -648,20 +651,74 @@ class AvalancheApp(App):
                     w.add_class("-pane-active")
                 else:
                     w.remove_class("-pane-active")
-                w.refresh()
             except NoMatches:
                 pass
-        # Refresh non-pane widgets
-        for widget_id in ("status-bar", "dag-panel"):
-            try:
-                self._screen.query_one(f"#{widget_id}").refresh()
-            except NoMatches:
-                pass
-        # Run history still sizes itself to its complete table.
-        try:
-            self._screen.query_one("#run-history-content").refresh(layout=True)
-        except NoMatches:
-            pass
+        # Refresh projections only when their own inputs change. In particular a
+        # key in the DAG must not rebuild history layout or render static headers.
+        store = self.store
+        run = store.current_run
+        animation = (
+            store.frame // 3 if run is not None and run.status == RunStatus.RUNNING else 0
+        )
+        node_token = (
+            tuple((key, state.status, state.revision) for key, state in run.nodes.items())
+            if run is not None
+            else ()
+        )
+        self._refresh_projection(
+            "dag-panel",
+            (
+                id(store.dag),
+                node_token,
+                animation,
+                store.selected_node.name if store.selected_node else None,
+            ),
+        )
+        history = store.runs_for_current_workflow
+        history_token = (
+            id(history),
+            len(history),
+            store.selected_run_id,
+            store._run_data_revision(store.current_workflow.selector)
+            if store.current_workflow
+            else 0,
+            store.frame // 30,
+        )
+        previous = self._widget_tokens.get("run-history-content")
+        self._refresh_projection(
+            "run-history-content",
+            history_token,
+            layout=previous is None or previous[1] != len(history),
+        )
+        if store.sidebar_visible:
+            self._refresh_projection(
+                "sidebar",
+                (
+                    id(store.workflows),
+                    store.sidebar_cursor,
+                    store.sidebar_selected_id,
+                    frozenset(store.sidebar_expanded),
+                    tuple(store.workflow_statuses.items()),
+                    animation,
+                ),
+                layout=True,
+            )
+        self._refresh_projection(
+            "status-bar",
+            (
+                store.run_error,
+                store.search_query,
+                store.search_index,
+                store.match_count,
+                store.searching,
+                store.focused_pane,
+                store.selected_run_id,
+                store.selected_node.name if store.selected_node else None,
+                animation,
+                store.frame // 30,
+                self.store.provider.stream_state,
+            ),
+        )
         if self.store.trace_inspector_open:
             for content_id in (
                 "agent-trace-content",
@@ -672,19 +729,6 @@ class AvalancheApp(App):
                     self._screen.query_one(f"#{content_id}").refresh(layout=True)
                 except NoMatches:
                     pass
-        # Update sticky headers
-        try:
-            from .widgets.run_history import RunHistoryWidget
-
-            self._screen.query_one("#run-history-header").update(
-                RunHistoryWidget.render_header()
-            )
-        except NoMatches:
-            pass
-        try:
-            self._screen.query_one("#log-header").update(LogWidget.render_header())
-        except NoMatches:
-            pass
         # Update border titles with run context
         run_id = self.store.selected_run_id
         run_suffix = f" · {run_id}" if run_id else ""
@@ -765,6 +809,25 @@ class AvalancheApp(App):
             log_w.sync_from_store()
         except NoMatches:
             pass
+        # Keep the one-line status clock painted. A completely clean frame can
+        # otherwise defer Textual's after-refresh callbacks until the next 30 Hz
+        # animation tick; expensive history/DAG projections remain dirty-only.
+        try:
+            self._screen.query_one("#status-bar").refresh()
+        except NoMatches:
+            pass
+
+    def _refresh_projection(
+        self, widget_id: str, token: tuple, *, layout: bool = False
+    ) -> None:
+        if self._widget_tokens.get(widget_id) == token:
+            return
+        self._widget_tokens[widget_id] = token
+        if self._screen is not None:
+            try:
+                self._screen.query_one(f"#{widget_id}").refresh(layout=layout)
+            except NoMatches:
+                pass
 
     def _sync_sidebar_focus(self) -> None:
         """Keep Textual focus in sync with store.focused_pane."""
