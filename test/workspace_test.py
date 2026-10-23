@@ -95,10 +95,10 @@ def test_directory_workspace_rejects_invalid_reference(tmp_path, reference):
 def test_reference_workspace_serialization_is_path_free_and_unbound(tmp_path):
     reference = "\u00e9" * 1024
     workspace = ava.Workspace.from_directory(str(tmp_path), reference=reference)
-    manifest = {"version": 1, "reference": reference}
+    manifest = {"kind": "workspace", "version": 1, "reference": reference}
 
-    def unexpected_serializer(value):
-        raise AssertionError("reference workspace called the value serializer hook")
+    def reference_serializer(value):
+        return value.manifest()
 
     for mode in ("python", "json"):
         assert workspace.model_dump(mode=mode) == manifest
@@ -106,7 +106,7 @@ def test_reference_workspace_serialization_is_path_free_and_unbound(tmp_path):
             workspace.model_dump(
                 mode=mode,
                 context={
-                    workspace_module._WORKSPACE_SERIALIZER_CONTEXT_KEY: unexpected_serializer
+                    workspace_module._WORKSPACE_SERIALIZER_CONTEXT_KEY: reference_serializer
                 },
             )
             == manifest
@@ -149,7 +149,7 @@ def test_reference_workspace_transport_emits_no_attachments(tmp_path):
         workspace: ava.Workspace
 
     workspace = ava.Workspace.from_directory(tmp_path, reference="host-managed:example")
-    manifest = {"version": 1, "reference": workspace.reference}
+    manifest = {"kind": "workspace", "version": 1, "reference": workspace.reference}
     request = Request(workspace=workspace)
     assert json.loads(_json_payload(request))["workspace"] == manifest
     for value in (workspace, request, {"workspace": workspace}):
@@ -157,8 +157,19 @@ def test_reference_workspace_transport_emits_no_attachments(tmp_path):
         assert encoded.files == ()
         assert str(tmp_path) not in encoded.value_json
         assert "host-managed:example" in encoded.value_json
-    restored = decode_workflow_result(encode_workflow_result({"workspace": workspace}))
-    assert restored["workspace"].manifest() == manifest
+    for value in (workspace, request, {"workspace": workspace}):
+        restored = decode_workflow_result(encode_workflow_result(value))
+        actual = restored if isinstance(restored, ava.Workspace) else restored["workspace"]
+        assert isinstance(actual, ava.Workspace)
+        assert actual.manifest() == manifest
+    with pytest.warns(DeprecationWarning):
+        assert (
+            ava.Workspace.from_manifest({"version": 1, "reference": "legacy"}).reference
+            == "legacy"
+        )
+    for kind in ("file", "object", "other"):
+        with pytest.raises(ValueError):
+            ava.Workspace.from_manifest({**manifest, "kind": kind})
 
 
 @pytest.mark.parametrize("fail", [False, True])

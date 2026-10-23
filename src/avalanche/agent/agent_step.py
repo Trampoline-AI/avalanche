@@ -507,12 +507,31 @@ class Agent:
         dspy_signature = self._resolve_signature()
         self._validate_input_names(dspy_signature, inputs)
 
-        if self._predictor is None:
+        from .file_adapter import AgentFileBridge, mount_inputs, predict_signature
+
+        internal_signature = predict_signature(dspy_signature)
+        bridge = (
+            AgentFileBridge(self._step_name)
+            if internal_signature is not dspy_signature
+            else None
+        )
+        runtime_kwargs = dict(self._runtime_kwargs)
+        if bridge is not None:
+            from predict_rlm.compatibility import files
+
+            if "output_dir" in runtime_kwargs:
+                raise AgentStepError("File steps own output_dir")
+            runtime_kwargs["output_dir"] = str(bridge.output_dir)
+            runtime_kwargs["modules"] = [
+                *runtime_kwargs.pop("modules", ()),
+                files(input_mode="mount", output_dir=str(bridge.output_dir)),
+            ]
+        if self._predictor is None or bridge is not None:
             self._predictor = _build_predictor(
-                dspy_signature,
+                internal_signature,
                 skills=self._skills,
                 tools=self._tools,
-                **self._runtime_kwargs,
+                **runtime_kwargs,
             )
 
         from predict_rlm.trace import extract_trace_from_exc
@@ -522,7 +541,7 @@ class Agent:
 
         try:
             try:
-                prediction: Prediction = await self._predictor.acall(**inputs)
+                prediction: Prediction = await self._predictor.acall(**mount_inputs(inputs))
             except asyncio.CancelledError as exc:
                 try:
                     trace = extract_trace_from_exc(exc)
@@ -580,6 +599,9 @@ class Agent:
             capture = _STEP_EVALUATION_CAPTURE.get()
             if capture is not None:
                 capture.submit(inputs, prediction, terminal_event)
+            if bridge is not None:
+                for name in dspy_signature.output_fields:
+                    prediction[name] = bridge.outputs(prediction[name])
             return prediction
         finally:
             _AGENT_INVOCATION_STATE.reset(invocation_token)

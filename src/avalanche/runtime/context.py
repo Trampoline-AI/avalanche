@@ -1,21 +1,16 @@
 from __future__ import annotations
 
-import hashlib
 from contextvars import ContextVar
-from io import BytesIO
-from pathlib import Path
 from typing import Any, Literal
 
 from pydantic import (
     BaseModel,
     ConfigDict,
     Field,
-    SerializationInfo,
-    SerializerFunctionWrapHandler,
     field_validator,
-    model_serializer,
-    model_validator,
 )
+
+from avalanche.file import File as File
 
 
 class BaseInput(BaseModel):
@@ -108,58 +103,3 @@ def _run_with_context(context: RunContext, fn: Any, /, *args: Any, **kwargs: Any
 def run_with_context(context: RunContext, fn: Any, *args: Any, **kwargs: Any) -> Any:
     """Execute a function with a RunContext available to framework helpers."""
     return _run_with_context(context, fn, *args, **kwargs)
-
-
-_FILE_SERIALIZER_CONTEXT_KEY = "__avalanche_operator_file_serializer__"
-
-
-class File(BaseModel):
-    """In-memory file value accepted as workflow input or returned as output."""
-
-    model_config = ConfigDict(arbitrary_types_allowed=True, extra="forbid")
-
-    content: bytes
-    name: str | None = None
-    content_type: str | None = None
-    sha256: str | None = None
-
-    @model_serializer(mode="wrap")
-    def _serialize(
-        self,
-        handler: SerializerFunctionWrapHandler,
-        info: SerializationInfo,
-    ) -> Any:
-        """Allow the operator codec to substitute an attachment marker."""
-        context = info.context
-        serializer = (
-            context.get(_FILE_SERIALIZER_CONTEXT_KEY) if isinstance(context, dict) else None
-        )
-        if callable(serializer):
-            return serializer(self)
-        return handler(self)
-
-    @classmethod
-    def from_path(cls, path: str | Path, *, content_type: str | None = None) -> "File":
-        file_path = Path(path)
-        return cls(
-            name=file_path.name,
-            content=file_path.read_bytes(),
-            content_type=content_type,
-        )
-
-    @model_validator(mode="after")
-    def _compute_or_validate_sha256(self) -> "File":
-        digest = hashlib.sha256(self.content).hexdigest()
-        if self.sha256 is None:
-            self.sha256 = digest
-            return self
-        if self.sha256.lower() != digest:
-            raise ValueError("File sha256 does not match content")
-        self.sha256 = digest
-        return self
-
-    def read_bytes(self) -> bytes:
-        return self.content
-
-    def open(self) -> BytesIO:
-        return BytesIO(self.content)

@@ -51,7 +51,17 @@ def __getattr__(name: str):
         from predict_rlm import RunTrace
 
         value = RunTrace
-    elif name in {"Skill", "File"}:
+    elif name == "File":
+        import warnings
+
+        from avalanche.file import File
+
+        warnings.warn(
+            "ava.agent.File is deprecated; use ava.File. Removed next minor release.",
+            DeprecationWarning, stacklevel=2,
+        )
+        return File
+    elif name == "Skill":
         import predict_rlm
 
         value = getattr(predict_rlm, name)

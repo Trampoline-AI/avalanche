@@ -77,7 +77,10 @@ def test_ava_web_interrupt_during_startup_releases_listener(monkeypatch):
         rebound.bind(("127.0.0.1", port))
 
 
-def test_ava_result_materializes_nested_workspace_tree(monkeypatch, tmp_path, capsys):
+@pytest.mark.parametrize("reference", [False, True])
+def test_ava_result_materializes_nested_workspace_tree(
+    monkeypatch, tmp_path, capsys, reference
+):
     from ava_cli import app
     from avalanche import Workspace
 
@@ -87,7 +90,12 @@ def test_ava_result_materializes_nested_workspace_tree(monkeypatch, tmp_path, ca
 
     class FakeProvider:
         def get_run_result(self, run_id):
-            return {"output": Workspace.from_path(source)}
+            workspace = (
+                Workspace.from_directory(source, reference="host-managed:export")
+                if reference
+                else Workspace.from_path(source)
+            )
+            return {"output": workspace}
 
         def close(self):
             pass

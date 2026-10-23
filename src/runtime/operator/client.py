@@ -1896,15 +1896,18 @@ class GrpcStateProvider:
                 raise TypeError("run_id_factory must return a string")
             if not request_run_id:
                 raise ValueError("run_id_factory must return a nonempty string")
-        input_files = [
-            _file_attachment(field_name, value) for field_name, value in (files or {}).items()
-        ]
+        payload = json.loads(_json_payload(input) or "{}")
+        for field_name, value in (files or {}).items():
+            if field_name in payload:
+                raise ValueError(f"Duplicate input field {field_name!r}")
+            file = value if isinstance(value, File) else File(name=field_name, content=value)
+            payload[field_name] = file.model_dump()
         request = pb.StartRunRequestV2(
             workflow_selector=workflow_selector,
             run_id=request_run_id,
-            input_json=_json_payload(input),
+            input_json=json.dumps(payload),
             context_json=_json_payload(context),
-            input_files=input_files,
+            input_files=[],
         )
         resp = self._call(self._stub.StartRun, request)
         return resp.run_id
@@ -3178,22 +3181,11 @@ def _json_payload(payload: Mapping[str, Any] | BaseModel | None) -> str:
 
 
 def _json_payload_default(value: Any) -> Any:
+    if isinstance(value, File):
+        return value.model_dump()
     if isinstance(value, Workspace):
         return value._manifest_for_serialization()
     raise TypeError(f"Input JSON does not support {type(value).__name__}")
-
-
-def _file_attachment(field_name: str, value: File | bytes) -> pb.FileAttachmentV2:
-    file = value if isinstance(value, File) else File(name=field_name, content=value)
-    return pb.FileAttachmentV2(
-        attachment_id=f"inline:{field_name}:{file.name or ''}",
-        field_name=field_name,
-        name=file.name or "",
-        media_type=file.content_type or "",
-        sha256=file.sha256 or "",
-        size_bytes=len(file.content),
-        inline_bytes=file.content,
-    )
 
 
 def _v2_continuation(scope: str, token: str) -> pb.ContinuationRefV2 | None:

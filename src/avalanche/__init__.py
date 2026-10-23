@@ -54,7 +54,14 @@ from .storage import Namespace, NamespaceConfig, ScanResult, Table, TableGroup
 from .types import AppendResult, SnapshotMetadata, SnapshotState
 from .webhook import Webhook
 
-__version__ = "0.13.0"
+__version__ = "0.14.0"
+
+from .references import (
+    LocalReferenceBinder,
+    ReferenceBinder,
+    file_reference_context,
+    rebind_arguments,
+)
 
 # Submodules and names resolved lazily on first attribute access (see __getattr__).
 _LAZY_SUBMODULES = frozenset({"agent", "classifier", "iceberg", "lance"})
@@ -108,6 +115,10 @@ def __dir__() -> list[str]:
 
 
 __all__ = [
+    "ReferenceBinder",
+    "LocalReferenceBinder",
+    "rebind_arguments",
+    "file_reference_context",
     # Decorators
     "source",
     "step",

@@ -157,7 +157,7 @@ wheels = [
 
 [[package]]
 name = "avalanche-ai"
-version = "0.13.0"
+version = "0.14.0"
 source = { editable = "." }
 dependencies = [
     { name = "cloudpickle" },
@@ -222,7 +222,7 @@ requires-dist = [
     { name = "filelock", specifier = ">=3.20,<4" },
     { name = "grpcio", specifier = ">=1.75.1" },
     { name = "polars", specifier = ">=1.34,<1.35" },
-    { name = "predict-rlm", extras = ["codex-lm"], specifier = ">=0.10.0" },
+    { name = "predict-rlm", extras = ["codex-lm"], git = "https://github.com/Trampoline-AI/predict-rlm.git?rev=d74f4de96f0e663441a211d5315829ebc8cb326b" },
     { name = "protobuf", specifier = ">=6.31.1" },
     { name = "pydantic", specifier = ">=2,<3" },
     { name = "pyiceberg", extras = ["glue", "pandas", "pyarrow", "s3fs", "sql-sqlite"], specifier = ">=0.9,<0.11" },
@@ -1803,8 +1803,8 @@ wheels = [
 
 [[package]]
 name = "predict-rlm"
-version = "0.10.0"
-source = { registry = "https://pypi.org/simple" }
+version = "0.12.0"
+source = { git = "https://github.com/Trampoline-AI/predict-rlm.git?rev=d74f4de96f0e663441a211d5315829ebc8cb326b#d74f4de96f0e663441a211d5315829ebc8cb326b" }
 dependencies = [
     { name = "aiohttp" },
     { name = "deno" },
@@ -1813,10 +1813,6 @@ dependencies = [
     { name = "pydantic" },
     { name = "pygments" },
     { name = "tenacity" },
-]
-sdist = { url = "https://files.pythonhosted.org/packages/22/2b/98b6a6fbb07964e89d7850580b87831b5e80b48f6daeea2b50363080320f/predict_rlm-0.10.0.tar.gz", hash = "sha256:c04485e8f5943413010d952cef3898d680b35a248007a64143d11a73ebb12f9f", size = 304899, upload-time = "2026-10-21T18:41:45.225Z" }
-wheels = [
-    { url = "https://files.pythonhosted.org/packages/d1/32/bc2aa6863a449d9c9ebcd55382b2c10da23f971cdb844e44bb6f36ad8a1f/predict_rlm-0.10.0-py3-none-any.whl", hash = "sha256:bea88ad6d4b038af7109444bc3111a2390b82317b4ecfe9e68eeb09f9f9c32af", size = 339528, upload-time = "2026-10-21T18:41:43.538Z" },
 ]
 
 [package.optional-dependencies]

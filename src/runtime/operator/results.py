@@ -13,7 +13,6 @@ from uuid import uuid4
 from pydantic import BaseModel
 
 from avalanche.runtime import File
-from avalanche.runtime.context import _FILE_SERIALIZER_CONTEXT_KEY
 from avalanche.workspace import _WORKSPACE_SERIALIZER_CONTEXT_KEY, Workspace
 
 _RESULT_FORMAT_VERSION = 1
@@ -50,16 +49,8 @@ class EncodedWorkflowResult:
 
 
 def encode_workflow_result(value: Any) -> EncodedWorkflowResult:
-    """Encode a supported result while extracting every native ``File`` value."""
-    attachments: list[ResultFileAttachment] = []
+    """Encode supported values; File bodies never enter JSON or attachments."""
     marker_token = uuid4().hex
-
-    def serialize_file(file: File) -> dict[str, str]:
-        attachment_id = _append_attachment(file, attachments)
-        return {
-            "__operator_file_marker__": marker_token,
-            "attachment_id": attachment_id,
-        }
 
     def serialize_workspace(workspace: Workspace) -> dict[str, Any]:
         return {
@@ -67,20 +58,17 @@ def encode_workflow_result(value: Any) -> EncodedWorkflowResult:
             "manifest": workspace._manifest_for_serialization(),
         }
 
-    if isinstance(value, BaseModel) and not isinstance(value, File):
+    if isinstance(value, BaseModel) and not isinstance(value, (File, Workspace)):
         value = value.model_dump(
             mode="json",
             by_alias=True,
             context={
-                _FILE_SERIALIZER_CONTEXT_KEY: serialize_file,
                 _WORKSPACE_SERIALIZER_CONTEXT_KEY: serialize_workspace,
             },
         )
     encoded = _encode_value(
         value,
-        attachments,
         marker_token,
-        serialize_file,
         _DecodeBudget(),
     )
     value_json = json.dumps(
@@ -92,10 +80,7 @@ def encode_workflow_result(value: Any) -> EncodedWorkflowResult:
     value_size = len(value_json.encode("utf-8"))
     if value_size > MAX_RESULT_VALUE_JSON_BYTES:
         raise ValueError(f"Workflow result JSON exceeds {MAX_RESULT_VALUE_JSON_BYTES} bytes")
-    total_attachment_bytes = sum(len(item.content) for item in attachments)
-    if value_size + total_attachment_bytes > MAX_RESULT_TOTAL_BYTES:
-        raise ValueError(f"Workflow result exceeds {MAX_RESULT_TOTAL_BYTES} bytes")
-    return EncodedWorkflowResult(value_json=value_json, files=tuple(attachments))
+    return EncodedWorkflowResult(value_json=value_json, files=())
 
 
 def decode_workflow_result(payload: EncodedWorkflowResult) -> Any:
@@ -164,52 +149,9 @@ def validate_workflow_result_document(
     _reject_unused_attachments(attachment_ids, used_attachments)
 
 
-def _append_attachment(
-    file: File,
-    attachments: list[ResultFileAttachment],
-) -> str:
-    if len(attachments) >= MAX_RESULT_ATTACHMENTS:
-        raise ValueError(f"Workflow result exceeds {MAX_RESULT_ATTACHMENTS} file attachments")
-    _validate_optional_metadata_string(
-        file.name,
-        "Result file attachment name",
-        MAX_ATTACHMENT_NAME_LENGTH,
-    )
-    _validate_optional_metadata_string(
-        file.content_type,
-        "Result file attachment media type",
-        MAX_ATTACHMENT_MEDIA_TYPE_LENGTH,
-    )
-    if type(file.content) is not bytes:
-        raise ValueError("Result file attachment content must be bytes")
-    if len(file.content) > MAX_RESULT_ATTACHMENT_BYTES:
-        raise ValueError(f"Result file attachment exceeds {MAX_RESULT_ATTACHMENT_BYTES} bytes")
-    total_attachment_bytes = sum(len(item.content) for item in attachments) + len(file.content)
-    if total_attachment_bytes > MAX_RESULT_ATTACHMENTS_BYTES:
-        raise ValueError(
-            "Workflow result file attachments exceed " f"{MAX_RESULT_ATTACHMENTS_BYTES} bytes"
-        )
-    digest = hashlib.sha256(file.content).hexdigest()
-    if file.sha256 is not None and file.sha256 != digest:
-        raise ValueError("Result file digest does not match its content")
-    attachment_id = f"file_{len(attachments)}"
-    attachments.append(
-        ResultFileAttachment(
-            attachment_id=attachment_id,
-            content=file.content,
-            name=file.name,
-            media_type=file.content_type,
-            sha256=digest,
-        )
-    )
-    return attachment_id
-
-
 def _encode_value(
     value: Any,
-    attachments: list[ResultFileAttachment],
     marker_token: str,
-    serialize_file: Any,
     budget: _DecodeBudget,
     depth: int = 0,
 ) -> dict[str, Any]:
@@ -219,21 +161,13 @@ def _encode_value(
     if budget.nodes > MAX_RESULT_VALUE_NODES:
         raise ValueError(f"Workflow result exceeds {MAX_RESULT_VALUE_NODES} encoded values")
     if isinstance(value, File):
-        return {
-            "kind": "file",
-            "attachment_id": _append_attachment(value, attachments),
-        }
+        return value.model_dump()
+    if type(value) is dict and value.get("kind") == "file":
+        return File.model_validate(value).model_dump()
+    if type(value) is dict and value.get("kind") == "workspace":
+        return {"kind": "workspace", "manifest": Workspace.from_manifest(value).manifest()}
     if isinstance(value, Workspace):
         return {"kind": "workspace", "manifest": value._manifest_for_serialization()}
-    if (
-        type(value) is dict
-        and value.get("__operator_file_marker__") == marker_token
-        and set(value) == {"__operator_file_marker__", "attachment_id"}
-    ):
-        attachment_id = value["attachment_id"]
-        if type(attachment_id) is not str:
-            raise TypeError("Pydantic File serializer returned an invalid marker")
-        return {"kind": "file", "attachment_id": attachment_id}
     if (
         type(value) is dict
         and value.get("__operator_workspace_marker__") == marker_token
@@ -251,7 +185,6 @@ def _encode_value(
             mode="json",
             by_alias=True,
             context={
-                _FILE_SERIALIZER_CONTEXT_KEY: serialize_file,
                 _WORKSPACE_SERIALIZER_CONTEXT_KEY: lambda workspace: {
                     "__operator_workspace_marker__": marker_token,
                     "manifest": workspace._manifest_for_serialization(),
@@ -260,9 +193,7 @@ def _encode_value(
         )
         return _encode_value(
             dumped,
-            attachments,
             marker_token,
-            serialize_file,
             budget,
             depth,
         )
@@ -272,9 +203,7 @@ def _encode_value(
             "items": [
                 _encode_value(
                     item,
-                    attachments,
                     marker_token,
-                    serialize_file,
                     budget,
                     depth + 1,
                 )
@@ -287,9 +216,7 @@ def _encode_value(
             "items": [
                 _encode_value(
                     item,
-                    attachments,
                     marker_token,
-                    serialize_file,
                     budget,
                     depth + 1,
                 )
@@ -306,9 +233,7 @@ def _encode_value(
                     key,
                     _encode_value(
                         item,
-                        attachments,
                         marker_token,
-                        serialize_file,
                         budget,
                         depth + 1,
                     ),
@@ -459,6 +384,13 @@ def _decode_value(
                 depth + 1,
             )
         return result
+    if kind == "file" and "version" in encoded:
+        file = File.model_validate(encoded)
+        if isinstance(attachments, dict) and file.ref.workspace.startswith("local-ws:v1:"):
+            from avalanche.references import LocalReferenceBinder
+
+            return file.bind(LocalReferenceBinder().bind_file(file))
+        return file
     if kind == "file":
         if set(encoded) != {"kind", "attachment_id"}:
             raise ValueError("Malformed file workflow result")
@@ -483,7 +415,19 @@ def _decode_value(
         if set(encoded) != {"kind", "manifest"} or type(encoded["manifest"]) is not dict:
             raise ValueError("Malformed workspace workflow result")
         try:
-            return Workspace.from_manifest(encoded["manifest"])
+            workspace = Workspace.from_manifest(encoded["manifest"])
+            if (
+                isinstance(attachments, dict)
+                and workspace.reference is not None
+                and workspace.reference.startswith("local-ws:v1:")
+            ):
+                from avalanche.references import LocalReferenceBinder
+
+                return Workspace.from_directory(
+                    LocalReferenceBinder().bind_workspace(workspace),
+                    reference=workspace.reference,
+                )
+            return workspace
         except (TypeError, ValueError) as exc:
             raise ValueError(f"Malformed workspace workflow result: {exc}") from exc
     raise ValueError(f"Unknown workflow result kind {kind!r}")

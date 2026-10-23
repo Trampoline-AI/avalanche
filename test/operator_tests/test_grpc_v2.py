@@ -1,5 +1,6 @@
 """Wire-level pagination, replay recovery, and opaque reference safety."""
 
+import hashlib
 import socket
 import threading
 import time
@@ -10,14 +11,13 @@ import grpc
 import pytest
 
 from avalanche import source, workflow
-from avalanche.runtime import File
 from runtime.operator.client import GrpcStateProvider, StreamState
 from runtime.operator.models import LogEntry, LogLevel, RunState, RunStatus, SequencedLogEntry
 from runtime.operator.operator import Operator
 from runtime.operator.proto import operator_pb2 as pb
 from runtime.operator.proto import operator_pb2_grpc as pb_grpc
 from runtime.operator.result_store import publish_workflow_result
-from runtime.operator.results import encode_workflow_result
+from runtime.operator.results import EncodedWorkflowResult, ResultFileAttachment
 from runtime.operator.server import serve
 
 
@@ -75,7 +75,20 @@ def _seed_result_file(operator: Operator, run_id: str) -> None:
     pending = operator._result_store.prepare()
     try:
         digest = publish_workflow_result(
-            encode_workflow_result(File(name="result.txt", content=b"result file")),
+            # Keep exercising legacy artifact transport independently of ava.File,
+            # whose new encoder emits references and no attachments.
+            EncodedWorkflowResult(
+                value_json='{"version":1,"value":{"kind":"file","attachment_id":"file_0"}}',
+                files=(
+                    ResultFileAttachment(
+                        attachment_id="file_0",
+                        content=b"result file",
+                        name="result.txt",
+                        media_type=None,
+                        sha256=hashlib.sha256(b"result file").hexdigest(),
+                    ),
+                ),
+            ),
             pending.descriptor,
             (pending.device, pending.inode),
             threading.Event(),
