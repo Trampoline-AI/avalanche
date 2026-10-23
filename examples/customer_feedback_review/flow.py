@@ -29,9 +29,11 @@ def load_feedback_workbook() -> File:
 
 @ava.agent_step(
     ExtractThemes,
-    lm=MODEL,
-    sub_lm=SUB_MODEL,
-    skills=[ava.agent.skills.spreadsheet, evidence_coding_skill],
+    runtime=ava.runtimes.PredictRLM(
+        lm=MODEL,
+        sub_lm=SUB_MODEL,
+        skills=[ava.agent.skills.spreadsheet, evidence_coding_skill],
+    ),
 )
 async def extract_themes(workbook: File, *, agent: ava.Agent) -> ThemeReport:
     prediction = await agent(workbook=workbook)
@@ -40,9 +42,11 @@ async def extract_themes(workbook: File, *, agent: ava.Agent) -> ThemeReport:
 
 @ava.agent_step(
     DetectRisks,
-    lm=MODEL,
-    sub_lm=SUB_MODEL,
-    skills=[ava.agent.skills.spreadsheet, evidence_coding_skill],
+    runtime=ava.runtimes.PredictRLM(
+        lm=MODEL,
+        sub_lm=SUB_MODEL,
+        skills=[ava.agent.skills.spreadsheet, evidence_coding_skill],
+    ),
 )
 async def detect_risks(workbook: File, *, agent: ava.Agent) -> RiskReport:
     prediction = await agent(workbook=workbook)
@@ -82,10 +86,12 @@ def compose_product_review(
 
 @ava.agent_step(
     BuildReviewWorkbook,
-    lm=MODEL,
-    sub_lm=SUB_MODEL,
-    skills=[ava.agent.skills.spreadsheet],
-    output_dir=WORKBOOK_OUTPUT_DIR,
+    runtime=ava.runtimes.PredictRLM(
+        lm=MODEL,
+        sub_lm=SUB_MODEL,
+        skills=[ava.agent.skills.spreadsheet],
+        output_dir=WORKBOOK_OUTPUT_DIR,
+    ),
 )
 async def build_review_workbook(
     source_workbook: File,
@@ -99,10 +105,12 @@ async def build_review_workbook(
 
 @ava.agent_step(
     WriteExecutiveBrief,
-    lm=MODEL,
-    sub_lm=SUB_MODEL,
-    skills=[ava.agent.skills.docx],
-    output_dir=BRIEF_OUTPUT_DIR,
+    runtime=ava.runtimes.PredictRLM(
+        lm=MODEL,
+        sub_lm=SUB_MODEL,
+        skills=[ava.agent.skills.docx],
+        output_dir=BRIEF_OUTPUT_DIR,
+    ),
 )
 async def write_executive_brief(
     review: ProductReview,
