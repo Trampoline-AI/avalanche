@@ -38,6 +38,7 @@ from .models import (
 )
 from .source import resolve_watch_roots
 from .workflow_metadata import (
+    agent_declarations_for_workflow,
     node_docstring_lines_for_workflow,
     node_source_code_for_workflow,
     step_interface_for_workflow,
@@ -57,28 +58,6 @@ class AmbiguousWorkflow(KeyError):  # noqa: N818 - domain exception name is inte
         super().__init__(
             f"Ambiguous workflow {selector!r}; candidates: {', '.join(candidate_ids)}"
         )
-
-
-def agent_metadata_for_workflow(workflow: Workflow, node_ids: list[str]) -> dict[str, str]:
-    """Serialize stable agent declaration metadata for current-catalog projections."""
-    metadata_by_node: dict[str, str] = {}
-    for node_id in node_ids:
-        spec = getattr(workflow.nodes[node_id].node.fn, "__agent_step__", None)
-        if spec is None:
-            continue
-        try:
-            metadata = spec.declaration_metadata(workflow.agent_defaults)
-            metadata_by_node[node_id] = json.dumps(
-                metadata, ensure_ascii=False, separators=(",", ":"), sort_keys=True
-            )
-        except Exception as exc:
-            metadata_by_node[node_id] = json.dumps(
-                {"error": str(exc) or type(exc).__name__},
-                ensure_ascii=False,
-                separators=(",", ":"),
-                sort_keys=True,
-            )
-    return metadata_by_node
 
 
 def classifier_metadata_for_workflow(workflow: Workflow, node_ids: list[str]) -> dict[str, str]:
@@ -154,6 +133,10 @@ def workflow_revision(info: WorkflowInfo) -> str:
     fields = asdict(info)
     for key in ("version", "next_run_at", "last_run_at", "webhook_url", "webhook_active"):
         fields.pop(key)
+    fields["agent_declarations"] = {
+        node_id: declaration.model_dump(mode="json")
+        for node_id, declaration in info.agent_declarations.items()
+    }
     return hashlib.sha256(json.dumps(fields, sort_keys=True).encode()).hexdigest()
 
 
@@ -169,8 +152,8 @@ def workflow_to_info(
     node_ids = workflow._topological_sort()
     node_types = {nid: workflow.nodes[nid].node.node_type.value for nid in node_ids}
     display_names = {nid: display_name_from_id(nid) for nid in node_ids}
-    agent_metadata_json = agent_metadata_for_workflow(workflow, node_ids)
-    agent_node_ids = list(agent_metadata_json)
+    agent_declarations = agent_declarations_for_workflow(workflow, node_ids)
+    agent_node_ids = list(agent_declarations)
     standard_step_docstring_lines = node_docstring_lines_for_workflow(workflow, node_ids)
     node_source_code = node_source_code_for_workflow(workflow, node_ids)
     return WorkflowInfo(
@@ -186,7 +169,7 @@ def workflow_to_info(
         node_types=node_types,
         display_names=display_names,
         agent_node_ids=agent_node_ids,
-        agent_metadata_json=agent_metadata_json,
+        agent_declarations=agent_declarations,
         classifier_metadata_json=classifier_metadata_for_workflow(workflow, node_ids),
         evaluation_metadata_json=evaluation_metadata_for_workflow(workflow, node_ids),
         step_interface_json=step_interface_for_workflow(workflow, node_ids),
@@ -214,7 +197,7 @@ def descriptor_to_info(descriptor: WorkflowDescriptor) -> WorkflowInfo:
         node_types=dict(descriptor.node_types),
         display_names=dict(descriptor.display_names),
         agent_node_ids=list(descriptor.agent_node_ids),
-        agent_metadata_json=dict(descriptor.agent_metadata_json),
+        agent_declarations=dict(descriptor.agent_declarations),
         classifier_metadata_json=dict(descriptor.classifier_metadata_json),
         evaluation_metadata_json=dict(descriptor.evaluation_metadata_json),
         step_interface_json=dict(descriptor.step_interface_json),

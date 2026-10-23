@@ -283,9 +283,9 @@ export interface FlowInfoV2 {
      */
     agentNodeIds: string[];
     /**
-     * @generated from protobuf field: map<string, string> agent_metadata_json = 9
+     * @generated from protobuf field: map<string, string> agent_declarations_json = 9
      */
-    agentMetadataJson: {
+    agentDeclarationsJson: {
         [key: string]: string;
     };
     /**
@@ -2325,7 +2325,7 @@ class FlowInfoV2$Type extends MessageType<FlowInfoV2> {
             { no: 6, name: "file_path", kind: "scalar", T: 9 /*ScalarType.STRING*/ },
             { no: 7, name: "topology", kind: "message", T: () => WorkflowTopologyV2 },
             { no: 8, name: "agent_node_ids", kind: "scalar", repeat: 2 /*RepeatType.UNPACKED*/, T: 9 /*ScalarType.STRING*/ },
-            { no: 9, name: "agent_metadata_json", kind: "map", K: 9 /*ScalarType.STRING*/, V: { kind: "scalar", T: 9 /*ScalarType.STRING*/ } },
+            { no: 9, name: "agent_declarations_json", kind: "map", K: 9 /*ScalarType.STRING*/, V: { kind: "scalar", T: 9 /*ScalarType.STRING*/ } },
             { no: 10, name: "cron", kind: "scalar", T: 9 /*ScalarType.STRING*/ },
             { no: 11, name: "next_run_at", kind: "scalar", T: 1 /*ScalarType.DOUBLE*/ },
             { no: 12, name: "last_run_at", kind: "scalar", T: 1 /*ScalarType.DOUBLE*/ },
@@ -2347,7 +2347,7 @@ class FlowInfoV2$Type extends MessageType<FlowInfoV2> {
         message.workflowId = "";
         message.filePath = "";
         message.agentNodeIds = [];
-        message.agentMetadataJson = {};
+        message.agentDeclarationsJson = {};
         message.cron = "";
         message.nextRunAt = 0;
         message.lastRunAt = 0;
@@ -2391,8 +2391,8 @@ class FlowInfoV2$Type extends MessageType<FlowInfoV2> {
                 case /* repeated string agent_node_ids */ 8:
                     message.agentNodeIds.push(reader.string());
                     break;
-                case /* map<string, string> agent_metadata_json */ 9:
-                    this.binaryReadMap9(message.agentMetadataJson, reader, options);
+                case /* map<string, string> agent_declarations_json */ 9:
+                    this.binaryReadMap9(message.agentDeclarationsJson, reader, options);
                     break;
                 case /* string cron */ 10:
                     message.cron = reader.string();
@@ -2435,8 +2435,8 @@ class FlowInfoV2$Type extends MessageType<FlowInfoV2> {
         }
         return message;
     }
-    private binaryReadMap9(map: FlowInfoV2["agentMetadataJson"], reader: IBinaryReader, options: BinaryReadOptions): void {
-        let len = reader.uint32(), end = reader.pos + len, key: keyof FlowInfoV2["agentMetadataJson"] | undefined, val: FlowInfoV2["agentMetadataJson"][any] | undefined;
+    private binaryReadMap9(map: FlowInfoV2["agentDeclarationsJson"], reader: IBinaryReader, options: BinaryReadOptions): void {
+        let len = reader.uint32(), end = reader.pos + len, key: keyof FlowInfoV2["agentDeclarationsJson"] | undefined, val: FlowInfoV2["agentDeclarationsJson"][any] | undefined;
         while (reader.pos < end) {
             let [fieldNo, wireType] = reader.tag();
             switch (fieldNo) {
@@ -2446,7 +2446,7 @@ class FlowInfoV2$Type extends MessageType<FlowInfoV2> {
                 case 2:
                     val = reader.string();
                     break;
-                default: throw new globalThis.Error("unknown map entry field for avalanche.operator.FlowInfoV2.agent_metadata_json");
+                default: throw new globalThis.Error("unknown map entry field for avalanche.operator.FlowInfoV2.agent_declarations_json");
             }
         }
         map[key ?? ""] = val ?? "";
@@ -2508,9 +2508,9 @@ class FlowInfoV2$Type extends MessageType<FlowInfoV2> {
         /* repeated string agent_node_ids = 8; */
         for (let i = 0; i < message.agentNodeIds.length; i++)
             writer.tag(8, WireType.LengthDelimited).string(message.agentNodeIds[i]);
-        /* map<string, string> agent_metadata_json = 9; */
-        for (let k of globalThis.Object.keys(message.agentMetadataJson))
-            writer.tag(9, WireType.LengthDelimited).fork().tag(1, WireType.LengthDelimited).string(k).tag(2, WireType.LengthDelimited).string(message.agentMetadataJson[k]).join();
+        /* map<string, string> agent_declarations_json = 9; */
+        for (let k of globalThis.Object.keys(message.agentDeclarationsJson))
+            writer.tag(9, WireType.LengthDelimited).fork().tag(1, WireType.LengthDelimited).string(k).tag(2, WireType.LengthDelimited).string(message.agentDeclarationsJson[k]).join();
         /* string cron = 10; */
         if (message.cron !== "")
             writer.tag(10, WireType.LengthDelimited).string(message.cron);

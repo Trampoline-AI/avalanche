@@ -1,5 +1,31 @@
 {
   "$defs": {
+    "AgentDeclaration": {
+      "additionalProperties": false,
+      "description": "Everything discovery publishes about one agent step.",
+      "properties": {
+        "runtime": {
+          "$ref": "#/$defs/PredictRLMDeclaration"
+        },
+        "signature": {
+          "$ref": "#/$defs/SignatureDeclaration"
+        },
+        "tools": {
+          "items": {
+            "$ref": "#/$defs/ToolDeclaration"
+          },
+          "title": "Tools",
+          "type": "array"
+        }
+      },
+      "required": [
+        "signature",
+        "tools",
+        "runtime"
+      ],
+      "title": "AgentDeclaration",
+      "type": "object"
+    },
     "AgentEvent": {
       "discriminator": {
         "mapping": {
@@ -250,6 +276,31 @@
       "title": "CodeGenerated",
       "type": "object"
     },
+    "FieldDeclaration": {
+      "additionalProperties": false,
+      "description": "One signature field as shown to people: its name, type name and description.",
+      "properties": {
+        "annotation": {
+          "title": "Annotation",
+          "type": "string"
+        },
+        "description": {
+          "title": "Description",
+          "type": "string"
+        },
+        "name": {
+          "title": "Name",
+          "type": "string"
+        }
+      },
+      "required": [
+        "name",
+        "annotation",
+        "description"
+      ],
+      "title": "FieldDeclaration",
+      "type": "object"
+    },
     "JsonValue": {},
     "ModelCallAction": {
       "additionalProperties": false,
@@ -389,6 +440,137 @@
       "title": "ModelStarted",
       "type": "object"
     },
+    "PredictRLMConfiguredModel": {
+      "additionalProperties": false,
+      "description": "A model set on the step or as a workflow default.",
+      "properties": {
+        "identity": {
+          "$ref": "#/$defs/JsonValue"
+        },
+        "source": {
+          "enum": [
+            "step override",
+            "workflow default"
+          ],
+          "title": "Source",
+          "type": "string"
+        }
+      },
+      "required": [
+        "source",
+        "identity"
+      ],
+      "title": "PredictRLMConfiguredModel",
+      "type": "object"
+    },
+    "PredictRLMDeclaration": {
+      "additionalProperties": false,
+      "description": "PredictRLM settings after workflow defaults and step overrides are applied.\n\n``settings`` holds the effective constructor options that serialize to JSON,\nwithout credentials or callables.",
+      "properties": {
+        "aggregated_static_instructions": {
+          "title": "Aggregated Static Instructions",
+          "type": "string"
+        },
+        "kind": {
+          "const": "predict_rlm",
+          "default": "predict_rlm",
+          "title": "Kind",
+          "type": "string"
+        },
+        "models": {
+          "$ref": "#/$defs/PredictRLMModels"
+        },
+        "modules": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Modules",
+          "type": "array"
+        },
+        "packages": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Packages",
+          "type": "array"
+        },
+        "settings": {
+          "additionalProperties": {
+            "$ref": "#/$defs/JsonValue"
+          },
+          "title": "Settings",
+          "type": "object"
+        },
+        "skills": {
+          "items": {
+            "$ref": "#/$defs/PredictRLMSkillDeclaration"
+          },
+          "title": "Skills",
+          "type": "array"
+        }
+      },
+      "required": [
+        "kind",
+        "settings",
+        "models",
+        "skills",
+        "aggregated_static_instructions",
+        "packages",
+        "modules"
+      ],
+      "title": "PredictRLMDeclaration",
+      "type": "object"
+    },
+    "PredictRLMDefaultModel": {
+      "additionalProperties": false,
+      "description": "No model was configured, so PredictRLM picks its own default.",
+      "properties": {
+        "source": {
+          "const": "PredictRLM default",
+          "default": "PredictRLM default",
+          "title": "Source",
+          "type": "string"
+        }
+      },
+      "required": [
+        "source"
+      ],
+      "title": "PredictRLMDefaultModel",
+      "type": "object"
+    },
+    "PredictRLMModels": {
+      "additionalProperties": false,
+      "properties": {
+        "main": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/PredictRLMDefaultModel"
+            },
+            {
+              "$ref": "#/$defs/PredictRLMConfiguredModel"
+            }
+          ],
+          "title": "Main"
+        },
+        "sub": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/PredictRLMDefaultModel"
+            },
+            {
+              "$ref": "#/$defs/PredictRLMConfiguredModel"
+            }
+          ],
+          "title": "Sub"
+        }
+      },
+      "required": [
+        "main",
+        "sub"
+      ],
+      "title": "PredictRLMModels",
+      "type": "object"
+    },
     "PredictRLMNativeTrace": {
       "additionalProperties": false,
       "description": "PredictRLM run details that have no common-layer equivalent.",
@@ -428,6 +610,84 @@
         "cache_hits"
       ],
       "title": "PredictRLMNativeTrace",
+      "type": "object"
+    },
+    "PredictRLMSkillDeclaration": {
+      "additionalProperties": false,
+      "properties": {
+        "instructions": {
+          "title": "Instructions",
+          "type": "string"
+        },
+        "modules": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Modules",
+          "type": "array"
+        },
+        "name": {
+          "title": "Name",
+          "type": "string"
+        },
+        "packages": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Packages",
+          "type": "array"
+        },
+        "tools": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Tools",
+          "type": "array"
+        }
+      },
+      "required": [
+        "name",
+        "instructions",
+        "packages",
+        "modules",
+        "tools"
+      ],
+      "title": "PredictRLMSkillDeclaration",
+      "type": "object"
+    },
+    "SignatureDeclaration": {
+      "additionalProperties": false,
+      "properties": {
+        "inputs": {
+          "items": {
+            "$ref": "#/$defs/FieldDeclaration"
+          },
+          "title": "Inputs",
+          "type": "array"
+        },
+        "instructions": {
+          "title": "Instructions",
+          "type": "string"
+        },
+        "name": {
+          "title": "Name",
+          "type": "string"
+        },
+        "outputs": {
+          "items": {
+            "$ref": "#/$defs/FieldDeclaration"
+          },
+          "title": "Outputs",
+          "type": "array"
+        }
+      },
+      "required": [
+        "name",
+        "instructions",
+        "inputs",
+        "outputs"
+      ],
+      "title": "SignatureDeclaration",
       "type": "object"
     },
     "TokenUsage": {
@@ -568,6 +828,31 @@
         "duration_ms"
       ],
       "title": "ToolCallAction",
+      "type": "object"
+    },
+    "ToolDeclaration": {
+      "additionalProperties": false,
+      "description": "A tool the agent can call. ``source_code`` is empty when it cannot be read.",
+      "properties": {
+        "description": {
+          "title": "Description",
+          "type": "string"
+        },
+        "name": {
+          "title": "Name",
+          "type": "string"
+        },
+        "source_code": {
+          "title": "Source Code",
+          "type": "string"
+        }
+      },
+      "required": [
+        "name",
+        "description",
+        "source_code"
+      ],
+      "title": "ToolDeclaration",
       "type": "object"
     },
     "ToolFinished": {

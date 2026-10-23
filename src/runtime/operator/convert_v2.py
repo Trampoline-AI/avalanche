@@ -7,6 +7,8 @@ import math
 from collections.abc import Callable, Mapping
 from datetime import datetime
 
+from avalanche.agent.declaration import AgentDeclaration
+
 from .models import (
     AgentEventAppended,
     AgentEventDescriptor,
@@ -97,7 +99,10 @@ def workflow_info_to_v2(info: WorkflowInfo) -> pb.FlowInfoV2:
         file_path=info.source_file,
         topology=workflow_topology_to_v2(topology),
         agent_node_ids=info.agent_node_ids,
-        agent_metadata_json=info.agent_metadata_json,
+        agent_declarations_json={
+            node_id: declaration.model_dump_json()
+            for node_id, declaration in info.agent_declarations.items()
+        },
         classifier_metadata_json=info.classifier_metadata_json,
         evaluation_metadata_json=info.evaluation_metadata_json,
         cron=info.cron or "",
@@ -713,7 +718,10 @@ def workflow_info_from_v2(msg: pb.FlowInfoV2) -> WorkflowInfo:
         node_types=dict(msg.topology.node_types),
         display_names=dict(msg.topology.display_names),
         agent_node_ids=list(msg.agent_node_ids),
-        agent_metadata_json=dict(msg.agent_metadata_json),
+        agent_declarations={
+            node_id: AgentDeclaration.model_validate_json(value)
+            for node_id, value in msg.agent_declarations_json.items()
+        },
         classifier_metadata_json=dict(msg.classifier_metadata_json),
         evaluation_metadata_json=dict(msg.evaluation_metadata_json),
         standard_step_docstring_lines=dict(msg.topology.standard_step_docstring_lines),
