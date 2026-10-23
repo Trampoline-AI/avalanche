@@ -10,6 +10,7 @@ import sys
 import threading
 import time
 import traceback
+from contextvars import ContextVar
 from functools import wraps
 from pathlib import Path
 from typing import Any, Callable, Protocol
@@ -43,6 +44,9 @@ from .result_store import (
 )
 from .results import encode_workflow_result
 from .workflow_metadata import node_docstring_lines_for_workflow, step_interface_for_workflow
+
+_log_attempt: ContextVar[str] = ContextVar("operator_log_attempt", default="")
+_log_node: ContextVar[str] = ContextVar("operator_log_node", default="")
 
 
 def _import_isolated_ray() -> Any:
@@ -120,6 +124,7 @@ def _run_worker(
         except OSError:
             pass
     root = Path(import_root)
+    _log_attempt.set(uuid4().hex)
     stdout = _QueueStream(event_queue, "operator", logging.INFO)
     stderr = _QueueStream(event_queue, "operator", logging.ERROR)
     sys.stdout = stdout
@@ -377,11 +382,29 @@ class _SealableEventQueue:
         self._event_queue = event_queue
         self._lock = threading.Lock()
         self._sealed = False
+        self._log_records = 0
+        self._log_bytes = 0
+        self._log_truncated = False
 
     def put(self, event: dict[str, Any]) -> None:
         with self._lock:
-            if not self._sealed:
-                self._event_queue.put(event)
+            if self._sealed:
+                return
+            if event["type"] == "log":
+                size = len(event["message"].encode())
+                if self._log_records >= 10_000 or self._log_bytes + size > 4 * 1024 * 1024:
+                    if not self._log_truncated:
+                        self._event_queue.put(
+                            {
+                                **event,
+                                "message": "[activity truncated: worker log budget exhausted]",
+                            }
+                        )
+                        self._log_truncated = True
+                    return
+                self._log_records += 1
+                self._log_bytes += size
+            self._event_queue.put(event)
 
     def put_terminal(self, event: dict[str, Any]) -> None:
         with self._lock:
@@ -408,6 +431,7 @@ class _QueueLogHandler(logging.Handler):
         name = record.name
         node_id = (
             current_agent_log_node_id()
+            or _log_node.get()
             or self._node_id
             or (name.split(".")[-1] if name.startswith("avalanche.node.") else name)
         )
@@ -418,7 +442,9 @@ class _QueueLogHandler(logging.Handler):
                 "timestamp": record.created,
                 "level": record.levelno,
                 "node_id": _bounded_event_text(node_id, 4096),
-                "message": _bounded_event_text(record.getMessage(), 65_536),
+                "message": _bounded_log_text(record.getMessage()),
+                "channel": "log",
+                "attempt": _log_attempt.get(),
             },
         )
 
@@ -429,6 +455,7 @@ class _QueueStream:
         self._default_node_id = node_id
         self._level = level
         self._local = threading.local()
+        self._buffer: ContextVar[str] = ContextVar("operator_stream_buffer", default="")
 
     def bind_node(self, node_id: str) -> tuple[bool, str]:
         """Bind writes from the current worker thread to one node."""
@@ -446,19 +473,22 @@ class _QueueStream:
             del self._local.node_id
 
     def write(self, value: str) -> int:
-        buffer = getattr(self._local, "buffer", "") + value
+        buffer = self._buffer.get() + value
         while "\n" in buffer:
             line, buffer = buffer.split("\n", 1)
             if line.strip():
                 self._emit(line.rstrip())
-        self._local.buffer = buffer
+        if len(buffer.encode()) > 8192:
+            self._emit(buffer)
+            buffer = ""
+        self._buffer.set(buffer)
         return len(value)
 
     def flush(self) -> None:
-        buffer = getattr(self._local, "buffer", "")
+        buffer = self._buffer.get()
         if buffer.strip():
             self._emit(buffer.rstrip())
-        self._local.buffer = ""
+        self._buffer.set("")
 
     def isatty(self) -> bool:
         return False
@@ -478,8 +508,11 @@ class _QueueStream:
                 "timestamp": time.time(),
                 "level": self._level,
                 "node_id": current_agent_log_node_id()
+                or _log_node.get()
                 or getattr(self._local, "node_id", self._default_node_id),
-                "message": _bounded_event_text(message, 65_536),
+                "message": _bounded_log_text(message),
+                "channel": "stderr" if self._level >= logging.ERROR else "stdout",
+                "attempt": _log_attempt.get(),
             },
         )
 
@@ -511,6 +544,8 @@ def _with_node_streams(
 
         @wraps(fn)
         async def async_wrapper(*args: Any, **kwargs: Any) -> Any:
+            attempt_token = _log_attempt.set(uuid4().hex)
+            node_token = _log_node.set(name)
             stdout_binding = stdout.bind_node(name)
             stderr_binding = stderr.bind_node(name)
             try:
@@ -520,11 +555,15 @@ def _with_node_streams(
                 stderr.flush()
                 stdout.reset_node(stdout_binding)
                 stderr.reset_node(stderr_binding)
+                _log_attempt.reset(attempt_token)
+                _log_node.reset(node_token)
 
         return async_wrapper
 
     @wraps(fn)
     def wrapper(*args: Any, **kwargs: Any) -> Any:
+        attempt_token = _log_attempt.set(uuid4().hex)
+        node_token = _log_node.set(name)
         stdout_binding = stdout.bind_node(name)
         stderr_binding = stderr.bind_node(name)
         try:
@@ -534,6 +573,8 @@ def _with_node_streams(
             stderr.flush()
             stdout.reset_node(stdout_binding)
             stderr.reset_node(stderr_binding)
+            _log_attempt.reset(attempt_token)
+            _log_node.reset(node_token)
 
     return wrapper
 
@@ -692,12 +733,14 @@ def _with_ray_node_streams(
 
         @wraps(fn)
         async def async_wrapper(*args: Any, **kwargs: Any) -> Any:
-            stdout = _QueueStream(ray_log_queue, name, logging.INFO)
-            stderr = _QueueStream(ray_log_queue, name, logging.ERROR)
+            attempt_token = _log_attempt.set(uuid4().hex)
+            capture_queue = _SealableEventQueue(ray_log_queue)
+            stdout = _QueueStream(capture_queue, name, logging.INFO)
+            stderr = _QueueStream(capture_queue, name, logging.ERROR)
             old_stdout, old_stderr = sys.stdout, sys.stderr
             root_logger = logging.getLogger()
             old_level = root_logger.level
-            handler = _QueueLogHandler(ray_log_queue, node_id)
+            handler = _QueueLogHandler(capture_queue, node_id)
             root_logger.addHandler(handler)
             root_logger.setLevel(logging.INFO)
             sys.stdout, sys.stderr = stdout, stderr
@@ -709,17 +752,20 @@ def _with_ray_node_streams(
                 sys.stdout, sys.stderr = old_stdout, old_stderr
                 root_logger.removeHandler(handler)
                 root_logger.setLevel(old_level)
+                _log_attempt.reset(attempt_token)
 
         return async_wrapper
 
     @wraps(fn)
     def wrapper(*args: Any, **kwargs: Any) -> Any:
-        stdout = _QueueStream(ray_log_queue, name, logging.INFO)
-        stderr = _QueueStream(ray_log_queue, name, logging.ERROR)
+        attempt_token = _log_attempt.set(uuid4().hex)
+        capture_queue = _SealableEventQueue(ray_log_queue)
+        stdout = _QueueStream(capture_queue, name, logging.INFO)
+        stderr = _QueueStream(capture_queue, name, logging.ERROR)
         old_stdout, old_stderr = sys.stdout, sys.stderr
         root_logger = logging.getLogger()
         old_level = root_logger.level
-        handler = _QueueLogHandler(ray_log_queue, node_id)
+        handler = _QueueLogHandler(capture_queue, node_id)
         root_logger.addHandler(handler)
         root_logger.setLevel(logging.INFO)
         sys.stdout, sys.stderr = stdout, stderr
@@ -731,6 +777,7 @@ def _with_ray_node_streams(
             sys.stdout, sys.stderr = old_stdout, old_stderr
             root_logger.removeHandler(handler)
             root_logger.setLevel(old_level)
+            _log_attempt.reset(attempt_token)
 
     return wrapper
 
@@ -789,6 +836,13 @@ def _put_terminal_run_event(
 
     _validate_run_event(event)
     event_queue.put_terminal(event)
+
+
+def _bounded_log_text(value: str) -> str:
+    raw = value.encode("utf-8")
+    if len(raw) <= 8192:
+        return value
+    return raw[:8100].decode("utf-8", "ignore") + " … [record truncated]"
 
 
 def _bounded_event_text(value: object, maximum_length: int) -> str:

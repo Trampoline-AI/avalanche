@@ -2,12 +2,13 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 import logging
 import threading
 import time
 from collections import defaultdict
-from dataclasses import replace
+from dataclasses import asdict, replace
 from pathlib import Path
 from types import MappingProxyType
 from typing import Callable
@@ -137,6 +138,25 @@ def agent_instruction_lines_for_workflow(
     return lines_by_node
 
 
+def workflow_input_schema(workflow: Workflow) -> str:
+    """Only the declared workflow input model is caller input, not injected nodes."""
+    schema = (
+        workflow.input_type.model_json_schema()
+        if workflow.input_type is not None
+        else {"type": "object", "additionalProperties": True}
+    )
+    schema["$schema"] = "https://json-schema.org/draft/2020-12/schema"
+    return json.dumps(schema, sort_keys=True, separators=(",", ":"))
+
+
+def workflow_revision(info: WorkflowInfo) -> str:
+    """Current catalog declaration digest, excluding changing schedule observations."""
+    fields = asdict(info)
+    for key in ("version", "next_run_at", "last_run_at", "webhook_url", "webhook_active"):
+        fields.pop(key)
+    return hashlib.sha256(json.dumps(fields, sort_keys=True).encode()).hexdigest()
+
+
 def workflow_to_info(
     workflow: Workflow,
     file_path: str,
@@ -172,6 +192,7 @@ def workflow_to_info(
         step_interface_json=step_interface_for_workflow(workflow, node_ids),
         standard_step_docstring_lines=standard_step_docstring_lines,
         node_source_code=node_source_code,
+        input_schema_json=workflow_input_schema(workflow),
         cron=workflow.cron,
         webhook_path=workflow.webhook.path if workflow.webhook else None,
         webhook_enabled=workflow.webhook is not None,
@@ -199,6 +220,7 @@ def descriptor_to_info(descriptor: WorkflowDescriptor) -> WorkflowInfo:
         step_interface_json=dict(descriptor.step_interface_json),
         standard_step_docstring_lines=dict(descriptor.standard_step_docstring_lines),
         node_source_code=dict(descriptor.node_source_code),
+        input_schema_json=descriptor.input_schema_json,
         cron=descriptor.cron,
         webhook_path=descriptor.webhook_path,
         webhook_enabled=descriptor.webhook_enabled,

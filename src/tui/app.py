@@ -245,6 +245,7 @@ class AvalancheApp(App):
         node = store.selected_node.name if store.selected_node else None
         token = (
             self._scope,
+            store.current_workflow.version if store.current_workflow else None,
             flow,
             run,
             node,
@@ -258,7 +259,12 @@ class AvalancheApp(App):
             self._action_intents.clear()
             self._actions_in_flight.clear()
         return TuiContext(
-            self._scope, flow=flow, run=run, node=node, generation=self._context_generation
+            self._scope,
+            flow=flow,
+            run=run,
+            node=node,
+            generation=self._context_generation,
+            version=store.current_workflow.version or None if store.current_workflow else None,
         )
 
     def get_system_commands(self, screen):

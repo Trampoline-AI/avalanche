@@ -16,6 +16,8 @@ package avalanche.operator;
 // from transport metadata and use only V2 request and response messages.
 service OperatorServiceV2 {
   rpc DiscoverFlows(DiscoverFlowsRequestV2) returns (FlowListV2);
+  rpc ReadTuiResource(ReadTuiResourceRequestV2) returns (TuiResourcePageV2);
+  rpc ReadTuiArtifact(ReadTuiArtifactRequestV2) returns (stream RunOutputArtifactChunkV2);
   rpc GetWorkflowNodeSource(GetWorkflowNodeSourceRequestV2)
       returns (WorkflowNodeSourceV2);
   rpc StartRun(StartRunRequestV2) returns (StartRunResponseV2);
@@ -32,6 +34,31 @@ service OperatorServiceV2 {
   rpc ReadRunOutputArtifact(ReadRunOutputArtifactRequestV2)
       returns (stream RunOutputArtifactChunkV2);
   rpc WatchRunStatus(WatchRunStatusRequestV2) returns (stream RunStatusEnvelopeV2);
+}
+
+
+// Bounded JSON DTOs for optional TuiExtensions v1 resources. No file bodies.
+message ReadTuiResourceRequestV2 {
+  string resource = 1;
+  string workflow_selector = 2;
+  string run_id = 3;
+  string version = 4;
+  string node_id = 5;
+  string attempt = 6;
+  string cursor = 7;
+  uint32 limit = 8;
+  uint32 byte_limit = 9;
+}
+message ReadTuiArtifactRequestV2 {
+  string run_id = 1;
+  string artifact_id = 2;
+  string revision = 3;
+}
+message TuiResourcePageV2 {
+  repeated string items_json = 1;
+  string next_cursor = 2;
+  bool truncated = 3;
+  string revision = 4;
 }
 
 // ── V2 Request / Response ───────────────────────────────
@@ -118,6 +145,8 @@ message FlowInfoV2 {
   bool webhook_active = 15;
   map<string, string> classifier_metadata_json = 16;
   map<string, string> evaluation_metadata_json = 17;
+  string input_schema_json = 18;
+  string version = 19;
 }
 
 message DiscoveryDiagnosticV2 {
@@ -187,6 +216,8 @@ message StartRunRequestV2 {
   // Required JSON context document, validated and bounded by the server.
   string context_json = 4;
   repeated FileAttachmentV2 input_files = 5;
+  // Optional exact catalog declaration digest; rejected if the selected flow changed.
+  string expected_version = 6;
 }
 
 message StartRunResponseV2 {
@@ -360,6 +391,8 @@ message RunActivityDescriptorV2 {
   TerminalSealV2 terminal_seal = 17;
   // Required for classifier_event, including when its detail body has expired.
   ClassifierInvocationSummaryV2 classifier_summary = 18;
+  optional string channel = 19;
+  optional string attempt = 20;
 }
 
 message ClassifierInvocationSummaryV2 {

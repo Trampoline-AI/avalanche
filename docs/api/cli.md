@@ -148,10 +148,42 @@ and optionally a node.
 | Option | Default | Meaning |
 | --- | --- | --- |
 | `--connect HOST:PORT` | Omitted | Select connected rather than mock mode. |
+| `--flow SELECTOR` | Omitted | Canonical workflow selector; do not combine with the positional flow. |
+| `--run ID` | Omitted | Inspect a run; reject a conflicting workflow link. |
+| `--node ID` | Omitted | Inspect a node within the selected workflow/run. |
+| `--read-only` | Off | Disable start/cancel in the UI and provider boundary; downloads remain explicit reads. |
 | `--token` | `AVALANCHE_TUI_GRPC_TOKEN`, otherwise omitted | Client bearer token for a server/proxy that understands it. |
 | `--tls` | `AVALANCHE_TUI_GRPC_TLS`, otherwise off | Enable TLS; environment values `1`, `true`, and `yes` enable it case-insensitively. |
 | `--insecure` | Off | Override `--tls` and the TLS environment setting to disable TLS, unless an explicit `--tls-ca-cert` is supplied. |
 | `--tls-ca-cert PATH` | `AVALANCHE_TUI_GRPC_TLS_CA_CERT`, otherwise omitted | CA certificate for verification. An explicit flag enables TLS even with `--insecure`, regardless of argument order. |
+
+Connected operators expose workflow JSON input schemas with a catalog declaration
+version. Start opens JSON-valued fields, previews the exact input and requires
+confirmation. The selected version is checked again on start. Operator versions
+are current declaration revisions, not durable deployments or source archives.
+
+The command palette includes bounded, revision-pinned run history, artifact and
+schedule panels. Artifact pages contain existing File references, never file
+bodies. To download, open Artifacts, then choose Download artifact, supply the
+row ID and an explicit destination, preview and confirm. The download streams
+from the operator, verifies size and SHA-256 and refuses to overwrite an existing
+path. Local File references use the framework's host binder; unavailable or
+expired references fail explicitly. Workspace-directory export remains available
+through `ava result --output-dir`, rather than a simulated TUI directory download.
+Schedules show real cron/next/last observations; the operator offers no toggle or
+wait-resolution action. There is no production permission service in local mode.
+
+Logs retain real node/channel/attempt identity where captured by the worker,
+including stdout/stderr before a step exits. Capture retains at most 10,000
+records / 4 MiB per coordinator (and per Ray task), with an explicit truncation
+marker; individual records are bounded to 8 KiB. Search covers the loaded window,
+not an unbounded server log archive. Direct OS file-descriptor writes and detached
+child processes are not captured by the Python stream adapter.
+
+Reachability is cached from the transport. An idle UI sends no health/run polling
+requests; reconnect uses bounded backoff and the existing baseline/reset/ACK
+handshake. The local operator is ephemeral: restarting it resets history instead
+of pretending it recovered old runs.
 
 These are client transport options, not evidence that the local operator provides
 a production authentication service. Do not expose a local operator solely on

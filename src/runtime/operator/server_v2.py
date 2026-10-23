@@ -122,6 +122,9 @@ class OperatorV2Servicer(pb_grpc.OperatorServiceV2Servicer):
 
     def __init__(self, operator: Operator) -> None:
         self._op = operator
+        from .server_tui import TuiResourceReader
+
+        self._tui_reader = TuiResourceReader(self)
         self._binding_lock = threading.RLock()
         self._issued_cursors: OrderedDict[_CursorIdentity, pb.LifecycleCursorV2] = OrderedDict()
         self._event_ulids_by_sequence: dict[int, str] = {}
@@ -812,6 +815,49 @@ class OperatorV2Servicer(pb_grpc.OperatorServiceV2Servicer):
 
     # ── Discovery ─────────────────────────────────────────
 
+    def ReadTuiArtifact(self, request, context):  # noqa: N802
+        from avalanche.file import File
+        from avalanche.references import LocalReferenceBinder
+
+        from .server_tui import result_file_references
+
+        revision = f"{self._op.operator_instance_id}:artifacts:{request.run_id}"
+        if request.revision != revision:
+            context.abort(grpc.StatusCode.FAILED_PRECONDITION, "Artifact revision expired")
+        payload = self._result_payload(request.run_id, context)
+        file = next(
+            (
+                file
+                for identifier, file in result_file_references(payload.value_json)
+                if identifier == request.artifact_id and isinstance(file, File)
+            ),
+            None,
+        )
+        if file is None:
+            context.abort(grpc.StatusCode.NOT_FOUND, "Artifact not found")
+        try:
+            bound = file.bind(LocalReferenceBinder().bind_file(file))
+            digest, size, index = hashlib.sha256(), 0, 0
+            with bound.open() as source:
+                while context.is_active():
+                    chunk = source.read(64 * 1024)
+                    if not chunk:
+                        break
+                    size += len(chunk)
+                    if size > file.size:
+                        raise ValueError("Artifact exceeded its declared size")
+                    digest.update(chunk)
+                    yield pb.RunOutputArtifactChunkV2(chunk_index=index, data=chunk, eof=False)
+                    index += 1
+            if size != file.size or digest.hexdigest() != file.sha256:
+                raise ValueError("Artifact integrity failed")
+            yield pb.RunOutputArtifactChunkV2(chunk_index=index, eof=True)
+        except (OSError, RuntimeError, ValueError):
+            context.abort(grpc.StatusCode.DATA_LOSS, "Artifact unavailable or integrity failed")
+
+    def ReadTuiResource(self, request, context):  # noqa: N802
+        return self._tui_reader.read(request, context)
+
     def DiscoverFlows(self, request, context):  # noqa: N802
         binding = self._flow_continuation_binding(request.continuation, context)
         if binding is None:
@@ -905,6 +951,7 @@ class OperatorV2Servicer(pb_grpc.OperatorServiceV2Servicer):
                 run_id=request.run_id,
                 input=run_input,
                 context=run_context,
+                expected_version=request.expected_version,
             )
             return pb.StartRunResponseV2(run_id=run_id)
         except InvalidRunIdError as exc:

@@ -52,6 +52,7 @@ from .models import (
     AgentEventDescriptor,
     AgentEventDetailAppended,
     AgentEventPage,
+    CapturedLogEntry,
     CatalogReloadRequired,
     CatalogReplaced,
     CatalogSnapshot,
@@ -99,7 +100,12 @@ from .models import (
     WorkflowReloadStatus,
     WorkflowTopology,
 )
-from .registry import AmbiguousWorkflow, WorkflowRegistry
+from .registry import (
+    AmbiguousWorkflow,
+    WorkflowRegistry,
+    descriptor_to_info,
+    workflow_revision,
+)
 from .result_store import (
     PendingResultBundle,
     ResultPublicationCancelledError,
@@ -1273,6 +1279,8 @@ class Operator:
             level=item.entry.level,
             node_id=item.entry.node_id,
             size_bytes=item.size_bytes,
+            channel=item.entry.channel if isinstance(item.entry, CapturedLogEntry) else None,
+            attempt=item.entry.attempt if isinstance(item.entry, CapturedLogEntry) else None,
             body_token=_encode_transport_token(
                 kind="log-body",
                 operator_instance_id=self._operator_instance_id,
@@ -1480,6 +1488,7 @@ class Operator:
         run_id: str | None = None,
         input: dict[str, Any] | None = None,
         context: dict[str, Any] | None = None,
+        expected_version: str = "",
     ) -> str:
         """Publish a requesting run, then prepare it asynchronously."""
         if run_id is not None and not isinstance(run_id, str):
@@ -1488,6 +1497,11 @@ class Operator:
             raise InvalidRunIdError(f"run_id exceeds {MAX_RUN_ID_BYTES}-byte UTF-8 limit")
         triggered_at = time.time()
         descriptor, configured_root = self._registry.resolve_source(flow_name)
+        if (
+            expected_version
+            and workflow_revision(descriptor_to_info(descriptor)) != expected_version
+        ):
+            raise ValueError("Workflow version changed; reload the start form")
         import_root, workflow_relative_module_file = resolve_live_source(
             configured_root, descriptor.locator
         )
@@ -2384,7 +2398,9 @@ class Operator:
                             matched_node_id = next(matches, None)
                             if matched_node_id is not None and next(matches, None) is None:
                                 log_node_id = matched_node_id
-                        log_entry = LogEntry(
+                        log_entry = CapturedLogEntry(
+                            channel=event.get("channel"),
+                            attempt=event.get("attempt"),
                             timestamp=datetime.fromtimestamp(event["timestamp"]),
                             level=_LEVEL_MAP.get(event["level"], LogLevel.INFO),
                             node_id=log_node_id,
@@ -4019,7 +4035,8 @@ def _validate_run_event(event: object, *, validate_result: bool = True) -> str:
     elif event_type == "log":
         _require_exact_event_keys(
             event,
-            {"type", "timestamp", "level", "node_id", "message"},
+            {"type", "timestamp", "level", "node_id", "message"}
+            | ({"channel", "attempt"} if "channel" in event else set()),
         )
         timestamp = _timestamp_field(event, "timestamp")
         try:
@@ -4033,6 +4050,10 @@ def _validate_run_event(event: object, *, validate_result: bool = True) -> str:
             raise _CoordinatorProtocolError("field 'level' must be a bounded integer")
         _string_field(event, "node_id", maximum_length=_MAX_EVENT_FIELD_LENGTH)
         _string_field(event, "message", maximum_length=_MAX_EVENT_MESSAGE_LENGTH)
+        if "channel" in event:
+            if event["channel"] not in {"stdout", "stderr", "log"}:
+                raise _CoordinatorProtocolError("invalid activity channel")
+            _string_field(event, "attempt", maximum_length=_MAX_EVENT_FIELD_LENGTH)
     else:
         status = _string_field(
             event,

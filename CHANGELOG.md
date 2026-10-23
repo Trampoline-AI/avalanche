@@ -2,6 +2,21 @@
 
 ## Unreleased
 
+- Revamp the terminal workflow browser with viewport history and DAGs, bounded
+  streaming log tails with loaded-window search and node/channel/attempt filters,
+  node/agent inspection, schedules, contextual help and a command palette.
+- Add optional, versioned provider extensions for revision-pinned resource pages,
+  typed JSON input preview/confirmation and capability-described actions; keep
+  legacy providers usable without these optional features.
+- Serve standalone operator input schemas and catalog versions, bounded server
+  pages for history/schedules/artifacts, explicit SHA-256-verified File-reference
+  downloads, and real worker stdout/stderr/log attempt metadata. Reconnect/reset
+  belongs to the transport; health display no longer sends polling RPCs.
+- Add `ava tui --flow SELECTOR --run ID --node ID --read-only` deep links and
+  mutation fences. Schedules are inspection-only; no unsupported wait or schedule
+  controls are offered. This prepares the next minor release without changing
+  the package version.
+
 ### 0.14.0
 
 - Make `ava.File` a path-backed workspace reference: streaming read-only `open()`,

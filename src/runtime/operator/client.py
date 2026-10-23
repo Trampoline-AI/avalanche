@@ -11,6 +11,7 @@ from collections import OrderedDict
 from collections.abc import Mapping, Sequence
 from copy import deepcopy
 from dataclasses import dataclass, replace
+from datetime import datetime
 from enum import Enum
 from numbers import Real
 from typing import TYPE_CHECKING, Any, Callable
@@ -46,6 +47,7 @@ from .models import (
     LogAppended,
     LogDetailAppended,
     LogEntry,
+    LogLevel,
     NodeState,
     NodeStatusChanged,
     OperatorUpdate,
@@ -290,6 +292,7 @@ class GrpcStateProvider:
         max_retained_detail_bytes: int = DEFAULT_MAX_RETAINED_DETAIL_BYTES,
         max_paged_items: int = DEFAULT_MAX_PAGED_ITEMS,
         reset_baseline_loader: Callable[[StreamResetNotice], ResetBaseline] | None = None,
+        read_only: bool = False,
     ) -> None:
         if isinstance(unary_timeout, bool) or not isinstance(unary_timeout, Real):
             raise TypeError("unary_timeout must be a real number")
@@ -313,6 +316,10 @@ class GrpcStateProvider:
         if run_id_factory is not None and not callable(run_id_factory):
             raise TypeError("run_id_factory must be callable")
 
+        self._read_only = read_only
+        from .tui_extensions import OperatorTuiExtensions
+
+        self.tui_extensions = OperatorTuiExtensions(self)
         self._address = address
         extra_metadata = self._validate_transport_metadata(metadata)
         authorization = (("authorization", f"Bearer {token}"),) if token else ()
@@ -977,11 +984,13 @@ class GrpcStateProvider:
                 logs.append(
                     SequencedLogEntry(
                         sequence=descriptor.sequence,
-                        entry=LogEntry(
+                        entry=_stream_log_entry(
                             timestamp=descriptor.timestamp,
                             level=descriptor.level,
                             node_id=descriptor.node_id,
                             message=message,
+                            channel=descriptor.channel,
+                            attempt=descriptor.attempt,
                         ),
                         size_bytes=descriptor.size_bytes,
                     )
@@ -1885,7 +1894,12 @@ class GrpcStateProvider:
         input: Mapping[str, Any] | BaseModel | None = None,
         context: Mapping[str, Any] | BaseModel | None = None,
         files: Mapping[str, File | bytes] | None = None,
+        expected_version: str = "",
     ) -> str:
+        if self._read_only:
+            from tui.state import TuiExtensionError
+
+            raise TuiExtensionError("read_only", "Provider is read-only")
         if run_id is not None:
             request_run_id = run_id
         elif self._run_id_factory is None:
@@ -1908,11 +1922,16 @@ class GrpcStateProvider:
             input_json=json.dumps(payload),
             context_json=_json_payload(context),
             input_files=[],
+            expected_version=expected_version,
         )
         resp = self._call(self._stub.StartRun, request)
         return resp.run_id
 
     def cancel_run(self, run_id: str) -> None:
+        if self._read_only:
+            from tui.state import TuiExtensionError
+
+            raise TuiExtensionError("read_only", "Provider is read-only")
         self._call(self._stub.CancelRun, pb.CancelRunRequestV2(run_id=run_id))
 
     def on_run_update(self, callback: Callable[[RunState], None]) -> None:
@@ -2263,17 +2282,8 @@ class GrpcStateProvider:
             self._stream_thread.start()
 
     def ping(self) -> bool:
-        """Quick health check — try a fast unary call with short timeout."""
-        try:
-            kwargs = {"timeout": min(2.0, self._unary_timeout)}
-            if self._metadata is not None:
-                kwargs["metadata"] = self._metadata
-            self._stub.DiscoverFlows(pb.DiscoverFlowsRequestV2(page_size=1), **kwargs)
-            self._record_unary_success()
-            return True
-        except grpc.RpcError as e:
-            self._record_unary_error(e)
-            return False
+        """Cached transport reachability; never send a health-poll RPC."""
+        return self.operator_reachable
 
     def _install_catalog_locked(
         self,
@@ -2441,10 +2451,28 @@ class GrpcStateProvider:
             except grpc.RpcError as error:
                 if self._stream_stop.is_set():
                     break
+                if error.code() == grpc.StatusCode.FAILED_PRECONDITION:
+                    # A restarted local operator rejects the old scope before it
+                    # can send a reset frame. Rebaseline on this transport fault,
+                    # not through a periodic health/discovery poll.
+                    try:
+                        baseline = self._call(
+                            self._stub.DiscoverFlows, pb.DiscoverFlowsRequestV2(page_size=1)
+                        )
+                    except OperatorCallError:
+                        baseline = None
+                    if baseline is not None:
+                        self._require_stream_reset(
+                            baseline.scope_ref.reference,
+                            baseline.cursor.event_ulid,
+                            event_cursor=baseline.cursor,
+                        )
+                        continue
                 with self._lifecycle_lock:
                     if self.stream_state is not StreamState.RESET_REQUIRED:
                         self.stream_state = StreamState.FAILED
-                    self.stream_error = f"{error.code().name}: {error.details()}"
+                    self.operator_reachable = error.code() not in _TRANSPORT_FAILURE_STATUSES
+                    self.stream_error = f"{error.code().name}: stream unavailable"
                     retry_count = self.stream_retry_count
                 delay = min(2 ** min(retry_count, 5), 30)
                 self._stream_stop.wait(delay)
@@ -2454,6 +2482,7 @@ class GrpcStateProvider:
                 with self._lifecycle_lock:
                     if self.stream_state is not StreamState.RESET_REQUIRED:
                         self.stream_state = StreamState.FAILED
+                    self.operator_reachable = False
                     self.stream_error = str(error)
                 self._stream_stop.wait(2.0)
 
@@ -2490,6 +2519,7 @@ class GrpcStateProvider:
             self.stream_state = StreamState.RESET_REQUIRED
             self._reset_acknowledged.clear()
 
+        self.tui_extensions.invalidate("*", operator_instance_id, reset=True)
         for callback in tuple(self._stream_reset_callbacks):
             try:
                 callback(notice)
@@ -2556,7 +2586,9 @@ class GrpcStateProvider:
                 descriptor.body_token,
                 descriptor.size_bytes,
             ).decode()
-            log_detail = LogEntry(
+            log_detail = _stream_log_entry(
+                channel=descriptor.channel,
+                attempt=descriptor.attempt,
                 timestamp=descriptor.timestamp,
                 level=descriptor.level,
                 node_id=descriptor.node_id,
@@ -2965,6 +2997,9 @@ class GrpcStateProvider:
             self._catalog_reload_deployment_id = None
 
     def _notify_catalog_callbacks(self, catalog: CatalogSnapshot) -> None:
+        self.tui_extensions.invalidate(
+            "*", f"{catalog.operator_instance_id}:catalog:{catalog.revision}"
+        )
         for callback in self._catalog_callbacks:
             try:
                 callback(deepcopy(catalog))
@@ -2972,6 +3007,9 @@ class GrpcStateProvider:
                 pass
 
     def _notify_run_callbacks(self, run: RunState) -> None:
+        self.tui_extensions.invalidate(
+            "runs", f"{run.operator_instance_id}:run:{run.run_id}:{run.revision}"
+        )
         for callback in self._run_callbacks:
             try:
                 callback(_structural_callback_projection(run))
@@ -3003,12 +3041,27 @@ class GrpcStateProvider:
             self.operator_reachable = False
             self.stream_state = StreamState.STOPPED
             thread = self._stream_thread
+        self.tui_extensions.close()
         if close_channel:
             self._channel.close()
         if thread is not None and thread is not threading.current_thread():
             thread.join(timeout=STREAM_THREAD_JOIN_TIMEOUT_SECONDS)
         with self._state_lock:
             self._clear_detail_caches_locked()
+
+
+def _stream_log_entry(
+    *,
+    timestamp: datetime,
+    level: LogLevel,
+    node_id: str,
+    message: str,
+    channel: str | None,
+    attempt: str | None,
+) -> LogEntry:
+    from tui.models import StreamLogEntry
+
+    return StreamLogEntry(timestamp, level, node_id, message, channel, attempt)
 
 
 def _structural_callback_projection(run: RunState) -> RunState:

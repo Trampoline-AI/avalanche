@@ -244,7 +244,7 @@ class InputForm(ModalScreen):
             raise ValueError("Input must be a JSON object")
         if len(json.dumps(payload, allow_nan=False).encode("utf-8")) > 1024 * 1024:
             raise ValueError("Input exceeds 1 MiB")
-        validate_input(payload, self.schema)
+        validate_input(payload, json_plain(self.schema))
         return payload
 
     def _input_token(self) -> tuple:
