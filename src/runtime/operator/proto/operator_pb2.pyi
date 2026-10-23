@@ -7,11 +7,41 @@ from typing import ClassVar as _ClassVar, Optional as _Optional, Union as _Union
 
 DESCRIPTOR: _descriptor.FileDescriptor
 
+class AgentTraceStatusV2(int, metaclass=_enum_type_wrapper.EnumTypeWrapper):
+    __slots__ = ()
+    AGENT_TRACE_STATUS_V2_UNSPECIFIED: _ClassVar[AgentTraceStatusV2]
+    AGENT_TRACE_STATUS_V2_SUCCEEDED: _ClassVar[AgentTraceStatusV2]
+    AGENT_TRACE_STATUS_V2_FAILED: _ClassVar[AgentTraceStatusV2]
+    AGENT_TRACE_STATUS_V2_CANCELLED: _ClassVar[AgentTraceStatusV2]
+
+class AgentEventKindV2(int, metaclass=_enum_type_wrapper.EnumTypeWrapper):
+    __slots__ = ()
+    AGENT_EVENT_KIND_V2_UNSPECIFIED: _ClassVar[AgentEventKindV2]
+    AGENT_EVENT_KIND_V2_NATIVE: _ClassVar[AgentEventKindV2]
+    AGENT_EVENT_KIND_V2_TURN_FINISHED: _ClassVar[AgentEventKindV2]
+    AGENT_EVENT_KIND_V2_MODEL_STARTED: _ClassVar[AgentEventKindV2]
+    AGENT_EVENT_KIND_V2_MODEL_FINISHED: _ClassVar[AgentEventKindV2]
+    AGENT_EVENT_KIND_V2_TOOL_STARTED: _ClassVar[AgentEventKindV2]
+    AGENT_EVENT_KIND_V2_TOOL_FINISHED: _ClassVar[AgentEventKindV2]
+    AGENT_EVENT_KIND_V2_CODE_GENERATED: _ClassVar[AgentEventKindV2]
+
 class PageOrderV2(int, metaclass=_enum_type_wrapper.EnumTypeWrapper):
     __slots__ = ()
     PAGE_ORDER_V2_FORWARD: _ClassVar[PageOrderV2]
     PAGE_ORDER_V2_NEWEST_FIRST: _ClassVar[PageOrderV2]
 
+AGENT_TRACE_STATUS_V2_UNSPECIFIED: AgentTraceStatusV2
+AGENT_TRACE_STATUS_V2_SUCCEEDED: AgentTraceStatusV2
+AGENT_TRACE_STATUS_V2_FAILED: AgentTraceStatusV2
+AGENT_TRACE_STATUS_V2_CANCELLED: AgentTraceStatusV2
+AGENT_EVENT_KIND_V2_UNSPECIFIED: AgentEventKindV2
+AGENT_EVENT_KIND_V2_NATIVE: AgentEventKindV2
+AGENT_EVENT_KIND_V2_TURN_FINISHED: AgentEventKindV2
+AGENT_EVENT_KIND_V2_MODEL_STARTED: AgentEventKindV2
+AGENT_EVENT_KIND_V2_MODEL_FINISHED: AgentEventKindV2
+AGENT_EVENT_KIND_V2_TOOL_STARTED: AgentEventKindV2
+AGENT_EVENT_KIND_V2_TOOL_FINISHED: AgentEventKindV2
+AGENT_EVENT_KIND_V2_CODE_GENERATED: AgentEventKindV2
 PAGE_ORDER_V2_FORWARD: PageOrderV2
 PAGE_ORDER_V2_NEWEST_FIRST: PageOrderV2
 
@@ -793,43 +823,82 @@ class NodeSnapshotV2(_message.Message):
         activity_continuation: _Optional[_Union[ContinuationRefV2, _Mapping]] = ...,
     ) -> None: ...
 
-class TraceHeaderV2(_message.Message):
+class TokenUsageV2(_message.Message):
     __slots__ = (
-        "status",
-        "model",
-        "sub_model",
-        "iterations",
-        "max_iterations",
-        "duration_ms",
-        "usage_json",
-        "telemetry_json",
+        "input_tokens",
+        "output_tokens",
+        "cache_read_input_tokens",
+        "cache_creation_input_tokens",
+        "cost_usd",
     )
-    STATUS_FIELD_NUMBER: _ClassVar[int]
-    MODEL_FIELD_NUMBER: _ClassVar[int]
-    SUB_MODEL_FIELD_NUMBER: _ClassVar[int]
-    ITERATIONS_FIELD_NUMBER: _ClassVar[int]
-    MAX_ITERATIONS_FIELD_NUMBER: _ClassVar[int]
-    DURATION_MS_FIELD_NUMBER: _ClassVar[int]
-    USAGE_JSON_FIELD_NUMBER: _ClassVar[int]
-    TELEMETRY_JSON_FIELD_NUMBER: _ClassVar[int]
-    status: str
-    model: str
-    sub_model: str
-    iterations: int
-    max_iterations: int
-    duration_ms: int
-    usage_json: str
-    telemetry_json: str
+    INPUT_TOKENS_FIELD_NUMBER: _ClassVar[int]
+    OUTPUT_TOKENS_FIELD_NUMBER: _ClassVar[int]
+    CACHE_READ_INPUT_TOKENS_FIELD_NUMBER: _ClassVar[int]
+    CACHE_CREATION_INPUT_TOKENS_FIELD_NUMBER: _ClassVar[int]
+    COST_USD_FIELD_NUMBER: _ClassVar[int]
+    input_tokens: int
+    output_tokens: int
+    cache_read_input_tokens: int
+    cache_creation_input_tokens: int
+    cost_usd: float
     def __init__(
         self,
-        status: _Optional[str] = ...,
+        input_tokens: _Optional[int] = ...,
+        output_tokens: _Optional[int] = ...,
+        cache_read_input_tokens: _Optional[int] = ...,
+        cache_creation_input_tokens: _Optional[int] = ...,
+        cost_usd: _Optional[float] = ...,
+    ) -> None: ...
+
+class TraceHeaderV2(_message.Message):
+    __slots__ = (
+        "model",
+        "duration_ms",
+        "telemetry_json",
+        "runtime_kind",
+        "trace_format",
+        "turn_count",
+        "tool_call_count",
+        "usage",
+        "external_run_id",
+        "stop_reason",
+        "status",
+    )
+    MODEL_FIELD_NUMBER: _ClassVar[int]
+    DURATION_MS_FIELD_NUMBER: _ClassVar[int]
+    TELEMETRY_JSON_FIELD_NUMBER: _ClassVar[int]
+    RUNTIME_KIND_FIELD_NUMBER: _ClassVar[int]
+    TRACE_FORMAT_FIELD_NUMBER: _ClassVar[int]
+    TURN_COUNT_FIELD_NUMBER: _ClassVar[int]
+    TOOL_CALL_COUNT_FIELD_NUMBER: _ClassVar[int]
+    USAGE_FIELD_NUMBER: _ClassVar[int]
+    EXTERNAL_RUN_ID_FIELD_NUMBER: _ClassVar[int]
+    STOP_REASON_FIELD_NUMBER: _ClassVar[int]
+    STATUS_FIELD_NUMBER: _ClassVar[int]
+    model: str
+    duration_ms: int
+    telemetry_json: str
+    runtime_kind: str
+    trace_format: str
+    turn_count: int
+    tool_call_count: int
+    usage: TokenUsageV2
+    external_run_id: str
+    stop_reason: str
+    status: AgentTraceStatusV2
+    def __init__(
+        self,
         model: _Optional[str] = ...,
-        sub_model: _Optional[str] = ...,
-        iterations: _Optional[int] = ...,
-        max_iterations: _Optional[int] = ...,
         duration_ms: _Optional[int] = ...,
-        usage_json: _Optional[str] = ...,
         telemetry_json: _Optional[str] = ...,
+        runtime_kind: _Optional[str] = ...,
+        trace_format: _Optional[str] = ...,
+        turn_count: _Optional[int] = ...,
+        tool_call_count: _Optional[int] = ...,
+        usage: _Optional[_Union[TokenUsageV2, _Mapping]] = ...,
+        external_run_id: _Optional[str] = ...,
+        stop_reason: _Optional[str] = ...,
+        status: _Optional[_Union[AgentTraceStatusV2, str]] = ...,
     ) -> None: ...
 
 class TraceDescriptorV2(_message.Message):
@@ -974,17 +1043,19 @@ class RunActivityDescriptorV2(_message.Message):
         "node_id",
         "level",
         "invocation_id",
-        "iteration",
         "duration_ms",
         "error",
-        "tool_count",
-        "predict_count",
         "event_kind",
         "trace",
         "terminal_seal",
         "classifier_summary",
         "channel",
         "attempt",
+        "turn",
+        "tool_call_count",
+        "native_event_kind",
+        "agent_event_kind",
+        "model_call_count",
     )
     ACTIVITY_ID_FIELD_NUMBER: _ClassVar[int]
     RUN_SEQUENCE_FIELD_NUMBER: _ClassVar[int]
@@ -995,17 +1066,19 @@ class RunActivityDescriptorV2(_message.Message):
     NODE_ID_FIELD_NUMBER: _ClassVar[int]
     LEVEL_FIELD_NUMBER: _ClassVar[int]
     INVOCATION_ID_FIELD_NUMBER: _ClassVar[int]
-    ITERATION_FIELD_NUMBER: _ClassVar[int]
     DURATION_MS_FIELD_NUMBER: _ClassVar[int]
     ERROR_FIELD_NUMBER: _ClassVar[int]
-    TOOL_COUNT_FIELD_NUMBER: _ClassVar[int]
-    PREDICT_COUNT_FIELD_NUMBER: _ClassVar[int]
     EVENT_KIND_FIELD_NUMBER: _ClassVar[int]
     TRACE_FIELD_NUMBER: _ClassVar[int]
     TERMINAL_SEAL_FIELD_NUMBER: _ClassVar[int]
     CLASSIFIER_SUMMARY_FIELD_NUMBER: _ClassVar[int]
     CHANNEL_FIELD_NUMBER: _ClassVar[int]
     ATTEMPT_FIELD_NUMBER: _ClassVar[int]
+    TURN_FIELD_NUMBER: _ClassVar[int]
+    TOOL_CALL_COUNT_FIELD_NUMBER: _ClassVar[int]
+    NATIVE_EVENT_KIND_FIELD_NUMBER: _ClassVar[int]
+    AGENT_EVENT_KIND_FIELD_NUMBER: _ClassVar[int]
+    MODEL_CALL_COUNT_FIELD_NUMBER: _ClassVar[int]
     activity_id: str
     run_sequence: int
     kind: str
@@ -1015,17 +1088,19 @@ class RunActivityDescriptorV2(_message.Message):
     node_id: str
     level: str
     invocation_id: str
-    iteration: int
     duration_ms: int
     error: bool
-    tool_count: int
-    predict_count: int
     event_kind: str
     trace: TraceDescriptorV2
     terminal_seal: TerminalSealV2
     classifier_summary: ClassifierInvocationSummaryV2
     channel: str
     attempt: str
+    turn: int
+    tool_call_count: int
+    native_event_kind: str
+    agent_event_kind: AgentEventKindV2
+    model_call_count: int
     def __init__(
         self,
         activity_id: _Optional[str] = ...,
@@ -1037,17 +1112,19 @@ class RunActivityDescriptorV2(_message.Message):
         node_id: _Optional[str] = ...,
         level: _Optional[str] = ...,
         invocation_id: _Optional[str] = ...,
-        iteration: _Optional[int] = ...,
         duration_ms: _Optional[int] = ...,
         error: bool = ...,
-        tool_count: _Optional[int] = ...,
-        predict_count: _Optional[int] = ...,
         event_kind: _Optional[str] = ...,
         trace: _Optional[_Union[TraceDescriptorV2, _Mapping]] = ...,
         terminal_seal: _Optional[_Union[TerminalSealV2, _Mapping]] = ...,
         classifier_summary: _Optional[_Union[ClassifierInvocationSummaryV2, _Mapping]] = ...,
         channel: _Optional[str] = ...,
         attempt: _Optional[str] = ...,
+        turn: _Optional[int] = ...,
+        tool_call_count: _Optional[int] = ...,
+        native_event_kind: _Optional[str] = ...,
+        agent_event_kind: _Optional[_Union[AgentEventKindV2, str]] = ...,
+        model_call_count: _Optional[int] = ...,
     ) -> None: ...
 
 class ClassifierInvocationSummaryV2(_message.Message):

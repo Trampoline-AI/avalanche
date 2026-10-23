@@ -8,10 +8,12 @@ from collections.abc import Callable, Mapping
 from datetime import datetime
 
 from avalanche.agent.declaration import AgentDeclaration
+from avalanche.agent.trace import AgentTraceStatus, TokenUsage
 
 from .models import (
     AgentEventAppended,
     AgentEventDescriptor,
+    AgentEventKind,
     CatalogReloadRequired,
     CatalogReplaced,
     CatalogSnapshot,
@@ -171,17 +173,54 @@ def run_summary_to_v2(summary) -> pb.RunSummaryV2:
     )
 
 
+_TRACE_STATUS_TO_V2: Mapping[AgentTraceStatus, int] = {
+    "succeeded": pb.AGENT_TRACE_STATUS_V2_SUCCEEDED,
+    "failed": pb.AGENT_TRACE_STATUS_V2_FAILED,
+    "cancelled": pb.AGENT_TRACE_STATUS_V2_CANCELLED,
+}
+_TRACE_STATUS_FROM_V2 = {value: key for key, value in _TRACE_STATUS_TO_V2.items()}
+_AGENT_EVENT_KIND_TO_V2: Mapping[AgentEventKind, int] = {
+    "native": pb.AGENT_EVENT_KIND_V2_NATIVE,
+    "turn.finished": pb.AGENT_EVENT_KIND_V2_TURN_FINISHED,
+    "model.started": pb.AGENT_EVENT_KIND_V2_MODEL_STARTED,
+    "model.finished": pb.AGENT_EVENT_KIND_V2_MODEL_FINISHED,
+    "tool.started": pb.AGENT_EVENT_KIND_V2_TOOL_STARTED,
+    "tool.finished": pb.AGENT_EVENT_KIND_V2_TOOL_FINISHED,
+    "code.generated": pb.AGENT_EVENT_KIND_V2_CODE_GENERATED,
+}
+_AGENT_EVENT_KIND_FROM_V2 = {value: key for key, value in _AGENT_EVENT_KIND_TO_V2.items()}
+
+
+def token_usage_to_v2(usage: TokenUsage) -> pb.TokenUsageV2:
+    message = pb.TokenUsageV2(
+        input_tokens=usage.input_tokens, output_tokens=usage.output_tokens
+    )
+    if usage.cache_read_input_tokens is not None:
+        message.cache_read_input_tokens = usage.cache_read_input_tokens
+    if usage.cache_creation_input_tokens is not None:
+        message.cache_creation_input_tokens = usage.cache_creation_input_tokens
+    if usage.cost_usd is not None:
+        message.cost_usd = usage.cost_usd
+    return message
+
+
 def trace_header_to_v2(header: TraceHeader) -> pb.TraceHeaderV2:
     message = pb.TraceHeaderV2(
-        status=header.status,
-        model=header.model,
-        iterations=header.iterations,
-        max_iterations=header.max_iterations,
+        status=_TRACE_STATUS_TO_V2[header.status],
+        runtime_kind=header.runtime_kind,
+        trace_format=header.trace_format,
         duration_ms=header.duration_ms,
-        usage_json=header.usage_json,
+        turn_count=header.turn_count,
+        tool_call_count=header.tool_call_count,
     )
-    if header.sub_model is not None:
-        message.sub_model = header.sub_model
+    if header.model is not None:
+        message.model = header.model
+    if header.usage is not None:
+        message.usage.CopyFrom(token_usage_to_v2(header.usage))
+    if header.external_run_id is not None:
+        message.external_run_id = header.external_run_id
+    if header.stop_reason is not None:
+        message.stop_reason = header.stop_reason
     if header.telemetry_json is not None:
         message.telemetry_json = header.telemetry_json
     return message
@@ -379,12 +418,13 @@ def agent_event_activity_to_v2(
         node_id=node_id,
         invocation_id=event.invocation_id,
         error=event.error,
-        tool_count=event.tool_count,
-        predict_count=event.predict_count,
-        event_kind=event.event_kind,
+        tool_call_count=event.tool_call_count,
+        model_call_count=event.model_call_count,
+        native_event_kind=event.native_event_kind,
+        agent_event_kind=_AGENT_EVENT_KIND_TO_V2[event.agent_event_kind],
     )
-    if event.iteration is not None:
-        message.iteration = event.iteration
+    if event.turn is not None:
+        message.turn = event.turn
     if event.duration_ms is not None:
         message.duration_ms = event.duration_ms
     return message
@@ -791,15 +831,38 @@ def run_summary_from_v2(msg: pb.RunSummaryV2) -> RunSummary:
     )
 
 
+def token_usage_from_v2(msg: pb.TokenUsageV2) -> TokenUsage:
+    return TokenUsage(
+        input_tokens=msg.input_tokens,
+        output_tokens=msg.output_tokens,
+        cache_read_input_tokens=(
+            msg.cache_read_input_tokens if msg.HasField("cache_read_input_tokens") else None
+        ),
+        cache_creation_input_tokens=(
+            msg.cache_creation_input_tokens
+            if msg.HasField("cache_creation_input_tokens")
+            else None
+        ),
+        cost_usd=msg.cost_usd if msg.HasField("cost_usd") else None,
+    )
+
+
 def trace_header_from_v2(msg: pb.TraceHeaderV2) -> TraceHeader:
+    if msg.status not in _TRACE_STATUS_FROM_V2:
+        raise ValueError(f"unsupported agent trace status {msg.status}")
+    if not msg.runtime_kind or not msg.trace_format:
+        raise ValueError("agent trace header requires a runtime kind and trace format")
     return TraceHeader(
-        status=msg.status,
-        model=msg.model,
-        sub_model=msg.sub_model if msg.HasField("sub_model") else None,
-        iterations=msg.iterations,
-        max_iterations=msg.max_iterations,
+        status=_TRACE_STATUS_FROM_V2[msg.status],
+        runtime_kind=msg.runtime_kind,
+        trace_format=msg.trace_format,
+        model=msg.model if msg.HasField("model") else None,
         duration_ms=msg.duration_ms,
-        usage_json=msg.usage_json,
+        usage=token_usage_from_v2(msg.usage) if msg.HasField("usage") else None,
+        turn_count=msg.turn_count,
+        tool_call_count=msg.tool_call_count,
+        external_run_id=msg.external_run_id if msg.HasField("external_run_id") else None,
+        stop_reason=msg.stop_reason if msg.HasField("stop_reason") else None,
         telemetry_json=msg.telemetry_json if msg.HasField("telemetry_json") else None,
     )
 
@@ -866,13 +929,15 @@ def terminal_seal_descriptor_from_v2(
         raise ValueError("terminal seal timestamp must be finite")
     if msg.size_bytes or msg.node_id or msg.level or msg.invocation_id:
         raise ValueError("terminal seal descriptor contains body or node fields")
-    if msg.HasField("detail_ref") or msg.HasField("iteration") or msg.HasField("duration_ms"):
+    if msg.HasField("detail_ref") or msg.HasField("turn") or msg.HasField("duration_ms"):
         raise ValueError("terminal seal descriptor contains an activity body reference")
     if (
         msg.error
-        or msg.tool_count
-        or msg.predict_count
+        or msg.tool_call_count
+        or msg.model_call_count
         or msg.event_kind
+        or msg.native_event_kind
+        or msg.agent_event_kind
         or msg.HasField("trace")
         or msg.HasField("classifier_summary")
     ):
@@ -926,13 +991,20 @@ def agent_event_descriptor_from_v2(
         event_sequence=msg.run_sequence,
         size_bytes=msg.size_bytes,
         body_token=msg.detail_ref.object_key,
-        event_kind=msg.event_kind,
-        iteration=msg.iteration if msg.HasField("iteration") else None,
+        native_event_kind=msg.native_event_kind,
+        agent_event_kind=_agent_event_kind_from_v2(msg.agent_event_kind),
+        turn=msg.turn if msg.HasField("turn") else None,
         duration_ms=msg.duration_ms if msg.HasField("duration_ms") else None,
         error=msg.error,
-        tool_count=msg.tool_count,
-        predict_count=msg.predict_count,
+        tool_call_count=msg.tool_call_count,
+        model_call_count=msg.model_call_count,
     )
+
+
+def _agent_event_kind_from_v2(value: int) -> AgentEventKind:
+    if value not in _AGENT_EVENT_KIND_FROM_V2:
+        raise ValueError(f"unsupported agent event kind {value}")
+    return _AGENT_EVENT_KIND_FROM_V2[value]
 
 
 def classifier_event_descriptor_from_v2(

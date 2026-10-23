@@ -31,6 +31,15 @@
   BREAKING-PROTOCOL: the Delta protocol moves to 2.0 (`avalanche.PROTOCOL_VERSION`)
   because the operator proto field 9 is renamed `agent_declarations_json` and its
   JSON shape changes; deployments built on protocol 1.x must be rebuilt.
+- Operator: the agent trace summary sent to clients is now runtime-neutral: status
+  (succeeded, failed or cancelled), runtime kind, trace format, model, total token
+  usage and cost, turn and tool-call counts, and stop reason. Agent live-event
+  summaries carry a common event kind next to the runtime's own kind, the turn, and
+  tool-call and model-call counts. PredictRLM's sub-model, iteration limit and
+  per-model usage are no longer in the summary; the web UI reads them from the
+  trace body. The protobuf messages change, so the operator, its clients and
+  `@trampoline-ai/operator-ui` must be upgraded together. BREAKING-PROTOCOL: part
+  of Delta protocol 2.0 (trace header and agent activity fields replaced).
 
 ## 0.15.1 — 2026-10-24
 

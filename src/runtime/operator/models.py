@@ -12,6 +12,19 @@ from typing import TYPE_CHECKING, Literal, Mapping
 if TYPE_CHECKING:
     from avalanche._agent_trace import AgentTerminalDetail
     from avalanche.agent.declaration import AgentDeclaration
+    from avalanche.agent.trace import AgentTraceStatus, TokenUsage
+
+
+# The common kind of an agent live event; "native" when it has no common equivalent.
+AgentEventKind = Literal[
+    "native",
+    "turn.finished",
+    "model.started",
+    "model.finished",
+    "tool.started",
+    "tool.finished",
+    "code.generated",
+]
 
 
 class NodeStatus(Enum):
@@ -120,15 +133,21 @@ class RunState:
 
 @dataclass(frozen=True)
 class TraceHeader:
-    """RunTrace metadata retained separately from iteration and evidence bodies."""
+    """The runtime-neutral summary of a finished agent invocation.
 
-    status: str
-    model: str
-    sub_model: str | None
-    iterations: int
-    max_iterations: int
+    Runtime-specific details stay in the trace body.
+    """
+
+    status: AgentTraceStatus
+    runtime_kind: str
+    trace_format: str
+    model: str | None
     duration_ms: int
-    usage_json: str
+    usage: TokenUsage | None
+    turn_count: int
+    tool_call_count: int
+    external_run_id: str | None
+    stop_reason: str | None
     telemetry_json: str | None = None
 
 
@@ -235,12 +254,13 @@ class AgentEvent:
     event_sequence: int
     event_json: str
     size_bytes: int = 0
-    event_kind: str = ""
-    iteration: int | None = None
+    native_event_kind: str = ""
+    agent_event_kind: AgentEventKind = "native"
+    turn: int | None = None
     duration_ms: int | None = None
     error: bool = False
-    tool_count: int = 0
-    predict_count: int = 0
+    tool_call_count: int = 0
+    model_call_count: int = 0
 
 
 @dataclass(frozen=True)
@@ -342,12 +362,13 @@ class AgentEventDescriptor:
     event_sequence: int
     size_bytes: int
     body_token: str
-    event_kind: str = ""
-    iteration: int | None = None
+    native_event_kind: str = ""
+    agent_event_kind: AgentEventKind = "native"
+    turn: int | None = None
     duration_ms: int | None = None
     error: bool = False
-    tool_count: int = 0
-    predict_count: int = 0
+    tool_call_count: int = 0
+    model_call_count: int = 0
 
 
 @dataclass(frozen=True)
