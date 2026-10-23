@@ -217,7 +217,7 @@ message StartRunRequestV2 {
   string context_json = 4;
   repeated FileAttachmentV2 input_files = 5;
   // Optional exact catalog declaration digest; rejected if the selected flow changed.
-  string expected_version = 6;
+  optional string expected_version = 6;
 }
 
 message StartRunResponseV2 {
