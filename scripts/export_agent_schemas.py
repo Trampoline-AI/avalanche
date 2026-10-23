@@ -1,6 +1,6 @@
 """Write the JSON Schema of Avalanche's runtime-neutral agent trace models.
 
-The web UI generates its TypeScript types and validators from this file
+The web UI generates zod schemas and TypeScript types from this file
 (``make web-proto``), so the browser and Python agree on one trace shape.
 
     uv run python scripts/export_agent_schemas.py
