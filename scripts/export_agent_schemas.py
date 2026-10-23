@@ -1,7 +1,7 @@
-"""Write the JSON Schema of Avalanche's runtime-neutral agent trace models.
+"""Write the JSON Schema of Avalanche's runtime-neutral agent models.
 
 The web UI generates zod schemas and TypeScript types from this file
-(``make web-proto``), so the browser and Python agree on one trace shape.
+(``make web-proto``), so the browser and Python agree on one shape for agent traces and declarations.
 
     uv run python scripts/export_agent_schemas.py
 """
@@ -15,6 +15,7 @@ from pathlib import Path
 from pydantic import TypeAdapter
 
 from avalanche.agent.contract import AgentEvent
+from avalanche.agent.declaration import AgentDeclaration
 from avalanche.agent.trace import AgentTraceRecord
 
 OUTPUT = (
@@ -28,11 +29,12 @@ OUTPUT = (
 
 
 def agent_schemas_json() -> str:
-    """One schema document whose ``$defs`` hold the final trace body and live events."""
+    """One schema document whose ``$defs`` hold traces, live events and declarations."""
     keyed, schema = TypeAdapter.json_schemas(
         [
             ("AgentTraceRecord", "serialization", TypeAdapter(AgentTraceRecord)),
             ("AgentEvent", "serialization", TypeAdapter(AgentEvent)),
+            ("AgentDeclaration", "serialization", TypeAdapter(AgentDeclaration)),
         ],
         ref_template="#/$defs/{model}",
     )

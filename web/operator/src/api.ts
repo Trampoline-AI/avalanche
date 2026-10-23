@@ -1163,7 +1163,7 @@ function mapFlowInfo(flow: FlowInfoV2): FlowInfoMsg {
     relativeFile: flow.filePath,
     builderSymbol: "",
     agentNodeIds: flow.agentNodeIds,
-    agentMetadataJson: flow.agentMetadataJson,
+    agentDeclarationsJson: flow.agentDeclarationsJson,
     classifierMetadataJson: flow.classifierMetadataJson,
     evaluationMetadataJson: flow.evaluationMetadataJson,
     stepInterfaceJson: flow.topology?.stepInterfaceJson ?? {},

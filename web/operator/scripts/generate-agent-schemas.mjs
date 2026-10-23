@@ -66,6 +66,9 @@ function zod(schema, deps) {
   switch (schema.type) {
     case "object": {
       checkKeys(schema, ["type", "properties", "required", "additionalProperties"]);
+      if (!("properties" in schema) && typeof schema.additionalProperties === "object") {
+        return `z.record(z.string(), ${zod(schema.additionalProperties, deps)})`;
+      }
       if (schema.additionalProperties !== false) {
         throw new Error(`Object schemas must forbid extra fields: ${JSON.stringify(schema)}`);
       }

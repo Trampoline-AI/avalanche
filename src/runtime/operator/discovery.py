@@ -21,6 +21,7 @@ from typing import Any
 
 from croniter import croniter
 
+from avalanche.agent.declaration import AgentDeclaration
 from avalanche.classifier.models import ClassifierDeclaration
 from avalanche.dag import Workflow
 
@@ -33,6 +34,7 @@ from .models import (
 from .source_policy import is_excluded_directory, is_path_in_excluded_directory
 from .windows_job import WindowsJob, assign_process, close_job, create_kill_on_close_job
 from .workflow_metadata import (
+    agent_declarations_for_workflow,
     node_docstring_lines_for_workflow,
     node_source_code_for_workflow,
     step_interface_for_workflow,
@@ -610,8 +612,7 @@ def _descriptor_to_dict(
     node_ids = workflow._topological_sort()
     standard_step_docstring_lines = node_docstring_lines_for_workflow(workflow, node_ids)
     node_source_code = node_source_code_for_workflow(workflow, node_ids)
-    agent_node_ids = []
-    agent_metadata_json = []
+    agent_declarations = agent_declarations_for_workflow(workflow, node_ids)
     classifier_metadata_json: list[list[str]] = []
     evaluation_metadata_json: list[list[str]] = []
     for node_id in node_ids:
@@ -624,37 +625,11 @@ def _descriptor_to_dict(
         spec = getattr(workflow.nodes[node_id].node.fn, "__agent_step__", None)
         if spec is None:
             continue
-        agent_node_ids.append(node_id)
         if spec.evaluations is not None:
             evaluation_declaration = spec.evaluations.declaration_metadata(
                 workflow.classifier_defaults
             )
             evaluation_metadata_json.append([node_id, evaluation_declaration.model_dump_json()])
-        try:
-            metadata = spec.declaration_metadata(workflow.agent_defaults)
-            agent_metadata_json.append(
-                [
-                    node_id,
-                    json.dumps(
-                        metadata,
-                        ensure_ascii=False,
-                        separators=(",", ":"),
-                        sort_keys=True,
-                    ),
-                ]
-            )
-        except Exception as exc:
-            agent_metadata_json.append(
-                [
-                    node_id,
-                    json.dumps(
-                        {"error": str(exc) or type(exc).__name__},
-                        ensure_ascii=False,
-                        separators=(",", ":"),
-                        sort_keys=True,
-                    ),
-                ]
-            )
     from .registry import workflow_input_schema
 
     return {
@@ -670,8 +645,11 @@ def _descriptor_to_dict(
         "graph": [[key, value] for key, value in workflow.graph.items()],
         "node_types": [[nid, workflow.nodes[nid].node.node_type.value] for nid in node_ids],
         "display_names": [[nid, display_name_from_id(nid)] for nid in node_ids],
-        "agent_node_ids": agent_node_ids,
-        "agent_metadata_json": agent_metadata_json,
+        "agent_node_ids": list(agent_declarations),
+        "agent_declarations_json": [
+            [node_id, declaration.model_dump_json()]
+            for node_id, declaration in agent_declarations.items()
+        ],
         "classifier_metadata_json": classifier_metadata_json,
         "evaluation_metadata_json": evaluation_metadata_json,
         "step_interface_json": list(step_interface_for_workflow(workflow, node_ids).items()),
@@ -694,8 +672,9 @@ def _descriptor_from_dict(item: dict[str, Any]) -> WorkflowDescriptor:
         node_types=tuple((key, value) for key, value in item["node_types"]),
         display_names=tuple((key, value) for key, value in item["display_names"]),
         agent_node_ids=tuple(item.get("agent_node_ids", ())),
-        agent_metadata_json=tuple(
-            (key, value) for key, value in item.get("agent_metadata_json", ())
+        agent_declarations=tuple(
+            (key, AgentDeclaration.model_validate_json(value))
+            for key, value in item["agent_declarations_json"]
         ),
         classifier_metadata_json=tuple(
             (key, value) for key, value in item.get("classifier_metadata_json", ())

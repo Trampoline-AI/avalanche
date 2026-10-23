@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import json
 import threading
 import time
 from datetime import datetime
@@ -13,6 +12,16 @@ from predict_rlm import RunTrace
 from predict_rlm.trace import IterationStep
 
 from avalanche._agent_trace import AgentTerminalDetail, AgentTraceEnvelope
+from avalanche.agent.declaration import (
+    AgentDeclaration,
+    FieldDeclaration,
+    PredictRLMConfiguredModel,
+    PredictRLMDeclaration,
+    PredictRLMModels,
+    PredictRLMSkillDeclaration,
+    SignatureDeclaration,
+    ToolDeclaration,
+)
 
 from .mock_extensions import MockTuiExtensions
 from .models import (
@@ -271,67 +280,59 @@ DOC_PROCESSING_WORKFLOW = WorkflowInfo(
     },
 )
 
-AGENT_TRACE_METADATA = {
-    "signature": {
-        "name": "InspectRecords",
-        "instructions": "Inspect records and summarize active entries.",
-        "inputs": [
-            {
-                "name": "records",
-                "annotation": "list[Record]",
-                "description": "records to inspect",
-            }
-        ],
-        "outputs": [
-            {
-                "name": "summary",
-                "annotation": "InspectionSummary",
-                "description": "structured inspection summary",
-            },
-            {
-                "name": "labels",
-                "annotation": "list[str]",
-                "description": "inspection labels",
-            },
-            {
-                "name": "note",
-                "annotation": "str | None",
-                "description": "optional inspection note",
-            },
-        ],
-    },
-    "runtime": {
-        "lm": "main-model",
-        "sub_lm": "sub-model",
-        "max_iterations": 4,
-    },
-    "models": {
-        "main": {"identity": "main-model", "source": "agent runtime"},
-        "sub": {"identity": "sub-model", "source": "agent runtime"},
-    },
-    "skills": [
-        {
-            "name": "audit",
-            "instructions": "Verify active status before summarizing.",
-            "packages": ["pydantic"],
-            "modules": ["record_helpers"],
-            "tools": ["lookup_record"],
-        }
-    ],
-    "aggregated_static_instructions": (
-        "Inspect records and summarize active entries.\n\n"
-        "## Skill: audit\n\nVerify active status before summarizing."
+AGENT_TRACE_DECLARATION = AgentDeclaration(
+    signature=SignatureDeclaration(
+        name="InspectRecords",
+        instructions="Inspect records and summarize active entries.",
+        inputs=(
+            FieldDeclaration(
+                name="records", annotation="list[Record]", description="records to inspect"
+            ),
+        ),
+        outputs=(
+            FieldDeclaration(
+                name="summary",
+                annotation="InspectionSummary",
+                description="structured inspection summary",
+            ),
+            FieldDeclaration(
+                name="labels", annotation="list[str]", description="inspection labels"
+            ),
+            FieldDeclaration(
+                name="note", annotation="str | None", description="optional inspection note"
+            ),
+        ),
     ),
-    "packages": ["pydantic"],
-    "modules": ["record_helpers"],
-    "tools": [
-        {
-            "name": "lookup_record",
-            "description": "Look up a record by identifier.",
-        }
-    ],
-}
-
+    tools=(
+        ToolDeclaration(
+            name="lookup_record",
+            description="Look up a record by identifier.",
+            source_code="",
+        ),
+    ),
+    runtime=PredictRLMDeclaration(
+        settings={"lm": "main-model", "sub_lm": "sub-model", "max_iterations": 4},
+        models=PredictRLMModels(
+            main=PredictRLMConfiguredModel(source="step override", identity="main-model"),
+            sub=PredictRLMConfiguredModel(source="step override", identity="sub-model"),
+        ),
+        skills=(
+            PredictRLMSkillDeclaration(
+                name="audit",
+                instructions="Verify active status before summarizing.",
+                packages=("pydantic",),
+                modules=("record_helpers",),
+                tools=("lookup_record",),
+            ),
+        ),
+        aggregated_static_instructions=(
+            "Inspect records and summarize active entries.\n\n"
+            "## Skill: audit\n\nVerify active status before summarizing."
+        ),
+        packages=("pydantic",),
+        modules=("record_helpers",),
+    ),
+)
 
 AGENT_TRACE_WORKFLOW = WorkflowInfo(
     name="agent_trace",
@@ -341,9 +342,7 @@ AGENT_TRACE_WORKFLOW = WorkflowInfo(
     node_types={"inspect_agent_1": "step"},
     display_names={"inspect_agent_1": "inspect_agent"},
     agent_node_ids=["inspect_agent_1"],
-    agent_metadata_json={
-        "inspect_agent_1": json.dumps(AGENT_TRACE_METADATA, separators=(",", ":"))
-    },
+    agent_declarations={"inspect_agent_1": AGENT_TRACE_DECLARATION},
 )
 
 

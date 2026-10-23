@@ -1,5 +1,6 @@
 import type { OperatorApi, StructuralBaseline } from "../api";
 import type { EvaluationDeclaration } from "../classifier";
+import type { AgentDeclaration, PredictRLMDeclaration } from "../generated/agentSchemas";
 import {
   CatalogSnapshotMsg,
   FlowInfoMsg,
@@ -10,6 +11,46 @@ import {
   RunSummaryMsg,
   WorkflowTopologyMsg,
 } from "../model";
+
+/** A complete published agent declaration, as JSON; override only what a test reads. */
+export function agentDeclarationJson({
+  instructions = "",
+  inputs = [],
+  outputs = [],
+  tools = [],
+  runtime = {},
+}: {
+  instructions?: string;
+  inputs?: { name: string; annotation: string }[];
+  outputs?: { name: string; annotation: string }[];
+  tools?: Partial<AgentDeclaration["tools"][number]>[];
+  runtime?: Partial<PredictRLMDeclaration>;
+}): string {
+  const field = (item: { name: string; annotation: string }) => ({ ...item, description: "" });
+  const declaration: AgentDeclaration = {
+    signature: {
+      name: "Signature",
+      instructions,
+      inputs: inputs.map(field),
+      outputs: outputs.map(field),
+    },
+    tools: tools.map((tool) => ({ name: "tool", description: "", source_code: "", ...tool })),
+    runtime: {
+      kind: "predict_rlm",
+      settings: {},
+      models: {
+        main: { source: "PredictRLM default" },
+        sub: { source: "PredictRLM default" },
+      },
+      skills: [],
+      aggregated_static_instructions: instructions,
+      packages: [],
+      modules: [],
+      ...runtime,
+    },
+  };
+  return JSON.stringify(declaration);
+}
 
 export function eventUlid(sequence: number | string): string {
   return Number(sequence).toString(16).toUpperCase().padStart(26, "0");

@@ -5,7 +5,20 @@ from __future__ import annotations
 import inspect
 import textwrap
 
+from avalanche.agent.declaration import AgentDeclaration
 from avalanche.dag import NodeType, Workflow
+
+
+def agent_declarations_for_workflow(
+    workflow: Workflow, node_ids: list[str]
+) -> dict[str, AgentDeclaration]:
+    """Describe every agent step; a step that cannot be described fails discovery."""
+    declarations: dict[str, AgentDeclaration] = {}
+    for node_id in node_ids:
+        spec = getattr(workflow.nodes[node_id].node.fn, "__agent_step__", None)
+        if spec is not None:
+            declarations[node_id] = spec.declaration(workflow.agent_defaults)
+    return declarations
 
 
 def step_interface_for_workflow(workflow: Workflow, node_ids: list[str]) -> dict[str, str]:
