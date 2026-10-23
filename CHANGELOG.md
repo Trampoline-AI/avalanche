@@ -13,7 +13,7 @@
   name, size and checksum (or a workspace's entry count, total size, or reference)
   instead of the mounted host path. The file bridge that mounts `ava.File` inputs
   and reserves `ava.File` outputs moved into the PredictRLM runtime unchanged.
-- Operator UI: `make web-proto` now also generates TypeScript types and validators
+- Operator UI: `make web-proto` now also generates zod schemas and TypeScript types
   for the runtime-neutral agent trace from the Python models
   (`scripts/export_agent_schemas.py`). The UI does not use them yet.
 

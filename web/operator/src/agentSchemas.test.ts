@@ -1,7 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import type { AgentTraceRecord } from "./generated/agentSchemas";
-import { validateAgentEvent, validateAgentTraceRecord } from "./generated/agentValidators";
+import { AgentEvent, AgentTraceRecord } from "./generated/agentSchemas";
 
 const record: AgentTraceRecord = {
   schema_version: 2,
@@ -54,28 +53,31 @@ const record: AgentTraceRecord = {
   },
 };
 
-describe("generated agent validators", () => {
+describe("generated agent schemas", () => {
   it("accept a trace record shaped like the Python model", () => {
-    expect(validateAgentTraceRecord(record)).toBe(true);
+    expect(AgentTraceRecord.parse(record)).toEqual(record);
   });
 
   it.each([
     ["an unknown runtime", { ...record, header: { ...record.header, runtime_kind: "other" } }],
     ["an unknown field", { ...record, extra: true }],
     ["an old schema version", { ...record, schema_version: 1 }],
+    ["a negative duration", { ...record, header: { ...record.header, duration_ms: -1 } }],
     [
       "an unknown action kind",
       { ...record, turns: [{ ...record.turns[0], actions: [{ kind: "other" }] }] },
     ],
   ])("reject a trace record with %s", (_case, body) => {
-    expect(validateAgentTraceRecord(body)).toBe(false);
+    expect(AgentTraceRecord.safeParse(body).success).toBe(false);
   });
 
   it("tell live events apart by kind", () => {
-    expect(validateAgentEvent({ kind: "tool.started", call_id: "t", name: "lookup" })).toBe(
-      true,
-    );
-    expect(validateAgentEvent({ kind: "tool.started", call_id: "t" })).toBe(false);
-    expect(validateAgentEvent({ kind: "unknown", call_id: "t", name: "lookup" })).toBe(false);
+    expect(
+      AgentEvent.safeParse({ kind: "tool.started", call_id: "t", name: "lookup" }).success,
+    ).toBe(true);
+    expect(AgentEvent.safeParse({ kind: "tool.started", call_id: "t" }).success).toBe(false);
+    expect(
+      AgentEvent.safeParse({ kind: "unknown", call_id: "t", name: "lookup" }).success,
+    ).toBe(false);
   });
 });
