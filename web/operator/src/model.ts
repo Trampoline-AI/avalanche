@@ -383,51 +383,45 @@ export const NodeSnapshotMsg = {
   },
 };
 
+export type AgentTraceStatus = "succeeded" | "failed" | "cancelled";
+
+/** Token counts for an agent invocation; absent figures were not reported. */
+export interface TokenUsageMsg {
+  inputTokens: string;
+  outputTokens: string;
+  cacheReadInputTokens?: string;
+  cacheCreationInputTokens?: string;
+  costUsd?: number;
+}
+
+/** The runtime-neutral summary of a finished agent invocation. */
 export interface TraceHeaderMsg {
-  /**
-   * @generated from protobuf field: string status = 1
-   */
-  status: string;
-  /**
-   * @generated from protobuf field: string model = 2
-   */
-  model: string;
-  /**
-   * @generated from protobuf field: optional string sub_model = 3
-   */
-  subModel?: string;
-  /**
-   * @generated from protobuf field: uint64 iterations = 4
-   */
-  iterations: string;
-  /**
-   * @generated from protobuf field: uint64 max_iterations = 5
-   */
-  maxIterations: string;
-  /**
-   * @generated from protobuf field: uint64 duration_ms = 6
-   */
+  status: AgentTraceStatus;
+  runtimeKind: string;
+  traceFormat: string;
+  model?: string;
   durationMs: string;
-  /**
-   * @generated from protobuf field: string usage_json = 7
-   */
-  usageJson: string;
-  /**
-   * @generated from protobuf field: optional string telemetry_json = 8
-   */
+  usage?: TokenUsageMsg;
+  turnCount: string;
+  toolCallCount: string;
+  externalRunId?: string;
+  stopReason?: string;
   telemetryJson?: string;
 }
 
 export const TraceHeaderMsg = {
   create(value: DeepPartial<TraceHeaderMsg> = {}): TraceHeaderMsg {
     return {
-      status: "",
-      model: "",
-      subModel: undefined,
-      iterations: "0",
-      maxIterations: "0",
+      status: "succeeded",
+      runtimeKind: "predict_rlm",
+      traceFormat: "predict_rlm.run/v1",
+      model: undefined,
       durationMs: "0",
-      usageJson: "",
+      usage: undefined,
+      turnCount: "0",
+      toolCallCount: "0",
+      externalRunId: undefined,
+      stopReason: undefined,
       telemetryJson: undefined,
       ...value,
     } as TraceHeaderMsg;
@@ -467,6 +461,8 @@ export interface TraceDescriptorMsg {
    * @generated from protobuf field: avalanche.operator.TraceHeaderMsg header = 8
    */
   header?: TraceHeaderMsg;
+  /** Reads the final trace body; empty when the trace has no body. */
+  bodyToken?: string;
 }
 
 export const TraceDescriptorMsg = {
@@ -682,6 +678,15 @@ export const LogRecordDescriptorMsg = {
   },
 };
 
+export type AgentEventKind =
+  | "native"
+  | "turn.finished"
+  | "model.started"
+  | "model.finished"
+  | "tool.started"
+  | "tool.finished"
+  | "code.generated";
+
 export interface AgentEventDescriptorMsg {
   /**
    * @generated from protobuf field: uint64 event_sequence = 1
@@ -699,14 +704,12 @@ export interface AgentEventDescriptorMsg {
    * @generated from protobuf field: string invocation_id = 4
    */
   invocationId: string;
-  /**
-   * @generated from protobuf field: string event_kind = 5
-   */
-  eventKind: string;
-  /**
-   * @generated from protobuf field: optional uint32 iteration = 6
-   */
-  iteration?: number;
+  /** The runtime's own event kind, such as "iteration.recorded". */
+  nativeEventKind: string;
+  /** The common kind, or "native" when the event has none. */
+  agentEventKind: AgentEventKind;
+  /** The turn the event belongs to, when it belongs to one. */
+  turn?: number;
   /**
    * @generated from protobuf field: optional uint64 duration_ms = 7
    */
@@ -715,14 +718,8 @@ export interface AgentEventDescriptorMsg {
    * @generated from protobuf field: bool error = 8
    */
   error: boolean;
-  /**
-   * @generated from protobuf field: uint32 tool_count = 9
-   */
-  toolCount: number;
-  /**
-   * @generated from protobuf field: uint32 predict_count = 10
-   */
-  predictCount: number;
+  toolCallCount: number;
+  modelCallCount: number;
 }
 
 export const AgentEventDescriptorMsg = {
@@ -732,12 +729,13 @@ export const AgentEventDescriptorMsg = {
       sizeBytes: "0",
       bodyToken: "",
       invocationId: "",
-      eventKind: "",
-      iteration: undefined,
+      nativeEventKind: "",
+      agentEventKind: "native",
+      turn: undefined,
       durationMs: undefined,
       error: false,
-      toolCount: 0,
-      predictCount: 0,
+      toolCallCount: 0,
+      modelCallCount: 0,
       ...value,
     } as AgentEventDescriptorMsg;
   },

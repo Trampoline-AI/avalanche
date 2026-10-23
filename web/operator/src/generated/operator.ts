@@ -813,41 +813,85 @@ export interface NodeSnapshotV2 {
     activityContinuation?: ContinuationRefV2;
 }
 /**
+ * Token counts for an agent invocation; absent figures were not reported.
+ *
+ * @generated from protobuf message avalanche.operator.TokenUsageV2
+ */
+export interface TokenUsageV2 {
+    /**
+     * @generated from protobuf field: uint64 input_tokens = 1
+     */
+    inputTokens: string;
+    /**
+     * @generated from protobuf field: uint64 output_tokens = 2
+     */
+    outputTokens: string;
+    /**
+     * @generated from protobuf field: optional uint64 cache_read_input_tokens = 3
+     */
+    cacheReadInputTokens?: string;
+    /**
+     * @generated from protobuf field: optional uint64 cache_creation_input_tokens = 4
+     */
+    cacheCreationInputTokens?: string;
+    /**
+     * @generated from protobuf field: optional double cost_usd = 5
+     */
+    costUsd?: number;
+}
+/**
+ * The runtime-neutral summary of one finished agent invocation. Runtime-specific
+ * details (such as PredictRLM's sub-model) stay in the trace body.
+ *
  * @generated from protobuf message avalanche.operator.TraceHeaderV2
  */
 export interface TraceHeaderV2 {
     /**
-     * @generated from protobuf field: string status = 1
+     * @generated from protobuf field: optional string model = 2
      */
-    status: string;
-    /**
-     * @generated from protobuf field: string model = 2
-     */
-    model: string;
-    /**
-     * @generated from protobuf field: optional string sub_model = 3
-     */
-    subModel?: string;
-    /**
-     * @generated from protobuf field: uint64 iterations = 4
-     */
-    iterations: string;
-    /**
-     * @generated from protobuf field: uint64 max_iterations = 5
-     */
-    maxIterations: string;
+    model?: string;
     /**
      * @generated from protobuf field: uint64 duration_ms = 6
      */
     durationMs: string;
     /**
-     * @generated from protobuf field: string usage_json = 7
-     */
-    usageJson: string;
-    /**
      * @generated from protobuf field: optional string telemetry_json = 8
      */
     telemetryJson?: string;
+    /**
+     * Open strings, so a new runtime needs no protobuf change.
+     *
+     * @generated from protobuf field: string runtime_kind = 9
+     */
+    runtimeKind: string;
+    /**
+     * @generated from protobuf field: string trace_format = 10
+     */
+    traceFormat: string;
+    /**
+     * @generated from protobuf field: uint64 turn_count = 11
+     */
+    turnCount: string;
+    /**
+     * @generated from protobuf field: uint64 tool_call_count = 12
+     */
+    toolCallCount: string;
+    /**
+     * @generated from protobuf field: avalanche.operator.TokenUsageV2 usage = 13
+     */
+    usage?: TokenUsageV2;
+    /**
+     * @generated from protobuf field: optional string external_run_id = 14
+     */
+    externalRunId?: string;
+    /**
+     * @generated from protobuf field: optional string stop_reason = 15
+     */
+    stopReason?: string;
+    /**
+     * @generated from protobuf field: avalanche.operator.AgentTraceStatusV2 status = 16
+     */
+    status: AgentTraceStatusV2;
 }
 /**
  * @generated from protobuf message avalanche.operator.TraceDescriptorV2
@@ -1041,10 +1085,6 @@ export interface RunActivityDescriptorV2 {
      */
     invocationId: string;
     /**
-     * @generated from protobuf field: optional uint32 iteration = 10
-     */
-    iteration?: number;
-    /**
      * @generated from protobuf field: optional uint64 duration_ms = 11
      */
     durationMs?: string;
@@ -1053,15 +1093,7 @@ export interface RunActivityDescriptorV2 {
      */
     error: boolean;
     /**
-     * @generated from protobuf field: uint32 tool_count = 13
-     */
-    toolCount: number;
-    /**
-     * @generated from protobuf field: uint32 predict_count = 14
-     */
-    predictCount: number;
-    /**
-     * Agent event kind or classifier invocation status.
+     * Classifier invocation status; agent events use agent_event_kind and native_event_kind.
      *
      * @generated from protobuf field: string event_kind = 15
      */
@@ -1090,6 +1122,34 @@ export interface RunActivityDescriptorV2 {
      * @generated from protobuf field: optional string attempt = 20
      */
     attempt?: string;
+    /**
+     * Agent events only: the turn the event belongs to, when it belongs to one.
+     *
+     * @generated from protobuf field: optional uint32 turn = 21
+     */
+    turn?: number;
+    /**
+     * Agent events only: tool calls and nested model calls the event reports.
+     *
+     * @generated from protobuf field: uint32 tool_call_count = 22
+     */
+    toolCallCount: number;
+    /**
+     * Agent events only: the runtime's own event kind, such as "iteration.recorded".
+     *
+     * @generated from protobuf field: string native_event_kind = 23
+     */
+    nativeEventKind: string;
+    /**
+     * Agent events only: the common kind, or NATIVE when the event has none.
+     *
+     * @generated from protobuf field: avalanche.operator.AgentEventKindV2 agent_event_kind = 24
+     */
+    agentEventKind: AgentEventKindV2;
+    /**
+     * @generated from protobuf field: uint32 model_call_count = 25
+     */
+    modelCallCount: number;
 }
 /**
  * @generated from protobuf message avalanche.operator.ClassifierInvocationSummaryV2
@@ -1610,6 +1670,66 @@ export interface RunStatusEnvelopeV2 {
      * @generated from protobuf field: avalanche.operator.ScopeReferenceV2 scope_ref = 10
      */
     scopeRef?: ScopeReferenceV2;
+}
+/**
+ * @generated from protobuf enum avalanche.operator.AgentTraceStatusV2
+ */
+export enum AgentTraceStatusV2 {
+    /**
+     * @generated from protobuf enum value: AGENT_TRACE_STATUS_V2_UNSPECIFIED = 0;
+     */
+    UNSPECIFIED = 0,
+    /**
+     * @generated from protobuf enum value: AGENT_TRACE_STATUS_V2_SUCCEEDED = 1;
+     */
+    SUCCEEDED = 1,
+    /**
+     * @generated from protobuf enum value: AGENT_TRACE_STATUS_V2_FAILED = 2;
+     */
+    FAILED = 2,
+    /**
+     * @generated from protobuf enum value: AGENT_TRACE_STATUS_V2_CANCELLED = 3;
+     */
+    CANCELLED = 3
+}
+/**
+ * @generated from protobuf enum avalanche.operator.AgentEventKindV2
+ */
+export enum AgentEventKindV2 {
+    /**
+     * @generated from protobuf enum value: AGENT_EVENT_KIND_V2_UNSPECIFIED = 0;
+     */
+    UNSPECIFIED = 0,
+    /**
+     * A runtime event with no common equivalent, such as session setup.
+     *
+     * @generated from protobuf enum value: AGENT_EVENT_KIND_V2_NATIVE = 1;
+     */
+    NATIVE = 1,
+    /**
+     * @generated from protobuf enum value: AGENT_EVENT_KIND_V2_TURN_FINISHED = 2;
+     */
+    TURN_FINISHED = 2,
+    /**
+     * @generated from protobuf enum value: AGENT_EVENT_KIND_V2_MODEL_STARTED = 3;
+     */
+    MODEL_STARTED = 3,
+    /**
+     * @generated from protobuf enum value: AGENT_EVENT_KIND_V2_MODEL_FINISHED = 4;
+     */
+    MODEL_FINISHED = 4,
+    /**
+     * @generated from protobuf enum value: AGENT_EVENT_KIND_V2_TOOL_STARTED = 5;
+     */
+    TOOL_STARTED = 5,
+    /**
+     * @generated from protobuf enum value: AGENT_EVENT_KIND_V2_TOOL_FINISHED = 6;
+     */
+    TOOL_FINISHED = 6,
+    /**
+     * @generated from protobuf enum value: AGENT_EVENT_KIND_V2_CODE_GENERATED = 7;
+     */
+    CODE_GENERATED = 7
 }
 /**
  * @generated from protobuf enum avalanche.operator.PageOrderV2
@@ -4050,27 +4170,106 @@ class NodeSnapshotV2$Type extends MessageType<NodeSnapshotV2> {
  */
 export const NodeSnapshotV2 = new NodeSnapshotV2$Type();
 // @generated message type with reflection information, may provide speed optimized methods
+class TokenUsageV2$Type extends MessageType<TokenUsageV2> {
+    constructor() {
+        super("avalanche.operator.TokenUsageV2", [
+            { no: 1, name: "input_tokens", kind: "scalar", T: 4 /*ScalarType.UINT64*/ },
+            { no: 2, name: "output_tokens", kind: "scalar", T: 4 /*ScalarType.UINT64*/ },
+            { no: 3, name: "cache_read_input_tokens", kind: "scalar", opt: true, T: 4 /*ScalarType.UINT64*/ },
+            { no: 4, name: "cache_creation_input_tokens", kind: "scalar", opt: true, T: 4 /*ScalarType.UINT64*/ },
+            { no: 5, name: "cost_usd", kind: "scalar", opt: true, T: 1 /*ScalarType.DOUBLE*/ }
+        ]);
+    }
+    create(value?: PartialMessage<TokenUsageV2>): TokenUsageV2 {
+        const message = globalThis.Object.create((this.messagePrototype!));
+        message.inputTokens = "0";
+        message.outputTokens = "0";
+        if (value !== undefined)
+            reflectionMergePartial<TokenUsageV2>(this, message, value);
+        return message;
+    }
+    internalBinaryRead(reader: IBinaryReader, length: number, options: BinaryReadOptions, target?: TokenUsageV2): TokenUsageV2 {
+        let message = target ?? this.create(), end = reader.pos + length;
+        while (reader.pos < end) {
+            let [fieldNo, wireType] = reader.tag();
+            switch (fieldNo) {
+                case /* uint64 input_tokens */ 1:
+                    message.inputTokens = reader.uint64().toString();
+                    break;
+                case /* uint64 output_tokens */ 2:
+                    message.outputTokens = reader.uint64().toString();
+                    break;
+                case /* optional uint64 cache_read_input_tokens */ 3:
+                    message.cacheReadInputTokens = reader.uint64().toString();
+                    break;
+                case /* optional uint64 cache_creation_input_tokens */ 4:
+                    message.cacheCreationInputTokens = reader.uint64().toString();
+                    break;
+                case /* optional double cost_usd */ 5:
+                    message.costUsd = reader.double();
+                    break;
+                default:
+                    let u = options.readUnknownField;
+                    if (u === "throw")
+                        throw new globalThis.Error(`Unknown field ${fieldNo} (wire type ${wireType}) for ${this.typeName}`);
+                    let d = reader.skip(wireType);
+                    if (u !== false)
+                        (u === true ? UnknownFieldHandler.onRead : u)(this.typeName, message, fieldNo, wireType, d);
+            }
+        }
+        return message;
+    }
+    internalBinaryWrite(message: TokenUsageV2, writer: IBinaryWriter, options: BinaryWriteOptions): IBinaryWriter {
+        /* uint64 input_tokens = 1; */
+        if (message.inputTokens !== "0")
+            writer.tag(1, WireType.Varint).uint64(message.inputTokens);
+        /* uint64 output_tokens = 2; */
+        if (message.outputTokens !== "0")
+            writer.tag(2, WireType.Varint).uint64(message.outputTokens);
+        /* optional uint64 cache_read_input_tokens = 3; */
+        if (message.cacheReadInputTokens !== undefined)
+            writer.tag(3, WireType.Varint).uint64(message.cacheReadInputTokens);
+        /* optional uint64 cache_creation_input_tokens = 4; */
+        if (message.cacheCreationInputTokens !== undefined)
+            writer.tag(4, WireType.Varint).uint64(message.cacheCreationInputTokens);
+        /* optional double cost_usd = 5; */
+        if (message.costUsd !== undefined)
+            writer.tag(5, WireType.Bit64).double(message.costUsd);
+        let u = options.writeUnknownFields;
+        if (u !== false)
+            (u == true ? UnknownFieldHandler.onWrite : u)(this.typeName, message, writer);
+        return writer;
+    }
+}
+/**
+ * @generated MessageType for protobuf message avalanche.operator.TokenUsageV2
+ */
+export const TokenUsageV2 = new TokenUsageV2$Type();
+// @generated message type with reflection information, may provide speed optimized methods
 class TraceHeaderV2$Type extends MessageType<TraceHeaderV2> {
     constructor() {
         super("avalanche.operator.TraceHeaderV2", [
-            { no: 1, name: "status", kind: "scalar", T: 9 /*ScalarType.STRING*/ },
-            { no: 2, name: "model", kind: "scalar", T: 9 /*ScalarType.STRING*/ },
-            { no: 3, name: "sub_model", kind: "scalar", opt: true, T: 9 /*ScalarType.STRING*/ },
-            { no: 4, name: "iterations", kind: "scalar", T: 4 /*ScalarType.UINT64*/ },
-            { no: 5, name: "max_iterations", kind: "scalar", T: 4 /*ScalarType.UINT64*/ },
+            { no: 2, name: "model", kind: "scalar", opt: true, T: 9 /*ScalarType.STRING*/ },
             { no: 6, name: "duration_ms", kind: "scalar", T: 4 /*ScalarType.UINT64*/ },
-            { no: 7, name: "usage_json", kind: "scalar", T: 9 /*ScalarType.STRING*/ },
-            { no: 8, name: "telemetry_json", kind: "scalar", opt: true, T: 9 /*ScalarType.STRING*/ }
+            { no: 8, name: "telemetry_json", kind: "scalar", opt: true, T: 9 /*ScalarType.STRING*/ },
+            { no: 9, name: "runtime_kind", kind: "scalar", T: 9 /*ScalarType.STRING*/ },
+            { no: 10, name: "trace_format", kind: "scalar", T: 9 /*ScalarType.STRING*/ },
+            { no: 11, name: "turn_count", kind: "scalar", T: 4 /*ScalarType.UINT64*/ },
+            { no: 12, name: "tool_call_count", kind: "scalar", T: 4 /*ScalarType.UINT64*/ },
+            { no: 13, name: "usage", kind: "message", T: () => TokenUsageV2 },
+            { no: 14, name: "external_run_id", kind: "scalar", opt: true, T: 9 /*ScalarType.STRING*/ },
+            { no: 15, name: "stop_reason", kind: "scalar", opt: true, T: 9 /*ScalarType.STRING*/ },
+            { no: 16, name: "status", kind: "enum", T: () => ["avalanche.operator.AgentTraceStatusV2", AgentTraceStatusV2, "AGENT_TRACE_STATUS_V2_"] }
         ]);
     }
     create(value?: PartialMessage<TraceHeaderV2>): TraceHeaderV2 {
         const message = globalThis.Object.create((this.messagePrototype!));
-        message.status = "";
-        message.model = "";
-        message.iterations = "0";
-        message.maxIterations = "0";
         message.durationMs = "0";
-        message.usageJson = "";
+        message.runtimeKind = "";
+        message.traceFormat = "";
+        message.turnCount = "0";
+        message.toolCallCount = "0";
+        message.status = 0;
         if (value !== undefined)
             reflectionMergePartial<TraceHeaderV2>(this, message, value);
         return message;
@@ -4080,29 +4279,38 @@ class TraceHeaderV2$Type extends MessageType<TraceHeaderV2> {
         while (reader.pos < end) {
             let [fieldNo, wireType] = reader.tag();
             switch (fieldNo) {
-                case /* string status */ 1:
-                    message.status = reader.string();
-                    break;
-                case /* string model */ 2:
+                case /* optional string model */ 2:
                     message.model = reader.string();
-                    break;
-                case /* optional string sub_model */ 3:
-                    message.subModel = reader.string();
-                    break;
-                case /* uint64 iterations */ 4:
-                    message.iterations = reader.uint64().toString();
-                    break;
-                case /* uint64 max_iterations */ 5:
-                    message.maxIterations = reader.uint64().toString();
                     break;
                 case /* uint64 duration_ms */ 6:
                     message.durationMs = reader.uint64().toString();
                     break;
-                case /* string usage_json */ 7:
-                    message.usageJson = reader.string();
-                    break;
                 case /* optional string telemetry_json */ 8:
                     message.telemetryJson = reader.string();
+                    break;
+                case /* string runtime_kind */ 9:
+                    message.runtimeKind = reader.string();
+                    break;
+                case /* string trace_format */ 10:
+                    message.traceFormat = reader.string();
+                    break;
+                case /* uint64 turn_count */ 11:
+                    message.turnCount = reader.uint64().toString();
+                    break;
+                case /* uint64 tool_call_count */ 12:
+                    message.toolCallCount = reader.uint64().toString();
+                    break;
+                case /* avalanche.operator.TokenUsageV2 usage */ 13:
+                    message.usage = TokenUsageV2.internalBinaryRead(reader, reader.uint32(), options, message.usage);
+                    break;
+                case /* optional string external_run_id */ 14:
+                    message.externalRunId = reader.string();
+                    break;
+                case /* optional string stop_reason */ 15:
+                    message.stopReason = reader.string();
+                    break;
+                case /* avalanche.operator.AgentTraceStatusV2 status */ 16:
+                    message.status = reader.int32();
                     break;
                 default:
                     let u = options.readUnknownField;
@@ -4116,30 +4324,39 @@ class TraceHeaderV2$Type extends MessageType<TraceHeaderV2> {
         return message;
     }
     internalBinaryWrite(message: TraceHeaderV2, writer: IBinaryWriter, options: BinaryWriteOptions): IBinaryWriter {
-        /* string status = 1; */
-        if (message.status !== "")
-            writer.tag(1, WireType.LengthDelimited).string(message.status);
-        /* string model = 2; */
-        if (message.model !== "")
+        /* optional string model = 2; */
+        if (message.model !== undefined)
             writer.tag(2, WireType.LengthDelimited).string(message.model);
-        /* optional string sub_model = 3; */
-        if (message.subModel !== undefined)
-            writer.tag(3, WireType.LengthDelimited).string(message.subModel);
-        /* uint64 iterations = 4; */
-        if (message.iterations !== "0")
-            writer.tag(4, WireType.Varint).uint64(message.iterations);
-        /* uint64 max_iterations = 5; */
-        if (message.maxIterations !== "0")
-            writer.tag(5, WireType.Varint).uint64(message.maxIterations);
         /* uint64 duration_ms = 6; */
         if (message.durationMs !== "0")
             writer.tag(6, WireType.Varint).uint64(message.durationMs);
-        /* string usage_json = 7; */
-        if (message.usageJson !== "")
-            writer.tag(7, WireType.LengthDelimited).string(message.usageJson);
         /* optional string telemetry_json = 8; */
         if (message.telemetryJson !== undefined)
             writer.tag(8, WireType.LengthDelimited).string(message.telemetryJson);
+        /* string runtime_kind = 9; */
+        if (message.runtimeKind !== "")
+            writer.tag(9, WireType.LengthDelimited).string(message.runtimeKind);
+        /* string trace_format = 10; */
+        if (message.traceFormat !== "")
+            writer.tag(10, WireType.LengthDelimited).string(message.traceFormat);
+        /* uint64 turn_count = 11; */
+        if (message.turnCount !== "0")
+            writer.tag(11, WireType.Varint).uint64(message.turnCount);
+        /* uint64 tool_call_count = 12; */
+        if (message.toolCallCount !== "0")
+            writer.tag(12, WireType.Varint).uint64(message.toolCallCount);
+        /* avalanche.operator.TokenUsageV2 usage = 13; */
+        if (message.usage)
+            TokenUsageV2.internalBinaryWrite(message.usage, writer.tag(13, WireType.LengthDelimited).fork(), options).join();
+        /* optional string external_run_id = 14; */
+        if (message.externalRunId !== undefined)
+            writer.tag(14, WireType.LengthDelimited).string(message.externalRunId);
+        /* optional string stop_reason = 15; */
+        if (message.stopReason !== undefined)
+            writer.tag(15, WireType.LengthDelimited).string(message.stopReason);
+        /* avalanche.operator.AgentTraceStatusV2 status = 16; */
+        if (message.status !== 0)
+            writer.tag(16, WireType.Varint).int32(message.status);
         let u = options.writeUnknownFields;
         if (u !== false)
             (u == true ? UnknownFieldHandler.onWrite : u)(this.typeName, message, writer);
@@ -4525,17 +4742,19 @@ class RunActivityDescriptorV2$Type extends MessageType<RunActivityDescriptorV2> 
             { no: 7, name: "node_id", kind: "scalar", T: 9 /*ScalarType.STRING*/ },
             { no: 8, name: "level", kind: "scalar", T: 9 /*ScalarType.STRING*/ },
             { no: 9, name: "invocation_id", kind: "scalar", T: 9 /*ScalarType.STRING*/ },
-            { no: 10, name: "iteration", kind: "scalar", opt: true, T: 13 /*ScalarType.UINT32*/ },
             { no: 11, name: "duration_ms", kind: "scalar", opt: true, T: 4 /*ScalarType.UINT64*/ },
             { no: 12, name: "error", kind: "scalar", T: 8 /*ScalarType.BOOL*/ },
-            { no: 13, name: "tool_count", kind: "scalar", T: 13 /*ScalarType.UINT32*/ },
-            { no: 14, name: "predict_count", kind: "scalar", T: 13 /*ScalarType.UINT32*/ },
             { no: 15, name: "event_kind", kind: "scalar", T: 9 /*ScalarType.STRING*/ },
             { no: 16, name: "trace", kind: "message", T: () => TraceDescriptorV2 },
             { no: 17, name: "terminal_seal", kind: "message", T: () => TerminalSealV2 },
             { no: 18, name: "classifier_summary", kind: "message", T: () => ClassifierInvocationSummaryV2 },
             { no: 19, name: "channel", kind: "scalar", opt: true, T: 9 /*ScalarType.STRING*/ },
-            { no: 20, name: "attempt", kind: "scalar", opt: true, T: 9 /*ScalarType.STRING*/ }
+            { no: 20, name: "attempt", kind: "scalar", opt: true, T: 9 /*ScalarType.STRING*/ },
+            { no: 21, name: "turn", kind: "scalar", opt: true, T: 13 /*ScalarType.UINT32*/ },
+            { no: 22, name: "tool_call_count", kind: "scalar", T: 13 /*ScalarType.UINT32*/ },
+            { no: 23, name: "native_event_kind", kind: "scalar", T: 9 /*ScalarType.STRING*/ },
+            { no: 24, name: "agent_event_kind", kind: "enum", T: () => ["avalanche.operator.AgentEventKindV2", AgentEventKindV2, "AGENT_EVENT_KIND_V2_"] },
+            { no: 25, name: "model_call_count", kind: "scalar", T: 13 /*ScalarType.UINT32*/ }
         ]);
     }
     create(value?: PartialMessage<RunActivityDescriptorV2>): RunActivityDescriptorV2 {
@@ -4549,9 +4768,11 @@ class RunActivityDescriptorV2$Type extends MessageType<RunActivityDescriptorV2> 
         message.level = "";
         message.invocationId = "";
         message.error = false;
-        message.toolCount = 0;
-        message.predictCount = 0;
         message.eventKind = "";
+        message.toolCallCount = 0;
+        message.nativeEventKind = "";
+        message.agentEventKind = 0;
+        message.modelCallCount = 0;
         if (value !== undefined)
             reflectionMergePartial<RunActivityDescriptorV2>(this, message, value);
         return message;
@@ -4588,20 +4809,11 @@ class RunActivityDescriptorV2$Type extends MessageType<RunActivityDescriptorV2> 
                 case /* string invocation_id */ 9:
                     message.invocationId = reader.string();
                     break;
-                case /* optional uint32 iteration */ 10:
-                    message.iteration = reader.uint32();
-                    break;
                 case /* optional uint64 duration_ms */ 11:
                     message.durationMs = reader.uint64().toString();
                     break;
                 case /* bool error */ 12:
                     message.error = reader.bool();
-                    break;
-                case /* uint32 tool_count */ 13:
-                    message.toolCount = reader.uint32();
-                    break;
-                case /* uint32 predict_count */ 14:
-                    message.predictCount = reader.uint32();
                     break;
                 case /* string event_kind */ 15:
                     message.eventKind = reader.string();
@@ -4620,6 +4832,21 @@ class RunActivityDescriptorV2$Type extends MessageType<RunActivityDescriptorV2> 
                     break;
                 case /* optional string attempt */ 20:
                     message.attempt = reader.string();
+                    break;
+                case /* optional uint32 turn */ 21:
+                    message.turn = reader.uint32();
+                    break;
+                case /* uint32 tool_call_count */ 22:
+                    message.toolCallCount = reader.uint32();
+                    break;
+                case /* string native_event_kind */ 23:
+                    message.nativeEventKind = reader.string();
+                    break;
+                case /* avalanche.operator.AgentEventKindV2 agent_event_kind */ 24:
+                    message.agentEventKind = reader.int32();
+                    break;
+                case /* uint32 model_call_count */ 25:
+                    message.modelCallCount = reader.uint32();
                     break;
                 default:
                     let u = options.readUnknownField;
@@ -4660,21 +4887,12 @@ class RunActivityDescriptorV2$Type extends MessageType<RunActivityDescriptorV2> 
         /* string invocation_id = 9; */
         if (message.invocationId !== "")
             writer.tag(9, WireType.LengthDelimited).string(message.invocationId);
-        /* optional uint32 iteration = 10; */
-        if (message.iteration !== undefined)
-            writer.tag(10, WireType.Varint).uint32(message.iteration);
         /* optional uint64 duration_ms = 11; */
         if (message.durationMs !== undefined)
             writer.tag(11, WireType.Varint).uint64(message.durationMs);
         /* bool error = 12; */
         if (message.error !== false)
             writer.tag(12, WireType.Varint).bool(message.error);
-        /* uint32 tool_count = 13; */
-        if (message.toolCount !== 0)
-            writer.tag(13, WireType.Varint).uint32(message.toolCount);
-        /* uint32 predict_count = 14; */
-        if (message.predictCount !== 0)
-            writer.tag(14, WireType.Varint).uint32(message.predictCount);
         /* string event_kind = 15; */
         if (message.eventKind !== "")
             writer.tag(15, WireType.LengthDelimited).string(message.eventKind);
@@ -4693,6 +4911,21 @@ class RunActivityDescriptorV2$Type extends MessageType<RunActivityDescriptorV2> 
         /* optional string attempt = 20; */
         if (message.attempt !== undefined)
             writer.tag(20, WireType.LengthDelimited).string(message.attempt);
+        /* optional uint32 turn = 21; */
+        if (message.turn !== undefined)
+            writer.tag(21, WireType.Varint).uint32(message.turn);
+        /* uint32 tool_call_count = 22; */
+        if (message.toolCallCount !== 0)
+            writer.tag(22, WireType.Varint).uint32(message.toolCallCount);
+        /* string native_event_kind = 23; */
+        if (message.nativeEventKind !== "")
+            writer.tag(23, WireType.LengthDelimited).string(message.nativeEventKind);
+        /* avalanche.operator.AgentEventKindV2 agent_event_kind = 24; */
+        if (message.agentEventKind !== 0)
+            writer.tag(24, WireType.Varint).int32(message.agentEventKind);
+        /* uint32 model_call_count = 25; */
+        if (message.modelCallCount !== 0)
+            writer.tag(25, WireType.Varint).uint32(message.modelCallCount);
         let u = options.writeUnknownFields;
         if (u !== false)
             (u == true ? UnknownFieldHandler.onWrite : u)(this.typeName, message, writer);

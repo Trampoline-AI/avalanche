@@ -79,11 +79,11 @@ export function RetainedAgentValue({
       (event) => event.eventSequence,
       kind === "inputs" ? "newer" : "older",
       [...records.values()]
-        .filter((event) => event.eventKind === eventKind)
+        .filter((event) => event.nativeEventKind === eventKind)
         .map((event) => event.eventSequence),
     )
       .reverse()
-      .find((event) => event.eventKind === eventKind);
+      .find((event) => event.nativeEventKind === eventKind);
   }, [eventKind, kind, liveEvents, page.records]);
 
   useEffect(() => {

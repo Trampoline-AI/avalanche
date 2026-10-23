@@ -6,7 +6,8 @@ import {
   type AgentTraceStep,
   type AgentTraceStepSummary,
   type TraceLmUsage,
-  parseAgentTraceUsage,
+  parsePredictRlmTraceSummary,
+  type PredictRlmTraceSummary,
   parseAgentTraceStepEvent,
   summarizeAgentTraceStep,
 } from "./agentTrace";
@@ -245,6 +246,37 @@ function AgentAndStepInspector({
       ? Object.hasOwn(run.topology.agentFieldSchemasJson, nodeId ?? "")
       : Boolean(node?.trace)
     : isWorkflowAgentNode;
+  // PredictRLM's sub-model, iteration limit and per-model usage live in its small
+  // final trace body, not the common header, so read that body once it exists.
+  const traceBodyToken =
+    run && isAgentNode && node?.trace?.header?.runtimeKind === "predict_rlm"
+      ? node.trace.bodyToken
+      : undefined;
+  const [predictRlmSummary, setPredictRlmSummary] = useState<
+    | { bodyToken: string; summary: PredictRlmTraceSummary }
+    | { bodyToken: string; error: string }
+  >();
+  useEffect(() => {
+    if (!traceBodyToken) return;
+    const controller = new AbortController();
+    void api
+      .readJsonDetail(traceBodyToken, controller.signal)
+      .then((body) => {
+        if (controller.signal.aborted) return;
+        setPredictRlmSummary({
+          bodyToken: traceBodyToken,
+          summary: parsePredictRlmTraceSummary(body),
+        });
+      })
+      .catch((error: unknown) => {
+        if (controller.signal.aborted) return;
+        setPredictRlmSummary({
+          bodyToken: traceBodyToken,
+          error: error instanceof Error ? error.message : "Trace details are unavailable.",
+        });
+      });
+    return () => controller.abort();
+  }, [api, traceBodyToken]);
   const evaluationRecord =
     run && isAgentNode ? evaluationState.records[nodeId ?? ""] : undefined;
   const rawEvaluationDeclaration = run?.topology?.evaluationMetadataJson[nodeId ?? ""];
@@ -535,7 +567,7 @@ function AgentAndStepInspector({
   }, [activeEventPage.records, eventPageOrder, liveEvents]);
 
   const turns = useMemo(
-    () => combinedEvents.filter((event) => event.eventKind === "iteration.recorded"),
+    () => combinedEvents.filter((event) => event.agentEventKind === "turn.finished"),
     [combinedEvents],
   );
 
@@ -630,7 +662,7 @@ function AgentAndStepInspector({
     [cacheVersion, detailErrors, detailLoadingVersion, turns],
   );
   const lifecycleEvents = useMemo(
-    () => combinedEvents.filter((event) => event.eventKind !== "iteration.recorded"),
+    () => combinedEvents.filter((event) => event.agentEventKind !== "turn.finished"),
     [combinedEvents],
   );
 
@@ -649,21 +681,22 @@ function AgentAndStepInspector({
         : undefined
     : undefined;
   const traceHeader = isAgentNode ? node?.trace?.header : undefined;
-  let traceUsage: TraceLmUsage | undefined;
-  if (traceHeader?.usageJson) {
-    try {
-      traceUsage = parseAgentTraceUsage(JSON.parse(traceHeader.usageJson) as unknown);
-    } catch {
-      traceUsage = undefined;
-    }
-  }
+  const predictRlmResult =
+    predictRlmSummary && predictRlmSummary.bodyToken === traceBodyToken
+      ? predictRlmSummary
+      : undefined;
+  const predictRlm =
+    predictRlmResult && "summary" in predictRlmResult ? predictRlmResult.summary : undefined;
+  const predictRlmError =
+    predictRlmResult && "error" in predictRlmResult ? predictRlmResult.error : undefined;
+  const traceUsage: TraceLmUsage | undefined = predictRlm?.usage;
   const declaredModels = isUnknownRecord(workflowDeclaration?.model)
     ? workflowDeclaration.model
     : undefined;
   const declaredMainModel = declaredModelName(declaredModels?.main);
   const declaredSubModel = declaredModelName(declaredModels?.sub);
   const mainModel = traceHeader?.model;
-  const subModel = traceHeader?.subModel;
+  const subModel = predictRlm?.subModel;
   const headerDuration = traceHeader
     ? formatTraceDuration(traceHeader.durationMs)
     : nodeDuration;
@@ -746,21 +779,31 @@ function AgentAndStepInspector({
               <p className="m-0 whitespace-normal text-secondary [overflow-wrap:anywhere]">
                 <span className="mr-1.5 text-muted uppercase">Main</span>
                 {mainModel ?? "—"}
-                {traceUsage &&
-                  ` · ${TOKEN_NUMBER_FORMAT.format(traceUsage.main.inputTokens)} in / ${TOKEN_NUMBER_FORMAT.format(traceUsage.main.outputTokens)} out · $${traceUsage.main.cost.toFixed(4)}`}
+                {traceUsage
+                  ? ` · ${TOKEN_NUMBER_FORMAT.format(traceUsage.main.inputTokens)} in / ${TOKEN_NUMBER_FORMAT.format(traceUsage.main.outputTokens)} out · $${traceUsage.main.cost.toFixed(4)}`
+                  : traceHeader.usage &&
+                    ` · ${TOKEN_NUMBER_FORMAT.format(Number(traceHeader.usage.inputTokens))} in / ${TOKEN_NUMBER_FORMAT.format(Number(traceHeader.usage.outputTokens))} out${traceHeader.usage.costUsd === undefined ? "" : ` · $${traceHeader.usage.costUsd.toFixed(4)}`}`}
               </p>
-              <p className="m-0 whitespace-normal text-secondary [overflow-wrap:anywhere]">
-                <span className="mr-1.5 text-muted uppercase">Sub</span>
-                {subModel ?? "—"}
-                {traceUsage &&
-                  ` · ${TOKEN_NUMBER_FORMAT.format(traceUsage.sub.inputTokens)} in / ${TOKEN_NUMBER_FORMAT.format(traceUsage.sub.outputTokens)} out · $${traceUsage.sub.cost.toFixed(4)}`}
-              </p>
+              {traceHeader.runtimeKind === "predict_rlm" && (
+                <p className="m-0 whitespace-normal text-secondary [overflow-wrap:anywhere]">
+                  <span className="mr-1.5 text-muted uppercase">Sub</span>
+                  {subModel ?? "—"}
+                  {traceUsage &&
+                    ` · ${TOKEN_NUMBER_FORMAT.format(traceUsage.sub.inputTokens)} in / ${TOKEN_NUMBER_FORMAT.format(traceUsage.sub.outputTokens)} out · $${traceUsage.sub.cost.toFixed(4)}`}
+                </p>
+              )}
               <p className="m-0 text-muted">
                 <span className="text-secondary">
-                  {traceHeader.iterations} of {traceHeader.maxIterations}
+                  {traceHeader.turnCount}
+                  {predictRlm && ` of ${predictRlm.maxIterations}`}
                 </span>{" "}
-                iterations
+                {traceHeader.runtimeKind === "predict_rlm" ? "iterations" : "turns"}
               </p>
+              {predictRlmError && (
+                <p role="alert" className="m-0 text-danger [overflow-wrap:anywhere]">
+                  {predictRlmError}
+                </p>
+              )}
             </div>
           )}
           {node?.error && (
