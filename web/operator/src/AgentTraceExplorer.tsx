@@ -328,7 +328,7 @@ function TurnSecondaryDetails({
         </DeferredTurnDetail>
       </TraceSection>
       <TraceSection
-        label={`Tools (${descriptor.toolCount})`}
+        label={`Tools (${descriptor.toolCallCount})`}
         onOpenChange={(open) => setSectionOpen("tools", open)}
       >
         <DeferredTurnDetail detail={detail} onLoadTurn={onLoadTurn}>
@@ -336,7 +336,7 @@ function TurnSecondaryDetails({
         </DeferredTurnDetail>
       </TraceSection>
       <TraceSection
-        label={`Predict calls (${descriptor.predictCount})`}
+        label={`Predict calls (${descriptor.modelCallCount})`}
         onOpenChange={(open) => setSectionOpen("predict", open)}
       >
         <DeferredTurnDetail detail={detail} onLoadTurn={onLoadTurn}>
@@ -390,13 +390,11 @@ export function AgentTraceExplorer({
     () =>
       [...turns].sort((left, right) => {
         const leftIteration =
-          left.summary.status === "ready"
-            ? left.summary.step.iteration
-            : left.descriptor.iteration;
+          left.summary.status === "ready" ? left.summary.step.iteration : left.descriptor.turn;
         const rightIteration =
           right.summary.status === "ready"
             ? right.summary.step.iteration
-            : right.descriptor.iteration;
+            : right.descriptor.turn;
         if (
           leftIteration !== undefined &&
           rightIteration !== undefined &&
@@ -432,8 +430,9 @@ export function AgentTraceExplorer({
                 <span className="relative inline-flex size-2 rounded-full bg-agent" />
               </span>
               <span>
-                {ACTIVITY_LABELS[currentActivity.eventKind] ?? currentActivity.eventKind}
-                {currentActivity.iteration ? ` · turn ${currentActivity.iteration}` : ""}
+                {ACTIVITY_LABELS[currentActivity.nativeEventKind] ??
+                  currentActivity.nativeEventKind}
+                {currentActivity.turn ? ` · turn ${currentActivity.turn}` : ""}
               </span>
             </div>
           )}
@@ -458,7 +457,7 @@ export function AgentTraceExplorer({
                 {orderedTurns.map(({ descriptor, summary, detail }, index) => {
                   const turnKey = descriptor.bodyToken || descriptor.eventSequence;
                   const step = summary.status === "ready" ? summary.step : undefined;
-                  const iteration = step?.iteration ?? descriptor.iteration ?? index + 1;
+                  const iteration = step?.iteration ?? descriptor.turn ?? index + 1;
                   const failed = descriptor.error || step?.error;
                   const finishReason = failed ? undefined : finishLabel(step?.lm?.finishReason);
                   return (
@@ -479,8 +478,8 @@ export function AgentTraceExplorer({
                           </strong>
                           <p className="mt-0.5 mb-0 whitespace-normal font-mono text-[8px] leading-[1.6] text-muted [overflow-wrap:anywhere]">
                             {formatDuration(step?.durationMs ?? descriptor.durationMs)}
-                            {` · ${descriptor.toolCount} tool${descriptor.toolCount === 1 ? "" : "s"}`}
-                            {` · ${descriptor.predictCount} predict`}
+                            {` · ${descriptor.toolCallCount} tool${descriptor.toolCallCount === 1 ? "" : "s"}`}
+                            {` · ${descriptor.modelCallCount} predict`}
                             {step
                               ? ` · main ${turnUsageLabel(step.usage.main)} · sub ${turnUsageLabel(step.usage.sub)}`
                               : ""}

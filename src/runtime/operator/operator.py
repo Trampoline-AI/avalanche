@@ -115,7 +115,7 @@ from .webhooks import DEFAULT_WEBHOOK_PORT, WebhookServer, routes_for
 from .windows_job import WindowsJob, assign_process, close_job, create_kill_on_close_job
 
 if TYPE_CHECKING:
-    from predict_rlm import RunTrace
+    from predict_rlm import RunEvidence, RunTrace
 
 _LEVEL_MAP = {
     logging.DEBUG: LogLevel.DEBUG,
@@ -1302,12 +1302,13 @@ class Operator:
                 node_id=node_id,
                 sequence=item.event_sequence,
             ),
-            event_kind=item.event_kind,
-            iteration=item.iteration,
+            native_event_kind=item.native_event_kind,
+            agent_event_kind=item.agent_event_kind,
+            turn=item.turn,
             duration_ms=item.duration_ms,
             error=item.error,
-            tool_count=item.tool_count,
-            predict_count=item.predict_count,
+            tool_call_count=item.tool_call_count,
+            model_call_count=item.model_call_count,
         )
 
     def _classifier_event_descriptor_locked(
@@ -2498,6 +2499,7 @@ class Operator:
         from predict_rlm import IterationStep
 
         from avalanche._agent_trace import AgentLifecycleEvent, AgentTerminalDetail
+        from avalanche.runtimes.predict_rlm.mapping import COMMON_EVENT_KINDS
 
         if node_id not in run.nodes:
             raise _CoordinatorProtocolError("agent evidence references unpublished node")
@@ -2591,12 +2593,13 @@ class Operator:
                 event_sequence=len(projected_events) + 1,
                 event_json=event_json,
                 size_bytes=event_size,
-                event_kind=event_kind,
-                iteration=iteration,
+                native_event_kind=event_kind,
+                agent_event_kind=COMMON_EVENT_KINDS.get(event_kind, "native"),
+                turn=iteration,
                 duration_ms=duration_ms,
                 error=event_error,
-                tool_count=tool_count,
-                predict_count=predict_count,
+                tool_call_count=tool_count,
+                model_call_count=predict_count,
             )
             detail = []
             if iteration is not None:
@@ -2637,7 +2640,7 @@ class Operator:
                 trace = terminal_detail.trace
                 if trace is None:
                     raise _CoordinatorProtocolError("finished agent trace must not be null")
-                header = _trace_header_from_trace(trace)
+                header = _trace_header(trace, terminal_detail.evidence)
                 finalized_trace = terminal_detail.model_dump_json(
                     exclude={"trace": {"steps"}}
                 ).encode()
@@ -3846,16 +3849,22 @@ def _evaluation_metadata_mapping(value: object) -> dict[str, str]:
     return metadata
 
 
-def _trace_header_from_trace(trace: RunTrace) -> TraceHeader:
-    """Project the validated SDK trace without retaining its iteration body."""
+def _trace_header(trace: RunTrace, evidence: RunEvidence) -> TraceHeader:
+    """Keep the common header; the turns and native details stay in the trace body."""
+    from avalanche.runtimes.predict_rlm.trace import trace_header
+
+    header = trace_header(trace, evidence, model=None)
     return TraceHeader(
-        status=trace.status,
-        model=trace.model,
-        sub_model=trace.sub_model,
-        iterations=trace.iterations,
-        max_iterations=trace.max_iterations,
-        duration_ms=trace.duration_ms,
-        usage_json=trace.usage.model_dump_json(),
+        status=header.status,
+        runtime_kind=header.runtime_kind,
+        trace_format=header.trace_format,
+        model=header.model,
+        duration_ms=header.duration_ms,
+        usage=header.usage,
+        turn_count=header.turn_count,
+        tool_call_count=header.tool_call_count,
+        external_run_id=header.external_run_id,
+        stop_reason=header.stop_reason,
         telemetry_json=(
             json.dumps(trace.telemetry_ref, separators=(",", ":"))
             if trace.telemetry_ref is not None

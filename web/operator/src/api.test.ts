@@ -6,6 +6,7 @@ import type { ClassifierDeclaration, ClassifierInvocation } from "./classifier";
 import {
   ActivityDetailChunkV2,
   ActivityDetailRefV2,
+  AgentEventKindV2,
   CatalogReloadRequiredV2,
   ClassifierInvocationSummaryV2,
   EvaluationRecordV2,
@@ -841,7 +842,9 @@ describe("operator transport boundary", () => {
             scopeRef,
             cursor: cursor(),
             runId: "run-1",
-            activities: [{ ...activity, kind: "agent_event" }],
+            activities: [
+              { ...activity, kind: "agent_event", agentEventKind: AgentEventKindV2.NATIVE },
+            ],
           }),
         ),
       }),
