@@ -867,6 +867,27 @@ describe("retained run inspection", () => {
     expect(screen.getByText("historical_review_question")).toBeInTheDocument();
   });
 
+  it("never shows PredictRLM's combined usage as main-model usage", () => {
+    const pendingRun = RunSnapshotMsg.create({
+      ...run,
+      nodes: [{ ...run.nodes[0], trace: { ...run.nodes[0].trace, bodyToken: "trace-body" } }],
+    });
+    render(
+      <Inspector
+        api={createApi({ readJsonDetail: () => new Promise(() => undefined) })}
+        workflow={agentWorkflow}
+        run={pendingRun}
+        nodeId={node.nodeId}
+        onClose={() => undefined}
+      />,
+    );
+    const header = screen
+      .getByRole("complementary", { name: "Run inspector" })
+      .querySelector("header")!;
+    expect(within(header).getByText("Main").parentElement).toHaveTextContent("retained-model");
+    expect(within(header).getByText("Main").parentElement).not.toHaveTextContent("12 in");
+  });
+
   it("shows a common header for runtimes without PredictRLM details", () => {
     const otherRun = RunSnapshotMsg.create({
       ...run,
@@ -943,13 +964,13 @@ describe("retained run inspection", () => {
       const header = screen
         .getByRole("complementary", { name: "Run inspector" })
         .querySelector("header")!;
-      expect(within(header).getByText("Main").parentElement).toHaveTextContent(
-        "retained-model · 12 in / 3 out · $0.0100",
-      );
       await waitFor(() =>
         expect(within(header).getByText("Sub").parentElement).toHaveTextContent(
           "retained-sub-model · 9 in / 1 out · $0.0025",
         ),
+      );
+      expect(within(header).getByText("Main").parentElement).toHaveTextContent(
+        "retained-model · 12 in / 3 out · $0.0100",
       );
       expect(header).toHaveTextContent("2 of 4 iterations");
       expect(header).toHaveTextContent("0.13s");

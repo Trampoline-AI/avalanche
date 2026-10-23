@@ -781,7 +781,8 @@ function AgentAndStepInspector({
                 {mainModel ?? "—"}
                 {traceUsage
                   ? ` · ${TOKEN_NUMBER_FORMAT.format(traceUsage.main.inputTokens)} in / ${TOKEN_NUMBER_FORMAT.format(traceUsage.main.outputTokens)} out · $${traceUsage.main.cost.toFixed(4)}`
-                  : traceHeader.usage &&
+                  : traceHeader.runtimeKind !== "predict_rlm" &&
+                    traceHeader.usage &&
                     ` · ${TOKEN_NUMBER_FORMAT.format(Number(traceHeader.usage.inputTokens))} in / ${TOKEN_NUMBER_FORMAT.format(Number(traceHeader.usage.outputTokens))} out${traceHeader.usage.costUsd === undefined ? "" : ` · $${traceHeader.usage.costUsd.toFixed(4)}`}`}
               </p>
               {traceHeader.runtimeKind === "predict_rlm" && (

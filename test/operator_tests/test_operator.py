@@ -225,7 +225,10 @@ def test_agent_trace_header_and_events_carry_common_fields_over_protobuf(
             {
                 "kind": "trace_finished",
                 "invocation_id": "inv",
-                "trace": agent_trace(steps=[step]).model_dump(mode="json"),
+                # Steps crossed as live events, so the terminal trace carries none.
+                "trace": agent_trace(steps=[])
+                .model_copy(update={"iterations": 1})
+                .model_dump(mode="json"),
                 "evidence": {
                     "run_id": "sdk-run",
                     "complete": True,
@@ -251,6 +254,7 @@ def test_agent_trace_header_and_events_carry_common_fields_over_protobuf(
             "submit",
         )
         assert header.usage == TokenUsage(input_tokens=0, output_tokens=0, cost_usd=0.0)
+        assert header.tool_call_count == 2
         assert header.external_run_id == "sdk-run"
         assert (
             trace_header_from_v2(
