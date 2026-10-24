@@ -4,6 +4,10 @@
 
 - Prepare 0.15.0: the TUI now requires TuiExtensions v1; see the breaking change below.
 
+### Protocol
+
+- Delta protocol 1.0 (baseline): export `avalanche.PROTOCOL_VERSION`; see docs/compatibility.md.
+
 ## 0.15.0 — 2026-10-24
 
 - **BREAKING CHANGE:** the TUI and `ava tui` no longer support providers implementing

@@ -24,6 +24,10 @@ jobs:
         with:
           fetch-depth: 0
       - uses: astral-sh/setup-uv@v7
+      - name: Check protocol changelog against previous tag
+        run: |
+          BASE=$(git describe --tags --abbrev=0 "${GITHUB_SHA}^")
+          uv run --no-project --python 3.13 python scripts/check_protocol_changelog.py --base "$BASE"
       - name: Verify tag is on main
         run: |
           TAG="${GITHUB_REF_NAME}"
