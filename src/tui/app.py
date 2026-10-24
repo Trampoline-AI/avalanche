@@ -961,9 +961,7 @@ class AvalancheApp(App):
         if key is None:
             return
         envelope = self.store.selected_agent_trace_envelope
-        if envelope is not None and (
-            envelope.trace is not None or envelope.evidence is not None
-        ):
+        if envelope is not None and envelope.terminal is not None:
             self._trace_hydration_retry.pop(key, None)
             return
         if self._trace_hydration_attempts or self._trace_hydration_closed:

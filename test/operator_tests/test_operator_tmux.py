@@ -10,6 +10,7 @@ from uuid import uuid4
 
 import pytest
 
+from avalanche.agent.trace import CodeExecutionAction
 from runtime.operator.client import GrpcStateProvider, OperatorCallError
 from runtime.operator.models import RunStatus
 
@@ -512,16 +513,26 @@ async def test_operator_tui_extensions_live_pilot(tmp_path):
                 "answer": 10,
                 "lm_calls": 3,
             }
+            await wait_for(pilot, lambda: app.store.selected_agent_record is not None)
             envelope = app.store.selected_agent_trace_envelope
             assert envelope is not None
-            trace = envelope.trace
-            assert trace is not None and trace.iterations == 3
-            assert [step.iteration for step in trace.steps] == [1, 2, 3]
-            assert "numbers = [2, 3, 5]" in trace.steps[0].code
-            assert "[2, 3, 5]" in trace.steps[0].output
-            assert "total = sum(numbers)" in trace.steps[1].code
-            assert "10" in trace.steps[1].output
-            assert "SUBMIT(answer=total)" in trace.steps[2].code
+            record = app.store.selected_agent_record
+            assert record is not None and record.header.turn_count == 3
+            turns = app.store.selected_agent_turns
+            assert [turn.finished.turn.index for turn in turns] == [1, 2, 3]
+            code = [
+                next(
+                    action
+                    for action in turn.finished.turn.actions
+                    if isinstance(action, CodeExecutionAction)
+                )
+                for turn in turns
+            ]
+            assert "numbers = [2, 3, 5]" in code[0].code
+            assert "[2, 3, 5]" in code[0].output
+            assert "total = sum(numbers)" in code[1].code
+            assert "10" in code[1].output
+            assert "SUBMIT(answer=total)" in code[2].code
             inspector = app.screen.query_one("#agent-trace-content")
             # Visit each retained turn through the real trace navigation, not
             # just the provider's hydrated model.
@@ -539,8 +550,8 @@ async def test_operator_tui_extensions_live_pilot(tmp_path):
             assert "[2, 3, 5]" in screen_text and "10" in screen_text
             assert "total = sum(numbers)" in screen_text
             assert "SUBMIT(answer=total)" in screen_text
-            assert trace.usage.main.input_tokens == 0
-            assert trace.usage.main.output_tokens == 0
+            assert record.native.usage.main.input_tokens == 0
+            assert record.native.usage.main.output_tokens == 0
             assert "0 in / 0 out" in screen_text
             assert "Main:" in screen_text and "Sub:" in screen_text
             app.save_screenshot(str(evidence / "scripted-trace.svg"))

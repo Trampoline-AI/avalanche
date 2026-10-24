@@ -221,8 +221,6 @@ def trace_header_to_v2(header: TraceHeader) -> pb.TraceHeaderV2:
         message.external_run_id = header.external_run_id
     if header.stop_reason is not None:
         message.stop_reason = header.stop_reason
-    if header.telemetry_json is not None:
-        message.telemetry_json = header.telemetry_json
     return message
 
 
@@ -863,7 +861,6 @@ def trace_header_from_v2(msg: pb.TraceHeaderV2) -> TraceHeader:
         tool_call_count=msg.tool_call_count,
         external_run_id=msg.external_run_id if msg.HasField("external_run_id") else None,
         stop_reason=msg.stop_reason if msg.HasField("stop_reason") else None,
-        telemetry_json=msg.telemetry_json if msg.HasField("telemetry_json") else None,
     )
 
 

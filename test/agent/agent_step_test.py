@@ -264,19 +264,19 @@ async def test_live_evidence_redacts_tool_and_model_secrets_without_losing_event
 
     assert result.outputs.note == "reviewed"
     live = observed[:-1]
-    assert [event["sequence"] for event in live] == list(range(1, 7))
-    assert live[0]["data"]["inputs"] == {"person": {"id": 1, "name": "Ada"}}
-    assert live[-1]["data"]["outputs"] == {"note": "reviewed"}
-    assert "model-secret" not in json.dumps(observed)
-    assert "tool-secret" not in json.dumps(observed)
-    assert observed[-1]["kind"] == "trace_finished"
-    assert observed[-1]["evidence"] == {
-        "run_id": "run",
-        "complete": True,
-        "terminal_outcome": "completed",
-    }
-    assert "evidence" not in observed[-1]["trace"]
-    assert len({event["invocation_id"] for event in observed}) == 1
+    # Avalanche, not the runtime, numbers the live events.
+    assert [event.sequence for event in live] == list(range(1, 7))
+    assert live[0].native.inputs == {"person": {"id": 1, "name": "Ada"}}
+    assert live[-1].native.outputs == {"note": "reviewed"}
+    wire = "".join(event.model_dump_json() for event in observed)
+    assert "model-secret" not in wire
+    assert "tool-secret" not in wire
+    terminal = observed[-1]
+    assert terminal.kind == "trace_finished"
+    assert terminal.complete is True
+    assert terminal.record.header.external_run_id == "run"
+    assert terminal.record.header.status == "succeeded"
+    assert len({event.invocation_id for event in observed}) == 1
 
 
 @pytest.mark.asyncio
@@ -338,13 +338,13 @@ async def test_concurrent_agent_invocations_keep_evidence_and_traces_correlated(
     assert (left.outputs.note, right.outputs.note) == ("left", "right")
     grouped = {}
     for event in observed:
-        grouped.setdefault(event["invocation_id"], []).append(event)
+        grouped.setdefault(event.invocation_id, []).append(event)
     assert len(grouped) == 2
     assert not set(grouped) & {"left", "right", "caller-left", "caller-right"}
     for events in grouped.values():
-        assert [event["kind"] for event in events] == ["evidence", "evidence", "trace_finished"]
-        assert events[0]["data"]["call_id"] == events[-1]["evidence"]["run_id"]
-        assert "invocation_id" not in events[0]["data"]
+        assert [event.kind for event in events] == ["event", "event", "trace_finished"]
+        assert events[0].common.call_id == events[-1].record.header.external_run_id
+        assert "caller-" not in events[0].model_dump_json()
 
 
 @pytest.mark.asyncio
@@ -379,7 +379,7 @@ async def test_real_recorder_propagates_strict_observer_failures(monkeypatch, fa
             return result
 
     def broken_listener(event):
-        if event["kind"] == "evidence":
+        if event.kind == "event":
             raise failure
 
     agent = ava.Agent(signature=SummarySignature, step_name="summarize")
@@ -422,16 +422,15 @@ async def test_agent_cancellation_emits_one_terminal_and_preserves_cancellation(
             await agent(person=Person(id=1, name="Ada"))
     assert raised.value is cancellation
     assert len(observed) == 1
-    assert observed[0]["evidence"] == {
-        "run_id": "cancelled-run",
-        "complete": True,
-        "terminal_outcome": "cancelled",
-    }
+    (terminal,) = observed
+    assert terminal.complete is True
     if exportable_trace:
-        assert observed[0]["kind"] == "trace_finished"
-        assert observed[0]["trace"]["status"] == "error"
+        assert terminal.kind == "trace_finished"
+        assert terminal.record.header.status == "cancelled"
+        assert terminal.record.header.external_run_id == "cancelled-run"
     else:
-        assert observed[0]["kind"] == "trace_unavailable"
+        assert terminal.kind == "trace_unavailable"
+        assert (terminal.status, terminal.external_run_id) == ("cancelled", "cancelled-run")
 
 
 @pytest.mark.asyncio
@@ -490,7 +489,7 @@ async def test_terminal_persistence_failure_is_not_reclassified_as_agent_failure
         with pytest.raises(RuntimeError) as raised:
             await agent(person=Person(id=1, name="Ada"))
     assert raised.value is failure
-    assert [event["kind"] for event in observed] == ["trace_finished"]
+    assert [event.kind for event in observed] == ["trace_finished"]
 
 
 @pytest.mark.asyncio
@@ -529,17 +528,15 @@ async def test_agent_failure_retains_separate_evidence_without_exposing_raw_even
 
     assert raised.value.__cause__ is failure
     assert len(observed) == 1
-    assert observed[0]["kind"] == (
-        "trace_finished" if exportable_trace else "trace_unavailable"
-    )
-    assert observed[0]["evidence"] == {
-        "run_id": "failed-run",
-        "complete": False,
-        "terminal_outcome": "error",
-    }
+    (terminal,) = observed
+    assert terminal.kind == ("trace_finished" if exportable_trace else "trace_unavailable")
+    assert terminal.complete is False
     if exportable_trace:
-        assert observed[0]["trace"]["status"] == "error"
-    assert "private-model-input" not in json.dumps(observed)
+        header = terminal.record.header
+        assert (header.status, header.external_run_id) == ("failed", "failed-run")
+    else:
+        assert (terminal.status, terminal.external_run_id) == ("failed", "failed-run")
+    assert "private-model-input" not in terminal.model_dump_json()
 
 
 @pytest.mark.asyncio
@@ -598,17 +595,33 @@ def _iteration_with_details(payloads):
     )
 
 
-def _retain_iteration(step):
-    from predict_rlm import IterationStep, RunEvent, RunEventKind
+def _live_json(event, sequence=1):
+    """One PredictRLM event as the operator receives it from an agent step."""
+    from avalanche.agent.live import AgentLiveEvent
 
+    native, common = predict_rlm_events.project_event(event)
+    return AgentLiveEvent(
+        invocation_id="invocation",
+        sequence=sequence,
+        timestamp_ns=1,
+        runtime_kind="predict_rlm",
+        common=common,
+        native=native,
+    ).model_dump_json()
+
+
+def _retain_iteration(step):
+    """Send one recorded turn and its final trace through the operator.
+
+    Returns the turn and PredictRLM's details as the operator serves them.
+    """
+    from predict_rlm import RunEvent, RunEventKind
+
+    from avalanche._agent_trace import AgentTraceEnvelope
+    from avalanche.runtimes.predict_rlm.replay import replay
     from runtime.operator import Operator
     from runtime.operator.models import AgentEventAppended, NodeState, NodeStatus, RunState
 
-    event = predict_rlm_events._project_evidence_event(
-        RunEvent("sdk-run", 1, RunEventKind.ITERATION_RECORDED, 1, {"step": step}),
-        invocation_id="invocation",
-    )
-    IterationStep.model_validate(event["data"]["step"], strict=True)
     operator = Operator([], watch=False, schedule=False)
     run = RunState(run_id="bounded-detail-run", flow_name="agent-flow")
     run.nodes["agent"] = NodeState("agent", "agent", "step", status=NodeStatus.RUNNING)
@@ -625,38 +638,31 @@ def _retain_iteration(step):
         sum(len(group.calls) for group in step.predict_calls),
     )
     original_trace = _trace().model_copy(update={"iterations": 1, "steps": [step]})
-    terminal_events = []
-    with capture_agent_evidence(terminal_events.append, errors="raise"):
-        predict_rlm_trace._emit_terminal_trace(
-            original_trace,
-            invocation_id="invocation",
-            evidence=predict_rlm_trace._evidence_metadata(
-                RunEvidence(run_id="sdk-run", complete=True, terminal_outcome="completed")
-            ),
-            runtime_kwargs={},
-        )
+    sent = replay(
+        [RunEvent("sdk-run", 1, RunEventKind.ITERATION_RECORDED, 1, {"step": step})],
+        RunEvidence(run_id="sdk-run", complete=True, terminal_outcome="completed"),
+        invocation_id="invocation",
+        trace=original_trace,
+    )
     try:
-        for evidence in (
-            event,
-            *terminal_events,
-        ):
+        for evidence in sent:
             operator._apply_event(
                 run.run_id,
                 handle,
-                {"type": "agent_evidence", "node_id": "agent", "event": evidence},
+                {
+                    "type": "agent_evidence",
+                    "node_id": "agent",
+                    "event": evidence.model_dump_json(),
+                },
             )
-            if evidence["kind"] == "evidence":
+            if evidence.kind == "event":
                 while True:
                     update = subscription.get(timeout=5).update
                     if isinstance(update.change, AgentEventAppended):
                         break
                 summary = update.change.event
                 assert (summary.tool_call_count, summary.model_call_count) == expected_counts
-                assert (summary.turn, summary.duration_ms, summary.error) == (
-                    step.iteration,
-                    step.duration_ms,
-                    step.error,
-                )
+                assert (summary.turn, summary.duration_ms) == (step.iteration, step.duration_ms)
         snapshot = operator.get_latest_run_snapshot(
             run.run_id,
             operator_instance_id=operator.operator_instance_id,
@@ -664,15 +670,37 @@ def _retain_iteration(step):
         page = operator.list_agent_events(page_token=snapshot.nodes[0].event_page_token)
         summary = page.events[0]
         assert (summary.tool_call_count, summary.model_call_count) == expected_counts
-        detail = json.loads(operator.get_run(run.run_id).nodes["agent"].agent_trace_json)
-        hydrated = RunTrace.model_validate(detail["trace"], strict=True)
-        assert len(hydrated.steps) == 1
-        assert detail["evidence"]["terminal_outcome"] == "completed"
+        envelope = AgentTraceEnvelope.model_validate_json(
+            operator.get_run(run.run_id).nodes["agent"].agent_trace_json
+        )
+        assert envelope.terminal.record.header.status == "succeeded"
         assert original_trace.steps[0] is step
-        return hydrated.steps[0], detail["events"][0]["data"]
+        (event,) = envelope.events
+        return event.common, event.native
     finally:
         operator.unsubscribe_operator_updates(subscription)
         operator.close()
+
+
+def _code(turn):
+    from avalanche.agent.trace import CodeExecutionAction
+
+    (code,) = [
+        action for action in turn.turn.actions if isinstance(action, CodeExecutionAction)
+    ]
+    return code
+
+
+def _tools(turn):
+    from avalanche.agent.trace import ToolCallAction
+
+    return [action for action in turn.turn.actions if isinstance(action, ToolCallAction)]
+
+
+def _usage(step):
+    from avalanche.runtimes.predict_rlm.events import native_usage
+
+    return native_usage(step.usage)
 
 
 @pytest.mark.parametrize(
@@ -688,30 +716,30 @@ def _retain_iteration(step):
 def test_iteration_detail_survives_operator_retention_and_hydration(payloads):
     step = _iteration_with_details(payloads)
     original = step.model_copy(deep=True)
-    hydrated, data = _retain_iteration(step)
+    turn, native = _retain_iteration(step)
 
     assert step == original
-    assert hydrated.iteration == 1
-    assert hydrated.duration_ms == 12
-    assert hydrated.code == step.code
-    assert hydrated.output == step.output
-    assert hydrated.usage == step.usage
-    assert hydrated.predict_calls[0].signature == "question -> answer"
-    assert data["predict_count"] == len(payloads)
-    assert [call.usage for call in hydrated.predict_calls[0].calls] == [
-        call.usage for call in step.predict_calls[0].calls
+    assert turn.turn.index == 1
+    assert turn.turn.duration_ms == 12
+    assert _code(turn).code == step.code
+    assert _code(turn).output == step.output
+    assert native.usage == _usage(step)
+    assert native.predict_calls[0].signature == "question -> answer"
+    assert native.predict_count == len(payloads)
+    assert [call.usage for call in native.predict_calls[0].calls] == [
+        call.usage for call in native.predict_calls[0].calls
     ]
-    assert len(json.dumps(data["step"], separators=(",", ":")).encode()) <= (
-        predict_rlm_events._MAX_EVIDENCE_VALUE_BYTES
+    assert (
+        len(native.model_dump_json().encode()) <= predict_rlm_events._MAX_EVIDENCE_VALUE_BYTES
     )
+    inputs = [call.input for call in native.predict_calls[0].calls]
     if len(json.dumps(step.model_dump(mode="json"), separators=(",", ":")).encode()) <= (
         predict_rlm_events._MAX_EVIDENCE_VALUE_BYTES
     ):
-        assert hydrated == step
+        assert inputs == [{"question": payload} for payload in payloads]
     else:
-        inputs = [call.input for call in hydrated.predict_calls[0].calls]
         assert any(value.get("kind") == "unavailable" for value in inputs)
-        assert [call.output for call in hydrated.predict_calls[0].calls] == [
+        assert [call.output for call in native.predict_calls[0].calls] == [
             {"answer": "ready"}
         ] * len(payloads)
         if len(payloads) > 1:
@@ -736,19 +764,19 @@ def test_iteration_bounds_tool_payloads_and_text_without_changing_sdk_values():
         )
     ]
     original = step.model_copy(deep=True)
-    hydrated, data = _retain_iteration(step)
+    turn, native = _retain_iteration(step)
 
     assert step == original
-    assert "unavailable" in hydrated.reasoning
-    assert "unavailable" in hydrated.untruncated_output
-    assert hydrated.code == step.code
-    assert hydrated.output == step.output
-    tool = hydrated.tool_calls[0]
+    assert "unavailable" in turn.turn.reasoning
+    assert "unavailable" in native.untruncated_output
+    assert _code(turn).code == step.code
+    assert _code(turn).output == step.output
+    (tool,) = _tools(turn)
     assert (tool.name, tool.duration_ms, tool.error) == ("lookup", 7, "lookup failed")
-    assert tool.args[0]["kind"] == "unavailable"
-    assert tool.kwargs["kind"] == "unavailable"
+    assert tool.arguments["args"][0]["kind"] == "unavailable"
+    assert tool.arguments["kwargs"]["kind"] == "unavailable"
     assert tool.result["kind"] == "unavailable"
-    assert data["tool_count"] == 1
+    assert native.tool_count == 1
 
 
 def test_iteration_call_overflow_reports_omitted_counts(monkeypatch):
@@ -760,24 +788,23 @@ def test_iteration_call_overflow_reports_omitted_counts(monkeypatch):
         ToolCall(name=f"tool_{index}", duration_ms=index, result=index) for index in range(12)
     ]
     original = step.model_copy(deep=True)
-    hydrated, data = _retain_iteration(step)
+    turn, native = _retain_iteration(step)
 
     assert step == original
-    assert hydrated.iteration == step.iteration
-    assert hydrated.duration_ms == step.duration_ms
-    assert hydrated.usage == step.usage
-    assert data["tool_count"] == 12
-    assert data["predict_count"] == 12
-    omissions = data["omissions"]
-    assert "unavailable" in hydrated.reasoning
-    assert omissions["tool_count"] + len(hydrated.tool_calls) == 12
+    assert turn.turn.index == step.iteration
+    assert turn.turn.duration_ms == step.duration_ms
+    assert native.usage == _usage(step)
+    assert (native.tool_count, native.predict_count) == (12, 12)
+    omissions = native.omissions
+    assert "unavailable" in turn.turn.reasoning
+    assert omissions.tool_count + len(_tools(turn)) == 12
     assert (
-        omissions["predict_count"] + sum(len(group.calls) for group in hydrated.predict_calls)
-        == 12
+        omissions.predict_count + sum(len(group.calls) for group in native.predict_calls) == 12
     )
-    assert omissions["tool_count"] > 0
-    assert omissions["predict_count"] > 0
-    assert len(json.dumps(data["step"], separators=(",", ":")).encode()) <= 1200
+    assert omissions.tool_count > 0
+    assert omissions.predict_count > 0
+    # The common turn says how many calls it left out, so counts stay true.
+    assert (turn.tool_call_count, turn.model_call_count) == (12, 12)
 
 
 def test_iteration_rejects_unrepresentable_metadata_budget_without_fabricating_usage(
@@ -790,9 +817,8 @@ def test_iteration_rejects_unrepresentable_metadata_budget_without_fabricating_u
     step.usage.main.input_tokens = 10**200
     original = step.model_copy(deep=True)
     with pytest.raises(ValueError):
-        predict_rlm_events._project_evidence_event(
-            RunEvent("sdk-run", 1, RunEventKind.ITERATION_RECORDED, 1, {"step": step}),
-            invocation_id="invocation",
+        predict_rlm_events.project_event(
+            RunEvent("sdk-run", 1, RunEventKind.ITERATION_RECORDED, 1, {"step": step})
         )
     assert step == original
 
@@ -840,7 +866,7 @@ def test_live_execution_output_is_bounded_before_operator_retention(output, omit
     if error is not None:
         data["error"] = error
     event = RunEvent("sdk-run", 1, RunEventKind.CODE_EXECUTED, 1, data)
-    projected = predict_rlm_events._project_evidence_event(event, invocation_id="invocation")
+    projected = _live_json(event)
     operator = Operator([], watch=False, schedule=False)
     run = RunState(run_id="live-output-run", flow_name="agent-flow", status=RunStatus.RUNNING)
     run.nodes["agent"] = NodeState("agent", "agent", "step", status=NodeStatus.RUNNING)
@@ -851,24 +877,23 @@ def test_live_execution_output_is_bounded_before_operator_retention(output, omit
         envelope = AgentTraceEnvelope.model_validate_json(
             snapshot.nodes["agent"].agent_trace_json
         )
-        retained = envelope.events[0]
+        retained = envelope.events[0].native
         assert snapshot.status is RunStatus.RUNNING
-        assert envelope.trace is None
-        assert envelope.evidence is None
-        assert retained.event_kind == "code.executed"
+        assert envelope.terminal is None
+        assert retained.kind == "code.executed"
         if omitted:
-            assert retained.data["output"]["kind"] == "unavailable"
+            assert "unavailable" in retained.output
         else:
-            assert retained.data["output"] == output
+            assert retained.output == output
         if error is not None:
-            assert retained.data["error"] == error
-            assert envelope.error == retained.data["error"]
+            assert retained.execution_error == error
+            assert envelope.error == error
             assert event.data["error"] == error
         else:
-            assert "error" not in retained.data
+            assert retained.execution_error is None
             assert envelope.error is None
         assert event.data["output"] == output
-        assert len(json.dumps(retained.data["output"]).encode()) <= (
+        assert len(json.dumps(retained.output).encode()) <= (
             predict_rlm_events._MAX_EVIDENCE_VALUE_BYTES
         )
     finally:
@@ -895,15 +920,14 @@ def test_all_lifecycle_errors_obey_operator_contract(event_kind, error):
         "error": error,
     }
     event = RunEvent("sdk-run", 1, RunEventKind(event_kind), 1, data)
-    projected = predict_rlm_events._project_evidence_event(event, invocation_id="invocation")
-    retained = _retain_live_event(projected)
-    assert retained.event_kind == event_kind
+    retained = _retain_live_event(_live_json(event))
+    assert retained.native.kind == event_kind
     if len(error) > 65_536:
-        assert retained.data["error"].startswith(error[:128])
-        assert "unavailable" in retained.data["error"][-128:]
-        assert len(retained.data["error"]) <= 65_536
+        assert retained.error.startswith(error[:128])
+        assert "unavailable" in retained.error[-128:]
+        assert len(retained.error) <= 65_536
     else:
-        assert retained.data["error"] == error
+        assert retained.error == error
     assert event.data["error"] == error
 
 
@@ -958,15 +982,21 @@ def test_live_inspection_budget_covers_whole_event(event_kind, data, omitted_fie
     from predict_rlm import RunEvent, RunEventKind
 
     event = RunEvent("sdk-run", 1, RunEventKind(event_kind), 1, data)
-    projected = predict_rlm_events._project_evidence_event(event, invocation_id="invocation")
-    retained = _retain_live_event(projected)
-    value = retained.data[omitted_field]
+    retained = _retain_live_event(_live_json(event))
+    value = {
+        "code": lambda: retained.common.code,
+        "signature": lambda: retained.native.signature,
+        "inputs": lambda: retained.native.inputs,
+        "outputs": lambda: retained.native.outputs,
+        "name": lambda: retained.common.name,
+    }[omitted_field]()
     if isinstance(value, str):
         assert "unavailable" in value
     else:
         assert value["kind"] == "unavailable"
-    assert len(json.dumps(retained.data, separators=(",", ":")).encode()) <= (
-        predict_rlm_events._MAX_EVIDENCE_VALUE_BYTES
+    # Event identity and the common envelope add little to the bounded detail.
+    assert len(retained.model_dump_json().encode()) <= (
+        predict_rlm_events._MAX_EVIDENCE_VALUE_BYTES + 1024
     )
     assert "unavailable" not in event.data[omitted_field]
 
@@ -976,8 +1006,8 @@ def test_deep_iteration_payload_does_not_reenter_transport_at_terminal():
     for _ in range(80):
         payload = {"nested": payload}
     step = _iteration_with_details([payload])
-    retained, _ = _retain_iteration(step)
-    bounded = retained.predict_calls[0].calls[0].input
+    _, native = _retain_iteration(step)
+    bounded = native.predict_calls[0].calls[0].input
     assert "unavailable" in json.dumps(bounded)
     assert step.predict_calls[0].calls[0].input == {"question": payload}
 
@@ -1018,8 +1048,8 @@ async def test_codex_lm_is_named_codex_in_declaration_and_run_trace(monkeypatch)
     observed = []
     with capture_agent_evidence(observed.append, errors="raise"):
         await summarize.__agent_step__.make_agent()(person=Person(id=1, name="Ada"))
-    (finished,) = [event for event in observed if event["kind"] == "trace_finished"]
-    assert (finished["trace"]["model"], finished["trace"]["sub_model"]) == (
+    (finished,) = [event for event in observed if event.kind == "trace_finished"]
+    assert (finished.record.header.model, finished.record.native.sub_model) == (
         "codex/gpt-5.6-terra",
         "codex/gpt-5.6-terra",
     )

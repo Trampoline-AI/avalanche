@@ -9,8 +9,16 @@ from types import SimpleNamespace
 
 import grpc
 import pytest
-from pydantic_core import PydanticSerializationError
+from pydantic import BaseModel
 
+from avalanche.agent.live import (
+    AgentLiveEvent,
+    AgentTraceFinished,
+    AgentTraceUnavailable,
+    CodeGenerated,
+)
+from avalanche.agent.native.predict_rlm import Correlated, RunStarted
+from avalanche.agent.trace import AgentTrace
 from runtime.operator import Operator
 from runtime.operator import operator as operator_module
 from runtime.operator.models import (
@@ -43,19 +51,69 @@ def _add_run(operator: Operator, run_id: str, *, node_id: str = "agent_1") -> Ru
     return run
 
 
+def _live(
+    sequence: int, *, invocation_id: str = "test-invocation", code: str = "pass"
+) -> AgentLiveEvent:
+    return AgentLiveEvent(
+        invocation_id=invocation_id,
+        sequence=sequence,
+        timestamp_ns=sequence,
+        runtime_kind="predict_rlm",
+        common=CodeGenerated(turn=sequence, code=code),
+        native=Correlated(kind="code.generated"),
+    )
+
+
+def _record(*, model: str = "test-model", run_id: str = "sdk-run") -> AgentTrace:
+    """A final trace as the PredictRLM adapter builds it."""
+    from predict_rlm import RunEvidence, RunTrace
+
+    from avalanche.runtimes.predict_rlm.trace import trace_record
+
+    record = trace_record(
+        RunTrace(
+            status="completed", model=model, iterations=0, max_iterations=3, duration_ms=1
+        ),
+        RunEvidence(run_id=run_id, complete=True, terminal_outcome="completed"),
+        model=None,
+        sub_model=None,
+    )
+    return record.model_copy(update={"turns_streamed": True})
+
+
+def _finished(
+    *, invocation_id: str = "test-invocation", complete: bool = True, **record: str
+) -> AgentTraceFinished:
+    return AgentTraceFinished(
+        invocation_id=invocation_id, record=_record(**record), complete=complete
+    )
+
+
+def _unavailable(
+    *,
+    invocation_id: str = "test-invocation",
+    status: str = "failed",
+    complete: bool = True,
+    error: str = "Stopped before the first iteration",
+    external_run_id: str = "sdk-pre-trace",
+) -> AgentTraceUnavailable:
+    return AgentTraceUnavailable(
+        invocation_id=invocation_id,
+        runtime_kind="predict_rlm",
+        status=status,
+        error=error,
+        external_run_id=external_run_id,
+        complete=complete,
+    )
+
+
+def _wire(evidence: BaseModel | str) -> dict:
+    body = evidence if isinstance(evidence, str) else evidence.model_dump_json()
+    return {"type": "agent_evidence", "node_id": "agent_1", "event": body}
+
+
 def _evidence(sequence: int) -> dict:
-    return {
-        "type": "agent_evidence",
-        "node_id": "agent_1",
-        "event": {
-            "kind": "evidence",
-            "invocation_id": "test-invocation",
-            "sequence": sequence,
-            "event_kind": "code.generated",
-            "timestamp_ns": sequence,
-            "data": {"iteration": sequence},
-        },
-    }
+    return _wire(_live(sequence))
 
 
 def _unused_port() -> int:
@@ -476,7 +534,7 @@ def test_close_keeps_dispatcher_alive_for_notification_from_delayed_drain():
         operator.close()
 
 
-def test_read_trace_rejects_reused_identity_from_previous_operator_epoch(agent_trace):
+def test_read_trace_rejects_reused_identity_from_previous_operator_epoch():
     first = Operator(watch=False, schedule=False)
     second = Operator(watch=False, schedule=False)
     server = None
@@ -488,20 +546,7 @@ def test_read_trace_rejects_reused_identity_from_previous_operator_epoch(agent_t
         operator._apply_event(
             run.run_id,
             _event_handle(),
-            {
-                "type": "agent_evidence",
-                "node_id": "agent_1",
-                "event": {
-                    "kind": "trace_finished",
-                    "invocation_id": "test-invocation",
-                    "trace": agent_trace(model=marker).model_dump(mode="json"),
-                    "evidence": {
-                        "run_id": f"sdk-{marker}",
-                        "complete": True,
-                        "terminal_outcome": "completed",
-                    },
-                },
-            },
+            _wire(_finished(model=marker, run_id=f"sdk-{marker}")),
         )
         return operator.read_trace(
             run.run_id,
@@ -538,12 +583,8 @@ def test_read_trace_rejects_reused_identity_from_previous_operator_epoch(agent_t
             stub.ReadActivityDetail(pb.ReadActivityDetailRequestV2(detail_ref=detail_ref))
         )
         trace = json.loads(b"".join(chunk.data for chunk in chunks))
-        assert trace["trace"]["model"] == "second"
-        assert trace["evidence"] == {
-            "run_id": "sdk-second",
-            "complete": True,
-            "terminal_outcome": "completed",
-        }
+        assert trace["record"]["header"]["model"] == "second"
+        assert trace["record"]["header"]["external_run_id"] == "sdk-second"
     finally:
         if channel is not None:
             channel.close()
@@ -553,32 +594,15 @@ def test_read_trace_rejects_reused_identity_from_previous_operator_epoch(agent_t
         second.close()
 
 
-@pytest.mark.parametrize(
-    ("terminal_outcome", "complete"), [("error", True), ("cancelled", False)]
-)
-def test_unavailable_trace_retains_pre_trace_evidence(terminal_outcome, complete):
+@pytest.mark.parametrize(("status", "complete"), [("failed", True), ("cancelled", False)])
+def test_unavailable_trace_retains_pre_trace_evidence(status, complete):
     operator = Operator(watch=False, schedule=False)
     run = _add_run(operator, "run-pre-trace")
-    evidence = {
-        "run_id": "sdk-pre-trace",
-        "complete": complete,
-        "terminal_outcome": terminal_outcome,
-    }
+    unavailable = _unavailable(
+        invocation_id="pre-trace-invocation", status=status, complete=complete
+    )
     try:
-        operator._apply_event(
-            run.run_id,
-            _event_handle(),
-            {
-                "type": "agent_evidence",
-                "node_id": "agent_1",
-                "event": {
-                    "kind": "trace_unavailable",
-                    "invocation_id": "pre-trace-invocation",
-                    "error": "Stopped before the first iteration",
-                    "evidence": evidence,
-                },
-            },
-        )
+        operator._apply_event(run.run_id, _event_handle(), _wire(unavailable))
         materialized = operator.get_run(run.run_id)
         descriptor = materialized.nodes["agent_1"].trace
         assert descriptor.status == "unavailable"
@@ -588,176 +612,85 @@ def test_unavailable_trace_retains_pre_trace_evidence(terminal_outcome, complete
             run.run_id, "agent_1", operator_instance_id=operator.operator_instance_id
         )
         assert descriptor.size_bytes == len(retained.data)
-        assert json.loads(retained.data) == {
-            "invocation_id": "pre-trace-invocation",
-            "trace": None,
-            "evidence": evidence,
-        }
+        assert AgentTraceUnavailable.model_validate_json(retained.data) == unavailable
         envelope = json.loads(materialized.nodes["agent_1"].agent_trace_json)
         assert envelope["invocation_id"] == "pre-trace-invocation"
-        assert envelope["trace"] is None
-        assert envelope["run_id"] == "sdk-pre-trace"
-        assert envelope["evidence"] == evidence
+        assert envelope["terminal"]["external_run_id"] == "sdk-pre-trace"
         assert envelope["error"] == "Stopped before the first iteration"
     finally:
         operator.close()
 
 
-def test_terminal_evidence_completeness_changes_publish_a_new_retained_revision(agent_trace):
+def test_a_repeated_final_trace_is_ignored_and_a_different_one_is_a_protocol_error():
     operator = Operator(watch=False, schedule=False)
-    run = _add_run(operator, "run-evidence-revision")
-    event = {
-        "kind": "trace_finished",
-        "invocation_id": "test-invocation",
-        "trace": agent_trace().model_dump(mode="json"),
-        "evidence": {
-            "run_id": "sdk-revision",
-            "complete": False,
-            "terminal_outcome": "completed",
-        },
-    }
+    run = _add_run(operator, "run-final-once")
     try:
-
-        def apply():
-            operator._apply_event(
-                run.run_id,
-                _event_handle(),
-                {"type": "agent_evidence", "node_id": "agent_1", "event": event},
-            )
-
-        apply()
+        operator._apply_event(run.run_id, _event_handle(), _wire(_finished(complete=False)))
         original = operator.read_trace(
             run.run_id, "agent_1", operator_instance_id=operator.operator_instance_id
         )
-        apply()
+        # The same final body again changes nothing, so replays are harmless.
+        operator._apply_event(run.run_id, _event_handle(), _wire(_finished(complete=False)))
         assert operator.get_run(run.run_id).nodes["agent_1"].trace.revision == original.revision
-        event["evidence"] = {
-            "run_id": "sdk-revision",
-            "complete": True,
-            "terminal_outcome": "completed",
-        }
-        apply()
-        current = operator.get_run(run.run_id).nodes["agent_1"].trace
-        assert current.complete is True
-        assert current.revision > original.revision
-        assert (
-            json.loads(
-                operator.read_trace(
-                    run.run_id,
-                    "agent_1",
-                    operator_instance_id=operator.operator_instance_id,
-                    revision=original.revision,
-                ).data
-            )["evidence"]["complete"]
-            is False
-        )
+        with pytest.raises(_CoordinatorProtocolError, match="second final trace"):
+            operator._apply_event(run.run_id, _event_handle(), _wire(_finished(complete=True)))
+        with pytest.raises(_CoordinatorProtocolError, match="after its final trace"):
+            operator._apply_event(run.run_id, _event_handle(), _evidence(1))
+        assert operator.get_run(run.run_id).nodes["agent_1"].trace.complete is False
     finally:
         operator.close()
 
 
 @pytest.mark.parametrize("kind", ["trace_finished", "trace_unavailable"])
-def test_terminal_detail_byte_limit_includes_separate_evidence(kind, agent_trace):
-    operator = Operator(watch=False, schedule=False, max_trace_body_bytes=64)
+def test_terminal_detail_byte_limit_counts_the_whole_body(kind):
+    terminal = _finished() if kind == "trace_finished" else _unavailable()
+    limit = len(terminal.model_dump_json().encode()) - 1
+    operator = Operator(watch=False, schedule=False, max_trace_body_bytes=limit)
     run = _add_run(operator, "run-terminal-limit")
-    event = {
-        "kind": kind,
-        "invocation_id": "test-invocation",
-        "evidence": {
-            "run_id": "sdk-" + "x" * 128,
-            "complete": True,
-            "terminal_outcome": "completed",
-        },
-    }
-    if kind == "trace_finished":
-        event["trace"] = agent_trace().model_dump(mode="json")
-    else:
-        event["error"] = "Stopped before the first iteration"
     try:
-        with pytest.raises(_CoordinatorProtocolError, match="terminal detail exceeds"):
-            operator._apply_event(
-                run.run_id,
-                _event_handle(),
-                {"type": "agent_evidence", "node_id": "agent_1", "event": event},
-            )
-    finally:
-        operator.close()
-
-
-@pytest.mark.parametrize("kind", ["trace_finished", "trace_unavailable"])
-def test_terminal_detail_byte_limit_counts_invocation_identity(kind, agent_trace):
-    evidence = {"run_id": "sdk-budget", "complete": True, "terminal_outcome": "error"}
-    trace = agent_trace().model_dump(mode="json") if kind == "trace_finished" else None
-    legacy_body = {
-        "trace": {key: value for key, value in trace.items() if key != "steps"}
-        if trace is not None
-        else None,
-        "evidence": evidence,
-    }
-    body_limit = len(json.dumps(legacy_body, separators=(",", ":")).encode())
-    operator = Operator(watch=False, schedule=False, max_trace_body_bytes=body_limit)
-    run = _add_run(operator, "run-invocation-budget")
-    event = {"kind": kind, "invocation_id": "call-" + "a" * 256, "evidence": evidence}
-    if kind == "trace_finished":
-        event["trace"] = trace
-    else:
-        event["error"] = "Stopped before the first iteration"
-    try:
-        with pytest.raises(_CoordinatorProtocolError, match="terminal detail exceeds"):
-            operator._apply_event(
-                run.run_id,
-                _event_handle(),
-                {"type": "agent_evidence", "node_id": "agent_1", "event": event},
-            )
+        with pytest.raises(_CoordinatorProtocolError, match="exceeds"):
+            operator._apply_event(run.run_id, _event_handle(), _wire(terminal))
         assert operator.get_run(run.run_id).nodes["agent_1"].trace is None
     finally:
         operator.close()
 
 
+_TEXT_MARKER = "TEXT-MARKER"
+
+
 @pytest.fixture(
     params=[
-        ("evidence", ("data", "input")),
-        ("trace_finished", ("trace", "model")),
-        ("trace_unavailable", ("evidence", "run_id")),
-        ("trace_unavailable", ("error",)),
-        ("trace_finished", ("invocation_id",)),
-        ("trace_unavailable", ("invocation_id",)),
-    ],
-    ids=[
         "lifecycle-input",
-        "terminal-trace",
-        "unavailable-evidence",
+        "terminal-model",
+        "unavailable-run",
         "unavailable-error",
         "terminal-invocation",
         "unavailable-invocation",
     ],
 )
-def agent_text_event(request, agent_trace):
-    kind, path = request.param
+def agent_text_event(request):
+    """An evidence body whose one text field holds the given text."""
+    builders = {
+        "lifecycle-input": lambda: AgentLiveEvent(
+            invocation_id="test-invocation",
+            sequence=1,
+            timestamp_ns=1,
+            runtime_kind="predict_rlm",
+            common=None,
+            native=RunStarted(input_fields=("input",), inputs={"input": _TEXT_MARKER}),
+        ),
+        "terminal-model": lambda: _finished(model=_TEXT_MARKER),
+        "unavailable-run": lambda: _unavailable(external_run_id=_TEXT_MARKER),
+        "unavailable-error": lambda: _unavailable(error=_TEXT_MARKER),
+        "terminal-invocation": lambda: _finished(invocation_id=_TEXT_MARKER),
+        "unavailable-invocation": lambda: _unavailable(invocation_id=_TEXT_MARKER),
+    }
+    build_body = builders[request.param]
 
     def build(text):
-        event = {"kind": kind, "invocation_id": "test-invocation"}
-        if kind == "evidence":
-            event.update(
-                sequence=1,
-                event_kind="run.started",
-                timestamp_ns=1,
-                data={"input": "valid"},
-            )
-        else:
-            event["evidence"] = {
-                "run_id": "sdk-text",
-                "complete": True,
-                "terminal_outcome": "completed" if kind == "trace_finished" else "error",
-            }
-            if kind == "trace_finished":
-                event["trace"] = agent_trace().model_dump(mode="python")
-            else:
-                event["error"] = "Stopped before the first iteration"
-        target = event
-        for name in path[:-1]:
-            target = target[name]
-        target[path[-1]] = text
-        return {"type": "agent_evidence", "node_id": "agent_1", "event": event}
+        # JSON escapes keep text that cannot be encoded, such as a lone surrogate.
+        body = build_body().model_dump_json()
+        return _wire(body.replace(_TEXT_MARKER, json.dumps(text)[1:-1]))
 
     return build
 
@@ -770,9 +703,6 @@ def test_unencodable_agent_detail_is_a_protocol_fault(agent_text_event):
             operator._apply_event(
                 run.run_id, _event_handle(), agent_text_event("private-input-\ud800")
             )
-        assert isinstance(
-            error.value.__cause__, (PydanticSerializationError, UnicodeEncodeError)
-        )
         assert str(error.value).isascii()
         assert "private-input" not in str(error.value)
         snapshot = operator.get_latest_run_snapshot(
@@ -829,109 +759,112 @@ def test_unencodable_agent_detail_drain_terminalizes_run(agent_text_event, monke
 def test_agent_detail_retains_valid_unicode(agent_text_event):
     operator = Operator(watch=False, schedule=False)
     run = _add_run(operator, "run-unicode")
-    event = agent_text_event("日本語 café \U0001d11e")
+    text = "日本語 café \U0001d11e"
+    event = agent_text_event(text)
     try:
         operator._apply_event(run.run_id, _event_handle(), event)
         materialized = operator.get_run(run.run_id)
-        envelope = json.loads(materialized.nodes["agent_1"].agent_trace_json)
-        detail = event["event"]
-        assert envelope["invocation_id"] == (
-            None if detail["kind"] == "evidence" else detail["invocation_id"]
-        )
-        if detail["kind"] == "evidence":
-            assert envelope["events"][0]["data"] == detail["data"]
-            assert envelope["events"][0]["invocation_id"] == detail["invocation_id"]
-        else:
+        envelope = materialized.nodes["agent_1"].agent_trace_json
+        assert text in json.dumps(json.loads(envelope), ensure_ascii=False)
+        if json.loads(event["event"])["kind"] != "event":
             retained = operator.read_trace(
                 run.run_id, "agent_1", operator_instance_id=operator.operator_instance_id
             )
             assert materialized.nodes["agent_1"].trace.size_bytes == len(retained.data)
-            assert json.loads(retained.data)["evidence"] == detail["evidence"]
-            assert json.loads(retained.data)["invocation_id"] == detail["invocation_id"]
-            assert envelope["evidence"] == detail["evidence"]
-            if detail["kind"] == "trace_finished":
-                assert envelope["trace"]["model"] == detail["trace"]["model"]
-            else:
-                assert envelope["error"] == detail["error"]
+            assert text in retained.data.decode("utf-8")
     finally:
         operator.close()
 
 
-@pytest.mark.parametrize("kind", ["trace_finished", "trace_unavailable"])
-@pytest.mark.parametrize(
-    "metadata",
-    [
-        None,
-        {"run_id": "sdk-invalid", "complete": True},
-        {"run_id": 1, "complete": True, "terminal_outcome": "completed"},
-        {"run_id": "sdk-invalid", "complete": 1, "terminal_outcome": "completed"},
-        {"run_id": "sdk-invalid", "complete": True, "terminal_outcome": None},
-        {"run_id": "sdk-invalid", "complete": True, "terminal_outcome": "failed"},
+def _v1_evidence() -> str:
+    return json.dumps(
         {
-            "run_id": "sdk-invalid",
-            "complete": True,
-            "terminal_outcome": "completed",
-            "events": [{"data": {"raw": "must not reach retained detail"}}],
-        },
+            "kind": "evidence",
+            "invocation_id": "test-invocation",
+            "sequence": 1,
+            "event_kind": "code.generated",
+            "timestamp_ns": 1,
+            "data": {"iteration": 1, "code": "pass"},
+        }
+    )
+
+
+def _patched(evidence: BaseModel, path: tuple[str, ...], value: object) -> str:
+    body = json.loads(evidence.model_dump_json())
+    target = body
+    for name in path[:-1]:
+        target = target[name]
+    target[path[-1]] = value
+    return json.dumps(body)
+
+
+@pytest.mark.parametrize(
+    "body",
+    [
+        pytest.param(_v1_evidence, id="v1-body"),
+        pytest.param(
+            lambda: _patched(_live(1), ("schema_version",), 1), id="v1-schema-version"
+        ),
+        pytest.param(
+            lambda: _patched(_live(1), ("native", "format"), "other.run/v1"),
+            id="unknown-native-format",
+        ),
+        pytest.param(
+            lambda: _patched(_live(1), ("native", "kind"), "code.compiled"),
+            id="unknown-native-kind",
+        ),
+        pytest.param(
+            lambda: _patched(_live(1), ("runtime_kind",), "other_runtime"),
+            id="unknown-runtime",
+        ),
+        pytest.param(
+            lambda: _patched(_live(1), ("common",), None),
+            id="native-kind-without-its-common-event",
+        ),
+        pytest.param(
+            lambda: _patched(
+                _live(1),
+                ("native",),
+                {"format": "predict_rlm.run/v1", "kind": "tool.started"},
+            ),
+            id="native-kind-with-another-common-event",
+        ),
+        pytest.param(
+            lambda: _patched(_finished(), ("record", "turns_streamed"), False),
+            id="final-trace-with-unstreamed-turns",
+        ),
+        pytest.param(
+            lambda: _patched(_finished(), ("record", "header", "trace_format"), "other/v1"),
+            id="header-format-mismatch",
+        ),
+        pytest.param(
+            lambda: _patched(_unavailable(), ("status",), "completed"),
+            id="unknown-status",
+        ),
+        pytest.param(lambda: _patched(_unavailable(), ("extra",), 1), id="extra-field"),
+        pytest.param(lambda: "{", id="not-json"),
     ],
 )
-def test_invalid_terminal_metadata_reaches_the_caller(kind, metadata, agent_trace):
+def test_malformed_agent_evidence_is_a_protocol_error(body):
     operator = Operator(watch=False, schedule=False)
-    run = _add_run(operator, "run-invalid-metadata")
-    event = {"kind": kind, "invocation_id": "test-invocation", "evidence": metadata}
-    if kind == "trace_finished":
-        event["trace"] = agent_trace().model_dump(mode="json")
-    else:
-        event["error"] = "Stopped before the first iteration"
+    run = _add_run(operator, "run-malformed-evidence")
     try:
-        with pytest.raises(_CoordinatorProtocolError, match="invalid agent terminal detail"):
-            operator._apply_event(
-                run.run_id,
-                _event_handle(),
-                {"type": "agent_evidence", "node_id": "agent_1", "event": event},
-            )
+        with pytest.raises(_CoordinatorProtocolError, match="invalid agent evidence body"):
+            operator._apply_event(run.run_id, _event_handle(), _wire(body()))
+        assert operator.get_run(run.run_id).nodes["agent_1"].trace is None
     finally:
         operator.close()
 
 
-@pytest.mark.parametrize("kind", ["trace_finished", "trace_unavailable"])
-def test_missing_terminal_metadata_reaches_the_caller(kind, agent_trace):
+def test_agent_evidence_must_be_a_json_string():
     operator = Operator(watch=False, schedule=False)
-    run = _add_run(operator, "run-missing-metadata")
-    event = {"kind": kind, "invocation_id": "test-invocation"}
-    if kind == "trace_finished":
-        event["trace"] = agent_trace().model_dump(mode="json")
-    else:
-        event["error"] = "Stopped before the first iteration"
+    run = _add_run(operator, "run-dict-evidence")
     try:
-        with pytest.raises(_CoordinatorProtocolError, match="missing required field"):
+        with pytest.raises(_CoordinatorProtocolError, match="JSON string"):
             operator._apply_event(
                 run.run_id,
                 _event_handle(),
-                {"type": "agent_evidence", "node_id": "agent_1", "event": event},
-            )
-    finally:
-        operator.close()
-
-
-def test_invalid_trace_reaches_the_caller():
-    operator = Operator(watch=False, schedule=False)
-    run = _add_run(operator, "run-invalid-trace")
-    try:
-        with pytest.raises(_CoordinatorProtocolError, match="invalid agent terminal detail"):
-            operator._record_agent_evidence_event(
-                run,
-                "agent_1",
-                {
-                    "kind": "trace_finished",
-                    "invocation_id": "test-invocation",
-                    "trace": {"status": "completed"},
-                    "evidence": {
-                        "run_id": "sdk-invalid",
-                        "complete": True,
-                        "terminal_outcome": "completed",
-                    },
-                },
+                {"type": "agent_evidence", "node_id": "agent_1", "event": {"kind": "event"}},
             )
     finally:
         operator.close()
@@ -946,16 +879,7 @@ def test_agent_event_publication_failure_reaches_the_workflow(asynchronous):
         def put(self, event):
             raise OSError("agent event transport disconnected")
 
-    event = {
-        "kind": "trace_unavailable",
-        "invocation_id": "test-invocation",
-        "error": "Stopped before the first iteration",
-        "evidence": {
-            "run_id": "sdk-failure",
-            "complete": True,
-            "terminal_outcome": "error",
-        },
-    }
+    event = _unavailable()
 
     def run_agent():
         emit_agent_evidence(event)
@@ -974,57 +898,22 @@ def test_agent_event_publication_failure_reaches_the_workflow(asynchronous):
             wrapped()
 
 
-@pytest.mark.parametrize(
-    ("event_kind", "data"),
-    [
-        ("run.failed", {}),
-        ("run.cancelled", {"error": None}),
-        ("code.executed", {"iteration": True}),
-        ("predict.finished", {"call_id": "call", "error": 0}),
-        ("tool.finished", {"call_id": "call", "name": "tool", "duration_ms": None}),
-    ],
-)
-def test_malformed_lifecycle_summary_reaches_the_caller(event_kind, data):
-    operator = Operator(watch=False, schedule=False)
-    run = _add_run(operator, "run-invalid-lifecycle")
-    try:
-        with pytest.raises(_CoordinatorProtocolError):
-            operator._record_agent_evidence_event(
-                run,
-                "agent_1",
-                {
-                    "kind": "evidence",
-                    "invocation_id": "test-invocation",
-                    "sequence": 1,
-                    "event_kind": event_kind,
-                    "timestamp_ns": 1,
-                    "data": data,
-                },
-            )
-    finally:
-        operator.close()
-
-
 @pytest.mark.parametrize("failed", [False, True])
 def test_empty_exception_message_remains_a_failure_not_a_success(failed):
     operator = Operator(watch=False, schedule=False)
     run = _add_run(operator, "run-empty-exception")
-    data = {"call_id": "call"}
-    if failed:
-        data["error"] = ""
+    from avalanche.agent.live import ModelFinished
+
+    event = AgentLiveEvent(
+        invocation_id="test-invocation",
+        sequence=1,
+        timestamp_ns=1,
+        runtime_kind="predict_rlm",
+        common=ModelFinished(call_id="call", error="" if failed else None),
+        native=Correlated(kind="predict.finished"),
+    )
     try:
-        operator._record_agent_evidence_event(
-            run,
-            "agent_1",
-            {
-                "kind": "evidence",
-                "invocation_id": "test-invocation",
-                "sequence": 1,
-                "event_kind": "predict.finished",
-                "timestamp_ns": 1,
-                "data": data,
-            },
-        )
+        operator._record_agent_evidence_event(run, "agent_1", event.model_dump_json())
         envelope = json.loads(operator.get_run(run.run_id).nodes["agent_1"].agent_trace_json)
         assert envelope["status"] == ("error" if failed else "in_progress")
         assert envelope["error"] == ("" if failed else None)

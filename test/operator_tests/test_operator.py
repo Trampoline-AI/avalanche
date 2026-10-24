@@ -201,41 +201,33 @@ def test_agent_trace_header_and_events_carry_common_fields_over_protobuf(
             run.run_id, handle, {"type": "agent_evidence", "node_id": "agent_1", "event": event}
         )
 
+    from predict_rlm import RunEvent, RunEventKind, RunEvidence
+    from predict_rlm.trace import PredictCallDetail, PredictCallGroup, ToolCall
+
+    from avalanche.runtimes.predict_rlm.replay import replay
+
     step = iteration_step(1, "x = 1")
-    try:
-        for sequence, event_kind, data in (
-            (1, "session.started", {}),
-            (
-                2,
-                "iteration.recorded",
-                {"tool_count": 2, "predict_count": 1, "step": step.model_dump(mode="json")},
-            ),
-        ):
-            apply(
-                {
-                    "kind": "evidence",
-                    "invocation_id": "inv",
-                    "sequence": sequence,
-                    "event_kind": event_kind,
-                    "timestamp_ns": sequence,
-                    "data": data,
-                }
-            )
-        apply(
-            {
-                "kind": "trace_finished",
-                "invocation_id": "inv",
-                # Steps crossed as live events, so the terminal trace carries none.
-                "trace": agent_trace(steps=[])
-                .model_copy(update={"iterations": 1})
-                .model_dump(mode="json"),
-                "evidence": {
-                    "run_id": "sdk-run",
-                    "complete": True,
-                    "terminal_outcome": "completed",
-                },
-            }
+    step.tool_calls = [
+        ToolCall(name="lookup", duration_ms=1),
+        ToolCall(name="fetch", duration_ms=1),
+    ]
+    step.predict_calls = [
+        PredictCallGroup(
+            signature="q -> a", model="sub", calls=[PredictCallDetail(duration_ms=1)]
         )
+    ]
+    sent = replay(
+        [
+            RunEvent("sdk-run", 1, RunEventKind.RUN_STARTED, 1, {"inputs": {}}),
+            RunEvent("sdk-run", 2, RunEventKind.ITERATION_RECORDED, 2, {"step": step}),
+        ],
+        RunEvidence(run_id="sdk-run", complete=True, terminal_outcome="completed"),
+        invocation_id="inv",
+        trace=agent_trace(steps=[step]),
+    )
+    try:
+        for event in sent:
+            apply(event.model_dump_json())
         summaries = operator.list_run_summaries()
         snapshot = operator.get_run_snapshot(
             run.run_id,
@@ -266,7 +258,7 @@ def test_agent_trace_header_and_events_carry_common_fields_over_protobuf(
         page = operator.list_agent_events(page_token=snapshot.nodes[0].event_page_token)
         setup, turn = page.events
         assert (setup.native_event_kind, setup.agent_event_kind, setup.turn) == (
-            "session.started",
+            "run.started",
             "native",
             None,
         )
@@ -310,7 +302,7 @@ def test_trace_header_from_protobuf_rejects_unknown_status_and_missing_runtime(f
 
 
 def test_agent_evidence_deduplicates_per_invocation_and_materializes_references(
-    agent_trace, iteration_step
+    agent_trace, iteration_step, agent_evidence
 ):
     operator = Operator([], watch=False, schedule=False)
     run = RunState(run_id="run-agent", flow_name="agent-flow", status=RunStatus.RUNNING)
@@ -325,46 +317,26 @@ def test_agent_evidence_deduplicates_per_invocation_and_materializes_references(
             run.run_id, handle, {"type": "agent_evidence", "node_id": "agent_1", "event": event}
         )
 
+    def code(event):
+        return event["common"]["turn"]["actions"][0]["code"]
+
     try:
         for invocation, output in (("first", "one"), ("second", "two")):
-            event = {
-                "kind": "evidence",
-                "invocation_id": invocation,
-                "sequence": 1,
-                "event_kind": "iteration.recorded",
-                "timestamp_ns": 1,
-                "data": {
-                    "output": output,
-                    "tool_count": 0,
-                    "predict_count": 0,
-                    "step": iteration_step(1, output).model_dump(mode="json"),
-                },
-            }
-            apply(event)
-            apply(event)
+            step = iteration_step(1, output)
+            live, terminal = agent_evidence(
+                agent_trace(steps=[step]), invocation_id=invocation, run_id=f"sdk-{invocation}"
+            )
+            apply(live.model_dump_json())
+            apply(live.model_dump_json())
             if invocation == "first":
                 for live_run in (
                     operator.get_run(run.run_id),
                     operator.list_runs("")[0],
                 ):
                     live_trace = json.loads(live_run.nodes["agent_1"].agent_trace_json)
-                    assert [item["data"]["output"] for item in live_trace["events"]] == ["one"]
-                    assert live_trace["trace"] is None
-                    assert live_trace["evidence"] is None
-            apply(
-                {
-                    "kind": "trace_finished",
-                    "invocation_id": invocation,
-                    "trace": agent_trace(steps=[iteration_step(99, "not retained")]).model_dump(
-                        mode="json"
-                    ),
-                    "evidence": {
-                        "run_id": f"sdk-{invocation}",
-                        "complete": True,
-                        "terminal_outcome": "completed",
-                    },
-                }
-            )
+                    assert [code(item) for item in live_trace["events"]] == ["one"]
+                    assert live_trace["terminal"] is None
+            apply(terminal.model_dump_json())
         summaries = operator.list_run_summaries()
         snapshot = operator.get_run_snapshot(
             run.run_id,
@@ -377,91 +349,21 @@ def test_agent_evidence_deduplicates_per_invocation_and_materializes_references(
             ("second", 2),
         ]
         bodies = [json.loads(operator.read_detail(event.body_token)) for event in page.events]
-        assert [body["data"]["output"] for body in bodies] == ["one", "two"]
+        assert [code(body) for body in bodies] == ["one", "two"]
         materialized = operator.get_run(run.run_id)
         trace = json.loads(materialized.nodes["agent_1"].agent_trace_json)
-        assert trace["status"] == "completed"
+        assert trace["status"] == "succeeded"
         assert trace["invocation_id"] == "second"
-        assert [event["data"]["output"] for event in trace["events"]] == ["two"]
-        assert trace["run_id"] == "sdk-second"
-        assert trace["trace"]["steps"] == [iteration_step(1, "two").model_dump(mode="json")]
-        assert "evidence" not in trace["trace"]
-        assert trace["evidence"]["complete"] is True
-        assert trace["evidence"]["terminal_outcome"] == "completed"
+        assert [code(event) for event in trace["events"]] == ["two"]
+        assert trace["terminal"]["record"]["header"]["external_run_id"] == "sdk-second"
+        assert trace["terminal"]["complete"] is True
         retained = json.loads(
             operator.read_trace(
                 run.run_id, "agent_1", operator_instance_id=operator.operator_instance_id
             ).data
         )
         assert retained["invocation_id"] == "second"
-        assert retained["evidence"]["run_id"] == "sdk-second"
-        assert "steps" not in retained["trace"]
-    finally:
-        operator.close()
-
-
-@pytest.mark.parametrize("field", ["tool_count", "predict_count"])
-@pytest.mark.parametrize("value", [True, 1.5, "1", None, -1])
-def test_iteration_summary_rejects_malformed_counts(iteration_step, field, value):
-    from runtime.operator.operator import _CoordinatorProtocolError
-
-    operator = Operator([], watch=False, schedule=False)
-    run = RunState(run_id="invalid-counts", flow_name="agent-flow")
-    run.nodes["agent"] = NodeState("agent", "agent", "step")
-    operator._runs[run.run_id] = run
-    data = {
-        "step": iteration_step(1, "pass").model_dump(mode="json"),
-        "tool_count": 0,
-        "predict_count": 0,
-    }
-    data[field] = value
-    try:
-        with pytest.raises(_CoordinatorProtocolError):
-            operator._record_agent_evidence_event(
-                run,
-                "agent",
-                {
-                    "kind": "evidence",
-                    "invocation_id": "invocation",
-                    "sequence": 1,
-                    "event_kind": "iteration.recorded",
-                    "timestamp_ns": 1,
-                    "data": data,
-                },
-            )
-        assert operator.get_run(run.run_id).nodes["agent"].agent_trace_json is None
-    finally:
-        operator.close()
-
-
-@pytest.mark.parametrize("field", ["tool_count", "predict_count"])
-def test_iteration_summary_requires_executed_counts(iteration_step, field):
-    from runtime.operator.operator import _CoordinatorProtocolError
-
-    operator = Operator([], watch=False, schedule=False)
-    run = RunState(run_id="missing-counts", flow_name="agent-flow")
-    run.nodes["agent"] = NodeState("agent", "agent", "step")
-    operator._runs[run.run_id] = run
-    data = {
-        "step": iteration_step(1, "pass").model_dump(mode="json"),
-        "tool_count": 0,
-        "predict_count": 0,
-    }
-    del data[field]
-    try:
-        with pytest.raises(_CoordinatorProtocolError):
-            operator._record_agent_evidence_event(
-                run,
-                "agent",
-                {
-                    "kind": "evidence",
-                    "invocation_id": "invocation",
-                    "sequence": 1,
-                    "event_kind": "iteration.recorded",
-                    "timestamp_ns": 1,
-                    "data": data,
-                },
-            )
-        assert operator.get_run(run.run_id).nodes["agent"].agent_trace_json is None
+        # Turns travelled as live events; the final body carries none.
+        assert retained["record"]["turns"] == []
     finally:
         operator.close()

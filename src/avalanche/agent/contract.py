@@ -17,7 +17,6 @@ from pydantic import (
     ConfigDict,
     Field,
     JsonValue,
-    PositiveInt,
     TypeAdapter,
     create_model,
     model_validator,
@@ -25,7 +24,17 @@ from pydantic import (
 from pydantic.fields import FieldInfo
 
 from .declaration import RuntimeDeclaration
-from .trace import AgentTrace, RuntimeKind, Turn
+from .live import (
+    AgentEvent,
+    CodeGenerated,
+    ModelFinished,
+    ModelStarted,
+    ToolFinished,
+    ToolStarted,
+    TurnFinished,
+)
+from .native import NativeEvent
+from .trace import AgentTrace, AgentTraceStatus, RuntimeKind
 
 # Serialized bodies always carry defaulted fields such as ``kind``; their
 # exported JSON Schema says so.
@@ -221,64 +230,31 @@ class AgentResult(BaseModel):
     trace: AgentTrace
 
 
-class TurnFinished(BaseModel):
-    model_config = _STRICT
-
-    kind: Literal["turn.finished"] = "turn.finished"
-    turn: Turn
-
-
-class ModelStarted(BaseModel):
-    model_config = _STRICT
-
-    kind: Literal["model.started"] = "model.started"
-    call_id: str
-    model: str
-
-
-class ModelFinished(BaseModel):
-    model_config = _STRICT
-
-    kind: Literal["model.finished"] = "model.finished"
-    call_id: str
-    error: str | None
-
-
-class ToolStarted(BaseModel):
-    model_config = _STRICT
-
-    kind: Literal["tool.started"] = "tool.started"
-    call_id: str
-    name: str
-
-
-class ToolFinished(BaseModel):
-    model_config = _STRICT
-
-    kind: Literal["tool.finished"] = "tool.finished"
-    call_id: str
-    name: str
-    error: str | None
-
-
-class CodeGenerated(BaseModel):
-    model_config = _STRICT
-
-    kind: Literal["code.generated"] = "code.generated"
-    turn: PositiveInt
-    code: str
-
-
-AgentEvent = Annotated[
-    TurnFinished | ModelStarted | ModelFinished | ToolStarted | ToolFinished | CodeGenerated,
-    Field(discriminator="kind"),
-]
-
-
 class AgentEventSink(Protocol):
-    """Receives live events while a runtime runs; Avalanche assigns sequence numbers."""
+    """Receives an invocation's live events and its one terminal trace.
 
-    async def emit(self, event: AgentEvent) -> None: ...
+    Avalanche assigns sequence numbers and timestamps. A runtime sends each live
+    event as its native payload plus the common event, when there is one, and
+    finishes with exactly one ``finished`` or ``unavailable`` call, also when the
+    run fails or is cancelled.
+    """
+
+    async def emit(self, native: NativeEvent, common: AgentEvent | None) -> None: ...
+
+    def finished(self, record: AgentTrace, *, complete: bool) -> None:
+        """Send the final trace; its turns already travelled as live events."""
+        ...
+
+    def unavailable(
+        self,
+        *,
+        status: AgentTraceStatus,
+        error: str,
+        external_run_id: str | None,
+        complete: bool,
+    ) -> None:
+        """Report that the run ended without a trace the runtime could export."""
+        ...
 
 
 @runtime_checkable
@@ -302,3 +278,25 @@ class AgentRuntime(Protocol):
     async def invoke(
         self, request: AgentRequest, events: AgentEventSink
     ) -> AgentRunOutcome: ...
+
+
+__all__ = [
+    "AgentEvent",
+    "AgentEventSink",
+    "AgentOutputs",
+    "AgentRequest",
+    "AgentResult",
+    "AgentRunOutcome",
+    "AgentRuntime",
+    "CodeGenerated",
+    "FieldSpec",
+    "JsonOutputs",
+    "ModelFinished",
+    "ModelStarted",
+    "PythonOutputs",
+    "SignatureSpec",
+    "ToolFinished",
+    "ToolSpec",
+    "ToolStarted",
+    "TurnFinished",
+]

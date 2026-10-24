@@ -104,11 +104,20 @@ def _prediction(status: str = "completed", outcome: str = "completed") -> Predic
 
 
 class _Recorder:
-    def __init__(self) -> None:
-        self.events: list[object] = []
+    """An invocation sink that keeps what the runtime sent."""
 
-    async def emit(self, event: object) -> None:
-        self.events.append(event)
+    def __init__(self) -> None:
+        self.events: list[tuple[object, object]] = []
+        self.terminals: list[object] = []
+
+    async def emit(self, native: object, common: object) -> None:
+        self.events.append((native, common))
+
+    def finished(self, record: object, *, complete: bool) -> None:
+        self.terminals.append(record)
+
+    def unavailable(self, **detail: object) -> None:
+        self.terminals.append(detail)
 
 
 def _use_predictor(monkeypatch, predictor) -> list[dict[str, object]]:
@@ -209,7 +218,8 @@ async def test_invoke_maps_a_run_onto_the_common_trace(monkeypatch):
     assert (header.usage.input_tokens, header.usage.output_tokens) == (13, 6)
     assert header.usage.cost_usd == pytest.approx(0.3)
     native = outcome.trace.native
-    assert (native.sub_model, native.max_iterations, native.cache_hits) == ("sub-model", 4, 1)
+    assert (native.sub_model, native.max_iterations) == ("sub-model", 4)
+    assert native.usage.main.cache_hits + native.usage.sub.cache_hits == 1
     (turn,) = outcome.trace.turns
     assert [type(action) for action in turn.actions] == [
         CodeExecutionAction,
@@ -269,13 +279,19 @@ async def test_live_predict_rlm_events_reach_the_runtime_sink_as_common_events(m
 
     await PredictRLM().invoke(_request(), recorder)
 
-    assert [type(event) for event in recorder.events] == [
-        CodeGenerated,
-        ToolStarted,
-        ModelStarted,
-        TurnFinished,
+    assert [(native.kind, type(common)) for native, common in recorder.events] == [
+        ("run.started", type(None)),
+        ("code.generated", CodeGenerated),
+        ("tool.started", ToolStarted),
+        ("predict.started", ModelStarted),
+        ("iteration.recorded", TurnFinished),
     ]
-    assert recorder.events[-1].turn.index == 1
+    native, finished = recorder.events[-1]
+    assert finished.turn.index == 1
+    # The common turn and PredictRLM's own details split the step between them.
+    assert native.untruncated_output == _step().untruncated_output
+    [record] = recorder.terminals
+    assert record.turns_streamed and record.turns == ()
 
 
 @pytest.mark.asyncio
@@ -283,8 +299,8 @@ async def test_a_base_exception_from_the_runtime_sink_propagates_unchanged(monke
     class Stop(BaseException):
         pass
 
-    class StoppingSink:
-        async def emit(self, event: object) -> None:
+    class StoppingSink(_Recorder):
+        async def emit(self, native: object, common: object) -> None:
             raise Stop
 
     class Predictor:
@@ -344,9 +360,10 @@ def test_file_and_workspace_inputs_are_recorded_without_bytes(tmp_path):
         {"inputs": {"document": document, "workspace": ava.Workspace()}},
     )
 
-    projected = events_module._project_evidence_event(event, invocation_id="invocation")
+    native, common = events_module.project_event(event)
 
-    assert projected["data"]["inputs"] == {
+    assert common is None
+    assert native.inputs == {
         "document": {
             "kind": "file",
             "workspace": document.ref.workspace,

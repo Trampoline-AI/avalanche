@@ -23,6 +23,8 @@ from pydantic import (
 
 from ..file import File
 from ..workspace import Workspace
+from .kinds import RuntimeKind
+from .native.predict_rlm import PredictRLMUsage
 
 # Serialized bodies always carry defaulted fields such as ``kind``; their
 # exported JSON Schema says so.
@@ -33,7 +35,6 @@ _STRICT = ConfigDict(
     json_schema_serialization_defaults_required=True,
 )
 
-RuntimeKind = Literal["predict_rlm"]
 AgentTraceStatus = Literal["succeeded", "failed", "cancelled"]
 ActionCaller = Literal["model", "code"]
 
@@ -137,7 +138,9 @@ class PredictRLMNativeTrace(BaseModel):
     format: Literal["predict_rlm.run/v1"] = "predict_rlm.run/v1"
     sub_model: str | None
     max_iterations: PositiveInt
-    cache_hits: NonNegativeInt
+    usage: PredictRLMUsage
+    # PredictRLM's compact reference for joining a partial trace to its events.
+    telemetry_ref: dict[str, JsonValue] | None
 
 
 # A discriminated union on ``format`` once a second runtime adds its format.

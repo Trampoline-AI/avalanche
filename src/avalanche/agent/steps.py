@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import inspect
+import time
 import types
 import uuid
 from contextvars import ContextVar
@@ -24,6 +25,7 @@ from typing import (
 import dspy
 from pydantic import JsonValue, ValidationError
 
+from .._agent_evidence import emit_agent_evidence
 from ..dag import Node, NodeFuture, NodeType, _workflow_context
 from ..evaluations import Evaluations
 from ..step_interface import (
@@ -32,7 +34,6 @@ from ..step_interface import (
     step_interface_from_signature,
 )
 from .contract import (
-    AgentEvent,
     AgentRequest,
     AgentResult,
     AgentRuntime,
@@ -46,7 +47,11 @@ from .declaration import (
     tool_declarations,
 )
 from .defaults import AgentDefaults, effective_runtime, reject_removed_arguments
+from .kinds import RuntimeKind
+from .live import AgentEvent, AgentLiveEvent, AgentTraceFinished, AgentTraceUnavailable
+from .native import NativeEvent
 from .signature import resolve_signature
+from .trace import AgentTrace, AgentTraceStatus
 
 InputT = TypeVar("InputT")
 OutputT = TypeVar("OutputT")
@@ -64,18 +69,74 @@ class AgentOutputError(AgentStepExecutionError):
     """An agent's outputs do not match its step's signature."""
 
 
-class _UnobservedEvents:
-    """Discards common live events.
+class _InvocationEvents:
+    """Stamps one invocation's evidence and hands it to the current observer.
 
-    The operator receives each runtime's own v1 wire events until event bodies
-    become runtime-neutral; then this sink is replaced by one that forwards.
+    Avalanche, not the runtime, numbers live events, and each invocation ends
+    with exactly one final trace event.
     """
 
-    async def emit(self, event: AgentEvent) -> None:
-        return None
+    def __init__(self, invocation_id: str, runtime_kind: RuntimeKind) -> None:
+        self._invocation_id = invocation_id
+        self._runtime_kind = runtime_kind
+        self._sequence = 0
+        self.terminated = False
 
+    async def emit(self, native: NativeEvent, common: AgentEvent | None) -> None:
+        self.record(native, common)
 
-_UNOBSERVED_EVENTS = _UnobservedEvents()
+    def record(self, native: NativeEvent, common: AgentEvent | None) -> None:
+        """Stamp and send one live event; ``emit`` without the await."""
+        if self.terminated:
+            raise AgentStepError(
+                f"agent invocation {self._invocation_id} sent a live event "
+                "after its final trace"
+            )
+        self._sequence += 1
+        emit_agent_evidence(
+            AgentLiveEvent(
+                invocation_id=self._invocation_id,
+                sequence=self._sequence,
+                timestamp_ns=time.time_ns(),
+                runtime_kind=self._runtime_kind,
+                common=common,
+                native=native,
+            )
+        )
+
+    def finished(self, record: AgentTrace, *, complete: bool) -> None:
+        self._terminate(
+            AgentTraceFinished(
+                invocation_id=self._invocation_id, record=record, complete=complete
+            )
+        )
+
+    def unavailable(
+        self,
+        *,
+        status: AgentTraceStatus,
+        error: str,
+        external_run_id: str | None,
+        complete: bool,
+    ) -> None:
+        self._terminate(
+            AgentTraceUnavailable(
+                invocation_id=self._invocation_id,
+                runtime_kind=self._runtime_kind,
+                status=status,
+                error=error,
+                external_run_id=external_run_id,
+                complete=complete,
+            )
+        )
+
+    def _terminate(self, terminal: AgentTraceFinished | AgentTraceUnavailable) -> None:
+        if self.terminated:
+            raise AgentStepError(
+                f"agent invocation {self._invocation_id} sent a second final trace"
+            )
+        self.terminated = True
+        emit_agent_evidence(terminal)
 
 
 _WORKFLOW_AGENT_DEFAULTS: ContextVar[AgentDefaults] = ContextVar(
@@ -121,7 +182,13 @@ class Agent:
             from ..runtimes.predict_rlm import PredictRLM
 
             self._runtime = PredictRLM()
-        outcome = await self._runtime.invoke(request, _UNOBSERVED_EVENTS)
+        events = _InvocationEvents(request.invocation_id, self._runtime.kind)
+        outcome = await self._runtime.invoke(request, events)
+        if not events.terminated:
+            raise AgentStepError(
+                f"agent step {self._step_name!r}: runtime {self._runtime.kind!r} "
+                "returned without sending its final trace"
+            )
         # The runtime has already sent its terminal trace, so a mismatch is
         # recorded before the step fails, and no evaluation is submitted.
         try:
