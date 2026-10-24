@@ -62,14 +62,23 @@ def tui_session(request):
         _tmux("kill-session", "-t", session)
 
 
+def _confirm_empty_action(session: str) -> None:
+    _wait_for(session, lambda text: "Preview validated input" in text)
+    _tmux("send-keys", "-t", session, "Tab", "Enter")
+    _wait_for(session, lambda text: "{}" in text)
+    _tmux("send-keys", "-t", session, "Tab", "Enter")
+
+
 def test_terminal_start_cancel_and_select_history(tui_session):
     screen = _wait_for(tui_session, lambda text: re.search(r"run_[0-9a-f-]+.*success", text))
     older = re.search(r"(run_[0-9a-f-]+).*success", screen).group(1)
     _tmux("send-keys", "-t", tui_session, "r")
+    _confirm_empty_action(tui_session)
     screen = _wait_for(tui_session, lambda text: re.search(r"run_[0-9a-f-]+.*running", text))
     started = re.search(r"(run_[0-9a-f-]+).*running", screen).group(1)
     assert started != older
     _tmux("send-keys", "-t", tui_session, "x")
+    _confirm_empty_action(tui_session)
     _wait_for(tui_session, lambda text: re.search(rf"{started}.*cancelled", text))
 
     _tmux("send-keys", "-t", tui_session, "d", "Down")
