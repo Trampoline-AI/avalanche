@@ -375,3 +375,22 @@ def test_file_and_workspace_inputs_are_recorded_without_bytes(tmp_path):
         },
         "workspace": {"kind": "workspace", "entry_count": 0, "total_size_bytes": 0},
     }
+
+
+def test_every_predict_rlm_event_kind_has_a_native_payload():
+    from typing import get_args
+
+    from avalanche.agent.native import predict_rlm as native
+
+    members = get_args(get_args(native.PredictRLMNativeEvent)[0])
+    modelled = {kind for member in members for kind in member.common_kinds}
+    assert modelled == {kind.value for kind in RunEventKind}
+
+
+@pytest.mark.parametrize("kind", ["session.started", "input.prepared", "session.released"])
+def test_sandbox_lifecycle_events_reach_the_sink_without_a_common_event(kind):
+    native, common = events_module.project_event(
+        RunEvent("run", 1, RunEventKind(kind), 1, {"field": "question"})
+    )
+
+    assert (native.kind, common) == (kind, None)
