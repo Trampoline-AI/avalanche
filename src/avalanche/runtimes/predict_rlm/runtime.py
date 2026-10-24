@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import inspect
 import math
+import tempfile
 from collections.abc import Sequence
 from dataclasses import dataclass
 from enum import Enum
@@ -31,7 +32,6 @@ from predict_rlm.telemetry import TelemetryContext
 from pydantic import BaseModel, ConfigDict, GetCoreSchemaHandler, PlainValidator, PrivateAttr
 from pydantic_core import CoreSchema, core_schema
 
-from ..._agent_evidence import AgentTraceFinishedEvent
 from ...agent.contract import (
     AgentEventSink,
     AgentRequest,
@@ -50,6 +50,7 @@ from ...agent.declaration import (
 )
 from ...agent.steps import AgentStepExecutionError, _describe_signature
 from ...agent.trace import RuntimeKind
+from . import files
 from .events import _AGENT_INVOCATION_STATE, _AgentInvocationState, _AvalancheEvidenceSink
 from .trace import (
     _emit_terminal_trace,
@@ -265,14 +266,6 @@ def _check_sbx_pool(value: object) -> object:
 _SbxPool = Annotated[object, PlainValidator(_check_sbx_pool)]
 
 
-@dataclass(frozen=True)
-class PredictRLMCall:
-    """A finished PredictRLM call and the v1 terminal event already emitted for it."""
-
-    prediction: dspy.Prediction
-    terminal_event: AgentTraceFinishedEvent
-
-
 class PredictRLM(BaseModel):
     """Run agent steps with PredictRLM.
 
@@ -323,15 +316,33 @@ class PredictRLM(BaseModel):
         return {**state, "__pydantic_private__": {"_predictors": []}}
 
     async def invoke(self, request: AgentRequest, events: AgentEventSink) -> AgentRunOutcome:
-        call = await self.predict(request, events)
-        prediction = call.prediction
+        predictor = self._predictor_for(request)
+        signature = request.signature.dspy_signature
+        input_files = files.file_fields(signature, signature.input_fields)
+        output_files = files.file_fields(signature, signature.output_fields)
+        inputs = {
+            name: getattr(request.inputs, name)
+            for name in request.signature.input_model.model_fields
+        }
+        with (
+            tempfile.TemporaryDirectory(prefix="avalanche-predict-rlm-") as directory,
+            files.host_inputs(inputs, input_files, Path(directory)) as host_inputs,
+        ):
+            prediction = await self._run(
+                predictor,
+                request,
+                host_inputs,
+                input_types={name: type(value).__name__ for name, value in inputs.items()},
+                events=events,
+            )
+            output_names = request.signature.output_model.model_fields
+            # A missing field is left out, so output validation reports it.
+            values = files.avalanche_outputs(
+                {name: prediction[name] for name in output_names if name in prediction},
+                output_files,
+            )
         return AgentRunOutcome(
-            outputs=PythonOutputs(
-                values={
-                    name: prediction[name]
-                    for name in request.signature.output_model.model_fields
-                }
-            ),
+            outputs=PythonOutputs(values=values),
             trace=trace_record(
                 prediction.trace,
                 prediction.evidence,
@@ -340,19 +351,16 @@ class PredictRLM(BaseModel):
             ),
         )
 
-    async def predict(
-        self, request: AgentRequest, events: AgentEventSink | None = None
-    ) -> PredictRLMCall:
-        """Run PredictRLM and return its native prediction.
-
-        Agent steps still return this prediction until they return an
-        ``AgentResult``; new callers should use ``invoke``.
-        """
-        predictor = self._predictor_for(request)
-        inputs = {
-            name: getattr(request.inputs, name)
-            for name in request.signature.input_model.model_fields
-        }
+    async def _run(
+        self,
+        predictor: _PredictRLMPredictor,
+        request: AgentRequest,
+        inputs: Mapping[str, object],
+        *,
+        input_types: Mapping[str, str],
+        events: AgentEventSink,
+    ) -> dspy.Prediction:
+        """Run PredictRLM, sending its v1 terminal trace event on every outcome."""
         runtime_kwargs = {"lm": self.lm, "sub_lm": self.sub_lm}
 
         from predict_rlm.trace import extract_trace_from_exc
@@ -398,20 +406,19 @@ class PredictRLM(BaseModel):
                         evidence=evidence,
                         runtime_kwargs=runtime_kwargs,
                     )
-                input_types = {name: type(value).__name__ for name, value in inputs.items()}
                 raise AgentStepExecutionError(
                     f"agent step {request.step_name!r} failed calling "
                     f"{_describe_signature(request.signature.dspy_signature)}: {exc}. "
-                    f"input types: {input_types}."
+                    f"input types: {dict(input_types)}."
                 ) from exc
 
-            terminal_event = _emit_terminal_trace(
+            _emit_terminal_trace(
                 prediction.trace,
                 invocation_id=state.invocation_id,
                 evidence=_evidence_metadata(prediction.evidence),
                 runtime_kwargs=runtime_kwargs,
             )
-            return PredictRLMCall(prediction=prediction, terminal_event=terminal_event)
+            return prediction
         finally:
             _AGENT_INVOCATION_STATE.reset(invocation_token)
 
@@ -423,7 +430,7 @@ class PredictRLM(BaseModel):
         passed = (self.model_fields_set | {"verbose"}) - {"skills"}
         options = {name: getattr(self, name) for name in passed}
         predictor = _build_predictor(
-            request.signature.dspy_signature,
+            files.predictor_signature(request.signature.dspy_signature),
             skills=tuple(self.skills or ()),
             tools=tuple(tool.function for tool in request.tools),
             **options,

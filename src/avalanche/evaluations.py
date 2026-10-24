@@ -1,4 +1,4 @@
-"""Observe agent invocation predictions with ordinary selectors and TypeSafe questions."""
+"""Observe agent invocation outputs with ordinary selectors and TypeSafe questions."""
 
 from __future__ import annotations
 
@@ -6,13 +6,14 @@ import inspect
 import json
 import math
 from collections.abc import Callable, Mapping
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from types import MappingProxyType
 from typing import Annotated, Generic, TypeVar
 
 from pydantic import BaseModel, ConfigDict, Field, InstanceOf, JsonValue, field_validator
 
 from ._evaluation_inputs import MetricInput, metric_inputs
+from .agent.trace import AgentTraceRecord
 from .classifier.classifier_step import Classifier, _close_classifier, _error_description
 from .classifier.models import (
     Answer,
@@ -38,11 +39,11 @@ class EvaluationError(RuntimeError):
 
 @dataclass(frozen=True)
 class EvalContext(Generic[InputT, OutputT]):
-    """Winning agent call inputs, complete prediction, and exported terminal trace."""
+    """The winning agent call: its inputs, validated outputs, and full trace with turns."""
 
     inputs: Mapping[str, InputT]
     output: OutputT
-    trace: list[JsonValue] = field(default_factory=list)
+    trace: AgentTraceRecord
 
 
 def _require_sync(function: object, description: str) -> None:

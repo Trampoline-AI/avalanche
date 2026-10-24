@@ -369,7 +369,7 @@ def generate_binary() -> str:
     runtime=ava.runtimes.PredictRLM(lm="openai/gpt-5.6-terra"),
 )
 async def convert_binary(binary: str, *, agent: ava.Agent) -> str:
-    return (await agent(binary=binary)).decimal
+    return (await agent(binary=binary)).outputs.decimal
 
 @ava.dest
 def print_result(result: str) -> str:

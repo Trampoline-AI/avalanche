@@ -48,6 +48,28 @@
   A step's PredictRLM settings are merged over the workflow default field by field;
   with neither, the step uses `ava.runtimes.PredictRLM()`. `tools=` and
   `evaluations=` stay on the step. `ava.runtimes` is now importable from `ava`.
+- **Breaking** — Agents: `await agent(...)` now returns an `ava.agent.AgentResult`
+  instead of the PredictRLM prediction. `result.outputs` holds the signature's output
+  fields, already validated in strict mode, and `result.trace` is the invocation's
+  runtime-neutral `ava.agent.AgentTrace` (header plus turns). Decorated steps now
+  validate outputs like inline steps do: a missing or wrongly typed output raises
+  `ava.agent.AgentOutputError` instead of reaching the step body.
+
+  ```python
+  # before
+  prediction = await agent(document=document)
+  return Report.model_validate(prediction.report)
+
+  # after
+  return (await agent(document=document)).outputs.report
+  ```
+
+  In evaluations, `ctx.output` is the validated outputs and `ctx.trace` is the full
+  `ava.agent.AgentTrace` instead of a list of JSON events; a call whose outputs fail
+  validation submits no evaluation. `ava.agent.AgentTrace` is no longer PredictRLM's
+  `RunTrace`. Agent steps can now run on any agent runtime, not only PredictRLM.
+- Agents: PredictRLM steps can declare `ava.File` and `list[ava.File]` inputs and
+  outputs. For now the files' bytes pass through a temporary directory on the host.
 
 ## 0.13.0
 

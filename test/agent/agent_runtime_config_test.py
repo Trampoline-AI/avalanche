@@ -82,7 +82,7 @@ def test_merged_runtime_remembers_only_fields_someone_set():
 def test_declaration_names_where_each_model_came_from():
     @ava.agent_step(Echo, runtime=PredictRLM(sub_lm="step-sub"))
     async def echo(text: str, *, agent: ava.Agent) -> str:
-        return (await agent(text=text)).answer
+        return (await agent(text=text)).outputs.answer
 
     declaration = echo.fn.__agent_step__.declaration(
         AgentDefaults(runtime=PredictRLM(lm="workflow-main", max_iterations=4))
@@ -100,7 +100,7 @@ def test_declaration_names_where_each_model_came_from():
 def test_declaration_attributes_inherited_models_to_the_workflow():
     @ava.agent_step(Echo)
     async def echo(text: str, *, agent: ava.Agent) -> str:
-        return (await agent(text=text)).answer
+        return (await agent(text=text)).outputs.answer
 
     runtime = echo.fn.__agent_step__.declaration(
         AgentDefaults(runtime=PredictRLM(lm="workflow-main"))
@@ -114,7 +114,7 @@ def test_declaration_attributes_inherited_models_to_the_workflow():
 def test_declaration_without_runtime_or_defaults_uses_predict_rlm_defaults():
     @ava.agent_step(Echo)
     async def echo(text: str, *, agent: ava.Agent) -> str:
-        return (await agent(text=text)).answer
+        return (await agent(text=text)).outputs.answer
 
     runtime = echo.fn.__agent_step__.declaration().runtime
 

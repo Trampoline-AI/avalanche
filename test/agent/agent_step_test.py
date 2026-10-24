@@ -78,8 +78,8 @@ def test_bodyful_agent_invokes_service_and_owns_structured_result(monkeypatch, s
 
     @ava.agent_step(signature)
     async def summarize(person: Person, *, agent: ava.Agent):
-        prediction = await agent(person=person)
-        return {"headline": prediction.summary.headline, "note": prediction.note}
+        result = await agent(person=person)
+        return {"headline": result.outputs.summary.headline, "note": result.outputs.note}
 
     @ava.workflow
     def flow():
@@ -238,6 +238,7 @@ async def test_live_evidence_redacts_tool_and_model_secrets_without_losing_event
             for sequence, (kind, data) in enumerate(events, 1):
                 await sink.emit(RunEvent("run", sequence, kind, sequence, data))
             return Prediction(
+                summary=Summary(headline="Ada", person_count=1),
                 note="reviewed",
                 trace=_trace(),
                 evidence=RunEvidence(
@@ -261,7 +262,7 @@ async def test_live_evidence_redacts_tool_and_model_secrets_without_losing_event
     with capture_agent_evidence(observed.append, errors="raise"):
         result = await agent(person=Person(id=1, name="Ada"))
 
-    assert result.note == "reviewed"
+    assert result.outputs.note == "reviewed"
     live = observed[:-1]
     assert [event["sequence"] for event in live] == list(range(1, 7))
     assert live[0]["data"]["inputs"] == {"person": {"id": 1, "name": "Ada"}}
@@ -320,6 +321,7 @@ async def test_concurrent_agent_invocations_keep_evidence_and_traces_correlated(
                 ),
             )
             return Prediction(
+                summary=Summary(headline=name, person_count=1),
                 note=name,
                 trace=_trace(),
                 evidence=RunEvidence(run_id=name, complete=True, terminal_outcome="completed"),
@@ -333,7 +335,7 @@ async def test_concurrent_agent_invocations_keep_evidence_and_traces_correlated(
             agent(person=Person(id=1, name="left")),
             agent(person=Person(id=2, name="right")),
         )
-    assert (left.note, right.note) == ("left", "right")
+    assert (left.outputs.note, right.outputs.note) == ("left", "right")
     grouped = {}
     for event in observed:
         grouped.setdefault(event["invocation_id"], []).append(event)
@@ -369,7 +371,9 @@ async def test_real_recorder_propagates_strict_observer_failures(monkeypatch, fa
                 await recorder.finish_failure(error)
                 predictor._attach_runtime_evidence(error, recorder)
                 raise
-            result = Prediction(note="recorded", trace=_trace())
+            result = Prediction(
+                summary=Summary(headline="Ada", person_count=1), note="recorded", trace=_trace()
+            )
             await recorder.finish_success(status="completed", outputs={"note": "recorded"})
             predictor._attach_runtime_evidence(result, recorder)
             return result
@@ -388,7 +392,7 @@ async def test_real_recorder_propagates_strict_observer_failures(monkeypatch, fa
         assert isinstance(raised.value.__cause__, EvidenceIncompleteError)
         assert raised.value.__cause__.__cause__ is failure
         with capture_agent_evidence(broken_listener, errors="ignore"):
-            assert (await agent(person=Person(id=1, name="Ada"))).note == "recorded"
+            assert (await agent(person=Person(id=1, name="Ada"))).outputs.note == "recorded"
     else:
         assert raised.value is failure
 
@@ -988,6 +992,7 @@ async def test_codex_lm_is_named_codex_in_declaration_and_run_trace(monkeypatch)
         async def acall(self, **inputs):
             return Prediction(
                 summary=Summary(headline="about Ada", person_count=1),
+                note="reviewed",
                 trace=_trace().model_copy(
                     update={"model": codex.model, "sub_model": codex.model}
                 ),
@@ -1002,7 +1007,7 @@ async def test_codex_lm_is_named_codex_in_declaration_and_run_trace(monkeypatch)
 
     @ava.agent_step(SummarySignature, runtime=PredictRLM(lm=codex, sub_lm=codex))
     async def summarize(person: Person, *, agent: ava.Agent):
-        return (await agent(person=person)).summary
+        return (await agent(person=person)).outputs.summary
 
     models = summarize.__agent_step__.declaration().runtime.models
     assert [model.identity["name"] for model in (models.main, models.sub)] == [
@@ -1023,7 +1028,7 @@ async def test_codex_lm_is_named_codex_in_declaration_and_run_trace(monkeypatch)
 def test_string_models_keep_their_litellm_ids_in_declaration():
     @ava.agent_step(SummarySignature, runtime=PredictRLM(lm="openai/gpt-5.6-terra"))
     async def summarize(person: Person, *, agent: ava.Agent):
-        return (await agent(person=person)).summary
+        return (await agent(person=person)).outputs.summary
 
     models = summarize.__agent_step__.declaration().runtime.models
     assert models.main.identity == "openai/gpt-5.6-terra"

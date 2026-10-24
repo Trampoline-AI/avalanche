@@ -7,10 +7,10 @@ import importlib
 import dspy
 import pytest
 from predict_rlm import RunEvidence, RunTrace
-from pydantic import BaseModel, ConfigDict, Field, ValidationError, model_validator
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 import avalanche as ava
-from avalanche.agent import AgentStepError
+from avalanche.agent import AgentOutputError, AgentStepError
 from avalanche.runtimes import PredictRLM
 
 predict_rlm_runtime = importlib.import_module("avalanche.runtimes.predict_rlm.runtime")
@@ -302,7 +302,7 @@ def test_missing_prediction_method_output_fails_as_missing_field(predictor_facto
     def flow():
         return ava.agent.step(PredictionMethodOutputs, inputs={"text": "apple"})
 
-    with pytest.raises(AgentStepError, match=f"missing output field '{missing}'"):
+    with pytest.raises(AgentOutputError, match=rf"{missing}\n  Field required"):
         flow().run(executor=ava.LocalExecutor()).result()
 
 
@@ -314,7 +314,7 @@ def test_invalid_output_is_not_coerced_or_replaced(predictor_factory, value):
     def flow():
         return ava.agent.step(PositiveCount, inputs={"text": "four"})
 
-    with pytest.raises(ValidationError):
+    with pytest.raises(AgentOutputError):
         flow().run(executor=ava.LocalExecutor()).result()
 
 
@@ -342,7 +342,7 @@ def test_invalid_structured_output_is_rejected(predictor_factory, quantity):
             ExtractItems, inputs={"transcript": "0 apples", "customer": "Ada"}
         )
 
-    with pytest.raises(ValidationError):
+    with pytest.raises(AgentOutputError):
         flow().run(executor=ava.LocalExecutor()).result()
 
 
@@ -372,7 +372,7 @@ def test_missing_output_fails_without_retry(predictor_factory, signature):
     def flow():
         return ava.agent.step(signature, inputs={"text": "missing"})
 
-    with pytest.raises(AgentStepError):
+    with pytest.raises(AgentOutputError):
         flow().run(executor=ava.LocalExecutor()).result()
     assert invocations == ["missing"]
 
@@ -556,11 +556,11 @@ def test_bodyful_agent_spellings_and_inline_agents_mix(predictor_factory):
 
     @ava.agent.step(Echo)
     async def first(text: str, *, agent: ava.Agent):
-        return (await agent(text=text)).answer + "!"
+        return (await agent(text=text)).outputs.answer + "!"
 
     @ava.agent_step(Echo)
     async def second(text: str, *, agent: ava.Agent):
-        return (await agent(text=text)).answer + "?"
+        return (await agent(text=text)).outputs.answer + "?"
 
     @ava.workflow
     def flow():
@@ -575,7 +575,7 @@ def test_nested_agent_decorators_fail_with_agent_error(decorator):
     def flow():
         @decorator(Echo)
         async def nested(text: str, *, agent: ava.Agent):
-            return (await agent(text=text)).answer
+            return (await agent(text=text)).outputs.answer
 
         return nested("hello")
 
@@ -591,7 +591,7 @@ def test_applying_precreated_agent_decorator_inside_workflow_is_rejected(decorat
     def flow():
         @decorate
         async def nested(text: str, *, agent: ava.Agent):
-            return (await agent(text=text)).answer
+            return (await agent(text=text)).outputs.answer
 
         return nested("hello")
 

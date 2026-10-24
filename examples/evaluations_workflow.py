@@ -17,7 +17,6 @@ from __future__ import annotations
 
 from typing import Literal
 
-from dspy import Prediction
 from model_selection import select_models
 from pydantic import BaseModel, JsonValue
 
@@ -62,7 +61,7 @@ class IncidentHandoff(BaseModel):
 
 
 def handoff_evidence(
-    ctx: ava.EvalContext[IncidentPacket, Prediction],
+    ctx: ava.EvalContext[IncidentPacket, BaseModel],
 ) -> dict[str, JsonValue]:
     """Shared evidence selection lets three independent questions use one request."""
     return {
@@ -72,35 +71,18 @@ def handoff_evidence(
 
 
 def handoff_trace_evidence(
-    ctx: ava.EvalContext[IncidentPacket, Prediction],
+    ctx: ava.EvalContext[IncidentPacket, BaseModel],
 ) -> dict[str, JsonValue]:
-    """Keep observed actions and source facts without the trace's duplicate copies."""
-    actions: list[JsonValue] = []
-    for event in ctx.trace:
-        if event["kind"] == "trace_unavailable":
-            actions.append(event)
-        elif event["kind"] == "trace_finished":
-            actions.append(
-                {
-                    "kind": "trace_finished",
-                    "invocation_id": event["invocation_id"],
-                    "actions": [
-                        {
-                            "iteration": step["iteration"],
-                            "code": step["code"],
-                            "output": step["output"],
-                            "tool_calls": step["tool_calls"],
-                            "predict_calls": step["predict_calls"],
-                        }
-                        for step in event["trace"]["steps"]
-                    ],
-                }
-            )
-        else:
-            raise ValueError(f"Unsupported agent trace event: {event['kind']!r}")
+    """Keep the agent's observed actions, turn by turn, next to the source facts."""
     return {
         "source": ctx.inputs["packet"].model_dump(mode="json"),
-        "agent_actions": actions,
+        "agent_actions": [
+            {
+                "turn": turn.index,
+                "actions": [action.model_dump(mode="json") for action in turn.actions],
+            }
+            for turn in ctx.trace.turns
+        ],
     }
 
 
@@ -319,8 +301,7 @@ def generate_mock_incident() -> IncidentPacket:
 async def prepare_incident_handoff(
     packet: IncidentPacket, *, agent: ava.Agent
 ) -> IncidentHandoff:
-    prediction = await agent(packet=packet)
-    return prediction.handoff
+    return (await agent(packet=packet)).outputs.handoff
 
 
 @ava.step

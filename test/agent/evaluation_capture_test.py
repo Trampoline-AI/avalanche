@@ -5,7 +5,6 @@ from __future__ import annotations
 import asyncio
 import importlib
 import inspect
-import json
 import warnings
 from typing import Literal
 
@@ -18,6 +17,7 @@ from ray import cloudpickle
 import avalanche as ava
 from avalanche._agent_evidence import capture_agent_evidence, emit_agent_evidence
 from avalanche.agent import AgentStepExecutionError
+from avalanche.agent.trace import Turn
 from avalanche.evaluation_capture import capture_evaluations
 
 predict_rlm_runtime = importlib.import_module("avalanche.runtimes.predict_rlm.runtime")
@@ -62,6 +62,13 @@ def _trace(
             )
         ],
     )
+
+
+def _turn(text: str) -> Turn:
+    """The common turn the PredictRLM adapter makes from ``_trace(text)``."""
+    from avalanche.runtimes.predict_rlm.mapping import turn_from_step
+
+    return turn_from_step(_trace(text).steps[0])
 
 
 def forbidden_evaluation(*args, **kwargs):
@@ -118,7 +125,7 @@ def test_declaration_and_discovery_do_not_execute_evaluations(evaluations, monke
 async def test_embedded_execution_does_not_run_evaluations(evaluations, predictor):
     @ava.agent_step(EchoSignature, evaluations=evaluations)
     async def echo(*, agent: ava.Agent) -> str:
-        return (await agent(text="hello")).answer
+        return (await agent(text="hello")).outputs.answer
 
     with warnings.catch_warnings():
         warnings.simplefilter("error")
@@ -142,10 +149,10 @@ async def test_actual_call_inputs_and_complete_prediction_replace_step_result(
         context: ava.RunContext,
         logger=ava.Logger(),
     ) -> Report:
-        prediction = await agent(text=f"prepared: {text.strip()}")
+        result = await agent(text=f"prepared: {text.strip()}")
         # Submission must already exist before postprocessing starts.
         assert len(submissions) == 1
-        return Report(summary=" ".join([prediction.answer] * repeat))
+        return Report(summary=" ".join([result.outputs.answer] * repeat))
 
     observed = []
     with capture_agent_evidence(observed.append, errors="raise"):
@@ -157,22 +164,14 @@ async def test_actual_call_inputs_and_complete_prediction_replace_step_result(
     context = submissions[0].context
     assert submissions[0].error is None
     assert context.inputs == {"text": "prepared: hello"}
-    assert isinstance(context.output, Prediction)
-    assert context.output.answer == "PREPARED: HELLO"
-    assert context.output.handoff == Report(summary="summary: prepared: hello")
+    assert context.output.model_dump() == {
+        "answer": "PREPARED: HELLO",
+        "handoff": {"summary": "summary: prepared: hello"},
+    }
+    # The operator's terminal event drops streamed steps; evaluations keep every turn.
     assert observed[0]["trace"]["steps"] == []
-    assert context.trace[0]["invocation_id"] == observed[0]["invocation_id"]
-    selected_trace = RunTrace.model_validate(context.trace[0]["trace"], strict=True)
-    assert selected_trace.steps == [
-        IterationStep(
-            iteration=1,
-            reasoning="Process prepared: hello",
-            code="answer = 'prepared: hello'",
-            output="prepared: hello",
-            untruncated_output="full output: prepared: hello",
-            duration_ms=12,
-        )
-    ]
+    assert context.trace.header.external_run_id == "prepared: hello"
+    assert context.trace.turns == (_turn("prepared: hello"),)
 
 
 @pytest.mark.asyncio
@@ -193,10 +192,10 @@ async def test_nested_step_capture_is_isolated_and_restored(
 
     @ava.agent_step(EchoSignature, evaluations=helper_evaluations)
     async def helper(*, agent: ava.Agent) -> str:
-        prediction = await agent(text="helper")
+        result = await agent(text="helper")
         if failure is not None:
             raise failure
-        return prediction.answer
+        return result.outputs.answer
 
     @ava.agent_step(EchoSignature, evaluations=evaluations)
     async def outer(*, agent: ava.Agent) -> str:
@@ -206,7 +205,7 @@ async def test_nested_step_capture_is_isolated_and_restored(
             with pytest.raises(failure_type) as raised:
                 await helper.fn()
             assert raised.value is failure
-        return (await agent(text="outer")).answer
+        return (await agent(text="outer")).outputs.answer
 
     submissions = []
     observed = []
@@ -230,10 +229,8 @@ async def test_nested_step_capture_is_isolated_and_restored(
         assert context.inputs == {"text": text}
         assert context.output.answer == text.upper()
         assert context.output.handoff == Report(summary=f"summary: {text}")
-        assert context.output.evidence.run_id == text
-        assert context.trace[0]["invocation_id"] == terminal["invocation_id"]
-        selected_trace = RunTrace.model_validate(context.trace[0]["trace"], strict=True)
-        assert selected_trace == _trace(text)
+        assert context.trace.header.external_run_id == terminal["evidence"]["run_id"] == text
+        assert context.trace.turns == (_turn(text),)
 
 
 @pytest.mark.asyncio
@@ -242,7 +239,7 @@ async def test_unevaluated_helper_does_not_create_evaluation_for_no_call_outer(
 ):
     @ava.agent_step(EchoSignature)
     async def helper(*, agent: ava.Agent) -> str:
-        return (await agent(text="helper")).answer
+        return (await agent(text="helper")).outputs.answer
 
     @ava.agent_step(EchoSignature, evaluations=evaluations)
     async def outer(*, agent: ava.Agent) -> str:
@@ -269,7 +266,7 @@ async def test_inline_helper_cannot_claim_enclosing_step_evaluation(evaluations,
         answer, report = await inline_call(text="helper")
         assert answer == "HELPER"
         assert report == Report(summary="summary: helper")
-        return (await agent(text="outer")).answer
+        return (await agent(text="outer")).outputs.answer
 
     submissions = []
     with capture_evaluations(submissions.append) as errors:
@@ -279,9 +276,7 @@ async def test_inline_helper_cannot_claim_enclosing_step_evaluation(evaluations,
     [submission] = submissions
     assert submission.context.inputs == {"text": "outer"}
     assert submission.context.output.answer == "OUTER"
-    assert RunTrace.model_validate(submission.context.trace[0]["trace"], strict=True) == _trace(
-        "outer"
-    )
+    assert submission.context.trace.turns == (_turn("outer"),)
 
 
 @pytest.mark.asyncio
@@ -348,7 +343,7 @@ async def test_first_successful_completion_wins_without_gating_later_calls(
         assert submissions[0].context.output.answer == "FAST"
         release_slow.set()
         later = await slow
-        return [later.answer, fast.answer]
+        return [later.outputs.answer, fast.outputs.answer]
 
     observed = []
     with capture_agent_evidence(observed.append, errors="raise"):
@@ -365,10 +360,8 @@ async def test_first_successful_completion_wins_without_gating_later_calls(
     terminals = [event for event in observed if event["kind"] != "evidence"]
     assert len(terminals) == 2
     assert all(event["trace"]["steps"] == [] for event in terminals)
-    assert context.trace[0]["invocation_id"] == terminals[0]["invocation_id"]
-    selected_trace = RunTrace.model_validate(context.trace[0]["trace"], strict=True)
-    assert selected_trace.steps == _trace("fast").steps
-    assert context.trace[0]["invocation_id"] != terminals[1]["invocation_id"]
+    assert context.trace.header.external_run_id == terminals[0]["evidence"]["run_id"]
+    assert context.trace.turns == (_turn("fast"),)
 
 
 @pytest.mark.asyncio
@@ -407,7 +400,7 @@ async def test_failed_earlier_call_does_not_claim_capture_and_observers_keep_all
             await agent(text="failed")
         first = await agent(text="first")
         later = await agent(text="later")
-        return [first.answer, later.answer]
+        return [first.outputs.answer, later.outputs.answer]
 
     observed = []
     submissions = []
@@ -441,49 +434,9 @@ async def test_failed_earlier_call_does_not_claim_capture_and_observers_keep_all
     context = submissions[0].context
     assert context.inputs == {"text": "first"}
     assert context.output.answer == "first"
-    assert context.trace[0]["invocation_id"] == terminal[1]["invocation_id"]
+    assert context.trace.header.external_run_id == terminal[1]["evidence"]["run_id"]
     assert all(event["trace"]["steps"] == [] for event in terminal[1:])
-    selected_trace = RunTrace.model_validate(context.trace[0]["trace"], strict=True)
-    assert selected_trace.steps == _trace("first").steps
-    assert json.loads(json.dumps(context.trace)) == context.trace
-
-
-def test_unavailable_terminal_trace_is_retained_at_capture_boundary(evaluations):
-    output = Prediction(
-        answer="first",
-        handoff=Report(summary="first"),
-        trace=_trace("first"),
-        evidence=RunEvidence(run_id="first", complete=True, terminal_outcome="completed"),
-    )
-    submissions = []
-    with capture_evaluations(submissions.append) as errors:
-        capture = capture_module._StepEvaluationCapture(evaluations, step_name="echo")
-        capture.submit(
-            {"text": "first"},
-            output,
-            {
-                "kind": "trace_unavailable",
-                "invocation_id": "first-invocation",
-                "error": "terminal trace unavailable",
-                "evidence": {
-                    "run_id": "first",
-                    "complete": True,
-                    "terminal_outcome": "completed",
-                },
-            },
-        )
-
-    assert errors == []
-    assert submissions[0].error is None
-    assert submissions[0].context.inputs == {"text": "first"}
-    assert submissions[0].context.output.answer == "first"
-    assert submissions[0].context.trace == [
-        {
-            "kind": "trace_unavailable",
-            "invocation_id": "first-invocation",
-            "error": "terminal trace unavailable",
-        }
-    ]
+    assert context.trace.turns == (_turn("first"),)
 
 
 @pytest.mark.asyncio
@@ -496,7 +449,7 @@ async def test_prior_observer_error_policy_is_unchanged(evaluations, predictor, 
 
     @ava.agent_step(EchoSignature, evaluations=evaluations)
     async def echo(*, agent: ava.Agent) -> str:
-        return (await agent(text="hello")).answer
+        return (await agent(text="hello")).outputs.answer
 
     submissions = []
     with capture_agent_evidence(observer, errors=policy):
@@ -589,7 +542,7 @@ async def test_submission_failure_is_reported_without_changing_agent_or_step_ret
     async def echo(*, agent: ava.Agent) -> list[str]:
         first = await agent(text="first")
         later = await agent(text="later")
-        return [first.answer, later.answer]
+        return [first.outputs.answer, later.outputs.answer]
 
     attempts = []
 
@@ -611,7 +564,7 @@ async def test_async_collector_does_not_run_without_a_synchronous_snapshot(
 ):
     @ava.agent_step(EchoSignature, evaluations=evaluations)
     async def echo(*, agent: ava.Agent) -> str:
-        return (await agent(text="unchanged")).answer
+        return (await agent(text="unchanged")).outputs.answer
 
     calls = []
 
@@ -634,7 +587,7 @@ async def test_warning_and_diagnostic_failures_are_isolated(
 ):
     @ava.agent_step(EchoSignature, evaluations=evaluations)
     async def echo(*, agent: ava.Agent) -> str:
-        return (await agent(text="unchanged")).answer
+        return (await agent(text="unchanged")).outputs.answer
 
     def reject(submission):
         warnings.warn("snapshot unavailable", UserWarning)
@@ -659,7 +612,7 @@ async def test_context_capture_failure_is_reported_once_without_retry(
 ):
     @ava.agent_step(EchoSignature, evaluations=evaluations)
     async def echo(*, agent: ava.Agent) -> list[str]:
-        return [(await agent(text=text)).answer for text in ("first", "later")]
+        return [(await agent(text=text)).outputs.answer for text in ("first", "later")]
 
     def fail_context(**kwargs):
         raise ValueError("context unavailable")
@@ -674,48 +627,12 @@ async def test_context_capture_failure_is_reported_once_without_retry(
     assert "context unavailable" in submissions[0].error
 
 
-@pytest.mark.asyncio
-@pytest.mark.parametrize(
-    "failure_type", [ValueError, KeyboardInterrupt, asyncio.CancelledError]
-)
-async def test_full_trace_export_failure_is_reported_once_without_changing_returns(
-    evaluations, predictor, monkeypatch, failure_type
-):
-    @ava.agent_step(EchoSignature, evaluations=evaluations)
-    async def echo(*, agent: ava.Agent) -> list[str]:
-        return [(await agent(text=text)).answer for text in ("first", "later")]
-
-    original_export = RunTrace.to_exportable_json
-    exports = []
-
-    def fail_full_export(self, *args, **kwargs):
-        if self.steps:
-            exports.append(self.steps[0].output)
-            raise failure_type("full trace unavailable")
-        return original_export(self, *args, **kwargs)
-
-    monkeypatch.setattr(RunTrace, "to_exportable_json", fail_full_export)
-    submissions = []
-    observed = []
-    with capture_agent_evidence(observed.append, errors="raise"):
-        with capture_evaluations(submissions.append) as errors:
-            assert await echo.fn() == ["FIRST", "LATER"]
-
-    assert exports == ["first"]
-    assert errors == []
-    assert len(submissions) == 1
-    assert submissions[0].context is None
-    assert submissions[0].error == f"{failure_type.__name__}: full trace unavailable"
-    assert len(observed) == 2
-    assert all(event["trace"]["steps"] == [] for event in observed)
-
-
 def test_local_workflows_use_own_classifier_defaults_and_actual_call_inputs(
     evaluations, predictor
 ):
     @ava.agent_step(EchoSignature, evaluations=evaluations)
     async def echo(text: str, *, logger, agent: ava.Agent) -> str:
-        return (await agent(text=f"prepared {text}")).answer
+        return (await agent(text=f"prepared {text}")).outputs.answer
 
     @ava.workflow(classifier_defaults={"model": "workflow-a", "timeout": 3.0})
     def first():
@@ -758,7 +675,6 @@ async def test_ray_serialization_uses_worker_context_and_synchronous_owned_snaps
             return Prediction(
                 answer=payload[0].upper(),
                 handoff=Report(summary="original summary"),
-                sources=["original source"],
                 trace=_trace(payload[0]),
                 evidence=RunEvidence(
                     run_id="snapshot-run", complete=True, terminal_outcome="completed"
@@ -768,15 +684,12 @@ async def test_ray_serialization_uses_worker_context_and_synchronous_owned_snaps
     monkeypatch.setattr(predict_rlm_runtime, "_build_predictor", lambda *a, **kw: Predictor())
 
     @ava.agent_step(SnapshotSignature, evaluations=evaluations)
-    async def echo(text: str, *, agent: ava.Agent) -> Prediction:
+    async def echo(text: str, *, agent: ava.Agent) -> Report:
         payload = [f"prepared {text}"]
-        prediction = await agent(payload=payload)
+        result = await agent(payload=payload)
         payload.append("caller mutation")
-        prediction.handoff.summary = "caller changed summary"
-        prediction.sources.append("caller source")
-        prediction.trace.steps[0].output = "caller changed trace"
-        prediction.evidence.complete = False
-        return prediction
+        result.outputs.handoff.summary = "caller changed summary"
+        return result.outputs.handoff
 
     bound = echo.fn.__agent_step__.with_workflow_defaults(
         echo.fn, {}, classifier_defaults={"model": "worker-model", "timeout": 2.0}
@@ -789,19 +702,13 @@ async def test_ray_serialization_uses_worker_context_and_synchronous_owned_snaps
 
     with capture_evaluations(snapshot):
         result = await restored("initial")
-    result.answer = "downstream mutation"
+    result.summary = "downstream mutation"
 
-    # The synchronous worker collector snapshots before caller/downstream mutation.
+    # The synchronous worker collector snapshots before caller/downstream mutation,
+    # and the step's generated output model survives the snapshot's pickling.
     submission = cloudpickle.loads(snapshots[0])
-    assert result.handoff.summary == "caller changed summary"
-    assert result.trace.steps[0].output == "caller changed trace"
-    assert result.evidence.complete is False
     assert submission.context.output.answer == "PREPARED INITIAL"
     assert submission.context.output.handoff.summary == "original summary"
-    assert submission.context.output.sources == ["original source"]
     assert submission.context.inputs == {"payload": ["prepared initial"]}
-    assert submission.context.output.trace.steps == _trace("prepared initial").steps
-    assert submission.context.output.evidence.complete is True
-    selected_trace = RunTrace.model_validate(submission.context.trace[0]["trace"], strict=True)
-    assert selected_trace.steps == _trace("prepared initial").steps
+    assert submission.context.trace.turns == (_turn("prepared initial"),)
     assert submission.runtime_defaults == {"model": "worker-model", "timeout": 2.0}
