@@ -14,6 +14,7 @@ from predict_rlm.trace import IterationStep
 
 from avalanche._agent_trace import AgentTerminalDetail, AgentTraceEnvelope
 
+from .mock_extensions import MockTuiExtensions
 from .models import (
     CatalogSnapshot,
     DetailUpdate,
@@ -567,6 +568,11 @@ class MockStateProvider:
         self.operator_reachable = True
         self.stream_state = "live"
         self.stream_error = ""
+        self.connection_label = "Mock operator"
+        self.last_error = ""
+        self._stop = threading.Event()
+        self._mock_extensions = MockTuiExtensions(self)
+        self.tui_extensions = self._mock_extensions
         self._workflows = {p.selector: p for p in ALL_WORKFLOWS}
         if include_agent_trace:
             self._workflows[AGENT_TRACE_WORKFLOW.selector] = AGENT_TRACE_WORKFLOW
@@ -805,8 +811,14 @@ class MockStateProvider:
             trace_body=trace_body,
         )
 
+    def ping(self) -> bool:
+        return self.operator_reachable
+
     def close(self) -> None:
-        """Mock provider owns no external resources."""
+        self._stop.set()
+        self._mock_extensions.close()
+        for thread in self._threads:
+            thread.join()
 
     def start_run(self, workflow_selector: str, **kwargs) -> str:
         info = self._workflows.get(workflow_selector)
@@ -911,6 +923,7 @@ class MockStateProvider:
         self.stream_state = "live"
 
     def _notify_run(self, run: RunState) -> None:
+        self._mock_extensions.invalidate()
         for cb in self._run_callbacks:
             cb(run)
 
@@ -953,7 +966,8 @@ class MockStateProvider:
             elapsed = time.monotonic() - phase_start
             remaining = duration - elapsed
             if remaining > 0:
-                time.sleep(remaining)
+                if self._stop.wait(remaining):
+                    return
 
             if run.status != RunStatus.RUNNING:
                 return
@@ -1003,7 +1017,8 @@ class MockStateProvider:
                 return
             wait = offset - (time.monotonic() - phase_start)
             if wait > 0:
-                time.sleep(wait)
+                if self._stop.wait(wait):
+                    return
             entry = LogEntry(
                 timestamp=datetime.now(),
                 level=level,

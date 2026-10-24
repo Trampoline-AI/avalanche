@@ -44,6 +44,11 @@ class LogEntry:
     node_id: str
     message: str
 
+    # Operator diagnostics have no worker attempt; captured activity carries both.
+
+    channel: str | None = None
+    attempt: str | None = None
+
 
 @dataclass(frozen=True)
 class WorkflowTopology:
@@ -324,6 +329,8 @@ class LogRecordDescriptor:
     node_id: str
     size_bytes: int
     body_token: str
+    channel: str | None = None
+    attempt: str | None = None
 
 
 @dataclass(frozen=True)
@@ -600,6 +607,8 @@ class WorkflowInfo:
     webhook_enabled: bool = False
     webhook_url: str | None = None
     webhook_active: bool = False
+    input_schema_json: str = ""
+    version: str = ""
 
     @property
     def selector(self) -> str:
@@ -689,6 +698,7 @@ class WorkflowDescriptor:
     cron: str | None = None
     webhook_path: str | None = None
     webhook_enabled: bool = False
+    input_schema_json: str = ""
 
 
 @dataclass(frozen=True)

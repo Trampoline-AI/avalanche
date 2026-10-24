@@ -7,7 +7,7 @@ from rich.text import Text
 from textual.widgets import Static
 
 from ..models import RunStatus
-from ..state import get_operator_reachability, get_stream_state
+from ..state import get_operator_reachability, get_stream_state, status_label
 from ..theme import (
     DIM_STYLE,
     ICE_BRIGHT,
@@ -16,7 +16,10 @@ from ..theme import (
     ICE_STEEL,
     ICE_TEAL,
     ICE_WARN,
+    OTHER_STATUS_CHAR,
+    OTHER_STATUS_STYLE,
     SPINNER_FRAMES,
+    status_display,
 )
 
 _SEP = " › "
@@ -91,12 +94,14 @@ class StatusBar(Static):
                 text.append("latest", Style(color=ICE_FROST))
                 text.append(f" ({run.run_id})", DIM_STYLE)
             # Status indicator
-            if run.status == RunStatus.RUNNING:
+            if run.status is RunStatus.RUNNING:
                 icon = SPINNER_FRAMES[store.frame % len(SPINNER_FRAMES)]
             else:
-                icon = _STATUS_ICONS.get(run.status, "")
-            if icon:
-                text.append(f" {icon}", _STATUS_STYLES.get(run.status, Style()))
+                icon = status_display(run.status, _STATUS_ICONS, OTHER_STATUS_CHAR)
+            style = status_display(run.status, _STATUS_STYLES, OTHER_STATUS_STYLE)
+            text.append(f" {icon}", style)
+            if not isinstance(run.status, RunStatus):
+                text.append(f" {status_label(run.status)}", style)
 
         node = store.selected_node
         if node:

@@ -2,24 +2,40 @@
 
 from __future__ import annotations
 
-import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
 
 import grpc
-from textual.app import App, ComposeResult
+from textual.app import App, ComposeResult, SystemCommand
 from textual.binding import Binding
 from textual.css.query import NoMatches
 from textual.timer import Timer
+from textual.widget import Widget
 from textual.widgets import Header
 
 from runtime.operator.client import OperatorCallError
 
 from .dag_layout import DagNode
+from .extensions import ExtensionSession
 from .mock import MockStateProvider
 from .models import RunState, RunStatus, TraceDetail, WorkflowInfo
+from .screens.input_form import InputForm
+from .screens.tools import InspectionScreen, LogFilterScreen, ResourceScreen
 from .screens.workflow_detail import WorkflowDetailScreen
-from .state import StateProvider, get_operator_reachability
+from .state import (
+    ActionDescriptor,
+    ActionResult,
+    Object,
+    PanelDescriptor,
+    ReadOnlyStateProvider,
+    ScopeDescriptor,
+    StateProvider,
+    TuiContext,
+    TuiExtensionError,
+    get_operator_reachability,
+    require_tui_provider,
+    status_label,
+)
 from .theme import AVALANCHE_THEME
 from .ui_store import TraceDetailCompletion, TraceHydrationKey, UIStore
 from .widgets.agent_trace import (
@@ -60,6 +76,11 @@ class AvalancheApp(App):
 
     BINDINGS = [
         Binding("ctrl+c", "quit", "Quit", priority=True),
+        Binding("?", "context_help", "Help"),
+        Binding("f", "log_filters", "Log filters"),
+        Binding("i", "inspect_node", "Inspect node"),
+        Binding("c", "catalog", "Catalog"),
+        Binding("ctrl+s", "schedules", "Schedules"),
         ("escape", "escape_key", "Esc"),
         Binding("tab", "workflow_next", "Tab", priority=True),
         Binding("shift+tab", "workflow_prev", "Shift+Tab", priority=True),
@@ -90,6 +111,8 @@ class AvalancheApp(App):
         node: str | None = None,
         *,
         close_provider_on_unmount: bool = True,
+        run: str | None = None,
+        read_only: bool = False,
     ):
         super().__init__()
         self.register_theme(AVALANCHE_THEME)
@@ -97,7 +120,14 @@ class AvalancheApp(App):
         defer_initial_catalog = provider is not None
         if provider is None:
             provider = MockStateProvider(include_agent_trace=workflow == "agent_trace")
+        require_tui_provider(provider)
+        if read_only:
+            provider = ReadOnlyStateProvider(provider)
         self.store = UIStore(provider, defer_initial_catalog=defer_initial_catalog)
+        self.read_only = read_only
+        self._deep_link_run = run
+        self._deep_link_run_in_flight = False
+        self._requested_flow = workflow
         self._close_provider_on_unmount = close_provider_on_unmount
         self._timer: Timer | None = None
         self._screen: WorkflowDetailScreen | None = None
@@ -117,7 +147,6 @@ class AvalancheApp(App):
             max_workers=1,
             thread_name_prefix="avalanche-run-control",
         )
-        self._cancel_run_requests: set[str] = set()
         self._run_controls_closed = False
         self._dag_visible = True
         self._restore_dag_focus = False
@@ -129,6 +158,20 @@ class AvalancheApp(App):
         self._deep_link_workflow = workflow
         self._deep_link_node = node
         self._operator_was_reachable: bool | None = None
+        self.extension_session = ExtensionSession(
+            provider.tui_extensions,
+            read_only=read_only,
+            post=lambda callback: self.call_later(callback),
+        )
+        self._extension_baseline_generation = 0
+        self._scope_reload_pending = False
+        self._extension_token: tuple | None = None
+        self._context_generation = 0
+        self._widget_tokens: dict[str, tuple] = {}
+        self._breadcrumbs = ""
+        self._scope: tuple[tuple[str, str], ...] = ()
+        self._action_intents: dict[tuple[TuiContext, str], tuple[str, str]] = {}
+        self._actions_in_flight: set[tuple[TuiContext, str]] = set()
         self._apply_deep_link()
 
     def _apply_deep_link(self) -> None:
@@ -149,6 +192,22 @@ class AvalancheApp(App):
                 self._deep_link_workflow = None
             else:
                 return
+        if self._deep_link_run is not None:
+            if not self.store.workflows or self._deep_link_run_in_flight:
+                return
+            run_id = self._deep_link_run
+            self._deep_link_run_in_flight = True
+            epoch = self.store._workflow_context_epoch
+
+            def load_link() -> None:
+                try:
+                    run = self.store.provider.get_run(run_id)
+                except Exception:
+                    run = None
+                self.call_later(self._complete_run_link, run_id, epoch, run)
+
+            self._run_control_executor.submit(load_link)
+            return
         if node:
             match = next((n for n in self.store.all_nodes if n.name == node), None)
             if match is None:
@@ -156,6 +215,271 @@ class AvalancheApp(App):
             if match:
                 self.store.select_node(match)
                 self._deep_link_node = None
+
+    def _complete_run_link(self, run_id: str, epoch: int, run: RunState | None) -> None:
+        self._deep_link_run_in_flight = False
+        self._deep_link_run = None
+        if epoch != self.store._workflow_context_epoch:
+            return
+        if run is None:
+            self.store.run_error = f"Linked run {run_id} is unavailable"
+            return
+        matches = [flow for flow in self.store.workflows if self.store._run_matches(run, flow)]
+        current = self.store.current_workflow
+        if len(matches) != 1 or (
+            self._requested_flow is not None
+            and current is not None
+            and current.selector != matches[0].selector
+        ):
+            self.store.run_error = "Flow/run deep link does not match the loaded catalog"
+            return
+        if current is None or current.selector != matches[0].selector:
+            self.store.switch_workflow(matches[0])
+        self.store.switch_run(run)
+        self._apply_deep_link()
+        self._refresh_widgets()
+
+    @property
+    def extension_context(self) -> TuiContext:
+        store = self.store
+        flow = store.current_workflow.selector if store.current_workflow else None
+        run = store.selected_run_id
+        node = store.selected_node.name if store.selected_node else None
+        token = (
+            self._scope,
+            store.current_workflow.version if store.current_workflow else None,
+            flow,
+            run,
+            node,
+            store._workflow_context_epoch,
+            store._run_interaction_generation,
+            store._latest_reset_generation,
+        )
+        if token != self._extension_token:
+            self._extension_token = token
+            self._context_generation += 1
+            self._action_intents.clear()
+            self._actions_in_flight.clear()
+        return TuiContext(
+            self._scope,
+            flow=flow,
+            run=run,
+            node=node,
+            generation=self._context_generation,
+            version=store.current_workflow.version or None if store.current_workflow else None,
+        )
+
+    def get_system_commands(self, screen):
+        yield SystemCommand("Catalog", "Browse workflow definitions", self.action_catalog)
+        yield SystemCommand("Run history", "Focus loaded run history", self._focus_history)
+        yield SystemCommand(
+            "Inspect node",
+            "State, timing, errors and trace availability",
+            self.action_inspect_node,
+        )
+        yield SystemCommand(
+            "Schedules", "Inspect schedules; no simulated toggle", self.action_schedules
+        )
+        yield SystemCommand(
+            "Log filters", "Node, attempt, channel and level", self.action_log_filters
+        )
+        yield SystemCommand(
+            "Follow / pause logs", "Toggle live log following", self.action_toggle_autoscroll
+        )
+        yield SystemCommand("Help", "Keys and current context", self.action_context_help)
+        description = self.extension_session.description
+        if description is not None:
+            for panel in (
+                description.panels if "paged-resources" in description.features else ()
+            ):
+                yield SystemCommand(
+                    f"{panel.slot} / {panel.label}",
+                    f"Open {panel.renderer} panel",
+                    lambda panel=panel: self.open_extension_panel(panel),
+                )
+            for action in description.actions:
+                if (
+                    action.input_schema is not None
+                    and "json-schema-forms" not in description.features
+                ):
+                    continue
+                unavailable = not action.available or (self.read_only and action.mutates)
+                reason = "read-only" if self.read_only and action.mutates else action.reason
+                label = f"{action.label} · disabled: {reason}" if unavailable else action.label
+                yield SystemCommand(
+                    label,
+                    action.permission or "Provider action",
+                    lambda action=action: self.invoke_extension_action(action),
+                )
+            for scope in description.scopes:
+                yield SystemCommand(
+                    f"Scope / {scope.label}",
+                    scope.reason or "Switch scope",
+                    lambda scope=scope: self.select_extension_scope(scope),
+                )
+
+    def _focus_history(self) -> None:
+        self.store.focused_pane = "run-history"
+        self._refresh_widgets()
+
+    def action_catalog(self) -> None:
+        self.store.sidebar_visible = True
+        self.store.focused_pane = "sidebar"
+        self._sync_sidebar_focus()
+        self._refresh_widgets()
+
+    def action_context_help(self) -> None:
+        context = self.extension_context
+        self.push_screen(
+            InspectionScreen(
+                "Contextual help",
+                (
+                    f"Flow: {context.flow or 'none'}\nRun: {context.run or 'none'}\n"
+                    f"Node: {context.node or 'none'}\n"
+                    f"Mode: {'read-only' if self.read_only else 'interactive'}\n\n"
+                    "Ctrl+P  command palette\nTab / Shift+Tab  workflow\nSpace E / C  catalog\n"
+                    "Arrows  pane navigation\nAlt+arrows  select run\n"
+                    "I  node/attempt inspection\n"
+                    "Enter  agent trace\nEscape  back / clear selection\n"
+                    "L / D  logs / DAG\nS  follow / pause logs\nF  filters\n"
+                    "/  loaded-window search\n"
+                    "N / Shift+N  search matches\nE / Z  expand / collapse\n"
+                    "Ctrl+S  schedules\n\n"
+                    "Provider actions and optional panels appear only when described.\n"
+                    "Missing attempts, timestamps or channels are not exposed, never invented."
+                ),
+            )
+        )
+
+    def action_log_filters(self) -> None:
+        self.push_screen(LogFilterScreen())
+
+    def action_schedules(self) -> None:
+        description = self.extension_session.description
+        panel = (
+            next((p for p in description.panels if p.resource == "schedules"), None)
+            if description
+            else None
+        )
+        if panel is not None:
+            self.open_extension_panel(panel)
+
+    def action_inspect_node(self) -> None:
+        import json
+
+        store = self.store
+        selected = store.selected_node
+        node = (
+            store.current_run.nodes.get(selected.name)
+            if selected is not None and store.current_run is not None
+            else None
+        )
+        if node is None:
+            content = "Select a node with run data. Attempt metadata is not exposed."
+        else:
+            content = json.dumps(
+                {
+                    "node": node.node_id,
+                    "state": status_label(node.status),
+                    "revision": node.revision,
+                    "elapsed_seconds": node.elapsed,
+                    "error": node.error,
+                    "trace_available": node.trace.available if node.trace else None,
+                },
+                indent=2,
+            )
+        self.push_screen(InspectionScreen("Node / attempt detail", content))
+
+    def open_extension_panel(self, panel: PanelDescriptor) -> None:
+        self.push_screen(ResourceScreen(self.extension_session, panel, self.extension_context))
+
+    def select_extension_scope(self, scope: ScopeDescriptor) -> None:
+        if not scope.selectable:
+            self.notify(scope.reason or "Scope unavailable", severity="warning")
+            return
+        self._scope = scope.context.scope
+        self._scope_reload_pending = True
+        self._context_generation += 1
+        self.store._workflow_context_epoch += 1
+        self.store._run_interaction_generation += 1
+        self.store._cancel_detail_hydration_repairs()
+        self.store.close_trace_inspector()
+        self.store.current_run = None
+        self.store.current_workflow = None
+        self.store.workflows = []
+        self.store._set_runs_cache([])
+        self.store.dag = None
+        self.store.all_nodes = []
+        self._refresh_widgets()
+
+    def invoke_extension_action(self, action: ActionDescriptor) -> None:
+        session = self.extension_session
+        if (self.read_only and action.mutates) or not action.available:
+            self.notify(
+                "Read-only"
+                if self.read_only and action.mutates
+                else action.reason or "Action unavailable",
+                severity="warning",
+            )
+            return
+        context = self.extension_context
+        if (
+            action.input_schema is not None
+            and "json-schema-forms" not in session.extension.features
+        ):
+            self.notify("Provider does not expose schema forms", severity="warning")
+            return
+        if action.input_schema is not None or action.confirmation or action.mutates:
+            schema = action.input_schema or {"type": "object", "properties": {}}
+            self.push_screen(
+                InputForm(
+                    schema,
+                    context,
+                    lambda payload: self._invoke_extension(action, context, payload),
+                    title=action.confirmation or action.label,
+                )
+            )
+        else:
+            self._invoke_extension(action, context, {})
+
+    def _invoke_extension(
+        self, action: ActionDescriptor, context: TuiContext, payload: Object
+    ) -> None:
+        from uuid import uuid4
+
+        session = self.extension_session
+        if context != self.extension_context or session.context != context:
+            return
+        key = (context, action.id)
+        if key in self._actions_in_flight:
+            return
+        import json
+
+        from .state import json_plain
+
+        encoded = json.dumps(json_plain(payload), sort_keys=True, separators=(",", ":"))
+        previous = self._action_intents.get(key)
+        if previous is not None and previous[1] != encoded:
+            self.notify(
+                "Previous outcome is uncertain; retry the same payload or change context",
+                severity="warning",
+            )
+            return
+        intent, _ = self._action_intents.setdefault(key, (str(uuid4()), encoded))
+
+        def complete(result: ActionResult) -> None:
+            self._actions_in_flight.discard(key)
+            if result.status == "completed":
+                self._action_intents.pop(key, None)
+            # Accepted is a request acknowledgement, never a terminal run outcome.
+            self.notify(f"{action.label}: {result.status}")
+
+        def failed(error: TuiExtensionError) -> None:
+            self._actions_in_flight.discard(key)
+            self.notify(f"{error.code}: {error}", severity="error")
+
+        if session.invoke(action, payload, intent, complete, failed):
+            self._actions_in_flight.add(key)
 
     def compose(self) -> ComposeResult:
         yield Header()
@@ -180,11 +504,12 @@ class AvalancheApp(App):
         self._trace_hydration_closed = True
         self._run_controls_closed = True
         self.store.request_shutdown()
-        close = getattr(self.store.provider, "close", None)
+        self.extension_session.close(wait=False)
         try:
-            if self._close_provider_on_unmount and callable(close):
-                close()
+            if self._close_provider_on_unmount:
+                self.store.provider.close()
         finally:
+            self.extension_session.close()
             self.store.shutdown()
             self._trace_hydration_executor.shutdown(wait=True, cancel_futures=True)
             self._run_control_executor.shutdown(wait=True, cancel_futures=True)
@@ -195,21 +520,41 @@ class AvalancheApp(App):
 
     # ── Tick ───────────────────────────────────────────────────────
 
-    _poll_counter: int = 0
-
     def _tick(self) -> None:
         catalog_revision = self.store.catalog_revision
         self.store.tick()
+        session = self.extension_session
+        session.select(self.extension_context)
+        changed = session.tick()
+        if session.awaiting_baseline:
+            if (
+                self.store._latest_reset_generation > self._extension_baseline_generation
+                and not self.store._reset_reconciliations_in_flight
+            ):
+                session.reconciled()
+        elif changed:
+            self.store._refresh_workflow_catalog()
+            self.store._refresh_runs_cache()
+            if isinstance(self.screen, ResourceScreen):
+                if (
+                    self.screen.panel.resource in session.changed_resources
+                    or "*" in session.changed_resources
+                ):
+                    self.screen._revision = None
+                    self.screen._load(None)
+        if not session.awaiting_baseline:
+            self._extension_baseline_generation = self.store._latest_reset_generation
+        if self._scope_reload_pending and session.description is not None:
+            self._scope_reload_pending = False
+            self.store._refresh_workflow_catalog()
         self._apply_trace_hydration_completions()
         self._hydrate_selected_trace()
         if self.store.catalog_revision != catalog_revision:
             self._apply_deep_link()
             if self._screen:
                 self._screen._remount_dag()
-        # Poll current run every ~1s as fallback if stream missed updates
-        self._poll_counter += 1
-        if self._poll_counter % 30 == 0:
-            self._poll_current_run()
+        if self._deep_link_workflow or self._deep_link_run or self._deep_link_node:
+            self._apply_deep_link()
         self.store.auto_follow_latest_run()
         self._refresh_widgets()
         self._autoscroll_logs()
@@ -243,13 +588,26 @@ class AvalancheApp(App):
                 if workflow is not None and node_id is not None
                 else "Agent step"
             )
-            inspector.border_title = f"Agent {display_name}"
+            self._set_border_title(inspector, f"Agent {display_name}")
         except NoMatches:
             pass
         try:
             self._screen.sync_controls()
         except NoMatches:
             pass
+        context = self.extension_context
+        scope = " / ".join(label for _, label in context.scope)
+        crumbs = " › ".join(
+            item for item in (scope, context.flow, context.run, context.node) if item
+        )
+        mode = "READ ONLY" if self.read_only else "interactive"
+        breadcrumbs = f"{mode} · {crumbs or 'Catalog'} · Ctrl+P commands · ? help"
+        if breadcrumbs != self._breadcrumbs:
+            self._breadcrumbs = breadcrumbs
+            try:
+                self._screen.query_one("#breadcrumbs").update(breadcrumbs)
+            except NoMatches:
+                pass
         # Show/hide sidebar + grip, sync width
         visible = self.store.sidebar_visible
         try:
@@ -268,20 +626,74 @@ class AvalancheApp(App):
                     w.add_class("-pane-active")
                 else:
                     w.remove_class("-pane-active")
-                w.refresh()
             except NoMatches:
                 pass
-        # Refresh non-pane widgets
-        for widget_id in ("status-bar", "dag-panel"):
-            try:
-                self._screen.query_one(f"#{widget_id}").refresh()
-            except NoMatches:
-                pass
-        # Run history still sizes itself to its complete table.
-        try:
-            self._screen.query_one("#run-history-content").refresh(layout=True)
-        except NoMatches:
-            pass
+        # Refresh projections only when their own inputs change. In particular a
+        # key in the DAG must not rebuild history layout or render static headers.
+        store = self.store
+        run = store.current_run
+        animation = (
+            store.frame // 3 if run is not None and run.status is RunStatus.RUNNING else 0
+        )
+        node_token = (
+            tuple((key, state.status, state.revision) for key, state in run.nodes.items())
+            if run is not None
+            else ()
+        )
+        self._refresh_projection(
+            "dag-panel",
+            (
+                id(store.dag),
+                node_token,
+                animation,
+                store.selected_node.name if store.selected_node else None,
+            ),
+        )
+        history = store.runs_for_current_workflow
+        history_token = (
+            id(history),
+            len(history),
+            store.selected_run_id,
+            store._run_data_revision(store.current_workflow.selector)
+            if store.current_workflow
+            else 0,
+            store.frame // 30,
+        )
+        previous = self._widget_tokens.get("run-history-content")
+        self._refresh_projection(
+            "run-history-content",
+            history_token,
+            layout=previous is None or previous[1] != len(history),
+        )
+        if store.sidebar_visible:
+            self._refresh_projection(
+                "sidebar",
+                (
+                    id(store.workflows),
+                    store.sidebar_cursor,
+                    store.sidebar_selected_id,
+                    frozenset(store.sidebar_expanded),
+                    tuple(store.workflow_statuses.items()),
+                    animation,
+                ),
+                layout=True,
+            )
+        self._refresh_projection(
+            "status-bar",
+            (
+                store.run_error,
+                store.search_query,
+                store.search_index,
+                store.match_count,
+                store.searching,
+                store.focused_pane,
+                store.selected_run_id,
+                store.selected_node.name if store.selected_node else None,
+                animation,
+                store.frame // 30,
+                self.store.provider.stream_state,
+            ),
+        )
         if self.store.trace_inspector_open:
             for content_id in (
                 "agent-trace-content",
@@ -292,25 +704,12 @@ class AvalancheApp(App):
                     self._screen.query_one(f"#{content_id}").refresh(layout=True)
                 except NoMatches:
                     pass
-        # Update sticky headers
-        try:
-            from .widgets.run_history import RunHistoryWidget
-
-            self._screen.query_one("#run-history-header").update(
-                RunHistoryWidget.render_header()
-            )
-        except NoMatches:
-            pass
-        try:
-            self._screen.query_one("#log-header").update(LogWidget.render_header())
-        except NoMatches:
-            pass
         # Update border titles with run context
         run_id = self.store.selected_run_id
         run_suffix = f" · {run_id}" if run_id else ""
         try:
             dag = self._screen.query_one("#dag-container")
-            dag.border_title = f"DAG{run_suffix}"
+            self._set_border_title(dag, f"DAG{run_suffix}")
             # Show center button only when DAG is scrollable
             btn = self._screen.query_one("#dag-center-btn")
             btn.display = dag.max_scroll_x > 0 or dag.max_scroll_y > 0
@@ -320,6 +719,13 @@ class AvalancheApp(App):
             from .widgets.run_history import _cron_description, _next_run_label
 
             rh = self._screen.query_one("#run-history")
+            subtitle = (
+                f"{self.store.history_evicted:,} older runs outside loaded window"
+                if self.store.history_evicted
+                else ""
+            )
+            if rh.border_subtitle != subtitle:
+                rh.border_subtitle = subtitle
             n_runs = len(self.store.runs_for_current_workflow)
             left = f"{n_runs} Run{'s' if n_runs != 1 else ''}" if n_runs else "Runs"
 
@@ -339,9 +745,9 @@ class AvalancheApp(App):
                     "#60dce4" if self.store.focused_pane == "run-history" else "#5a4f80"
                 )
                 line = f"[{line_color}]{'─' * (pad - 2)}[/]"
-                rh.border_title = f"{left} {line} {right}"
+                self._set_border_title(rh, f"{left} {line} {right}")
             else:
-                rh.border_title = left
+                self._set_border_title(rh, left)
         except NoMatches:
             pass
         # Log panel border title + toggle hints + wrap width
@@ -372,7 +778,7 @@ class AvalancheApp(App):
             # Line color matches border: bright when focused, dim when not
             line_color = "#60dce4" if self.store.focused_pane == "log" else "#5a4f80"
             line = f"[{line_color}]{'─' * (pad - 2)}[/]"
-            lp.border_title = f"{left} {line} {right}"
+            self._set_border_title(lp, f"{left} {line} {right}")
 
             log_w = self._screen.query_one("#log-content", LogWidget)
             # Subtract 2: 1 for the scrollbar gutter + 1 for breathing room
@@ -380,6 +786,35 @@ class AvalancheApp(App):
             log_w.sync_from_store()
         except NoMatches:
             pass
+        # Keep the one-line status clock painted. A completely clean frame can
+        # otherwise defer Textual's after-refresh callbacks until the next 30 Hz
+        # animation tick; expensive history/DAG projections remain dirty-only.
+        try:
+            self._screen.query_one("#status-bar").refresh()
+        except NoMatches:
+            pass
+
+    def _set_border_title(self, widget: Widget, title: str) -> None:
+        # Textual refreshes the entire widget even when an identical title is
+        # assigned. Compare source markup rather than its normalized getter;
+        # include widget identity so a remounted pane receives its title.
+        key = f"border-title:{widget.id}"
+        token = (id(widget), title)
+        if self._widget_tokens.get(key) != token:
+            self._widget_tokens[key] = token
+            widget.border_title = title
+
+    def _refresh_projection(
+        self, widget_id: str, token: tuple, *, layout: bool = False
+    ) -> None:
+        if self._widget_tokens.get(widget_id) == token:
+            return
+        self._widget_tokens[widget_id] = token
+        if self._screen is not None:
+            try:
+                self._screen.query_one(f"#{widget_id}").refresh(layout=layout)
+            except NoMatches:
+                pass
 
     def _sync_sidebar_focus(self) -> None:
         """Keep Textual focus in sync with store.focused_pane."""
@@ -406,45 +841,6 @@ class AvalancheApp(App):
                 log_view.scroll_y = target
         except Exception:
             pass
-
-    # ── Run polling (fallback for missed stream events) ─────────────
-
-    _poll_in_flight: bool = False
-
-    def _poll_current_run(self) -> None:
-        """Fetch fresh state for the current run via get_run in a background thread.
-
-        Covers cases where the gRPC stream hasn't connected yet or
-        missed updates (e.g. first run while Ray is starting).
-        """
-        run = self.store.current_run
-        workflow = self.store.current_workflow
-        if run is None or workflow is None or self._poll_in_flight:
-            return
-        # Only poll for active/recent runs
-        provider = self.store.provider
-        run_id = run.run_id
-        selector = workflow.selector
-        data_revision = self.store._run_data_revision(selector)
-        context_epoch = self.store._workflow_context_epoch
-        self._poll_in_flight = True
-
-        def _do_poll():
-            try:
-                fresh = provider.get_run(run_id)
-                if fresh is not None:
-                    self.store.enqueue_polled_run_update(
-                        selector,
-                        data_revision,
-                        context_epoch,
-                        fresh,
-                    )
-            except Exception:
-                pass
-            finally:
-                self._poll_in_flight = False
-
-        threading.Thread(target=_do_poll, daemon=True).start()
 
     def _selected_trace_hydration_key(self) -> TraceHydrationKey | None:
         if not self.store.trace_inspector_open or self.store.trace_inspector_tab != "trace":
@@ -537,6 +933,7 @@ class AvalancheApp(App):
         node_id: str,
         descriptor_revision: int,
         hydrated: TraceDetail | None,
+        context_generation: int = 0,
     ) -> TraceDetailCompletion:
         trace_body = None
         if hydrated is not None:
@@ -554,6 +951,7 @@ class AvalancheApp(App):
             node_id=node_id,
             descriptor_revision=descriptor_revision,
             trace_body=trace_body,
+            context_generation=context_generation,
         )
 
     def _hydrate_selected_trace(self) -> None:
@@ -584,6 +982,7 @@ class AvalancheApp(App):
         attempt = self._trace_hydration_attempt_counter
         self._trace_hydration_attempts[key] = attempt
         run_id, node_id, descriptor_revision = key
+        context_generation = self.store._run_interaction_generation
 
         def _hydrate() -> None:
             hydrated = None
@@ -606,6 +1005,7 @@ class AvalancheApp(App):
                     node_id=node_id,
                     descriptor_revision=descriptor_revision,
                     hydrated=hydrated,
+                    context_generation=context_generation,
                 )
                 if failure is None:
                     self.store.enqueue_trace_hydration_completion(completion)
@@ -628,29 +1028,9 @@ class AvalancheApp(App):
 
     # ── Connection monitoring ───────────────────────────────────────
 
-    _ping_counter: int = 0
-    _ping_in_flight: bool = False
-
     def _check_connection(self) -> None:
         """Reserve the disconnect overlay for an unreachable operator."""
         provider = self.store.provider
-        ping = getattr(provider, "ping", None)
-        if not callable(ping):
-            return  # Local providers do not expose connection tracking.
-
-        # Ping every ~2s (30 ticks at 15fps), non-blocking.
-        self._ping_counter += 1
-        if self._ping_counter % 60 == 0 and not self._ping_in_flight:
-            self._ping_in_flight = True
-
-            def _do_ping():
-                try:
-                    ping()
-                finally:
-                    self._ping_in_flight = False
-
-            threading.Thread(target=_do_ping, daemon=True).start()
-
         reachable = get_operator_reachability(provider)
         if reachable and self._operator_was_reachable is False:
             self.store._refresh_workflow_catalog()
@@ -672,8 +1052,8 @@ class AvalancheApp(App):
         dots = "." * ((self.store.frame // 8) % 4)
         msg = Text()
         msg.append("CONNECTION LOST\n\n", Style(color="#f06080", bold=True))
-        connection_label = getattr(provider, "connection_label", "Operator")
-        last_error = getattr(provider, "last_error", "") or provider.stream_error
+        connection_label = provider.connection_label
+        last_error = provider.last_error or provider.stream_error
         msg.append(f"{connection_label}\n", Style(color="#e0f8ff"))
         msg.append("is not reachable.\n\n", Style(color="#7ab0c8"))
         if last_error:
@@ -834,7 +1214,10 @@ class AvalancheApp(App):
         return list(self.store.workflows)
 
     def action_workflow_prev(self) -> None:
-        """Shift+Tab: switch to the previous workflow in explorer order."""
+        """Shift+Tab: traverse modal focus, or select the previous workflow."""
+        if self._screen is not None and self.screen is not self._screen:
+            self.screen.focus_previous()
+            return
         workflows = self._workflows_in_sidebar_order()
         if not workflows:
             return
@@ -854,7 +1237,10 @@ class AvalancheApp(App):
         self._refresh_widgets()
 
     def action_workflow_next(self) -> None:
-        """Tab: switch to the next workflow in explorer order."""
+        """Tab: traverse modal focus, or select the next workflow."""
+        if self._screen is not None and self.screen is not self._screen:
+            self.screen.focus_next()
+            return
         workflows = self._workflows_in_sidebar_order()
         if not workflows:
             return
@@ -932,6 +1318,9 @@ class AvalancheApp(App):
                 pass
 
     def action_expand_trace_hierarchy(self) -> None:
+        if self.store.focused_pane == "dag" and self._screen is not None:
+            self._screen.query_one("#dag-panel").expand_all(True)
+            return
         if self.store.focused_pane != "trace":
             return
         self.store.expand_trace_hierarchy()
@@ -939,6 +1328,9 @@ class AvalancheApp(App):
         self._scroll_trace_selection_into_view()
 
     def action_collapse_trace_hierarchy(self) -> None:
+        if self.store.focused_pane == "dag" and self._screen is not None:
+            self._screen.query_one("#dag-panel").expand_all(False)
+            return
         if self.store.focused_pane != "trace":
             return
         self.store.collapse_trace_hierarchy()
@@ -975,50 +1367,41 @@ class AvalancheApp(App):
 
     def action_start_run(self) -> None:
         self._run_actions_menu_open = False
-        if self.store.start_run_async():
-            self._log_autoscroll = True
-            self._refresh_widgets()
+        description = self.extension_session.description
+        action = (
+            next((a for a in description.actions if a.id == "run.start"), None)
+            if description
+            else None
+        )
+        if action is not None:
+            self.invoke_extension_action(action)
 
     def can_start_run(self) -> bool:
-        """Return whether the current workflow can start a run."""
-        return self.store.current_workflow is not None and not self.store._start_run_in_flight
+        description = self.extension_session.description
+        return (
+            not self.read_only
+            and description is not None
+            and any(a.id == "run.start" and a.available for a in description.actions)
+        )
 
     def can_cancel_selected_run(self) -> bool:
-        run = self.store.current_run
+        description = self.extension_session.description
         return (
-            run is not None
-            and run.status in {RunStatus.REQUESTING, RunStatus.PENDING, RunStatus.RUNNING}
-            and run.run_id not in self._cancel_run_requests
+            not self.read_only
+            and description is not None
+            and any(a.id == "run.cancel" and a.available for a in description.actions)
         )
 
     def action_cancel_run(self) -> None:
-        """Request cancellation without blocking the Textual event loop."""
-        run = self.store.current_run
-        if run is None or not self.can_cancel_selected_run():
-            return
-
-        run_id = run.run_id
-        self._cancel_run_requests.add(run_id)
         self._run_actions_menu_open = False
-        self._refresh_widgets()
-
-        def request_cancel() -> None:
-            error = ""
-            try:
-                self.store.provider.cancel_run(run_id)
-            except Exception as exc:
-                error = str(exc) or "Run failed to stop"
-            if not self._run_controls_closed:
-                self.call_from_thread(self._complete_cancel_run, run_id, error)
-
-        self._run_control_executor.submit(request_cancel)
-
-    def _complete_cancel_run(self, run_id: str, error: str) -> None:
-        """Apply the completed cancellation request on the UI thread."""
-        self._cancel_run_requests.discard(run_id)
-        if error:
-            self.store.run_error = error
-        self._refresh_widgets()
+        description = self.extension_session.description
+        action = (
+            next((a for a in description.actions if a.id == "run.cancel"), None)
+            if description
+            else None
+        )
+        if action is not None:
+            self.invoke_extension_action(action)
 
     def action_toggle_run_actions_menu(self) -> None:
         if (self._screen is not None and self._screen.size.height <= 15) or (
@@ -1096,8 +1479,32 @@ class AvalancheApp(App):
         except Exception:
             pass
 
+    def check_action(self, action: str, parameters: tuple) -> bool | None:
+        if self.store.searching and action not in {"escape_key", "quit"}:
+            return False
+        if (
+            self._screen is not None
+            and self.screen is not self._screen
+            and action
+            not in {
+                "quit",
+                "focus",
+                "focus_next",
+                "focus_previous",
+                "workflow_next",
+                "workflow_prev",
+            }
+        ):
+            # Tab/Shift+Tab use the priority workflow bindings, whose handlers
+            # route to modal focus before a batched next key is dispatched.
+            # Other dashboard shortcuts remain blocked while a modal is open.
+            return False
+        return True
+
     def on_key(self, event) -> None:
         """Handle search input, leader key (space), and / n N keys."""
+        if self._screen is not None and self.screen is not self._screen:
+            return
         if self.store.searching:
             if event.key == "escape":
                 return

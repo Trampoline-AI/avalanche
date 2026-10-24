@@ -655,7 +655,10 @@ def _descriptor_to_dict(
                     ),
                 ]
             )
+    from .registry import workflow_input_schema
+
     return {
+        "input_schema_json": workflow_input_schema(workflow),
         "workflow_id": workflow_id,
         "display_name": workflow.name,
         "locator": {
@@ -682,6 +685,7 @@ def _descriptor_to_dict(
 
 def _descriptor_from_dict(item: dict[str, Any]) -> WorkflowDescriptor:
     return WorkflowDescriptor(
+        input_schema_json=item["input_schema_json"],
         workflow_id=item["workflow_id"],
         display_name=item["display_name"],
         locator=WorkflowLocator(**item["locator"]),

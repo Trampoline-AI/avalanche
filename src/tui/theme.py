@@ -2,10 +2,12 @@
 
 from __future__ import annotations
 
+from collections.abc import Mapping
+
 from rich.style import Style
 from textual.theme import Theme
 
-from .models import LogLevel, NodeStatus
+from .models import LogLevel, NodeStatus, RunStatus
 
 # ── Avalanche glacier palette ─────────────────────────────────────────────────
 # Derived from the avalanche logo: deep navy → purple → steel blue → teal → ice
@@ -44,6 +46,21 @@ STATUS_STYLES: dict[NodeStatus, Style] = {
     NodeStatus.FAILED: Style(color=ICE_FAIL, bold=True),
     NodeStatus.SKIPPED: Style(color=ICE_PURPLE),
 }
+
+# Unknown statuses are display-only; identity prevents a raw string or a
+# provider object that compares equal to an enum from borrowing its meaning.
+OTHER_STATUS_CHAR = "◇"
+OTHER_STATUS_STYLE = Style(color=ICE_STEEL, dim=True)
+
+
+def status_display[T](
+    status: object,
+    values: Mapping[NodeStatus, T] | Mapping[RunStatus, T],
+    other: T,
+) -> T:
+    """Use a display map only for its actual enum members (no hashing required)."""
+    return next((value for member, value in values.items() if status is member), other)
+
 
 # ── Structural styles ─────────────────────────────────────────────────────
 

@@ -32,6 +32,10 @@ class OperatorServiceV2Stub(object):
     summary, snapshot, detail, and typed update APIs below. Remote operators and
     clients must upgrade together.
 
+    TODO: Replace JSON-string transport for Avalanche-owned declarations, questions,
+    and evaluation results with structured protobuf messages and generated types.
+    Keep user-defined payloads and JSON Schema documents as flexible JSON values.
+
     ── Service ─────────────────────────────────────────────
 
     V2 is the only served contract. Requests derive their authorization scope
@@ -48,6 +52,18 @@ class OperatorServiceV2Stub(object):
             "/avalanche.operator.OperatorServiceV2/DiscoverFlows",
             request_serializer=operator__pb2.DiscoverFlowsRequestV2.SerializeToString,
             response_deserializer=operator__pb2.FlowListV2.FromString,
+            _registered_method=True,
+        )
+        self.ReadTuiResource = channel.unary_unary(
+            "/avalanche.operator.OperatorServiceV2/ReadTuiResource",
+            request_serializer=operator__pb2.ReadTuiResourceRequestV2.SerializeToString,
+            response_deserializer=operator__pb2.TuiResourcePageV2.FromString,
+            _registered_method=True,
+        )
+        self.ReadTuiArtifact = channel.unary_stream(
+            "/avalanche.operator.OperatorServiceV2/ReadTuiArtifact",
+            request_serializer=operator__pb2.ReadTuiArtifactRequestV2.SerializeToString,
+            response_deserializer=operator__pb2.RunOutputArtifactChunkV2.FromString,
             _registered_method=True,
         )
         self.GetWorkflowNodeSource = channel.unary_unary(
@@ -129,6 +145,10 @@ class OperatorServiceV2Servicer(object):
     summary, snapshot, detail, and typed update APIs below. Remote operators and
     clients must upgrade together.
 
+    TODO: Replace JSON-string transport for Avalanche-owned declarations, questions,
+    and evaluation results with structured protobuf messages and generated types.
+    Keep user-defined payloads and JSON Schema documents as flexible JSON values.
+
     ── Service ─────────────────────────────────────────────
 
     V2 is the only served contract. Requests derive their authorization scope
@@ -136,6 +156,18 @@ class OperatorServiceV2Servicer(object):
     """
 
     def DiscoverFlows(self, request, context):
+        """Missing associated documentation comment in .proto file."""
+        context.set_code(grpc.StatusCode.UNIMPLEMENTED)
+        context.set_details("Method not implemented!")
+        raise NotImplementedError("Method not implemented!")
+
+    def ReadTuiResource(self, request, context):
+        """Missing associated documentation comment in .proto file."""
+        context.set_code(grpc.StatusCode.UNIMPLEMENTED)
+        context.set_details("Method not implemented!")
+        raise NotImplementedError("Method not implemented!")
+
+    def ReadTuiArtifact(self, request, context):
         """Missing associated documentation comment in .proto file."""
         context.set_code(grpc.StatusCode.UNIMPLEMENTED)
         context.set_details("Method not implemented!")
@@ -221,6 +253,16 @@ def add_OperatorServiceV2Servicer_to_server(servicer, server):
             request_deserializer=operator__pb2.DiscoverFlowsRequestV2.FromString,
             response_serializer=operator__pb2.FlowListV2.SerializeToString,
         ),
+        "ReadTuiResource": grpc.unary_unary_rpc_method_handler(
+            servicer.ReadTuiResource,
+            request_deserializer=operator__pb2.ReadTuiResourceRequestV2.FromString,
+            response_serializer=operator__pb2.TuiResourcePageV2.SerializeToString,
+        ),
+        "ReadTuiArtifact": grpc.unary_stream_rpc_method_handler(
+            servicer.ReadTuiArtifact,
+            request_deserializer=operator__pb2.ReadTuiArtifactRequestV2.FromString,
+            response_serializer=operator__pb2.RunOutputArtifactChunkV2.SerializeToString,
+        ),
         "GetWorkflowNodeSource": grpc.unary_unary_rpc_method_handler(
             servicer.GetWorkflowNodeSource,
             request_deserializer=operator__pb2.GetWorkflowNodeSourceRequestV2.FromString,
@@ -297,6 +339,10 @@ class OperatorServiceV2(object):
     summary, snapshot, detail, and typed update APIs below. Remote operators and
     clients must upgrade together.
 
+    TODO: Replace JSON-string transport for Avalanche-owned declarations, questions,
+    and evaluation results with structured protobuf messages and generated types.
+    Keep user-defined payloads and JSON Schema documents as flexible JSON values.
+
     ── Service ─────────────────────────────────────────────
 
     V2 is the only served contract. Requests derive their authorization scope
@@ -322,6 +368,66 @@ class OperatorServiceV2(object):
             "/avalanche.operator.OperatorServiceV2/DiscoverFlows",
             operator__pb2.DiscoverFlowsRequestV2.SerializeToString,
             operator__pb2.FlowListV2.FromString,
+            options,
+            channel_credentials,
+            insecure,
+            call_credentials,
+            compression,
+            wait_for_ready,
+            timeout,
+            metadata,
+            _registered_method=True,
+        )
+
+    @staticmethod
+    def ReadTuiResource(
+        request,
+        target,
+        options=(),
+        channel_credentials=None,
+        call_credentials=None,
+        insecure=False,
+        compression=None,
+        wait_for_ready=None,
+        timeout=None,
+        metadata=None,
+    ):
+        return grpc.experimental.unary_unary(
+            request,
+            target,
+            "/avalanche.operator.OperatorServiceV2/ReadTuiResource",
+            operator__pb2.ReadTuiResourceRequestV2.SerializeToString,
+            operator__pb2.TuiResourcePageV2.FromString,
+            options,
+            channel_credentials,
+            insecure,
+            call_credentials,
+            compression,
+            wait_for_ready,
+            timeout,
+            metadata,
+            _registered_method=True,
+        )
+
+    @staticmethod
+    def ReadTuiArtifact(
+        request,
+        target,
+        options=(),
+        channel_credentials=None,
+        call_credentials=None,
+        insecure=False,
+        compression=None,
+        wait_for_ready=None,
+        timeout=None,
+        metadata=None,
+    ):
+        return grpc.experimental.unary_stream(
+            request,
+            target,
+            "/avalanche.operator.OperatorServiceV2/ReadTuiArtifact",
+            operator__pb2.ReadTuiArtifactRequestV2.SerializeToString,
+            operator__pb2.RunOutputArtifactChunkV2.FromString,
             options,
             channel_credentials,
             insecure,

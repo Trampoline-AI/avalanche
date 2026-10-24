@@ -21,7 +21,7 @@ from .source import iter_source_paths
 
 logger = logging.getLogger(__name__)
 
-_CACHE_SCHEMA_VERSION = 9
+_CACHE_SCHEMA_VERSION = 10
 
 
 class _CacheModel(BaseModel):
@@ -81,6 +81,7 @@ class _CachedDescriptor(_CacheModel):
     cron: str | None
     webhook_path: str | None
     webhook_enabled: bool
+    input_schema_json: str
 
     @classmethod
     def from_domain(cls, descriptor: WorkflowDescriptor) -> _CachedDescriptor:
@@ -102,6 +103,7 @@ class _CachedDescriptor(_CacheModel):
             cron=descriptor.cron,
             webhook_path=descriptor.webhook_path,
             webhook_enabled=descriptor.webhook_enabled,
+            input_schema_json=descriptor.input_schema_json,
         )
 
     def to_domain(self) -> WorkflowDescriptor:
@@ -123,6 +125,7 @@ class _CachedDescriptor(_CacheModel):
             cron=self.cron,
             webhook_path=self.webhook_path,
             webhook_enabled=self.webhook_enabled,
+            input_schema_json=self.input_schema_json,
         )
 
 
@@ -179,7 +182,7 @@ class _SourceStamp(_CacheModel):
 
 
 class _CacheDocument(_CacheModel):
-    schema_version: Literal[9]
+    schema_version: Literal[10]
     environment: str
     roots: tuple[_CachedRoot, ...]
     watch_roots: tuple[str, ...]

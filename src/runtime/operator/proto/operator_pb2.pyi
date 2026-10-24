@@ -15,6 +15,82 @@ class PageOrderV2(int, metaclass=_enum_type_wrapper.EnumTypeWrapper):
 PAGE_ORDER_V2_FORWARD: PageOrderV2
 PAGE_ORDER_V2_NEWEST_FIRST: PageOrderV2
 
+class ReadTuiResourceRequestV2(_message.Message):
+    __slots__ = (
+        "resource",
+        "workflow_selector",
+        "run_id",
+        "version",
+        "node_id",
+        "attempt",
+        "cursor",
+        "limit",
+        "byte_limit",
+    )
+    RESOURCE_FIELD_NUMBER: _ClassVar[int]
+    WORKFLOW_SELECTOR_FIELD_NUMBER: _ClassVar[int]
+    RUN_ID_FIELD_NUMBER: _ClassVar[int]
+    VERSION_FIELD_NUMBER: _ClassVar[int]
+    NODE_ID_FIELD_NUMBER: _ClassVar[int]
+    ATTEMPT_FIELD_NUMBER: _ClassVar[int]
+    CURSOR_FIELD_NUMBER: _ClassVar[int]
+    LIMIT_FIELD_NUMBER: _ClassVar[int]
+    BYTE_LIMIT_FIELD_NUMBER: _ClassVar[int]
+    resource: str
+    workflow_selector: str
+    run_id: str
+    version: str
+    node_id: str
+    attempt: str
+    cursor: str
+    limit: int
+    byte_limit: int
+    def __init__(
+        self,
+        resource: _Optional[str] = ...,
+        workflow_selector: _Optional[str] = ...,
+        run_id: _Optional[str] = ...,
+        version: _Optional[str] = ...,
+        node_id: _Optional[str] = ...,
+        attempt: _Optional[str] = ...,
+        cursor: _Optional[str] = ...,
+        limit: _Optional[int] = ...,
+        byte_limit: _Optional[int] = ...,
+    ) -> None: ...
+
+class ReadTuiArtifactRequestV2(_message.Message):
+    __slots__ = ("run_id", "artifact_id", "revision")
+    RUN_ID_FIELD_NUMBER: _ClassVar[int]
+    ARTIFACT_ID_FIELD_NUMBER: _ClassVar[int]
+    REVISION_FIELD_NUMBER: _ClassVar[int]
+    run_id: str
+    artifact_id: str
+    revision: str
+    def __init__(
+        self,
+        run_id: _Optional[str] = ...,
+        artifact_id: _Optional[str] = ...,
+        revision: _Optional[str] = ...,
+    ) -> None: ...
+
+class TuiResourcePageV2(_message.Message):
+    __slots__ = ("items_json", "next_cursor", "truncated", "revision")
+    ITEMS_JSON_FIELD_NUMBER: _ClassVar[int]
+    NEXT_CURSOR_FIELD_NUMBER: _ClassVar[int]
+    TRUNCATED_FIELD_NUMBER: _ClassVar[int]
+    REVISION_FIELD_NUMBER: _ClassVar[int]
+    items_json: _containers.RepeatedScalarFieldContainer[str]
+    next_cursor: str
+    truncated: bool
+    revision: str
+    def __init__(
+        self,
+        items_json: _Optional[_Iterable[str]] = ...,
+        next_cursor: _Optional[str] = ...,
+        truncated: bool = ...,
+        revision: _Optional[str] = ...,
+    ) -> None: ...
+
 class ScopeReferenceV2(_message.Message):
     __slots__ = ("reference",)
     REFERENCE_FIELD_NUMBER: _ClassVar[int]
@@ -148,6 +224,8 @@ class FlowInfoV2(_message.Message):
         "webhook_active",
         "classifier_metadata_json",
         "evaluation_metadata_json",
+        "input_schema_json",
+        "version",
     )
     class AgentMetadataJsonEntry(_message.Message):
         __slots__ = ("key", "value")
@@ -190,6 +268,8 @@ class FlowInfoV2(_message.Message):
     WEBHOOK_ACTIVE_FIELD_NUMBER: _ClassVar[int]
     CLASSIFIER_METADATA_JSON_FIELD_NUMBER: _ClassVar[int]
     EVALUATION_METADATA_JSON_FIELD_NUMBER: _ClassVar[int]
+    INPUT_SCHEMA_JSON_FIELD_NUMBER: _ClassVar[int]
+    VERSION_FIELD_NUMBER: _ClassVar[int]
     workflow_selector: str
     display_name: str
     manifest_digest: str
@@ -207,6 +287,8 @@ class FlowInfoV2(_message.Message):
     webhook_active: bool
     classifier_metadata_json: _containers.ScalarMap[str, str]
     evaluation_metadata_json: _containers.ScalarMap[str, str]
+    input_schema_json: str
+    version: str
     def __init__(
         self,
         workflow_selector: _Optional[str] = ...,
@@ -226,6 +308,8 @@ class FlowInfoV2(_message.Message):
         webhook_active: bool = ...,
         classifier_metadata_json: _Optional[_Mapping[str, str]] = ...,
         evaluation_metadata_json: _Optional[_Mapping[str, str]] = ...,
+        input_schema_json: _Optional[str] = ...,
+        version: _Optional[str] = ...,
     ) -> None: ...
 
 class DiscoveryDiagnosticV2(_message.Message):
@@ -466,17 +550,26 @@ class FileAttachmentV2(_message.Message):
     ) -> None: ...
 
 class StartRunRequestV2(_message.Message):
-    __slots__ = ("run_id", "workflow_selector", "input_json", "context_json", "input_files")
+    __slots__ = (
+        "run_id",
+        "workflow_selector",
+        "input_json",
+        "context_json",
+        "input_files",
+        "expected_version",
+    )
     RUN_ID_FIELD_NUMBER: _ClassVar[int]
     WORKFLOW_SELECTOR_FIELD_NUMBER: _ClassVar[int]
     INPUT_JSON_FIELD_NUMBER: _ClassVar[int]
     CONTEXT_JSON_FIELD_NUMBER: _ClassVar[int]
     INPUT_FILES_FIELD_NUMBER: _ClassVar[int]
+    EXPECTED_VERSION_FIELD_NUMBER: _ClassVar[int]
     run_id: str
     workflow_selector: str
     input_json: str
     context_json: str
     input_files: _containers.RepeatedCompositeFieldContainer[FileAttachmentV2]
+    expected_version: str
     def __init__(
         self,
         run_id: _Optional[str] = ...,
@@ -484,6 +577,7 @@ class StartRunRequestV2(_message.Message):
         input_json: _Optional[str] = ...,
         context_json: _Optional[str] = ...,
         input_files: _Optional[_Iterable[_Union[FileAttachmentV2, _Mapping]]] = ...,
+        expected_version: _Optional[str] = ...,
     ) -> None: ...
 
 class StartRunResponseV2(_message.Message):
@@ -889,6 +983,8 @@ class RunActivityDescriptorV2(_message.Message):
         "trace",
         "terminal_seal",
         "classifier_summary",
+        "channel",
+        "attempt",
     )
     ACTIVITY_ID_FIELD_NUMBER: _ClassVar[int]
     RUN_SEQUENCE_FIELD_NUMBER: _ClassVar[int]
@@ -908,6 +1004,8 @@ class RunActivityDescriptorV2(_message.Message):
     TRACE_FIELD_NUMBER: _ClassVar[int]
     TERMINAL_SEAL_FIELD_NUMBER: _ClassVar[int]
     CLASSIFIER_SUMMARY_FIELD_NUMBER: _ClassVar[int]
+    CHANNEL_FIELD_NUMBER: _ClassVar[int]
+    ATTEMPT_FIELD_NUMBER: _ClassVar[int]
     activity_id: str
     run_sequence: int
     kind: str
@@ -926,6 +1024,8 @@ class RunActivityDescriptorV2(_message.Message):
     trace: TraceDescriptorV2
     terminal_seal: TerminalSealV2
     classifier_summary: ClassifierInvocationSummaryV2
+    channel: str
+    attempt: str
     def __init__(
         self,
         activity_id: _Optional[str] = ...,
@@ -946,6 +1046,8 @@ class RunActivityDescriptorV2(_message.Message):
         trace: _Optional[_Union[TraceDescriptorV2, _Mapping]] = ...,
         terminal_seal: _Optional[_Union[TerminalSealV2, _Mapping]] = ...,
         classifier_summary: _Optional[_Union[ClassifierInvocationSummaryV2, _Mapping]] = ...,
+        channel: _Optional[str] = ...,
+        attempt: _Optional[str] = ...,
     ) -> None: ...
 
 class ClassifierInvocationSummaryV2(_message.Message):

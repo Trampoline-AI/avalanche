@@ -7,6 +7,7 @@ from rich.text import Text
 from textual.widgets import Static
 
 from ..models import NodeStatus
+from ..state import status_label
 from ..theme import (
     DIM_STYLE,
     ICE_BRIGHT,
@@ -15,7 +16,10 @@ from ..theme import (
     ICE_PURPLE,
     ICE_STEEL,
     ICE_TEAL,
+    OTHER_STATUS_CHAR,
+    OTHER_STATUS_STYLE,
     SPINNER_FRAMES,
+    status_display,
 )
 
 _VALUE_STYLE = Style(color=ICE_FROST)
@@ -71,15 +75,15 @@ class RunDetailWidget(Static):
 
         # Node rows
         for ns in run.nodes.values():
-            if ns.status == NodeStatus.RUNNING:
+            if ns.status is NodeStatus.RUNNING:
                 icon = SPINNER_FRAMES[frame % len(SPINNER_FRAMES)]
             else:
-                icon = _NODE_STATUS_CHARS[ns.status]
-            ns_style = _NODE_STATUS_STYLES[ns.status]
+                icon = status_display(ns.status, _NODE_STATUS_CHARS, OTHER_STATUS_CHAR)
+            ns_style = status_display(ns.status, _NODE_STATUS_STYLES, OTHER_STATUS_STYLE)
 
             text.append(f" {icon} ", ns_style)
             text.append(f"{ns.name:<18}", _VALUE_STYLE)
-            text.append(f"{ns.status.value:<9}", ns_style)
+            text.append(f"{status_label(ns.status):<9}", ns_style)
             if ns.elapsed is not None:
                 text.append(f"{_fmt_time(ns.elapsed):>6}", DIM_STYLE)
             text.append("\n")

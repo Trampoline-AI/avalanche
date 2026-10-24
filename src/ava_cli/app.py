@@ -235,6 +235,10 @@ def _build_parser() -> argparse.ArgumentParser:
         description="Launch the Avalanche TUI in mock mode or connected mode.",
     )
     tui.add_argument("flow", nargs="?", help="optional flow[/node] deep link")
+    tui.add_argument("--flow", dest="flow_selector", help="canonical workflow selector")
+    tui.add_argument("--run", help="run ID to inspect")
+    tui.add_argument("--node", help="node ID to inspect")
+    tui.add_argument("--read-only", action="store_true", help="disable all runtime mutations")
     tui.add_argument("--connect", metavar="HOST:PORT", help="operator address")
     tui.add_argument("--token", help="operator bearer token")
     tui.add_argument("--tls", action="store_true", help="use TLS for gRPC")
@@ -1468,8 +1472,19 @@ def _run_tui(args: argparse.Namespace) -> int:
         delegated_args.append("--insecure")
     if args.tls_ca_cert:
         delegated_args.extend(["--tls-ca-cert", args.tls_ca_cert])
+    if args.flow and args.flow_selector:
+        raise ValueError("use either positional flow or --flow, not both")
     if args.flow:
         delegated_args.append(args.flow)
+    for flag, value in (
+        ("--flow", args.flow_selector),
+        ("--run", args.run),
+        ("--node", args.node),
+    ):
+        if value is not None:
+            delegated_args.extend([flag, value])
+    if args.read_only:
+        delegated_args.append("--read-only")
     _launch_tui(delegated_args)
     return 0
 

@@ -421,6 +421,7 @@ class WorkflowDetailScreen(Screen):
 
     def compose(self) -> ComposeResult:
         yield Header()
+        yield Static(id="breadcrumbs", markup=False)
         with Horizontal(id="main-layout"):
             yield Sidebar(id="sidebar")
             with Vertical(id="right-pane"):
@@ -440,7 +441,11 @@ class WorkflowDetailScreen(Screen):
                             with Vertical(id="run-action-menu"):
                                 yield Button("Start run (r)", id="run-menu-start-button")
                                 yield Button("Stop selected run", id="run-menu-stop-button")
-                            yield Static(id="run-history-header", classes="pane-header")
+                            yield Static(
+                                RunHistoryWidget.render_header(),
+                                id="run-history-header",
+                                classes="pane-header",
+                            )
                         yield RunHistoryWidget(id="run-history-content")
                     with Vertical(id="dag-section"):
                         yield Static(
@@ -462,7 +467,11 @@ class WorkflowDetailScreen(Screen):
                         with Vertical(id="log-panel") as lp:
                             lp.border_title = "Logs"
                             lp.styles.height = "1fr"
-                            yield Static(id="log-header", classes="pane-header")
+                            yield Static(
+                                LogWidget.render_header(),
+                                id="log-header",
+                                classes="pane-header",
+                            )
                             yield LogWidget(id="log-content")
                 with _ThinScrollContainer(id="agent-trace-inspector") as inspector:
                     inspector.border_title = "Agent"

@@ -2,13 +2,17 @@
 
 from __future__ import annotations
 
-from .state import ConnectionAwareStateProvider, StateProvider
+from .state import StateProvider, TuiExtensions, require_tui_provider
 
 
 def launch_tui(
     argv: list[str] | None = None,
     *,
     provider: StateProvider | None = None,
+    flow: str | None = None,
+    run: str | None = None,
+    node: str | None = None,
+    read_only: bool = False,
 ) -> None:
     """Launch the Avalanche TUI.
 
@@ -38,8 +42,24 @@ def launch_tui(
     token = os.environ.get("AVALANCHE_TUI_GRPC_TOKEN") or None
     tls = os.environ.get("AVALANCHE_TUI_GRPC_TLS", "").lower() in {"1", "true", "yes"}
     tls_ca_cert = os.environ.get("AVALANCHE_TUI_GRPC_TLS_CA_CERT") or None
-    flow = None
-    node = None
+    links = {"--flow": flow, "--run": run, "--node": node}
+    for flag in links:
+        equals = next((arg for arg in args if arg.startswith(flag + "=")), None)
+        if equals is not None:
+            links[flag] = equals.partition("=")[2]
+            if not links[flag]:
+                raise ValueError(f"{flag} requires an identifier")
+            args.remove(equals)
+        elif flag in args:
+            idx = args.index(flag)
+            if idx + 1 >= len(args) or args[idx + 1].startswith("--"):
+                raise ValueError(f"{flag} requires an identifier")
+            links[flag] = args[idx + 1]
+            args = args[:idx] + args[idx + 2 :]
+    flow, run, node = links["--flow"], links["--run"], links["--node"]
+    if "--read-only" in args:
+        read_only = True
+        args.remove("--read-only")
 
     # Parse --connect flag
     equals_connect = next(
@@ -104,10 +124,15 @@ def launch_tui(
         provider = GrpcStateProvider(connect, **provider_kwargs)
         owned_provider = provider
 
+    if provider is not None:
+        require_tui_provider(provider)
+
     app = AvalancheApp(
         provider=provider,
         workflow=flow,
         node=node,
+        run=run,
+        read_only=read_only,
         close_provider_on_unmount=provider is None,
     )
     try:
@@ -117,4 +142,4 @@ def launch_tui(
             owned_provider.close()
 
 
-__all__ = ["ConnectionAwareStateProvider", "StateProvider", "launch_tui"]
+__all__ = ["StateProvider", "TuiExtensions", "launch_tui"]

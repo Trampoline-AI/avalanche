@@ -6,13 +6,14 @@ for Rich-text rendering with bracket notation for parallel branches.
 
 from __future__ import annotations
 
-from collections import defaultdict
+from collections import defaultdict, deque
 from dataclasses import dataclass, field
 
 from rich.style import Style
 from rich.text import Text
 
 from .models import NodeStatus, WorkflowInfo, display_name_from_id
+from .state import status_label
 from .theme import (
     AGENT_CAPTION_SELECTED_STYLE,
     AGENT_CAPTION_STYLE,
@@ -21,12 +22,15 @@ from .theme import (
     DIM_STYLE,
     ICE_FROST,
     ICE_STEEL,
+    OTHER_STATUS_CHAR,
+    OTHER_STATUS_STYLE,
     SKIP_EDGE_COLORS,
     SPINNER_FRAMES,
     STATUS_CHARS,
     STATUS_STYLES,
     VIRTUAL_LABELS,
     VIRTUAL_STYLE,
+    status_display,
 )
 
 # ── Layout tree nodes ─────────────────────────────────────────────────────
@@ -71,23 +75,27 @@ class ParGroup:
 
 
 def _topo_depth(graph: dict[str, list[str]], node_ids: list[str]) -> dict[str, int]:
-    """Compute the longest-path depth for each node (topological level)."""
-    parents_of: dict[str, list[str]] = defaultdict(list)
-    for parent, children in graph.items():
+    """Longest-path levels without a Python-recursion limit on long chains."""
+    children_of = {nid: graph.get(nid, []) for nid in node_ids}
+    indegree = dict.fromkeys(node_ids, 0)
+    for children in children_of.values():
         for child in children:
-            parents_of[child].append(parent)
-    depth: dict[str, int] = {}
-
-    def _get_depth(nid: str) -> int:
-        if nid in depth:
-            return depth[nid]
-        pars = parents_of.get(nid, [])
-        d = max((_get_depth(p) + 1 for p in pars), default=0)
-        depth[nid] = d
-        return d
-
-    for nid in node_ids:
-        _get_depth(nid)
+            if child not in indegree:
+                raise ValueError(f"DAG edge references unknown node {child}")
+            indegree[child] += 1
+    ready = deque(nid for nid in node_ids if indegree[nid] == 0)
+    depth = dict.fromkeys(node_ids, 0)
+    visited = 0
+    while ready:
+        parent = ready.popleft()
+        visited += 1
+        for child in children_of[parent]:
+            depth[child] = max(depth[child], depth[parent] + 1)
+            indegree[child] -= 1
+            if indegree[child] == 0:
+                ready.append(child)
+    if visited != len(node_ids):
+        raise ValueError("Workflow topology contains a cycle")
     return depth
 
 
@@ -163,6 +171,27 @@ def workflow_to_layout(info: WorkflowInfo) -> tuple[SeqGroup, list[DagNode]]:
 
     Returns (layout_tree, all_non_virtual_nodes).
     """
+    if len(info.node_ids) > 200:
+        # Large topologies use an indexed topological outline, not an eagerly
+        # materialized bracket canvas or recursive fork/join reachability scans.
+        levels = _topo_depth(info.graph, info.node_ids)
+        columns: dict[int, list[DagNode]] = defaultdict(list)
+        agents = frozenset(info.agent_node_ids)
+        nodes = []
+        for nid in info.node_ids:
+            node = DagNode(
+                nid,
+                info.node_types.get(nid, "step"),
+                info.display_names.get(nid) or display_name_from_id(nid),
+                nid in agents,
+            )
+            columns[levels[nid]].append(node)
+            nodes.append(node)
+        groups = [
+            ParGroup([SeqGroup([node]) for node in columns[level]]) for level in sorted(columns)
+        ]
+        return SeqGroup(groups), nodes
+
     # ── Phase 1: extract skip edges, compute levels ──────────────────────
     clean_graph, skip_edges = _extract_skip_edges(info.graph, info.node_ids)
     node_types = info.node_types
@@ -655,12 +684,15 @@ def _render_cross_track_skip_edges(
 def marker_for(node: DagNode, status: NodeStatus, frame: int) -> str:
     if node.virtual:
         return VIRTUAL_LABELS.get(node.name, node.name)
-    if status == NodeStatus.RUNNING:
+    if status is NodeStatus.RUNNING:
         return SPINNER_FRAMES[frame % len(SPINNER_FRAMES)]
-    return STATUS_CHARS[status]
+    return status_display(status, STATUS_CHARS, OTHER_STATUS_CHAR)
 
 
 def _duration_label(elapsed: float | None, status: NodeStatus) -> str:
+    if not isinstance(status, NodeStatus):
+        label = status_label(status)
+        return f"{label} · {_fmt_elapsed(elapsed)}" if elapsed is not None else label
     if elapsed is not None:
         return _fmt_elapsed(elapsed)
     if status == NodeStatus.PENDING:
@@ -739,7 +771,7 @@ def append_node(
     elapsed: float | None = None,
 ) -> None:
     m = marker_for(node, status, frame)
-    style = STATUS_STYLES[status]
+    style = status_display(status, STATUS_STYLES, OTHER_STATUS_STYLE)
     if node.virtual:
         text.append(m, VIRTUAL_STYLE)
         return

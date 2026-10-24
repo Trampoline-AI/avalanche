@@ -45,6 +45,7 @@ from .models import (
     WorkflowTopology,
 )
 from .proto import operator_pb2 as pb
+from .registry import workflow_revision
 
 DETAIL_URI_SCHEME = "local://detail/"
 TRACE_URI_SCHEME = "local://trace/"
@@ -87,6 +88,8 @@ def workflow_info_to_v2(info: WorkflowInfo) -> pb.FlowInfoV2:
     manifest_digest = sha256_hex(("\n".join([info.selector, *info.node_ids])).encode("utf-8"))
     return pb.FlowInfoV2(
         workflow_selector=info.selector,
+        input_schema_json=info.input_schema_json,
+        version=workflow_revision(info),
         display_name=info.rendered_name,
         manifest_digest=manifest_digest,
         node_ids=info.node_ids,
@@ -349,6 +352,8 @@ def log_activity_to_v2(
         detail_ref=detail_ref,
         node_id=log.node_id,
         level=log.level.value,
+        channel=log.channel,
+        attempt=log.attempt,
     )
 
 
@@ -700,6 +705,8 @@ def workflow_info_from_v2(msg: pb.FlowInfoV2) -> WorkflowInfo:
     graph = {parent: list(edges.children) for parent, edges in msg.topology.graph.items()}
     return WorkflowInfo(
         name=msg.display_name,
+        input_schema_json=msg.input_schema_json,
+        version=msg.version,
         file_path=msg.file_path,
         node_ids=node_ids,
         graph=graph,
@@ -894,6 +901,8 @@ def log_record_descriptor_from_v2(
         node_id=msg.node_id,
         size_bytes=msg.size_bytes,
         body_token=msg.detail_ref.object_key,
+        channel=msg.channel if msg.HasField("channel") else None,
+        attempt=msg.attempt if msg.HasField("attempt") else None,
     )
 
 
