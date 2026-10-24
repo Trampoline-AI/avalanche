@@ -362,6 +362,26 @@ async def test_a_workspace_is_the_working_directory_and_comes_back_as_an_output(
     assert result.outputs.edited.path == tmp_path
 
 
+class Documents(ava.Signature):
+    documents: list[ava.File] = ava.InputField()
+    answer: str = ava.OutputField()
+
+
+@pytest.mark.asyncio
+async def test_input_files_with_unusable_names_are_written_as_file(replay):
+    seen = replay([_init(), _result({"answer": "read"})])
+    names = [".", "..", "/", "a\x00b", "x" * 300, "dir/report.txt"]
+
+    result = await ava.Agent(signature=Documents, step_name="docs", runtime=ClaudeAgent())(
+        documents=[ava.File(content=b"x", name=name) for name in names]
+    )
+
+    assert result.outputs.answer == "read"
+    written = [line.strip().strip('",') for line in seen["prompt"].splitlines()]
+    paths = [line for line in written if line.startswith(".avalanche-inputs-")]
+    assert [path.rsplit("/", 1)[1] for path in paths] == ["file"] * 5 + ["report.txt"]
+
+
 class TwoWorkspaces(ava.Signature):
     first: ava.Workspace = ava.InputField()
     second: ava.Workspace = ava.InputField()

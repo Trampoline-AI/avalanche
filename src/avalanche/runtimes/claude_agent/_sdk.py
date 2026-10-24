@@ -255,7 +255,7 @@ def _prompt_inputs(
     def write(file: File) -> str:
         nonlocal written
         written += 1
-        target = inputs_directory / str(written) / Path(file.name or "file").name
+        target = inputs_directory / str(written) / _file_name(file.name)
         target.parent.mkdir()
         target.write_bytes(file.content)
         return target.relative_to(directory).as_posix()
@@ -271,6 +271,14 @@ def _prompt_inputs(
         else:
             values[name] = to_jsonable_python(value)
     return values
+
+
+def _file_name(name: str | None) -> str:
+    """The file's own base name, or ``file`` when the filesystem cannot use it."""
+    base = Path(name or "").name
+    if base in {"", ".", ".."} or "\x00" in base or len(base.encode()) > 255:
+        return "file"
+    return base
 
 
 def _prompt(inputs: Mapping[str, JsonValue]) -> str:
