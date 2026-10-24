@@ -12,6 +12,12 @@ export interface TraceLmUsage {
   sub: TraceTokenUsage;
 }
 
+export interface TraceTurnUsage {
+  main: TraceTokenUsage;
+  /** Absent for runtimes that have no sub-model, which also make no predict calls. */
+  sub?: TraceTokenUsage;
+}
+
 export interface TraceLmFinish {
   finishReason?: string;
 }
@@ -56,7 +62,7 @@ export interface AgentTraceStep {
   toolCalls: AgentTraceToolCall[];
   predictCalls: AgentTracePredictGroup[];
   lm?: TraceLmFinish;
-  usage: TraceLmUsage;
+  usage: TraceTurnUsage;
 }
 
 export type AgentTraceStepSummary = Pick<

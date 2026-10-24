@@ -8,10 +8,11 @@ import inspect
 import json
 import shutil
 import tempfile
+import types
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, get_type_hints
+from typing import TYPE_CHECKING, Any, Union, get_args, get_origin, get_type_hints
 
 from claude_agent_sdk import (
     AssistantMessage,
@@ -29,7 +30,14 @@ from claude_agent_sdk import (
     query,
     tool,
 )
-from pydantic import BaseModel, ConfigDict, JsonValue, TypeAdapter, create_model
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    JsonValue,
+    TypeAdapter,
+    ValidationError,
+    create_model,
+)
 from pydantic_core import to_json, to_jsonable_python
 
 from ...agent.contract import (
@@ -37,11 +45,12 @@ from ...agent.contract import (
     AgentRequest,
     AgentRunOutcome,
     JsonOutputs,
+    PythonOutputs,
     ToolSpec,
 )
 from ...agent.live import ToolFinished, ToolStarted, TurnFinished
 from ...agent.native import claude_agent as native
-from ...agent.steps import AgentStepError, AgentStepExecutionError
+from ...agent.steps import AgentOutputError, AgentStepError, AgentStepExecutionError
 from ...agent.trace import (
     AgentTrace,
     AgentTraceHeader,
@@ -85,7 +94,7 @@ async def run(
     file_outputs = [
         name
         for name, info in signature.output_model.model_fields.items()
-        if info.annotation is File
+        if _mentions_file(info.annotation)
     ]
     if file_outputs:
         raise AgentStepError(
@@ -205,15 +214,30 @@ async def run(
             raise AgentStepExecutionError(
                 f"agent step {request.step_name!r}: Claude's structured output is not an object"
             )
+        if not workspace_outputs:
+            return AgentRunOutcome(
+                outputs=JsonOutputs(text=json.dumps(result.structured_output)), trace=record
+            )
+        # A reference snapshot is bound to its directory, which a JSON round trip loses,
+        # so Claude's values are validated here and the snapshot joins them as an object.
+        snapshot = (
+            workspace.snapshot() if workspace is not None else Workspace.from_path(directory)
+        )
         outputs: dict[str, object] = dict(result.structured_output)
         for name in workspace_outputs:
-            snapshot = (
-                workspace.snapshot()
-                if workspace is not None
-                else Workspace.from_path(directory)
-            )
             outputs[name] = json.loads(snapshot.model_dump_json())
-        return AgentRunOutcome(outputs=JsonOutputs(text=json.dumps(outputs)), trace=record)
+        try:
+            validated = signature.validate_outputs(JsonOutputs(text=json.dumps(outputs)))
+        except ValidationError as exc:
+            raise AgentOutputError(
+                f"agent step {request.step_name!r}: Claude's structured output does not match "
+                f"the signature: {exc}"
+            ) from exc
+        values = {
+            name: getattr(validated, name) for name in signature.output_model.model_fields
+        }
+        values.update(dict.fromkeys(workspace_outputs, snapshot))
+        return AgentRunOutcome(outputs=PythonOutputs(values=values), trace=record)
 
 
 def _prompt_inputs(
@@ -256,6 +280,17 @@ def _prompt(inputs: Mapping[str, JsonValue]) -> str:
 def _system_prompt(instructions: str, append: str | None) -> str:
     prompt = instructions.strip()
     return f"{prompt}\n\n{append.strip()}" if append else prompt
+
+
+def _mentions_file(annotation: object) -> bool:
+    if annotation is File:
+        return True
+    origin = get_origin(annotation)
+    if origin is None:
+        return False
+    if origin in (Union, types.UnionType) or isinstance(origin, type):
+        return any(_mentions_file(argument) for argument in get_args(annotation))
+    return False
 
 
 def _output_schema(model: type[BaseModel], workspace_outputs: list[str]) -> dict[str, Any]:

@@ -108,6 +108,8 @@ describe("agent trace viewers", () => {
     expect(viewer.turn(event)).not.toHaveProperty("code");
     // Claude turns are not timed, so no duration is shown rather than 0ms.
     expect(viewer.turn(event).durationMs).toBeUndefined();
+    // No sub-model, so the explorer shows no predict calls or sub-model usage.
+    expect(viewer.turn(event).usage.sub).toBeUndefined();
     expect(viewer.hasSubModel).toBe(false);
     const body = claudeTurnEvent(3);
     if (body.native.kind !== "message.finished") throw new Error("fixture is a turn");

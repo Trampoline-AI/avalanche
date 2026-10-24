@@ -47,7 +47,7 @@ function turn(event: AgentLiveEvent): AgentTraceStep {
     ),
     predictCalls: [],
     lm: { finishReason: native.stop_reason ?? undefined },
-    usage: { main: tokenUsage(turn.usage), sub: NO_USAGE },
+    usage: { main: tokenUsage(turn.usage) },
   };
 }
 
