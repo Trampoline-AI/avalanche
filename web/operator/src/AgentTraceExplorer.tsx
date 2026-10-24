@@ -6,6 +6,7 @@ import type {
   AgentTraceStepSummary,
   AgentTraceToolCall,
   TraceTokenUsage,
+  TraceTurnTokens,
 } from "./agentTrace/types";
 import { activityLabel } from "./agentTrace/viewers";
 import { compareSequence } from "./detailProjection";
@@ -71,8 +72,9 @@ function usageLabel(usage: TraceTokenUsage) {
   return `${tokens}${cost}${cache}`;
 }
 
-function turnUsageLabel(usage: TraceTokenUsage) {
-  return `${NUMBER_FORMAT.format(usage.inputTokens)} in / ${NUMBER_FORMAT.format(usage.outputTokens)} out · $${usage.cost.toFixed(4)}`;
+function turnUsageLabel(usage: TraceTurnTokens) {
+  const cost = usage.cost === undefined ? "" : ` · $${usage.cost.toFixed(4)}`;
+  return `${NUMBER_FORMAT.format(usage.inputTokens)} in / ${NUMBER_FORMAT.format(usage.outputTokens)} out${cost}`;
 }
 
 function TraceSection({
@@ -483,7 +485,9 @@ export function AgentTraceExplorer({
                             {formatDuration(step?.durationMs ?? descriptor.durationMs)}
                             {` · ${descriptor.toolCallCount} tool${descriptor.toolCallCount === 1 ? "" : "s"}`}
                             {hasPredictCalls ? ` · ${descriptor.modelCallCount} predict` : ""}
-                            {step ? ` · main ${turnUsageLabel(step.usage.main)}` : ""}
+                            {step?.usage.main
+                              ? ` · main ${turnUsageLabel(step.usage.main)}`
+                              : ""}
                             {step?.usage.sub ? ` · sub ${turnUsageLabel(step.usage.sub)}` : ""}
                             {finishReason ? ` · ${finishReason}` : ""}
                             {failed ? " · error" : ""}
