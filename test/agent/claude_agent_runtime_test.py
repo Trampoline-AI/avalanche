@@ -9,6 +9,7 @@ import os
 import sys
 
 import pytest
+from pydantic import BaseModel
 
 pytest.importorskip("claude_agent_sdk")
 
@@ -267,8 +268,15 @@ async def test_api_error_result_fails_with_the_api_error(replay):
         error=ResultError("Claude Code returned an error result", exit_code=1),
     )
 
-    with pytest.raises(AgentStepExecutionError, match="529"):
-        await _agent()(a=2, b=3)
+    observed = []
+    with capture_agent_evidence(observed.append, errors="raise"):
+        with pytest.raises(AgentStepExecutionError, match="529"):
+            await _agent()(a=2, b=3)
+
+    # The reason also reaches the live result event and the final trace.
+    finished = next(e for e in observed if e.kind == "event" and e.native.kind == "finished")
+    assert "529" in finished.native.error
+    assert any("529" in error for error in observed[-1].record.native.errors)
 
 
 @pytest.mark.asyncio
@@ -365,6 +373,25 @@ class FileOutput(ava.Signature):
     report: ava.File = ava.OutputField()
 
 
+class Attachment(BaseModel):
+    file: ava.File
+
+
+class FileTupleInput(ava.Signature):
+    files: tuple[ava.File, ...] = ava.InputField()
+    answer: str = ava.OutputField()
+
+
+class FileInModelInput(ava.Signature):
+    attachment: Attachment = ava.InputField()
+    answer: str = ava.OutputField()
+
+
+class OptionalWorkspaceInput(ava.Signature):
+    workspace: ava.Workspace | None = ava.InputField()
+    answer: str = ava.OutputField()
+
+
 class FileListOutput(ava.Signature):
     question: str = ava.InputField()
     reports: list[ava.File] = ava.OutputField()
@@ -377,8 +404,22 @@ class FileListOutput(ava.Signature):
         (TwoWorkspaces, {"first": ava.Workspace(), "second": ava.Workspace()}, "at most one"),
         (FileOutput, {"question": "q"}, "ava.File outputs"),
         (FileListOutput, {"question": "q"}, "ava.File outputs"),
+        (FileTupleInput, {"files": (ava.File(content=b"x"),)}, "typed exactly"),
+        (
+            FileInModelInput,
+            {"attachment": Attachment(file=ava.File(content=b"x"))},
+            "typed exactly",
+        ),
+        (OptionalWorkspaceInput, {"workspace": None}, "typed exactly"),
     ],
-    ids=["two-workspaces", "file-output", "file-list-output"],
+    ids=[
+        "two-workspaces",
+        "file-output",
+        "file-list-output",
+        "file-tuple-input",
+        "file-in-model-input",
+        "optional-workspace-input",
+    ],
 )
 async def test_unsupported_signatures_fail_before_calling_claude(
     replay, signature, inputs, match
