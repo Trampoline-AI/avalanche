@@ -936,6 +936,10 @@
           "title": "Num Turns",
           "type": "integer"
         },
+        "output_omitted": {
+          "title": "Output Omitted",
+          "type": "boolean"
+        },
         "structured_output": {
           "$ref": "#/$defs/JsonValue"
         },
@@ -951,6 +955,7 @@
         "is_error",
         "num_turns",
         "structured_output",
+        "output_omitted",
         "errors"
       ],
       "title": "Finished",

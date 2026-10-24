@@ -117,6 +117,8 @@ class Finished(_Event):
     is_error: bool
     num_turns: NonNegativeInt
     structured_output: JsonValue
+    # True when the output exceeded the trace size limit and is left out here.
+    output_omitted: bool
     errors: tuple[str, ...]
 
     @property

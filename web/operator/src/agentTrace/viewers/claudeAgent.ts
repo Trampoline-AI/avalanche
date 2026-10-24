@@ -53,7 +53,9 @@ function turn(event: AgentLiveEvent): AgentTraceStep {
 function retainedValue(event: AgentLiveEvent, kind: "inputs" | "outputs"): unknown {
   const { native } = event;
   if (kind === "inputs" && native.kind === "started") return native.inputs;
-  if (kind === "outputs" && native.kind === "finished") return native.structured_output;
+  // A failed session reports no output, and an oversized one is left out of the trace.
+  if (kind === "outputs" && native.kind === "finished")
+    return native.structured_output ?? undefined;
   return undefined;
 }
 
