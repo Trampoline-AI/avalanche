@@ -136,7 +136,6 @@ async def test_operator_tui_extensions_live_pilot(tmp_path):
     from textwrap import dedent
 
     from tui.app import AvalancheApp
-    from tui.models import StreamLogEntry
     from tui.screens.input_form import InputForm
     from tui.state import TuiContext, TuiExtensionError
     from tui.widgets.log_panel import LogWidget
@@ -146,7 +145,15 @@ async def test_operator_tui_extensions_live_pilot(tmp_path):
     assertions = []
     gate = tmp_path / "release-step"
     artifact = tmp_path / "artifact.bin"
-    workflow = tmp_path / "pilot_flow.py"
+    import shutil
+
+    flow_directory = tmp_path / "flows"
+    flow_directory.mkdir()
+    shutil.copyfile(
+        Path(__file__).parents[2] / "examples/scripted_agent.py",
+        flow_directory / "scripted_agent.py",
+    )
+    workflow = flow_directory / "pilot_flow.py"
     workflow.write_text(
         dedent(f"""
         import logging
@@ -205,7 +212,7 @@ async def test_operator_tui_extensions_live_pilot(tmp_path):
         "-m",
         "ava_cli",
         "operator",
-        str(workflow),
+        str(flow_directory),
         "--port",
         str(port),
         "--webhook-port",
@@ -246,6 +253,10 @@ async def test_operator_tui_extensions_live_pilot(tmp_path):
         assert json.loads(flow.input_schema_json)["properties"]["count"]["type"] == "integer"
         assert flow.version
         assertions.append("catalog_input_schema_and_version")
+        from tui import launch_tui
+
+        with pytest.raises(TypeError, match="TuiExtensions v1"):
+            launch_tui([], provider=object())
         app = AvalancheApp(provider=provider, workflow=flow.selector)
 
         async def wait_for(pilot, predicate, seconds=25):
@@ -283,7 +294,7 @@ async def test_operator_tui_extensions_live_pilot(tmp_path):
             assert any(node.status.value == "running" for node in run.nodes.values())
             assert not gate.exists()
             live = [log for log in app.store.logs if "live-" in log.message]
-            assert {log.channel for log in live if isinstance(log, StreamLogEntry)} == {
+            assert {log.channel for log in live} == {
                 "stdout",
                 "stderr",
                 "log",
@@ -466,6 +477,64 @@ async def test_operator_tui_extensions_live_pilot(tmp_path):
                 assert time.monotonic() < deadline
                 await pilot.pause(0.05)
             assertions.append("cancel_long_step_accepted_then_terminal")
+            agent_flow = next(flow for flow in flows if flow.name == "scripted_agent")
+            app.store.switch_workflow(agent_flow)
+            await wait_for(
+                pilot,
+                lambda: app.extension_session.description is not None
+                and app.extension_session.context == app.extension_context,
+            )
+            agent_run_id = await asyncio.to_thread(observer.start_run, agent_flow.selector)
+            await wait_for(
+                pilot,
+                lambda: app.store.current_run is not None
+                and app.store.current_run.run_id == agent_run_id
+                and app.store.current_run.status == RunStatus.SUCCESS,
+                seconds=60,
+            )
+            app.store.select_node(
+                next(n for n in app.store.all_nodes if n.name == "sum_numbers_1")
+            )
+            await pilot.press("enter")
+            await wait_for(pilot, lambda: app.store.selected_agent_trace_envelope is not None)
+            assert await asyncio.to_thread(observer.get_run_result, agent_run_id) == {
+                "answer": 10,
+                "lm_calls": 3,
+            }
+            envelope = app.store.selected_agent_trace_envelope
+            assert envelope is not None
+            trace = envelope.trace
+            assert trace is not None and trace.iterations == 3
+            assert [step.iteration for step in trace.steps] == [1, 2, 3]
+            assert "numbers = [2, 3, 5]" in trace.steps[0].code
+            assert "[2, 3, 5]" in trace.steps[0].output
+            assert "total = sum(numbers)" in trace.steps[1].code
+            assert "10" in trace.steps[1].output
+            assert "SUBMIT(answer=total)" in trace.steps[2].code
+            inspector = app.screen.query_one("#agent-trace-content")
+            # Visit each retained turn through the real trace navigation, not
+            # just the provider's hydrated model.
+            await pilot.press("up", "up")
+            rendered = []
+            for _ in range(3):
+                await pilot.press("e")
+                await pilot.pause()
+                rendered.append(inspector.render().plain)
+                await pilot.press("z", "down")
+            screen_text = "\n".join(rendered)
+            (evidence / "scripted-trace-screen.txt").write_text(screen_text)
+            (evidence / "scripted-trace.json").write_text(envelope.model_dump_json(indent=2))
+            assert "numbers = [2, 3, 5]" in screen_text
+            assert "[2, 3, 5]" in screen_text and "10" in screen_text
+            assert "total = sum(numbers)" in screen_text
+            assert "SUBMIT(answer=total)" in screen_text
+            assert trace.usage.main.input_tokens == 0
+            assert trace.usage.main.output_tokens == 0
+            assert "0 in / 0 out" in screen_text
+            assert "Main:" in screen_text and "Sub:" in screen_text
+            app.save_screenshot(str(evidence / "scripted-trace.svg"))
+            assertions.append("multi_iteration_scripted_lm_trace")
+            await pilot.press("escape")
             old_epoch = provider.operator_instance_id
             await asyncio.to_thread(process.terminate)
             await asyncio.to_thread(process.wait, 15)
@@ -520,13 +589,6 @@ async def test_operator_tui_extensions_live_pilot(tmp_path):
             json.dumps(
                 {
                     "passed": assertions,
-                    "NOT_RUN": {
-                        "multi_iteration_scripted_lm_trace": (
-                            "No scripted-LM example exists under examples/. "
-                            "The inline operator predictor fixture emits "
-                            "a zero-iteration trace, not a multi-iteration LM."
-                        )
-                    },
                     "operator_command": command,
                     "owned_process_exit": process.returncode,
                 },
