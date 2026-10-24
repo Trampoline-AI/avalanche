@@ -14,6 +14,7 @@ import pytest
 import typesafe_sdk
 from pydantic import BaseModel, ValidationError
 
+from avalanche.agent.native.predict_rlm import PredictRLMTokenUsage, PredictRLMUsage
 from avalanche.agent.trace import AgentTrace, AgentTraceHeader, PredictRLMNativeTrace
 from avalanche.evaluations import (
     EvalContext,
@@ -25,6 +26,11 @@ from avalanche.evaluations import (
 )
 
 pytest_plugins = ["classifier_test"]
+
+_NO_USAGE = PredictRLMUsage(
+    main=PredictRLMTokenUsage(input_tokens=0, output_tokens=0, cost=0.0, cache_hits=0),
+    sub=PredictRLMTokenUsage(input_tokens=0, output_tokens=0, cost=0.0, cache_hits=0),
+)
 
 TRACE = AgentTrace(
     header=AgentTraceHeader(
@@ -41,7 +47,9 @@ TRACE = AgentTrace(
         session_id=None,
     ),
     turns=(),
-    native=PredictRLMNativeTrace(sub_model=None, max_iterations=1, cache_hits=0),
+    native=PredictRLMNativeTrace(
+        sub_model=None, max_iterations=1, usage=_NO_USAGE, telemetry_ref=None
+    ),
     turns_streamed=False,
 )
 

@@ -104,7 +104,7 @@ def test_terminal_agent_drilldown_and_return(tui_session):
     screen = _wait_for(tui_session, lambda text: "AGENT TURN" in text)
     assert "Run: agent-mock" in screen
     assert "Live record: complete" in screen
-    assert "terminal=completed" in screen
+    assert "terminal=succeeded" in screen
     _tmux("send-keys", "-t", tui_session, "e")
     _wait_for(tui_session, lambda text: "Filter active records" in text)
     _tmux("send-keys", "-t", tui_session, "Right", "Enter")

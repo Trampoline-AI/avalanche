@@ -22,6 +22,14 @@ import {
 } from "./model";
 import type { AgentEventKind } from "./model";
 import {
+  finishedTrace,
+  runStartedEvent,
+  runSucceededEvent,
+  tokenUsage,
+  turnEvent,
+  type TurnOptions,
+} from "./test/agentTraceFixtures";
+import {
   agentDeclarationJson,
   createApi,
   evaluationDeclaration,
@@ -137,47 +145,8 @@ function traceEvent(iteration: number, sizeBytes = "64") {
   });
 }
 
-function traceDetail(iteration: number) {
-  const usage = { input_tokens: 1, output_tokens: 1, cost: 0, cache_hits: 0 };
-  return {
-    event_kind: "iteration.recorded",
-    data: {
-      step: {
-        iteration,
-        reasoning: `Reasoning for turn ${iteration}.`,
-        code: `print("turn ${iteration}")`,
-        output: `Output for turn ${iteration}.`,
-        untruncated_output: `Full output for turn ${iteration}.`,
-        error: false,
-        duration_ms: 1,
-        usage: { main: usage, sub: usage },
-        tool_calls: [
-          {
-            name: `lookup_${iteration}`,
-            args: [],
-            kwargs: {},
-            result: `Tool result ${iteration}`,
-            duration_ms: 1,
-          },
-        ],
-        predict_calls: [
-          {
-            signature: "question -> answer",
-            model: "sub-model",
-            total_usage: usage,
-            calls: [
-              {
-                duration_ms: 1,
-                usage,
-                input: { question: "Ready?" },
-                output: { answer: `Prediction ${iteration}` },
-              },
-            ],
-          },
-        ],
-      },
-    },
-  };
+function traceDetail(iteration: number, options: TurnOptions = {}) {
+  return turnEvent(iteration, options);
 }
 
 function traceTurn(iteration: number) {
@@ -429,10 +398,11 @@ describe("retained run inspection", () => {
           outputSignal = signal;
           return output.promise;
         }
-        return Promise.resolve({
-          inputs: { question: "new input" },
-          outputs: { answer: "new output" },
-        });
+        return Promise.resolve(
+          token === "event-3"
+            ? runStartedEvent({ question: "new input" })
+            : runSucceededEvent({ answer: "new output" }),
+        );
       },
     });
     const view = render(
@@ -443,7 +413,7 @@ describe("retained run inspection", () => {
     await waitFor(() => expect(outputSignal).toBeDefined());
     expect(inputSignal?.aborted).toBe(false);
     await act(async () => {
-      output.resolve({ outputs: { answer: "independent output" } });
+      output.resolve(runSucceededEvent({ answer: "independent output" }));
       await output.promise;
     });
     expect(await screen.findByText("independent output")).toBeInTheDocument();
@@ -463,7 +433,7 @@ describe("retained run inspection", () => {
     expect(await screen.findByText("new input")).toBeInTheDocument();
     expect(await screen.findByText("new output")).toBeInTheDocument();
     await act(async () => {
-      input.resolve({ inputs: { question: "stale input" } });
+      input.resolve(runStartedEvent({ question: "stale input" }));
       await input.promise;
     });
     expect(screen.queryByText("stale input")).not.toBeInTheDocument();
@@ -491,10 +461,10 @@ describe("retained run inspection", () => {
     });
     const api = createApi({
       listAgentEventPage,
-      readJsonDetail: async () => ({
-        inputs: { question: "Original input" },
-        outputs: { answer: "Final output" },
-      }),
+      readJsonDetail: async (token) =>
+        token === "event-1"
+          ? runStartedEvent({ question: "Original input" })
+          : runSucceededEvent({ answer: "Final output" }),
     });
     render(<Inspector api={api} run={run} nodeId={node.nodeId} onClose={() => undefined} />);
     openRunIo();
@@ -563,7 +533,7 @@ describe("retained run inspection", () => {
           throw new Error("Input page unavailable");
         return eventPage([event(2, "run.succeeded")]);
       },
-      readJsonDetail: async () => ({ outputs: { answer: "available output" } }),
+      readJsonDetail: async () => runSucceededEvent({ answer: "available output" }),
     });
     render(<Inspector api={api} run={run} nodeId={node.nodeId} onClose={() => undefined} />);
     openRunIo();
@@ -576,7 +546,7 @@ describe("retained run inspection", () => {
   it("keeps run history visible when the current node is absent", async () => {
     const api = createApi({
       listAgentEventPage: async () => eventPage([event(2, "run.succeeded")]),
-      readJsonDetail: async () => ({ outputs: { answer: "historical answer" } }),
+      readJsonDetail: async () => runSucceededEvent({ answer: "historical answer" }),
     });
     const view = render(
       <Inspector
@@ -933,21 +903,14 @@ describe("retained run inspection", () => {
       ...run,
       nodes: [{ ...run.nodes[0], trace: { ...run.nodes[0].trace, bodyToken: "trace-body" } }],
     });
-    const usage = (input: number, output: number, cost: number) => ({
-      input_tokens: input,
-      output_tokens: output,
-      cost,
-      cache_hits: 0,
-    });
     const readJsonDetail = vi.fn<OperatorApi["readJsonDetail"]>(async (token) =>
       token === "trace-body"
-        ? {
-            trace: {
-              sub_model: "retained-sub-model",
-              max_iterations: 4,
-              usage: { main: usage(12, 3, 0.01), sub: usage(9, 1, 0.0025) },
-            },
-          }
+        ? finishedTrace({
+            subModel: "retained-sub-model",
+            maxIterations: 4,
+            main: tokenUsage(12, 3, 0.01),
+            sub: tokenUsage(9, 1, 0.0025),
+          })
         : undefined,
     );
     render(
@@ -1265,9 +1228,7 @@ describe("trace detail retention and recovery", () => {
     fireEvent.click(screen.getByRole("tab", { name: "Trace" }));
     await waitFor(() => expect(readJsonDetail).toHaveBeenCalledTimes(3));
     await act(async () => {
-      const body = traceDetail(1);
-      body.data.step.reasoning = "Stale reasoning";
-      stale.resolve(body);
+      stale.resolve(traceDetail(1, { reasoning: "Stale reasoning" }));
       await stale.promise;
     });
     view.rerender(

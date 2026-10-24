@@ -13,12 +13,26 @@ from functools import lru_cache
 from queue import Empty
 from typing import Any, Callable, Literal
 
-from predict_rlm.trace import IterationStep
 from pydantic import ValidationError
 
-from avalanche._agent_trace import AgentLifecycleEvent, AgentTerminalDetail, AgentTraceEnvelope
+from avalanche._agent_trace import AgentTraceEnvelope
 from avalanche.agent.declaration import AgentDeclaration
+from avalanche.agent.live import (
+    AgentLiveEvent,
+    AgentTraceFinished,
+    AgentTraceTerminal,
+    TurnFinished,
+)
+from avalanche.agent.trace import AgentTrace
 
+from .agent_trace_viewers import (
+    InspectionTurn,
+    PendingStep,
+    TraceFormatViewer,
+    TraceGroup,
+    TraceItem,
+    viewer_for,
+)
 from .dag_layout import DagNode, SeqGroup, build_nav_grid, nav_move, workflow_to_layout
 from .models import (
     AgentEventDetailAppended,
@@ -66,16 +80,6 @@ MappingSource = tuple[tuple[str, ...], ...]
 
 
 @dataclass(frozen=True)
-class AgentInspectionTurn:
-    """An SDK step paired with its source invocation and executed totals."""
-
-    invocation_id: str | None
-    step: IterationStep
-    tool_count: int
-    predict_count: int
-
-
-@dataclass(frozen=True)
 class TraceDetailCompletion:
     """One trace body read, isolated from mutable structural run state."""
 
@@ -85,7 +89,7 @@ class TraceDetailCompletion:
     created_sequence: int
     node_id: str
     descriptor_revision: int
-    trace_body: AgentTerminalDetail | None
+    trace_body: AgentTraceTerminal | None
     context_generation: int = 0
 
 
@@ -316,9 +320,7 @@ class UIStore:
         self._trace_hydration_completions: list[tuple[TraceDetailCompletion, bool]] = []
         self._log_details: dict[tuple[str, str, int], list[LogEntry]] = {}
         self._log_detail_sequences: dict[tuple[str, str, int], int] = {}
-        self._agent_event_details: dict[
-            tuple[str, str, int, str], list[AgentLifecycleEvent]
-        ] = {}
+        self._agent_event_details: dict[tuple[str, str, int, str], list[AgentLiveEvent]] = {}
         self._agent_event_sequences: dict[tuple[str, str, int, str], int] = {}
         self._detail_hydrations_in_flight: dict[RunDetailKey, int] = {}
         self._detail_hydration_requirements: dict[
@@ -619,7 +621,7 @@ class UIStore:
         return "completed_with_output" if outputs else "completed_without_output"
 
     @property
-    def selected_agent_events(self) -> list[AgentLifecycleEvent]:
+    def selected_agent_events(self) -> list[AgentLiveEvent]:
         run = self.current_run
         node_id = self.selected_agent_node_id
         if run is None or node_id is None:
@@ -640,75 +642,50 @@ class UIStore:
         return events
 
     @property
-    def selected_agent_outputs(self) -> dict[str, Any] | None:
-        """Return the newest terminal outputs from hydrated or live evidence."""
-        for event in reversed(self.selected_agent_events):
-            if event.event_kind == "run.succeeded":
-                outputs = event.data["outputs"]
-                if not isinstance(outputs, dict):
-                    raise TypeError("run.succeeded outputs must be an object")
-                return outputs
-        return None
+    def selected_agent_record(self) -> AgentTrace | None:
+        """The final trace of the selected agent step, once it has one."""
+        envelope = self.selected_agent_trace_envelope
+        terminal = envelope.terminal if envelope is not None else None
+        return terminal.record if isinstance(terminal, AgentTraceFinished) else None
 
     @property
-    def selected_agent_turns(self) -> list[AgentInspectionTurn]:
+    def selected_agent_viewer(self) -> TraceFormatViewer | None:
+        """The viewer for the selected step's trace format, once anything arrived."""
+        record = self.selected_agent_record
+        if record is not None:
+            return viewer_for(record.header.trace_format)
+        events = self.selected_agent_events
+        return viewer_for(events[0].native.format) if events else None
+
+    @property
+    def selected_agent_outputs(self) -> Mapping[str, Any] | None:
+        """Return the newest final outputs from hydrated or live evidence."""
+        viewer = self.selected_agent_viewer
+        return viewer.outputs(self.selected_agent_events) if viewer is not None else None
+
+    @property
+    def selected_agent_turns(self) -> list[InspectionTurn]:
         envelope = self.selected_agent_trace_envelope
-        trace = envelope.trace if envelope is not None else None
-        records = [
-            event
-            for event in self.selected_agent_events
-            if event.event_kind == "iteration.recorded"
-        ]
-        totals = {
-            (event.invocation_id, event.data["step"]["iteration"]): event.data
-            for event in records
-        }
-        sources = (
-            [(envelope.invocation_id, step) for step in trace.steps]
-            if trace is not None
-            else [
-                (event.invocation_id, IterationStep.model_validate(event.data["step"]))
-                for event in records
-            ]
+        # Once a final trace arrived, show the turns of the invocation it belongs to.
+        finished = (
+            envelope.invocation_id
+            if envelope is not None and envelope.terminal is not None
+            else None
         )
-        turns = []
-        for invocation_id, step in sources:
-            counts = totals.get((invocation_id, step.iteration))
-            turns.append(
-                AgentInspectionTurn(
-                    invocation_id=invocation_id,
-                    step=step,
-                    tool_count=(
-                        counts["tool_count"] if counts is not None else len(step.tool_calls)
-                    ),
-                    predict_count=(
-                        counts["predict_count"]
-                        if counts is not None
-                        else sum(len(group.calls) for group in step.predict_calls)
-                    ),
-                )
-            )
+        turns = [
+            InspectionTurn(event.invocation_id, event.common, event.native)
+            for event in self.selected_agent_events
+            if isinstance(event.common, TurnFinished)
+            and (finished is None or event.invocation_id == finished)
+        ]
         self._reconcile_trace_turns(len(turns))
         return turns
 
     @property
-    def selected_agent_pending_events(self) -> list[AgentLifecycleEvent]:
-        """Keep pending execution evidence scoped to its SDK invocation."""
-        events = self.selected_agent_events
-        recorded = {
-            (
-                event.invocation_id,
-                event.data["step"]["iteration"],
-            )
-            for event in events
-            if event.event_kind == "iteration.recorded"
-        }
-        return [
-            event
-            for event in events
-            if event.event_kind in {"code.generated", "code.executed"}
-            and (event.invocation_id, event.data["iteration"]) not in recorded
-        ]
+    def selected_agent_pending_events(self) -> tuple[PendingStep, ...]:
+        """Live work still awaiting its finished turn, scoped to its invocation."""
+        viewer = self.selected_agent_viewer
+        return viewer.pending(self.selected_agent_events) if viewer is not None else ()
 
     @staticmethod
     def _detail_key(run: RunState) -> RunDetailKey:
@@ -745,22 +722,21 @@ class UIStore:
             self._runs_cache[cache_index] = run
 
     @staticmethod
-    def _events_from_node(run: RunState, node_id: str) -> list[AgentLifecycleEvent]:
+    def _events_from_node(run: RunState, node_id: str) -> list[AgentLiveEvent]:
         node = run.nodes.get(node_id)
         if node is None or node.agent_trace_json is None:
             return []
         return list(_parse_agent_envelope(node.agent_trace_json).events)
 
     @staticmethod
-    def _event_sequence(events: list[AgentLifecycleEvent]) -> int:
+    def _event_sequence(events: list[AgentLiveEvent]) -> int:
         return max((event.sequence for event in events), default=0)
 
     @staticmethod
     def _node_has_trace_detail(node: NodeState) -> bool:
         if node.agent_trace_json is None:
             return False
-        envelope = _parse_agent_envelope(node.agent_trace_json)
-        return envelope.trace is not None or envelope.evidence is not None
+        return _parse_agent_envelope(node.agent_trace_json).terminal is not None
 
     def _remember_run_details(self, run: RunState) -> set[str]:
         """Adopt explicit detail containers only when their watermark advances."""
@@ -1199,7 +1175,7 @@ class UIStore:
         known_sequence = self._agent_event_sequences.get(agent_key, 0)
         if detail.event.event_sequence <= known_sequence:
             return True
-        event = AgentLifecycleEvent.model_validate_json(detail.event.event_json)
+        event = AgentLiveEvent.model_validate_json(detail.event.event_json, strict=True)
         events.append(event)
         self._agent_event_sequences[agent_key] = detail.event.event_sequence
         return True
@@ -1276,29 +1252,25 @@ class UIStore:
             or descriptor.revision != completion.descriptor_revision
         ):
             return False
-        detail = completion.trace_body
+        terminal = completion.trace_body
         envelope = (
             _parse_agent_envelope(node.agent_trace_json)
             if node.agent_trace_json is not None
             else AgentTraceEnvelope(
-                schema_version=1,
-                invocation_id=detail.invocation_id,
-                status=detail.evidence.terminal_outcome,
-                run_id=detail.evidence.run_id,
-                events=self._agent_event_details.get(
-                    (*self._detail_key(run), completion.node_id), []
+                schema_version=2,
+                invocation_id=terminal.invocation_id,
+                status=descriptor.status,
+                events=tuple(
+                    self._agent_event_details.get(
+                        (*self._detail_key(run), completion.node_id), []
+                    )
                 ),
-                trace=None,
-                evidence=None,
+                terminal=None,
                 error=None,
             )
         )
         envelope = envelope.model_copy(
-            update={
-                "invocation_id": detail.invocation_id,
-                "trace": detail.trace,
-                "evidence": detail.evidence,
-            }
+            update={"invocation_id": terminal.invocation_id, "terminal": terminal}
         )
         updated_node = copy(node)
         updated_node.agent_trace_json = envelope.model_dump_json()
@@ -1806,92 +1778,38 @@ class UIStore:
 
     def _trace_navigation_paths(self) -> list[tuple[str, ...]]:
         paths: list[tuple[str, ...]] = []
-        for index, inspection_turn in enumerate(self.selected_agent_turns):
-            step = inspection_turn.step
-            turn = ("turn", str(index))
-            paths.append(turn)
+        viewer = self.selected_agent_viewer
+        if viewer is None:
+            return paths
+        for index, turn in enumerate(self.selected_agent_turns):
+            path = ("turn", str(index))
+            paths.append(path)
             if index in self.trace_collapsed_turns:
                 continue
-            sections = ["code", "output"]
-            if step.reasoning:
-                sections.insert(0, "reasoning")
-            paths.extend(turn + (section,) for section in sections)
-            if step.reasoning:
-                self._append_value_navigation_paths(
-                    paths, turn + ("reasoning",), step.reasoning
-                )
-            self._append_value_navigation_paths(
-                paths,
-                turn + ("output",),
-                step.untruncated_output if self.trace_show_full_output else step.output,
-            )
-            tools = turn + ("tools",)
-            paths.append(tools)
-            calls = step.tool_calls
-            if self.trace_path_materialized(tools):
-                for call_index, call in enumerate(calls):
-                    tool = tools + (str(call_index),)
-                    paths.append(tool)
-                    if self.trace_path_materialized(tool):
-                        input_path = tool + ("input",)
-                        result_path = tool + ("result",)
-                        paths.extend((input_path, result_path))
-                        self._append_value_navigation_paths(
-                            paths,
-                            input_path,
-                            {"args": call.args, "kwargs": call.kwargs},
-                        )
-                        self._append_value_navigation_paths(
-                            paths,
-                            result_path,
-                            call.error if call.error is not None else call.result,
-                        )
-            predict = turn + ("predict",)
-            paths.append(predict)
-            groups = step.predict_calls
-            if self.trace_path_materialized(predict):
-                for group_index, group in enumerate(groups):
-                    group_path = predict + (str(group_index),)
-                    paths.append(group_path)
-                    if not self.trace_path_materialized(group_path):
-                        continue
-                    for call_index, call in enumerate(group.calls):
-                        call_path = group_path + (str(call_index),)
-                        paths.append(call_path)
-                        if self.trace_path_materialized(call_path):
-                            input_path = call_path + ("input",)
-                            output_path = call_path + ("output",)
-                            paths.extend((input_path, output_path))
-                            self._append_value_navigation_paths(paths, input_path, call.input)
-                            self._append_value_navigation_paths(
-                                paths,
-                                output_path,
-                                call.error if call.error is not None else call.output,
-                            )
-            metadata_path = turn + ("metadata",)
-            paths.append(metadata_path)
-            self._append_value_navigation_paths(
-                paths,
-                metadata_path,
-                {
-                    "finish_reason": step.lm.finish_reason if step.lm is not None else None,
-                    "usage": step.usage.model_dump(),
-                },
-            )
-        envelope = self.selected_agent_trace_envelope
-        if envelope is None or envelope.trace is None:
-            for event in self.selected_agent_pending_events:
-                root = ("live", event.invocation_id, str(event.sequence))
+            view = viewer.turn(turn, full_output=self.trace_show_full_output)
+            self._append_item_navigation_paths(paths, path, view.items)
+        if self.selected_agent_record is None:
+            for pending in self.selected_agent_pending_events:
+                root = ("live", pending.event.invocation_id, str(pending.event.sequence))
                 paths.append(root)
-                section = (
-                    "code"
-                    if event.event_kind == "code.generated"
-                    else "error"
-                    if "error" in event.data
-                    else "output"
-                )
-                paths.append(root + (section,))
+                paths.append(root + (pending.section.key,))
         return paths
+
+    def _append_item_navigation_paths(
+        self,
+        paths: list[tuple[str, ...]],
+        parent: tuple[str, ...],
+        items: Sequence[TraceItem],
+    ) -> None:
+        """Walk the same section tree the trace widget draws."""
+        for item in items:
+            path = parent + (item.key,)
+            paths.append(path)
+            if isinstance(item, TraceGroup):
+                if self.trace_path_materialized(path):
+                    self._append_item_navigation_paths(paths, path, item.children)
+            elif not item.python:
+                self._append_value_navigation_paths(paths, path, item.value)
 
     def _set_trace_selection(self, path: tuple[str, ...] | None) -> None:
         self.trace_selected_paths[self.trace_inspector_tab] = path

@@ -37,3 +37,24 @@ def agent_trace():
         )
 
     return build
+
+
+@pytest.fixture
+def agent_evidence():
+    """Wire bodies for a recorded PredictRLM run, made by the real adapter.
+
+    Each step becomes a live ``turn.finished`` event, then the final trace.
+    """
+    from predict_rlm import RunEvent, RunEventKind, RunEvidence
+
+    from avalanche.runtimes.predict_rlm.replay import replay
+
+    def build(trace, *, invocation_id="invocation", run_id="sdk-run", complete=True):
+        events = [
+            RunEvent(run_id, index, RunEventKind.ITERATION_RECORDED, index, {"step": step})
+            for index, step in enumerate(trace.steps, start=1)
+        ]
+        evidence = RunEvidence(run_id=run_id, complete=complete, terminal_outcome="completed")
+        return replay(events, evidence, invocation_id=invocation_id, trace=trace)
+
+    return build

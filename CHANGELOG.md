@@ -86,6 +86,23 @@
   types change).
 - Agents: a PredictRLM file output that has no host path, lies outside the step's
   reserved output folder, or is missing now raises `ava.agent.AgentOutputError`.
+- **Breaking** — Operator: agent live events and final traces have a new,
+  runtime-neutral body (schema version 2). Each live event carries Avalanche's own
+  sequence number, the common event (a finished turn, a model or tool call, generated
+  code) when there is one, and the runtime's own details as a typed payload. The final
+  trace is the runtime-neutral trace record; its turns travel as live events. The
+  operator validates every body once and rejects bodies from older versions, unknown
+  formats, events whose runtime details do not match their common event, and a second,
+  different final trace for the same agent call. The TUI and web UI show traces through
+  one viewer per trace format. The operator, its clients and
+  `@trampoline-ai/operator-ui` must be upgraded together.
+- **Breaking** — Agents: listeners registered with `ava.agent.capture_agent_evidence`
+  now receive the validated event models (`ava.agent.AgentEvidenceEvent`,
+  `AgentTraceFinishedEvent`, `AgentTraceUnavailableEvent`) instead of dictionaries.
+  BREAKING-PROTOCOL: part of Delta protocol 2.0 (agent evidence and the operator's
+  agent event and trace bodies change; proto field 8 `telemetry_json` is reserved).
+- Operator: the agent trace header no longer carries PredictRLM's telemetry
+  reference; it is in the PredictRLM part of the final trace body.
 
 ## 0.15.1 — 2026-10-24
 

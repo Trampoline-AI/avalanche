@@ -26,38 +26,138 @@
       "title": "AgentDeclaration",
       "type": "object"
     },
-    "AgentEvent": {
-      "discriminator": {
-        "mapping": {
-          "code.generated": "#/$defs/CodeGenerated",
-          "model.finished": "#/$defs/ModelFinished",
-          "model.started": "#/$defs/ModelStarted",
-          "tool.finished": "#/$defs/ToolFinished",
-          "tool.started": "#/$defs/ToolStarted",
-          "turn.finished": "#/$defs/TurnFinished"
+    "AgentLiveEvent": {
+      "additionalProperties": false,
+      "description": "One live event of an agent invocation, as the operator stores and serves it.",
+      "properties": {
+        "common": {
+          "anyOf": [
+            {
+              "discriminator": {
+                "mapping": {
+                  "code.generated": "#/$defs/CodeGenerated",
+                  "model.finished": "#/$defs/ModelFinished",
+                  "model.started": "#/$defs/ModelStarted",
+                  "tool.finished": "#/$defs/ToolFinished",
+                  "tool.started": "#/$defs/ToolStarted",
+                  "turn.finished": "#/$defs/TurnFinished"
+                },
+                "propertyName": "kind"
+              },
+              "oneOf": [
+                {
+                  "$ref": "#/$defs/TurnFinished"
+                },
+                {
+                  "$ref": "#/$defs/ModelStarted"
+                },
+                {
+                  "$ref": "#/$defs/ModelFinished"
+                },
+                {
+                  "$ref": "#/$defs/ToolStarted"
+                },
+                {
+                  "$ref": "#/$defs/ToolFinished"
+                },
+                {
+                  "$ref": "#/$defs/CodeGenerated"
+                }
+              ]
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Common"
         },
-        "propertyName": "kind"
-      },
-      "oneOf": [
-        {
-          "$ref": "#/$defs/TurnFinished"
+        "invocation_id": {
+          "minLength": 1,
+          "title": "Invocation Id",
+          "type": "string"
         },
-        {
-          "$ref": "#/$defs/ModelStarted"
+        "kind": {
+          "const": "event",
+          "default": "event",
+          "title": "Kind",
+          "type": "string"
         },
-        {
-          "$ref": "#/$defs/ModelFinished"
+        "native": {
+          "discriminator": {
+            "mapping": {
+              "code.executed": "#/$defs/CodeExecuted",
+              "code.generated": "#/$defs/Correlated",
+              "iteration.recorded": "#/$defs/IterationRecorded",
+              "predict.finished": "#/$defs/Correlated",
+              "predict.started": "#/$defs/PredictStarted",
+              "run.cancelled": "#/$defs/RunEnded",
+              "run.failed": "#/$defs/RunEnded",
+              "run.started": "#/$defs/RunStarted",
+              "run.succeeded": "#/$defs/RunSucceeded",
+              "tool.finished": "#/$defs/Correlated",
+              "tool.started": "#/$defs/Correlated"
+            },
+            "propertyName": "kind"
+          },
+          "oneOf": [
+            {
+              "$ref": "#/$defs/RunStarted"
+            },
+            {
+              "$ref": "#/$defs/IterationRecorded"
+            },
+            {
+              "$ref": "#/$defs/PredictStarted"
+            },
+            {
+              "$ref": "#/$defs/Correlated"
+            },
+            {
+              "$ref": "#/$defs/CodeExecuted"
+            },
+            {
+              "$ref": "#/$defs/RunSucceeded"
+            },
+            {
+              "$ref": "#/$defs/RunEnded"
+            }
+          ],
+          "title": "Native"
         },
-        {
-          "$ref": "#/$defs/ToolStarted"
+        "runtime_kind": {
+          "const": "predict_rlm",
+          "title": "Runtime Kind",
+          "type": "string"
         },
-        {
-          "$ref": "#/$defs/ToolFinished"
+        "schema_version": {
+          "const": 2,
+          "default": 2,
+          "title": "Schema Version",
+          "type": "integer"
         },
-        {
-          "$ref": "#/$defs/CodeGenerated"
+        "sequence": {
+          "exclusiveMinimum": 0,
+          "title": "Sequence",
+          "type": "integer"
+        },
+        "timestamp_ns": {
+          "minimum": 0,
+          "title": "Timestamp Ns",
+          "type": "integer"
         }
-      ]
+      },
+      "required": [
+        "kind",
+        "schema_version",
+        "invocation_id",
+        "sequence",
+        "timestamp_ns",
+        "runtime_kind",
+        "common",
+        "native"
+      ],
+      "title": "AgentLiveEvent",
+      "type": "object"
     },
     "AgentTrace": {
       "additionalProperties": false,
@@ -95,6 +195,45 @@
         "turns_streamed"
       ],
       "title": "AgentTrace",
+      "type": "object"
+    },
+    "AgentTraceFinished": {
+      "additionalProperties": false,
+      "description": "The final trace of an invocation; its turns travelled as live events.\n\n``complete`` says whether every live event of the invocation was delivered.",
+      "properties": {
+        "complete": {
+          "title": "Complete",
+          "type": "boolean"
+        },
+        "invocation_id": {
+          "minLength": 1,
+          "title": "Invocation Id",
+          "type": "string"
+        },
+        "kind": {
+          "const": "trace_finished",
+          "default": "trace_finished",
+          "title": "Kind",
+          "type": "string"
+        },
+        "record": {
+          "$ref": "#/$defs/AgentTrace"
+        },
+        "schema_version": {
+          "const": 2,
+          "default": 2,
+          "title": "Schema Version",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "kind",
+        "schema_version",
+        "invocation_id",
+        "record",
+        "complete"
+      ],
+      "title": "AgentTraceFinished",
       "type": "object"
     },
     "AgentTraceHeader": {
@@ -205,6 +344,144 @@
       "title": "AgentTraceHeader",
       "type": "object"
     },
+    "AgentTraceTerminal": {
+      "discriminator": {
+        "mapping": {
+          "trace_finished": "#/$defs/AgentTraceFinished",
+          "trace_unavailable": "#/$defs/AgentTraceUnavailable"
+        },
+        "propertyName": "kind"
+      },
+      "oneOf": [
+        {
+          "$ref": "#/$defs/AgentTraceFinished"
+        },
+        {
+          "$ref": "#/$defs/AgentTraceUnavailable"
+        }
+      ]
+    },
+    "AgentTraceUnavailable": {
+      "additionalProperties": false,
+      "description": "An invocation that ended without a trace the runtime could export.",
+      "properties": {
+        "complete": {
+          "title": "Complete",
+          "type": "boolean"
+        },
+        "error": {
+          "title": "Error",
+          "type": "string"
+        },
+        "external_run_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "External Run Id"
+        },
+        "invocation_id": {
+          "minLength": 1,
+          "title": "Invocation Id",
+          "type": "string"
+        },
+        "kind": {
+          "const": "trace_unavailable",
+          "default": "trace_unavailable",
+          "title": "Kind",
+          "type": "string"
+        },
+        "runtime_kind": {
+          "const": "predict_rlm",
+          "title": "Runtime Kind",
+          "type": "string"
+        },
+        "schema_version": {
+          "const": 2,
+          "default": 2,
+          "title": "Schema Version",
+          "type": "integer"
+        },
+        "status": {
+          "enum": [
+            "succeeded",
+            "failed",
+            "cancelled"
+          ],
+          "title": "Status",
+          "type": "string"
+        }
+      },
+      "required": [
+        "kind",
+        "schema_version",
+        "invocation_id",
+        "runtime_kind",
+        "status",
+        "error",
+        "external_run_id",
+        "complete"
+      ],
+      "title": "AgentTraceUnavailable",
+      "type": "object"
+    },
+    "CodeExecuted": {
+      "additionalProperties": false,
+      "properties": {
+        "execution_error": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Execution Error"
+        },
+        "format": {
+          "const": "predict_rlm.run/v1",
+          "default": "predict_rlm.run/v1",
+          "title": "Format",
+          "type": "string"
+        },
+        "iteration": {
+          "minimum": 0,
+          "title": "Iteration",
+          "type": "integer"
+        },
+        "kind": {
+          "const": "code.executed",
+          "default": "code.executed",
+          "title": "Kind",
+          "type": "string"
+        },
+        "output": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Output"
+        }
+      },
+      "required": [
+        "format",
+        "kind",
+        "iteration",
+        "output",
+        "execution_error"
+      ],
+      "title": "CodeExecuted",
+      "type": "object"
+    },
     "CodeExecutionAction": {
       "additionalProperties": false,
       "description": "Code the agent wrote and executed during a turn.",
@@ -276,6 +553,34 @@
       "title": "CodeGenerated",
       "type": "object"
     },
+    "Correlated": {
+      "additionalProperties": false,
+      "description": "Native kinds whose common event already carries everything.",
+      "properties": {
+        "format": {
+          "const": "predict_rlm.run/v1",
+          "default": "predict_rlm.run/v1",
+          "title": "Format",
+          "type": "string"
+        },
+        "kind": {
+          "enum": [
+            "predict.finished",
+            "tool.started",
+            "tool.finished",
+            "code.generated"
+          ],
+          "title": "Kind",
+          "type": "string"
+        }
+      },
+      "required": [
+        "format",
+        "kind"
+      ],
+      "title": "Correlated",
+      "type": "object"
+    },
     "FieldDeclaration": {
       "additionalProperties": false,
       "description": "One signature field as shown to people: its name, type name and description.",
@@ -299,6 +604,88 @@
         "description"
       ],
       "title": "FieldDeclaration",
+      "type": "object"
+    },
+    "IterationRecorded": {
+      "additionalProperties": false,
+      "description": "PredictRLM's details of a finished turn; the turn itself is the common event.",
+      "properties": {
+        "finish_reason": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Finish Reason"
+        },
+        "format": {
+          "const": "predict_rlm.run/v1",
+          "default": "predict_rlm.run/v1",
+          "title": "Format",
+          "type": "string"
+        },
+        "iteration": {
+          "minimum": 0,
+          "title": "Iteration",
+          "type": "integer"
+        },
+        "kind": {
+          "const": "iteration.recorded",
+          "default": "iteration.recorded",
+          "title": "Kind",
+          "type": "string"
+        },
+        "omissions": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/PredictRLMOmissions"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "predict_calls": {
+          "items": {
+            "$ref": "#/$defs/PredictRLMSubCallGroup"
+          },
+          "title": "Predict Calls",
+          "type": "array"
+        },
+        "predict_count": {
+          "minimum": 0,
+          "title": "Predict Count",
+          "type": "integer"
+        },
+        "tool_count": {
+          "minimum": 0,
+          "title": "Tool Count",
+          "type": "integer"
+        },
+        "untruncated_output": {
+          "title": "Untruncated Output",
+          "type": "string"
+        },
+        "usage": {
+          "$ref": "#/$defs/PredictRLMUsage"
+        }
+      },
+      "required": [
+        "format",
+        "kind",
+        "iteration",
+        "untruncated_output",
+        "finish_reason",
+        "usage",
+        "predict_calls",
+        "tool_count",
+        "predict_count",
+        "omissions"
+      ],
+      "title": "IterationRecorded",
       "type": "object"
     },
     "JsonValue": {},
@@ -591,11 +978,6 @@
       "additionalProperties": false,
       "description": "PredictRLM run details that have no common-layer equivalent.",
       "properties": {
-        "cache_hits": {
-          "minimum": 0,
-          "title": "Cache Hits",
-          "type": "integer"
-        },
         "format": {
           "const": "predict_rlm.run/v1",
           "default": "predict_rlm.run/v1",
@@ -617,15 +999,66 @@
             }
           ],
           "title": "Sub Model"
+        },
+        "telemetry_ref": {
+          "anyOf": [
+            {
+              "additionalProperties": {
+                "$ref": "#/$defs/JsonValue"
+              },
+              "type": "object"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Telemetry Ref"
+        },
+        "usage": {
+          "$ref": "#/$defs/PredictRLMUsage"
         }
       },
       "required": [
         "format",
         "sub_model",
         "max_iterations",
-        "cache_hits"
+        "usage",
+        "telemetry_ref"
       ],
       "title": "PredictRLMNativeTrace",
+      "type": "object"
+    },
+    "PredictRLMOmissions": {
+      "additionalProperties": false,
+      "description": "Calls left out of a turn that exceeded the live event size limit.",
+      "properties": {
+        "predict_count": {
+          "minimum": 0,
+          "title": "Predict Count",
+          "type": "integer"
+        },
+        "predict_group_count": {
+          "minimum": 0,
+          "title": "Predict Group Count",
+          "type": "integer"
+        },
+        "reason": {
+          "title": "Reason",
+          "type": "string"
+        },
+        "tool_count": {
+          "minimum": 0,
+          "title": "Tool Count",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "reason",
+        "tool_count",
+        "predict_count",
+        "predict_group_count"
+      ],
+      "title": "PredictRLMOmissions",
       "type": "object"
     },
     "PredictRLMSkillDeclaration": {
@@ -669,6 +1102,305 @@
         "tools"
       ],
       "title": "PredictRLMSkillDeclaration",
+      "type": "object"
+    },
+    "PredictRLMSubCall": {
+      "additionalProperties": false,
+      "description": "One sub-model call made by the agent's code through ``predict()``.",
+      "properties": {
+        "duration_ms": {
+          "minimum": 0,
+          "title": "Duration Ms",
+          "type": "integer"
+        },
+        "error": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Error"
+        },
+        "finish_reason": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Finish Reason"
+        },
+        "input": {
+          "additionalProperties": {
+            "$ref": "#/$defs/JsonValue"
+          },
+          "title": "Input",
+          "type": "object"
+        },
+        "output": {
+          "additionalProperties": {
+            "$ref": "#/$defs/JsonValue"
+          },
+          "title": "Output",
+          "type": "object"
+        },
+        "usage": {
+          "$ref": "#/$defs/PredictRLMTokenUsage"
+        }
+      },
+      "required": [
+        "duration_ms",
+        "usage",
+        "input",
+        "output",
+        "error",
+        "finish_reason"
+      ],
+      "title": "PredictRLMSubCall",
+      "type": "object"
+    },
+    "PredictRLMSubCallGroup": {
+      "additionalProperties": false,
+      "description": "Sub-model calls that share one signature, instructions and model.",
+      "properties": {
+        "calls": {
+          "items": {
+            "$ref": "#/$defs/PredictRLMSubCall"
+          },
+          "title": "Calls",
+          "type": "array"
+        },
+        "instructions": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Instructions"
+        },
+        "model": {
+          "title": "Model",
+          "type": "string"
+        },
+        "signature": {
+          "title": "Signature",
+          "type": "string"
+        },
+        "total_usage": {
+          "$ref": "#/$defs/PredictRLMTokenUsage"
+        }
+      },
+      "required": [
+        "signature",
+        "instructions",
+        "model",
+        "total_usage",
+        "calls"
+      ],
+      "title": "PredictRLMSubCallGroup",
+      "type": "object"
+    },
+    "PredictRLMTokenUsage": {
+      "additionalProperties": false,
+      "description": "PredictRLM's token counts for one model; ``cache_hits`` counts cached calls.",
+      "properties": {
+        "cache_hits": {
+          "minimum": 0,
+          "title": "Cache Hits",
+          "type": "integer"
+        },
+        "cost": {
+          "minimum": 0,
+          "title": "Cost",
+          "type": "number"
+        },
+        "input_tokens": {
+          "minimum": 0,
+          "title": "Input Tokens",
+          "type": "integer"
+        },
+        "output_tokens": {
+          "minimum": 0,
+          "title": "Output Tokens",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "input_tokens",
+        "output_tokens",
+        "cost",
+        "cache_hits"
+      ],
+      "title": "PredictRLMTokenUsage",
+      "type": "object"
+    },
+    "PredictRLMUsage": {
+      "additionalProperties": false,
+      "description": "Usage of the main (code-writing) model and the sub-model, kept apart.",
+      "properties": {
+        "main": {
+          "$ref": "#/$defs/PredictRLMTokenUsage"
+        },
+        "sub": {
+          "$ref": "#/$defs/PredictRLMTokenUsage"
+        }
+      },
+      "required": [
+        "main",
+        "sub"
+      ],
+      "title": "PredictRLMUsage",
+      "type": "object"
+    },
+    "PredictStarted": {
+      "additionalProperties": false,
+      "properties": {
+        "format": {
+          "const": "predict_rlm.run/v1",
+          "default": "predict_rlm.run/v1",
+          "title": "Format",
+          "type": "string"
+        },
+        "instructions": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Instructions"
+        },
+        "kind": {
+          "const": "predict.started",
+          "default": "predict.started",
+          "title": "Kind",
+          "type": "string"
+        },
+        "signature": {
+          "title": "Signature",
+          "type": "string"
+        }
+      },
+      "required": [
+        "format",
+        "kind",
+        "signature",
+        "instructions"
+      ],
+      "title": "PredictStarted",
+      "type": "object"
+    },
+    "RunEnded": {
+      "additionalProperties": false,
+      "description": "A run that failed or was cancelled.",
+      "properties": {
+        "error_type": {
+          "title": "Error Type",
+          "type": "string"
+        },
+        "format": {
+          "const": "predict_rlm.run/v1",
+          "default": "predict_rlm.run/v1",
+          "title": "Format",
+          "type": "string"
+        },
+        "kind": {
+          "enum": [
+            "run.failed",
+            "run.cancelled"
+          ],
+          "title": "Kind",
+          "type": "string"
+        },
+        "run_error": {
+          "title": "Run Error",
+          "type": "string"
+        }
+      },
+      "required": [
+        "format",
+        "kind",
+        "error_type",
+        "run_error"
+      ],
+      "title": "RunEnded",
+      "type": "object"
+    },
+    "RunStarted": {
+      "additionalProperties": false,
+      "properties": {
+        "format": {
+          "const": "predict_rlm.run/v1",
+          "default": "predict_rlm.run/v1",
+          "title": "Format",
+          "type": "string"
+        },
+        "input_fields": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Input Fields",
+          "type": "array"
+        },
+        "inputs": {
+          "$ref": "#/$defs/JsonValue"
+        },
+        "kind": {
+          "const": "run.started",
+          "default": "run.started",
+          "title": "Kind",
+          "type": "string"
+        }
+      },
+      "required": [
+        "format",
+        "kind",
+        "input_fields",
+        "inputs"
+      ],
+      "title": "RunStarted",
+      "type": "object"
+    },
+    "RunSucceeded": {
+      "additionalProperties": false,
+      "properties": {
+        "format": {
+          "const": "predict_rlm.run/v1",
+          "default": "predict_rlm.run/v1",
+          "title": "Format",
+          "type": "string"
+        },
+        "kind": {
+          "const": "run.succeeded",
+          "default": "run.succeeded",
+          "title": "Kind",
+          "type": "string"
+        },
+        "outputs": {
+          "$ref": "#/$defs/JsonValue"
+        },
+        "status": {
+          "title": "Status",
+          "type": "string"
+        }
+      },
+      "required": [
+        "format",
+        "kind",
+        "status",
+        "outputs"
+      ],
+      "title": "RunSucceeded",
       "type": "object"
     },
     "SignatureDeclaration": {
@@ -1027,6 +1759,7 @@
     },
     "TurnFinished": {
       "additionalProperties": false,
+      "description": "A finished turn.\n\nA turn too large for one live event drops some of its calls; the omitted\ncounts say how many, so viewers can show that rather than hide it.",
       "properties": {
         "kind": {
           "const": "turn.finished",
@@ -1034,13 +1767,25 @@
           "title": "Kind",
           "type": "string"
         },
+        "omitted_model_calls": {
+          "minimum": 0,
+          "title": "Omitted Model Calls",
+          "type": "integer"
+        },
+        "omitted_tool_calls": {
+          "minimum": 0,
+          "title": "Omitted Tool Calls",
+          "type": "integer"
+        },
         "turn": {
           "$ref": "#/$defs/Turn"
         }
       },
       "required": [
         "kind",
-        "turn"
+        "turn",
+        "omitted_tool_calls",
+        "omitted_model_calls"
       ],
       "title": "TurnFinished",
       "type": "object"

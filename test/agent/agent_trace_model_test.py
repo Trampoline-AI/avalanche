@@ -8,6 +8,7 @@ import pytest
 from pydantic import ValidationError
 
 import avalanche as ava
+from avalanche.agent.native.predict_rlm import PredictRLMTokenUsage, PredictRLMUsage
 from avalanche.agent.trace import (
     AgentTrace,
     AgentTraceHeader,
@@ -20,6 +21,11 @@ from avalanche.agent.trace import (
     file_input_evidence,
 )
 from avalanche.workspace import WorkspaceEntry
+
+_NO_USAGE = PredictRLMUsage(
+    main=PredictRLMTokenUsage(input_tokens=0, output_tokens=0, cost=0.0, cache_hits=0),
+    sub=PredictRLMTokenUsage(input_tokens=0, output_tokens=0, cost=0.0, cache_hits=0),
+)
 
 
 def _turn(index: int, *, tool_calls: int = 1) -> Turn:
@@ -78,7 +84,9 @@ def _record(**changes: object) -> AgentTrace:
     fields: dict[str, object] = {
         "header": _header(),
         "turns": (_turn(1), _turn(2)),
-        "native": PredictRLMNativeTrace(sub_model=None, max_iterations=5, cache_hits=0),
+        "native": PredictRLMNativeTrace(
+            sub_model=None, max_iterations=5, usage=_NO_USAGE, telemetry_ref=None
+        ),
         "turns_streamed": False,
     }
     fields.update(changes)

@@ -98,7 +98,6 @@ function mapTraceHeader(header: TraceHeaderV2): TraceHeaderMsg {
   if (header.usage) mapped.usage = mapTokenUsage(header.usage);
   if (header.externalRunId !== undefined) mapped.externalRunId = header.externalRunId;
   if (header.stopReason !== undefined) mapped.stopReason = header.stopReason;
-  if (header.telemetryJson !== undefined) mapped.telemetryJson = header.telemetryJson;
   return mapped;
 }
 

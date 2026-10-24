@@ -579,11 +579,12 @@ def _with_agent_evidence(
     """Forward agent evidence through the coordinator's event protocol."""
 
     def emit(event: AgentEvidenceObserverEvent) -> None:
+        # Sent as JSON: the operator validates each body once, in strict JSON mode.
         event_queue.put(
             {
                 "type": "agent_evidence",
                 "node_id": node_id,
-                "event": event,
+                "event": event.model_dump_json(),
             }
         )
 

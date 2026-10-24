@@ -4,15 +4,6 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
-from ...agent.contract import (
-    AgentEvent,
-    CodeGenerated,
-    ModelFinished,
-    ModelStarted,
-    ToolFinished,
-    ToolStarted,
-    TurnFinished,
-)
 from ...agent.trace import (
     AgentAction,
     CodeExecutionAction,
@@ -24,7 +15,7 @@ from ...agent.trace import (
 from .events import _project_agent_value
 
 if TYPE_CHECKING:
-    from predict_rlm import IterationStep, RunEvent
+    from predict_rlm import IterationStep
     from predict_rlm.trace import TokenUsage as PredictRLMTokenUsage
 
 
@@ -82,39 +73,3 @@ def turn_from_step(step: IterationStep) -> Turn:
         duration_ms=step.duration_ms,
         usage=common_usage(step.usage.main, step.usage.sub),
     )
-
-
-# PredictRLM event kinds that have a common live event; the rest are native only.
-COMMON_EVENT_KINDS = {
-    "iteration.recorded": "turn.finished",
-    "predict.started": "model.started",
-    "predict.finished": "model.finished",
-    "tool.started": "tool.started",
-    "tool.finished": "tool.finished",
-    "code.generated": "code.generated",
-}
-
-
-def common_event(event: RunEvent) -> AgentEvent | None:
-    """The common live event for a PredictRLM event; run lifecycle has none."""
-    data = event.data
-    match event.kind.value:
-        case "iteration.recorded":
-            from predict_rlm import IterationStep
-
-            step = IterationStep.model_validate(data["step"], strict=True)
-            return TurnFinished(turn=turn_from_step(step))
-        case "predict.started":
-            return ModelStarted(call_id=data["call_id"], model=data["model"])
-        case "predict.finished":
-            return ModelFinished(call_id=data["call_id"], error=data.get("error"))
-        case "tool.started":
-            return ToolStarted(call_id=data["call_id"], name=data["name"])
-        case "tool.finished":
-            return ToolFinished(
-                call_id=data["call_id"], name=data["name"], error=data.get("error")
-            )
-        case "code.generated":
-            return CodeGenerated(turn=data["iteration"], code=data["code"])
-        case _:
-            return None

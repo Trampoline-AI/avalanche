@@ -8,10 +8,7 @@ from datetime import datetime
 from typing import Callable
 from uuid import uuid4
 
-from predict_rlm import RunTrace
-from predict_rlm.trace import IterationStep
-
-from avalanche._agent_trace import AgentTerminalDetail, AgentTraceEnvelope
+from avalanche._agent_trace import AgentTraceEnvelope
 from avalanche.agent.declaration import (
     AgentDeclaration,
     FieldDeclaration,
@@ -22,6 +19,7 @@ from avalanche.agent.declaration import (
     SignatureDeclaration,
     ToolDeclaration,
 )
+from avalanche.agent.live import AgentLiveEvent, AgentTraceFinished
 
 from .mock_extensions import MockTuiExtensions
 from .models import (
@@ -637,106 +635,7 @@ class MockStateProvider:
             )
         self._runs[run2.run_id] = run2
 
-        trace_events = [
-            {
-                "sequence": 1,
-                "kind": "code.generated",
-                "timestamp_ns": 1,
-                "data": {
-                    "iteration": 1,
-                    "code": (
-                        "records = [item for item in input_records if item.get('active')]\\n"
-                        "summary = {'active_count': len(records), 'names': "
-                        "[item['name'] for item in records]}\\n"
-                        "print(summary)"
-                    ),
-                },
-            },
-            {
-                "sequence": 2,
-                "kind": "code.executed",
-                "timestamp_ns": 2,
-                "data": {"iteration": 1, "output": "SANDBOX_STDOUT_SENTINEL"},
-            },
-            {
-                "sequence": 3,
-                "kind": "iteration.recorded",
-                "timestamp_ns": 3,
-                "data": {"step": {"iteration": 1}},
-            },
-            {
-                "sequence": 4,
-                "kind": "run.succeeded",
-                "timestamp_ns": 4,
-                "data": {
-                    "status": "completed",
-                    "outputs": {
-                        "summary": {"active_count": 1, "ready": False},
-                        "labels": ["reviewed"],
-                        "note": None,
-                    },
-                },
-            },
-        ]
-        trace_step = {
-            "iteration": 1,
-            "reasoning": "Filter active records and summarize their names.",
-            "code": trace_events[0]["data"]["code"],
-            "output": "SANDBOX_STDOUT_SENTINEL",
-            "untruncated_output": (
-                "FULL OUTPUT: {'active_count': 2, 'names': "
-                "['Ada Lovelace', 'Grace Hopper']}\\n" + "wrapped output line " * 12
-            ),
-            "error": False,
-            "duration_ms": 14,
-            "tool_calls": [],
-            "predict_calls": [],
-            "lm": {"finish_reason": "stop"},
-            "usage": {"main": {}, "sub": {}},
-        }
-        trace_step = IterationStep.model_validate(trace_step).model_dump()
-        trace_events[2]["data"] = {
-            "iteration": trace_step["iteration"],
-            "duration_ms": trace_step["duration_ms"],
-            "error": trace_step["error"],
-            "tool_count": len(trace_step["tool_calls"]),
-            "predict_count": sum(len(group["calls"]) for group in trace_step["predict_calls"]),
-            "step": trace_step,
-        }
-        trace_envelope = {
-            "schema_version": 1,
-            "invocation_id": "agent-mock",
-            "status": "completed",
-            "run_id": "agent-mock",
-            "events": [
-                {
-                    "invocation_id": "agent-mock",
-                    "sequence": event["sequence"],
-                    "event_kind": event["kind"],
-                    "timestamp_ns": event["timestamp_ns"],
-                    "data": event["data"],
-                }
-                for event in trace_events
-            ],
-            "trace": {
-                "status": "completed",
-                "model": "mock-main",
-                "sub_model": "mock-sub",
-                "iterations": 1,
-                "max_iterations": 4,
-                "duration_ms": 20,
-                "usage": {"main": {}, "sub": {}},
-                "steps": [trace_step],
-            },
-            "evidence": {
-                "run_id": "agent-mock",
-                "complete": True,
-                "terminal_outcome": "completed",
-            },
-            "error": None,
-        }
-        trace_envelope["trace"] = RunTrace.model_validate(trace_envelope["trace"]).model_dump()
-        trace_envelope = AgentTraceEnvelope.model_validate(trace_envelope)
+        trace_envelope = _mock_agent_trace()
         agent_run = RunState(
             run_id="run_agent",
             flow_name="agent_trace",
@@ -759,13 +658,13 @@ class MockStateProvider:
                     datetime.now(),
                     LogLevel.INFO,
                     "inspect_agent_1",
-                    "Agent code.generated iteration=1",
+                    "Agent code.generated turn=1",
                 ),
                 LogEntry(
                     datetime.now(),
                     LogLevel.INFO,
                     "inspect_agent_1",
-                    "Agent iteration.recorded iteration=1 duration=14ms",
+                    "Agent iteration.recorded turn=1 duration=14ms",
                 ),
             ]
         )
@@ -792,14 +691,9 @@ class MockStateProvider:
         if run is None or node is None or descriptor is None or not node.agent_trace_json:
             return None
         envelope = AgentTraceEnvelope.model_validate_json(node.agent_trace_json)
-        if envelope.evidence is None:
+        if envelope.terminal is None:
             return None
-        assert envelope.invocation_id is not None
-        trace_body = AgentTerminalDetail(
-            invocation_id=envelope.invocation_id,
-            trace=envelope.trace,
-            evidence=envelope.evidence,
-        )
+        trace_body = envelope.terminal
         return TraceDetail(
             operator_instance_id=run.operator_instance_id,
             run_id=run.run_id,
@@ -1025,3 +919,80 @@ class MockStateProvider:
             )
             run.logs.append(entry)
             self._notify_log(run, entry)
+
+
+def _mock_agent_trace() -> AgentTraceEnvelope:
+    """A finished one-turn PredictRLM trace, replayed through the real adapter."""
+    from predict_rlm import IterationStep, RunEvent, RunEventKind, RunEvidence, RunTrace
+
+    from avalanche.runtimes.predict_rlm.replay import replay
+
+    code = (
+        "records = [item for item in input_records if item.get('active')]\n"
+        "summary = {'active_count': len(records), 'names': "
+        "[item['name'] for item in records]}\n"
+        "print(summary)"
+    )
+    step = IterationStep(
+        iteration=1,
+        reasoning="Filter active records and summarize their names.",
+        code=code,
+        output="SANDBOX_STDOUT_SENTINEL",
+        untruncated_output=(
+            "FULL OUTPUT: {'active_count': 2, 'names': "
+            "['Ada Lovelace', 'Grace Hopper']}\n" + "wrapped output line " * 12
+        ),
+        duration_ms=14,
+        lm={"finish_reason": "stop"},
+    )
+    outputs = {
+        "summary": {"active_count": 1, "ready": False},
+        "labels": ["reviewed"],
+        "note": None,
+    }
+    run_events = [
+        RunEvent(
+            "agent-mock", 1, RunEventKind.CODE_GENERATED, 1, {"iteration": 1, "code": code}
+        ),
+        RunEvent(
+            "agent-mock",
+            2,
+            RunEventKind.CODE_EXECUTED,
+            2,
+            {"iteration": 1, "output": "SANDBOX_STDOUT_SENTINEL"},
+        ),
+        RunEvent(
+            "agent-mock", 3, RunEventKind.ITERATION_RECORDED, 3, {"step": step.model_dump()}
+        ),
+        RunEvent(
+            "agent-mock",
+            4,
+            RunEventKind.RUN_SUCCEEDED,
+            4,
+            {"status": "completed", "outputs": outputs},
+        ),
+    ]
+    sent = replay(
+        run_events,
+        RunEvidence(run_id="agent-mock", complete=True, terminal_outcome="completed"),
+        invocation_id="agent-mock",
+        trace=RunTrace(
+            status="completed",
+            model="mock-main",
+            sub_model="mock-sub",
+            iterations=1,
+            max_iterations=4,
+            duration_ms=20,
+            steps=[step],
+        ),
+    )
+    *live, terminal = sent
+    assert isinstance(terminal, AgentTraceFinished)
+    return AgentTraceEnvelope(
+        schema_version=2,
+        invocation_id="agent-mock",
+        status="succeeded",
+        events=tuple(event for event in live if isinstance(event, AgentLiveEvent)),
+        terminal=terminal,
+        error=None,
+    )

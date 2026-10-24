@@ -21,6 +21,7 @@ from predict_rlm import (
     RuntimeContribution,
     RuntimeHook,
     RuntimeHookEvent,
+    RunTrace,
     SbxConfig,
     Skill,
     SubmitConfirmationContext,
@@ -60,7 +61,6 @@ from .files import AgentFileBridge, mount_inputs, predict_signature
 from .trace import (
     _emit_terminal_trace,
     _emit_trace_unavailable,
-    _evidence_metadata,
     _model_display_name,
     trace_record,
 )
@@ -384,31 +384,17 @@ class PredictRLM(BaseModel):
         *,
         events: AgentEventSink,
     ) -> dspy.Prediction:
-        """Run PredictRLM, sending its v1 terminal trace event on every outcome."""
-        runtime_kwargs = {"lm": self.lm, "sub_lm": self.sub_lm}
-
+        """Run PredictRLM, sending its final trace event on every outcome."""
         from predict_rlm.trace import extract_trace_from_exc
 
-        state = _AgentInvocationState(request.invocation_id, events, inputs)
+        state = _AgentInvocationState(events, inputs)
         invocation_token = _AGENT_INVOCATION_STATE.set(state)
         try:
             try:
                 prediction: dspy.Prediction = await predictor.acall(**mount_inputs(inputs))
             except asyncio.CancelledError as exc:
                 try:
-                    trace = extract_trace_from_exc(exc)
-                    evidence = _evidence_metadata(exc.evidence)
-                    if trace is None:
-                        _emit_trace_unavailable(
-                            exc, invocation_id=state.invocation_id, evidence=evidence
-                        )
-                    else:
-                        _emit_terminal_trace(
-                            trace,
-                            invocation_id=state.invocation_id,
-                            evidence=evidence,
-                            runtime_kwargs=runtime_kwargs,
-                        )
+                    self._finish(extract_trace_from_exc(exc), exc, events)
                 except Exception as evidence_error:
                     exc.add_note(
                         f"Failed to retain agent cancellation detail: {evidence_error}"
@@ -417,35 +403,38 @@ class PredictRLM(BaseModel):
             except Exception as exc:
                 if state.listener_base_exception is not None:
                     raise state.listener_base_exception
-                trace = extract_trace_from_exc(exc)
-                evidence = _evidence_metadata(exc.evidence)
-                if trace is None:
-                    _emit_trace_unavailable(
-                        exc, invocation_id=state.invocation_id, evidence=evidence
-                    )
-                else:
-                    _emit_terminal_trace(
-                        trace,
-                        invocation_id=state.invocation_id,
-                        evidence=evidence,
-                        runtime_kwargs=runtime_kwargs,
-                    )
+                self._finish(extract_trace_from_exc(exc), exc, events)
                 input_types = {name: type(value).__name__ for name, value in inputs.items()}
                 raise AgentStepExecutionError(
                     f"agent step {request.step_name!r} failed calling "
                     f"{_describe_signature(request.signature.dspy_signature)}: {exc}. "
                     f"input types: {input_types}."
                 ) from exc
-
             _emit_terminal_trace(
                 prediction.trace,
-                invocation_id=state.invocation_id,
-                evidence=_evidence_metadata(prediction.evidence),
-                runtime_kwargs=runtime_kwargs,
+                prediction.evidence,
+                events,
+                model=_model_display_name(self.lm),
+                sub_model=_model_display_name(self.sub_lm),
             )
             return prediction
         finally:
             _AGENT_INVOCATION_STATE.reset(invocation_token)
+
+    def _finish(
+        self, trace: RunTrace | None, error: BaseException, events: AgentEventSink
+    ) -> None:
+        """Send the final trace of a run that raised, or say there is none."""
+        if trace is None:
+            _emit_trace_unavailable(error, error.evidence, events)
+            return
+        _emit_terminal_trace(
+            trace,
+            error.evidence,
+            events,
+            model=_model_display_name(self.lm),
+            sub_model=_model_display_name(self.sub_lm),
+        )
 
     def _predictor_for(self, request: AgentRequest) -> _PredictRLMPredictor:
         for signature, tools, predictor in self._predictors:

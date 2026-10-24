@@ -77,8 +77,19 @@ def case(request) -> RuntimeCase:
 
 
 class _Recorder:
-    async def emit(self, event: object) -> None:
-        return None
+    """An invocation sink that counts the final trace events it receives."""
+
+    def __init__(self) -> None:
+        self.terminals: list[str] = []
+
+    async def emit(self, native: object, common: object) -> None:
+        assert not self.terminals, "live event after the final trace"
+
+    def finished(self, record: object, *, complete: bool) -> None:
+        self.terminals.append("finished")
+
+    def unavailable(self, **detail: object) -> None:
+        self.terminals.append("unavailable")
 
 
 def _request() -> AgentRequest:
@@ -107,8 +118,10 @@ async def test_outcome_trace_names_the_runtime_and_outputs_fit_the_signature(cas
     runtime = case.make_runtime()
     request = _request()
 
-    outcome = await runtime.invoke(request, _Recorder())
+    recorder = _Recorder()
+    outcome = await runtime.invoke(request, recorder)
 
+    assert recorder.terminals == ["finished"]
     assert outcome.trace.header.runtime_kind == runtime.kind
     assert request.signature.validate_outputs(outcome.outputs).model_dump() == {"answer": "a"}
 
@@ -117,5 +130,9 @@ async def test_outcome_trace_names_the_runtime_and_outputs_fit_the_signature(cas
 async def test_a_failed_run_raises_instead_of_returning_an_outcome(case, monkeypatch):
     case.install(monkeypatch, False)
 
+    recorder = _Recorder()
     with pytest.raises(Exception, match="provider unavailable"):
-        await case.make_runtime().invoke(_request(), _Recorder())
+        await case.make_runtime().invoke(_request(), recorder)
+
+    # A failed run still ends with exactly one final trace event.
+    assert len(recorder.terminals) == 1

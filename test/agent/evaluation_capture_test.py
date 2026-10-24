@@ -17,6 +17,7 @@ from ray import cloudpickle
 import avalanche as ava
 from avalanche._agent_evidence import capture_agent_evidence, emit_agent_evidence
 from avalanche.agent import AgentStepExecutionError
+from avalanche.agent.live import AgentTraceUnavailable
 from avalanche.agent.trace import Turn
 from avalanche.evaluation_capture import capture_evaluations
 
@@ -169,7 +170,7 @@ async def test_actual_call_inputs_and_complete_prediction_replace_step_result(
         "handoff": {"summary": "summary: prepared: hello"},
     }
     # The operator's terminal event drops streamed steps; evaluations keep every turn.
-    assert observed[0]["trace"]["steps"] == []
+    assert observed[0].record.turns == ()
     assert context.trace.header.external_run_id == "prepared: hello"
     assert context.trace.turns == (_turn("prepared: hello"),)
 
@@ -218,7 +219,7 @@ async def test_nested_step_capture_is_isolated_and_restored(
     assert [submission.evaluations for submission in submissions] == (
         [helper_evaluations, evaluations] if helper_evaluated else [evaluations]
     )
-    terminals = [event for event in observed if event["kind"] != "evidence"]
+    terminals = [event for event in observed if event.kind != "event"]
     assert len(terminals) == 2
     expected_calls = [("helper", terminals[0]), ("outer", terminals[1])]
     if not helper_evaluated:
@@ -229,7 +230,8 @@ async def test_nested_step_capture_is_isolated_and_restored(
         assert context.inputs == {"text": text}
         assert context.output.answer == text.upper()
         assert context.output.handoff == Report(summary=f"summary: {text}")
-        assert context.trace.header.external_run_id == terminal["evidence"]["run_id"] == text
+        assert context.trace.header.external_run_id == text
+        assert terminal.record.header.external_run_id == text
         assert context.trace.turns == (_turn(text),)
 
 
@@ -357,10 +359,10 @@ async def test_first_successful_completion_wins_without_gating_later_calls(
     context = submissions[0].context
     assert context.inputs == {"text": "fast"}
     assert context.output.handoff.summary == "fast"
-    terminals = [event for event in observed if event["kind"] != "evidence"]
+    terminals = [event for event in observed if event.kind != "event"]
     assert len(terminals) == 2
-    assert all(event["trace"]["steps"] == [] for event in terminals)
-    assert context.trace.header.external_run_id == terminals[0]["evidence"]["run_id"]
+    assert all(event.record.turns == () for event in terminals)
+    assert context.trace.header.external_run_id == terminals[0].record.header.external_run_id
     assert context.trace.turns == (_turn("fast"),)
 
 
@@ -408,34 +410,32 @@ async def test_failed_earlier_call_does_not_claim_capture_and_observers_keep_all
         with capture_evaluations(submissions.append):
             assert await echo.fn() == ["first", "later"]
         emit_agent_evidence(
-            {
-                "kind": "trace_unavailable",
-                "invocation_id": "outside",
-                "error": "outside",
-                "evidence": {
-                    "run_id": "outside",
-                    "complete": True,
-                    "terminal_outcome": "error",
-                },
-            }
+            AgentTraceUnavailable(
+                invocation_id="outside",
+                runtime_kind="predict_rlm",
+                status="failed",
+                error="outside",
+                external_run_id="outside",
+                complete=True,
+            )
         )
 
-    assert observed[-1]["invocation_id"] == "outside"
-    terminal = [event for event in observed[:-1] if event["kind"] != "evidence"]
+    assert observed[-1].invocation_id == "outside"
+    terminal = [event for event in observed[:-1] if event.kind != "event"]
     assert len(terminal) == 3
-    assert terminal[0]["evidence"]["terminal_outcome"] == "error"
+    assert terminal[0].complete is True
     if exportable_failure_trace:
-        assert terminal[0]["trace"]["status"] == "error"
-        assert terminal[0]["trace"]["steps"] == []
+        assert terminal[0].record.header.status == "failed"
+        assert terminal[0].record.turns == ()
     else:
-        assert terminal[0]["kind"] == "trace_unavailable"
-    assert len([event for event in observed if event["kind"] == "evidence"]) == 3
+        assert terminal[0].kind == "trace_unavailable"
+    assert len([event for event in observed if event.kind == "event"]) == 3
     assert len(submissions) == 1
     context = submissions[0].context
     assert context.inputs == {"text": "first"}
     assert context.output.answer == "first"
-    assert context.trace.header.external_run_id == terminal[1]["evidence"]["run_id"]
-    assert all(event["trace"]["steps"] == [] for event in terminal[1:])
+    assert context.trace.header.external_run_id == terminal[1].record.header.external_run_id
+    assert all(event.record.turns == () for event in terminal[1:])
     assert context.trace.turns == (_turn("first"),)
 
 

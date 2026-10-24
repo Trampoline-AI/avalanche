@@ -306,17 +306,18 @@ def test_spawned_inline_agent_feeds_typed_downstream_result_and_retains_evidence
             ]
         page = operator.list_agent_events(run.run_id, agent_id)
         bodies = [json.loads(operator.read_detail(event.body_token)) for event in page.events]
-        assert [body["event_kind"] for body in bodies] == ["run.started", "run.succeeded"]
-        assert bodies[0]["data"]["inputs"] == expected_inputs
-        assert bodies[1]["data"]["outputs"] == (
+        assert [body["native"]["kind"] for body in bodies] == ["run.started", "run.succeeded"]
+        assert bodies[0]["native"]["inputs"] == expected_inputs
+        assert bodies[1]["native"]["outputs"] == (
             {"decision": {"route": "billing", "priority": 6}}
             if flow_name == "single"
             else {"score": 6, "route": "billing"}
         )
         assert len({event.invocation_id for event in page.events}) == 1
         trace = json.loads(operator.get_run(run.run_id).nodes[agent_id].agent_trace_json)
-        assert trace["trace"]["status"] == "completed"
-        assert trace["trace"]["max_iterations"] == calls[0]["config"]["max_iterations"]
+        record = trace["terminal"]["record"]
+        assert record["header"]["status"] == "succeeded"
+        assert record["native"]["max_iterations"] == calls[0]["config"]["max_iterations"]
         assert dict(historical.agent_instruction_lines)[agent_id] == (
             "Route a customer ticket."
             if flow_name == "single"

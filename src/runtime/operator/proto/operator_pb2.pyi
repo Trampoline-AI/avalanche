@@ -854,7 +854,6 @@ class TraceHeaderV2(_message.Message):
     __slots__ = (
         "model",
         "duration_ms",
-        "telemetry_json",
         "runtime_kind",
         "trace_format",
         "turn_count",
@@ -866,7 +865,6 @@ class TraceHeaderV2(_message.Message):
     )
     MODEL_FIELD_NUMBER: _ClassVar[int]
     DURATION_MS_FIELD_NUMBER: _ClassVar[int]
-    TELEMETRY_JSON_FIELD_NUMBER: _ClassVar[int]
     RUNTIME_KIND_FIELD_NUMBER: _ClassVar[int]
     TRACE_FORMAT_FIELD_NUMBER: _ClassVar[int]
     TURN_COUNT_FIELD_NUMBER: _ClassVar[int]
@@ -877,7 +875,6 @@ class TraceHeaderV2(_message.Message):
     STATUS_FIELD_NUMBER: _ClassVar[int]
     model: str
     duration_ms: int
-    telemetry_json: str
     runtime_kind: str
     trace_format: str
     turn_count: int
@@ -890,7 +887,6 @@ class TraceHeaderV2(_message.Message):
         self,
         model: _Optional[str] = ...,
         duration_ms: _Optional[int] = ...,
-        telemetry_json: _Optional[str] = ...,
         runtime_kind: _Optional[str] = ...,
         trace_format: _Optional[str] = ...,
         turn_count: _Optional[int] = ...,

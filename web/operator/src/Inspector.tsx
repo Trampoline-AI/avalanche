@@ -2,15 +2,15 @@ import { useCallback, useEffect, useId, useMemo, useRef, useState } from "react"
 import { X } from "lucide-react";
 
 import { AgentTraceExplorer, type AgentTraceTurn } from "./AgentTraceExplorer";
+import { parseAgentLiveEvent, parseAgentTraceTerminal } from "./agentTrace/common";
 import {
   type AgentTraceStep,
   type AgentTraceStepSummary,
+  type TraceBodySummary,
   type TraceLmUsage,
-  parsePredictRlmTraceSummary,
-  type PredictRlmTraceSummary,
-  parseAgentTraceStepEvent,
   summarizeAgentTraceStep,
-} from "./agentTrace";
+} from "./agentTrace/types";
+import { headerViewer, viewerFor } from "./agentTrace/viewers";
 
 import type { OperatorApi } from "./api";
 import { ClassifierInspector } from "./ClassifierInspector";
@@ -246,37 +246,36 @@ function AgentAndStepInspector({
       ? Object.hasOwn(run.topology.agentFieldSchemasJson, nodeId ?? "")
       : Boolean(node?.trace)
     : isWorkflowAgentNode;
-  // PredictRLM's sub-model, iteration limit and per-model usage live in its small
-  // final trace body, not the common header, so read that body once it exists.
-  const traceBodyToken =
-    run && isAgentNode && node?.trace?.header?.runtimeKind === "predict_rlm"
-      ? node.trace.bodyToken
-      : undefined;
-  const [predictRlmSummary, setPredictRlmSummary] = useState<
-    | { bodyToken: string; summary: PredictRlmTraceSummary }
+  // Some runtimes keep header details, such as PredictRLM's sub-model, iteration
+  // limit and per-model usage, in their small final trace body; read it once.
+  const traceFormat = run && isAgentNode ? node?.trace?.header?.traceFormat : undefined;
+  const traceViewer = traceFormat ? headerViewer(traceFormat) : undefined;
+  const traceBodyToken = traceViewer ? node?.trace?.bodyToken : undefined;
+  const [traceBodySummary, setTraceBodySummary] = useState<
+    | { bodyToken: string; summary: TraceBodySummary | undefined }
     | { bodyToken: string; error: string }
   >();
   useEffect(() => {
-    if (!traceBodyToken) return;
+    if (!traceBodyToken || !traceViewer) return;
     const controller = new AbortController();
     void api
       .readJsonDetail(traceBodyToken, controller.signal)
       .then((body) => {
         if (controller.signal.aborted) return;
-        setPredictRlmSummary({
+        setTraceBodySummary({
           bodyToken: traceBodyToken,
-          summary: parsePredictRlmTraceSummary(body),
+          summary: traceViewer.summary(parseAgentTraceTerminal(body)),
         });
       })
       .catch((error: unknown) => {
         if (controller.signal.aborted) return;
-        setPredictRlmSummary({
+        setTraceBodySummary({
           bodyToken: traceBodyToken,
           error: error instanceof Error ? error.message : "Trace details are unavailable.",
         });
       });
     return () => controller.abort();
-  }, [api, traceBodyToken]);
+  }, [api, traceBodyToken, traceViewer]);
   const evaluationRecord =
     run && isAgentNode ? evaluationState.records[nodeId ?? ""] : undefined;
   const rawEvaluationDeclaration = run?.topology?.evaluationMetadataJson[nodeId ?? ""];
@@ -596,7 +595,8 @@ function AgentAndStepInspector({
             tabRef.current !== "trace"
           )
             return;
-          const step = parseAgentTraceStepEvent(body);
+          const live = parseAgentLiveEvent(body);
+          const step = viewerFor(live.native.format).turn(live);
           traceSummaries.current.set(key, summarizeAgentTraceStep(step));
           while (traceSummaries.current.size > DESCRIPTOR_WINDOW_SIZE) {
             const oldest = traceSummaries.current.keys().next().value;
@@ -681,22 +681,22 @@ function AgentAndStepInspector({
         : undefined
     : undefined;
   const traceHeader = isAgentNode ? node?.trace?.header : undefined;
-  const predictRlmResult =
-    predictRlmSummary && predictRlmSummary.bodyToken === traceBodyToken
-      ? predictRlmSummary
+  const traceBodyResult =
+    traceBodySummary && traceBodySummary.bodyToken === traceBodyToken
+      ? traceBodySummary
       : undefined;
-  const predictRlm =
-    predictRlmResult && "summary" in predictRlmResult ? predictRlmResult.summary : undefined;
-  const predictRlmError =
-    predictRlmResult && "error" in predictRlmResult ? predictRlmResult.error : undefined;
-  const traceUsage: TraceLmUsage | undefined = predictRlm?.usage;
+  const traceBody =
+    traceBodyResult && "summary" in traceBodyResult ? traceBodyResult.summary : undefined;
+  const traceBodyError =
+    traceBodyResult && "error" in traceBodyResult ? traceBodyResult.error : undefined;
+  const traceUsage: TraceLmUsage | undefined = traceBody?.usage;
   const declaredModels = isUnknownRecord(workflowDeclaration?.model)
     ? workflowDeclaration.model
     : undefined;
   const declaredMainModel = declaredModelName(declaredModels?.main);
   const declaredSubModel = declaredModelName(declaredModels?.sub);
   const mainModel = traceHeader?.model;
-  const subModel = predictRlm?.subModel;
+  const subModel = traceBody?.subModel;
   const headerDuration = traceHeader
     ? formatTraceDuration(traceHeader.durationMs)
     : nodeDuration;
@@ -781,11 +781,11 @@ function AgentAndStepInspector({
                 {mainModel ?? "—"}
                 {traceUsage
                   ? ` · ${TOKEN_NUMBER_FORMAT.format(traceUsage.main.inputTokens)} in / ${TOKEN_NUMBER_FORMAT.format(traceUsage.main.outputTokens)} out · $${traceUsage.main.cost.toFixed(4)}`
-                  : traceHeader.runtimeKind !== "predict_rlm" &&
+                  : !traceViewer?.usageInBody &&
                     traceHeader.usage &&
                     ` · ${TOKEN_NUMBER_FORMAT.format(Number(traceHeader.usage.inputTokens))} in / ${TOKEN_NUMBER_FORMAT.format(Number(traceHeader.usage.outputTokens))} out${traceHeader.usage.costUsd === undefined ? "" : ` · $${traceHeader.usage.costUsd.toFixed(4)}`}`}
               </p>
-              {traceHeader.runtimeKind === "predict_rlm" && (
+              {traceViewer?.hasSubModel && (
                 <p className="m-0 whitespace-normal text-secondary [overflow-wrap:anywhere]">
                   <span className="mr-1.5 text-muted uppercase">Sub</span>
                   {subModel ?? "—"}
@@ -796,13 +796,13 @@ function AgentAndStepInspector({
               <p className="m-0 text-muted">
                 <span className="text-secondary">
                   {traceHeader.turnCount}
-                  {predictRlm && ` of ${predictRlm.maxIterations}`}
+                  {traceBody && ` of ${traceBody.maxIterations}`}
                 </span>{" "}
-                {traceHeader.runtimeKind === "predict_rlm" ? "iterations" : "turns"}
+                {traceViewer?.turnUnit ?? "turns"}
               </p>
-              {predictRlmError && (
+              {traceBodyError && (
                 <p role="alert" className="m-0 text-danger [overflow-wrap:anywhere]">
-                  {predictRlmError}
+                  {traceBodyError}
                 </p>
               )}
             </div>

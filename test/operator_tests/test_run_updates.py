@@ -6,7 +6,8 @@ from datetime import datetime
 
 import pytest
 
-from avalanche._agent_trace import AgentLifecycleEvent
+from avalanche.agent.live import AgentLiveEvent
+from avalanche.agent.native.predict_rlm import RunStarted
 from runtime.operator.client import GrpcStateProvider, _RunUpdateResetError
 from runtime.operator.models import (
     AgentEvent,
@@ -244,12 +245,13 @@ def test_mutating_callbacks_cannot_corrupt_other_consumers_or_retained_state():
         assert observed_logs[0].message == "original"
         assert provider._log_entries["run-1"][0].message == "original"
 
-        lifecycle = AgentLifecycleEvent(
+        lifecycle = AgentLiveEvent(
             invocation_id="test-invocation",
             sequence=1,
-            event_kind="original",
             timestamp_ns=1,
-            data={},
+            runtime_kind="predict_rlm",
+            common=None,
+            native=RunStarted(input_fields=(), inputs={}),
         )
         event_json = lifecycle.model_dump_json()
         event = AgentEvent(
@@ -269,8 +271,10 @@ def test_mutating_callbacks_cannot_corrupt_other_consumers_or_retained_state():
         )
         provider._notify_detail_callbacks(event_detail)
 
-        assert json.loads(observed_details[1].event.event_json)["event_kind"] == "original"
-        assert provider._agent_events[("run-1", "node-1")][0].event_kind == "original"
+        assert (
+            json.loads(observed_details[1].event.event_json)["native"]["kind"] == "run.started"
+        )
+        assert provider._agent_events[("run-1", "node-1")][0].native.kind == "run.started"
     finally:
         provider.close()
 

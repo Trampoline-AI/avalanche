@@ -11,6 +11,8 @@ import {
   measuredByteCost,
   mergeDescriptorPage,
 } from "./detailProjection";
+import { parseAgentLiveEvent } from "./agentTrace/common";
+import { valueEventKinds, viewerFor } from "./agentTrace/viewers";
 import { isUnknownRecord } from "./guards";
 import { DescriptorPageOrder, type AgentEventDescriptorMsg } from "./model";
 import { ValueView } from "./ValueView";
@@ -37,7 +39,7 @@ const EMPTY_PAGE: DescriptorPageState<AgentEventDescriptorMsg> = {
 
 type ValueState =
   | { api: OperatorApi; token: string; status: "loading" }
-  | { api: OperatorApi; token: string; status: "ready"; body: unknown }
+  | { api: OperatorApi; token: string; status: "ready"; retained: unknown }
   | { api: OperatorApi; token: string; status: "error"; error: string };
 
 // Each mounted direction owns its cursor, cancellation and one bounded cached body.
@@ -68,7 +70,7 @@ export function RetainedAgentValue({
   const activeError = pageError?.api === api ? pageError.error : undefined;
   const order =
     kind === "inputs" ? DescriptorPageOrder.FORWARD : DescriptorPageOrder.NEWEST_FIRST;
-  const eventKind = kind === "inputs" ? "run.started" : "run.succeeded";
+  const eventKinds = useMemo(() => valueEventKinds(kind), [kind]);
   const label = kind === "inputs" ? "input" : "output";
   const valueEvent = useMemo(() => {
     const records = new Map<string, AgentEventDescriptorMsg>();
@@ -79,12 +81,12 @@ export function RetainedAgentValue({
       (event) => event.eventSequence,
       kind === "inputs" ? "newer" : "older",
       [...records.values()]
-        .filter((event) => event.nativeEventKind === eventKind)
+        .filter((event) => eventKinds.has(event.nativeEventKind))
         .map((event) => event.eventSequence),
     )
       .reverse()
-      .find((event) => event.nativeEventKind === eventKind);
-  }, [eventKind, kind, liveEvents, page.records]);
+      .find((event) => eventKinds.has(event.nativeEventKind));
+  }, [eventKinds, kind, liveEvents, page.records]);
 
   useEffect(() => {
     const controller = new AbortController();
@@ -206,7 +208,13 @@ export function RetainedAgentValue({
           });
           return;
         }
-        setValueState({ api, token, status: "ready", body });
+        const event = parseAgentLiveEvent(body);
+        setValueState({
+          api,
+          token,
+          status: "ready",
+          retained: viewerFor(event.native.format).retainedValue(event, kind),
+        });
       })
       .catch((error: unknown) => {
         if (controller.signal.aborted) return;
@@ -218,14 +226,11 @@ export function RetainedAgentValue({
         });
       });
     return () => controller.abort();
-  }, [api, sizeBytes, token]);
+  }, [api, kind, sizeBytes, token]);
 
   const value = valueState?.api === api && valueState.token === token ? valueState : undefined;
-  const body =
-    value?.status === "ready" && isUnknownRecord(value.body) ? value.body : undefined;
-  const payload = body && isUnknownRecord(body.data) ? body.data : body;
-  const hasRetainedValue = Boolean(payload && Object.hasOwn(payload, kind));
-  const retainedValue = hasRetainedValue ? payload?.[kind] : undefined;
+  const retainedValue = value?.status === "ready" ? value.retained : undefined;
+  const hasRetainedValue = retainedValue !== undefined;
   const retainedFields = isUnknownRecord(retainedValue) ? retainedValue : undefined;
   const waiting =
     !activeError && ((pageState?.api !== api && !valueEvent) || (token && !value));

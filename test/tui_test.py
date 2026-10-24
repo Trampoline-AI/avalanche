@@ -11,16 +11,19 @@ from datetime import datetime
 
 import grpc
 import pytest
-from predict_rlm import RunTrace
+from predict_rlm import RunEvent, RunEventKind, RunEvidence, RunTrace
 from predict_rlm.trace import IterationStep, PredictCallDetail, PredictCallGroup, ToolCall
 from pydantic import ValidationError
 
-from avalanche._agent_trace import (
-    AgentEvidenceMetadata,
-    AgentLifecycleEvent,
-    AgentTerminalDetail,
-    AgentTraceEnvelope,
+from avalanche._agent_trace import AgentTraceEnvelope
+from avalanche.agent.live import (
+    AGENT_TRACE_TERMINAL,
+    AgentLiveEvent,
+    AgentTraceFinished,
+    AgentTraceUnavailable,
 )
+from avalanche.runtimes.predict_rlm.events import project_event
+from avalanche.runtimes.predict_rlm.trace import trace_record
 from runtime.operator.client import OperatorCallError
 from runtime.operator.models import (
     AgentEvent,
@@ -47,6 +50,97 @@ from tui.ui_store import TraceDetailCompletion, UIStore
 from tui.widgets.agent_trace import AgentOutputInspector, AgentTraceInspector
 from tui.widgets.log_panel import LogWidget
 
+_MOCK_REASONING = "Filter active records and summarize their names."
+
+
+def _event(invocation_id: str, sequence: int, kind: RunEventKind, data: dict) -> AgentLiveEvent:
+    """One PredictRLM event as an agent step sends it, made by the real adapter."""
+    native, common = project_event(RunEvent(invocation_id, sequence, kind, sequence, data))
+    return AgentLiveEvent(
+        invocation_id=invocation_id,
+        sequence=sequence,
+        timestamp_ns=sequence,
+        runtime_kind="predict_rlm",
+        common=common,
+        native=native,
+    )
+
+
+def _finished(
+    invocation_id: str,
+    trace: RunTrace,
+    *,
+    run_id: str,
+    complete: bool = True,
+    outcome: str = "completed",
+) -> AgentTraceFinished:
+    record = trace_record(
+        trace,
+        RunEvidence(run_id=run_id, complete=complete, terminal_outcome=outcome),
+        model=None,
+        sub_model=None,
+    )
+    return AgentTraceFinished(
+        invocation_id=invocation_id,
+        record=record.model_copy(update={"turns": (), "turns_streamed": True}),
+        complete=complete,
+    )
+
+
+def _unavailable(
+    invocation_id: str, *, run_id: str, complete: bool, status: str
+) -> AgentTraceUnavailable:
+    return AgentTraceUnavailable(
+        invocation_id=invocation_id,
+        runtime_kind="predict_rlm",
+        status=status,
+        error="trace unavailable",
+        external_run_id=run_id,
+        complete=complete,
+    )
+
+
+def _step(code: str, *, tools: int = 0, predicts: int = 0) -> IterationStep:
+    return IterationStep(
+        iteration=1,
+        reasoning=_MOCK_REASONING,
+        code=code,
+        output="SANDBOX_STDOUT_SENTINEL",
+        untruncated_output="FULL OUTPUT",
+        duration_ms=14,
+        tool_calls=[
+            ToolCall(name="lookup", duration_ms=1, result=index) for index in range(tools)
+        ],
+        predict_calls=[
+            PredictCallGroup(
+                signature="question -> answer",
+                model="test-model",
+                calls=[
+                    PredictCallDetail(
+                        duration_ms=1, input={"question": index}, output={"answer": index}
+                    )
+                    for index in range(predicts)
+                ],
+            )
+        ]
+        if predicts
+        else [],
+    )
+
+
+def _without_retained_calls(event: AgentLiveEvent) -> AgentLiveEvent:
+    """A turn whose calls were dropped for size; its executed totals remain."""
+    turn = event.common.turn
+    code = [action for action in turn.actions if action.kind == "code_execution"]
+    return event.model_copy(
+        update={
+            "common": event.common.model_copy(
+                update={"turn": turn.model_copy(update={"actions": tuple(code)})}
+            ),
+            "native": event.native.model_copy(update={"predict_calls": ()}),
+        }
+    )
+
 
 async def _wait_for(pilot, predicate) -> None:
     deadline = time.monotonic() + 3
@@ -72,18 +166,12 @@ class _RecordingTraceProvider(MockStateProvider):
         assert run is not None
         node = run.nodes["inspect_agent_1"]
         envelope = AgentTraceEnvelope.model_validate_json(node.agent_trace_json)
-        self.body = AgentTerminalDetail(
-            invocation_id=envelope.invocation_id,
-            trace=envelope.trace,
-            evidence=envelope.evidence,
-        )
+        self.body = envelope.terminal
         self.trace_body_json = self.body.model_dump_json()
         pending = replace(
             node,
             trace=TraceDescriptor(available=True, revision=1),
-            agent_trace_json=envelope.model_copy(
-                update={"trace": None, "evidence": None}
-            ).model_dump_json(),
+            agent_trace_json=envelope.model_copy(update={"terminal": None}).model_dump_json(),
         )
         second = replace(pending, node_id="second_agent_1", name="second_agent")
         workflow = self._workflows["agent_trace"]
@@ -147,7 +235,7 @@ class _RecordingTraceProvider(MockStateProvider):
             created_sequence=run.created_sequence,
             node_id=node_id,
             descriptor_revision=descriptor.revision,
-            trace_body=AgentTerminalDetail.model_validate(json.loads(self.trace_body_json)),
+            trace_body=AGENT_TRACE_TERMINAL.validate_json(self.trace_body_json),
         )
 
     def close(self) -> None:
@@ -290,15 +378,9 @@ def test_live_details_survive_summary_updates_and_repair_missing_history(store):
         log_sequence=1,
         log=log,
     )
-    event_json = json.dumps(
-        {
-            "invocation_id": "invocation",
-            "timestamp_ns": 1,
-            "sequence": 1,
-            "event_kind": "code.executed",
-            "data": {"output": "done"},
-        }
-    )
+    event_json = _event(
+        "invocation", 1, RunEventKind.CODE_EXECUTED, {"iteration": 1, "output": "done"}
+    ).model_dump_json()
     store.enqueue_detail_update(detail)
     store.enqueue_detail_update(detail)
     store.enqueue_detail_update(
@@ -314,7 +396,7 @@ def test_live_details_survive_summary_updates_and_repair_missing_history(store):
     store.enqueue_run_update(replace(run, revision=4, latest_log_sequence=1))
     store._apply_background_updates()
     assert [entry.message for entry in store.logs] == ["first detail"]
-    assert store.selected_agent_events[0].data["output"] == "done"
+    assert store.selected_agent_events[0].native.output == "done"
 
     # Missing sequence two is recovered by a snapshot, not silently skipped.
     recovered_logs = [
@@ -471,18 +553,12 @@ async def test_delayed_agent_trace_cannot_overwrite_newer_failure_and_recovers()
     provider = MockStateProvider(include_agent_trace=True)
     run = provider.get_run("run_agent")
     node = run.nodes["inspect_agent_1"]
-    envelope = json.loads(node.agent_trace_json)
-    body = AgentTerminalDetail.model_validate(
-        {
-            "invocation_id": envelope["invocation_id"],
-            "trace": envelope["trace"],
-            "evidence": envelope["evidence"],
-        }
-    )
+    envelope = AgentTraceEnvelope.model_validate_json(node.agent_trace_json)
+    body = envelope.terminal
     pending = replace(
         node,
         trace=TraceDescriptor(available=True, revision=1),
-        agent_trace_json=json.dumps({**envelope, "trace": None, "evidence": None}),
+        agent_trace_json=envelope.model_copy(update={"terminal": None}).model_dump_json(),
     )
     run = replace(run, revision=1, nodes={node.node_id: pending})
     provider._runs[run.run_id] = run
@@ -547,20 +623,19 @@ async def test_delayed_agent_trace_cannot_overwrite_newer_failure_and_recovers()
         await _wait_for(pilot, lambda: app.store.current_run.status is RunStatus.FAILED)
         release.set()
         await _wait_for(pilot, fresh_entered.is_set)
-        assert app.store.selected_agent_trace_envelope.trace is None
+        assert app.store.selected_agent_trace_envelope.terminal is None
         assert [entry.message for entry in app.store.logs] == ["new failure"]
 
         fresh_release.set()
         await _wait_for(
-            pilot, lambda: app.store.selected_agent_trace_envelope.trace is not None
+            pilot, lambda: app.store.selected_agent_trace_envelope.terminal is not None
         )
         # Force a history refresh after hydration rather than relying on the timer.
         _drain_until(app.store, lambda: not app.store._runs_refresh_in_flight)
         app.store._refresh_runs_cache()
         _drain_until(app.store, lambda: not app.store._runs_refresh_in_flight)
         hydrated = app.store.selected_agent_trace_envelope
-        assert hydrated.trace == body.trace
-        assert hydrated.evidence == body.evidence
+        assert hydrated.terminal == body
         assert app.store.selected_agent_outputs == {
             "summary": {"active_count": 1, "ready": False},
             "labels": ["reviewed"],
@@ -570,10 +645,7 @@ async def test_delayed_agent_trace_cannot_overwrite_newer_failure_and_recovers()
         assert app.store.current_run.nodes[node.node_id].status is NodeStatus.FAILED
         assert [entry.message for entry in app.store.logs] == ["new failure"]
         await pilot.press("e")
-        assert (
-            body.trace.steps[0].reasoning
-            in app.screen.query_one("#agent-trace-content").render().plain
-        )
+        assert _MOCK_REASONING in app.screen.query_one("#agent-trace-content").render().plain
 
 
 @pytest.mark.asyncio
@@ -601,7 +673,7 @@ async def test_trace_transport_failure_retries_after_backoff_without_duplicate_f
         assert not app._trace_hydration_in_flight
         retry_deadline = app._trace_hydration_retry[key][1]
         assert retry_deadline > now[0]
-        assert app.store.selected_agent_trace_envelope.trace is None
+        assert app.store.selected_agent_trace_envelope.terminal is None
 
         now[0] = retry_deadline - 0.001
         app._hydrate_selected_trace()
@@ -614,7 +686,7 @@ async def test_trace_transport_failure_retries_after_backoff_without_duplicate_f
             app._hydrate_selected_trace()
         retry_release.set()
         await _wait_for(
-            pilot, lambda: app.store.selected_agent_trace_envelope.trace == provider.body.trace
+            pilot, lambda: app.store.selected_agent_trace_envelope.terminal == provider.body
         )
         app._hydrate_selected_trace()
         await pilot.pause(0.05)
@@ -624,7 +696,7 @@ async def test_trace_transport_failure_retries_after_backoff_without_duplicate_f
         assert key not in app._trace_hydration_retry
         await pilot.press("e")
         inspector = app.screen.query_one("#agent-trace-content", AgentTraceInspector)
-        assert provider.body.trace.steps[0].reasoning in inspector.render().plain
+        assert _MOCK_REASONING in inspector.render().plain
 
 
 @pytest.mark.asyncio
@@ -646,7 +718,7 @@ async def test_failed_trace_fetch_releases_changed_node_and_run_contexts():
         assert provider.calls == [("run_agent", "inspect_agent_1")]
         release.set()
         await _wait_for(
-            pilot, lambda: app.store.selected_agent_trace_envelope.trace == provider.body.trace
+            pilot, lambda: app.store.selected_agent_trace_envelope.terminal == provider.body
         )
         assert provider.calls == [
             ("run_agent", "inspect_agent_1"),
@@ -656,7 +728,7 @@ async def test_failed_trace_fetch_releases_changed_node_and_run_contexts():
         await pilot.press("alt+down")
         await _wait_for(pilot, lambda: app.store.selected_run_id == "older-agent-run")
         await _wait_for(
-            pilot, lambda: app.store.selected_agent_trace_envelope.trace == provider.body.trace
+            pilot, lambda: app.store.selected_agent_trace_envelope.terminal == provider.body
         )
         assert provider.calls == [
             ("run_agent", "inspect_agent_1"),
@@ -671,7 +743,7 @@ async def test_failed_trace_fetch_releases_changed_node_and_run_contexts():
 @pytest.mark.parametrize(
     ("body_json", "failure", "error_type"),
     [
-        ("{", None, json.JSONDecodeError),
+        ("{", None, ValidationError),
         ('{"invocation_id": "agent-mock", "trace": null}', None, ValidationError),
         (
             None,
@@ -738,36 +810,25 @@ async def test_terminal_hydration_uses_body_invocation_for_turn_totals(
     run = provider.get_run("run_agent")
     node = run.nodes["inspect_agent_1"]
     envelope = AgentTraceEnvelope.model_validate_json(node.agent_trace_json)
-    prototype = provider.body.trace.steps[0]
-    events = []
-    steps = []
-    for invocation_id, tool_count, predict_count in [("call-a", 2, 3), ("call-b", 7, 11)]:
-        step = prototype.model_copy(
-            update={
-                "iteration": 1,
-                "code": f"print('{invocation_id}')",
-                "tool_calls": [],
-                "predict_calls": [],
-            }
-        )
-        steps.append(step)
-        events.append(
-            AgentLifecycleEvent(
-                invocation_id=invocation_id,
-                sequence=1,
-                timestamp_ns=1,
-                event_kind="iteration.recorded",
-                data={
-                    "tool_count": tool_count,
-                    "predict_count": predict_count,
-                    "step": step.model_dump(mode="json"),
-                },
-            )
-        )
-    body = AgentTerminalDetail(
-        invocation_id="call-a",
-        trace=provider.body.trace.model_copy(update={"steps": steps[:1]}),
-        evidence=provider.body.evidence,
+    steps = [
+        _step(f"print('{invocation_id}')", tools=tools, predicts=predicts)
+        for invocation_id, tools, predicts in [("call-a", 2, 3), ("call-b", 7, 11)]
+    ]
+    events = [
+        _event(invocation_id, 1, RunEventKind.ITERATION_RECORDED, {"step": step})
+        for invocation_id, step in zip(("call-a", "call-b"), steps, strict=True)
+    ]
+    body = _finished(
+        "call-a",
+        RunTrace(
+            status="completed",
+            model="mock-main",
+            iterations=1,
+            max_iterations=4,
+            duration_ms=20,
+            steps=steps[:1],
+        ),
+        run_id="agent-mock",
     )
     provider.trace_body_json = body.model_dump_json()
     provider._runs[run.run_id] = replace(
@@ -777,7 +838,7 @@ async def test_terminal_hydration_uses_body_invocation_for_turn_totals(
             node.node_id: replace(
                 node,
                 agent_trace_json=envelope.model_copy(
-                    update={"invocation_id": pending_invocation_id, "events": events}
+                    update={"invocation_id": pending_invocation_id, "events": tuple(events)}
                 ).model_dump_json(),
             ),
         },
@@ -791,18 +852,17 @@ async def test_terminal_hydration_uses_body_invocation_for_turn_totals(
         assert app.store.selected_agent_trace_envelope.invocation_id == pending_invocation_id
         release.set()
         await _wait_for(
-            pilot, lambda: app.store.selected_agent_trace_envelope.trace is not None
+            pilot, lambda: app.store.selected_agent_trace_envelope.terminal is not None
         )
         hydrated = app.store.selected_agent_trace_envelope
         assert hydrated.invocation_id == "call-a"
-        assert hydrated.trace == body.trace
-        assert hydrated.events == events
+        assert hydrated.terminal == body
+        assert hydrated.events == tuple(events)
         assert app.store.selected_agent_events == events
+        # Only the finished invocation's turns sit next to its final trace.
         [turn] = app.store.selected_agent_turns
-        assert (turn.invocation_id, turn.step.iteration) == ("call-a", 1)
-        assert (turn.tool_count, turn.predict_count) == (2, 3)
-        assert turn.step.tool_calls == []
-        assert turn.step.predict_calls == []
+        assert (turn.invocation_id, turn.finished.turn.index) == ("call-a", 1)
+        assert (turn.native.tool_count, turn.native.predict_count) == (2, 3)
         rendered = (
             app.screen.query_one("#agent-trace-content", AgentTraceInspector).render().plain
         )
@@ -818,39 +878,37 @@ def test_terminal_hydration_keeps_existing_history(store, with_trace, pending_in
     run = store.current_run
     node = run.nodes["agent"]
     events = [
-        AgentLifecycleEvent(
-            invocation_id="sdk-run",
-            sequence=1,
-            timestamp_ns=1,
-            event_kind="run.succeeded",
-            data={"outputs": {"ready": False}},
+        _event(
+            "sdk-run",
+            1,
+            RunEventKind.RUN_SUCCEEDED,
+            {"status": "completed", "outputs": {"ready": False}},
         )
     ]
     node.status = NodeStatus.FAILED
     node.trace = TraceDescriptor(available=True, revision=3)
     envelope = AgentTraceEnvelope(
-        schema_version=1,
+        schema_version=2,
         invocation_id=pending_invocation_id,
         status="failed",
-        run_id="sdk-run",
-        events=events,
-        trace=None,
-        evidence=None,
+        events=tuple(events),
+        terminal=None,
         error="sandbox stopped",
     )
     node.agent_trace_json = envelope.model_dump_json()
     store.select_node(store.all_nodes[0])
-    evidence = AgentEvidenceMetadata(run_id="sdk-run", complete=False, terminal_outcome="error")
-    trace = (
-        RunTrace(
-            status="error",
-            model="test",
-            iterations=0,
-            max_iterations=1,
-            duration_ms=1,
+    terminal = (
+        _finished(
+            "sdk-run",
+            RunTrace(
+                status="error", model="test", iterations=0, max_iterations=1, duration_ms=1
+            ),
+            run_id="sdk-run",
+            complete=False,
+            outcome="error",
         )
         if with_trace
-        else None
+        else _unavailable("sdk-run", run_id="sdk-run", complete=False, status="failed")
     )
     completion = TraceDetailCompletion(
         attempt=1,
@@ -859,17 +917,16 @@ def test_terminal_hydration_keeps_existing_history(store, with_trace, pending_in
         created_sequence=run.created_sequence,
         node_id=node.node_id,
         descriptor_revision=3,
-        trace_body=AgentTerminalDetail(invocation_id="sdk-run", trace=trace, evidence=evidence),
+        trace_body=terminal,
     )
     store.enqueue_trace_hydration_completion(completion)
     store._apply_background_updates()
     hydrated = store.selected_agent_trace_envelope
     assert hydrated.invocation_id == "sdk-run"
-    assert hydrated.trace == trace
-    assert hydrated.evidence == evidence
+    assert hydrated.terminal == terminal
     assert hydrated.status == "failed"
     assert hydrated.error == "sandbox stopped"
-    assert hydrated.events == events
+    assert hydrated.events == tuple(events)
     assert store.selected_agent_events == events
     assert store.selected_agent_outputs == {"ready": False}
     assert store.selected_agent_inspector_state == "failed"
@@ -888,15 +945,21 @@ async def test_agent_evidence_without_trace_remains_visible_and_retains_outputs(
     provider = MockStateProvider(include_agent_trace=True)
     run = provider.get_run("run_agent")
     node = run.nodes["inspect_agent_1"]
-    envelope = json.loads(node.agent_trace_json)
-    events = [AgentLifecycleEvent.model_validate(event) for event in envelope["events"]]
-    envelope["trace"] = None
-    envelope["evidence"]["complete"] = not failed
-    envelope["evidence"]["terminal_outcome"] = "error" if failed else "completed"
-    evidence = AgentEvidenceMetadata.model_validate(envelope["evidence"])
-    envelope["evidence"] = None
-    envelope["error"] = "sandbox stopped" if failed else None
-    envelope["status"] = "failed" if failed else "completed"
+    envelope = AgentTraceEnvelope.model_validate_json(node.agent_trace_json)
+    events = list(envelope.events)
+    unavailable = _unavailable(
+        envelope.invocation_id,
+        run_id="agent-mock",
+        complete=not failed,
+        status="failed" if failed else "succeeded",
+    )
+    envelope = envelope.model_copy(
+        update={
+            "terminal": None,
+            "error": "sandbox stopped" if failed else None,
+            "status": "failed" if failed else "succeeded",
+        }
+    )
     provider._runs[run.run_id] = replace(
         run,
         status=RunStatus.FAILED if failed else RunStatus.SUCCESS,
@@ -905,7 +968,7 @@ async def test_agent_evidence_without_trace_remains_visible_and_retains_outputs(
                 node,
                 status=NodeStatus.FAILED if failed else NodeStatus.SUCCESS,
                 trace=TraceDescriptor(available=True, revision=1),
-                agent_trace_json=json.dumps(envelope),
+                agent_trace_json=envelope.model_dump_json(),
             )
         },
     )
@@ -925,9 +988,7 @@ async def test_agent_evidence_without_trace_remains_visible_and_retains_outputs(
             created_sequence=run.created_sequence,
             node_id=node_id,
             descriptor_revision=1,
-            trace_body=AgentTerminalDetail(
-                invocation_id=envelope["invocation_id"], trace=None, evidence=evidence
-            ),
+            trace_body=unavailable,
         )
 
     provider.hydrate_trace = hydrate_trace
@@ -936,7 +997,7 @@ async def test_agent_evidence_without_trace_remains_visible_and_retains_outputs(
         await _wait_for(pilot, lambda: app.store.current_run is not None)
         await pilot.press("enter")
         await _wait_for(
-            pilot, lambda: app.store.selected_agent_trace_envelope.evidence == evidence
+            pilot, lambda: app.store.selected_agent_trace_envelope.terminal == unavailable
         )
         app._hydrate_selected_trace()
         app._hydrate_selected_trace()
@@ -944,8 +1005,8 @@ async def test_agent_evidence_without_trace_remains_visible_and_retains_outputs(
         assert hydrate_calls == [(run.run_id, node.node_id)]
         trace = app.screen.query_one("#agent-trace-content", AgentTraceInspector)
         rendered = trace.render().plain
-        assert evidence.run_id in rendered
-        assert evidence.terminal_outcome in rendered
+        assert unavailable.external_run_id in rendered
+        assert f"terminal={unavailable.status}" in rendered
         assert ("incomplete" if failed else "complete") in rendered
         if failed:
             assert "sandbox stopped" in rendered
@@ -969,12 +1030,7 @@ async def test_live_execution_remains_inspectable_before_iteration_record():
     envelope = AgentTraceEnvelope.model_validate_json(node.agent_trace_json)
     generated = envelope.events[0]
     envelope = envelope.model_copy(
-        update={
-            "status": "running",
-            "trace": None,
-            "evidence": None,
-            "events": [generated],
-        }
+        update={"status": "running", "terminal": None, "events": (generated,)}
     )
     provider._runs[run.run_id] = replace(
         run,
@@ -995,12 +1051,11 @@ async def test_live_execution_remains_inspectable_before_iteration_record():
         assert "awaiting execution" in inspector.render().plain
         assert "records = [item" in inspector.render().plain
         assert app.store.selected_agent_turns == []
-        executed = AgentLifecycleEvent(
-            invocation_id=generated.invocation_id,
-            sequence=2,
-            timestamp_ns=2,
-            event_kind="code.executed",
-            data={"iteration": 1, "output": "LIVE_EXECUTION_RESULT", "final": False},
+        executed = _event(
+            generated.invocation_id,
+            2,
+            RunEventKind.CODE_EXECUTED,
+            {"iteration": 1, "output": "LIVE_EXECUTION_RESULT"},
         )
         event_json = executed.model_dump_json()
         app.store.enqueue_detail_update(
@@ -1026,24 +1081,21 @@ async def test_interleaved_live_invocations_keep_independent_bodies_and_navigati
     run = provider.get_run("run_agent")
     node = run.nodes["inspect_agent_1"]
     envelope = AgentTraceEnvelope.model_validate_json(node.agent_trace_json)
-    step = envelope.trace.steps[0]
     generated = [
-        AgentLifecycleEvent(
-            invocation_id=invocation_id,
-            sequence=1,
-            timestamp_ns=index + 1,
-            event_kind="code.generated",
-            data={"iteration": step.iteration, "code": f"print('{invocation_id}_CODE')"},
+        _event(
+            invocation_id,
+            1,
+            RunEventKind.CODE_GENERATED,
+            {"iteration": 1, "code": f"print('{invocation_id}_CODE')"},
         )
-        for index, invocation_id in enumerate(("CALL_A", "CALL_B"))
+        for invocation_id in ("CALL_A", "CALL_B")
     ]
     envelope = envelope.model_copy(
         update={
             "invocation_id": None,
-            "status": "completed" if terminal else "running",
-            "trace": None,
-            "evidence": None,
-            "events": generated[:1],
+            "status": "succeeded" if terminal else "running",
+            "terminal": None,
+            "events": tuple(generated[:1]),
         }
     )
     provider._runs[run.run_id] = replace(
@@ -1121,16 +1173,11 @@ async def test_interleaved_live_invocations_keep_independent_bodies_and_navigati
 
         for transport_sequence, invocation_id in enumerate(("CALL_A", "CALL_B"), start=3):
             await append(
-                AgentLifecycleEvent(
-                    invocation_id=invocation_id,
-                    sequence=2,
-                    timestamp_ns=transport_sequence,
-                    event_kind="code.executed",
-                    data={
-                        "iteration": step.iteration,
-                        "output": f"{invocation_id}_OUTPUT",
-                        "final": False,
-                    },
+                _event(
+                    invocation_id,
+                    2,
+                    RunEventKind.CODE_EXECUTED,
+                    {"iteration": 1, "output": f"{invocation_id}_OUTPUT"},
                 ),
                 transport_sequence,
             )
@@ -1149,21 +1196,11 @@ async def test_interleaved_live_invocations_keep_independent_bodies_and_navigati
         assert "CALL_A_OUTPUT" in rendered
         assert "CALL_B_OUTPUT" in rendered
 
-        recorded_step = step.model_copy(
-            update={"code": generated[0].data["code"], "output": "CALL_A_OUTPUT"}
+        recorded_step = _step(generated[0].common.code).model_copy(
+            update={"output": "CALL_A_OUTPUT"}
         )
         await append(
-            AgentLifecycleEvent(
-                invocation_id="CALL_A",
-                sequence=3,
-                timestamp_ns=5,
-                event_kind="iteration.recorded",
-                data={
-                    "step": recorded_step.model_dump(mode="json"),
-                    "tool_count": 0,
-                    "predict_count": 0,
-                },
-            ),
+            _event("CALL_A", 3, RunEventKind.ITERATION_RECORDED, {"step": recorded_step}),
             5,
         )
         assert app.store.trace_inspector_navigation_paths() == [
@@ -1187,21 +1224,18 @@ async def test_interleaved_live_invocations_keep_independent_bodies_and_navigati
 
 def test_live_append_does_not_leak_between_stores_parsing_identical_json(store):
     run = store.current_run
-    generated = AgentLifecycleEvent(
-        invocation_id="isolated-run",
-        sequence=1,
-        timestamp_ns=1,
-        event_kind="code.generated",
-        data={"iteration": 1, "code": "print('isolated')"},
+    generated = _event(
+        "isolated-run",
+        1,
+        RunEventKind.CODE_GENERATED,
+        {"iteration": 1, "code": "print('isolated')"},
     )
     envelope = AgentTraceEnvelope(
-        schema_version=1,
+        schema_version=2,
         invocation_id="isolated-run",
         status="running",
-        run_id="isolated-run",
-        events=[generated],
-        trace=None,
-        evidence=None,
+        events=(generated,),
+        terminal=None,
         error=None,
     )
     run.nodes["agent"].agent_trace_json = envelope.model_dump_json()
@@ -1213,12 +1247,11 @@ def test_live_append_does_not_leak_between_stores_parsing_identical_json(store):
         _drain_until(other, lambda: other.current_run is not None)
         other.select_node(other.all_nodes[0])
         assert other.selected_agent_events == [generated]
-        executed = AgentLifecycleEvent(
-            invocation_id="isolated-run",
-            sequence=2,
-            timestamp_ns=2,
-            event_kind="code.executed",
-            data={"iteration": 1, "output": "isolated result"},
+        executed = _event(
+            "isolated-run",
+            2,
+            RunEventKind.CODE_EXECUTED,
+            {"iteration": 1, "output": "isolated result"},
         )
         event_json = executed.model_dump_json()
         store.enqueue_detail_update(
@@ -1235,8 +1268,8 @@ def test_live_append_does_not_leak_between_stores_parsing_identical_json(store):
         assert store.selected_agent_events == [generated, executed]
         assert other.selected_agent_events == [generated]
         assert other.selected_agent_turns == []
-        assert store.selected_agent_trace_envelope.events == [generated]
-        assert other.selected_agent_trace_envelope.events == [generated]
+        assert store.selected_agent_trace_envelope.events == (generated,)
+        assert other.selected_agent_trace_envelope.events == (generated,)
     finally:
         other.shutdown()
 
@@ -1245,51 +1278,38 @@ def test_live_append_does_not_leak_between_stores_parsing_identical_json(store):
 def test_trace_completion_cannot_repair_overflow_event_history(
     store, monkeypatch, retained_high_watermark
 ):
-    from predict_rlm import IterationStep
-
     from tui.ui_store import _DetailRepairWatermark
 
     run = store.current_run
     node = run.nodes["agent"]
+    step = IterationStep(
+        iteration=1,
+        reasoning="Inspect retained history",
+        code="print('retained')",
+        output="retained",
+        untruncated_output="retained",
+        duration_ms=1,
+    )
     events = [
-        AgentLifecycleEvent(
-            invocation_id="overflow-run",
-            sequence=sequence,
-            timestamp_ns=sequence,
-            event_kind=kind,
-            data=data,
-        )
+        _event("overflow-run", sequence, kind, data)
         for sequence, kind, data in (
-            (1, "code.generated", {"iteration": 1, "code": "print('retained')"}),
-            (2, "code.executed", {"iteration": 1, "output": "retained", "final": False}),
+            (1, RunEventKind.CODE_GENERATED, {"iteration": 1, "code": "print('retained')"}),
+            (2, RunEventKind.CODE_EXECUTED, {"iteration": 1, "output": "retained"}),
+            (3, RunEventKind.ITERATION_RECORDED, {"step": step}),
             (
-                3,
-                "iteration.recorded",
-                {
-                    "tool_count": 0,
-                    "predict_count": 0,
-                    "step": IterationStep(
-                        iteration=1,
-                        reasoning="Inspect retained history",
-                        code="print('retained')",
-                        output="retained",
-                        untruncated_output="retained",
-                        duration_ms=1,
-                    ).model_dump(mode="json"),
-                },
+                4,
+                RunEventKind.RUN_SUCCEEDED,
+                {"status": "completed", "outputs": {"ready": True}},
             ),
-            (4, "run.succeeded", {"outputs": {"ready": True}}),
         )
     ]
     retained = [events[0], events[2]] if retained_high_watermark else [events[0]]
     envelope = AgentTraceEnvelope(
-        schema_version=1,
+        schema_version=2,
         invocation_id="overflow-run",
-        status="completed",
-        run_id="overflow-run",
-        events=retained,
-        trace=None,
-        evidence=None,
+        status="succeeded",
+        events=tuple(retained),
+        terminal=None,
         error=None,
     )
     node.agent_trace_json = envelope.model_dump_json()
@@ -1300,8 +1320,8 @@ def test_trace_completion_cannot_repair_overflow_event_history(
     store.select_node(store.all_nodes[0])
     key = store._detail_key(run)
     event_key = (*key, node.node_id)
-    evidence = AgentEvidenceMetadata(
-        run_id="overflow-run", complete=True, terminal_outcome="completed"
+    terminal = _unavailable(
+        "overflow-run", run_id="overflow-run", complete=True, status="succeeded"
     )
     baseline = replace(
         run,
@@ -1309,7 +1329,7 @@ def test_trace_completion_cannot_repair_overflow_event_history(
             node.node_id: replace(
                 node,
                 agent_trace_json=envelope.model_copy(
-                    update={"events": events[:3], "evidence": evidence}
+                    update={"events": tuple(events[:3]), "terminal": terminal}
                 ).model_dump_json(),
             )
         },
@@ -1352,13 +1372,11 @@ def test_trace_completion_cannot_repair_overflow_event_history(
                 created_sequence=run.created_sequence,
                 node_id=node.node_id,
                 descriptor_revision=3,
-                trace_body=AgentTerminalDetail(
-                    invocation_id="overflow-run", trace=None, evidence=evidence
-                ),
+                trace_body=terminal,
             )
         )
         store._apply_background_updates()
-        assert store.selected_agent_trace_envelope.evidence == evidence
+        assert store.selected_agent_trace_envelope.terminal == terminal
         assert store.selected_agent_events == retained
         assert event_key in store._invalid_agent_event_details
         requirements = store._detail_hydration_requirements[key]
@@ -1391,12 +1409,14 @@ async def test_missing_agent_declaration_keeps_output_navigation_usable():
         "retained_payload": {"count": 2, "ready": False},
         "audit_label": "RETAINED_OUTPUT",
     }
-    events = [
-        event.model_copy(update={"data": {"outputs": retained_outputs}})
-        if event.event_kind == "run.succeeded"
+    events = tuple(
+        event.model_copy(
+            update={"native": event.native.model_copy(update={"outputs": retained_outputs})}
+        )
+        if event.native.kind == "run.succeeded"
         else event
         for event in envelope.events
-    ]
+    )
     provider._runs[run.run_id] = replace(
         run,
         nodes={
@@ -1439,25 +1459,17 @@ async def test_turn_summary_uses_executed_totals_not_retained_calls(live):
     run = provider.get_run("run_agent")
     node = run.nodes["inspect_agent_1"]
     envelope = AgentTraceEnvelope.model_validate_json(node.agent_trace_json)
-    step = envelope.trace.steps[0].model_copy(update={"tool_calls": [], "predict_calls": []})
-    event = AgentLifecycleEvent(
-        invocation_id=envelope.invocation_id,
-        sequence=1,
-        timestamp_ns=1,
-        event_kind="iteration.recorded",
-        data={
-            "tool_count": 12,
-            "predict_count": 17,
-            "step": step.model_dump(mode="json"),
-        },
+    event = _without_retained_calls(
+        _event(
+            envelope.invocation_id,
+            1,
+            RunEventKind.ITERATION_RECORDED,
+            {"step": _step("pass", tools=12, predicts=17)},
+        )
     )
-    envelope.events = [event]
+    envelope = envelope.model_copy(update={"events": (event,)})
     if live:
-        envelope.trace = None
-        envelope.evidence = None
-        envelope.status = "in_progress"
-    else:
-        envelope.trace.steps = [step]
+        envelope = envelope.model_copy(update={"terminal": None, "status": "in_progress"})
     node.agent_trace_json = envelope.model_dump_json()
     node.trace = None
     node.status = NodeStatus.RUNNING if live else NodeStatus.SUCCESS
@@ -1473,8 +1485,7 @@ async def test_turn_summary_uses_executed_totals_not_retained_calls(live):
         )
         assert "12 tool" in rendered
         assert "17 predict" in rendered
-        assert app.store.selected_agent_turns[0].step.tool_calls == []
-        assert app.store.selected_agent_turns[0].step.predict_calls == []
+        assert app.store.selected_agent_turns[0].native.predict_calls == ()
 
 
 @pytest.mark.asyncio
@@ -1487,58 +1498,27 @@ async def test_concurrent_recorded_turn_totals_stay_with_their_invocation(
     run = provider.get_run("run_agent")
     node = run.nodes["inspect_agent_1"]
     envelope = AgentTraceEnvelope.model_validate_json(node.agent_trace_json)
-    terminal = envelope.model_copy(deep=True)
-    prototype = envelope.trace.steps[0]
+    terminal = envelope
     counts = [("call-a", 2, 3), ("call-b", 7, 11)]
     if reverse:
         counts.reverse()
     events = []
     for invocation, tool_count, predict_count in counts:
-        step = prototype.model_copy(
-            update={
-                "code": f"print('{invocation}')",
-                "tool_calls": [
-                    ToolCall(name="lookup", duration_ms=1, result=index)
-                    for index in range(tool_count)
-                ]
-                if retained
-                else [],
-                "predict_calls": [
-                    PredictCallGroup(
-                        signature="question -> answer",
-                        model="test-model",
-                        calls=[
-                            PredictCallDetail(
-                                duration_ms=1,
-                                input={"question": index},
-                                output={"answer": index},
-                            )
-                            for index in range(predict_count)
-                        ],
-                    )
-                ]
-                if retained
-                else [],
-            }
+        event = _event(
+            invocation,
+            1,
+            RunEventKind.ITERATION_RECORDED,
+            {"step": _step(f"print('{invocation}')", tools=tool_count, predicts=predict_count)},
         )
-        events.append(
-            AgentLifecycleEvent(
-                invocation_id=invocation,
-                sequence=1,
-                timestamp_ns=1,
-                event_kind="iteration.recorded",
-                data={
-                    "tool_count": tool_count,
-                    "predict_count": predict_count,
-                    "step": step.model_dump(mode="json"),
-                },
-            )
-        )
-    envelope.events = events
-    envelope.invocation_id = None
-    envelope.trace = None
-    envelope.evidence = None
-    envelope.status = "running"
+        events.append(event if retained else _without_retained_calls(event))
+    envelope = envelope.model_copy(
+        update={
+            "events": tuple(events),
+            "invocation_id": None,
+            "terminal": None,
+            "status": "running",
+        }
+    )
     node.agent_trace_json = envelope.model_dump_json()
     node.trace = None
     node.status = NodeStatus.RUNNING
@@ -1557,9 +1537,13 @@ async def test_concurrent_recorded_turn_totals_stay_with_their_invocation(
         assert second_summary in rendered
         assert rendered.index(first_summary) < rendered.index(second_summary)
 
-        terminal.invocation_id = first[0]
-        terminal.events = events
-        terminal.trace.steps = [IterationStep.model_validate(events[0].data["step"])]
+        terminal = terminal.model_copy(
+            update={
+                "invocation_id": first[0],
+                "events": tuple(events),
+                "terminal": terminal.terminal.model_copy(update={"invocation_id": first[0]}),
+            }
+        )
         current_node = app.store.current_run.nodes["inspect_agent_1"]
         current_node.agent_trace_json = terminal.model_dump_json()
         current_node.status = NodeStatus.SUCCESS

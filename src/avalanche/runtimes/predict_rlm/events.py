@@ -5,35 +5,30 @@ from __future__ import annotations
 import json
 import math
 from contextvars import ContextVar
-from typing import TYPE_CHECKING, Any, Mapping, TypeAlias
+from typing import TYPE_CHECKING, Mapping, TypeAlias
 
 from pydantic import BaseModel
 
-from ..._agent_evidence import (
-    AGENT_ERROR_CHARACTER_LIMIT,
-    AgentInvocationId,
-    emit_agent_evidence,
-)
+from ..._agent_evidence import AGENT_ERROR_CHARACTER_LIMIT
+from ...agent.native import predict_rlm as native
 from ...agent.trace import file_input_evidence
 from ...file import File
 from ...workspace import Workspace
 
 if TYPE_CHECKING:
     from predict_rlm import IterationStep, RunEvent
+    from predict_rlm.trace import LMUsage
+    from predict_rlm.trace import TokenUsage as PredictRLMTokenUsage
 
     from ...agent.contract import AgentEventSink
+    from ...agent.live import AgentEvent
+    from ...agent.native.predict_rlm import PredictRLMNativeEvent
 
 
 class _AgentInvocationState:
     """Task-local evidence state for one agent invocation."""
 
-    def __init__(
-        self,
-        invocation_id: AgentInvocationId,
-        events: AgentEventSink | None,
-        inputs: Mapping[str, object],
-    ) -> None:
-        self.invocation_id = invocation_id
+    def __init__(self, events: AgentEventSink, inputs: Mapping[str, object]) -> None:
         self.events = events
         # The step's own inputs: PredictRLM sees mounted host paths for files instead.
         self.inputs = inputs
@@ -46,41 +41,26 @@ _AGENT_INVOCATION_STATE: ContextVar[_AgentInvocationState | None] = ContextVar(
 
 
 class _AvalancheEvidenceSink:
-    """Project PredictRLM evidence under the bridge's explicit error policy."""
+    """Send PredictRLM's events to the invocation's sink under its error policy."""
 
     strict = True
 
     async def emit(self, event: RunEvent) -> None:
         state = _current_invocation_state()
-        projected = _project_evidence_event(
-            event,
-            invocation_id=state.invocation_id,
-            inputs=state.inputs,
-        )
-        _emit_sink_evidence(projected, state=state)
-        if state.events is not None:
-            from .mapping import common_event
-
-            common = common_event(event)
-            if common is not None:
-                try:
-                    await state.events.emit(common)
-                except BaseException as exc:
-                    if not isinstance(exc, Exception) and state.listener_base_exception is None:
-                        state.listener_base_exception = exc
-                    raise
+        native, common = project_event(event, inputs=state.inputs)
+        try:
+            await state.events.emit(native, common)
+        except BaseException as exc:
+            if not isinstance(exc, Exception) and state.listener_base_exception is None:
+                state.listener_base_exception = exc
+            raise
 
     async def flush(self, run_id: str) -> None:
         return None
 
     async def close(self, run_id: str, terminal_event: RunEvent | None = None) -> None:
         if terminal_event is not None:
-            state = _current_invocation_state()
-            projected = _project_evidence_event(
-                terminal_event,
-                invocation_id=state.invocation_id,
-            )
-            _emit_sink_evidence(projected, state=state)
+            await self.emit(terminal_event)
 
 
 def _current_invocation_state() -> _AgentInvocationState:
@@ -88,19 +68,6 @@ def _current_invocation_state() -> _AgentInvocationState:
     if state is None:
         raise RuntimeError("agent evidence emitted outside an agent invocation")
     return state
-
-
-def _emit_sink_evidence(
-    event: dict[str, Any],
-    *,
-    state: _AgentInvocationState,
-) -> None:
-    try:
-        emit_agent_evidence(event)
-    except BaseException as exc:
-        if not isinstance(exc, Exception) and state.listener_base_exception is None:
-            state.listener_base_exception = exc
-        raise
 
 
 JsonValue: TypeAlias = (
@@ -183,7 +150,7 @@ def _bound_live_detail(projected: dict[str, JsonValue]) -> None:
         if key in {"call_id", "status", "error_type", "error"}:
             continue
         replacement: JsonValue
-        if key in {"inputs", "outputs", "output"}:
+        if key in {"inputs", "outputs"}:
             replacement = marker
         elif isinstance(value, str):
             replacement = text_marker
@@ -330,13 +297,13 @@ def _bounded_iteration_step(
     }
 
 
-def _project_evidence_event(
-    event: RunEvent,
-    *,
-    invocation_id: AgentInvocationId,
-    inputs: Mapping[str, object] | None = None,
+def _project_event_data(
+    event: RunEvent, *, inputs: Mapping[str, object] | None = None
 ) -> dict[str, JsonValue]:
-    """Project one PredictRLM event; ``inputs`` replaces the run's mounted inputs."""
+    """Select one event's public fields, bounded for the live event channel.
+
+    ``inputs`` replaces the run's mounted inputs, so files keep their references.
+    """
     event_kind = event.kind.value
     data = event.data
     projected: dict[str, JsonValue] = {}
@@ -354,9 +321,6 @@ def _project_evidence_event(
         step = IterationStep.model_validate(data["step"], strict=True)
         bounded_step, omissions = _bounded_iteration_step(step)
         projected = {
-            "iteration": step.iteration,
-            "duration_ms": step.duration_ms,
-            "error": step.error,
             "tool_count": len(step.tool_calls),
             "predict_count": sum(len(group.calls) for group in step.predict_calls),
             "step": bounded_step,
@@ -391,12 +355,130 @@ def _project_evidence_event(
         projected = {"error_type": data["error_type"], "error": data["error"]}
     if event_kind != "iteration.recorded":
         _bound_live_detail(projected)
+    return projected
 
-    return {
-        "kind": "evidence",
-        "invocation_id": invocation_id,
-        "sequence": event.sequence,
-        "event_kind": event_kind,
-        "timestamp_ns": event.timestamp_ns,
-        "data": projected,
-    }
+
+def project_event(
+    event: RunEvent, *, inputs: Mapping[str, object] | None = None
+) -> tuple[PredictRLMNativeEvent, AgentEvent | None]:
+    """One PredictRLM event as its native payload and its common event, if any.
+
+    ``inputs`` are the step's own inputs, recorded in place of the mounted ones.
+    """
+    from ...agent.live import (
+        CodeGenerated,
+        ModelFinished,
+        ModelStarted,
+        ToolFinished,
+        ToolStarted,
+        TurnFinished,
+    )
+    from .mapping import turn_from_step
+
+    kind = event.kind.value
+    data = _project_event_data(event, inputs=inputs)
+    match kind:
+        case "run.started":
+            return native.RunStarted(
+                input_fields=tuple(data["input_fields"]), inputs=data["inputs"]
+            ), None
+        case "iteration.recorded":
+            from predict_rlm import IterationStep
+
+            # The bounded step keeps PredictRLM's schema, with oversized values replaced.
+            step = IterationStep.model_validate(data["step"])
+            omissions = (
+                native.PredictRLMOmissions.model_validate(data["omissions"])
+                if "omissions" in data
+                else None
+            )
+            detail = native.IterationRecorded(
+                iteration=step.iteration,
+                untruncated_output=step.untruncated_output,
+                finish_reason=step.lm.finish_reason if step.lm is not None else None,
+                usage=native_usage(step.usage),
+                predict_calls=tuple(
+                    native.PredictRLMSubCallGroup(
+                        signature=group.signature,
+                        instructions=group.instructions,
+                        model=group.model,
+                        total_usage=native_token_usage(group.total_usage),
+                        calls=tuple(
+                            native.PredictRLMSubCall(
+                                duration_ms=call.duration_ms,
+                                usage=native_token_usage(call.usage),
+                                input=_json_object(call.input),
+                                output=_json_object(call.output),
+                                error=call.error,
+                                finish_reason=(
+                                    call.lm.finish_reason if call.lm is not None else None
+                                ),
+                            )
+                            for call in group.calls
+                        ),
+                    )
+                    for group in step.predict_calls
+                ),
+                tool_count=data["tool_count"],
+                predict_count=data["predict_count"],
+                omissions=omissions,
+            )
+            return detail, TurnFinished(
+                turn=turn_from_step(step),
+                omitted_tool_calls=omissions.tool_count if omissions is not None else 0,
+                omitted_model_calls=omissions.predict_count if omissions is not None else 0,
+            )
+        case "predict.started":
+            return native.PredictStarted(
+                signature=data["signature"], instructions=data["instructions"]
+            ), ModelStarted(call_id=data["call_id"], model=data["model"])
+        case "predict.finished":
+            return native.Correlated(kind=kind), ModelFinished(
+                call_id=data["call_id"], error=data.get("error")
+            )
+        case "tool.started":
+            return native.Correlated(kind=kind), ToolStarted(
+                call_id=data["call_id"], name=data["name"]
+            )
+        case "tool.finished":
+            return native.Correlated(kind=kind), ToolFinished(
+                call_id=data["call_id"], name=data["name"], error=data.get("error")
+            )
+        case "code.generated":
+            return native.Correlated(kind=kind), CodeGenerated(
+                turn=data["iteration"], code=data["code"]
+            )
+        case "code.executed":
+            return native.CodeExecuted(
+                iteration=data["iteration"],
+                output=data.get("output"),
+                execution_error=data.get("error"),
+            ), None
+        case "run.succeeded":
+            return native.RunSucceeded(status=data["status"], outputs=data["outputs"]), None
+        case "run.failed" | "run.cancelled":
+            return native.RunEnded(
+                kind=kind, error_type=data["error_type"], run_error=data["error"]
+            ), None
+    raise ValueError(f"unknown PredictRLM event kind {kind!r}")
+
+
+def native_token_usage(usage: PredictRLMTokenUsage) -> native.PredictRLMTokenUsage:
+    return native.PredictRLMTokenUsage(
+        input_tokens=usage.input_tokens,
+        output_tokens=usage.output_tokens,
+        cost=usage.cost,
+        cache_hits=usage.cache_hits,
+    )
+
+
+def native_usage(usage: LMUsage) -> native.PredictRLMUsage:
+    return native.PredictRLMUsage(
+        main=native_token_usage(usage.main), sub=native_token_usage(usage.sub)
+    )
+
+
+def _json_object(value: JsonValue) -> dict[str, JsonValue]:
+    if not isinstance(value, dict):
+        raise TypeError(f"PredictRLM call detail must be an object, got {type(value).__name__}")
+    return value

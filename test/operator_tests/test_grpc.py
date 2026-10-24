@@ -284,6 +284,28 @@ def test_canonical_and_ambiguous_grpc_selection(tmp_path):
         operator.close()
 
 
+def _replay(trace, *, invocation_id: str, run_id: str):
+    """The evidence a PredictRLM step sends for ``trace``, made by the real adapter."""
+    from predict_rlm import RunEvent, RunEventKind, RunEvidence
+
+    from avalanche.runtimes.predict_rlm.replay import replay
+
+    events = [
+        RunEvent(run_id, index, RunEventKind.ITERATION_RECORDED, index, {"step": step})
+        for index, step in enumerate(trace.steps, start=1)
+    ]
+    evidence = RunEvidence(run_id=run_id, complete=True, terminal_outcome="completed")
+    return replay(events, evidence, invocation_id=invocation_id, trace=trace)
+
+
+def _apply_agent_evidence(operator, run_id: str, evidence) -> None:
+    operator._apply_event(
+        run_id,
+        _event_handle(),
+        {"type": "agent_evidence", "node_id": "agent-1", "event": evidence.model_dump_json()},
+    )
+
+
 def _seed_hydration_run(operator, run_id: str, agent_trace, iteration_step) -> RunState:
     run = RunState(run_id=run_id, flow_name="flow")
     run.nodes["agent-1"] = NodeState(
@@ -293,54 +315,11 @@ def _seed_hydration_run(operator, run_id: str, agent_trace, iteration_step) -> R
     )
     operator._runs[run_id] = run
     operator._notify_run(run)
-    for sequence in range(1, 6):
-        operator._apply_event(
-            run_id,
-            _event_handle(),
-            {
-                "type": "agent_evidence",
-                "node_id": "agent-1",
-                "event": {
-                    "kind": "evidence",
-                    "invocation_id": "test-invocation",
-                    "sequence": sequence,
-                    "event_kind": "iteration.recorded",
-                    "timestamp_ns": sequence,
-                    "data": {
-                        "iteration": sequence,
-                        "tool_count": 0,
-                        "predict_count": 0,
-                        "step": iteration_step(sequence, f"print({sequence})").model_dump(
-                            mode="json"
-                        ),
-                    },
-                },
-            },
-        )
-    operator._apply_event(
-        run_id,
-        _event_handle(),
-        {
-            "type": "agent_evidence",
-            "node_id": "agent-1",
-            "event": {
-                "kind": "trace_finished",
-                "invocation_id": "test-invocation",
-                "trace": agent_trace(
-                    steps=[
-                        iteration_step(sequence, f"print({sequence})")
-                        for sequence in range(1, 6)
-                    ],
-                    telemetry_ref={"payload": "x" * (2 * 1024 * 1024 + 17)},
-                ).model_dump(mode="json"),
-                "evidence": {
-                    "run_id": f"sdk-{run_id}",
-                    "complete": True,
-                    "terminal_outcome": "completed",
-                },
-            },
-        },
-    )
+    steps = [iteration_step(sequence, f"print({sequence})") for sequence in range(1, 6)]
+    # A large native field makes the final body cross several transport chunks.
+    trace = agent_trace(steps=steps, telemetry_ref={"payload": "x" * (2 * 1024 * 1024 + 17)})
+    for evidence in _replay(trace, invocation_id="test-invocation", run_id=f"sdk-{run_id}"):
+        _apply_agent_evidence(operator, run_id, evidence)
     return run
 
 
@@ -374,28 +353,24 @@ def test_paged_details_and_chunked_trace_materialize_without_cross_run_invalidat
         envelope = json.loads(hydrated.nodes["agent-1"].agent_trace_json)
         assert [event["sequence"] for event in envelope["events"]] == [1, 2, 3, 4, 5]
         assert envelope["invocation_id"] is None
-        assert envelope["trace"] is None
+        assert envelope["terminal"] is None
         assert len(hydrated.logs) == 6
         trace = provider.hydrate_trace(run.run_id, "agent-1")
-        assert trace.trace_body.invocation_id == "test-invocation"
-        assert trace.trace_body.trace.telemetry_ref == {"payload": "x" * (2 * 1024 * 1024 + 17)}
-        assert trace.trace_body.trace.steps == [
-            iteration_step(sequence, f"print({sequence})") for sequence in range(1, 6)
-        ]
-        assert trace.trace_body.evidence.run_id == "sdk-run-target"
-        assert trace.trace_body.evidence.complete is True
-        assert trace.trace_body.evidence.terminal_outcome == "completed"
-        trace.trace_body.trace.steps[0].output = "changed-by-caller"
-        again_detail = provider.hydrate_trace(run.run_id, "agent-1")
-        assert again_detail.trace_body.trace.steps[0].output == "Output for iteration 1"
+        body = trace.trace_body
+        assert body.invocation_id == "test-invocation"
+        assert body.record.native.telemetry_ref == {"payload": "x" * (2 * 1024 * 1024 + 17)}
+        assert body.record.turns == ()
+        assert body.record.header.turn_count == 5
+        assert body.record.header.external_run_id == "sdk-run-target"
+        assert body.complete is True
+        assert provider.hydrate_trace(run.run_id, "agent-1").trace_body == body
         hydrated.logs.clear()
         envelope["events"].clear()
         again = provider.get_run(run.run_id)
         assert len(again.logs) == 6
-        assert len(json.loads(again.nodes["agent-1"].agent_trace_json)["events"]) == 5
         again_envelope = json.loads(again.nodes["agent-1"].agent_trace_json)
-        assert again_envelope["run_id"] == "sdk-run-target"
-        assert again_envelope["evidence"] == trace.trace_body.evidence.model_dump(mode="json")
+        assert len(again_envelope["events"]) == 5
+        assert again_envelope["terminal"] == body.model_dump(mode="json")
         assert again_envelope["invocation_id"] == "test-invocation"
     finally:
         provider.close()
@@ -412,51 +387,26 @@ def test_grpc_terminal_hydration_selects_body_invocation_across_event_pages(
     run.nodes["agent-1"] = NodeState("agent-1", "Agent", "step")
     operator._runs[run.run_id] = run
     operator._notify_run(run)
-    step_a = iteration_step(1, "call_a()")
-    step_b = iteration_step(1, "call_b()")
-    for invocation_id, step, tool_count, predict_count in (
-        ("call-a", step_a, 2, 3),
-        ("call-b", step_b, 7, 11),
-    ):
-        operator._apply_event(
-            run.run_id,
-            _event_handle(),
-            {
-                "type": "agent_evidence",
-                "node_id": "agent-1",
-                "event": {
-                    "kind": "evidence",
-                    "invocation_id": invocation_id,
-                    "sequence": 1,
-                    "event_kind": "iteration.recorded",
-                    "timestamp_ns": 1,
-                    "data": {
-                        "iteration": 1,
-                        "tool_count": tool_count,
-                        "predict_count": predict_count,
-                        "step": step.model_dump(mode="json", exclude_unset=True),
-                    },
-                },
-            },
-        )
-    operator._apply_event(
-        run.run_id,
-        _event_handle(),
-        {
-            "type": "agent_evidence",
-            "node_id": "agent-1",
-            "event": {
-                "kind": "trace_finished",
-                "invocation_id": "call-a",
-                "trace": agent_trace(steps=[step_a]).model_dump(mode="json"),
-                "evidence": {
-                    "run_id": "sdk-call-a",
-                    "complete": True,
-                    "terminal_outcome": "completed",
-                },
-            },
-        },
-    )
+    from predict_rlm.trace import PredictCallDetail, PredictCallGroup, ToolCall
+
+    def with_calls(step, tools, predicts):
+        step.tool_calls = [ToolCall(name=f"tool_{i}", duration_ms=1) for i in range(tools)]
+        step.predict_calls = [
+            PredictCallGroup(
+                signature="q -> a",
+                model="sub",
+                calls=[PredictCallDetail(duration_ms=1) for _ in range(predicts)],
+            )
+        ]
+        return step
+
+    step_a = with_calls(iteration_step(1, "call_a()"), 2, 3)
+    step_b = with_calls(iteration_step(1, "call_b()"), 7, 11)
+    sent_a = _replay(agent_trace(steps=[step_a]), invocation_id="call-a", run_id="sdk-call-a")
+    sent_b = _replay(agent_trace(steps=[step_b]), invocation_id="call-b", run_id="sdk-call-b")
+    # Both invocations stream their turn; only call-a has finished.
+    for evidence in (sent_a[0], sent_b[0], sent_a[1]):
+        _apply_agent_evidence(operator, run.run_id, evidence)
     server = serve(operator, port=(port := _unused_port()), block=False)
     provider = GrpcStateProvider(f"localhost:{port}")
     try:
@@ -469,24 +419,24 @@ def test_grpc_terminal_hydration_selects_body_invocation_across_event_pages(
         ]
         detail = provider.hydrate_trace(run.run_id, "agent-1")
         assert detail.trace_body.invocation_id == "call-a"
-        assert detail.trace_body.trace.steps == [step_a]
-        assert detail.trace_body.evidence.run_id == "sdk-call-a"
+        assert detail.trace_body.record.header.external_run_id == "sdk-call-a"
         hydrated = provider.get_run(run.run_id)
         envelope = json.loads(hydrated.nodes["agent-1"].agent_trace_json)
         assert envelope["invocation_id"] == "call-a"
-        assert [step["code"] for step in envelope["trace"]["steps"]] == ["call_a()"]
         assert [
             (
                 event["invocation_id"],
-                event["data"]["tool_count"],
-                event["data"]["predict_count"],
+                event["native"]["tool_count"],
+                event["native"]["predict_count"],
             )
             for event in envelope["events"]
         ] == [("call-a", 2, 3), ("call-b", 7, 11)]
         in_process = operator.get_run(run.run_id)
         local_envelope = json.loads(in_process.nodes["agent-1"].agent_trace_json)
         assert local_envelope["invocation_id"] == "call-a"
-        assert local_envelope["trace"] == envelope["trace"]
+        assert local_envelope["terminal"] == envelope["terminal"]
+        # The operator shows only the finished invocation's turns next to its trace.
+        assert [event["invocation_id"] for event in local_envelope["events"]] == ["call-a"]
         retained = operator.read_trace(
             run.run_id, "agent-1", operator_instance_id=operator.operator_instance_id
         )
@@ -697,56 +647,37 @@ def test_concurrent_close_and_stream_start_leave_no_live_thread_or_calls():
     assert stub.post_close_calls == 0
 
 
-@pytest.mark.parametrize(
-    ("terminal_outcome", "complete"), [("error", True), ("cancelled", False)]
-)
-def test_grpc_hydrates_pre_trace_terminal_evidence(terminal_outcome, complete):
+@pytest.mark.parametrize(("status", "complete"), [("failed", True), ("cancelled", False)])
+def test_grpc_hydrates_pre_trace_terminal_evidence(status, complete):
+    from avalanche.agent.live import AgentTraceUnavailable
+
     operator = Operator([], watch=False, schedule=False)
     run = RunState(run_id="run-pre-trace", flow_name="flow")
     run.nodes["agent-1"] = NodeState("agent-1", "Agent", "step")
     operator._runs[run.run_id] = run
     operator._notify_run(run)
-    evidence = {
-        "run_id": "sdk-pre-trace",
-        "complete": complete,
-        "terminal_outcome": terminal_outcome,
-    }
-    operator._apply_event(
-        run.run_id,
-        _event_handle(),
-        {
-            "type": "agent_evidence",
-            "node_id": "agent-1",
-            "event": {
-                "kind": "trace_unavailable",
-                "invocation_id": "pre-trace-invocation",
-                "error": "Stopped before the first iteration",
-                "evidence": evidence,
-            },
-        },
+    unavailable = AgentTraceUnavailable(
+        invocation_id="pre-trace-invocation",
+        runtime_kind="predict_rlm",
+        status=status,
+        error="Stopped before the first iteration",
+        external_run_id="sdk-pre-trace",
+        complete=complete,
     )
+    _apply_agent_evidence(operator, run.run_id, unavailable)
     server = serve(operator, port=(port := _unused_port()), block=False)
     provider = GrpcStateProvider(f"localhost:{port}")
     try:
         detail = provider.hydrate_trace(run.run_id, "agent-1")
         assert detail is not None
-        assert detail.trace_body.invocation_id == "pre-trace-invocation"
-        assert detail.trace_body.trace is None
-        assert detail.trace_body.evidence.model_dump(mode="json") == evidence
+        assert detail.trace_body == unavailable
         hydrated = provider.get_run(run.run_id)
         assert hydrated.nodes["agent-1"].trace.complete is complete
         envelope = json.loads(hydrated.nodes["agent-1"].agent_trace_json)
         assert envelope["invocation_id"] == "pre-trace-invocation"
         assert envelope["status"] == "unavailable"
-        assert envelope["trace"] is None
-        assert envelope["run_id"] == "sdk-pre-trace"
-        assert envelope["evidence"] == evidence
-        detail.trace_body.evidence = detail.trace_body.evidence.model_copy(
-            update={"run_id": "changed-by-caller"}
-        )
-        again = provider.hydrate_trace(run.run_id, "agent-1")
-        assert again.trace_body.invocation_id == "pre-trace-invocation"
-        assert again.trace_body.evidence.run_id == "sdk-pre-trace"
+        assert envelope["terminal"] == unavailable.model_dump(mode="json")
+        assert provider.hydrate_trace(run.run_id, "agent-1").trace_body == unavailable
     finally:
         provider.close()
         server.stop(grace=0).wait()
@@ -756,12 +687,12 @@ def test_grpc_hydrates_pre_trace_terminal_evidence(terminal_outcome, complete):
 @pytest.mark.parametrize(
     "body",
     [
-        b'{"invocation_id":"test-invocation","trace":null}',
+        # A v1 body is no longer accepted.
         b'{"invocation_id":"test-invocation","trace":null,"evidence":null}',
-        b'{"invocation_id":"test-invocation","trace":{"status":"completed"},'
-        b'"evidence":{"run_id":"sdk-corrupt","complete":true,"terminal_outcome":"completed"}}',
-        b'{"trace":null,"evidence":{"run_id":"sdk-corrupt",'
-        b'"complete":true,"terminal_outcome":"error"}}',
+        b'{"kind":"trace_unavailable","invocation_id":"test-invocation"}',
+        b'{"kind":"trace_finished","schema_version":2,"invocation_id":"test-invocation",'
+        b'"record":{"header":{}},"complete":true}',
+        b'{"kind":"trace_finished","schema_version":1}',
         b'{"trace":',
     ],
 )
