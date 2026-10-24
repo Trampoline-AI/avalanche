@@ -10,7 +10,7 @@ from typing import ClassVar
 import dspy
 import pytest
 from predict_rlm import File as PredictRLMFile
-from predict_rlm import IterationStep, RunEvidence, RunTrace
+from predict_rlm import IterationStep, RunEvent, RunEventKind, RunEvidence, RunTrace
 from pydantic import BaseModel
 
 import avalanche as ava
@@ -21,6 +21,7 @@ from avalanche.agent.trace import AgentTraceHeader, AgentTraceRecord, PredictRLM
 from avalanche.evaluation_capture import capture_evaluations
 
 predict_rlm_runtime = importlib.import_module("avalanche.runtimes.predict_rlm.runtime")
+predict_rlm_events = importlib.import_module("avalanche.runtimes.predict_rlm.events")
 
 
 class Count(ava.Signature):
@@ -202,6 +203,9 @@ async def test_predict_rlm_receives_and_returns_ava_files_through_host_paths(
 
     class Predictor:
         async def acall(self, **inputs):
+            await predict_rlm_events._AvalancheEvidenceSink().emit(
+                RunEvent("run", 1, RunEventKind.RUN_STARTED, 1, {"inputs": inputs})
+            )
             received["document"] = Path(inputs["document"].path).read_bytes()
             received["attachments"] = [
                 Path(file.path).read_bytes() for file in inputs["attachments"]
@@ -219,17 +223,46 @@ async def test_predict_rlm_receives_and_returns_ava_files_through_host_paths(
 
     monkeypatch.setattr(predict_rlm_runtime, "_build_predictor", build)
 
-    result = await ava.Agent(signature=Redact, step_name="redact")(
-        document=ava.File(content=b"secret", name="doc.txt"),
-        attachments=[ava.File(content=b"a", name="a.txt"), ava.File(content=b"b")],
-    )
+    document = ava.File(content=b"secret", name="doc.txt")
+    observed = []
+    with capture_agent_evidence(observed.append, errors="raise"):
+        result = await ava.Agent(signature=Redact, step_name="redact")(
+            document=document,
+            # Names that are not plain file names still get a file of their own.
+            attachments=[ava.File(content=b"a", name=".."), ava.File(content=b"b", name="/")],
+        )
 
     assert received == {"document": b"secret", "attachments": [b"a", b"b"]}
+    # Evidence describes the caller's file, never the temporary path it was written to.
+    assert observed[0]["data"]["inputs"]["document"] == {
+        "kind": "file",
+        "name": "doc.txt",
+        "content_type": None,
+        "size_bytes": 6,
+        "sha256": document.sha256,
+    }
     assert result.outputs.redacted == ava.File(content=b"[redacted]", name="redacted.txt")
     assert result.outputs.notes == "done"
     assert built[0].input_fields["document"].annotation is PredictRLMFile
     assert built[0].input_fields["attachments"].annotation == list[PredictRLMFile]
     assert built[0].output_fields["redacted"].annotation is PredictRLMFile
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "redacted",
+    [None, "not a file", PredictRLMFile(path=None), PredictRLMFile(path="/missing/file")],
+    ids=["missing-value", "wrong-type", "no-path", "unreadable"],
+)
+async def test_predict_rlm_file_outputs_that_cannot_be_read_are_output_errors(
+    monkeypatch, redacted
+):
+    _use_predictor(monkeypatch, {"redacted": redacted, "notes": "done"})
+
+    with pytest.raises(AgentOutputError, match="redacted"):
+        await ava.Agent(signature=Redact, step_name="redact")(
+            document=ava.File(content=b"secret"), attachments=[]
+        )
 
 
 class NestedFile(ava.Signature):

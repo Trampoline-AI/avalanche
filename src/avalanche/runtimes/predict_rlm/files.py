@@ -12,15 +12,18 @@ files are read back into ``ava.File`` values. Delete this module once
 from __future__ import annotations
 
 import types
-from collections.abc import Mapping
+from collections.abc import Iterator, Mapping
+from contextlib import contextmanager
+from contextvars import ContextVar
 from pathlib import Path
+from types import MappingProxyType
 from typing import Literal, Union, get_args, get_origin
 
 import dspy
 from predict_rlm import File as PredictRLMFile
 from pydantic.fields import FieldInfo
 
-from ...agent.steps import AgentStepError
+from ...agent.steps import AgentOutputError, AgentStepError
 from ...runtime.context import File
 
 FileShape = Literal["one", "many"]
@@ -55,19 +58,34 @@ def predictor_signature(signature: type[dspy.Signature]) -> type[dspy.Signature]
     return bridged
 
 
+# Each bridged input path's source file, so evidence can describe the original file.
+_BRIDGED_SOURCES: ContextVar[Mapping[str, File]] = ContextVar(
+    "avalanche_predict_rlm_bridged_sources", default=MappingProxyType({})
+)
+
+
+@contextmanager
 def host_inputs(
     inputs: Mapping[str, object], shapes: Mapping[str, FileShape], directory: Path
-) -> dict[str, object]:
-    """Write ``ava.File`` inputs under ``directory`` and pass their paths instead."""
-    written = 0
+) -> Iterator[dict[str, object]]:
+    """Write ``ava.File`` inputs under ``directory`` and pass their paths instead.
+
+    While the context is open, ``bridged_source`` maps each written path back to
+    its ``ava.File``.
+    """
+    sources: dict[str, File] = {}
 
     def write(file: File) -> PredictRLMFile:
-        nonlocal written
-        written += 1
         # One subdirectory per file keeps the original name without collisions.
-        target = directory / str(written) / Path(file.name or "file").name
+        name = Path(file.name or "").name
+        target = (
+            directory
+            / str(len(sources) + 1)
+            / (name if name not in {"", ".", ".."} else "file")
+        )
         target.parent.mkdir()
         target.write_bytes(file.content)
+        sources[str(target)] = file
         return PredictRLMFile(path=str(target))
 
     converted = dict(inputs)
@@ -79,7 +97,16 @@ def host_inputs(
         else:
             assert isinstance(value, list)
             converted[name] = [write(file) for file in value]
-    return converted
+    token = _BRIDGED_SOURCES.set(MappingProxyType(sources))
+    try:
+        yield converted
+    finally:
+        _BRIDGED_SOURCES.reset(token)
+
+
+def bridged_source(path: str) -> File | None:
+    """The ``ava.File`` an input path was written from, if the bridge wrote it."""
+    return _BRIDGED_SOURCES.get().get(path)
 
 
 def avalanche_outputs(
@@ -96,7 +123,7 @@ def avalanche_outputs(
         elif isinstance(value, list):
             converted[name] = [_read(name, item) for item in value]
         else:
-            raise AgentStepError(
+            raise AgentOutputError(
                 f"PredictRLM returned {type(value).__name__} for list[ava.File] "
                 f"output {name!r}"
             )
@@ -105,11 +132,16 @@ def avalanche_outputs(
 
 def _read(name: str, value: object) -> File:
     if not isinstance(value, PredictRLMFile) or value.path is None:
-        raise AgentStepError(
+        raise AgentOutputError(
             f"PredictRLM returned {type(value).__name__} without a host path "
             f"for ava.File output {name!r}"
         )
-    return File.from_path(value.path)
+    try:
+        return File.from_path(value.path)
+    except OSError as exc:
+        raise AgentOutputError(
+            f"PredictRLM output file for {name!r} cannot be read: {exc}"
+        ) from exc
 
 
 def _mentions_file(annotation: object) -> bool:

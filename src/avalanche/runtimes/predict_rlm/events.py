@@ -125,6 +125,12 @@ def _project_agent_value(value: object, *, depth: int = 0) -> JsonValue:
     if predict_rlm is not None and isinstance(value, predict_rlm.File):
         path = value.path
         if isinstance(path, str) and path:
+            from .files import bridged_source
+
+            # An ``ava.File`` input is described by its identity, not its temporary path.
+            source = bridged_source(path)
+            if source is not None:
+                return file_input_evidence(source).model_dump(mode="json")
             return {"kind": "predict_rlm_file", "path": path}
         return _unavailable_value("PredictRLM file has no host path")
 

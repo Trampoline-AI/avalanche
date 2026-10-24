@@ -324,11 +324,14 @@ class PredictRLM(BaseModel):
             name: getattr(request.inputs, name)
             for name in request.signature.input_model.model_fields
         }
-        with tempfile.TemporaryDirectory(prefix="avalanche-predict-rlm-") as directory:
+        with (
+            tempfile.TemporaryDirectory(prefix="avalanche-predict-rlm-") as directory,
+            files.host_inputs(inputs, input_files, Path(directory)) as host_inputs,
+        ):
             prediction = await self._run(
                 predictor,
                 request,
-                files.host_inputs(inputs, input_files, Path(directory)),
+                host_inputs,
                 input_types={name: type(value).__name__ for name, value in inputs.items()},
                 events=events,
             )
