@@ -70,6 +70,7 @@ class ClaudeAgentViewer:
         for event in reversed(events):
             if isinstance(event.native, Finished):
                 output = event.native.structured_output
+                # A failed session reports no output; an oversized one is left out.
                 return output if isinstance(output, dict) else None
         return None
 

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import importlib
+import itertools
 import os
 import sys
 
@@ -64,12 +65,16 @@ def _init() -> SystemMessage:
     )
 
 
-def _assistant(*blocks, usage=None) -> AssistantMessage:
+_MESSAGE_IDS = itertools.count(1)
+
+
+def _assistant(*blocks, usage=None, message_id=None) -> AssistantMessage:
+    """One assistant message; each gets its own ID unless it continues a response."""
     return AssistantMessage(
         content=list(blocks),
         model=MODEL,
         usage=usage or {"input_tokens": 3, "output_tokens": 5},
-        message_id="msg",
+        message_id=message_id or f"msg-{next(_MESSAGE_IDS)}",
     )
 
 
@@ -302,6 +307,10 @@ async def test_a_workspace_is_the_working_directory_and_comes_back_as_an_output(
 
     async def edit_then_finish(*, prompt, options):
         seen.update(prompt=prompt, options=options)
+        # The file input exists under the working directory while the session runs.
+        seen["drafts"] = [
+            path.read_bytes() for path in tmp_path.glob(".avalanche-inputs-*/1/draft.txt")
+        ]
         (tmp_path / "notes.txt").write_text("written by the agent")
         for message in [_init(), _result({"summary": "done"})]:
             yield message
@@ -313,9 +322,11 @@ async def test_a_workspace_is_the_working_directory_and_comes_back_as_an_output(
 
     options = seen["options"]
     assert options.cwd == str(tmp_path)
-    # The file input is written into the working directory and named by its path.
-    assert (tmp_path / "inputs" / "1" / "draft.txt").read_bytes() == b"draft"
-    assert '"document": "inputs/1/draft.txt"' in seen["prompt"]
+    # The file input was written under the working directory, named by its relative
+    # path, and removed afterwards, so the host's directory keeps no copy.
+    assert seen["drafts"] == [b"draft"]
+    assert '"document": ".avalanche-inputs-' in seen["prompt"]
+    assert sorted(path.name for path in tmp_path.iterdir()) == ["existing.txt", "notes.txt"]
     assert "edited" not in options.output_format["schema"]["properties"]
     assert result.outputs.summary == "done"
     assert result.outputs.edited.reference == "notes"
@@ -432,3 +443,73 @@ async def test_live_claude_call_with_a_small_model():
         "claude_agent",
         "succeeded",
     )
+
+
+@pytest.mark.asyncio
+async def test_a_response_split_across_messages_and_subagent_traffic_form_one_turn(replay):
+    subagent = AssistantMessage(
+        content=[ToolUseBlock(id="sub-1", name="Read", input={"path": "x"})],
+        model=MODEL,
+        parent_tool_use_id="call-2",
+        message_id="sub-msg",
+    )
+    replay(
+        [
+            _init(),
+            # The CLI streams one response with two parallel tool calls as two messages.
+            _assistant(
+                ToolUseBlock(
+                    id="call-1", name="mcp__avalanche__lookup_bonus", input={"name": "a"}
+                ),
+                message_id="parallel",
+            ),
+            _assistant(
+                ToolUseBlock(id="call-2", name="Task", input={"prompt": "check"}),
+                message_id="parallel",
+            ),
+            subagent,
+            UserMessage(
+                content=[ToolResultBlock(tool_use_id="sub-1", content="file")],
+                parent_tool_use_id="call-2",
+            ),
+            UserMessage(
+                content=[
+                    ToolResultBlock(tool_use_id="call-1", content="10"),
+                    ToolResultBlock(tool_use_id="call-2", content="checked"),
+                ]
+            ),
+            _assistant(TextBlock(text="Done."), usage={"input_tokens": 7, "output_tokens": 9}),
+            _result({"total": 15}),
+        ]
+    )
+    result = await _agent()(a=2, b=3)
+
+    first, second = result.trace.turns
+    assert [(call.call_id, call.result) for call in first.actions] == [
+        ("call-1", "10"),
+        ("call-2", "checked"),
+    ]
+    assert second.text == "Done."
+    assert result.trace.header.turn_count == 2
+
+
+@pytest.mark.asyncio
+async def test_the_message_stream_is_closed_when_handling_a_message_fails(monkeypatch):
+    closed = []
+
+    async def query(*, prompt, options):
+        try:
+            yield _init()
+            yield UserMessage(content=[ToolResultBlock(tool_use_id="nowhere", content="?")])
+            yield _result({"total": 1})
+        finally:
+            closed.append(True)
+
+    monkeypatch.setattr(sdk_module, "query", query)
+    observed = []
+    with capture_agent_evidence(observed.append, errors="raise"):
+        with pytest.raises(AgentStepExecutionError, match="unknown tool call"):
+            await _agent()(a=2, b=3)
+
+    assert closed == [True]
+    assert observed[-1].kind == "trace_unavailable"
