@@ -4,6 +4,26 @@
 
 - Keep input and output names whole on browser UI step cards; long types now wrap
   between words and show the full name and type on hover.
+- **Upgrading** — This release makes agent steps runtime-neutral. Code that defines
+  agent steps changes in two places, and the operator, its clients and
+  `@trampoline-ai/operator-ui` must be upgraded together, because agent declarations,
+  trace headers and trace bodies all change shape:
+
+  ```python
+  # before
+  @ava.agent_step(Review, lm=MODEL, skills=[ava.agent.skills.docx])
+  async def review(document: str, *, agent: ava.Agent) -> Report:
+      prediction = await agent(document=document)
+      return Report.model_validate(prediction.report)
+
+  # after
+  @ava.agent_step(Review, runtime=ava.runtimes.PredictRLM(lm=MODEL, skills=[ava.agent.skills.docx]))
+  async def review(document: str, *, agent: ava.Agent) -> Report:
+      return (await agent(document=document)).outputs.report
+  ```
+
+  The entries below give the details. The operator and TUI no longer import
+  PredictRLM; only the PredictRLM runtime does.
 - Agents: add internal, not yet used models for running agent steps on runtimes
   other than PredictRLM: a runtime-neutral request, result and trace format. Agent
   steps behave exactly as before.
