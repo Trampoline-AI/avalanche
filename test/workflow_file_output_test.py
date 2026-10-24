@@ -17,8 +17,7 @@ def test_agent_file_mount_and_reserved_outputs(tmp_path):
     """Use the real PredictRLM adapters and DirectPython backend without a network LM."""
     from dspy import JSONAdapter
     from dspy.utils import DummyLM
-
-    from avalanche.agent import DirectPythonBackend
+    from predict_rlm.backends import DirectPythonBackend
 
     class Convert(ava.Signature):
         document: ava.File = ava.InputField()
