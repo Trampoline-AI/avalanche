@@ -22,8 +22,7 @@ from typing import (
 )
 
 import dspy
-from dspy import Prediction
-from pydantic import JsonValue, TypeAdapter, ValidationError
+from pydantic import JsonValue, ValidationError
 
 from ..dag import Node, NodeFuture, NodeType, _workflow_context
 from ..evaluations import Evaluations
@@ -32,7 +31,14 @@ from ..step_interface import (
     resolve_step_signature,
     step_interface_from_signature,
 )
-from .contract import AgentRequest, AgentRuntime, SignatureSpec, ToolSpec
+from .contract import (
+    AgentEvent,
+    AgentRequest,
+    AgentResult,
+    AgentRuntime,
+    SignatureSpec,
+    ToolSpec,
+)
 from .declaration import (
     AgentDeclaration,
     FieldDeclaration,
@@ -52,6 +58,24 @@ class AgentStepError(RuntimeError):
 
 class AgentStepExecutionError(RuntimeError):
     """An agent invocation failed inside an agent step."""
+
+
+class AgentOutputError(AgentStepExecutionError):
+    """An agent's outputs do not match its step's signature."""
+
+
+class _UnobservedEvents:
+    """Discards common live events.
+
+    The operator receives each runtime's own v1 wire events until event bodies
+    become runtime-neutral; then this sink is replaced by one that forwards.
+    """
+
+    async def emit(self, event: AgentEvent) -> None:
+        return None
+
+
+_UNOBSERVED_EVENTS = _UnobservedEvents()
 
 
 _WORKFLOW_AGENT_DEFAULTS: ContextVar[AgentDefaults] = ContextVar(
@@ -78,8 +102,8 @@ class Agent:
         self._signature: SignatureSpec | None = None
         self._tools: tuple[ToolSpec, ...] = ()
 
-    async def __call__(self, **inputs: Any) -> Prediction:
-        """Run the configured agent and return its raw DSPy prediction."""
+    async def __call__(self, **inputs: Any) -> AgentResult:
+        """Run the agent and return its validated outputs with the invocation's trace."""
         signature = self._resolve_signature()
         self._validate_input_names(signature.dspy_signature, inputs)
         try:
@@ -93,18 +117,21 @@ class Agent:
             inputs=validated_inputs,
             tools=self._tools,
         )
-        from ..runtimes.predict_rlm import PredictRLM
-
-        # Until agent steps return typed results, the step still hands back the
-        # PredictRLM prediction, so only PredictRLM can run one.
         if self._runtime is None:
+            from ..runtimes.predict_rlm import PredictRLM
+
             self._runtime = PredictRLM()
-        if not isinstance(self._runtime, PredictRLM):
-            raise AgentStepError(
-                f"agent step {self._step_name!r}: runtime {self._runtime.kind!r} "
-                "cannot run agent steps yet"
-            )
-        call = await self._runtime.predict(request)
+        outcome = await self._runtime.invoke(request, _UNOBSERVED_EVENTS)
+        # The runtime has already sent its terminal trace, so a mismatch is
+        # recorded before the step fails, and no evaluation is submitted.
+        try:
+            outputs = signature.validate_outputs(outcome.outputs)
+        except ValidationError as exc:
+            raise AgentOutputError(
+                f"agent step {self._step_name!r} returned outputs that do not match "
+                f"{_describe_signature(signature.dspy_signature)}: {exc}"
+            ) from exc
+        result = AgentResult(outputs=outputs, trace=outcome.trace)
 
         # Resolve process-local state only in the executing worker. Existing
         # observers have already applied their own strict/error policy.
@@ -112,8 +139,8 @@ class Agent:
 
         capture = _STEP_EVALUATION_CAPTURE.get()
         if capture is not None:
-            capture.submit(inputs, call.prediction, call.terminal_event)
-        return call.prediction
+            capture.submit(inputs, result.outputs, result.trace)
+        return result
 
     def _resolve_signature(self) -> SignatureSpec:
         if self._signature is None:
@@ -456,9 +483,7 @@ def step(
         owner="ava.agent.step", runtime=runtime, tools=tools, removed=removed
     )
     output_fields = signature.output_fields
-    output_adapters = tuple(
-        (name, TypeAdapter(field.rebuild_annotation())) for name, field in output_fields.items()
-    )
+    output_names = tuple(output_fields)
     output_annotations = tuple(field.rebuild_annotation() for field in output_fields.values())
     public_signature = inspect.Signature(
         parameters=[
@@ -487,17 +512,9 @@ def step(
 
         with capture_step_evaluations(spec.evaluations, step_name=spec.step_name):
             bound = public_signature.bind(*args, **kwargs)
-            prediction: dspy.Prediction = await spec.make_agent()(**bound.arguments)
-            values = []
-            for name, adapter in output_adapters:
-                try:
-                    value = prediction[name]
-                except KeyError as exc:
-                    raise AgentStepError(
-                        f"inline agent {spec.step_name!r} is missing output field {name!r}"
-                    ) from exc
-                values.append(adapter.validate_python(value, strict=True))
-            return values[0] if len(values) == 1 else tuple(values)
+            result = await spec.make_agent()(**bound.arguments)
+            values = tuple(getattr(result.outputs, name) for name in output_names)
+            return values[0] if len(values) == 1 else values
 
     invoke.__name__ = spec.step_name
     invoke.__qualname__ = spec.step_name

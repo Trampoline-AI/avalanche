@@ -1,10 +1,10 @@
 import { describe, expect, it } from "vitest";
 
 import { parseAgentDeclaration } from "./GraphCanvas";
-import { AgentEvent, AgentTraceRecord } from "./generated/agentSchemas";
+import { AgentEvent, AgentTrace } from "./generated/agentSchemas";
 import { agentDeclarationJson } from "./test/fixtures";
 
-const record: AgentTraceRecord = {
+const record: AgentTrace = {
   schema_version: 2,
   turns_streamed: false,
   header: {
@@ -57,7 +57,7 @@ const record: AgentTraceRecord = {
 
 describe("generated agent schemas", () => {
   it("accept a trace record shaped like the Python model", () => {
-    expect(AgentTraceRecord.parse(record)).toEqual(record);
+    expect(AgentTrace.parse(record)).toEqual(record);
   });
 
   it.each([
@@ -70,7 +70,7 @@ describe("generated agent schemas", () => {
       { ...record, turns: [{ ...record.turns[0], actions: [{ kind: "other" }] }] },
     ],
   ])("reject a trace record with %s", (_case, body) => {
-    expect(AgentTraceRecord.safeParse(body).success).toBe(false);
+    expect(AgentTrace.safeParse(body).success).toBe(false);
   });
 
   it("tell live events apart by kind", () => {

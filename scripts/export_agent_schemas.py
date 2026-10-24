@@ -16,7 +16,7 @@ from pydantic import TypeAdapter
 
 from avalanche.agent.contract import AgentEvent
 from avalanche.agent.declaration import AgentDeclaration
-from avalanche.agent.trace import AgentTraceRecord
+from avalanche.agent.trace import AgentTrace
 
 OUTPUT = (
     Path(__file__).resolve().parent.parent
@@ -32,7 +32,7 @@ def agent_schemas_json() -> str:
     """One schema document whose ``$defs`` hold traces, live events and declarations."""
     keyed, schema = TypeAdapter.json_schemas(
         [
-            ("AgentTraceRecord", "serialization", TypeAdapter(AgentTraceRecord)),
+            ("AgentTrace", "serialization", TypeAdapter(AgentTrace)),
             ("AgentEvent", "serialization", TypeAdapter(AgentEvent)),
             ("AgentDeclaration", "serialization", TypeAdapter(AgentDeclaration)),
         ],

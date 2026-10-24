@@ -46,8 +46,8 @@ Load only what the task needs:
   integration surface.
 - Native observation-only agent quality metrics and composites:
   [agent-steps.md](references/agent-steps.md#native-evaluations). Use the first
-  successful agent call to return: its keyword arguments, complete DSPy
-  `Prediction`, and only that invocation's trace—not the enclosing step's inputs,
+  successful agent call to return: its keyword arguments, validated
+  outputs, and only that invocation's trace—not the enclosing step's inputs,
   postprocessed return, or all invocation traces. Do not invent a second context
   schema or a separate evaluation workflow.
 - Usage, native classifier syntax, question-object design for routing, labels,
@@ -598,9 +598,10 @@ operator-based execution commands, never a standalone Python runner.
   through the runtime, `runtime=ava.runtimes.PredictRLM(skills=[...])`, on each
   agent step that needs them.
 - In decorated bodies, `agent` is framework-injected, keyword-only, annotated
-  `ava.Agent`, and never passed at DAG call sites. `await agent(...)` returns the
-  raw DSPy prediction; the body selects, validates, composes, and returns or
-  persists the intended output explicitly.
+  `ava.Agent`, and never passed at DAG call sites. `await agent(...)` returns an
+  `ava.agent.AgentResult` whose `outputs` are already validated against the
+  signature; the body selects, composes, and returns or persists the intended
+  output explicitly.
 - Use direct returned `>>` chains with `ava.agent.step(Signature, ...)` for
   a single agent call. Inputs and outputs follow signature order; `&` supplies
   inputs in branch order. Invalid or missing outputs raise an error.

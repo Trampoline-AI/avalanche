@@ -196,3 +196,49 @@ def test_full_inline_ray_workflow_returns_validated_values_from_real_workers(ray
     assert result["prediction_pid"] != worker_driver_pid
     assert result["render_pid"] != worker_driver_pid
     assert runtime_module._build_predictor is driver_builder
+
+
+def test_agent_outputs_model_crosses_ray_workers(ray_runtime):
+    from ray import cloudpickle
+    from ray._private.runtime_env.setup_hook import export_setup_func_module
+
+    order_skill = ava.agent.Skill(
+        name="order-extraction",
+        instructions="Parse comma-separated quantity/name orders with parse_orders.",
+        tools={"parse_orders": lambda transcript: (["apples"], [2])},
+    )
+
+    @ava.agent_step(ExtractWorkerItems, runtime=PredictRLM(skills=[order_skill]))
+    async def extract(transcript: str, *, agent: ava.Agent):
+        # The outputs model is generated from the signature at run time.
+        return (await agent(transcript=transcript, customer="Ada")).outputs
+
+    @ava.dest
+    def read(outputs) -> dict[str, object]:
+        return {"type": type(outputs).__name__, "customer": outputs.items.customer}
+
+    @ava.source
+    def recording():
+        return "2 apples"
+
+    @ava.workflow
+    def flow():
+        return read(extract(recording()))
+
+    runtime_env = {
+        "env_vars": {"PYTHONPATH": os.pathsep.join(os.path.abspath(path) for path in sys.path)},
+        "worker_process_setup_hook": f"{__name__}._install_worker_predictor",
+    }
+    export_setup_func_module(runtime_env, runtime_env["worker_process_setup_hook"])
+
+    @ray_runtime.remote(num_cpus=0, runtime_env=runtime_env)
+    def execute(serialized_workflow):
+        from ray import cloudpickle
+
+        import avalanche as ava
+
+        workflow = cloudpickle.loads(serialized_workflow)
+        return workflow.run(executor=ava.RayExecutor()).result(timeout=30)
+
+    result = ray_runtime.get(execute.remote(cloudpickle.dumps(flow())), timeout=60)
+    assert result == {"type": "ExtractWorkerItemsOutputs", "customer": "Ada"}

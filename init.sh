@@ -107,7 +107,7 @@ def generate_binary() -> str:
     runtime=ava.runtimes.PredictRLM(lm=starter_lm()),
 )
 async def convert_binary(binary: str, *, agent: ava.Agent) -> str:
-    return (await agent(binary=binary)).decimal
+    return (await agent(binary=binary)).outputs.decimal
 
 
 @ava.dest

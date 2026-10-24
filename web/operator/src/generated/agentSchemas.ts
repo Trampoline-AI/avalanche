@@ -73,5 +73,5 @@ export type AgentTraceHeader = z.infer<typeof AgentTraceHeader>;
 export const PredictRLMNativeTrace = z.strictObject({ "cache_hits": z.int().min(0), "format": z.literal("predict_rlm.run/v1"), "max_iterations": z.int().gt(0), "sub_model": z.union([z.string(), z.null()]) });
 export type PredictRLMNativeTrace = z.infer<typeof PredictRLMNativeTrace>;
 
-export const AgentTraceRecord = z.strictObject({ "header": AgentTraceHeader, "native": PredictRLMNativeTrace, "schema_version": z.literal(2), "turns": z.array(Turn), "turns_streamed": z.boolean() });
-export type AgentTraceRecord = z.infer<typeof AgentTraceRecord>;
+export const AgentTrace = z.strictObject({ "header": AgentTraceHeader, "native": PredictRLMNativeTrace, "schema_version": z.literal(2), "turns": z.array(Turn), "turns_streamed": z.boolean() });
+export type AgentTrace = z.infer<typeof AgentTrace>;

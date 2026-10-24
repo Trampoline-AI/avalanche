@@ -74,8 +74,9 @@ parallel-input example.
 Use a decorated body for preparation, mapping, batching, custom validation,
 composition, or persistence. Both `@ava.agent_step(Signature, ...)` and
 `@ava.agent.step(Signature, ...)` support this form outside workflows.
-The injected keyword-only `agent: ava.Agent` returns a prediction from
-`await agent(...)`; the body selects, validates, and returns or persists its result.
+The injected keyword-only `agent: ava.Agent` returns an `ava.agent.AgentResult`
+from `await agent(...)`, with validated `outputs` and the invocation's `trace`; the
+body selects and returns or persists its result.
 Never supply `agent` at a DAG call site or nest agent decorators inside a workflow.
 
 Compact signatures belong directly inside an inline `ava.agent.step(...)` call
@@ -376,11 +377,11 @@ do not replace the native integration with a custom client.
 
 ## Native agent-step evaluations
 
-For observation of an agent's prediction, prefer its native `evaluations=`
+For observation of an agent's outputs, prefer its native `evaluations=`
 declaration over an extra workflow node. Each `ava.Metric` separates a
 synchronous evidence selector from one existing Choice/Noul/Score question.
 `ava.EvalContext` exposes the first successful agent call to return: its actual
-keyword arguments, complete DSPy `Prediction`, and its single terminal trace event.
+keyword arguments, validated outputs, and its full `ava.agent.AgentTrace`.
 Select named outputs such as `ctx.output.audit.summary`. The step's own return
 value is separate; later calls run normally without replacing or resubmitting
 evaluation. Submitted evaluation survives step postprocessing failure.
