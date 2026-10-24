@@ -32,7 +32,7 @@ function turn(event: AgentLiveEvent): AgentTraceStep {
     untruncatedOutput: native.untruncated_output,
     // Only failed code fails a turn; the code may have handled a failed tool call.
     error: code.error !== null,
-    durationMs: turn.duration_ms ?? 0,
+    durationMs: turn.duration_ms ?? undefined,
     toolCalls: turn.actions.flatMap((action) =>
       action.kind === "tool_call"
         ? [
