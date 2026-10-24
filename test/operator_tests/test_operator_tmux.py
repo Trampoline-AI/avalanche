@@ -83,7 +83,23 @@ def test_terminal_runs_discovered_workflow(tmp_path):
         while "terminal_flow" not in screen():
             assert time.monotonic() < deadline, screen()
             time.sleep(0.1)
-        tmux("send-keys", "-t", f"{session}:.1", "Escape", "r")
+        tmux("send-keys", "-t", f"{session}:.1", "Escape")
+        deadline = time.monotonic() + 20
+        # Extension discovery is asynchronous. Once ready, run now opens the
+        # schema preview/confirmation even when this workflow takes no input.
+        while "Preview validated input" not in screen():
+            assert time.monotonic() < deadline, screen()
+            tmux("send-keys", "-t", f"{session}:.1", "r")
+            time.sleep(0.2)
+        tmux("send-keys", "-t", f"{session}:.1", "Tab")
+        time.sleep(0.1)
+        tmux("send-keys", "-t", f"{session}:.1", "Enter")
+        while "{}" not in screen():
+            assert time.monotonic() < deadline, screen()
+            time.sleep(0.1)
+        tmux("send-keys", "-t", f"{session}:.1", "Tab")
+        time.sleep(0.1)
+        tmux("send-keys", "-t", f"{session}:.1", "Enter")
         deadline = time.monotonic() + 20
         while True:
             runs = client.list_runs("terminal_flow")
