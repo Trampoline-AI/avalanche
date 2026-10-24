@@ -346,14 +346,16 @@ function TurnSecondaryDetails({
           {(step) => <ToolCalls calls={step.toolCalls} />}
         </DeferredTurnDetail>
       </TraceSection>
-      <TraceSection
-        label={`Predict calls (${descriptor.modelCallCount})`}
-        onOpenChange={(open) => setSectionOpen("predict", open)}
-      >
-        <DeferredTurnDetail detail={detail} onLoadTurn={onLoadTurn}>
-          {(step) => <PredictCalls groups={step.predictCalls} />}
-        </DeferredTurnDetail>
-      </TraceSection>
+      {summary.usage.sub !== undefined && (
+        <TraceSection
+          label={`Predict calls (${descriptor.modelCallCount})`}
+          onOpenChange={(open) => setSectionOpen("predict", open)}
+        >
+          <DeferredTurnDetail detail={detail} onLoadTurn={onLoadTurn}>
+            {(step) => <PredictCalls groups={step.predictCalls} />}
+          </DeferredTurnDetail>
+        </TraceSection>
+      )}
     </div>
   );
 }
@@ -457,6 +459,10 @@ export function AgentTraceExplorer({
                   const iteration = step?.iteration ?? descriptor.turn ?? index + 1;
                   const failed = descriptor.error || step?.error;
                   const finishReason = failed ? undefined : finishLabel(step?.lm?.finishReason);
+                  // Only runtimes with a sub-model make predict calls.
+                  const hasPredictCalls = step
+                    ? step.usage.sub !== undefined
+                    : descriptor.modelCallCount > 0;
                   return (
                     <article
                       className={`turn-row overflow-hidden rounded-lg border bg-panel ${failed ? "border-danger" : "border-line"}`}
@@ -476,10 +482,9 @@ export function AgentTraceExplorer({
                           <p className="mt-0.5 mb-0 whitespace-normal font-mono text-[8px] leading-[1.6] text-muted [overflow-wrap:anywhere]">
                             {formatDuration(step?.durationMs ?? descriptor.durationMs)}
                             {` · ${descriptor.toolCallCount} tool${descriptor.toolCallCount === 1 ? "" : "s"}`}
-                            {` · ${descriptor.modelCallCount} predict`}
-                            {step
-                              ? ` · main ${turnUsageLabel(step.usage.main)} · sub ${turnUsageLabel(step.usage.sub)}`
-                              : ""}
+                            {hasPredictCalls ? ` · ${descriptor.modelCallCount} predict` : ""}
+                            {step ? ` · main ${turnUsageLabel(step.usage.main)}` : ""}
+                            {step?.usage.sub ? ` · sub ${turnUsageLabel(step.usage.sub)}` : ""}
                             {finishReason ? ` · ${finishReason}` : ""}
                             {failed ? " · error" : ""}
                           </p>
