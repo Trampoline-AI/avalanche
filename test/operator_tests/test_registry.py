@@ -187,7 +187,7 @@ def test_agent_step_that_cannot_be_declared_is_a_discovery_diagnostic(tmp_path):
         '    Echo, runtime=ava.runtimes.PredictRLM(lm={"temperature": float("nan")})\n'
         ")\n"
         "async def echo(text: str, *, agent: ava.Agent) -> str:\n"
-        "    return (await agent(text=text)).answer\n"
+        "    return (await agent(text=text)).outputs.answer\n"
         "@ava.workflow\ndef flow():\n    return echo('hi')\n"
     )
     registry = WorkflowRegistry()

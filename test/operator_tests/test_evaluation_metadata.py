@@ -126,7 +126,7 @@ def _write_workflow(root: Path, *, revised: bool = False, guarded: bool = False)
                 import avalanche.runtimes.predict_rlm.runtime as predict_rlm_runtime
 
                 predict_rlm_runtime._build_predictor = lambda *args, **kwargs: Predictor()
-                return (await agent(query=value)).reply
+                return (await agent(query=value)).outputs.reply
 
             @ava.workflow(classifier_defaults={{
                 "model": {'workflow-revised' if revised else 'workflow-original'!r},

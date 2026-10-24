@@ -36,8 +36,7 @@ def load_feedback_workbook() -> File:
     ),
 )
 async def extract_themes(workbook: File, *, agent: ava.Agent) -> ThemeReport:
-    prediction = await agent(workbook=workbook)
-    return ThemeReport.model_validate(prediction.report)
+    return (await agent(workbook=workbook)).outputs.report
 
 
 @ava.agent_step(
@@ -49,8 +48,7 @@ async def extract_themes(workbook: File, *, agent: ava.Agent) -> ThemeReport:
     ),
 )
 async def detect_risks(workbook: File, *, agent: ava.Agent) -> RiskReport:
-    prediction = await agent(workbook=workbook)
-    return RiskReport.model_validate(prediction.report)
+    return (await agent(workbook=workbook)).outputs.report
 
 
 @ava.step
@@ -99,8 +97,7 @@ async def build_review_workbook(
     *,
     agent: ava.Agent,
 ) -> File:
-    prediction = await agent(source_workbook=source_workbook, review=review)
-    return File.model_validate(prediction.workbook)
+    return (await agent(source_workbook=source_workbook, review=review)).outputs.workbook
 
 
 @ava.agent_step(
@@ -117,8 +114,7 @@ async def write_executive_brief(
     *,
     agent: ava.Agent,
 ) -> File:
-    prediction = await agent(review=review)
-    return File.model_validate(prediction.brief)
+    return (await agent(review=review)).outputs.brief
 
 
 @ava.dest

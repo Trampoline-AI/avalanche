@@ -176,8 +176,8 @@ async def audit_package(
     *,
     agent: ava.Agent,
 ) -> PackageAudit:
-    prediction = await agent(package=package)
-    audit = validate_package_audit(package, prediction.audit)
+    result = await agent(package=package)
+    audit = validate_package_audit(package, result.outputs.audit)
     await persist_audit(audit)
     return audit
 ```
@@ -185,12 +185,16 @@ async def audit_package(
 Rules:
 
 - Each `ava.InputField` name must be supplied exactly once to `await agent(...)`.
-- Read prediction fields by their exact `ava.OutputField` names.
+- `await agent(...)` returns an `ava.agent.AgentResult`. Read
+  `result.outputs.<name>` by the exact `ava.OutputField` names; each value is
+  already strictly validated against its declared type. `result.trace` is the
+  invocation's `ava.agent.AgentTrace` (header plus turns).
 - Keep the `agent` parameter keyword-only, without a default, annotated
   `ava.Agent`.
 - Never pass `agent` at a DAG call site; Avalanche injects it at execution.
 - A decorated body owns its selection, mapping, custom validation, composition,
-  and persistence; inline nodes already perform strict signature-field validation.
+  and persistence. Decorated and inline agent calls share one strict validation
+  of the signature's outputs; a mismatch raises `ava.agent.AgentOutputError`.
 - An agent-step body may be `def` or `async def`, but model calls are awaitable,
   so normal bodies are asynchronous.
 
@@ -212,11 +216,13 @@ async def answer_question(
     *,
     agent: ava.Agent,
 ) -> Answer:
-    prediction = await agent(
-        question=request.question,
-        context=request.context,
-    )
-    return Answer(answer=prediction.answer, citations=prediction.citations)
+    outputs = (
+        await agent(
+            question=request.question,
+            context=request.context,
+        )
+    ).outputs
+    return Answer(answer=outputs.answer, citations=outputs.citations)
 ```
 
 Use the typed class form as soon as the contract has nested models, substantial
@@ -403,7 +409,7 @@ audit_evaluations = ava.Evaluations(
             },
         ),
         "checked_evidence": ava.Metric(
-            state=lambda ctx: ctx.trace,
+            state=lambda ctx: [turn.model_dump(mode="json") for turn in ctx.trace.turns],
             question={
                 "type": "noul",
                 "instructions": (
@@ -424,8 +430,7 @@ audit_evaluations = ava.Evaluations(
 
 @ava.agent_step(AuditPackage, evaluations=audit_evaluations)
 async def audit_package(package: PreparedPackage, *, agent: ava.Agent) -> PackageAudit:
-    prediction = await agent(package=package)
-    return PackageAudit.model_validate(prediction.audit)
+    return (await agent(package=package)).outputs.audit
 ```
 
 `ava.Evaluations` is a frozen Pydantic declaration with owned, read-only `metrics`
@@ -436,30 +441,31 @@ executes selectors or composites; evaluation failures remain independent of the
 workflow.
 
 These selectors reuse the signature's `audit: PackageAudit` field inside the
-complete DSPy prediction; do not introduce another input/output/context schema:
+validated outputs; do not introduce another input/output/context schema:
 
 - `ctx.inputs` contains the actual keyword arguments passed to the first successful
   `await agent(...)` call to return, not the enclosing step's arguments.
-- `ctx.output` is that call's **complete DSPy `Prediction`**. Select named fields,
-  such as `ctx.output.audit`, and use `.model_dump(mode="json")` for a whole
-  Pydantic output. The step's `return prediction.audit` remains separate.
-- `ctx.trace` contains that invocation's single JSON-compatible terminal event:
-  its invocation ID and exported trace or unavailable-trace error. Internal agent
-  iterations and model calls remain part of that trace.
+- `ctx.output` is that call's **validated outputs** (`result.outputs`). Select
+  named fields, such as `ctx.output.audit`, and use `.model_dump(mode="json")` for
+  a whole Pydantic output. The step's `return result.outputs.audit` remains separate.
+- `ctx.trace` is that invocation's complete `ava.agent.AgentTrace`, a Pydantic
+  model: `ctx.trace.header` summarizes the run, and `ctx.trace.turns` lists each
+  turn's code, tool calls and model calls. Serialize what you select with
+  `.model_dump(mode="json")`.
+- A call whose outputs fail validation records its trace but submits no evaluation.
 - Combine relevant inputs and outputs explicitly, for example
   `{"request": ctx.inputs["question"], "answer": ctx.output.answer}` when the
   agent signature has those fields. Optional `ava.EvalContext[InputType,
-  dspy.Prediction]` annotations aid static checking; no automatic lambda inference
+  pydantic.BaseModel]` annotations aid static checking; no automatic lambda inference
   is promised.
 - Return text, JSON objects, or JSON arrays with finite nested numbers from
   selectors. Convert Python-only values explicitly. Native evaluations do not
   open files, extract content, or evaluate images/media. Paths are not evidence
   of the referenced file's contents.
 
-Full terminal traces may repeat steps under `evidence.events` and repeat each
-output as `untruncated_output`. For trace-quality judgments, select the source
-and observable action fields needed for the question instead of sending every
-copy. Jev can return HTTP 400 `max_tokens_exceeded` for oversized state; Avalanche
+Every trace turn carries the code the agent ran and that code's output, so full
+traces grow quickly. For trace-quality judgments, select the source and observable
+action fields needed for the question instead of sending the whole trace. Jev can return HTTP 400 `max_tokens_exceeded` for oversized state; Avalanche
 exposes the machine code but not the potentially private request body.
 
 Equal selected state with compatible evaluator configuration is batched by
@@ -490,7 +496,7 @@ Verify `TYPESAFE_API_KEY`, including exported values that override `.env`; resta
 the operator after changing credentials and run again. Never print the key.
 
 Automatic evaluations run only in operator mode when the first successful agent
-invocation returns, before the prediction reaches step postprocessing.
+invocation returns, before the result reaches step postprocessing.
 The first successful return wins, not the first start. Later calls still run
 normally but neither overwrite nor resubmit evaluation. Failed or cancelled
 calls do not claim the capture; no successful call means no evaluation record.
@@ -515,7 +521,7 @@ Trace paths use the agent accent color; input and output paths remain neutral.
 Clickable trace labels underline only on hover.
 In run views, clicking a trace label or pressing Enter/Space opens and focuses
 the same node's **Trace** tab. Current-definition trace paths remain read-only.
-Path roots refer to the captured agent call's arguments, prediction, and trace;
+Path roots refer to the captured agent call's arguments, validated outputs, and trace;
 opaque selectors show `custom: qualified_name`. This is selection metadata, not the serialized
 state sent to Jev or execution of the selector. Completed
 composites appear beside run-node evaluation badges and in the agent sidebar
@@ -559,6 +565,6 @@ also documents operator inspection and the record APIs.
 - Exercise host tools against real bounded fixtures, not placeholder returns.
 - For file-modifying agents, inspect the produced artifact using the appropriate
   PredictRLM skill's required verification procedure.
-- Inline nodes validate each declared output field automatically. In a decorated
-  body, treat the raw prediction as untrusted until the intended output has been
-  validated; `await agent(...)` still returns the raw prediction.
+- Every agent call validates each declared output field automatically, in inline
+  nodes and decorated bodies alike. Validate further only for rules the types
+  cannot express, such as citations that must exist in the source.
