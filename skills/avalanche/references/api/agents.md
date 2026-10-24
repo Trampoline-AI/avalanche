@@ -186,7 +186,7 @@ Import agent errors from `avalanche.agent`. `AgentStepError` and `AgentStepExecu
 | `AgentStepError` | Invalid injected `agent` parameter, invalid resolved input-field mapping, or missing/extra model-call input names. |
 | `TypeError` | Missing/invalid signature, outputless signature, invalid skills/tools declaration, or forbidden workflow-default keys. Signature validation may occur during workflow metadata resolution or the first agent call rather than decoration. |
 | Dependency construction errors | Invalid upstream options or incompatible skill/tool configuration. Predictor construction occurs before the call's execution-error wrapper, so these propagate directly. |
-| `AgentOutputError` | The runtime's outputs do not match the signature: a field is missing or has the wrong type. Raised after the invocation's trace is recorded; no evaluation is submitted. Chains the Pydantic `ValidationError` as its cause. |
+| `AgentOutputError` | The runtime's outputs do not match the signature: a field is missing or has the wrong type, or a PredictRLM `ava.File` output cannot be read back. Raised after the invocation's trace is recorded; no evaluation is submitted. Signature mismatches chain the Pydantic `ValidationError` as their cause. |
 | `AgentStepExecutionError` | Ordinary exception from the predictor's asynchronous call. Includes step/signature identity and input type names; chains the original exception as its cause. |
 | `asyncio.CancelledError` | Cancellation propagates without conversion. |
 
