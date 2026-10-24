@@ -7,6 +7,7 @@ list sliced by the client. Artifacts remain references until explicit download.
 
 from __future__ import annotations
 
+import hashlib
 import json
 from collections import OrderedDict
 from dataclasses import dataclass
@@ -212,12 +213,29 @@ class TuiResourceReader:
         if request.resource != "schedules":
             context.abort(grpc.StatusCode.UNIMPLEMENTED, "Unsupported TUI resource")
         catalog = op.get_catalog()
-        revision = f"{op.operator_instance_id}:catalog:{catalog.revision}"
-        if position is not None and position.revision != revision:
-            context.abort(grpc.StatusCode.OUT_OF_RANGE, "cursor_expired")
         flows = sorted(
             (flow for flow in catalog.workflows if flow.cron), key=lambda flow: flow.selector
         )
+        # Dispatch observations change without a catalog declaration revision.
+        # Pin those values too; a continuation must never mix schedule pages.
+        observation = json.dumps(
+            [
+                (
+                    flow.selector,
+                    flow.rendered_name,
+                    flow.cron,
+                    flow.next_run_at,
+                    flow.last_run_at,
+                )
+                for flow in flows
+            ],
+            separators=(",", ":"),
+            allow_nan=False,
+        )
+        digest = hashlib.sha256(observation.encode()).hexdigest()
+        revision = f"{op.operator_instance_id}:schedules:{catalog.revision}:{digest}"
+        if position is not None and position.revision != revision:
+            context.abort(grpc.StatusCode.OUT_OF_RANGE, "cursor_expired")
         if offset >= len(flows):
             return None, None, revision
         flow = flows[offset]
