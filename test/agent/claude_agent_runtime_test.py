@@ -350,6 +350,8 @@ async def test_a_workspace_is_the_working_directory_and_comes_back_as_an_output(
     assert "edited" not in options.output_format["schema"]["properties"]
     assert result.outputs.summary == "done"
     assert result.outputs.edited.reference == "notes"
+    # The returned reference stays bound to the directory the agent worked in.
+    assert result.outputs.edited.path == tmp_path
 
 
 class TwoWorkspaces(ava.Signature):
@@ -363,14 +365,20 @@ class FileOutput(ava.Signature):
     report: ava.File = ava.OutputField()
 
 
+class FileListOutput(ava.Signature):
+    question: str = ava.InputField()
+    reports: list[ava.File] = ava.OutputField()
+
+
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
     ("signature", "inputs", "match"),
     [
         (TwoWorkspaces, {"first": ava.Workspace(), "second": ava.Workspace()}, "at most one"),
         (FileOutput, {"question": "q"}, "ava.File outputs"),
+        (FileListOutput, {"question": "q"}, "ava.File outputs"),
     ],
-    ids=["two-workspaces", "file-output"],
+    ids=["two-workspaces", "file-output", "file-list-output"],
 )
 async def test_unsupported_signatures_fail_before_calling_claude(
     replay, signature, inputs, match
