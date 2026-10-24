@@ -7,9 +7,9 @@ from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
     from predict_rlm import DirectPythonBackend, Skill, skills
-    from predict_rlm import RunTrace as AgentTrace
 
     from ..file import File
+    from .contract import AgentResult
     from .defaults import AgentDefaults
     from .evidence import (
         AgentEvidenceEvent,
@@ -22,12 +22,23 @@ if TYPE_CHECKING:
         capture_agent_evidence,
     )
     from .signature import InputField, OutputField, Signature
-    from .steps import Agent, AgentStepError, AgentStepExecutionError, agent_step, step
+    from .steps import (
+        Agent,
+        AgentOutputError,
+        AgentStepError,
+        AgentStepExecutionError,
+        agent_step,
+        step,
+    )
+    from .trace import AgentTrace
 
 # Exports load on first use, so runtime-neutral submodules such as
 # ``declaration`` and ``trace`` import without DSPy or PredictRLM.
 _EXPORTS = {
     "Agent": ".steps",
+    "AgentOutputError": ".steps",
+    "AgentResult": ".contract",
+    "AgentTrace": ".trace",
     "AgentStepError": ".steps",
     "AgentStepExecutionError": ".steps",
     "agent_step": ".steps",
@@ -53,6 +64,8 @@ __all__ = [
     "AgentEvidenceListener",
     "AgentEvidenceObserverEvent",
     "AgentInvocationId",
+    "AgentOutputError",
+    "AgentResult",
     "AgentStepError",
     "AgentStepExecutionError",
     "AgentTrace",
@@ -77,10 +90,6 @@ def __getattr__(name: str):
         value = getattr(importlib.import_module(_EXPORTS[name], __name__), name)
     elif name == "skills":
         import predict_rlm.skills as value
-    elif name == "AgentTrace":
-        from predict_rlm import RunTrace
-
-        value = RunTrace
     elif name == "File":
         import warnings
 

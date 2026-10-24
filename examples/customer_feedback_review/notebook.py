@@ -480,7 +480,7 @@ def _(mo):
                 "configured `ava.Agent` through dependency injection."
             ),
             mo.ui.code_editor(
-                value="@ava.agent_step(\n    AnalyzeWorkbook,\n    runtime=ava.runtimes.PredictRLM(skills=[ava.agent.skills.spreadsheet]),\n)\nasync def analyze_workbook(\n    workbook: File, *, agent: ava.Agent\n) -> WorkbookAnalysis:\n    return (await agent(workbook=workbook)).analysis",
+                value="@ava.agent_step(\n    AnalyzeWorkbook,\n    runtime=ava.runtimes.PredictRLM(skills=[ava.agent.skills.spreadsheet]),\n)\nasync def analyze_workbook(\n    workbook: File, *, agent: ava.Agent\n) -> WorkbookAnalysis:\n    return (await agent(workbook=workbook)).outputs.analysis",
                 language="python",
                 disabled=True,
                 show_copy_button=True,
@@ -624,7 +624,7 @@ def _(
         ),
     )
     async def extract_themes(workbook: File, *, agent: ava.Agent) -> ThemeReport:
-        return ThemeReport.model_validate((await agent(workbook=workbook)).report)
+        return (await agent(workbook=workbook)).outputs.report
 
     class DetectRisks(ava.Signature):
         """Identify material account risks grounded in the feedback workbook."""
@@ -641,7 +641,7 @@ def _(
         ),
     )
     async def detect_risks(workbook: File, *, agent: ava.Agent) -> RiskReport:
-        return RiskReport.model_validate((await agent(workbook=workbook)).report)
+        return (await agent(workbook=workbook)).outputs.report
 
     @ava.step
     def compose_product_review(
@@ -678,9 +678,7 @@ def _(
         *,
         agent: ava.Agent,
     ) -> File:
-        return File.model_validate(
-            (await agent(source_workbook=source_workbook, review=review)).workbook
-        )
+        return (await agent(source_workbook=source_workbook, review=review)).outputs.workbook
 
     class WriteExecutiveBrief(ava.Signature):
         """Render the approved review as a concise Word executive brief."""
@@ -701,7 +699,7 @@ def _(
         *,
         agent: ava.Agent,
     ) -> File:
-        return File.model_validate((await agent(review=review)).brief)
+        return (await agent(review=review)).outputs.brief
 
     @ava.dest
     def publish_review_pack(workbook: File, brief: File) -> PublishedReviewPack:

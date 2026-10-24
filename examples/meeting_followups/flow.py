@@ -46,13 +46,13 @@ def load_meeting() -> MeetingContext:
     runtime=ava.runtimes.PredictRLM(lm=MODEL, sub_lm=SUB_MODEL, max_iterations=20),
 )
 async def extract_followups(meeting: MeetingContext, *, agent: ava.Agent) -> Extraction:
-    prediction = await agent(
+    result = await agent(
         transcript="\n".join(
             f"L{index:04d}: {line}" for index, line in enumerate(meeting.lines, start=1)
         ),
         meeting=f"{meeting.request.title} ({meeting.request.meeting_date.isoformat()})",
     )
-    extraction = Extraction.model_validate(prediction.extraction)
+    extraction = result.outputs.extraction
     validate_extraction(extraction, meeting)
     return extraction
 

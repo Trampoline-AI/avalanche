@@ -13,8 +13,8 @@ from ..._agent_evidence import (
 )
 from ...agent.steps import AgentStepError
 from ...agent.trace import (
+    AgentTrace,
     AgentTraceHeader,
-    AgentTraceRecord,
     AgentTraceStatus,
     PredictRLMNativeTrace,
 )
@@ -141,7 +141,7 @@ def trace_record(
     *,
     model: str | None,
     sub_model: str | None,
-) -> AgentTraceRecord:
+) -> AgentTrace:
     """The common trace record for one PredictRLM run, turns included.
 
     ``model`` and ``sub_model`` are display names that replace PredictRLM's
@@ -150,7 +150,7 @@ def trace_record(
     from .mapping import turn_from_step
 
     usage = trace.usage
-    return AgentTraceRecord(
+    return AgentTrace(
         header=trace_header(
             trace,
             evidence,

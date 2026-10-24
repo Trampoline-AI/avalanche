@@ -104,8 +104,8 @@ async def audit_rfp(
     # The table binding remains explicit at the step declaration boundary.
     dest: ava.Table = ns.audit_results,
 ) -> ava.AppendResult:
-    prediction = await agent(documents=documents)
-    return dest.append(prediction.audit)
+    result = await agent(documents=documents)
+    return dest.append(result.outputs.audit)
 ```
 
 The injected `agent` parameter is required and keyword-only. It is never passed
@@ -138,13 +138,20 @@ def answer_flow():
 
 `publish_answer` receives `answer` and `citations` in that order.
 
-## Raw predictions and multiple outputs
+## Agent results and multiple outputs
 
-In a decorated function, `await agent(...)` returns the raw DSPy prediction.
+In a decorated function, `await agent(...)` returns an `ava.agent.AgentResult`
+with two fields:
+
+- `result.outputs` holds every output field of the signature, already validated
+  against its declared type. A runtime that returns a missing or wrongly typed
+  field fails the call with `ava.agent.AgentOutputError`; values are never
+  coerced. Inline agent steps validate through the same path.
+- `result.trace` is the invocation's `ava.agent.AgentTrace`: a header that every
+  runtime fills the same way (status, model, duration, token usage, turn and
+  tool-call counts) plus its turns.
+
 The function chooses what to return or save. Neither form saves outputs automatically.
-
-`prediction.trace` contains the agent's execution trace. Its type,
-`ava.agent.AgentTrace`, is the same as PredictRLM's `RunTrace`.
 
 ```python
 class DraftArtifactsSig(ava.Signature):
@@ -162,11 +169,11 @@ async def render_artifacts(
     agent: ava.Agent,
     dest: ava.Table = ns.draft_artifacts,
 ) -> ava.AppendResult:
-    prediction = await agent(plan=plan)
+    outputs = (await agent(plan=plan)).outputs
     return dest.append(
         DraftArtifacts(
-            proposal=prediction.proposal,
-            compliance_matrix=prediction.compliance_matrix,
+            proposal=outputs.proposal,
+            compliance_matrix=outputs.compliance_matrix,
         )
     )
 ```
@@ -280,7 +287,7 @@ review_evaluations = ava.Evaluations(
             },
         ),
         "checked_evidence": ava.Metric(
-            state=lambda ctx: ctx.trace,
+            state=lambda ctx: [turn.model_dump(mode="json") for turn in ctx.trace.turns],
             question={
                 "type": "noul",
                 "instructions": (
@@ -301,8 +308,7 @@ review_evaluations = ava.Evaluations(
 
 @ava.agent_step(ReviewSignature, evaluations=review_evaluations)
 async def review_document(document: str, *, agent: ava.Agent) -> Review:
-    prediction = await agent(document=document)
-    return prediction.review
+    return (await agent(document=document)).outputs.review
 ```
 
 An inline agent takes the same declaration:
@@ -331,15 +337,20 @@ Selectors receive `ava.EvalContext(inputs, output, trace)`:
 
 - `ctx.inputs` contains the exact keyword arguments passed to the first successful
   `await agent(...)` call to return, not the enclosing step's arguments.
-- `ctx.output` is that call's **complete DSPy `Prediction`**, preserving every
-  named output field. Here, select `ctx.output.review.summary` or serialize
-  `ctx.output.review.model_dump(mode="json")`; `return prediction.review` only
-  controls the separate value sent to downstream workflow nodes.
-- `ctx.trace` is a JSON-compatible list containing that invocation's single
-  terminal event, with its invocation ID and exported trace or unavailable-trace
-  error. The trace includes the invocation's internal iterations and model calls.
+- `ctx.output` is that call's **validated outputs**, the same object as
+  `result.outputs`, with every named output field. Here, select
+  `ctx.output.review.summary` or serialize `ctx.output.review.model_dump(mode="json")`;
+  `return result.outputs.review` only controls the separate value sent to downstream
+  workflow nodes.
+- `ctx.trace` is that invocation's complete `ava.agent.AgentTrace`, turns included:
+  `ctx.trace.header` summarizes the run, and each of `ctx.trace.turns` lists the
+  code, tool calls and model calls the agent made. It is a Pydantic model, so
+  serialize the part you select, for example `ctx.trace.header.model_dump(mode="json")`.
 
-Capture happens before the prediction returns to the step body. The first
+A call whose outputs fail validation does not count as successful: its trace is
+still recorded for the run, but it submits no evaluation.
+
+Capture happens before the result returns to the step body. The first
 successful agent call to return wins, even if another call started earlier.
 Later calls still execute and return normally but cannot replace the capture
 or trigger another evaluation. Calls that fail or are cancelled do not claim it.
@@ -349,7 +360,7 @@ continues even if subsequent step postprocessing fails or is cancelled.
 Each metric has a collapsed **Input** section listing qualified source paths,
 such as `input.document`, `output.review.summary`, `output`, or `trace`. **Input**
 refers to Jev's input; path roots refer to the captured agent call's arguments,
-complete prediction, or execution trace. Bare source names have no selected field path.
+validated outputs, or execution trace. Bare source names have no selected field path.
 Trace source paths use the agent accent color; input and output paths stay neutral.
 In run views, trace labels underline only on hover: click or press Enter/Space
 to open the same node's **Trace** tab and focus it. Current definitions without
@@ -362,7 +373,7 @@ do not invent input paths.
 
 Reuse the agent signature's existing input and output types. There is no mandatory
 second context schema, `input_type`, or `output_type`. Optional selector annotations
-can use `ava.EvalContext[InputType, dspy.Prediction]`; they do not change runtime validation.
+can use `ava.EvalContext[InputType, pydantic.BaseModel]`; they do not change runtime validation.
 
 Only selected text, JSON objects, or JSON arrays are sent to Jev. Nested numbers
 must be finite. Convert Python-only values explicitly; arbitrary objects are
@@ -370,11 +381,10 @@ not stringified. Evaluation does not open files, extract document content, or
 evaluate images/media: a path is only text, not file evidence. Select already
 available text/JSON when evaluating a file-producing agent.
 
-The full `ctx.trace` may repeat agent steps in both `steps` and `evidence.events`,
-and may include an output again as `untruncated_output`. Large traces can exceed
-[Jev's context budget](https://docs.typesafe.ai/models). Select the source facts
-and observable actions needed for your question instead of sending both copies
-or silently truncating evidence.
+Every turn of `ctx.trace` carries the code the agent ran and that code's output, so
+large traces can exceed [Jev's context budget](https://docs.typesafe.ai/models).
+Select the source facts and observable actions needed for your question instead of
+sending the whole trace or silently truncating evidence.
 
 ### Answers, composites, and batching
 

@@ -62,6 +62,30 @@
   Steps with `ava.File` or `ava.Workspace` fields still reserve their file outputs in
   the run workspace and reject `output_dir`. BREAKING-PROTOCOL: part of Delta
   protocol 2.0 (agent step arguments change).
+- **Breaking** — Agents: `await agent(...)` now returns an `ava.agent.AgentResult`
+  instead of the PredictRLM prediction. `result.outputs` holds the signature's output
+  fields, already validated in strict mode, and `result.trace` is the invocation's
+  runtime-neutral `ava.agent.AgentTrace` (header plus turns). Decorated steps now
+  validate outputs like inline steps do: a missing or wrongly typed output raises
+  `ava.agent.AgentOutputError` instead of reaching the step body.
+
+  ```python
+  # before
+  prediction = await agent(document=document)
+  return Report.model_validate(prediction.report)
+
+  # after
+  return (await agent(document=document)).outputs.report
+  ```
+
+  In evaluations, `ctx.output` is the validated outputs and `ctx.trace` is the full
+  `ava.agent.AgentTrace` instead of a list of JSON events; a call whose outputs fail
+  validation submits no evaluation. `ava.agent.AgentTrace` is no longer PredictRLM's
+  `RunTrace`. Agent steps can now run on any agent runtime, not only PredictRLM.
+  BREAKING-PROTOCOL: part of Delta protocol 2.0 (agent call results and evidence
+  types change).
+- Agents: a PredictRLM file output that has no host path, lies outside the step's
+  reserved output folder, or is missing now raises `ava.agent.AgentOutputError`.
 
 ## 0.15.1 — 2026-10-24
 

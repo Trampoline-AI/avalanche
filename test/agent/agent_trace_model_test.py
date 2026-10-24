@@ -9,8 +9,8 @@ from pydantic import ValidationError
 
 import avalanche as ava
 from avalanche.agent.trace import (
+    AgentTrace,
     AgentTraceHeader,
-    AgentTraceRecord,
     CodeExecutionAction,
     ModelCallAction,
     PredictRLMNativeTrace,
@@ -74,7 +74,7 @@ def _header(**changes: object) -> AgentTraceHeader:
     return AgentTraceHeader.model_validate(fields)
 
 
-def _record(**changes: object) -> AgentTraceRecord:
+def _record(**changes: object) -> AgentTrace:
     fields: dict[str, object] = {
         "header": _header(),
         "turns": (_turn(1), _turn(2)),
@@ -82,13 +82,13 @@ def _record(**changes: object) -> AgentTraceRecord:
         "turns_streamed": False,
     }
     fields.update(changes)
-    return AgentTraceRecord.model_validate(fields)
+    return AgentTrace.model_validate(fields)
 
 
 def test_record_round_trips_through_json():
     record = _record()
 
-    restored = AgentTraceRecord.model_validate_json(record.model_dump_json())
+    restored = AgentTrace.model_validate_json(record.model_dump_json())
 
     assert restored == record
     assert restored.schema_version == 2
@@ -137,7 +137,7 @@ def test_json_body_rejects_unknown_shapes(change):
     change(body)
 
     with pytest.raises(ValidationError):
-        AgentTraceRecord.model_validate(body)
+        AgentTrace.model_validate(body)
 
 
 def test_file_evidence_records_the_reference_without_bytes_or_host_paths(tmp_path):

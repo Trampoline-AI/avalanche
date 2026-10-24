@@ -14,8 +14,8 @@ import avalanche as ava
     evaluations=...,
 )
 async def analyze(document: str, *, agent: ava.Agent) -> str:
-    prediction = await agent(document=document)
-    return prediction.summary
+    result = await agent(document=document)
+    return result.outputs.summary
 ```
 
 The example assumes a signature with input `document` and output `summary`. Ellipses denote optional arguments to omit or replace, not values to pass.
@@ -48,7 +48,7 @@ The decorator returns a single-output workflow step. The body must declare exact
 
 Declare decorated bodies outside workflow construction. Both `@ava.agent_step(...)` and `@ava.agent.step(...)` support this form; nested agent decorators raise `AgentStepError`.
 
-Decorated agent functions do not provide ordinary node-decorator options such as a node slug. The body chooses which prediction fields to return and whether to write files or tables; the decorator does not persist the body result to an application table.
+Decorated agent functions do not provide ordinary node-decorator options such as a node slug. The body chooses which output fields to return and whether to write files or tables; the decorator does not persist the body result to an application table.
 
 ### Inline call
 
@@ -122,21 +122,25 @@ ava.OutputField(**kwargs) -> FieldInfo
 | Field `desc` | Model-facing field description. `description` supplies it when `desc` is omitted. |
 | Field `default`, `default_factory`, constraints | Ordinary Pydantic field options, forwarded by DSPy. Without a default/factory the descriptor is required. |
 
-The field helpers accept keyword arguments only. Field declarations alone do not validate values; inline agent execution strictly validates outputs, while decorated bodies receive raw predictions. Malformed declarations or incompatible field options raise DSPy/Pydantic errors, including `ValueError` and `TypeError`. Signature classes expose `instructions`, `input_fields`, and `output_fields` for the declared contract; inherited dependency editing methods are outside this reference.
+The field helpers accept keyword arguments only. Field declarations alone do not validate values; every agent call strictly validates its outputs, for inline and decorated steps alike. Malformed declarations or incompatible field options raise DSPy/Pydantic errors, including `ValueError` and `TypeError`. Signature classes expose `instructions`, `input_fields`, and `output_fields` for the declared contract; inherited dependency editing methods are outside this reference.
 
 ## Injected Agent call
 
 ```python
-prediction = await agent(**inputs)
-summary = prediction.summary  # the output name declared by the signature
+result = await agent(**inputs)
+summary = result.outputs.summary  # the output name declared by the signature
 ```
 
 `inputs` must contain **exactly** the signature's input names, even for fields with descriptor defaults. Positional input arguments, extra names, and missing names are not supported. Runtime configuration cannot be overridden through this call. Avalanche checks input names, not their value types; PredictRLM/DSPy processes the values.
 
-The return is the dependency's raw DSPy prediction, with outputs accessible by their declared field names. There is no fixed Avalanche result-field schema. For a structured output, callers can explicitly validate the field with their application model, for example `Report.model_validate(prediction.report)`.
+The return is an `ava.agent.AgentResult`, the same for every runtime:
 
-PredictRLM also supplies typed `prediction.trace` and `prediction.evidence`
-metadata. `ava.agent.AgentTrace` is the PredictRLM `RunTrace` type.
+| Field | Meaning |
+| --- | --- |
+| `outputs` | A frozen Pydantic model generated from the signature, with one attribute per output field. Each value is already validated in strict mode against its declared type, so a structured field such as `result.outputs.report` is already a `Report`. |
+| `trace` | The invocation's `ava.agent.AgentTrace`: `trace.header` (runtime kind, status, stop reason, model, duration, token usage, turn and tool-call counts) and `trace.turns`, each with the code, tool calls and model calls of that turn. Runtime-specific details sit in `trace.native`. |
+
+Outputs that are missing or do not match their declared types raise `AgentOutputError` after the invocation's trace is recorded; values are never coerced or defaulted.
 
 Each step-body execution receives a fresh injected agent. Its first call constructs the predictor lazily; subsequent calls in that body reuse it. The body can make zero, one, or multiple calls. Calling a decorated step during workflow construction follows [node semantics](workflows.md), not this model-call interface.
 
@@ -169,26 +173,20 @@ Built-in skill objects are `ava.agent.skills.pdf`, `ava.agent.skills.docx`, and 
 
 ## Agent files
 
-```python
-ava.agent.File(*, path: str | None = None)
-ava.agent.File.from_dir(path: str) -> list[ava.agent.File]
-```
+Agent signatures declare files with the workflow types [`ava.File` and `ava.Workspace`](files-workspaces.md), as whole fields or inside other types such as `list[ava.File]` or `dict[str, ava.File]`. `ava.agent.File` is a deprecated alias of `ava.File`.
 
-This is PredictRLM's file-reference model, **not** the workflow runtime [`ava.File`](files-workspaces.md). It has one field, `path`: an optional host-path string, default `None`. Construction returns a reference; it does not read or verify the file. Invalid field types raise dependency Pydantic validation errors.
-
-As a signature input, `File` names a host file to mount in the agent sandbox. As a signature output, PredictRLM fills `path` with the generated host-file path. Both `File` and `list[File]` are supported signature shapes. Read generated paths through `prediction.<field>.path`, or validate a mapping-shaped output with `ava.agent.File.model_validate(prediction.<field>)` before reading `path`.
-
-`from_dir` recursively collects file references without reading their content. It sorts filenames within each visited directory, not the entire traversal. A nonexistent directory produces an empty list. Agent `File` does not expose workflow file read/write or publication methods; use [files and workspaces](files-workspaces.md) for those APIs.
+With PredictRLM, `ava.File` and `ava.Workspace` inputs are mounted in the agent sandbox where they are on the host, without copying; workspaces are mounted read-only (advisory with `DirectPythonBackend`). `ava.File` outputs are written to a folder reserved for the step, its attempt and the call, `.outputs/<step>/<attempt>/<invocation>/` inside the run workspace, and come back in `result.outputs` as `ava.File` references to that workspace; see [File references](../file-references.md). A file output without a host path, outside the reserved folder, or missing raises `AgentOutputError`. Steps with file fields own their output folder: setting the PredictRLM `output_dir` raises `AgentStepError`.
 
 ## Errors
 
-Import agent errors from `avalanche.agent`. `AgentStepError` and `AgentStepExecutionError` are separate direct `RuntimeError` subclasses.
+Import agent errors from `avalanche.agent`. `AgentStepError` and `AgentStepExecutionError` are separate direct `RuntimeError` subclasses; `AgentOutputError` subclasses `AgentStepExecutionError`.
 
 | Error | Caller-visible condition |
 | --- | --- |
 | `AgentStepError` | Invalid injected `agent` parameter, invalid resolved input-field mapping, or missing/extra model-call input names. |
 | `TypeError` | Missing/invalid signature, outputless signature, invalid skills/tools declaration, or forbidden workflow-default keys. Signature validation may occur during workflow metadata resolution or the first agent call rather than decoration. |
 | Dependency construction errors | Invalid upstream options or incompatible skill/tool configuration. Predictor construction occurs before the call's execution-error wrapper, so these propagate directly. |
+| `AgentOutputError` | The runtime's outputs do not match the signature: a field is missing or has the wrong type. Raised after the invocation's trace is recorded; no evaluation is submitted. Chains the Pydantic `ValidationError` as its cause. |
 | `AgentStepExecutionError` | Ordinary exception from the predictor's asynchronous call. Includes step/signature identity and input type names; chains the original exception as its cause. |
 | `asyncio.CancelledError` | Cancellation propagates without conversion. |
 

@@ -25,7 +25,7 @@ from pydantic import (
 from pydantic.fields import FieldInfo
 
 from .declaration import RuntimeDeclaration
-from .trace import AgentTraceRecord, RuntimeKind, Turn
+from .trace import AgentTrace, RuntimeKind, Turn
 
 # Serialized bodies always carry defaulted fields such as ``kind``; their
 # exported JSON Schema says so.
@@ -209,7 +209,7 @@ class AgentRunOutcome(BaseModel):
     model_config = _LIVE
 
     outputs: AgentOutputs
-    trace: AgentTraceRecord
+    trace: AgentTrace
 
 
 class AgentResult(BaseModel):
@@ -218,7 +218,7 @@ class AgentResult(BaseModel):
     model_config = _LIVE
 
     outputs: BaseModel
-    trace: AgentTraceRecord
+    trace: AgentTrace
 
 
 class TurnFinished(BaseModel):

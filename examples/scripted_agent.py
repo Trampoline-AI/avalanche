@@ -36,9 +36,9 @@ async def sum_numbers(*, agent: Agent) -> dict[str, int]:
     )
     with dspy.context(lm=lm, adapter=JSONAdapter()):
         result = await agent(task="Sum 2, 3 and 5; verify the result.")
-    assert result.answer == 10
+    assert result.outputs.answer == 10
     assert len(lm.history) == 3
-    return {"answer": result.answer, "lm_calls": len(lm.history)}
+    return {"answer": result.outputs.answer, "lm_calls": len(lm.history)}
 
 
 @ava.workflow

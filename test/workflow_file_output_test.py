@@ -65,9 +65,9 @@ def test_agent_file_mount_and_reserved_outputs(tmp_path):
     async def convert(document: ava.File, *, agent: ava.Agent) -> ava.File:
         first = await agent(document=document, directory=workspace, documents=[document, None])
         second = await agent(document=document, directory=workspace, documents=[document, None])
-        assert first.result.path != second.result.path
-        assert first.result.read_bytes() == second.result.read_bytes()
-        return second.result
+        assert first.outputs.result.path != second.outputs.result.path
+        assert first.outputs.result.read_bytes() == second.outputs.result.read_bytes()
+        return second.outputs.result
 
     @ava.step
     def consume(converted: ava.File) -> ava.File:
@@ -243,7 +243,7 @@ def test_agent_file_step_traces_record_input_references_not_mounted_paths(tmp_pa
         ),
     )
     async def count(document: ava.File, *, agent: ava.Agent) -> int:
-        return (await agent(document=document)).size
+        return (await agent(document=document)).outputs.size
 
     @ava.workflow
     def flow():
