@@ -94,15 +94,17 @@ async def run(
         for name, info in signature.output_model.model_fields.items()
         if info.annotation is Workspace
     ]
-    file_outputs = [
+    unsupported_outputs = [
         name
         for name, info in signature.output_model.model_fields.items()
         if _mentions(info.annotation, File)
+        or (info.annotation is not Workspace and _mentions(info.annotation, Workspace))
     ]
-    if file_outputs:
+    if unsupported_outputs:
         raise AgentStepError(
             f"agent step {request.step_name!r}: ClaudeAgent cannot return ava.File outputs "
-            f"{file_outputs}; return an ava.Workspace instead"
+            f"or a workspace other than a plain ava.Workspace field {unsupported_outputs}; "
+            "return an ava.Workspace instead"
         )
     workspace: Workspace | None = None
     with contextlib.ExitStack() as stack:

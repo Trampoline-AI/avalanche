@@ -392,6 +392,11 @@ class OptionalWorkspaceInput(ava.Signature):
     answer: str = ava.OutputField()
 
 
+class OptionalWorkspaceOutput(ava.Signature):
+    question: str = ava.InputField()
+    workspace: ava.Workspace | None = ava.OutputField()
+
+
 class FileListOutput(ava.Signature):
     question: str = ava.InputField()
     reports: list[ava.File] = ava.OutputField()
@@ -404,6 +409,7 @@ class FileListOutput(ava.Signature):
         (TwoWorkspaces, {"first": ava.Workspace(), "second": ava.Workspace()}, "at most one"),
         (FileOutput, {"question": "q"}, "ava.File outputs"),
         (FileListOutput, {"question": "q"}, "ava.File outputs"),
+        (OptionalWorkspaceOutput, {"question": "q"}, "plain ava.Workspace"),
         (FileTupleInput, {"files": (ava.File(content=b"x"),)}, "typed exactly"),
         (
             FileInModelInput,
@@ -416,6 +422,7 @@ class FileListOutput(ava.Signature):
         "two-workspaces",
         "file-output",
         "file-list-output",
+        "optional-workspace-output",
         "file-tuple-input",
         "file-in-model-input",
         "optional-workspace-input",
