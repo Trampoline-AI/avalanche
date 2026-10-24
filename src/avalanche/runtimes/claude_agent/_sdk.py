@@ -70,12 +70,15 @@ _SERVER = "avalanche"
 _JSON = TypeAdapter(JsonValue)
 # Tool arguments and results kept in a trace; larger values are replaced by a marker.
 _MAX_VALUE_BYTES = 256 * 1024
+# An error reason taken from a result's free text is cut to this length.
+_MAX_ERROR_CHARS = 4096
 
 
 async def run(
     runtime: ClaudeAgent, request: AgentRequest, events: AgentEventSink
 ) -> AgentRunOutcome:
     signature = request.signature
+    _check_inputs(request)
     workspace_inputs = [
         name
         for name, info in signature.input_model.model_fields.items()
@@ -94,7 +97,7 @@ async def run(
     file_outputs = [
         name
         for name, info in signature.output_model.model_fields.items()
-        if _mentions_file(info.annotation)
+        if _mentions(info.annotation, File)
     ]
     if file_outputs:
         raise AgentStepError(
@@ -202,7 +205,7 @@ async def run(
             record.model_copy(update={"turns": (), "turns_streamed": True}), complete=True
         )
         if record.header.status != "succeeded":
-            detail = "; ".join(result.errors or ()) or result.result or result.subtype
+            detail = "; ".join(_result_errors(result)) or result.subtype
             if result.subtype == "success" and not result.is_error:
                 detail = (
                     "the session succeeded without the structured output the signature needs"
@@ -259,11 +262,9 @@ def _prompt_inputs(
         value = getattr(request.inputs, name)
         if info.annotation is Workspace:
             values[name] = "the current working directory"
-        elif isinstance(value, File):
+        elif info.annotation is File:
             values[name] = write(value)
-        elif (
-            isinstance(value, list) and all(isinstance(item, File) for item in value) and value
-        ):
+        elif info.annotation == list[File]:
             values[name] = [write(item) for item in value]
         else:
             values[name] = to_jsonable_python(value)
@@ -282,15 +283,45 @@ def _system_prompt(instructions: str, append: str | None) -> str:
     return f"{prompt}\n\n{append.strip()}" if append else prompt
 
 
-def _mentions_file(annotation: object) -> bool:
-    if annotation is File:
+def _mentions(annotation: object, target: type, seen: frozenset[type] = frozenset()) -> bool:
+    """Whether ``target`` appears anywhere in a field type, including inside models."""
+    if annotation is target:
         return True
+    if isinstance(annotation, type) and issubclass(annotation, BaseModel):
+        if annotation in seen:
+            return False
+        return any(
+            _mentions(field.annotation, target, seen | {annotation})
+            for field in annotation.model_fields.values()
+        )
     origin = get_origin(annotation)
     if origin is None:
         return False
     if origin in (Union, types.UnionType) or isinstance(origin, type):
-        return any(_mentions_file(argument) for argument in get_args(annotation))
+        return any(_mentions(argument, target, seen) for argument in get_args(annotation))
     return False
+
+
+def _check_inputs(request: AgentRequest) -> None:
+    """Files and workspaces are supported only as whole input field types."""
+    for name, info in request.signature.input_model.model_fields.items():
+        annotation = info.annotation
+        if annotation in (File, Workspace, list[File]):
+            continue
+        if _mentions(annotation, File) or _mentions(annotation, Workspace):
+            raise AgentStepError(
+                f"agent step {request.step_name!r}: ClaudeAgent input {name!r} must be typed "
+                "exactly ava.File, list[ava.File] or ava.Workspace when it holds files"
+            )
+
+
+def _result_errors(result: ResultMessage) -> tuple[str, ...]:
+    """Why a result failed; API failures carry their reason only in the result text."""
+    if result.errors:
+        return tuple(result.errors)
+    if result.is_error and result.result:
+        return (result.result[:_MAX_ERROR_CHARS],)
+    return ()
 
 
 def _output_schema(model: type[BaseModel], workspace_outputs: list[str]) -> dict[str, Any]:
@@ -487,7 +518,7 @@ class _Transcript:
                         is_error=message.is_error,
                         num_turns=message.num_turns,
                         **_structured_output(message.structured_output),
-                        errors=tuple(message.errors or ()),
+                        errors=_result_errors(message),
                     ),
                     None,
                 )
@@ -568,7 +599,7 @@ class _Transcript:
                 num_turns=result.num_turns,
                 duration_api_ms=result.duration_api_ms,
                 permission_denials=len(result.permission_denials or ()),
-                errors=tuple(result.errors or ()),
+                errors=_result_errors(result),
             ),
             turns_streamed=False,
         )
