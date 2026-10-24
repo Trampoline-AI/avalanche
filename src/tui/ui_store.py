@@ -289,10 +289,8 @@ class UIStore:
         *,
         defer_initial_catalog: bool = False,
         reset_baseline_loader: Callable[[StreamResetNotice], ResetBaseline] | None = None,
-        read_only: bool = False,
     ) -> None:
         self.provider = provider
-        self.read_only = read_only
         self._empty_logs = LogWindow()
         self.log_node_filter: str | None = None
         self.log_level_filter: str | None = None
@@ -335,8 +333,6 @@ class UIStore:
         self._status_refresh_in_flight = False
         self._catalog_refresh_in_flight = False
         self._catalog_refresh_generation = 0
-        self._start_run_in_flight = False
-        self._start_request_generation = 0
         self._run_interaction_generation = 0
         self._detail_hydration_generation = 0
         self._detail_hydration_retry_generation = 0
@@ -2075,88 +2071,6 @@ class UIStore:
             self.nav_grid, self.selected_node, self.preferred_row, dx, dy
         )
 
-    # ── Mutation: run control ──────────────────────────────────────
-
-    def start_run(self) -> str | None:
-        if self.read_only or not self.current_workflow:
-            return None
-        selector = self.current_workflow.selector
-        try:
-            run_id = self.provider.start_run(selector)
-            if not run_id:
-                self.run_error = "Run failed to start"
-                return None
-            run = self.provider.get_run(run_id)
-            runs = self.provider.list_runs(selector)
-        except Exception as exc:
-            self.run_error = str(exc) or "Run failed to start"
-            return None
-        # Refresh cache so the new run appears immediately.
-        self._set_runs_cache(runs)
-        self.current_run = run
-        if run is not None:
-            self._replace_run_references(run)
-        self._advance_run_data_revision(selector)
-        self.start_time = time.monotonic()
-        self.run_error = ""
-        return run_id
-
-    def start_run_async(self, **kwargs) -> bool:
-        """Launch the complete start/get/list sequence off the UI thread."""
-        workflow = self.current_workflow
-        if self.read_only or workflow is None or self._start_run_in_flight:
-            return False
-
-        import threading
-
-        self._start_run_in_flight = True
-        self._start_request_generation += 1
-        request_generation = self._start_request_generation
-        interaction_generation = self._run_interaction_generation
-        workflow_selector = workflow.selector
-        data_revision = self._run_data_revision(workflow_selector)
-        context_epoch = self._workflow_context_epoch
-        provider = self.provider
-        self.run_error = ""
-
-        def _do_start() -> None:
-            run_id = ""
-            run = None
-            runs = None
-            error = ""
-            try:
-                run_id = provider.start_run(workflow_selector, **kwargs)
-                if not run_id:
-                    error = "Run failed to start"
-                else:
-                    run = provider.get_run(run_id)
-                    runs = provider.list_runs(workflow_selector)
-                    if run is None:
-                        run = next((item for item in runs if item.run_id == run_id), None)
-                        if run is None:
-                            error = f"Started run {run_id} was not found"
-            except Exception as exc:
-                error = str(exc) or "Run failed to start"
-            self._background_updates.put(
-                (
-                    "start_run",
-                    (
-                        workflow_selector,
-                        request_generation,
-                        interaction_generation,
-                        data_revision,
-                        context_epoch,
-                        run_id,
-                        run,
-                        runs,
-                        error,
-                    ),
-                )
-            )
-
-        threading.Thread(target=_do_start, daemon=True).start()
-        return True
-
     def select_next_run(self) -> None:
         """Move down in run history (toward older runs)."""
         display = list(reversed(self.runs_for_current_workflow))
@@ -2566,48 +2480,6 @@ class UIStore:
             elif kind == "trace_hydration_complete":
                 applied = self._apply_trace_detail_completion(payload)
                 self._trace_hydration_completions.append((payload, applied))
-            elif kind == "start_run":
-                (
-                    selector,
-                    request_generation,
-                    interaction_generation,
-                    data_revision,
-                    context_epoch,
-                    run_id,
-                    run,
-                    runs,
-                    error,
-                ) = payload
-                if request_generation == self._start_request_generation:
-                    self._start_run_in_flight = False
-                context_relevant = (
-                    request_generation == self._start_request_generation
-                    and interaction_generation == self._run_interaction_generation
-                    and context_epoch == self._workflow_context_epoch
-                    and self.current_workflow is not None
-                    and self.current_workflow.selector == selector
-                )
-                data_relevant = data_revision == self._run_data_revision(selector)
-                relevant = context_relevant and data_relevant
-                if not relevant:
-                    if context_relevant and not data_relevant:
-                        self._refresh_runs_cache()
-                    continue
-                if error:
-                    self.run_error = error
-                    continue
-                self.run_error = ""
-                self._set_runs_cache(runs or ([] if run is None else [run]))
-                self.current_run = run or next(
-                    (item for item in self._runs_cache if item.run_id == run_id), None
-                )
-                if self.current_run is not None:
-                    self._replace_run_references(self.current_run)
-                self.run_pinned = True
-                self.start_time = time.monotonic()
-                self._advance_run_data_revision(selector)
-                if run_id and self._runs_cache:
-                    self.workflow_statuses[selector] = self._runs_cache[-1].status
         self._start_due_detail_hydrations()
 
     def _apply_reset_baseline(self, baseline: ResetBaseline) -> None:

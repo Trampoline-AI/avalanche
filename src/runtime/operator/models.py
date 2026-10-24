@@ -44,10 +44,7 @@ class LogEntry:
     node_id: str
     message: str
 
-
-@dataclass(frozen=True)
-class CapturedLogEntry(LogEntry):
-    """Worker-owned activity identity; absent on legacy/operator diagnostics."""
+    # Operator diagnostics have no worker attempt; captured activity carries both.
 
     channel: str | None = None
     attempt: str | None = None

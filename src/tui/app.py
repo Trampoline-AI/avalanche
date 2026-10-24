@@ -33,7 +33,7 @@ from .state import (
     TuiContext,
     TuiExtensionError,
     get_operator_reachability,
-    get_tui_extensions,
+    require_tui_provider,
     status_label,
 )
 from .theme import AVALANCHE_THEME
@@ -120,11 +120,10 @@ class AvalancheApp(App):
         defer_initial_catalog = provider is not None
         if provider is None:
             provider = MockStateProvider(include_agent_trace=workflow == "agent_trace")
+        require_tui_provider(provider)
         if read_only:
             provider = ReadOnlyStateProvider(provider)
-        self.store = UIStore(
-            provider, defer_initial_catalog=defer_initial_catalog, read_only=read_only
-        )
+        self.store = UIStore(provider, defer_initial_catalog=defer_initial_catalog)
         self.read_only = read_only
         self._deep_link_run = run
         self._deep_link_run_in_flight = False
@@ -148,7 +147,6 @@ class AvalancheApp(App):
             max_workers=1,
             thread_name_prefix="avalanche-run-control",
         )
-        self._cancel_run_requests: set[str] = set()
         self._run_controls_closed = False
         self._dag_visible = True
         self._restore_dag_focus = False
@@ -160,7 +158,11 @@ class AvalancheApp(App):
         self._deep_link_workflow = workflow
         self._deep_link_node = node
         self._operator_was_reachable: bool | None = None
-        self.extension_session: ExtensionSession | None = None
+        self.extension_session = ExtensionSession(
+            provider.tui_extensions,
+            read_only=read_only,
+            post=lambda callback: self.call_later(callback),
+        )
         self._extension_baseline_generation = 0
         self._scope_reload_pending = False
         self._extension_token: tuple | None = None
@@ -285,48 +287,36 @@ class AvalancheApp(App):
             "Follow / pause logs", "Toggle live log following", self.action_toggle_autoscroll
         )
         yield SystemCommand("Help", "Keys and current context", self.action_context_help)
-        if self.extension_session is None:
-            if self.can_start_run():
+        description = self.extension_session.description
+        if description is not None:
+            for panel in (
+                description.panels if "paged-resources" in description.features else ()
+            ):
                 yield SystemCommand(
-                    "Start run", "Start the selected workflow", self.action_start_run
+                    f"{panel.slot} / {panel.label}",
+                    f"Open {panel.renderer} panel",
+                    lambda panel=panel: self.open_extension_panel(panel),
                 )
-            if self.can_cancel_selected_run():
-                yield SystemCommand(
-                    "Cancel run", "Request cancellation", self.action_cancel_run
-                )
-        else:
-            description = self.extension_session.description
-            if description is not None:
-                for panel in (
-                    description.panels if "paged-resources" in description.features else ()
+            for action in description.actions:
+                if (
+                    action.input_schema is not None
+                    and "json-schema-forms" not in description.features
                 ):
-                    yield SystemCommand(
-                        f"{panel.slot} / {panel.label}",
-                        f"Open {panel.renderer} panel",
-                        lambda panel=panel: self.open_extension_panel(panel),
-                    )
-                for action in description.actions:
-                    if (
-                        action.input_schema is not None
-                        and "json-schema-forms" not in description.features
-                    ):
-                        continue
-                    unavailable = not action.available or (self.read_only and action.mutates)
-                    reason = "read-only" if self.read_only and action.mutates else action.reason
-                    label = (
-                        f"{action.label} · disabled: {reason}" if unavailable else action.label
-                    )
-                    yield SystemCommand(
-                        label,
-                        action.permission or "Provider action",
-                        lambda action=action: self.invoke_extension_action(action),
-                    )
-                for scope in description.scopes:
-                    yield SystemCommand(
-                        f"Scope / {scope.label}",
-                        scope.reason or "Switch scope",
-                        lambda scope=scope: self.select_extension_scope(scope),
-                    )
+                    continue
+                unavailable = not action.available or (self.read_only and action.mutates)
+                reason = "read-only" if self.read_only and action.mutates else action.reason
+                label = f"{action.label} · disabled: {reason}" if unavailable else action.label
+                yield SystemCommand(
+                    label,
+                    action.permission or "Provider action",
+                    lambda action=action: self.invoke_extension_action(action),
+                )
+            for scope in description.scopes:
+                yield SystemCommand(
+                    f"Scope / {scope.label}",
+                    scope.reason or "Switch scope",
+                    lambda scope=scope: self.select_extension_scope(scope),
+                )
 
     def _focus_history(self) -> None:
         self.store.focused_pane = "run-history"
@@ -365,20 +355,14 @@ class AvalancheApp(App):
         self.push_screen(LogFilterScreen())
 
     def action_schedules(self) -> None:
-        lines = ["Schedule control is not exposed by the legacy provider."]
-        for flow in self.store.workflows:
-            if flow.cron:
-                lines.extend(
-                    [
-                        f"\n{flow.rendered_name}",
-                        f"  cron: {flow.cron}",
-                        f"  next dispatch timestamp: {flow.next_run_at}",
-                        f"  last dispatch timestamp: {flow.last_run_at}",
-                    ]
-                )
-        if len(lines) == 1:
-            lines.append("No schedules in the loaded catalog.")
-        self.push_screen(InspectionScreen("Schedules", "\n".join(lines)))
+        description = self.extension_session.description
+        panel = (
+            next((p for p in description.panels if p.resource == "schedules"), None)
+            if description
+            else None
+        )
+        if panel is not None:
+            self.open_extension_panel(panel)
 
     def action_inspect_node(self) -> None:
         import json
@@ -401,17 +385,13 @@ class AvalancheApp(App):
                     "elapsed_seconds": node.elapsed,
                     "error": node.error,
                     "trace_available": node.trace.available if node.trace else None,
-                    "attempts": "not exposed by legacy provider",
                 },
                 indent=2,
             )
         self.push_screen(InspectionScreen("Node / attempt detail", content))
 
     def open_extension_panel(self, panel: PanelDescriptor) -> None:
-        if self.extension_session is not None:
-            self.push_screen(
-                ResourceScreen(self.extension_session, panel, self.extension_context)
-            )
+        self.push_screen(ResourceScreen(self.extension_session, panel, self.extension_context))
 
     def select_extension_scope(self, scope: ScopeDescriptor) -> None:
         if not scope.selectable:
@@ -434,8 +414,6 @@ class AvalancheApp(App):
 
     def invoke_extension_action(self, action: ActionDescriptor) -> None:
         session = self.extension_session
-        if session is None:
-            return
         if (self.read_only and action.mutates) or not action.available:
             self.notify(
                 "Read-only"
@@ -470,7 +448,7 @@ class AvalancheApp(App):
         from uuid import uuid4
 
         session = self.extension_session
-        if session is None or context != self.extension_context or session.context != context:
+        if context != self.extension_context or session.context != context:
             return
         key = (context, action.id)
         if key in self._actions_in_flight:
@@ -510,13 +488,6 @@ class AvalancheApp(App):
         self._screen = WorkflowDetailScreen()
         self.push_screen(self._screen)
 
-        extension = get_tui_extensions(self.store.provider)
-        if extension is not None:
-            self.extension_session = ExtensionSession(
-                extension,
-                read_only=self.read_only,
-                post=lambda callback: self.call_later(callback),
-            )
         self.store.provider.on_run_update(self._on_run_update_bg)
         self.store.provider.on_catalog_update(self.store.enqueue_catalog_update)
         self.store.provider.on_detail_update(self.store.enqueue_detail_update)
@@ -533,15 +504,12 @@ class AvalancheApp(App):
         self._trace_hydration_closed = True
         self._run_controls_closed = True
         self.store.request_shutdown()
-        if self.extension_session is not None:
-            self.extension_session.close(wait=False)
-        close = getattr(self.store.provider, "close", None)
+        self.extension_session.close(wait=False)
         try:
-            if self._close_provider_on_unmount and callable(close):
-                close()
+            if self._close_provider_on_unmount:
+                self.store.provider.close()
         finally:
-            if self.extension_session is not None:
-                self.extension_session.close()
+            self.extension_session.close()
             self.store.shutdown()
             self._trace_hydration_executor.shutdown(wait=True, cancel_futures=True)
             self._run_control_executor.shutdown(wait=True, cancel_futures=True)
@@ -556,30 +524,29 @@ class AvalancheApp(App):
         catalog_revision = self.store.catalog_revision
         self.store.tick()
         session = self.extension_session
-        if session is not None:
-            session.select(self.extension_context)
-            changed = session.tick()
-            if session.awaiting_baseline:
+        session.select(self.extension_context)
+        changed = session.tick()
+        if session.awaiting_baseline:
+            if (
+                self.store._latest_reset_generation > self._extension_baseline_generation
+                and not self.store._reset_reconciliations_in_flight
+            ):
+                session.reconciled()
+        elif changed:
+            self.store._refresh_workflow_catalog()
+            self.store._refresh_runs_cache()
+            if isinstance(self.screen, ResourceScreen):
                 if (
-                    self.store._latest_reset_generation > self._extension_baseline_generation
-                    and not self.store._reset_reconciliations_in_flight
+                    self.screen.panel.resource in session.changed_resources
+                    or "*" in session.changed_resources
                 ):
-                    session.reconciled()
-            elif changed:
-                self.store._refresh_workflow_catalog()
-                self.store._refresh_runs_cache()
-                if isinstance(self.screen, ResourceScreen):
-                    if (
-                        self.screen.panel.resource in session.changed_resources
-                        or "*" in session.changed_resources
-                    ):
-                        self.screen._revision = None
-                        self.screen._load(None)
-            if not session.awaiting_baseline:
-                self._extension_baseline_generation = self.store._latest_reset_generation
-            if self._scope_reload_pending and session.description is not None:
-                self._scope_reload_pending = False
-                self.store._refresh_workflow_catalog()
+                    self.screen._revision = None
+                    self.screen._load(None)
+        if not session.awaiting_baseline:
+            self._extension_baseline_generation = self.store._latest_reset_generation
+        if self._scope_reload_pending and session.description is not None:
+            self._scope_reload_pending = False
+            self.store._refresh_workflow_catalog()
         self._apply_trace_hydration_completions()
         self._hydrate_selected_trace()
         if self.store.catalog_revision != catalog_revision:
@@ -1085,8 +1052,8 @@ class AvalancheApp(App):
         dots = "." * ((self.store.frame // 8) % 4)
         msg = Text()
         msg.append("CONNECTION LOST\n\n", Style(color="#f06080", bold=True))
-        connection_label = getattr(provider, "connection_label", "Operator")
-        last_error = getattr(provider, "last_error", "") or provider.stream_error
+        connection_label = provider.connection_label
+        last_error = provider.last_error or provider.stream_error
         msg.append(f"{connection_label}\n", Style(color="#e0f8ff"))
         msg.append("is not reachable.\n\n", Style(color="#7ab0c8"))
         if last_error:
@@ -1399,98 +1366,42 @@ class AvalancheApp(App):
         self._refresh_widgets()
 
     def action_start_run(self) -> None:
-        session = self.extension_session
-        if session is not None:
-            description = session.description
-            action = (
-                next((a for a in description.actions if a.id == "run.start"), None)
-                if description
-                else None
-            )
-            if action is None:
-                self.notify("Start is not exposed by this provider", severity="warning")
-                return
-            self.invoke_extension_action(action)
-            return
         self._run_actions_menu_open = False
-        if not self.can_start_run():
-            return
-        if self.store.start_run_async():
-            self._log_autoscroll = True
-            self._refresh_widgets()
+        description = self.extension_session.description
+        action = (
+            next((a for a in description.actions if a.id == "run.start"), None)
+            if description
+            else None
+        )
+        if action is not None:
+            self.invoke_extension_action(action)
 
     def can_start_run(self) -> bool:
-        """Return whether the current workflow can start a run."""
-        if self.extension_session is not None:
-            description = self.extension_session.description
-            return (
-                not self.read_only
-                and description is not None
-                and any(a.id == "run.start" and a.available for a in description.actions)
-            )
+        description = self.extension_session.description
         return (
             not self.read_only
-            and self.store.current_workflow is not None
-            and not self.store._start_run_in_flight
+            and description is not None
+            and any(a.id == "run.start" and a.available for a in description.actions)
         )
 
     def can_cancel_selected_run(self) -> bool:
-        if self.extension_session is not None:
-            description = self.extension_session.description
-            return (
-                not self.read_only
-                and description is not None
-                and any(a.id == "run.cancel" and a.available for a in description.actions)
-            )
-        run = self.store.current_run
+        description = self.extension_session.description
         return (
             not self.read_only
-            and run is not None
-            and any(
-                run.status is status
-                for status in (RunStatus.REQUESTING, RunStatus.PENDING, RunStatus.RUNNING)
-            )
-            and not self._cancel_run_requests
+            and description is not None
+            and any(a.id == "run.cancel" and a.available for a in description.actions)
         )
 
     def action_cancel_run(self) -> None:
-        """Request cancellation without blocking the Textual event loop."""
-        if self.extension_session is not None:
-            description = self.extension_session.description
-            action = (
-                next((a for a in description.actions if a.id == "run.cancel"), None)
-                if description
-                else None
-            )
-            if action is not None:
-                self.invoke_extension_action(action)
-            return
-        run = self.store.current_run
-        if run is None or not self.can_cancel_selected_run():
-            return
-
-        run_id = run.run_id
-        self._cancel_run_requests.add(run_id)
         self._run_actions_menu_open = False
-        self._refresh_widgets()
-
-        def request_cancel() -> None:
-            error = ""
-            try:
-                self.store.provider.cancel_run(run_id)
-            except Exception as exc:
-                error = str(exc) or "Run failed to stop"
-            if not self._run_controls_closed:
-                self.call_from_thread(self._complete_cancel_run, run_id, error)
-
-        self._run_control_executor.submit(request_cancel)
-
-    def _complete_cancel_run(self, run_id: str, error: str) -> None:
-        """Apply the completed cancellation request on the UI thread."""
-        self._cancel_run_requests.discard(run_id)
-        if error:
-            self.store.run_error = error
-        self._refresh_widgets()
+        description = self.extension_session.description
+        action = (
+            next((a for a in description.actions if a.id == "run.cancel"), None)
+            if description
+            else None
+        )
+        if action is not None:
+            self.invoke_extension_action(action)
 
     def action_toggle_run_actions_menu(self) -> None:
         if (self._screen is not None and self._screen.size.height <= 15) or (

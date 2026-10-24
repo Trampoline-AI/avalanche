@@ -18,6 +18,7 @@ from .models import (
 )
 
 
+@runtime_checkable
 class StateProvider(Protocol):
     """State and action contract consumed by the Avalanche TUI.
 
@@ -31,6 +32,15 @@ class StateProvider(Protocol):
     operator_instance_id: str
     stream_state: str
     stream_error: str
+    tui_extensions: TuiExtensions
+
+    @property
+    def connection_label(self) -> str: ...
+
+    @property
+    def last_error(self) -> str: ...
+
+    def ping(self) -> bool: ...
 
     def list_workflows(self) -> list[WorkflowInfo]: ...
 
@@ -75,21 +85,6 @@ class StateProvider(Protocol):
     ) -> None: ...
 
 
-@runtime_checkable
-class ConnectionAwareStateProvider(Protocol):
-    """Optional connection state exposed by remote providers."""
-
-    operator_reachable: bool
-
-    @property
-    def connection_label(self) -> str: ...
-
-    @property
-    def last_error(self) -> str: ...
-
-    def ping(self) -> bool: ...
-
-
 def status_label(status: object) -> str:
     """Preserve a provider's status label without enum conversion."""
     return str(getattr(status, "value", status))
@@ -102,7 +97,7 @@ def get_operator_reachability(provider: StateProvider) -> bool:
 
 def get_stream_state(provider: StateProvider) -> str:
     """Return the provider's explicit stream lifecycle value."""
-    value = getattr(provider.stream_state, "value", provider.stream_state)
+    value = provider.stream_state
     if not isinstance(value, str):
         raise TypeError("provider.stream_state must be a string-valued state")
     return value
@@ -226,7 +221,7 @@ class TuiExtensionError(Exception):
 
 @runtime_checkable
 class TuiExtensions(Protocol):
-    """Optional v1 interface. Providers own authorization, deadlines and replay.
+    """Required v1 interface. Providers own authorization, deadlines and replay.
 
     Calls run off the UI thread. Returned context must exactly echo the input,
     including generation. Mappings are immutable. Cursors pin resource/revision;
@@ -261,14 +256,16 @@ class TuiExtensions(Protocol):
     def subscribe(self, callback: Callable[[Invalidation], None]) -> Callable[[], None]: ...
 
 
-def get_tui_extensions(provider: StateProvider) -> TuiExtensions | None:
-    """Negotiate the optional boundary without expanding the legacy protocol."""
-    extension = getattr(provider, "tui_extensions", None)
-    if extension is None:
-        return None
-    if not isinstance(extension, TuiExtensions):
-        raise TypeError("tui_extensions must implement TuiExtensions")
-    return extension if extension.protocol_version[0] == 1 else None
+def require_tui_provider(provider: StateProvider) -> None:
+    """Reject incomplete providers before creating UI workers or starting streams."""
+    if not isinstance(provider, StateProvider):
+        raise TypeError(
+            "The TUI requires the complete StateProvider store contract and "
+            "tui_extensions implementing TuiExtensions v1"
+        )
+    extension = provider.tui_extensions
+    if not isinstance(extension, TuiExtensions) or extension.protocol_version[0] != 1:
+        raise TypeError("The TUI requires TuiExtensions v1")
 
 
 class ReadOnlyExtensions:
@@ -312,7 +309,7 @@ class ReadOnlyExtensions:
 
 
 class ReadOnlyStateProvider:
-    """An explicit transport-facing mutation fence around a legacy provider.
+    """An explicit transport-facing mutation fence around a v1 provider.
 
     The injected original remains caller-owned. This proxy does not grant server
     authorization: authenticated providers must continue enforcing it themselves.
@@ -320,8 +317,8 @@ class ReadOnlyStateProvider:
 
     def __init__(self, provider: StateProvider) -> None:
         self._provider = provider
-        extension = get_tui_extensions(provider)
-        self.tui_extensions = ReadOnlyExtensions(extension) if extension is not None else None
+        require_tui_provider(provider)
+        self.tui_extensions = ReadOnlyExtensions(provider.tui_extensions)
 
     @property
     def operator_reachable(self) -> bool:
@@ -341,13 +338,14 @@ class ReadOnlyStateProvider:
 
     @property
     def connection_label(self) -> str:
-        if isinstance(self._provider, ConnectionAwareStateProvider):
-            return self._provider.connection_label
-        return "Provider"
+        return self._provider.connection_label
 
     @property
     def last_error(self) -> str:
-        return self._provider.stream_error
+        return self._provider.last_error
+
+    def ping(self) -> bool:
+        return self._provider.ping()
 
     def list_workflows(self) -> list[WorkflowInfo]:
         return self._provider.list_workflows()
@@ -414,7 +412,6 @@ __all__ = [
     "TuiContext",
     "TuiExtensionError",
     "TuiExtensions",
-    "ConnectionAwareStateProvider",
     "StateProvider",
     "get_operator_reachability",
     "get_stream_state",

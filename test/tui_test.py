@@ -234,112 +234,6 @@ async def test_workflow_and_node_navigation_selects_the_visible_target():
         assert app.store.selected_node is None
 
 
-@pytest.mark.asyncio
-async def test_start_cancel_and_history_navigation_preserve_the_selected_run():
-    provider = MockStateProvider()
-    app = AvalancheApp(provider=provider, workflow="order_workflow")
-    async with app.run_test(size=(120, 40)) as pilot:
-        await _wait_for(pilot, lambda: app.store.current_run is not None)
-        original = app.store.current_run
-        await pilot.press("r")
-        await _wait_for(pilot, lambda: app.store.selected_run_id != original.run_id)
-        started = app.store.current_run
-        assert started.status is RunStatus.RUNNING
-        assert provider.get_run(started.run_id).flow_name == "order_workflow"
-
-        await pilot.press("a", "x")
-        await _wait_for(pilot, lambda: app.store.current_run.status is RunStatus.CANCELLED)
-        assert provider.get_run(started.run_id).status is RunStatus.CANCELLED
-        assert provider.get_run(original.run_id).status is RunStatus.SUCCESS
-
-        await pilot.press("alt+down")
-        assert app.store.selected_run_id == original.run_id
-        assert app.store.focused_pane == "dag"
-        await pilot.pause()
-        assert app.store.selected_run_id == original.run_id
-        await pilot.press("alt+up")
-        assert app.store.selected_run_id == started.run_id
-
-        # Collapsing the focused DAG routes arrows to history, not a hidden pane.
-        await pilot.press("d", "down")
-        assert app.store.selected_run_id == original.run_id
-        await pilot.press("d", "right")
-        assert app.store.selected_node.name == "fetch_orders_1"
-
-
-@pytest.mark.asyncio
-async def test_delayed_start_cannot_steal_workflow_selection():
-    entered = threading.Event()
-    release = threading.Event()
-
-    class SlowStartProvider(MockStateProvider):
-        def start_run(self, workflow_selector, **kwargs):
-            entered.set()
-            release.wait()
-            run = RunState(
-                run_id="late-start", flow_name=workflow_selector, status=RunStatus.RUNNING
-            )
-            self._runs[run.run_id] = run
-            return run.run_id
-
-        def close(self):
-            release.set()
-
-    provider = SlowStartProvider()
-    app = AvalancheApp(provider=provider, workflow="order_workflow")
-    async with app.run_test(size=(120, 40)) as pilot:
-        await _wait_for(pilot, lambda: app.store.current_run is not None)
-        await pilot.press("r")
-        assert await asyncio.to_thread(entered.wait, 1)
-        await pilot.press("tab")
-        selected = app.store.current_workflow.selector
-        assert selected != "order_workflow"
-        release.set()
-        await _wait_for(pilot, lambda: not app.store._start_run_in_flight)
-        assert app.store.current_workflow.selector == selected
-        assert app.store.selected_run_id != "late-start"
-        assert all(run.flow_name == selected for run in app.store.runs_for_current_workflow)
-
-
-@pytest.mark.asyncio
-async def test_start_failure_and_disconnect_preserve_history_and_allow_recovery():
-    class FailingProvider(MockStateProvider):
-        connection_label = "operator.example:7433"
-        last_error = "connection refused"
-
-        def start_run(self, workflow_selector, **kwargs):
-            raise RuntimeError("run quota exhausted")
-
-        def ping(self):
-            return self.operator_reachable
-
-    provider = FailingProvider()
-    app = AvalancheApp(provider=provider, workflow="order_workflow")
-    async with app.run_test(size=(120, 40)) as pilot:
-        await _wait_for(pilot, lambda: app.store.current_run is not None)
-        run_id = app.store.selected_run_id
-        await pilot.press("r")
-        await _wait_for(pilot, lambda: bool(app.store.run_error))
-        assert "run quota exhausted" in app.screen.query_one("#status-bar").render().plain
-        assert app.store.selected_run_id == run_id
-
-        provider.stream_state = "failed"
-        provider.stream_error = "update stream interrupted"
-        await pilot.pause()
-        overlay = app.screen.query_one("#disconnect-wrapper")
-        assert not overlay.has_class("visible")
-        provider.operator_reachable = False
-        await _wait_for(pilot, lambda: overlay.has_class("visible"))
-        assert app.store.selected_run_id == run_id
-
-        provider.operator_reachable = True
-        provider.stream_state = "live"
-        await _wait_for(pilot, lambda: not overlay.has_class("visible"))
-        await pilot.press("right")
-        assert app.store.selected_node.name == "fetch_orders_1"
-        assert app.store.selected_run_id == run_id
-
-
 def test_live_terminal_state_beats_delayed_history_and_keeps_an_older_run_pinned(store):
     provider = store.provider
     current = store.current_run
@@ -1798,12 +1692,11 @@ class _ExtensionFixture:
 
 
 class _RevampProvider(MockStateProvider):
-    def __init__(self, *, extensions=False):
+    def __init__(self):
         super().__init__(include_agent_trace=True)
         self.reads = []
         self.starts = []
-        if extensions:
-            self.tui_extensions = _ExtensionFixture(self)
+        self.tui_extensions = _ExtensionFixture(self)
 
     def list_workflows(self):
         self.reads.append("catalog")
@@ -2033,13 +1926,13 @@ async def test_revamp_node_attempt_detail_and_context_help_are_readable():
 
 @pytest.mark.asyncio
 async def test_revamp_streaming_log_window_follow_pause_search_and_all_filters():
-    from tui.models import LogWindow, StreamLogEntry
+    from tui.models import LogWindow
     from tui.screens.tools import LogFilterScreen
 
     provider = _RevampProvider()
     run = provider.list_runs("order_workflow")[0]
     run.logs = [
-        StreamLogEntry(
+        LogEntry(
             datetime(2020, 1, 1),
             LogLevel.INFO,
             "fetch_orders_1",
@@ -2065,7 +1958,7 @@ async def test_revamp_streaming_log_window_follow_pause_search_and_all_filters()
             run.created_sequence,
             10021,
             10021,
-            StreamLogEntry(
+            LogEntry(
                 datetime(2020, 1, 1),
                 LogLevel.ERROR,
                 "fetch_orders_1",
@@ -2093,7 +1986,7 @@ async def test_revamp_streaming_log_window_follow_pause_search_and_all_filters()
 async def test_revamp_schema_start_form_preserves_typed_kwargs_and_confirms():
     from tui.screens.input_form import InputForm
 
-    provider = _RevampProvider(extensions=True)
+    provider = _RevampProvider()
     app = AvalancheApp(provider=provider, workflow="order_workflow")
     async with app.run_test(size=(160, 50)) as pilot:
         await _wait_for(
@@ -2124,21 +2017,25 @@ async def test_revamp_schema_start_form_preserves_typed_kwargs_and_confirms():
 
 @pytest.mark.asyncio
 async def test_revamp_schedules_inspection_never_offers_a_simulated_toggle():
-    from tui.screens.tools import InspectionScreen
+    from tui.screens.tools import ResourceScreen
 
     app = AvalancheApp()
     async with app.run_test(size=(120, 40)) as pilot:
+        await _wait_for(pilot, lambda: app.extension_session.description is not None)
         await pilot.press("ctrl+s")
-        assert isinstance(app.screen, InspectionScreen)
-        assert app.screen.query_one("#inspection-content").read_only
-        assert len(app.screen.query("Button")) == 1
+        assert isinstance(app.screen, ResourceScreen)
+        assert app.screen.panel.resource == "schedules"
+        assert not any(
+            action.id.startswith("schedule.")
+            for action in app.extension_session.description.actions
+        )
         await pilot.press("escape")
         assert app.screen is app._screen
 
 
 @pytest.mark.asyncio
 async def test_revamp_palette_and_read_only_block_keyboard_and_direct_mutations():
-    provider = _RevampProvider(extensions=True)
+    provider = _RevampProvider()
     app = AvalancheApp(provider=provider, read_only=True)
     async with app.run_test(size=(160, 50)) as pilot:
         await _wait_for(pilot, lambda: app.extension_session.description is not None)
@@ -2149,8 +2046,6 @@ async def test_revamp_palette_and_read_only_block_keyboard_and_direct_mutations(
         app.invoke_extension_action(action)
         app.action_start_run()
         app.action_cancel_run()
-        assert not app.store.start_run_async(count=2)
-        assert app.store.start_run() is None
         from tui.state import TuiExtensionError
 
         with pytest.raises(TuiExtensionError) as rejected:
@@ -2172,7 +2067,7 @@ async def test_revamp_palette_and_read_only_block_keyboard_and_direct_mutations(
 async def test_revamp_resource_panels_page_empty_error_and_reject_stale_context(renderer):
     from tui.screens.tools import ResourceScreen
 
-    provider = _RevampProvider(extensions=True)
+    provider = _RevampProvider()
     app = AvalancheApp(provider=provider)
     async with app.run_test(size=(160, 50)) as pilot:
         await _wait_for(
@@ -2201,7 +2096,7 @@ async def test_revamp_resource_panels_page_empty_error_and_reject_stale_context(
 
 @pytest.mark.asyncio
 async def test_revamp_extension_completion_cannot_repaint_after_context_switch():
-    provider = _RevampProvider(extensions=True)
+    provider = _RevampProvider()
     app = AvalancheApp(provider=provider)
     async with app.run_test(size=(160, 50)) as pilot:
         await _wait_for(

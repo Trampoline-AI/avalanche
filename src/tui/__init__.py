@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from .state import ConnectionAwareStateProvider, StateProvider
+from .state import StateProvider, TuiExtensions, require_tui_provider
 
 
 def launch_tui(
@@ -124,6 +124,9 @@ def launch_tui(
         provider = GrpcStateProvider(connect, **provider_kwargs)
         owned_provider = provider
 
+    if provider is not None:
+        require_tui_provider(provider)
+
     app = AvalancheApp(
         provider=provider,
         workflow=flow,
@@ -139,4 +142,4 @@ def launch_tui(
             owned_provider.close()
 
 
-__all__ = ["ConnectionAwareStateProvider", "StateProvider", "launch_tui"]
+__all__ = ["StateProvider", "TuiExtensions", "launch_tui"]

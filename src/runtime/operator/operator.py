@@ -52,7 +52,6 @@ from .models import (
     AgentEventDescriptor,
     AgentEventDetailAppended,
     AgentEventPage,
-    CapturedLogEntry,
     CatalogReloadRequired,
     CatalogReplaced,
     CatalogSnapshot,
@@ -1279,8 +1278,8 @@ class Operator:
             level=item.entry.level,
             node_id=item.entry.node_id,
             size_bytes=item.size_bytes,
-            channel=item.entry.channel if isinstance(item.entry, CapturedLogEntry) else None,
-            attempt=item.entry.attempt if isinstance(item.entry, CapturedLogEntry) else None,
+            channel=item.entry.channel,
+            attempt=item.entry.attempt,
             body_token=_encode_transport_token(
                 kind="log-body",
                 operator_instance_id=self._operator_instance_id,
@@ -2398,7 +2397,7 @@ class Operator:
                             matched_node_id = next(matches, None)
                             if matched_node_id is not None and next(matches, None) is None:
                                 log_node_id = matched_node_id
-                        log_entry = CapturedLogEntry(
+                        log_entry = LogEntry(
                             channel=event.get("channel"),
                             attempt=event.get("attempt"),
                             timestamp=datetime.fromtimestamp(event["timestamp"]),

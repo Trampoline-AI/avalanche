@@ -1,4 +1,4 @@
-"""Bounded operator resource pages for the optional TUI boundary.
+"""Bounded operator resource pages for the TuiExtensions v1 boundary.
 
 Continuations are server-issued, target-bound and evicted with a fixed count.
 Run history reuses the operator's immutable structural baseline, never a live

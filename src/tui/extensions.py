@@ -1,4 +1,4 @@
-"""Bounded off-thread execution for optional provider-described UI resources."""
+"""Bounded off-thread execution for provider-described UI resources."""
 
 from __future__ import annotations
 
@@ -143,8 +143,7 @@ class ExtensionSession:
                     raise TypeError("describe must return ExtensionDescription")
                 self.loading = False
                 if result.protocol_version[0] != 1:
-                    self.error = "Unsupported extension major version"
-                    return
+                    raise TypeError("The TUI requires TuiExtensions v1")
                 self.description = result
                 self.error = ""
 

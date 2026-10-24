@@ -10,7 +10,7 @@ from textual.geometry import Size
 from textual.scroll_view import ScrollView
 from textual.strip import Strip
 
-from ..models import LogEntry, LogWindow, StreamLogEntry
+from ..models import LogEntry, LogWindow
 from ..theme import DIM_STYLE, ICE_FROST, ICE_STEEL, LOG_LEVEL_STYLES
 
 _PREFIX_WIDTH = 49
@@ -81,18 +81,10 @@ class LogWidget(ScrollView, can_focus=False):
             return False
         if store.log_level_filter and entry.level.value != store.log_level_filter:
             return False
-        if store.log_channel_filter:
-            if (
-                not isinstance(entry, StreamLogEntry)
-                or entry.channel != store.log_channel_filter
-            ):
-                return False
-        if store.log_attempt_filter:
-            if (
-                not isinstance(entry, StreamLogEntry)
-                or entry.attempt != store.log_attempt_filter
-            ):
-                return False
+        if store.log_channel_filter and entry.channel != store.log_channel_filter:
+            return False
+        if store.log_attempt_filter and entry.attempt != store.log_attempt_filter:
+            return False
         return True
 
     def _append(self, sequence: int, entry: LogEntry) -> None:

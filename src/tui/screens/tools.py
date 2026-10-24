@@ -11,7 +11,7 @@ from textual.screen import ModalScreen
 from textual.widgets import Button, DataTable, Input, Label, Select, Static, TextArea, Tree
 
 from ..extensions import ExtensionSession
-from ..models import LogLevel, StreamLogEntry
+from ..models import LogLevel
 from ..state import ExtensionPage, PanelDescriptor, TuiContext, TuiExtensionError, json_plain
 
 
@@ -55,7 +55,6 @@ class LogFilterScreen(ModalScreen):
 
     def compose(self) -> ComposeResult:
         store = self.app.store
-        enhanced = [entry for entry in store.logs if isinstance(entry, StreamLogEntry)]
         with VerticalScroll():
             yield Label("Log filters · loaded window only")
             yield Label("Node ID (blank follows selected DAG node)")
@@ -66,14 +65,10 @@ class LogFilterScreen(ModalScreen):
                 allow_blank=False,
                 id="filter-level",
             )
-            yield Label("Channel" if enhanced else "Channel · not exposed by this provider")
-            yield Input(
-                store.log_channel_filter or "", id="filter-channel", disabled=not enhanced
-            )
-            yield Label("Attempt" if enhanced else "Attempt · not exposed by this provider")
-            yield Input(
-                store.log_attempt_filter or "", id="filter-attempt", disabled=not enhanced
-            )
+            yield Label("Channel")
+            yield Input(store.log_channel_filter or "", id="filter-channel")
+            yield Label("Attempt")
+            yield Input(store.log_attempt_filter or "", id="filter-attempt")
             yield Button("Apply", id="filter-apply")
             yield Button("Clear filters", id="filter-clear")
 

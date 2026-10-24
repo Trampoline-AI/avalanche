@@ -1,7 +1,7 @@
 """Shared state models and UI-owned bounded presentation data."""
 
 from collections.abc import Iterable, Sequence
-from dataclasses import dataclass, replace
+from dataclasses import replace
 
 from runtime.operator.models import (
     AgentEventDetailAppended,
@@ -25,14 +25,6 @@ from runtime.operator.models import (
 LOG_WINDOW_RECORDS = 10_000
 LOG_WINDOW_BYTES = 8 * 1024 * 1024
 LOG_MESSAGE_BYTES = 8192
-
-
-@dataclass(frozen=True)
-class StreamLogEntry(LogEntry):
-    """Optional activity metadata; None means the provider does not expose it."""
-
-    channel: str | None = None
-    attempt: str | None = None
 
 
 class LogWindow(list[LogEntry]):

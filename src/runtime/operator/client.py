@@ -11,7 +11,6 @@ from collections import OrderedDict
 from collections.abc import Mapping, Sequence
 from copy import deepcopy
 from dataclasses import dataclass, replace
-from datetime import datetime
 from enum import Enum
 from numbers import Real
 from typing import TYPE_CHECKING, Any, Callable
@@ -47,7 +46,6 @@ from .models import (
     LogAppended,
     LogDetailAppended,
     LogEntry,
-    LogLevel,
     NodeState,
     NodeStatusChanged,
     OperatorUpdate,
@@ -984,7 +982,7 @@ class GrpcStateProvider:
                 logs.append(
                     SequencedLogEntry(
                         sequence=descriptor.sequence,
-                        entry=_stream_log_entry(
+                        entry=LogEntry(
                             timestamp=descriptor.timestamp,
                             level=descriptor.level,
                             node_id=descriptor.node_id,
@@ -1758,7 +1756,7 @@ class GrpcStateProvider:
             return self._materialize_run_locked(result)
 
     def _materialize_run_locked(self, run: RunState) -> RunState:
-        """Build compatibility detail only for an explicit state read."""
+        """Hydrate retained detail only for an explicit state read."""
         result = deepcopy(run)
         if result.run_id in self._hydrated_log_runs:
             self._touch_detail_cache_locked(self._log_cache_key(result.run_id))
@@ -2586,7 +2584,7 @@ class GrpcStateProvider:
                 descriptor.body_token,
                 descriptor.size_bytes,
             ).decode()
-            log_detail = _stream_log_entry(
+            log_detail = LogEntry(
                 channel=descriptor.channel,
                 attempt=descriptor.attempt,
                 timestamp=descriptor.timestamp,
@@ -3048,20 +3046,6 @@ class GrpcStateProvider:
             thread.join(timeout=STREAM_THREAD_JOIN_TIMEOUT_SECONDS)
         with self._state_lock:
             self._clear_detail_caches_locked()
-
-
-def _stream_log_entry(
-    *,
-    timestamp: datetime,
-    level: LogLevel,
-    node_id: str,
-    message: str,
-    channel: str | None,
-    attempt: str | None,
-) -> LogEntry:
-    from tui.models import StreamLogEntry
-
-    return StreamLogEntry(timestamp, level, node_id, message, channel, attempt)
 
 
 def _structural_callback_projection(run: RunState) -> RunState:
