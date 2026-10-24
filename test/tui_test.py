@@ -2095,3 +2095,31 @@ async def test_revamp_run_deep_link_resolves_once_and_rejects_wrong_flow():
     async with wrong.run_test(size=(160, 50)) as pilot:
         await _wait_for(pilot, lambda: bool(wrong.store.run_error))
         assert wrong.store.selected_run_id != run.run_id
+
+
+def test_claude_declarations_fill_the_metadata_sections(store):
+    from avalanche.agent.declaration import (
+        AgentDeclaration,
+        ClaudeAgentDeclaration,
+        SignatureDeclaration,
+        ToolDeclaration,
+    )
+
+    declaration = AgentDeclaration(
+        signature=SignatureDeclaration(name="Sum", instructions="Add.", inputs=(), outputs=()),
+        tools=(ToolDeclaration(name="lookup", description="", source_code=""),),
+        runtime=ClaudeAgentDeclaration(
+            model="claude-haiku-5-5", settings={"max_turns": 4}, builtin_tools=("Read",)
+        ),
+    )
+    store.current_workflow = replace(
+        store.current_workflow, agent_declarations={"agent": declaration}
+    )
+    store.select_node(store.all_nodes[0])
+
+    sections = store.agent_declaration_sections()
+
+    assert sections["models"] == {"main": "claude-haiku-5-5"}
+    assert sections["runtime"] == {"max_turns": 4, "builtin_tools": ["Read"]}
+    assert [tool["name"] for tool in sections["tools"]] == ["lookup"]
+    assert sections["skills"] == {}

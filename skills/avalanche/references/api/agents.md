@@ -44,6 +44,21 @@ Model, skill and other PredictRLM settings belong to the runtime. Passing `lm=`,
 
 The remaining fields (`max_llm_calls`, `max_output_chars`, `sandbox_backend`, `allowed_domains`, `runtime_hooks`, and so on) take the same values and defaults as the installed PredictRLM constructor. Any other keyword is passed unchanged to the PredictRLM constructor, so an option Avalanche has no field for still works, and an unknown one raises PredictRLM's `TypeError` when the agent first runs.
 
+`ava.runtimes.ClaudeAgent(...)` runs the step with Claude through the [Claude Agent SDK](https://docs.claude.com/en/docs/agent-sdk/overview). It needs the `claude` extra (`uv add 'avalanche-ai[claude]'`) and the Claude Code CLI wherever the step runs, Ray workers included. Building the descriptor needs neither, so workflows that declare Claude steps import and publish without them; a step that runs without the SDK raises `AgentStepExecutionError` naming the extra.
+
+| Field | Accepted value and default | Meaning |
+| --- | --- | --- |
+| `model` | `str \| None`; default `None` | Claude model, such as `"claude-haiku-5-5"`. `None` lets the Claude CLI choose. |
+| `max_turns` | positive `int \| None`; default `None` | Most model turns before the session stops. |
+| `builtin_tools` | Sequence of Claude Code tool names; default none | Built-in tools the agent may use without asking, such as `"Read"` or `"Bash"`. None are enabled by default; the step's own `tools=` are always available. |
+| `permission_mode` | `"default"`, `"acceptEdits"`, `"plan"`, `"bypassPermissions"` or `"dontAsk"`; default `"default"` | Claude Code permission mode. |
+| `system_prompt_append` | `str \| None`; default `None` | Text appended to the signature's instructions, which form the system prompt. |
+| `max_budget_usd` | positive `float \| None`; default `None` | Spending limit for the session. |
+
+The CLI authenticates as it does in a terminal: an existing `claude` login, `CLAUDE_CODE_OAUTH_TOKEN` (create one for a Claude subscription with `claude setup-token`), or `ANTHROPIC_API_KEY`. Each call runs isolated from the user's Claude setup: user and project settings are not loaded and only the step's own tools are offered, with no MCP servers or connectors from the user's account.
+
+The signature's instructions are the system prompt; the inputs are sent as JSON and the outputs come back as Claude's structured output for the signature's output schema, then are validated like every runtime's. `ava.File` inputs are written into the session's working directory and named by relative path. One `ava.Workspace` input becomes the working directory: a reference workspace runs in place, so the agent's writes land in the host's directory, and a value workspace runs in its temporary copy; an `ava.Workspace` output field returns that directory's snapshot. Without a workspace input the session runs in an empty temporary directory. More than one workspace input, and `ava.File` outputs, raise `AgentStepError`.
+
 The decorator returns a single-output workflow step. The body must declare exactly `*, agent: ava.Agent`, with no default; Avalanche injects it and removes it from the step's public call signature. The remaining Python parameters and return annotation describe the workflow step, independently of the model signature. Synchronous and asynchronous bodies are accepted; an awaitable body result is awaited. Use an asynchronous body to await model calls.
 
 Declare decorated bodies outside workflow construction. Both `@ava.agent_step(...)` and `@ava.agent.step(...)` support this form; nested agent decorators raise `AgentStepError`.

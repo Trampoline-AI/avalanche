@@ -114,22 +114,37 @@ export function parseAgentDeclaration(raw: string | undefined): AgentDeclaration
     type: annotation,
     description,
   });
-  return {
+  const signature = {
     instructions: declaration.signature.instructions,
     inputs: declaration.signature.inputs.map(field),
     outputs: declaration.signature.outputs.map(field),
-    model: declaration.runtime.models,
-    runtime: declaration.runtime.settings,
-    skills: declaration.runtime.skills.map(({ name, instructions, packages, modules }) => ({
+  };
+  const tool = ({ name, source_code }: { name: string; source_code: string }) => ({
+    name,
+    sourceCode: source_code || undefined,
+  });
+  const { runtime } = declaration;
+  if (runtime.kind === "claude_agent") {
+    return {
+      ...signature,
+      model: { main: { source: "step override", identity: runtime.model } },
+      runtime: { ...runtime.settings, builtin_tools: runtime.builtin_tools },
+      skills: [],
+      tools: declaration.tools.map(tool),
+    };
+  }
+  return {
+    ...signature,
+    model: runtime.models,
+    runtime: runtime.settings,
+    skills: runtime.skills.map(({ name, instructions, packages, modules }) => ({
       name,
       instructions,
       packages,
       modules,
     })),
     // Skill tools first, then the step's own, as the agent sees them.
-    tools: [...declaration.runtime.skill_tools, ...declaration.tools].map(
-      ({ name, source_code }) => ({ name, sourceCode: source_code || undefined }),
-    ),
+    tools: [...runtime.skill_tools, ...declaration.tools].map(tool),
   };
 }
 

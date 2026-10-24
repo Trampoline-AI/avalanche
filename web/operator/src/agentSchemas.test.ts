@@ -110,6 +110,24 @@ describe("parseAgentDeclaration", () => {
     expect(declaration?.runtime).toEqual({ max_iterations: 3 });
   });
 
+  it("reads a Claude Agent SDK declaration", () => {
+    const declaration = parseAgentDeclaration(
+      JSON.stringify({
+        signature: { name: "Sum", instructions: "Add.", inputs: [], outputs: [] },
+        tools: [{ name: "lookup", description: "", source_code: "def lookup(): ..." }],
+        runtime: {
+          kind: "claude_agent",
+          model: "claude-haiku-5-5",
+          settings: { max_turns: 4 },
+          builtin_tools: ["Read"],
+        },
+      }),
+    );
+    expect(declaration?.runtime).toEqual({ max_turns: 4, builtin_tools: ["Read"] });
+    expect(declaration?.skills).toEqual([]);
+    expect(declaration?.tools.map((tool) => tool.name)).toEqual(["lookup"]);
+  });
+
   it("throws on a malformed declaration instead of dropping fields", () => {
     const declaration = JSON.parse(agentDeclarationJson({ instructions: "Answer." }));
     delete declaration.runtime.kind;

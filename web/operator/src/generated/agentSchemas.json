@@ -5,7 +5,22 @@
       "description": "Everything discovery publishes about one agent step.\n\n``tools`` are the step's own tools; tools a runtime adds, such as PredictRLM\nskill tools, are in its ``runtime`` section.",
       "properties": {
         "runtime": {
-          "$ref": "#/$defs/PredictRLMDeclaration"
+          "discriminator": {
+            "mapping": {
+              "claude_agent": "#/$defs/ClaudeAgentDeclaration",
+              "predict_rlm": "#/$defs/PredictRLMDeclaration"
+            },
+            "propertyName": "kind"
+          },
+          "oneOf": [
+            {
+              "$ref": "#/$defs/PredictRLMDeclaration"
+            },
+            {
+              "$ref": "#/$defs/ClaudeAgentDeclaration"
+            }
+          ],
+          "title": "Runtime"
         },
         "signature": {
           "$ref": "#/$defs/SignatureDeclaration"
@@ -85,61 +100,202 @@
         "native": {
           "discriminator": {
             "mapping": {
-              "artifact.collected": "#/$defs/Lifecycle",
-              "artifact.mounted": "#/$defs/Lifecycle",
-              "code.executed": "#/$defs/CodeExecuted",
-              "code.generated": "#/$defs/Correlated",
-              "input.prepared": "#/$defs/Lifecycle",
-              "iteration.recorded": "#/$defs/IterationRecorded",
-              "output.materialized": "#/$defs/Lifecycle",
-              "output.reserved": "#/$defs/Lifecycle",
-              "packages.installed": "#/$defs/Lifecycle",
-              "predict.finished": "#/$defs/Correlated",
-              "predict.started": "#/$defs/PredictStarted",
-              "run.cancelled": "#/$defs/RunEnded",
-              "run.failed": "#/$defs/RunEnded",
-              "run.started": "#/$defs/RunStarted",
-              "run.succeeded": "#/$defs/RunSucceeded",
-              "session.finalize_failed": "#/$defs/Lifecycle",
-              "session.finalized": "#/$defs/Lifecycle",
-              "session.release_failed": "#/$defs/Lifecycle",
-              "session.released": "#/$defs/Lifecycle",
-              "session.started": "#/$defs/Lifecycle",
-              "tool.finished": "#/$defs/Correlated",
-              "tool.started": "#/$defs/Correlated"
+              "claude_agent.messages/v1": {
+                "discriminator": {
+                  "mapping": {
+                    "finished": "#/$defs/Finished",
+                    "message.finished": "#/$defs/MessageFinished",
+                    "rate_limit": "#/$defs/RateLimited",
+                    "session.initialized": "#/$defs/SessionInitialized",
+                    "started": "#/$defs/Started",
+                    "tool.returned": "#/$defs/ToolReturned",
+                    "tool.used": "#/$defs/ToolUsed"
+                  },
+                  "propertyName": "kind"
+                },
+                "oneOf": [
+                  {
+                    "$ref": "#/$defs/Started"
+                  },
+                  {
+                    "$ref": "#/$defs/SessionInitialized"
+                  },
+                  {
+                    "$ref": "#/$defs/ToolUsed"
+                  },
+                  {
+                    "$ref": "#/$defs/ToolReturned"
+                  },
+                  {
+                    "$ref": "#/$defs/MessageFinished"
+                  },
+                  {
+                    "$ref": "#/$defs/RateLimited"
+                  },
+                  {
+                    "$ref": "#/$defs/Finished"
+                  }
+                ]
+              },
+              "predict_rlm.run/v1": {
+                "discriminator": {
+                  "mapping": {
+                    "artifact.collected": "#/$defs/Lifecycle",
+                    "artifact.mounted": "#/$defs/Lifecycle",
+                    "code.executed": "#/$defs/CodeExecuted",
+                    "code.generated": "#/$defs/Correlated",
+                    "input.prepared": "#/$defs/Lifecycle",
+                    "iteration.recorded": "#/$defs/IterationRecorded",
+                    "output.materialized": "#/$defs/Lifecycle",
+                    "output.reserved": "#/$defs/Lifecycle",
+                    "packages.installed": "#/$defs/Lifecycle",
+                    "predict.finished": "#/$defs/Correlated",
+                    "predict.started": "#/$defs/PredictStarted",
+                    "run.cancelled": "#/$defs/RunEnded",
+                    "run.failed": "#/$defs/RunEnded",
+                    "run.started": "#/$defs/RunStarted",
+                    "run.succeeded": "#/$defs/RunSucceeded",
+                    "session.finalize_failed": "#/$defs/Lifecycle",
+                    "session.finalized": "#/$defs/Lifecycle",
+                    "session.release_failed": "#/$defs/Lifecycle",
+                    "session.released": "#/$defs/Lifecycle",
+                    "session.started": "#/$defs/Lifecycle",
+                    "tool.finished": "#/$defs/Correlated",
+                    "tool.started": "#/$defs/Correlated"
+                  },
+                  "propertyName": "kind"
+                },
+                "oneOf": [
+                  {
+                    "$ref": "#/$defs/RunStarted"
+                  },
+                  {
+                    "$ref": "#/$defs/Lifecycle"
+                  },
+                  {
+                    "$ref": "#/$defs/IterationRecorded"
+                  },
+                  {
+                    "$ref": "#/$defs/PredictStarted"
+                  },
+                  {
+                    "$ref": "#/$defs/Correlated"
+                  },
+                  {
+                    "$ref": "#/$defs/CodeExecuted"
+                  },
+                  {
+                    "$ref": "#/$defs/RunSucceeded"
+                  },
+                  {
+                    "$ref": "#/$defs/RunEnded"
+                  }
+                ]
+              }
             },
-            "propertyName": "kind"
+            "propertyName": "format"
           },
           "oneOf": [
             {
-              "$ref": "#/$defs/RunStarted"
+              "discriminator": {
+                "mapping": {
+                  "artifact.collected": "#/$defs/Lifecycle",
+                  "artifact.mounted": "#/$defs/Lifecycle",
+                  "code.executed": "#/$defs/CodeExecuted",
+                  "code.generated": "#/$defs/Correlated",
+                  "input.prepared": "#/$defs/Lifecycle",
+                  "iteration.recorded": "#/$defs/IterationRecorded",
+                  "output.materialized": "#/$defs/Lifecycle",
+                  "output.reserved": "#/$defs/Lifecycle",
+                  "packages.installed": "#/$defs/Lifecycle",
+                  "predict.finished": "#/$defs/Correlated",
+                  "predict.started": "#/$defs/PredictStarted",
+                  "run.cancelled": "#/$defs/RunEnded",
+                  "run.failed": "#/$defs/RunEnded",
+                  "run.started": "#/$defs/RunStarted",
+                  "run.succeeded": "#/$defs/RunSucceeded",
+                  "session.finalize_failed": "#/$defs/Lifecycle",
+                  "session.finalized": "#/$defs/Lifecycle",
+                  "session.release_failed": "#/$defs/Lifecycle",
+                  "session.released": "#/$defs/Lifecycle",
+                  "session.started": "#/$defs/Lifecycle",
+                  "tool.finished": "#/$defs/Correlated",
+                  "tool.started": "#/$defs/Correlated"
+                },
+                "propertyName": "kind"
+              },
+              "oneOf": [
+                {
+                  "$ref": "#/$defs/RunStarted"
+                },
+                {
+                  "$ref": "#/$defs/Lifecycle"
+                },
+                {
+                  "$ref": "#/$defs/IterationRecorded"
+                },
+                {
+                  "$ref": "#/$defs/PredictStarted"
+                },
+                {
+                  "$ref": "#/$defs/Correlated"
+                },
+                {
+                  "$ref": "#/$defs/CodeExecuted"
+                },
+                {
+                  "$ref": "#/$defs/RunSucceeded"
+                },
+                {
+                  "$ref": "#/$defs/RunEnded"
+                }
+              ]
             },
             {
-              "$ref": "#/$defs/Lifecycle"
-            },
-            {
-              "$ref": "#/$defs/IterationRecorded"
-            },
-            {
-              "$ref": "#/$defs/PredictStarted"
-            },
-            {
-              "$ref": "#/$defs/Correlated"
-            },
-            {
-              "$ref": "#/$defs/CodeExecuted"
-            },
-            {
-              "$ref": "#/$defs/RunSucceeded"
-            },
-            {
-              "$ref": "#/$defs/RunEnded"
+              "discriminator": {
+                "mapping": {
+                  "finished": "#/$defs/Finished",
+                  "message.finished": "#/$defs/MessageFinished",
+                  "rate_limit": "#/$defs/RateLimited",
+                  "session.initialized": "#/$defs/SessionInitialized",
+                  "started": "#/$defs/Started",
+                  "tool.returned": "#/$defs/ToolReturned",
+                  "tool.used": "#/$defs/ToolUsed"
+                },
+                "propertyName": "kind"
+              },
+              "oneOf": [
+                {
+                  "$ref": "#/$defs/Started"
+                },
+                {
+                  "$ref": "#/$defs/SessionInitialized"
+                },
+                {
+                  "$ref": "#/$defs/ToolUsed"
+                },
+                {
+                  "$ref": "#/$defs/ToolReturned"
+                },
+                {
+                  "$ref": "#/$defs/MessageFinished"
+                },
+                {
+                  "$ref": "#/$defs/RateLimited"
+                },
+                {
+                  "$ref": "#/$defs/Finished"
+                }
+              ]
             }
           ],
           "title": "Native"
         },
         "runtime_kind": {
-          "const": "predict_rlm",
+          "enum": [
+            "predict_rlm",
+            "claude_agent"
+          ],
           "title": "Runtime Kind",
           "type": "string"
         },
@@ -181,7 +337,22 @@
           "$ref": "#/$defs/AgentTraceHeader"
         },
         "native": {
-          "$ref": "#/$defs/PredictRLMNativeTrace"
+          "discriminator": {
+            "mapping": {
+              "claude_agent.messages/v1": "#/$defs/ClaudeAgentNativeTrace",
+              "predict_rlm.run/v1": "#/$defs/PredictRLMNativeTrace"
+            },
+            "propertyName": "format"
+          },
+          "oneOf": [
+            {
+              "$ref": "#/$defs/PredictRLMNativeTrace"
+            },
+            {
+              "$ref": "#/$defs/ClaudeAgentNativeTrace"
+            }
+          ],
+          "title": "Native"
         },
         "schema_version": {
           "const": 2,
@@ -282,7 +453,10 @@
           "title": "Model"
         },
         "runtime_kind": {
-          "const": "predict_rlm",
+          "enum": [
+            "predict_rlm",
+            "claude_agent"
+          ],
           "title": "Runtime Kind",
           "type": "string"
         },
@@ -410,7 +584,10 @@
           "type": "string"
         },
         "runtime_kind": {
-          "const": "predict_rlm",
+          "enum": [
+            "predict_rlm",
+            "claude_agent"
+          ],
           "title": "Runtime Kind",
           "type": "string"
         },
@@ -441,6 +618,113 @@
         "complete"
       ],
       "title": "AgentTraceUnavailable",
+      "type": "object"
+    },
+    "ClaudeAgentDeclaration": {
+      "additionalProperties": false,
+      "description": "What a Claude Agent SDK runtime contributes to a declaration.\n\n``model`` is ``None`` when the step leaves the choice to the Claude CLI.",
+      "properties": {
+        "builtin_tools": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Builtin Tools",
+          "type": "array"
+        },
+        "kind": {
+          "const": "claude_agent",
+          "default": "claude_agent",
+          "title": "Kind",
+          "type": "string"
+        },
+        "model": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Model"
+        },
+        "settings": {
+          "additionalProperties": {
+            "$ref": "#/$defs/JsonValue"
+          },
+          "title": "Settings",
+          "type": "object"
+        }
+      },
+      "required": [
+        "kind",
+        "model",
+        "settings",
+        "builtin_tools"
+      ],
+      "title": "ClaudeAgentDeclaration",
+      "type": "object"
+    },
+    "ClaudeAgentNativeTrace": {
+      "additionalProperties": false,
+      "description": "Claude Agent SDK session details that have no common-layer equivalent.",
+      "properties": {
+        "duration_api_ms": {
+          "anyOf": [
+            {
+              "minimum": 0,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Duration Api Ms"
+        },
+        "errors": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Errors",
+          "type": "array"
+        },
+        "format": {
+          "const": "claude_agent.messages/v1",
+          "default": "claude_agent.messages/v1",
+          "title": "Format",
+          "type": "string"
+        },
+        "num_turns": {
+          "minimum": 0,
+          "title": "Num Turns",
+          "type": "integer"
+        },
+        "permission_denials": {
+          "minimum": 0,
+          "title": "Permission Denials",
+          "type": "integer"
+        },
+        "result_subtype": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Result Subtype"
+        }
+      },
+      "required": [
+        "format",
+        "result_subtype",
+        "num_turns",
+        "duration_api_ms",
+        "permission_denials",
+        "errors"
+      ],
+      "title": "ClaudeAgentNativeTrace",
       "type": "object"
     },
     "CodeExecuted": {
@@ -620,6 +904,58 @@
       "title": "FieldDeclaration",
       "type": "object"
     },
+    "Finished": {
+      "additionalProperties": false,
+      "description": "The SDK's result message: how the session ended and the structured output.",
+      "properties": {
+        "errors": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Errors",
+          "type": "array"
+        },
+        "format": {
+          "const": "claude_agent.messages/v1",
+          "default": "claude_agent.messages/v1",
+          "title": "Format",
+          "type": "string"
+        },
+        "is_error": {
+          "title": "Is Error",
+          "type": "boolean"
+        },
+        "kind": {
+          "const": "finished",
+          "default": "finished",
+          "title": "Kind",
+          "type": "string"
+        },
+        "num_turns": {
+          "minimum": 0,
+          "title": "Num Turns",
+          "type": "integer"
+        },
+        "structured_output": {
+          "$ref": "#/$defs/JsonValue"
+        },
+        "subtype": {
+          "title": "Subtype",
+          "type": "string"
+        }
+      },
+      "required": [
+        "format",
+        "kind",
+        "subtype",
+        "is_error",
+        "num_turns",
+        "structured_output",
+        "errors"
+      ],
+      "title": "Finished",
+      "type": "object"
+    },
     "IterationRecorded": {
       "additionalProperties": false,
       "description": "PredictRLM's details of a finished turn; the turn itself is the common event.",
@@ -736,6 +1072,71 @@
         "kind"
       ],
       "title": "Lifecycle",
+      "type": "object"
+    },
+    "MessageFinished": {
+      "additionalProperties": false,
+      "description": "One assistant message, completed by its tool results; the turn is common.",
+      "properties": {
+        "api_error": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Api Error"
+        },
+        "format": {
+          "const": "claude_agent.messages/v1",
+          "default": "claude_agent.messages/v1",
+          "title": "Format",
+          "type": "string"
+        },
+        "kind": {
+          "const": "message.finished",
+          "default": "message.finished",
+          "title": "Kind",
+          "type": "string"
+        },
+        "message_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Message Id"
+        },
+        "model": {
+          "title": "Model",
+          "type": "string"
+        },
+        "stop_reason": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Stop Reason"
+        }
+      },
+      "required": [
+        "format",
+        "kind",
+        "message_id",
+        "model",
+        "stop_reason",
+        "api_error"
+      ],
+      "title": "MessageFinished",
       "type": "object"
     },
     "ModelCallAction": {
@@ -1349,6 +1750,46 @@
       "title": "PredictStarted",
       "type": "object"
     },
+    "RateLimited": {
+      "additionalProperties": false,
+      "properties": {
+        "format": {
+          "const": "claude_agent.messages/v1",
+          "default": "claude_agent.messages/v1",
+          "title": "Format",
+          "type": "string"
+        },
+        "kind": {
+          "const": "rate_limit",
+          "default": "rate_limit",
+          "title": "Kind",
+          "type": "string"
+        },
+        "limit_type": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Limit Type"
+        },
+        "status": {
+          "title": "Status",
+          "type": "string"
+        }
+      },
+      "required": [
+        "format",
+        "kind",
+        "status",
+        "limit_type"
+      ],
+      "title": "RateLimited",
+      "type": "object"
+    },
     "RunEnded": {
       "additionalProperties": false,
       "description": "A run that failed or was cancelled.",
@@ -1452,6 +1893,62 @@
       "title": "RunSucceeded",
       "type": "object"
     },
+    "SessionInitialized": {
+      "additionalProperties": false,
+      "description": "The CLI's own report of the session it started.",
+      "properties": {
+        "format": {
+          "const": "claude_agent.messages/v1",
+          "default": "claude_agent.messages/v1",
+          "title": "Format",
+          "type": "string"
+        },
+        "kind": {
+          "const": "session.initialized",
+          "default": "session.initialized",
+          "title": "Kind",
+          "type": "string"
+        },
+        "model": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Model"
+        },
+        "session_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Session Id"
+        },
+        "tools": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Tools",
+          "type": "array"
+        }
+      },
+      "required": [
+        "format",
+        "kind",
+        "session_id",
+        "model",
+        "tools"
+      ],
+      "title": "SessionInitialized",
+      "type": "object"
+    },
     "SignatureDeclaration": {
       "additionalProperties": false,
       "properties": {
@@ -1485,6 +1982,46 @@
         "outputs"
       ],
       "title": "SignatureDeclaration",
+      "type": "object"
+    },
+    "Started": {
+      "additionalProperties": false,
+      "description": "The prompt Avalanche sent: the step's inputs and its working directory's role.",
+      "properties": {
+        "format": {
+          "const": "claude_agent.messages/v1",
+          "default": "claude_agent.messages/v1",
+          "title": "Format",
+          "type": "string"
+        },
+        "inputs": {
+          "$ref": "#/$defs/JsonValue"
+        },
+        "kind": {
+          "const": "started",
+          "default": "started",
+          "title": "Kind",
+          "type": "string"
+        },
+        "model": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Model"
+        }
+      },
+      "required": [
+        "format",
+        "kind",
+        "model",
+        "inputs"
+      ],
+      "title": "Started",
       "type": "object"
     },
     "TokenUsage": {
@@ -1690,6 +2227,36 @@
       "title": "ToolFinished",
       "type": "object"
     },
+    "ToolReturned": {
+      "additionalProperties": false,
+      "description": "A tool's result reached the model; the common event says whether it failed.",
+      "properties": {
+        "format": {
+          "const": "claude_agent.messages/v1",
+          "default": "claude_agent.messages/v1",
+          "title": "Format",
+          "type": "string"
+        },
+        "kind": {
+          "const": "tool.returned",
+          "default": "tool.returned",
+          "title": "Kind",
+          "type": "string"
+        },
+        "turn_index": {
+          "minimum": 0,
+          "title": "Turn Index",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "format",
+        "kind",
+        "turn_index"
+      ],
+      "title": "ToolReturned",
+      "type": "object"
+    },
     "ToolStarted": {
       "additionalProperties": false,
       "properties": {
@@ -1714,6 +2281,36 @@
         "name"
       ],
       "title": "ToolStarted",
+      "type": "object"
+    },
+    "ToolUsed": {
+      "additionalProperties": false,
+      "description": "The model asked for a tool; the common event names the call.",
+      "properties": {
+        "format": {
+          "const": "claude_agent.messages/v1",
+          "default": "claude_agent.messages/v1",
+          "title": "Format",
+          "type": "string"
+        },
+        "kind": {
+          "const": "tool.used",
+          "default": "tool.used",
+          "title": "Kind",
+          "type": "string"
+        },
+        "turn_index": {
+          "minimum": 0,
+          "title": "Turn Index",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "format",
+        "kind",
+        "turn_index"
+      ],
+      "title": "ToolUsed",
       "type": "object"
     },
     "Turn": {

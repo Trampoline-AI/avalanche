@@ -194,3 +194,76 @@ export function finishedTrace(options: FinishedOptions = {}): AgentTraceTerminal
     },
   };
 }
+
+function claudeLive(
+  sequence: number,
+  rest: Pick<AgentLiveEvent, "common" | "native">,
+): AgentLiveEvent {
+  return { ...live(sequence, rest), runtime_kind: "claude_agent" };
+}
+
+/** A Claude turn: text, thinking and one tool call. */
+export function claudeTurnEvent(index: number): AgentLiveEvent {
+  return claudeLive(index, {
+    common: {
+      kind: "turn.finished",
+      omitted_tool_calls: 0,
+      omitted_model_calls: 0,
+      turn: {
+        index,
+        text: `Answer text ${index}.`,
+        reasoning: `Thinking ${index}.`,
+        duration_ms: null,
+        usage: {
+          input_tokens: 3,
+          output_tokens: 5,
+          cost_usd: null,
+          cache_read_input_tokens: null,
+          cache_creation_input_tokens: null,
+        },
+        actions: [
+          {
+            kind: "tool_call",
+            call_id: `call-${index}`,
+            caller: "model",
+            name: "mcp__avalanche__lookup",
+            arguments: { name: "a" },
+            result: "10",
+            error: null,
+            duration_ms: null,
+          },
+        ],
+      },
+    },
+    native: {
+      format: "claude_agent.messages/v1",
+      kind: "message.finished",
+      message_id: `msg-${index}`,
+      model: "claude-haiku-5-5",
+      stop_reason: "tool_use",
+      api_error: null,
+    },
+  });
+}
+
+export function claudeStartedEvent(inputs: Record<string, JsonValue>): AgentLiveEvent {
+  return claudeLive(1, {
+    common: null,
+    native: { format: "claude_agent.messages/v1", kind: "started", model: null, inputs },
+  });
+}
+
+export function claudeFinishedEvent(output: Record<string, JsonValue>): AgentLiveEvent {
+  return claudeLive(9, {
+    common: null,
+    native: {
+      format: "claude_agent.messages/v1",
+      kind: "finished",
+      subtype: "success",
+      is_error: false,
+      num_turns: 2,
+      structured_output: output,
+      errors: [],
+    },
+  });
+}

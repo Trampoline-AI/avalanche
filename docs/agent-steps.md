@@ -232,6 +232,29 @@ the runtime to show the PredictRLM trace. Set signatures and tools on each step.
 Passing `lm=`, `skills=` or another PredictRLM setting directly to the step
 raises `TypeError` naming the `runtime=` replacement.
 
+### Claude agent steps
+
+`ava.runtimes.ClaudeAgent` runs a step with Claude through the Claude Agent SDK
+instead of PredictRLM. Install the `claude` extra and the Claude Code CLI, pick a
+model, and use the step exactly as before:
+
+```python
+@ava.agent_step(
+    Summarize,
+    runtime=ava.runtimes.ClaudeAgent(model="claude-haiku-5-5", max_turns=8),
+    tools=[lookup_policy],
+)
+async def summarize(document: str, *, agent: ava.Agent) -> str:
+    return (await agent(document=document)).outputs.summary
+```
+
+The CLI signs in as it does in a terminal: an existing `claude` login,
+`CLAUDE_CODE_OAUTH_TOKEN` from `claude setup-token` (a Claude subscription), or
+`ANTHROPIC_API_KEY`. A workflow default and a step runtime of different kinds do
+not merge: a `ClaudeAgent` step ignores a PredictRLM workflow default. See
+[runtimes](api/agents.md#runtimes) for every setting and for file and workspace
+inputs.
+
 ## Native evaluations
 
 Attach observation-only quality judgments to an agent with `evaluations=`, on either
