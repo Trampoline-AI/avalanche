@@ -91,9 +91,15 @@ def test_terminal_runs_discovered_workflow(tmp_path):
             assert time.monotonic() < deadline, screen()
             tmux("send-keys", "-t", f"{session}:.1", "r")
             time.sleep(0.2)
-        tmux("send-keys", "-t", f"{session}:.1", "Tab")
-        time.sleep(0.1)
+        # Textual/terminal startup may land on the raw editor or Preview. Enter
+        # is harmless in the empty editor; only advance focus if no validated
+        # preview appeared. Never assume Tab starts from one particular widget.
         tmux("send-keys", "-t", f"{session}:.1", "Enter")
+        time.sleep(0.2)
+        if "{}" not in screen():
+            tmux("send-keys", "-t", f"{session}:.1", "Tab")
+            time.sleep(0.1)
+            tmux("send-keys", "-t", f"{session}:.1", "Enter")
         while "{}" not in screen():
             assert time.monotonic() < deadline, screen()
             time.sleep(0.1)
