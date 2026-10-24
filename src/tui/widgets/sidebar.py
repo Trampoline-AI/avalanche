@@ -11,6 +11,7 @@ from textual.message import Message
 from textual.widgets import Static
 
 from ..models import RunStatus, WorkflowInfo
+from ..state import status_label
 from ..theme import (
     ICE_BRIGHT,
     ICE_FAIL,
@@ -19,7 +20,10 @@ from ..theme import (
     ICE_STEEL,
     ICE_TEAL,
     ICE_WARN,
+    OTHER_STATUS_CHAR,
+    OTHER_STATUS_STYLE,
     SPINNER_FRAMES,
+    status_display,
 )
 
 _SELECTED_BG = Style(bgcolor="#2a4a6a")
@@ -181,19 +185,21 @@ class Sidebar(Static, can_focus=True):
                 status = workflow_statuses.get(p.selector)
 
                 if status is not None:
-                    if status == RunStatus.RUNNING:
+                    if status is RunStatus.RUNNING:
                         icon = SPINNER_FRAMES[frame % len(SPINNER_FRAMES)]
                     else:
-                        icon = _STATUS_ICONS[status]
-                    icon_style = _STATUS_STYLES[status]
+                        icon = status_display(status, _STATUS_ICONS, OTHER_STATUS_CHAR)
+                    icon_style = status_display(status, _STATUS_STYLES, OTHER_STATUS_STYLE)
+                    if not isinstance(status, RunStatus):
+                        icon += f" {status_label(status)}"
                 else:
                     icon = "·"
                     icon_style = Style(color=ICE_STEEL)
 
                 prefix = f"{indent}  "
                 # prefix + icon + space + name
-                name = _clip(p.rendered_name, len(prefix) + 2)
-                content_len = len(prefix) + 2 + len(name)
+                name = _clip(p.rendered_name, len(prefix) + len(icon) + 1)
+                content_len = len(prefix) + len(icon) + 1 + len(name)
                 pad = max(0, row_width - content_len)
 
                 if is_selected:

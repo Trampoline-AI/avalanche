@@ -34,6 +34,7 @@ from .state import (
     TuiExtensionError,
     get_operator_reachability,
     get_tui_extensions,
+    status_label,
 )
 from .theme import AVALANCHE_THEME
 from .ui_store import TraceDetailCompletion, TraceHydrationKey, UIStore
@@ -389,7 +390,7 @@ class AvalancheApp(App):
             content = json.dumps(
                 {
                     "node": node.node_id,
-                    "state": node.status.value,
+                    "state": status_label(node.status),
                     "revision": node.revision,
                     "elapsed_seconds": node.elapsed,
                     "error": node.error,
@@ -659,7 +660,7 @@ class AvalancheApp(App):
         store = self.store
         run = store.current_run
         animation = (
-            store.frame // 3 if run is not None and run.status == RunStatus.RUNNING else 0
+            store.frame // 3 if run is not None and run.status is RunStatus.RUNNING else 0
         )
         node_token = (
             tuple((key, state.status, state.revision) for key, state in run.nodes.items())
@@ -1439,7 +1440,10 @@ class AvalancheApp(App):
         return (
             not self.read_only
             and run is not None
-            and run.status in {RunStatus.REQUESTING, RunStatus.PENDING, RunStatus.RUNNING}
+            and any(
+                run.status is status
+                for status in (RunStatus.REQUESTING, RunStatus.PENDING, RunStatus.RUNNING)
+            )
             and not self._cancel_run_requests
         )
 

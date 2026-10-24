@@ -19,7 +19,13 @@ from .models import (
 
 
 class StateProvider(Protocol):
-    """State and action contract consumed by the Avalanche TUI."""
+    """State and action contract consumed by the Avalanche TUI.
+
+    Providers MAY report node/run statuses beyond the built-in enums. The UI
+    shows their .value (or str(status)) verbatim with a neutral other-state
+    marker, never coerces them to enum members, and never infers terminality
+    from a label. Providers own elapsed/ended_at and terminal-state evidence.
+    """
 
     operator_reachable: bool
     operator_instance_id: str
@@ -82,6 +88,11 @@ class ConnectionAwareStateProvider(Protocol):
     def last_error(self) -> str: ...
 
     def ping(self) -> bool: ...
+
+
+def status_label(status: object) -> str:
+    """Preserve a provider's status label without enum conversion."""
+    return str(getattr(status, "value", status))
 
 
 def get_operator_reachability(provider: StateProvider) -> bool:

@@ -6,7 +6,10 @@ from rich.text import Text
 from textual.strip import Strip
 from textual.widgets import Static
 
-from ..dag_layout import DagNode, render_dag_rich
+from ..dag_layout import DagNode, marker_for, render_dag_rich
+from ..models import NodeStatus
+from ..state import status_label
+from ..theme import OTHER_STATUS_STYLE, STATUS_STYLES, status_display
 
 
 class DagWidget(Static, can_focus=False):
@@ -70,20 +73,26 @@ class DagWidget(Static, can_focus=False):
                 style="dim",
             )
         state = store.current_run.nodes.get(item.name) if store.current_run else None
-        status = state.status.value if state else "PENDING"
+        status = status_label(state.status) if state else "PENDING"
         selected = item is store.selected_node
         revision = state.revision if state else -1
-        token = (status, revision, selected)
+        node_status = state.status if state else NodeStatus.PENDING
+        animation = store.frame if node_status is NodeStatus.RUNNING else 0
+        token = (status, type(node_status), revision, selected, animation)
         cached = self._node_lines.get(item.name)
         if cached is not None and cached[0] == token:
             return cached[1]
         workflow = store.current_workflow
         children = workflow.graph.get(item.name, []) if workflow else []
         edges = ", ".join(children[:4]) + (" …" if len(children) > 4 else "")
-        line = Text(
-            f"  {'▶' if selected else ' '} {item.display_name}  {status}  → {edges}",
-            style="reverse" if selected else "",
+        line = Text(f"  {'▶' if selected else ' '} {item.display_name}  ")
+        line.append(
+            f"{marker_for(item, node_status, store.frame)} {status}",
+            status_display(node_status, STATUS_STYLES, OTHER_STATUS_STYLE),
         )
+        line.append(f"  → {edges}")
+        if selected:
+            line.stylize("reverse")
         self._node_lines[item.name] = (token, line)
         if len(self._node_lines) > 256:
             del self._node_lines[next(iter(self._node_lines))]

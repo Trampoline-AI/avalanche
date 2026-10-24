@@ -12,6 +12,7 @@ from textual.strip import Strip
 from textual.widgets import Static
 
 from ..models import RunState, RunStatus
+from ..state import status_label
 from ..theme import (
     DIM_STYLE,
     ICE_BRIGHT,
@@ -21,7 +22,10 @@ from ..theme import (
     ICE_STEEL,
     ICE_TEAL,
     ICE_WARN,
+    OTHER_STATUS_CHAR,
+    OTHER_STATUS_STYLE,
     SPINNER_FRAMES,
+    status_display,
 )
 
 _SELECTED_BG = Style(bgcolor="#2a4a6a")
@@ -84,11 +88,11 @@ class RunHistoryWidget(Static):
             return Text()
         run = runs[-index - 1]
         selected = run.run_id == store.selected_run_id
-        style = RUN_STATUS_STYLES[run.status]
+        style = status_display(run.status, RUN_STATUS_STYLES, OTHER_STATUS_STYLE)
         icon = (
             SPINNER_FRAMES[store.frame % len(SPINNER_FRAMES)]
-            if run.status == RunStatus.RUNNING
-            else RUN_STATUS_ICONS[run.status]
+            if run.status is RunStatus.RUNNING
+            else status_display(run.status, RUN_STATUS_ICONS, OTHER_STATUS_CHAR)
         )
         # started_at is a process-monotonic duration clock, not a calendar date.
         # triggered_at is the provider's wall-clock creation time; absent is unknown.
@@ -103,7 +107,7 @@ class RunHistoryWidget(Static):
         text = Text("  ", bg)
         text.append(f"{run.run_id:<14}", Style(color=ICE_FROST, bold=selected) + bg)
         text.append(f"{ts}  {duration}   ", DIM_STYLE + bg)
-        text.append(f"{run.status.value} {icon}", style + bg)
+        text.append(f"{status_label(run.status)} {icon}", style + bg)
         return text
 
     def get_content_height(self, container, viewport, width: int) -> int:

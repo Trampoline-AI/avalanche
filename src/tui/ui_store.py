@@ -36,7 +36,8 @@ from .models import (
     WorkflowInfo,
     bound_run,
 )
-from .state import StateProvider, get_stream_state
+from .state import StateProvider, get_stream_state, status_label
+from .theme import status_display
 
 
 @lru_cache(maxsize=1)
@@ -468,12 +469,19 @@ class UIStore:
     def run_state_label(self) -> str:
         if self.current_run is None:
             return "IDLE"
-        return {
-            RunStatus.REQUESTING: "REQUESTING",
-            RunStatus.RUNNING: "RUNNING",
-            RunStatus.FAILED: "FAILED",
-            RunStatus.SUCCESS: "DONE",
-        }.get(self.current_run.status, "IDLE")
+        status = self.current_run.status
+        return status_display(
+            status,
+            {
+                RunStatus.REQUESTING: "REQUESTING",
+                RunStatus.PENDING: "IDLE",
+                RunStatus.RUNNING: "RUNNING",
+                RunStatus.FAILED: "FAILED",
+                RunStatus.SUCCESS: "DONE",
+                RunStatus.CANCELLED: "IDLE",
+            },
+            status_label(status),
+        )
 
     @property
     def selected_run_id(self) -> str | None:

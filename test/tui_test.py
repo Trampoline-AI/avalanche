@@ -1899,6 +1899,121 @@ async def test_revamp_large_dag_collapses_and_renders_only_the_viewport_on_resiz
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("representation", ["value", "string", "str"])
+@pytest.mark.parametrize("node_count", [1, 201])
+async def test_provider_statuses_outside_enums_render_verbatim(representation, node_count):
+    from types import SimpleNamespace
+
+    from tui.widgets.run_detail import RunDetailWidget
+    from tui.widgets.run_history import RunHistoryWidget
+    from tui.widgets.sidebar import Sidebar
+
+    class RawStatus:
+        def __init__(self, label):
+            self.label = label
+
+        def __str__(self):
+            return self.label
+
+    def status(label):
+        if representation == "value":
+            # A provider-side status need not even be hashable.
+            return SimpleNamespace(value=label)
+        return label if representation == "string" else RawStatus(label)
+
+    provider = _RevampProvider()
+    run = provider.get_run("run_agent")
+    workflow = provider._workflows["agent_trace"]
+    prototype = run.nodes["inspect_agent_1"]
+    ids = [f"node_{i}" for i in range(node_count)]
+    workflow = replace(
+        workflow,
+        node_ids=ids,
+        graph={nid: ids[i + 1 : i + 2] for i, nid in enumerate(ids)},
+        node_types={nid: "step" for nid in ids},
+        display_names={nid: nid for nid in ids},
+        agent_node_ids=[],
+    )
+    run = replace(
+        run,
+        status=status("parked"),
+        nodes={
+            nid: replace(
+                prototype,
+                node_id=nid,
+                name=nid,
+                status=status("cancelled"),
+                started_at=10.0,
+                ended_at=12.0,
+            )
+            for nid in ids
+        },
+    )
+    provider._workflows = {workflow.selector: workflow}
+    provider._runs = {run.run_id: run}
+    app = AvalancheApp(provider=provider, workflow=workflow.selector, node=ids[0])
+    async with app.run_test(size=(160, 50)) as pilot:
+        await _wait_for(pilot, lambda: app.store.current_run is not None)
+        await pilot.press("c")
+        dag = app.screen.query_one("#dag-panel")
+        history = app.screen.query_one("#run-history-content", RunHistoryWidget)
+        sidebar = app.screen.query_one("#sidebar", Sidebar)
+        detail = RunDetailWidget()
+        detail._test_store = app.store
+        assert "cancelled" in dag.render().plain
+        assert "cancelled" in detail.render().plain
+        assert "parked" in history.render().plain
+        assert "parked" in sidebar.render().plain
+        assert "parked" in app.screen.query_one("#status-bar").render().plain
+        assert app.store.run_state_label == "parked"
+        assert "◇" in dag.render().plain
+        assert "◇" in detail.render().plain
+        assert "◇" in history.render().plain
+        assert "◇" in sidebar.render().plain
+        assert app.store.node_elapsed[ids[0]] == 2.0
+        assert not app.can_cancel_selected_run()
+        await pilot.press("i")
+        assert json.loads(app.screen.content)["state"] == "cancelled"
+        await pilot.press("escape")
+        # Every provider label stays verbatim, even when it resembles a built-in.
+        for label in (
+            "queued",
+            "running",
+            "succeeded",
+            "failed",
+            "cancelled",
+            "parked",
+            "indeterminate",
+            "mystery_state",
+        ):
+            current = app.store.current_run
+            assert current is not None
+            if label == "failed":
+                # Equal labels must not reuse an enum's cached failure glyph.
+                current.nodes[ids[0]].status = NodeStatus.FAILED
+                assert "✗" in dag.render().plain
+            current.status = status(label)
+            current.nodes[ids[0]].status = status(label)
+            for cached in app.store.runs_for_current_workflow:
+                cached.status = current.status
+            app.store.workflow_statuses[workflow.selector] = current.status
+            app._refresh_widgets()
+            await pilot.pause()
+            for rendered in (
+                dag.render(),
+                detail.render(),
+                history.render(),
+                sidebar.render(),
+            ):
+                assert label in rendered.plain
+                assert "◇" in rendered.plain
+                assert "✓" not in rendered.plain
+                assert "✗" not in rendered.plain
+            assert app.store.run_state_label == label
+            assert app.store.current_run.status is current.status
+
+
+@pytest.mark.asyncio
 async def test_revamp_node_attempt_detail_and_context_help_are_readable():
     from tui.screens.tools import InspectionScreen
 

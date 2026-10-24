@@ -13,6 +13,7 @@ from rich.style import Style
 from rich.text import Text
 
 from .models import NodeStatus, WorkflowInfo, display_name_from_id
+from .state import status_label
 from .theme import (
     AGENT_CAPTION_SELECTED_STYLE,
     AGENT_CAPTION_STYLE,
@@ -21,12 +22,15 @@ from .theme import (
     DIM_STYLE,
     ICE_FROST,
     ICE_STEEL,
+    OTHER_STATUS_CHAR,
+    OTHER_STATUS_STYLE,
     SKIP_EDGE_COLORS,
     SPINNER_FRAMES,
     STATUS_CHARS,
     STATUS_STYLES,
     VIRTUAL_LABELS,
     VIRTUAL_STYLE,
+    status_display,
 )
 
 # ── Layout tree nodes ─────────────────────────────────────────────────────
@@ -680,12 +684,15 @@ def _render_cross_track_skip_edges(
 def marker_for(node: DagNode, status: NodeStatus, frame: int) -> str:
     if node.virtual:
         return VIRTUAL_LABELS.get(node.name, node.name)
-    if status == NodeStatus.RUNNING:
+    if status is NodeStatus.RUNNING:
         return SPINNER_FRAMES[frame % len(SPINNER_FRAMES)]
-    return STATUS_CHARS[status]
+    return status_display(status, STATUS_CHARS, OTHER_STATUS_CHAR)
 
 
 def _duration_label(elapsed: float | None, status: NodeStatus) -> str:
+    if not isinstance(status, NodeStatus):
+        label = status_label(status)
+        return f"{label} · {_fmt_elapsed(elapsed)}" if elapsed is not None else label
     if elapsed is not None:
         return _fmt_elapsed(elapsed)
     if status == NodeStatus.PENDING:
@@ -764,7 +771,7 @@ def append_node(
     elapsed: float | None = None,
 ) -> None:
     m = marker_for(node, status, frame)
-    style = STATUS_STYLES[status]
+    style = status_display(status, STATUS_STYLES, OTHER_STATUS_STYLE)
     if node.virtual:
         text.append(m, VIRTUAL_STYLE)
         return
