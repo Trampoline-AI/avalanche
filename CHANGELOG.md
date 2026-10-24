@@ -2,20 +2,31 @@
 
 ## Unreleased
 
-- Revamp the terminal workflow browser with viewport history and DAGs, bounded
-  streaming log tails with loaded-window search and node/channel/attempt filters,
-  node/agent inspection, schedules, contextual help and a command palette.
-- Add optional, versioned provider extensions for revision-pinned resource pages,
-  typed JSON input preview/confirmation and capability-described actions; keep
-  legacy providers usable without these optional features.
-- Serve standalone operator input schemas and catalog versions, bounded server
-  pages for history/schedules/artifacts, explicit SHA-256-verified File-reference
-  downloads, and real worker stdout/stderr/log attempt metadata. Reconnect/reset
-  belongs to the transport; health display no longer sends polling RPCs.
-- Add `ava tui --flow SELECTOR --run ID --node ID --read-only` deep links and
-  mutation fences. Schedules are inspection-only; no unsupported wait or schedule
-  controls are offered. This prepares the next minor release without changing
-  the package version.
+- Prepare 0.15.0: the TUI now requires TuiExtensions v1; see the breaking change below.
+
+## 0.15.0 — 2026-10-24
+
+- **BREAKING CHANGE:** the TUI and `ava tui` no longer support providers implementing
+  only the legacy StateProvider protocol. Old data sources and compatibility paths
+  are removed. Providers must implement TuiExtensions v1 and the complete revamped
+  store contract, including stream reset/baseline/ACK and detail hydration. Incomplete
+  providers fail at launch, rather than silently hiding controls.
+- Rebuild the terminal workflow browser with viewport history and DAGs, bounded
+  streaming logs, loaded-window search, node/channel/attempt filters, agent trace
+  inspection, schedules, contextual help and a command palette.
+- Add revision-pinned provider resource pages, JSON input preview/confirmation,
+  capability-described actions, deep links and read-only mutation fences.
+- Expose standalone operator input schemas, catalog versions, bounded server pages
+  for history/schedules/artifacts, SHA-256-verified File-reference downloads and real
+  worker stdout/stderr/log attempt metadata. Reconnect/reset belongs to the transport;
+  health display no longer sends polling RPCs. Schedules remain inspection-only.
+- Add a network-free, three-iteration JSON DummyLM agent example and prove its code,
+  outputs and retained usage in the real operator's TUI trace screen.
+
+### Known issues
+
+- The wheel still exports generic top-level `runtime` and `tui` packages. Track the
+  package-name collision follow-up in [#119](https://github.com/Trampoline-AI/avalanche/issues/119).
 
 ### 0.14.0
 
