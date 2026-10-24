@@ -14,6 +14,8 @@ import runtime.operator.client
 import runtime.operator.operator
 import runtime.operator.run_worker
 import runtime.operator.server
+import runtime.operator.server_tui
+import runtime.operator.tui_extensions
 import tui.app
 import tui.ui_store
 import tui.widgets.agent_trace
