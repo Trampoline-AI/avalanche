@@ -77,12 +77,7 @@ def host_inputs(
 
     def write(file: File) -> PredictRLMFile:
         # One subdirectory per file keeps the original name without collisions.
-        name = Path(file.name or "").name
-        target = (
-            directory
-            / str(len(sources) + 1)
-            / (name if name not in {"", ".", ".."} else "file")
-        )
+        target = directory / str(len(sources) + 1) / _host_file_name(file.name)
         target.parent.mkdir()
         target.write_bytes(file.content)
         sources[str(target)] = file
@@ -102,6 +97,14 @@ def host_inputs(
         yield converted
     finally:
         _BRIDGED_SOURCES.reset(token)
+
+
+def _host_file_name(name: str | None) -> str:
+    """The file's own base name, or ``file`` when the filesystem cannot use it."""
+    base = Path(name or "").name
+    if base in {"", ".", ".."} or "\x00" in base or len(base.encode()) > 255:
+        return "file"
+    return base
 
 
 def bridged_source(path: str) -> File | None:

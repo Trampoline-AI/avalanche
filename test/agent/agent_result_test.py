@@ -229,10 +229,15 @@ async def test_predict_rlm_receives_and_returns_ava_files_through_host_paths(
         result = await ava.Agent(signature=Redact, step_name="redact")(
             document=document,
             # Names that are not plain file names still get a file of their own.
-            attachments=[ava.File(content=b"a", name=".."), ava.File(content=b"b", name="/")],
+            attachments=[
+                ava.File(content=b"a", name=".."),
+                ava.File(content=b"b", name="/"),
+                ava.File(content=b"c", name="é" * 200),
+                ava.File(content=b"d", name="a\x00b"),
+            ],
         )
 
-    assert received == {"document": b"secret", "attachments": [b"a", b"b"]}
+    assert received == {"document": b"secret", "attachments": [b"a", b"b", b"c", b"d"]}
     # Evidence describes the caller's file, never the temporary path it was written to.
     assert observed[0]["data"]["inputs"]["document"] == {
         "kind": "file",
