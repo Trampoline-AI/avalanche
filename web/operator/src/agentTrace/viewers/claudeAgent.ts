@@ -1,16 +1,15 @@
 import type { TokenUsage } from "../../generated/agentSchemas";
 import type { AgentLiveEvent } from "../common";
-import type { AgentTraceStep, TraceTokenUsage } from "../types";
+import type { AgentTraceStep, TraceTurnTokens } from "../types";
 import type { TraceViewer } from "./index";
 
-const NO_USAGE: TraceTokenUsage = { inputTokens: 0, outputTokens: 0, cost: 0, cacheHits: 0 };
-
-function tokenUsage(usage: TokenUsage | null): TraceTokenUsage {
-  if (usage === null) return NO_USAGE;
+// Claude prices only the whole session, so a turn's cost is usually absent.
+function tokenUsage(usage: TokenUsage | null): TraceTurnTokens | undefined {
+  if (usage === null) return undefined;
   return {
     inputTokens: usage.input_tokens,
     outputTokens: usage.output_tokens,
-    cost: usage.cost_usd ?? 0,
+    cost: usage.cost_usd ?? undefined,
     cacheHits: 0,
   };
 }
