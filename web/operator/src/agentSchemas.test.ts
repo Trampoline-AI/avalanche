@@ -83,7 +83,10 @@ describe("generated agent schemas", () => {
   it.each([
     ["a v1 body", { event_kind: "iteration.recorded", data: {} }],
     ["an old schema version", { ...turnEvent(1), schema_version: 1 }],
-    ["an unknown native format", { ...turnEvent(1), native: { format: "other/v1" } }],
+    [
+      "an unknown native format",
+      { ...turnEvent(1), native: { ...turnEvent(1).native, format: "other/v1" } },
+    ],
     [
       "an unknown native kind",
       { ...turnEvent(1), native: { format: "predict_rlm.run/v1", kind: "code.compiled" } },
