@@ -12,9 +12,9 @@ from __future__ import annotations
 import inspect
 import textwrap
 from collections.abc import Callable, Mapping
-from typing import Literal
+from typing import Annotated, Literal
 
-from pydantic import BaseModel, ConfigDict, JsonValue
+from pydantic import BaseModel, ConfigDict, Field, JsonValue
 
 _STRICT = ConfigDict(
     strict=True,
@@ -113,8 +113,23 @@ class PredictRLMDeclaration(BaseModel):
     modules: tuple[str, ...]
 
 
-# A discriminated union on ``kind`` once a second runtime declares itself.
-RuntimeDeclaration = PredictRLMDeclaration
+class ClaudeAgentDeclaration(BaseModel):
+    """What a Claude Agent SDK runtime contributes to a declaration.
+
+    ``model`` is ``None`` when the step leaves the choice to the Claude CLI.
+    """
+
+    model_config = _STRICT
+
+    kind: Literal["claude_agent"] = "claude_agent"
+    model: str | None
+    settings: dict[str, JsonValue]
+    builtin_tools: tuple[str, ...]
+
+
+RuntimeDeclaration = Annotated[
+    PredictRLMDeclaration | ClaudeAgentDeclaration, Field(discriminator="kind")
+]
 
 
 class AgentDeclaration(BaseModel):

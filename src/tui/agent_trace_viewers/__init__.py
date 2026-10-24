@@ -98,9 +98,12 @@ class TraceFormatViewer(Protocol):
 
 
 def _registry() -> Mapping[str, TraceFormatViewer]:
+    from .claude_agent import CLAUDE_AGENT
     from .predict_rlm import PREDICT_RLM
 
-    return MappingProxyType({"predict_rlm.run/v1": PREDICT_RLM})
+    return MappingProxyType(
+        {"predict_rlm.run/v1": PREDICT_RLM, "claude_agent.messages/v1": CLAUDE_AGENT}
+    )
 
 
 # Keyed by trace format; every format in the native union has a viewer.

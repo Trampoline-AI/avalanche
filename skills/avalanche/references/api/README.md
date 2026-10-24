@@ -44,7 +44,8 @@ and result definitions. Other pages likewise link the APIs they accept or return
   use Avalanche are documented with the API that produces them.
 
 Python 3.13 is required. Agent and classifier support is included in the
-base installation; Lance storage needs `uv add 'avalanche-ai[lance]'`. Avalanche
+base installation; Lance storage needs `uv add 'avalanche-ai[lance]'`, and Claude agent
+steps (`ava.runtimes.ClaudeAgent`) need `uv add 'avalanche-ai[claude]'`. Avalanche
 remains an early-release, local-development toolkit.
 
 ## Offline skill reference

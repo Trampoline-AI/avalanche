@@ -67,6 +67,9 @@ function turn(event: AgentLiveEvent): AgentTraceStep {
 function summary(terminal: AgentTraceTerminal): TraceBodySummary | undefined {
   if (terminal.kind !== "trace_finished") return undefined;
   const { native } = terminal.record;
+  if (native.format !== "predict_rlm.run/v1") {
+    throw new Error(`not a PredictRLM trace: ${native.format}`);
+  }
   return {
     subModel: native.sub_model ?? undefined,
     maxIterations: native.max_iterations,

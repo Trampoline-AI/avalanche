@@ -9,9 +9,10 @@ from __future__ import annotations
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
+    from .claude_agent import ClaudeAgent
     from .predict_rlm import PredictRLM
 
-__all__ = ["PredictRLM"]
+__all__ = ["ClaudeAgent", "PredictRLM"]
 
 
 def __getattr__(name: str):
@@ -19,6 +20,10 @@ def __getattr__(name: str):
         from . import predict_rlm
 
         value = predict_rlm.PredictRLM
+    elif name == "ClaudeAgent":
+        from . import claude_agent
+
+        value = claude_agent.ClaudeAgent
     else:
         raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
 
