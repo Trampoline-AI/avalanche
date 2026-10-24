@@ -83,8 +83,8 @@ function zod(schema, deps) {
       checkKeys(schema, ["type", "items"]);
       return `z.array(${zod(schema.items, deps)})`;
     case "string":
-      checkKeys(schema, ["type"]);
-      return "z.string()";
+      checkKeys(schema, ["type", "minLength"]);
+      return "minLength" in schema ? `z.string().min(${schema.minLength})` : "z.string()";
     case "integer":
       checkKeys(schema, ["type", "minimum", "exclusiveMinimum"]);
       return `z.int()${bounds(schema)}`;

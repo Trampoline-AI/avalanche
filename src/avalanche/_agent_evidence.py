@@ -4,45 +4,20 @@ from __future__ import annotations
 
 from contextlib import contextmanager
 from contextvars import ContextVar
-from typing import Any, Callable, Iterator, Literal, TypeAlias, TypedDict
+from typing import Callable, Iterator, Literal, TypeAlias
 
-from pydantic import JsonValue
+from .agent.live import AgentLiveEvent, AgentTraceFinished, AgentTraceUnavailable
 
 AgentInvocationId: TypeAlias = str
 AGENT_ERROR_CHARACTER_LIMIT = 65_536
 
 
-class AgentEvidenceEvent(TypedDict):
-    """Incremental, sanitized evidence emitted during an agent run."""
-
-    kind: Literal["evidence"]
-    invocation_id: AgentInvocationId
-    sequence: int
-    event_kind: str
-    timestamp_ns: int
-    data: dict[str, Any]
-
-
-class AgentTraceFinishedEvent(TypedDict):
-    """Terminal exported trace for a completed, failed, or cancelled agent call."""
-
-    kind: Literal["trace_finished"]
-    invocation_id: AgentInvocationId
-    trace: dict[str, Any]
-    evidence: dict[str, JsonValue]
-
-
-class AgentTraceUnavailableEvent(TypedDict):
-    """Terminal notification emitted when no exportable trace is available."""
-
-    kind: Literal["trace_unavailable"]
-    invocation_id: AgentInvocationId
-    error: str
-    evidence: dict[str, JsonValue]
-
-
+# The wire models are the observer contract: listeners receive validated events.
+AgentEvidenceEvent: TypeAlias = AgentLiveEvent
+AgentTraceFinishedEvent: TypeAlias = AgentTraceFinished
+AgentTraceUnavailableEvent: TypeAlias = AgentTraceUnavailable
 AgentEvidenceObserverEvent: TypeAlias = (
-    AgentEvidenceEvent | AgentTraceFinishedEvent | AgentTraceUnavailableEvent
+    AgentLiveEvent | AgentTraceFinished | AgentTraceUnavailable
 )
 AgentEvidenceListener: TypeAlias = Callable[[AgentEvidenceObserverEvent], None]
 ListenerErrorPolicy: TypeAlias = Literal["raise", "ignore"]

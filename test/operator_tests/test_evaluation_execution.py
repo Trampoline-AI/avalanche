@@ -22,12 +22,18 @@ import cloudpickle
 import pytest
 
 from avalanche import EvalContext, Evaluations, Metric
+from avalanche.agent.native.predict_rlm import PredictRLMTokenUsage, PredictRLMUsage
 from avalanche.agent.trace import AgentTrace, AgentTraceHeader, PredictRLMNativeTrace
 from avalanche.evaluation_capture import EvaluationSubmission
 from runtime.operator import Operator
 from runtime.operator.evaluation_models import EvaluationRecord
 from runtime.operator.evaluation_worker import EvaluationWorkers, snapshot_evaluation
 from runtime.operator.models import RunState, RunStatus
+
+_NO_USAGE = PredictRLMUsage(
+    main=PredictRLMTokenUsage(input_tokens=0, output_tokens=0, cost=0.0, cache_hits=0),
+    sub=PredictRLMTokenUsage(input_tokens=0, output_tokens=0, cost=0.0, cache_hits=0),
+)
 
 TRACE = AgentTrace(
     header=AgentTraceHeader(
@@ -44,7 +50,9 @@ TRACE = AgentTrace(
         session_id=None,
     ),
     turns=(),
-    native=PredictRLMNativeTrace(sub_model=None, max_iterations=1, cache_hits=0),
+    native=PredictRLMNativeTrace(
+        sub_model=None, max_iterations=1, usage=_NO_USAGE, telemetry_ref=None
+    ),
     turns_streamed=False,
 )
 

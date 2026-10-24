@@ -6,7 +6,8 @@ import type {
   AgentTraceStepSummary,
   AgentTraceToolCall,
   TraceTokenUsage,
-} from "./agentTrace";
+} from "./agentTrace/types";
+import { activityLabel } from "./agentTrace/viewers";
 import { compareSequence } from "./detailProjection";
 import type { AgentEventDescriptorMsg } from "./model";
 import { PythonSource } from "./PythonSource";
@@ -129,7 +130,7 @@ function ToolCalls({ calls }: { calls: AgentTraceToolCall[] }) {
           <div className="mt-2 grid gap-2">
             <div>
               <h5 className="m-0 mb-1 font-mono text-[8px] text-muted uppercase">Arguments</h5>
-              <ValueView value={{ args: call.args, kwargs: call.kwargs }} />
+              <ValueView value={call.arguments} />
             </div>
             <div>
               <h5
@@ -347,19 +348,6 @@ function TurnSecondaryDetails({
   );
 }
 
-const ACTIVITY_LABELS: Record<string, string> = {
-  "run.started": "Agent run started",
-  "code.generated": "Generating code",
-  "code.executed": "Running generated code",
-  "predict.started": "Calling sub-model",
-  "predict.finished": "Sub-model call finished",
-  "tool.started": "Calling tool",
-  "tool.finished": "Tool call finished",
-  "run.succeeded": "Agent run completed",
-  "run.failed": "Agent run failed",
-  "run.cancelled": "Agent run cancelled",
-};
-
 export function AgentTraceExplorer({
   scopeKey,
   turns,
@@ -430,8 +418,7 @@ export function AgentTraceExplorer({
                 <span className="relative inline-flex size-2 rounded-full bg-agent" />
               </span>
               <span>
-                {ACTIVITY_LABELS[currentActivity.nativeEventKind] ??
-                  currentActivity.nativeEventKind}
+                {activityLabel(currentActivity.nativeEventKind)}
                 {currentActivity.turn ? ` · turn ${currentActivity.turn}` : ""}
               </span>
             </div>

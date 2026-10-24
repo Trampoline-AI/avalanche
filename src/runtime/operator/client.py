@@ -80,7 +80,7 @@ from .results import (
 )
 
 if TYPE_CHECKING:
-    from avalanche._agent_trace import AgentLifecycleEvent, AgentTerminalDetail
+    from avalanche.agent.live import AgentLiveEvent, AgentTraceTerminal
 
 DEFAULT_UNARY_TIMEOUT_SECONDS = 10.0
 DETAIL_HYDRATION_PAGE_SIZE = 100
@@ -374,8 +374,8 @@ class GrpcStateProvider:
         self._activity_continuations: dict[tuple[str, str, str], pb.ContinuationRefV2] = {}
         self._detail_refs_by_key: dict[str, pb.ActivityDetailRefV2] = {}
         self._trace_detail_refs: dict[tuple[str, str, int], pb.ActivityDetailRefV2] = {}
-        self._agent_events: dict[tuple[str, str], list[AgentLifecycleEvent]] = {}
-        self._trace_bodies: dict[tuple[str, str], AgentTerminalDetail] = {}
+        self._agent_events: dict[tuple[str, str], list[AgentLiveEvent]] = {}
+        self._trace_bodies: dict[tuple[str, str], AgentTraceTerminal] = {}
         self._detail_cache_usage: OrderedDict[_DetailCacheKey, tuple[int, int]] = OrderedDict()
         self._retained_detail_count = 0
         self._retained_detail_bytes = 0
@@ -828,9 +828,9 @@ class GrpcStateProvider:
 
             hydrated_agent_nodes: set[tuple[str, str]] = set()
             agent_sequences: dict[tuple[str, str], int] = {}
-            agent_events: dict[tuple[str, str], list[AgentLifecycleEvent]] = {}
+            agent_events: dict[tuple[str, str], list[AgentLiveEvent]] = {}
             agent_event_bytes: dict[tuple[str, str], int] = {}
-            trace_bodies: dict[tuple[str, str], AgentTerminalDetail] = {}
+            trace_bodies: dict[tuple[str, str], AgentTraceTerminal] = {}
             trace_body_bytes: dict[tuple[str, str], int] = {}
             if reuse_cached and cached is not None:
                 for node_id, node in run.nodes.items():
@@ -1628,9 +1628,9 @@ class GrpcStateProvider:
         log_bytes: int,
         hydrated_agent_nodes: set[tuple[str, str]],
         agent_sequences: dict[tuple[str, str], int],
-        agent_events: dict[tuple[str, str], list[AgentLifecycleEvent]],
+        agent_events: dict[tuple[str, str], list[AgentLiveEvent]],
         agent_event_bytes: dict[tuple[str, str], int],
-        trace_bodies: dict[tuple[str, str], AgentTerminalDetail],
+        trace_bodies: dict[tuple[str, str], AgentTraceTerminal],
         trace_body_bytes: dict[tuple[str, str], int],
     ) -> RunState:
         with self._state_lock:
@@ -1853,9 +1853,9 @@ class GrpcStateProvider:
             raise ValueError("trace body does not match its descriptor")
         if hashlib.sha256(bytes(data)).hexdigest() != detail_ref.sha256:
             raise ValueError("trace body digest does not match its descriptor")
-        from avalanche._agent_trace import AgentTerminalDetail
+        from avalanche.agent.live import AGENT_TRACE_TERMINAL
 
-        trace = AgentTerminalDetail.model_validate_json(data, strict=True)
+        trace = AGENT_TRACE_TERMINAL.validate_json(bytes(data), strict=True)
 
         with self._state_lock:
             if self._closed:
@@ -3141,71 +3141,42 @@ def _trace_detail_from_run(run: RunState | None, node_id: str) -> TraceDetail | 
     descriptor = node.trace if node is not None else None
     if node is None or descriptor is None or node.agent_trace_json is None:
         return None
-    from avalanche._agent_trace import AgentTerminalDetail, AgentTraceEnvelope
+    from avalanche._agent_trace import AgentTraceEnvelope
 
     envelope = AgentTraceEnvelope.model_validate_json(node.agent_trace_json, strict=True)
-    if envelope.evidence is None:
-        if envelope.trace is not None:
-            raise ValueError("hydrated terminal trace is missing lifecycle metadata")
+    if envelope.terminal is None:
         return None
-    if envelope.invocation_id is None:
-        raise ValueError("hydrated terminal trace is missing invocation identity")
     return TraceDetail(
         operator_instance_id=run.operator_instance_id,
         run_id=run.run_id,
         created_sequence=run.created_sequence,
         node_id=node_id,
         descriptor_revision=descriptor.revision,
-        trace_body=AgentTerminalDetail(
-            invocation_id=envelope.invocation_id,
-            trace=envelope.trace,
-            evidence=envelope.evidence,
-        ),
+        trace_body=envelope.terminal,
     )
 
 
-def _append_agent_event(events: list[AgentLifecycleEvent], event_json: str) -> None:
-    from predict_rlm import IterationStep
+def _append_agent_event(events: list[AgentLiveEvent], event_json: str) -> None:
+    from avalanche.agent.live import AgentLiveEvent
 
-    from avalanche._agent_trace import AgentLifecycleEvent
-
-    event = AgentLifecycleEvent.model_validate_json(event_json, strict=True)
-    if event.event_kind == "iteration.recorded":
-        IterationStep.model_validate(event.data["step"], strict=True)
-    events.append(event)
+    events.append(AgentLiveEvent.model_validate_json(event_json, strict=True))
 
 
 def _materialize_agent_trace_json(
-    events: Sequence[AgentLifecycleEvent],
+    events: Sequence[AgentLiveEvent],
     *,
     status: str,
-    trace_body: AgentTerminalDetail | None,
+    trace_body: AgentTraceTerminal | None,
 ) -> str:
-    from predict_rlm import IterationStep
-
     from avalanche._agent_trace import AgentTraceEnvelope
 
-    trace = (
-        trace_body.trace.model_copy(deep=True)
-        if trace_body is not None and trace_body.trace is not None
-        else None
-    )
-    evidence = trace_body.evidence if trace_body is not None else None
-    invocation_id = trace_body.invocation_id if trace_body is not None else None
-    if trace is not None:
-        trace.steps = [
-            IterationStep.model_validate(event.data["step"], strict=True)
-            for event in events
-            if event.event_kind == "iteration.recorded" and event.invocation_id == invocation_id
-        ]
     envelope = AgentTraceEnvelope(
-        schema_version=1,
-        invocation_id=invocation_id,
-        status=trace.status if trace is not None else status,
-        run_id=evidence.run_id if evidence is not None else None,
-        events=list(events),
-        trace=trace,
-        evidence=evidence,
+        schema_version=2,
+        invocation_id=trace_body.invocation_id if trace_body is not None else None,
+        status=status,
+        # Turns travel as live events; viewers read them from here.
+        events=tuple(events),
+        terminal=trace_body,
         error=None,
     )
     return envelope.model_dump_json()

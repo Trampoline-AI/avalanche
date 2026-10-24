@@ -406,7 +406,6 @@ export interface TraceHeaderMsg {
   toolCallCount: string;
   externalRunId?: string;
   stopReason?: string;
-  telemetryJson?: string;
 }
 
 export const TraceHeaderMsg = {
@@ -422,7 +421,6 @@ export const TraceHeaderMsg = {
       toolCallCount: "0",
       externalRunId: undefined,
       stopReason: undefined,
-      telemetryJson: undefined,
       ...value,
     } as TraceHeaderMsg;
   },

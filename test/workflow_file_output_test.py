@@ -1,7 +1,6 @@
 """Embedded file values survive workflow output handling without data loss."""
 
 import hashlib
-import json
 
 import pytest
 from pydantic import BaseModel
@@ -216,6 +215,7 @@ def test_agent_file_step_traces_record_input_references_not_mounted_paths(tmp_pa
     from predict_rlm.backends import DirectPythonBackend
 
     from avalanche.agent import capture_agent_evidence
+    from avalanche.agent.live import AgentLiveEvent
 
     class Count(ava.Signature):
         document: ava.File = ava.InputField()
@@ -257,10 +257,10 @@ def test_agent_file_step_traces_record_input_references_not_mounted_paths(tmp_pa
         assert flow().run(executor=ava.LocalExecutor()).result(timeout=20) == 5
 
     started = next(
-        event["data"]
+        event.native
         for event in observed
-        if event["kind"] == "evidence" and event["event_kind"] == "run.started"
+        if isinstance(event, AgentLiveEvent) and event.native.kind == "run.started"
     )
-    assert started["inputs"]["document"]["workspace"] == "snapshot:test"
-    assert started["inputs"]["document"]["path"] == "input.txt"
-    assert str(tmp_path) not in json.dumps(started)
+    assert started.inputs["document"]["workspace"] == "snapshot:test"
+    assert started.inputs["document"]["path"] == "input.txt"
+    assert str(tmp_path) not in started.model_dump_json()

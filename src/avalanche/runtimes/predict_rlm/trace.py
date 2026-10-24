@@ -1,16 +1,9 @@
-"""PredictRLM terminal traces: the v1 wire events and the common trace record."""
+"""PredictRLM terminal traces: the common trace record and the final trace event."""
 
 from __future__ import annotations
 
-import json
-from typing import TYPE_CHECKING, Any, Mapping
+from typing import TYPE_CHECKING, Any
 
-from ..._agent_evidence import (
-    AgentInvocationId,
-    AgentTraceFinishedEvent,
-    AgentTraceUnavailableEvent,
-    emit_agent_evidence,
-)
 from ...agent.steps import AgentStepError
 from ...agent.trace import (
     AgentTrace,
@@ -18,66 +11,39 @@ from ...agent.trace import (
     AgentTraceStatus,
     PredictRLMNativeTrace,
 )
-from .events import _bounded_agent_error
+from .events import _bounded_agent_error, native_usage
 
 if TYPE_CHECKING:
     from predict_rlm import RunEvidence, RunTrace
 
-    from ..._agent_trace import AgentEvidenceMetadata
-
-
-def _evidence_metadata(evidence: RunEvidence) -> AgentEvidenceMetadata:
-    from ..._agent_trace import AgentEvidenceMetadata
-
-    return AgentEvidenceMetadata(
-        run_id=evidence.run_id,
-        complete=evidence.complete,
-        terminal_outcome=evidence.terminal_outcome,
-    )
+    from ...agent.contract import AgentEventSink
 
 
 def _emit_terminal_trace(
     trace: RunTrace,
+    evidence: RunEvidence,
+    events: AgentEventSink,
     *,
-    invocation_id: AgentInvocationId,
-    evidence: AgentEvidenceMetadata,
-    runtime_kwargs: Mapping[str, Any],
-) -> AgentTraceFinishedEvent:
-    # Iterations already crossed the bounded event channel. Do not re-send
-    # original payloads that the operator would discard after validation.
-    update: dict[str, Any] = {"steps": []}
-    main_label = _model_display_name(runtime_kwargs.get("lm"))
-    if main_label is not None:
-        update["model"] = main_label
-    sub_label = _model_display_name(runtime_kwargs.get("sub_lm"))
-    # PredictRLM omits the sub-model when it shares the main LM.
-    if sub_label is not None and trace.sub_model is not None:
-        update["sub_model"] = sub_label
-    parsed = json.loads(trace.model_copy(update=update).to_exportable_json())
-    event: AgentTraceFinishedEvent = {
-        "kind": "trace_finished",
-        "invocation_id": invocation_id,
-        "trace": parsed,
-        "evidence": evidence.model_dump(mode="json"),
-    }
-    emit_agent_evidence(event)
-    return event
+    model: str | None,
+    sub_model: str | None,
+) -> None:
+    """Send the final trace; its turns already crossed the live event channel."""
+    record = trace_record(trace, evidence, model=model, sub_model=sub_model)
+    events.finished(
+        AgentTrace(header=record.header, turns=(), native=record.native, turns_streamed=True),
+        complete=evidence.complete,
+    )
 
 
 def _emit_trace_unavailable(
-    error: BaseException,
-    *,
-    invocation_id: AgentInvocationId,
-    evidence: AgentEvidenceMetadata,
-) -> AgentTraceUnavailableEvent:
-    event: AgentTraceUnavailableEvent = {
-        "kind": "trace_unavailable",
-        "invocation_id": invocation_id,
-        "error": _bounded_agent_error(str(error)),
-        "evidence": evidence.model_dump(mode="json"),
-    }
-    emit_agent_evidence(event)
-    return event
+    error: BaseException, evidence: RunEvidence, events: AgentEventSink
+) -> None:
+    events.unavailable(
+        status=_STATUSES[evidence.terminal_outcome],
+        error=_bounded_agent_error(str(error)),
+        external_run_id=evidence.run_id,
+        complete=evidence.complete,
+    )
 
 
 def _model_display_name(value: Any) -> str | None:
@@ -97,6 +63,11 @@ def _model_display_name(value: Any) -> str | None:
 
 
 _STOP_REASONS = {"completed": "submit", "max_iterations": "max_iterations"}
+_STATUSES: dict[str, AgentTraceStatus] = {
+    "completed": "succeeded",
+    "error": "failed",
+    "cancelled": "cancelled",
+}
 
 
 def trace_header(
@@ -115,11 +86,7 @@ def trace_header(
     """
     from .mapping import common_usage
 
-    status: AgentTraceStatus = {
-        "completed": "succeeded",
-        "error": "failed",
-        "cancelled": "cancelled",
-    }[evidence.terminal_outcome]
+    status = _STATUSES[evidence.terminal_outcome]
     return AgentTraceHeader(
         runtime_kind="predict_rlm",
         trace_format="predict_rlm.run/v1",
@@ -149,7 +116,6 @@ def trace_record(
     """
     from .mapping import turn_from_step
 
-    usage = trace.usage
     return AgentTrace(
         header=trace_header(
             trace,
@@ -162,7 +128,8 @@ def trace_record(
         native=PredictRLMNativeTrace(
             sub_model=_sub_model_name(trace, sub_model),
             max_iterations=trace.max_iterations,
-            cache_hits=usage.main.cache_hits + usage.sub.cache_hits,
+            usage=native_usage(trace.usage),
+            telemetry_ref=trace.telemetry_ref,
         ),
         turns_streamed=False,
     )

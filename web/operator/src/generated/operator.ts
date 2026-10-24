@@ -855,10 +855,6 @@ export interface TraceHeaderV2 {
      */
     durationMs: string;
     /**
-     * @generated from protobuf field: optional string telemetry_json = 8
-     */
-    telemetryJson?: string;
-    /**
      * Open strings, so a new runtime needs no protobuf change.
      *
      * @generated from protobuf field: string runtime_kind = 9
@@ -4251,7 +4247,6 @@ class TraceHeaderV2$Type extends MessageType<TraceHeaderV2> {
         super("avalanche.operator.TraceHeaderV2", [
             { no: 2, name: "model", kind: "scalar", opt: true, T: 9 /*ScalarType.STRING*/ },
             { no: 6, name: "duration_ms", kind: "scalar", T: 4 /*ScalarType.UINT64*/ },
-            { no: 8, name: "telemetry_json", kind: "scalar", opt: true, T: 9 /*ScalarType.STRING*/ },
             { no: 9, name: "runtime_kind", kind: "scalar", T: 9 /*ScalarType.STRING*/ },
             { no: 10, name: "trace_format", kind: "scalar", T: 9 /*ScalarType.STRING*/ },
             { no: 11, name: "turn_count", kind: "scalar", T: 4 /*ScalarType.UINT64*/ },
@@ -4284,9 +4279,6 @@ class TraceHeaderV2$Type extends MessageType<TraceHeaderV2> {
                     break;
                 case /* uint64 duration_ms */ 6:
                     message.durationMs = reader.uint64().toString();
-                    break;
-                case /* optional string telemetry_json */ 8:
-                    message.telemetryJson = reader.string();
                     break;
                 case /* string runtime_kind */ 9:
                     message.runtimeKind = reader.string();
@@ -4330,9 +4322,6 @@ class TraceHeaderV2$Type extends MessageType<TraceHeaderV2> {
         /* uint64 duration_ms = 6; */
         if (message.durationMs !== "0")
             writer.tag(6, WireType.Varint).uint64(message.durationMs);
-        /* optional string telemetry_json = 8; */
-        if (message.telemetryJson !== undefined)
-            writer.tag(8, WireType.LengthDelimited).string(message.telemetryJson);
         /* string runtime_kind = 9; */
         if (message.runtimeKind !== "")
             writer.tag(9, WireType.LengthDelimited).string(message.runtimeKind);

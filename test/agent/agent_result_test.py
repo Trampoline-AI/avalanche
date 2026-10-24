@@ -17,11 +17,18 @@ import avalanche as ava
 from avalanche._agent_evidence import capture_agent_evidence
 from avalanche.agent import AgentOutputError, AgentResult
 from avalanche.agent.contract import AgentRequest, AgentRunOutcome, JsonOutputs
+from avalanche.agent.native.predict_rlm import PredictRLMTokenUsage, PredictRLMUsage
 from avalanche.agent.trace import AgentTrace, AgentTraceHeader, PredictRLMNativeTrace
 from avalanche.evaluation_capture import capture_evaluations
 
 predict_rlm_runtime = importlib.import_module("avalanche.runtimes.predict_rlm.runtime")
 predict_rlm_events = importlib.import_module("avalanche.runtimes.predict_rlm.events")
+
+
+_NO_USAGE = PredictRLMUsage(
+    main=PredictRLMTokenUsage(input_tokens=0, output_tokens=0, cost=0.0, cache_hits=0),
+    sub=PredictRLMTokenUsage(input_tokens=0, output_tokens=0, cost=0.0, cache_hits=0),
+)
 
 
 class Count(ava.Signature):
@@ -105,7 +112,7 @@ async def test_wrong_output_fails_after_the_terminal_trace_and_submits_no_evalua
             with pytest.raises(AgentOutputError, match="count"):
                 await count.fn("two words")
 
-    assert [event["kind"] for event in observed] == ["trace_finished"]
+    assert [event.kind for event in observed] == ["trace_finished"]
     assert submissions == []
 
 
@@ -123,7 +130,9 @@ class _FixedJsonRuntime(BaseModel):
         raise NotImplementedError
 
     async def invoke(self, request: AgentRequest, events) -> AgentRunOutcome:
-        return AgentRunOutcome(outputs=JsonOutputs(text=self.reply), trace=_empty_trace())
+        trace = _empty_trace()
+        events.finished(trace.model_copy(update={"turns_streamed": True}), complete=True)
+        return AgentRunOutcome(outputs=JsonOutputs(text=self.reply), trace=trace)
 
 
 def _empty_trace() -> AgentTrace:
@@ -142,7 +151,9 @@ def _empty_trace() -> AgentTrace:
             session_id=None,
         ),
         turns=(),
-        native=PredictRLMNativeTrace(sub_model=None, max_iterations=1, cache_hits=0),
+        native=PredictRLMNativeTrace(
+            sub_model=None, max_iterations=1, usage=_NO_USAGE, telemetry_ref=None
+        ),
         turns_streamed=False,
     )
 
@@ -242,8 +253,8 @@ async def test_predict_rlm_mounts_ava_files_and_returns_reserved_outputs(monkeyp
     # Inputs are mounted where they are, never copied.
     assert received == {"document": str(source), "attachments": [str(attachment)]}
     # Evidence describes the caller's file reference, never the mounted host path.
-    assert observed[0]["data"]["inputs"]["document"]["workspace"] == "snapshot:test"
-    assert observed[0]["data"]["inputs"]["document"]["path"] == "doc.txt"
+    assert observed[0].native.inputs["document"]["workspace"] == "snapshot:test"
+    assert observed[0].native.inputs["document"]["path"] == "doc.txt"
     redacted = result.outputs.redacted
     assert isinstance(redacted, ava.File)
     assert redacted.read_bytes() == b"[redacted]"

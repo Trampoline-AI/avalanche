@@ -1,7 +1,8 @@
 import { describe, expect, it } from "vitest";
 
 import { parseAgentDeclaration } from "./GraphCanvas";
-import { AgentEvent, AgentTrace } from "./generated/agentSchemas";
+import { AgentLiveEvent, AgentTrace, AgentTraceTerminal } from "./generated/agentSchemas";
+import { finishedTrace, tokenUsage, turnEvent } from "./test/agentTraceFixtures";
 import { agentDeclarationJson } from "./test/fixtures";
 
 const record: AgentTrace = {
@@ -51,7 +52,8 @@ const record: AgentTrace = {
     format: "predict_rlm.run/v1",
     sub_model: null,
     max_iterations: 4,
-    cache_hits: 0,
+    usage: { main: tokenUsage(), sub: tokenUsage() },
+    telemetry_ref: null,
   },
 };
 
@@ -73,14 +75,22 @@ describe("generated agent schemas", () => {
     expect(AgentTrace.safeParse(body).success).toBe(false);
   });
 
-  it("tell live events apart by kind", () => {
-    expect(
-      AgentEvent.safeParse({ kind: "tool.started", call_id: "t", name: "lookup" }).success,
-    ).toBe(true);
-    expect(AgentEvent.safeParse({ kind: "tool.started", call_id: "t" }).success).toBe(false);
-    expect(
-      AgentEvent.safeParse({ kind: "unknown", call_id: "t", name: "lookup" }).success,
-    ).toBe(false);
+  it("accept live event and final trace bodies shaped like the Python models", () => {
+    expect(AgentLiveEvent.parse(turnEvent(1))).toEqual(turnEvent(1));
+    expect(AgentTraceTerminal.parse(finishedTrace())).toEqual(finishedTrace());
+  });
+
+  it.each([
+    ["a v1 body", { event_kind: "iteration.recorded", data: {} }],
+    ["an old schema version", { ...turnEvent(1), schema_version: 1 }],
+    ["an unknown native format", { ...turnEvent(1), native: { format: "other/v1" } }],
+    [
+      "an unknown native kind",
+      { ...turnEvent(1), native: { format: "predict_rlm.run/v1", kind: "code.compiled" } },
+    ],
+    ["an unknown common kind", { ...turnEvent(1), common: { kind: "turn.paused" } }],
+  ])("reject a live event with %s", (_case, body) => {
+    expect(AgentLiveEvent.safeParse(body).success).toBe(false);
   });
 });
 

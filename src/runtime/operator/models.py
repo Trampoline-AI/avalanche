@@ -10,8 +10,8 @@ from types import MappingProxyType
 from typing import TYPE_CHECKING, Literal, Mapping
 
 if TYPE_CHECKING:
-    from avalanche._agent_trace import AgentTerminalDetail
     from avalanche.agent.declaration import AgentDeclaration
+    from avalanche.agent.live import AgentTraceFinished, AgentTraceUnavailable
     from avalanche.agent.trace import AgentTraceStatus, TokenUsage
 
 
@@ -148,7 +148,6 @@ class TraceHeader:
     tool_call_count: int
     external_run_id: str | None
     stop_reason: str | None
-    telemetry_json: str | None = None
 
 
 @dataclass(frozen=True)
@@ -185,7 +184,7 @@ class TraceDetail:
     created_sequence: int
     node_id: str
     descriptor_revision: int
-    trace_body: AgentTerminalDetail
+    trace_body: AgentTraceFinished | AgentTraceUnavailable
 
 
 @dataclass(frozen=True)
