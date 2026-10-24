@@ -1240,7 +1240,10 @@ class AvalancheApp(App):
         return list(self.store.workflows)
 
     def action_workflow_prev(self) -> None:
-        """Shift+Tab: switch to the previous workflow in explorer order."""
+        """Shift+Tab: traverse modal focus, or select the previous workflow."""
+        if self._screen is not None and self.screen is not self._screen:
+            self.screen.focus_previous()
+            return
         workflows = self._workflows_in_sidebar_order()
         if not workflows:
             return
@@ -1260,7 +1263,10 @@ class AvalancheApp(App):
         self._refresh_widgets()
 
     def action_workflow_next(self) -> None:
-        """Tab: switch to the next workflow in explorer order."""
+        """Tab: traverse modal focus, or select the next workflow."""
+        if self._screen is not None and self.screen is not self._screen:
+            self.screen.focus_next()
+            return
         workflows = self._workflows_in_sidebar_order()
         if not workflows:
             return
@@ -1558,10 +1564,19 @@ class AvalancheApp(App):
         if (
             self._screen is not None
             and self.screen is not self._screen
-            and action not in {"quit", "focus", "focus_next", "focus_previous"}
+            and action
+            not in {
+                "quit",
+                "focus",
+                "focus_next",
+                "focus_previous",
+                "workflow_next",
+                "workflow_prev",
+            }
         ):
-            # Keep dashboard shortcuts out of modals, but preserve Textual's
-            # application-level Tab/Shift+Tab focus traversal inside them.
+            # Tab/Shift+Tab use the priority workflow bindings, whose handlers
+            # route to modal focus before a batched next key is dispatched.
+            # Other dashboard shortcuts remain blocked while a modal is open.
             return False
         return True
 
