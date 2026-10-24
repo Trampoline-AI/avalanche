@@ -109,5 +109,7 @@ describe("agent trace viewers", () => {
     const finished = parseAgentLiveEvent(claudeFinishedEvent({ total: 5 }));
     expect(viewer.retainedValue(started, "inputs")).toEqual({ a: 2 });
     expect(viewer.retainedValue(finished, "outputs")).toEqual({ total: 5 });
+    const failed = parseAgentLiveEvent(claudeFinishedEvent(null));
+    expect(viewer.retainedValue(failed, "outputs")).toBeUndefined();
   });
 });

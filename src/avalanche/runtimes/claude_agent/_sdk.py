@@ -6,6 +6,7 @@ import asyncio
 import contextlib
 import inspect
 import json
+import shutil
 import tempfile
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field
@@ -102,7 +103,10 @@ async def run(
             directory = Path(
                 stack.enter_context(tempfile.TemporaryDirectory(prefix="avalanche-claude-"))
             )
-        prompt_inputs = _prompt_inputs(request, directory)
+        # Input files go to a fresh folder that is removed afterwards, so a reused or
+        # host-owned working directory keeps no copies and runs never collide.
+        inputs_directory = Path(tempfile.mkdtemp(prefix=".avalanche-inputs-", dir=directory))
+        prompt_inputs = _prompt_inputs(request, directory, inputs_directory)
         options = ClaudeAgentOptions(
             model=runtime.model,
             max_turns=runtime.max_turns,
@@ -127,37 +131,45 @@ async def run(
             cwd=str(directory),
         )
         transcript = _Transcript(events)
-        await events.emit(native.Started(model=runtime.model, inputs=prompt_inputs), None)
         try:
-            async for message in query(prompt=_prompt(prompt_inputs), options=options):
-                await transcript.add(message)
-        except asyncio.CancelledError:
-            events.unavailable(
-                status="cancelled",
-                error="the agent call was cancelled",
-                external_run_id=transcript.session_id,
-                complete=True,
-            )
-            raise
-        except CLINotFoundError as exc:
-            events.unavailable(
-                status="failed", error=str(exc), external_run_id=None, complete=True
-            )
-            raise AgentStepExecutionError(
-                f"agent step {request.step_name!r}: the Claude CLI is not installed where "
-                "this step runs; install Claude Code on every machine and Ray worker that "
-                "runs ClaudeAgent steps"
-            ) from exc
-        except Exception as exc:
-            events.unavailable(
-                status="failed",
-                error=f"{type(exc).__name__}: {exc}",
-                external_run_id=transcript.session_id,
-                complete=True,
-            )
-            raise AgentStepExecutionError(
-                f"agent step {request.step_name!r} failed calling Claude: {exc}"
-            ) from exc
+            await events.emit(native.Started(model=runtime.model, inputs=prompt_inputs), None)
+            try:
+                # Closing the stream stops the CLI even when handling a message raises.
+                async with contextlib.aclosing(
+                    query(prompt=_prompt(prompt_inputs), options=options)
+                ) as messages:
+                    async for message in messages:
+                        await transcript.add(message)
+            except asyncio.CancelledError:
+                events.unavailable(
+                    status="cancelled",
+                    error="the agent call was cancelled",
+                    external_run_id=transcript.session_id,
+                    complete=True,
+                )
+                raise
+            except CLINotFoundError as exc:
+                events.unavailable(
+                    status="failed", error=str(exc), external_run_id=None, complete=True
+                )
+                raise AgentStepExecutionError(
+                    f"agent step {request.step_name!r}: the Claude CLI is not installed where "
+                    "this step runs; install Claude Code on every machine and Ray worker that "
+                    "runs ClaudeAgent steps"
+                ) from exc
+            except Exception as exc:
+                events.unavailable(
+                    status="failed",
+                    error=f"{type(exc).__name__}: {exc}",
+                    external_run_id=transcript.session_id,
+                    complete=True,
+                )
+                raise AgentStepExecutionError(
+                    f"agent step {request.step_name!r} failed calling Claude: {exc}"
+                ) from exc
+        finally:
+            # Before any workspace snapshot, so the outputs never include the inputs.
+            shutil.rmtree(inputs_directory)
         result = transcript.result
         if result is None:
             events.unavailable(
@@ -197,18 +209,20 @@ async def run(
         return AgentRunOutcome(outputs=JsonOutputs(text=json.dumps(outputs)), trace=record)
 
 
-def _prompt_inputs(request: AgentRequest, directory: Path) -> dict[str, JsonValue]:
-    """The inputs as JSON; files are written into the working directory and named by path."""
+def _prompt_inputs(
+    request: AgentRequest, directory: Path, inputs_directory: Path
+) -> dict[str, JsonValue]:
+    """The inputs as JSON; files are written under the working directory and named by path."""
     values: dict[str, JsonValue] = {}
     written = 0
 
     def write(file: File) -> str:
         nonlocal written
         written += 1
-        target = Path("inputs") / str(written) / Path(file.name or "file").name
-        (directory / target).parent.mkdir(parents=True)
-        (directory / target).write_bytes(file.content)
-        return target.as_posix()
+        target = inputs_directory / str(written) / Path(file.name or "file").name
+        target.parent.mkdir()
+        target.write_bytes(file.content)
+        return target.relative_to(directory).as_posix()
 
     for name, info in request.signature.input_model.model_fields.items():
         value = getattr(request.inputs, name)
@@ -329,15 +343,28 @@ def _bounded(value: object) -> JsonValue:
     return {"kind": "unavailable", "reason": "value exceeds the trace size limit"}
 
 
+def _structured_output(value: object) -> dict[str, JsonValue]:
+    """The result's structured output for the trace, or a note that it was too large."""
+    projected = _JSON.validate_python(to_jsonable_python(value))
+    if len(to_json(projected)) <= _MAX_VALUE_BYTES:
+        return {"structured_output": projected, "output_omitted": False}
+    return {"structured_output": None, "output_omitted": True}
+
+
 def _result_text(content: str | list[dict[str, Any]] | None) -> JsonValue:
     return _bounded(content)
 
 
 @dataclass
 class _PendingTurn:
-    """An assistant message waiting for the results of the tools it called."""
+    """One assistant response waiting for the results of the tools it called.
+
+    The CLI may stream one response as several messages sharing a message ID;
+    their blocks are gathered here in order.
+    """
 
     message: AssistantMessage
+    blocks: list[object] = field(default_factory=list)
     calls: dict[str, ToolCallAction] = field(default_factory=dict)
 
 
@@ -363,13 +390,30 @@ class _Transcript:
                     ),
                     None,
                 )
+            case (
+                AssistantMessage(parent_tool_use_id=str())
+                | UserMessage(parent_tool_use_id=str())
+            ):
+                # A subagent's own messages: its work returns to this session as the
+                # result of the tool call that started it.
+                pass
             case AssistantMessage():
-                await self._finish_turn()
-                self.model = self.model or message.model
-                self._pending = _PendingTurn(message)
+                pending = self._pending
+                if (
+                    pending is None
+                    or message.message_id is None
+                    or message.message_id != pending.message.message_id
+                ):
+                    await self._finish_turn()
+                    self.model = self.model or message.model
+                    pending = self._pending = _PendingTurn(message)
+                else:
+                    # The same response continued: its latest message holds the usage.
+                    pending.message = message
+                pending.blocks.extend(message.content)
                 for block in message.content:
                     if isinstance(block, ToolUseBlock):
-                        self._pending.calls[block.id] = ToolCallAction(
+                        pending.calls[block.id] = ToolCallAction(
                             call_id=block.id,
                             caller="model",
                             name=block.name,
@@ -400,7 +444,7 @@ class _Transcript:
                         subtype=message.subtype,
                         is_error=message.is_error,
                         num_turns=message.num_turns,
-                        structured_output=_bounded(message.structured_output),
+                        **_structured_output(message.structured_output),
                         errors=tuple(message.errors or ()),
                     ),
                     None,
@@ -432,9 +476,9 @@ class _Transcript:
         if pending is None:
             return
         message = pending.message
-        text = "".join(block.text for block in message.content if isinstance(block, TextBlock))
+        text = "".join(block.text for block in pending.blocks if isinstance(block, TextBlock))
         reasoning = "".join(
-            block.thinking for block in message.content if isinstance(block, ThinkingBlock)
+            block.thinking for block in pending.blocks if isinstance(block, ThinkingBlock)
         )
         turn = Turn(
             index=len(self.turns) + 1,
