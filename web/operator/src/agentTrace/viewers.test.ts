@@ -44,6 +44,19 @@ describe("agent trace viewers", () => {
     expect(viewerFor(event.native.format).turn(event).error).toBe(true);
   });
 
+  it("does not fail a turn whose code handled a failed tool call", () => {
+    const body = turnEvent(3);
+    if (body.common?.kind !== "turn.finished") throw new Error("fixture is a turn");
+    const actions = body.common.turn.actions.map((action) =>
+      action.kind === "tool_call" ? { ...action, error: "not found" } : action,
+    );
+    const event = parseAgentLiveEvent({
+      ...body,
+      common: { ...body.common, turn: { ...body.common.turn, actions } },
+    });
+    expect(viewerFor(event.native.format).turn(event).error).toBe(false);
+  });
+
   it("rejects a non-turn event as a turn", () => {
     const event = parseAgentLiveEvent(runStartedEvent({ question: "Ready?" }));
     expect(() => viewerFor(event.native.format).turn(event)).toThrow();

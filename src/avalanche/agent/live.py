@@ -26,7 +26,14 @@ from pydantic import (
 
 from .kinds import RuntimeKind
 from .native import NativeEvent
-from .trace import AgentTrace, AgentTraceStatus, ModelCallAction, ToolCallAction, Turn
+from .trace import (
+    AgentTrace,
+    AgentTraceStatus,
+    CodeExecutionAction,
+    ModelCallAction,
+    ToolCallAction,
+    Turn,
+)
 
 # Serialized bodies always carry defaulted fields such as ``kind``; their
 # exported JSON Schema says so.
@@ -159,9 +166,14 @@ class AgentLiveEvent(BaseModel):
 
     @property
     def failed(self) -> bool:
-        """Whether the event reports a failure, with or without an error text."""
+        """Whether the event reports a failure, with or without an error text.
+
+        A turn fails when code it ran failed; the agent may have handled a failed
+        tool or model call inside it.
+        """
         failed_turn = isinstance(self.common, TurnFinished) and any(
-            action.error is not None for action in self.common.turn.actions
+            isinstance(action, CodeExecutionAction) and action.error is not None
+            for action in self.common.turn.actions
         )
         return self.error is not None or failed_turn
 

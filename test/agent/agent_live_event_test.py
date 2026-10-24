@@ -154,3 +154,23 @@ async def test_a_runtime_that_skips_its_final_trace_fails_the_call():
 
     with pytest.raises(AgentStepError, match="final trace"):
         await agent(text="hi")
+
+
+def test_a_handled_tool_failure_does_not_fail_the_turn():
+    from predict_rlm.trace import ToolCall
+
+    from avalanche.runtimes.predict_rlm.events import project_event
+
+    step = _step()
+    step.tool_calls = [ToolCall(name="lookup", duration_ms=1, error="not found")]
+    native, common = project_event(
+        RunEvent("run", 1, RunEventKind.ITERATION_RECORDED, 1, {"step": step})
+    )
+    event = _live(common=common, native=native)
+
+    assert event.failed is False
+    failed_code = step.model_copy(update={"error": True})
+    native, common = project_event(
+        RunEvent("run", 1, RunEventKind.ITERATION_RECORDED, 1, {"step": failed_code})
+    )
+    assert _live(common=common, native=native).failed is True
