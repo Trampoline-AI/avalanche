@@ -7,9 +7,10 @@ import importlib
 import itertools
 import os
 import sys
+from typing import Annotated
 
 import pytest
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 pytest.importorskip("claude_agent_sdk")
 
@@ -407,6 +408,11 @@ class FileInModelInput(ava.Signature):
     answer: str = ava.OutputField()
 
 
+class AnnotatedFileListInput(ava.Signature):
+    files: list[Annotated[ava.File, Field(description="a file")]] = ava.InputField()
+    answer: str = ava.OutputField()
+
+
 class OptionalWorkspaceInput(ava.Signature):
     workspace: ava.Workspace | None = ava.InputField()
     answer: str = ava.OutputField()
@@ -437,6 +443,7 @@ class FileListOutput(ava.Signature):
             "typed exactly",
         ),
         (OptionalWorkspaceInput, {"workspace": None}, "typed exactly"),
+        (AnnotatedFileListInput, {"files": [ava.File(content=b"x")]}, "typed exactly"),
     ],
     ids=[
         "two-workspaces",
@@ -446,6 +453,7 @@ class FileListOutput(ava.Signature):
         "file-tuple-input",
         "file-in-model-input",
         "optional-workspace-input",
+        "annotated-file-list-input",
     ],
 )
 async def test_unsupported_signatures_fail_before_calling_claude(

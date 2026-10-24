@@ -12,7 +12,7 @@ import types
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Union, get_args, get_origin, get_type_hints
+from typing import TYPE_CHECKING, Annotated, Any, Union, get_args, get_origin, get_type_hints
 
 from claude_agent_sdk import (
     AssistantMessage,
@@ -307,6 +307,8 @@ def _mentions(annotation: object, target: type, seen: frozenset[type] = frozense
     origin = get_origin(annotation)
     if origin is None:
         return False
+    if origin is Annotated:
+        return _mentions(get_args(annotation)[0], target, seen)
     if origin in (Union, types.UnionType) or isinstance(origin, type):
         return any(_mentions(argument, target, seen) for argument in get_args(annotation))
     return False
