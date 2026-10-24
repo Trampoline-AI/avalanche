@@ -87,7 +87,8 @@ function zod(schema, deps) {
       return "minLength" in schema ? `z.string().min(${schema.minLength})` : "z.string()";
     case "integer":
       checkKeys(schema, ["type", "minimum", "exclusiveMinimum"]);
-      return `z.int()${bounds(schema)}`;
+      // z.int() accepts safe integers only; nanosecond timestamps exceed 2**53.
+      return `z.number()${bounds(schema)}.refine(Number.isInteger, "Expected an integer")`;
     case "number":
       checkKeys(schema, ["type", "minimum", "exclusiveMinimum"]);
       return `z.number()${bounds(schema)}`;
