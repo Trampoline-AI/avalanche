@@ -181,10 +181,9 @@ dependency order. Only terminal-node receipts are fetched and exposed through
 
 Evaluation observation is separate from the execution-service lifecycle and its
 commit receipts. In operator-managed Local and Ray execution, the first successful
-agent invocation to return in each step submits its actual call arguments, complete
-DSPy prediction, and its terminal trace event for background evaluation. The step's
-own return value remains separate. Evidence is snapshotted before the prediction
-returns to the step body, so later mutations cannot change the observed execution.
+agent invocation to return in each step submits its actual call arguments, validated
+outputs, and full trace for background evaluation. The step's own return value
+remains separate. Evidence is snapshotted before the result returns to the step body, so later mutations cannot change the observed execution.
 Later agent calls do not replace or resubmit it; step postprocessing failure does
 not cancel an already-submitted evaluation.
 

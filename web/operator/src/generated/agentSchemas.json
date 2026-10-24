@@ -59,6 +59,44 @@
         }
       ]
     },
+    "AgentTrace": {
+      "additionalProperties": false,
+      "description": "The complete trace of one agent invocation.\n\nWhen ``turns_streamed`` is true, turns travelled as live events and the\nrecord carries none; the header still states how many there were.",
+      "properties": {
+        "header": {
+          "$ref": "#/$defs/AgentTraceHeader"
+        },
+        "native": {
+          "$ref": "#/$defs/PredictRLMNativeTrace"
+        },
+        "schema_version": {
+          "const": 2,
+          "default": 2,
+          "title": "Schema Version",
+          "type": "integer"
+        },
+        "turns": {
+          "items": {
+            "$ref": "#/$defs/Turn"
+          },
+          "title": "Turns",
+          "type": "array"
+        },
+        "turns_streamed": {
+          "title": "Turns Streamed",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "schema_version",
+        "header",
+        "turns",
+        "native",
+        "turns_streamed"
+      ],
+      "title": "AgentTrace",
+      "type": "object"
+    },
     "AgentTraceHeader": {
       "additionalProperties": false,
       "description": "Summary every runtime reports for one agent invocation.",
@@ -165,44 +203,6 @@
         "session_id"
       ],
       "title": "AgentTraceHeader",
-      "type": "object"
-    },
-    "AgentTraceRecord": {
-      "additionalProperties": false,
-      "description": "The complete trace of one agent invocation.\n\nWhen ``turns_streamed`` is true, turns travelled as live events and the\nrecord carries none; the header still states how many there were.",
-      "properties": {
-        "header": {
-          "$ref": "#/$defs/AgentTraceHeader"
-        },
-        "native": {
-          "$ref": "#/$defs/PredictRLMNativeTrace"
-        },
-        "schema_version": {
-          "const": 2,
-          "default": 2,
-          "title": "Schema Version",
-          "type": "integer"
-        },
-        "turns": {
-          "items": {
-            "$ref": "#/$defs/Turn"
-          },
-          "title": "Turns",
-          "type": "array"
-        },
-        "turns_streamed": {
-          "title": "Turns Streamed",
-          "type": "boolean"
-        }
-      },
-      "required": [
-        "schema_version",
-        "header",
-        "turns",
-        "native",
-        "turns_streamed"
-      ],
-      "title": "AgentTraceRecord",
       "type": "object"
     },
     "CodeExecutionAction": {

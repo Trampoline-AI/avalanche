@@ -44,8 +44,8 @@ def _agent_node(monkeypatch):
 
     @ava.agent_step(EchoSignature)
     async def echo(text: str, *, agent: ava.Agent) -> str:
-        prediction = await agent(text=text)
-        return prediction.answer
+        result = await agent(text=text)
+        return result.outputs.answer
 
     return echo
 

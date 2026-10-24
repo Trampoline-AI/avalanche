@@ -129,9 +129,8 @@ async def audit_package(
     agent: ava.Agent,
     dest: ava.Table = ns.audits,
 ) -> ava.AppendResult:
-    prediction = await agent(package=prepared)
-    artifact = AuditArtifact.model_validate(prediction.audit)
-    return dest.append(artifact)
+    result = await agent(package=prepared)
+    return dest.append(result.outputs.audit)
 ```
 
 Appending returns `ava.AppendResult`, which carries both appended data and the
@@ -155,8 +154,7 @@ async def draft_proposal(
     agent: ava.Agent,
     dest: ava.Table = ns.proposals,
 ) -> ava.AppendResult:
-    prediction = await agent(audit=audit)
-    return dest.append(ProposalArtifact.model_validate(prediction.proposal))
+    return dest.append((await agent(audit=audit)).outputs.proposal)
 ```
 
 Connect it in the DAG:

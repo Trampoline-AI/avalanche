@@ -3,21 +3,17 @@
 from __future__ import annotations
 
 import inspect
-import json
 import logging
 from collections.abc import Callable, Iterator, Mapping
 from contextlib import contextmanager
 from contextvars import ContextVar
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, TypeVar, cast
+from typing import TypeVar, cast
 
-from pydantic import JsonValue
+from pydantic import BaseModel, JsonValue
 
-from ._agent_evidence import AgentTraceFinishedEvent, AgentTraceUnavailableEvent
+from .agent.trace import AgentTrace
 from .evaluations import EvalContext, Evaluations
-
-if TYPE_CHECKING:
-    from dspy import Prediction
 
 InputT = TypeVar("InputT")
 OutputT = TypeVar("OutputT")
@@ -27,8 +23,8 @@ OutputT = TypeVar("OutputT")
 class EvaluationSubmission:
     """Live execution objects; the collector must snapshot them before returning."""
 
-    evaluations: Evaluations[object, Prediction]
-    context: EvalContext[object, Prediction] | None
+    evaluations: Evaluations[object, BaseModel]
+    context: EvalContext[object, BaseModel] | None
     runtime_defaults: Mapping[str, JsonValue]
     error: str | None = None
 
@@ -82,7 +78,7 @@ def _diagnostic(message: str) -> None:
 class _StepEvaluationCapture:
     def __init__(
         self,
-        evaluations: Evaluations[object, Prediction],
+        evaluations: Evaluations[object, BaseModel],
         step_name: str,
     ) -> None:
         self.evaluations = evaluations
@@ -93,8 +89,8 @@ class _StepEvaluationCapture:
     def submit(
         self,
         inputs: Mapping[str, InputT],
-        output: Prediction,
-        terminal_event: AgentTraceFinishedEvent | AgentTraceUnavailableEvent,
+        output: BaseModel,
+        trace: AgentTrace,
     ) -> None:
         if self.claimed:
             return
@@ -110,29 +106,11 @@ class _StepEvaluationCapture:
 
         from .classifier.classifier_step import _WORKFLOW_CLASSIFIER_DEFAULTS
 
-        context: EvalContext[object, Prediction] | None = None
+        context: EvalContext[object, BaseModel] | None = None
         error = None
         runtime_defaults: Mapping[str, JsonValue] = {}
         try:
             runtime_defaults = _WORKFLOW_CLASSIFIER_DEFAULTS.get()
-            if terminal_event["kind"] == "trace_finished":
-                trace: list[JsonValue] = [
-                    {
-                        "kind": terminal_event["kind"],
-                        "invocation_id": terminal_event["invocation_id"],
-                        # The operator event omits iterations already streamed.
-                        # Evaluations retain the full winning invocation instead.
-                        "trace": json.loads(output.trace.to_exportable_json()),
-                    }
-                ]
-            else:
-                trace = [
-                    {
-                        "kind": terminal_event["kind"],
-                        "invocation_id": terminal_event["invocation_id"],
-                        "error": terminal_event["error"],
-                    }
-                ]
             context = EvalContext(inputs=inputs, output=output, trace=trace)
         except BaseException as exc:
             error = _error_message(exc)
@@ -170,7 +148,7 @@ def capture_step_evaluations(
 ) -> Iterator[None]:
     """Isolate this step's capture slot, including steps without evaluations."""
     capture = (
-        _StepEvaluationCapture(cast("Evaluations[object, Prediction]", evaluations), step_name)
+        _StepEvaluationCapture(cast("Evaluations[object, BaseModel]", evaluations), step_name)
         if evaluations is not None
         else None
     )

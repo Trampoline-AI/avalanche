@@ -144,7 +144,7 @@ class PredictRLMNativeTrace(BaseModel):
 NativeTrace = PredictRLMNativeTrace
 
 
-class AgentTraceRecord(BaseModel):
+class AgentTrace(BaseModel):
     """The complete trace of one agent invocation.
 
     When ``turns_streamed`` is true, turns travelled as live events and the

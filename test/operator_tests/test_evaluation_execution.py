@@ -22,11 +22,31 @@ import cloudpickle
 import pytest
 
 from avalanche import EvalContext, Evaluations, Metric
+from avalanche.agent.trace import AgentTrace, AgentTraceHeader, PredictRLMNativeTrace
 from avalanche.evaluation_capture import EvaluationSubmission
 from runtime.operator import Operator
 from runtime.operator.evaluation_models import EvaluationRecord
 from runtime.operator.evaluation_worker import EvaluationWorkers, snapshot_evaluation
 from runtime.operator.models import RunState, RunStatus
+
+TRACE = AgentTrace(
+    header=AgentTraceHeader(
+        runtime_kind="predict_rlm",
+        trace_format="predict_rlm.run/v1",
+        status="succeeded",
+        stop_reason="submit",
+        model="test-model",
+        duration_ms=1,
+        usage=None,
+        turn_count=0,
+        tool_call_count=0,
+        external_run_id="run",
+        session_id=None,
+    ),
+    turns=(),
+    native=PredictRLMNativeTrace(sub_model=None, max_iterations=1, cache_hits=0),
+    turns_streamed=False,
+)
 
 
 @dataclass
@@ -195,7 +215,7 @@ evaluations = ava.Evaluations(
             question={{"type": "noul", "instructions": "Is the agent handoff useful?"}},
         ),
         "trace": ava.Metric(
-            state=lambda ctx: ctx.trace,
+            state=lambda ctx: ctx.trace.model_dump(mode="json"),
             question={{"type": "noul", "instructions": "Is this invocation supported?"}},
         ),
     }},
@@ -218,17 +238,15 @@ async def research(ticket: dict, repeat: int = 2, *, agent: ava.Agent,
         agent(text="world", payload=agent_payload),
     )
     later = await agent(text="later", payload=agent_payload)
-    predictions[1].handoff.summary = "mutated by caller"
-    predictions[1].handoff.payload["items"].append("caller output mutation")
+    predictions[1].outputs.handoff.summary = "mutated by caller"
+    predictions[1].outputs.handoff.payload["items"].append("caller output mutation")
     agent_payload["items"].append("caller input mutation")
-    predictions[1].trace.steps[0].output = "mutated trace"
-    predictions[1].trace.steps[0].untruncated_output = "mutated full trace"
     {body}
     return Report(
-        summary="postprocessed " + " ".join(p.answer for p in predictions),
+        summary="postprocessed " + " ".join(p.outputs.answer for p in predictions),
         payload=ticket,
         producer_pid=os.getpid(),
-        answers=[p.answer for p in predictions] + [later.answer],
+        answers=[p.outputs.answer for p in predictions] + [later.outputs.answer],
     )
 
 @ava.step
@@ -321,21 +339,23 @@ def assert_original_requests(service: EvaluationService, *, winner: str = "world
     assert report["state"]["selector_pid"] != report["state"]["producer_pid"]
     assert report["state"]["selector_pid"] != os.getpid()
     trace_request = next(item for item in requests if "trace" in item["questions"])
-    traces = trace_request["state"]
-    assert len(traces) == 1
-    assert traces[0]["kind"] == "trace_finished"
-    assert traces[0]["trace"]["status"] == "completed"
-    assert traces[0]["trace"]["iterations"] == 1
-    [iteration] = traces[0]["trace"]["steps"]
-    assert iteration["iteration"] == 1
-    assert iteration["reasoning"] == "Echo the input"
-    assert iteration["code"] == "SUBMIT(answer=" + repr(winner.upper()) + ")"
-    assert iteration["output"] == winner
-    assert iteration["untruncated_output"] == winner
-    assert iteration["duration_ms"] == 10
-    assert iteration["error"] is False
-    assert iteration["tool_calls"] == []
-    assert iteration["predict_calls"] == []
+    trace = trace_request["state"]
+    assert trace["header"]["status"] == "succeeded"
+    assert trace["header"]["external_run_id"] == winner + "-run"
+    assert trace["header"]["turn_count"] == 1
+    [turn] = trace["turns"]
+    assert turn["index"] == 1
+    assert turn["reasoning"] == "Echo the input"
+    assert turn["duration_ms"] == 10
+    assert turn["actions"] == [
+        {
+            "kind": "code_execution",
+            "language": "python",
+            "code": "SUBMIT(answer=" + repr(winner.upper()) + ")",
+            "output": winner,
+            "error": None,
+        }
+    ]
     assert service.requests.empty()
 
 
@@ -456,6 +476,7 @@ def test_snapshot_owns_source_under_python_prefix_and_restores_registry(
                     ),
                     answer="READY",
                 ),
+                trace=TRACE,
             ),
             runtime_defaults={},
         )
@@ -531,7 +552,7 @@ def test_snapshot_keeps_installed_library_selectors_by_reference(
                     )
                 }
             ),
-            context=EvalContext(inputs={}, output="completed report"),
+            context=EvalContext(inputs={}, output="completed report", trace=TRACE),
             runtime_defaults={},
         )
     )
@@ -620,7 +641,7 @@ def test_evaluation_result_survives_process_exit_between_poll_and_liveness():
                     )
                 }
             ),
-            context=EvalContext(inputs={}, output="completed report"),
+            context=EvalContext(inputs={}, output="completed report", trace=TRACE),
             runtime_defaults={},
         )
     )
