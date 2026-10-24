@@ -20,8 +20,10 @@
       return (await agent(document=document)).outputs.report
   ```
 
-  The entries below give the details. The operator and TUI no longer import
-  PredictRLM; only the PredictRLM runtime does.
+  The entries below give the details. The operator, client and TUI no longer import
+  PredictRLM when they start; only the PredictRLM runtime, the `ava.agent.skills`,
+  `Skill` and `DirectPythonBackend` re-exports, and the TUI's mock trace import it,
+  on first use.
 - Agents: add internal, not yet used models for running agent steps on runtimes
   other than PredictRLM: a runtime-neutral request, result and trace format. Agent
   steps behave exactly as before.

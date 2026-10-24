@@ -140,7 +140,9 @@ signature, validated inputs, and tools); the runtime returns raw outputs plus a
 runtime-neutral trace. Avalanche then validates the outputs against the
 signature in one place, so every runtime shares the same output contract, and
 returns an `AgentResult(outputs, trace)` to the step. PredictRLM is the default
-runtime and the only module that imports PredictRLM.
+runtime. Outside `avalanche.runtimes.predict_rlm`, PredictRLM is imported only
+lazily: by the `ava.agent.skills`, `Skill` and `DirectPythonBackend` re-exports
+and by the TUI mock trace.
 
 Each agent step runs on a runtime, a frozen descriptor such as
 `ava.runtimes.PredictRLM(lm=..., sub_lm=...)`. A workflow-level
