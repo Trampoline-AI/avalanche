@@ -44,7 +44,10 @@ export interface AgentTracePredictGroup {
 export interface AgentTraceStep {
   iteration: number;
   reasoning: string;
-  code: string;
+  /** Code the agent ran; absent for runtimes that answer without running code. */
+  code?: string;
+  /** What `output` holds: a code sandbox's output, or the model's reply. */
+  outputKind: "sandbox" | "response";
   output: string;
   untruncatedOutput: string;
   error: boolean;
@@ -57,7 +60,7 @@ export interface AgentTraceStep {
 
 export type AgentTraceStepSummary = Pick<
   AgentTraceStep,
-  "iteration" | "reasoning" | "error" | "durationMs" | "lm" | "usage"
+  "iteration" | "reasoning" | "error" | "durationMs" | "lm" | "usage" | "outputKind"
 >;
 
 export function summarizeAgentTraceStep(step: AgentTraceStep): AgentTraceStepSummary {
@@ -68,6 +71,7 @@ export function summarizeAgentTraceStep(step: AgentTraceStep): AgentTraceStepSum
     durationMs: step.durationMs,
     lm: step.lm,
     usage: step.usage,
+    outputKind: step.outputKind,
   };
 }
 

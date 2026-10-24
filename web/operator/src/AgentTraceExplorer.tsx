@@ -287,20 +287,30 @@ function TurnSecondaryDetails({
 
   return (
     <div className="trace-turn-detail border-t border-line px-3 pb-1">
+      {summary.outputKind === "sandbox" && (
+        <TraceSection
+          label="Generated Python"
+          onOpenChange={(open) => setSectionOpen("code", open)}
+        >
+          <DeferredTurnDetail detail={detail} onLoadTurn={onLoadTurn}>
+            {(step) => (
+              <div className="h-56 max-h-[45vh] min-h-32 overflow-auto rounded-md border border-line bg-canvas">
+                <PythonSource source={step.code ?? ""} />
+              </div>
+            )}
+          </DeferredTurnDetail>
+        </TraceSection>
+      )}
       <TraceSection
-        label="Generated Python"
-        onOpenChange={(open) => setSectionOpen("code", open)}
-      >
-        <DeferredTurnDetail detail={detail} onLoadTurn={onLoadTurn}>
-          {(step) => (
-            <div className="h-56 max-h-[45vh] min-h-32 overflow-auto rounded-md border border-line bg-canvas">
-              <PythonSource source={step.code} />
-            </div>
-          )}
-        </DeferredTurnDetail>
-      </TraceSection>
-      <TraceSection
-        label={summary.error ? "Sandbox error output" : "Sandbox output"}
+        label={
+          summary.outputKind === "response"
+            ? summary.error
+              ? "Error response"
+              : "Response"
+            : summary.error
+              ? "Sandbox error output"
+              : "Sandbox output"
+        }
         onOpenChange={(open) => setSectionOpen("output", open)}
       >
         <DeferredTurnDetail detail={detail} onLoadTurn={onLoadTurn}>

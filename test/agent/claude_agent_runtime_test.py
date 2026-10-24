@@ -15,6 +15,7 @@ pytest.importorskip("claude_agent_sdk")
 from claude_agent_sdk import (  # noqa: E402
     AssistantMessage,
     CLINotFoundError,
+    ResultError,
     ResultMessage,
     SystemMessage,
     TextBlock,
@@ -240,12 +241,18 @@ async def test_a_session_without_structured_output_fails_after_its_trace(replay)
 
 @pytest.mark.asyncio
 async def test_running_out_of_turns_fails_with_the_sdk_reason(replay):
-    replay([_init(), _result(None, subtype="error_max_turns", is_error=True)])
+    # Like the real SDK, the stream raises ResultError after an error result.
+    replay(
+        [_init(), _result(None, subtype="error_max_turns", is_error=True)],
+        error=ResultError("Claude Code returned an error result", exit_code=1),
+    )
     observed = []
     with capture_agent_evidence(observed.append, errors="raise"):
         with pytest.raises(AgentStepExecutionError, match="error_max_turns"):
             await _agent(max_turns=1)(a=2, b=3)
 
+    # The final trace keeps the session's details instead of an unavailable trace.
+    assert observed[-1].kind == "trace_finished"
     header = observed[-1].record.header
     assert (header.status, header.stop_reason) == ("failed", "error_max_turns")
     assert observed[-1].record.native.result_subtype == "error_max_turns"
@@ -513,3 +520,20 @@ async def test_the_message_stream_is_closed_when_handling_a_message_fails(monkey
 
     assert closed == [True]
     assert observed[-1].kind == "trace_unavailable"
+
+
+@pytest.mark.asyncio
+async def test_a_setup_failure_leaves_no_input_files_in_the_workspace(replay, tmp_path):
+    def untyped(value):
+        return value
+
+    seen = replay([])
+    workspace = ava.Workspace.from_directory(tmp_path, reference="notes")
+
+    with pytest.raises(AgentStepError, match="type annotation"):
+        await ava.Agent(
+            signature=Edit, step_name="edit", runtime=ClaudeAgent(), tools=(untyped,)
+        )(workspace=workspace, document=ava.File(content=b"draft", name="draft.txt"))
+
+    assert seen == {}
+    assert list(tmp_path.iterdir()) == []
