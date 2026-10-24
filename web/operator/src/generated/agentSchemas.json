@@ -85,15 +85,26 @@
         "native": {
           "discriminator": {
             "mapping": {
+              "artifact.collected": "#/$defs/Lifecycle",
+              "artifact.mounted": "#/$defs/Lifecycle",
               "code.executed": "#/$defs/CodeExecuted",
               "code.generated": "#/$defs/Correlated",
+              "input.prepared": "#/$defs/Lifecycle",
               "iteration.recorded": "#/$defs/IterationRecorded",
+              "output.materialized": "#/$defs/Lifecycle",
+              "output.reserved": "#/$defs/Lifecycle",
+              "packages.installed": "#/$defs/Lifecycle",
               "predict.finished": "#/$defs/Correlated",
               "predict.started": "#/$defs/PredictStarted",
               "run.cancelled": "#/$defs/RunEnded",
               "run.failed": "#/$defs/RunEnded",
               "run.started": "#/$defs/RunStarted",
               "run.succeeded": "#/$defs/RunSucceeded",
+              "session.finalize_failed": "#/$defs/Lifecycle",
+              "session.finalized": "#/$defs/Lifecycle",
+              "session.release_failed": "#/$defs/Lifecycle",
+              "session.released": "#/$defs/Lifecycle",
+              "session.started": "#/$defs/Lifecycle",
               "tool.finished": "#/$defs/Correlated",
               "tool.started": "#/$defs/Correlated"
             },
@@ -102,6 +113,9 @@
           "oneOf": [
             {
               "$ref": "#/$defs/RunStarted"
+            },
+            {
+              "$ref": "#/$defs/Lifecycle"
             },
             {
               "$ref": "#/$defs/IterationRecorded"
@@ -689,6 +703,41 @@
       "type": "object"
     },
     "JsonValue": {},
+    "Lifecycle": {
+      "additionalProperties": false,
+      "description": "Sandbox and artifact lifecycle steps; Avalanche keeps only that they happened.",
+      "properties": {
+        "format": {
+          "const": "predict_rlm.run/v1",
+          "default": "predict_rlm.run/v1",
+          "title": "Format",
+          "type": "string"
+        },
+        "kind": {
+          "enum": [
+            "input.prepared",
+            "session.started",
+            "packages.installed",
+            "artifact.mounted",
+            "output.reserved",
+            "artifact.collected",
+            "output.materialized",
+            "session.finalized",
+            "session.finalize_failed",
+            "session.released",
+            "session.release_failed"
+          ],
+          "title": "Kind",
+          "type": "string"
+        }
+      },
+      "required": [
+        "format",
+        "kind"
+      ],
+      "title": "Lifecycle",
+      "type": "object"
+    },
     "ModelCallAction": {
       "additionalProperties": false,
       "description": "A nested model call made during a turn, for example a sub-model query.",

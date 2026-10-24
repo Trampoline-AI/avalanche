@@ -10,7 +10,7 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 from types import MappingProxyType
-from typing import Annotated, ClassVar, Literal
+from typing import Annotated, ClassVar, Literal, get_args
 
 from pydantic import BaseModel, ConfigDict, Field, JsonValue, NonNegativeFloat, NonNegativeInt
 
@@ -186,8 +186,31 @@ class RunEnded(_Event):
         return self.run_error
 
 
+LifecycleKind = Literal[
+    "input.prepared",
+    "session.started",
+    "packages.installed",
+    "artifact.mounted",
+    "output.reserved",
+    "artifact.collected",
+    "output.materialized",
+    "session.finalized",
+    "session.finalize_failed",
+    "session.released",
+    "session.release_failed",
+]
+
+
+class Lifecycle(_Event):
+    """Sandbox and artifact lifecycle steps; Avalanche keeps only that they happened."""
+
+    kind: LifecycleKind
+    common_kinds = MappingProxyType(dict.fromkeys(get_args(LifecycleKind)))
+
+
 PredictRLMNativeEvent = Annotated[
     RunStarted
+    | Lifecycle
     | IterationRecorded
     | PredictStarted
     | Correlated

@@ -400,7 +400,8 @@ class Operator:
         self._trace_bodies: dict[tuple[str, str], dict[int, bytes]] = {}
         self._trace_errors: dict[tuple[str, str], str | None] = {}
         self._agent_invocation_sequences: dict[tuple[str, str, str], int] = {}
-        # Each invocation's runtime, fixed by its first evidence, and its final body.
+        # Each invocation's runtime, fixed by its first evidence, and the digest of
+        # its final body, so a replayed final trace can be told from a different one.
         self._agent_invocation_runtimes: dict[tuple[str, str, str], str] = {}
         self._agent_finished_invocations: dict[tuple[str, str, str], bytes] = {}
         self._run_log_bytes: dict[str, int] = {}
@@ -2615,9 +2616,10 @@ class Operator:
             )
         else:
             finalized_trace = evidence.model_dump_json().encode()
+            final_digest = hashlib.sha256(finalized_trace).digest()
             previous_final = self._agent_finished_invocations.get(invocation_key)
             if previous_final is not None:
-                if previous_final == finalized_trace:
+                if previous_final == final_digest:
                     return None
                 raise _CoordinatorProtocolError("agent invocation sent a second final trace")
             if len(finalized_trace) > self._max_trace_body_bytes:
@@ -2657,7 +2659,7 @@ class Operator:
                     )
                     message = f"Agent trace unavailable: {error}"
                     level = LogLevel.WARN
-            self._agent_finished_invocations[invocation_key] = finalized_trace
+            self._agent_finished_invocations[invocation_key] = final_digest
 
         entry = LogEntry(
             timestamp=datetime.now(),

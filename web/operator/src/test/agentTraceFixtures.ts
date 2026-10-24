@@ -25,7 +25,8 @@ function live(
     schema_version: 2,
     invocation_id: "invocation-1",
     sequence,
-    timestamp_ns: sequence,
+    // A real time.time_ns() value, beyond JavaScript's safe integers.
+    timestamp_ns: 1_792_855_720_829_187_328 + sequence * 1_024,
     runtime_kind: "predict_rlm",
     ...rest,
   };

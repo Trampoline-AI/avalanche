@@ -460,7 +460,8 @@ def project_event(
             return native.RunEnded(
                 kind=kind, error_type=data["error_type"], run_error=data["error"]
             ), None
-    raise ValueError(f"unknown PredictRLM event kind {kind!r}")
+    # Sandbox and artifact lifecycle kinds; an unknown kind fails validation here.
+    return native.Lifecycle(kind=kind), None
 
 
 def native_token_usage(usage: PredictRLMTokenUsage) -> native.PredictRLMTokenUsage:
