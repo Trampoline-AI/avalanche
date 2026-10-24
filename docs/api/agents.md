@@ -131,7 +131,7 @@ result = await agent(**inputs)
 summary = result.outputs.summary  # the output name declared by the signature
 ```
 
-`inputs` must contain **exactly** the signature's input names, even for fields with descriptor defaults. Positional input arguments, extra names, and missing names are not supported. Runtime configuration cannot be overridden through this call. Avalanche checks input names, not their value types; PredictRLM/DSPy processes the values.
+`inputs` must contain **exactly** the signature's input names, even for fields with descriptor defaults. Positional input arguments, extra names, and missing names are not supported. Runtime configuration cannot be overridden through this call. Avalanche checks the names and validates each value against its declared input type before the runtime starts; a mismatch raises `AgentStepError`.
 
 The return is an `ava.agent.AgentResult`, the same for every runtime:
 

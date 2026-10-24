@@ -131,16 +131,31 @@ construction; they are not eager values.
 
 A workflow can use plain deterministic nodes and `@ava.agent_step` nodes in the
 same DAG. An agent step is still an ordinary Avalanche node: Avalanche injects
-the keyword-only `ava.Agent`, the step calls it, then the step body validates,
-composes, and persists its own result. Agent execution is implemented through
-PredictRLM; the step's signature, skills, tools, and runtime model settings
+the keyword-only `ava.Agent`, the step calls it, then the step body composes
+and persists its own result. The step's signature, tools, and runtime settings
 remain explicit declaration data.
+
+An `AgentRuntime` runs one agent call. Avalanche hands it an `AgentRequest` (the
+signature, validated inputs, and tools); the runtime returns raw outputs plus a
+runtime-neutral trace. Avalanche then validates the outputs against the
+signature in one place, so every runtime shares the same output contract, and
+returns an `AgentResult(outputs, trace)` to the step. PredictRLM is the default
+runtime and the only module that imports PredictRLM.
 
 Each agent step runs on a runtime, a frozen descriptor such as
 `ava.runtimes.PredictRLM(lm=..., sub_lm=...)`. A workflow-level
 `agent_defaults={"runtime": ...}` supplies shared settings; a step's runtime of
 the same kind is merged over it field by field, and with neither the step uses
 `PredictRLM()`. Signatures and tools stay step-local.
+
+While a runtime runs, it reports live events, and each call ends with exactly
+one final trace. A live event carries Avalanche's sequence number, the common
+event when there is one (a finished turn, a model or tool call, generated code),
+and the runtime's own details as a typed payload for its trace format. The final
+trace is the common `AgentTrace`: a header every runtime fills the same
+way, plus a native section; its turns already travelled as live events. These
+models live in `src/avalanche/agent/` without runtime imports, so the operator,
+client, TUI, and web UI validate every format without the runtime installed.
 
 ### Executors
 
@@ -284,7 +299,10 @@ each run using the `spawn` multiprocessing context.
 
 Preparation, runtime, and terminal events are serializable queue messages. The
 parent validates them before mutating its state. The coordinator forwards stdout,
-stderr, logging, and agent evidence through the event channel. For Ray runs, a
+stderr, logging, and agent evidence through the event channel. Agent evidence
+crosses as JSON and is validated once, in strict mode, against the live event
+and final trace models. Malformed or out-of-order agent evidence, such as a
+second final trace for one call, fails the run as a protocol error. For Ray runs, a
 Ray queue carries worker log events back to the coordinator and then the parent.
 
 Cancellation sets the child cancellation event and eventually tears down the
@@ -435,6 +453,7 @@ object sharing, and UI-owned execution.
 | Browser UI source | `web/operator/` |
 | Packaged browser assets | `src/runtime/operator/web_assets/` |
 | Textual TUI | `src/tui/` |
+| Agent trace viewers, one per trace format | `src/tui/agent_trace_viewers/`, `web/operator/src/agentTrace/` |
 | CLI | `src/ava_cli/` |
 | Runnable examples | `examples/` |
 | Behavior and integration tests | `test/` |
