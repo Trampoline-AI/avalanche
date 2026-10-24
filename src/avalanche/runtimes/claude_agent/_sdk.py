@@ -193,8 +193,8 @@ async def run(
             record.model_copy(update={"turns": (), "turns_streamed": True}), complete=True
         )
         if record.header.status != "succeeded":
-            detail = "; ".join(result.errors or ()) or result.subtype
-            if result.subtype == "success":
+            detail = "; ".join(result.errors or ()) or result.result or result.subtype
+            if result.subtype == "success" and not result.is_error:
                 detail = (
                     "the session succeeded without the structured output the signature needs"
                 )
