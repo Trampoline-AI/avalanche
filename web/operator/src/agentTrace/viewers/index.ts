@@ -2,6 +2,7 @@
 // viewer here fails the TypeScript build.
 import type { AgentLiveEvent, AgentTraceTerminal, NativeEventFormat } from "../common";
 import type { AgentTraceStep, TraceBodySummary } from "../types";
+import { claudeAgentViewer } from "./claudeAgent";
 import { predictRlmViewer } from "./predictRlm";
 
 export interface TraceViewer {
@@ -23,6 +24,7 @@ export interface TraceViewer {
 
 export const TRACE_VIEWERS = {
   "predict_rlm.run/v1": predictRlmViewer,
+  "claude_agent.messages/v1": claudeAgentViewer,
 } satisfies Record<NativeEventFormat, TraceViewer>;
 
 function isNativeEventFormat(format: string): format is NativeEventFormat {

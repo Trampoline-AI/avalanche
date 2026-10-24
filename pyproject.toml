@@ -42,6 +42,9 @@ ray = [
 lance = [
     "pylance>=0.24.0",
 ]
+claude = [
+    "claude-agent-sdk>=0.2.174",
+]
 
 [dependency-groups]
 dev = [

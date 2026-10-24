@@ -127,6 +127,17 @@
   agent event and trace bodies change; proto field 8 `telemetry_json` is reserved).
 - Operator: the agent trace header no longer carries PredictRLM's telemetry
   reference; it is in the PredictRLM part of the final trace body.
+- Agents: new `ava.runtimes.ClaudeAgent` runs agent steps with Claude through the
+  Claude Agent SDK. Install the new `claude` extra (`avalanche-ai[claude]`) and the
+  Claude Code CLI, then choose a model with `ClaudeAgent(model="claude-haiku-5-5")`.
+  The CLI signs in with an existing `claude` login, a subscription token from
+  `claude setup-token` (`CLAUDE_CODE_OAUTH_TOKEN`), or `ANTHROPIC_API_KEY`. Each call
+  runs without the user's Claude settings, MCP servers or connectors; step tools are
+  offered through an in-process tool server; outputs come back as structured output
+  and are validated like every runtime's. One `ava.Workspace` input becomes the
+  working directory. The TUI and web UI show Claude traces through their own viewer,
+  and a Claude declaration shows its model and settings. Workflows that only declare
+  Claude steps import and publish without the extra installed.
 
 ## 0.15.1 — 2026-10-24
 

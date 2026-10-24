@@ -143,8 +143,26 @@ class PredictRLMNativeTrace(BaseModel):
     telemetry_ref: dict[str, JsonValue] | None
 
 
-# A discriminated union on ``format`` once a second runtime adds its format.
-NativeTrace = PredictRLMNativeTrace
+class ClaudeAgentNativeTrace(BaseModel):
+    """Claude Agent SDK session details that have no common-layer equivalent."""
+
+    model_config = _STRICT
+
+    runtime_kind: ClassVar[RuntimeKind] = "claude_agent"
+
+    format: Literal["claude_agent.messages/v1"] = "claude_agent.messages/v1"
+    # The SDK's result subtype, such as ``success`` or ``error_max_turns``.
+    result_subtype: str | None
+    # Turns as the CLI counts them, which include tool-result round trips.
+    num_turns: NonNegativeInt
+    duration_api_ms: NonNegativeInt | None
+    permission_denials: NonNegativeInt
+    errors: tuple[str, ...]
+
+
+NativeTrace = Annotated[
+    PredictRLMNativeTrace | ClaudeAgentNativeTrace, Field(discriminator="format")
+]
 
 
 class AgentTrace(BaseModel):

@@ -1,6 +1,9 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  claudeFinishedEvent,
+  claudeStartedEvent,
+  claudeTurnEvent,
   finishedTrace,
   runStartedEvent,
   runSucceededEvent,
@@ -12,7 +15,10 @@ import { TRACE_VIEWERS, activityLabel, headerViewer, viewerFor } from "./viewers
 
 describe("agent trace viewers", () => {
   it("has a viewer for every trace format", () => {
-    expect(Object.keys(TRACE_VIEWERS)).toEqual(["predict_rlm.run/v1"]);
+    expect(Object.keys(TRACE_VIEWERS).sort()).toEqual([
+      "claude_agent.messages/v1",
+      "predict_rlm.run/v1",
+    ]);
   });
 
   it("maps a PredictRLM turn event from its common turn and native details", () => {
@@ -83,5 +89,25 @@ describe("agent trace viewers", () => {
     expect(activityLabel("custom.kind")).toBe("custom.kind");
     expect(headerViewer("other/v1")).toBeUndefined();
     expect(() => viewerFor("other/v1")).toThrow("No viewer");
+  });
+
+  it("maps a Claude turn from its text, thinking and tool calls", () => {
+    const event = parseAgentLiveEvent(claudeTurnEvent(2));
+    const viewer = viewerFor(event.native.format);
+
+    expect(viewer.turn(event)).toMatchObject({
+      iteration: 2,
+      reasoning: "Thinking 2.",
+      output: "Answer text 2.",
+      error: false,
+      toolCalls: [{ name: "mcp__avalanche__lookup", arguments: { name: "a" }, result: "10" }],
+      predictCalls: [],
+      lm: { finishReason: "tool_use" },
+    });
+    expect(viewer.hasSubModel).toBe(false);
+    const started = parseAgentLiveEvent(claudeStartedEvent({ a: 2 }));
+    const finished = parseAgentLiveEvent(claudeFinishedEvent({ total: 5 }));
+    expect(viewer.retainedValue(started, "inputs")).toEqual({ a: 2 });
+    expect(viewer.retainedValue(finished, "outputs")).toEqual({ total: 5 });
   });
 });

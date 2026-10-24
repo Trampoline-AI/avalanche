@@ -16,7 +16,7 @@ from typing import Any, Callable, Literal
 from pydantic import ValidationError
 
 from avalanche._agent_trace import AgentTraceEnvelope
-from avalanche.agent.declaration import AgentDeclaration
+from avalanche.agent.declaration import AgentDeclaration, ClaudeAgentDeclaration
 from avalanche.agent.live import (
     AgentLiveEvent,
     AgentTraceFinished,
@@ -1688,13 +1688,27 @@ class UIStore:
             return {}
         signature = declaration.signature.model_dump(mode="json")
         runtime = declaration.runtime.model_dump(mode="json")
-        return {
+        step_tools = [tool.model_dump(mode="json") for tool in declaration.tools]
+        common = {
             "signature": {
                 "instructions": signature["instructions"],
                 "name": signature["name"],
             },
             "inputs": signature["inputs"],
             "outputs": signature["outputs"],
+        }
+        if isinstance(declaration.runtime, ClaudeAgentDeclaration):
+            return {
+                **common,
+                "skills": {},
+                "models": {"main": runtime["model"]},
+                "runtime": {**runtime["settings"], "builtin_tools": runtime["builtin_tools"]},
+                "packages": [],
+                "modules": [],
+                "tools": step_tools,
+            }
+        return {
+            **common,
             "skills": {skill.pop("name"): skill for skill in runtime["skills"]},
             "models": runtime["models"],
             "runtime": {
@@ -1705,10 +1719,7 @@ class UIStore:
             "packages": runtime["packages"],
             "modules": runtime["modules"],
             # Skill tools first, then the step's own, as the agent sees them.
-            "tools": [
-                *runtime["skill_tools"],
-                *(tool.model_dump(mode="json") for tool in declaration.tools),
-            ],
+            "tools": [*runtime["skill_tools"], *step_tools],
         }
 
     def trace_inspector_navigation_paths(self) -> list[tuple[str, ...]]:

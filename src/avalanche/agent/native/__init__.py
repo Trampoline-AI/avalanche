@@ -6,9 +6,15 @@ client and TUI validate every format without the runtime extras installed.
 
 from __future__ import annotations
 
+from typing import Annotated
+
+from pydantic import Field
+
+from .claude_agent import ClaudeAgentNativeEvent
 from .predict_rlm import PredictRLMNativeEvent
 
-# A discriminated union on ``format`` once a second runtime adds its format.
-NativeEvent = PredictRLMNativeEvent
+NativeEvent = Annotated[
+    PredictRLMNativeEvent | ClaudeAgentNativeEvent, Field(discriminator="format")
+]
 
 __all__ = ["NativeEvent"]
