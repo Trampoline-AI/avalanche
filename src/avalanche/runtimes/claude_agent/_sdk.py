@@ -106,6 +106,9 @@ async def run(
         # Input files go to a fresh folder that is removed afterwards, so a reused or
         # host-owned working directory keeps no copies and runs never collide.
         inputs_directory = Path(tempfile.mkdtemp(prefix=".avalanche-inputs-", dir=directory))
+        # Also on any failure before the session starts; the explicit removal below
+        # runs first, before a workspace snapshot.
+        stack.callback(shutil.rmtree, inputs_directory, ignore_errors=True)
         prompt_inputs = _prompt_inputs(request, directory, inputs_directory)
         options = ClaudeAgentOptions(
             model=runtime.model,
@@ -140,6 +143,10 @@ async def run(
                 ) as messages:
                     async for message in messages:
                         await transcript.add(message)
+                        if transcript.result is not None:
+                            # The CLI exits non-zero after an error result and the SDK
+                            # then raises ResultError; the result already says why.
+                            break
             except asyncio.CancelledError:
                 events.unavailable(
                     status="cancelled",
@@ -169,7 +176,7 @@ async def run(
                 ) from exc
         finally:
             # Before any workspace snapshot, so the outputs never include the inputs.
-            shutil.rmtree(inputs_directory)
+            shutil.rmtree(inputs_directory, ignore_errors=True)
         result = transcript.result
         if result is None:
             events.unavailable(

@@ -104,7 +104,16 @@ describe("agent trace viewers", () => {
       predictCalls: [],
       lm: { finishReason: "tool_use" },
     });
+    expect(viewer.turn(event).outputKind).toBe("response");
+    expect(viewer.turn(event)).not.toHaveProperty("code");
     expect(viewer.hasSubModel).toBe(false);
+    const body = claudeTurnEvent(3);
+    if (body.native.kind !== "message.finished") throw new Error("fixture is a turn");
+    const apiError = parseAgentLiveEvent({
+      ...body,
+      native: { ...body.native, api_error: "rate_limit" },
+    });
+    expect(viewer.turn(apiError).error).toBe(true);
     const started = parseAgentLiveEvent(claudeStartedEvent({ a: 2 }));
     const finished = parseAgentLiveEvent(claudeFinishedEvent({ total: 5 }));
     expect(viewer.retainedValue(started, "inputs")).toEqual({ a: 2 });
