@@ -80,7 +80,7 @@ def _assistant(*blocks, usage=None, message_id=None) -> AssistantMessage:
 
 
 def _result(
-    structured_output, *, subtype="success", is_error=False, errors=None
+    structured_output, *, subtype="success", is_error=False, errors=None, result=None
 ) -> ResultMessage:
     return ResultMessage(
         subtype=subtype,
@@ -93,6 +93,7 @@ def _result(
         usage={"input_tokens": 10, "output_tokens": 20, "cache_read_input_tokens": 4},
         structured_output=structured_output,
         errors=errors,
+        result=result,
     )
 
 
@@ -256,6 +257,18 @@ async def test_running_out_of_turns_fails_with_the_sdk_reason(replay):
     header = observed[-1].record.header
     assert (header.status, header.stop_reason) == ("failed", "error_max_turns")
     assert observed[-1].record.native.result_subtype == "error_max_turns"
+
+
+@pytest.mark.asyncio
+async def test_api_error_result_fails_with_the_api_error(replay):
+    # The SDK reports API failures as a "success" result that is an error.
+    replay(
+        [_init(), _result(None, is_error=True, result="API Error: 529 overloaded")],
+        error=ResultError("Claude Code returned an error result", exit_code=1),
+    )
+
+    with pytest.raises(AgentStepExecutionError, match="529"):
+        await _agent()(a=2, b=3)
 
 
 @pytest.mark.asyncio

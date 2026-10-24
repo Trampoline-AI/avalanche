@@ -51,7 +51,8 @@ export interface AgentTraceStep {
   output: string;
   untruncatedOutput: string;
   error: boolean;
-  durationMs: number;
+  /** Absent when the runtime does not time its turns. */
+  durationMs?: number;
   toolCalls: AgentTraceToolCall[];
   predictCalls: AgentTracePredictGroup[];
   lm?: TraceLmFinish;

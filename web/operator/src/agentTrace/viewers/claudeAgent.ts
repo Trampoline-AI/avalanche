@@ -31,7 +31,7 @@ function turn(event: AgentLiveEvent): AgentTraceStep {
     untruncatedOutput: text,
     // Rate-limit, billing and authentication failures arrive as API-error turns.
     error: native.api_error !== null,
-    durationMs: turn.duration_ms ?? 0,
+    durationMs: turn.duration_ms ?? undefined,
     toolCalls: turn.actions.flatMap((action) =>
       action.kind === "tool_call"
         ? [
