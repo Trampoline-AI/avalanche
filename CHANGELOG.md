@@ -7,6 +7,8 @@
 ### Protocol
 
 - Delta protocol 1.0 (baseline): export `avalanche.PROTOCOL_VERSION`; see docs/compatibility.md.
+- Lazily re-export `avalanche.agent.DirectPythonBackend` so hosts can use Avalanche's
+  backend interface without importing PredictRLM directly.
 
 ## 0.15.0 — 2026-10-24
 
