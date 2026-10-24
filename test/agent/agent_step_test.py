@@ -727,7 +727,8 @@ def test_iteration_detail_survives_operator_retention_and_hydration(payloads):
     assert native.predict_calls[0].signature == "question -> answer"
     assert native.predict_count == len(payloads)
     assert [call.usage for call in native.predict_calls[0].calls] == [
-        call.usage for call in native.predict_calls[0].calls
+        predict_rlm_events.native_token_usage(call.usage)
+        for call in step.predict_calls[0].calls
     ]
     assert (
         len(native.model_dump_json().encode()) <= predict_rlm_events._MAX_EVIDENCE_VALUE_BYTES

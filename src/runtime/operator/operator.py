@@ -2523,10 +2523,10 @@ class Operator:
 
         if node_id not in run.nodes:
             raise _CoordinatorProtocolError("agent evidence references unpublished node")
-        if len(event_json) > self._max_trace_body_bytes:
-            raise _CoordinatorProtocolError(
-                f"agent evidence exceeds {self._max_trace_body_bytes} byte limit"
-            )
+        # A coarse bound before parsing; each kind's own limit is checked below.
+        parse_limit = max(self._max_agent_event_bytes, self._max_trace_body_bytes)
+        if len(event_json) > parse_limit:
+            raise _CoordinatorProtocolError(f"agent evidence exceeds {parse_limit} byte limit")
         try:
             evidence = AGENT_EVIDENCE.validate_json(event_json, strict=True)
         except ValueError as exc:
