@@ -26,10 +26,11 @@ function turn(event: AgentLiveEvent): AgentTraceStep {
     iteration: turn.index,
     reasoning: turn.reasoning ?? "",
     // Claude answers in text and tool calls; it runs no generated code of its own.
-    code: "",
+    outputKind: "response",
     output: text,
     untruncatedOutput: text,
-    error: false,
+    // Rate-limit, billing and authentication failures arrive as API-error turns.
+    error: native.api_error !== null,
     durationMs: turn.duration_ms ?? 0,
     toolCalls: turn.actions.flatMap((action) =>
       action.kind === "tool_call"

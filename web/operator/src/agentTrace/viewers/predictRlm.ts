@@ -27,6 +27,7 @@ function turn(event: AgentLiveEvent): AgentTraceStep {
     iteration: turn.index,
     reasoning: turn.reasoning ?? "",
     code: code.code,
+    outputKind: "sandbox",
     output: code.output,
     untruncatedOutput: native.untruncated_output,
     // Only failed code fails a turn; the code may have handled a failed tool call.
