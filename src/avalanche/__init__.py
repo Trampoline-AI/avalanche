@@ -30,6 +30,7 @@ from .model_frame import Json
 
 # Progress tracking
 from .progress import ProgressStore
+from .protocol import PROTOCOL_VERSION, ProtocolVersion
 from .run_handle import RunHandle
 
 # Runtime primitives
@@ -115,6 +116,8 @@ def __dir__() -> list[str]:
 
 
 __all__ = [
+    "PROTOCOL_VERSION",
+    "ProtocolVersion",
     "ReferenceBinder",
     "LocalReferenceBinder",
     "rebind_arguments",
