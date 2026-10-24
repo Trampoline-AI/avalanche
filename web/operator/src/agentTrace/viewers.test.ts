@@ -110,6 +110,8 @@ describe("agent trace viewers", () => {
     expect(viewer.turn(event).durationMs).toBeUndefined();
     // No sub-model, so the explorer shows no predict calls or sub-model usage.
     expect(viewer.turn(event).usage.sub).toBeUndefined();
+    // Claude prices only the whole session, so a turn has no cost of its own.
+    expect(viewer.turn(event).usage.main?.cost).toBeUndefined();
     expect(viewer.hasSubModel).toBe(false);
     const body = claudeTurnEvent(3);
     if (body.native.kind !== "message.finished") throw new Error("fixture is a turn");

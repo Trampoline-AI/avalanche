@@ -12,10 +12,14 @@ export interface TraceLmUsage {
   sub: TraceTokenUsage;
 }
 
+/** A turn's tokens; the cost is absent when the runtime prices only the whole run. */
+export type TraceTurnTokens = Omit<TraceTokenUsage, "cost"> & { cost?: number };
+
 export interface TraceTurnUsage {
-  main: TraceTokenUsage;
+  /** Absent when the runtime reported no usage for the turn. */
+  main?: TraceTurnTokens;
   /** Absent for runtimes that have no sub-model, which also make no predict calls. */
-  sub?: TraceTokenUsage;
+  sub?: TraceTurnTokens;
 }
 
 export interface TraceLmFinish {
