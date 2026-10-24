@@ -126,7 +126,11 @@ def model_group(turn: Turn) -> TraceGroup:
 
 
 def turn_failed(turn: Turn) -> bool:
-    return any(action.error is not None for action in turn.actions)
+    """A turn fails when code it ran failed; failed tool or model calls may be handled."""
+    return any(
+        isinstance(action, CodeExecutionAction) and action.error is not None
+        for action in turn.actions
+    )
 
 
 def common_items(turn: Turn) -> list[TraceItem]:

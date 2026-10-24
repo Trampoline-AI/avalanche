@@ -18,7 +18,7 @@ from avalanche.agent.native.predict_rlm import (
 from avalanche.agent.trace import AgentTrace, CodeExecutionAction, PredictRLMNativeTrace
 
 from . import InspectionTurn, PendingStep, TraceGroup, TraceItem, TraceSection, TurnView
-from .generic import duration_seconds, tool_group, turn_failed
+from .generic import duration_seconds, tool_group
 
 _LABELS = {
     "run.started": "Run started",
@@ -32,6 +32,17 @@ _LABELS = {
     "run.succeeded": "Run completed",
     "run.failed": "Run failed",
     "run.cancelled": "Run cancelled",
+    "input.prepared": "Input prepared",
+    "session.started": "Sandbox started",
+    "packages.installed": "Packages installed",
+    "artifact.mounted": "File mounted",
+    "output.reserved": "Output reserved",
+    "artifact.collected": "File collected",
+    "output.materialized": "Output written",
+    "session.finalized": "Sandbox finalized",
+    "session.finalize_failed": "Sandbox finalize failed",
+    "session.released": "Sandbox released",
+    "session.release_failed": "Sandbox release failed",
 }
 
 
@@ -146,7 +157,7 @@ class PredictRLMViewer:
             index=common.index,
             duration_ms=common.duration_ms,
             counts=f"{detail.tool_count} tool · {detail.predict_count} predict",
-            failed=turn_failed(common),
+            failed=code.error is not None,
             items=tuple(items),
         )
 
