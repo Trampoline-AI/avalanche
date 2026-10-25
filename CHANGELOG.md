@@ -2,7 +2,7 @@
 
 ## Unreleased
 
-- Prepare 0.15.0: the TUI now requires TuiExtensions v1; see the breaking change below.
+## 0.15.1 — 2026-10-24
 
 ### Protocol
 
