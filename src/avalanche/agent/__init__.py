@@ -18,6 +18,7 @@ from .evidence import (
 from .signature import InputField, OutputField, Signature
 
 if TYPE_CHECKING:
+    from predict_rlm import DirectPythonBackend
     from predict_rlm import RunTrace as AgentTrace
 
 __all__ = [
@@ -31,6 +32,7 @@ __all__ = [
     "AgentTrace",
     "AgentTraceFinishedEvent",
     "AgentTraceUnavailableEvent",
+    "DirectPythonBackend",
     "File",
     "InputField",
     "ListenerErrorPolicy",
@@ -61,6 +63,10 @@ def __getattr__(name: str):
             DeprecationWarning, stacklevel=2,
         )
         return File
+    elif name == "DirectPythonBackend":
+        from predict_rlm import DirectPythonBackend
+
+        value = DirectPythonBackend
     elif name == "Skill":
         import predict_rlm
 

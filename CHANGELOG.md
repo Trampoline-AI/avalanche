@@ -2,7 +2,12 @@
 
 ## Unreleased
 
-- Prepare 0.15.0: the TUI now requires TuiExtensions v1; see the breaking change below.
+## 0.15.1 — 2026-10-24
+
+### Protocol
+
+- Delta protocol 1.0 (baseline): `avalanche.PROTOCOL_VERSION`; see docs/compatibility.md.
+- Re-export `avalanche.agent.DirectPythonBackend` so Delta reaches PredictRLM through Avalanche.
 
 ## 0.15.0 — 2026-10-24
 

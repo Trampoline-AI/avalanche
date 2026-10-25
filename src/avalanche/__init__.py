@@ -30,6 +30,7 @@ from .model_frame import Json
 
 # Progress tracking
 from .progress import ProgressStore
+from .protocol import PROTOCOL_VERSION, ProtocolVersion
 from .run_handle import RunHandle
 
 # Runtime primitives
@@ -54,7 +55,7 @@ from .storage import Namespace, NamespaceConfig, ScanResult, Table, TableGroup
 from .types import AppendResult, SnapshotMetadata, SnapshotState
 from .webhook import Webhook
 
-__version__ = "0.15.0"
+__version__ = "0.15.1"
 
 from .references import (
     LocalReferenceBinder,
@@ -115,6 +116,8 @@ def __dir__() -> list[str]:
 
 
 __all__ = [
+    "PROTOCOL_VERSION",
+    "ProtocolVersion",
     "ReferenceBinder",
     "LocalReferenceBinder",
     "rebind_arguments",

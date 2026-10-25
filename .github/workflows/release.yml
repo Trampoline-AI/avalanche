@@ -24,6 +24,17 @@ jobs:
         with:
           fetch-depth: 0
       - uses: astral-sh/setup-uv@v7
+      - name: Require BREAKING-PROTOCOL on a protocol major change
+        run: |
+          major() { sed -n 's/^PROTOCOL_VERSION = ProtocolVersion(\([0-9]*\),.*/\1/p'; }
+          PREV=$(git describe --tags --abbrev=0 "${GITHUB_SHA}^")
+          OLD=$(git show "$PREV:src/avalanche/protocol.py" 2>/dev/null | major)
+          NEW=$(major < src/avalanche/protocol.py)
+          if [ -n "$OLD" ] && [ "$OLD" != "$NEW" ] && ! git diff "$PREV" -- CHANGELOG.md | grep -q '^+.*BREAKING-PROTOCOL'; then
+            echo "::error::Protocol major $OLD -> $NEW since $PREV needs a BREAKING-PROTOCOL changelog entry"
+            exit 1
+          fi
+          echo "Protocol major ${OLD:-none} -> $NEW since $PREV: ok"
       - name: Verify tag is on main
         run: |
           TAG="${GITHUB_REF_NAME}"

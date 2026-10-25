@@ -91,17 +91,28 @@ def test_terminal_runs_discovered_workflow(tmp_path):
             assert time.monotonic() < deadline, screen()
             tmux("send-keys", "-t", f"{session}:.1", "r")
             time.sleep(0.2)
+
         # Textual/terminal startup may land on the raw editor or Preview. Enter
         # is harmless in the empty editor; only advance focus if no validated
         # preview appeared. Never assume Tab starts from one particular widget.
-        tmux("send-keys", "-t", f"{session}:.1", "Enter")
-        time.sleep(0.2)
-        if "{}" not in screen():
-            tmux("send-keys", "-t", f"{session}:.1", "Tab")
-            time.sleep(0.1)
+        def confirm_preview():
             tmux("send-keys", "-t", f"{session}:.1", "Enter")
+            time.sleep(0.2)
+            if "{}" not in screen():
+                tmux("send-keys", "-t", f"{session}:.1", "Tab")
+                time.sleep(0.1)
+                tmux("send-keys", "-t", f"{session}:.1", "Enter")
+
+        confirm_preview()
+        deadline = time.monotonic() + 20
         while "{}" not in screen():
             assert time.monotonic() < deadline, screen()
+            # The keys can close the preview without starting the run: re-open it.
+            if "Preview validated input" not in screen():
+                tmux("send-keys", "-t", f"{session}:.1", "r")
+                time.sleep(0.2)
+                if "Preview validated input" in screen():
+                    confirm_preview()
             time.sleep(0.1)
         tmux("send-keys", "-t", f"{session}:.1", "Tab")
         time.sleep(0.1)
