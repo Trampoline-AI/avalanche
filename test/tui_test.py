@@ -22,6 +22,7 @@ from avalanche.agent.live import (
     AgentTraceFinished,
     AgentTraceUnavailable,
 )
+from avalanche.agent.native.predict_rlm import PredictRLMOmissions
 from avalanche.runtimes.predict_rlm.events import project_event
 from avalanche.runtimes.predict_rlm.trace import trace_record
 from runtime.operator.client import OperatorCallError
@@ -129,15 +130,28 @@ def _step(code: str, *, tools: int = 0, predicts: int = 0) -> IterationStep:
 
 
 def _without_retained_calls(event: AgentLiveEvent) -> AgentLiveEvent:
-    """A turn whose calls were dropped for size; its executed totals remain."""
+    """A turn whose calls were dropped for size; the omitted counts keep its totals."""
     turn = event.common.turn
-    code = [action for action in turn.actions if action.kind == "code_execution"]
+    predicts = len(turn.native.predict_calls)
+    native_turn = turn.native.model_copy(update={"predict_calls": ()})
     return event.model_copy(
         update={
             "common": event.common.model_copy(
-                update={"turn": turn.model_copy(update={"actions": tuple(code)})}
+                update={
+                    "turn": turn.model_copy(update={"tool_calls": (), "native": native_turn}),
+                    "omitted_tool_calls": len(turn.tool_calls),
+                }
             ),
-            "native": event.native.model_copy(update={"predict_calls": ()}),
+            "native": event.native.model_copy(
+                update={
+                    "omissions": PredictRLMOmissions(
+                        reason="iteration detail exceeds byte limit",
+                        tool_count=len(turn.tool_calls) - predicts,
+                        predict_count=predicts,
+                        predict_group_count=0,
+                    )
+                }
+            ),
         }
     )
 
@@ -862,7 +876,7 @@ async def test_terminal_hydration_uses_body_invocation_for_turn_totals(
         # Only the finished invocation's turns sit next to its final trace.
         [turn] = app.store.selected_agent_turns
         assert (turn.invocation_id, turn.finished.turn.index) == ("call-a", 1)
-        assert (turn.native.tool_count, turn.native.predict_count) == (2, 3)
+        assert turn.finished.tool_call_count == 5
         rendered = (
             app.screen.query_one("#agent-trace-content", AgentTraceInspector).render().plain
         )
@@ -1196,7 +1210,7 @@ async def test_interleaved_live_invocations_keep_independent_bodies_and_navigati
         assert "CALL_A_OUTPUT" in rendered
         assert "CALL_B_OUTPUT" in rendered
 
-        recorded_step = _step(generated[0].common.code).model_copy(
+        recorded_step = _step(generated[0].native.code).model_copy(
             update={"output": "CALL_A_OUTPUT"}
         )
         await append(
@@ -1485,7 +1499,7 @@ async def test_turn_summary_uses_executed_totals_not_retained_calls(live):
         )
         assert "12 tool" in rendered
         assert "17 predict" in rendered
-        assert app.store.selected_agent_turns[0].native.predict_calls == ()
+        assert app.store.selected_agent_turns[0].finished.turn.native.predict_calls == ()
 
 
 @pytest.mark.asyncio

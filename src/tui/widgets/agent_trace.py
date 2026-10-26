@@ -17,10 +17,10 @@ from avalanche.agent.live import (
     AgentTraceFinished,
     AgentTraceTerminal,
     AgentTraceUnavailable,
-    ModelStarted,
     ToolFinished,
     ToolStarted,
 )
+from avalanche.agent.native.predict_rlm import PredictStarted
 
 from ..agent_trace_viewers import (
     InspectionTurn,
@@ -405,10 +405,10 @@ def _append_live_status(
         return
     for event in events[-16:]:
         detail = f" · turn {event.turn}" if event.turn is not None else ""
-        match event.common:
-            case ToolStarted(name=name) | ToolFinished(name=name):
+        match event.common, event.native:
+            case ToolStarted(name=name) | ToolFinished(name=name), _:
                 detail += f" · {name}"
-            case ModelStarted(model=model):
+            case None, PredictStarted(model=model):
                 detail += f" · {model}"
         text.append(
             f"{'!' if event.failed else '•'} {viewer.live_label(event)}{detail}\n",

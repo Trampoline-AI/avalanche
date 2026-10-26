@@ -10,7 +10,6 @@ from uuid import uuid4
 
 import pytest
 
-from avalanche.agent.trace import CodeExecutionAction
 from runtime.operator.client import GrpcStateProvider, OperatorCallError
 from runtime.operator.models import RunStatus
 
@@ -520,14 +519,7 @@ async def test_operator_tui_extensions_live_pilot(tmp_path):
             assert record is not None and record.header.turn_count == 3
             turns = app.store.selected_agent_turns
             assert [turn.finished.turn.index for turn in turns] == [1, 2, 3]
-            code = [
-                next(
-                    action
-                    for action in turn.finished.turn.actions
-                    if isinstance(action, CodeExecutionAction)
-                )
-                for turn in turns
-            ]
+            code = [turn.finished.turn.native for turn in turns]
             assert "numbers = [2, 3, 5]" in code[0].code
             assert "[2, 3, 5]" in code[0].output
             assert "total = sum(numbers)" in code[1].code

@@ -104,11 +104,8 @@ const run = RunSnapshotMsg.create({
 });
 const COMMON_EVENT_KINDS: Record<string, AgentEventKind> = {
   "iteration.recorded": "turn.finished",
-  "code.generated": "code.generated",
   "tool.started": "tool.started",
   "tool.finished": "tool.finished",
-  "predict.started": "model.started",
-  "predict.finished": "model.finished",
 };
 function event(sequence: number, nativeEventKind = "iteration.recorded") {
   return AgentEventDescriptorMsg.create({
@@ -139,8 +136,8 @@ function eventPage(
 function traceEvent(iteration: number, sizeBytes = "64") {
   return AgentEventDescriptorMsg.create({
     ...event(iteration),
-    toolCallCount: 1,
-    modelCallCount: 1,
+    // One tool call and one predict call.
+    toolCallCount: 2,
     sizeBytes,
   });
 }
@@ -1228,7 +1225,7 @@ describe("trace detail retention and recovery", () => {
     fireEvent.click(screen.getByRole("tab", { name: "Trace" }));
     await waitFor(() => expect(readJsonDetail).toHaveBeenCalledTimes(3));
     await act(async () => {
-      stale.resolve(traceDetail(1, { text: "Stale text" }));
+      stale.resolve(traceDetail(1, { message: "Stale text" }));
       await stale.promise;
     });
     view.rerender(

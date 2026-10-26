@@ -15,9 +15,8 @@ from avalanche.agent.live import (
     AgentLiveEvent,
     AgentTraceFinished,
     AgentTraceUnavailable,
-    CodeGenerated,
 )
-from avalanche.agent.native.predict_rlm import Correlated, RunStarted
+from avalanche.agent.native.predict_rlm import CodeGenerated, PredictFinished, RunStarted
 from avalanche.agent.trace import AgentTrace
 from runtime.operator import Operator
 from runtime.operator import operator as operator_module
@@ -59,8 +58,8 @@ def _live(
         sequence=sequence,
         timestamp_ns=sequence,
         runtime_kind="predict_rlm",
-        common=CodeGenerated(turn=sequence, code=code),
-        native=Correlated(kind="code.generated"),
+        common=None,
+        native=CodeGenerated(iteration=sequence, code=code),
     )
 
 
@@ -818,8 +817,10 @@ def _patched(evidence: BaseModel, path: tuple[str, ...], value: object) -> str:
             id="unknown-runtime",
         ),
         pytest.param(
-            lambda: _patched(_live(1), ("common",), None),
-            id="native-kind-without-its-common-event",
+            lambda: _patched(
+                _live(1), ("common",), {"kind": "tool.started", "call_id": "c", "name": "n"}
+            ),
+            id="native-kind-with-a-common-event-it-lacks",
         ),
         pytest.param(
             lambda: _patched(
@@ -902,15 +903,13 @@ def test_agent_event_publication_failure_reaches_the_workflow(asynchronous):
 def test_empty_exception_message_remains_a_failure_not_a_success(failed):
     operator = Operator(watch=False, schedule=False)
     run = _add_run(operator, "run-empty-exception")
-    from avalanche.agent.live import ModelFinished
-
     event = AgentLiveEvent(
         invocation_id="test-invocation",
         sequence=1,
         timestamp_ns=1,
         runtime_kind="predict_rlm",
-        common=ModelFinished(call_id="call", error="" if failed else None),
-        native=Correlated(kind="predict.finished"),
+        common=None,
+        native=PredictFinished(call_id="call", predict_error="" if failed else None),
     )
     try:
         operator._record_agent_evidence_event(run, "agent_1", event.model_dump_json())

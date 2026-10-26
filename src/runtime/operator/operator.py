@@ -1316,7 +1316,6 @@ class Operator:
             duration_ms=item.duration_ms,
             error=item.error,
             tool_call_count=item.tool_call_count,
-            model_call_count=item.model_call_count,
         )
 
     def _classifier_event_descriptor_locked(
@@ -2587,9 +2586,6 @@ class Operator:
                 error=evidence.failed,
                 tool_call_count=(
                     turn_finished.tool_call_count if turn_finished is not None else 0
-                ),
-                model_call_count=(
-                    turn_finished.model_call_count if turn_finished is not None else 0
                 ),
             )
             detail = []

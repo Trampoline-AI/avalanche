@@ -366,8 +366,10 @@ Selectors receive `ava.EvalContext(inputs, output, trace)`:
   `return result.outputs.review` only controls the separate value sent to downstream
   workflow nodes.
 - `ctx.trace` is that invocation's complete `ava.agent.AgentTrace`, turns included:
-  `ctx.trace.header` summarizes the run, and each of `ctx.trace.turns` lists the
-  code, tool calls and model calls the agent made. It is a Pydantic model, so
+  `ctx.trace.header` summarizes the run, and each of `ctx.trace.turns` holds what
+  the model wrote (`message`), the tool calls it made (`tool_calls`) and the
+  runtime's own details (`native`, such as PredictRLM's code and output). It is a
+  Pydantic model, so
   serialize the part you select, for example `ctx.trace.header.model_dump(mode="json")`.
 
 A call whose outputs fail validation does not count as successful: its trace is
