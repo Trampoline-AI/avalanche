@@ -36,6 +36,7 @@ from avalanche.agent import (  # noqa: E402
 )
 from avalanche.agent.contract import ToolSpec  # noqa: E402
 from avalanche.agent.declaration import ClaudeAgentDeclaration  # noqa: E402
+from avalanche.agent.native import claude_agent as claude_native  # noqa: E402
 from avalanche.agent.trace import ToolCallAction  # noqa: E402
 from avalanche.runtimes import ClaudeAgent  # noqa: E402
 
@@ -227,8 +228,15 @@ async def test_a_failed_tool_is_kept_on_its_call_and_does_not_fail_the_turn(repl
 
 
 @pytest.mark.asyncio
-async def test_a_session_without_structured_output_fails_after_its_trace(replay):
-    replay([_init(), _assistant(TextBlock(text="15")), _result(None)])
+@pytest.mark.parametrize(
+    ("structured_output", "stop_reason"),
+    [(None, "no_structured_output"), ([15], "structured_output_not_object")],
+    ids=["missing", "not-an-object"],
+)
+async def test_a_session_without_an_output_object_fails_after_its_trace(
+    replay, structured_output, stop_reason
+):
+    replay([_init(), _assistant(TextBlock(text="15")), _result(structured_output)])
     observed = []
     with capture_agent_evidence(observed.append, errors="raise"):
         with pytest.raises(AgentStepExecutionError, match="structured output"):
@@ -238,8 +246,20 @@ async def test_a_session_without_structured_output_fails_after_its_trace(replay)
     assert final.kind == "trace_finished"
     assert (final.record.header.status, final.record.header.stop_reason) == (
         "failed",
-        "no_structured_output",
+        stop_reason,
     )
+
+
+def test_a_failed_result_without_a_reason_names_its_subtype():
+    finished = claude_native.Finished(
+        subtype="error_during_execution",
+        is_error=True,
+        num_turns=1,
+        structured_output=None,
+        output_omitted=False,
+        errors=(),
+    )
+    assert finished.error == "error_during_execution"
 
 
 @pytest.mark.asyncio

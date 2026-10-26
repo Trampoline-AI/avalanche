@@ -123,7 +123,7 @@ class Finished(_Event):
 
     @property
     def error(self) -> str | None:
-        return "; ".join(self.errors) if self.is_error else None
+        return ("; ".join(self.errors) or self.subtype) if self.is_error else None
 
 
 ClaudeAgentNativeEvent = Annotated[
