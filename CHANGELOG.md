@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- Keep input and output names whole on browser UI step cards; long types now wrap
+  between words and show the full name and type on hover.
+
 ## 0.15.1 — 2026-10-24
 
 ### Protocol

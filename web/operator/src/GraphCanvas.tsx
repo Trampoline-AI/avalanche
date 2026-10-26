@@ -430,13 +430,16 @@ const WorkflowNodeCard = memo(({ data, selected }: NodeProps<Node<CardData>>) =>
             <small>Inputs</small>
             {data.declaration.inputs.map((field) => (
               <span
-                className="field node-field mt-[3px] flex min-h-3.5 min-w-0 items-start justify-start gap-1 font-mono text-[7px]/[1.35] text-[#36423c] [&>code]:min-w-0 [&>code]:[overflow-wrap:anywhere] [&>code]:text-[7px] [&>code]:text-muted"
+                className="field node-field mt-[3px] flex min-h-3.5 min-w-0 items-start justify-start gap-1 font-mono text-[7px]/[1.35] text-[#36423c] [&>code]:min-w-0 [&>code]:[overflow-wrap:break-word] [&>code]:text-[7px] [&>code]:text-muted"
                 key={`input-${field.name}`}
               >
-                <span className="node-field-name min-w-0 [overflow-wrap:anywhere]">
+                <span
+                  className="node-field-name max-w-full shrink-0 truncate"
+                  title={field.name}
+                >
                   {field.name}
                 </span>
-                {field.type && <code>{field.type}</code>}
+                {field.type && <code title={field.type}>{field.type}</code>}
               </span>
             ))}
           </section>
@@ -447,13 +450,16 @@ const WorkflowNodeCard = memo(({ data, selected }: NodeProps<Node<CardData>>) =>
             <small>Outputs</small>
             {data.declaration.outputs.map((field) => (
               <span
-                className="field node-field mt-[3px] flex min-h-3.5 min-w-0 items-start justify-end gap-1 font-mono text-[7px]/[1.35] text-[#36423c] [&>code]:min-w-0 [&>code]:[overflow-wrap:anywhere] [&>code]:text-[7px] [&>code]:text-muted"
+                className="field node-field mt-[3px] flex min-h-3.5 min-w-0 items-start justify-end gap-1 font-mono text-[7px]/[1.35] text-[#36423c] [&>code]:min-w-0 [&>code]:[overflow-wrap:break-word] [&>code]:text-[7px] [&>code]:text-muted"
                 key={`output-${field.name}`}
               >
-                <span className="node-field-name min-w-0 [overflow-wrap:anywhere]">
+                <span
+                  className="node-field-name max-w-full shrink-0 truncate"
+                  title={field.name}
+                >
                   {field.name}
                 </span>
-                {field.type && <code>{field.type}</code>}
+                {field.type && <code title={field.type}>{field.type}</code>}
               </span>
             ))}
           </section>
