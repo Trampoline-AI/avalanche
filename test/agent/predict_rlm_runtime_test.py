@@ -226,7 +226,8 @@ async def test_invoke_maps_a_run_onto_the_common_trace(monkeypatch):
         ToolCallAction,
         ModelCallAction,
     ]
-    assert turn.reasoning == "look it up"
+    # What PredictRLM writes each iteration is the turn's text, not provider reasoning.
+    assert (turn.text, turn.reasoning) == ("look it up", None)
 
 
 @pytest.mark.parametrize(

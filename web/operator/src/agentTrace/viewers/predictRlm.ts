@@ -25,11 +25,13 @@ function turn(event: AgentLiveEvent): AgentTraceStep {
   }
   return {
     iteration: turn.index,
-    reasoning: turn.reasoning ?? "",
-    code: code.code,
-    outputKind: "sandbox",
-    output: code.output,
-    untruncatedOutput: native.untruncated_output,
+    text: turn.text ?? undefined,
+    reasoning: turn.reasoning ?? undefined,
+    execution: {
+      code: code.code,
+      output: code.output,
+      untruncatedOutput: native.untruncated_output,
+    },
     // Only failed code fails a turn; the code may have handled a failed tool call.
     error: code.error !== null,
     durationMs: turn.duration_ms ?? undefined,

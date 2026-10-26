@@ -353,7 +353,7 @@ def assert_original_requests(service: EvaluationService, *, winner: str = "world
     assert trace["header"]["turn_count"] == 1
     [turn] = trace["turns"]
     assert turn["index"] == 1
-    assert turn["reasoning"] == "Echo the input"
+    assert turn["text"] == "Echo the input"
     assert turn["duration_ms"] == 10
     assert turn["actions"] == [
         {

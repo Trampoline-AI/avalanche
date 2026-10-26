@@ -18,7 +18,7 @@ from avalanche.agent.native.predict_rlm import (
 from avalanche.agent.trace import AgentTrace, CodeExecutionAction, PredictRLMNativeTrace
 
 from . import InspectionTurn, PendingStep, TraceGroup, TraceItem, TraceSection, TurnView
-from .generic import duration_seconds, tool_group
+from .generic import duration_seconds, reasoning_items, tool_group
 
 _LABELS = {
     "run.started": "Run started",
@@ -128,10 +128,8 @@ class PredictRLMViewer:
             action for action in common.actions if isinstance(action, CodeExecutionAction)
         ]
         items: list[TraceItem] = []
-        if common.reasoning:
-            items.append(
-                TraceSection("reasoning", "Reasoning", common.reasoning, style="dim italic")
-            )
+        if common.text:
+            items.append(TraceSection("text", "Text", common.text))
         items.append(TraceSection("code", "Code", code.code, python=True))
         items.append(
             TraceSection(
@@ -153,6 +151,7 @@ class PredictRLMViewer:
                 },
             )
         )
+        items.extend(reasoning_items(common))
         return TurnView(
             index=common.index,
             duration_ms=common.duration_ms,
