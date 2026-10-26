@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import time
 from concurrent.futures import ThreadPoolExecutor
+from dataclasses import replace
 
 import grpc
 from textual.app import App, ComposeResult, SystemCommand
@@ -11,7 +12,7 @@ from textual.binding import Binding
 from textual.css.query import NoMatches
 from textual.timer import Timer
 from textual.widget import Widget
-from textual.widgets import Header
+from textual.widgets import Header, Static
 
 from runtime.operator.client import OperatorCallError
 
@@ -20,11 +21,13 @@ from .extensions import ExtensionSession
 from .mock import MockStateProvider
 from .models import RunState, RunStatus, TraceDetail, WorkflowInfo
 from .screens.input_form import InputForm
-from .screens.tools import InspectionScreen, LogFilterScreen, ResourceScreen
+from .screens.tools import InspectionScreen, LogFilterScreen, ResourcePanel, ResourceScreen
 from .screens.workflow_detail import WorkflowDetailScreen
 from .state import (
     ActionDescriptor,
     ActionResult,
+    NavigationContribution,
+    NavigationTarget,
     Object,
     PanelDescriptor,
     ReadOnlyStateProvider,
@@ -44,6 +47,7 @@ from .widgets.agent_trace import (
     AgentTraceInspector,
 )
 from .widgets.log_panel import LogWidget
+from .widgets.navigation import NavigationTree
 from .widgets.run_history import RunHistoryWidget
 from .widgets.sidebar import Sidebar
 
@@ -78,8 +82,9 @@ class AvalancheApp(App):
         Binding("ctrl+c", "quit", "Quit", priority=True),
         Binding("?", "context_help", "Help"),
         Binding("f", "log_filters", "Log filters"),
+        Binding("h", "navigation_home", "Home"),
         Binding("i", "inspect_node", "Inspect node"),
-        Binding("c", "catalog", "Catalog"),
+        Binding("c", "catalog", "Catalog", priority=True),
         Binding("ctrl+s", "schedules", "Schedules"),
         ("escape", "escape_key", "Esc"),
         Binding("tab", "workflow_next", "Tab", priority=True),
@@ -165,6 +170,9 @@ class AvalancheApp(App):
         )
         self._extension_baseline_generation = 0
         self._scope_reload_pending = False
+        self._navigation_target: NavigationTarget | None = None
+        self._navigation: NavigationContribution | None = None
+        self._navigation_view_token: tuple | None = None
         self._extension_token: tuple | None = None
         self._context_generation = 0
         self._widget_tokens: dict[str, tuple] = {}
@@ -242,6 +250,14 @@ class AvalancheApp(App):
     @property
     def extension_context(self) -> TuiContext:
         store = self.store
+        if self._navigation_target is not None:
+            token = (self._navigation_target, store._latest_reset_generation)
+            if token != self._extension_token:
+                self._extension_token = token
+                self._context_generation += 1
+                self._action_intents.clear()
+                self._actions_in_flight.clear()
+            return replace(self._navigation_target.context, generation=self._context_generation)
         flow = store.current_workflow.selector if store.current_workflow else None
         run = store.selected_run_id
         node = store.selected_node.name if store.selected_node else None
@@ -323,6 +339,12 @@ class AvalancheApp(App):
         self._refresh_widgets()
 
     def action_catalog(self) -> None:
+        if self.navigation_active:
+            tree = self._screen.query_one(NavigationTree)
+            tree.focus()
+            if tree.cursor_node is None and tree.root.children:
+                tree.move_cursor(tree.root.children[0])
+            return
         self.store.sidebar_visible = True
         self.store.focused_pane = "sidebar"
         self._sync_sidebar_focus()
@@ -390,12 +412,150 @@ class AvalancheApp(App):
             )
         self.push_screen(InspectionScreen("Node / attempt detail", content))
 
+    @property
+    def navigation_active(self) -> bool:
+        return self._navigation is not None
+
+    def _check_navigation_action(self, action: str) -> bool | None:
+        if action == "navigation_home":
+            return self.navigation_active
+        if self.navigation_active and self.screen is self._screen:
+            if action in {
+                "nav_up",
+                "nav_down",
+                "nav_left",
+                "nav_right",
+                "activate",
+                "workflow_next",
+                "workflow_prev",
+                "expand_trace_hierarchy",
+                "collapse_trace_hierarchy",
+                "log_page_up",
+                "log_page_down",
+            }:
+                return False  # Let the focused Tree/DataTable own ordinary input.
+        return None
+
+    def action_navigation_home(self) -> None:
+        if self._navigation is not None:
+            self.navigate(self._navigation.home_target)
+
+    def navigate(self, target: NavigationTarget) -> None:
+        if not self.navigation_active:
+            return
+        target = replace(target, context=replace(target.context, generation=0))
+        if target == self._navigation_target:
+            return
+        self._navigation_target = target
+        self._extension_token = None
+        self._scope = target.context.scope
+        self._scope_reload_pending = False
+        # The exact same session fence used by scope selection cancels obsolete calls.
+        self.store._cancel_detail_hydration_repairs()
+        self.store.close_trace_inspector()
+        self.extension_session.select(self.extension_context)
+        self.extension_session.tick()
+        self._refresh_widgets()
+
+    async def _replace_navigation_panel(
+        self, context: TuiContext, panel: PanelDescriptor | None, message: str
+    ) -> None:
+        if context != self.extension_context or self._screen is None or self._closing:
+            return
+        host = self._screen.query_one("#extension-panel")
+        await host.remove_children()
+        if context != self.extension_context:
+            return
+        if panel is None:
+            await host.mount(Static(message, markup=False))
+        else:
+            await host.mount(ResourcePanel(self.extension_session, panel, context))
+
+    def _sync_navigation(self) -> bool:
+        session = self.extension_session
+        if "navigation" not in session.extension.features:
+            return False
+        description = session.description
+        if description is not None:
+            contribution = (
+                description.navigation if "navigation" in description.features else None
+            )
+            if contribution is not None:
+                self._navigation = contribution
+                if self._navigation_target is None:
+                    self.navigate(contribution.initial_target)
+                    return True
+            elif self.navigation_active:
+                self._navigation = None
+                self._navigation_target = None
+                self._extension_token = None
+                session.select(self.extension_context)
+        tree = self._screen.query_one(NavigationTree)
+        host = self._screen.query_one("#extension-panel")
+        active = self.navigation_active
+        tree.display = host.display = active
+        self._screen.query_one("#sidebar").display = not active and self.store.sidebar_visible
+        self._screen.query_one("#right-pane").display = not active
+        self._screen.query_one("#status-bar").display = not active
+        if not active:
+            return False
+        context = self.extension_context
+        tree.sync(self._navigation, context)
+        crumbs = " › ".join(value for _, value in context.scope)
+        breadcrumbs = f"{'READ ONLY' if self.read_only else 'interactive'} · {crumbs} · h Home"
+        if breadcrumbs != self._breadcrumbs:
+            self._breadcrumbs = breadcrumbs
+            self._screen.query_one("#breadcrumbs").update(breadcrumbs)
+        panel = None
+        message = session.error or "Loading navigation target…"
+        if description is not None:
+            target = self._navigation_target
+            panel = next(
+                (
+                    p
+                    for p in description.panels
+                    if (
+                        p.id == target.panel_id
+                        if target.panel_id is not None
+                        else p.resource == target.resource_id
+                        if target.resource_id is not None
+                        else True
+                    )
+                ),
+                None,
+            )
+            if panel is None and target.resource_id is not None:
+                panel = PanelDescriptor(
+                    target.resource_id,
+                    target.resource_id,
+                    "navigation",
+                    target.resource_id,
+                    "json",
+                )
+            if "paged-resources" not in description.features:
+                panel = None
+            message = "Unknown / unavailable target; no panel described"
+        token = (context, panel, message)
+        if token != self._navigation_view_token:
+            self._navigation_view_token = token
+            # Hide the old selection synchronously, before asynchronous DOM replacement.
+            for child in host.children:
+                child.display = False
+            self.call_later(self._replace_navigation_panel, context, panel, message)
+        return True
+
     def open_extension_panel(self, panel: PanelDescriptor) -> None:
+        if self.navigation_active:
+            self.navigate(NavigationTarget(self.extension_context, panel_id=panel.id))
+            return
         self.push_screen(ResourceScreen(self.extension_session, panel, self.extension_context))
 
     def select_extension_scope(self, scope: ScopeDescriptor) -> None:
         if not scope.selectable:
             self.notify(scope.reason or "Scope unavailable", severity="warning")
+            return
+        if self.navigation_active:
+            self.navigate(NavigationTarget(scope.context))
             return
         self._scope = scope.context.scope
         self._scope_reload_pending = True
@@ -533,8 +693,11 @@ class AvalancheApp(App):
             ):
                 session.reconciled()
         elif changed:
-            self.store._refresh_workflow_catalog()
-            self.store._refresh_runs_cache()
+            if not self.navigation_active:
+                self.store._refresh_workflow_catalog()
+                self.store._refresh_runs_cache()
+            else:
+                self._navigation_view_token = None
             if isinstance(self.screen, ResourceScreen):
                 if (
                     self.screen.panel.resource in session.changed_resources
@@ -562,9 +725,11 @@ class AvalancheApp(App):
 
     def _refresh_widgets(self) -> None:
         """Refresh all visible widgets to reflect current store state."""
-        self._normalize_focused_pane()
-        if not self._screen:
+        if not self._screen or not self._screen.is_mounted or self._screen._closing:
             return
+        if self._sync_navigation():
+            return
+        self._normalize_focused_pane()
         try:
             dashboard = self._screen.query_one("#dashboard-pane")
             inspector = self._screen.query_one("#agent-trace-inspector")
@@ -1499,11 +1664,14 @@ class AvalancheApp(App):
             # route to modal focus before a batched next key is dispatched.
             # Other dashboard shortcuts remain blocked while a modal is open.
             return False
-        return True
+        navigation = self._check_navigation_action(action)
+        return True if navigation is None else navigation
 
     def on_key(self, event) -> None:
         """Handle search input, leader key (space), and / n N keys."""
         if self._screen is not None and self.screen is not self._screen:
+            return
+        if self.navigation_active:
             return
         if self.store.searching:
             if event.key == "escape":

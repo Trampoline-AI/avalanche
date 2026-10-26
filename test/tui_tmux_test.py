@@ -112,3 +112,32 @@ def test_terminal_agent_drilldown_and_return(tui_session):
     assert "SANDBOX_STDOUT_SENTINEL" not in screen
     _tmux("send-keys", "-t", tui_session, "Escape")
     _wait_for(tui_session, lambda text: "Agent iteration.recorded" in text)
+
+
+def test_terminal_optional_navigation_stays_beside_resource_views(tmp_path):
+    if not shutil.which("tmux"):
+        pytest.skip("tmux not installed")
+    root = Path(__file__).resolve().parents[1]
+    script = tmp_path / "navigation.py"
+    script.write_text(
+        "import sys\n"
+        f"sys.path.insert(0, {str(root / 'test')!r})\n"
+        "from tui_test import _RevampProvider, _NavigationFixture\n"
+        "from tui.app import AvalancheApp\n"
+        "provider = _RevampProvider()\n"
+        "provider.tui_extensions = _NavigationFixture(provider)\n"
+        "AvalancheApp(provider=provider, read_only=True).run()\n"
+    )
+    session = f"pytest-navigation-{uuid4().hex[:8]}"
+    _tmux("new-session", "-d", "-s", session, "-c", str(root), "-x", "140", "-y", "40")
+    try:
+        _tmux("respawn-pane", "-k", "-t", session, f"uv run python {script}")
+        _wait_for(session, lambda text: "Overview" in text and "Organization" in text)
+        _tmux("send-keys", "-t", session, "c", "Down", "Enter")
+        screen = _wait_for(session, lambda text: "acme › demo" in text and "Overview" in text)
+        assert "Organization" in screen and "unknown:new-state" in screen
+        _tmux("send-keys", "-t", session, "h")
+        _wait_for(session, lambda text: "acme › demo" not in text and "Overview" in text)
+        _tmux("send-keys", "-t", session, "C-c")
+    finally:
+        _tmux("kill-session", "-t", session)

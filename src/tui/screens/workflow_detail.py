@@ -19,6 +19,7 @@ from ..widgets.agent_trace import (
 )
 from ..widgets.dag import DagWidget
 from ..widgets.log_panel import LogWidget
+from ..widgets.navigation import NavigationTree
 from ..widgets.run_history import RunHistoryWidget
 from ..widgets.sidebar import Sidebar
 from ..widgets.status_bar import StatusBar
@@ -423,6 +424,10 @@ class WorkflowDetailScreen(Screen):
         yield Header()
         yield Static(id="breadcrumbs", markup=False)
         with Horizontal(id="main-layout"):
+            if "navigation" in self.app.extension_session.extension.features:
+                yield NavigationTree()
+                with Vertical(id="extension-panel") as panel:
+                    panel.display = False
             yield Sidebar(id="sidebar")
             with Vertical(id="right-pane"):
                 with Vertical(id="dashboard-pane"):

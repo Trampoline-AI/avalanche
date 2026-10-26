@@ -1691,6 +1691,99 @@ class _ExtensionFixture:
         return unsubscribe
 
 
+class _NavigationFixture(_ExtensionFixture):
+    features = _ExtensionFixture.features | {"navigation"}
+
+    def __init__(self, provider):
+        super().__init__(provider)
+        from tui.state import (
+            NavigationContribution,
+            NavigationNode,
+            NavigationTarget,
+            TuiContext,
+        )
+
+        self.home = NavigationTarget(TuiContext((("org", "acme"),)), panel_id="home")
+        self.project = NavigationTarget(
+            TuiContext((("org", "acme"), ("project", "demo"))), panel_id="home"
+        )
+        self.detail = NavigationTarget(self.project.context, resource_id="detail")
+        self.navigation = NavigationContribution(
+            nodes=(
+                NavigationNode(
+                    "org",
+                    "Organization",
+                    target=self.home,
+                    children=(
+                        NavigationNode(
+                            "project",
+                            "Project",
+                            target=self.project,
+                            lazy=True,
+                            badge="unknown:new-state",
+                        ),
+                    ),
+                    expanded=True,
+                ),
+            ),
+            initial_target=self.home,
+            home_target=self.home,
+        )
+        self.child_gate = None
+        self.child_error = False
+
+    def describe(self, context):
+        from tui.state import ExtensionDescription, PanelDescriptor
+
+        return ExtensionDescription(
+            context,
+            self.protocol_version,
+            self.features,
+            self.revision,
+            (),
+            (),
+            (PanelDescriptor("home", "Overview", "navigation", "rows", "table", ("id",)),),
+            navigation=self.navigation,
+        )
+
+    def read_navigation(self, parent_id, context, *, cursor=None, limit=100, byte_limit=262144):
+        from tui.state import NavigationNode, NavigationPage, TuiExtensionError
+
+        self.calls.append(("children", context, parent_id, cursor, limit, byte_limit))
+        if self.child_gate is not None:
+            entered, release = self.child_gate
+            entered.set()
+            release.wait(3)
+        if self.child_error:
+            raise TuiExtensionError("unavailable", "Children unavailable")
+        return NavigationPage(
+            context,
+            (
+                NavigationNode(
+                    "child" if cursor is None else "last", "Child", target=self.project
+                ),
+            ),
+            "page2" if cursor is None else None,
+            cursor is None,
+            self.revision,
+        )
+
+    def read(self, resource, context, *, cursor=None, limit=100, byte_limit=262144):
+        from types import MappingProxyType
+
+        from tui.state import ExtensionPage
+
+        self.calls.append(("read", context, resource, cursor, limit, byte_limit))
+        return ExtensionPage(
+            context,
+            (MappingProxyType({"id": "row"}),),
+            None,
+            False,
+            self.revision,
+            row_targets=MappingProxyType({"row": self.detail}),
+        )
+
+
 class _RevampProvider(MockStateProvider):
     def __init__(self):
         super().__init__(include_agent_trace=True)
@@ -2144,3 +2237,139 @@ async def test_revamp_run_deep_link_resolves_once_and_rejects_wrong_flow():
     async with wrong.run_test(size=(160, 50)) as pilot:
         await _wait_for(pilot, lambda: bool(wrong.store.run_error))
         assert wrong.store.selected_run_id != run.run_id
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("unnegotiated_contribution", [False, True])
+async def test_navigation_is_optional_and_legacy_panels_remain_modal(unnegotiated_contribution):
+    from tui.screens.tools import ResourceScreen
+
+    provider = _RevampProvider()
+    if unnegotiated_contribution:
+        provider.tui_extensions = _NavigationFixture(provider)
+        provider.tui_extensions.features = _ExtensionFixture.features
+    app = AvalancheApp(provider=provider)
+    async with app.run_test(size=(140, 45)) as pilot:
+        await _wait_for(pilot, lambda: app.extension_session.description is not None)
+        assert not app.screen.query("#extension-navigation")
+        app.action_catalog()
+        assert app.screen.query_one("#sidebar").display
+        assert app.screen.query_one("#dashboard-pane").display
+        app.open_extension_panel(app.extension_session.description.panels[0])
+        assert isinstance(app.screen, ResourceScreen)
+        await _wait_for(pilot, lambda: app.screen._revision is not None)
+        await pilot.press("escape")
+        assert app.screen is app._screen
+        assert app.screen.query_one("#sidebar").display
+        assert not any(call[0] == "children" for call in provider.tui_extensions.calls)
+
+
+@pytest.mark.asyncio
+async def test_navigation_tree_targets_rows_home_and_bounded_more():
+    from textual.widgets import DataTable
+
+    from tui.widgets.navigation import NavigationTree
+
+    provider = _RevampProvider()
+    extension = provider.tui_extensions = _NavigationFixture(provider)
+    app = AvalancheApp(provider=provider, read_only=True)
+    async with app.run_test(size=(140, 45)) as pilot:
+        await _wait_for(
+            pilot, lambda: app.extension_context.scope == extension.home.context.scope
+        )
+        tree = app.screen.query_one(NavigationTree)
+        await _wait_for(pilot, lambda: len(tree.root.children) == 1)
+        assert tree.display
+        assert not app.screen.query_one("#sidebar").display
+        assert "unknown:new-state" in tree.root.children[0].children[0].label.plain
+        tree.focus()
+        tree.select_node(tree.root.children[0])
+        await pilot.press("enter", "down", "enter")
+        await _wait_for(
+            pilot, lambda: app.extension_context.scope == extension.project.context.scope
+        )
+        # Activate a lazy child load in the now-selected context.
+        project = tree.root.children[0].children[0]
+        tree.load_children(project)
+        await _wait_for(
+            pilot,
+            lambda: any(
+                n.data and n.data.node and n.data.node.id == "child" for n in project.children
+            ),
+        )
+        assert any("incomplete" in n.label.plain for n in project.children)
+        tree.select_node(next(n for n in project.children if n.data and n.data.node))
+        await pilot.press("enter")
+        more = next(n for n in project.children if n.data and n.data.cursor)
+        tree.select_node(more)
+        await pilot.press("enter")
+        await _wait_for(
+            pilot,
+            lambda: any(
+                n.data and n.data.node and n.data.node.id == "last" for n in project.children
+            ),
+        )
+        assert not any(
+            n.data and n.data.node and n.data.node.id == "child" for n in project.children
+        )
+        await _wait_for(pilot, lambda: bool(app.screen.query("#resource-body")))
+        table = app.screen.query_one("#resource-body", DataTable)
+        await _wait_for(pilot, lambda: table.row_count == 1)
+        table.focus()
+        await pilot.press("enter")
+        await _wait_for(pilot, lambda: app._navigation_target.resource_id == "detail")
+        assert app.screen is app._screen
+        assert tree.is_mounted and tree.display
+        await pilot.press("h")
+        await _wait_for(
+            pilot, lambda: app.extension_context.scope == extension.home.context.scope
+        )
+        await _wait_for(pilot, lambda: bool(app.screen.query("#resource-body")))
+        await _wait_for(pilot, lambda: app.screen.query_one("#resource-body").row_count == 1)
+        reads = list(extension.calls)
+        await pilot.pause(0.2)
+        assert extension.calls == reads  # no timer polling
+        assert all(call[-2:] == (100, 262144) for call in extension.calls)
+        # Mouse activation uses the same row-ID mapping as Enter.
+        await pilot.click("#resource-body", offset=(2, 1))
+        await _wait_for(pilot, lambda: app._navigation_target.resource_id == "detail")
+
+
+@pytest.mark.asyncio
+async def test_navigation_child_failure_and_superseded_load_are_inline_and_fenced():
+    from tui.widgets.navigation import NavigationTree
+
+    provider = _RevampProvider()
+    extension = provider.tui_extensions = _NavigationFixture(provider)
+    app = AvalancheApp(provider=provider)
+    async with app.run_test(size=(140, 45)) as pilot:
+        await _wait_for(
+            pilot, lambda: app.extension_context.scope == extension.home.context.scope
+        )
+        tree = app.screen.query_one(NavigationTree)
+        await _wait_for(pilot, lambda: len(tree.root.children) == 1)
+        project = tree.root.children[0].children[0]
+        extension.child_error = True
+        tree.load_children(project)
+        await _wait_for(
+            pilot, lambda: any("unavailable" in n.label.plain for n in project.children)
+        )
+        extension.child_error = False
+        entered, release = threading.Event(), threading.Event()
+        extension.child_gate = entered, release
+        tree.load_children(project)
+        try:
+            await _wait_for(pilot, entered.is_set)
+            app.navigate(extension.project)
+            release.set()
+            await _wait_for(pilot, lambda: app.extension_session.description is not None)
+            await _wait_for(
+                pilot, lambda: all(future.done() for future in app.extension_session._futures)
+            )
+            await pilot.pause()  # Drain the completed worker's queued UI callback.
+            assert not any(
+                n.data and n.data.node and n.data.node.id == "child" for n in project.children
+            )
+            assert app.screen is app._screen
+        finally:
+            release.set()

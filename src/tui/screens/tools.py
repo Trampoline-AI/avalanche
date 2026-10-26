@@ -5,9 +5,11 @@ from __future__ import annotations
 import json
 from collections.abc import Mapping
 
+from rich.text import Text
 from textual.app import ComposeResult
 from textual.containers import Horizontal, VerticalScroll
 from textual.screen import ModalScreen
+from textual.widget import Widget
 from textual.widgets import Button, DataTable, Input, Label, Select, Static, TextArea, Tree
 
 from ..extensions import ExtensionSession
@@ -89,8 +91,8 @@ class LogFilterScreen(ModalScreen):
         self.app._refresh_widgets()
 
 
-class ResourceScreen(ModalScreen):
-    """Replace one bounded revision-pinned page; never accumulate artifact bodies."""
+class ResourceContent(Widget):
+    """Shared bounded resource view for modal legacy and persistent navigation panels."""
 
     DEFAULT_CSS = """
     ResourceScreen { align: center middle; }
@@ -112,10 +114,11 @@ class ResourceScreen(ModalScreen):
         self._next_cursor: str | None = None
         self._revision: str | None = None
         self._requested_cursor: str | None = None
+        self._row_targets = {}
 
     def compose(self) -> ComposeResult:
         with VerticalScroll():
-            yield Label(f"{self.panel.slot} / {self.panel.label}")
+            yield Label(Text(f"{self.panel.slot} / {self.panel.label}"))
             yield Static("Loading…", id="resource-status", markup=False)
             if self.panel.renderer == "table":
                 yield DataTable(id="resource-body")
@@ -123,15 +126,20 @@ class ResourceScreen(ModalScreen):
                 yield Tree(self.panel.label, id="resource-body")
             else:
                 yield TextArea(read_only=True, id="resource-body")
+            if self.app.navigation_active:
+                yield VerticalScroll(id="resource-links")
             with Horizontal():
                 yield Button("Reload", id="resource-reload")
                 yield Button("Next page", id="resource-next", disabled=True)
-                yield Button("Back", id="resource-back")
+                if isinstance(self, ModalScreen):
+                    yield Button("Back", id="resource-back")
 
     def on_mount(self) -> None:
-        self._load(None)
+        self.call_after_refresh(self._load, None)
 
     def _load(self, cursor: str | None) -> None:
+        if not self.is_mounted or self._closing:
+            return
         if self.context != self.app.extension_context:
             self.query_one("#resource-status", Static).update(
                 "Stale context · reopen this panel"
@@ -158,6 +166,17 @@ class ResourceScreen(ModalScreen):
             )
             return
         self._revision = page.revision
+        self._row_targets = page.row_targets if self.app.navigation_active else {}
+        if self.app.navigation_active:
+            links = self.query_one("#resource-links", VerticalScroll)
+            links.remove_children()
+            if self.panel.renderer not in {"table", "tree"}:
+                links.mount(
+                    *(
+                        Button(f"Open {row_id}", name=row_id, classes="resource-link")
+                        for row_id in self._row_targets
+                    )
+                )
         self._next_cursor = page.next_cursor
         self.query_one("#resource-status", Static).update(
             f"Revision {page.revision} · {len(page.items)} loaded rows"
@@ -171,8 +190,12 @@ class ResourceScreen(ModalScreen):
             table.clear(columns=True)
             columns = self.panel.columns or (tuple(page.items[0]) if page.items else ("id",))
             table.add_columns(*columns)
+            table.cursor_type = "row" if self.app.navigation_active else "cell"
             for item in page.items:
-                table.add_row(*(json.dumps(json_plain(item.get(col))) for col in columns))
+                row_id = item["id"] if self.app.navigation_active else None
+                table.add_row(
+                    *(json.dumps(json_plain(item.get(col))) for col in columns), key=row_id
+                )
         elif self.panel.renderer == "tree":
             tree = self.query_one("#resource-body", Tree)
             tree.clear()
@@ -192,7 +215,14 @@ class ResourceScreen(ModalScreen):
                     else:
                         parent.add_leaf(f"{key}: {json.dumps(child)}")
 
-            add(tree.root, page.items)
+            if self.app.navigation_active:
+                for item in page.items:
+                    row = tree.root.add(
+                        Text(item["id"]), data=self._row_targets.get(item["id"])
+                    )
+                    add(row, item)
+            else:
+                add(tree.root, page.items)
             tree.root.expand()
         else:
             body = self.query_one("#resource-body", TextArea)
@@ -232,10 +262,42 @@ class ResourceScreen(ModalScreen):
 
     def on_button_pressed(self, event: Button.Pressed) -> None:
         event.stop()
-        if event.button.id == "resource-back":
+        if event.button.has_class("resource-link"):
+            self._navigate_row(event.button.name)
+        elif event.button.id == "resource-back" and isinstance(self, ModalScreen):
             self.dismiss()
         elif event.button.id == "resource-next" and self._next_cursor is not None:
             self._load(self._next_cursor)
         elif event.button.id == "resource-reload":
             self._revision = None
             self._load(None)
+
+    def _navigate_row(self, row_id: str | None) -> None:
+        if self.context == self.app.extension_context and row_id in self._row_targets:
+            self.app.navigate(self._row_targets[row_id])
+
+    def on_data_table_row_selected(self, event: DataTable.RowSelected) -> None:
+        event.stop()
+        self._navigate_row(event.row_key.value)
+
+    def on_tree_node_selected(self, event: Tree.NodeSelected) -> None:
+        event.stop()
+        if event.node.data is not None and self.context == self.app.extension_context:
+            self.app.navigate(event.node.data)
+
+
+class ResourceScreen(ResourceContent, ModalScreen):
+    """Legacy modal path; retained when navigation is not negotiated."""
+
+
+class ResourcePanel(ResourceContent):
+    """The same resource renderers in the central area, beside persistent navigation."""
+
+    BINDINGS = []
+    DEFAULT_CSS = """
+    ResourcePanel { width: 1fr; height: 100%; }
+    ResourcePanel > VerticalScroll { width: 100%; height: 100%; padding: 1; }
+    ResourcePanel #resource-body { height: 1fr; }
+    ResourcePanel Horizontal { height: 3; }
+    ResourceContent #resource-links { height: auto; max-height: 8; }
+    """
