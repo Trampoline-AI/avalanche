@@ -109,6 +109,9 @@ def predict_rlm_declaration(
         ) + skill_instructions
     declaration = PredictRLMDeclaration(
         settings=_effective_runtime_metadata(workflow_defaults, step_overrides),
+        extra_options=tuple(
+            sorted({*workflow_defaults, *step_overrides} - PredictRLM.model_fields.keys())
+        ),
         models=_effective_model_metadata(workflow_defaults, step_overrides),
         skills=tuple(_skill_declaration(skill) for skill in skills),
         aggregated_static_instructions=aggregated_instructions,

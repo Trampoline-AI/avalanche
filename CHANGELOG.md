@@ -27,6 +27,9 @@
   declaration JSON has a new shape (PredictRLM settings, models and skills move under
   `runtime`), so the operator, its clients and `@trampoline-ai/operator-ui` must be
   upgraded together. Cached discovery results from older versions are rebuilt.
+  The PredictRLM section lists the names of options passed through to PredictRLM
+  without an Avalanche field (`extra_options`); their values appear in its settings
+  only when they serialize to JSON.
   BREAKING-PROTOCOL: the Delta protocol moves to 2.0 (`avalanche.PROTOCOL_VERSION`)
   because the operator proto field 9 is renamed `agent_declarations_json` and its
   JSON shape changes; deployments built on protocol 1.x must be rebuilt.

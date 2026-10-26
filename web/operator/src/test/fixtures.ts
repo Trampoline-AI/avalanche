@@ -38,6 +38,7 @@ export function agentDeclarationJson({
     runtime: {
       kind: "predict_rlm",
       settings: {},
+      extra_options: [],
       models: {
         main: { source: "PredictRLM default" },
         sub: { source: "PredictRLM default" },

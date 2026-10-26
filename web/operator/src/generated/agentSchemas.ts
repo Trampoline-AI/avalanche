@@ -16,7 +16,7 @@ export type PredictRLMModels = z.infer<typeof PredictRLMModels>;
 export const PredictRLMSkillDeclaration = z.strictObject({ "instructions": z.string(), "modules": z.array(z.string()), "name": z.string(), "packages": z.array(z.string()), "tools": z.array(z.string()) });
 export type PredictRLMSkillDeclaration = z.infer<typeof PredictRLMSkillDeclaration>;
 
-export const PredictRLMDeclaration = z.strictObject({ "aggregated_static_instructions": z.string(), "kind": z.literal("predict_rlm"), "models": PredictRLMModels, "modules": z.array(z.string()), "packages": z.array(z.string()), "settings": z.record(z.string(), JsonValue), "skills": z.array(PredictRLMSkillDeclaration) });
+export const PredictRLMDeclaration = z.strictObject({ "aggregated_static_instructions": z.string(), "extra_options": z.array(z.string()), "kind": z.literal("predict_rlm"), "models": PredictRLMModels, "modules": z.array(z.string()), "packages": z.array(z.string()), "settings": z.record(z.string(), JsonValue), "skills": z.array(PredictRLMSkillDeclaration) });
 export type PredictRLMDeclaration = z.infer<typeof PredictRLMDeclaration>;
 
 export const FieldDeclaration = z.strictObject({ "annotation": z.string(), "description": z.string(), "name": z.string() });
