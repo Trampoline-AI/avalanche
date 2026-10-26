@@ -211,13 +211,11 @@ async def run(
             if result.subtype == "success" and not result.is_error:
                 detail = (
                     "the session succeeded without the structured output the signature needs"
+                    if result.structured_output is None
+                    else "Claude's structured output is not an object"
                 )
             raise AgentStepExecutionError(
                 f"agent step {request.step_name!r}: Claude did not finish: {detail}"
-            )
-        if not isinstance(result.structured_output, dict):
-            raise AgentStepExecutionError(
-                f"agent step {request.step_name!r}: Claude's structured output is not an object"
             )
         if not workspace_outputs:
             return AgentRunOutcome(
@@ -586,17 +584,19 @@ class _Transcript:
 
     def record(self, result: ResultMessage, *, model: str | None) -> AgentTrace:
         succeeded = result.subtype == "success" and not result.is_error
-        status: AgentTraceStatus = (
-            "succeeded" if succeeded and result.structured_output is not None else "failed"
-        )
+        # Outputs are an object of fields; anything else fails the step, so the trace too.
+        has_output = isinstance(result.structured_output, dict)
+        status: AgentTraceStatus = "succeeded" if succeeded and has_output else "failed"
         return AgentTrace(
             header=AgentTraceHeader(
                 runtime_kind="claude_agent",
                 trace_format=native.FORMAT,
                 status=status,
                 stop_reason=result.subtype
-                if result.structured_output is not None or not succeeded
-                else "no_structured_output",
+                if has_output or not succeeded
+                else "no_structured_output"
+                if result.structured_output is None
+                else "structured_output_not_object",
                 model=self.model or model,
                 duration_ms=result.duration_ms,
                 usage=_usage(result.usage, result.total_cost_usd),
