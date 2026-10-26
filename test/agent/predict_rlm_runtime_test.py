@@ -23,15 +23,9 @@ from predict_rlm.trace import (
 )
 
 import avalanche as ava
-from avalanche.agent.contract import (
-    AgentRequest,
-    CodeGenerated,
-    ModelStarted,
-    SignatureSpec,
-    ToolStarted,
-    TurnFinished,
-)
-from avalanche.agent.trace import CodeExecutionAction, ModelCallAction, ToolCallAction
+from avalanche.agent.contract import AgentRequest, SignatureSpec, ToolStarted, TurnFinished
+from avalanche.agent.native.predict_rlm import PredictRLMPredictCall, PredictRLMTokenUsage
+from avalanche.agent.trace import ToolCall as CommonToolCall
 from avalanche.runtimes import PredictRLM
 
 runtime_module = importlib.import_module("avalanche.runtimes.predict_rlm.runtime")
@@ -210,9 +204,10 @@ async def test_invoke_maps_a_run_onto_the_common_trace(monkeypatch):
         "succeeded",
         "submit",
     )
+    # The sub-model call counts as a tool call.
     assert (header.turn_count, header.tool_call_count, header.external_run_id) == (
         1,
-        1,
+        2,
         "sdk-run",
     )
     assert (header.usage.input_tokens, header.usage.output_tokens) == (13, 6)
@@ -221,13 +216,32 @@ async def test_invoke_maps_a_run_onto_the_common_trace(monkeypatch):
     assert (native.sub_model, native.max_iterations) == ("sub-model", 4)
     assert native.usage.main.cache_hits + native.usage.sub.cache_hits == 1
     (turn,) = outcome.trace.turns
-    assert [type(action) for action in turn.actions] == [
-        CodeExecutionAction,
-        ToolCallAction,
-        ModelCallAction,
-    ]
-    # What PredictRLM writes each iteration is the turn's text, not provider reasoning.
-    assert (turn.text, turn.reasoning) == ("look it up", None)
+    assert [call.name for call in turn.tool_calls] == ["lookup", "predict"]
+    assert turn.tool_calls[-1] == CommonToolCall(
+        call_id=None,
+        caller="code",
+        name="predict",
+        arguments={"text": "q"},
+        result={"summary": "s"},
+        error=None,
+        duration_ms=4,
+    )
+    assert turn.native.predict_calls == (
+        PredictRLMPredictCall(
+            signature="text -> summary",
+            instructions=None,
+            model="sub-model",
+            usage=PredictRLMTokenUsage(input_tokens=3, output_tokens=1, cost=0.0, cache_hits=0),
+            finish_reason=None,
+        ),
+    )
+    assert (turn.native.code, turn.native.output, turn.native.error) == (
+        "lookup('q')",
+        "found",
+        False,
+    )
+    # What PredictRLM writes each iteration is the turn's message, not provider reasoning.
+    assert (turn.message, turn.reasoning) == ("look it up", None)
 
 
 @pytest.mark.parametrize(
@@ -282,15 +296,16 @@ async def test_live_predict_rlm_events_reach_the_runtime_sink_as_common_events(m
 
     assert [(native.kind, type(common)) for native, common in recorder.events] == [
         ("run.started", type(None)),
-        ("code.generated", CodeGenerated),
+        ("code.generated", type(None)),
         ("tool.started", ToolStarted),
-        ("predict.started", ModelStarted),
+        ("predict.started", type(None)),
         ("iteration.recorded", TurnFinished),
     ]
     native, finished = recorder.events[-1]
     assert finished.turn.index == 1
-    # The common turn and PredictRLM's own details split the step between them.
-    assert native.untruncated_output == _step().untruncated_output
+    # The turn carries PredictRLM's own details; the native event only what it left out.
+    assert finished.turn.native.untruncated_output == _step().untruncated_output
+    assert native.omissions is None
     [record] = recorder.terminals
     assert record.turns_streamed and record.turns == ()
 

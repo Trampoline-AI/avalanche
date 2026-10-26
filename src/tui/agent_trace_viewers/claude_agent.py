@@ -8,7 +8,7 @@ from dataclasses import dataclass, replace
 from pydantic import JsonValue
 
 from avalanche.agent.live import AgentLiveEvent
-from avalanche.agent.native.claude_agent import Finished, MessageFinished
+from avalanche.agent.native.claude_agent import ClaudeAgentTurn, Finished
 from avalanche.agent.trace import AgentTrace, ClaudeAgentNativeTrace
 
 from . import InspectionTurn, PendingStep, TraceSection, TurnView
@@ -59,24 +59,20 @@ class ClaudeAgentViewer:
 
     def turn(self, turn: InspectionTurn, *, full_output: bool) -> TurnView:
         view = GENERIC.turn(turn, full_output=full_output)
-        native = turn.native
-        if not isinstance(native, MessageFinished):
-            raise TypeError(f"not a Claude message event: {native.kind}")
+        native = turn.finished.turn.native
+        if not isinstance(native, ClaudeAgentTurn):
+            raise TypeError(f"not a Claude turn: {native.format}")
         # Rate-limit, billing and authentication failures arrive as API-error turns.
-        message = TraceSection(
-            "message",
-            "Message",
+        response = TraceSection(
+            "response",
+            "Response",
             {"stop_reason": native.stop_reason, "api_error": native.api_error},
             style="bold red" if native.api_error is not None else "dim",
         )
-        # Model reasoning stays last, after the message details.
+        # Model reasoning stays last, after the response details.
         reasoning = reasoning_items(turn.finished.turn)
         body = view.items[: len(view.items) - len(reasoning)]
-        return replace(
-            view,
-            failed=view.failed or native.api_error is not None,
-            items=(*body, message, *reasoning),
-        )
+        return replace(view, items=(*body, response, *reasoning))
 
     def live_label(self, event: AgentLiveEvent) -> str:
         return _LABELS[event.native.kind]

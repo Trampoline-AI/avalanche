@@ -33,7 +33,7 @@ function live(
 }
 
 export interface TurnOptions {
-  text?: string;
+  message?: string;
   reasoning?: string;
   code?: string;
   output?: string;
@@ -41,18 +41,16 @@ export interface TurnOptions {
   failed?: boolean;
 }
 
-/** A PredictRLM turn with one tool call and one sub-model call. */
+/** A PredictRLM turn with one tool call and one sub-model (predict) call. */
 export function turnEvent(iteration: number, options: TurnOptions = {}): AgentLiveEvent {
   const usage = tokenUsage();
-  const output = options.output ?? `Output for turn ${iteration}.`;
   return live(iteration, {
     common: {
       kind: "turn.finished",
       omitted_tool_calls: 0,
-      omitted_model_calls: 0,
       turn: {
         index: iteration,
-        text: options.text ?? `Text for turn ${iteration}.`,
+        message: options.message ?? `Text for turn ${iteration}.`,
         reasoning: options.reasoning ?? null,
         duration_ms: 1,
         usage: {
@@ -62,16 +60,8 @@ export function turnEvent(iteration: number, options: TurnOptions = {}): AgentLi
           cache_read_input_tokens: null,
           cache_creation_input_tokens: null,
         },
-        actions: [
+        tool_calls: [
           {
-            kind: "code_execution",
-            language: "python",
-            code: options.code ?? `print("turn ${iteration}")`,
-            output,
-            error: options.failed ? output : null,
-          },
-          {
-            kind: "tool_call",
             call_id: null,
             caller: "code",
             name: `lookup_${iteration}`,
@@ -81,46 +71,36 @@ export function turnEvent(iteration: number, options: TurnOptions = {}): AgentLi
             duration_ms: 1,
           },
           {
-            kind: "model_call",
             call_id: null,
             caller: "code",
-            model: "sub-model",
-            duration_ms: 1,
-            usage: null,
+            name: "predict",
+            arguments: { question: "Ready?" },
+            result: { answer: `Prediction ${iteration}` },
             error: null,
+            duration_ms: 1,
           },
         ],
-      },
-    },
-    native: {
-      format: "predict_rlm.run/v1",
-      kind: "iteration.recorded",
-      iteration,
-      untruncated_output: options.untruncatedOutput ?? `Full output for turn ${iteration}.`,
-      finish_reason: "stop",
-      usage: { main: usage, sub: usage },
-      predict_calls: [
-        {
-          signature: "question -> answer",
-          instructions: null,
-          model: "sub-model",
-          total_usage: usage,
-          calls: [
+        native: {
+          format: "predict_rlm.run/v1",
+          code: options.code ?? `print("turn ${iteration}")`,
+          output: options.output ?? `Output for turn ${iteration}.`,
+          untruncated_output: options.untruncatedOutput ?? `Full output for turn ${iteration}.`,
+          error: options.failed ?? false,
+          finish_reason: "stop",
+          usage: { main: usage, sub: usage },
+          predict_calls: [
             {
-              duration_ms: 1,
+              signature: "question -> answer",
+              instructions: null,
+              model: "sub-model",
               usage,
-              input: { question: "Ready?" },
-              output: { answer: `Prediction ${iteration}` },
-              error: null,
               finish_reason: null,
             },
           ],
         },
-      ],
-      tool_count: 1,
-      predict_count: 1,
-      omissions: null,
+      },
     },
+    native: { format: "predict_rlm.run/v1", kind: "iteration.recorded", omissions: null },
   });
 }
 
@@ -203,16 +183,15 @@ function claudeLive(
   return { ...live(sequence, rest), runtime_kind: "claude_agent" };
 }
 
-/** A Claude turn: text, thinking and one tool call. */
+/** A Claude turn: a message, thinking and one tool call. */
 export function claudeTurnEvent(index: number): AgentLiveEvent {
   return claudeLive(index, {
     common: {
       kind: "turn.finished",
       omitted_tool_calls: 0,
-      omitted_model_calls: 0,
       turn: {
         index,
-        text: `Answer text ${index}.`,
+        message: `Answer text ${index}.`,
         reasoning: `Thinking ${index}.`,
         duration_ms: null,
         usage: {
@@ -222,9 +201,8 @@ export function claudeTurnEvent(index: number): AgentLiveEvent {
           cache_read_input_tokens: null,
           cache_creation_input_tokens: null,
         },
-        actions: [
+        tool_calls: [
           {
-            kind: "tool_call",
             call_id: `call-${index}`,
             caller: "model",
             name: "mcp__avalanche__lookup",
@@ -234,16 +212,16 @@ export function claudeTurnEvent(index: number): AgentLiveEvent {
             duration_ms: null,
           },
         ],
+        native: {
+          format: "claude_agent.messages/v1",
+          message_id: `msg-${index}`,
+          model: "claude-haiku-5-5",
+          stop_reason: "tool_use",
+          api_error: null,
+        },
       },
     },
-    native: {
-      format: "claude_agent.messages/v1",
-      kind: "message.finished",
-      message_id: `msg-${index}`,
-      model: "claude-haiku-5-5",
-      stop_reason: "tool_use",
-      api_error: null,
-    },
+    native: { format: "claude_agent.messages/v1", kind: "message.finished" },
   });
 }
 

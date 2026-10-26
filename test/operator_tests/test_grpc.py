@@ -423,14 +423,11 @@ def test_grpc_terminal_hydration_selects_body_invocation_across_event_pages(
         hydrated = provider.get_run(run.run_id)
         envelope = json.loads(hydrated.nodes["agent-1"].agent_trace_json)
         assert envelope["invocation_id"] == "call-a"
+        # Each turn keeps its tool calls, predict calls included.
         assert [
-            (
-                event["invocation_id"],
-                event["native"]["tool_count"],
-                event["native"]["predict_count"],
-            )
+            (event["invocation_id"], len(event["common"]["turn"]["tool_calls"]))
             for event in envelope["events"]
-        ] == [("call-a", 2, 3), ("call-b", 7, 11)]
+        ] == [("call-a", 5), ("call-b", 18)]
         in_process = operator.get_run(run.run_id)
         local_envelope = json.loads(in_process.nodes["agent-1"].agent_trace_json)
         assert local_envelope["invocation_id"] == "call-a"

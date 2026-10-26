@@ -38,7 +38,8 @@ from avalanche.agent import (  # noqa: E402
 from avalanche.agent.contract import ToolSpec  # noqa: E402
 from avalanche.agent.declaration import ClaudeAgentDeclaration  # noqa: E402
 from avalanche.agent.native import claude_agent as claude_native  # noqa: E402
-from avalanche.agent.trace import ToolCallAction  # noqa: E402
+from avalanche.agent.native.claude_agent import ClaudeAgentTurn  # noqa: E402
+from avalanche.agent.trace import ToolCall  # noqa: E402
 from avalanche.runtimes import ClaudeAgent  # noqa: E402
 
 sdk_module = importlib.import_module("avalanche.runtimes.claude_agent._sdk")
@@ -170,9 +171,12 @@ async def test_a_session_maps_onto_outputs_turns_and_live_events(replay):
     assert header.external_run_id == header.session_id == "session-1"
     assert header.usage.cost_usd == pytest.approx(0.0004)
     first, second = result.trace.turns
-    assert (first.reasoning, first.text) == ("I need the bonus.", "Looking up the bonus.")
-    (call,) = first.actions
-    assert call == ToolCallAction(
+    assert (first.reasoning, first.message) == ("I need the bonus.", "Looking up the bonus.")
+    assert first.native == ClaudeAgentTurn(
+        message_id=first.native.message_id, model=MODEL, stop_reason=None, api_error=None
+    )
+    (call,) = first.tool_calls
+    assert call == ToolCall(
         call_id="call-1",
         caller="model",
         name="mcp__avalanche__lookup_bonus",
@@ -181,7 +185,7 @@ async def test_a_session_maps_onto_outputs_turns_and_live_events(replay):
         error=None,
         duration_ms=None,
     )
-    assert [action.name for action in second.actions] == ["StructuredOutput"]
+    assert [call.name for call in second.tool_calls] == ["StructuredOutput"]
     assert [
         (event.kind, event.native.kind if event.kind == "event" else None) for event in observed
     ] == [
@@ -223,7 +227,7 @@ async def test_large_inputs_and_tool_calls_stay_within_the_live_event_limits(
     replay, monkeypatch
 ):
     monkeypatch.setattr(sdk_module, "_MAX_VALUE_BYTES", 64)
-    monkeypatch.setattr(sdk_module, "_MAX_TURN_ACTION_BYTES", 1)
+    monkeypatch.setattr(sdk_module, "_MAX_TURN_TOOL_CALL_BYTES", 1)
     seen = replay(_success_stream())
     observed = []
     with capture_agent_evidence(observed.append, errors="raise"):
@@ -232,8 +236,8 @@ async def test_large_inputs_and_tool_calls_stay_within_the_live_event_limits(
         e.common for e in observed if e.kind == "event" and e.native.kind == "message.finished"
     ]
     # Over the budget, a live turn's calls are counted as omitted; the record keeps them.
-    assert [(len(t.turn.actions), t.omitted_tool_calls) for t in turns] == [(0, 1), (0, 1)]
-    assert [len(turn.actions) for turn in result.trace.turns] == [1, 1]
+    assert [(len(t.turn.tool_calls), t.omitted_tool_calls) for t in turns] == [(0, 1), (0, 1)]
+    assert [len(turn.tool_calls) for turn in result.trace.turns] == [1, 1]
 
     seen = replay([_init(), _result({"answer": "ok"})])
     observed = []
@@ -251,12 +255,38 @@ async def test_a_failed_tool_is_kept_on_its_call_and_does_not_fail_the_turn(repl
     with capture_agent_evidence(observed.append, errors="raise"):
         result = await _agent()(a=2, b=3)
 
-    (call,) = result.trace.turns[0].actions
+    (call,) = result.trace.turns[0].tool_calls
     assert (call.result, call.error) == (None, "lookup failed")
     turn_event = next(
         e for e in observed if e.kind == "event" and e.native.kind == "message.finished"
     )
     assert turn_event.failed is False
+
+
+@pytest.mark.asyncio
+async def test_a_turn_with_an_api_error_fails(replay):
+    # The structured-output call's result is followed by a reply the API failed.
+    stream = _success_stream()
+    stream[-1:] = [
+        AssistantMessage(
+            content=[TextBlock(text="API Error: 429")],
+            model=MODEL,
+            error="rate_limit",
+            usage={"input_tokens": 1, "output_tokens": 1},
+            message_id="msg-api-error",
+        ),
+        _result({"total": 15}),
+    ]
+    replay(stream)
+    observed = []
+    with capture_agent_evidence(observed.append, errors="raise"):
+        result = await _agent()(a=2, b=3)
+
+    assert result.trace.turns[-1].native.api_error == "rate_limit"
+    turn_events = [
+        e for e in observed if e.kind == "event" and e.native.kind == "message.finished"
+    ]
+    assert [event.failed for event in turn_events] == [False, False, True]
 
 
 @pytest.mark.asyncio
@@ -743,11 +773,11 @@ async def test_a_response_split_across_messages_and_subagent_traffic_form_one_tu
     result = await _agent()(a=2, b=3)
 
     first, second = result.trace.turns
-    assert [(call.call_id, call.result) for call in first.actions] == [
+    assert [(call.call_id, call.result) for call in first.tool_calls] == [
         ("call-1", "10"),
         ("call-2", "checked"),
     ]
-    assert second.text == "Done."
+    assert second.message == "Done."
     assert result.trace.header.turn_count == 2
 
 

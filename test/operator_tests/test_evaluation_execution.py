@@ -353,17 +353,16 @@ def assert_original_requests(service: EvaluationService, *, winner: str = "world
     assert trace["header"]["turn_count"] == 1
     [turn] = trace["turns"]
     assert turn["index"] == 1
-    assert turn["text"] == "Echo the input"
+    assert turn["message"] == "Echo the input"
     assert turn["duration_ms"] == 10
-    assert turn["actions"] == [
-        {
-            "kind": "code_execution",
-            "language": "python",
-            "code": "SUBMIT(answer=" + repr(winner.upper()) + ")",
-            "output": winner,
-            "error": None,
-        }
-    ]
+    assert turn["tool_calls"] == []
+    native = turn["native"]
+    assert (native["format"], native["code"], native["output"], native["error"]) == (
+        "predict_rlm.run/v1",
+        "SUBMIT(answer=" + repr(winner.upper()) + ")",
+        winner,
+        False,
+    )
     assert service.requests.empty()
 
 

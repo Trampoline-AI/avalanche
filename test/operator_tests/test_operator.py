@@ -246,7 +246,8 @@ def test_agent_trace_header_and_events_carry_common_fields_over_protobuf(
             "submit",
         )
         assert header.usage == TokenUsage(input_tokens=0, output_tokens=0, cost_usd=0.0)
-        assert header.tool_call_count == 2
+        # Two tool calls and one predict call.
+        assert header.tool_call_count == 3
         assert header.external_run_id == "sdk-run"
         assert (
             trace_header_from_v2(
@@ -267,17 +268,17 @@ def test_agent_trace_header_and_events_carry_common_fields_over_protobuf(
             "turn.finished",
             1,
         )
-        assert (turn.tool_call_count, turn.model_call_count) == (2, 1)
+        assert turn.tool_call_count == 3
         wire = agent_event_activity_to_v2(
             turn, run_id=run.run_id, node_id="agent_1", detail_ref=pb.ActivityDetailRefV2()
         )
         decoded = agent_event_descriptor_from_v2(
             pb.RunActivityDescriptorV2.FromString(wire.SerializeToString())
         )
-        assert (decoded.agent_event_kind, decoded.turn, decoded.model_call_count) == (
+        assert (decoded.agent_event_kind, decoded.turn, decoded.tool_call_count) == (
             "turn.finished",
             1,
-            1,
+            3,
         )
     finally:
         operator.close()
@@ -318,7 +319,7 @@ def test_agent_evidence_deduplicates_per_invocation_and_materializes_references(
         )
 
     def code(event):
-        return event["common"]["turn"]["actions"][0]["code"]
+        return event["common"]["turn"]["native"]["code"]
 
     try:
         for invocation, output in (("first", "one"), ("second", "two")):

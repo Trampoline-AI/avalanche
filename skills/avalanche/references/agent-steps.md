@@ -450,8 +450,9 @@ validated outputs; do not introduce another input/output/context schema:
   named fields, such as `ctx.output.audit`, and use `.model_dump(mode="json")` for
   a whole Pydantic output. The step's `return result.outputs.audit` remains separate.
 - `ctx.trace` is that invocation's complete `ava.agent.AgentTrace`, a Pydantic
-  model: `ctx.trace.header` summarizes the run, and `ctx.trace.turns` lists each
-  turn's code, tool calls and model calls. Serialize what you select with
+  model: `ctx.trace.header` summarizes the run, and `ctx.trace.turns` holds each
+  turn's `message`, `tool_calls` and runtime-specific `native` details (such as
+  PredictRLM's code and output). Serialize what you select with
   `.model_dump(mode="json")`.
 - A call whose outputs fail validation records its trace but submits no evaluation.
 - Combine relevant inputs and outputs explicitly, for example

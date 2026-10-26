@@ -26,14 +26,7 @@ from pydantic import (
 
 from .kinds import RuntimeKind
 from .native import NativeEvent
-from .trace import (
-    AgentTrace,
-    AgentTraceStatus,
-    CodeExecutionAction,
-    ModelCallAction,
-    ToolCallAction,
-    Turn,
-)
+from .trace import AgentTrace, AgentTraceStatus, Turn
 
 # Serialized bodies always carry defaulted fields such as ``kind``; their
 # exported JSON Schema says so.
@@ -48,8 +41,8 @@ _STRICT = ConfigDict(
 class TurnFinished(BaseModel):
     """A finished turn.
 
-    A turn too large for one live event drops some of its calls; the omitted
-    counts say how many, so viewers can show that rather than hide it.
+    A turn too large for one live event drops some of its tool calls; the omitted
+    count says how many, so viewers can show that rather than hide it.
     """
 
     model_config = _STRICT
@@ -57,33 +50,10 @@ class TurnFinished(BaseModel):
     kind: Literal["turn.finished"] = "turn.finished"
     turn: Turn
     omitted_tool_calls: NonNegativeInt
-    omitted_model_calls: NonNegativeInt
 
     @property
     def tool_call_count(self) -> int:
-        actions = self.turn.actions
-        return self.omitted_tool_calls + sum(isinstance(a, ToolCallAction) for a in actions)
-
-    @property
-    def model_call_count(self) -> int:
-        actions = self.turn.actions
-        return self.omitted_model_calls + sum(isinstance(a, ModelCallAction) for a in actions)
-
-
-class ModelStarted(BaseModel):
-    model_config = _STRICT
-
-    kind: Literal["model.started"] = "model.started"
-    call_id: str
-    model: str
-
-
-class ModelFinished(BaseModel):
-    model_config = _STRICT
-
-    kind: Literal["model.finished"] = "model.finished"
-    call_id: str
-    error: str | None
+        return self.omitted_tool_calls + len(self.turn.tool_calls)
 
 
 class ToolStarted(BaseModel):
@@ -103,16 +73,8 @@ class ToolFinished(BaseModel):
     error: str | None
 
 
-class CodeGenerated(BaseModel):
-    model_config = _STRICT
-
-    kind: Literal["code.generated"] = "code.generated"
-    turn: PositiveInt
-    code: str
-
-
 AgentEvent = Annotated[
-    TurnFinished | ModelStarted | ModelFinished | ToolStarted | ToolFinished | CodeGenerated,
+    TurnFinished | ToolStarted | ToolFinished,
     Field(discriminator="kind"),
 ]
 
@@ -146,6 +108,13 @@ class AgentLiveEvent(BaseModel):
                 f"native event {native.kind!r} travels with common event "
                 f"{expected!r}, not {actual!r}"
             )
+        if isinstance(self.common, TurnFinished) and self.common.turn.native.format != (
+            native.format
+        ):
+            raise ValueError(
+                f"turn of format {self.common.turn.native.format!r} does not belong to "
+                f"native format {native.format!r}"
+            )
         return self
 
     @property
@@ -153,14 +122,12 @@ class AgentLiveEvent(BaseModel):
         match self.common:
             case TurnFinished(turn=turn):
                 return turn.index
-            case CodeGenerated(turn=turn):
-                return turn
         return self.native.turn
 
     @property
     def error(self) -> str | None:
         match self.common:
-            case ModelFinished(error=error) | ToolFinished(error=error) if error is not None:
+            case ToolFinished(error=error) if error is not None:
                 return error
         return self.native.error
 
@@ -168,13 +135,10 @@ class AgentLiveEvent(BaseModel):
     def failed(self) -> bool:
         """Whether the event reports a failure, with or without an error text.
 
-        A turn fails when code it ran failed; the agent may have handled a failed
-        tool or model call inside it.
+        A turn fails as its runtime decides (failed code, an API error); the agent
+        may have handled a failed tool call inside it.
         """
-        failed_turn = isinstance(self.common, TurnFinished) and any(
-            isinstance(action, CodeExecutionAction) and action.error is not None
-            for action in self.common.turn.actions
-        )
+        failed_turn = isinstance(self.common, TurnFinished) and self.common.turn.failed
         return self.error is not None or failed_turn
 
 

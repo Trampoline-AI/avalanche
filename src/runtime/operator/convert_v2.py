@@ -182,11 +182,8 @@ _TRACE_STATUS_FROM_V2 = {value: key for key, value in _TRACE_STATUS_TO_V2.items(
 _AGENT_EVENT_KIND_TO_V2: Mapping[AgentEventKind, int] = {
     "native": pb.AGENT_EVENT_KIND_V2_NATIVE,
     "turn.finished": pb.AGENT_EVENT_KIND_V2_TURN_FINISHED,
-    "model.started": pb.AGENT_EVENT_KIND_V2_MODEL_STARTED,
-    "model.finished": pb.AGENT_EVENT_KIND_V2_MODEL_FINISHED,
     "tool.started": pb.AGENT_EVENT_KIND_V2_TOOL_STARTED,
     "tool.finished": pb.AGENT_EVENT_KIND_V2_TOOL_FINISHED,
-    "code.generated": pb.AGENT_EVENT_KIND_V2_CODE_GENERATED,
 }
 _AGENT_EVENT_KIND_FROM_V2 = {value: key for key, value in _AGENT_EVENT_KIND_TO_V2.items()}
 
@@ -417,7 +414,6 @@ def agent_event_activity_to_v2(
         invocation_id=event.invocation_id,
         error=event.error,
         tool_call_count=event.tool_call_count,
-        model_call_count=event.model_call_count,
         native_event_kind=event.native_event_kind,
         agent_event_kind=_AGENT_EVENT_KIND_TO_V2[event.agent_event_kind],
     )
@@ -931,7 +927,6 @@ def terminal_seal_descriptor_from_v2(
     if (
         msg.error
         or msg.tool_call_count
-        or msg.model_call_count
         or msg.event_kind
         or msg.native_event_kind
         or msg.agent_event_kind
@@ -994,7 +989,6 @@ def agent_event_descriptor_from_v2(
         duration_ms=msg.duration_ms if msg.HasField("duration_ms") else None,
         error=msg.error,
         tool_call_count=msg.tool_call_count,
-        model_call_count=msg.model_call_count,
     )
 
 

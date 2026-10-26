@@ -197,7 +197,7 @@ The return is an `ava.agent.AgentResult`, the same for every runtime:
 | Field | Meaning |
 | --- | --- |
 | `outputs` | A frozen Pydantic model generated from the signature, with one attribute per output field. Each value is already validated in strict mode against its declared type, so a structured field such as `result.outputs.report` is already a `Report`. |
-| `trace` | The invocation's `ava.agent.AgentTrace`: `trace.header` (runtime kind, status, stop reason, model, duration, token usage, turn and tool-call counts) and `trace.turns`, each with the code, tool calls and model calls of that turn. Runtime-specific details sit in `trace.native`. |
+| `trace` | The invocation's `ava.agent.AgentTrace`: `trace.header` (runtime kind, status, stop reason, model, duration, token usage, turn and tool-call counts) and `trace.turns`, each with the model's `message`, its `reasoning` when the runtime exposes it, its `tool_calls` (PredictRLM sub-model calls are `predict` tool calls), `usage`, and the runtime's own part of the turn in `native` (PredictRLM's code and output; Claude's stop reason and API error). Runtime-specific run details sit in `trace.native`. |
 
 Outputs that are missing or do not match their declared types raise `AgentOutputError` after the invocation's trace is recorded; values are never coerced or defaulted.
 

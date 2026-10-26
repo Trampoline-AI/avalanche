@@ -138,12 +138,37 @@
   and come back as file references, as with PredictRLM. The TUI and web UI show Claude traces through their own viewer,
   and a Claude declaration shows its model and settings. Workflows that only declare
   Claude steps import and publish without the extra installed.
-- Agents: a trace turn's `text` is now what the model wrote that turn, for every
-  runtime. PredictRLM's per-iteration `reasoning` field moves into `text`, matching
+- Agents: every runtime now reports a trace turn in the same shape: `message` (what
+  the model wrote that turn), `reasoning`, `tool_calls`, `duration_ms`, `usage` (the
+  whole turn, every model summed) and `native`, the runtime's own part of the turn.
+  PredictRLM's per-iteration `reasoning` field moves into `message`, matching
   Claude's reply text; `Turn.reasoning` now holds only a provider's own reasoning
   (such as Claude's extended thinking) and is `None` when the runtime does not expose
-  it. The web UI and TUI show each turn's text first and keep model reasoning in a
+  it. Tool calls are the only shared action: `Turn.actions` becomes
+  `Turn.tool_calls`, `ToolCallAction` becomes `ToolCall` (without a `kind` field),
+  and the `code_execution` and `model_call` actions are gone. A PredictRLM turn's
+  code, its output and whether it failed now sit in `turn.native` (format
+  `predict_rlm.run/v1`), and each sub-model call is a `predict` tool call with its
+  inputs as `arguments` and its outputs as `result`; `turn.native.predict_calls`
+  gives each call's signature, model, usage and finish reason in the same order. A
+  Claude turn's message ID, model, stop reason and API error sit in `turn.native`
+  (format `claude_agent.messages/v1`), and a turn with an API error now counts as
+  failed. Trace tool-call counts now include PredictRLM's `predict` calls.
+  Code reading `ctx.trace.turns` in evaluations must use the new names; older stored
+  traces are not converted.
+- Live agent events: the shared `model.started`, `model.finished` and
+  `code.generated` events, and `TurnFinished.omitted_model_calls`, are removed.
+  PredictRLM still reports them as its own `predict.started`, `predict.finished`
+  and `code.generated` events, so viewers keep showing running sub-model calls and
+  code that has not finished. Operator protocol: agent activity descriptors no
+  longer carry `model_call_count` (its field number is reserved), and the
+  `MODEL_STARTED`, `MODEL_FINISHED` and `CODE_GENERATED` agent event kinds are
+  reserved.
+- Web UI and TUI: each turn shows its message first and keeps model reasoning in a
   collapsed "Model reasoning" section at the end, shown only when there is some.
+  PredictRLM turns show their code and output from the turn's own part and list
+  "Predict calls" with their inputs, outputs and details; Claude turns show the
+  response's stop reason and API error.
 
 ## 0.15.1 — 2026-10-24
 

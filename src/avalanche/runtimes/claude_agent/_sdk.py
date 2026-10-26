@@ -56,7 +56,7 @@ from ...agent.trace import (
     AgentTraceStatus,
     ClaudeAgentNativeTrace,
     TokenUsage,
-    ToolCallAction,
+    ToolCall,
     Turn,
     file_input_evidence,
 )
@@ -73,7 +73,7 @@ _JSON = TypeAdapter(JsonValue)
 _MAX_VALUE_BYTES = 256 * 1024
 # A turn's tool calls kept in its live event; later calls are counted as omitted, so the
 # event stays well under the operator's 8 MiB agent-event limit.
-_MAX_TURN_ACTION_BYTES = 4 * 1024 * 1024
+_MAX_TURN_TOOL_CALL_BYTES = 4 * 1024 * 1024
 # An error reason taken from a result's free text is cut to this length.
 _MAX_ERROR_CHARS = 4096
 
@@ -508,15 +508,15 @@ def _bounded(value: object) -> JsonValue:
     return {"kind": "unavailable", "reason": "value exceeds the trace size limit"}
 
 
-def _within_budget(actions: tuple[ToolCallAction, ...]) -> tuple[ToolCallAction, ...]:
+def _within_budget(calls: tuple[ToolCall, ...]) -> tuple[ToolCall, ...]:
     """The turn's first tool calls that fit its live-event budget, in order."""
-    kept: list[ToolCallAction] = []
+    kept: list[ToolCall] = []
     used = 0
-    for action in actions:
-        used += len(action.model_dump_json().encode())
-        if used > _MAX_TURN_ACTION_BYTES:
+    for call in calls:
+        used += len(call.model_dump_json().encode())
+        if used > _MAX_TURN_TOOL_CALL_BYTES:
             break
-        kept.append(action)
+        kept.append(call)
     return tuple(kept)
 
 
@@ -542,7 +542,7 @@ class _PendingTurn:
 
     message: AssistantMessage
     blocks: list[object] = field(default_factory=list)
-    calls: dict[str, ToolCallAction] = field(default_factory=dict)
+    calls: dict[str, ToolCall] = field(default_factory=dict)
 
 
 class _Transcript:
@@ -591,7 +591,7 @@ class _Transcript:
                 pending.blocks.extend(message.content)
                 for block in message.content:
                     if isinstance(block, ToolUseBlock):
-                        pending.calls[block.id] = ToolCallAction(
+                        pending.calls[block.id] = ToolCall(
                             call_id=block.id,
                             caller="model",
                             name=block.name,
@@ -661,26 +661,26 @@ class _Transcript:
         )
         turn = Turn(
             index=len(self.turns) + 1,
-            text=text or None,
+            message=text or None,
             reasoning=reasoning or None,
-            actions=tuple(pending.calls.values()),
+            tool_calls=tuple(pending.calls.values()),
             duration_ms=None,
             usage=_usage(message.usage),
-        )
-        self.turns.append(turn)
-        # The record keeps every call; the live event keeps those within its budget.
-        kept = _within_budget(turn.actions)
-        await self._events.emit(
-            native.MessageFinished(
+            native=native.ClaudeAgentTurn(
                 message_id=message.message_id,
                 model=message.model,
                 stop_reason=message.stop_reason,
                 api_error=message.error,
             ),
+        )
+        self.turns.append(turn)
+        # The record keeps every call; the live event keeps those within its budget.
+        kept = _within_budget(turn.tool_calls)
+        await self._events.emit(
+            native.MessageFinished(),
             TurnFinished(
-                turn=turn.model_copy(update={"actions": kept}),
-                omitted_tool_calls=len(turn.actions) - len(kept),
-                omitted_model_calls=0,
+                turn=turn.model_copy(update={"tool_calls": kept}),
+                omitted_tool_calls=len(turn.tool_calls) - len(kept),
             ),
         )
 
@@ -703,7 +703,7 @@ class _Transcript:
                 duration_ms=result.duration_ms,
                 usage=_usage(result.usage, result.total_cost_usd),
                 turn_count=len(self.turns),
-                tool_call_count=sum(len(turn.actions) for turn in self.turns),
+                tool_call_count=sum(len(turn.tool_calls) for turn in self.turns),
                 external_run_id=result.session_id,
                 session_id=result.session_id,
             ),
