@@ -6,7 +6,6 @@ import asyncio
 import contextlib
 import inspect
 import json
-import shutil
 import tempfile
 import types
 from collections.abc import Callable, Mapping
@@ -59,8 +58,10 @@ from ...agent.trace import (
     TokenUsage,
     ToolCallAction,
     Turn,
+    file_input_evidence,
 )
-from ...runtime.context import File
+from ...file import File
+from ...references import AgentOutputFolder
 from ...workspace import Workspace
 
 if TYPE_CHECKING:
@@ -97,17 +98,24 @@ async def run(
         for name, info in signature.output_model.model_fields.items()
         if info.annotation is Workspace
     ]
+    file_outputs = {
+        name: info.annotation is File
+        for name, info in signature.output_model.model_fields.items()
+        if info.annotation in (File, list[File])
+    }
     unsupported_outputs = [
         name
         for name, info in signature.output_model.model_fields.items()
-        if _mentions(info.annotation, File)
-        or (info.annotation is not Workspace and _mentions(info.annotation, Workspace))
+        if name not in file_outputs
+        and (
+            _mentions(info.annotation, File)
+            or (info.annotation is not Workspace and _mentions(info.annotation, Workspace))
+        )
     ]
     if unsupported_outputs:
         raise AgentStepError(
-            f"agent step {request.step_name!r}: ClaudeAgent cannot return ava.File outputs "
-            f"or a workspace other than a plain ava.Workspace field {unsupported_outputs}; "
-            "return an ava.Workspace instead"
+            f"agent step {request.step_name!r}: ClaudeAgent outputs that hold files must be "
+            f"typed exactly ava.File, list[ava.File] or ava.Workspace {unsupported_outputs}"
         )
     workspace: Workspace | None = None
     with contextlib.ExitStack() as stack:
@@ -120,13 +128,21 @@ async def run(
             directory = Path(
                 stack.enter_context(tempfile.TemporaryDirectory(prefix="avalanche-claude-"))
             )
-        # Input files go to a fresh folder that is removed afterwards, so a reused or
-        # host-owned working directory keeps no copies and runs never collide.
-        inputs_directory = Path(tempfile.mkdtemp(prefix=".avalanche-inputs-", dir=directory))
-        # Also on any failure before the session starts; the explicit removal below
-        # runs first, before a workspace snapshot.
-        stack.callback(shutil.rmtree, inputs_directory, ignore_errors=True)
-        prompt_inputs = _prompt_inputs(request, directory, inputs_directory)
+        # File outputs go to a fresh folder in the run workspace, as with every runtime.
+        output_folder = AgentOutputFolder(request.step_name) if file_outputs else None
+        prompt_inputs = _prompt_inputs(request, directory)
+        # Claude reads input files where they are, without copies; folders outside the
+        # working directory are added so the CLI may reach them.
+        add_dirs = sorted(
+            {
+                str(path)
+                for path in (
+                    *(file.path.parent for file in _input_files(request)),
+                    *((output_folder.path,) if output_folder is not None else ()),
+                )
+                if not path.is_relative_to(directory)
+            }
+        )
         options = ClaudeAgentOptions(
             model=runtime.model,
             max_turns=runtime.max_turns,
@@ -146,61 +162,57 @@ async def run(
             system_prompt=_system_prompt(signature.instructions, runtime.system_prompt_append),
             output_format={
                 "type": "json_schema",
-                "schema": _output_schema(signature.output_model, workspace_outputs),
+                "schema": _output_schema(
+                    signature.output_model, workspace_outputs, file_outputs
+                ),
             },
             cwd=str(directory),
+            add_dirs=add_dirs,
         )
         transcript = _Transcript(events, workspace_outputs=tuple(workspace_outputs))
+        # The trace records file inputs by reference, never by host path.
+        await events.emit(
+            native.Started(model=runtime.model, inputs=_trace_inputs(request)),
+            None,
+        )
         try:
-            # Claude gets the full inputs; the trace keeps each one within the value limit.
-            await events.emit(
-                native.Started(
-                    model=runtime.model,
-                    inputs={name: _bounded(value) for name, value in prompt_inputs.items()},
-                ),
-                None,
+            # Closing the stream stops the CLI even when handling a message raises.
+            async with contextlib.aclosing(
+                query(prompt=_prompt(prompt_inputs, output_folder, directory), options=options)
+            ) as messages:
+                async for message in messages:
+                    await transcript.add(message)
+                    if transcript.result is not None:
+                        # The CLI exits non-zero after an error result and the SDK
+                        # then raises ResultError; the result already says why.
+                        break
+        except asyncio.CancelledError:
+            events.unavailable(
+                status="cancelled",
+                error="the agent call was cancelled",
+                external_run_id=transcript.session_id,
+                complete=True,
             )
-            try:
-                # Closing the stream stops the CLI even when handling a message raises.
-                async with contextlib.aclosing(
-                    query(prompt=_prompt(prompt_inputs), options=options)
-                ) as messages:
-                    async for message in messages:
-                        await transcript.add(message)
-                        if transcript.result is not None:
-                            # The CLI exits non-zero after an error result and the SDK
-                            # then raises ResultError; the result already says why.
-                            break
-            except asyncio.CancelledError:
-                events.unavailable(
-                    status="cancelled",
-                    error="the agent call was cancelled",
-                    external_run_id=transcript.session_id,
-                    complete=True,
-                )
-                raise
-            except CLINotFoundError as exc:
-                events.unavailable(
-                    status="failed", error=str(exc), external_run_id=None, complete=True
-                )
-                raise AgentStepExecutionError(
-                    f"agent step {request.step_name!r}: the Claude CLI is not installed where "
-                    "this step runs; install Claude Code on every machine and Ray worker that "
-                    "runs ClaudeAgent steps"
-                ) from exc
-            except Exception as exc:
-                events.unavailable(
-                    status="failed",
-                    error=f"{type(exc).__name__}: {exc}",
-                    external_run_id=transcript.session_id,
-                    complete=True,
-                )
-                raise AgentStepExecutionError(
-                    f"agent step {request.step_name!r} failed calling Claude: {exc}"
-                ) from exc
-        finally:
-            # Before any workspace snapshot, so the outputs never include the inputs.
-            shutil.rmtree(inputs_directory, ignore_errors=True)
+            raise
+        except CLINotFoundError as exc:
+            events.unavailable(
+                status="failed", error=str(exc), external_run_id=None, complete=True
+            )
+            raise AgentStepExecutionError(
+                f"agent step {request.step_name!r}: the Claude CLI is not installed where "
+                "this step runs; install Claude Code on every machine and Ray worker that "
+                "runs ClaudeAgent steps"
+            ) from exc
+        except Exception as exc:
+            events.unavailable(
+                status="failed",
+                error=f"{type(exc).__name__}: {exc}",
+                external_run_id=transcript.session_id,
+                complete=True,
+            )
+            raise AgentStepExecutionError(
+                f"agent step {request.step_name!r} failed calling Claude: {exc}"
+            ) from exc
         result = transcript.result
         if result is None:
             events.unavailable(
@@ -227,18 +239,27 @@ async def run(
             raise AgentStepExecutionError(
                 f"agent step {request.step_name!r}: Claude did not finish: {detail}"
             )
-        if not workspace_outputs:
+        if not workspace_outputs and output_folder is None:
             return AgentRunOutcome(
                 outputs=JsonOutputs(text=json.dumps(result.structured_output)), trace=record
             )
         # A reference snapshot is bound to its directory, which a JSON round trip loses,
         # so Claude's values are validated here and the snapshot joins them as an object.
         snapshot = (
-            workspace.snapshot() if workspace is not None else Workspace.from_path(directory)
+            (workspace.snapshot() if workspace is not None else Workspace.from_path(directory))
+            if workspace_outputs
+            else None
         )
         outputs: dict[str, object] = dict(result.structured_output)
+        files = (
+            _output_files(request, outputs, file_outputs, output_folder, directory)
+            if output_folder is not None
+            else {}
+        )
         for name in workspace_outputs:
             outputs[name] = json.loads(snapshot.model_dump_json())
+        for name in file_outputs:
+            outputs[name] = json.loads(to_json(files[name]))
         try:
             validated = signature.validate_outputs(JsonOutputs(text=json.dumps(outputs)))
         except ValidationError as exc:
@@ -250,50 +271,96 @@ async def run(
             name: getattr(validated, name) for name in signature.output_model.model_fields
         }
         values.update(dict.fromkeys(workspace_outputs, snapshot))
+        values.update(files)
         return AgentRunOutcome(outputs=PythonOutputs(values=values), trace=record)
 
 
-def _prompt_inputs(
-    request: AgentRequest, directory: Path, inputs_directory: Path
-) -> dict[str, JsonValue]:
-    """The inputs as JSON; files are written under the working directory and named by path."""
+def _input_files(request: AgentRequest) -> list[File]:
+    files: list[File] = []
+    for name, info in request.signature.input_model.model_fields.items():
+        value = getattr(request.inputs, name)
+        if info.annotation is File:
+            files.append(value)
+        elif info.annotation == list[File]:
+            files.extend(value)
+    return files
+
+
+def _prompt_path(path: Path, directory: Path) -> str:
+    """A path relative to the working directory when it is inside it, else absolute."""
+    return (
+        path.relative_to(directory).as_posix() if path.is_relative_to(directory) else str(path)
+    )
+
+
+def _prompt_inputs(request: AgentRequest, directory: Path) -> dict[str, JsonValue]:
+    """The inputs as JSON; files are named by their bound host path."""
     values: dict[str, JsonValue] = {}
-    written = 0
-
-    def write(file: File) -> str:
-        nonlocal written
-        written += 1
-        target = inputs_directory / str(written) / _file_name(file.name)
-        target.parent.mkdir()
-        target.write_bytes(file.content)
-        return target.relative_to(directory).as_posix()
-
     for name, info in request.signature.input_model.model_fields.items():
         value = getattr(request.inputs, name)
         if info.annotation is Workspace:
             values[name] = "the current working directory"
         elif info.annotation is File:
-            values[name] = write(value)
+            values[name] = _prompt_path(value.path, directory)
         elif info.annotation == list[File]:
-            values[name] = [write(item) for item in value]
+            values[name] = [_prompt_path(item.path, directory) for item in value]
         else:
             values[name] = to_jsonable_python(value)
     return values
 
 
-def _file_name(name: str | None) -> str:
-    """The file's own base name, or ``file`` when the filesystem cannot use it."""
-    base = Path(name or "").name
-    if base in {"", ".", ".."} or "\x00" in base or len(base.encode()) > 255:
-        return "file"
-    return base
+def _trace_inputs(request: AgentRequest) -> dict[str, JsonValue]:
+    """The inputs as the trace keeps them: files and workspaces by reference."""
+    values: dict[str, JsonValue] = {}
+    for name, info in request.signature.input_model.model_fields.items():
+        value = getattr(request.inputs, name)
+        if info.annotation in (File, Workspace):
+            values[name] = file_input_evidence(value).model_dump(mode="json")
+        elif info.annotation == list[File]:
+            values[name] = [file_input_evidence(item).model_dump(mode="json") for item in value]
+        else:
+            values[name] = _bounded(to_jsonable_python(value))
+    return values
 
 
-def _prompt(inputs: Mapping[str, JsonValue]) -> str:
-    return (
-        "Complete the task for these inputs. Files are given as paths relative to the "
-        "current working directory.\n\n" + json.dumps(inputs, indent=2, ensure_ascii=False)
+def _prompt(
+    inputs: Mapping[str, JsonValue], output_folder: AgentOutputFolder | None, directory: Path
+) -> str:
+    prompt = (
+        "Complete the task for these inputs. Files are given as paths; relative paths are "
+        "relative to the current working directory.\n\n"
+        + json.dumps(inputs, indent=2, ensure_ascii=False)
     )
+    if output_folder is not None:
+        prompt += (
+            "\n\nWrite every file output inside "
+            f"{_prompt_path(output_folder.path, directory)} and give its path."
+        )
+    return prompt
+
+
+def _output_files(
+    request: AgentRequest,
+    outputs: Mapping[str, object],
+    file_outputs: Mapping[str, bool],
+    output_folder: AgentOutputFolder,
+    directory: Path,
+) -> dict[str, File | list[File]]:
+    """Claude's file output paths as references in the run workspace."""
+    files: dict[str, File | list[File]] = {}
+    for name, single in file_outputs.items():
+        try:
+            paths = TypeAdapter(str if single else list[str]).validate_python(outputs.get(name))
+            if isinstance(paths, str):
+                files[name] = output_folder.file(directory / paths)
+            else:
+                files[name] = [output_folder.file(directory / path) for path in paths]
+        except (OSError, ValueError) as exc:
+            # ValidationError is a ValueError: a missing or non-path value.
+            raise AgentOutputError(
+                f"agent step {request.step_name!r} output {name!r} is not a usable file: {exc}"
+            ) from exc
+    return files
 
 
 def _system_prompt(instructions: str, append: str | None) -> str:
@@ -344,12 +411,17 @@ def _result_errors(result: ResultMessage) -> tuple[str, ...]:
     return ()
 
 
-def _output_schema(model: type[BaseModel], workspace_outputs: list[str]) -> dict[str, Any]:
-    """The signature's output schema, without the fields Avalanche fills itself."""
+def _output_schema(
+    model: type[BaseModel], workspace_outputs: list[str], file_outputs: Mapping[str, bool]
+) -> dict[str, Any]:
+    """The signature's output schema; Avalanche fills workspaces, files are paths."""
     schema = model.model_json_schema()
     for name in workspace_outputs:
         del schema["properties"][name]
         schema["required"] = [field for field in schema.get("required", ()) if field != name]
+    path = {"type": "string", "description": "Path of a file you wrote for this output."}
+    for name, single in file_outputs.items():
+        schema["properties"][name] = path if single else {"type": "array", "items": path}
     return schema
 
 

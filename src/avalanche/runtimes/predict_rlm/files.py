@@ -3,17 +3,14 @@
 from __future__ import annotations
 
 import types
-from pathlib import Path
 from typing import Annotated, Union, get_args, get_origin
-from uuid import uuid4
 
 import dspy
 from predict_rlm import File as PredictFile
 from predict_rlm import Workspace as PredictWorkspace
 
 from avalanche.file import File
-from avalanche.references import agent_output_workspace
-from avalanche.runtime.context import get_current_run_context
+from avalanche.references import AgentOutputFolder
 from avalanche.workspace import Workspace
 
 
@@ -59,29 +56,15 @@ def mount_inputs(value):
 
 class AgentFileBridge:
     def __init__(self, step_name: str):
-        self.workspace, attempt = agent_output_workspace()
-        context = get_current_run_context()
-        step = context.node_slug if context is not None and context.node_slug else step_name
-        for component in (step, attempt):
-            if (
-                not component
-                or component in {".", ".."}
-                or "/" in component
-                or "\\" in component
-            ):
-                raise ValueError("Agent step and attempt must be single path components")
-        # Multiple model calls in one node attempt must not overwrite prior refs.
-        self.output_dir = self.workspace.path / ".outputs" / step / attempt / uuid4().hex
-        self.output_dir.mkdir(parents=True, exist_ok=False)
+        self._folder = AgentOutputFolder(step_name)
+        self.workspace = self._folder.workspace
+        self.output_dir = self._folder.path
 
     def outputs(self, value):
         if isinstance(value, PredictFile):
             if value.path is None:
                 raise ValueError("Agent File output has no host path")
-            path = Path(value.path).resolve(strict=True)
-            if not path.is_relative_to(self.output_dir.resolve()):
-                raise ValueError("Agent File output escaped the reserved step/attempt folder")
-            return File.from_path(path, workspace=self.workspace)
+            return self._folder.file(value.path)
         if isinstance(value, list):
             return [self.outputs(item) for item in value]
         if isinstance(value, tuple):

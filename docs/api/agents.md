@@ -138,11 +138,11 @@ ava.runtimes.ClaudeAgent(model="claude-haiku-5-5", max_turns=10, builtin_tools=(
 
 | Field type | Input | Output |
 | --- | --- | --- |
-| `ava.File`, `list[ava.File]` | Written into the session's working directory; Claude gets the relative paths. | Not supported; return an `ava.Workspace` instead. |
+| `ava.File`, `list[ava.File]` | Read where they are, never copied. Claude gets each file's bound path, relative to the working directory when the file is inside it; folders outside it are added to the session so Claude can reach them. The trace records each file by its workspace reference. | Claude writes each file into a folder reserved for the call, `.outputs/<step>/<attempt>/<invocation>/` inside the run workspace, and returns its path; the step gets `ava.File` references to that workspace, as with PredictRLM (see [File references](../file-references.md)). A path that is missing or outside the folder raises `AgentOutputError`. |
 | `ava.Workspace` (at most one input) | Becomes the working directory. A reference workspace runs in place, so the agent's writes land in your directory; a value workspace runs in its temporary copy. | A snapshot of the working directory. A reference stays bound to its directory. |
 | No workspace input | The session runs in an empty temporary directory. | |
 
-Any other shape that holds files or a workspace, such as `ava.Workspace | None`, `tuple[ava.File, ...]` or a model with an `ava.File` field, raises `AgentStepError` before Claude is called.
+Any other shape that holds files or a workspace, such as `ava.Workspace | None`, `tuple[ava.File, ...]` or a model with an `ava.File` field, as an input or an output, raises `AgentStepError` before Claude is called.
 
 ## Signature declarations
 
