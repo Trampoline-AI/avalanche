@@ -143,7 +143,8 @@
 - Agents: every runtime now reports a trace turn in the same shape: `message` (what
   the model wrote that turn), `reasoning`, `tool_calls`, `duration_ms`, `usage` (the
   whole turn, every model summed) and `native`, the runtime's own part of the turn.
-  PredictRLM's per-iteration `reasoning` field moves into `message`, matching
+  `Turn.text` is renamed to `Turn.message`, so code reading Claude's reply text from
+  `turn.text` must read `turn.message`. PredictRLM's per-iteration `reasoning` field moves into `message`, matching
   Claude's reply text; `Turn.reasoning` now holds only a provider's own reasoning
   (such as Claude's extended thinking) and is `None` when the runtime does not expose
   it. Tool calls are the only shared action: `Turn.actions` becomes
