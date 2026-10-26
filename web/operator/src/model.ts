@@ -676,14 +676,7 @@ export const LogRecordDescriptorMsg = {
   },
 };
 
-export type AgentEventKind =
-  | "native"
-  | "turn.finished"
-  | "model.started"
-  | "model.finished"
-  | "tool.started"
-  | "tool.finished"
-  | "code.generated";
+export type AgentEventKind = "native" | "turn.finished" | "tool.started" | "tool.finished";
 
 export interface AgentEventDescriptorMsg {
   /**
@@ -716,8 +709,8 @@ export interface AgentEventDescriptorMsg {
    * @generated from protobuf field: bool error = 8
    */
   error: boolean;
+  /** Tool calls the event reports, sub-model (predict) calls included. */
   toolCallCount: number;
-  modelCallCount: number;
 }
 
 export const AgentEventDescriptorMsg = {
@@ -733,7 +726,6 @@ export const AgentEventDescriptorMsg = {
       durationMs: undefined,
       error: false,
       toolCallCount: 0,
-      modelCallCount: 0,
       ...value,
     } as AgentEventDescriptorMsg;
   },

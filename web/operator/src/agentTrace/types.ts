@@ -34,21 +34,17 @@ export interface AgentTraceToolCall {
   durationMs?: number;
 }
 
+/** A sub-model call the agent's code made: its ``predict`` tool call and its details. */
 export interface AgentTracePredictCall {
-  durationMs: number;
-  usage: TraceTokenUsage;
-  input: Record<string, unknown>;
-  output: Record<string, unknown>;
-  error?: string;
-  lm?: TraceLmFinish;
-}
-
-export interface AgentTracePredictGroup {
   signature: string;
   instructions?: string;
   model: string;
-  totalUsage: TraceTokenUsage;
-  calls: AgentTracePredictCall[];
+  durationMs?: number;
+  usage: TraceTokenUsage;
+  input: unknown;
+  output: unknown;
+  error?: string;
+  lm?: TraceLmFinish;
 }
 
 /** Code the agent wrote and ran in a turn, with what it printed. */
@@ -61,7 +57,7 @@ export interface AgentTraceExecution {
 export interface AgentTraceStep {
   iteration: number;
   /** What the model wrote this turn; absent when it wrote nothing. */
-  text?: string;
+  message?: string;
   /** The provider's own reasoning, when the runtime reports it. */
   reasoning?: string;
   /** Absent for runtimes that answer without running code. */
@@ -69,25 +65,38 @@ export interface AgentTraceStep {
   error: boolean;
   /** Absent when the runtime does not time its turns. */
   durationMs?: number;
+  /** Tool calls other than predict calls, as far as the live event kept them. */
   toolCalls: AgentTraceToolCall[];
-  predictCalls: AgentTracePredictGroup[];
+  predictCalls: AgentTracePredictCall[];
+  /** Both counts include calls a large turn's live event left out. */
+  toolCallCount: number;
+  predictCallCount: number;
   lm?: TraceLmFinish;
   usage: TraceTurnUsage;
 }
 
 export type AgentTraceStepSummary = Pick<
   AgentTraceStep,
-  "iteration" | "text" | "error" | "durationMs" | "lm" | "usage"
+  | "iteration"
+  | "message"
+  | "error"
+  | "durationMs"
+  | "lm"
+  | "usage"
+  | "toolCallCount"
+  | "predictCallCount"
 > & { hasExecution: boolean; hasReasoning: boolean };
 
 export function summarizeAgentTraceStep(step: AgentTraceStep): AgentTraceStepSummary {
   return {
     iteration: step.iteration,
-    text: step.text,
+    message: step.message,
     error: step.error,
     durationMs: step.durationMs,
     lm: step.lm,
     usage: step.usage,
+    toolCallCount: step.toolCallCount,
+    predictCallCount: step.predictCallCount,
     hasExecution: step.execution !== undefined,
     hasReasoning: step.reasoning !== undefined,
   };

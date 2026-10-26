@@ -1,6 +1,6 @@
-"""Claude Agent SDK native live-event payloads, format ``claude_agent.messages/v1``.
+"""Claude Agent SDK native turn parts and live-event payloads, ``claude_agent.messages/v1``.
 
-The common layer already carries each turn's text, thinking and tool calls; these
+The common layer already carries each turn's message, thinking and tool calls; these
 models hold what only the SDK reports, mirrored here without importing the SDK.
 """
 
@@ -22,6 +22,22 @@ _STRICT = ConfigDict(
 )
 
 FORMAT = "claude_agent.messages/v1"
+
+
+class ClaudeAgentTurn(BaseModel):
+    """The assistant message behind one turn, as the SDK reports it."""
+
+    model_config = _STRICT
+
+    format: Literal["claude_agent.messages/v1"] = FORMAT
+    message_id: str | None
+    model: str
+    stop_reason: str | None
+    api_error: str | None
+
+    @property
+    def failed(self) -> bool:
+        return self.api_error is not None
 
 
 class _Event(BaseModel):
@@ -92,11 +108,6 @@ class MessageFinished(_Event):
 
     kind: Literal["message.finished"] = "message.finished"
     common_kinds = MappingProxyType({"message.finished": "turn.finished"})
-
-    message_id: str | None
-    model: str
-    stop_reason: str | None
-    api_error: str | None
 
 
 class RateLimited(_Event):

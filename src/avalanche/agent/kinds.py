@@ -10,9 +10,6 @@ RuntimeKind = Literal["predict_rlm", "claude_agent"]
 # Kinds of the runtime-neutral live events every runtime can send.
 CommonEventKind = Literal[
     "turn.finished",
-    "model.started",
-    "model.finished",
     "tool.started",
     "tool.finished",
-    "code.generated",
 ]

@@ -114,7 +114,7 @@ def trace_record(
     ``model`` and ``sub_model`` are display names that replace PredictRLM's
     model ids when set (see ``_model_display_name``).
     """
-    from .mapping import turn_from_step
+    from .mapping import step_tool_call_count, turn_from_step
 
     return AgentTrace(
         header=trace_header(
@@ -122,7 +122,7 @@ def trace_record(
             evidence,
             model=model,
             turn_count=len(trace.steps),
-            tool_call_count=sum(len(step.tool_calls) for step in trace.steps),
+            tool_call_count=sum(step_tool_call_count(step) for step in trace.steps),
         ),
         turns=tuple(turn_from_step(step) for step in trace.steps),
         native=PredictRLMNativeTrace(

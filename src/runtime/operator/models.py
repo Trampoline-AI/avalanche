@@ -19,11 +19,8 @@ if TYPE_CHECKING:
 AgentEventKind = Literal[
     "native",
     "turn.finished",
-    "model.started",
-    "model.finished",
     "tool.started",
     "tool.finished",
-    "code.generated",
 ]
 
 
@@ -259,7 +256,6 @@ class AgentEvent:
     duration_ms: int | None = None
     error: bool = False
     tool_call_count: int = 0
-    model_call_count: int = 0
 
 
 @dataclass(frozen=True)
@@ -367,7 +363,6 @@ class AgentEventDescriptor:
     duration_ms: int | None = None
     error: bool = False
     tool_call_count: int = 0
-    model_call_count: int = 0
 
 
 @dataclass(frozen=True)

@@ -7,7 +7,7 @@ from typing import get_args
 
 import pytest
 
-from avalanche.agent.native import NativeEvent
+from avalanche.agent.native import NativeEvent, TurnNative
 from avalanche.agent.trace import NativeTrace
 from tui.agent_trace_viewers import VIEWERS
 
@@ -25,7 +25,7 @@ def _formats(union: object) -> set[str]:
 
 
 def test_every_trace_format_has_a_viewer():
-    assert set(VIEWERS) == _formats(NativeEvent) | _formats(NativeTrace)
+    assert set(VIEWERS) == _formats(NativeEvent) | _formats(NativeTrace) | _formats(TurnNative)
 
 
 def test_the_predict_rlm_viewer_labels_every_native_kind():
@@ -91,20 +91,18 @@ def test_a_claude_session_renders_through_its_viewer_and_metadata_sections(monke
         InspectionTurn(turn_event.invocation_id, turn_event.common, turn_event.native),
         full_output=False,
     )
-    assert [item.key for item in view.items] == [
-        "text",
-        "tools",
-        "models",
-        "metadata",
-        "message",
-    ]
+    assert [item.key for item in view.items] == ["message", "tools", "metadata", "response"]
     assert not view.failed
     # A rate-limit, billing or sign-in failure marks the turn failed.
+    turn = turn_event.common.turn
+    failed_turn = turn.model_copy(
+        update={"native": turn.native.model_copy(update={"api_error": "rate_limit"})}
+    )
     api_error = viewer.turn(
         InspectionTurn(
             turn_event.invocation_id,
-            turn_event.common,
-            turn_event.native.model_copy(update={"api_error": "rate_limit"}),
+            turn_event.common.model_copy(update={"turn": failed_turn}),
+            turn_event.native,
         ),
         full_output=False,
     )
@@ -117,7 +115,7 @@ def test_a_claude_session_renders_through_its_viewer_and_metadata_sections(monke
         InspectionTurn(turn_event.invocation_id, thinking, turn_event.native),
         full_output=False,
     )
-    assert view.items[0].key == "text"
+    assert view.items[0].key == "message"
     assert view.items[-1].key == "reasoning"
     assert any("session-1" in line for line, _ in viewer.header(final.record))
     assert viewer.outputs(events) == {"total": 5}

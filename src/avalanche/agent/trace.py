@@ -24,7 +24,8 @@ from pydantic import (
 from ..file import File
 from ..workspace import Workspace
 from .kinds import RuntimeKind
-from .native.predict_rlm import PredictRLMUsage
+from .native import TurnNative
+from .native.predict_rlm import PredictRLMTurn, PredictRLMUsage
 
 # Serialized bodies always carry defaulted fields such as ``kind``; their
 # exported JSON Schema says so.
@@ -51,12 +52,11 @@ class TokenUsage(BaseModel):
     cost_usd: NonNegativeFloat | None = None
 
 
-class ToolCallAction(BaseModel):
+class ToolCall(BaseModel):
     """A tool invoked by the model directly or by code the agent ran."""
 
     model_config = _STRICT
 
-    kind: Literal["tool_call"] = "tool_call"
     call_id: str | None
     caller: ActionCaller
     name: str
@@ -66,51 +66,41 @@ class ToolCallAction(BaseModel):
     duration_ms: NonNegativeInt | None
 
 
-class CodeExecutionAction(BaseModel):
-    """Code the agent wrote and executed during a turn."""
-
-    model_config = _STRICT
-
-    kind: Literal["code_execution"] = "code_execution"
-    language: str
-    code: str
-    output: str
-    error: str | None
-
-
-class ModelCallAction(BaseModel):
-    """A nested model call made during a turn, for example a sub-model query."""
-
-    model_config = _STRICT
-
-    kind: Literal["model_call"] = "model_call"
-    call_id: str | None
-    caller: ActionCaller
-    model: str
-    duration_ms: NonNegativeInt | None
-    usage: TokenUsage | None
-    error: str | None
-
-
-AgentAction = Annotated[
-    ToolCallAction | CodeExecutionAction | ModelCallAction, Field(discriminator="kind")
-]
-
-
 class Turn(BaseModel):
-    """One model response and the actions that followed it."""
+    """One model response and the tool calls that followed it."""
 
     model_config = _STRICT
 
     index: PositiveInt
     # What the model wrote this turn, as a reader would see it.
-    text: str | None
+    message: str | None
     # The model provider's own reasoning (thinking tokens), only when the runtime
-    # exposes it; never the turn's written text.
+    # exposes it; never the turn's message.
     reasoning: str | None
-    actions: tuple[AgentAction, ...]
+    tool_calls: tuple[ToolCall, ...]
     duration_ms: NonNegativeInt | None
+    # The whole turn, every model it called summed.
     usage: TokenUsage | None
+    native: TurnNative
+
+    @model_validator(mode="after")
+    def _check_native(self) -> Self:
+        if isinstance(self.native, PredictRLMTurn):
+            predict_calls = len(self.native.predict_calls)
+            tail = self.tool_calls[len(self.tool_calls) - predict_calls :]
+            if len(tail) != predict_calls or any(
+                call.name != "predict" or call.caller != "code" for call in tail
+            ):
+                raise ValueError(
+                    f"a PredictRLM turn's last {predict_calls} tool calls must be its "
+                    "predict calls"
+                )
+        return self
+
+    @property
+    def failed(self) -> bool:
+        """Whether the turn failed as its runtime decides: failed code or an API error."""
+        return self.native.failed
 
 
 class AgentTraceHeader(BaseModel):
@@ -208,9 +198,13 @@ class AgentTrace(BaseModel):
                 f"header turn_count {header.turn_count} does not match "
                 f"{len(self.turns)} turns"
             )
-        tool_calls = sum(
-            isinstance(action, ToolCallAction) for turn in self.turns for action in turn.actions
-        )
+        formats = {turn.native.format for turn in self.turns} - {self.native.format}
+        if formats:
+            raise ValueError(
+                f"turns of format {sorted(formats)} do not belong to a "
+                f"{self.native.format!r} trace"
+            )
+        tool_calls = sum(len(turn.tool_calls) for turn in self.turns)
         if header.tool_call_count != tool_calls:
             raise ValueError(
                 f"header tool_call_count {header.tool_call_count} does not match "

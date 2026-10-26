@@ -58,11 +58,8 @@ const TRACE_STATUSES: Partial<Record<AgentTraceStatusV2, AgentTraceStatus>> = {
 const AGENT_EVENT_KINDS: Partial<Record<AgentEventKindV2, AgentEventKind>> = {
   [AgentEventKindV2.NATIVE]: "native",
   [AgentEventKindV2.TURN_FINISHED]: "turn.finished",
-  [AgentEventKindV2.MODEL_STARTED]: "model.started",
-  [AgentEventKindV2.MODEL_FINISHED]: "model.finished",
   [AgentEventKindV2.TOOL_STARTED]: "tool.started",
   [AgentEventKindV2.TOOL_FINISHED]: "tool.finished",
-  [AgentEventKindV2.CODE_GENERATED]: "code.generated",
 };
 
 function mapTokenUsage(usage: TokenUsageV2): TokenUsageMsg {
@@ -907,7 +904,6 @@ export class GrpcWebOperatorApi implements OperatorApi {
       agentEventKind,
       error: activity.error,
       toolCallCount: activity.toolCallCount,
-      modelCallCount: activity.modelCallCount,
     };
     if (activity.turn !== undefined) mapped.turn = activity.turn;
     if (activity.durationMs !== undefined) mapped.durationMs = activity.durationMs;
@@ -1013,7 +1009,6 @@ export class GrpcWebOperatorApi implements OperatorApi {
       activity.durationMs !== undefined ||
       activity.error ||
       activity.toolCallCount !== 0 ||
-      activity.modelCallCount !== 0 ||
       activity.agentEventKind !== AgentEventKindV2.UNSPECIFIED ||
       activity.nativeEventKind ||
       activity.eventKind ||

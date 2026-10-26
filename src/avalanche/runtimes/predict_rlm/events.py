@@ -320,11 +320,7 @@ def _project_event_data(
 
         step = IterationStep.model_validate(data["step"], strict=True)
         bounded_step, omissions = _bounded_iteration_step(step)
-        projected = {
-            "tool_count": len(step.tool_calls),
-            "predict_count": sum(len(group.calls) for group in step.predict_calls),
-            "step": bounded_step,
-        }
+        projected = {"step": bounded_step}
         if omissions:
             projected["omissions"] = omissions
     elif event_kind == "predict.started":
@@ -365,14 +361,7 @@ def project_event(
 
     ``inputs`` are the step's own inputs, recorded in place of the mounted ones.
     """
-    from ...agent.live import (
-        CodeGenerated,
-        ModelFinished,
-        ModelStarted,
-        ToolFinished,
-        ToolStarted,
-        TurnFinished,
-    )
+    from ...agent.live import ToolFinished, ToolStarted, TurnFinished
     from .mapping import turn_from_step
 
     kind = event.kind.value
@@ -392,50 +381,25 @@ def project_event(
                 if "omissions" in data
                 else None
             )
-            detail = native.IterationRecorded(
-                iteration=step.iteration,
-                untruncated_output=step.untruncated_output,
-                finish_reason=step.lm.finish_reason if step.lm is not None else None,
-                usage=native_usage(step.usage),
-                predict_calls=tuple(
-                    native.PredictRLMSubCallGroup(
-                        signature=group.signature,
-                        instructions=group.instructions,
-                        model=group.model,
-                        total_usage=native_token_usage(group.total_usage),
-                        calls=tuple(
-                            native.PredictRLMSubCall(
-                                duration_ms=call.duration_ms,
-                                usage=native_token_usage(call.usage),
-                                input=_json_object(call.input),
-                                output=_json_object(call.output),
-                                error=call.error,
-                                finish_reason=(
-                                    call.lm.finish_reason if call.lm is not None else None
-                                ),
-                            )
-                            for call in group.calls
-                        ),
-                    )
-                    for group in step.predict_calls
-                ),
-                tool_count=data["tool_count"],
-                predict_count=data["predict_count"],
-                omissions=omissions,
-            )
-            return detail, TurnFinished(
+            return native.IterationRecorded(omissions=omissions), TurnFinished(
                 turn=turn_from_step(step),
-                omitted_tool_calls=omissions.tool_count if omissions is not None else 0,
-                omitted_model_calls=omissions.predict_count if omissions is not None else 0,
+                omitted_tool_calls=(
+                    omissions.tool_count + omissions.predict_count
+                    if omissions is not None
+                    else 0
+                ),
             )
         case "predict.started":
             return native.PredictStarted(
-                signature=data["signature"], instructions=data["instructions"]
-            ), ModelStarted(call_id=data["call_id"], model=data["model"])
+                call_id=data["call_id"],
+                signature=data["signature"],
+                instructions=data["instructions"],
+                model=data["model"],
+            ), None
         case "predict.finished":
-            return native.Correlated(kind=kind), ModelFinished(
-                call_id=data["call_id"], error=data.get("error")
-            )
+            return native.PredictFinished(
+                call_id=data["call_id"], predict_error=data.get("error")
+            ), None
         case "tool.started":
             return native.Correlated(kind=kind), ToolStarted(
                 call_id=data["call_id"], name=data["name"]
@@ -445,9 +409,7 @@ def project_event(
                 call_id=data["call_id"], name=data["name"], error=data.get("error")
             )
         case "code.generated":
-            return native.Correlated(kind=kind), CodeGenerated(
-                turn=data["iteration"], code=data["code"]
-            )
+            return native.CodeGenerated(iteration=data["iteration"], code=data["code"]), None
         case "code.executed":
             return native.CodeExecuted(
                 iteration=data["iteration"],
@@ -477,9 +439,3 @@ def native_usage(usage: LMUsage) -> native.PredictRLMUsage:
     return native.PredictRLMUsage(
         main=native_token_usage(usage.main), sub=native_token_usage(usage.sub)
     )
-
-
-def _json_object(value: JsonValue) -> dict[str, JsonValue]:
-    if not isinstance(value, dict):
-        raise TypeError(f"PredictRLM call detail must be an object, got {type(value).__name__}")
-    return value
