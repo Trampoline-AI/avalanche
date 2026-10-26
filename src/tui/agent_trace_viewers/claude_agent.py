@@ -3,15 +3,15 @@
 from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 
 from pydantic import JsonValue
 
 from avalanche.agent.live import AgentLiveEvent
-from avalanche.agent.native.claude_agent import Finished
+from avalanche.agent.native.claude_agent import Finished, MessageFinished
 from avalanche.agent.trace import AgentTrace, ClaudeAgentNativeTrace
 
-from . import InspectionTurn, PendingStep, TurnView
+from . import InspectionTurn, PendingStep, TraceSection, TurnView
 from .generic import COMMON_LABELS, GENERIC, duration_seconds, usage_label
 
 _LABELS = {
@@ -58,7 +58,22 @@ class ClaudeAgentViewer:
         return record.header.status == "succeeded"
 
     def turn(self, turn: InspectionTurn, *, full_output: bool) -> TurnView:
-        return GENERIC.turn(turn, full_output=full_output)
+        view = GENERIC.turn(turn, full_output=full_output)
+        native = turn.native
+        if not isinstance(native, MessageFinished):
+            raise TypeError(f"not a Claude message event: {native.kind}")
+        # Rate-limit, billing and authentication failures arrive as API-error turns.
+        message = TraceSection(
+            "message",
+            "Message",
+            {"stop_reason": native.stop_reason, "api_error": native.api_error},
+            style="bold red" if native.api_error is not None else "dim",
+        )
+        return replace(
+            view,
+            failed=view.failed or native.api_error is not None,
+            items=(*view.items, message),
+        )
 
     def live_label(self, event: AgentLiveEvent) -> str:
         return _LABELS[event.native.kind]
