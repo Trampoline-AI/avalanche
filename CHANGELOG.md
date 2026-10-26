@@ -58,8 +58,8 @@
   @ava.agent_step(Review, runtime=ava.runtimes.PredictRLM(sub_lm=SUB_MODEL, skills=[ava.agent.skills.docx]))
   ```
 
-  A step's PredictRLM settings are merged over the workflow default field by field;
-  with neither, the step uses `ava.runtimes.PredictRLM()`. `tools=` and
+  A step's PredictRLM settings are merged over the workflow default field by field
+  (options passed through to PredictRLM merge the same way); with neither, the step uses `ava.runtimes.PredictRLM()`. `tools=` and
   `evaluations=` stay on the step. `ava.runtimes` is now importable from `ava`.
   Steps with `ava.File` or `ava.Workspace` fields still reserve their file outputs in
   the run workspace and reject `output_dir`. BREAKING-PROTOCOL: part of Delta
