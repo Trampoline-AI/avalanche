@@ -7,6 +7,7 @@ import importlib
 import itertools
 import os
 import sys
+from pathlib import Path
 from typing import Annotated
 
 import pytest
@@ -384,14 +385,11 @@ async def test_a_workspace_is_the_working_directory_and_comes_back_as_an_output(
 ):
     seen: dict[str, object] = {}
     (tmp_path / "existing.txt").write_text("kept")
+    (tmp_path / "draft.txt").write_text("draft")
     workspace = ava.Workspace.from_directory(tmp_path, reference="notes")
 
     async def edit_then_finish(*, prompt, options):
         seen.update(prompt=prompt, options=options)
-        # The file input exists under the working directory while the session runs.
-        seen["drafts"] = [
-            path.read_bytes() for path in tmp_path.glob(".avalanche-inputs-*/1/draft.txt")
-        ]
         (tmp_path / "notes.txt").write_text("written by the agent")
         for message in [_init(), _result({"summary": "done"})]:
             yield message
@@ -399,15 +397,18 @@ async def test_a_workspace_is_the_working_directory_and_comes_back_as_an_output(
     monkeypatch.setattr(sdk_module, "query", edit_then_finish)
     result = await ava.Agent(
         signature=Edit, step_name="edit", runtime=ClaudeAgent(model=MODEL)
-    )(workspace=workspace, document=ava.File(content=b"draft", name="draft.txt"))
+    )(workspace=workspace, document=ava.File.from_path(tmp_path / "draft.txt"))
 
     options = seen["options"]
     assert options.cwd == str(tmp_path)
-    # The file input was written under the working directory, named by its relative
-    # path, and removed afterwards, so the host's directory keeps no copy.
-    assert seen["drafts"] == [b"draft"]
-    assert '"document": ".avalanche-inputs-' in seen["prompt"]
-    assert sorted(path.name for path in tmp_path.iterdir()) == ["existing.txt", "notes.txt"]
+    # A file inside the working directory is named by its relative path, never copied.
+    assert '"document": "draft.txt"' in seen["prompt"]
+    assert options.add_dirs == []
+    assert sorted(path.name for path in tmp_path.iterdir()) == [
+        "draft.txt",
+        "existing.txt",
+        "notes.txt",
+    ]
     assert "edited" not in options.output_format["schema"]["properties"]
     assert result.outputs.summary == "done"
     assert result.outputs.edited.reference == "notes"
@@ -421,18 +422,91 @@ class Documents(ava.Signature):
 
 
 @pytest.mark.asyncio
-async def test_input_files_with_unusable_names_are_written_as_file(replay):
+async def test_input_files_are_read_where_they_are_and_traced_by_reference(replay, tmp_path):
     seen = replay([_init(), _result({"answer": "read"})])
-    names = [".", "..", "/", "a\x00b", "x" * 300, "dir/report.txt"]
+    sources = tmp_path / "sources"
+    sources.mkdir()
+    (sources / "a.txt").write_text("a")
+    (sources / "b.txt").write_text("b")
+    workspace = ava.Workspace.from_directory(sources, reference="snapshot:sources")
+    documents = [
+        ava.File.from_path(sources / name, workspace=workspace) for name in ("a.txt", "b.txt")
+    ]
 
-    result = await ava.Agent(signature=Documents, step_name="docs", runtime=ClaudeAgent())(
-        documents=[ava.File(content=b"x", name=name) for name in names]
-    )
+    observed = []
+    with capture_agent_evidence(observed.append, errors="raise"):
+        result = await ava.Agent(signature=Documents, step_name="docs", runtime=ClaudeAgent())(
+            documents=documents
+        )
 
     assert result.outputs.answer == "read"
-    written = [line.strip().strip('",') for line in seen["prompt"].splitlines()]
-    paths = [line for line in written if line.startswith(".avalanche-inputs-")]
-    assert [path.rsplit("/", 1)[1] for path in paths] == ["file"] * 5 + ["report.txt"]
+    # Files outside the working directory keep their host path, and Claude may reach
+    # their folder; nothing is copied.
+    assert str(sources / "a.txt") in seen["prompt"]
+    assert str(sources / "b.txt") in seen["prompt"]
+    assert seen["options"].add_dirs == [str(sources)]
+    assert sorted(path.name for path in sources.iterdir()) == ["a.txt", "b.txt"]
+    # The trace records each file by its reference, never by its host path.
+    started = observed[0].native
+    assert isinstance(started, claude_native.Started)
+    assert [item["path"] for item in started.inputs["documents"]] == ["a.txt", "b.txt"]
+    assert {item["workspace"] for item in started.inputs["documents"]} == {"snapshot:sources"}
+    assert str(tmp_path) not in started.model_dump_json()
+
+
+class Report(ava.Signature):
+    question: str = ava.InputField()
+    report: ava.File = ava.OutputField()
+    appendices: list[ava.File] = ava.OutputField()
+
+
+@pytest.mark.asyncio
+async def test_file_outputs_are_reserved_in_the_run_workspace(monkeypatch, tmp_path):
+    seen: dict[str, object] = {}
+    workspace = ava.Workspace.from_directory(tmp_path, reference="snapshot:run")
+
+    async def write_then_finish(*, prompt, options):
+        seen.update(prompt=prompt, options=options)
+        (folder,) = options.add_dirs
+        (Path(folder) / "report.txt").write_text("report")
+        (Path(folder) / "a.txt").write_text("a")
+        result = {
+            "report": f"{folder}/report.txt",
+            "appendices": [f"{folder}/a.txt"],
+        }
+        for message in [_init(), _result(result)]:
+            yield message
+
+    monkeypatch.setattr(sdk_module, "query", write_then_finish)
+    with ava.file_reference_context(workspace, attempt="attempt-1"):
+        result = await ava.Agent(signature=Report, step_name="report", runtime=ClaudeAgent())(
+            question="q"
+        )
+
+    (folder,) = seen["options"].add_dirs
+    assert Path(folder).is_relative_to(tmp_path / ".outputs" / "report" / "attempt-1")
+    assert f"Write every file output inside {folder}" in seen["prompt"]
+    schema = seen["options"].output_format["schema"]["properties"]
+    assert schema["report"]["type"] == "string"
+    assert schema["appendices"]["items"]["type"] == "string"
+    report = result.outputs.report
+    assert report.read_bytes() == b"report"
+    assert report.ref.workspace == "snapshot:run"
+    assert report.ref.path.startswith(".outputs/report/attempt-1/")
+    assert [file.read_bytes() for file in result.outputs.appendices] == [b"a"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "report", [None, "missing.txt", __file__], ids=["absent", "missing", "outside"]
+)
+async def test_file_outputs_that_cannot_be_used_are_output_errors(replay, tmp_path, report):
+    replay([_init(), _result({"report": report, "appendices": []})])
+
+    with pytest.raises(AgentOutputError, match="report"):
+        await ava.Agent(signature=Report, step_name="report", runtime=ClaudeAgent())(
+            question="q"
+        )
 
 
 class TwoWorkspaces(ava.Signature):
@@ -441,13 +515,13 @@ class TwoWorkspaces(ava.Signature):
     answer: str = ava.OutputField()
 
 
-class FileOutput(ava.Signature):
-    question: str = ava.InputField()
-    report: ava.File = ava.OutputField()
-
-
 class Attachment(BaseModel):
     file: ava.File
+
+
+class FileInModelOutput(ava.Signature):
+    question: str = ava.InputField()
+    attachment: Attachment = ava.OutputField()
 
 
 class FileTupleInput(ava.Signature):
@@ -475,19 +549,13 @@ class OptionalWorkspaceOutput(ava.Signature):
     workspace: ava.Workspace | None = ava.OutputField()
 
 
-class FileListOutput(ava.Signature):
-    question: str = ava.InputField()
-    reports: list[ava.File] = ava.OutputField()
-
-
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
     ("signature", "inputs", "match"),
     [
         (TwoWorkspaces, {"first": ava.Workspace(), "second": ava.Workspace()}, "at most one"),
-        (FileOutput, {"question": "q"}, "ava.File outputs"),
-        (FileListOutput, {"question": "q"}, "ava.File outputs"),
-        (OptionalWorkspaceOutput, {"question": "q"}, "plain ava.Workspace"),
+        (FileInModelOutput, {"question": "q"}, "typed exactly"),
+        (OptionalWorkspaceOutput, {"question": "q"}, "typed exactly"),
         (FileTupleInput, {"files": (ava.File(content=b"x"),)}, "typed exactly"),
         (
             FileInModelInput,
@@ -499,8 +567,7 @@ class FileListOutput(ava.Signature):
     ],
     ids=[
         "two-workspaces",
-        "file-output",
-        "file-list-output",
+        "file-in-model-output",
         "optional-workspace-output",
         "file-tuple-input",
         "file-in-model-input",
@@ -672,17 +739,20 @@ async def test_the_message_stream_is_closed_when_handling_a_message_fails(monkey
 
 
 @pytest.mark.asyncio
-async def test_a_setup_failure_leaves_no_input_files_in_the_workspace(replay, tmp_path):
+async def test_a_setup_failure_writes_nothing_into_the_workspace(replay, tmp_path):
     def untyped(value):
         return value
 
     seen = replay([])
-    workspace = ava.Workspace.from_directory(tmp_path, reference="notes")
+    directory = tmp_path / "workspace"
+    directory.mkdir()
+    workspace = ava.Workspace.from_directory(directory, reference="notes")
+    (tmp_path / "draft.txt").write_text("draft")
 
     with pytest.raises(AgentStepError, match="type annotation"):
         await ava.Agent(
             signature=Edit, step_name="edit", runtime=ClaudeAgent(), tools=(untyped,)
-        )(workspace=workspace, document=ava.File(content=b"draft", name="draft.txt"))
+        )(workspace=workspace, document=ava.File.from_path(tmp_path / "draft.txt"))
 
     assert seen == {}
-    assert list(tmp_path.iterdir()) == []
+    assert list(directory.iterdir()) == []

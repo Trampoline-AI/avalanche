@@ -192,3 +192,35 @@ def agent_output_workspace() -> tuple[Workspace, str]:
         root.mkdir(parents=True, exist_ok=True)
         workspace = local_workspace(root)
     return workspace, _output_attempt.get() or uuid4().hex
+
+
+class AgentOutputFolder:
+    """A fresh folder for one agent call's file outputs, inside the run workspace.
+
+    Outputs live under ``.outputs/<step>/<attempt>/<invocation>/``, so multiple calls
+    in one node attempt never overwrite each other's files.
+    """
+
+    def __init__(self, step_name: str):
+        from .runtime.context import get_current_run_context
+
+        self.workspace, attempt = agent_output_workspace()
+        context = get_current_run_context()
+        step = context.node_slug if context is not None and context.node_slug else step_name
+        for component in (step, attempt):
+            if (
+                not component
+                or component in {".", ".."}
+                or "/" in component
+                or "\\" in component
+            ):
+                raise ValueError("Agent step and attempt must be single path components")
+        self.path = self.workspace.path / ".outputs" / step / attempt / uuid4().hex
+        self.path.mkdir(parents=True, exist_ok=False)
+
+    def file(self, path: str | Path) -> File:
+        """The public reference for a file the agent wrote inside this folder."""
+        host_path = Path(path).resolve(strict=True)
+        if not host_path.is_relative_to(self.path.resolve()):
+            raise ValueError("Agent File output escaped the reserved step/attempt folder")
+        return File.from_path(host_path, workspace=self.workspace)

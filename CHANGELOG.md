@@ -133,7 +133,9 @@
   runs without the user's Claude settings, MCP servers or connectors; step tools are
   offered through an in-process tool server; outputs come back as structured output
   and are validated like every runtime's. One `ava.Workspace` input becomes the
-  working directory. The TUI and web UI show Claude traces through their own viewer,
+  working directory. `ava.File` inputs are read where they are, by path, without
+  copies; `ava.File` outputs are written to a folder reserved in the run workspace
+  and come back as file references, as with PredictRLM. The TUI and web UI show Claude traces through their own viewer,
   and a Claude declaration shows its model and settings. Workflows that only declare
   Claude steps import and publish without the extra installed.
 
