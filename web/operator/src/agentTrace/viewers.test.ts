@@ -71,7 +71,7 @@ describe("agent trace viewers", () => {
   it("reads header details and run values from PredictRLM bodies", () => {
     const viewer = viewerFor("predict_rlm.run/v1");
     expect(
-      viewer.summary(
+      viewer.summary?.(
         parseAgentTraceTerminal(
           finishedTrace({ subModel: "sub", maxIterations: 6, sub: tokenUsage(9, 1, 0.5) }),
         ),
@@ -113,6 +113,8 @@ describe("agent trace viewers", () => {
     // Claude prices only the whole session, so a turn has no cost of its own.
     expect(viewer.turn(event).usage.main?.cost).toBeUndefined();
     expect(viewer.hasSubModel).toBe(false);
+    // The common header holds everything, so the final trace body is never fetched.
+    expect(viewer.summary).toBeUndefined();
     const body = claudeTurnEvent(3);
     if (body.native.kind !== "message.finished") throw new Error("fixture is a turn");
     const apiError = parseAgentLiveEvent({

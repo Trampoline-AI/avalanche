@@ -8,8 +8,8 @@ import { predictRlmViewer } from "./predictRlm";
 export interface TraceViewer {
   /** One turn.finished event as the explorer shows it. */
   turn(event: AgentLiveEvent): AgentTraceStep;
-  /** Header details kept in the final trace body, when the runtime has any. */
-  summary(terminal: AgentTraceTerminal): TraceBodySummary | undefined;
+  /** Header details kept in the final trace body; absent when the runtime keeps none. */
+  summary?: (terminal: AgentTraceTerminal) => TraceBodySummary | undefined;
   /** Whether the header must wait for the final body for its token usage. */
   usageInBody: boolean;
   /** Whether the runtime reports a second, sub-model next to the main model. */

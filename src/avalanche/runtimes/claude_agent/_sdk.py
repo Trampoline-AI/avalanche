@@ -441,7 +441,7 @@ def _within_budget(actions: tuple[ToolCallAction, ...]) -> tuple[ToolCallAction,
     kept: list[ToolCallAction] = []
     used = 0
     for action in actions:
-        used += len(action.model_dump_json())
+        used += len(action.model_dump_json().encode())
         if used > _MAX_TURN_ACTION_BYTES:
             break
         kept.append(action)
