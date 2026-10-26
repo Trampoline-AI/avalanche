@@ -768,7 +768,7 @@ def test_iteration_bounds_tool_payloads_and_text_without_changing_sdk_values():
     turn, native = _retain_iteration(step)
 
     assert step == original
-    assert "unavailable" in turn.turn.reasoning
+    assert "unavailable" in turn.turn.text
     assert "unavailable" in native.untruncated_output
     assert _code(turn).code == step.code
     assert _code(turn).output == step.output
@@ -797,7 +797,7 @@ def test_iteration_call_overflow_reports_omitted_counts(monkeypatch):
     assert native.usage == _usage(step)
     assert (native.tool_count, native.predict_count) == (12, 12)
     omissions = native.omissions
-    assert "unavailable" in turn.turn.reasoning
+    assert "unavailable" in turn.turn.text
     assert omissions.tool_count + len(_tools(turn)) == 12
     assert (
         omissions.predict_count + sum(len(group.calls) for group in native.predict_calls) == 12

@@ -1080,8 +1080,8 @@ describe("trace detail retention and recovery", () => {
       readJsonDetail,
     });
     render(<Inspector api={api} run={run} nodeId={node.nodeId} onClose={() => undefined} />);
-    await screen.findByText("Reasoning for turn 1.");
-    await screen.findByText("Reasoning for turn 2.");
+    await screen.findByText("Text for turn 1.");
+    await screen.findByText("Text for turn 2.");
     const first = traceTurn(1);
     const second = traceTurn(2);
     for (const label of secondarySections) toggleTraceSection(first, label);
@@ -1101,7 +1101,7 @@ describe("trace detail retention and recovery", () => {
         await detail.promise;
       });
     }
-    await screen.findByText("Reasoning for turn 10.");
+    await screen.findByText("Text for turn 10.");
     expect(within(first).getByText("Full output for turn 1.")).toBeVisible();
     expect(within(first).getByLabelText("Source code")).toHaveTextContent('print("turn 1")');
     expect(within(first).getByText(/Predict · question/)).toBeVisible();
@@ -1116,7 +1116,7 @@ describe("trace detail retention and recovery", () => {
       expect(within(first).queryByText("Full output for turn 1.")).toBeNull(),
     );
     fireEvent.click(screen.getByRole("button", { name: "Load more trace" }));
-    await screen.findByText("Reasoning for turn 18.");
+    await screen.findByText("Text for turn 18.");
     expect(within(second).getByText("Output for turn 2.")).toBeVisible();
     toggleTraceSection(first, "Generated Python");
     expect(await within(first).findByLabelText("Source code")).toHaveTextContent(
@@ -1151,7 +1151,7 @@ describe("trace detail retention and recovery", () => {
             onClose={() => undefined}
           />,
         );
-        await screen.findByText(`Reasoning for turn ${iteration}.`);
+        await screen.findByText(`Text for turn ${iteration}.`);
         toggleTraceSection(traceTurn(iteration), "Sandbox output");
         expect(
           await within(traceTurn(iteration)).findByText(`Output for turn ${iteration}.`),
@@ -1170,7 +1170,7 @@ describe("trace detail retention and recovery", () => {
     },
   );
 
-  it("retries failed reasoning in the same inspector scope and restores all secondary sections", async () => {
+  it("retries a failed turn in the same inspector scope and restores all secondary sections", async () => {
     const retry = Promise.withResolvers<unknown>();
     const readJsonDetail = vi
       .fn<OperatorApi["readJsonDetail"]>()
@@ -1186,13 +1186,13 @@ describe("trace detail retention and recovery", () => {
     expect(screen.queryByText("Generated Python")).toBeNull();
     expect(readJsonDetail).toHaveBeenCalledTimes(1);
     fireEvent.click(retryButton);
-    expect(screen.getByRole("status")).toHaveTextContent("Loading reasoning");
+    expect(screen.getByRole("status")).toHaveTextContent("Loading turn");
     expect(screen.queryByRole("button", { name: "Retry turn 1" })).toBeNull();
     await act(async () => {
       retry.resolve(traceDetail(1));
       await retry.promise;
     });
-    expect(await screen.findByText("Reasoning for turn 1.")).toBeVisible();
+    expect(await screen.findByText("Text for turn 1.")).toBeVisible();
     const turn = traceTurn(1);
     for (const label of secondarySections) toggleTraceSection(turn, label);
     expect(await within(turn).findByLabelText("Source code")).toHaveTextContent(
@@ -1228,7 +1228,7 @@ describe("trace detail retention and recovery", () => {
     fireEvent.click(screen.getByRole("tab", { name: "Trace" }));
     await waitFor(() => expect(readJsonDetail).toHaveBeenCalledTimes(3));
     await act(async () => {
-      stale.resolve(traceDetail(1, { reasoning: "Stale reasoning" }));
+      stale.resolve(traceDetail(1, { text: "Stale text" }));
       await stale.promise;
     });
     view.rerender(
@@ -1240,14 +1240,14 @@ describe("trace detail retention and recovery", () => {
         onClose={() => undefined}
       />,
     );
-    expect(screen.queryByText("Stale reasoning")).toBeNull();
-    expect(within(traceTurn(1)).getByRole("status")).toHaveTextContent("Loading reasoning");
+    expect(screen.queryByText("Stale text")).toBeNull();
+    expect(within(traceTurn(1)).getByRole("status")).toHaveTextContent("Loading turn");
     expect(readJsonDetail).toHaveBeenCalledTimes(3);
     await act(async () => {
       current.resolve(traceDetail(1));
       await current.promise;
     });
-    await screen.findByText("Reasoning for turn 1.");
+    await screen.findByText("Text for turn 1.");
     toggleTraceSection(traceTurn(1), "Sandbox output");
     await screen.findByText("Output for turn 1.");
     view.rerender(
@@ -1259,13 +1259,13 @@ describe("trace detail retention and recovery", () => {
       />,
     );
     await waitFor(() => expect(readJsonDetail).toHaveBeenCalledTimes(4));
-    await screen.findByText("Reasoning for turn 1.");
+    await screen.findByText("Text for turn 1.");
     expect(screen.queryByText("Output for turn 1.")).toBeNull();
     toggleTraceSection(traceTurn(1), "Sandbox output");
     expect(await screen.findByText("Output for turn 1.")).toBeVisible();
   });
 
-  it("retains reasoning but rejects oversized secondary bodies without refetching them on open", async () => {
+  it("retains turn text but rejects oversized secondary bodies without refetching them on open", async () => {
     const readJsonDetail = vi
       .fn<OperatorApi["readJsonDetail"]>()
       .mockResolvedValue(traceDetail(1));
@@ -1275,7 +1275,7 @@ describe("trace detail retention and recovery", () => {
       readJsonDetail,
     });
     render(<Inspector api={api} run={run} nodeId={node.nodeId} onClose={() => undefined} />);
-    expect(await screen.findByText("Reasoning for turn 1.")).toBeVisible();
+    expect(await screen.findByText("Text for turn 1.")).toBeVisible();
     const turn = traceTurn(1);
     toggleTraceSection(turn, "Generated Python");
     expect(await within(turn).findByRole("alert")).toHaveTextContent("browser detail limit");
@@ -1286,6 +1286,29 @@ describe("trace detail retention and recovery", () => {
     toggleTraceSection(turn, "Generated Python");
     expect(await within(turn).findByRole("alert")).toHaveTextContent("browser detail limit");
     expect(readJsonDetail).toHaveBeenCalledTimes(1);
+  });
+  it("shows a turn's text first and keeps model reasoning collapsed at the end", async () => {
+    const readJsonDetail = vi
+      .fn<OperatorApi["readJsonDetail"]>()
+      .mockImplementation(async (token) =>
+        token.endsWith("1")
+          ? traceDetail(1, { reasoning: "Provider thinking." })
+          : traceDetail(2),
+      );
+    const api = createApi({
+      listAgentEventPage: async () => eventPage([traceEvent(1), traceEvent(2)]),
+      readJsonDetail,
+    });
+    render(<Inspector api={api} run={run} nodeId={node.nodeId} onClose={() => undefined} />);
+    expect(await screen.findByText("Text for turn 1.")).toBeVisible();
+    await screen.findByText("Text for turn 2.");
+    const first = traceTurn(1);
+    const summaries = within(first).getAllByText(/./, { selector: "summary" });
+    expect(summaries.at(-1)).toHaveTextContent("Model reasoning");
+    expect(within(first).queryByText("Provider thinking.")).toBeNull();
+    toggleTraceSection(first, "Model reasoning");
+    expect(await within(first).findByText("Provider thinking.")).toBeVisible();
+    expect(within(traceTurn(2)).queryByText("Model reasoning")).toBeNull();
   });
 });
 

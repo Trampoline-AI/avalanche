@@ -51,15 +51,21 @@ export interface AgentTracePredictGroup {
   calls: AgentTracePredictCall[];
 }
 
-export interface AgentTraceStep {
-  iteration: number;
-  reasoning: string;
-  /** Code the agent ran; absent for runtimes that answer without running code. */
-  code?: string;
-  /** What `output` holds: a code sandbox's output, or the model's reply. */
-  outputKind: "sandbox" | "response";
+/** Code the agent wrote and ran in a turn, with what it printed. */
+export interface AgentTraceExecution {
+  code: string;
   output: string;
   untruncatedOutput: string;
+}
+
+export interface AgentTraceStep {
+  iteration: number;
+  /** What the model wrote this turn; absent when it wrote nothing. */
+  text?: string;
+  /** The provider's own reasoning, when the runtime reports it. */
+  reasoning?: string;
+  /** Absent for runtimes that answer without running code. */
+  execution?: AgentTraceExecution;
   error: boolean;
   /** Absent when the runtime does not time its turns. */
   durationMs?: number;
@@ -71,18 +77,19 @@ export interface AgentTraceStep {
 
 export type AgentTraceStepSummary = Pick<
   AgentTraceStep,
-  "iteration" | "reasoning" | "error" | "durationMs" | "lm" | "usage" | "outputKind"
->;
+  "iteration" | "text" | "error" | "durationMs" | "lm" | "usage"
+> & { hasExecution: boolean; hasReasoning: boolean };
 
 export function summarizeAgentTraceStep(step: AgentTraceStep): AgentTraceStepSummary {
   return {
     iteration: step.iteration,
-    reasoning: step.reasoning,
+    text: step.text,
     error: step.error,
     durationMs: step.durationMs,
     lm: step.lm,
     usage: step.usage,
-    outputKind: step.outputKind,
+    hasExecution: step.execution !== undefined,
+    hasReasoning: step.reasoning !== undefined,
   };
 }
 

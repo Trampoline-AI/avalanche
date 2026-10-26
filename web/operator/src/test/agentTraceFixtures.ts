@@ -33,6 +33,7 @@ function live(
 }
 
 export interface TurnOptions {
+  text?: string;
   reasoning?: string;
   code?: string;
   output?: string;
@@ -51,8 +52,8 @@ export function turnEvent(iteration: number, options: TurnOptions = {}): AgentLi
       omitted_model_calls: 0,
       turn: {
         index: iteration,
-        text: null,
-        reasoning: options.reasoning ?? `Reasoning for turn ${iteration}.`,
+        text: options.text ?? `Text for turn ${iteration}.`,
+        reasoning: options.reasoning ?? null,
         duration_ms: 1,
         usage: {
           input_tokens: 2,

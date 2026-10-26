@@ -20,14 +20,10 @@ function turn(event: AgentLiveEvent): AgentTraceStep {
     throw new Error("Claude turn events are message.finished with a finished turn");
   }
   const { turn } = common;
-  const text = turn.text ?? "";
   return {
     iteration: turn.index,
-    reasoning: turn.reasoning ?? "",
-    // Claude answers in text and tool calls; it runs no generated code of its own.
-    outputKind: "response",
-    output: text,
-    untruncatedOutput: text,
+    text: turn.text ?? undefined,
+    reasoning: turn.reasoning ?? undefined,
     // Rate-limit, billing and authentication failures arrive as API-error turns.
     error: native.api_error !== null,
     durationMs: turn.duration_ms ?? undefined,

@@ -135,12 +135,17 @@ def turn_failed(turn: Turn) -> bool:
 
 def common_items(turn: Turn) -> list[TraceItem]:
     items: list[TraceItem] = []
-    if turn.reasoning:
-        items.append(TraceSection("reasoning", "Reasoning", turn.reasoning, style="dim italic"))
     if turn.text:
         items.append(TraceSection("text", "Text", turn.text))
     items.extend(code_sections(turn))
     return items
+
+
+def reasoning_items(turn: Turn) -> list[TraceItem]:
+    """The provider's own reasoning, last and collapsed: long, and rarely read."""
+    if not turn.reasoning:
+        return []
+    return [TraceSection("reasoning", "Model reasoning", turn.reasoning, style="dim italic")]
 
 
 def pending_code(events: Sequence[AgentLiveEvent]) -> list[PendingStep]:
@@ -202,6 +207,7 @@ class GenericViewer:
                 },
             )
         )
+        items.extend(reasoning_items(common.turn))
         return TurnView(
             index=common.turn.index,
             duration_ms=common.turn.duration_ms,
