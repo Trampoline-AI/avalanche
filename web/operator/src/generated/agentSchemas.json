@@ -946,6 +946,13 @@
         "subtype": {
           "title": "Subtype",
           "type": "string"
+        },
+        "workspace_outputs": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Workspace Outputs",
+          "type": "array"
         }
       },
       "required": [
@@ -956,6 +963,7 @@
         "num_turns",
         "structured_output",
         "output_omitted",
+        "workspace_outputs",
         "errors"
       ],
       "title": "Finished",

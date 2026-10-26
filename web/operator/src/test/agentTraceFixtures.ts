@@ -253,7 +253,10 @@ export function claudeStartedEvent(inputs: Record<string, JsonValue>): AgentLive
   });
 }
 
-export function claudeFinishedEvent(output: Record<string, JsonValue> | null): AgentLiveEvent {
+export function claudeFinishedEvent(
+  output: Record<string, JsonValue> | null,
+  workspaceOutputs: string[] = [],
+): AgentLiveEvent {
   return claudeLive(9, {
     common: null,
     native: {
@@ -265,6 +268,7 @@ export function claudeFinishedEvent(output: Record<string, JsonValue> | null): A
       structured_output: output,
       output_omitted: output === null,
       errors: [],
+      workspace_outputs: workspaceOutputs,
     },
   });
 }

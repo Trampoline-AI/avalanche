@@ -86,7 +86,16 @@ class ClaudeAgentViewer:
             if isinstance(event.native, Finished):
                 output = event.native.structured_output
                 # A failed session reports no output; an oversized one is left out.
-                return output if isinstance(output, dict) else None
+                if not isinstance(output, dict):
+                    return None
+                # Workspace fields hold the session's working directory, not Claude's JSON.
+                return {
+                    **output,
+                    **dict.fromkeys(
+                        event.native.workspace_outputs,
+                        "workspace: the session's working directory",
+                    ),
+                }
         return None
 
 

@@ -119,6 +119,9 @@ class Finished(_Event):
     structured_output: JsonValue
     # True when the output exceeded the trace size limit and is left out here.
     output_omitted: bool
+    # Workspace output fields; Avalanche returns the working directory for them, so
+    # they are not part of Claude's structured output.
+    workspace_outputs: tuple[str, ...]
     errors: tuple[str, ...]
 
     @property

@@ -54,9 +54,17 @@ function retainedValue(event: AgentLiveEvent, kind: "inputs" | "outputs"): unkno
   const { native } = event;
   if (kind === "inputs" && native.kind === "started") return native.inputs;
   // A failed session reports no output, and an oversized one is left out of the trace.
-  if (kind === "outputs" && native.kind === "finished")
-    return native.structured_output ?? undefined;
-  return undefined;
+  if (kind !== "outputs" || native.kind !== "finished") return undefined;
+  const output = native.structured_output;
+  if (output === null || typeof output !== "object" || Array.isArray(output)) return undefined;
+  // Workspace fields hold the session's working directory, not Claude's JSON.
+  const workspaces = Object.fromEntries(
+    native.workspace_outputs.map((name) => [
+      name,
+      "workspace: the session's working directory",
+    ]),
+  );
+  return { ...output, ...workspaces };
 }
 
 export const claudeAgentViewer: TraceViewer = {
