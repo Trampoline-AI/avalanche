@@ -205,7 +205,19 @@ def _bounded_iteration_step(
     def size(value: JsonValue) -> int:
         return len(json.dumps(value, separators=(",", ":")).encode())
 
-    remaining = size(projected) - _MAX_EVIDENCE_VALUE_BYTES
+    def measured() -> int:
+        """The step's size as a turn: each predict call repeats its group's identity."""
+        repeated = 0
+        for group in groups:
+            assert isinstance(group, dict)
+            group_calls = group["calls"]
+            assert isinstance(group_calls, list)
+            if group_calls:
+                identity = [group["signature"], group["instructions"], group["model"]]
+                repeated += (len(group_calls) - 1) * size(identity)
+        return size(projected) + repeated
+
+    remaining = measured() - _MAX_EVIDENCE_VALUE_BYTES
     if remaining <= 0:
         return projected, {}
 
@@ -220,6 +232,11 @@ def _bounded_iteration_step(
             for item in value:
                 collect(item)
         elif isinstance(value, dict):
+            # A predict group's identity is repeated on each of its calls in the turn.
+            group_calls = (
+                value.get("calls") if any(value is group for group in groups) else None
+            )
+            copies = len(group_calls) if isinstance(group_calls, list) and group_calls else 1
             for key, item in value.items():
                 replacement: JsonValue
                 if isinstance(item, str):
@@ -232,6 +249,8 @@ def _bounded_iteration_step(
                     collect(item)
                     continue
                 saving = size(item) - size(replacement)
+                if key in {"signature", "instructions", "model"}:
+                    saving *= copies
                 if saving > 0:
                     candidates.append((saving, value, key, replacement))
 
@@ -285,7 +304,7 @@ def _bounded_iteration_step(
     projected["reasoning"] = reasoning + omission_note(
         omitted_tools, omitted_predicts, omitted_groups
     )
-    if size(projected) > _MAX_EVIDENCE_VALUE_BYTES:
+    if measured() > _MAX_EVIDENCE_VALUE_BYTES:
         # Required numeric SDK metadata cannot be replaced by an omission
         # marker without inventing measurements or breaking the SDK schema.
         raise ValueError("iteration inspection metadata exceeds byte limit")
