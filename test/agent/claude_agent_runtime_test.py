@@ -288,6 +288,7 @@ def test_a_failed_result_without_a_reason_names_its_subtype():
         num_turns=1,
         structured_output=None,
         output_omitted=False,
+        workspace_outputs=(),
         errors=(),
     )
     assert finished.error == "error_during_execution"

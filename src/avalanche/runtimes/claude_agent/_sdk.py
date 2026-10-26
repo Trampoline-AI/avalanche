@@ -150,7 +150,7 @@ async def run(
             },
             cwd=str(directory),
         )
-        transcript = _Transcript(events)
+        transcript = _Transcript(events, workspace_outputs=tuple(workspace_outputs))
         try:
             # Claude gets the full inputs; the trace keeps each one within the value limit.
             await events.emit(
@@ -476,8 +476,9 @@ class _PendingTurn:
 class _Transcript:
     """Turns the SDK's message stream into live events and a trace record."""
 
-    def __init__(self, events: AgentEventSink) -> None:
+    def __init__(self, events: AgentEventSink, *, workspace_outputs: tuple[str, ...]) -> None:
         self._events = events
+        self._workspace_outputs = workspace_outputs
         self._pending: _PendingTurn | None = None
         self.turns: list[Turn] = []
         self.session_id: str | None = None
@@ -551,6 +552,7 @@ class _Transcript:
                         num_turns=message.num_turns,
                         **_structured_output(message.structured_output),
                         errors=_result_errors(message),
+                        workspace_outputs=self._workspace_outputs,
                     ),
                     None,
                 )
