@@ -462,6 +462,8 @@ uv add "avalanche-ai[ray,lance]"
 
 ## Documentation
 
+- [TUI extension navigation](docs/tui-extensions.md)
+
 - [DAG API](docs/dag-api.md)
 - [Agent steps](docs/agent-steps.md)
 - [Classifier steps](docs/classifier-steps.md)

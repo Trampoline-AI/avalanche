@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+- Add optional, feature-negotiated TUI navigation for extension providers: a persistent
+  scope tree, central resource panels, navigable resource rows, lazy child pages and
+  one-key Home. Providers without the feature retain the workflow UI and modal panels.
+  The run protocol and package version are unchanged.
+
 ## 0.15.1 — 2026-10-24
 
 ### Protocol
