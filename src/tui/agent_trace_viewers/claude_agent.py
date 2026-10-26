@@ -12,7 +12,7 @@ from avalanche.agent.native.claude_agent import Finished, MessageFinished
 from avalanche.agent.trace import AgentTrace, ClaudeAgentNativeTrace
 
 from . import InspectionTurn, PendingStep, TraceSection, TurnView
-from .generic import COMMON_LABELS, GENERIC, duration_seconds, usage_label
+from .generic import COMMON_LABELS, GENERIC, duration_seconds, reasoning_items, usage_label
 
 _LABELS = {
     "started": "Prompt sent",
@@ -69,10 +69,13 @@ class ClaudeAgentViewer:
             {"stop_reason": native.stop_reason, "api_error": native.api_error},
             style="bold red" if native.api_error is not None else "dim",
         )
+        # Model reasoning stays last, after the message details.
+        reasoning = reasoning_items(turn.finished.turn)
+        body = view.items[: len(view.items) - len(reasoning)]
         return replace(
             view,
             failed=view.failed or native.api_error is not None,
-            items=(*view.items, message),
+            items=(*body, message, *reasoning),
         )
 
     def live_label(self, event: AgentLiveEvent) -> str:
