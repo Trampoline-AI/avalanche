@@ -668,6 +668,41 @@ async def test_live_claude_call_with_a_small_model():
     )
 
 
+@pytest.mark.skipif(
+    os.environ.get("AVALANCHE_LIVE_CLAUDE") != "1",
+    reason="set AVALANCHE_LIVE_CLAUDE=1 to call Claude through the local claude CLI",
+)
+@pytest.mark.asyncio
+async def test_live_claude_reads_an_outside_file_and_writes_a_file_output(tmp_path):
+    class Shout(ava.Signature):
+        """Read the input file and write its text in upper case to a new file."""
+
+        document: ava.File = ava.InputField()
+        shouted: ava.File = ava.OutputField()
+
+    sources = tmp_path / "sources"
+    sources.mkdir()
+    (sources / "note.txt").write_text("quiet words")
+    (tmp_path / "run").mkdir()
+    run_workspace = ava.Workspace.from_directory(tmp_path / "run", reference="snapshot:run")
+    agent = ava.Agent(
+        signature=Shout,
+        step_name="shout",
+        runtime=ClaudeAgent(
+            model=MODEL,
+            max_turns=8,
+            builtin_tools=("Read", "Write"),
+            permission_mode="acceptEdits",
+        ),
+    )
+    with ava.file_reference_context(run_workspace, attempt="attempt-1"):
+        result = await agent(document=ava.File.from_path(sources / "note.txt"))
+
+    shouted = result.outputs.shouted
+    assert shouted.ref.path.startswith(".outputs/shout/attempt-1/")
+    assert shouted.read_bytes().decode().strip() == "QUIET WORDS"
+
+
 @pytest.mark.asyncio
 async def test_a_response_split_across_messages_and_subagent_traffic_form_one_turn(replay):
     subagent = AssistantMessage(
