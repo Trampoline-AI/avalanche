@@ -70,6 +70,9 @@ _SERVER = "avalanche"
 _JSON = TypeAdapter(JsonValue)
 # Tool arguments and results kept in a trace; larger values are replaced by a marker.
 _MAX_VALUE_BYTES = 256 * 1024
+# A turn's tool calls kept in its live event; later calls are counted as omitted, so the
+# event stays well under the operator's 8 MiB agent-event limit.
+_MAX_TURN_ACTION_BYTES = 4 * 1024 * 1024
 # An error reason taken from a result's free text is cut to this length.
 _MAX_ERROR_CHARS = 4096
 
@@ -149,7 +152,14 @@ async def run(
         )
         transcript = _Transcript(events)
         try:
-            await events.emit(native.Started(model=runtime.model, inputs=prompt_inputs), None)
+            # Claude gets the full inputs; the trace keeps each one within the value limit.
+            await events.emit(
+                native.Started(
+                    model=runtime.model,
+                    inputs={name: _bounded(value) for name, value in prompt_inputs.items()},
+                ),
+                None,
+            )
             try:
                 # Closing the stream stops the CLI even when handling a message raises.
                 async with contextlib.aclosing(
@@ -426,6 +436,18 @@ def _bounded(value: object) -> JsonValue:
     return {"kind": "unavailable", "reason": "value exceeds the trace size limit"}
 
 
+def _within_budget(actions: tuple[ToolCallAction, ...]) -> tuple[ToolCallAction, ...]:
+    """The turn's first tool calls that fit its live-event budget, in order."""
+    kept: list[ToolCallAction] = []
+    used = 0
+    for action in actions:
+        used += len(action.model_dump_json())
+        if used > _MAX_TURN_ACTION_BYTES:
+            break
+        kept.append(action)
+    return tuple(kept)
+
+
 def _structured_output(value: object) -> dict[str, JsonValue]:
     """The result's structured output for the trace, or a note that it was too large."""
     projected = _JSON.validate_python(to_jsonable_python(value))
@@ -572,6 +594,8 @@ class _Transcript:
             usage=_usage(message.usage),
         )
         self.turns.append(turn)
+        # The record keeps every call; the live event keeps those within its budget.
+        kept = _within_budget(turn.actions)
         await self._events.emit(
             native.MessageFinished(
                 message_id=message.message_id,
@@ -579,7 +603,11 @@ class _Transcript:
                 stop_reason=message.stop_reason,
                 api_error=message.error,
             ),
-            TurnFinished(turn=turn, omitted_tool_calls=0, omitted_model_calls=0),
+            TurnFinished(
+                turn=turn.model_copy(update={"actions": kept}),
+                omitted_tool_calls=len(turn.actions) - len(kept),
+                omitted_model_calls=0,
+            ),
         )
 
     def record(self, result: ResultMessage, *, model: str | None) -> AgentTrace:

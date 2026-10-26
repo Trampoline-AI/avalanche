@@ -212,6 +212,37 @@ async def test_a_session_maps_onto_outputs_turns_and_live_events(replay):
     assert '"a": 2' in seen["prompt"]
 
 
+class Note(ava.Signature):
+    text: str = ava.InputField()
+    answer: str = ava.OutputField()
+
+
+@pytest.mark.asyncio
+async def test_large_inputs_and_tool_calls_stay_within_the_live_event_limits(
+    replay, monkeypatch
+):
+    monkeypatch.setattr(sdk_module, "_MAX_VALUE_BYTES", 64)
+    monkeypatch.setattr(sdk_module, "_MAX_TURN_ACTION_BYTES", 1)
+    seen = replay(_success_stream())
+    observed = []
+    with capture_agent_evidence(observed.append, errors="raise"):
+        result = await _agent()(a=2, b=3)
+    turns = [
+        e.common for e in observed if e.kind == "event" and e.native.kind == "message.finished"
+    ]
+    # Over the budget, a live turn's calls are counted as omitted; the record keeps them.
+    assert [(len(t.turn.actions), t.omitted_tool_calls) for t in turns] == [(0, 1), (0, 1)]
+    assert [len(turn.actions) for turn in result.trace.turns] == [1, 1]
+
+    seen = replay([_init(), _result({"answer": "ok"})])
+    observed = []
+    with capture_agent_evidence(observed.append, errors="raise"):
+        await ava.Agent(signature=Note, step_name="note", runtime=ClaudeAgent())(text="x" * 500)
+    # Claude gets the whole input; the started event keeps only a marker for it.
+    assert "x" * 500 in seen["prompt"]
+    assert observed[0].native.inputs["text"]["kind"] == "unavailable"
+
+
 @pytest.mark.asyncio
 async def test_a_failed_tool_is_kept_on_its_call_and_does_not_fail_the_turn(replay):
     replay(_success_stream(tool_error=True))
