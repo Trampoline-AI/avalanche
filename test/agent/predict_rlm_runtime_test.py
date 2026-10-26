@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 import importlib
 import inspect
+import pickle
 import subprocess
 import sys
 import textwrap
@@ -153,9 +154,32 @@ def test_runtime_imports_without_the_optional_sandbox_extra():
     subprocess.run([sys.executable, "-c", script], check=True)
 
 
-def test_descriptor_rejects_options_predict_rlm_does_not_have():
-    with pytest.raises(ValueError, match="max_turns"):
-        PredictRLM(max_turns=3)
+@pytest.mark.asyncio
+async def test_other_options_pass_unchanged_to_the_predict_rlm_constructor(monkeypatch):
+    received: list[dict[str, object]] = []
+
+    class Constructor:
+        def __init__(self, signature, **options):
+            received.append(options)
+
+        async def acall(self, **inputs):
+            return _prediction()
+
+    monkeypatch.setattr(predict_rlm, "PredictRLM", Constructor)
+    runtime = pickle.loads(pickle.dumps(PredictRLM(max_iterations=4, future_option=("a", 2))))
+
+    await runtime.invoke(_request(), _Recorder())
+
+    assert received[0]["max_iterations"] == 4
+    assert received[0]["future_option"] == ("a", 2)
+
+
+@pytest.mark.asyncio
+async def test_an_unknown_option_fails_on_first_run_with_predict_rlm_error():
+    runtime = PredictRLM(max_turns=3)
+
+    with pytest.raises(TypeError, match="max_turns"):
+        await runtime.invoke(_request(), _Recorder())
 
 
 @pytest.mark.asyncio

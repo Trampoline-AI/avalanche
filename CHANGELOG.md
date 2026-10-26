@@ -14,7 +14,9 @@
   `ava.Workspace` inputs appear in agent traces as their workspace reference, path,
   name, size and checksum (or a workspace's entry count, total size, or reference)
   instead of the mounted host path. The file bridge that mounts `ava.File` inputs
-  and reserves `ava.File` outputs moved into the PredictRLM runtime unchanged.
+  and reserves `ava.File` outputs moved into the PredictRLM runtime unchanged. Agent
+  options that `ava.runtimes.PredictRLM` has no field for are still passed unchanged
+  to PredictRLM, which rejects an unknown one with its own `TypeError` on the first run.
 - Operator UI: `make web-proto` now also generates zod schemas and TypeScript types
   for the runtime-neutral agent trace from the Python models
   (`scripts/export_agent_schemas.py`). The UI does not use them yet.

@@ -299,11 +299,13 @@ class PredictRLM(BaseModel):
     """Run agent steps with PredictRLM.
 
     Fields mirror ``predict_rlm.PredictRLM`` except the signature and tools,
-    which come from each request. Nothing is built until the first invocation.
+    which come from each request. Any other keyword is passed unchanged to
+    PredictRLM's constructor, which rejects an unknown one on the first run.
+    Nothing is built until the first invocation.
     """
 
     model_config = ConfigDict(
-        strict=True, frozen=True, extra="forbid", arbitrary_types_allowed=True
+        strict=True, frozen=True, extra="allow", arbitrary_types_allowed=True
     )
 
     kind: ClassVar[RuntimeKind] = "predict_rlm"
@@ -474,6 +476,7 @@ class PredictRLM(BaseModel):
         signature: type[dspy.Signature],
         **overrides: object,
     ) -> _PredictRLMPredictor:
+        # Set fields include pass-through extras; PredictRLM's constructor checks those.
         options = {name: getattr(self, name) for name in self.model_fields_set - {"skills"}}
         return _build_predictor(
             signature,
