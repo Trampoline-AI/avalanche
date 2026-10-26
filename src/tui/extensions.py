@@ -7,6 +7,7 @@ import threading
 from collections import deque
 from collections.abc import Callable
 from concurrent.futures import Future, ThreadPoolExecutor
+from dataclasses import asdict
 
 from .state import (
     ActionDescriptor,
@@ -14,13 +15,32 @@ from .state import (
     ExtensionDescription,
     ExtensionPage,
     Invalidation,
+    NavigationContribution,
+    NavigationPage,
     Object,
     PanelDescriptor,
     TuiContext,
     TuiExtensionError,
     TuiExtensions,
+    TuiNavigation,
     json_plain,
 )
+
+
+def validate_navigation(value: NavigationContribution | NavigationPage) -> None:
+    """Bound the complete eager subtree, not just the number of root nodes."""
+    pending = [(node, 0) for node in value.nodes]
+    ids: set[str] = set()
+    while pending:
+        node, depth = pending.pop()
+        if len(ids) >= 100 or depth > 32 or node.id in ids:
+            raise TuiExtensionError(
+                "integrity", "Navigation exceeds bounds or repeats node IDs"
+            )
+        ids.add(node.id)
+        pending.extend((child, depth + 1) for child in node.children)
+    if len(json.dumps(asdict(value)).encode("utf-8")) > 262144:
+        raise TuiExtensionError("integrity", "Navigation exceeded requested byte bounds")
 
 
 class ExtensionSession:
@@ -79,8 +99,12 @@ class ExtensionSession:
 
     def _submit(
         self,
-        call: Callable[[], ExtensionDescription | ExtensionPage | ActionResult],
-        accept: Callable[[ExtensionDescription | ExtensionPage | ActionResult], None],
+        call: Callable[
+            [], ExtensionDescription | ExtensionPage | ActionResult | NavigationPage
+        ],
+        accept: Callable[
+            [ExtensionDescription | ExtensionPage | ActionResult | NavigationPage], None
+        ],
         fail: Callable[[TuiExtensionError], None],
     ) -> bool:
         for future in self._futures:
@@ -151,7 +175,17 @@ class ExtensionSession:
                 self.loading = False
                 self.error = f"{error.code}: {error}"
 
-            if self._submit(lambda: self.extension.describe(context), accept, failed):
+            def describe() -> ExtensionDescription:
+                result = self.extension.describe(context)
+                if (
+                    "navigation" in self.extension.features
+                    and "navigation" in result.features
+                    and result.navigation is not None
+                ):
+                    validate_navigation(result.navigation)
+                return result
+
+            if self._submit(describe, accept, failed):
                 self.loading = True
                 self._describe_pending = False
         return changed
@@ -173,16 +207,57 @@ class ExtensionSession:
             page = self.extension.read(
                 panel.resource, context, cursor=cursor, limit=100, byte_limit=262144
             )
-            if (
-                len(page.items) > 100
-                or len(json.dumps(json_plain(page.items)).encode("utf-8")) > 262144
-            ):
+            encoded_size = len(json.dumps(json_plain(page.items)).encode("utf-8"))
+            if "navigation" in self.extension.features:
+                encoded_size += len(
+                    json.dumps(
+                        {key: asdict(target) for key, target in page.row_targets.items()}
+                    ).encode("utf-8")
+                )
+                ids: set[str] = set()
+                for item in page.items:
+                    row_id = item["id"]
+                    if not isinstance(row_id, str) or row_id in ids:
+                        raise TuiExtensionError(
+                            "integrity", "Resource row IDs must be unique strings"
+                        )
+                    ids.add(row_id)
+                if not set(page.row_targets).issubset(ids):
+                    raise TuiExtensionError("integrity", "Row target has no matching row ID")
+            if len(page.items) > 100 or encoded_size > 262144:
                 raise TuiExtensionError("integrity", "Provider exceeded requested page bounds")
             return page
 
         def received(page) -> None:
             if not isinstance(page, ExtensionPage):
                 raise TypeError("read must return ExtensionPage")
+            accept(page)
+
+        return self._submit(read, received, fail)
+
+    def read_navigation(
+        self,
+        parent_id: str,
+        cursor: str | None,
+        accept: Callable[[NavigationPage], None],
+        fail: Callable[[TuiExtensionError], None],
+    ) -> bool:
+        context = self.context
+        extension = self.extension
+        if "navigation" not in extension.features or not isinstance(extension, TuiNavigation):
+            fail(TuiExtensionError("unsupported", "Provider has no navigation loader"))
+            return False
+
+        def read() -> NavigationPage:
+            page = extension.read_navigation(
+                parent_id, context, cursor=cursor, limit=100, byte_limit=262144
+            )
+            validate_navigation(page)
+            return page
+
+        def received(page) -> None:
+            if not isinstance(page, NavigationPage):
+                raise TypeError("read_navigation must return NavigationPage")
             accept(page)
 
         return self._submit(read, received, fail)

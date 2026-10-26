@@ -3,7 +3,8 @@
 from __future__ import annotations
 
 from collections.abc import Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, field
+from types import MappingProxyType
 from typing import Any, Callable, Literal, Protocol, runtime_checkable
 
 from .models import (
@@ -163,6 +164,65 @@ class PanelDescriptor:
 
 
 @dataclass(frozen=True)
+class NavigationTarget:
+    """A local selection, never an authorized backend action.
+
+    Generation is assigned by the app. At most one of panel_id/resource_id is set;
+    neither selects the first described panel (or an explicit unknown view).
+    """
+
+    context: TuiContext
+    panel_id: str | None = None
+    resource_id: str | None = None
+
+    def __post_init__(self) -> None:
+        if self.panel_id is not None and self.resource_id is not None:
+            raise ValueError("A navigation target selects a panel OR a resource")
+
+
+@dataclass(frozen=True)
+class NavigationNode:
+    id: str
+    label: str
+    target: NavigationTarget | None = None
+    badge: str | None = None
+    children: tuple[NavigationNode, ...] = ()
+    lazy: bool = False
+    expanded: bool = False
+
+
+@dataclass(frozen=True)
+class NavigationContribution:
+    nodes: tuple[NavigationNode, ...]
+    initial_target: NavigationTarget
+    home_target: NavigationTarget
+
+
+@dataclass(frozen=True)
+class NavigationPage:
+    context: TuiContext
+    nodes: tuple[NavigationNode, ...]
+    next_cursor: Cursor | None
+    truncated: bool
+    revision: Revision
+
+
+@runtime_checkable
+class TuiNavigation(Protocol):
+    """Optional companion to TuiExtensions, negotiated by feature 'navigation'."""
+
+    def read_navigation(
+        self,
+        parent_id: str,
+        context: TuiContext,
+        *,
+        cursor: Cursor | None = None,
+        limit: int = 100,
+        byte_limit: int = 262144,
+    ) -> NavigationPage: ...
+
+
+@dataclass(frozen=True)
 class ExtensionDescription:
     context: TuiContext
     protocol_version: tuple[int, int]
@@ -171,6 +231,7 @@ class ExtensionDescription:
     scopes: tuple[ScopeDescriptor, ...]
     actions: tuple[ActionDescriptor, ...]
     panels: tuple[PanelDescriptor, ...]
+    navigation: NavigationContribution | None = None
 
 
 @dataclass(frozen=True)
@@ -180,6 +241,9 @@ class ExtensionPage:
     next_cursor: Cursor | None
     truncated: bool
     revision: Revision
+    row_targets: Mapping[str, NavigationTarget] = field(
+        default_factory=lambda: MappingProxyType({})
+    )
 
 
 @dataclass(frozen=True)
@@ -275,6 +339,21 @@ class ReadOnlyExtensions:
         self._extension = extension
         self.protocol_version = extension.protocol_version
         self.features = extension.features
+
+    def read_navigation(
+        self,
+        parent_id: str,
+        context: TuiContext,
+        *,
+        cursor: Cursor | None = None,
+        limit: int = 100,
+        byte_limit: int = 262144,
+    ) -> NavigationPage:
+        if not isinstance(self._extension, TuiNavigation):
+            raise TuiExtensionError("unsupported", "Provider has no navigation loader")
+        return self._extension.read_navigation(
+            parent_id, context, cursor=cursor, limit=limit, byte_limit=byte_limit
+        )
 
     def describe(self, context: TuiContext) -> ExtensionDescription:
         return self._extension.describe(context)
