@@ -465,11 +465,18 @@
     },
     "PredictRLMDeclaration": {
       "additionalProperties": false,
-      "description": "PredictRLM settings after workflow defaults and step overrides are applied.\n\n``settings`` holds the effective constructor options that serialize to JSON,\nwithout credentials or callables.",
+      "description": "PredictRLM settings after workflow defaults and step overrides are applied.\n\n``settings`` holds the effective constructor options that serialize to JSON,\nwithout credentials or callables. ``extra_options`` names the options\nAvalanche has no field for and passes unchanged to PredictRLM; their values\nappear in ``settings`` only under the same rules.",
       "properties": {
         "aggregated_static_instructions": {
           "title": "Aggregated Static Instructions",
           "type": "string"
+        },
+        "extra_options": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Extra Options",
+          "type": "array"
         },
         "kind": {
           "const": "predict_rlm",
@@ -512,6 +519,7 @@
       "required": [
         "kind",
         "settings",
+        "extra_options",
         "models",
         "skills",
         "aggregated_static_instructions",
