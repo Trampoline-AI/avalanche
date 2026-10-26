@@ -289,57 +289,53 @@ function TurnSecondaryDetails({
 
   return (
     <div className="trace-turn-detail border-t border-line px-3 pb-1">
-      {summary.outputKind === "sandbox" && (
-        <TraceSection
-          label="Generated Python"
-          onOpenChange={(open) => setSectionOpen("code", open)}
-        >
-          <DeferredTurnDetail detail={detail} onLoadTurn={onLoadTurn}>
-            {(step) => (
-              <div className="h-56 max-h-[45vh] min-h-32 overflow-auto rounded-md border border-line bg-canvas">
-                <PythonSource source={step.code ?? ""} />
-              </div>
-            )}
-          </DeferredTurnDetail>
-        </TraceSection>
+      {summary.hasExecution && (
+        <>
+          <TraceSection
+            label="Generated Python"
+            onOpenChange={(open) => setSectionOpen("code", open)}
+          >
+            <DeferredTurnDetail detail={detail} onLoadTurn={onLoadTurn}>
+              {(step) => (
+                <div className="h-56 max-h-[45vh] min-h-32 overflow-auto rounded-md border border-line bg-canvas">
+                  <PythonSource source={step.execution?.code ?? ""} />
+                </div>
+              )}
+            </DeferredTurnDetail>
+          </TraceSection>
+          <TraceSection
+            label={summary.error ? "Sandbox error output" : "Sandbox output"}
+            onOpenChange={(open) => setSectionOpen("output", open)}
+          >
+            <DeferredTurnDetail detail={detail} onLoadTurn={onLoadTurn}>
+              {(step) => {
+                const execution = step.execution;
+                if (execution === undefined) return null;
+                const outputDiffers = execution.untruncatedOutput !== execution.output;
+                return (
+                  <>
+                    <pre
+                      className={`m-0 max-h-56 overflow-auto whitespace-pre-wrap rounded-md border border-[#26332f] bg-[#111817] px-3 py-2.5 font-mono text-[8px] leading-[1.55] [overflow-wrap:anywhere] ${step.error ? "text-[#ffb4ac]" : "text-[#c7d4cf]"}`}
+                    >
+                      {showFullOutput ? execution.untruncatedOutput : execution.output}
+                    </pre>
+                    {outputDiffers && (
+                      <button
+                        type="button"
+                        className="mt-2 cursor-pointer border-0 bg-transparent p-0 font-mono text-[8px] text-acid focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-acid"
+                        aria-expanded={showFullOutput}
+                        onClick={onShowFullOutput}
+                      >
+                        {showFullOutput ? "Show shortened output" : "Show full output"}
+                      </button>
+                    )}
+                  </>
+                );
+              }}
+            </DeferredTurnDetail>
+          </TraceSection>
+        </>
       )}
-      <TraceSection
-        label={
-          summary.outputKind === "response"
-            ? summary.error
-              ? "Error response"
-              : "Response"
-            : summary.error
-              ? "Sandbox error output"
-              : "Sandbox output"
-        }
-        onOpenChange={(open) => setSectionOpen("output", open)}
-      >
-        <DeferredTurnDetail detail={detail} onLoadTurn={onLoadTurn}>
-          {(step) => {
-            const outputDiffers = step.untruncatedOutput !== step.output;
-            return (
-              <>
-                <pre
-                  className={`m-0 max-h-56 overflow-auto whitespace-pre-wrap rounded-md border border-[#26332f] bg-[#111817] px-3 py-2.5 font-mono text-[8px] leading-[1.55] [overflow-wrap:anywhere] ${step.error ? "text-[#ffb4ac]" : "text-[#c7d4cf]"}`}
-                >
-                  {showFullOutput ? step.untruncatedOutput : step.output}
-                </pre>
-                {outputDiffers && (
-                  <button
-                    type="button"
-                    className="mt-2 cursor-pointer border-0 bg-transparent p-0 font-mono text-[8px] text-acid focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-acid"
-                    aria-expanded={showFullOutput}
-                    onClick={onShowFullOutput}
-                  >
-                    {showFullOutput ? "Show shortened output" : "Show full output"}
-                  </button>
-                )}
-              </>
-            );
-          }}
-        </DeferredTurnDetail>
-      </TraceSection>
       <TraceSection
         label={`Tools (${descriptor.toolCallCount})`}
         onOpenChange={(open) => setSectionOpen("tools", open)}
@@ -355,6 +351,21 @@ function TurnSecondaryDetails({
         >
           <DeferredTurnDetail detail={detail} onLoadTurn={onLoadTurn}>
             {(step) => <PredictCalls groups={step.predictCalls} />}
+          </DeferredTurnDetail>
+        </TraceSection>
+      )}
+      {/* Provider reasoning is long and rarely read: last, collapsed, and only when kept. */}
+      {summary.hasReasoning && (
+        <TraceSection
+          label="Model reasoning"
+          onOpenChange={(open) => setSectionOpen("reasoning", open)}
+        >
+          <DeferredTurnDetail detail={detail} onLoadTurn={onLoadTurn}>
+            {(step) => (
+              <p className="m-0 max-h-56 overflow-auto whitespace-pre-wrap text-[10px] leading-[1.6] text-muted [overflow-wrap:anywhere]">
+                {step.reasoning}
+              </p>
+            )}
           </DeferredTurnDetail>
         </TraceSection>
       )}
@@ -496,17 +507,20 @@ export function AgentTraceExplorer({
                       </header>
 
                       <section className="border-t border-line px-3 py-3">
-                        <h4 className="m-0 mb-1.5 font-mono text-[8px] font-semibold tracking-[0.08em] text-muted uppercase">
-                          Reasoning
-                        </h4>
                         {step ? (
-                          <p className="m-0 whitespace-pre-wrap text-[13px] leading-[1.7] text-ink [overflow-wrap:anywhere]">
-                            {step.reasoning || "No reasoning was retained."}
-                          </p>
+                          step.text ? (
+                            <p className="m-0 whitespace-pre-wrap text-[13px] leading-[1.7] text-ink [overflow-wrap:anywhere]">
+                              {step.text}
+                            </p>
+                          ) : (
+                            <p className="m-0 text-[10px] text-muted italic">
+                              The model wrote no text this turn.
+                            </p>
+                          )
                         ) : summary.status === "error" ? (
                           <div>
                             <p className="m-0 text-[10px] text-danger" role="alert">
-                              Reasoning unavailable: {summary.error}
+                              Turn unavailable: {summary.error}
                             </p>
                             <button
                               type="button"
@@ -519,7 +533,7 @@ export function AgentTraceExplorer({
                           </div>
                         ) : (
                           <p className="m-0 text-[10px] text-muted italic" role="status">
-                            Loading reasoning…
+                            Loading turn…
                           </p>
                         )}
                       </section>

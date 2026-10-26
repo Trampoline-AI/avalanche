@@ -67,8 +67,10 @@ def turn_from_step(step: IterationStep) -> Turn:
     )
     return Turn(
         index=step.iteration,
-        text=None,
-        reasoning=step.reasoning,
+        # PredictRLM's "reasoning" is what the model writes each iteration, the turn's
+        # text. Provider reasoning is not captured yet.
+        text=step.reasoning or None,
+        reasoning=None,
         actions=tuple(actions),
         duration_ms=step.duration_ms,
         usage=common_usage(step.usage.main, step.usage.sub),

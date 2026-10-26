@@ -109,6 +109,16 @@ def test_a_claude_session_renders_through_its_viewer_and_metadata_sections(monke
         full_output=False,
     )
     assert api_error.failed
+    # Provider reasoning comes last, after everything a reader looks at first.
+    thinking = turn_event.common.model_copy(
+        update={"turn": turn_event.common.turn.model_copy(update={"reasoning": "hmm"})}
+    )
+    view = viewer.turn(
+        InspectionTurn(turn_event.invocation_id, thinking, turn_event.native),
+        full_output=False,
+    )
+    assert view.items[0].key == "text"
+    assert view.items[-1].key == "reasoning"
     assert any("session-1" in line for line, _ in viewer.header(final.record))
     assert viewer.outputs(events) == {"total": 5}
     # A successful output too large for the trace still shows as present.

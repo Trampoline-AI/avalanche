@@ -140,6 +140,12 @@
   and come back as file references, as with PredictRLM. The TUI and web UI show Claude traces through their own viewer,
   and a Claude declaration shows its model and settings. Workflows that only declare
   Claude steps import and publish without the extra installed.
+- Agents: a trace turn's `text` is now what the model wrote that turn, for every
+  runtime. PredictRLM's per-iteration `reasoning` field moves into `text`, matching
+  Claude's reply text; `Turn.reasoning` now holds only a provider's own reasoning
+  (such as Claude's extended thinking) and is `None` when the runtime does not expose
+  it. The web UI and TUI show each turn's text first and keep model reasoning in a
+  collapsed "Model reasoning" section at the end, shown only when there is some.
 
 ## 0.15.1 — 2026-10-24
 

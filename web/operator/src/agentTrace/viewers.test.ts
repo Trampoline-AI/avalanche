@@ -28,10 +28,12 @@ describe("agent trace viewers", () => {
 
     expect(step).toMatchObject({
       iteration: 1,
-      reasoning: "Reasoning for turn 1.",
-      code: 'print("turn 1")',
-      output: "Output for turn 1.",
-      untruncatedOutput: "full detail",
+      text: "Text for turn 1.",
+      execution: {
+        code: 'print("turn 1")',
+        output: "Output for turn 1.",
+        untruncatedOutput: "full detail",
+      },
       error: false,
       lm: { finishReason: "stop" },
       toolCalls: [{ name: "lookup_1", arguments: { args: [], kwargs: {} } }],
@@ -97,15 +99,15 @@ describe("agent trace viewers", () => {
 
     expect(viewer.turn(event)).toMatchObject({
       iteration: 2,
+      text: "Answer text 2.",
       reasoning: "Thinking 2.",
-      output: "Answer text 2.",
       error: false,
       toolCalls: [{ name: "mcp__avalanche__lookup", arguments: { name: "a" }, result: "10" }],
       predictCalls: [],
       lm: { finishReason: "tool_use" },
     });
-    expect(viewer.turn(event).outputKind).toBe("response");
-    expect(viewer.turn(event)).not.toHaveProperty("code");
+    // Claude runs no generated code, so the turn has no execution.
+    expect(viewer.turn(event).execution).toBeUndefined();
     // Claude turns are not timed, so no duration is shown rather than 0ms.
     expect(viewer.turn(event).durationMs).toBeUndefined();
     // No sub-model, so the explorer shows no predict calls or sub-model usage.

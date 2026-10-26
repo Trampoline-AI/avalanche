@@ -103,7 +103,10 @@ class Turn(BaseModel):
     model_config = _STRICT
 
     index: PositiveInt
+    # What the model wrote this turn, as a reader would see it.
     text: str | None
+    # The model provider's own reasoning (thinking tokens), only when the runtime
+    # exposes it; never the turn's written text.
     reasoning: str | None
     actions: tuple[AgentAction, ...]
     duration_ms: NonNegativeInt | None
