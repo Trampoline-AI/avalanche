@@ -42,7 +42,7 @@ Model, skill and other PredictRLM settings belong to the runtime. Passing `lm=`,
 | `output_dir` | `str \| pathlib.Path \| None`; default `None` | For steps without `ava.File` or `ava.Workspace` fields: collect PredictRLM `File` outputs under `<output_dir>/<field>/`, otherwise in a temporary directory. Steps with file fields reserve their outputs in the run workspace (see [File references](../file-references.md)) and raise `AgentStepError` when `output_dir` is set. Does not redirect scalar outputs or logs. |
 | `verbose` | `bool`; default `False` | PredictRLM console output. Avalanche runs agents quietly by default; PredictRLM's own default is `True`. |
 
-The remaining fields (`max_llm_calls`, `max_output_chars`, `sandbox_backend`, `allowed_domains`, `runtime_hooks`, and so on) take the same values and defaults as the installed PredictRLM constructor. An unknown field raises a validation error.
+The remaining fields (`max_llm_calls`, `max_output_chars`, `sandbox_backend`, `allowed_domains`, `runtime_hooks`, and so on) take the same values and defaults as the installed PredictRLM constructor. Any other keyword is passed unchanged to the PredictRLM constructor, so an option Avalanche has no field for still works, and an unknown one raises PredictRLM's `TypeError` when the agent first runs.
 
 The decorator returns a single-output workflow step. The body must declare exactly `*, agent: ava.Agent`, with no default; Avalanche injects it and removes it from the step's public call signature. The remaining Python parameters and return annotation describe the workflow step, independently of the model signature. Synchronous and asynchronous bodies are accepted; an awaitable body result is awaited. Use an asynchronous body to await model calls.
 

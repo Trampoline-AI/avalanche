@@ -1027,4 +1027,3 @@ def test_string_models_keep_their_litellm_ids_in_declaration():
 
     models = summarize.__agent_step__.declaration().runtime.models
     assert models.main.identity == "openai/gpt-5.6-terra"
-
