@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import functools
 import importlib
 import json
 import threading
@@ -12,12 +13,14 @@ from typing import Literal
 import pytest
 from dspy import Prediction
 from predict_rlm import RunEvidence, RunEvidenceEvent, RunTrace
-from pydantic import BaseModel
+from pydantic import BaseModel, ValidationError
 
 import avalanche as ava
 from avalanche.agent import AgentStepError, AgentStepExecutionError, capture_agent_evidence
 
-agent_module = importlib.import_module("avalanche.agent.agent_step")
+predict_rlm_runtime = importlib.import_module("avalanche.runtimes.predict_rlm.runtime")
+predict_rlm_events = importlib.import_module("avalanche.runtimes.predict_rlm.events")
+predict_rlm_trace = importlib.import_module("avalanche.runtimes.predict_rlm.trace")
 
 
 class Person(BaseModel):
@@ -64,7 +67,9 @@ def test_bodyful_agent_invokes_service_and_owns_structured_result(monkeypatch, s
                 ),
             )
 
-    monkeypatch.setattr(agent_module, "_build_predictor", lambda *args, **kwargs: Predictor())
+    monkeypatch.setattr(
+        predict_rlm_runtime, "_build_predictor", lambda *args, **kwargs: Predictor()
+    )
 
     @ava.source
     def load():
@@ -99,7 +104,9 @@ async def test_agent_rejects_bad_inputs_before_invocation_and_preserves_service_
             calls.append(inputs)
             raise failure
 
-    monkeypatch.setattr(agent_module, "_build_predictor", lambda *args, **kwargs: Predictor())
+    monkeypatch.setattr(
+        predict_rlm_runtime, "_build_predictor", lambda *args, **kwargs: Predictor()
+    )
     agent = ava.Agent(signature=SummarySignature, step_name="summarize", runtime_kwargs={})
     with pytest.raises(AgentStepError):
         await agent(extra="not in signature")
@@ -109,6 +116,78 @@ async def test_agent_rejects_bad_inputs_before_invocation_and_preserves_service_
         await agent(person=person)
     assert raised.value.__cause__ is failure
     assert calls == [{"person": person}]
+
+
+@pytest.mark.asyncio
+async def test_agent_rejects_wrongly_typed_inputs_before_invocation(monkeypatch):
+    calls = []
+
+    class Predictor:
+        async def acall(self, **inputs):
+            calls.append(inputs)
+
+    _use_predictor(monkeypatch, Predictor())
+    agent = ava.Agent(signature=SummarySignature, step_name="summarize", runtime_kwargs={})
+
+    with pytest.raises(AgentStepError, match="person"):
+        await agent(person="Ada")
+    assert calls == []
+
+
+@pytest.mark.asyncio
+async def test_tools_without_a_name_reach_the_predictor(monkeypatch):
+    class Predictor:
+        async def acall(self, **inputs):
+            return Prediction(
+                summary=Summary(headline="h", person_count=1),
+                note="n",
+                trace=_trace(),
+                evidence=RunEvidence(run_id="run", complete=True, terminal_outcome="completed"),
+            )
+
+    built = []
+
+    def build(signature, **config):
+        built.append(config["tools"])
+        return Predictor()
+
+    def lookup(term: str, *, scope: str) -> str:
+        return term
+
+    class Search:
+        def __call__(self, term: str) -> str:
+            return term
+
+    tools = [functools.partial(lookup, scope="all"), Search()]
+    monkeypatch.setattr(predict_rlm_runtime, "_build_predictor", build)
+    agent = ava.Agent(
+        signature=SummarySignature, step_name="summarize", runtime_kwargs={}, tools=tools
+    )
+
+    await agent(person=Person(id=1, name="Ada"))
+
+    assert built == [tuple(tools)]
+
+
+@pytest.mark.asyncio
+async def test_invalid_tool_fails_every_call_instead_of_being_dropped(monkeypatch):
+    _use_predictor(monkeypatch, object())
+    agent = ava.Agent(
+        signature=SummarySignature,
+        step_name="summarize",
+        runtime_kwargs={},
+        tools=["not callable"],
+    )
+
+    for _ in range(2):
+        with pytest.raises(ValidationError):
+            await agent(person=Person(id=1, name="Ada"))
+
+
+def _use_predictor(monkeypatch, predictor):
+    monkeypatch.setattr(
+        predict_rlm_runtime, "_build_predictor", lambda *args, **kwargs: predictor
+    )
 
 
 def _trace(
@@ -124,12 +203,14 @@ def _trace(
 
 
 @pytest.mark.asyncio
-async def test_live_evidence_redacts_tool_and_model_secrets_without_losing_event_order():
+async def test_live_evidence_redacts_tool_and_model_secrets_without_losing_event_order(
+    monkeypatch,
+):
     from predict_rlm import RunEvent, RunEventKind
 
     class Predictor:
         async def acall(self, **inputs):
-            sink = agent_module._AvalancheEvidenceSink()
+            sink = predict_rlm_events._AvalancheEvidenceSink()
             events = [
                 (RunEventKind.RUN_STARTED, {"inputs": inputs}),
                 (
@@ -177,7 +258,7 @@ async def test_live_evidence_redacts_tool_and_model_secrets_without_losing_event
             )
 
     agent = ava.Agent(signature=SummarySignature, step_name="summarize", runtime_kwargs={})
-    agent._predictor = Predictor()
+    _use_predictor(monkeypatch, Predictor())
     observed = []
     with capture_agent_evidence(observed.append, errors="raise"):
         result = await agent(person=Person(id=1, name="Ada"))
@@ -200,7 +281,7 @@ async def test_live_evidence_redacts_tool_and_model_secrets_without_losing_event
 
 
 @pytest.mark.asyncio
-async def test_concurrent_agent_invocations_keep_evidence_and_traces_correlated():
+async def test_concurrent_agent_invocations_keep_evidence_and_traces_correlated(monkeypatch):
     from predict_rlm import RunEvent, RunEventKind
 
     class Predictor:
@@ -210,7 +291,7 @@ async def test_concurrent_agent_invocations_keep_evidence_and_traces_correlated(
 
         async def acall(self, **inputs):
             name = inputs["person"].name
-            sink = agent_module._AvalancheEvidenceSink()
+            sink = predict_rlm_events._AvalancheEvidenceSink()
             await sink.emit(
                 RunEvent(
                     name,
@@ -247,7 +328,7 @@ async def test_concurrent_agent_invocations_keep_evidence_and_traces_correlated(
             )
 
     agent = ava.Agent(signature=SummarySignature, step_name="summarize", runtime_kwargs={})
-    agent._predictor = Predictor()
+    _use_predictor(monkeypatch, Predictor())
     observed = []
     with capture_agent_evidence(observed.append, errors="raise"):
         left, right = await asyncio.gather(
@@ -268,10 +349,10 @@ async def test_concurrent_agent_invocations_keep_evidence_and_traces_correlated(
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("failure_kind", ["persistence", "interrupt", "cancel"])
-async def test_real_recorder_propagates_strict_observer_failures(failure_kind):
+async def test_real_recorder_propagates_strict_observer_failures(monkeypatch, failure_kind):
     from predict_rlm import EvidenceIncompleteError, EvidenceRecorder, RunContext, RunEventKind
 
-    predictor = agent_module._build_predictor(SummarySignature, skills=(), tools=())
+    predictor = predict_rlm_runtime._build_predictor(SummarySignature, skills=(), tools=())
     failures = {
         "persistence": RuntimeError("persistence failed"),
         "interrupt": KeyboardInterrupt("listener interrupted"),
@@ -300,7 +381,7 @@ async def test_real_recorder_propagates_strict_observer_failures(failure_kind):
             raise failure
 
     agent = ava.Agent(signature=SummarySignature, step_name="summarize", runtime_kwargs={})
-    agent._predictor = RecorderPredictor()
+    _use_predictor(monkeypatch, RecorderPredictor())
     expected = AgentStepExecutionError if failure_kind == "persistence" else type(failure)
     with capture_agent_evidence(broken_listener, errors="raise"):
         with pytest.raises(expected) as raised:
@@ -317,6 +398,7 @@ async def test_real_recorder_propagates_strict_observer_failures(failure_kind):
 @pytest.mark.asyncio
 @pytest.mark.parametrize("exportable_trace", [False, True])
 async def test_agent_cancellation_emits_one_terminal_and_preserves_cancellation(
+    monkeypatch,
     exportable_trace,
 ):
     cancellation = asyncio.CancelledError("cancelled by caller")
@@ -331,7 +413,7 @@ async def test_agent_cancellation_emits_one_terminal_and_preserves_cancellation(
             raise cancellation
 
     agent = ava.Agent(signature=SummarySignature, step_name="summarize", runtime_kwargs={})
-    agent._predictor = Predictor()
+    _use_predictor(monkeypatch, Predictor())
     observed = []
     with capture_agent_evidence(observed.append, errors="raise"):
         with pytest.raises(asyncio.CancelledError) as raised:
@@ -352,7 +434,9 @@ async def test_agent_cancellation_emits_one_terminal_and_preserves_cancellation(
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("phase", ["start", "end"])
-async def test_dspy_callback_cancellation_without_sdk_evidence_preserves_cancelled_task(phase):
+async def test_dspy_callback_cancellation_without_sdk_evidence_preserves_cancelled_task(
+    monkeypatch, phase
+):
     import dspy
     from dspy.utils.callback import BaseCallback
 
@@ -372,7 +456,7 @@ async def test_dspy_callback_cancellation_without_sdk_evidence_preserves_cancell
             return dspy.Prediction(note="completed")
 
     agent = ava.Agent(signature=SummarySignature, step_name="summarize", runtime_kwargs={})
-    agent._predictor = Predictor(callbacks=[CancelCallback()])
+    _use_predictor(monkeypatch, Predictor(callbacks=[CancelCallback()]))
     task = asyncio.create_task(agent(person=Person(id=1, name="Ada")))
     with pytest.raises(asyncio.CancelledError) as raised:
         await task
@@ -381,7 +465,7 @@ async def test_dspy_callback_cancellation_without_sdk_evidence_preserves_cancell
 
 
 @pytest.mark.asyncio
-async def test_terminal_persistence_failure_is_not_reclassified_as_agent_failure():
+async def test_terminal_persistence_failure_is_not_reclassified_as_agent_failure(monkeypatch):
     class Predictor:
         async def acall(self, **inputs):
             return Prediction(
@@ -392,7 +476,7 @@ async def test_terminal_persistence_failure_is_not_reclassified_as_agent_failure
             )
 
     agent = ava.Agent(signature=SummarySignature, step_name="summarize", runtime_kwargs={})
-    agent._predictor = Predictor()
+    _use_predictor(monkeypatch, Predictor())
     failure = RuntimeError("terminal persistence failed")
     observed = []
 
@@ -410,6 +494,7 @@ async def test_terminal_persistence_failure_is_not_reclassified_as_agent_failure
 @pytest.mark.asyncio
 @pytest.mark.parametrize("exportable_trace", [False, True])
 async def test_agent_failure_retains_separate_evidence_without_exposing_raw_events(
+    monkeypatch,
     exportable_trace,
 ):
     failure = ValueError("provider unavailable")
@@ -434,7 +519,7 @@ async def test_agent_failure_retains_separate_evidence_without_exposing_raw_even
             raise failure
 
     agent = ava.Agent(signature=SummarySignature, step_name="summarize", runtime_kwargs={})
-    agent._predictor = Predictor()
+    _use_predictor(monkeypatch, Predictor())
     observed = []
     with capture_agent_evidence(observed.append, errors="raise"):
         with pytest.raises(AgentStepExecutionError) as raised:
@@ -457,7 +542,9 @@ async def test_agent_failure_retains_separate_evidence_without_exposing_raw_even
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("missing_field", ["trace", "evidence"])
-async def test_successful_agent_prediction_requires_sdk_trace_and_evidence(missing_field):
+async def test_successful_agent_prediction_requires_sdk_trace_and_evidence(
+    monkeypatch, missing_field
+):
     prediction = SimpleNamespace(
         note="reviewed",
         trace=_trace(),
@@ -472,7 +559,7 @@ async def test_successful_agent_prediction_requires_sdk_trace_and_evidence(missi
             return prediction
 
     agent = ava.Agent(signature=SummarySignature, step_name="summarize", runtime_kwargs={})
-    agent._predictor = Predictor()
+    _use_predictor(monkeypatch, Predictor())
     observed = []
     with capture_agent_evidence(observed.append, errors="raise"):
         with pytest.raises(AttributeError):
@@ -515,7 +602,7 @@ def _retain_iteration(step):
     from runtime.operator import Operator
     from runtime.operator.models import AgentEventAppended, NodeState, NodeStatus, RunState
 
-    event = agent_module._project_evidence_event(
+    event = predict_rlm_events._project_evidence_event(
         RunEvent("sdk-run", 1, RunEventKind.ITERATION_RECORDED, 1, {"step": step}),
         invocation_id="invocation",
     )
@@ -538,10 +625,10 @@ def _retain_iteration(step):
     original_trace = _trace().model_copy(update={"iterations": 1, "steps": [step]})
     terminal_events = []
     with capture_agent_evidence(terminal_events.append, errors="raise"):
-        agent_module._emit_terminal_trace(
+        predict_rlm_trace._emit_terminal_trace(
             original_trace,
             invocation_id="invocation",
-            evidence=agent_module._evidence_metadata(
+            evidence=predict_rlm_trace._evidence_metadata(
                 RunEvidence(run_id="sdk-run", complete=True, terminal_outcome="completed")
             ),
             runtime_kwargs={},
@@ -613,10 +700,10 @@ def test_iteration_detail_survives_operator_retention_and_hydration(payloads):
         call.usage for call in step.predict_calls[0].calls
     ]
     assert len(json.dumps(data["step"], separators=(",", ":")).encode()) <= (
-        agent_module._MAX_EVIDENCE_VALUE_BYTES
+        predict_rlm_events._MAX_EVIDENCE_VALUE_BYTES
     )
     if len(json.dumps(step.model_dump(mode="json"), separators=(",", ":")).encode()) <= (
-        agent_module._MAX_EVIDENCE_VALUE_BYTES
+        predict_rlm_events._MAX_EVIDENCE_VALUE_BYTES
     ):
         assert hydrated == step
     else:
@@ -665,7 +752,7 @@ def test_iteration_bounds_tool_payloads_and_text_without_changing_sdk_values():
 def test_iteration_call_overflow_reports_omitted_counts(monkeypatch):
     from predict_rlm.trace import ToolCall
 
-    monkeypatch.setattr(agent_module, "_MAX_EVIDENCE_VALUE_BYTES", 1200)
+    monkeypatch.setattr(predict_rlm_events, "_MAX_EVIDENCE_VALUE_BYTES", 1200)
     step = _iteration_with_details(["small question"] * 12)
     step.tool_calls = [
         ToolCall(name=f"tool_{index}", duration_ms=index, result=index) for index in range(12)
@@ -696,12 +783,12 @@ def test_iteration_rejects_unrepresentable_metadata_budget_without_fabricating_u
 ):
     from predict_rlm import RunEvent, RunEventKind
 
-    monkeypatch.setattr(agent_module, "_MAX_EVIDENCE_VALUE_BYTES", 128)
+    monkeypatch.setattr(predict_rlm_events, "_MAX_EVIDENCE_VALUE_BYTES", 128)
     step = _iteration_with_details([])
     step.usage.main.input_tokens = 10**200
     original = step.model_copy(deep=True)
     with pytest.raises(ValueError):
-        agent_module._project_evidence_event(
+        predict_rlm_events._project_evidence_event(
             RunEvent("sdk-run", 1, RunEventKind.ITERATION_RECORDED, 1, {"step": step}),
             invocation_id="invocation",
         )
@@ -717,14 +804,18 @@ _LIVE_OUTPUT_OVERHEAD = len(
     ("output", "omitted", "error"),
     [
         ("printed output", False, None),
-        ("x" * (agent_module._MAX_EVIDENCE_VALUE_BYTES - _LIVE_OUTPUT_OVERHEAD), False, None),
         (
-            "x" * (agent_module._MAX_EVIDENCE_VALUE_BYTES - _LIVE_OUTPUT_OVERHEAD + 1),
+            "x" * (predict_rlm_events._MAX_EVIDENCE_VALUE_BYTES - _LIVE_OUTPUT_OVERHEAD),
+            False,
+            None,
+        ),
+        (
+            "x" * (predict_rlm_events._MAX_EVIDENCE_VALUE_BYTES - _LIVE_OUTPUT_OVERHEAD + 1),
             True,
             None,
         ),
         ("x" * (9 * 1024 * 1024), True, None),
-        ("é" * (agent_module._MAX_EVIDENCE_VALUE_BYTES // 6 + 1), True, None),
+        ("é" * (predict_rlm_events._MAX_EVIDENCE_VALUE_BYTES // 6 + 1), True, None),
         ("x" * (9 * 1024 * 1024), True, "execution failed"),
     ],
     ids=[
@@ -747,7 +838,7 @@ def test_live_execution_output_is_bounded_before_operator_retention(output, omit
     if error is not None:
         data["error"] = error
     event = RunEvent("sdk-run", 1, RunEventKind.CODE_EXECUTED, 1, data)
-    projected = agent_module._project_evidence_event(event, invocation_id="invocation")
+    projected = predict_rlm_events._project_evidence_event(event, invocation_id="invocation")
     operator = Operator([], watch=False, schedule=False)
     run = RunState(run_id="live-output-run", flow_name="agent-flow", status=RunStatus.RUNNING)
     run.nodes["agent"] = NodeState("agent", "agent", "step", status=NodeStatus.RUNNING)
@@ -776,7 +867,7 @@ def test_live_execution_output_is_bounded_before_operator_retention(output, omit
             assert envelope.error is None
         assert event.data["output"] == output
         assert len(json.dumps(retained.data["output"]).encode()) <= (
-            agent_module._MAX_EVIDENCE_VALUE_BYTES
+            predict_rlm_events._MAX_EVIDENCE_VALUE_BYTES
         )
     finally:
         operator.close()
@@ -802,7 +893,7 @@ def test_all_lifecycle_errors_obey_operator_contract(event_kind, error):
         "error": error,
     }
     event = RunEvent("sdk-run", 1, RunEventKind(event_kind), 1, data)
-    projected = agent_module._project_evidence_event(event, invocation_id="invocation")
+    projected = predict_rlm_events._project_evidence_event(event, invocation_id="invocation")
     retained = _retain_live_event(projected)
     assert retained.event_kind == event_kind
     if len(error) > 65_536:
@@ -865,7 +956,7 @@ def test_live_inspection_budget_covers_whole_event(event_kind, data, omitted_fie
     from predict_rlm import RunEvent, RunEventKind
 
     event = RunEvent("sdk-run", 1, RunEventKind(event_kind), 1, data)
-    projected = agent_module._project_evidence_event(event, invocation_id="invocation")
+    projected = predict_rlm_events._project_evidence_event(event, invocation_id="invocation")
     retained = _retain_live_event(projected)
     value = retained.data[omitted_field]
     if isinstance(value, str):
@@ -873,7 +964,7 @@ def test_live_inspection_budget_covers_whole_event(event_kind, data, omitted_fie
     else:
         assert value["kind"] == "unavailable"
     assert len(json.dumps(retained.data, separators=(",", ":")).encode()) <= (
-        agent_module._MAX_EVIDENCE_VALUE_BYTES
+        predict_rlm_events._MAX_EVIDENCE_VALUE_BYTES
     )
     assert "unavailable" not in event.data[omitted_field]
 
@@ -907,7 +998,9 @@ async def test_codex_lm_is_named_codex_in_declaration_and_run_trace(monkeypatch)
                 ),
             )
 
-    monkeypatch.setattr(agent_module, "_build_predictor", lambda *args, **kwargs: Predictor())
+    monkeypatch.setattr(
+        predict_rlm_runtime, "_build_predictor", lambda *args, **kwargs: Predictor()
+    )
 
     @ava.agent_step(SummarySignature, lm=codex, sub_lm=codex)
     async def summarize(person: Person, *, agent: ava.Agent):

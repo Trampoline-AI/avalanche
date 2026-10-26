@@ -48,7 +48,7 @@ proto:
 	perl -pi -e 's/^import operator_pb2 as operator__pb2$$/from . import operator_pb2 as operator__pb2/' \
 		src/runtime/operator/proto/operator_pb2_grpc.py
 
-# Regenerate the checked-in TypeScript operator client.
+# Regenerate the checked-in TypeScript operator client and agent trace schemas.
 web-proto:
 	cd web && pnpm generate
 
