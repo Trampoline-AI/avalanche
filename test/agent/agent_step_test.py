@@ -805,6 +805,27 @@ def test_iteration_call_overflow_reports_omitted_counts(monkeypatch):
     assert turn.tool_call_count == 24
 
 
+def test_repeated_predict_instructions_stay_within_the_live_turn_budget(monkeypatch):
+    from predict_rlm import RunEvent, RunEventKind
+
+    budget = 64 * 1024
+    monkeypatch.setattr(predict_rlm_events, "_MAX_EVIDENCE_VALUE_BYTES", budget)
+    step = _iteration_with_details(["q"] * 200)
+    step.predict_calls[0].instructions = "Answer carefully. " * 200
+    _, turn = predict_rlm_events.project_event(
+        RunEvent("sdk-run", 1, RunEventKind.ITERATION_RECORDED, 1, {"step": step})
+    )
+
+    # Every predict call repeats its group's instructions; the turn is measured that way,
+    # leaving only a small fixed cost per call for the turn's own field names.
+    assert len(turn.model_dump_json().encode()) <= budget + 200 * 64
+    assert all(
+        call.instructions != step.predict_calls[0].instructions
+        for call in (turn.turn.native.predict_calls)
+    )
+    assert turn.tool_call_count == 200
+
+
 def test_iteration_rejects_unrepresentable_metadata_budget_without_fabricating_usage(
     monkeypatch,
 ):
