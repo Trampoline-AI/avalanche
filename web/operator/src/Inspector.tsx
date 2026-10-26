@@ -250,13 +250,14 @@ function AgentAndStepInspector({
   // limit and per-model usage, in their small final trace body; read it once.
   const traceFormat = run && isAgentNode ? node?.trace?.header?.traceFormat : undefined;
   const traceViewer = traceFormat ? headerViewer(traceFormat) : undefined;
-  const traceBodyToken = traceViewer ? node?.trace?.bodyToken : undefined;
+  const summarizeTraceBody = traceViewer?.summary;
+  const traceBodyToken = summarizeTraceBody ? node?.trace?.bodyToken : undefined;
   const [traceBodySummary, setTraceBodySummary] = useState<
     | { bodyToken: string; summary: TraceBodySummary | undefined }
     | { bodyToken: string; error: string }
   >();
   useEffect(() => {
-    if (!traceBodyToken || !traceViewer) return;
+    if (!traceBodyToken || !summarizeTraceBody) return;
     const controller = new AbortController();
     void api
       .readJsonDetail(traceBodyToken, controller.signal)
@@ -264,7 +265,7 @@ function AgentAndStepInspector({
         if (controller.signal.aborted) return;
         setTraceBodySummary({
           bodyToken: traceBodyToken,
-          summary: traceViewer.summary(parseAgentTraceTerminal(body)),
+          summary: summarizeTraceBody(parseAgentTraceTerminal(body)),
         });
       })
       .catch((error: unknown) => {
@@ -275,7 +276,7 @@ function AgentAndStepInspector({
         });
       });
     return () => controller.abort();
-  }, [api, traceBodyToken, traceViewer]);
+  }, [api, traceBodyToken, summarizeTraceBody]);
   const evaluationRecord =
     run && isAgentNode ? evaluationState.records[nodeId ?? ""] : undefined;
   const rawEvaluationDeclaration = run?.topology?.evaluationMetadataJson[nodeId ?? ""];

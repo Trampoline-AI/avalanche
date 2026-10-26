@@ -91,7 +91,24 @@ def test_a_claude_session_renders_through_its_viewer_and_metadata_sections(monke
         InspectionTurn(turn_event.invocation_id, turn_event.common, turn_event.native),
         full_output=False,
     )
-    assert [item.key for item in view.items] == ["text", "tools", "models", "metadata"]
+    assert [item.key for item in view.items] == [
+        "text",
+        "tools",
+        "models",
+        "metadata",
+        "message",
+    ]
+    assert not view.failed
+    # A rate-limit, billing or sign-in failure marks the turn failed.
+    api_error = viewer.turn(
+        InspectionTurn(
+            turn_event.invocation_id,
+            turn_event.common,
+            turn_event.native.model_copy(update={"api_error": "rate_limit"}),
+        ),
+        full_output=False,
+    )
+    assert api_error.failed
     assert any("session-1" in line for line, _ in viewer.header(final.record))
     assert viewer.outputs(events) == {"total": 5}
     assert {viewer.live_label(event) for event in events}
