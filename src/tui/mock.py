@@ -312,6 +312,7 @@ AGENT_TRACE_DECLARATION = AgentDeclaration(
     ),
     runtime=PredictRLMDeclaration(
         settings={"lm": "main-model", "sub_lm": "sub-model", "max_iterations": 4},
+        extra_options=(),
         models=PredictRLMModels(
             main=PredictRLMConfiguredModel(source="step override", identity="main-model"),
             sub=PredictRLMConfiguredModel(source="step override", identity="sub-model"),

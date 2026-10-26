@@ -91,13 +91,16 @@ class PredictRLMDeclaration(BaseModel):
     """PredictRLM settings after workflow defaults and step overrides are applied.
 
     ``settings`` holds the effective constructor options that serialize to JSON,
-    without credentials or callables.
+    without credentials or callables. ``extra_options`` names the options
+    Avalanche has no field for and passes unchanged to PredictRLM; their values
+    appear in ``settings`` only under the same rules.
     """
 
     model_config = _STRICT
 
     kind: Literal["predict_rlm"] = "predict_rlm"
     settings: dict[str, JsonValue]
+    extra_options: tuple[str, ...]
     models: PredictRLMModels
     skills: tuple[PredictRLMSkillDeclaration, ...]
     aggregated_static_instructions: str

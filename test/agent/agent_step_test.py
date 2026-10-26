@@ -1029,3 +1029,15 @@ def test_string_models_keep_their_litellm_ids_in_declaration():
 
     models = summarize.__agent_step__.declaration().runtime.models
     assert models.main.identity == "openai/gpt-5.6-terra"
+
+
+def test_declaration_names_extra_predict_rlm_options_and_keeps_json_values():
+    @ava.agent_step(SummarySignature, future_limit=3, future_hook=print)
+    async def summarize(person: Person, *, agent: ava.Agent):
+        return (await agent(person=person)).summary
+
+    runtime = summarize.__agent_step__.declaration({"future_mode": "fast"}).runtime
+    assert runtime.extra_options == ("future_hook", "future_limit", "future_mode")
+    assert runtime.settings["future_limit"] == 3
+    assert runtime.settings["future_mode"] == "fast"
+    assert "future_hook" not in runtime.settings
