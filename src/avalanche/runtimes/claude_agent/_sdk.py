@@ -381,7 +381,8 @@ def _write_skill_plugin(root: Path, skills: tuple[Skill, ...]) -> Path:
         for relative, source in skill.files.items():
             target = folder / relative
             target.parent.mkdir(parents=True, exist_ok=True)
-            shutil.copyfile(source, target)
+            # Keep permission bits, so a skill's scripts stay executable.
+            shutil.copy(source, target)
     return plugin
 
 

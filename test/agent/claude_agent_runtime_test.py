@@ -934,12 +934,21 @@ def _plugin_files(plugin: Path) -> dict[str, str]:
 
 @pytest.mark.asyncio
 async def test_step_skills_run_from_a_plugin_made_for_the_call(monkeypatch, tmp_path):
+    script = tmp_path / "check.sh"
+    script.write_text("#!/bin/sh\necho ok\n")
+    script.chmod(0o755)
     skill = _skill(tmp_path, metadata={"owner": "finance"})
+    skill = skill.model_copy(update={"files": {**skill.files, "scripts/check.sh": script}})
     seen: dict[str, object] = {}
 
     async def query(*, prompt, options):
         plugin = Path(options.plugins[0]["path"])
-        seen.update(options=options, plugin=plugin, files=_plugin_files(plugin))
+        seen.update(
+            options=options,
+            plugin=plugin,
+            files=_plugin_files(plugin),
+            script_mode=(plugin / "skills/bonus-rules/scripts/check.sh").stat().st_mode,
+        )
         for message in _success_stream():
             yield message
 
@@ -971,8 +980,10 @@ async def test_step_skills_run_from_a_plugin_made_for_the_call(monkeypatch, tmp_
         ".claude-plugin/plugin.json",
         "skills/bonus-rules/SKILL.md",
         "skills/bonus-rules/references/rules.md",
+        "skills/bonus-rules/scripts/check.sh",
     }
     assert files["skills/bonus-rules/references/rules.md"] == "Bonuses are ten points."
+    assert seen["script_mode"] & 0o111 == 0o111
     written = tmp_path / "written" / "bonus-rules"
     written.mkdir(parents=True)
     for relative, text in files.items():

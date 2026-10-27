@@ -499,9 +499,7 @@ class _QueueStream:
                 "type": "log",
                 "timestamp": time.time(),
                 "level": self._level,
-                "node_id": current_agent_log_node_id()
-                or _log_node.get()
-                or self._node.get(),
+                "node_id": current_agent_log_node_id() or _log_node.get() or self._node.get(),
                 "message": _bounded_log_text(message),
                 "channel": "stderr" if self._level >= logging.ERROR else "stdout",
                 "attempt": _log_attempt.get(),

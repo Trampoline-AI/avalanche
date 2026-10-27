@@ -57,9 +57,7 @@ class Skill(BaseModel):
     instructions: str
     files: Mapping[str, Path] = Field(default_factory=dict)
     license: str | None = None
-    compatibility: Annotated[str, StringConstraints(min_length=1, max_length=500)] | None = (
-        None
-    )
+    compatibility: Annotated[str, StringConstraints(min_length=1, max_length=500)] | None = None
     metadata: Mapping[str, str] = Field(default_factory=dict)
     allowed_tools: str | None = None
 
