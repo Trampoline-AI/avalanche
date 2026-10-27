@@ -19,6 +19,11 @@ from claude_agent_sdk import (
     ClaudeAgentOptions,
     ClaudeSDKClient,
     CLINotFoundError,
+    HookCallback,
+    HookContext,
+    HookInput,
+    HookJSONOutput,
+    HookMatcher,
     Message,
     RateLimitEvent,
     ResultMessage,
@@ -172,7 +177,8 @@ async def run(
         skill_tools: list[str] = []
         if plugin is not None:
             skill_tools.append("Skill")
-            # A skill's resource files are read with Read, allowed only inside the plugin.
+            # A skill's resource files are read with Read. Added for skills only, it
+            # reads nothing outside the plugin, whatever the permission mode.
             if any(skill.files for skill in request.skills) and "Read" not in builtin_tools:
                 skill_tools.append("Read")
         options = ClaudeAgentOptions(
@@ -200,6 +206,11 @@ async def run(
             # Only the step's own tools: no MCP servers or connectors from the user's
             # Claude account or configuration.
             strict_mcp_config=True,
+            hooks=(
+                {"PreToolUse": [HookMatcher(matcher="Read", hooks=[_read_only_inside(plugin)])]}
+                if "Read" in skill_tools
+                else None
+            ),
             system_prompt=_system_prompt(signature.instructions, runtime.system_prompt_append),
             output_format={
                 "type": "json_schema",
@@ -372,6 +383,46 @@ def _write_skill_plugin(root: Path, skills: tuple[Skill, ...]) -> Path:
             target.parent.mkdir(parents=True, exist_ok=True)
             shutil.copyfile(source, target)
     return plugin
+
+
+class _ReadInput(BaseModel):
+    """The part of a Read tool call that names the file; other options pass through."""
+
+    model_config = ConfigDict(strict=True, extra="allow")
+
+    file_path: str
+
+
+def _read_only_inside(folder: Path) -> HookCallback:
+    """A PreToolUse hook denying every Read outside ``folder``.
+
+    Hooks run before permission checks, so the limit holds in every permission
+    mode, ``bypassPermissions`` included, and for the session's working folders.
+    """
+    root = folder.resolve()
+
+    async def check(
+        hook_input: HookInput, tool_use_id: str | None, context: HookContext
+    ) -> HookJSONOutput:
+        try:
+            requested = _ReadInput.model_validate(hook_input["tool_input"]).file_path
+        except ValidationError:
+            requested = None
+        if requested is not None and (
+            (Path(hook_input["cwd"]) / requested).resolve().is_relative_to(root)
+        ):
+            return {}
+        return {
+            "hookSpecificOutput": {
+                "hookEventName": "PreToolUse",
+                "permissionDecision": "deny",
+                "permissionDecisionReason": (
+                    f"Read is available only for skill files inside {root}"
+                ),
+            }
+        }
+
+    return check
 
 
 def _input_files(request: AgentRequest) -> list[File]:
