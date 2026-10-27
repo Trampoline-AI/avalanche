@@ -7,6 +7,7 @@ import {
   ActivityDetailChunkV2,
   ActivityDetailRefV2,
   AgentEventKindV2,
+  AgentTraceStatusV2,
   CatalogReloadRequiredV2,
   ClassifierInvocationSummaryV2,
   EvaluationRecordV2,
@@ -24,10 +25,12 @@ import {
   RunSummaryV2,
   ScopeReferenceV2,
   TraceDescriptorV2,
+  TraceHeaderV2,
   WorkflowTopologyV2,
 } from "./generated/operator";
 import type { IOperatorServiceV2Client } from "./generated/operator.client";
 import { DescriptorPageOrder } from "./model";
+import { predictRlmTraceHeader } from "./test/agentTraceFixtures";
 import { evaluationDeclaration, eventUlid } from "./test/fixtures";
 
 function apiWith(client: Partial<Record<keyof IOperatorServiceV2Client, unknown>>) {
@@ -350,6 +353,54 @@ describe("operator transport boundary", () => {
     await expect(api.readTextDetail("text")).resolves.toBe("plain A😀B: not JSON }");
     await expect(api.readJsonDetail("text")).rejects.toThrow();
     await expect(api.readTextDetail("unregistered")).rejects.toThrow();
+  });
+
+  it.each([
+    ["a matching header part", "predict_rlm.run/v1", true],
+    ["another format's header part", "claude_agent.messages/v1", false],
+  ])("reads a trace header's runtime part only when it is %s", async (_case, format, valid) => {
+    const native =
+      format === "predict_rlm.run/v1"
+        ? predictRlmTraceHeader({ subModel: "sub", maxIterations: 6 })
+        : {
+            format,
+            result_subtype: "success",
+            num_turns: 1,
+            duration_api_ms: null,
+            permission_denials: 0,
+            errors: [],
+          };
+    const api = apiWith({
+      getRunSnapshot: () => ({
+        response: Promise.resolve(
+          RunSnapshotV2.create({
+            scopeRef,
+            cursor: cursor(),
+            summary: RunSummaryV2.create({ runId: "run-1" }),
+            nodes: [
+              NodeSnapshotV2.create({
+                nodeId: "agent",
+                trace: TraceDescriptorV2.create({
+                  available: true,
+                  header: TraceHeaderV2.create({
+                    status: AgentTraceStatusV2.SUCCEEDED,
+                    runtimeKind: "predict_rlm",
+                    traceFormat: "predict_rlm.run/v1",
+                    nativeJson: JSON.stringify(native),
+                  }),
+                }),
+              }),
+            ],
+          }),
+        ),
+      }),
+    });
+    const snapshot = api.getLatestRunSnapshot("run-1", "operator-1");
+    if (valid) {
+      expect((await snapshot).nodes[0].trace?.header?.native).toEqual(native);
+    } else {
+      await expect(snapshot).rejects.toThrow();
+    }
   });
 
   it("keeps historical classifier and evaluation declarations pinned when the current catalog changes", async () => {

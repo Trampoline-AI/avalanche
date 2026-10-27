@@ -856,6 +856,7 @@ class TraceHeaderV2(_message.Message):
         "external_run_id",
         "stop_reason",
         "status",
+        "native_json",
     )
     MODEL_FIELD_NUMBER: _ClassVar[int]
     DURATION_MS_FIELD_NUMBER: _ClassVar[int]
@@ -867,6 +868,7 @@ class TraceHeaderV2(_message.Message):
     EXTERNAL_RUN_ID_FIELD_NUMBER: _ClassVar[int]
     STOP_REASON_FIELD_NUMBER: _ClassVar[int]
     STATUS_FIELD_NUMBER: _ClassVar[int]
+    NATIVE_JSON_FIELD_NUMBER: _ClassVar[int]
     model: str
     duration_ms: int
     runtime_kind: str
@@ -877,6 +879,7 @@ class TraceHeaderV2(_message.Message):
     external_run_id: str
     stop_reason: str
     status: AgentTraceStatusV2
+    native_json: str
     def __init__(
         self,
         model: _Optional[str] = ...,
@@ -889,6 +892,7 @@ class TraceHeaderV2(_message.Message):
         external_run_id: _Optional[str] = ...,
         stop_reason: _Optional[str] = ...,
         status: _Optional[_Union[AgentTraceStatusV2, str]] = ...,
+        native_json: _Optional[str] = ...,
     ) -> None: ...
 
 class TraceDescriptorV2(_message.Message):

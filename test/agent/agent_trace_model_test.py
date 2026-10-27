@@ -12,13 +12,14 @@ from avalanche.agent.native.claude_agent import ClaudeAgentTurn
 from avalanche.agent.native.predict_rlm import (
     PredictRLMPredictCall,
     PredictRLMTokenUsage,
+    PredictRLMTraceHeader,
     PredictRLMTurn,
     PredictRLMUsage,
 )
 from avalanche.agent.trace import (
+    TRACE_HEADER_NATIVE_LIMIT_BYTES,
     AgentTrace,
     AgentTraceHeader,
-    PredictRLMNativeTrace,
     TokenUsage,
     ToolCall,
     Turn,
@@ -91,6 +92,9 @@ def _header(**changes: object) -> AgentTraceHeader:
         "tool_call_count": 4,
         "external_run_id": "run-1",
         "session_id": None,
+        "native": PredictRLMTraceHeader(
+            sub_model=None, max_iterations=5, usage=_NO_USAGE, telemetry_ref=None
+        ),
     }
     fields.update(changes)
     return AgentTraceHeader.model_validate(fields)
@@ -100,9 +104,6 @@ def _record(**changes: object) -> AgentTrace:
     fields: dict[str, object] = {
         "header": _header(),
         "turns": (_turn(1), _turn(2)),
-        "native": PredictRLMNativeTrace(
-            sub_model=None, max_iterations=5, usage=_NO_USAGE, telemetry_ref=None
-        ),
         "turns_streamed": False,
     }
     fields.update(changes)
@@ -132,6 +133,18 @@ def test_record_rejects_a_header_that_disagrees_with_its_body(header):
         _record(header=_header(**header))
 
 
+def test_header_rejects_a_runtime_part_too_large_for_run_snapshots():
+    large = PredictRLMTraceHeader(
+        sub_model=None,
+        max_iterations=5,
+        usage=_NO_USAGE,
+        telemetry_ref={"payload": "x" * TRACE_HEADER_NATIVE_LIMIT_BYTES},
+    )
+
+    with pytest.raises(ValidationError, match="run snapshot"):
+        _header(native=large)
+
+
 def test_record_rejects_out_of_order_turns():
     with pytest.raises(ValidationError, match="1..n"):
         _record(turns=(_turn(2), _turn(1)))
@@ -148,7 +161,8 @@ def test_streamed_record_carries_counts_but_no_turns():
 @pytest.mark.parametrize(
     "change",
     [
-        lambda body: body["native"].update(format="unknown/v1"),
+        lambda body: body["header"]["native"].update(format="unknown/v1"),
+        lambda body: body.update(native=body["header"].pop("native")),
         lambda body: body["header"].update(runtime_kind="unknown"),
         lambda body: body.update(schema_version=1),
         lambda body: body["turns"][0]["native"].update(format="unknown/v1"),
@@ -158,6 +172,7 @@ def test_streamed_record_carries_counts_but_no_turns():
     ],
     ids=[
         "unknown-format",
+        "native-outside-header",
         "unknown-runtime",
         "old-schema",
         "unknown-turn-format",

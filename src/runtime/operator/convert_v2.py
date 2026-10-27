@@ -7,7 +7,10 @@ import math
 from collections.abc import Callable, Mapping
 from datetime import datetime
 
+from pydantic import TypeAdapter
+
 from avalanche.agent.declaration import AgentDeclaration
+from avalanche.agent.native import TraceHeaderNative
 from avalanche.agent.trace import AgentTraceStatus, TokenUsage
 
 from .models import (
@@ -201,6 +204,9 @@ def token_usage_to_v2(usage: TokenUsage) -> pb.TokenUsageV2:
     return message
 
 
+_TRACE_HEADER_NATIVE: TypeAdapter[TraceHeaderNative] = TypeAdapter(TraceHeaderNative)
+
+
 def trace_header_to_v2(header: TraceHeader) -> pb.TraceHeaderV2:
     message = pb.TraceHeaderV2(
         status=_TRACE_STATUS_TO_V2[header.status],
@@ -209,6 +215,7 @@ def trace_header_to_v2(header: TraceHeader) -> pb.TraceHeaderV2:
         duration_ms=header.duration_ms,
         turn_count=header.turn_count,
         tool_call_count=header.tool_call_count,
+        native_json=header.native.model_dump_json(),
     )
     if header.model is not None:
         message.model = header.model
@@ -846,6 +853,12 @@ def trace_header_from_v2(msg: pb.TraceHeaderV2) -> TraceHeader:
         raise ValueError(f"unsupported agent trace status {msg.status}")
     if not msg.runtime_kind or not msg.trace_format:
         raise ValueError("agent trace header requires a runtime kind and trace format")
+    native = _TRACE_HEADER_NATIVE.validate_json(msg.native_json)
+    if native.format != msg.trace_format or native.runtime_kind != msg.runtime_kind:
+        raise ValueError(
+            f"agent trace header native format {native.format!r} does not match "
+            f"trace format {msg.trace_format!r} of runtime {msg.runtime_kind!r}"
+        )
     return TraceHeader(
         status=_TRACE_STATUS_FROM_V2[msg.status],
         runtime_kind=msg.runtime_kind,
@@ -857,6 +870,7 @@ def trace_header_from_v2(msg: pb.TraceHeaderV2) -> TraceHeader:
         tool_call_count=msg.tool_call_count,
         external_run_id=msg.external_run_id if msg.HasField("external_run_id") else None,
         stop_reason=msg.stop_reason if msg.HasField("stop_reason") else None,
+        native=native,
     )
 
 

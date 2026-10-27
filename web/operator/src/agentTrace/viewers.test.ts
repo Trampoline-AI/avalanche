@@ -4,14 +4,12 @@ import {
   claudeFinishedEvent,
   claudeStartedEvent,
   claudeTurnEvent,
-  finishedTrace,
   runStartedEvent,
   runSucceededEvent,
-  tokenUsage,
   turnEvent,
 } from "../test/agentTraceFixtures";
-import { parseAgentLiveEvent, parseAgentTraceTerminal } from "./common";
-import { TRACE_VIEWERS, activityLabel, headerViewer, viewerFor } from "./viewers";
+import { parseAgentLiveEvent } from "./common";
+import { TRACE_VIEWERS, activityLabel, viewerFor } from "./viewers";
 
 describe("agent trace viewers", () => {
   it("has a viewer for every trace format", () => {
@@ -75,15 +73,8 @@ describe("agent trace viewers", () => {
     expect(() => viewerFor(event.native.format).turn(event)).toThrow();
   });
 
-  it("reads header details and run values from PredictRLM bodies", () => {
+  it("reads run values from PredictRLM bodies", () => {
     const viewer = viewerFor("predict_rlm.run/v1");
-    expect(
-      viewer.summary?.(
-        parseAgentTraceTerminal(
-          finishedTrace({ subModel: "sub", maxIterations: 6, sub: tokenUsage(9, 1, 0.5) }),
-        ),
-      ),
-    ).toMatchObject({ subModel: "sub", maxIterations: 6, usage: { sub: { inputTokens: 9 } } });
     const started = parseAgentLiveEvent(runStartedEvent({ question: "Ready?" }));
     const succeeded = parseAgentLiveEvent(runSucceededEvent({ answer: "Yes" }));
     expect(viewer.retainedValue(started, "inputs")).toEqual({ question: "Ready?" });
@@ -94,7 +85,6 @@ describe("agent trace viewers", () => {
   it("names live events and refuses unknown formats", () => {
     expect(activityLabel("predict.started")).not.toBe("predict.started");
     expect(activityLabel("custom.kind")).toBe("custom.kind");
-    expect(headerViewer("other/v1")).toBeUndefined();
     expect(() => viewerFor("other/v1")).toThrow("No viewer");
   });
 
@@ -119,9 +109,6 @@ describe("agent trace viewers", () => {
     expect(viewer.turn(event).usage.sub).toBeUndefined();
     // Claude prices only the whole session, so a turn has no cost of its own.
     expect(viewer.turn(event).usage.main?.cost).toBeUndefined();
-    expect(viewer.hasSubModel).toBe(false);
-    // The common header holds everything, so the final trace body is never fetched.
-    expect(viewer.summary).toBeUndefined();
     const body = claudeTurnEvent(3);
     if (body.common?.kind !== "turn.finished") throw new Error("fixture is a turn");
     const { turn } = body.common;

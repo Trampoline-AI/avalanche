@@ -1,4 +1,4 @@
-"""Claude Agent SDK native turn parts and live-event payloads, ``claude_agent.messages/v1``.
+"""Claude Agent SDK native header, turn and live-event parts, ``claude_agent.messages/v1``.
 
 The common layer already carries each turn's message, thinking and tool calls; these
 models hold what only the SDK reports, mirrored here without importing the SDK.
@@ -38,6 +38,23 @@ class ClaudeAgentTurn(BaseModel):
     @property
     def failed(self) -> bool:
         return self.api_error is not None
+
+
+class ClaudeAgentTraceHeader(BaseModel):
+    """Claude Agent SDK session details that have no common-header equivalent."""
+
+    model_config = _STRICT
+
+    runtime_kind: ClassVar[RuntimeKind] = "claude_agent"
+
+    format: Literal["claude_agent.messages/v1"] = FORMAT
+    # The SDK's result subtype, such as ``success`` or ``error_max_turns``.
+    result_subtype: str | None
+    # Turns as the CLI counts them, which include tool-result round trips.
+    num_turns: NonNegativeInt
+    duration_api_ms: NonNegativeInt | None
+    permission_denials: NonNegativeInt
+    errors: tuple[str, ...]
 
 
 class _Event(BaseModel):

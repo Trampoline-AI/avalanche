@@ -341,7 +341,7 @@ async def test_running_out_of_turns_fails_with_the_sdk_reason(replay):
     assert observed[-1].kind == "trace_finished"
     header = observed[-1].record.header
     assert (header.status, header.stop_reason) == ("failed", "error_max_turns")
-    assert observed[-1].record.native.result_subtype == "error_max_turns"
+    assert observed[-1].record.header.native.result_subtype == "error_max_turns"
 
 
 @pytest.mark.asyncio
@@ -360,7 +360,25 @@ async def test_api_error_result_fails_with_the_api_error(replay):
     # The reason also reaches the live result event and the final trace.
     finished = next(e for e in observed if e.kind == "event" and e.native.kind == "finished")
     assert "529" in finished.native.error
-    assert any("529" in error for error in observed[-1].record.native.errors)
+    assert any("529" in error for error in observed[-1].record.header.native.errors)
+
+
+@pytest.mark.asyncio
+async def test_many_long_result_errors_stay_within_the_trace_header_limit(replay):
+    replay(
+        # Three-byte characters are the worst case for the header's byte limit.
+        [_init(), _result(None, is_error=True, errors=["過負荷" * 2000] * 100)],
+        error=ResultError("Claude Code returned an error result", exit_code=1),
+    )
+
+    observed = []
+    with capture_agent_evidence(observed.append, errors="raise"):
+        with pytest.raises(AgentStepExecutionError, match="過負荷"):
+            await _agent()(a=2, b=3)
+
+    # The header travels in every run snapshot; its errors are cut, not dropped.
+    errors = observed[-1].record.header.native.errors
+    assert errors and all(error.startswith("過負荷") for error in errors)
 
 
 @pytest.mark.asyncio

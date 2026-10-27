@@ -336,24 +336,6 @@
         "header": {
           "$ref": "#/$defs/AgentTraceHeader"
         },
-        "native": {
-          "discriminator": {
-            "mapping": {
-              "claude_agent.messages/v1": "#/$defs/ClaudeAgentNativeTrace",
-              "predict_rlm.run/v1": "#/$defs/PredictRLMNativeTrace"
-            },
-            "propertyName": "format"
-          },
-          "oneOf": [
-            {
-              "$ref": "#/$defs/PredictRLMNativeTrace"
-            },
-            {
-              "$ref": "#/$defs/ClaudeAgentNativeTrace"
-            }
-          ],
-          "title": "Native"
-        },
         "schema_version": {
           "const": 2,
           "default": 2,
@@ -376,7 +358,6 @@
         "schema_version",
         "header",
         "turns",
-        "native",
         "turns_streamed"
       ],
       "title": "AgentTrace",
@@ -451,6 +432,24 @@
             }
           ],
           "title": "Model"
+        },
+        "native": {
+          "discriminator": {
+            "mapping": {
+              "claude_agent.messages/v1": "#/$defs/ClaudeAgentTraceHeader",
+              "predict_rlm.run/v1": "#/$defs/PredictRLMTraceHeader"
+            },
+            "propertyName": "format"
+          },
+          "oneOf": [
+            {
+              "$ref": "#/$defs/PredictRLMTraceHeader"
+            },
+            {
+              "$ref": "#/$defs/ClaudeAgentTraceHeader"
+            }
+          ],
+          "title": "Native"
         },
         "runtime_kind": {
           "enum": [
@@ -527,7 +526,8 @@
         "turn_count",
         "tool_call_count",
         "external_run_id",
-        "session_id"
+        "session_id",
+        "native"
       ],
       "title": "AgentTraceHeader",
       "type": "object"
@@ -665,9 +665,9 @@
       "title": "ClaudeAgentDeclaration",
       "type": "object"
     },
-    "ClaudeAgentNativeTrace": {
+    "ClaudeAgentTraceHeader": {
       "additionalProperties": false,
-      "description": "Claude Agent SDK session details that have no common-layer equivalent.",
+      "description": "Claude Agent SDK session details that have no common-header equivalent.",
       "properties": {
         "duration_api_ms": {
           "anyOf": [
@@ -724,7 +724,7 @@
         "permission_denials",
         "errors"
       ],
-      "title": "ClaudeAgentNativeTrace",
+      "title": "ClaudeAgentTraceHeader",
       "type": "object"
     },
     "ClaudeAgentTurn": {
@@ -1271,60 +1271,6 @@
       "title": "PredictRLMModels",
       "type": "object"
     },
-    "PredictRLMNativeTrace": {
-      "additionalProperties": false,
-      "description": "PredictRLM run details that have no common-layer equivalent.",
-      "properties": {
-        "format": {
-          "const": "predict_rlm.run/v1",
-          "default": "predict_rlm.run/v1",
-          "title": "Format",
-          "type": "string"
-        },
-        "max_iterations": {
-          "exclusiveMinimum": 0,
-          "title": "Max Iterations",
-          "type": "integer"
-        },
-        "sub_model": {
-          "anyOf": [
-            {
-              "type": "string"
-            },
-            {
-              "type": "null"
-            }
-          ],
-          "title": "Sub Model"
-        },
-        "telemetry_ref": {
-          "anyOf": [
-            {
-              "additionalProperties": {
-                "$ref": "#/$defs/JsonValue"
-              },
-              "type": "object"
-            },
-            {
-              "type": "null"
-            }
-          ],
-          "title": "Telemetry Ref"
-        },
-        "usage": {
-          "$ref": "#/$defs/PredictRLMUsage"
-        }
-      },
-      "required": [
-        "format",
-        "sub_model",
-        "max_iterations",
-        "usage",
-        "telemetry_ref"
-      ],
-      "title": "PredictRLMNativeTrace",
-      "type": "object"
-    },
     "PredictRLMOmissions": {
       "additionalProperties": false,
       "description": "Calls left out of a turn that exceeded the live event size limit.",
@@ -1481,6 +1427,60 @@
         "cache_hits"
       ],
       "title": "PredictRLMTokenUsage",
+      "type": "object"
+    },
+    "PredictRLMTraceHeader": {
+      "additionalProperties": false,
+      "description": "PredictRLM run details that have no common-header equivalent.",
+      "properties": {
+        "format": {
+          "const": "predict_rlm.run/v1",
+          "default": "predict_rlm.run/v1",
+          "title": "Format",
+          "type": "string"
+        },
+        "max_iterations": {
+          "exclusiveMinimum": 0,
+          "title": "Max Iterations",
+          "type": "integer"
+        },
+        "sub_model": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Sub Model"
+        },
+        "telemetry_ref": {
+          "anyOf": [
+            {
+              "additionalProperties": {
+                "$ref": "#/$defs/JsonValue"
+              },
+              "type": "object"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Telemetry Ref"
+        },
+        "usage": {
+          "$ref": "#/$defs/PredictRLMUsage"
+        }
+      },
+      "required": [
+        "format",
+        "sub_model",
+        "max_iterations",
+        "usage",
+        "telemetry_ref"
+      ],
+      "title": "PredictRLMTraceHeader",
       "type": "object"
     },
     "PredictRLMTurn": {

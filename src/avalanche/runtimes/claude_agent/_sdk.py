@@ -54,7 +54,6 @@ from ...agent.trace import (
     AgentTrace,
     AgentTraceHeader,
     AgentTraceStatus,
-    ClaudeAgentNativeTrace,
     TokenUsage,
     ToolCall,
     Turn,
@@ -76,6 +75,10 @@ _MAX_VALUE_BYTES = 256 * 1024
 _MAX_TURN_TOOL_CALL_BYTES = 4 * 1024 * 1024
 # An error reason taken from a result's free text is cut to this length.
 _MAX_ERROR_CHARS = 4096
+# Listed result errors kept in the trace header, which every run snapshot carries:
+# even fully JSON-escaped (6 bytes a character) they stay under its 64 KiB limit.
+_MAX_RESULT_ERRORS = 8
+_MAX_RESULT_ERROR_CHARS = 1024
 
 
 async def run(
@@ -405,7 +408,9 @@ def _check_inputs(request: AgentRequest) -> None:
 def _result_errors(result: ResultMessage) -> tuple[str, ...]:
     """Why a result failed; API failures carry their reason only in the result text."""
     if result.errors:
-        return tuple(result.errors)
+        return tuple(
+            error[:_MAX_RESULT_ERROR_CHARS] for error in result.errors[:_MAX_RESULT_ERRORS]
+        )
     if result.is_error and result.result:
         return (result.result[:_MAX_ERROR_CHARS],)
     return ()
@@ -706,14 +711,14 @@ class _Transcript:
                 tool_call_count=sum(len(turn.tool_calls) for turn in self.turns),
                 external_run_id=result.session_id,
                 session_id=result.session_id,
+                native=native.ClaudeAgentTraceHeader(
+                    result_subtype=result.subtype,
+                    num_turns=result.num_turns,
+                    duration_api_ms=result.duration_api_ms,
+                    permission_denials=len(result.permission_denials or ()),
+                    errors=_result_errors(result),
+                ),
             ),
             turns=tuple(self.turns),
-            native=ClaudeAgentNativeTrace(
-                result_subtype=result.subtype,
-                num_turns=result.num_turns,
-                duration_api_ms=result.duration_api_ms,
-                permission_denials=len(result.permission_denials or ()),
-                errors=_result_errors(result),
-            ),
             turns_streamed=False,
         )

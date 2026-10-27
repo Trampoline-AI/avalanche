@@ -323,8 +323,8 @@ enum AgentTraceStatusV2 {
   AGENT_TRACE_STATUS_V2_CANCELLED = 3;
 }
 
-// The runtime-neutral summary of one finished agent invocation. Runtime-specific
-// details (such as PredictRLM's sub-model) stay in the trace body.
+// The summary of one finished agent invocation. Runtime-specific details (such as
+// PredictRLM's sub-model) travel in native_json.
 message TraceHeaderV2 {
   reserved 1, 3, 4, 5, 7, 8;
   reserved "sub_model", "iterations", "max_iterations", "usage_json", "telemetry_json";
@@ -339,6 +339,9 @@ message TraceHeaderV2 {
   optional string external_run_id = 14;
   optional string stop_reason = 15;
   AgentTraceStatusV2 status = 16;
+  // The runtime-specific header part as JSON, discriminated by its "format"; it
+  // matches the generated agent trace schemas.
+  string native_json = 17;
 }
 
 message TraceDescriptorV2 {

@@ -212,7 +212,7 @@ async def test_invoke_maps_a_run_onto_the_common_trace(monkeypatch):
     )
     assert (header.usage.input_tokens, header.usage.output_tokens) == (13, 6)
     assert header.usage.cost_usd == pytest.approx(0.3)
-    native = outcome.trace.native
+    native = outcome.trace.header.native
     assert (native.sub_model, native.max_iterations) == ("sub-model", 4)
     assert native.usage.main.cache_hits + native.usage.sub.cache_hits == 1
     (turn,) = outcome.trace.turns
