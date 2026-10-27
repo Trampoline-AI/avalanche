@@ -50,10 +50,12 @@ Load only what the task needs:
   outputs, and only that invocation's trace—not the enclosing step's inputs,
   postprocessed return, or all invocation traces. Do not invent a second context
   schema or a separate evaluation workflow.
-- Agent runtime data (request, result, trace, live events) and how PredictRLM
-  and ClaudeAgent each fill it:
+- Agent runtime data (request, result, trace, live events):
   [agent-runtime-contract.md](references/agent-runtime-contract.md); every model,
   without explanations: [agent-runtime-models.md](references/agent-runtime-models.md).
+  Each runtime's settings, own data, and how it fills the shared data:
+  [predict-rlm.md](references/runtimes/predict-rlm.md) and
+  [claude-agent.md](references/runtimes/claude-agent.md).
 - Usage, native classifier syntax, question-object design for routing, labels,
   scoring, extraction, and verification, local execution, and CLI flags:
   [usage.md](references/usage.md#native-classifier-steps).
