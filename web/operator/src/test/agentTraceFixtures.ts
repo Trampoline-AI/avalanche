@@ -28,7 +28,6 @@ function live(
     sequence,
     // A real time.time_ns() value, beyond JavaScript's safe integers.
     timestamp_ns: 1_792_855_720_829_187_328 + sequence * 1_024,
-    runtime_kind: "predict_rlm",
     ...rest,
   };
 }
@@ -101,37 +100,20 @@ export function turnEvent(iteration: number, options: TurnOptions = {}): AgentLi
         },
       },
     },
-    native: { format: "predict_rlm.run/v1", kind: "iteration.recorded", omissions: null },
+    // A turn its live event kept whole has no native part.
+    native: null,
   });
 }
 
+/** The common event every runtime starts a run with. */
 export function runStartedEvent(
   inputs: Record<string, JsonValue>,
   sequence = 1,
+  omitted: string[] = [],
 ): AgentLiveEvent {
   return live(sequence, {
-    common: null,
-    native: {
-      format: "predict_rlm.run/v1",
-      kind: "run.started",
-      input_fields: Object.keys(inputs),
-      inputs,
-    },
-  });
-}
-
-export function runSucceededEvent(
-  outputs: Record<string, JsonValue>,
-  sequence = 2,
-): AgentLiveEvent {
-  return live(sequence, {
-    common: null,
-    native: {
-      format: "predict_rlm.run/v1",
-      kind: "run.succeeded",
-      status: "completed",
-      outputs,
-    },
+    common: { kind: "run.started", model: "main-model", inputs, omitted_inputs: omitted },
+    native: null,
   });
 }
 
@@ -153,45 +135,38 @@ export function predictRlmTraceHeader(options: HeaderOptions = {}): PredictRLMTr
   };
 }
 
-/** A PredictRLM final trace; its turns travelled as live events. */
-export function finishedTrace(options: HeaderOptions = {}): AgentTraceTerminal {
+export interface FinishedOptions extends HeaderOptions {
+  outputs?: Record<string, JsonValue> | null;
+  omittedOutputs?: string[];
+}
+
+/** A PredictRLM final event: the header and the outputs; its turns travelled live. */
+export function finishedTrace(options: FinishedOptions = {}): AgentTraceTerminal {
   return {
     kind: "trace_finished",
     schema_version: 2,
     invocation_id: "invocation-1",
     complete: true,
-    record: {
-      schema_version: 2,
-      turns_streamed: true,
-      turns: [],
-      header: {
-        runtime_kind: "predict_rlm",
-        trace_format: "predict_rlm.run/v1",
-        status: "succeeded",
-        stop_reason: "submit",
-        model: "retained-model",
-        duration_ms: 125,
-        usage: null,
-        turn_count: 2,
-        tool_call_count: 0,
-        external_run_id: "run-1",
-        session_id: null,
-        native: predictRlmTraceHeader(options),
-      },
+    outputs: options.outputs === undefined ? { answer: "done" } : options.outputs,
+    omitted_outputs: options.omittedOutputs ?? [],
+    header: {
+      status: "succeeded",
+      stop_reason: "submit",
+      model: "retained-model",
+      duration_ms: 125,
+      usage: null,
+      turn_count: 2,
+      tool_call_count: 0,
+      external_run_id: "run-1",
+      session_id: null,
+      native: predictRlmTraceHeader(options),
     },
   };
 }
 
-function claudeLive(
-  sequence: number,
-  rest: Pick<AgentLiveEvent, "common" | "native">,
-): AgentLiveEvent {
-  return { ...live(sequence, rest), runtime_kind: "claude_agent" };
-}
-
 /** A Claude turn: a message, thinking and one tool call. */
 export function claudeTurnEvent(index: number): AgentLiveEvent {
-  return claudeLive(index, {
+  return live(index, {
     common: {
       kind: "turn.finished",
       omitted_tool_calls: 0,
@@ -227,33 +202,6 @@ export function claudeTurnEvent(index: number): AgentLiveEvent {
         },
       },
     },
-    native: { format: "claude_agent.messages/v1", kind: "message.finished" },
-  });
-}
-
-export function claudeStartedEvent(inputs: Record<string, JsonValue>): AgentLiveEvent {
-  return claudeLive(1, {
-    common: null,
-    native: { format: "claude_agent.messages/v1", kind: "started", model: null, inputs },
-  });
-}
-
-export function claudeFinishedEvent(
-  output: Record<string, JsonValue> | null,
-  workspaceOutputs: string[] = [],
-): AgentLiveEvent {
-  return claudeLive(9, {
-    common: null,
-    native: {
-      format: "claude_agent.messages/v1",
-      kind: "finished",
-      subtype: "success",
-      is_error: false,
-      num_turns: 2,
-      structured_output: output,
-      output_omitted: output === null,
-      errors: [],
-      workspace_outputs: workspaceOutputs,
-    },
+    native: null,
   });
 }

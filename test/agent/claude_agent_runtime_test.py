@@ -35,9 +35,10 @@ from avalanche.agent import (  # noqa: E402
     AgentStepError,
     AgentStepExecutionError,
 )
+from avalanche.agent import trace as trace_module  # noqa: E402
 from avalanche.agent.contract import ToolSpec  # noqa: E402
 from avalanche.agent.declaration import ClaudeAgentDeclaration  # noqa: E402
-from avalanche.agent.native import claude_agent as claude_native  # noqa: E402
+from avalanche.agent.live import RunStarted, TurnFinished  # noqa: E402
 from avalanche.agent.native.claude_agent import ClaudeAgentTurn  # noqa: E402
 from avalanche.agent.trace import ToolCall  # noqa: E402
 from avalanche.runtimes import ClaudeAgent  # noqa: E402
@@ -144,6 +145,10 @@ def replay(monkeypatch):
     return install
 
 
+def _is_turn(event) -> bool:
+    return event.kind == "event" and isinstance(event.common, TurnFinished)
+
+
 def _agent(**runtime) -> ava.Agent:
     return ava.Agent(
         signature=Total,
@@ -186,22 +191,29 @@ async def test_a_session_maps_onto_outputs_turns_and_live_events(replay):
         duration_ms=None,
     )
     assert [call.name for call in second.tool_calls] == ["StructuredOutput"]
+    # Only the session report is Claude's own; everything else is a common event.
     assert [
-        (event.kind, event.native.kind if event.kind == "event" else None) for event in observed
+        (
+            event.kind,
+            event.native.kind if event.kind == "event" and event.native else None,
+            event.common.kind if event.kind == "event" and event.common else None,
+        )
+        for event in observed
     ] == [
-        ("event", "started"),
-        ("event", "session.initialized"),
-        ("event", "tool.used"),
-        ("event", "tool.returned"),
-        ("event", "message.finished"),
-        ("event", "tool.used"),
-        ("event", "tool.returned"),
-        ("event", "message.finished"),
-        ("event", "finished"),
-        ("trace_finished", None),
+        ("event", None, "run.started"),
+        ("event", "session.initialized", None),
+        ("event", None, "tool.started"),
+        ("event", None, "tool.finished"),
+        ("event", None, "turn.finished"),
+        ("event", None, "tool.started"),
+        ("event", None, "tool.finished"),
+        ("event", None, "turn.finished"),
+        ("trace_finished", None, None),
     ]
-    assert observed[-1].record.turns == ()
-    assert observed[0].native.inputs == {"a": 2, "b": 3}
+    assert [event.turn for event in observed[2:8]] == [1, 1, 1, 2, 2, 2]
+    assert observed[0].common.inputs == {"a": 2, "b": 3}
+    assert observed[0].common.model == MODEL
+    assert observed[-1].outputs == {"total": 15}
 
     options = seen["options"]
     assert options.model == MODEL
@@ -228,13 +240,12 @@ async def test_large_inputs_and_tool_calls_stay_within_the_live_event_limits(
 ):
     monkeypatch.setattr(sdk_module, "_MAX_VALUE_BYTES", 64)
     monkeypatch.setattr(sdk_module, "_MAX_TURN_TOOL_CALL_BYTES", 1)
+    monkeypatch.setattr(trace_module, "RETAINED_VALUES_LIMIT_BYTES", 64)
     seen = replay(_success_stream())
     observed = []
     with capture_agent_evidence(observed.append, errors="raise"):
         result = await _agent()(a=2, b=3)
-    turns = [
-        e.common for e in observed if e.kind == "event" and e.native.kind == "message.finished"
-    ]
+    turns = [e.common for e in observed if _is_turn(e)]
     # Over the budget, a live turn's calls are counted as omitted; the record keeps them.
     assert [(len(t.turn.tool_calls), t.omitted_tool_calls) for t in turns] == [(0, 1), (0, 1)]
     assert [len(turn.tool_calls) for turn in result.trace.turns] == [1, 1]
@@ -243,9 +254,9 @@ async def test_large_inputs_and_tool_calls_stay_within_the_live_event_limits(
     observed = []
     with capture_agent_evidence(observed.append, errors="raise"):
         await ava.Agent(signature=Note, step_name="note", runtime=ClaudeAgent())(text="x" * 500)
-    # Claude gets the whole input; the started event keeps only a marker for it.
+    # Claude gets the whole input; the run.started event names it as left out.
     assert "x" * 500 in seen["prompt"]
-    assert observed[0].native.inputs["text"]["kind"] == "unavailable"
+    assert (observed[0].common.inputs, observed[0].common.omitted_inputs) == ({}, ("text",))
 
 
 @pytest.mark.asyncio
@@ -257,9 +268,7 @@ async def test_a_failed_tool_is_kept_on_its_call_and_does_not_fail_the_turn(repl
 
     (call,) = result.trace.turns[0].tool_calls
     assert (call.result, call.error) == (None, "lookup failed")
-    turn_event = next(
-        e for e in observed if e.kind == "event" and e.native.kind == "message.finished"
-    )
+    turn_event = next(e for e in observed if _is_turn(e))
     assert turn_event.failed is False
 
 
@@ -283,9 +292,7 @@ async def test_a_turn_with_an_api_error_fails(replay):
         result = await _agent()(a=2, b=3)
 
     assert result.trace.turns[-1].native.api_error == "rate_limit"
-    turn_events = [
-        e for e in observed if e.kind == "event" and e.native.kind == "message.finished"
-    ]
+    turn_events = [e for e in observed if _is_turn(e)]
     assert [event.failed for event in turn_events] == [False, False, True]
 
 
@@ -306,23 +313,10 @@ async def test_a_session_without_an_output_object_fails_after_its_trace(
 
     final = observed[-1]
     assert final.kind == "trace_finished"
-    assert (final.record.header.status, final.record.header.stop_reason) == (
+    assert (final.header.status, final.header.stop_reason) == (
         "failed",
         stop_reason,
     )
-
-
-def test_a_failed_result_without_a_reason_names_its_subtype():
-    finished = claude_native.Finished(
-        subtype="error_during_execution",
-        is_error=True,
-        num_turns=1,
-        structured_output=None,
-        output_omitted=False,
-        workspace_outputs=(),
-        errors=(),
-    )
-    assert finished.error == "error_during_execution"
 
 
 @pytest.mark.asyncio
@@ -339,9 +333,9 @@ async def test_running_out_of_turns_fails_with_the_sdk_reason(replay):
 
     # The final trace keeps the session's details instead of an unavailable trace.
     assert observed[-1].kind == "trace_finished"
-    header = observed[-1].record.header
+    header = observed[-1].header
     assert (header.status, header.stop_reason) == ("failed", "error_max_turns")
-    assert observed[-1].record.header.native.result_subtype == "error_max_turns"
+    assert observed[-1].header.native.result_subtype == "error_max_turns"
 
 
 @pytest.mark.asyncio
@@ -357,10 +351,9 @@ async def test_api_error_result_fails_with_the_api_error(replay):
         with pytest.raises(AgentStepExecutionError, match="529"):
             await _agent()(a=2, b=3)
 
-    # The reason also reaches the live result event and the final trace.
-    finished = next(e for e in observed if e.kind == "event" and e.native.kind == "finished")
-    assert "529" in finished.native.error
-    assert any("529" in error for error in observed[-1].record.header.native.errors)
+    # The reason also reaches the final event's header.
+    assert any("529" in error for error in observed[-1].header.native.errors)
+    assert observed[-1].outputs is None
 
 
 @pytest.mark.asyncio
@@ -377,7 +370,7 @@ async def test_many_long_result_errors_stay_within_the_trace_header_limit(replay
             await _agent()(a=2, b=3)
 
     # The header travels in every run snapshot; its errors are cut, not dropped.
-    errors = observed[-1].record.header.native.errors
+    errors = observed[-1].header.native.errors
     assert errors and all(error.startswith("過負荷") for error in errors)
 
 
@@ -495,8 +488,8 @@ async def test_input_files_are_read_where_they_are_and_traced_by_reference(repla
     assert seen["options"].add_dirs == [str(sources)]
     assert sorted(path.name for path in sources.iterdir()) == ["a.txt", "b.txt"]
     # The trace records each file by its reference, never by its host path.
-    started = observed[0].native
-    assert isinstance(started, claude_native.Started)
+    started = observed[0].common
+    assert isinstance(started, RunStarted)
     assert [item["path"] for item in started.inputs["documents"]] == ["a.txt", "b.txt"]
     assert {item["workspace"] for item in started.inputs["documents"]} == {"snapshot:sources"}
     assert str(tmp_path) not in started.model_dump_json()
@@ -526,7 +519,11 @@ async def test_file_outputs_are_reserved_in_the_run_workspace(monkeypatch, tmp_p
             yield message
 
     monkeypatch.setattr(sdk_module, "_session", write_then_finish)
-    with ava.file_reference_context(workspace, attempt="attempt-1"):
+    observed = []
+    with (
+        ava.file_reference_context(workspace, attempt="attempt-1"),
+        capture_agent_evidence(observed.append, errors="raise"),
+    ):
         result = await ava.Agent(signature=Report, step_name="report", runtime=ClaudeAgent())(
             question="q"
         )
@@ -542,6 +539,11 @@ async def test_file_outputs_are_reserved_in_the_run_workspace(monkeypatch, tmp_p
     assert report.ref.workspace == "snapshot:run"
     assert report.ref.path.startswith(".outputs/report/attempt-1/")
     assert [file.read_bytes() for file in result.outputs.appendices] == [b"a"]
+    # The final event keeps each file output by its reference, never its host path.
+    outputs = observed[-1].outputs
+    assert (outputs["report"]["kind"], outputs["report"]["path"]) == ("file", report.ref.path)
+    assert [item["kind"] for item in outputs["appendices"]] == ["file"]
+    assert str(tmp_path) not in observed[-1].model_dump_json()
 
 
 @pytest.mark.asyncio
@@ -551,10 +553,14 @@ async def test_file_outputs_are_reserved_in_the_run_workspace(monkeypatch, tmp_p
 async def test_file_outputs_that_cannot_be_used_are_output_errors(replay, tmp_path, report):
     replay([_init(), _result({"report": report, "appendices": []})])
 
-    with pytest.raises(AgentOutputError, match="report"):
-        await ava.Agent(signature=Report, step_name="report", runtime=ClaudeAgent())(
-            question="q"
-        )
+    observed = []
+    with capture_agent_evidence(observed.append, errors="raise"):
+        with pytest.raises(AgentOutputError, match="report"):
+            await ava.Agent(signature=Report, step_name="report", runtime=ClaudeAgent())(
+                question="q"
+            )
+    # The step still sends its one final event, with no outputs to show.
+    assert (observed[-1].kind, observed[-1].outputs) == ("trace_finished", None)
 
 
 class TwoWorkspaces(ava.Signature):

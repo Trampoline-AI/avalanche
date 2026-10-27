@@ -512,11 +512,11 @@ async def test_operator_tui_extensions_live_pilot(tmp_path):
                 "answer": 10,
                 "lm_calls": 3,
             }
-            await wait_for(pilot, lambda: app.store.selected_agent_record is not None)
+            await wait_for(pilot, lambda: app.store.selected_agent_header is not None)
             envelope = app.store.selected_agent_trace_envelope
             assert envelope is not None
-            record = app.store.selected_agent_record
-            assert record is not None and record.header.turn_count == 3
+            header = app.store.selected_agent_header
+            assert header is not None and header.turn_count == 3
             turns = app.store.selected_agent_turns
             assert [turn.finished.turn.index for turn in turns] == [1, 2, 3]
             code = [turn.finished.turn.native for turn in turns]
@@ -542,8 +542,8 @@ async def test_operator_tui_extensions_live_pilot(tmp_path):
             assert "[2, 3, 5]" in screen_text and "10" in screen_text
             assert "total = sum(numbers)" in screen_text
             assert "SUBMIT(answer=total)" in screen_text
-            assert record.header.native.usage.main.input_tokens == 0
-            assert record.header.native.usage.main.output_tokens == 0
+            assert header.native.usage.main.input_tokens == 0
+            assert header.native.usage.main.output_tokens == 0
             assert "0 in / 0 out" in screen_text
             assert "Main:" in screen_text and "Sub:" in screen_text
             app.save_screenshot(str(evidence / "scripted-trace.svg"))

@@ -2,37 +2,31 @@
 
 from __future__ import annotations
 
-from collections.abc import Mapping, Sequence
+from collections.abc import Sequence
 from dataclasses import dataclass
-
-from pydantic import JsonValue
 
 from avalanche.agent.live import AgentLiveEvent, TurnFinished
 from avalanche.agent.native.predict_rlm import (
     CodeExecuted,
     CodeGenerated,
     IterationRecorded,
+    PredictRLMOmissions,
     PredictRLMPredictCall,
     PredictRLMTokenUsage,
     PredictRLMTraceHeader,
     PredictRLMTurn,
-    RunSucceeded,
 )
-from avalanche.agent.trace import AgentTrace, ToolCall, Turn
+from avalanche.agent.trace import AgentTraceHeader, ToolCall, Turn
 
 from . import InspectionTurn, PendingStep, TraceGroup, TraceItem, TraceSection, TurnView
-from .generic import duration_seconds, message_items, reasoning_items, tool_group
+from .generic import GENERIC, duration_seconds, message_items, reasoning_items, tool_group
 
 _LABELS = {
-    "run.started": "Run started",
     "code.generated": "Code generated",
     "code.executed": "Sandbox output received",
     "iteration.recorded": "Turn completed",
     "predict.started": "Sub-model call started",
     "predict.finished": "Sub-model call finished",
-    "tool.started": "Tool call started",
-    "tool.finished": "Tool call finished",
-    "run.succeeded": "Run completed",
     "run.failed": "Run failed",
     "run.cancelled": "Run cancelled",
     "input.prepared": "Input prepared",
@@ -56,17 +50,21 @@ def _usage_label(usage: PredictRLMTokenUsage) -> str:
     )
 
 
-def _native(record: AgentTrace) -> PredictRLMTraceHeader:
-    native = record.header.native
+def _native(header: AgentTraceHeader) -> PredictRLMTraceHeader:
+    native = header.native
     if not isinstance(native, PredictRLMTraceHeader):
         raise TypeError(f"not a PredictRLM trace: {native.format}")
     return native
 
 
-def _detail(turn: InspectionTurn) -> IterationRecorded:
-    if not isinstance(turn.native, IterationRecorded):
-        raise TypeError(f"PredictRLM turn has native kind {turn.native.kind!r}")
-    return turn.native
+def _omissions(turn: InspectionTurn) -> PredictRLMOmissions | None:
+    """What the turn's live event left out; a turn that kept everything has no native part."""
+    match turn.native:
+        case None:
+            return None
+        case IterationRecorded(omissions=omissions):
+            return omissions
+    raise TypeError(f"PredictRLM turn has native kind {turn.native.kind!r}")
 
 
 def _turn_native(turn: Turn) -> PredictRLMTurn:
@@ -121,9 +119,8 @@ def _predict_group(
 
 @dataclass(frozen=True)
 class PredictRLMViewer:
-    def header(self, record: AgentTrace) -> tuple[tuple[str, str], ...]:
-        header = record.header
-        native = _native(record)
+    def header(self, header: AgentTraceHeader) -> tuple[tuple[str, str], ...]:
+        native = _native(header)
         return (
             (f"Model: {header.model} · Sub-model: {native.sub_model}", ""),
             (
@@ -135,16 +132,16 @@ class PredictRLMViewer:
             (f"Sub:  {_usage_label(native.usage.sub)}", ""),
         )
 
-    def turn_limit(self, record: AgentTrace | None) -> int | None:
-        return _native(record).max_iterations if record is not None else None
+    def turn_limit(self, header: AgentTraceHeader | None) -> int | None:
+        return _native(header).max_iterations if header is not None else None
 
-    def submitted(self, record: AgentTrace) -> bool:
-        return record.header.stop_reason == "submit"
+    def submitted(self, header: AgentTraceHeader) -> bool:
+        return header.stop_reason == "submit"
 
     def turn(self, turn: InspectionTurn, *, full_output: bool) -> TurnView:
         common = turn.finished.turn
         native = _turn_native(common)
-        omissions = _detail(turn).omissions
+        omissions = _omissions(turn)
         predicts = predict_tool_calls(common)
         tools = common.tool_calls[: len(common.tool_calls) - len(predicts)]
         items: list[TraceItem] = message_items(common)
@@ -183,6 +180,8 @@ class PredictRLMViewer:
         )
 
     def live_label(self, event: AgentLiveEvent) -> str:
+        if event.native is None:
+            return GENERIC.live_label(event)
         return _LABELS[event.native.kind]
 
     def pending(self, events: Sequence[AgentLiveEvent]) -> tuple[PendingStep, ...]:
@@ -212,15 +211,6 @@ class PredictRLMViewer:
             if (event.invocation_id, turn) not in finished:
                 steps.append(PendingStep(event, turn, status, section))
         return tuple(steps)
-
-    def outputs(self, events: Sequence[AgentLiveEvent]) -> Mapping[str, JsonValue] | None:
-        for event in reversed(events):
-            if isinstance(event.native, RunSucceeded):
-                outputs = event.native.outputs
-                if not isinstance(outputs, dict):
-                    raise TypeError("PredictRLM run outputs must be an object")
-                return outputs
-        return None
 
 
 PREDICT_RLM = PredictRLMViewer()

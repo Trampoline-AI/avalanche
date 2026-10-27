@@ -11,15 +11,20 @@ import {
   measuredByteCost,
   mergeDescriptorPage,
 } from "./detailProjection";
-import { parseAgentLiveEvent } from "./agentTrace/common";
-import { valueEventKinds, viewerFor } from "./agentTrace/viewers";
+import { parseAgentLiveEvent, parseAgentTraceTerminal } from "./agentTrace/common";
 import { isUnknownRecord } from "./guards";
-import { DescriptorPageOrder, type AgentEventDescriptorMsg } from "./model";
+import {
+  DescriptorPageOrder,
+  type AgentEventDescriptorMsg,
+  type TraceDescriptorMsg,
+} from "./model";
 import { ValueView } from "./ValueView";
 
 interface RetainedAgentValueProps {
   api: OperatorApi;
   kind: "inputs" | "outputs";
+  /** The step's final event, which carries its outputs once it finished. */
+  trace?: TraceDescriptorMsg;
   fields: AgentFieldSchemas["inputs"] | undefined;
   schemaUnavailableMessage: string;
   operatorInstanceId: string;
@@ -37,16 +42,39 @@ const EMPTY_PAGE: DescriptorPageState<AgentEventDescriptorMsg> = {
   nextCursor: "0",
 };
 
+interface Retained {
+  /** Absent when the body holds no value, such as a run that returned no outputs. */
+  value: unknown;
+  /** Fields the trace left out because they were too large to keep. */
+  omitted: string[];
+}
+
 type ValueState =
   | { api: OperatorApi; token: string; status: "loading" }
-  | { api: OperatorApi; token: string; status: "ready"; retained: unknown }
+  | { api: OperatorApi; token: string; status: "ready"; retained: Retained }
   | { api: OperatorApi; token: string; status: "error"; error: string };
 
-// Each mounted direction owns its cursor, cancellation and one bounded cached body.
-// The parent keys this view by the historical descriptor scope.
+// The run's inputs travel on its common run.started event; its outputs on its final event.
+function retainedValue(body: unknown, kind: "inputs" | "outputs"): Retained {
+  if (kind === "inputs") {
+    const { common } = parseAgentLiveEvent(body);
+    return common?.kind === "run.started"
+      ? { value: common.inputs, omitted: common.omitted_inputs }
+      : { value: undefined, omitted: [] };
+  }
+  const terminal = parseAgentTraceTerminal(body);
+  return terminal.kind === "trace_finished" && terminal.outputs !== null
+    ? { value: terminal.outputs, omitted: terminal.omitted_outputs }
+    : { value: undefined, omitted: [] };
+}
+
+// Inputs page through the step's events for its run.started event; outputs read the
+// final event. Each mounted direction owns its cursor, cancellation and one bounded
+// cached body. The parent keys this view by the historical descriptor scope.
 export function RetainedAgentValue({
   api,
   kind,
+  trace,
   fields,
   operatorInstanceId,
   asOfEventUlid,
@@ -68,25 +96,24 @@ export function RetainedAgentValue({
   const pageGeneration = useRef(0);
   const page = pageState?.api === api ? pageState.page : EMPTY_PAGE;
   const activeError = pageError?.api === api ? pageError.error : undefined;
-  const order =
-    kind === "inputs" ? DescriptorPageOrder.FORWARD : DescriptorPageOrder.NEWEST_FIRST;
-  const eventKinds = useMemo(() => valueEventKinds(kind), [kind]);
+  const pagesEvents = kind === "inputs";
   const label = kind === "inputs" ? "input" : "output";
   const valueEvent = useMemo(() => {
+    if (!pagesEvents) return undefined;
     const records = new Map<string, AgentEventDescriptorMsg>();
     for (const event of page.records) records.set(event.eventSequence, event);
     for (const event of liveEvents) records.set(event.eventSequence, event);
+    const isRunStarted = (event: AgentEventDescriptorMsg) =>
+      event.agentEventKind === "run.started";
     return boundDescriptors(
       records,
       (event) => event.eventSequence,
-      kind === "inputs" ? "newer" : "older",
-      [...records.values()]
-        .filter((event) => eventKinds.has(event.nativeEventKind))
-        .map((event) => event.eventSequence),
+      "newer",
+      [...records.values()].filter(isRunStarted).map((event) => event.eventSequence),
     )
       .reverse()
-      .find((event) => eventKinds.has(event.nativeEventKind));
-  }, [eventKinds, kind, liveEvents, page.records]);
+      .find(isRunStarted);
+  }, [liveEvents, page.records, pagesEvents]);
 
   useEffect(() => {
     const controller = new AbortController();
@@ -94,8 +121,8 @@ export function RetainedAgentValue({
     const generation = ++pageGeneration.current;
     setPageState(undefined);
     setPageError(undefined);
-    setLoading(Boolean(eventPageToken));
-    if (!eventPageToken) {
+    setLoading(pagesEvents && Boolean(eventPageToken));
+    if (!pagesEvents || !eventPageToken) {
       setPageState({ api, page: EMPTY_PAGE });
       return () => controller.abort();
     }
@@ -106,7 +133,7 @@ export function RetainedAgentValue({
           afterEventSequence: "0",
           beforeEventSequence: "0",
           pageSize: DESCRIPTOR_PAGE_SIZE,
-          order,
+          order: DescriptorPageOrder.FORWARD,
           expectedOperatorInstanceId: operatorInstanceId,
           expectedAsOfEventUlid: asOfEventUlid,
           expectedRunId: runId,
@@ -135,7 +162,7 @@ export function RetainedAgentValue({
       pageController.current?.abort();
       pageController.current = null;
     };
-  }, [api, asOfEventUlid, eventPageToken, nodeId, operatorInstanceId, order, runId]);
+  }, [api, asOfEventUlid, eventPageToken, nodeId, operatorInstanceId, pagesEvents, runId]);
 
   function loadMore() {
     if (!page.nextPageToken || pageController.current) return;
@@ -148,10 +175,10 @@ export function RetainedAgentValue({
       .listAgentEventPage(
         {
           pageToken: page.nextPageToken,
-          afterEventSequence: kind === "inputs" ? page.nextCursor : "0",
-          beforeEventSequence: kind === "outputs" ? page.nextCursor : "0",
+          afterEventSequence: page.nextCursor,
+          beforeEventSequence: "0",
           pageSize: DESCRIPTOR_PAGE_SIZE,
-          order,
+          order: DescriptorPageOrder.FORWARD,
           expectedOperatorInstanceId: operatorInstanceId,
           expectedAsOfEventUlid: asOfEventUlid,
           expectedRunId: runId,
@@ -167,7 +194,7 @@ export function RetainedAgentValue({
             current?.api === api ? current.page : EMPTY_PAGE,
             next,
             (event) => event.eventSequence,
-            kind === "inputs" ? "newer" : "older",
+            "newer",
             valueEvent ? [valueEvent.eventSequence] : [],
           ),
         }));
@@ -186,8 +213,8 @@ export function RetainedAgentValue({
       });
   }
 
-  const token = valueEvent?.bodyToken;
-  const sizeBytes = valueEvent?.sizeBytes;
+  const token = pagesEvents ? valueEvent?.bodyToken : trace?.bodyToken;
+  const sizeBytes = pagesEvents ? valueEvent?.sizeBytes : trace?.sizeBytes;
   useEffect(() => {
     if (!token) {
       setValueState(undefined);
@@ -208,13 +235,7 @@ export function RetainedAgentValue({
           });
           return;
         }
-        const event = parseAgentLiveEvent(body);
-        setValueState({
-          api,
-          token,
-          status: "ready",
-          retained: viewerFor(event.native.format).retainedValue(event, kind),
-        });
+        setValueState({ api, token, status: "ready", retained: retainedValue(body, kind) });
       })
       .catch((error: unknown) => {
         if (controller.signal.aborted) return;
@@ -229,14 +250,16 @@ export function RetainedAgentValue({
   }, [api, kind, sizeBytes, token]);
 
   const value = valueState?.api === api && valueState.token === token ? valueState : undefined;
-  const retainedValue = value?.status === "ready" ? value.retained : undefined;
-  const hasRetainedValue = retainedValue !== undefined;
-  const retainedFields = isUnknownRecord(retainedValue) ? retainedValue : undefined;
+  const retained = value?.status === "ready" ? value.retained.value : undefined;
+  const omitted = value?.status === "ready" ? value.retained.omitted : [];
+  const hasRetainedValue = retained !== undefined;
+  const retainedFields = isUnknownRecord(retained) ? retained : undefined;
   const waiting =
-    !activeError && ((pageState?.api !== api && !valueEvent) || (token && !value));
+    !activeError &&
+    ((pagesEvents && pageState?.api !== api && !valueEvent) || (token && !value));
   const awaitingOutput =
     kind === "outputs" &&
-    !page.nextPageToken &&
+    !token &&
     (!nodeStatus || nodeStatus === "pending" || nodeStatus === "running");
 
   return (
@@ -263,7 +286,7 @@ export function RetainedAgentValue({
       ) : hasRetainedValue ? (
         retainedFields === undefined && (
           <div className="mt-2 min-w-0 rounded-md bg-canvas p-2">
-            <ValueView value={retainedValue} />
+            <ValueView value={retained} />
           </div>
         )
       ) : value?.status !== "error" && !activeError ? (
@@ -273,7 +296,12 @@ export function RetainedAgentValue({
             : `No retained ${label} is available${page.nextPageToken ? " in the loaded events" : ""}.`}
         </p>
       ) : null}
-      {page.nextPageToken && (
+      {omitted.length > 0 && (
+        <p className="text-[11px] text-muted [overflow-wrap:anywhere]" role="note">
+          Too large to keep in the trace: {omitted.join(", ")}.
+        </p>
+      )}
+      {pagesEvents && page.nextPageToken && (
         <button
           type="button"
           className="descriptor-page-action cursor-pointer rounded-md border border-line bg-panel px-2 py-[5px] font-mono text-[8px] text-acid disabled:cursor-wait disabled:text-muted"

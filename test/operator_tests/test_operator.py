@@ -268,13 +268,14 @@ def test_agent_trace_header_and_events_carry_common_fields_over_protobuf(
 
         page = operator.list_agent_events(page_token=snapshot.nodes[0].event_page_token)
         setup, turn = page.events
+        # Neither event has a PredictRLM part: both are common events alone.
         assert (setup.native_event_kind, setup.agent_event_kind, setup.turn) == (
+            "",
             "run.started",
-            "native",
             None,
         )
         assert (turn.native_event_kind, turn.agent_event_kind, turn.turn) == (
-            "iteration.recorded",
+            "",
             "turn.finished",
             1,
         )
@@ -290,6 +291,17 @@ def test_agent_trace_header_and_events_carry_common_fields_over_protobuf(
             1,
             3,
         )
+        started = agent_event_descriptor_from_v2(
+            pb.RunActivityDescriptorV2.FromString(
+                agent_event_activity_to_v2(
+                    setup,
+                    run_id=run.run_id,
+                    node_id="agent_1",
+                    detail_ref=pb.ActivityDetailRefV2(),
+                ).SerializeToString()
+            )
+        )
+        assert (started.native_event_kind, started.agent_event_kind) == ("", "run.started")
     finally:
         operator.close()
 
@@ -366,7 +378,7 @@ def test_agent_evidence_deduplicates_per_invocation_and_materializes_references(
         assert trace["status"] == "succeeded"
         assert trace["invocation_id"] == "second"
         assert [code(event) for event in trace["events"]] == ["two"]
-        assert trace["terminal"]["record"]["header"]["external_run_id"] == "sdk-second"
+        assert trace["terminal"]["header"]["external_run_id"] == "sdk-second"
         assert trace["terminal"]["complete"] is True
         retained = json.loads(
             operator.read_trace(
@@ -374,7 +386,8 @@ def test_agent_evidence_deduplicates_per_invocation_and_materializes_references(
             ).data
         )
         assert retained["invocation_id"] == "second"
-        # Turns travelled as live events; the final body carries none.
-        assert retained["record"]["turns"] == []
+        # Turns travelled as live events; the final body carries the header alone.
+        assert "turns" not in retained and "record" not in retained
+        assert retained["header"]["external_run_id"] == "sdk-second"
     finally:
         operator.close()

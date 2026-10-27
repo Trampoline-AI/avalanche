@@ -19,6 +19,7 @@ if TYPE_CHECKING:
 # The common kind of an agent live event; "native" when it has no common equivalent.
 AgentEventKind = Literal[
     "native",
+    "run.started",
     "turn.finished",
     "tool.started",
     "tool.finished",
@@ -134,8 +135,6 @@ class TraceHeader:
     """The summary of a finished agent invocation, with its runtime-specific part."""
 
     status: AgentTraceStatus
-    runtime_kind: str
-    trace_format: str
     model: str | None
     duration_ms: int
     usage: TokenUsage | None
@@ -144,6 +143,14 @@ class TraceHeader:
     external_run_id: str | None
     stop_reason: str | None
     native: TraceHeaderNative
+
+    @property
+    def runtime_kind(self) -> str:
+        return self.native.runtime_kind
+
+    @property
+    def trace_format(self) -> str:
+        return self.native.format
 
 
 @dataclass(frozen=True)

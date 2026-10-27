@@ -24,9 +24,9 @@ from pydantic import (
 from pydantic.fields import FieldInfo
 
 from .declaration import RuntimeDeclaration
-from .live import AgentEvent, ToolFinished, ToolStarted, TurnFinished
+from .live import AgentEvent, RunStarted, ToolFinished, ToolStarted, TurnFinished
 from .native import NativeEvent
-from .trace import AgentTrace, AgentTraceStatus, RuntimeKind
+from .trace import AgentTrace, AgentTraceHeader, AgentTraceStatus, RuntimeKind
 
 # Serialized bodies always carry defaulted fields such as ``kind``; their
 # exported JSON Schema says so.
@@ -223,18 +223,24 @@ class AgentResult(BaseModel):
 
 
 class AgentEventSink(Protocol):
-    """Receives an invocation's live events and its one terminal trace.
+    """Receives an invocation's live events and its one final event.
 
     Avalanche assigns sequence numbers and timestamps. A runtime sends each live
-    event as its native payload plus the common event, when there is one, and
-    finishes with exactly one ``finished`` or ``unavailable`` call, also when the
-    run fails or is cancelled.
+    event as its native payload, the common event, or both, and finishes with
+    exactly one ``finished`` or ``unavailable`` call, also when the run fails or
+    is cancelled.
     """
 
-    async def emit(self, native: NativeEvent, common: AgentEvent | None) -> None: ...
+    async def emit(self, native: NativeEvent | None, common: AgentEvent | None) -> None: ...
 
-    def finished(self, record: AgentTrace, *, complete: bool) -> None:
-        """Send the final trace; its turns already travelled as live events."""
+    def finished(
+        self, header: AgentTraceHeader, *, outputs: AgentOutputs | None, complete: bool
+    ) -> None:
+        """Send the trace header and the run's raw outputs, ``None`` when it has none.
+
+        The turns already travelled as live events; Avalanche keeps the outputs
+        within the trace size limit.
+        """
         ...
 
     def unavailable(
@@ -283,6 +289,7 @@ __all__ = [
     "FieldSpec",
     "JsonOutputs",
     "PythonOutputs",
+    "RunStarted",
     "SignatureSpec",
     "ToolFinished",
     "ToolSpec",

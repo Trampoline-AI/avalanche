@@ -855,7 +855,8 @@ export interface TraceHeaderV2 {
      */
     durationMs: string;
     /**
-     * Open strings, so a new runtime needs no protobuf change.
+     * Open strings, so a new runtime needs no protobuf change; both repeat what
+     * native_json says, for clients that do not parse it.
      *
      * @generated from protobuf field: string runtime_kind = 9
      */
@@ -1138,7 +1139,8 @@ export interface RunActivityDescriptorV2 {
      */
     toolCallCount: number;
     /**
-     * Agent events only: the runtime's own event kind, such as "iteration.recorded".
+     * Agent events only: the runtime's own event kind, such as "iteration.recorded";
+     * empty when the event has only a common part.
      *
      * @generated from protobuf field: string native_event_kind = 23
      */
@@ -1716,7 +1718,11 @@ export enum AgentEventKindV2 {
     /**
      * @generated from protobuf enum value: AGENT_EVENT_KIND_V2_TOOL_FINISHED = 6;
      */
-    TOOL_FINISHED = 6
+    TOOL_FINISHED = 6,
+    /**
+     * @generated from protobuf enum value: AGENT_EVENT_KIND_V2_RUN_STARTED = 8;
+     */
+    RUN_STARTED = 8
 }
 /**
  * @generated from protobuf enum avalanche.operator.PageOrderV2

@@ -5,8 +5,8 @@ from __future__ import annotations
 from typing import TYPE_CHECKING
 
 from ...agent.native import predict_rlm as native
-from ...agent.trace import TokenUsage, ToolCall, Turn
-from .events import _project_agent_value, native_token_usage, native_usage
+from ...agent.trace import TokenUsage, ToolCall, Turn, evidence_value
+from .events import native_token_usage, native_usage
 
 if TYPE_CHECKING:
     from predict_rlm import IterationStep
@@ -35,10 +35,10 @@ def turn_from_step(step: IterationStep) -> Turn:
             caller="code",
             name=tool.name,
             arguments={
-                "args": _project_agent_value(tool.args),
-                "kwargs": _project_agent_value(tool.kwargs),
+                "args": evidence_value(tool.args),
+                "kwargs": evidence_value(tool.kwargs),
             },
-            result=_project_agent_value(tool.result),
+            result=evidence_value(tool.result),
             error=tool.error,
             duration_ms=tool.duration_ms,
         )
@@ -53,8 +53,8 @@ def turn_from_step(step: IterationStep) -> Turn:
                     call_id=None,
                     caller="code",
                     name="predict",
-                    arguments=_project_agent_value(call.input),
-                    result=_project_agent_value(call.output),
+                    arguments=evidence_value(call.input),
+                    result=evidence_value(call.output),
                     error=call.error,
                     duration_ms=call.duration_ms,
                 )

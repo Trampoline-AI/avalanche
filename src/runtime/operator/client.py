@@ -3169,7 +3169,6 @@ def _materialize_agent_trace_json(
     from avalanche._agent_trace import AgentTraceEnvelope
 
     envelope = AgentTraceEnvelope(
-        schema_version=2,
         invocation_id=trace_body.invocation_id if trace_body is not None else None,
         status=status,
         # Turns travel as live events; viewers read them from here.

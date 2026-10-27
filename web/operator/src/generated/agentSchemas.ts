@@ -34,6 +34,9 @@ export type SignatureDeclaration = z.infer<typeof SignatureDeclaration>;
 export const AgentDeclaration = z.strictObject({ "runtime": z.discriminatedUnion("kind", [PredictRLMDeclaration, ClaudeAgentDeclaration]), "signature": SignatureDeclaration, "tools": z.array(ToolDeclaration) });
 export type AgentDeclaration = z.infer<typeof AgentDeclaration>;
 
+export const RunStarted = z.strictObject({ "inputs": z.record(z.string(), JsonValue), "kind": z.literal("run.started"), "model": z.union([z.string(), z.null()]), "omitted_inputs": z.array(z.string()) });
+export type RunStarted = z.infer<typeof RunStarted>;
+
 export const PredictRLMTokenUsage = z.strictObject({ "cache_hits": z.number().min(0).refine(Number.isInteger, "Expected an integer"), "cost": z.number().min(0), "input_tokens": z.number().min(0).refine(Number.isInteger, "Expected an integer"), "output_tokens": z.number().min(0).refine(Number.isInteger, "Expected an integer") });
 export type PredictRLMTokenUsage = z.infer<typeof PredictRLMTokenUsage>;
 
@@ -61,14 +64,11 @@ export type Turn = z.infer<typeof Turn>;
 export const TurnFinished = z.strictObject({ "kind": z.literal("turn.finished"), "omitted_tool_calls": z.number().min(0).refine(Number.isInteger, "Expected an integer"), "turn": Turn });
 export type TurnFinished = z.infer<typeof TurnFinished>;
 
-export const ToolStarted = z.strictObject({ "call_id": z.string(), "kind": z.literal("tool.started"), "name": z.string() });
+export const ToolStarted = z.strictObject({ "call_id": z.string(), "kind": z.literal("tool.started"), "name": z.string(), "turn": z.union([z.number().gt(0).refine(Number.isInteger, "Expected an integer"), z.null()]) });
 export type ToolStarted = z.infer<typeof ToolStarted>;
 
-export const ToolFinished = z.strictObject({ "call_id": z.string(), "error": z.union([z.string(), z.null()]), "kind": z.literal("tool.finished"), "name": z.string() });
+export const ToolFinished = z.strictObject({ "call_id": z.string(), "error": z.union([z.string(), z.null()]), "kind": z.literal("tool.finished"), "name": z.string(), "turn": z.union([z.number().gt(0).refine(Number.isInteger, "Expected an integer"), z.null()]) });
 export type ToolFinished = z.infer<typeof ToolFinished>;
-
-export const RunStarted = z.strictObject({ "format": z.literal("predict_rlm.run/v1"), "input_fields": z.array(z.string()), "inputs": JsonValue, "kind": z.literal("run.started") });
-export type RunStarted = z.infer<typeof RunStarted>;
 
 export const Lifecycle = z.strictObject({ "format": z.literal("predict_rlm.run/v1"), "kind": z.enum(["input.prepared","session.started","packages.installed","artifact.mounted","output.reserved","artifact.collected","output.materialized","session.finalized","session.finalize_failed","session.released","session.release_failed"]) });
 export type Lifecycle = z.infer<typeof Lifecycle>;
@@ -76,7 +76,7 @@ export type Lifecycle = z.infer<typeof Lifecycle>;
 export const PredictRLMOmissions = z.strictObject({ "predict_count": z.number().min(0).refine(Number.isInteger, "Expected an integer"), "predict_group_count": z.number().min(0).refine(Number.isInteger, "Expected an integer"), "reason": z.string(), "tool_count": z.number().min(0).refine(Number.isInteger, "Expected an integer") });
 export type PredictRLMOmissions = z.infer<typeof PredictRLMOmissions>;
 
-export const IterationRecorded = z.strictObject({ "format": z.literal("predict_rlm.run/v1"), "kind": z.literal("iteration.recorded"), "omissions": z.union([PredictRLMOmissions, z.null()]) });
+export const IterationRecorded = z.strictObject({ "format": z.literal("predict_rlm.run/v1"), "kind": z.literal("iteration.recorded"), "omissions": PredictRLMOmissions });
 export type IterationRecorded = z.infer<typeof IterationRecorded>;
 
 export const CodeGenerated = z.strictObject({ "code": z.string(), "format": z.literal("predict_rlm.run/v1"), "iteration": z.number().min(0).refine(Number.isInteger, "Expected an integer"), "kind": z.literal("code.generated") });
@@ -88,40 +88,19 @@ export type PredictStarted = z.infer<typeof PredictStarted>;
 export const PredictFinished = z.strictObject({ "call_id": z.string(), "format": z.literal("predict_rlm.run/v1"), "kind": z.literal("predict.finished"), "predict_error": z.union([z.string(), z.null()]) });
 export type PredictFinished = z.infer<typeof PredictFinished>;
 
-export const Correlated = z.strictObject({ "format": z.literal("predict_rlm.run/v1"), "kind": z.enum(["tool.started","tool.finished"]) });
-export type Correlated = z.infer<typeof Correlated>;
-
 export const CodeExecuted = z.strictObject({ "execution_error": z.union([z.string(), z.null()]), "format": z.literal("predict_rlm.run/v1"), "iteration": z.number().min(0).refine(Number.isInteger, "Expected an integer"), "kind": z.literal("code.executed"), "output": z.union([z.string(), z.null()]) });
 export type CodeExecuted = z.infer<typeof CodeExecuted>;
-
-export const RunSucceeded = z.strictObject({ "format": z.literal("predict_rlm.run/v1"), "kind": z.literal("run.succeeded"), "outputs": JsonValue, "status": z.string() });
-export type RunSucceeded = z.infer<typeof RunSucceeded>;
 
 export const RunEnded = z.strictObject({ "error_type": z.string(), "format": z.literal("predict_rlm.run/v1"), "kind": z.enum(["run.failed","run.cancelled"]), "run_error": z.string() });
 export type RunEnded = z.infer<typeof RunEnded>;
 
-export const Started = z.strictObject({ "format": z.literal("claude_agent.messages/v1"), "inputs": JsonValue, "kind": z.literal("started"), "model": z.union([z.string(), z.null()]) });
-export type Started = z.infer<typeof Started>;
-
 export const SessionInitialized = z.strictObject({ "format": z.literal("claude_agent.messages/v1"), "kind": z.literal("session.initialized"), "model": z.union([z.string(), z.null()]), "session_id": z.union([z.string(), z.null()]), "tools": z.array(z.string()) });
 export type SessionInitialized = z.infer<typeof SessionInitialized>;
-
-export const ToolUsed = z.strictObject({ "format": z.literal("claude_agent.messages/v1"), "kind": z.literal("tool.used"), "turn_index": z.number().min(0).refine(Number.isInteger, "Expected an integer") });
-export type ToolUsed = z.infer<typeof ToolUsed>;
-
-export const ToolReturned = z.strictObject({ "format": z.literal("claude_agent.messages/v1"), "kind": z.literal("tool.returned"), "turn_index": z.number().min(0).refine(Number.isInteger, "Expected an integer") });
-export type ToolReturned = z.infer<typeof ToolReturned>;
-
-export const MessageFinished = z.strictObject({ "format": z.literal("claude_agent.messages/v1"), "kind": z.literal("message.finished") });
-export type MessageFinished = z.infer<typeof MessageFinished>;
 
 export const RateLimited = z.strictObject({ "format": z.literal("claude_agent.messages/v1"), "kind": z.literal("rate_limit"), "limit_type": z.union([z.string(), z.null()]), "status": z.string() });
 export type RateLimited = z.infer<typeof RateLimited>;
 
-export const Finished = z.strictObject({ "errors": z.array(z.string()), "format": z.literal("claude_agent.messages/v1"), "is_error": z.boolean(), "kind": z.literal("finished"), "num_turns": z.number().min(0).refine(Number.isInteger, "Expected an integer"), "output_omitted": z.boolean(), "structured_output": JsonValue, "subtype": z.string(), "workspace_outputs": z.array(z.string()) });
-export type Finished = z.infer<typeof Finished>;
-
-export const AgentLiveEvent = z.strictObject({ "common": z.union([z.discriminatedUnion("kind", [TurnFinished, ToolStarted, ToolFinished]), z.null()]), "invocation_id": z.string().min(1), "kind": z.literal("event"), "native": z.discriminatedUnion("format", [z.discriminatedUnion("kind", [RunStarted, Lifecycle, IterationRecorded, CodeGenerated, PredictStarted, PredictFinished, Correlated, CodeExecuted, RunSucceeded, RunEnded]), z.discriminatedUnion("kind", [Started, SessionInitialized, ToolUsed, ToolReturned, MessageFinished, RateLimited, Finished])]), "runtime_kind": z.enum(["predict_rlm","claude_agent"]), "schema_version": z.literal(2), "sequence": z.number().gt(0).refine(Number.isInteger, "Expected an integer"), "timestamp_ns": z.number().min(0).refine(Number.isInteger, "Expected an integer") });
+export const AgentLiveEvent = z.strictObject({ "common": z.union([z.discriminatedUnion("kind", [RunStarted, TurnFinished, ToolStarted, ToolFinished]), z.null()]), "invocation_id": z.string().min(1), "kind": z.literal("event"), "native": z.union([z.discriminatedUnion("format", [z.discriminatedUnion("kind", [Lifecycle, IterationRecorded, CodeGenerated, PredictStarted, PredictFinished, CodeExecuted, RunEnded]), z.discriminatedUnion("kind", [SessionInitialized, RateLimited])]), z.null()]), "schema_version": z.literal(2), "sequence": z.number().gt(0).refine(Number.isInteger, "Expected an integer"), "timestamp_ns": z.number().min(0).refine(Number.isInteger, "Expected an integer") });
 export type AgentLiveEvent = z.infer<typeof AgentLiveEvent>;
 
 export const PredictRLMTraceHeader = z.strictObject({ "format": z.literal("predict_rlm.run/v1"), "max_iterations": z.number().gt(0).refine(Number.isInteger, "Expected an integer"), "sub_model": z.union([z.string(), z.null()]), "telemetry_ref": z.union([z.record(z.string(), JsonValue), z.null()]), "usage": PredictRLMUsage });
@@ -130,13 +109,10 @@ export type PredictRLMTraceHeader = z.infer<typeof PredictRLMTraceHeader>;
 export const ClaudeAgentTraceHeader = z.strictObject({ "duration_api_ms": z.union([z.number().min(0).refine(Number.isInteger, "Expected an integer"), z.null()]), "errors": z.array(z.string()), "format": z.literal("claude_agent.messages/v1"), "num_turns": z.number().min(0).refine(Number.isInteger, "Expected an integer"), "permission_denials": z.number().min(0).refine(Number.isInteger, "Expected an integer"), "result_subtype": z.union([z.string(), z.null()]) });
 export type ClaudeAgentTraceHeader = z.infer<typeof ClaudeAgentTraceHeader>;
 
-export const AgentTraceHeader = z.strictObject({ "duration_ms": z.number().min(0).refine(Number.isInteger, "Expected an integer"), "external_run_id": z.union([z.string(), z.null()]), "model": z.union([z.string(), z.null()]), "native": z.discriminatedUnion("format", [PredictRLMTraceHeader, ClaudeAgentTraceHeader]), "runtime_kind": z.enum(["predict_rlm","claude_agent"]), "session_id": z.union([z.string(), z.null()]), "status": z.enum(["succeeded","failed","cancelled"]), "stop_reason": z.union([z.string(), z.null()]), "tool_call_count": z.number().min(0).refine(Number.isInteger, "Expected an integer"), "trace_format": z.string(), "turn_count": z.number().min(0).refine(Number.isInteger, "Expected an integer"), "usage": z.union([TokenUsage, z.null()]) });
+export const AgentTraceHeader = z.strictObject({ "duration_ms": z.number().min(0).refine(Number.isInteger, "Expected an integer"), "external_run_id": z.union([z.string(), z.null()]), "model": z.union([z.string(), z.null()]), "native": z.discriminatedUnion("format", [PredictRLMTraceHeader, ClaudeAgentTraceHeader]), "session_id": z.union([z.string(), z.null()]), "status": z.enum(["succeeded","failed","cancelled"]), "stop_reason": z.union([z.string(), z.null()]), "tool_call_count": z.number().min(0).refine(Number.isInteger, "Expected an integer"), "turn_count": z.number().min(0).refine(Number.isInteger, "Expected an integer"), "usage": z.union([TokenUsage, z.null()]) });
 export type AgentTraceHeader = z.infer<typeof AgentTraceHeader>;
 
-export const AgentTrace = z.strictObject({ "header": AgentTraceHeader, "schema_version": z.literal(2), "turns": z.array(Turn), "turns_streamed": z.boolean() });
-export type AgentTrace = z.infer<typeof AgentTrace>;
-
-export const AgentTraceFinished = z.strictObject({ "complete": z.boolean(), "invocation_id": z.string().min(1), "kind": z.literal("trace_finished"), "record": AgentTrace, "schema_version": z.literal(2) });
+export const AgentTraceFinished = z.strictObject({ "complete": z.boolean(), "header": AgentTraceHeader, "invocation_id": z.string().min(1), "kind": z.literal("trace_finished"), "omitted_outputs": z.array(z.string()), "outputs": z.union([z.record(z.string(), JsonValue), z.null()]), "schema_version": z.literal(2) });
 export type AgentTraceFinished = z.infer<typeof AgentTraceFinished>;
 
 export const AgentTraceUnavailable = z.strictObject({ "complete": z.boolean(), "error": z.string(), "external_run_id": z.union([z.string(), z.null()]), "invocation_id": z.string().min(1), "kind": z.literal("trace_unavailable"), "runtime_kind": z.enum(["predict_rlm","claude_agent"]), "schema_version": z.literal(2), "status": z.enum(["succeeded","failed","cancelled"]) });

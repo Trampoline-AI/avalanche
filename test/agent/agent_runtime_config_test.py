@@ -122,7 +122,6 @@ def test_declaration_without_runtime_or_defaults_uses_predict_rlm_defaults():
     assert runtime.settings["max_iterations"] == PredictRLM().max_iterations
 
 
-
 def test_extra_options_merge_like_fields_with_the_step_winning():
     merged = PredictRLM(future_limit=3).merged_over(
         PredictRLM(future_limit=1, future_mode="fast")
@@ -144,6 +143,7 @@ def test_declaration_names_extra_options_and_keeps_only_json_values():
     assert runtime.settings["future_limit"] == 3
     assert runtime.settings["future_mode"] == "fast"
     assert "future_hook" not in runtime.settings
+
 
 @pytest.mark.parametrize(
     "removed",

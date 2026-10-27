@@ -3,17 +3,14 @@
 from __future__ import annotations
 
 import json
-import math
 from contextvars import ContextVar
-from typing import TYPE_CHECKING, Mapping, TypeAlias
+from typing import TYPE_CHECKING, Mapping
 
-from pydantic import BaseModel
+from pydantic import BaseModel, JsonValue
 
 from ..._agent_evidence import AGENT_ERROR_CHARACTER_LIMIT
 from ...agent.native import predict_rlm as native
-from ...agent.trace import file_input_evidence
-from ...file import File
-from ...workspace import Workspace
+from ...agent.trace import evidence_value, retained_fields, unavailable_value
 
 if TYPE_CHECKING:
     from predict_rlm import IterationStep, RunEvent
@@ -23,7 +20,6 @@ if TYPE_CHECKING:
     from ...agent.contract import AgentEventSink
     from ...agent.live import AgentEvent
     from ...agent.native.predict_rlm import PredictRLMNativeEvent
-    from .files import AgentFileBridge
 
 
 class _AgentInvocationState:
@@ -33,13 +29,13 @@ class _AgentInvocationState:
         self,
         events: AgentEventSink,
         inputs: Mapping[str, object],
-        files: AgentFileBridge | None,
+        model: str | None,
     ) -> None:
         self.events = events
         # The step's own inputs: PredictRLM sees mounted host paths for files instead.
         self.inputs = inputs
-        # Turns PredictRLM's file outputs into the ``ava.File`` references the step returns.
-        self.files = files
+        # The model the run asked for, as its ``run.started`` event names it.
+        self.model = model
         self.listener_base_exception: BaseException | None = None
 
 
@@ -55,9 +51,11 @@ class _AvalancheEvidenceSink:
 
     async def emit(self, event: RunEvent) -> None:
         state = _current_invocation_state()
-        native, common = project_event(event, inputs=state.inputs, files=state.files)
+        projected = project_event(event, inputs=state.inputs, model=state.model)
+        if projected is None:
+            return
         try:
-            await state.events.emit(native, common)
+            await state.events.emit(*projected)
         except BaseException as exc:
             if not isinstance(exc, Exception) and state.listener_base_exception is None:
                 state.listener_base_exception = exc
@@ -78,45 +76,7 @@ def _current_invocation_state() -> _AgentInvocationState:
     return state
 
 
-JsonValue: TypeAlias = (
-    str | int | float | bool | None | list["JsonValue"] | dict[str, "JsonValue"]
-)
 _MAX_EVIDENCE_VALUE_BYTES = 4 * 1024 * 1024
-_MAX_EVIDENCE_COLLECTION_ITEMS = 10_000
-_MAX_EVIDENCE_DEPTH = 32
-
-
-def _unavailable_value(reason: str) -> dict[str, JsonValue]:
-    return {"kind": "unavailable", "reason": reason}
-
-
-def _project_agent_value(value: object, *, depth: int = 0) -> JsonValue:
-    if depth > _MAX_EVIDENCE_DEPTH:
-        return _unavailable_value("maximum nesting depth exceeded")
-    if value is None or isinstance(value, (str, bool, int)):
-        return value
-    if isinstance(value, float):
-        return value if math.isfinite(value) else _unavailable_value("non-finite number")
-
-    if isinstance(value, File | Workspace):
-        return file_input_evidence(value).model_dump(mode="json")
-
-    if isinstance(value, BaseModel):
-        value = value.model_dump(mode="python")
-    if isinstance(value, Mapping):
-        if len(value) > _MAX_EVIDENCE_COLLECTION_ITEMS:
-            return _unavailable_value("mapping exceeds item limit")
-        projected: dict[str, JsonValue] = {}
-        for key, item in value.items():
-            if not isinstance(key, str):
-                return _unavailable_value("mapping keys must be strings")
-            projected[key] = _project_agent_value(item, depth=depth + 1)
-        return projected
-    if isinstance(value, (list, tuple)):
-        if len(value) > _MAX_EVIDENCE_COLLECTION_ITEMS:
-            return _unavailable_value("sequence exceeds item limit")
-        return [_project_agent_value(item, depth=depth + 1) for item in value]
-    return _unavailable_value(f"unsupported value type: {type(value).__name__}")
 
 
 def _bounded_agent_error(error: str) -> str:
@@ -140,7 +100,6 @@ def _bound_live_detail(projected: dict[str, JsonValue]) -> None:
     remaining = size(projected) - _MAX_EVIDENCE_VALUE_BYTES
     if remaining <= 0:
         return
-    marker = _unavailable_value("live event detail exceeds byte limit")
     text_marker = "[unavailable: live event detail exceeds byte limit]"
     candidates: list[tuple[int, str, JsonValue]] = []
     for key, value in projected.items():
@@ -148,9 +107,7 @@ def _bound_live_detail(projected: dict[str, JsonValue]) -> None:
         if key in {"call_id", "status", "error_type", "error"}:
             continue
         replacement: JsonValue
-        if key in {"inputs", "outputs"}:
-            replacement = marker
-        elif isinstance(value, str):
+        if isinstance(value, str):
             replacement = text_marker
         elif isinstance(value, list):
             replacement = [text_marker]
@@ -173,7 +130,7 @@ def _bounded_iteration_step(
     """Keep an SDK-shaped step within the aggregate inspection-data budget."""
 
     def fields(model: BaseModel, *, exclude: set[str]) -> dict[str, JsonValue]:
-        value = _project_agent_value(model.model_dump(mode="json", exclude=exclude))
+        value = evidence_value(model.model_dump(mode="json", exclude=exclude))
         assert isinstance(value, dict)
         return value
 
@@ -184,10 +141,10 @@ def _bounded_iteration_step(
     projected["predict_calls"] = groups
     for tool in step.tool_calls:
         detail = fields(tool, exclude={"args", "kwargs", "result"})
-        args = _project_agent_value(tool.args)
+        args = evidence_value(tool.args)
         detail["args"] = args if isinstance(args, list) else [args]
-        detail["kwargs"] = _project_agent_value(tool.kwargs)
-        detail["result"] = _project_agent_value(tool.result)
+        detail["kwargs"] = evidence_value(tool.kwargs)
+        detail["result"] = evidence_value(tool.result)
         tools.append(detail)
     for group in step.predict_calls:
         detail = fields(group, exclude={"calls"})
@@ -195,8 +152,8 @@ def _bounded_iteration_step(
         detail["calls"] = calls
         for call in group.calls:
             call_detail = fields(call, exclude={"input", "output"})
-            call_detail["input"] = _project_agent_value(call.input)
-            call_detail["output"] = _project_agent_value(call.output)
+            call_detail["input"] = evidence_value(call.input)
+            call_detail["output"] = evidence_value(call.output)
             calls.append(call_detail)
         groups.append(detail)
 
@@ -221,7 +178,7 @@ def _bounded_iteration_step(
 
     # Omit the largest inspection fields first, leaving small detail and SDK
     # identity/timing/usage intact. Replacements retain each field's SDK type.
-    marker = _unavailable_value("iteration detail exceeds byte limit")
+    marker = unavailable_value("iteration detail exceeds byte limit")
     text_marker = "[unavailable: iteration detail exceeds byte limit]"
     candidates: list[tuple[int, dict[str, JsonValue], str, JsonValue]] = []
 
@@ -293,43 +250,13 @@ def _bounded_iteration_step(
     }
 
 
-def _file_outputs(
-    outputs: Mapping[str, JsonValue], files: AgentFileBridge
-) -> dict[str, object]:
-    """PredictRLM's outputs with each file as the ``ava.File`` reference the step returns."""
-    values: dict[str, object] = {}
-    for name, value in outputs.items():
-        try:
-            values[name] = files.event_output(name, value)
-        except (OSError, ValueError) as exc:
-            # Never the host path; the step then fails with an output error naming the field.
-            values[name] = _unavailable_value(f"not a usable file: {type(exc).__name__}")
-    return values
-
-
-def _project_event_data(
-    event: RunEvent,
-    *,
-    inputs: Mapping[str, object] | None = None,
-    files: AgentFileBridge | None = None,
-) -> dict[str, JsonValue]:
-    """Select one event's public fields, bounded for the live event channel.
-
-    ``inputs`` replaces the run's mounted inputs, so files keep their references, and
-    ``files`` describes file outputs as the references the step returns.
-    """
+def _project_event_data(event: RunEvent) -> dict[str, JsonValue]:
+    """Select one event's public fields, bounded for the live event channel."""
     event_kind = event.kind.value
     data = event.data
     projected: dict[str, JsonValue] = {}
 
-    if event_kind == "run.started":
-        if inputs is None:
-            inputs = data["inputs"]
-        projected = {
-            "input_fields": sorted(inputs),
-            "inputs": _project_agent_value(inputs),
-        }
-    elif event_kind == "iteration.recorded":
+    if event_kind == "iteration.recorded":
         from predict_rlm import IterationStep
 
         step = IterationStep.model_validate(data["step"], strict=True)
@@ -356,11 +283,6 @@ def _project_event_data(
         for key in ("output", "error"):
             if key in data:
                 projected[key] = data[key]
-    elif event_kind == "run.succeeded":
-        outputs = data["outputs"]
-        if files is not None:
-            outputs = _file_outputs(outputs, files)
-        projected = {"status": data["status"], "outputs": _project_agent_value(outputs)}
     elif event_kind in {"run.failed", "run.cancelled"}:
         projected = {"error_type": data["error_type"], "error": data["error"]}
     if event_kind != "iteration.recorded":
@@ -372,23 +294,26 @@ def project_event(
     event: RunEvent,
     *,
     inputs: Mapping[str, object] | None = None,
-    files: AgentFileBridge | None = None,
-) -> tuple[PredictRLMNativeEvent, AgentEvent | None]:
-    """One PredictRLM event as its native payload and its common event, if any.
+    model: str | None = None,
+) -> tuple[PredictRLMNativeEvent | None, AgentEvent | None] | None:
+    """One PredictRLM event as its native payload and its common event, either optional.
 
     ``inputs`` are the step's own inputs, recorded in place of the mounted ones, and
-    ``files`` turns file outputs into the step's ``ava.File`` references.
+    ``model`` the model the run asked for. ``None`` means the event is not sent: a
+    run's success is the final event, which carries the outputs.
     """
-    from ...agent.live import ToolFinished, ToolStarted, TurnFinished
+    from ...agent.live import RunStarted, ToolFinished, ToolStarted, TurnFinished
     from .mapping import turn_from_step
 
     kind = event.kind.value
-    data = _project_event_data(event, inputs=inputs, files=files)
     match kind:
         case "run.started":
-            return native.RunStarted(
-                input_fields=tuple(data["input_fields"]), inputs=data["inputs"]
-            ), None
+            kept, omitted = retained_fields(event.data["inputs"] if inputs is None else inputs)
+            return None, RunStarted(model=model, inputs=kept, omitted_inputs=omitted)
+        case "run.succeeded":
+            return None
+    data = _project_event_data(event)
+    match kind:
         case "iteration.recorded":
             from predict_rlm import IterationStep
 
@@ -399,7 +324,9 @@ def project_event(
                 if "omissions" in data
                 else None
             )
-            return native.IterationRecorded(omissions=omissions), TurnFinished(
+            return (
+                native.IterationRecorded(omissions=omissions) if omissions is not None else None
+            ), TurnFinished(
                 turn=turn_from_step(step),
                 omitted_tool_calls=(
                     omissions.tool_count + omissions.predict_count
@@ -418,13 +345,12 @@ def project_event(
             return native.PredictFinished(
                 call_id=data["call_id"], predict_error=data.get("error")
             ), None
+        # PredictRLM's tool events do not say which turn's code called the tool.
         case "tool.started":
-            return native.Correlated(kind=kind), ToolStarted(
-                call_id=data["call_id"], name=data["name"]
-            )
+            return None, ToolStarted(call_id=data["call_id"], name=data["name"], turn=None)
         case "tool.finished":
-            return native.Correlated(kind=kind), ToolFinished(
-                call_id=data["call_id"], name=data["name"], error=data.get("error")
+            return None, ToolFinished(
+                call_id=data["call_id"], name=data["name"], turn=None, error=data.get("error")
             )
         case "code.generated":
             return native.CodeGenerated(iteration=data["iteration"], code=data["code"]), None
@@ -434,8 +360,6 @@ def project_event(
                 output=data.get("output"),
                 execution_error=data.get("error"),
             ), None
-        case "run.succeeded":
-            return native.RunSucceeded(status=data["status"], outputs=data["outputs"]), None
         case "run.failed" | "run.cancelled":
             return native.RunEnded(
                 kind=kind, error_type=data["error_type"], run_error=data["error"]

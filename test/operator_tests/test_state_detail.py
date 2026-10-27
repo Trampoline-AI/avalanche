@@ -15,9 +15,10 @@ from avalanche.agent.live import (
     AgentLiveEvent,
     AgentTraceFinished,
     AgentTraceUnavailable,
+    RunStarted,
 )
-from avalanche.agent.native.predict_rlm import CodeGenerated, PredictFinished, RunStarted
-from avalanche.agent.trace import AgentTrace
+from avalanche.agent.native.predict_rlm import CodeGenerated, PredictFinished
+from avalanche.agent.trace import AgentTraceHeader
 from runtime.operator import Operator
 from runtime.operator import operator as operator_module
 from runtime.operator.models import (
@@ -57,19 +58,18 @@ def _live(
         invocation_id=invocation_id,
         sequence=sequence,
         timestamp_ns=sequence,
-        runtime_kind="predict_rlm",
         common=None,
         native=CodeGenerated(iteration=sequence, code=code),
     )
 
 
-def _record(*, model: str = "test-model", run_id: str = "sdk-run") -> AgentTrace:
-    """A final trace as the PredictRLM adapter builds it."""
+def _header(*, model: str = "test-model", run_id: str = "sdk-run") -> AgentTraceHeader:
+    """A trace header as the PredictRLM adapter builds it."""
     from predict_rlm import RunEvidence, RunTrace
 
-    from avalanche.runtimes.predict_rlm.trace import trace_record
+    from avalanche.runtimes.predict_rlm.trace import trace_header
 
-    record = trace_record(
+    return trace_header(
         RunTrace(
             status="completed", model=model, iterations=0, max_iterations=3, duration_ms=1
         ),
@@ -77,14 +77,17 @@ def _record(*, model: str = "test-model", run_id: str = "sdk-run") -> AgentTrace
         model=None,
         sub_model=None,
     )
-    return record.model_copy(update={"turns_streamed": True})
 
 
 def _finished(
-    *, invocation_id: str = "test-invocation", complete: bool = True, **record: str
+    *, invocation_id: str = "test-invocation", complete: bool = True, **header: str
 ) -> AgentTraceFinished:
     return AgentTraceFinished(
-        invocation_id=invocation_id, record=_record(**record), complete=complete
+        invocation_id=invocation_id,
+        header=_header(**header),
+        outputs={"answer": "done"},
+        omitted_outputs=(),
+        complete=complete,
     )
 
 
@@ -582,8 +585,8 @@ def test_read_trace_rejects_reused_identity_from_previous_operator_epoch():
             stub.ReadActivityDetail(pb.ReadActivityDetailRequestV2(detail_ref=detail_ref))
         )
         trace = json.loads(b"".join(chunk.data for chunk in chunks))
-        assert trace["record"]["header"]["model"] == "second"
-        assert trace["record"]["header"]["external_run_id"] == "sdk-second"
+        assert trace["header"]["model"] == "second"
+        assert trace["header"]["external_run_id"] == "sdk-second"
     finally:
         if channel is not None:
             channel.close()
@@ -674,9 +677,8 @@ def agent_text_event(request):
             invocation_id="test-invocation",
             sequence=1,
             timestamp_ns=1,
-            runtime_kind="predict_rlm",
-            common=None,
-            native=RunStarted(input_fields=("input",), inputs={"input": _TEXT_MARKER}),
+            common=RunStarted(model=None, inputs={"input": _TEXT_MARKER}, omitted_inputs=()),
+            native=None,
         ),
         "terminal-model": lambda: _finished(model=_TEXT_MARKER),
         "unavailable-run": lambda: _unavailable(external_run_id=_TEXT_MARKER),
@@ -813,30 +815,29 @@ def _patched(evidence: BaseModel, path: tuple[str, ...], value: object) -> str:
             id="unknown-native-kind",
         ),
         pytest.param(
-            lambda: _patched(_live(1), ("runtime_kind",), "other_runtime"),
-            id="unknown-runtime",
+            lambda: _patched(_live(1), ("runtime_kind",), "predict_rlm"),
+            id="stored-runtime-kind",
         ),
-        pytest.param(
-            lambda: _patched(
-                _live(1), ("common",), {"kind": "tool.started", "call_id": "c", "name": "n"}
-            ),
-            id="native-kind-with-a-common-event-it-lacks",
-        ),
+        pytest.param(lambda: _patched(_live(1), ("native",), None), id="no-part"),
         pytest.param(
             lambda: _patched(
                 _live(1),
                 ("native",),
                 {"format": "predict_rlm.run/v1", "kind": "tool.started"},
             ),
-            id="native-kind-with-another-common-event",
+            id="removed-native-kind",
         ),
         pytest.param(
-            lambda: _patched(_finished(), ("record", "turns_streamed"), False),
-            id="final-trace-with-unstreamed-turns",
+            lambda: _patched(_finished(), ("record",), _finished().header.model_dump()),
+            id="final-trace-record",
         ),
         pytest.param(
-            lambda: _patched(_finished(), ("record", "header", "trace_format"), "other/v1"),
-            id="header-format-mismatch",
+            lambda: _patched(_finished(), ("header", "trace_format"), "other/v1"),
+            id="stored-trace-format",
+        ),
+        pytest.param(
+            lambda: _patched(_finished(), ("omitted_outputs",), ["answer"]),
+            id="output-kept-and-omitted",
         ),
         pytest.param(
             lambda: _patched(_unavailable(), ("status",), "completed"),
@@ -907,7 +908,6 @@ def test_empty_exception_message_remains_a_failure_not_a_success(failed):
         invocation_id="test-invocation",
         sequence=1,
         timestamp_ns=1,
-        runtime_kind="predict_rlm",
         common=None,
         native=PredictFinished(call_id="call", predict_error="" if failed else None),
     )

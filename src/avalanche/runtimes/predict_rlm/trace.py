@@ -1,4 +1,4 @@
-"""PredictRLM terminal traces: the common trace record and the final trace event."""
+"""PredictRLM traces: the common trace record and the final event."""
 
 from __future__ import annotations
 
@@ -16,7 +16,7 @@ from .events import _bounded_agent_error, native_usage
 if TYPE_CHECKING:
     from predict_rlm import RunEvidence, RunTrace
 
-    from ...agent.contract import AgentEventSink
+    from ...agent.contract import AgentEventSink, AgentOutputs
 
 
 def _emit_terminal_trace(
@@ -26,11 +26,12 @@ def _emit_terminal_trace(
     *,
     model: str | None,
     sub_model: str | None,
+    outputs: AgentOutputs | None,
 ) -> None:
-    """Send the final trace; its turns already crossed the live event channel."""
-    record = trace_record(trace, evidence, model=model, sub_model=sub_model)
+    """Send the final event; the turns already crossed the live event channel."""
     events.finished(
-        AgentTrace(header=record.header, turns=(), turns_streamed=True),
+        trace_header(trace, evidence, model=model, sub_model=sub_model),
+        outputs=outputs,
         complete=evidence.complete,
     )
 
@@ -75,29 +76,24 @@ def trace_header(
     evidence: RunEvidence,
     *,
     model: str | None,
-    turn_count: int,
-    tool_call_count: int,
     sub_model: str | None,
 ) -> AgentTraceHeader:
     """The common header for one PredictRLM run, without converting its turns.
 
-    The counts are passed in because a terminal trace sent after live events
-    carries no steps. ``model`` and ``sub_model`` are display names that replace
-    PredictRLM's model ids when set (see ``_model_display_name``).
+    ``model`` and ``sub_model`` are display names that replace PredictRLM's model
+    ids when set (see ``_model_display_name``).
     """
-    from .mapping import common_usage
+    from .mapping import common_usage, step_tool_call_count
 
     status = _STATUSES[evidence.terminal_outcome]
     return AgentTraceHeader(
-        runtime_kind="predict_rlm",
-        trace_format="predict_rlm.run/v1",
         status=status,
         stop_reason=_STOP_REASONS.get(trace.status),
         model=trace.model if model is None else model,
         duration_ms=trace.duration_ms,
         usage=common_usage(trace.usage.main, trace.usage.sub),
-        turn_count=turn_count,
-        tool_call_count=tool_call_count,
+        turn_count=len(trace.steps),
+        tool_call_count=sum(step_tool_call_count(step) for step in trace.steps),
         external_run_id=evidence.run_id,
         session_id=None,
         native=PredictRLMTraceHeader(
@@ -121,19 +117,11 @@ def trace_record(
     ``model`` and ``sub_model`` are display names that replace PredictRLM's
     model ids when set (see ``_model_display_name``).
     """
-    from .mapping import step_tool_call_count, turn_from_step
+    from .mapping import turn_from_step
 
     return AgentTrace(
-        header=trace_header(
-            trace,
-            evidence,
-            model=model,
-            turn_count=len(trace.steps),
-            tool_call_count=sum(step_tool_call_count(step) for step in trace.steps),
-            sub_model=sub_model,
-        ),
+        header=trace_header(trace, evidence, model=model, sub_model=sub_model),
         turns=tuple(turn_from_step(step) for step in trace.steps),
-        turns_streamed=False,
     )
 
 
