@@ -38,6 +38,9 @@ _STRICT = ConfigDict(
 )
 
 AgentTraceStatus = Literal["succeeded", "failed", "cancelled"]
+# The header, its runtime part included, travels in every run snapshot, so that part
+# stays small; anything large belongs in the turns.
+TRACE_HEADER_NATIVE_LIMIT_BYTES = 64 * 1024
 ActionCaller = Literal["model", "code"]
 
 
@@ -133,6 +136,12 @@ class AgentTraceHeader(BaseModel):
             raise ValueError(
                 f"header runtime_kind {self.runtime_kind!r} does not match "
                 f"native format {self.native.format!r}"
+            )
+        size = len(self.native.model_dump_json().encode())
+        if size > TRACE_HEADER_NATIVE_LIMIT_BYTES:
+            raise ValueError(
+                f"the header's {self.native.format!r} part is {size} bytes; it travels "
+                f"in every run snapshot, so the limit is {TRACE_HEADER_NATIVE_LIMIT_BYTES}"
             )
         return self
 
