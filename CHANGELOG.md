@@ -59,7 +59,7 @@
   (succeeded, failed or cancelled), runtime kind, trace format, model, total token
   usage and cost, turn and tool-call counts, and stop reason. Agent live-event
   summaries carry a common event kind next to the runtime's own kind, the turn, and
-  tool-call and model-call counts. Details only one runtime has, such as
+  tool-call counts. Details only one runtime has, such as
   PredictRLM's sub-model, iteration limit and per-model usage, travel in the
   summary's runtime part (`TraceHeaderV2.native_json`, typed JSON checked against the
   generated agent schemas on arrival), so the web UI and TUI show them without
@@ -128,8 +128,8 @@
   instead of `['document']`); the UI shows both as `input.document`.
 - **Breaking** — Operator: agent live events and final traces have a new,
   runtime-neutral body (schema version 2). Each live event carries Avalanche's own
-  sequence number, the common event (a finished turn, a model or tool call, generated
-  code) when there is one, and the runtime's own details as a typed payload. The final
+  sequence number, the common event (the run start, a finished turn or a tool call)
+  when there is one, and the runtime's own details as a typed payload. The final
   trace is the runtime-neutral trace record; its turns travel as live events. The
   operator validates every body once and rejects bodies from older versions, unknown
   formats, events whose runtime details do not match their common event, and a second,
@@ -150,7 +150,8 @@
   `ctx.trace.native` in evaluations must read `ctx.trace.header.native`; older
   stored traces are not converted. Because the header travels in every run
   snapshot, its runtime part is limited to 64 KiB; a larger one fails validation,
-  and Claude's result errors are kept to the first 8, each cut to 1024 characters. BREAKING-PROTOCOL: part of Delta protocol 2.0
+  and Claude's result errors are kept to the first 8, each cut to 1024 characters
+  (a failed result with no error list keeps its result text, cut to 4096 characters). BREAKING-PROTOCOL: part of Delta protocol 2.0
   (final trace body and trace header change; new `TraceHeaderV2.native_json`).
 - Agents: new `ava.runtimes.ClaudeAgent` runs agent steps with Claude through the
   Claude Agent SDK. Install the new `claude` extra (`avalanche-ai[claude]`) and the

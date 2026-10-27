@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-from datetime import datetime
-
 import pytest
 from predict_rlm import IterationStep, RunEvent, RunEventKind, RunEvidence, RunTrace
 from pydantic import ValidationError
@@ -247,18 +245,13 @@ def test_a_turn_travels_with_a_native_event_of_its_own_format():
 def test_a_file_output_travels_as_its_file_reference_never_its_host_path(tmp_path):
     from predict_rlm import File as PredictFile
 
-    from avalanche.runtimes.predict_rlm.files import AgentFileBridge, predict_signature
-
-    class Redact(ava.Signature):
-        document: str = ava.InputField()
-        redacted: ava.File = ava.OutputField()
-        reviewed_at: datetime = ava.OutputField()
+    from avalanche.runtimes.predict_rlm.files import AgentFileBridge
 
     header = _sent()[-1].header
     workspace = ava.Workspace.from_directory(tmp_path, reference="snapshot:test")
     observed = []
     with ava.file_reference_context(workspace, attempt="attempt-1"):
-        bridge = AgentFileBridge("redact", predict_signature(Redact))
+        bridge = AgentFileBridge("redact")
         output = bridge.output_dir / "redacted.txt"
         output.write_bytes(b"[redacted]")
         events = _InvocationEvents("invocation", "predict_rlm")
