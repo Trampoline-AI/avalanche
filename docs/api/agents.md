@@ -81,6 +81,8 @@ A runtime is the agent engine that runs an agent step. The step's signature, too
 | `ava.runtimes.PredictRLM(...)` (default) | Writes and runs Python in a sandbox, with a second model for structured sub-predictions. | Included. |
 | `ava.runtimes.ClaudeAgent(...)` | Runs Claude through the Claude Code CLI, using your step tools and any Claude Code tools you enable. | `uv add 'avalanche-ai[claude]'` and the Claude Code CLI. |
 
+The data every runtime shares (the request, result, trace and live events) is on [Agent runtimes](../agent-runtime-contract.md). Each runtime's settings, its own trace and event data, and how it fills the shared data are on its page: [PredictRLM](../runtimes/predict-rlm.md) and [ClaudeAgent](../runtimes/claude-agent.md). [Agent runtime models](../agent-runtime-models.md) lists every model of the layer.
+
 Choose one per step with `runtime=`, or for every step with the workflow's `agent_defaults` (see [workflow defaults](#workflow-defaults)):
 
 ```python
