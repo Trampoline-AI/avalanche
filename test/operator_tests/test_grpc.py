@@ -316,8 +316,7 @@ def _seed_hydration_run(operator, run_id: str, agent_trace, iteration_step) -> R
     operator._runs[run_id] = run
     operator._notify_run(run)
     steps = [iteration_step(sequence, f"print({sequence})") for sequence in range(1, 6)]
-    # A large native field makes the final body cross several transport chunks.
-    trace = agent_trace(steps=steps, telemetry_ref={"payload": "x" * (2 * 1024 * 1024 + 17)})
+    trace = agent_trace(steps=steps, telemetry_ref={"trace_id": "trace-1"})
     for evidence in _replay(trace, invocation_id="test-invocation", run_id=f"sdk-{run_id}"):
         _apply_agent_evidence(operator, run_id, evidence)
     return run
@@ -327,6 +326,8 @@ def test_paged_details_and_chunked_trace_materialize_without_cross_run_invalidat
     monkeypatch, agent_trace, iteration_step
 ):
     monkeypatch.setattr("runtime.operator.client.DETAIL_HYDRATION_PAGE_SIZE", 2)
+    # Small chunks make the final body cross several transport chunks.
+    monkeypatch.setattr("runtime.operator.server_v2.TRACE_CHUNK_BYTES", 256)
     operator = Operator([], watch=False, schedule=False)
     run = _seed_hydration_run(operator, "run-target", agent_trace, iteration_step)
     unrelated = RunState(run_id="run-unrelated", flow_name="flow")
@@ -358,9 +359,8 @@ def test_paged_details_and_chunked_trace_materialize_without_cross_run_invalidat
         trace = provider.hydrate_trace(run.run_id, "agent-1")
         body = trace.trace_body
         assert body.invocation_id == "test-invocation"
-        assert body.record.header.native.telemetry_ref == {
-            "payload": "x" * (2 * 1024 * 1024 + 17)
-        }
+        assert len(body.model_dump_json().encode()) > 3 * 256
+        assert body.record.header.native.telemetry_ref == {"trace_id": "trace-1"}
         assert body.record.turns == ()
         assert body.record.header.turn_count == 5
         assert body.record.header.external_run_id == "sdk-run-target"

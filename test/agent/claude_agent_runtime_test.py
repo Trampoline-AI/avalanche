@@ -364,6 +364,23 @@ async def test_api_error_result_fails_with_the_api_error(replay):
 
 
 @pytest.mark.asyncio
+async def test_many_long_result_errors_stay_within_the_trace_header_limit(replay):
+    replay(
+        [_init(), _result(None, is_error=True, errors=["overloaded " * 2000] * 100)],
+        error=ResultError("Claude Code returned an error result", exit_code=1),
+    )
+
+    observed = []
+    with capture_agent_evidence(observed.append, errors="raise"):
+        with pytest.raises(AgentStepExecutionError, match="overloaded"):
+            await _agent()(a=2, b=3)
+
+    # The header travels in every run snapshot; its errors are cut, not dropped.
+    errors = observed[-1].record.header.native.errors
+    assert errors and all(error.startswith("overloaded") for error in errors)
+
+
+@pytest.mark.asyncio
 async def test_wrongly_typed_structured_output_is_an_output_error(replay):
     replay(_success_stream(total="fifteen"))
 

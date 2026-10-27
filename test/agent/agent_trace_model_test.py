@@ -18,6 +18,7 @@ from avalanche.agent.native.predict_rlm import (
     PredictRLMUsage,
 )
 from avalanche.agent.trace import (
+    TRACE_HEADER_NATIVE_LIMIT_BYTES,
     AgentTrace,
     AgentTraceHeader,
     TokenUsage,
@@ -131,6 +132,18 @@ def test_record_round_trips_through_json():
 def test_record_rejects_a_header_that_disagrees_with_its_body(header):
     with pytest.raises(ValidationError):
         _record(header=_header(**header))
+
+
+def test_header_rejects_a_runtime_part_too_large_for_run_snapshots():
+    large = PredictRLMTraceHeader(
+        sub_model=None,
+        max_iterations=5,
+        usage=_NO_USAGE,
+        telemetry_ref={"payload": "x" * TRACE_HEADER_NATIVE_LIMIT_BYTES},
+    )
+
+    with pytest.raises(ValidationError, match="run snapshot"):
+        _header(native=large)
 
 
 def test_record_rejects_out_of_order_turns():
