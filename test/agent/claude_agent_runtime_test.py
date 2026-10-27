@@ -959,6 +959,8 @@ async def test_step_skills_run_from_a_plugin_made_for_the_call(monkeypatch, tmp_
     assert options.skills == ["avalanche:bonus-rules"]
     assert options.tools == ["Skill", "Read"]
     assert f"Read(/{plugin}/**)" in options.allowed_tools
+    [matcher] = options.hooks["PreToolUse"]
+    assert matcher.matcher == "Read"
     assert "Skill" not in options.allowed_tools
     assert str(plugin) in options.add_dirs
     # The user's and project's Claude settings and MCP servers stay out.
@@ -1001,6 +1003,7 @@ async def test_skills_without_files_add_only_the_skill_tool(replay, tmp_path):
     options = seen["options"]
     assert options.tools == ["Bash", "Skill"]
     assert not any(rule.startswith("Read") for rule in options.allowed_tools)
+    assert options.hooks is None
 
 
 @pytest.mark.asyncio
@@ -1050,3 +1053,78 @@ def test_a_claude_step_declares_its_skills(tmp_path):
         ("bonus-rules", ("references/rules.md",))
     ]
     assert declaration.skills[0].description.startswith("Explains bonuses")
+
+
+@pytest.mark.parametrize("permission_mode", ["default", "bypassPermissions"])
+@pytest.mark.asyncio
+async def test_the_added_read_tool_reads_only_inside_the_skill_plugin(
+    monkeypatch, tmp_path, permission_mode
+):
+    secret = tmp_path / "secret.txt"
+    secret.write_text("secret")
+    decisions: dict[str, str] = {}
+
+    async def query(*, prompt, options):
+        plugin = Path(options.plugins[0]["path"])
+        [matcher] = options.hooks["PreToolUse"]
+        [hook] = matcher.hooks
+        reads = {
+            "skill file": str(plugin / "skills/bonus-rules/references/rules.md"),
+            "dotted skill file": str(plugin / "skills/../skills/bonus-rules/SKILL.md"),
+            "outside file": str(secret),
+            "escape": str(plugin / ".." / ".." / "secret.txt"),
+            "working directory": "notes.txt",
+        }
+        for name, file_path in reads.items():
+            output = await hook(
+                {
+                    "hook_event_name": "PreToolUse",
+                    "session_id": "session-1",
+                    "transcript_path": "",
+                    "cwd": options.cwd,
+                    "tool_name": "Read",
+                    "tool_input": {"file_path": file_path},
+                    "tool_use_id": "call-1",
+                },
+                "call-1",
+                {"signal": None},
+            )
+            decisions[name] = output.get("hookSpecificOutput", {}).get(
+                "permissionDecision", "allow"
+            )
+        for message in _success_stream():
+            yield message
+
+    monkeypatch.setattr(sdk_module, "_session", query)
+    agent = ava.Agent(
+        signature=Total,
+        step_name="total",
+        runtime=ClaudeAgent(model=MODEL, permission_mode=permission_mode),
+        tools=(lookup_bonus,),
+        skills=(_skill(tmp_path),),
+    )
+    await agent(a=2, b=3)
+
+    assert decisions == {
+        "skill file": "allow",
+        "dotted skill file": "allow",
+        "outside file": "deny",
+        "escape": "deny",
+        "working directory": "deny",
+    }
+
+
+@pytest.mark.asyncio
+async def test_a_listed_read_tool_keeps_its_own_scope(replay, tmp_path):
+    seen = replay(_success_stream())
+    agent = ava.Agent(
+        signature=Total,
+        step_name="total",
+        runtime=ClaudeAgent(model=MODEL, builtin_tools=("Read",)),
+        tools=(lookup_bonus,),
+        skills=(_skill(tmp_path),),
+    )
+    await agent(a=2, b=3)
+
+    options = seen["options"]
+    assert (options.tools, options.hooks) == (["Read", "Skill"], None)
