@@ -9,7 +9,7 @@ All models are frozen, strict Pydantic models that reject unknown fields.
 and `AgentResult` hold live Python objects and are never serialized.
 
 ```python
-RuntimeKind = Literal["predict_rlm", "claude_agent"]
+RuntimeKind = Literal["predict_rlm", "claude_agent"]   # avalanche.agent.kinds
 ```
 
 ## Request
@@ -248,7 +248,7 @@ class ClaudeAgentTraceHeader:
     num_turns: NonNegativeInt
     duration_api_ms: NonNegativeInt | None
     permission_denials: NonNegativeInt
-    errors: tuple[str, ...]              # at most 8, each at most 1024 characters
+    errors: tuple[str, ...]              # at most 8 of at most 1024 characters, or one of at most 4096
 
 
 class ClaudeAgentTurn:
@@ -261,7 +261,7 @@ class ClaudeAgentTurn:
 
 ## Live events
 
-`avalanche.agent.live`, `avalanche.agent.native`
+`avalanche.agent.live`, `avalanche.agent.native`, `avalanche.agent.kinds`
 
 ```python
 AgentEvidence = Annotated[
