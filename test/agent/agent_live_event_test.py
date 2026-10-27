@@ -281,3 +281,64 @@ def test_a_file_output_travels_as_its_file_reference_never_its_host_path(tmp_pat
     assert redacted["workspace"] == "snapshot:test"
     assert redacted["path"].startswith(".outputs/redact/attempt-1/")
     assert str(tmp_path) not in final.model_dump_json()
+
+
+def test_typed_values_keep_their_json_form_and_host_paths_never_appear(tmp_path):
+    import uuid
+    from datetime import date
+    from decimal import Decimal
+
+    header = _sent()[-1].header
+    events = _InvocationEvents("invocation", "predict_rlm")
+    observed = []
+    key = uuid.UUID(int=1)
+    with capture_agent_evidence(observed.append, errors="raise"):
+        events.finished(
+            header,
+            outputs=PythonOutputs(
+                values={
+                    "due": date(2026, 10, 27),
+                    "key": key,
+                    "amount": Decimal("1.5"),
+                    "where": tmp_path,
+                }
+            ),
+            complete=True,
+        )
+
+    (final,) = observed
+    assert final.outputs["due"] == "2026-10-27"
+    assert final.outputs["key"] == str(key)
+    assert final.outputs["amount"] == "1.5"
+    assert final.outputs["where"]["kind"] == "unavailable"
+    assert str(tmp_path) not in final.model_dump_json()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("reply", ["not json", "[1]"], ids=["not-json", "not-an-object"])
+async def test_json_outputs_that_are_not_an_object_still_send_the_final_event(reply):
+    from avalanche.agent import AgentOutputError
+    from avalanche.agent.contract import AgentRunOutcome, JsonOutputs
+    from avalanche.runtimes.predict_rlm.trace import trace_record
+
+    class _Runtime(_SilentRuntime):
+        async def invoke(self, request, events):
+            trace = trace_record(
+                RunTrace(
+                    status="completed", model="m", iterations=0, max_iterations=2, duration_ms=1
+                ),
+                RunEvidence(run_id="run", complete=True, terminal_outcome="completed"),
+                model=None,
+                sub_model=None,
+            )
+            outputs = JsonOutputs(text=reply)
+            events.finished(trace.header, outputs=outputs, complete=True)
+            return AgentRunOutcome(outputs=outputs, trace=trace)
+
+    observed = []
+    with capture_agent_evidence(observed.append, errors="raise"):
+        with pytest.raises(AgentOutputError):
+            await ava.Agent(signature=Echo, step_name="echo", runtime=_Runtime())(text="hi")
+
+    (final,) = observed
+    assert (final.kind, final.outputs) == ("trace_finished", None)
