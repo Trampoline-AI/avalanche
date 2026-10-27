@@ -33,11 +33,9 @@ describe.each(["horizontal", "vertical"] as const)(
         });
         expect(edge.markerEnd).toMatchObject({ color: edge.style?.stroke });
       }
-      expect(highlighted.find((edge) => edge.id === "root->selected")?.type).toBe("skip");
       expect(edges.every((edge) => !edge.style)).toBe(true);
       const selectedBranch = highlighted.find((edge) => edge.id === "root->selected")!;
       const siblingBranch = highlighted.find((edge) => edge.id === "root->sibling")!;
-      expect(selectedBranch.data?.nextRowIds).toEqual(siblingBranch.data?.targetRowIds);
       expect(selectedBranch.zIndex).toBeGreaterThan(siblingBranch.zIndex!);
       expect(siblingBranch.style?.strokeDasharray).toBe("6 4");
     });

@@ -6,6 +6,11 @@
   `>=4.2.1,<5`; the lockfile moves `msgpack`, `virtualenv`, `graphql-core`,
   `setuptools` and OpenTelemetry to patched releases; the browser UI moves to
   `zod` 4.6.7 and `vitest` 4.1.12.
+- Draw clearer connections in the browser UI workflow graph. Each connection now has
+  its own start point, end point and path, so connections from different steps no
+  longer share lines. Connections that skip a step pass between the cards instead of
+  running underneath them along the bottom of the graph, and steps are ordered to
+  avoid crossings.
 - Keep input and output names whole on browser UI step cards; long types now wrap
   between words and show the full name and type on hover.
 - **Upgrading** — This release makes agent steps runtime-neutral. Code that defines

@@ -10,7 +10,6 @@ import {
   Panel,
   Position,
   ReactFlow,
-  useStore,
   useViewport,
   type Edge,
   type EdgeProps,
@@ -30,10 +29,9 @@ import { decodeClassifierDeclaration, decodeEvaluationDeclaration } from "./clas
 import { decodeStepInterface } from "./stepInterface";
 import type { EvaluationRecord } from "./evaluations";
 import { CompositeSummary } from "./CompositeSummary";
-import { createGraphLayout, graphPositions } from "./graphLayout";
-import { branchEdgePath, branchJunction, outerTrunkPath } from "./graphEdgePaths";
+import { arrangeGraph, createGraphLayout, type RoutedEdgeData } from "./graphLayout";
 import { highlightConnectedEdges } from "./graphSelection";
-import { useGraphOrientation, type GraphOrientation } from "./useGraphOrientation";
+import { useGraphOrientation } from "./useGraphOrientation";
 
 interface FieldMetadata {
   name: string;
@@ -491,157 +489,18 @@ const WorkflowNodeCard = memo(({ data, selected }: NodeProps<Node<CardData>>) =>
 });
 WorkflowNodeCard.displayName = "WorkflowNodeCard";
 
-// React Flow can render edges while node measurements are still arriving.
-// Fall back to the handle coordinate until that row's cards are available.
-function useRowBoundary(
-  nodeIds: readonly string[] | undefined,
-  vertical: boolean,
-  end: boolean,
-  fallback: number,
-): number {
-  return useStore((state) => {
-    const bounds = (nodeIds ?? []).flatMap((id) => {
-      const node = state.nodeLookup.get(id);
-      if (!node) return [];
-      const start = vertical
-        ? node.internals.positionAbsolute.y
-        : node.internals.positionAbsolute.x;
-      const size = vertical ? (node.measured.height ?? 130) : (node.measured.width ?? 360);
-      return [start + (end ? size : 0)];
-    });
-    if (bounds.length === 0) return fallback;
-    return end ? Math.max(...bounds) : Math.min(...bounds);
-  });
-}
-
-interface SkipEdgeData extends Record<string, unknown> {
-  lane: number;
-  orientation: GraphOrientation;
-  sourceRowIds: string[];
-  nextRowIds: string[];
-  targetRowIds: string[];
-  intermediateRows: string[][];
-}
-
-type SkipEdge = Edge<SkipEdgeData, "skip">;
-
-const SkipEdge = memo(
-  ({ data, markerEnd, sourceX, sourceY, style, targetX, targetY }: EdgeProps<SkipEdge>) => {
-    const vertical = data?.orientation === "vertical";
-    const routingRows = useStore(
-      (state) =>
-        (data?.intermediateRows ?? []).flatMap((ids) => {
-          const bounds = ids.flatMap((id) => {
-            const node = state.nodeLookup.get(id);
-            if (!node) return [];
-            return [
-              {
-                start: vertical
-                  ? node.internals.positionAbsolute.y
-                  : node.internals.positionAbsolute.x,
-                extent: vertical
-                  ? node.internals.positionAbsolute.x + (node.measured.width ?? 360)
-                  : node.internals.positionAbsolute.y + (node.measured.height ?? 130),
-              },
-            ];
-          });
-          if (bounds.length === 0) return [];
-          return [
-            {
-              start: Math.min(...bounds.map((bound) => bound.start)),
-              extent: Math.max(...bounds.map((bound) => bound.extent)),
-            },
-          ];
-        }),
-      (previous, next) =>
-        previous.length === next.length &&
-        previous.every(
-          (row, index) => row.start === next[index].start && row.extent === next[index].extent,
-        ),
-    );
-    const sourceRowEnd = useRowBoundary(
-      data?.sourceRowIds,
-      vertical,
-      true,
-      vertical ? sourceY : sourceX,
-    );
-    const nextRowStart = useRowBoundary(
-      data?.nextRowIds,
-      vertical,
-      false,
-      vertical ? targetY : targetX,
-    );
-    const targetRowStart = useRowBoundary(
-      data?.targetRowIds,
-      vertical,
-      false,
-      vertical ? targetY : targetX,
-    );
-    if (data === undefined) {
-      throw new Error("Skip edge is missing its routing lane");
-    }
-    const path = outerTrunkPath(
-      { sourceX, sourceY, targetX, targetY },
-      data.orientation,
-      routingRows,
-      data.lane,
-      branchJunction(sourceRowEnd, nextRowStart),
-      targetRowStart,
-    );
-
-    return <BaseEdge path={path} markerEnd={markerEnd} style={style} />;
+// Paths come from the layout, which routes every edge around cards and other edges.
+const RoutedEdge = memo(
+  ({ data, markerEnd, style }: EdgeProps<Edge<RoutedEdgeData, "routed">>) => {
+    if (data === undefined) throw new Error("Routed edge is missing its path");
+    return <BaseEdge path={data.path} markerEnd={markerEnd} style={style} />;
   },
 );
-SkipEdge.displayName = "SkipEdge";
-
-interface BranchEdgeData extends Record<string, unknown> {
-  orientation: GraphOrientation;
-  sourceRowIds: string[];
-  targetRowIds: string[];
-}
-
-const BranchEdge = memo(
-  ({
-    data,
-    markerEnd,
-    sourceX,
-    sourceY,
-    style,
-    targetX,
-    targetY,
-  }: EdgeProps<Edge<BranchEdgeData, "branch">>) => {
-    const vertical = data?.orientation === "vertical";
-    const sourceRowEnd = useRowBoundary(
-      data?.sourceRowIds,
-      vertical,
-      true,
-      vertical ? sourceY : sourceX,
-    );
-    const targetRowStart = useRowBoundary(
-      data?.targetRowIds,
-      vertical,
-      false,
-      vertical ? targetY : targetX,
-    );
-    if (data === undefined) throw new Error("Branch edge is missing its orientation");
-    return (
-      <BaseEdge
-        path={branchEdgePath(
-          { sourceX, sourceY, targetX, targetY },
-          data.orientation,
-          branchJunction(sourceRowEnd, targetRowStart),
-        )}
-        markerEnd={markerEnd}
-        style={style}
-      />
-    );
-  },
-);
-BranchEdge.displayName = "BranchEdge";
+RoutedEdge.displayName = "RoutedEdge";
 
 const NODE_TYPES = { workflow: WorkflowNodeCard };
 const NODE_ORIGIN: [number, number] = [0, 0.5];
-const EDGE_TYPES = { skip: SkipEdge, branch: BranchEdge };
+const EDGE_TYPES = { routed: RoutedEdge };
 const FIT_VIEW_OPTIONS = { padding: 0.24 };
 // Leave room for the floating timeline above a top-to-bottom graph.
 const VERTICAL_FIT_VIEW_OPTIONS: FitViewOptions = {
@@ -741,16 +600,20 @@ function GraphCanvasView({
     () =>
       topologyNodeIds && topologyGraph
         ? createGraphLayout({ nodeIds: topologyNodeIds, graph: topologyGraph }, orientation)
-        : { edges: [], rows: {} },
+        : { edges: [], layers: [], chains: {} },
     [topologyGraph, topologyNodeIds, orientation],
   );
-  const edges = useMemo(
-    () => highlightConnectedEdges(layout.edges, selectedNodeId),
-    [layout.edges, selectedNodeId],
+  const { positions, paths } = useMemo(
+    () => arrangeGraph(layout, nodeMeasurements, orientation),
+    [layout, nodeMeasurements, orientation],
   );
-  const positions = useMemo(
-    () => graphPositions(layout.rows, nodeMeasurements, orientation),
-    [layout.rows, nodeMeasurements, orientation],
+  const edges = useMemo(
+    () =>
+      highlightConnectedEdges(
+        layout.edges.map((edge) => ({ ...edge, data: { path: paths[edge.id] } })),
+        selectedNodeId,
+      ),
+    [layout.edges, paths, selectedNodeId],
   );
   const openCallbacks = useMemo(
     () =>
