@@ -275,6 +275,13 @@ def _check_sbx_pool(value: object) -> object:
 _SbxPool = Annotated[object, PlainValidator(_check_sbx_pool)]
 
 
+def _requested_model(lm: dspy.BaseLM | str | None) -> str | None:
+    """The model a run asks for, by name; ``None`` when it uses DSPy's configured LM."""
+    if lm is None or isinstance(lm, str):
+        return lm
+    return _model_display_name(lm) or lm.model
+
+
 class PredictRLM(BaseModel):
     """Run agent steps with PredictRLM.
 
@@ -353,7 +360,13 @@ class PredictRLM(BaseModel):
                     files(input_mode="mount", output_dir=str(bridge.output_dir)),
                 ],
             )
-        prediction = await self._run(predictor, request, inputs, events=events, files=bridge)
+        prediction = await self._run(predictor, request, inputs, events=events)
+        trace = trace_record(
+            prediction.trace,
+            prediction.evidence,
+            model=_model_display_name(self.lm),
+            sub_model=_model_display_name(self.sub_lm),
+        )
         output_names = request.signature.output_model.model_fields
         # A missing field is left out, so output validation reports it.
         values = {name: prediction[name] for name in output_names if name in prediction}
@@ -362,19 +375,16 @@ class PredictRLM(BaseModel):
                 try:
                     values[name] = bridge.outputs(value)
                 except (OSError, ValueError) as exc:
+                    events.finished(
+                        trace.header, outputs=None, complete=prediction.evidence.complete
+                    )
                     raise AgentOutputError(
                         f"agent step {request.step_name!r} output {name!r} is not a usable "
                         f"file: {exc}"
                     ) from exc
-        return AgentRunOutcome(
-            outputs=PythonOutputs(values=values),
-            trace=trace_record(
-                prediction.trace,
-                prediction.evidence,
-                model=_model_display_name(self.lm),
-                sub_model=_model_display_name(self.sub_lm),
-            ),
-        )
+        outputs = PythonOutputs(values=values)
+        events.finished(trace.header, outputs=outputs, complete=prediction.evidence.complete)
+        return AgentRunOutcome(outputs=outputs, trace=trace)
 
     async def _run(
         self,
@@ -383,12 +393,14 @@ class PredictRLM(BaseModel):
         inputs: Mapping[str, object],
         *,
         events: AgentEventSink,
-        files: AgentFileBridge | None,
     ) -> dspy.Prediction:
-        """Run PredictRLM, sending its final trace event on every outcome."""
+        """Run PredictRLM, sending its final event when the run raises.
+
+        A run that returns sends its final event once its outputs are known.
+        """
         from predict_rlm.trace import extract_trace_from_exc
 
-        state = _AgentInvocationState(events, inputs, files)
+        state = _AgentInvocationState(events, inputs, _requested_model(self.lm))
         invocation_token = _AGENT_INVOCATION_STATE.set(state)
         try:
             try:
@@ -411,13 +423,6 @@ class PredictRLM(BaseModel):
                     f"{_describe_signature(request.signature.dspy_signature)}: {exc}. "
                     f"input types: {input_types}."
                 ) from exc
-            _emit_terminal_trace(
-                prediction.trace,
-                prediction.evidence,
-                events,
-                model=_model_display_name(self.lm),
-                sub_model=_model_display_name(self.sub_lm),
-            )
             return prediction
         finally:
             _AGENT_INVOCATION_STATE.reset(invocation_token)
@@ -435,6 +440,7 @@ class PredictRLM(BaseModel):
             events,
             model=_model_display_name(self.lm),
             sub_model=_model_display_name(self.sub_lm),
+            outputs=None,
         )
 
     def _predictor_for(self, request: AgentRequest) -> _PredictRLMPredictor:

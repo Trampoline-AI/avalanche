@@ -2534,19 +2534,21 @@ class Operator:
         invocation_id = evidence.invocation_id
         key = (run.run_id, node_id)
         invocation_key = (run.run_id, node_id, invocation_id)
+        # A live event without a native part names no runtime.
         runtime_kind = (
             evidence.runtime_kind
             if isinstance(evidence, AgentLiveEvent)
             else terminal_runtime_kind(evidence)
         )
-        locked_runtime = self._agent_invocation_runtimes.setdefault(
-            invocation_key, runtime_kind
-        )
-        if runtime_kind != locked_runtime:
-            raise _CoordinatorProtocolError(
-                f"agent invocation started on runtime {locked_runtime!r} "
-                f"but sent evidence from {runtime_kind!r}"
+        if runtime_kind is not None:
+            locked_runtime = self._agent_invocation_runtimes.setdefault(
+                invocation_key, runtime_kind
             )
+            if runtime_kind != locked_runtime:
+                raise _CoordinatorProtocolError(
+                    f"agent invocation started on runtime {locked_runtime!r} "
+                    f"but sent evidence from {runtime_kind!r}"
+                )
         projected_events = self._agent_events.setdefault(key, [])
         previous_descriptor = self._trace_descriptors.get(
             key, TraceDescriptor(status="in_progress")
@@ -2577,7 +2579,7 @@ class Operator:
                 event_sequence=len(projected_events) + 1,
                 event_json=stored_json,
                 size_bytes=event_size,
-                native_event_kind=evidence.native.kind,
+                native_event_kind=(evidence.native.kind if evidence.native is not None else ""),
                 agent_event_kind=common.kind if common is not None else "native",
                 turn=evidence.turn,
                 duration_ms=(
@@ -2595,7 +2597,7 @@ class Operator:
                 detail.append(f"duration={projected_agent_event.duration_ms}ms")
             if evidence.error is not None:
                 detail.append(f"error={evidence.error}")
-            message = f"Agent {evidence.native.kind}"
+            message = f"Agent {evidence.kind_label}"
             if detail:
                 message += " " + " ".join(detail)
             status = previous_descriptor.status
@@ -2626,8 +2628,8 @@ class Operator:
                 projected_events[-1].event_sequence if projected_events else 0
             )
             match evidence:
-                case AgentTraceFinished(record=record):
-                    status = record.header.status
+                case AgentTraceFinished(header=header):
+                    status = header.status
                     error = None
                     descriptor = TraceDescriptor(
                         status=status,
@@ -2637,7 +2639,7 @@ class Operator:
                         event_count=len(projected_events),
                         size_bytes=len(finalized_trace),
                         latest_event_sequence=latest_event_sequence,
-                        header=_trace_header(record.header),
+                        header=_trace_header(header),
                     )
                     message = f"Agent trace {status}"
                     if status == "failed":
@@ -3580,7 +3582,6 @@ def _materialize_run_detail(capture: _RunDetailCapture) -> RunState:
         )
         trace_invocation_id = terminal.invocation_id if terminal is not None else None
         envelope = AgentTraceEnvelope(
-            schema_version=2,
             invocation_id=trace_invocation_id,
             status=descriptor.status if descriptor is not None else "in_progress",
             # Turns travel as live events; viewers read them from here.
@@ -3779,8 +3780,6 @@ def _trace_header(header: AgentTraceHeader) -> TraceHeader:
     """The header the run snapshot carries, its runtime-specific part included."""
     return TraceHeader(
         status=header.status,
-        runtime_kind=header.runtime_kind,
-        trace_format=header.trace_format,
         model=header.model,
         duration_ms=header.duration_ms,
         usage=header.usage,

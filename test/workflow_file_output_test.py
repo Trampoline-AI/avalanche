@@ -20,7 +20,7 @@ def test_agent_file_mount_and_reserved_outputs(tmp_path):
     from predict_rlm.backends import DirectPythonBackend
 
     from avalanche.agent import capture_agent_evidence
-    from avalanche.agent.live import AgentLiveEvent
+    from avalanche.agent.live import AgentTraceFinished
     from avalanche.agent.trace import file_input_evidence
 
     class Convert(ava.Signature):
@@ -88,12 +88,8 @@ def test_agent_file_mount_and_reserved_outputs(tmp_path):
     ):
         result = flow().run(executor=ava.LocalExecutor()).result(timeout=20)
     assert isinstance(result, ava.File)
-    # The live result event describes the output as the reference the step returned.
-    succeeded = [
-        event.native
-        for event in observed
-        if isinstance(event, AgentLiveEvent) and event.native.kind == "run.succeeded"
-    ]
+    # The final event describes the output as the reference the step returned.
+    succeeded = [event for event in observed if isinstance(event, AgentTraceFinished)]
     assert succeeded[-1].outputs["result"] == file_input_evidence(result).model_dump(
         mode="json"
     )
@@ -233,7 +229,7 @@ def test_agent_file_step_traces_record_input_references_not_mounted_paths(tmp_pa
     from predict_rlm.backends import DirectPythonBackend
 
     from avalanche.agent import capture_agent_evidence
-    from avalanche.agent.live import AgentLiveEvent
+    from avalanche.agent.live import AgentLiveEvent, RunStarted
 
     class Count(ava.Signature):
         document: ava.File = ava.InputField()
@@ -275,9 +271,9 @@ def test_agent_file_step_traces_record_input_references_not_mounted_paths(tmp_pa
         assert flow().run(executor=ava.LocalExecutor()).result(timeout=20) == 5
 
     started = next(
-        event.native
+        event.common
         for event in observed
-        if isinstance(event, AgentLiveEvent) and event.native.kind == "run.started"
+        if isinstance(event, AgentLiveEvent) and isinstance(event.common, RunStarted)
     )
     assert started.inputs["document"]["workspace"] == "snapshot:test"
     assert started.inputs["document"]["path"] == "input.txt"

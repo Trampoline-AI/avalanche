@@ -327,7 +327,7 @@ def test_paged_details_and_chunked_trace_materialize_without_cross_run_invalidat
 ):
     monkeypatch.setattr("runtime.operator.client.DETAIL_HYDRATION_PAGE_SIZE", 2)
     # Small chunks make the final body cross several transport chunks.
-    monkeypatch.setattr("runtime.operator.server_v2.TRACE_CHUNK_BYTES", 256)
+    monkeypatch.setattr("runtime.operator.server_v2.TRACE_CHUNK_BYTES", 128)
     operator = Operator([], watch=False, schedule=False)
     run = _seed_hydration_run(operator, "run-target", agent_trace, iteration_step)
     unrelated = RunState(run_id="run-unrelated", flow_name="flow")
@@ -359,11 +359,10 @@ def test_paged_details_and_chunked_trace_materialize_without_cross_run_invalidat
         trace = provider.hydrate_trace(run.run_id, "agent-1")
         body = trace.trace_body
         assert body.invocation_id == "test-invocation"
-        assert len(body.model_dump_json().encode()) > 3 * 256
-        assert body.record.header.native.telemetry_ref == {"trace_id": "trace-1"}
-        assert body.record.turns == ()
-        assert body.record.header.turn_count == 5
-        assert body.record.header.external_run_id == "sdk-run-target"
+        assert len(body.model_dump_json().encode()) > 3 * 128
+        assert body.header.native.telemetry_ref == {"trace_id": "trace-1"}
+        assert body.header.turn_count == 5
+        assert body.header.external_run_id == "sdk-run-target"
         assert body.complete is True
         assert provider.hydrate_trace(run.run_id, "agent-1").trace_body == body
         hydrated.logs.clear()
@@ -421,7 +420,7 @@ def test_grpc_terminal_hydration_selects_body_invocation_across_event_pages(
         ]
         detail = provider.hydrate_trace(run.run_id, "agent-1")
         assert detail.trace_body.invocation_id == "call-a"
-        assert detail.trace_body.record.header.external_run_id == "sdk-call-a"
+        assert detail.trace_body.header.external_run_id == "sdk-call-a"
         hydrated = provider.get_run(run.run_id)
         envelope = json.loads(hydrated.nodes["agent-1"].agent_trace_json)
         assert envelope["invocation_id"] == "call-a"

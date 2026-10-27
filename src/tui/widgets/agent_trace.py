@@ -420,9 +420,7 @@ def _append_terminal_status(text: Text, terminal: AgentTraceTerminal | None) -> 
     if terminal is None:
         return
     outcome = (
-        terminal.record.header.status
-        if isinstance(terminal, AgentTraceFinished)
-        else terminal.status
+        terminal.header.status if isinstance(terminal, AgentTraceFinished) else terminal.status
     )
     text.append(
         f"Live record: {'complete' if terminal.complete else 'incomplete'}"
@@ -441,16 +439,16 @@ def _trace_leading(store: Any) -> tuple[Text, list[InspectionTurn], bool]:
     )
     envelope = store.selected_agent_trace_envelope
     terminal = envelope.terminal if envelope is not None else None
-    record = store.selected_agent_record
+    header = store.selected_agent_header
     run_id = (
-        record.header.external_run_id
-        if record is not None
+        header.external_run_id
+        if header is not None
         else (terminal.external_run_id if isinstance(terminal, AgentTraceUnavailable) else None)
     )
     text = Text()
     _append_tabs(text, "trace")
     text.append(f"AGENT TRACE · {display_name}\n", style="bold #60dce4")
-    if record is None:
+    if header is None:
         state = store.selected_agent_inspector_state
         messages = {
             "truncated": (
@@ -484,7 +482,7 @@ def _trace_leading(store: Any) -> tuple[Text, list[InspectionTurn], bool]:
         return text, turns, state in {"live", "hydrating"}
 
     inspector_state = store.selected_agent_inspector_state
-    status = record.header.status
+    status = header.status
     if inspector_state == "pending":
         status = "pending"
     elif inspector_state == "live":
@@ -504,7 +502,7 @@ def _trace_leading(store: Any) -> tuple[Text, list[InspectionTurn], bool]:
     text.append(f" · Run: {run_id}\n")
     if envelope.error is not None:
         text.append(f"Error: {envelope.error}\n", style="bold red")
-    for line, style in store.selected_agent_viewer.header(record):
+    for line, style in store.selected_agent_viewer.header(header):
         text.append(f"{line}\n", style=style)
     _append_terminal_status(text, terminal)
     turns = store.selected_agent_turns
@@ -524,23 +522,23 @@ class AgentTraceInspector(_VirtualInspector):
 
         def build() -> tuple[Text, list[_InspectorRow]]:
             leading, turns, live = _trace_leading(store)
-            record = store.selected_agent_record
+            header = store.selected_agent_header
             viewer = store.selected_agent_viewer
-            live_rows = self._live_event_rows(store) if record is None else []
+            live_rows = self._live_event_rows(store) if header is None else []
             if not turns and not live_rows:
                 leading.append("No executable turn captured yet.\n", style="dim")
                 return leading, []
             if live_rows and not turns:
                 leading.append(_TRACE_CONTROLS, style="dim")
-            max_turns = viewer.turn_limit(record) if record is not None else len(turns)
+            max_turns = viewer.turn_limit(header) if header is not None else len(turns)
             node = (
                 store.current_run.nodes.get(store.selected_agent_node_id)
                 if store.current_run is not None and store.selected_agent_node_id is not None
                 else None
             )
             submitted = (
-                record is not None
-                and viewer.submitted(record)
+                header is not None
+                and viewer.submitted(header)
                 and node is not None
                 and node.status is NodeStatus.SUCCESS
             )
@@ -926,8 +924,9 @@ class AgentOutputInspector(_VirtualInspector):
                 return leading, []
             declaration = store.selected_agent_declaration
             declared = declaration.signature.outputs if declaration is not None else ()
-            names = [field.name for field in declared] or list(outputs)
-            names.extend(name for name in outputs if name not in names)
+            omitted = store.selected_agent_omitted_outputs
+            names = [field.name for field in declared] or [*outputs, *omitted]
+            names.extend(name for name in (*outputs, *omitted) if name not in names)
             descriptions = {field.name: field for field in declared}
             trace_token = store.selected_agent_trace_content_token
             rows: list[_InspectorRow] = []
@@ -944,7 +943,11 @@ class AgentOutputInspector(_VirtualInspector):
                         ("output", name),
                         label,
                         0,
-                        outputs[name] if name in outputs else "Unavailable",
+                        outputs[name]
+                        if name in outputs
+                        else "Unavailable: larger than the trace keeps"
+                        if name in omitted
+                        else "Unavailable",
                         store=store,
                         body_token=(trace_token, name in outputs),
                     )

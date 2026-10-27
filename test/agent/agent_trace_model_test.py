@@ -8,7 +8,7 @@ import pytest
 from pydantic import ValidationError
 
 import avalanche as ava
-from avalanche.agent.native.claude_agent import ClaudeAgentTurn
+from avalanche.agent.native.claude_agent import ClaudeAgentTraceHeader, ClaudeAgentTurn
 from avalanche.agent.native.predict_rlm import (
     PredictRLMPredictCall,
     PredictRLMTokenUsage,
@@ -81,8 +81,6 @@ def _turn(index: int, *, tool_calls: int = 1) -> Turn:
 
 def _header(**changes: object) -> AgentTraceHeader:
     fields: dict[str, object] = {
-        "runtime_kind": "predict_rlm",
-        "trace_format": "predict_rlm.run/v1",
         "status": "succeeded",
         "stop_reason": "submit",
         "model": "openai/gpt-5.5",
@@ -104,7 +102,6 @@ def _record(**changes: object) -> AgentTrace:
     fields: dict[str, object] = {
         "header": _header(),
         "turns": (_turn(1), _turn(2)),
-        "turns_streamed": False,
     }
     fields.update(changes)
     return AgentTrace.model_validate(fields)
@@ -116,13 +113,27 @@ def test_record_round_trips_through_json():
     restored = AgentTrace.model_validate_json(record.model_dump_json())
 
     assert restored == record
-    assert restored.schema_version == 2
+
+
+def test_header_names_its_runtime_and_format_from_its_runtime_part():
+    header = _header()
+
+    assert (header.runtime_kind, header.trace_format) == ("predict_rlm", "predict_rlm.run/v1")
+    assert {"runtime_kind", "trace_format"}.isdisjoint(header.model_dump())
 
 
 @pytest.mark.parametrize(
     "header",
     [
-        {"trace_format": "claude_agent.messages/v1"},
+        {
+            "native": ClaudeAgentTraceHeader(
+                result_subtype="success",
+                num_turns=2,
+                duration_api_ms=None,
+                permission_denials=0,
+                errors=(),
+            )
+        },
         {"turn_count": 3},
         {"tool_call_count": 2},
     ],
@@ -150,14 +161,6 @@ def test_record_rejects_out_of_order_turns():
         _record(turns=(_turn(2), _turn(1)))
 
 
-def test_streamed_record_carries_counts_but_no_turns():
-    record = _record(turns=(), turns_streamed=True)
-
-    assert record.header.turn_count == 2
-    with pytest.raises(ValidationError, match="streamed"):
-        _record(turns_streamed=True)
-
-
 @pytest.mark.parametrize(
     "change",
     [
@@ -173,8 +176,8 @@ def test_streamed_record_carries_counts_but_no_turns():
     ids=[
         "unknown-format",
         "native-outside-header",
-        "unknown-runtime",
-        "old-schema",
+        "stored-runtime-kind",
+        "schema-version",
         "unknown-turn-format",
         "old-tool-call",
         "old-turn",

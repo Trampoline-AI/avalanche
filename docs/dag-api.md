@@ -88,7 +88,9 @@ Current source, ordinary, and destination sidebars open on **Definition**, which
 contains the step interface. **Code** is a separate tab that loads the Python source
 only when opened. For agents, **Step definition** contains the interface card;
 **Agent definition** shows the agent call fields. A historical agent's **Run I/O**
-shows recorded agent inputs and outputs, not the step interface. Run interfaces
+shows recorded agent inputs and outputs, not the step interface: the inputs of
+the call's start event and the outputs of its final event, with fields too large
+for the trace named rather than shown. Run interfaces
 for other step types are captured from the prepared workflow and do not change
 when source is edited, reloaded, or removed. Older runs without this metadata show
 it as unavailable; they never substitute the current definition. Historical Python

@@ -1,5 +1,5 @@
 import type { PredictRLMTokenUsage } from "../../generated/agentSchemas";
-import type { AgentLiveEvent } from "../common";
+import { finishedTurn, type AgentLiveEvent } from "../common";
 import type { AgentTraceStep, TraceTokenUsage } from "../types";
 import { toolCall } from "./common";
 import type { TraceViewer } from "./index";
@@ -14,9 +14,11 @@ function tokenUsage(usage: PredictRLMTokenUsage): TraceTokenUsage {
 }
 
 function turn(event: AgentLiveEvent): AgentTraceStep {
-  const { common, native } = event;
-  if (common?.kind !== "turn.finished" || native.kind !== "iteration.recorded") {
-    throw new Error("PredictRLM turn events are iteration.recorded with a finished turn");
+  const common = finishedTurn(event);
+  const { native } = event;
+  // A turn its live event kept whole has no native part; one that left calls out says so.
+  if (native !== null && native.kind !== "iteration.recorded") {
+    throw new Error("PredictRLM turn events carry only iteration.recorded details");
   }
   const { turn } = common;
   const part = turn.native;
@@ -26,7 +28,7 @@ function turn(event: AgentLiveEvent): AgentTraceStep {
   // The turn's last tool calls are its predict calls, in the order of their details.
   const toolCount = turn.tool_calls.length - part.predict_calls.length;
   const predictCalls = turn.tool_calls.slice(toolCount);
-  const omissions = native.omissions;
+  const omissions = native?.omissions;
   return {
     iteration: turn.index,
     message: turn.message ?? undefined,
@@ -62,28 +64,16 @@ function turn(event: AgentLiveEvent): AgentTraceStep {
   };
 }
 
-function retainedValue(event: AgentLiveEvent, kind: "inputs" | "outputs"): unknown {
-  const { native } = event;
-  if (kind === "inputs" && native.kind === "run.started") return native.inputs;
-  if (kind === "outputs" && native.kind === "run.succeeded") return native.outputs;
-  return undefined;
-}
-
 export const predictRlmViewer: TraceViewer = {
   turn,
   turnUnit: "iterations",
   activityLabels: {
-    "run.started": "Agent run started",
+    "iteration.recorded": "Turn finished",
     "code.generated": "Generating code",
     "code.executed": "Running generated code",
     "predict.started": "Calling sub-model",
     "predict.finished": "Sub-model call finished",
-    "tool.started": "Calling tool",
-    "tool.finished": "Tool call finished",
-    "run.succeeded": "Agent run completed",
     "run.failed": "Agent run failed",
     "run.cancelled": "Agent run cancelled",
   },
-  valueEventKinds: { inputs: "run.started", outputs: "run.succeeded" },
-  retainedValue,
 };

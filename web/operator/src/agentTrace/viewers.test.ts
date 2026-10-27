@@ -1,15 +1,8 @@
 import { describe, expect, it } from "vitest";
 
-import {
-  claudeFinishedEvent,
-  claudeStartedEvent,
-  claudeTurnEvent,
-  runStartedEvent,
-  runSucceededEvent,
-  turnEvent,
-} from "../test/agentTraceFixtures";
+import { claudeTurnEvent, runStartedEvent, turnEvent } from "../test/agentTraceFixtures";
 import { parseAgentLiveEvent } from "./common";
-import { TRACE_VIEWERS, activityLabel, viewerFor } from "./viewers";
+import { TRACE_VIEWERS, activityLabel, turnViewer, viewerFor } from "./viewers";
 
 describe("agent trace viewers", () => {
   it("has a viewer for every trace format", () => {
@@ -22,7 +15,7 @@ describe("agent trace viewers", () => {
   it("maps a PredictRLM turn event from its common turn and its own part", () => {
     const event = parseAgentLiveEvent(turnEvent(1, { untruncatedOutput: "full detail" }));
 
-    const step = viewerFor(event.native.format).turn(event);
+    const step = turnViewer(event).turn(event);
 
     expect(step).toMatchObject({
       iteration: 1,
@@ -51,7 +44,7 @@ describe("agent trace viewers", () => {
 
   it("marks a turn whose code failed", () => {
     const event = parseAgentLiveEvent(turnEvent(2, { failed: true }));
-    expect(viewerFor(event.native.format).turn(event).error).toBe(true);
+    expect(turnViewer(event).turn(event).error).toBe(true);
   });
 
   it("does not fail a turn whose code handled a failed tool call", () => {
@@ -65,32 +58,48 @@ describe("agent trace viewers", () => {
       ...body,
       common: { ...body.common, turn: { ...body.common.turn, tool_calls: toolCalls } },
     });
-    expect(viewerFor(event.native.format).turn(event).error).toBe(false);
+    expect(turnViewer(event).turn(event).error).toBe(false);
   });
 
   it("rejects a non-turn event as a turn", () => {
     const event = parseAgentLiveEvent(runStartedEvent({ question: "Ready?" }));
-    expect(() => viewerFor(event.native.format).turn(event)).toThrow();
+    expect(() => turnViewer(event).turn(event)).toThrow();
+    expect(() => viewerFor("predict_rlm.run/v1").turn(event)).toThrow();
   });
 
-  it("reads run values from PredictRLM bodies", () => {
-    const viewer = viewerFor("predict_rlm.run/v1");
-    const started = parseAgentLiveEvent(runStartedEvent({ question: "Ready?" }));
-    const succeeded = parseAgentLiveEvent(runSucceededEvent({ answer: "Yes" }));
-    expect(viewer.retainedValue(started, "inputs")).toEqual({ question: "Ready?" });
-    expect(viewer.retainedValue(succeeded, "outputs")).toEqual({ answer: "Yes" });
-    expect(viewer.retainedValue(started, "outputs")).toBeUndefined();
+  it("counts the calls a large turn's live event left out", () => {
+    const body = turnEvent(4);
+    const event = parseAgentLiveEvent({
+      ...body,
+      native: {
+        format: "predict_rlm.run/v1",
+        kind: "iteration.recorded",
+        omissions: {
+          reason: "too large",
+          tool_count: 2,
+          predict_count: 3,
+          predict_group_count: 1,
+        },
+      },
+    });
+
+    expect(turnViewer(event).turn(event)).toMatchObject({
+      toolCallCount: 3,
+      predictCallCount: 4,
+    });
   });
 
-  it("names live events and refuses unknown formats", () => {
-    expect(activityLabel("predict.started")).not.toBe("predict.started");
-    expect(activityLabel("custom.kind")).toBe("custom.kind");
+  it("names live events from their native kind, else their common kind", () => {
+    expect(activityLabel("predict.started", "native")).not.toBe("predict.started");
+    expect(activityLabel("custom.kind", "native")).toBe("custom.kind");
+    expect(activityLabel("", "run.started")).not.toBe("run.started");
+    expect(activityLabel("", "tool.finished")).not.toBe("tool.finished");
     expect(() => viewerFor("other/v1")).toThrow("No viewer");
   });
 
   it("maps a Claude turn from its message, thinking and tool calls", () => {
     const event = parseAgentLiveEvent(claudeTurnEvent(2));
-    const viewer = viewerFor(event.native.format);
+    const viewer = turnViewer(event);
 
     expect(viewer.turn(event)).toMatchObject({
       iteration: 2,
@@ -121,14 +130,5 @@ describe("agent trace viewers", () => {
       },
     });
     expect(viewer.turn(apiError).error).toBe(true);
-    const started = parseAgentLiveEvent(claudeStartedEvent({ a: 2 }));
-    const finished = parseAgentLiveEvent(claudeFinishedEvent({ total: 5 }));
-    expect(viewer.retainedValue(started, "inputs")).toEqual({ a: 2 });
-    expect(viewer.retainedValue(finished, "outputs")).toEqual({ total: 5 });
-    const failed = parseAgentLiveEvent(claudeFinishedEvent(null));
-    expect(viewer.retainedValue(failed, "outputs")).toBeUndefined();
-    const edited = parseAgentLiveEvent(claudeFinishedEvent({ total: 5 }, ["edited"]));
-    expect(viewer.retainedValue(edited, "outputs")).toMatchObject({ total: 5 });
-    expect(viewer.retainedValue(edited, "outputs")).toHaveProperty("edited");
   });
 });

@@ -19,6 +19,15 @@ def _members(union: object) -> list[type]:
     return [member for arg in args for member in _members(arg) if isinstance(member, type)]
 
 
+def _kinds(union: object) -> set[str]:
+    """The native kinds a union's members can carry."""
+    return {
+        kind
+        for member in _members(union)
+        for kind in get_args(member.model_fields["kind"].annotation)
+    }
+
+
 def _formats(union: object) -> set[str]:
     return {member.model_fields["format"].default for member in _members(union)}
 
@@ -33,16 +42,14 @@ def test_the_predict_rlm_viewer_labels_every_native_kind():
     from avalanche.agent.native import predict_rlm as native
     from tui.agent_trace_viewers.predict_rlm import _LABELS
 
-    members = _members(native.PredictRLMNativeEvent)
-    assert set(_LABELS) == {kind for member in members for kind in member.common_kinds}
+    assert set(_LABELS) == _kinds(native.PredictRLMNativeEvent)
 
 
 def test_the_claude_agent_viewer_labels_every_native_kind():
     from avalanche.agent.native import claude_agent as native
     from tui.agent_trace_viewers.claude_agent import _LABELS
 
-    members = _members(native.ClaudeAgentNativeEvent)
-    assert set(_LABELS) == {kind for member in members for kind in member.common_kinds}
+    assert set(_LABELS) == _kinds(native.ClaudeAgentNativeEvent)
 
 
 def test_a_claude_session_renders_through_its_viewer_and_metadata_sections(monkeypatch):
@@ -86,8 +93,8 @@ def test_a_claude_session_renders_through_its_viewer_and_metadata_sections(monke
         asyncio.run(agent(a=2, b=3))
 
     *events, final = sent
-    viewer = viewer_for(final.record.header.trace_format)
-    turn_event = next(event for event in events if event.common is not None)
+    viewer = viewer_for(final.header.trace_format)
+    turn_event = next(event for event in events if event.common.kind == "turn.finished")
     view = viewer.turn(
         InspectionTurn(turn_event.invocation_id, turn_event.common, turn_event.native),
         full_output=False,
@@ -118,6 +125,7 @@ def test_a_claude_session_renders_through_its_viewer_and_metadata_sections(monke
     )
     assert view.items[0].key == "message"
     assert view.items[-1].key == "reasoning"
-    assert any("session-1" in line for line, _ in viewer.header(final.record))
-    assert viewer.outputs(events) == {"total": 5}
-    assert {viewer.live_label(event) for event in events}
+    assert any("session-1" in line for line, _ in viewer.header(final.header))
+    assert final.outputs == {"total": 5}
+    # Events without a Claude part are named from their common kind.
+    assert all(viewer.live_label(event) for event in events)

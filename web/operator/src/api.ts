@@ -58,6 +58,7 @@ const TRACE_STATUSES: Partial<Record<AgentTraceStatusV2, AgentTraceStatus>> = {
 
 const AGENT_EVENT_KINDS: Partial<Record<AgentEventKindV2, AgentEventKind>> = {
   [AgentEventKindV2.NATIVE]: "native",
+  [AgentEventKindV2.RUN_STARTED]: "run.started",
   [AgentEventKindV2.TURN_FINISHED]: "turn.finished",
   [AgentEventKindV2.TOOL_STARTED]: "tool.started",
   [AgentEventKindV2.TOOL_FINISHED]: "tool.finished",
@@ -81,9 +82,7 @@ function mapTokenUsage(usage: TokenUsageV2): TokenUsageMsg {
 function mapTraceHeader(header: TraceHeaderV2): TraceHeaderMsg {
   const status = TRACE_STATUSES[header.status];
   if (!status) throw new Error(`Unsupported agent trace status ${header.status}`);
-  if (!header.runtimeKind || !header.traceFormat) {
-    throw new Error("Agent trace header is missing its runtime kind or trace format");
-  }
+  // The runtime-specific part names the trace format; the wire's copy must agree.
   const native = parseTraceHeaderNative(JSON.parse(header.nativeJson));
   if (native.format !== header.traceFormat) {
     throw new Error(
@@ -92,8 +91,6 @@ function mapTraceHeader(header: TraceHeaderV2): TraceHeaderMsg {
   }
   const mapped: TraceHeaderMsg = {
     status,
-    runtimeKind: header.runtimeKind,
-    traceFormat: header.traceFormat,
     durationMs: header.durationMs,
     turnCount: header.turnCount,
     toolCallCount: header.toolCallCount,

@@ -169,8 +169,7 @@ async def test_actual_call_inputs_and_complete_prediction_replace_step_result(
         "answer": "PREPARED: HELLO",
         "handoff": {"summary": "summary: prepared: hello"},
     }
-    # The operator's terminal event drops streamed steps; evaluations keep every turn.
-    assert observed[0].record.turns == ()
+    # The final event carries the header alone; evaluations keep every turn.
     assert context.trace.header.external_run_id == "prepared: hello"
     assert context.trace.turns == (_turn("prepared: hello"),)
 
@@ -231,7 +230,7 @@ async def test_nested_step_capture_is_isolated_and_restored(
         assert context.output.answer == text.upper()
         assert context.output.handoff == Report(summary=f"summary: {text}")
         assert context.trace.header.external_run_id == text
-        assert terminal.record.header.external_run_id == text
+        assert terminal.header.external_run_id == text
         assert context.trace.turns == (_turn(text),)
 
 
@@ -361,8 +360,7 @@ async def test_first_successful_completion_wins_without_gating_later_calls(
     assert context.output.handoff.summary == "fast"
     terminals = [event for event in observed if event.kind != "event"]
     assert len(terminals) == 2
-    assert all(event.record.turns == () for event in terminals)
-    assert context.trace.header.external_run_id == terminals[0].record.header.external_run_id
+    assert context.trace.header.external_run_id == terminals[0].header.external_run_id
     assert context.trace.turns == (_turn("fast"),)
 
 
@@ -425,8 +423,7 @@ async def test_failed_earlier_call_does_not_claim_capture_and_observers_keep_all
     assert len(terminal) == 3
     assert terminal[0].complete is True
     if exportable_failure_trace:
-        assert terminal[0].record.header.status == "failed"
-        assert terminal[0].record.turns == ()
+        assert terminal[0].header.status == "failed"
     else:
         assert terminal[0].kind == "trace_unavailable"
     assert len([event for event in observed if event.kind == "event"]) == 3
@@ -434,8 +431,7 @@ async def test_failed_earlier_call_does_not_claim_capture_and_observers_keep_all
     context = submissions[0].context
     assert context.inputs.text == "first"
     assert context.output.answer == "first"
-    assert context.trace.header.external_run_id == terminal[1].record.header.external_run_id
-    assert all(event.record.turns == () for event in terminal[1:])
+    assert context.trace.header.external_run_id == terminal[1].header.external_run_id
     assert context.trace.turns == (_turn("first"),)
 
 

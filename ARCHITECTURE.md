@@ -151,16 +151,22 @@ the same kind is merged over it field by field, and with neither the step uses
 `PredictRLM()`. Signatures and tools stay step-local.
 
 While a runtime runs, it reports live events, and each call ends with exactly
-one final trace. A live event carries Avalanche's sequence number, the common
-event when there is one (a finished turn, a model or tool call, generated code),
-and the runtime's own details as a typed payload for its trace format. The final
-trace is the common `AgentTrace`: a header every runtime fills the same
-way; its turns already travelled as live events. Every shared object, the header
-and each turn and live event, carries a typed native part for its runtime's trace
-format, so the run summary sent to clients holds runtime details such as
-PredictRLM's sub-model and per-model usage without the trace body. These models
-live in `src/avalanche/agent/` without runtime imports, so the operator, client,
-TUI, and web UI validate every format without the runtime installed.
+one final event. A live event carries Avalanche's sequence number and a common
+event (the run's start with its inputs and model, a finished turn, a tool call),
+the runtime's own details as a typed native payload for its trace format, or
+both; an event the common layer describes fully has no native part. The final
+event carries the trace header, which every runtime fills the same way, and the
+step's outputs, with files by reference and fields too large to keep named
+rather than kept; the turns already travelled as live events. The complete
+`AgentTrace`, header and turns, exists only in process, as `result.trace` and
+for evaluations. The header and each turn carry a typed native part for their
+runtime's trace format, and the runtime kind and trace format are read from that
+part rather than stored again, so the run summary sent to clients holds runtime
+details such as PredictRLM's sub-model and per-model usage without the trace
+body. These models live in `src/avalanche/agent/` without runtime imports, so
+the operator, client, TUI, and web UI validate every format without the runtime
+installed. Only the bodies the operator stores and serves one by one, live
+events and final events, carry a schema version.
 
 ### Executors
 
@@ -306,8 +312,9 @@ Preparation, runtime, and terminal events are serializable queue messages. The
 parent validates them before mutating its state. The coordinator forwards stdout,
 stderr, logging, and agent evidence through the event channel. Agent evidence
 crosses as JSON and is validated once, in strict mode, against the live event
-and final trace models. Malformed or out-of-order agent evidence, such as a
-second final trace for one call, fails the run as a protocol error. For Ray runs, a
+and final event models. Malformed or out-of-order agent evidence, such as a
+second final event for one call, or native parts from two runtimes in one call,
+fails the run as a protocol error. For Ray runs, a
 Ray queue carries worker log events back to the coordinator and then the parent.
 
 Cancellation sets the child cancellation event and eventually tears down the

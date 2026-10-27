@@ -23,7 +23,13 @@ from predict_rlm.trace import (
 )
 
 import avalanche as ava
-from avalanche.agent.contract import AgentRequest, SignatureSpec, ToolStarted, TurnFinished
+from avalanche.agent.contract import (
+    AgentRequest,
+    RunStarted,
+    SignatureSpec,
+    ToolStarted,
+    TurnFinished,
+)
 from avalanche.agent.native.predict_rlm import PredictRLMPredictCall, PredictRLMTokenUsage
 from avalanche.agent.trace import ToolCall as CommonToolCall
 from avalanche.runtimes import PredictRLM
@@ -107,8 +113,8 @@ class _Recorder:
     async def emit(self, native: object, common: object) -> None:
         self.events.append((native, common))
 
-    def finished(self, record: object, *, complete: bool) -> None:
-        self.terminals.append(record)
+    def finished(self, header: object, *, outputs: object, complete: bool) -> None:
+        self.terminals.append((header, outputs))
 
     def unavailable(self, **detail: object) -> None:
         self.terminals.append(detail)
@@ -294,20 +300,25 @@ async def test_live_predict_rlm_events_reach_the_runtime_sink_as_common_events(m
 
     await PredictRLM().invoke(_request(), recorder)
 
-    assert [(native.kind, type(common)) for native, common in recorder.events] == [
-        ("run.started", type(None)),
+    assert [
+        (native.kind if native is not None else None, type(common))
+        for native, common in recorder.events
+    ] == [
+        (None, RunStarted),
         ("code.generated", type(None)),
-        ("tool.started", ToolStarted),
+        (None, ToolStarted),
         ("predict.started", type(None)),
-        ("iteration.recorded", TurnFinished),
+        (None, TurnFinished),
     ]
     native, finished = recorder.events[-1]
     assert finished.turn.index == 1
-    # The turn carries PredictRLM's own details; the native event only what it left out.
+    # The turn carries PredictRLM's own details; a native event only what it left out.
     assert finished.turn.native.untruncated_output == _step().untruncated_output
-    assert native.omissions is None
-    [record] = recorder.terminals
-    assert record.turns_streamed and record.turns == ()
+    assert native is None
+    # The final event carries the header and the outputs, never the turns again.
+    [(header, outputs)] = recorder.terminals
+    assert header.turn_count == 1
+    assert dict(outputs.values) == {"answer": "a"}
 
 
 @pytest.mark.asyncio
@@ -378,8 +389,8 @@ def test_file_and_workspace_inputs_are_recorded_without_bytes(tmp_path):
 
     native, common = events_module.project_event(event)
 
-    assert common is None
-    assert native.inputs == {
+    assert native is None
+    assert common.inputs == {
         "document": {
             "kind": "file",
             "workspace": document.ref.workspace,
@@ -393,14 +404,23 @@ def test_file_and_workspace_inputs_are_recorded_without_bytes(tmp_path):
     }
 
 
-def test_every_predict_rlm_event_kind_has_a_native_payload():
+def test_every_predict_rlm_event_kind_has_a_native_or_common_form():
     from typing import get_args
 
+    from avalanche.agent.live import AgentEvent
     from avalanche.agent.native import predict_rlm as native
 
-    members = get_args(get_args(native.PredictRLMNativeEvent)[0])
-    modelled = {kind for member in members for kind in member.common_kinds}
-    assert modelled == {kind.value for kind in RunEventKind}
+    def kinds(union):
+        members = get_args(get_args(union)[0])
+        return {
+            kind
+            for member in members
+            for kind in get_args(member.model_fields["kind"].annotation)
+        }
+
+    # A run's success is the final event, not a live one.
+    modelled = kinds(native.PredictRLMNativeEvent) | kinds(AgentEvent) | {"run.succeeded"}
+    assert modelled >= {kind.value for kind in RunEventKind}
 
 
 @pytest.mark.parametrize("kind", ["session.started", "input.prepared", "session.released"])

@@ -135,15 +135,13 @@ class _FixedJsonRuntime(BaseModel):
 
     async def invoke(self, request: AgentRequest, events) -> AgentRunOutcome:
         trace = _empty_trace()
-        events.finished(trace.model_copy(update={"turns_streamed": True}), complete=True)
+        events.finished(trace.header, outputs=JsonOutputs(text=self.reply), complete=True)
         return AgentRunOutcome(outputs=JsonOutputs(text=self.reply), trace=trace)
 
 
 def _empty_trace() -> AgentTrace:
     return AgentTrace(
         header=AgentTraceHeader(
-            runtime_kind="predict_rlm",
-            trace_format="predict_rlm.run/v1",
             status="succeeded",
             stop_reason="submit",
             model=None,
@@ -158,7 +156,6 @@ def _empty_trace() -> AgentTrace:
             ),
         ),
         turns=(),
-        turns_streamed=False,
     )
 
 
@@ -257,8 +254,8 @@ async def test_predict_rlm_mounts_ava_files_and_returns_reserved_outputs(monkeyp
     # Inputs are mounted where they are, never copied.
     assert received == {"document": str(source), "attachments": [str(attachment)]}
     # Evidence describes the caller's file reference, never the mounted host path.
-    assert observed[0].native.inputs["document"]["workspace"] == "snapshot:test"
-    assert observed[0].native.inputs["document"]["path"] == "doc.txt"
+    assert observed[0].common.inputs["document"]["workspace"] == "snapshot:test"
+    assert observed[0].common.inputs["document"]["path"] == "doc.txt"
     redacted = result.outputs.redacted
     assert isinstance(redacted, ava.File)
     assert redacted.read_bytes() == b"[redacted]"
