@@ -51,6 +51,7 @@ def _request(spec: SignatureSpec | None = None) -> AgentRequest:
         signature=spec,
         inputs=spec.input_model(question="q"),
         tools=(),
+        skills=(),
     )
 
 
@@ -430,3 +431,28 @@ def test_sandbox_lifecycle_events_reach_the_sink_without_a_common_event(kind):
     )
 
     assert (native.kind, common) == (kind, None)
+
+
+@pytest.mark.asyncio
+async def test_a_step_skill_is_rejected_before_predict_rlm_starts(monkeypatch):
+    builds = _use_predictor(monkeypatch, object())
+    skill = ava.agent.Skill(name="house-style", description="Applies a style.", instructions="")
+    recorder = _Recorder()
+
+    with pytest.raises(ava.agent.AgentStepError, match=r"PredictRLM\(skills="):
+        await PredictRLM().invoke(_request().model_copy(update={"skills": (skill,)}), recorder)
+
+    assert (builds, recorder.events, recorder.terminals) == ([], [], [])
+
+
+def test_predict_rlm_skills_live_with_the_runtime():
+    skills = ava.runtimes.predict_rlm.skills
+
+    assert skills.Skill is predict_rlm.Skill
+    assert [skills.pdf.name, skills.spreadsheet.name, skills.docx.name] == [
+        "pdf",
+        "spreadsheet",
+        "docx",
+    ]
+    declaration = PredictRLM(skills=[skills.pdf]).declaration(workflow_default=None)
+    assert [skill.name for skill in declaration.skills] == ["pdf"]

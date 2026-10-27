@@ -594,9 +594,10 @@ operator-based execution commands, never a standalone Python runner.
   instructions specific to that agent step in this docstring.
 - A Skill is reusable knowledge or a reusable capability shared by multiple
   agent steps. Never create a Skill solely to carry instructions for one agent
-  step; keep those instructions in its signature docstring. Pass reusable Skills
-  through the runtime, `runtime=ava.runtimes.PredictRLM(skills=[...])`, on each
-  agent step that needs them.
+  step; keep those instructions in its signature docstring. On PredictRLM steps,
+  pass reusable PredictRLM skills (`ava.runtimes.predict_rlm.skills`) through the
+  runtime, `runtime=ava.runtimes.PredictRLM(skills=[...])`. On ClaudeAgent steps,
+  pass `ava.agent.Skill` objects (Agent Skills format) in the step's `skills=`.
 - In decorated bodies, `agent` is framework-injected, keyword-only, annotated
   `ava.Agent`, and never passed at DAG call sites. `await agent(...)` returns an
   `ava.agent.AgentResult` whose `outputs` are already validated against the
@@ -673,7 +674,7 @@ def document_flow():
         ingest_documents()
         >> ava.agent.step(
             AnalyzeDocuments,
-            runtime=ava.runtimes.PredictRLM(skills=[ava.agent.skills.pdf]),
+            runtime=ava.runtimes.PredictRLM(skills=[ava.runtimes.predict_rlm.skills.pdf]),
         )
         >> publish_report()
     )

@@ -124,7 +124,7 @@ def test_full_inline_ray_workflow_returns_validated_values_from_real_workers(ray
     def count_items(quantities: list[int]) -> int:
         return sum(quantities)
 
-    order_skill = ava.agent.Skill(
+    order_skill = ava.runtimes.predict_rlm.skills.Skill(
         name="order-extraction",
         instructions="Parse comma-separated quantity/name orders with parse_orders.",
         tools={"parse_orders": parse_orders},
@@ -202,7 +202,7 @@ def test_agent_outputs_model_crosses_ray_workers(ray_runtime):
     from ray import cloudpickle
     from ray._private.runtime_env.setup_hook import export_setup_func_module
 
-    order_skill = ava.agent.Skill(
+    order_skill = ava.runtimes.predict_rlm.skills.Skill(
         name="order-extraction",
         instructions="Parse comma-separated quantity/name orders with parse_orders.",
         tools={"parse_orders": lambda transcript: (["apples"], [2])},

@@ -26,7 +26,7 @@ counting in Python and uses the model only for semantic judgments:
     runtime=ava.runtimes.PredictRLM(
         lm=MODEL,
         sub_lm=SUB_MODEL,
-        skills=[ava.agent.skills.spreadsheet, evidence_coding_skill],
+        skills=[ava.runtimes.predict_rlm.skills.spreadsheet, evidence_coding_skill],
     ),
 )
 async def extract_themes(workbook: File, *, agent: ava.Agent) -> ThemeReport:
@@ -38,7 +38,7 @@ async def extract_themes(workbook: File, *, agent: ava.Agent) -> ThemeReport:
     runtime=ava.runtimes.PredictRLM(
         lm=MODEL,
         sub_lm=SUB_MODEL,
-        skills=[ava.agent.skills.spreadsheet, evidence_coding_skill],
+        skills=[ava.runtimes.predict_rlm.skills.spreadsheet, evidence_coding_skill],
     ),
 )
 async def detect_risks(workbook: File, *, agent: ava.Agent) -> RiskReport:
@@ -83,7 +83,7 @@ with advisory read-only inputs, not a security sandbox. See the
     runtime=ava.runtimes.PredictRLM(
         lm=MODEL,
         sub_lm=SUB_MODEL,
-        skills=[ava.agent.skills.spreadsheet],
+        skills=[ava.runtimes.predict_rlm.skills.spreadsheet],
     ),
 )
 async def build_review_workbook(
@@ -100,7 +100,7 @@ async def build_review_workbook(
     runtime=ava.runtimes.PredictRLM(
         lm=MODEL,
         sub_lm=SUB_MODEL,
-        skills=[ava.agent.skills.docx],
+        skills=[ava.runtimes.predict_rlm.skills.docx],
     ),
 )
 async def write_executive_brief(

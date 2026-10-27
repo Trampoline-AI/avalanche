@@ -92,6 +92,8 @@ function ToolDetails({ tool }: { tool: ToolMetadata }) {
   );
 }
 
+const SKILL_LIST_TITLES = { packages: "Packages", modules: "Modules", files: "Files" } as const;
+
 export function InspectorResources({ declaration }: { declaration: AgentDeclaration }) {
   const [selectedSkillName, setSelectedSkillName] = useState<string>();
   const selectedSkill = declaration.skills.find((skill) => skill.name === selectedSkillName);
@@ -176,13 +178,14 @@ export function InspectorResources({ declaration }: { declaration: AgentDeclarat
         <div className="skill-markdown-scroll max-h-[calc(85dvh-2px)] overflow-auto overscroll-contain">
           {selectedSkill && (
             <div className="grid min-w-0 gap-6 p-6 pr-16">
+              {selectedSkill.description && (
+                <p className="m-0 text-sm text-secondary">{selectedSkill.description}</p>
+              )}
               <Markdown full>{selectedSkill.instructions}</Markdown>
-              {(["packages", "modules"] as const).map((kind) =>
+              {(["packages", "modules", "files"] as const).map((kind) =>
                 selectedSkill[kind].length > 0 ? (
-                  <section key={kind} aria-label={kind === "packages" ? "Packages" : "Modules"}>
-                    <h3 className="inspector-section-title">
-                      {kind === "packages" ? "Packages" : "Modules"}
-                    </h3>
+                  <section key={kind} aria-label={SKILL_LIST_TITLES[kind]}>
+                    <h3 className="inspector-section-title">{SKILL_LIST_TITLES[kind]}</h3>
                     <ul className="m-0 grid list-none gap-2 p-0">
                       {selectedSkill[kind].map((name, index) => (
                         <li key={`${index}:${name}`} className="min-w-0">

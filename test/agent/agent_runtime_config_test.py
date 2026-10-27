@@ -147,7 +147,13 @@ def test_declaration_names_extra_options_and_keeps_only_json_values():
 
 @pytest.mark.parametrize(
     "removed",
-    [{"lm": "x"}, {"sub_lm": "x", "max_iterations": 2}, {"skills": []}, {"verbose": True}],
+    [
+        {"lm": "x"},
+        {"sub_lm": "x", "max_iterations": 2},
+        {"skills": [ava.runtimes.predict_rlm.skills.pdf]},
+        {"verbose": True},
+    ],
+    ids=["lm", "models", "predict-rlm-skills", "verbose"],
 )
 def test_removed_step_arguments_name_their_replacement(removed):
     with pytest.raises(TypeError, match=r"runtime=ava\.runtimes\.PredictRLM\(") as raised:
@@ -187,3 +193,48 @@ def test_runtime_must_be_an_agent_runtime(runtime):
         ava.agent_step(Echo, runtime=runtime)
     with pytest.raises(TypeError, match="agent runtime"):
         ava.workflow(agent_defaults={"runtime": runtime})
+
+
+_STYLE = ava.agent.Skill(
+    name="house-style", description="Applies the house style.", instructions="Be brief."
+)
+
+
+def test_step_skills_are_declared_next_to_tools():
+    @ava.agent_step(Echo, skills=[_STYLE])
+    async def echo(text: str, *, agent: ava.Agent) -> str:
+        return (await agent(text=text)).outputs.answer
+
+    @ava.workflow
+    def flow():
+        return ava.agent.step(Echo, inputs={"text": "hi"}, skills=(_STYLE,))
+
+    inline = next(iter(flow().nodes.values())).node.fn.__agent_step__
+    for spec in (echo.fn.__agent_step__, inline):
+        declaration = spec.declaration()
+        assert [
+            (skill.name, skill.description, skill.instructions, skill.files)
+            for skill in declaration.skills
+        ] == [("house-style", "Applies the house style.", "Be brief.", ())]
+        assert declaration.runtime.skills == ()
+
+
+@pytest.mark.parametrize(
+    ("skills", "error", "message"),
+    [
+        ("house-style", TypeError, "sequence"),
+        (["house-style"], TypeError, "ava.agent.Skill objects, not str"),
+        ([_STYLE, _STYLE], ava.agent.AgentStepError, r"several skills named \['house-style'\]"),
+    ],
+)
+def test_step_skills_must_be_distinct_agent_skills(skills, error, message):
+    with pytest.raises(error, match=message):
+        ava.agent_step(Echo, skills=skills)
+
+
+@pytest.mark.asyncio
+async def test_a_predict_rlm_step_with_agent_skills_fails_before_the_agent_starts():
+    agent = ava.Agent(signature=Echo, step_name="echo", skills=(_STYLE,))
+
+    with pytest.raises(ava.agent.AgentStepError, match="ava.runtimes.predict_rlm.skills"):
+        await agent(text="hi")

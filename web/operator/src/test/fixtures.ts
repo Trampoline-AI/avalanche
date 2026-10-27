@@ -18,12 +18,14 @@ export function agentDeclarationJson({
   inputs = [],
   outputs = [],
   tools = [],
+  skills = [],
   runtime = {},
 }: {
   instructions?: string;
   inputs?: { name: string; annotation: string }[];
   outputs?: { name: string; annotation: string }[];
   tools?: Partial<AgentDeclaration["tools"][number]>[];
+  skills?: AgentDeclaration["skills"];
   runtime?: Partial<PredictRLMDeclaration>;
 }): string {
   const field = (item: { name: string; annotation: string }) => ({ ...item, description: "" });
@@ -35,6 +37,7 @@ export function agentDeclarationJson({
       outputs: outputs.map(field),
     },
     tools: tools.map((tool) => ({ name: "tool", description: "", source_code: "", ...tool })),
+    skills,
     runtime: {
       kind: "predict_rlm",
       settings: {},
