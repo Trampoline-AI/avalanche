@@ -42,11 +42,11 @@ PermissionMode = Literal["default", "acceptEdits", "plan", "bypassPermissions", 
 
 class ClaudeAgent:
     model: str | None = None                  # None: the CLI chooses
-    max_turns: int | None = None              # most turns before the session stops
+    max_turns: PositiveInt | None = None      # most turns before the session stops
     builtin_tools: Sequence[str] = ()         # Claude Code tools usable without asking, e.g. "Read"
     permission_mode: PermissionMode = "default"
     system_prompt_append: str | None = None   # added after the signature's instructions
-    max_budget_usd: float | None = None       # most US dollars one call may spend
+    max_budget_usd: PositiveFloat | None = None  # most US dollars one call may spend
 ```
 
 Each call ignores your own Claude setup: your user and project settings are not
@@ -198,7 +198,7 @@ ClaudeAgentNativeEvent = (
 )
 
 
-class Started:                     # common: None; the inputs given to Claude
+class Started:                     # common: None; the inputs as the trace keeps them, files by reference
     kind: Literal["started"]
     model: str | None
     inputs: JsonValue
