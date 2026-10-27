@@ -134,7 +134,7 @@ def test_extra_options_merge_like_fields_with_the_step_winning():
 def test_declaration_names_extra_options_and_keeps_only_json_values():
     @ava.agent_step(Echo, runtime=PredictRLM(future_limit=3, future_hook=print))
     async def echo(text: str, *, agent: ava.Agent) -> str:
-        return (await agent(text=text)).answer
+        return (await agent(text=text)).outputs.answer
 
     runtime = echo.fn.__agent_step__.declaration(
         AgentDefaults(runtime=PredictRLM(future_mode="fast"))
