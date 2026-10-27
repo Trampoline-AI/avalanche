@@ -302,6 +302,7 @@ AGENT_TRACE_DECLARATION = AgentDeclaration(
         ),
     ),
     tools=(),
+    skills=(),
     runtime=PredictRLMDeclaration(
         settings={"lm": "main-model", "sub_lm": "sub-model", "max_iterations": 4},
         extra_options=(),

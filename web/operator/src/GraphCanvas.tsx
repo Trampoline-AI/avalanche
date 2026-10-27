@@ -42,9 +42,12 @@ interface FieldMetadata {
 }
 export interface SkillMetadata {
   name: string;
+  /** What an Agent Skill does and when to use it; PredictRLM skills have none. */
+  description?: string;
   instructions: string;
   packages: string[];
   modules: string[];
+  files: string[];
 }
 
 export interface ToolMetadata {
@@ -124,12 +127,20 @@ export function parseAgentDeclaration(raw: string | undefined): AgentDeclaration
     sourceCode: source_code || undefined,
   });
   const { runtime } = declaration;
+  const stepSkills = declaration.skills.map(({ name, description, instructions, files }) => ({
+    name,
+    description,
+    instructions,
+    packages: [],
+    modules: [],
+    files,
+  }));
   if (runtime.kind === "claude_agent") {
     return {
       ...signature,
       model: { main: { source: "step override", identity: runtime.model } },
       runtime: { ...runtime.settings, builtin_tools: runtime.builtin_tools },
-      skills: [],
+      skills: stepSkills,
       tools: declaration.tools.map(tool),
     };
   }
@@ -137,12 +148,17 @@ export function parseAgentDeclaration(raw: string | undefined): AgentDeclaration
     ...signature,
     model: runtime.models,
     runtime: runtime.settings,
-    skills: runtime.skills.map(({ name, instructions, packages, modules }) => ({
-      name,
-      instructions,
-      packages,
-      modules,
-    })),
+    // The step's Agent Skills, then PredictRLM's own.
+    skills: [
+      ...stepSkills,
+      ...runtime.skills.map(({ name, instructions, packages, modules }) => ({
+        name,
+        instructions,
+        packages,
+        modules,
+        files: [],
+      })),
+    ],
     // Skill tools first, then the step's own, as the agent sees them.
     tools: [...runtime.skill_tools, ...declaration.tools].map(tool),
   };

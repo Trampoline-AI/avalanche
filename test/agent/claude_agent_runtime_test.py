@@ -757,6 +757,39 @@ async def test_live_claude_reads_an_outside_file_and_writes_a_file_output(tmp_pa
     assert shouted.read_bytes().decode().strip() == "QUIET WORDS"
 
 
+@pytest.mark.skipif(
+    os.environ.get("AVALANCHE_LIVE_CLAUDE") != "1",
+    reason="set AVALANCHE_LIVE_CLAUDE=1 to call Claude through the local claude CLI",
+)
+@pytest.mark.asyncio
+async def test_live_claude_uses_a_step_skill_and_reads_its_file(tmp_path):
+    class CodeWord(ava.Signature):
+        """Give the code word of the project named in the input."""
+
+        project: str = ava.InputField()
+        code_word: str = ava.OutputField()
+
+    codes = tmp_path / "codes.md"
+    codes.write_text("The code word of project heron is PELICAN-4217.\n")
+    skill = ava.agent.Skill(
+        name="project-codes",
+        description="Looks up project code words. Use when asked for a project's code word.",
+        instructions="Read references/codes.md in this skill's folder and answer from it.",
+        files={"references/codes.md": codes},
+    )
+    agent = ava.Agent(
+        signature=CodeWord,
+        step_name="code_word",
+        runtime=ClaudeAgent(model=MODEL, max_turns=8),
+        skills=(skill,),
+    )
+    result = await agent(project="heron")
+
+    assert result.outputs.code_word.strip() == "PELICAN-4217"
+    calls = [call.name for turn in result.trace.turns for call in turn.tool_calls]
+    assert "Skill" in calls
+
+
 @pytest.mark.asyncio
 async def test_a_response_split_across_messages_and_subagent_traffic_form_one_turn(replay):
     subagent = AssistantMessage(
@@ -877,3 +910,143 @@ async def test_a_setup_failure_writes_nothing_into_the_workspace(replay, tmp_pat
 
     assert seen == {}
     assert list(directory.iterdir()) == []
+
+
+def _skill(tmp_path: Path, name: str = "bonus-rules", **fields) -> ava.agent.Skill:
+    rules = tmp_path / f"{name}.md"
+    rules.write_text("Bonuses are ten points.")
+    return ava.agent.Skill(
+        name=name,
+        description="Explains bonuses. Use when adding a bonus.",
+        instructions="Read references/rules.md before adding a bonus.",
+        files={"references/rules.md": rules},
+        **fields,
+    )
+
+
+def _plugin_files(plugin: Path) -> dict[str, str]:
+    return {
+        path.relative_to(plugin).as_posix(): path.read_text()
+        for path in sorted(plugin.rglob("*"))
+        if path.is_file()
+    }
+
+
+@pytest.mark.asyncio
+async def test_step_skills_run_from_a_plugin_made_for_the_call(monkeypatch, tmp_path):
+    skill = _skill(tmp_path, metadata={"owner": "finance"})
+    seen: dict[str, object] = {}
+
+    async def query(*, prompt, options):
+        plugin = Path(options.plugins[0]["path"])
+        seen.update(options=options, plugin=plugin, files=_plugin_files(plugin))
+        for message in _success_stream():
+            yield message
+
+    monkeypatch.setattr(sdk_module, "_session", query)
+    agent = ava.Agent(
+        signature=Total,
+        step_name="total",
+        runtime=ClaudeAgent(model=MODEL),
+        tools=(lookup_bonus,),
+        skills=(skill,),
+    )
+    result = await agent(a=2, b=3)
+
+    assert result.outputs.total == 15
+    options, plugin = seen["options"], seen["plugin"]
+    assert options.plugins == [{"type": "local", "path": str(plugin)}]
+    assert options.skills == ["avalanche:bonus-rules"]
+    assert options.tools == ["Skill", "Read"]
+    assert f"Read(/{plugin}/**)" in options.allowed_tools
+    assert "Skill" not in options.allowed_tools
+    assert str(plugin) in options.add_dirs
+    # The user's and project's Claude settings and MCP servers stay out.
+    assert options.setting_sources == []
+    assert options.strict_mcp_config is True
+    files = seen["files"]
+    assert set(files) == {
+        ".claude-plugin/plugin.json",
+        "skills/bonus-rules/SKILL.md",
+        "skills/bonus-rules/references/rules.md",
+    }
+    assert files["skills/bonus-rules/references/rules.md"] == "Bonuses are ten points."
+    written = tmp_path / "written" / "bonus-rules"
+    written.mkdir(parents=True)
+    for relative, text in files.items():
+        if relative.startswith("skills/bonus-rules/"):
+            target = written / relative.removeprefix("skills/bonus-rules/")
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_text(text)
+    reloaded = ava.agent.Skill.from_dir(written)
+    assert reloaded.model_dump(exclude={"files"}) == skill.model_dump(exclude={"files"})
+    assert not plugin.exists()
+
+
+@pytest.mark.asyncio
+async def test_skills_without_files_add_only_the_skill_tool(replay, tmp_path):
+    seen = replay(_success_stream())
+    skill = ava.agent.Skill(
+        name="bonus-rules", description="Explains bonuses.", instructions="Add ten."
+    )
+    agent = ava.Agent(
+        signature=Total,
+        step_name="total",
+        runtime=ClaudeAgent(model=MODEL, builtin_tools=("Bash",)),
+        tools=(lookup_bonus,),
+        skills=(skill,),
+    )
+    await agent(a=2, b=3)
+
+    options = seen["options"]
+    assert options.tools == ["Bash", "Skill"]
+    assert not any(rule.startswith("Read") for rule in options.allowed_tools)
+
+
+@pytest.mark.asyncio
+async def test_a_step_without_skills_has_no_skill_tool_or_plugin(replay):
+    seen = replay(_success_stream())
+    await _agent()(a=2, b=3)
+
+    options = seen["options"]
+    assert (options.plugins, options.skills, options.tools) == ([], None, [])
+
+
+@pytest.mark.parametrize(
+    "error", [RuntimeError("CLI crashed"), asyncio.CancelledError()], ids=["fails", "cancelled"]
+)
+@pytest.mark.asyncio
+async def test_the_skill_plugin_is_removed_when_the_call_fails(monkeypatch, tmp_path, error):
+    plugins: list[Path] = []
+
+    async def query(*, prompt, options):
+        plugins.append(Path(options.plugins[0]["path"]))
+        yield _init()
+        raise error
+
+    monkeypatch.setattr(sdk_module, "_session", query)
+    agent = ava.Agent(
+        signature=Total,
+        step_name="total",
+        runtime=ClaudeAgent(model=MODEL),
+        tools=(lookup_bonus,),
+        skills=(_skill(tmp_path),),
+    )
+    with pytest.raises((AgentStepExecutionError, asyncio.CancelledError)):
+        await agent(a=2, b=3)
+
+    assert plugins and not plugins[0].exists()
+    assert not plugins[0].parent.exists()
+
+
+def test_a_claude_step_declares_its_skills(tmp_path):
+    @ava.agent_step(Total, runtime=ClaudeAgent(model=MODEL), skills=[_skill(tmp_path)])
+    async def total(a: int, b: int, *, agent: ava.Agent) -> int:
+        return (await agent(a=a, b=b)).outputs.total
+
+    declaration = total.fn.__agent_step__.declaration()
+
+    assert [(skill.name, skill.files) for skill in declaration.skills] == [
+        ("bonus-rules", ("references/rules.md",))
+    ]
+    assert declaration.skills[0].description.startswith("Explains bonuses")

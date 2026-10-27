@@ -71,6 +71,14 @@ describe("parseAgentDeclaration", () => {
       JSON.stringify({
         signature: { name: "Sum", instructions: "Add.", inputs: [], outputs: [] },
         tools: [{ name: "lookup", description: "", source_code: "def lookup(): ..." }],
+        skills: [
+          {
+            name: "house-style",
+            description: "Applies the house style.",
+            instructions: "Be brief.",
+            files: ["references/style.md"],
+          },
+        ],
         runtime: {
           kind: "claude_agent",
           model: "claude-haiku-5-5",
@@ -80,8 +88,29 @@ describe("parseAgentDeclaration", () => {
       }),
     );
     expect(declaration?.runtime).toEqual({ max_turns: 4, builtin_tools: ["Read"] });
-    expect(declaration?.skills).toEqual([]);
+    expect(declaration?.skills).toEqual([
+      {
+        name: "house-style",
+        description: "Applies the house style.",
+        instructions: "Be brief.",
+        packages: [],
+        modules: [],
+        files: ["references/style.md"],
+      },
+    ]);
     expect(declaration?.tools.map((tool) => tool.name)).toEqual(["lookup"]);
+  });
+
+  it("lists the step's Agent Skills before PredictRLM's own", () => {
+    const declaration = parseAgentDeclaration(
+      agentDeclarationJson({
+        skills: [{ name: "house-style", description: "d", instructions: "", files: [] }],
+        runtime: {
+          skills: [{ name: "pdf", instructions: "", packages: [], modules: [], tools: [] }],
+        },
+      }),
+    );
+    expect(declaration?.skills.map((skill) => skill.name)).toEqual(["house-style", "pdf"]);
   });
 
   it("throws on a malformed declaration instead of dropping fields", () => {

@@ -47,6 +47,7 @@ from .declaration import (
     AgentDeclaration,
     FieldDeclaration,
     SignatureDeclaration,
+    skill_declarations,
     tool_declarations,
 )
 from .defaults import AgentDefaults, effective_runtime, reject_removed_arguments
@@ -54,6 +55,7 @@ from .kinds import RuntimeKind
 from .live import AgentEvent, AgentLiveEvent, AgentTraceFinished, AgentTraceUnavailable
 from .native import NativeEvent
 from .signature import resolve_signature
+from .skills import Skill
 from .trace import AgentTraceHeader, AgentTraceStatus, retained_fields
 
 InputT = TypeVar("InputT")
@@ -180,12 +182,14 @@ class Agent:
         step_name: str,
         runtime: AgentRuntime | None = None,
         tools: tuple[Callable[..., Any], ...] = (),
+        skills: tuple[Skill, ...] = (),
     ) -> None:
         self._signature_declaration = signature
         self._step_name = step_name
         # PredictRLM when no runtime is given; built lazily, so nothing loads here.
         self._runtime = runtime
         self._declared_tools = tools
+        self._skills = skills
         self._signature: SignatureSpec | None = None
         self._tools: tuple[ToolSpec, ...] = ()
 
@@ -203,6 +207,7 @@ class Agent:
             signature=signature,
             inputs=validated_inputs,
             tools=self._tools,
+            skills=self._skills,
         )
         if self._runtime is None:
             from ..runtimes.predict_rlm import PredictRLM
@@ -279,6 +284,7 @@ class _AgentStepSpec(Generic[InputT, OutputT]):
         signature: type[dspy.Signature],
         runtime: AgentRuntime | None,
         tools: tuple[Callable[..., Any], ...],
+        skills: tuple[Skill, ...],
         public_signature: inspect.Signature,
         evaluations: Evaluations[InputT, OutputT] | None,
     ) -> None:
@@ -286,6 +292,7 @@ class _AgentStepSpec(Generic[InputT, OutputT]):
         self.signature = signature
         self.runtime = runtime
         self.tools = tools
+        self.skills = skills
         self.public_signature = public_signature
         self.evaluations = evaluations
 
@@ -295,6 +302,7 @@ class _AgentStepSpec(Generic[InputT, OutputT]):
             step_name=self.step_name,
             runtime=effective_runtime(self.runtime, _WORKFLOW_AGENT_DEFAULTS.get()),
             tools=self.tools,
+            skills=self.skills,
         )
 
     def field_schema_metadata(self) -> dict[str, list[dict[str, str]]]:
@@ -341,6 +349,7 @@ class _AgentStepSpec(Generic[InputT, OutputT]):
                 outputs=_field_declarations(signature.output_fields),
             ),
             tools=tool_declarations({_callable_name(tool): tool for tool in self.tools}),
+            skills=skill_declarations(self.skills),
             runtime=runtime_declaration,
         )
 
@@ -441,8 +450,13 @@ def _reject_nested_agent_decorator() -> None:
 
 
 def _step_configuration(
-    *, owner: str, runtime: object, tools: object, removed: Mapping[str, object]
-) -> tuple[AgentRuntime | None, tuple[Callable[..., Any], ...]]:
+    *,
+    owner: str,
+    runtime: object,
+    tools: object,
+    skills: object,
+    removed: Mapping[str, object],
+) -> tuple[AgentRuntime | None, tuple[Callable[..., Any], ...], tuple[Skill, ...]]:
     reject_removed_arguments(owner, removed)
     if runtime is not None and not isinstance(runtime, AgentRuntime):
         raise TypeError(
@@ -454,7 +468,19 @@ def _step_configuration(
     for tool in tools:
         if not callable(tool):
             raise TypeError(f"{owner} tools must be callable")
-    return runtime, tuple(tools)
+    if not isinstance(skills, Sequence) or isinstance(skills, str):
+        raise TypeError(f"{owner} skills must be a sequence of ava.agent.Skill")
+    for skill in skills:
+        if not isinstance(skill, Skill):
+            raise TypeError(
+                f"{owner} skills must be ava.agent.Skill objects, not {type(skill).__name__}; "
+                "PredictRLM's own skills go in runtime=ava.runtimes.PredictRLM(skills=[...])"
+            )
+    names = [skill.name for skill in skills]
+    duplicates = sorted({name for name in names if names.count(name) > 1})
+    if duplicates:
+        raise AgentStepError(f"{owner} has several skills named {duplicates}")
+    return runtime, tuple(tools), tuple(skills)
 
 
 def agent_step(
@@ -462,6 +488,7 @@ def agent_step(
     *,
     runtime: AgentRuntime | None = None,
     tools: Sequence[Callable[..., Any]] = (),
+    skills: Sequence[Skill] = (),
     evaluations: Evaluations[InputT, OutputT] | None = None,
     **removed: object,
 ) -> Callable[[Callable[..., Any]], Node]:
@@ -470,14 +497,15 @@ def agent_step(
     The first positional argument is a subclassed ``ava.Signature``, an inline
     ``ava.agent.Signature(...)``, or another DSPy Signature class. ``runtime``
     defaults to the workflow's ``agent_defaults`` runtime, else PredictRLM.
+    ``skills`` are ``ava.agent.Skill`` objects the agent may load when needed.
     """
     _reject_nested_agent_decorator()
     if signature is None:
         raise TypeError("ava.agent_step requires a Signature as its first argument")
     if evaluations is not None and not isinstance(evaluations, Evaluations):
         raise TypeError("ava.agent_step evaluations must be an ava.Evaluations declaration")
-    step_runtime, step_tools = _step_configuration(
-        owner="ava.agent_step", runtime=runtime, tools=tools, removed=removed
+    step_runtime, step_tools, step_skills = _step_configuration(
+        owner="ava.agent_step", runtime=runtime, tools=tools, skills=skills, removed=removed
     )
 
     def decorator(user_fn: Callable[..., Any]) -> Node:
@@ -489,6 +517,7 @@ def agent_step(
             signature=signature,
             runtime=step_runtime,
             tools=step_tools,
+            skills=step_skills,
             public_signature=public_signature,
             evaluations=evaluations,
         )
@@ -552,6 +581,7 @@ def step(
     slug: str | None = None,
     runtime: AgentRuntime | None = None,
     tools: Sequence[Callable[..., Any]] = (),
+    skills: Sequence[Skill] = (),
     evaluations: Evaluations[InputT, OutputT] | None = None,
     **removed: object,
 ) -> NodeFuture | Callable[[Callable[..., Any]], Node]:
@@ -560,7 +590,12 @@ def step(
         if inputs is not None or slug is not None:
             raise TypeError("ava.agent.step inputs= and slug= require a workflow body")
         return agent_step(
-            signature, runtime=runtime, tools=tools, evaluations=evaluations, **removed
+            signature,
+            runtime=runtime,
+            tools=tools,
+            skills=skills,
+            evaluations=evaluations,
+            **removed,
         )
 
     if evaluations is not None and not isinstance(evaluations, Evaluations):
@@ -572,8 +607,8 @@ def step(
         unexpected = [name for name in inputs if name not in signature.input_fields]
         if unexpected:
             raise AgentStepError(f"inline agent has unexpected input fields {unexpected}")
-    step_runtime, step_tools = _step_configuration(
-        owner="ava.agent.step", runtime=runtime, tools=tools, removed=removed
+    step_runtime, step_tools, step_skills = _step_configuration(
+        owner="ava.agent.step", runtime=runtime, tools=tools, skills=skills, removed=removed
     )
     output_fields = signature.output_fields
     output_names = tuple(output_fields)
@@ -596,6 +631,7 @@ def step(
         signature=signature,
         runtime=step_runtime,
         tools=step_tools,
+        skills=step_skills,
         public_signature=public_signature,
         evaluations=evaluations,
     )

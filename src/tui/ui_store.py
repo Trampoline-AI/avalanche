@@ -1709,6 +1709,10 @@ class UIStore:
         signature = declaration.signature.model_dump(mode="json")
         runtime = declaration.runtime.model_dump(mode="json")
         step_tools = [tool.model_dump(mode="json") for tool in declaration.tools]
+        step_skills = {
+            skill.pop("name"): skill
+            for skill in (skill.model_dump(mode="json") for skill in declaration.skills)
+        }
         common = {
             "signature": {
                 "instructions": signature["instructions"],
@@ -1720,7 +1724,7 @@ class UIStore:
         if isinstance(declaration.runtime, ClaudeAgentDeclaration):
             return {
                 **common,
-                "skills": {},
+                "skills": step_skills,
                 "models": {"main": runtime["model"]},
                 "runtime": {**runtime["settings"], "builtin_tools": runtime["builtin_tools"]},
                 "packages": [],
@@ -1729,7 +1733,11 @@ class UIStore:
             }
         return {
             **common,
-            "skills": {skill.pop("name"): skill for skill in runtime["skills"]},
+            # The step's Agent Skills, then PredictRLM's own.
+            "skills": {
+                **step_skills,
+                **{skill.pop("name"): skill for skill in runtime["skills"]},
+            },
             "models": runtime["models"],
             "runtime": {
                 key: value

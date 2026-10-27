@@ -961,6 +961,42 @@ describe("retained run inspection", () => {
     expect(readJsonDetail).toHaveBeenCalledWith("trace-body", expect.anything());
   });
 
+  it("shows an Agent Skill's description and files in its dialog", () => {
+    const declaration = FlowInfoMsg.create({
+      ...agentWorkflow,
+      agentDeclarationsJson: {
+        [node.nodeId]: agentDeclarationJson({
+          skills: [
+            {
+              name: "house-style",
+              description: "Applies the house style when writing reports.",
+              instructions: "Follow the style guide.",
+              files: ["references/style.md"],
+            },
+          ],
+        }),
+      },
+    });
+    render(
+      <Inspector
+        api={createApi()}
+        workflow={declaration}
+        nodeId={node.nodeId}
+        onClose={() => undefined}
+      />,
+    );
+    fireEvent.click(screen.getByRole("button", { name: "house-style" }));
+    const dialog = screen.getByRole("dialog", { name: "house-style" });
+    expect(
+      within(dialog).getByText("Applies the house style when writing reports."),
+    ).toBeVisible();
+    expect(within(dialog).getByText("Follow the style guide.")).toBeVisible();
+    expect(within(dialog).getByRole("region", { name: "Files" })).toHaveTextContent(
+      "references/style.md",
+    );
+    expect(within(dialog).queryByRole("region", { name: "Packages" })).not.toBeInTheDocument();
+  });
+
   it("opens skill Markdown separately while tool source and runtime stay inline", async () => {
     const declaration = FlowInfoMsg.create({
       ...agentWorkflow,

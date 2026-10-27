@@ -17,15 +17,19 @@
       return Report.model_validate(prediction.report)
 
   # after
-  @ava.agent_step(Review, runtime=ava.runtimes.PredictRLM(lm=MODEL, skills=[ava.agent.skills.docx]))
+  @ava.agent_step(Review, runtime=ava.runtimes.PredictRLM(lm=MODEL, skills=[ava.runtimes.predict_rlm.skills.docx]))
   async def review(document: str, *, agent: ava.Agent) -> Report:
       return (await agent(document=document)).outputs.report
   ```
 
+  PredictRLM's skills moved: `ava.agent.Skill` and `ava.agent.skills.pdf`, `.docx`
+  and `.spreadsheet` are now `ava.runtimes.predict_rlm.skills.Skill`, `.pdf`, `.docx`
+  and `.spreadsheet`. `ava.agent.Skill` and `ava.agent.skills` now mean the new Agent
+  Skills type below.
+
   The entries below give the details. The operator, client and TUI no longer import
-  PredictRLM when they start; only the PredictRLM runtime, the `ava.agent.skills`,
-  `Skill` and `DirectPythonBackend` re-exports, and the TUI's mock trace import it,
-  on first use.
+  PredictRLM when they start; only the PredictRLM runtime, the `DirectPythonBackend`
+  re-export and the TUI's mock trace import it, on first use.
 - Agents: add internal, not yet used models for running agent steps on runtimes
   other than PredictRLM: a runtime-neutral request, result and trace format. Agent
   steps behave exactly as before.
@@ -232,6 +236,19 @@
   PredictRLM turns show their code and output from the turn's own part and list
   "Predict calls" with their inputs, outputs and details; Claude turns show the
   response's stop reason and API error.
+- Agents: agent steps take `skills=`, a list of `ava.agent.Skill` objects in the
+  [Agent Skills](https://agentskills.io/specification) format: a name, a
+  description saying when to use the skill, Markdown instructions and optional
+  resource files. Load an existing `SKILL.md` folder with
+  `ava.agent.Skill.from_dir(path)`, which rejects what the format rejects, or build
+  one in code. `ava.runtimes.ClaudeAgent` runs them from a temporary plugin made for
+  each call; PredictRLM does not support them yet and fails before the agent starts.
+  **Breaking:** PredictRLM's own `Skill` and its built-in `pdf`, `docx` and
+  `spreadsheet` skills moved to `ava.runtimes.predict_rlm.skills`.
+- **Breaking** — Operator: agent declarations gain a `skills` list (name,
+  description, instructions and file paths) for the step's Agent Skills. The web UI
+  and TUI show them with PredictRLM's own skills; upgrade the operator, its clients
+  and `@trampoline-ai/operator-ui` together.
 
 ## 0.15.1 — 2026-10-24
 

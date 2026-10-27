@@ -26,6 +26,7 @@ from pydantic.fields import FieldInfo
 from .declaration import RuntimeDeclaration
 from .live import AgentEvent, RunStarted, ToolFinished, ToolStarted, TurnFinished
 from .native import NativeEvent
+from .skills import Skill
 from .trace import AgentTrace, AgentTraceHeader, AgentTraceStatus, RuntimeKind
 
 # Serialized bodies always carry defaulted fields such as ``kind``; their
@@ -183,7 +184,8 @@ class AgentRequest(BaseModel):
 
     ``inputs`` is an instance of the signature's input model. ``ava.File`` and
     ``ava.Workspace`` values pass through unchanged; each runtime decides how to
-    hand them to its agent.
+    hand them to its agent. ``skills`` are the step's Agent Skills; a runtime
+    that cannot offer them to its agent rejects the request.
     """
 
     model_config = _LIVE
@@ -193,6 +195,7 @@ class AgentRequest(BaseModel):
     signature: SignatureSpec
     inputs: BaseModel
     tools: tuple[ToolSpec, ...]
+    skills: tuple[Skill, ...]
 
     @model_validator(mode="after")
     def _check_inputs(self) -> Self:
@@ -201,6 +204,10 @@ class AgentRequest(BaseModel):
                 f"agent request inputs must be a {self.signature.input_model.__name__}, "
                 f"got {type(self.inputs).__name__}"
             )
+        names = [skill.name for skill in self.skills]
+        duplicates = sorted({name for name in names if names.count(name) > 1})
+        if duplicates:
+            raise ValueError(f"agent request has several skills named {duplicates}")
         return self
 
 

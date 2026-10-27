@@ -111,7 +111,7 @@ def proposal_flow():
         prepare_inputs()
         >> ava.agent.step(
             AuditPackage,
-            runtime=ava.runtimes.PredictRLM(skills=[ava.agent.skills.pdf]),
+            runtime=ava.runtimes.PredictRLM(skills=[ava.runtimes.predict_rlm.skills.pdf]),
             tools=[lookup_policy],
         )
         >> publish_audit()
@@ -168,7 +168,7 @@ from .util import persist_audit, validate_package_audit
 
 @ava.agent_step(
     AuditPackage,
-    runtime=ava.runtimes.PredictRLM(skills=[ava.agent.skills.pdf], max_iterations=30),
+    runtime=ava.runtimes.PredictRLM(skills=[ava.runtimes.predict_rlm.skills.pdf], max_iterations=30),
     tools=[lookup_policy],
 )
 async def audit_package(
@@ -228,17 +228,42 @@ async def answer_question(
 Use the typed class form as soon as the contract has nested models, substantial
 strategy instructions, reuse, or its own tests.
 
+## Agent Skills
+
+A step's `skills=` takes `ava.agent.Skill` objects in the Agent Skills format: a
+name, a description saying when to use the skill, Markdown instructions, and
+optional resource files. Load an existing `SKILL.md` folder with
+`ava.agent.Skill.from_dir(path)` or build one in code. Skills hold no functions;
+keep those in `tools=`.
+
+```python
+report_style = ava.agent.Skill.from_dir("skills/report-style")
+
+
+@ava.agent_step(
+    DraftProposal,
+    runtime=ava.runtimes.ClaudeAgent(model="claude-haiku-5-5"),
+    skills=[report_style],
+)
+async def draft_proposal(request: ProposalRequest, *, agent: ava.Agent): ...
+```
+
+Only `ava.runtimes.ClaudeAgent` runs a step's skills today. A PredictRLM step
+with `skills=` fails before the agent starts; give PredictRLM steps PredictRLM
+skills instead.
+
 ## PredictRLM skills
 
 Avalanche creates and invokes the PredictRLM runtime behind `ava.Agent`. Flow
-authors configure its capabilities with `Skill` objects passed through the
-runtime, `runtime=ava.runtimes.PredictRLM(skills=[...])`. Skills are passed
-through unchanged, and built-ins are lazy re-exports:
+authors configure its capabilities with PredictRLM `Skill` objects passed through
+the runtime, `runtime=ava.runtimes.PredictRLM(skills=[...])`. Skills are passed
+through unchanged; the class and the built-ins live in
+`ava.runtimes.predict_rlm.skills`:
 
 ```python
-ava.agent.skills.pdf
-ava.agent.skills.spreadsheet
-ava.agent.skills.docx
+ava.runtimes.predict_rlm.skills.pdf
+ava.runtimes.predict_rlm.skills.spreadsheet
+ava.runtimes.predict_rlm.skills.docx
 ```
 
 Define custom skills in `skills.py` when the knowledge or capability is reused by
@@ -248,7 +273,7 @@ multiple agent steps:
 import avalanche as ava
 
 
-evidence_grounding_skill = ava.agent.Skill(
+evidence_grounding_skill = ava.runtimes.predict_rlm.skills.Skill(
     name="evidence-grounding",
     instructions="""Ground claims in supplied evidence.
 
@@ -319,8 +344,8 @@ tool must have:
 - host-side validation and bounded access to files, APIs, or databases.
 
 Use a Skill when the model needs instructions or sandbox packages/modules. Use a
-direct tool when a self-describing host function is the capability. A Skill may
-bundle closely related tools.
+direct tool when a self-describing host function is the capability. A PredictRLM
+Skill may bundle closely related tools; an `ava.agent.Skill` never does.
 
 ## Files
 

@@ -152,6 +152,7 @@ def test_request_passes_file_and_workspace_inputs_unchanged(tmp_path):
         signature=spec,
         inputs=spec.input_model(document=document, workspace=workspace),
         tools=(ToolSpec(name="lookup", description="Look a term up.", function=lookup),),
+        skills=(),
     )
 
     assert request.inputs.document is document
@@ -173,4 +174,20 @@ def test_request_rejects_inputs_of_another_model():
             signature=spec,
             inputs=other.input_model(question="q"),
             tools=(),
+            skills=(),
+        )
+
+
+def test_request_rejects_two_skills_with_one_name():
+    spec = SignatureSpec.from_dspy(ava.Signature("question: str -> answer: int"))
+    skill = ava.agent.Skill(name="lookup", description="Looks up.", instructions="")
+
+    with pytest.raises(ValidationError, match="several skills named"):
+        AgentRequest(
+            invocation_id="i-1",
+            step_name="ask",
+            signature=spec,
+            inputs=spec.input_model(question="q"),
+            tools=(),
+            skills=(skill, skill),
         )

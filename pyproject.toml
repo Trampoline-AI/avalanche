@@ -25,6 +25,7 @@ dependencies = [
     "pyiceberg[glue, pandas, pyarrow, s3fs, sql-sqlite]>=0.9,<0.11",
     "python-dotenv>=1.0",
     "python-ulid>=3.0.0",
+    "pyyaml>=6",
     "textual>=6.2.1",
     "typesafe-sdk>=0.6.0",
     "uvicorn>=0.30,<1",
