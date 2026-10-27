@@ -28,6 +28,8 @@ class ClaudeAgentTurn(BaseModel):
 
     model_config = _STRICT
 
+    runtime_kind: ClassVar[RuntimeKind] = "claude_agent"
+
     format: Literal["claude_agent.messages/v1"] = FORMAT
     message_id: str | None
     model: str
