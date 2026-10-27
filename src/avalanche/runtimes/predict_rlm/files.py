@@ -31,6 +31,12 @@ def _annotation(annotation):
     return annotation
 
 
+def _has_path_type(annotation) -> bool:
+    if annotation is PredictFile or annotation is PredictWorkspace:
+        return True
+    return any(_has_path_type(item) for item in get_args(annotation))
+
+
 def predict_signature(signature: type[dspy.Signature]) -> type[dspy.Signature]:
     """Keep the declared public signature; translate only the internal predictor's."""
     translated = signature
@@ -64,11 +70,18 @@ class AgentFileBridge:
         self._event_outputs = {
             name: TypeAdapter(field.annotation)
             for name, field in signature.output_fields.items()
+            if _has_path_type(field.annotation)
         }
 
     def event_output(self, name, value):
-        """One output of PredictRLM's result event, its files as ``ava.File`` references."""
-        return self.outputs(self._event_outputs[name].validate_python(value))
+        """One output of PredictRLM's result event, its files as ``ava.File`` references.
+
+        Outputs without file types are already plain data and stay as they are.
+        """
+        adapter = self._event_outputs.get(name)
+        if adapter is None:
+            return value
+        return self.outputs(adapter.validate_python(value))
 
     def outputs(self, value):
         if isinstance(value, PredictFile):
