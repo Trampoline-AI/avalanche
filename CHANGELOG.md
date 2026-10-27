@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- Upgrade dependencies with known security advisories: `filelock` now requires
+  `>=4.2.1,<5`; the lockfile moves `msgpack`, `virtualenv`, `graphql-core`,
+  `setuptools` and OpenTelemetry to patched releases; the browser UI moves to
+  `zod` 4.6.7 and `vitest` 4.1.12.
 - Keep input and output names whole on browser UI step cards; long types now wrap
   between words and show the full name and type on hover.
 - **Upgrading** — This release makes agent steps runtime-neutral. Code that defines
