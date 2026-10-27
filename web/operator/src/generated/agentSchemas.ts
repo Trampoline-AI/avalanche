@@ -31,7 +31,10 @@ export type FieldDeclaration = z.infer<typeof FieldDeclaration>;
 export const SignatureDeclaration = z.strictObject({ "inputs": z.array(FieldDeclaration), "instructions": z.string(), "name": z.string(), "outputs": z.array(FieldDeclaration) });
 export type SignatureDeclaration = z.infer<typeof SignatureDeclaration>;
 
-export const AgentDeclaration = z.strictObject({ "runtime": z.discriminatedUnion("kind", [PredictRLMDeclaration, ClaudeAgentDeclaration]), "signature": SignatureDeclaration, "tools": z.array(ToolDeclaration) });
+export const SkillDeclaration = z.strictObject({ "description": z.string(), "files": z.array(z.string()), "instructions": z.string(), "name": z.string() });
+export type SkillDeclaration = z.infer<typeof SkillDeclaration>;
+
+export const AgentDeclaration = z.strictObject({ "runtime": z.discriminatedUnion("kind", [PredictRLMDeclaration, ClaudeAgentDeclaration]), "signature": SignatureDeclaration, "skills": z.array(SkillDeclaration), "tools": z.array(ToolDeclaration) });
 export type AgentDeclaration = z.infer<typeof AgentDeclaration>;
 
 export const RunStarted = z.strictObject({ "inputs": z.record(z.string(), JsonValue), "kind": z.literal("run.started"), "model": z.union([z.string(), z.null()]), "omitted_inputs": z.array(z.string()) });

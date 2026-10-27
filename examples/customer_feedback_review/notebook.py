@@ -421,7 +421,7 @@ async def _(
         runtime=ava.runtimes.PredictRLM(
             lm=MODEL,
             sub_lm=SUB_MODEL,
-            skills=[ava.agent.skills.spreadsheet, evidence_coding_skill],
+            skills=[ava.runtimes.predict_rlm.skills.spreadsheet, evidence_coding_skill],
         ),
     )
     _result = await _rlm(workbook=_workbook)
@@ -483,7 +483,7 @@ def _(mo):
                 "configured `ava.Agent` through dependency injection."
             ),
             mo.ui.code_editor(
-                value="@ava.agent_step(\n    AnalyzeWorkbook,\n    runtime=ava.runtimes.PredictRLM(skills=[ava.agent.skills.spreadsheet]),\n)\nasync def analyze_workbook(\n    workbook: File, *, agent: ava.Agent\n) -> WorkbookAnalysis:\n    return (await agent(workbook=workbook)).outputs.analysis",
+                value="@ava.agent_step(\n    AnalyzeWorkbook,\n    runtime=ava.runtimes.PredictRLM(skills=[ava.runtimes.predict_rlm.skills.spreadsheet]),\n)\nasync def analyze_workbook(\n    workbook: File, *, agent: ava.Agent\n) -> WorkbookAnalysis:\n    return (await agent(workbook=workbook)).outputs.analysis",
                 language="python",
                 disabled=True,
                 show_copy_button=True,
@@ -623,7 +623,7 @@ def _(
         runtime=ava.runtimes.PredictRLM(
             lm=MODEL,
             sub_lm=SUB_MODEL,
-            skills=[ava.agent.skills.spreadsheet, evidence_coding_skill],
+            skills=[ava.runtimes.predict_rlm.skills.spreadsheet, evidence_coding_skill],
         ),
     )
     async def extract_themes(workbook: File, *, agent: ava.Agent) -> ThemeReport:
@@ -640,7 +640,7 @@ def _(
         runtime=ava.runtimes.PredictRLM(
             lm=MODEL,
             sub_lm=SUB_MODEL,
-            skills=[ava.agent.skills.spreadsheet, evidence_coding_skill],
+            skills=[ava.runtimes.predict_rlm.skills.spreadsheet, evidence_coding_skill],
         ),
     )
     async def detect_risks(workbook: File, *, agent: ava.Agent) -> RiskReport:
@@ -672,7 +672,7 @@ def _(
         runtime=ava.runtimes.PredictRLM(
             lm=MODEL,
             sub_lm=SUB_MODEL,
-            skills=[ava.agent.skills.spreadsheet],
+            skills=[ava.runtimes.predict_rlm.skills.spreadsheet],
         ),
     )
     async def build_review_workbook(
@@ -694,7 +694,7 @@ def _(
         runtime=ava.runtimes.PredictRLM(
             lm=MODEL,
             sub_lm=SUB_MODEL,
-            skills=[ava.agent.skills.docx],
+            skills=[ava.runtimes.predict_rlm.skills.docx],
         ),
     )
     async def write_executive_brief(

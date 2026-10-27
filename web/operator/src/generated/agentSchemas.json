@@ -2,7 +2,7 @@
   "$defs": {
     "AgentDeclaration": {
       "additionalProperties": false,
-      "description": "Everything discovery publishes about one agent step.\n\n``tools`` are the step's own tools; tools a runtime adds, such as PredictRLM\nskill tools, are in its ``runtime`` section.",
+      "description": "Everything discovery publishes about one agent step.\n\n``tools`` and ``skills`` are the step's own; what a runtime adds, such as\nPredictRLM's skills and their tools, is in its ``runtime`` section.",
       "properties": {
         "runtime": {
           "discriminator": {
@@ -25,6 +25,13 @@
         "signature": {
           "$ref": "#/$defs/SignatureDeclaration"
         },
+        "skills": {
+          "items": {
+            "$ref": "#/$defs/SkillDeclaration"
+          },
+          "title": "Skills",
+          "type": "array"
+        },
         "tools": {
           "items": {
             "$ref": "#/$defs/ToolDeclaration"
@@ -36,6 +43,7 @@
       "required": [
         "signature",
         "tools",
+        "skills",
         "runtime"
       ],
       "title": "AgentDeclaration",
@@ -1612,6 +1620,39 @@
         "outputs"
       ],
       "title": "SignatureDeclaration",
+      "type": "object"
+    },
+    "SkillDeclaration": {
+      "additionalProperties": false,
+      "description": "An Agent Skill offered to the agent; ``files`` are its resource paths.",
+      "properties": {
+        "description": {
+          "title": "Description",
+          "type": "string"
+        },
+        "files": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Files",
+          "type": "array"
+        },
+        "instructions": {
+          "title": "Instructions",
+          "type": "string"
+        },
+        "name": {
+          "title": "Name",
+          "type": "string"
+        }
+      },
+      "required": [
+        "name",
+        "description",
+        "instructions",
+        "files"
+      ],
+      "title": "SkillDeclaration",
       "type": "object"
     },
     "TokenUsage": {

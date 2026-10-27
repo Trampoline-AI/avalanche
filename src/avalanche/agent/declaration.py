@@ -11,10 +11,12 @@ from __future__ import annotations
 
 import inspect
 import textwrap
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Mapping, Sequence
 from typing import Annotated, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, JsonValue
+
+from .skills import Skill
 
 _STRICT = ConfigDict(
     strict=True,
@@ -51,6 +53,17 @@ class ToolDeclaration(BaseModel):
     name: str
     description: str
     source_code: str
+
+
+class SkillDeclaration(BaseModel):
+    """An Agent Skill offered to the agent; ``files`` are its resource paths."""
+
+    model_config = _STRICT
+
+    name: str
+    description: str
+    instructions: str
+    files: tuple[str, ...]
 
 
 class PredictRLMSkillDeclaration(BaseModel):
@@ -135,14 +148,15 @@ RuntimeDeclaration = Annotated[
 class AgentDeclaration(BaseModel):
     """Everything discovery publishes about one agent step.
 
-    ``tools`` are the step's own tools; tools a runtime adds, such as PredictRLM
-    skill tools, are in its ``runtime`` section.
+    ``tools`` and ``skills`` are the step's own; what a runtime adds, such as
+    PredictRLM's skills and their tools, is in its ``runtime`` section.
     """
 
     model_config = _STRICT
 
     signature: SignatureDeclaration
     tools: tuple[ToolDeclaration, ...]
+    skills: tuple[SkillDeclaration, ...]
     runtime: RuntimeDeclaration
 
 
@@ -162,3 +176,16 @@ def tool_declarations(
             )
         )
     return tuple(declarations)
+
+
+def skill_declarations(skills: Sequence[Skill]) -> tuple[SkillDeclaration, ...]:
+    """Describe Agent Skills by name, description, instructions and resource paths."""
+    return tuple(
+        SkillDeclaration(
+            name=skill.name,
+            description=skill.description,
+            instructions=skill.instructions,
+            files=tuple(sorted(skill.files)),
+        )
+        for skill in skills
+    )

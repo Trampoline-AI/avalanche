@@ -286,7 +286,9 @@ class PredictRLM(BaseModel):
     """Run agent steps with PredictRLM.
 
     Fields mirror ``predict_rlm.PredictRLM`` except the signature and tools,
-    which come from each request. Any other keyword is passed unchanged to
+    which come from each request. ``skills`` takes PredictRLM's own skills, such
+    as ``ava.runtimes.predict_rlm.skills.pdf``; a step's ``ava.agent.Skill``
+    objects are not supported on PredictRLM yet. Any other keyword is passed unchanged to
     PredictRLM's constructor, which rejects an unknown one on the first run.
     Nothing is built until the first invocation.
     """
@@ -335,6 +337,14 @@ class PredictRLM(BaseModel):
         return {**state, "__pydantic_private__": {"_predictors": []}}
 
     async def invoke(self, request: AgentRequest, events: AgentEventSink) -> AgentRunOutcome:
+        if request.skills:
+            raise AgentStepError(
+                f"agent step {request.step_name!r} runs on PredictRLM, which does not support "
+                f"ava.agent.Skill yet (skills {[skill.name for skill in request.skills]}); "
+                "pass PredictRLM's own skills with "
+                "runtime=ava.runtimes.PredictRLM(skills=[...]), such as "
+                "ava.runtimes.predict_rlm.skills.pdf"
+            )
         inputs = {
             name: getattr(request.inputs, name)
             for name in request.signature.input_model.model_fields

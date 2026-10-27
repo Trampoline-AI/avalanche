@@ -1,6 +1,6 @@
 import avalanche as ava
 
-evidence_coding_skill = ava.agent.Skill(
+evidence_coding_skill = ava.runtimes.predict_rlm.skills.Skill(
     name="evidence-coding",
     instructions="""Turn qualitative records into auditable structured findings.
 

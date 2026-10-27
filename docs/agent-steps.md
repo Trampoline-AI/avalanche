@@ -49,7 +49,7 @@ def extraction_flow():
         load_pdf()
         >> ava.agent.step(
             ExtractItems,
-            runtime=ava.runtimes.PredictRLM(skills=[ava.agent.skills.pdf]),
+            runtime=ava.runtimes.PredictRLM(skills=[ava.runtimes.predict_rlm.skills.pdf]),
         )
         >> publish()
     )
@@ -95,7 +95,7 @@ class AuditRfpSig(ava.Signature):
 # `ns.audit_results` is this belt's model-declared audit table.
 @ava.agent_step(
     AuditRfpSig,
-    runtime=ava.runtimes.PredictRLM(skills=[ava.agent.skills.pdf]),
+    runtime=ava.runtimes.PredictRLM(skills=[ava.runtimes.predict_rlm.skills.pdf]),
 )
 async def audit_rfp(
     documents: list[File],
@@ -181,8 +181,42 @@ async def render_artifacts(
 
 ## Skills and tools
 
-Pass `tools=` on the agent call or decorator and skills on its PredictRLM
-runtime, not on the signature:
+Pass `tools=` and `skills=` on the agent call or decorator, not on the signature.
+Tools are ordinary Python functions with unique names. Skills are
+`ava.agent.Skill` objects in the [Agent Skills](https://agentskills.io/specification)
+format: a name, a description that says when to use the skill, Markdown
+instructions, and optional files the instructions refer to. The agent sees each
+skill's name and description and reads the rest only when it needs it. Skills hold
+no functions; a skill that needs one documents it, and the step passes it in `tools=`.
+
+Load an existing skill folder, one with a `SKILL.md` file, or build a skill in code:
+
+```python
+report_style = ava.agent.Skill.from_dir("skills/report-style")
+
+glossary = ava.agent.Skill(
+    name="contract-glossary",
+    description="Defines contract terms. Use when a contract term is unclear.",
+    instructions="Look the term up in references/glossary.md before answering.",
+    files={"references/glossary.md": Path("docs/glossary.md")},
+)
+
+
+@ava.agent_step(
+    Summarize,
+    runtime=ava.runtimes.ClaudeAgent(model="claude-haiku-5-5"),
+    tools=[search_contract_repository],
+    skills=[report_style, glossary],
+)
+async def summarize(document: str, *, agent: ava.Agent) -> str:
+    return (await agent(document=document)).outputs.summary
+```
+
+`ava.runtimes.ClaudeAgent` runs these skills. PredictRLM does not support them
+yet: a PredictRLM step with `skills=` fails before the agent starts. PredictRLM has
+its own skills, which bundle instructions with sandbox packages, modules and
+tools; pass them on its runtime. The built-in ones are
+`ava.runtimes.predict_rlm.skills.pdf`, `.docx` and `.spreadsheet`:
 
 ```python
 @ava.workflow
@@ -191,15 +225,12 @@ def extraction_flow():
         load_pdf()
         >> ava.agent.step(
             ExtractItems,
-            runtime=ava.runtimes.PredictRLM(skills=[ava.agent.skills.pdf]),
+            runtime=ava.runtimes.PredictRLM(skills=[ava.runtimes.predict_rlm.skills.pdf]),
             tools=[search_contract_repository],
         )
         >> publish()
     )
 ```
-
-Tools are ordinary Python functions with unique names. Built-in skills include
-`ava.agent.skills.pdf`, `.docx`, and `.spreadsheet`.
 
 ## Runtime configuration
 
@@ -219,7 +250,7 @@ def extraction_flow():
         >> ava.agent.step(
             ExtractItems,
             runtime=ava.runtimes.PredictRLM(
-                skills=[ava.agent.skills.pdf], max_iterations=60
+                skills=[ava.runtimes.predict_rlm.skills.pdf], max_iterations=60
             ),
         )
         >> publish()
@@ -229,8 +260,8 @@ def extraction_flow():
 The extraction step above runs with `lm="openai/gpt-5.5"`, the PDF skill and 60
 iterations. The same `runtime=` works on agent decorators. Set `verbose=True` on
 the runtime to show the PredictRLM trace. Set signatures and tools on each step.
-Passing `lm=`, `skills=` or another PredictRLM setting directly to the step
-raises `TypeError` naming the `runtime=` replacement.
+Passing `lm=` or another PredictRLM setting, or a PredictRLM skill, directly to
+the step raises `TypeError` naming the `runtime=` replacement.
 
 ### Claude agent steps
 
@@ -252,8 +283,8 @@ The CLI signs in with the first of `ANTHROPIC_API_KEY`,
 `CLAUDE_CODE_OAUTH_TOKEN` from `claude setup-token` (a Claude subscription), and an
 existing `claude` login. A workflow default and a step runtime of different kinds do
 not merge: a `ClaudeAgent` step ignores a PredictRLM workflow default. See
-[runtimes](api/agents.md#runtimes) for every setting and for file and workspace
-inputs.
+[runtimes](api/agents.md#runtimes) for every setting, for file and workspace
+inputs, and for how Claude runs a step's skills.
 
 ## Native evaluations
 

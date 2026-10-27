@@ -11,6 +11,7 @@ import avalanche as ava
     signature,
     runtime=ava.runtimes.PredictRLM(lm=..., sub_lm=..., max_iterations=..., skills=...),
     tools=...,
+    skills=...,
     evaluations=...,
 )
 async def analyze(document: str, *, agent: ava.Agent) -> str:
@@ -25,9 +26,10 @@ The example assumes a signature with input `document` and output `summary`. Elli
 | `signature` | Required DSPy signature class | An Avalanche `Signature` subclass, the class returned by `Signature(...)`, or a native DSPy signature class. Must declare at least one output. Bare strings are not accepted. |
 | `runtime` | An agent runtime such as `ava.runtimes.PredictRLM(...)`; default `None` | The runtime that runs the agent and its settings. Omitted uses the workflow's `agent_defaults` runtime, else `ava.runtimes.PredictRLM()`. See [runtimes](#runtimes). Any other value raises `TypeError`. |
 | `tools` | Sequence of callables; default none | Additional tools; every member must be callable. |
+| `skills` | Sequence of `ava.agent.Skill`; default none | [Agent Skills](#skills) the agent may load when it needs them. Names must be distinct (`AgentStepError`); any other member raises `TypeError`. `ClaudeAgent` runs them; PredictRLM does not support them yet. |
 | `evaluations` | `ava.Evaluations \| None`; default `None` | Observation-only quality judgments of the first successful agent call, run by the operator. See [native evaluations](../agent-steps.md#native-evaluations). Any other value raises `TypeError`. |
 
-Model, skill and other PredictRLM settings belong to the runtime. Passing `lm=`, `sub_lm=`, `max_iterations=`, `skills=` or another PredictRLM keyword to the step raises `TypeError` naming the `runtime=ava.runtimes.PredictRLM(...)` replacement.
+Model and other PredictRLM settings, PredictRLM's own skills included, belong to the runtime. Passing `lm=`, `sub_lm=`, `max_iterations=` or another PredictRLM keyword to the step, or a PredictRLM skill in its `skills=`, raises `TypeError` naming the `runtime=ava.runtimes.PredictRLM(...)` replacement.
 
 The decorator returns a single-output workflow step. The body must declare exactly `*, agent: ava.Agent`, with no default; Avalanche injects it and removes it from the step's public call signature. The remaining Python parameters and return annotation describe the workflow step, independently of the model signature. Synchronous and asynchronous bodies are accepted; an awaitable body result is awaited. Use an asynchronous body to await model calls.
 
@@ -101,7 +103,7 @@ ava.runtimes.PredictRLM(lm="openai/gpt-5", sub_lm="openai/gpt-5-mini", max_itera
 | `lm` | `dspy.LM \| str \| None`; default `None` | Main model, which writes the code. `None` uses the DSPy context configuration. |
 | `sub_lm` | `dspy.LM \| str \| None`; default `None` | Model for the agent's structured prediction tool. `None` uses the DSPy context configuration. |
 | `max_iterations` | `int`; default `30` | Most code-writing iterations. |
-| `skills` | Sequence of `ava.agent.Skill`; default none | Capability bundles. |
+| `skills` | Sequence of `ava.runtimes.predict_rlm.skills.Skill`; default none | [PredictRLM's own skills](#predictrlm-skills). A step's `ava.agent.Skill` objects are not supported on PredictRLM yet: such a step raises `AgentStepError` before the agent starts. |
 | `output_dir` | `str \| pathlib.Path \| None`; default `None` | For steps without `ava.File` or `ava.Workspace` fields: where PredictRLM `File` outputs are collected, as `<output_dir>/<field>/`; otherwise a temporary directory. Steps with file fields reserve their outputs in the run workspace (see File references) and raise `AgentStepError` when `output_dir` is set. Scalar outputs and logs are not redirected. |
 | `verbose` | `bool`; default `False` | PredictRLM console output. Avalanche runs agents quietly; PredictRLM's own default is `True`. |
 
@@ -134,6 +136,8 @@ ava.runtimes.ClaudeAgent(model="claude-haiku-5-5", max_turns=10, builtin_tools=(
 To run steps on your subscription, unset `ANTHROPIC_API_KEY` where the step runs.
 
 **Isolation.** Each call ignores your own Claude setup: user and project settings are not loaded, and MCP servers and claude.ai connectors from your account are not offered. The agent sees only the step's tools and the `builtin_tools` you list.
+
+**Skills.** A step's `skills=` are written, for that call only, into a temporary Claude Code plugin named `avalanche` outside your Claude configuration and removed when the call ends, whatever its outcome. Claude sees each skill as `avalanche:<name>` with its description, and loads its instructions with the `Skill` tool, which is added for the call. When a skill has files, the `Read` tool is added too, allowed only inside the plugin folder. The Claude CLI's own bundled skills stay hidden from the agent, but a prompt input that starts with `/<name>` could still start one of them.
 
 **Inputs and outputs.** The signature's instructions are the system prompt. Inputs are sent as JSON; outputs come back as Claude's structured output and are validated against the signature like every runtime's.
 
@@ -210,8 +214,40 @@ Each step-body execution receives a fresh injected agent. Its first call constru
 
 ## Skills
 
+A step's skills follow the [Agent Skills](https://agentskills.io/specification) format. Pass them in the step's `skills=`.
+
 ```python
-ava.agent.Skill(
+class Skill(BaseModel, frozen=True):
+    name: str  # 1-64 lowercase letters, digits and single hyphens, not at either end
+    description: str  # 1-1024 characters: what the skill does and when to use it
+    instructions: str  # Markdown the agent reads when it uses the skill
+    files: Mapping[str, Path] = {}  # path inside the skill folder -> host file
+    license: str | None = None
+    compatibility: str | None = None  # 1-500 characters
+    metadata: Mapping[str, str] = {}
+    allowed_tools: str | None = None  # space-separated, experimental
+
+    @classmethod
+    def from_dir(cls, path: Path | str) -> Skill: ...
+
+    def skill_md(self) -> str: ...
+```
+
+`ava.agent.Skill` is also `ava.agent.skills.Skill`. Values are validated strictly when the skill is built and a bad value raises Pydantic's `ValidationError`. Each `files` key is a relative path written with `/`, without `.` or `..` parts, other than `SKILL.md`, and not also the folder of another key; each value must be an existing file. Skills hold no functions: a skill that needs one says so, and the step passes it in `tools=`.
+
+`Skill.from_dir(path)` loads a folder holding a `SKILL.md` file: YAML frontmatter between `---` lines, then the Markdown instructions. Every other file in the folder becomes a resource file under its relative path. The frontmatter may hold only `name`, `description`, `license`, `compatibility`, `metadata` and `allowed-tools`, and `name` must match the folder's name. Anything else, or a missing `SKILL.md`, raises `ava.agent.SkillFormatError`, a `ValueError`. `skill.skill_md()` returns the `SKILL.md` text for a skill.
+
+Which runtimes run a step's skills:
+
+| Runtime | Support |
+| --- | --- |
+| `ClaudeAgent` | Yes; see [ClaudeAgent](#claudeagent). |
+| `PredictRLM` | Not yet. The step raises `AgentStepError` before the agent starts; use [PredictRLM's own skills](#predictrlm-skills) instead. |
+
+### PredictRLM skills
+
+```python
+ava.runtimes.predict_rlm.skills.Skill(
     *,
     name: str,
     instructions: str = "",
@@ -221,7 +257,7 @@ ava.agent.Skill(
 )
 ```
 
-All arguments are keyword-only. This returns a PredictRLM `Skill`; the displayed container defaults are fresh per instance. All five fields are readable on the result.
+All arguments are keyword-only. This is PredictRLM's own `Skill`: always in the agent's prompt, with sandbox packages, modules and tools. The displayed container defaults are fresh per instance. All five fields are readable on the result.
 
 | Field | Meaning |
 | --- | --- |
@@ -231,9 +267,9 @@ All arguments are keyword-only. This returns a PredictRLM `Skill`; the displayed
 | `modules` | Import name to host Python module-file path; default empty mapping. |
 | `tools` | Tool name to synchronous or asynchronous callable; default empty mapping. |
 
-Invalid field values raise dependency Pydantic validation errors. Combining skills with duplicate module or tool names raises dependency `ValueError` when the predictor is built. Avalanche does not provide its own skill loader or dependency installer API.
+Invalid field values raise dependency Pydantic validation errors. Combining skills with duplicate module or tool names raises dependency `ValueError` when the predictor is built. Avalanche does not provide a dependency installer API.
 
-Built-in skill objects are `ava.agent.skills.pdf`, `ava.agent.skills.docx`, and `ava.agent.skills.spreadsheet`. Pass the objects in the runtime's `skills=[...]`, for example `runtime=ava.runtimes.PredictRLM(skills=[ava.agent.skills.pdf])`; their instructions and package requirements belong to PredictRLM.
+Built-in skill objects are `ava.runtimes.predict_rlm.skills.pdf`, `ava.runtimes.predict_rlm.skills.docx`, and `ava.runtimes.predict_rlm.skills.spreadsheet`. Pass the objects in the runtime's `skills=[...]`, for example `runtime=ava.runtimes.PredictRLM(skills=[ava.runtimes.predict_rlm.skills.pdf])`; their instructions and package requirements belong to PredictRLM.
 
 ## Agent files
 
@@ -247,7 +283,7 @@ Import agent errors from `avalanche.agent`. `AgentStepError` and `AgentStepExecu
 
 | Error | Caller-visible condition |
 | --- | --- |
-| `AgentStepError` | Invalid injected `agent` parameter, invalid resolved input-field mapping, or missing/extra model-call input names. |
+| `AgentStepError` | Invalid injected `agent` parameter, invalid resolved input-field mapping, missing/extra model-call input names, two step skills with one name, or step skills on a runtime that does not support them. |
 | `TypeError` | Missing/invalid signature, outputless signature, invalid skills/tools declaration, or forbidden workflow-default keys. Signature validation may occur during workflow metadata resolution or the first agent call rather than decoration. |
 | Dependency construction errors | Invalid upstream options or incompatible skill/tool configuration. Predictor construction occurs before the call's execution-error wrapper, so these propagate directly. |
 | `AgentOutputError` | The runtime's outputs do not match the signature: a field is missing or has the wrong type, or a PredictRLM `ava.File` output cannot be read back. Raised after the invocation's trace is recorded; no evaluation is submitted. Signature mismatches chain the Pydantic `ValidationError` as their cause. |

@@ -124,7 +124,7 @@ def extraction_flow():
     return (
         load_pdf()
         >> ava.agent.step(
-            ExtractItems, runtime=ava.runtimes.PredictRLM(skills=[ava.agent.skills.pdf])
+            ExtractItems, runtime=ava.runtimes.PredictRLM(skills=[ava.runtimes.predict_rlm.skills.pdf])
         )
         >> publish()
     )

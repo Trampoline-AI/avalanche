@@ -2090,12 +2090,21 @@ def test_claude_declarations_fill_the_metadata_sections(store):
         AgentDeclaration,
         ClaudeAgentDeclaration,
         SignatureDeclaration,
+        SkillDeclaration,
         ToolDeclaration,
     )
 
     declaration = AgentDeclaration(
         signature=SignatureDeclaration(name="Sum", instructions="Add.", inputs=(), outputs=()),
         tools=(ToolDeclaration(name="lookup", description="", source_code=""),),
+        skills=(
+            SkillDeclaration(
+                name="house-style",
+                description="Applies the house style.",
+                instructions="Be brief.",
+                files=("references/style.md",),
+            ),
+        ),
         runtime=ClaudeAgentDeclaration(
             model="claude-haiku-5-5", settings={"max_turns": 4}, builtin_tools=("Read",)
         ),
@@ -2110,4 +2119,10 @@ def test_claude_declarations_fill_the_metadata_sections(store):
     assert sections["models"] == {"main": "claude-haiku-5-5"}
     assert sections["runtime"] == {"max_turns": 4, "builtin_tools": ["Read"]}
     assert [tool["name"] for tool in sections["tools"]] == ["lookup"]
-    assert sections["skills"] == {}
+    assert sections["skills"] == {
+        "house-style": {
+            "description": "Applies the house style.",
+            "instructions": "Be brief.",
+            "files": ["references/style.md"],
+        }
+    }

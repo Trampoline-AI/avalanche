@@ -136,13 +136,21 @@ and persists its own result. The step's signature, tools, and runtime settings
 remain explicit declaration data.
 
 An `AgentRuntime` runs one agent call. Avalanche hands it an `AgentRequest` (the
-signature, validated inputs, and tools); the runtime returns raw outputs plus a
+signature, validated inputs, tools, and Agent Skills); the runtime returns raw outputs plus a
 runtime-neutral trace. Avalanche then validates the outputs against the
 signature in one place, so every runtime shares the same output contract, and
 returns an `AgentResult(outputs, trace)` to the step. PredictRLM is the default
 runtime. Outside `avalanche.runtimes.predict_rlm`, PredictRLM is imported only
-lazily: by the `ava.agent.skills`, `Skill` and `DirectPythonBackend` re-exports
-and by the TUI mock trace.
+lazily: by the `DirectPythonBackend` re-export and by the TUI mock trace.
+
+Skills follow the same split. `ava.agent.Skill` is a runtime-neutral Agent Skill
+(name, description, instructions, resource files) passed as a step's `skills=`,
+carried in the request and published in the shared part of the declaration. Each
+runtime decides how to offer skills to its agent: ClaudeAgent writes them into a
+temporary Claude Code plugin per call, and PredictRLM rejects them until it
+supports the format. PredictRLM's own skills, which bundle prompt text with sandbox
+packages, modules and tools, stay a PredictRLM runtime setting under
+`ava.runtimes.predict_rlm.skills`.
 
 Each agent step runs on a runtime, a frozen descriptor such as
 `ava.runtimes.PredictRLM(lm=..., sub_lm=...)`. A workflow-level

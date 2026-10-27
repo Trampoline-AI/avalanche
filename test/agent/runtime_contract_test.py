@@ -100,6 +100,7 @@ def _request() -> AgentRequest:
         signature=spec,
         inputs=spec.input_model(question="q"),
         tools=(),
+        skills=(),
     )
 
 

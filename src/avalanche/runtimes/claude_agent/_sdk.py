@@ -6,6 +6,7 @@ import asyncio
 import contextlib
 import inspect
 import json
+import shutil
 import tempfile
 import types
 from collections.abc import AsyncIterator, Callable, Mapping
@@ -51,6 +52,7 @@ from ...agent.contract import (
 )
 from ...agent.live import RunStarted, ToolFinished, ToolStarted, TurnFinished
 from ...agent.native import claude_agent as native
+from ...agent.skills import SKILL_FILE, Skill
 from ...agent.steps import AgentOutputError, AgentStepError, AgentStepExecutionError
 from ...agent.trace import (
     AgentTrace,
@@ -69,6 +71,9 @@ if TYPE_CHECKING:
     from .runtime import ClaudeAgent
 
 _SERVER = "avalanche"
+# The plugin that carries a step's Agent Skills; Claude names each skill
+# ``avalanche:<name>``.
+_SKILL_PLUGIN = "avalanche"
 _JSON = TypeAdapter(JsonValue)
 # Tool arguments and results kept in a trace; larger values are replaced by a marker.
 _MAX_VALUE_BYTES = 256 * 1024
@@ -135,6 +140,20 @@ async def run(
             )
         # File outputs go to a fresh folder in the run workspace, as with every runtime.
         output_folder = AgentOutputFolder(request.step_name) if file_outputs else None
+        # The step's skills go in a plugin folder made for this call, never in the
+        # user's Claude configuration or a workspace the step returns.
+        plugin = (
+            _write_skill_plugin(
+                Path(
+                    stack.enter_context(
+                        tempfile.TemporaryDirectory(prefix="avalanche-claude-skills-")
+                    )
+                ),
+                request.skills,
+            )
+            if request.skills
+            else None
+        )
         prompt_inputs = _prompt_inputs(request, directory)
         # Claude reads input files where they are, without copies; folders outside the
         # working directory are added so the CLI may reach them.
@@ -144,10 +163,18 @@ async def run(
                 for path in (
                     *(file.path.parent for file in _input_files(request)),
                     *((output_folder.path,) if output_folder is not None else ()),
+                    *((plugin,) if plugin is not None else ()),
                 )
                 if not path.is_relative_to(directory)
             }
         )
+        builtin_tools = list(runtime.builtin_tools)
+        skill_tools: list[str] = []
+        if plugin is not None:
+            skill_tools.append("Skill")
+            # A skill's resource files are read with Read, allowed only inside the plugin.
+            if any(skill.files for skill in request.skills) and "Read" not in builtin_tools:
+                skill_tools.append("Read")
         options = ClaudeAgentOptions(
             model=runtime.model,
             max_turns=runtime.max_turns,
@@ -155,11 +182,20 @@ async def run(
             permission_mode=runtime.permission_mode,
             # User and project Claude settings never leak into a workflow step.
             setting_sources=[],
-            tools=list(runtime.builtin_tools),
+            tools=[*builtin_tools, *skill_tools],
             allowed_tools=[
-                *runtime.builtin_tools,
+                *builtin_tools,
                 *(f"mcp__{_SERVER}__{spec.name}" for spec in request.tools),
+                *((f"Read(/{plugin}/**)",) if "Read" in skill_tools else ()),
             ],
+            # Only the step's skills: the CLI's bundled skills stay hidden. With
+            # ``skills`` set, the SDK allows the Skill tool for each listed name.
+            plugins=[{"type": "local", "path": str(plugin)}] if plugin is not None else [],
+            skills=(
+                [f"{_SKILL_PLUGIN}:{skill.name}" for skill in request.skills]
+                if request.skills
+                else None
+            ),
             mcp_servers={_SERVER: _tool_server(request.tools)} if request.tools else {},
             # Only the step's own tools: no MCP servers or connectors from the user's
             # Claude account or configuration.
@@ -308,6 +344,34 @@ def _outputs(
     values.update(dict.fromkeys(workspace_outputs, snapshot))
     values.update(files)
     return PythonOutputs(values=values)
+
+
+def _write_skill_plugin(root: Path, skills: tuple[Skill, ...]) -> Path:
+    """Write a Claude Code plugin holding ``skills`` under ``root``; return its folder.
+
+    The plugin declares no MCP servers, hooks or agents: only skills.
+    """
+    plugin = root / _SKILL_PLUGIN
+    manifest = plugin / ".claude-plugin" / "plugin.json"
+    manifest.parent.mkdir(parents=True)
+    manifest.write_text(
+        json.dumps(
+            {
+                "name": _SKILL_PLUGIN,
+                "description": "Agent Skills of one Avalanche agent step",
+            }
+        ),
+        encoding="utf-8",
+    )
+    for skill in skills:
+        folder = plugin / "skills" / skill.name
+        folder.mkdir(parents=True)
+        (folder / SKILL_FILE).write_text(skill.skill_md(), encoding="utf-8")
+        for relative, source in skill.files.items():
+            target = folder / relative
+            target.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copyfile(source, target)
+    return plugin
 
 
 def _input_files(request: AgentRequest) -> list[File]:

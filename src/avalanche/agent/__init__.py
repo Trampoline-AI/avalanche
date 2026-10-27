@@ -6,9 +6,10 @@ import importlib
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
-    from predict_rlm import DirectPythonBackend, Skill, skills
+    from predict_rlm import DirectPythonBackend
 
     from ..file import File
+    from . import skills
     from .contract import AgentResult
     from .defaults import AgentDefaults
     from .evidence import (
@@ -22,6 +23,7 @@ if TYPE_CHECKING:
         capture_agent_evidence,
     )
     from .signature import InputField, OutputField, Signature
+    from .skills import Skill, SkillFormatError
     from .steps import (
         Agent,
         AgentOutputError,
@@ -33,7 +35,7 @@ if TYPE_CHECKING:
     from .trace import AgentTrace
 
 # Exports load on first use, so runtime-neutral submodules such as
-# ``declaration`` and ``trace`` import without DSPy or PredictRLM.
+# ``declaration``, ``skills`` and ``trace`` import without DSPy or PredictRLM.
 _EXPORTS = {
     "Agent": ".steps",
     "AgentOutputError": ".steps",
@@ -55,6 +57,8 @@ _EXPORTS = {
     "InputField": ".signature",
     "OutputField": ".signature",
     "Signature": ".signature",
+    "Skill": ".skills",
+    "SkillFormatError": ".skills",
 }
 
 __all__ = [
@@ -78,6 +82,7 @@ __all__ = [
     "OutputField",
     "Signature",
     "Skill",
+    "SkillFormatError",
     "agent_step",
     "capture_agent_evidence",
     "skills",
@@ -89,7 +94,7 @@ def __getattr__(name: str):
     if name in _EXPORTS:
         value = getattr(importlib.import_module(_EXPORTS[name], __name__), name)
     elif name == "skills":
-        import predict_rlm.skills as value
+        value = importlib.import_module(".skills", __name__)
     elif name == "File":
         import warnings
 
@@ -104,10 +109,6 @@ def __getattr__(name: str):
         from predict_rlm import DirectPythonBackend
 
         value = DirectPythonBackend
-    elif name == "Skill":
-        import predict_rlm
-
-        value = getattr(predict_rlm, name)
     else:
         raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
 
