@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import hashlib
+import json
 
 import pytest
 from pydantic import ValidationError
@@ -134,10 +135,11 @@ def test_streamed_record_carries_counts_but_no_turns():
 )
 def test_json_body_rejects_unknown_shapes(change):
     body = _record().model_dump(mode="json")
+    assert AgentTraceRecord.model_validate_json(json.dumps(body)) == _record()
     change(body)
 
     with pytest.raises(ValidationError):
-        AgentTraceRecord.model_validate(body)
+        AgentTraceRecord.model_validate_json(json.dumps(body))
 
 
 def test_file_evidence_records_the_reference_without_bytes_or_host_paths(tmp_path):
