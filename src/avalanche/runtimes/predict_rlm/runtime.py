@@ -350,7 +350,7 @@ class PredictRLM(BaseModel):
                 raise AgentStepError("File steps own output_dir")
             from predict_rlm.compatibility import files
 
-            bridge = AgentFileBridge(request.step_name, internal_signature)
+            bridge = AgentFileBridge(request.step_name)
             predictor = self._build_for(
                 request,
                 internal_signature,
