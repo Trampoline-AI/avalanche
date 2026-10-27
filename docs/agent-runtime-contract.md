@@ -290,9 +290,12 @@ class TokenUsage:
 
 ### File and workspace values
 
-A trace never holds a file's bytes or host path. A file or workspace in the
-call's inputs, or in a tool's arguments or results, is recorded by its reference
-(see [file references](file-references.md)):
+A file or workspace in the call's inputs is recorded by its reference, never its
+bytes or host path (see [file references](file-references.md)). Tool values
+depend on the runtime: PredictRLM records files in tool arguments and results,
+and its file outputs, the same way. ClaudeAgent records a tool's result as the
+JSON Claude got, so an `ava.File` a tool returns appears in its JSON form, and an
+`ava.Workspace` holding its files appears with their contents.
 
 ```python
 class FileInputEvidence:            # an ava.File
@@ -446,8 +449,10 @@ A finished turn, as sent:
 
 ### The final event
 
-Every call ends with exactly one final event, also when it fails or is
-cancelled. `complete` says whether every live event of the call was delivered.
+Every call the runtime starts ends with exactly one final event, also when it
+fails or is cancelled. A call rejected before it starts, for example for invalid
+inputs or a field type the runtime does not support, sends none. `complete` says
+whether every live event of the call was delivered.
 
 ```python
 class AgentTraceFinished:         # the call has a trace
