@@ -73,10 +73,12 @@ _MAX_VALUE_BYTES = 256 * 1024
 # A turn's tool calls kept in its live event; later calls are counted as omitted, so the
 # event stays well under the operator's 8 MiB agent-event limit.
 _MAX_TURN_TOOL_CALL_BYTES = 4 * 1024 * 1024
-# An error reason, listed or taken from a result's free text, is cut to this length.
+# An error reason taken from a result's free text is cut to this length.
 _MAX_ERROR_CHARS = 4096
-# Result errors kept in the trace header, which every run snapshot carries.
+# Listed result errors kept in the trace header, which every run snapshot carries:
+# even fully JSON-escaped (6 bytes a character) they stay under its 64 KiB limit.
 _MAX_RESULT_ERRORS = 8
+_MAX_RESULT_ERROR_CHARS = 1024
 
 
 async def run(
@@ -406,7 +408,9 @@ def _check_inputs(request: AgentRequest) -> None:
 def _result_errors(result: ResultMessage) -> tuple[str, ...]:
     """Why a result failed; API failures carry their reason only in the result text."""
     if result.errors:
-        return tuple(error[:_MAX_ERROR_CHARS] for error in result.errors[:_MAX_RESULT_ERRORS])
+        return tuple(
+            error[:_MAX_RESULT_ERROR_CHARS] for error in result.errors[:_MAX_RESULT_ERRORS]
+        )
     if result.is_error and result.result:
         return (result.result[:_MAX_ERROR_CHARS],)
     return ()

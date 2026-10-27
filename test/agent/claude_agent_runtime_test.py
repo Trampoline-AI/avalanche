@@ -366,18 +366,19 @@ async def test_api_error_result_fails_with_the_api_error(replay):
 @pytest.mark.asyncio
 async def test_many_long_result_errors_stay_within_the_trace_header_limit(replay):
     replay(
-        [_init(), _result(None, is_error=True, errors=["overloaded " * 2000] * 100)],
+        # Three-byte characters are the worst case for the header's byte limit.
+        [_init(), _result(None, is_error=True, errors=["過負荷" * 2000] * 100)],
         error=ResultError("Claude Code returned an error result", exit_code=1),
     )
 
     observed = []
     with capture_agent_evidence(observed.append, errors="raise"):
-        with pytest.raises(AgentStepExecutionError, match="overloaded"):
+        with pytest.raises(AgentStepExecutionError, match="過負荷"):
             await _agent()(a=2, b=3)
 
     # The header travels in every run snapshot; its errors are cut, not dropped.
     errors = observed[-1].record.header.native.errors
-    assert errors and all(error.startswith("overloaded") for error in errors)
+    assert errors and all(error.startswith("過負荷") for error in errors)
 
 
 @pytest.mark.asyncio
