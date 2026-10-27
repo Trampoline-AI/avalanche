@@ -362,7 +362,7 @@ The code's output:
 | `signature` | The step's signature, as is. |
 | `inputs` | Keyword arguments of the run. |
 | `ava.File` inputs | Mounted in the sandbox from where they are, without copies. |
-| `ava.Workspace` inputs | Mounted in the sandbox, read-only. |
+| `ava.Workspace` inputs | Mounted in the sandbox, read-only (only advisory with `DirectPythonBackend`). |
 | `tools` | Functions the agent's code can call by name. |
 | `skills` | Not supported yet. A step with skills fails with `AgentStepError` before the agent starts. |
 | `invocation_id`, `step_name` | Not sent. |
