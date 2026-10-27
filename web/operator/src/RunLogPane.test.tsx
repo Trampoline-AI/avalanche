@@ -4,6 +4,7 @@ import { describe, expect, it, vi } from "vitest";
 import type { LogDescriptorPage } from "./api";
 import { LogRecordDescriptorMsg, RunSnapshotMsg } from "./model";
 import { RunLogPane } from "./RunLogPane";
+import { formatLogDuration } from "./logDuration";
 import { createApi, node, snapshotFor } from "./test/fixtures";
 
 const run = RunSnapshotMsg.create({
@@ -38,6 +39,38 @@ function page(records: LogRecordDescriptorMsg[], nextPageToken = ""): LogDescrip
 }
 
 describe("run logs", () => {
+  it.each([
+    "Custom message duration=1930000ms",
+    "Agent code.executed iteration=2 duration=32min10s (1930000ms)",
+    "Agent code.executed iteration=2 duration=999ms error=duration=1930000ms",
+  ])("preserves unrelated payloads and already formatted durations: %s", (message) => {
+    expect(formatLogDuration(message)).toBe(message);
+  });
+
+  it.each([
+    [0, "0ms"],
+    [999, "999ms"],
+    [1000, "1s (1000ms)"],
+    [1234, "1.234s (1234ms)"],
+    [120000, "120s (120000ms)"],
+    [120001, "2min0s (120001ms)"],
+    [1930000, "32min10s (1930000ms)"],
+    [4140000, "69min0s (4140000ms)"],
+    [4140001, "1h9min0s (4140001ms)"],
+    [7384000, "2h3min4s (7384000ms)"],
+  ])(
+    "displays readable agent durations for %s milliseconds",
+    async (milliseconds, formatted) => {
+      const api = createApi({
+        listLogPage: async () => page([log(1)]),
+        readTextDetail: async () =>
+          `Agent code.generated iteration=2 duration=${milliseconds}ms`,
+      });
+      render(<RunLogPane api={api} run={run} onSelectNode={() => undefined} />);
+      await screen.findByText(`Agent code.generated iteration=2 duration=${formatted}`);
+    },
+  );
+
   it("merges retained and live logs once in sequence order, renders hostile text safely, and filters by node", async () => {
     const bodies: Record<string, string> = {
       "log-1": "Fetched orders",
