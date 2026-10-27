@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from datetime import datetime
+
 import pytest
 from predict_rlm import IterationStep, RunEvent, RunEventKind, RunEvidence, RunTrace
 from pydantic import ValidationError
@@ -196,6 +198,7 @@ def test_a_file_output_travels_as_its_file_reference_never_its_host_path(tmp_pat
     class Redact(ava.Signature):
         document: str = ava.InputField()
         redacted: ava.File = ava.OutputField()
+        reviewed_at: datetime = ava.OutputField()
 
     workspace = ava.Workspace.from_directory(tmp_path, reference="snapshot:test")
     with ava.file_reference_context(workspace, attempt="attempt-1"):
@@ -209,11 +212,19 @@ def test_a_file_output_travels_as_its_file_reference_never_its_host_path(tmp_pat
                 1,
                 RunEventKind.RUN_SUCCEEDED,
                 1,
-                {"status": "completed", "outputs": {"redacted": {"path": str(output)}}},
+                {
+                    "status": "completed",
+                    "outputs": {
+                        "redacted": {"path": str(output)},
+                        "reviewed_at": "2026-10-27T09:00:00",
+                    },
+                },
             ),
             files=bridge,
         )
 
+    # Outputs without file types stay the plain data PredictRLM reported.
+    assert native.outputs["reviewed_at"] == "2026-10-27T09:00:00"
     redacted = native.outputs["redacted"]
     assert redacted["kind"] == ("file" if written else "unavailable")
     if written:
