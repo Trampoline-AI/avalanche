@@ -250,6 +250,13 @@
   description, instructions and file paths) for the step's Agent Skills. The web UI
   and TUI show them with PredictRLM's own skills; upgrade the operator, its clients
   and `@trampoline-ai/operator-ui` together.
+- Docs: new pages for agent runtimes. `docs/agent-runtime-contract.md` shows the data
+  every runtime shares (request, result, trace, live events) as typed schemas and
+  JSON examples. `docs/runtimes/predict-rlm.md` and `docs/runtimes/claude-agent.md`
+  show each runtime's settings, its own trace and event data, and how it fills the
+  shared data. `docs/agent-runtime-models.md` lists every model of the layer by
+  request, result, trace and live events. The agent API reference links to them, and
+  the Avalanche skill carries copies.
 
 ## 0.15.1 — 2026-10-24
 
