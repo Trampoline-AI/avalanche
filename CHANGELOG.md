@@ -146,7 +146,9 @@
   `ClaudeAgentTraceHeader` (the SDK's result subtype, turn count, API time,
   permission denials and errors), both in `avalanche.agent.native`. Code reading
   `ctx.trace.native` in evaluations must read `ctx.trace.header.native`; older
-  stored traces are not converted. BREAKING-PROTOCOL: part of Delta protocol 2.0
+  stored traces are not converted. Because the header travels in every run
+  snapshot, its runtime part is limited to 64 KiB; a larger one fails validation,
+  and Claude's result errors are kept to the first 8, each cut to 4096 characters. BREAKING-PROTOCOL: part of Delta protocol 2.0
   (final trace body and trace header change; new `TraceHeaderV2.native_json`).
 - Agents: new `ava.runtimes.ClaudeAgent` runs agent steps with Claude through the
   Claude Agent SDK. Install the new `claude` extra (`avalanche-ai[claude]`) and the
