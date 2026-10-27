@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import math
 from collections.abc import Mapping
+from dataclasses import fields, is_dataclass
 from pathlib import PurePath
 from typing import Annotated, Literal, Self
 
@@ -270,6 +271,10 @@ def evidence_value(value: object, *, depth: int = 0) -> JsonValue:
         return file_input_evidence(value).model_dump(mode="json")
     if isinstance(value, BaseModel):
         value = value.model_dump(mode="python")
+    elif is_dataclass(value) and not isinstance(value, type):
+        value = {field.name: getattr(value, field.name) for field in fields(value)}
+    elif isinstance(value, (set, frozenset)):
+        value = list(value)
     if isinstance(value, Mapping):
         if len(value) > _MAX_EVIDENCE_COLLECTION_ITEMS:
             return unavailable_value("mapping exceeds item limit")
@@ -283,13 +288,17 @@ def evidence_value(value: object, *, depth: int = 0) -> JsonValue:
         if len(value) > _MAX_EVIDENCE_COLLECTION_ITEMS:
             return unavailable_value("sequence exceeds item limit")
         return [evidence_value(item, depth=depth + 1) for item in value]
-    # A host path is never evidence; other typed values (dates, UUIDs, decimals, enums)
-    # keep the JSON form pydantic gives them.
+    # Typed leaf values (dates, UUIDs, decimals, enums) keep the JSON scalar pydantic
+    # gives them. A host path is never evidence, and nothing nested is converted here,
+    # so a path or file inside an unknown container cannot become a plain string.
     if not isinstance(value, PurePath):
         try:
-            return evidence_value(to_jsonable_python(value), depth=depth + 1)
+            scalar = to_jsonable_python(value)
         except PydanticSerializationError:
-            pass
+            scalar = None
+        else:
+            if isinstance(scalar, (str, bool, int, float)):
+                return evidence_value(scalar, depth=depth + 1)
     return unavailable_value(f"unsupported value type: {type(value).__name__}")
 
 
