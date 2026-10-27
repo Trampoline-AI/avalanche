@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import math
 from collections.abc import Mapping
+from pathlib import PurePath
 from typing import Annotated, Literal, Self
 
 from pydantic import (
@@ -23,7 +24,7 @@ from pydantic import (
     PositiveInt,
     model_validator,
 )
-from pydantic_core import to_json
+from pydantic_core import PydanticSerializationError, to_json, to_jsonable_python
 
 from ..file import File
 from ..workspace import Workspace
@@ -282,6 +283,13 @@ def evidence_value(value: object, *, depth: int = 0) -> JsonValue:
         if len(value) > _MAX_EVIDENCE_COLLECTION_ITEMS:
             return unavailable_value("sequence exceeds item limit")
         return [evidence_value(item, depth=depth + 1) for item in value]
+    # A host path is never evidence; other typed values (dates, UUIDs, decimals, enums)
+    # keep the JSON form pydantic gives them.
+    if not isinstance(value, PurePath):
+        try:
+            return evidence_value(to_jsonable_python(value), depth=depth + 1)
+        except PydanticSerializationError:
+            pass
     return unavailable_value(f"unsupported value type: {type(value).__name__}")
 
 
