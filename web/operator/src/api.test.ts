@@ -362,7 +362,14 @@ describe("operator transport boundary", () => {
     const native =
       format === "predict_rlm.run/v1"
         ? predictRlmTraceHeader({ subModel: "sub", maxIterations: 6 })
-        : { ...predictRlmTraceHeader(), format };
+        : {
+            format,
+            result_subtype: "success",
+            num_turns: 1,
+            duration_api_ms: null,
+            permission_denials: 0,
+            errors: [],
+          };
     const api = apiWith({
       getRunSnapshot: () => ({
         response: Promise.resolve(
