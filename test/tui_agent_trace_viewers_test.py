@@ -76,7 +76,7 @@ def test_a_claude_session_renders_through_its_viewer_and_metadata_sections(monke
             structured_output={"total": 5},
         )
 
-    monkeypatch.setattr(sdk, "query", query)
+    monkeypatch.setattr(sdk, "_session", query)
     sent = []
     agent = ava.Agent(
         signature=Sum, step_name="sum", runtime=ClaudeAgent(model="claude-haiku-5-5")
@@ -111,4 +111,14 @@ def test_a_claude_session_renders_through_its_viewer_and_metadata_sections(monke
     assert api_error.failed
     assert any("session-1" in line for line, _ in viewer.header(final.record))
     assert viewer.outputs(events) == {"total": 5}
+    # A successful output too large for the trace still shows as present.
+    finished = next(event for event in events if event.native.kind == "finished")
+    omitted = finished.model_copy(
+        update={
+            "native": finished.native.model_copy(
+                update={"structured_output": None, "output_omitted": True}
+            )
+        }
+    )
+    assert viewer.outputs([omitted]) is not None
     assert {viewer.live_label(event) for event in events}

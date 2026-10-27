@@ -85,8 +85,11 @@ class ClaudeAgentViewer:
         for event in reversed(events):
             if isinstance(event.native, Finished):
                 output = event.native.structured_output
-                # A failed session reports no output; an oversized one is left out.
-                if not isinstance(output, dict):
+                if event.native.output_omitted:
+                    # The step returned an output too large for the trace to keep.
+                    output = {"structured_output": "omitted: larger than the trace keeps"}
+                elif not isinstance(output, dict):
+                    # A failed session reports no output.
                     return None
                 # Workspace fields hold the session's working directory, not Claude's JSON.
                 return {
