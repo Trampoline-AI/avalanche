@@ -78,15 +78,12 @@ ava.runtimes.PredictRLM(skills=[ava.runtimes.predict_rlm.skills.pdf])
 
 ## Trace example
 
-The `Summarize` call above, on PredictRLM. The agent counted the words, asked the
-sub-model for a summary, then submitted.
+The `Summarize` call above, on PredictRLM, as `result.trace`. The agent counted
+the words, asked the sub-model for a summary, then submitted.
 
 ```json
 {
-  "schema_version": 2,
   "header": {
-    "runtime_kind": "predict_rlm",
-    "trace_format": "predict_rlm.run/v1",
     "status": "succeeded",
     "stop_reason": "submit",
     "model": "openai/gpt-5",
@@ -186,8 +183,7 @@ sub-model for a summary, then submitted.
         "predict_calls": []
       }
     }
-  ],
-  "turns_streamed": false
+  ]
 }
 ```
 
@@ -246,26 +242,21 @@ last tool calls, in the same order.
 
 ## Native live events
 
-The `native` part of each live event. Every class also has
-`format: Literal["predict_rlm.run/v1"]`. The comment names the `common` event it
-is sent with.
+The `native` part of a live event, for what only PredictRLM reports. Every class
+also has `format: Literal["predict_rlm.run/v1"]`. The comment names the `common`
+event it is sent with. The run starting and tool calls are shared events alone,
+with `native: None`.
 
 ```python
 PredictRLMNativeEvent = (
-    RunStarted | IterationRecorded | CodeGenerated | PredictStarted | PredictFinished
-    | Correlated | CodeExecuted | RunSucceeded | RunEnded | Lifecycle
+    IterationRecorded | CodeGenerated | PredictStarted | PredictFinished
+    | CodeExecuted | RunEnded | Lifecycle
 )
-
-
-class RunStarted:                  # common: None
-    kind: Literal["run.started"]
-    input_fields: tuple[str, ...]
-    inputs: JsonValue
 
 
 class IterationRecorded:           # common: turn.finished, which holds the turn
     kind: Literal["iteration.recorded"]
-    omissions: PredictRLMOmissions | None  # set when calls were dropped to fit one event
+    omissions: PredictRLMOmissions # the calls dropped to fit the turn into one event
 
 
 class CodeGenerated:               # common: None; code about to run
@@ -288,21 +279,11 @@ class PredictFinished:             # common: None
     predict_error: str | None
 
 
-class Correlated:                  # common: the event of the same name, which holds everything
-    kind: Literal["tool.started", "tool.finished"]
-
-
 class CodeExecuted:                # common: None
     kind: Literal["code.executed"]
     iteration: int
     output: str | None
     execution_error: str | None
-
-
-class RunSucceeded:                # common: None
-    kind: Literal["run.succeeded"]
-    status: str
-    outputs: JsonValue             # file outputs as the ava.File references the step returns
 
 
 class RunEnded:                    # common: None
@@ -327,6 +308,10 @@ class PredictRLMOmissions:
     predict_group_count: int
 ```
 
+A `turn.finished` event has an `iteration.recorded` part only when the turn was
+too large for one event and some of its calls were left out; a turn sent whole
+has `native: None`.
+
 The agent calling `predict()`, which has no shared event:
 
 ```json
@@ -336,7 +321,6 @@ The agent calling `predict()`, which has no shared event:
   "invocation_id": "b81d2f04",
   "sequence": 4,
   "timestamp_ns": 1761480001200000000,
-  "runtime_kind": "predict_rlm",
   "common": null,
   "native": {
     "format": "predict_rlm.run/v1",
@@ -358,7 +342,6 @@ The code's output:
   "invocation_id": "b81d2f04",
   "sequence": 6,
   "timestamp_ns": 1761480002900000000,
-  "runtime_kind": "predict_rlm",
   "common": null,
   "native": {
     "format": "predict_rlm.run/v1",
@@ -366,36 +349,6 @@ The code's output:
     "iteration": 1,
     "output": "3 Avalanche runs DAGs.\n",
     "execution_error": null
-  }
-}
-```
-
-A run that ended, for a step with a `report: ava.File` output:
-
-```json
-{
-  "kind": "event",
-  "schema_version": 2,
-  "invocation_id": "b81d2f04",
-  "sequence": 12,
-  "timestamp_ns": 1761480004300000000,
-  "runtime_kind": "predict_rlm",
-  "common": null,
-  "native": {
-    "format": "predict_rlm.run/v1",
-    "kind": "run.succeeded",
-    "status": "completed",
-    "outputs": {
-      "report": {
-        "kind": "file",
-        "workspace": "delta-ws:v1:snapshot-id",
-        "path": ".outputs/summarize/1/5e0c2a9b7d4f4c1e8a63f0b2d91c7a48/report.md",
-        "name": "report.md",
-        "content_type": "text/markdown",
-        "size_bytes": 412,
-        "sha256": "3a7bd3e2360a3d29eea436fcfb7e44c7..."
-      }
-    }
   }
 }
 ```
@@ -418,9 +371,46 @@ A run that ended, for a step with a `report: ava.File` output:
 
 | `common.kind` | PredictRLM event |
 | --- | --- |
+| `run.started` | `run.started`. `model` is the `lm` setting by name, `None` when the run uses DSPy's current model; `inputs` are the step's inputs, files and workspaces by reference, not the paths mounted in the sandbox. |
 | `turn.finished` | `iteration.recorded` |
-| `tool.started`, `tool.finished` | `tool.started`, `tool.finished` |
-| `None` | `predict.started`, `predict.finished`, `code.generated`, `code.executed`, and the run and sandbox events |
+| `tool.started`, `tool.finished` | `tool.started`, `tool.finished`. `turn` is `None`: PredictRLM does not say which iteration's code called the tool. |
+| `None` | `predict.started`, `predict.finished`, `code.generated`, `code.executed`, `run.failed`, `run.cancelled` and the sandbox events |
+
+PredictRLM's `run.succeeded` is not sent: the final event says the run succeeded
+and carries its outputs.
+
+### Final event
+
+Sent once the run has ended and its outputs, if any, are built.
+
+| Final event | PredictRLM |
+| --- | --- |
+| `trace_finished` | PredictRLM has a trace of the run. `outputs` are the values from `SUBMIT(...)`, with `ava.File` outputs as the file references the step returns. `outputs` is `None` when the run raised, or when a file output is not usable; the step then raises. |
+| `trace_unavailable` | The run raised without a trace. |
+
+The final event for a step with a `report: ava.File` output:
+
+```json
+{
+  "kind": "trace_finished",
+  "schema_version": 2,
+  "invocation_id": "b81d2f04",
+  "header": { "...": "as in the trace example" },
+  "outputs": {
+    "report": {
+      "kind": "file",
+      "workspace": "delta-ws:v1:snapshot-id",
+      "path": ".outputs/summarize/1/5e0c2a9b7d4f4c1e8a63f0b2d91c7a48/report.md",
+      "name": "report.md",
+      "content_type": "text/markdown",
+      "size_bytes": 412,
+      "sha256": "3a7bd3e2360a3d29eea436fcfb7e44c7..."
+    }
+  },
+  "omitted_outputs": [],
+  "complete": true
+}
+```
 
 ### Trace header
 

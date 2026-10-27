@@ -70,9 +70,10 @@ The examples below all come from this step, called with
 1. Avalanche validates your inputs and builds an **`AgentRequest`**: the
    signature, the inputs, the tools, the skills.
 2. The runtime runs it on its engine. While it runs, it sends **live events**:
-   a tool started, a turn finished.
-3. The runtime returns an **`AgentRunOutcome`**: the raw outputs and the
-   **trace**, both already in Avalanche's shape.
+   the call started, a tool started, a turn finished.
+3. Once it has the outputs, the runtime sends the **final event**: the trace
+   header and the outputs. It then returns an **`AgentRunOutcome`**: the raw
+   outputs and the **trace**, both already in Avalanche's shape.
 4. Avalanche validates the outputs against the signature and gives your step an
    **`AgentResult`**.
 
@@ -94,24 +95,22 @@ call fails with `ava.agent.AgentOutputError`.
 
 ## `AgentTrace`
 
-The same shape for every runtime.
+The same shape for every runtime. It is the trace your process holds, as
+`result.trace`, and it always has every turn. The operator, TUI and web UI never
+receive it whole: each turn arrives as a `turn.finished` [live event](#live-events),
+and the [final event](#the-final-event) carries the header.
 
 ```python
 class AgentTrace:
-    schema_version: Literal[2]
     header: AgentTraceHeader
     turns: tuple[Turn, ...]
-    turns_streamed: bool  # True when the turns went out as live events; turns is then ()
 ```
 
 As JSON, for the Claude call above:
 
 ```json
 {
-  "schema_version": 2,
   "header": {
-    "runtime_kind": "claude_agent",
-    "trace_format": "claude_agent.messages/v1",
     "status": "succeeded",
     "stop_reason": "success",
     "model": "claude-haiku-5-5",
@@ -199,8 +198,7 @@ As JSON, for the Claude call above:
         "api_error": null
       }
     }
-  ],
-  "turns_streamed": false
+  ]
 }
 ```
 
@@ -210,8 +208,6 @@ The same call on PredictRLM is on the [PredictRLM page](runtimes/predict-rlm.md#
 
 ```python
 class AgentTraceHeader:
-    runtime_kind: Literal["predict_rlm", "claude_agent"]
-    trace_format: str             # names the shape of every native part
     status: Literal["succeeded", "failed", "cancelled"]
     stop_reason: str | None       # why it ended, in the runtime's words
     model: str | None             # the main model
@@ -222,7 +218,15 @@ class AgentTraceHeader:
     external_run_id: str | None   # the runtime's own ID for this run
     session_id: str | None        # the runtime's session ID, when it has one
     native: PredictRLMTraceHeader | ClaudeAgentTraceHeader  # see each runtime page
+
+    @property
+    def runtime_kind(self) -> Literal["predict_rlm", "claude_agent"]: ...  # from native
+    @property
+    def trace_format(self) -> str: ...  # native.format, the shape of every native part
 ```
+
+`runtime_kind` and `trace_format` are read from the `native` part, so they are not
+in the JSON.
 
 The header travels with every run snapshot, so its `native` part is kept under
 64 KiB. Anything larger belongs in the turns.
@@ -290,12 +294,13 @@ class TokenUsage:
 
 ### File and workspace values
 
-A file or workspace in the call's inputs is recorded by its reference, never its
-bytes or host path (see file references, `docs/file-references.md`). Tool values
-depend on the runtime: PredictRLM records files in tool arguments and results,
-and its file outputs, the same way. ClaudeAgent records a tool's result as the
-JSON Claude got, so an `ava.File` a tool returns appears in its JSON form, and an
-`ava.Workspace` holding its files appears with their contents.
+A file or workspace in the call's inputs or outputs is recorded by its reference,
+never its bytes or host path (see file references, `docs/file-references.md`), in the
+`run.started` event and the final event alike, whatever the runtime. Tool values
+depend on the runtime: PredictRLM records files in tool arguments and results the
+same way. ClaudeAgent records a tool's result as the JSON Claude got, so an
+`ava.File` a tool returns appears in its JSON form, and an `ava.Workspace` holding
+its files appears with their contents.
 
 ```python
 class FileInputEvidence:            # an ava.File
@@ -334,8 +339,8 @@ class WorkspaceReferenceInputEvidence:  # an ava.Workspace pointing to a folder
 ## Live events
 
 Sent while the call runs. The TUI and web UI show them as the run goes, and the
-operator stores them with the run. Each event has a shared part, `common`, and
-the runtime's own part, `native`.
+operator stores them with the run. Each event has a shared part, `common`, the
+runtime's own part, `native`, or both.
 
 ```python
 class AgentLiveEvent:
@@ -344,10 +349,18 @@ class AgentLiveEvent:
     invocation_id: str
     sequence: int                 # from 1, in order within the call
     timestamp_ns: int             # when Avalanche received it
-    runtime_kind: Literal["predict_rlm", "claude_agent"]
     common: AgentEvent | None     # None when the event means nothing outside its runtime
-    native: PredictRLMNativeEvent | ClaudeAgentNativeEvent  # see each runtime page
+    native: PredictRLMNativeEvent | ClaudeAgentNativeEvent | None  # see each runtime page;
+                                  # None when common says everything
+
+    @property
+    def runtime_kind(self) -> Literal["predict_rlm", "claude_agent"] | None: ...
 ```
+
+At least one of `common` and `native` is set. `runtime_kind` is read from the
+native part, or from the turn of a `turn.finished` event, so it is not in the
+JSON; it is `None` for an event with only a `run.started`, `tool.started` or
+`tool.finished` part.
 
 ```json
 {
@@ -356,17 +369,13 @@ class AgentLiveEvent:
   "invocation_id": "3f9a0c7e",
   "sequence": 3,
   "timestamp_ns": 1761480000123000000,
-  "runtime_kind": "claude_agent",
   "common": {
     "kind": "tool.started",
     "call_id": "toolu_01",
-    "name": "mcp__avalanche__lookup_term"
+    "name": "mcp__avalanche__lookup_term",
+    "turn": 1
   },
-  "native": {
-    "format": "claude_agent.messages/v1",
-    "kind": "tool.used",
-    "turn_index": 1
-  }
+  "native": null
 }
 ```
 
@@ -376,7 +385,14 @@ The shared events. Events only one runtime has, such as PredictRLM's
 `predict()` calls, have `common: None` and are on the runtime's page.
 
 ```python
-AgentEvent = TurnFinished | ToolStarted | ToolFinished
+AgentEvent = RunStarted | TurnFinished | ToolStarted | ToolFinished
+
+
+class RunStarted:                 # the first event of every call
+    kind: Literal["run.started"]
+    model: str | None             # the model the runtime asked for; None: the engine's default
+    inputs: dict[str, JsonValue]  # the step's inputs, files and workspaces by reference
+    omitted_inputs: tuple[str, ...]  # inputs left out because they are too large
 
 
 class TurnFinished:
@@ -389,13 +405,37 @@ class ToolStarted:
     kind: Literal["tool.started"]
     call_id: str
     name: str
+    turn: int | None              # the turn that called the tool, when the runtime knows it
 
 
 class ToolFinished:
     kind: Literal["tool.finished"]
     call_id: str
     name: str
+    turn: int | None
     error: str | None
+```
+
+The inputs together are kept up to 4 MiB as JSON. Past that, the largest are left
+out, one by one, and named in `omitted_inputs`.
+
+The call starting, as sent:
+
+```json
+{
+  "kind": "event",
+  "schema_version": 2,
+  "invocation_id": "3f9a0c7e",
+  "sequence": 1,
+  "timestamp_ns": 1761480000001000000,
+  "common": {
+    "kind": "run.started",
+    "model": "claude-haiku-5-5",
+    "inputs": {"document": "Avalanche runs DAGs."},
+    "omitted_inputs": []
+  },
+  "native": null
+}
 ```
 
 A finished turn, as sent:
@@ -407,7 +447,6 @@ A finished turn, as sent:
   "invocation_id": "3f9a0c7e",
   "sequence": 5,
   "timestamp_ns": 1761480002100000000,
-  "runtime_kind": "claude_agent",
   "common": {
     "kind": "turn.finished",
     "turn": {
@@ -443,7 +482,7 @@ A finished turn, as sent:
     },
     "omitted_tool_calls": 0
   },
-  "native": {"format": "claude_agent.messages/v1", "kind": "message.finished"}
+  "native": null
 }
 ```
 
@@ -459,7 +498,9 @@ class AgentTraceFinished:         # the call has a trace
     kind: Literal["trace_finished"]
     schema_version: Literal[2]
     invocation_id: str
-    record: AgentTrace            # turns_streamed is True and turns is ()
+    header: AgentTraceHeader      # the turns went out as turn.finished events
+    outputs: dict[str, JsonValue] | None  # None when the run returned no outputs
+    omitted_outputs: tuple[str, ...]      # outputs left out because they are too large
     complete: bool
 
 
@@ -474,17 +515,22 @@ class AgentTraceUnavailable:      # the call ended without a trace
     complete: bool
 ```
 
+The runtime sends the final event once it has the outputs. `outputs` are the raw
+outputs as the runtime returned them, before Avalanche validates them, with files
+and workspaces by reference. As with inputs, they are kept up to 4 MiB together,
+and the largest beyond that are named in `omitted_outputs`. `outputs` is `None`
+when the run ended without outputs, for example when it failed, or when turning
+the engine's answer into outputs failed; the step then raises after the final
+event.
+
 ```json
 {
   "kind": "trace_finished",
   "schema_version": 2,
   "invocation_id": "3f9a0c7e",
-  "record": {
-    "schema_version": 2,
-    "header": { "...": "as in the trace above" },
-    "turns": [],
-    "turns_streamed": true
-  },
+  "header": { "...": "as in the trace above" },
+  "outputs": {"summary": "Avalanche runs DAGs.", "word_count": 3},
+  "omitted_outputs": [],
   "complete": true
 }
 ```
