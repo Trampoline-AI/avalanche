@@ -22,7 +22,7 @@ from avalanche.agent.live import (
     AgentTraceFinished,
     AgentTraceUnavailable,
 )
-from avalanche.agent.native.predict_rlm import PredictRLMOmissions
+from avalanche.agent.native.predict_rlm import IterationRecorded, PredictRLMOmissions
 from avalanche.runtimes.predict_rlm.events import project_event
 from avalanche.runtimes.predict_rlm.trace import trace_header
 from runtime.operator.client import OperatorCallError
@@ -143,15 +143,14 @@ def _without_retained_calls(event: AgentLiveEvent) -> AgentLiveEvent:
                     "omitted_tool_calls": len(turn.tool_calls),
                 }
             ),
-            "native": event.native.model_copy(
-                update={
-                    "omissions": PredictRLMOmissions(
-                        reason="iteration detail exceeds byte limit",
-                        tool_count=len(turn.tool_calls) - predicts,
-                        predict_count=predicts,
-                        predict_group_count=0,
-                    )
-                }
+            # A turn that left calls out carries PredictRLM's omission counts.
+            "native": IterationRecorded(
+                omissions=PredictRLMOmissions(
+                    reason="iteration detail exceeds byte limit",
+                    tool_count=len(turn.tool_calls) - predicts,
+                    predict_count=predicts,
+                    predict_group_count=0,
+                )
             ),
         }
     )
@@ -935,7 +934,8 @@ def test_terminal_hydration_keeps_existing_history(store, with_trace, pending_in
     assert hydrated.error == "sandbox stopped"
     assert hydrated.events == tuple(events)
     assert store.selected_agent_events == events
-    assert store.selected_agent_outputs == {"ready": False}
+    # A failed call has no outputs; they travel only on a finished final event.
+    assert store.selected_agent_outputs is None
     assert store.selected_agent_inspector_state == "failed"
 
 
