@@ -78,6 +78,8 @@ class PredictRLMTurn(BaseModel):
 
     model_config = _STRICT
 
+    runtime_kind: ClassVar[RuntimeKind] = "predict_rlm"
+
     format: Literal["predict_rlm.run/v1"] = FORMAT
     code: str
     # The code's output as shown to the model, and in full.

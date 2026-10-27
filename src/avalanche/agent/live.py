@@ -129,8 +129,12 @@ class AgentLiveEvent(BaseModel):
 
     @property
     def runtime_kind(self) -> RuntimeKind | None:
-        """The runtime that sent the event, when it has a native part to say so."""
-        return self.native.runtime_kind if self.native is not None else None
+        """The runtime that sent the event, when a native part, its own or its turn's, says."""
+        if self.native is not None:
+            return self.native.runtime_kind
+        if isinstance(self.common, TurnFinished):
+            return self.common.turn.native.runtime_kind
+        return None
 
     @property
     def kind_label(self) -> str:
