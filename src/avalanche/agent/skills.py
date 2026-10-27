@@ -9,6 +9,7 @@ stay in its ``tools=``.
 
 from __future__ import annotations
 
+import os
 from collections.abc import Mapping
 from pathlib import Path, PurePosixPath
 from typing import Annotated, Self
@@ -103,6 +104,8 @@ class Skill(BaseModel):
         must hold only the specification's fields, and ``name`` must match the
         folder's name.
         """
+        # The name matches the folder as given, which may be a symlink to another name.
+        folder_name = Path(os.path.abspath(path)).name
         directory = Path(path).resolve()
         skill_file = directory / SKILL_FILE
         if not skill_file.is_file():
@@ -115,10 +118,10 @@ class Skill(BaseModel):
                 f"not define: {unknown}; allowed fields are {sorted(_FRONTMATTER_FIELDS)}"
             )
         name = frontmatter.get("name")
-        if name != directory.name:
+        if name != folder_name:
             raise SkillFormatError(
                 f"{skill_file}: skill name {name!r} must match its folder name "
-                f"{directory.name!r}"
+                f"{folder_name!r}"
             )
         files = {
             file.relative_to(directory).as_posix(): file
