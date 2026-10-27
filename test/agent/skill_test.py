@@ -109,6 +109,22 @@ def test_from_dir_rejects_what_the_specification_rejects(
         Skill.from_dir(folder)
 
 
+def test_an_indented_rule_inside_a_yaml_value_does_not_end_the_frontmatter(tmp_path):
+    description = "Use for reports.\n---\nMore text."
+    folder = _write_skill(
+        tmp_path,
+        "reports",
+        "---\nname: reports\ndescription: |-\n  Use for reports.\n  ---\n  More text.\n"
+        "---\nWrite the report.\n",
+    )
+
+    skill = Skill.from_dir(folder)
+
+    assert (skill.description, skill.instructions) == (description, "Write the report.")
+    (folder / "SKILL.md").write_text(skill.skill_md())
+    assert Skill.from_dir(folder).description == description
+
+
 def test_from_dir_needs_a_skill_file(tmp_path):
     with pytest.raises(SkillFormatError, match="no SKILL.md"):
         Skill.from_dir(tmp_path)
