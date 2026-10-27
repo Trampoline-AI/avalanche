@@ -100,7 +100,8 @@ class Skill(BaseModel):
         """Load the skill in a folder holding a ``SKILL.md`` file.
 
         Every other file in the folder becomes a resource file; a symlink to a
-        file outside the folder is rejected. The frontmatter
+        file outside the folder, or to a folder, is rejected. Frontmatter values
+        are read as strings. The frontmatter
         must hold only the specification's fields, and ``name`` must match the
         folder's name.
         """
@@ -123,9 +124,21 @@ class Skill(BaseModel):
                 f"{skill_file}: skill name {name!r} must match its folder name "
                 f"{folder_name!r}"
             )
+        entries = sorted(directory.rglob("*"))
+        # rglob does not enter symlinked folders, so their files would be lost.
+        linked_folders = sorted(
+            entry.relative_to(directory).as_posix()
+            for entry in entries
+            if entry.is_symlink() and entry.is_dir()
+        )
+        if linked_folders:
+            raise SkillFormatError(
+                f"{skill_file}: folders {linked_folders} are symlinks; a skill folder may "
+                "link files but not folders"
+            )
         files = {
             file.relative_to(directory).as_posix(): file
-            for file in sorted(directory.rglob("*"))
+            for file in entries
             if file.is_file() and file != skill_file
         }
         # A symlink may point anywhere; a resource must really live in the folder.
@@ -184,7 +197,9 @@ def _split_frontmatter(skill_file: Path) -> tuple[Mapping[str, object], str]:
     except StopIteration:
         raise SkillFormatError(f"{skill_file}: frontmatter has no closing '---' line") from None
     try:
-        frontmatter = yaml.safe_load("\n".join(lines[1:end]))
+        # Every scalar stays a string: the format's values are strings, and YAML 1.1
+        # would otherwise read a name such as ``on`` or ``123`` as a bool or a number.
+        frontmatter = yaml.load("\n".join(lines[1:end]), Loader=yaml.BaseLoader)
     except yaml.YAMLError as exc:
         raise SkillFormatError(f"{skill_file}: frontmatter is not valid YAML: {exc}") from exc
     if not isinstance(frontmatter, dict):

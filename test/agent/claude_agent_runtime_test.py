@@ -1076,6 +1076,9 @@ async def test_the_added_read_tool_reads_only_inside_the_skill_plugin(
     decisions: dict[str, str] = {}
 
     async def query(*, prompt, options):
+        # The hook is the same in every mode; that the CLI runs hooks before its
+        # permission checks, bypassPermissions included, is the CLI's contract.
+        assert options.permission_mode == permission_mode
         plugin = Path(options.plugins[0]["path"])
         [matcher] = options.hooks["PreToolUse"]
         [hook] = matcher.hooks
