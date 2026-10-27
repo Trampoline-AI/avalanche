@@ -342,3 +342,45 @@ async def test_json_outputs_that_are_not_an_object_still_send_the_final_event(re
 
     (final,) = observed
     assert (final.kind, final.outputs) == ("trace_finished", None)
+
+
+def test_paths_and_files_nested_in_dataclasses_and_sets_never_leak_host_paths(tmp_path):
+    from dataclasses import dataclass
+    from pathlib import Path
+
+    source = tmp_path / "doc.txt"
+    source.write_bytes(b"doc")
+    workspace = ava.Workspace.from_directory(tmp_path, reference="snapshot:test")
+
+    @dataclass
+    class Doc:
+        source: Path
+        file: ava.File
+        tags: frozenset[str]
+
+    header = _sent()[-1].header
+    events = _InvocationEvents("invocation", "predict_rlm")
+    observed = []
+    with capture_agent_evidence(observed.append, errors="raise"):
+        events.finished(
+            header,
+            outputs=PythonOutputs(
+                values={
+                    "doc": Doc(
+                        source=source,
+                        file=ava.File.from_path(source, workspace=workspace),
+                        tags=frozenset({"a"}),
+                    ),
+                    "paths": {source},
+                }
+            ),
+            complete=True,
+        )
+
+    (final,) = observed
+    doc = final.outputs["doc"]
+    assert doc["source"]["kind"] == "unavailable"
+    assert (doc["file"]["kind"], doc["file"]["workspace"]) == ("file", "snapshot:test")
+    assert doc["tags"] == ["a"]
+    assert final.outputs["paths"][0]["kind"] == "unavailable"
+    assert str(tmp_path) not in final.model_dump_json()
