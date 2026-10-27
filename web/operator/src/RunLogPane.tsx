@@ -12,6 +12,7 @@ import {
 } from "react";
 
 import { AnsiText } from "./AnsiText";
+import { formatLogDuration } from "./logDuration";
 import type { OperatorApi } from "./api";
 import {
   boundDescriptors,
@@ -593,7 +594,8 @@ export function RunLogPane({
               >
                 {virtualizer.getVirtualItems().map((virtualRow) => {
                   const entry = combinedLogs[virtualRow.index];
-                  const body = logBodies.get(entry.bodyToken);
+                  const rawBody = logBodies.get(entry.bodyToken);
+                  const body = rawBody === undefined ? undefined : formatLogDuration(rawBody);
                   const graphNode =
                     graphNodesByIdentity.byId.get(entry.nodeId) ??
                     graphNodesByIdentity.byUniqueName.get(entry.nodeId);

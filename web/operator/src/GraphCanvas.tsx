@@ -183,7 +183,16 @@ function firstInstructionLine(instructions: string | undefined): string | undefi
 
 const NODE_DETAIL_ZOOM_THRESHOLD = 1.0;
 
-const NodeDuration = memo(
+function formatNodeDuration(seconds: number): string {
+  if (seconds <= 120) return `${seconds.toFixed(1)}s`;
+  const wholeSeconds = Math.floor(seconds);
+  const minutes = Math.floor(wholeSeconds / 60);
+  const remainingSeconds = wholeSeconds % 60;
+  if (seconds <= 69 * 60) return `${minutes}m ${remainingSeconds}s`;
+  return `${Math.floor(minutes / 60)}h ${minutes % 60}m ${remainingSeconds}s`;
+}
+
+export const NodeDuration = memo(
   ({
     startedAt,
     endedAt,
@@ -232,8 +241,9 @@ const NodeDuration = memo(
     return (
       <span
         className={`node-duration absolute font-mono text-muted transition-[font-size] duration-150 ease-out motion-reduce:transition-none ${compact ? "top-3 right-3 text-sm" : "top-4 right-4 text-[9px]"}`}
+        title={`${elapsedSeconds.toFixed(1)} seconds`}
       >
-        {elapsedSeconds.toFixed(1)}s
+        {formatNodeDuration(elapsedSeconds)}
       </span>
     );
   },
