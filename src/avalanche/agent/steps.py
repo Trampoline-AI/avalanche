@@ -109,9 +109,8 @@ class _InvocationEvents:
     def finished(
         self, header: AgentTraceHeader, *, outputs: AgentOutputs | None, complete: bool
     ) -> None:
-        kept, omitted = (
-            (None, ()) if outputs is None else retained_fields(_raw_outputs(outputs))
-        )
+        raw = None if outputs is None else _raw_outputs(outputs)
+        kept, omitted = (None, ()) if raw is None else retained_fields(raw)
         self._terminate(
             AgentTraceFinished(
                 invocation_id=self._invocation_id,
@@ -150,12 +149,17 @@ class _InvocationEvents:
         emit_agent_evidence(terminal)
 
 
-def _raw_outputs(outputs: AgentOutputs) -> Mapping[str, object]:
+def _raw_outputs(outputs: AgentOutputs) -> Mapping[str, object] | None:
     match outputs:
         case PythonOutputs(values=values):
             return values
         case JsonOutputs(text=text):
-            return _JSON_OBJECT.validate_json(text)
+            # Text that is not a JSON object keeps no outputs; output validation then
+            # fails the step with AgentOutputError, after this final event.
+            try:
+                return _JSON_OBJECT.validate_json(text)
+            except ValidationError:
+                return None
 
 
 _JSON_OBJECT: TypeAdapter[dict[str, JsonValue]] = TypeAdapter(dict[str, JsonValue])
