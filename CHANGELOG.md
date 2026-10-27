@@ -130,8 +130,8 @@
 - Agents: new `ava.runtimes.ClaudeAgent` runs agent steps with Claude through the
   Claude Agent SDK. Install the new `claude` extra (`avalanche-ai[claude]`) and the
   Claude Code CLI, then choose a model with `ClaudeAgent(model="claude-haiku-5-5")`.
-  The CLI signs in with an existing `claude` login, a subscription token from
-  `claude setup-token` (`CLAUDE_CODE_OAUTH_TOKEN`), or `ANTHROPIC_API_KEY`. Each call
+  The CLI signs in with the first of `ANTHROPIC_API_KEY`, a subscription token from
+  `claude setup-token` (`CLAUDE_CODE_OAUTH_TOKEN`), and an existing `claude` login. Each call
   runs without the user's Claude settings, MCP servers or connectors; step tools are
   offered through an in-process tool server; outputs come back as structured output
   and are validated like every runtime's. One `ava.Workspace` input becomes the

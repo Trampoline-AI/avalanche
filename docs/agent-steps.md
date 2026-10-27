@@ -248,9 +248,9 @@ async def summarize(document: str, *, agent: ava.Agent) -> str:
     return (await agent(document=document)).outputs.summary
 ```
 
-The CLI signs in as it does in a terminal: an existing `claude` login,
-`CLAUDE_CODE_OAUTH_TOKEN` from `claude setup-token` (a Claude subscription), or
-`ANTHROPIC_API_KEY`. A workflow default and a step runtime of different kinds do
+The CLI signs in with the first of `ANTHROPIC_API_KEY`,
+`CLAUDE_CODE_OAUTH_TOKEN` from `claude setup-token` (a Claude subscription), and an
+existing `claude` login. A workflow default and a step runtime of different kinds do
 not merge: a `ClaudeAgent` step ignores a PredictRLM workflow default. See
 [runtimes](api/agents.md#runtimes) for every setting and for file and workspace
 inputs.
