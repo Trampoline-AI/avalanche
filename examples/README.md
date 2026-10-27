@@ -90,6 +90,23 @@ workbook with parallel theme and risk agents, validates their reports
 deterministically, then publishes an Excel product review and Word executive
 brief. See its [README](customer_feedback_review/README.md) for the full flow.
 
+### `claude_deck_bakeoff.py`
+
+Four agent steps on the [ClaudeAgent runtime](../docs/runtimes/claude-agent.md)
+that work on real Office files. One agent writes a Word memo. Two agents then turn
+it into competing PowerPoint decks at the same time, each in a different style. A
+last agent reads the memo and both decks, writes a Markdown scorecard and picks a
+winner. The memo, both decks and the scorecard are copied to
+`.avalanche/claude-deck-bakeoff/`, with the winning deck marked `_WINNER`.
+
+Needs `uv sync --extra claude`, the `claude` CLI signed in, and `uv` on PATH: the
+agents build and read the files with `python-docx` and `python-pptx` through
+`uv run --with`. Set `CLAUDE_DECK_BAKEOFF_MODEL` to change the model.
+
+```bash
+uv run python examples/claude_deck_bakeoff.py
+```
+
 ### `complex_dag_pattern.py`
 
 Simplest local flow execution path. It demonstrates the Python DAG API,
