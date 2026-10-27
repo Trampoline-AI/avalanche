@@ -643,6 +643,40 @@ def test_a_repeated_final_trace_is_ignored_and_a_different_one_is_a_protocol_err
         operator.close()
 
 
+def test_a_turn_of_another_runtime_is_a_protocol_error_without_a_native_event():
+    from predict_rlm import IterationStep, RunEvent, RunEventKind
+
+    from avalanche.agent.native.claude_agent import SessionInitialized
+    from avalanche.runtimes.predict_rlm.events import project_event
+
+    operator = Operator(watch=False, schedule=False)
+    run = _add_run(operator, "run-foreign-turn")
+    step = IterationStep(
+        iteration=1, reasoning="r", code="x", output="", untruncated_output="", duration_ms=1
+    )
+    native, turn = project_event(
+        RunEvent("sdk", 1, RunEventKind.ITERATION_RECORDED, 1, {"step": step})
+    )
+    claude = AgentLiveEvent(
+        invocation_id="test-invocation",
+        sequence=1,
+        timestamp_ns=1,
+        common=None,
+        native=SessionInitialized(session_id="s", model=None, tools=()),
+    )
+    # The PredictRLM turn has no native event of its own; its turn's part names it.
+    foreign = AgentLiveEvent(
+        invocation_id="test-invocation", sequence=2, timestamp_ns=2, common=turn, native=native
+    )
+    assert native is None and foreign.runtime_kind == "predict_rlm"
+    try:
+        operator._apply_event(run.run_id, _event_handle(), _wire(claude))
+        with pytest.raises(_CoordinatorProtocolError, match="runtime"):
+            operator._apply_event(run.run_id, _event_handle(), _wire(foreign))
+    finally:
+        operator.close()
+
+
 @pytest.mark.parametrize("kind", ["trace_finished", "trace_unavailable"])
 def test_terminal_detail_byte_limit_counts_the_whole_body(kind):
     terminal = _finished() if kind == "trace_finished" else _unavailable()
