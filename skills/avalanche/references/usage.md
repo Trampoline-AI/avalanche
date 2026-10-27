@@ -380,8 +380,8 @@ do not replace the native integration with a custom client.
 For observation of an agent's outputs, prefer its native `evaluations=`
 declaration over an extra workflow node. Each `ava.Metric` separates a
 synchronous evidence selector from one existing Choice/Noul/Score question.
-`ava.EvalContext` exposes the first successful agent call to return: its actual
-keyword arguments, validated outputs, and its full `ava.agent.AgentTrace`.
+`ava.EvalContext` exposes the first successful agent call to return: its validated
+inputs (`ctx.inputs.field`), validated outputs, and its full `ava.agent.AgentTrace`.
 Select named outputs such as `ctx.output.audit.summary`. The step's own return
 value is separate; later calls run normally without replacing or resubmitting
 evaluation. Submitted evaluation survives step postprocessing failure.

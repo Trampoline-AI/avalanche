@@ -4,12 +4,12 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, Any
 
+from ...agent.native.predict_rlm import PredictRLMTraceHeader
 from ...agent.steps import AgentStepError
 from ...agent.trace import (
     AgentTrace,
     AgentTraceHeader,
     AgentTraceStatus,
-    PredictRLMNativeTrace,
 )
 from .events import _bounded_agent_error, native_usage
 
@@ -30,7 +30,7 @@ def _emit_terminal_trace(
     """Send the final trace; its turns already crossed the live event channel."""
     record = trace_record(trace, evidence, model=model, sub_model=sub_model)
     events.finished(
-        AgentTrace(header=record.header, turns=(), native=record.native, turns_streamed=True),
+        AgentTrace(header=record.header, turns=(), turns_streamed=True),
         complete=evidence.complete,
     )
 
@@ -77,12 +77,13 @@ def trace_header(
     model: str | None,
     turn_count: int,
     tool_call_count: int,
+    sub_model: str | None,
 ) -> AgentTraceHeader:
     """The common header for one PredictRLM run, without converting its turns.
 
     The counts are passed in because a terminal trace sent after live events
-    carries no steps. ``model`` is a display name that replaces PredictRLM's
-    model id when set (see ``_model_display_name``).
+    carries no steps. ``model`` and ``sub_model`` are display names that replace
+    PredictRLM's model ids when set (see ``_model_display_name``).
     """
     from .mapping import common_usage
 
@@ -99,6 +100,12 @@ def trace_header(
         tool_call_count=tool_call_count,
         external_run_id=evidence.run_id,
         session_id=None,
+        native=PredictRLMTraceHeader(
+            sub_model=_sub_model_name(trace, sub_model),
+            max_iterations=trace.max_iterations,
+            usage=native_usage(trace.usage),
+            telemetry_ref=trace.telemetry_ref,
+        ),
     )
 
 
@@ -123,14 +130,9 @@ def trace_record(
             model=model,
             turn_count=len(trace.steps),
             tool_call_count=sum(step_tool_call_count(step) for step in trace.steps),
+            sub_model=sub_model,
         ),
         turns=tuple(turn_from_step(step) for step in trace.steps),
-        native=PredictRLMNativeTrace(
-            sub_model=_sub_model_name(trace, sub_model),
-            max_iterations=trace.max_iterations,
-            usage=native_usage(trace.usage),
-            telemetry_ref=trace.telemetry_ref,
-        ),
         turns_streamed=False,
     )
 

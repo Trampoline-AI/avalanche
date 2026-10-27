@@ -12,6 +12,7 @@ from typing import TYPE_CHECKING, Literal, Mapping
 if TYPE_CHECKING:
     from avalanche.agent.declaration import AgentDeclaration
     from avalanche.agent.live import AgentTraceFinished, AgentTraceUnavailable
+    from avalanche.agent.native import TraceHeaderNative
     from avalanche.agent.trace import AgentTraceStatus, TokenUsage
 
 
@@ -130,10 +131,7 @@ class RunState:
 
 @dataclass(frozen=True)
 class TraceHeader:
-    """The runtime-neutral summary of a finished agent invocation.
-
-    Runtime-specific details stay in the trace body.
-    """
+    """The summary of a finished agent invocation, with its runtime-specific part."""
 
     status: AgentTraceStatus
     runtime_kind: str
@@ -145,6 +143,7 @@ class TraceHeader:
     tool_call_count: int
     external_run_id: str | None
     stop_reason: str | None
+    native: TraceHeaderNative
 
 
 @dataclass(frozen=True)

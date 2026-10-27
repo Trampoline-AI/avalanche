@@ -1,6 +1,6 @@
 import type { PredictRLMTokenUsage } from "../../generated/agentSchemas";
-import type { AgentLiveEvent, AgentTraceTerminal } from "../common";
-import type { AgentTraceStep, TraceBodySummary, TraceTokenUsage } from "../types";
+import type { AgentLiveEvent } from "../common";
+import type { AgentTraceStep, TraceTokenUsage } from "../types";
 import { toolCall } from "./common";
 import type { TraceViewer } from "./index";
 
@@ -62,19 +62,6 @@ function turn(event: AgentLiveEvent): AgentTraceStep {
   };
 }
 
-function summary(terminal: AgentTraceTerminal): TraceBodySummary | undefined {
-  if (terminal.kind !== "trace_finished") return undefined;
-  const { native } = terminal.record;
-  if (native.format !== "predict_rlm.run/v1") {
-    throw new Error(`not a PredictRLM trace: ${native.format}`);
-  }
-  return {
-    subModel: native.sub_model ?? undefined,
-    maxIterations: native.max_iterations,
-    usage: { main: tokenUsage(native.usage.main), sub: tokenUsage(native.usage.sub) },
-  };
-}
-
 function retainedValue(event: AgentLiveEvent, kind: "inputs" | "outputs"): unknown {
   const { native } = event;
   if (kind === "inputs" && native.kind === "run.started") return native.inputs;
@@ -84,10 +71,6 @@ function retainedValue(event: AgentLiveEvent, kind: "inputs" | "outputs"): unkno
 
 export const predictRlmViewer: TraceViewer = {
   turn,
-  summary,
-  // The sub-model, iteration limit and per-model usage are only in the final body.
-  usageInBody: true,
-  hasSubModel: true,
   turnUnit: "iterations",
   activityLabels: {
     "run.started": "Agent run started",

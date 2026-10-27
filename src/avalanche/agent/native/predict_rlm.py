@@ -1,8 +1,8 @@
-"""PredictRLM's native turn part and live-event payloads, format ``predict_rlm.run/v1``.
+"""PredictRLM's native header, turn and live-event parts, format ``predict_rlm.run/v1``.
 
-Each turn carries PredictRLM's own part (its code and output), and each live
-event carries the common event, when there is one, plus the details only
-PredictRLM has. These models mirror the parts of PredictRLM's own records
+The header carries PredictRLM's run details, each turn its own part (its code and
+output), and each live event carries the common event, when there is one, plus the
+details only PredictRLM has. These models mirror the parts of PredictRLM's own records
 that the common layer does not hold, and import nothing from PredictRLM, so the
 operator, client and TUI validate them without the runtime installed.
 """
@@ -13,7 +13,15 @@ from collections.abc import Mapping
 from types import MappingProxyType
 from typing import Annotated, ClassVar, Literal, get_args
 
-from pydantic import BaseModel, ConfigDict, Field, JsonValue, NonNegativeFloat, NonNegativeInt
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field,
+    JsonValue,
+    NonNegativeFloat,
+    NonNegativeInt,
+    PositiveInt,
+)
 
 from ..kinds import CommonEventKind, RuntimeKind
 
@@ -85,6 +93,21 @@ class PredictRLMTurn(BaseModel):
     @property
     def failed(self) -> bool:
         return self.error
+
+
+class PredictRLMTraceHeader(BaseModel):
+    """PredictRLM run details that have no common-header equivalent."""
+
+    model_config = _STRICT
+
+    runtime_kind: ClassVar[RuntimeKind] = "predict_rlm"
+
+    format: Literal["predict_rlm.run/v1"] = FORMAT
+    sub_model: str | None
+    max_iterations: PositiveInt
+    usage: PredictRLMUsage
+    # PredictRLM's compact reference for joining a partial trace to its events.
+    telemetry_ref: dict[str, JsonValue] | None
 
 
 class PredictRLMOmissions(BaseModel):

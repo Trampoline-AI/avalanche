@@ -796,7 +796,8 @@ def test_iteration_call_overflow_reports_omitted_counts(monkeypatch):
     assert turn.turn.duration_ms == step.duration_ms
     assert turn.turn.native.usage == _usage(step)
     omissions = native.omissions
-    assert "unavailable" in turn.turn.message
+    # The counts are on the event, not appended to what the model wrote.
+    assert turn.turn.message == step.reasoning
     assert omissions.tool_count + len(_tools(turn)) == 12
     assert omissions.predict_count + len(turn.turn.native.predict_calls) == 12
     assert omissions.tool_count > 0
@@ -1069,7 +1070,7 @@ async def test_codex_lm_is_named_codex_in_declaration_and_run_trace(monkeypatch)
     with capture_agent_evidence(observed.append, errors="raise"):
         await summarize.__agent_step__.make_agent()(person=Person(id=1, name="Ada"))
     (finished,) = [event for event in observed if event.kind == "trace_finished"]
-    assert (finished.record.header.model, finished.record.native.sub_model) == (
+    assert (finished.record.header.model, finished.record.header.native.sub_model) == (
         "codex/gpt-5.6-terra",
         "codex/gpt-5.6-terra",
     )

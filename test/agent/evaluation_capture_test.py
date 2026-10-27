@@ -164,7 +164,7 @@ async def test_actual_call_inputs_and_complete_prediction_replace_step_result(
     assert errors == []
     context = submissions[0].context
     assert submissions[0].error is None
-    assert context.inputs == {"text": "prepared: hello"}
+    assert context.inputs.text == "prepared: hello"
     assert context.output.model_dump() == {
         "answer": "PREPARED: HELLO",
         "handoff": {"summary": "summary: prepared: hello"},
@@ -227,7 +227,7 @@ async def test_nested_step_capture_is_isolated_and_restored(
     for submission, (text, terminal) in zip(submissions, expected_calls, strict=True):
         assert submission.error is None
         context = submission.context
-        assert context.inputs == {"text": text}
+        assert context.inputs.text == text
         assert context.output.answer == text.upper()
         assert context.output.handoff == Report(summary=f"summary: {text}")
         assert context.trace.header.external_run_id == text
@@ -276,7 +276,7 @@ async def test_inline_helper_cannot_claim_enclosing_step_evaluation(evaluations,
 
     assert errors == []
     [submission] = submissions
-    assert submission.context.inputs == {"text": "outer"}
+    assert submission.context.inputs.text == "outer"
     assert submission.context.output.answer == "OUTER"
     assert submission.context.trace.turns == (_turn("outer"),)
 
@@ -297,7 +297,7 @@ async def test_inline_agent_captures_its_own_evaluation(evaluations, predictor):
     assert errors == []
     [submission] = submissions
     assert submission.evaluations is evaluations
-    assert submission.context.inputs == {"text": "inline"}
+    assert submission.context.inputs.text == "inline"
     assert submission.context.output.answer == "INLINE"
 
 
@@ -357,7 +357,7 @@ async def test_first_successful_completion_wins_without_gating_later_calls(
     assert errors == []
     assert len(submissions) == 1
     context = submissions[0].context
-    assert context.inputs == {"text": "fast"}
+    assert context.inputs.text == "fast"
     assert context.output.handoff.summary == "fast"
     terminals = [event for event in observed if event.kind != "event"]
     assert len(terminals) == 2
@@ -432,7 +432,7 @@ async def test_failed_earlier_call_does_not_claim_capture_and_observers_keep_all
     assert len([event for event in observed if event.kind == "event"]) == 3
     assert len(submissions) == 1
     context = submissions[0].context
-    assert context.inputs == {"text": "first"}
+    assert context.inputs.text == "first"
     assert context.output.answer == "first"
     assert context.trace.header.external_run_id == terminal[1].record.header.external_run_id
     assert all(event.record.turns == () for event in terminal[1:])
@@ -658,10 +658,10 @@ def test_local_workflows_use_own_classifier_defaults_and_actual_call_inputs(
         {"model": "workflow-b", "timeout": 7.0},
         {},
     ]
-    assert [submission.context.inputs for submission in submissions] == [
-        {"text": "prepared first"},
-        {"text": "prepared second"},
-        {"text": "prepared direct"},
+    assert [submission.context.inputs.text for submission in submissions] == [
+        "prepared first",
+        "prepared second",
+        "prepared direct",
     ]
 
 
@@ -705,10 +705,11 @@ async def test_ray_serialization_uses_worker_context_and_synchronous_owned_snaps
     result.summary = "downstream mutation"
 
     # The synchronous worker collector snapshots before caller/downstream mutation,
-    # and the step's generated output model survives the snapshot's pickling.
+    # and the step's generated input and output models survive the snapshot's pickling.
     submission = cloudpickle.loads(snapshots[0])
     assert submission.context.output.answer == "PREPARED INITIAL"
     assert submission.context.output.handoff.summary == "original summary"
-    assert submission.context.inputs == {"payload": ["prepared initial"]}
+    assert submission.context.inputs.payload == ["prepared initial"]
+    assert type(submission.context.inputs).model_fields.keys() == {"payload"}
     assert submission.context.trace.turns == (_turn("prepared initial"),)
     assert submission.runtime_defaults == {"model": "worker-model", "timeout": 2.0}

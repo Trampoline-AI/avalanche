@@ -14,10 +14,11 @@ from avalanche.agent.native.predict_rlm import (
     IterationRecorded,
     PredictRLMPredictCall,
     PredictRLMTokenUsage,
+    PredictRLMTraceHeader,
     PredictRLMTurn,
     RunSucceeded,
 )
-from avalanche.agent.trace import AgentTrace, PredictRLMNativeTrace, ToolCall, Turn
+from avalanche.agent.trace import AgentTrace, ToolCall, Turn
 
 from . import InspectionTurn, PendingStep, TraceGroup, TraceItem, TraceSection, TurnView
 from .generic import duration_seconds, message_items, reasoning_items, tool_group
@@ -55,9 +56,9 @@ def _usage_label(usage: PredictRLMTokenUsage) -> str:
     )
 
 
-def _native(record: AgentTrace) -> PredictRLMNativeTrace:
-    native = record.native
-    if not isinstance(native, PredictRLMNativeTrace):
+def _native(record: AgentTrace) -> PredictRLMTraceHeader:
+    native = record.header.native
+    if not isinstance(native, PredictRLMTraceHeader):
         raise TypeError(f"not a PredictRLM trace: {native.format}")
     return native
 

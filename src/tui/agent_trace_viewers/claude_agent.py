@@ -8,8 +8,12 @@ from dataclasses import dataclass, replace
 from pydantic import JsonValue
 
 from avalanche.agent.live import AgentLiveEvent
-from avalanche.agent.native.claude_agent import ClaudeAgentTurn, Finished
-from avalanche.agent.trace import AgentTrace, ClaudeAgentNativeTrace
+from avalanche.agent.native.claude_agent import (
+    ClaudeAgentTraceHeader,
+    ClaudeAgentTurn,
+    Finished,
+)
+from avalanche.agent.trace import AgentTrace
 
 from . import InspectionTurn, PendingStep, TraceSection, TurnView
 from .generic import COMMON_LABELS, GENERIC, duration_seconds, reasoning_items, usage_label
@@ -25,9 +29,9 @@ _LABELS = {
 }
 
 
-def _native(record: AgentTrace) -> ClaudeAgentNativeTrace:
-    native = record.native
-    if not isinstance(native, ClaudeAgentNativeTrace):
+def _native(record: AgentTrace) -> ClaudeAgentTraceHeader:
+    native = record.header.native
+    if not isinstance(native, ClaudeAgentTraceHeader):
         raise TypeError(f"not a Claude Agent SDK trace: {native.format}")
     return native
 

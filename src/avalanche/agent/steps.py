@@ -206,7 +206,7 @@ class Agent:
 
         capture = _STEP_EVALUATION_CAPTURE.get()
         if capture is not None:
-            capture.submit(inputs, result.outputs, result.trace)
+            capture.submit(validated_inputs, result.outputs, result.trace)
         return result
 
     def _resolve_signature(self) -> SignatureSpec:

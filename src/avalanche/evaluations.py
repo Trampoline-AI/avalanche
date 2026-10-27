@@ -39,9 +39,13 @@ class EvaluationError(RuntimeError):
 
 @dataclass(frozen=True)
 class EvalContext(Generic[InputT, OutputT]):
-    """The winning agent call: its inputs, validated outputs, and full trace with turns."""
+    """The winning agent call: its validated inputs and outputs, and full trace with turns.
 
-    inputs: Mapping[str, InputT]
+    ``inputs`` and ``output`` are instances of the signature's input and output
+    models, so selectors read fields as attributes (``ctx.inputs.document``).
+    """
+
+    inputs: InputT
     output: OutputT
     trace: AgentTrace
 

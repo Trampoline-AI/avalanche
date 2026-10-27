@@ -2,15 +2,13 @@ import { useCallback, useEffect, useId, useMemo, useRef, useState } from "react"
 import { X } from "lucide-react";
 
 import { AgentTraceExplorer, type AgentTraceTurn } from "./AgentTraceExplorer";
-import { parseAgentLiveEvent, parseAgentTraceTerminal } from "./agentTrace/common";
+import { parseAgentLiveEvent } from "./agentTrace/common";
 import {
   type AgentTraceStep,
   type AgentTraceStepSummary,
-  type TraceBodySummary,
-  type TraceLmUsage,
   summarizeAgentTraceStep,
 } from "./agentTrace/types";
-import { headerViewer, viewerFor } from "./agentTrace/viewers";
+import { viewerFor } from "./agentTrace/viewers";
 
 import type { OperatorApi } from "./api";
 import { ClassifierInspector } from "./ClassifierInspector";
@@ -246,37 +244,6 @@ function AgentAndStepInspector({
       ? Object.hasOwn(run.topology.agentFieldSchemasJson, nodeId ?? "")
       : Boolean(node?.trace)
     : isWorkflowAgentNode;
-  // Some runtimes keep header details, such as PredictRLM's sub-model, iteration
-  // limit and per-model usage, in their small final trace body; read it once.
-  const traceFormat = run && isAgentNode ? node?.trace?.header?.traceFormat : undefined;
-  const traceViewer = traceFormat ? headerViewer(traceFormat) : undefined;
-  const summarizeTraceBody = traceViewer?.summary;
-  const traceBodyToken = summarizeTraceBody ? node?.trace?.bodyToken : undefined;
-  const [traceBodySummary, setTraceBodySummary] = useState<
-    | { bodyToken: string; summary: TraceBodySummary | undefined }
-    | { bodyToken: string; error: string }
-  >();
-  useEffect(() => {
-    if (!traceBodyToken || !summarizeTraceBody) return;
-    const controller = new AbortController();
-    void api
-      .readJsonDetail(traceBodyToken, controller.signal)
-      .then((body) => {
-        if (controller.signal.aborted) return;
-        setTraceBodySummary({
-          bodyToken: traceBodyToken,
-          summary: summarizeTraceBody(parseAgentTraceTerminal(body)),
-        });
-      })
-      .catch((error: unknown) => {
-        if (controller.signal.aborted) return;
-        setTraceBodySummary({
-          bodyToken: traceBodyToken,
-          error: error instanceof Error ? error.message : "Trace details are unavailable.",
-        });
-      });
-    return () => controller.abort();
-  }, [api, traceBodyToken, summarizeTraceBody]);
   const evaluationRecord =
     run && isAgentNode ? evaluationState.records[nodeId ?? ""] : undefined;
   const rawEvaluationDeclaration = run?.topology?.evaluationMetadataJson[nodeId ?? ""];
@@ -681,23 +648,19 @@ function AgentAndStepInspector({
         ? formatSeconds(node.endedAt - node.startedAt)
         : undefined
     : undefined;
-  const traceHeader = isAgentNode ? node?.trace?.header : undefined;
-  const traceBodyResult =
-    traceBodySummary && traceBodySummary.bodyToken === traceBodyToken
-      ? traceBodySummary
-      : undefined;
-  const traceBody =
-    traceBodyResult && "summary" in traceBodyResult ? traceBodyResult.summary : undefined;
-  const traceBodyError =
-    traceBodyResult && "error" in traceBodyResult ? traceBodyResult.error : undefined;
-  const traceUsage: TraceLmUsage | undefined = traceBody?.usage;
+  const traceHeader = run && isAgentNode ? node?.trace?.header : undefined;
+  const traceViewer = traceHeader ? viewerFor(traceHeader.traceFormat) : undefined;
+  // PredictRLM's header part holds its sub-model, iteration limit and per-model usage.
+  const predictRlmHeader =
+    traceHeader?.native.format === "predict_rlm.run/v1" ? traceHeader.native : undefined;
+  const traceUsage = predictRlmHeader?.usage;
   const declaredModels = isUnknownRecord(workflowDeclaration?.model)
     ? workflowDeclaration.model
     : undefined;
   const declaredMainModel = declaredModelName(declaredModels?.main);
   const declaredSubModel = declaredModelName(declaredModels?.sub);
   const mainModel = traceHeader?.model;
-  const subModel = traceBody?.subModel;
+  const subModel = predictRlmHeader?.sub_model ?? undefined;
   const headerDuration = traceHeader
     ? formatTraceDuration(traceHeader.durationMs)
     : nodeDuration;
@@ -781,31 +744,24 @@ function AgentAndStepInspector({
                 <span className="mr-1.5 text-muted uppercase">Main</span>
                 {mainModel ?? "—"}
                 {traceUsage
-                  ? ` · ${TOKEN_NUMBER_FORMAT.format(traceUsage.main.inputTokens)} in / ${TOKEN_NUMBER_FORMAT.format(traceUsage.main.outputTokens)} out · $${traceUsage.main.cost.toFixed(4)}`
-                  : !traceViewer?.usageInBody &&
-                    traceHeader.usage &&
+                  ? ` · ${TOKEN_NUMBER_FORMAT.format(traceUsage.main.input_tokens)} in / ${TOKEN_NUMBER_FORMAT.format(traceUsage.main.output_tokens)} out · $${traceUsage.main.cost.toFixed(4)}`
+                  : traceHeader.usage &&
                     ` · ${TOKEN_NUMBER_FORMAT.format(Number(traceHeader.usage.inputTokens))} in / ${TOKEN_NUMBER_FORMAT.format(Number(traceHeader.usage.outputTokens))} out${traceHeader.usage.costUsd === undefined ? "" : ` · $${traceHeader.usage.costUsd.toFixed(4)}`}`}
               </p>
-              {traceViewer?.hasSubModel && (
+              {traceUsage && (
                 <p className="m-0 whitespace-normal text-secondary [overflow-wrap:anywhere]">
                   <span className="mr-1.5 text-muted uppercase">Sub</span>
                   {subModel ?? "—"}
-                  {traceUsage &&
-                    ` · ${TOKEN_NUMBER_FORMAT.format(traceUsage.sub.inputTokens)} in / ${TOKEN_NUMBER_FORMAT.format(traceUsage.sub.outputTokens)} out · $${traceUsage.sub.cost.toFixed(4)}`}
+                  {` · ${TOKEN_NUMBER_FORMAT.format(traceUsage.sub.input_tokens)} in / ${TOKEN_NUMBER_FORMAT.format(traceUsage.sub.output_tokens)} out · $${traceUsage.sub.cost.toFixed(4)}`}
                 </p>
               )}
               <p className="m-0 text-muted">
                 <span className="text-secondary">
                   {traceHeader.turnCount}
-                  {traceBody && ` of ${traceBody.maxIterations}`}
+                  {predictRlmHeader && ` of ${predictRlmHeader.max_iterations}`}
                 </span>{" "}
                 {traceViewer?.turnUnit ?? "turns"}
               </p>
-              {traceBodyError && (
-                <p role="alert" className="m-0 text-danger [overflow-wrap:anywhere]">
-                  {traceBodyError}
-                </p>
-              )}
             </div>
           )}
           {node?.error && (

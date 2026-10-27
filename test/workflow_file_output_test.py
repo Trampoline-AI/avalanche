@@ -19,6 +19,10 @@ def test_agent_file_mount_and_reserved_outputs(tmp_path):
     from dspy.utils import DummyLM
     from predict_rlm.backends import DirectPythonBackend
 
+    from avalanche.agent import capture_agent_evidence
+    from avalanche.agent.live import AgentLiveEvent
+    from avalanche.agent.trace import file_input_evidence
+
     class Convert(ava.Signature):
         document: ava.File = ava.InputField()
         directory: ava.Workspace = ava.InputField()
@@ -77,9 +81,23 @@ def test_agent_file_mount_and_reserved_outputs(tmp_path):
     def flow():
         return consume(convert(file))
 
-    with ava.file_reference_context(workspace, attempt="attempt-1"):
+    observed = []
+    with (
+        capture_agent_evidence(observed.append, errors="raise"),
+        ava.file_reference_context(workspace, attempt="attempt-1"),
+    ):
         result = flow().run(executor=ava.LocalExecutor()).result(timeout=20)
     assert isinstance(result, ava.File)
+    # The live result event describes the output as the reference the step returned.
+    succeeded = [
+        event.native
+        for event in observed
+        if isinstance(event, AgentLiveEvent) and event.native.kind == "run.succeeded"
+    ]
+    assert succeeded[-1].outputs["result"] == file_input_evidence(result).model_dump(
+        mode="json"
+    )
+    assert str(tmp_path) not in succeeded[-1].model_dump_json()
     assert result.path.name == "converted.pdf"
     assert result.path.parent.name == "result"
     assert result.path.is_relative_to(tmp_path / ".outputs" / "convert" / "attempt-1")
