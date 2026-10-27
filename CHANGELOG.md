@@ -193,9 +193,9 @@
   longer carry `model_call_count` (its field number is reserved), and the
   `MODEL_STARTED`, `MODEL_FINISHED` and `CODE_GENERATED` agent event kinds are
   reserved.
-- Live agent events: PredictRLM's `run.succeeded` event describes `ava.File`
-  outputs as the file references the step returns (workspace, path, name, size and
-  checksum), the same form as its inputs, instead of PredictRLM's own
+- Agent evidence: the final event's `outputs` describe a PredictRLM step's
+  `ava.File` outputs as the file references the step returns (workspace, path, name,
+  size and checksum), the same form as its inputs, instead of PredictRLM's own
   `predict_rlm_file` value with the host path. The web UI no longer has a special
   display for `predict_rlm_file` values. BREAKING-PROTOCOL: part of Delta protocol
   2.0 (agent live event bodies change).
