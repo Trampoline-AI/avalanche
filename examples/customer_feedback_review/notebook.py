@@ -418,15 +418,18 @@ async def _(
     _rlm = ava.Agent(
         signature=ExtractThemes,
         step_name="extract_themes",
-        runtime_kwargs={"lm": MODEL, "sub_lm": SUB_MODEL},
-        skills=[ava.agent.skills.spreadsheet, evidence_coding_skill],
+        runtime=ava.runtimes.PredictRLM(
+            lm=MODEL,
+            sub_lm=SUB_MODEL,
+            skills=[ava.agent.skills.spreadsheet, evidence_coding_skill],
+        ),
     )
     _result = await _rlm(workbook=_workbook)
 
     mo.vstack(
         (
             mo.md("### Running that agent"),
-            mo.inspect(_result.report.model_dump()),
+            mo.inspect(_result.outputs.report.model_dump()),
         )
     )
     return
