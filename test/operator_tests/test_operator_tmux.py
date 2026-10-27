@@ -542,8 +542,8 @@ async def test_operator_tui_extensions_live_pilot(tmp_path):
             assert "[2, 3, 5]" in screen_text and "10" in screen_text
             assert "total = sum(numbers)" in screen_text
             assert "SUBMIT(answer=total)" in screen_text
-            assert record.native.usage.main.input_tokens == 0
-            assert record.native.usage.main.output_tokens == 0
+            assert record.header.native.usage.main.input_tokens == 0
+            assert record.header.native.usage.main.output_tokens == 0
             assert "0 in / 0 out" in screen_text
             assert "Main:" in screen_text and "Sub:" in screen_text
             app.save_screenshot(str(evidence / "scripted-trace.svg"))

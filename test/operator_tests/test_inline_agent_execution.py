@@ -317,7 +317,9 @@ def test_spawned_inline_agent_feeds_typed_downstream_result_and_retains_evidence
         trace = json.loads(operator.get_run(run.run_id).nodes[agent_id].agent_trace_json)
         record = trace["terminal"]["record"]
         assert record["header"]["status"] == "succeeded"
-        assert record["native"]["max_iterations"] == calls[0]["config"]["max_iterations"]
+        assert (
+            record["header"]["native"]["max_iterations"] == calls[0]["config"]["max_iterations"]
+        )
         assert dict(historical.agent_instruction_lines)[agent_id] == (
             "Route a customer ticket."
             if flow_name == "single"

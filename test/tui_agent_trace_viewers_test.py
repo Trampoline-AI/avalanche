@@ -7,8 +7,7 @@ from typing import get_args
 
 import pytest
 
-from avalanche.agent.native import NativeEvent, TurnNative
-from avalanche.agent.trace import NativeTrace
+from avalanche.agent.native import NativeEvent, TraceHeaderNative, TurnNative
 from tui.agent_trace_viewers import VIEWERS
 
 
@@ -25,7 +24,9 @@ def _formats(union: object) -> set[str]:
 
 
 def test_every_trace_format_has_a_viewer():
-    assert set(VIEWERS) == _formats(NativeEvent) | _formats(NativeTrace) | _formats(TurnNative)
+    assert set(VIEWERS) == _formats(NativeEvent) | _formats(TraceHeaderNative) | _formats(
+        TurnNative
+    )
 
 
 def test_the_predict_rlm_viewer_labels_every_native_kind():

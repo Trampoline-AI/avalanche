@@ -155,9 +155,12 @@ one final trace. A live event carries Avalanche's sequence number, the common
 event when there is one (a finished turn, a model or tool call, generated code),
 and the runtime's own details as a typed payload for its trace format. The final
 trace is the common `AgentTrace`: a header every runtime fills the same
-way, plus a native section; its turns already travelled as live events. These
-models live in `src/avalanche/agent/` without runtime imports, so the operator,
-client, TUI, and web UI validate every format without the runtime installed.
+way; its turns already travelled as live events. Every shared object, the header
+and each turn and live event, carries a typed native part for its runtime's trace
+format, so the run summary sent to clients holds runtime details such as
+PredictRLM's sub-model and per-model usage without the trace body. These models
+live in `src/avalanche/agent/` without runtime imports, so the operator, client,
+TUI, and web UI validate every format without the runtime installed.
 
 ### Executors
 

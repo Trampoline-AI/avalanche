@@ -12,13 +12,13 @@ from avalanche.agent.native.claude_agent import ClaudeAgentTurn
 from avalanche.agent.native.predict_rlm import (
     PredictRLMPredictCall,
     PredictRLMTokenUsage,
+    PredictRLMTraceHeader,
     PredictRLMTurn,
     PredictRLMUsage,
 )
 from avalanche.agent.trace import (
     AgentTrace,
     AgentTraceHeader,
-    PredictRLMNativeTrace,
     TokenUsage,
     ToolCall,
     Turn,
@@ -91,6 +91,9 @@ def _header(**changes: object) -> AgentTraceHeader:
         "tool_call_count": 4,
         "external_run_id": "run-1",
         "session_id": None,
+        "native": PredictRLMTraceHeader(
+            sub_model=None, max_iterations=5, usage=_NO_USAGE, telemetry_ref=None
+        ),
     }
     fields.update(changes)
     return AgentTraceHeader.model_validate(fields)
@@ -100,9 +103,6 @@ def _record(**changes: object) -> AgentTrace:
     fields: dict[str, object] = {
         "header": _header(),
         "turns": (_turn(1), _turn(2)),
-        "native": PredictRLMNativeTrace(
-            sub_model=None, max_iterations=5, usage=_NO_USAGE, telemetry_ref=None
-        ),
         "turns_streamed": False,
     }
     fields.update(changes)
@@ -148,7 +148,8 @@ def test_streamed_record_carries_counts_but_no_turns():
 @pytest.mark.parametrize(
     "change",
     [
-        lambda body: body["native"].update(format="unknown/v1"),
+        lambda body: body["header"]["native"].update(format="unknown/v1"),
+        lambda body: body.update(native=body["header"].pop("native")),
         lambda body: body["header"].update(runtime_kind="unknown"),
         lambda body: body.update(schema_version=1),
         lambda body: body["turns"][0]["native"].update(format="unknown/v1"),
@@ -158,6 +159,7 @@ def test_streamed_record_carries_counts_but_no_turns():
     ],
     ids=[
         "unknown-format",
+        "native-outside-header",
         "unknown-runtime",
         "old-schema",
         "unknown-turn-format",

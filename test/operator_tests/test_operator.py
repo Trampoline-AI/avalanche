@@ -249,12 +249,22 @@ def test_agent_trace_header_and_events_carry_common_fields_over_protobuf(
         # Two tool calls and one predict call.
         assert header.tool_call_count == 3
         assert header.external_run_id == "sdk-run"
-        assert (
-            trace_header_from_v2(
-                pb.TraceHeaderV2.FromString(trace_header_to_v2(header).SerializeToString())
-            )
-            == header
+        # PredictRLM's own header part travels with the summary.
+        assert header.native.max_iterations == 10
+        wire_header = pb.TraceHeaderV2.FromString(
+            trace_header_to_v2(header).SerializeToString()
         )
+        assert trace_header_from_v2(wire_header) == header
+        # A runtime part of another format, or none at all, is rejected on arrival.
+        mismatched = pb.TraceHeaderV2()
+        mismatched.CopyFrom(wire_header)
+        mismatched.trace_format = "claude_agent.messages/v1"
+        missing = pb.TraceHeaderV2()
+        missing.CopyFrom(wire_header)
+        missing.native_json = ""
+        for invalid in (mismatched, missing):
+            with pytest.raises(ValueError):
+                trace_header_from_v2(invalid)
 
         page = operator.list_agent_events(page_token=snapshot.nodes[0].event_page_token)
         setup, turn = page.events

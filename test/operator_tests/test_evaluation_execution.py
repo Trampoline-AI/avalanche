@@ -20,10 +20,15 @@ from types import SimpleNamespace
 
 import cloudpickle
 import pytest
+from pydantic import BaseModel
 
 from avalanche import EvalContext, Evaluations, Metric
-from avalanche.agent.native.predict_rlm import PredictRLMTokenUsage, PredictRLMUsage
-from avalanche.agent.trace import AgentTrace, AgentTraceHeader, PredictRLMNativeTrace
+from avalanche.agent.native.predict_rlm import (
+    PredictRLMTokenUsage,
+    PredictRLMTraceHeader,
+    PredictRLMUsage,
+)
+from avalanche.agent.trace import AgentTrace, AgentTraceHeader
 from avalanche.evaluation_capture import EvaluationSubmission
 from runtime.operator import Operator
 from runtime.operator.evaluation_models import EvaluationRecord
@@ -34,6 +39,11 @@ _NO_USAGE = PredictRLMUsage(
     main=PredictRLMTokenUsage(input_tokens=0, output_tokens=0, cost=0.0, cache_hits=0),
     sub=PredictRLMTokenUsage(input_tokens=0, output_tokens=0, cost=0.0, cache_hits=0),
 )
+
+
+class NoInputs(BaseModel):
+    pass
+
 
 TRACE = AgentTrace(
     header=AgentTraceHeader(
@@ -48,11 +58,11 @@ TRACE = AgentTrace(
         tool_call_count=0,
         external_run_id="run",
         session_id=None,
+        native=PredictRLMTraceHeader(
+            sub_model=None, max_iterations=1, usage=_NO_USAGE, telemetry_ref=None
+        ),
     ),
     turns=(),
-    native=PredictRLMNativeTrace(
-        sub_model=None, max_iterations=1, usage=_NO_USAGE, telemetry_ref=None
-    ),
     turns_streamed=False,
 )
 
@@ -136,6 +146,9 @@ class Handoff(BaseModel):
     def selected_summary(self):
         return self.summary
 
+class Request(BaseModel):
+    text: str
+
 class Report(BaseModel):
     summary: str
     payload: dict[str, object]
@@ -146,7 +159,7 @@ def report_state(ctx):
     return {
         "summary": ctx.output.handoff.selected_summary(),
         "answer": ctx.output.answer,
-        "inputs": dict(ctx.inputs),
+        "inputs": ctx.inputs.model_dump(mode="json"),
         "payload": ctx.output.handoff.payload,
         "producer_pid": ctx.output.handoff.producer_pid,
         "selector_pid": os.getpid(),
@@ -474,7 +487,7 @@ def test_snapshot_owns_source_under_python_prefix_and_restores_registry(
                 model="evaluation-workflow-model",
             ),
             context=EvalContext(
-                inputs={"text": "original"},
+                inputs=module.Request(text="original"),
                 output=SimpleNamespace(
                     handoff=module.Handoff(
                         summary="owned output",
@@ -559,7 +572,7 @@ def test_snapshot_keeps_installed_library_selectors_by_reference(
                     )
                 }
             ),
-            context=EvalContext(inputs={}, output="completed report", trace=TRACE),
+            context=EvalContext(inputs=NoInputs(), output="completed report", trace=TRACE),
             runtime_defaults={},
         )
     )
@@ -648,7 +661,7 @@ def test_evaluation_result_survives_process_exit_between_poll_and_liveness():
                     )
                 }
             ),
-            context=EvalContext(inputs={}, output="completed report", trace=TRACE),
+            context=EvalContext(inputs=NoInputs(), output="completed report", trace=TRACE),
             runtime_defaults={},
         )
     )
@@ -952,7 +965,7 @@ class TestPredictor:
 predict_rlm.PredictRLM = TestPredictor
 
 evaluations = ava.Evaluations(metrics={"quality": ava.Metric(
-    state=lambda ctx: {"inputs": dict(ctx.inputs), "answer": ctx.output.answer},
+    state=lambda ctx: {"inputs": {"text": ctx.inputs.text}, "answer": ctx.output.answer},
     question={"type": "noul", "instructions": "Is the draft useful?"},
 )})
 
