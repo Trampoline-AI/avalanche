@@ -125,6 +125,21 @@ def test_an_indented_rule_inside_a_yaml_value_does_not_end_the_frontmatter(tmp_p
     assert Skill.from_dir(folder).description == description
 
 
+def test_from_dir_rejects_a_symlink_to_a_file_outside_the_folder(tmp_path):
+    secret = tmp_path / "credentials"
+    secret.write_text("secret")
+    folder = _write_skill(
+        tmp_path, "notes", "---\nname: notes\ndescription: d\n---\n", {"inside.md": "x"}
+    )
+    (folder / "references").mkdir()
+    (folder / "references" / "alias.md").symlink_to(folder / "inside.md")
+    assert set(Skill.from_dir(folder).files) == {"inside.md", "references/alias.md"}
+
+    (folder / "references" / "notes.md").symlink_to(secret)
+    with pytest.raises(SkillFormatError, match=r"\['references/notes.md'\]"):
+        Skill.from_dir(folder)
+
+
 def test_from_dir_needs_a_skill_file(tmp_path):
     with pytest.raises(SkillFormatError, match="no SKILL.md"):
         Skill.from_dir(tmp_path)

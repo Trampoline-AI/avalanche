@@ -98,7 +98,8 @@ class Skill(BaseModel):
     def from_dir(cls, path: Path | str) -> Skill:
         """Load the skill in a folder holding a ``SKILL.md`` file.
 
-        Every other file in the folder becomes a resource file. The frontmatter
+        Every other file in the folder becomes a resource file; a symlink to a
+        file outside the folder is rejected. The frontmatter
         must hold only the specification's fields, and ``name`` must match the
         folder's name.
         """
@@ -124,6 +125,17 @@ class Skill(BaseModel):
             for file in sorted(directory.rglob("*"))
             if file.is_file() and file != skill_file
         }
+        # A symlink may point anywhere; a resource must really live in the folder.
+        outside = sorted(
+            relative
+            for relative, file in files.items()
+            if not file.resolve().is_relative_to(directory)
+        )
+        if outside:
+            raise SkillFormatError(
+                f"{skill_file}: resource files {outside} are symlinks to files outside "
+                f"the skill folder {directory}"
+            )
         try:
             return cls.model_validate(
                 {
