@@ -100,7 +100,7 @@ The `Summarize` call above. Claude looked up a term, then answered through the
           "caller": "model",
           "name": "mcp__avalanche__lookup_term",
           "arguments": {"term": "DAG"},
-          "result": "A data-flow graph.",
+          "result": [{"type": "text", "text": "\"A data-flow graph.\""}],
           "error": null,
           "duration_ms": null
         }
@@ -350,7 +350,7 @@ One turn per Claude response.
 | --- | --- |
 | `message` | What Claude wrote. |
 | `reasoning` | Claude's thinking, when shown. |
-| `tool_calls` | Each tool Claude asked for, with `caller: "model"` and `duration_ms: null`. Step tools are named `mcp__avalanche__<name>`. Claude's answer is a `StructuredOutput` call whose `arguments` are the outputs. |
+| `tool_calls` | Each tool Claude asked for, with `caller: "model"` and `duration_ms: null`. Step tools are named `mcp__avalanche__<name>`, and their `result` is the MCP content Claude got: text blocks holding the tool's return value as JSON. Claude's answer is a `StructuredOutput` call whose `arguments` are the outputs. |
 | `duration_ms` | `null` |
 | `usage` | The response's usage, without cost. |
 | `native` | A `ClaudeAgentTurn`. |

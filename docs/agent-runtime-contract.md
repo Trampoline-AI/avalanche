@@ -147,7 +147,7 @@ As JSON, for the Claude call above:
           "caller": "model",
           "name": "mcp__avalanche__lookup_term",
           "arguments": {"term": "DAG"},
-          "result": "A data-flow graph.",
+          "result": [{"type": "text", "text": "\"A data-flow graph.\""}],
           "error": null,
           "duration_ms": null
         }
@@ -249,7 +249,8 @@ got an API error.
 
 `caller` is `"model"` when the model asked for the call, and `"code"` when code
 the agent ran made it. `name` is the tool's name as the engine knows it, so
-ClaudeAgent records `lookup_term` as `mcp__avalanche__lookup_term`.
+ClaudeAgent records `lookup_term` as `mcp__avalanche__lookup_term`. `result` is
+what the engine gave the model; each runtime page says how it records it.
 
 ```python
 class ToolCall:
@@ -268,7 +269,7 @@ class ToolCall:
   "caller": "model",
   "name": "mcp__avalanche__lookup_term",
   "arguments": {"term": "DAG"},
-  "result": "A data-flow graph.",
+  "result": [{"type": "text", "text": "\"A data-flow graph.\""}],
   "error": null,
   "duration_ms": null
 }
@@ -416,7 +417,7 @@ A finished turn, as sent:
           "caller": "model",
           "name": "mcp__avalanche__lookup_term",
           "arguments": {"term": "DAG"},
-          "result": "A data-flow graph.",
+          "result": [{"type": "text", "text": "\"A data-flow graph.\""}],
           "error": null,
           "duration_ms": null
         }
