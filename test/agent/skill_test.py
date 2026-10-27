@@ -140,6 +140,15 @@ def test_from_dir_rejects_a_symlink_to_a_file_outside_the_folder(tmp_path):
         Skill.from_dir(folder)
 
 
+def test_the_name_matches_a_symlinked_folder_as_given(tmp_path):
+    _write_skill(tmp_path / "vendor", "pdf-v2", "---\nname: pdf\ndescription: d\n---\n")
+    (tmp_path / "pdf").symlink_to(tmp_path / "vendor" / "pdf-v2")
+
+    assert Skill.from_dir(tmp_path / "pdf").name == "pdf"
+    with pytest.raises(SkillFormatError, match="'pdf-v2'"):
+        Skill.from_dir(tmp_path / "vendor" / "pdf-v2")
+
+
 def test_from_dir_needs_a_skill_file(tmp_path):
     with pytest.raises(SkillFormatError, match="no SKILL.md"):
         Skill.from_dir(tmp_path)
