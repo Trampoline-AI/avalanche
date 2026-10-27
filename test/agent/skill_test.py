@@ -162,6 +162,4 @@ def test_resource_files_must_exist_and_not_be_another_files_folder(tmp_path):
     with pytest.raises(ValidationError, match="not a file"):
         Skill(name="x", description="d", instructions="", files={"a.md": tmp_path / "gone"})
     with pytest.raises(ValidationError, match="also the folder"):
-        Skill(
-            name="x", description="d", instructions="", files={"a": source, "a/b.md": source}
-        )
+        Skill(name="x", description="d", instructions="", files={"a": source, "a/b.md": source})

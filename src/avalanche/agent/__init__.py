@@ -102,7 +102,8 @@ def __getattr__(name: str):
 
         warnings.warn(
             "ava.agent.File is deprecated; use ava.File. Removed next minor release.",
-            DeprecationWarning, stacklevel=2,
+            DeprecationWarning,
+            stacklevel=2,
         )
         return File
     elif name == "DirectPythonBackend":
