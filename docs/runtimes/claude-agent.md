@@ -56,7 +56,8 @@ The Claude CLI's own bundled skills are hidden.
 
 ## Trace example
 
-The `Summarize` call above. Claude looked up a term, then answered.
+The `Summarize` call above. Claude looked up a term, then answered through the
+`StructuredOutput` tool.
 
 ```json
 {
@@ -76,7 +77,7 @@ The `Summarize` call above. Claude looked up a term, then answered.
       "cost_usd": 0.0042
     },
     "turn_count": 2,
-    "tool_call_count": 1,
+    "tool_call_count": 2,
     "external_run_id": "9f2c-session",
     "session_id": "9f2c-session",
     "native": {
@@ -97,7 +98,7 @@ The `Summarize` call above. Claude looked up a term, then answered.
         {
           "call_id": "toolu_01",
           "caller": "model",
-          "name": "lookup_term",
+          "name": "mcp__avalanche__lookup_term",
           "arguments": {"term": "DAG"},
           "result": "A data-flow graph.",
           "error": null,
@@ -122,9 +123,19 @@ The `Summarize` call above. Claude looked up a term, then answered.
     },
     {
       "index": 2,
-      "message": "{\"summary\": \"Avalanche runs DAGs.\", \"word_count\": 3}",
+      "message": null,
       "reasoning": null,
-      "tool_calls": [],
+      "tool_calls": [
+        {
+          "call_id": "toolu_02",
+          "caller": "model",
+          "name": "StructuredOutput",
+          "arguments": {"summary": "Avalanche runs DAGs.", "word_count": 3},
+          "result": "Structured output provided successfully",
+          "error": null,
+          "duration_ms": null
+        }
+      ],
       "duration_ms": null,
       "usage": {
         "input_tokens": 600,
@@ -137,7 +148,7 @@ The `Summarize` call above. Claude looked up a term, then answered.
         "format": "claude_agent.messages/v1",
         "message_id": "msg_02",
         "model": "claude-haiku-5-5",
-        "stop_reason": "end_turn",
+        "stop_reason": "tool_use",
         "api_error": null
       }
     }
@@ -157,7 +168,8 @@ class ClaudeAgentTraceHeader:
     num_turns: int                 # as the CLI counts them, tool-result round trips included
     duration_api_ms: int | None    # time spent waiting on the API
     permission_denials: int        # tool uses Claude was not allowed
-    errors: tuple[str, ...]        # why the session failed: the first 8, each cut to 1024 characters
+    errors: tuple[str, ...]        # why the session failed: the first 8 listed errors, each cut to
+                                   # 1024 characters, else the result text cut to 4096
 ```
 
 ## Native turn
@@ -327,7 +339,7 @@ tool call that started them.
 | `model` | The model that answered, else the `model` setting. |
 | `usage` | The session's usage, with its total cost. |
 | `turn_count` | Number of Claude responses. |
-| `tool_call_count` | Number of tool calls. |
+| `tool_call_count` | Number of tool calls, Claude's `StructuredOutput` answer included. |
 | `external_run_id`, `session_id` | The Claude session ID. |
 
 ### Turns
@@ -338,7 +350,7 @@ One turn per Claude response.
 | --- | --- |
 | `message` | What Claude wrote. |
 | `reasoning` | Claude's thinking, when shown. |
-| `tool_calls` | Each tool Claude asked for, with `caller: "model"` and `duration_ms: null`. |
+| `tool_calls` | Each tool Claude asked for, with `caller: "model"` and `duration_ms: null`. Step tools are named `mcp__avalanche__<name>`. Claude's answer is a `StructuredOutput` call whose `arguments` are the outputs. |
 | `duration_ms` | `null` |
 | `usage` | The response's usage, without cost. |
 | `native` | A `ClaudeAgentTurn`. |

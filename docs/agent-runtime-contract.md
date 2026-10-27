@@ -124,7 +124,7 @@ As JSON, for the Claude call above:
       "cost_usd": 0.0042
     },
     "turn_count": 2,
-    "tool_call_count": 1,
+    "tool_call_count": 2,
     "external_run_id": "9f2c-session",
     "session_id": "9f2c-session",
     "native": {
@@ -145,7 +145,7 @@ As JSON, for the Claude call above:
         {
           "call_id": "toolu_01",
           "caller": "model",
-          "name": "lookup_term",
+          "name": "mcp__avalanche__lookup_term",
           "arguments": {"term": "DAG"},
           "result": "A data-flow graph.",
           "error": null,
@@ -170,9 +170,19 @@ As JSON, for the Claude call above:
     },
     {
       "index": 2,
-      "message": "{\"summary\": \"Avalanche runs DAGs.\", \"word_count\": 3}",
+      "message": null,
       "reasoning": null,
-      "tool_calls": [],
+      "tool_calls": [
+        {
+          "call_id": "toolu_02",
+          "caller": "model",
+          "name": "StructuredOutput",
+          "arguments": {"summary": "Avalanche runs DAGs.", "word_count": 3},
+          "result": "Structured output provided successfully",
+          "error": null,
+          "duration_ms": null
+        }
+      ],
       "duration_ms": null,
       "usage": {
         "input_tokens": 600,
@@ -185,7 +195,7 @@ As JSON, for the Claude call above:
         "format": "claude_agent.messages/v1",
         "message_id": "msg_02",
         "model": "claude-haiku-5-5",
-        "stop_reason": "end_turn",
+        "stop_reason": "tool_use",
         "api_error": null
       }
     }
@@ -238,7 +248,8 @@ got an API error.
 ### `ToolCall`
 
 `caller` is `"model"` when the model asked for the call, and `"code"` when code
-the agent ran made it.
+the agent ran made it. `name` is the tool's name as the engine knows it, so
+ClaudeAgent records `lookup_term` as `mcp__avalanche__lookup_term`.
 
 ```python
 class ToolCall:
@@ -255,7 +266,7 @@ class ToolCall:
 {
   "call_id": "toolu_01",
   "caller": "model",
-  "name": "lookup_term",
+  "name": "mcp__avalanche__lookup_term",
   "arguments": {"term": "DAG"},
   "result": "A data-flow graph.",
   "error": null,
@@ -345,7 +356,7 @@ class AgentLiveEvent:
   "common": {
     "kind": "tool.started",
     "call_id": "toolu_01",
-    "name": "lookup_term"
+    "name": "mcp__avalanche__lookup_term"
   },
   "native": {
     "format": "claude_agent.messages/v1",
@@ -403,7 +414,7 @@ A finished turn, as sent:
         {
           "call_id": "toolu_01",
           "caller": "model",
-          "name": "lookup_term",
+          "name": "mcp__avalanche__lookup_term",
           "arguments": {"term": "DAG"},
           "result": "A data-flow graph.",
           "error": null,

@@ -388,7 +388,7 @@ A run that ended, for a step with a `report: ava.File` output:
       "report": {
         "kind": "file",
         "workspace": "delta-ws:v1:snapshot-id",
-        "path": ".outputs/summarize/1/b81d2f04/report.md",
+        "path": ".outputs/summarize/1/5e0c2a9b7d4f4c1e8a63f0b2d91c7a48/report.md",
         "name": "report.md",
         "content_type": "text/markdown",
         "size_bytes": 412,
