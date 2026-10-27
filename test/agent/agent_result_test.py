@@ -17,8 +17,12 @@ import avalanche as ava
 from avalanche._agent_evidence import capture_agent_evidence
 from avalanche.agent import AgentOutputError, AgentResult
 from avalanche.agent.contract import AgentRequest, AgentRunOutcome, JsonOutputs
-from avalanche.agent.native.predict_rlm import PredictRLMTokenUsage, PredictRLMUsage
-from avalanche.agent.trace import AgentTrace, AgentTraceHeader, PredictRLMNativeTrace
+from avalanche.agent.native.predict_rlm import (
+    PredictRLMTokenUsage,
+    PredictRLMTraceHeader,
+    PredictRLMUsage,
+)
+from avalanche.agent.trace import AgentTrace, AgentTraceHeader
 from avalanche.evaluation_capture import capture_evaluations
 
 predict_rlm_runtime = importlib.import_module("avalanche.runtimes.predict_rlm.runtime")
@@ -149,11 +153,11 @@ def _empty_trace() -> AgentTrace:
             tool_call_count=0,
             external_run_id=None,
             session_id=None,
+            native=PredictRLMTraceHeader(
+                sub_model=None, max_iterations=1, usage=_NO_USAGE, telemetry_ref=None
+            ),
         ),
         turns=(),
-        native=PredictRLMNativeTrace(
-            sub_model=None, max_iterations=1, usage=_NO_USAGE, telemetry_ref=None
-        ),
         turns_streamed=False,
     )
 

@@ -1,15 +1,10 @@
-// What the trace explorer and inspector header show, whatever the runtime.
+// What the trace explorer shows, whatever the runtime.
 
 export interface TraceTokenUsage {
   inputTokens: number;
   outputTokens: number;
   cost: number;
   cacheHits: number;
-}
-
-export interface TraceLmUsage {
-  main: TraceTokenUsage;
-  sub: TraceTokenUsage;
 }
 
 /** A turn's tokens; the cost is absent when the runtime prices only the whole run. */
@@ -100,11 +95,4 @@ export function summarizeAgentTraceStep(step: AgentTraceStep): AgentTraceStepSum
     hasExecution: step.execution !== undefined,
     hasReasoning: step.reasoning !== undefined,
   };
-}
-
-/** Details a runtime keeps in its final trace body rather than the common header. */
-export interface TraceBodySummary {
-  subModel?: string;
-  maxIterations: number;
-  usage: TraceLmUsage;
 }

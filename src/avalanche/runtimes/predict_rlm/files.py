@@ -8,6 +8,7 @@ from typing import Annotated, Union, get_args, get_origin
 import dspy
 from predict_rlm import File as PredictFile
 from predict_rlm import Workspace as PredictWorkspace
+from pydantic import TypeAdapter
 
 from avalanche.file import File
 from avalanche.references import AgentOutputFolder
@@ -55,10 +56,19 @@ def mount_inputs(value):
 
 
 class AgentFileBridge:
-    def __init__(self, step_name: str):
+    def __init__(self, step_name: str, signature: type[dspy.Signature]):
         self._folder = AgentOutputFolder(step_name)
         self.workspace = self._folder.workspace
         self.output_dir = self._folder.path
+        # PredictRLM's result event holds outputs as plain data; these restore its files.
+        self._event_outputs = {
+            name: TypeAdapter(field.annotation)
+            for name, field in signature.output_fields.items()
+        }
+
+    def event_output(self, name, value):
+        """One output of PredictRLM's result event, its files as ``ava.File`` references."""
+        return self.outputs(self._event_outputs[name].validate_python(value))
 
     def outputs(self, value):
         if isinstance(value, PredictFile):

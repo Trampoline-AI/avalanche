@@ -444,8 +444,9 @@ workflow.
 These selectors reuse the signature's `audit: PackageAudit` field inside the
 validated outputs; do not introduce another input/output/context schema:
 
-- `ctx.inputs` contains the actual keyword arguments passed to the first successful
-  `await agent(...)` call to return, not the enclosing step's arguments.
+- `ctx.inputs` is the validated inputs of the first successful `await agent(...)`
+  call to return, not the enclosing step's arguments: an instance of the signature's
+  input model. Read fields as attributes, such as `ctx.inputs.question`.
 - `ctx.output` is that call's **validated outputs** (`result.outputs`). Select
   named fields, such as `ctx.output.audit`, and use `.model_dump(mode="json")` for
   a whole Pydantic output. The step's `return result.outputs.audit` remains separate.
@@ -456,8 +457,8 @@ validated outputs; do not introduce another input/output/context schema:
   `.model_dump(mode="json")`.
 - A call whose outputs fail validation records its trace but submits no evaluation.
 - Combine relevant inputs and outputs explicitly, for example
-  `{"request": ctx.inputs["question"], "answer": ctx.output.answer}` when the
-  agent signature has those fields. Optional `ava.EvalContext[InputType,
+  `{"request": ctx.inputs.question, "answer": ctx.output.answer}` when the
+  agent signature has those fields. Optional `ava.EvalContext[pydantic.BaseModel,
   pydantic.BaseModel]` annotations aid static checking; no automatic lambda inference
   is promised.
 - Return text, JSON objects, or JSON arrays with finite nested numbers from

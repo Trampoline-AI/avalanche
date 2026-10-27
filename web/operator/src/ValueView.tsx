@@ -100,20 +100,6 @@ function ScalarValue({ value, jsonOnly }: { value: unknown; jsonOnly: boolean })
     return <span className="value-scalar text-acid">{String(value)}</span>;
   }
   if (isUnknownRecord(value)) {
-    if (value.kind === "predict_rlm_file" && typeof value.path === "string") {
-      return (
-        <span
-          className="file-value flex min-w-48 gap-[9px] rounded-[7px] border border-acid p-[9px] text-acid [&_small]:block [&_small]:text-[7px] [&_small]:text-muted [&_small]:uppercase [&_code]:mt-[3px] [&_code]:block [&_code]:whitespace-normal [&_code]:text-[9px] [&_code]:[overflow-wrap:anywhere]"
-          title="Reported host path; contents are not copied"
-        >
-          <span aria-hidden="true">↗</span>
-          <span>
-            <small>PredictRLM file</small>
-            <code>{value.path}</code>
-          </span>
-        </span>
-      );
-    }
     if (value.kind === "unavailable" && typeof value.reason === "string") {
       return (
         <span className="value-unavailable text-[9px] text-amber">
@@ -132,11 +118,7 @@ function isCollection(
   return (
     Array.isArray(value) ||
     (isUnknownRecord(value) &&
-      (jsonOnly ||
-        !(
-          (value.kind === "predict_rlm_file" && typeof value.path === "string") ||
-          (value.kind === "unavailable" && typeof value.reason === "string")
-        )))
+      (jsonOnly || !(value.kind === "unavailable" && typeof value.reason === "string")))
   );
 }
 

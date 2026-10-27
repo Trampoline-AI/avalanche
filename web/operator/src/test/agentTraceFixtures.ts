@@ -5,6 +5,7 @@ import type {
   AgentTraceTerminal,
   JsonValue,
   PredictRLMTokenUsage,
+  PredictRLMTraceHeader,
 } from "../generated/agentSchemas";
 
 export function tokenUsage(
@@ -134,15 +135,26 @@ export function runSucceededEvent(
   });
 }
 
-export interface FinishedOptions {
+export interface HeaderOptions {
   subModel?: string | null;
   maxIterations?: number;
   main?: PredictRLMTokenUsage;
   sub?: PredictRLMTokenUsage;
 }
 
+/** PredictRLM's part of a trace header. */
+export function predictRlmTraceHeader(options: HeaderOptions = {}): PredictRLMTraceHeader {
+  return {
+    format: "predict_rlm.run/v1",
+    sub_model: options.subModel ?? null,
+    max_iterations: options.maxIterations ?? 4,
+    usage: { main: options.main ?? tokenUsage(), sub: options.sub ?? tokenUsage() },
+    telemetry_ref: null,
+  };
+}
+
 /** A PredictRLM final trace; its turns travelled as live events. */
-export function finishedTrace(options: FinishedOptions = {}): AgentTraceTerminal {
+export function finishedTrace(options: HeaderOptions = {}): AgentTraceTerminal {
   return {
     kind: "trace_finished",
     schema_version: 2,
@@ -164,13 +176,7 @@ export function finishedTrace(options: FinishedOptions = {}): AgentTraceTerminal
         tool_call_count: 0,
         external_run_id: "run-1",
         session_id: null,
-      },
-      native: {
-        format: "predict_rlm.run/v1",
-        sub_model: options.subModel ?? null,
-        max_iterations: options.maxIterations ?? 4,
-        usage: { main: options.main ?? tokenUsage(), sub: options.sub ?? tokenUsage() },
-        telemetry_ref: null,
+        native: predictRlmTraceHeader(options),
       },
     },
   };

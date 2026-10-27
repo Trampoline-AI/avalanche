@@ -1,14 +1,15 @@
 """Runtime-neutral agent trace models.
 
 Every agent runtime reports the same header and turns, named after the
-OpenTelemetry conventions for AI calls, plus one runtime-specific native
-section. The native union is closed and defined here without SDK imports, so
-the operator and TUI can validate every format without runtime extras.
+OpenTelemetry conventions for AI calls, plus a runtime-specific native part
+on the header and on each turn. The native unions are closed and defined without
+SDK imports, so the operator and TUI can validate every format without runtime
+extras.
 """
 
 from __future__ import annotations
 
-from typing import Annotated, ClassVar, Literal, Self
+from typing import Annotated, Literal, Self
 
 from pydantic import (
     BaseModel,
@@ -24,8 +25,8 @@ from pydantic import (
 from ..file import File
 from ..workspace import Workspace
 from .kinds import RuntimeKind
-from .native import TurnNative
-from .native.predict_rlm import PredictRLMTurn, PredictRLMUsage
+from .native import TraceHeaderNative, TurnNative
+from .native.predict_rlm import PredictRLMTurn
 
 # Serialized bodies always carry defaulted fields such as ``kind``; their
 # exported JSON Schema says so.
@@ -119,43 +120,21 @@ class AgentTraceHeader(BaseModel):
     tool_call_count: NonNegativeInt
     external_run_id: str | None
     session_id: str | None
+    native: TraceHeaderNative
 
-
-class PredictRLMNativeTrace(BaseModel):
-    """PredictRLM run details that have no common-layer equivalent."""
-
-    model_config = _STRICT
-
-    runtime_kind: ClassVar[RuntimeKind] = "predict_rlm"
-
-    format: Literal["predict_rlm.run/v1"] = "predict_rlm.run/v1"
-    sub_model: str | None
-    max_iterations: PositiveInt
-    usage: PredictRLMUsage
-    # PredictRLM's compact reference for joining a partial trace to its events.
-    telemetry_ref: dict[str, JsonValue] | None
-
-
-class ClaudeAgentNativeTrace(BaseModel):
-    """Claude Agent SDK session details that have no common-layer equivalent."""
-
-    model_config = _STRICT
-
-    runtime_kind: ClassVar[RuntimeKind] = "claude_agent"
-
-    format: Literal["claude_agent.messages/v1"] = "claude_agent.messages/v1"
-    # The SDK's result subtype, such as ``success`` or ``error_max_turns``.
-    result_subtype: str | None
-    # Turns as the CLI counts them, which include tool-result round trips.
-    num_turns: NonNegativeInt
-    duration_api_ms: NonNegativeInt | None
-    permission_denials: NonNegativeInt
-    errors: tuple[str, ...]
-
-
-NativeTrace = Annotated[
-    PredictRLMNativeTrace | ClaudeAgentNativeTrace, Field(discriminator="format")
-]
+    @model_validator(mode="after")
+    def _check_native(self) -> Self:
+        if self.trace_format != self.native.format:
+            raise ValueError(
+                f"header trace_format {self.trace_format!r} does not match "
+                f"native format {self.native.format!r}"
+            )
+        if self.runtime_kind != self.native.runtime_kind:
+            raise ValueError(
+                f"header runtime_kind {self.runtime_kind!r} does not match "
+                f"native format {self.native.format!r}"
+            )
+        return self
 
 
 class AgentTrace(BaseModel):
@@ -170,22 +149,11 @@ class AgentTrace(BaseModel):
     schema_version: Literal[2] = 2
     header: AgentTraceHeader
     turns: tuple[Turn, ...]
-    native: NativeTrace
     turns_streamed: bool
 
     @model_validator(mode="after")
     def _check_consistency(self) -> Self:
         header = self.header
-        if header.trace_format != self.native.format:
-            raise ValueError(
-                f"header trace_format {header.trace_format!r} does not match "
-                f"native format {self.native.format!r}"
-            )
-        if header.runtime_kind != self.native.runtime_kind:
-            raise ValueError(
-                f"header runtime_kind {header.runtime_kind!r} does not match "
-                f"native format {self.native.format!r}"
-            )
         if self.turns_streamed:
             if self.turns:
                 raise ValueError("a trace with streamed turns must not carry turns")
@@ -198,11 +166,11 @@ class AgentTrace(BaseModel):
                 f"header turn_count {header.turn_count} does not match "
                 f"{len(self.turns)} turns"
             )
-        formats = {turn.native.format for turn in self.turns} - {self.native.format}
+        formats = {turn.native.format for turn in self.turns} - {header.trace_format}
         if formats:
             raise ValueError(
                 f"turns of format {sorted(formats)} do not belong to a "
-                f"{self.native.format!r} trace"
+                f"{header.trace_format!r} trace"
             )
         tool_calls = sum(len(turn.tool_calls) for turn in self.turns)
         if header.tool_call_count != tool_calls:
