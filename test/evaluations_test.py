@@ -14,8 +14,12 @@ import pytest
 import typesafe_sdk
 from pydantic import BaseModel, ValidationError
 
-from avalanche.agent.native.predict_rlm import PredictRLMTokenUsage, PredictRLMUsage
-from avalanche.agent.trace import AgentTrace, AgentTraceHeader, PredictRLMNativeTrace
+from avalanche.agent.native.predict_rlm import (
+    PredictRLMTokenUsage,
+    PredictRLMTraceHeader,
+    PredictRLMUsage,
+)
+from avalanche.agent.trace import AgentTrace, AgentTraceHeader
 from avalanche.evaluations import (
     EvalContext,
     EvaluationDeclaration,
@@ -32,6 +36,11 @@ _NO_USAGE = PredictRLMUsage(
     sub=PredictRLMTokenUsage(input_tokens=0, output_tokens=0, cost=0.0, cache_hits=0),
 )
 
+
+class NoInputs(BaseModel):
+    pass
+
+
 TRACE = AgentTrace(
     header=AgentTraceHeader(
         runtime_kind="predict_rlm",
@@ -45,11 +54,11 @@ TRACE = AgentTrace(
         tool_call_count=0,
         external_run_id="run",
         session_id=None,
+        native=PredictRLMTraceHeader(
+            sub_model=None, max_iterations=1, usage=_NO_USAGE, telemetry_ref=None
+        ),
     ),
     turns=(),
-    native=PredictRLMNativeTrace(
-        sub_model=None, max_iterations=1, usage=_NO_USAGE, telemetry_ref=None
-    ),
     turns_streamed=False,
 )
 
@@ -84,11 +93,17 @@ async def test_shared_states_batch_without_combining_different_evidence(noul_ser
             "summary": noul(lambda ctx: {"text": ctx.output, "flag": True}),
             "same": noul(lambda ctx: {"flag": True, "text": ctx.output}),
             "numeric": noul(lambda ctx: {"text": ctx.output, "flag": 1}),
-            "source": noul(lambda ctx: ctx.inputs["source"]),
+            "source": noul(lambda ctx: ctx.inputs.source),
         }
     )
+
+    class Inputs(BaseModel):
+        source: str
+
     result = await evaluations.evaluate(
-        EvalContext(inputs={"source": "independent source"}, output="summary text", trace=TRACE)
+        EvalContext(
+            inputs=Inputs(source="independent source"), output="summary text", trace=TRACE
+        )
     )
     requests = [json.loads(request.content) for request in noul_service.requests]
     assert [(item["state"], set(item["questions"])) for item in requests] == [
@@ -109,8 +124,12 @@ async def test_existing_objects_support_field_combination_and_all_traces(noul_se
         conclusion: str
         unrelated_private_field: str
 
+    class Inputs(BaseModel):
+        topic: str
+        opaque: object
+
     context = EvalContext(
-        inputs={"topic": "testing", "opaque": object()},
+        inputs=Inputs(topic="testing", opaque=object()),
         output=Report(
             summary="short summary",
             conclusion="check boundaries",
@@ -122,7 +141,7 @@ async def test_existing_objects_support_field_combination_and_all_traces(noul_se
         metrics={
             "summary": noul(lambda ctx: ctx.output.summary),
             "relevance": noul(
-                lambda ctx: {"topic": ctx.inputs["topic"], "answer": ctx.output.conclusion}
+                lambda ctx: {"topic": ctx.inputs.topic, "answer": ctx.output.conclusion}
             ),
             "trace": noul(lambda ctx: ctx.trace.header.model_dump(mode="json")),
         }
@@ -149,7 +168,7 @@ async def test_questions_are_snapshotted_and_all_answer_metadata_survives(
     metrics["severity"].question["criteria"].clear()
     metrics.clear()
     result = await evaluations.evaluate(
-        EvalContext(inputs={}, output="charged twice", trace=TRACE)
+        EvalContext(inputs=NoInputs(), output="charged twice", trace=TRACE)
     )
     assert result.classification.model_dump(mode="json") == response_body
     assert result.classification.choices["department"].choice == "billing"
@@ -198,7 +217,9 @@ async def test_composites_explicitly_normalize_scores_and_preserve_raw_answers(s
             )
         },
     )
-    result = await evaluations.evaluate(EvalContext(inputs={}, output="summary", trace=TRACE))
+    result = await evaluations.evaluate(
+        EvalContext(inputs=NoInputs(), output="summary", trace=TRACE)
+    )
     assert result.composites["quality"] == pytest.approx(0.765)
     assert result.classification.model_dump(mode="json") == service.response_body
     assert len(service.requests) == 1
@@ -213,7 +234,7 @@ async def test_composites_cannot_overwrite_raw_answers_or_each_others_inputs(nou
     result = await Evaluations(
         metrics={"fact": noul(lambda ctx: ctx.output)},
         composites={"mutating": mutate, "original": lambda answers: answers.nouls["fact"].noul},
-    ).evaluate(EvalContext(inputs={}, output="fact", trace=TRACE))
+    ).evaluate(EvalContext(inputs=NoInputs(), output="fact", trace=TRACE))
     assert result.classification.nouls["fact"].noul == 0.8
     assert result.composites == {"mutating": 0.0, "original": 0.8}
 
@@ -238,7 +259,7 @@ async def test_unknown_usage_remains_unknown_per_counter(noul_service):
     noul_service.handler = respond
     result = await Evaluations(
         metrics={"one": noul(lambda ctx: "first"), "two": noul(lambda ctx: "second")}
-    ).evaluate(EvalContext(inputs={}, output=None, trace=TRACE))
+    ).evaluate(EvalContext(inputs=NoInputs(), output=None, trace=TRACE))
     assert result.classification.usage.input_tokens is None
     assert result.classification.usage.output_tokens == 4
 
@@ -254,7 +275,7 @@ async def test_evaluation_overrides_workflow_runtime_without_leaking(noul_servic
 
     monkeypatch.setattr(typesafe_sdk, "AsyncTypeSafeClient", configured_client)
     evaluations = Evaluations(metrics={"fact": noul(lambda ctx: ctx.output)}, timeout=3)
-    context = EvalContext(inputs={}, output="fact", trace=TRACE)
+    context = EvalContext(inputs=NoInputs(), output="fact", trace=TRACE)
     await evaluations.evaluate(
         context, runtime_defaults={"model": "workflow-model", "timeout": 9}
     )
@@ -388,7 +409,7 @@ def test_declaration_metadata_owns_nested_questions_and_public_collections():
 
 
 def test_adjacent_lambdas_describe_only_their_own_context_reads():
-    first, second = lambda ctx: ctx.output.summary, lambda ctx: ctx.inputs["packet"]
+    first, second = lambda ctx: ctx.output.summary, lambda ctx: ctx.inputs.packet
     evaluations = Evaluations(
         metrics={
             "first": noul(first),
@@ -405,7 +426,7 @@ def test_adjacent_lambdas_describe_only_their_own_context_reads():
     )
     assert evaluations.declaration_metadata().metric_inputs == {
         "first": (MetricInput(source="output", selector="summary"),),
-        "second": (MetricInput(source="input", selector="['packet']"),),
+        "second": (MetricInput(source="input", selector="packet"),),
         "combined": (
             MetricInput(source="output", selector="customer_update_draft"),
             MetricInput(source="output", selector="summary"),
@@ -417,16 +438,16 @@ def test_adjacent_lambdas_describe_only_their_own_context_reads():
 def test_named_helpers_describe_explicit_reads_not_dict_keys_or_methods():
     def grounded(ctx):
         return {
-            "source": ctx.inputs["packet"].model_dump(mode="json"),
+            "source": ctx.inputs.packet.model_dump(mode="json"),
             "handoff": ctx.output.model_dump(mode="json"),
         }
 
     def inspected(ctx):
         actions = [event["output"] for event in ctx.trace]
-        return {"actions": actions, "source": ctx.inputs["packet"].model_dump(mode="json")}
+        return {"actions": actions, "source": ctx.inputs.packet.model_dump(mode="json")}
 
     def nested(ctx):
-        return ctx.output.items[0].text, ctx.inputs["packet"].facts["observed"]
+        return ctx.output.items[0].text, ctx.inputs.packet.facts["observed"]
 
     declaration = Evaluations(
         metrics={
@@ -437,16 +458,16 @@ def test_named_helpers_describe_explicit_reads_not_dict_keys_or_methods():
     ).declaration_metadata()
     assert declaration.metric_inputs == {
         "grounded": (
-            MetricInput(source="input", selector="['packet']"),
+            MetricInput(source="input", selector="packet"),
             MetricInput(source="output", selector=""),
         ),
         "inspected": (
             MetricInput(source="trace", selector=""),
-            MetricInput(source="input", selector="['packet']"),
+            MetricInput(source="input", selector="packet"),
         ),
         "nested": (
             MetricInput(source="output", selector="items[0].text"),
-            MetricInput(source="input", selector="['packet'].facts['observed']"),
+            MetricInput(source="input", selector="packet.facts['observed']"),
         ),
     }
 
@@ -501,18 +522,20 @@ def test_historic_metadata_defaults_to_no_provenance_and_new_fields_are_strict()
 async def test_python_only_or_nonfinite_selected_state_fails_privately(invalid, noul_service):
     evaluations = Evaluations(metrics={"selected": noul(lambda ctx: invalid)})
     with pytest.raises(EvaluationError, match="State validation for metric 'selected'"):
-        await evaluations.evaluate(EvalContext(inputs={}, output=object(), trace=TRACE))
+        await evaluations.evaluate(EvalContext(inputs=NoInputs(), output=object(), trace=TRACE))
     assert noul_service.requests == []
 
 
 @pytest.mark.asyncio
 async def test_selector_errors_identify_metric_without_exposing_state(noul_service):
     secret = "private-selector-payload"
-    evaluations = Evaluations(metrics={"missing": noul(lambda ctx: ctx.inputs[secret])})
+    evaluations = Evaluations(
+        metrics={"missing": noul(lambda ctx: getattr(ctx.inputs, secret))}
+    )
     with pytest.raises(
-        EvaluationError, match="State selector for metric 'missing'.*KeyError"
+        EvaluationError, match="State selector for metric 'missing'.*AttributeError"
     ) as caught:
-        await evaluations.evaluate(EvalContext(inputs={}, output=None, trace=TRACE))
+        await evaluations.evaluate(EvalContext(inputs=NoInputs(), output=None, trace=TRACE))
     assert secret not in "".join(traceback.format_exception(caught.value))
     assert noul_service.requests == []
 
@@ -525,7 +548,7 @@ async def test_invalid_composite_results_fail_without_clamping(invalid, noul_ser
         composites={"invalid": lambda answers: invalid},
     )
     with pytest.raises(EvaluationError, match="Composite 'invalid'.*finite number"):
-        await evaluations.evaluate(EvalContext(inputs={}, output="fact", trace=TRACE))
+        await evaluations.evaluate(EvalContext(inputs=NoInputs(), output="fact", trace=TRACE))
 
 
 @pytest.mark.asyncio
@@ -536,7 +559,7 @@ async def test_composite_failure_is_private_and_names_the_composite(noul_service
     with pytest.raises(EvaluationError, match="Composite 'quality'.*ValueError") as caught:
         await Evaluations(
             metrics={"fact": noul(lambda ctx: ctx.output)}, composites={"quality": broken}
-        ).evaluate(EvalContext(inputs={}, output="fact", trace=TRACE))
+        ).evaluate(EvalContext(inputs=NoInputs(), output="fact", trace=TRACE))
     assert "private-composite-payload" not in "".join(traceback.format_exception(caught.value))
 
 
@@ -558,7 +581,7 @@ async def test_malformed_answers_use_existing_classifier_validation_and_close(se
     with pytest.raises(
         EvaluationError, match="Jev evaluation for metrics 'fact'.*Invalid TypeSafe response"
     ):
-        await evaluations.evaluate(EvalContext(inputs={}, output="state", trace=TRACE))
+        await evaluations.evaluate(EvalContext(inputs=NoInputs(), output="state", trace=TRACE))
     assert all(transport.closed for transport in service.transports)
 
 
@@ -574,7 +597,7 @@ async def test_service_failure_exposes_stage_not_credentials_or_echoed_state(nou
         EvaluationError, match="Jev evaluation for metrics 'fact'.*HTTP 401"
     ) as caught:
         await Evaluations(metrics={"fact": noul(lambda ctx: ctx.output)}).evaluate(
-            EvalContext(inputs={}, output=secret, trace=TRACE)
+            EvalContext(inputs=NoInputs(), output=secret, trace=TRACE)
         )
     formatted = "".join(traceback.format_exception(caught.value))
     assert "private-server-state" not in formatted
@@ -586,7 +609,7 @@ async def test_service_failure_exposes_stage_not_credentials_or_echoed_state(nou
 async def test_path_strings_are_sent_as_text_without_opening_files(noul_service, tmp_path):
     path = tmp_path / "missing-evidence.txt"
     await Evaluations(metrics={"path": noul(lambda ctx: ctx.output)}).evaluate(
-        EvalContext(inputs={}, output=str(path), trace=TRACE)
+        EvalContext(inputs=NoInputs(), output=str(path), trace=TRACE)
     )
     assert json.loads(noul_service.requests[0].content)["state"] == str(path)
     assert not path.exists()

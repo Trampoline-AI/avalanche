@@ -23,8 +23,8 @@ OutputT = TypeVar("OutputT")
 class EvaluationSubmission:
     """Live execution objects; the collector must snapshot them before returning."""
 
-    evaluations: Evaluations[object, BaseModel]
-    context: EvalContext[object, BaseModel] | None
+    evaluations: Evaluations[BaseModel, BaseModel]
+    context: EvalContext[BaseModel, BaseModel] | None
     runtime_defaults: Mapping[str, JsonValue]
     error: str | None = None
 
@@ -78,7 +78,7 @@ def _diagnostic(message: str) -> None:
 class _StepEvaluationCapture:
     def __init__(
         self,
-        evaluations: Evaluations[object, BaseModel],
+        evaluations: Evaluations[BaseModel, BaseModel],
         step_name: str,
     ) -> None:
         self.evaluations = evaluations
@@ -88,7 +88,7 @@ class _StepEvaluationCapture:
 
     def submit(
         self,
-        inputs: Mapping[str, InputT],
+        inputs: BaseModel,
         output: BaseModel,
         trace: AgentTrace,
     ) -> None:
@@ -106,7 +106,7 @@ class _StepEvaluationCapture:
 
         from .classifier.classifier_step import _WORKFLOW_CLASSIFIER_DEFAULTS
 
-        context: EvalContext[object, BaseModel] | None = None
+        context: EvalContext[BaseModel, BaseModel] | None = None
         error = None
         runtime_defaults: Mapping[str, JsonValue] = {}
         try:
@@ -148,7 +148,9 @@ def capture_step_evaluations(
 ) -> Iterator[None]:
     """Isolate this step's capture slot, including steps without evaluations."""
     capture = (
-        _StepEvaluationCapture(cast("Evaluations[object, BaseModel]", evaluations), step_name)
+        _StepEvaluationCapture(
+            cast("Evaluations[BaseModel, BaseModel]", evaluations), step_name
+        )
         if evaluations is not None
         else None
     )

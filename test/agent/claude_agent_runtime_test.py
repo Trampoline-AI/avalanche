@@ -341,7 +341,7 @@ async def test_running_out_of_turns_fails_with_the_sdk_reason(replay):
     assert observed[-1].kind == "trace_finished"
     header = observed[-1].record.header
     assert (header.status, header.stop_reason) == ("failed", "error_max_turns")
-    assert observed[-1].record.native.result_subtype == "error_max_turns"
+    assert observed[-1].record.header.native.result_subtype == "error_max_turns"
 
 
 @pytest.mark.asyncio
@@ -360,7 +360,7 @@ async def test_api_error_result_fails_with_the_api_error(replay):
     # The reason also reaches the live result event and the final trace.
     finished = next(e for e in observed if e.kind == "event" and e.native.kind == "finished")
     assert "529" in finished.native.error
-    assert any("529" in error for error in observed[-1].record.native.errors)
+    assert any("529" in error for error in observed[-1].record.header.native.errors)
 
 
 @pytest.mark.asyncio

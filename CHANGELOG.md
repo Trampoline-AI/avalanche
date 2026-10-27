@@ -59,10 +59,12 @@
   (succeeded, failed or cancelled), runtime kind, trace format, model, total token
   usage and cost, turn and tool-call counts, and stop reason. Agent live-event
   summaries carry a common event kind next to the runtime's own kind, the turn, and
-  tool-call and model-call counts. PredictRLM's sub-model, iteration limit and
-  per-model usage are no longer in the summary; the web UI reads them from the
-  trace body. The protobuf messages change, so the operator, its clients and
-  `@trampoline-ai/operator-ui` must be upgraded together. BREAKING-PROTOCOL: part
+  tool-call and model-call counts. Details only one runtime has, such as
+  PredictRLM's sub-model, iteration limit and per-model usage, travel in the
+  summary's runtime part (`TraceHeaderV2.native_json`, typed JSON checked against the
+  generated agent schemas on arrival), so the web UI and TUI show them without
+  reading the trace body. The protobuf messages change, so the operator, its clients
+  and `@trampoline-ai/operator-ui` must be upgraded together. BREAKING-PROTOCOL: part
   of Delta protocol 2.0 (trace header and agent activity fields replaced).
 - **Breaking** — Agents: agent steps now take a `runtime=` instead of PredictRLM
   arguments. `lm=`, `sub_lm=`, `max_iterations=`, `skills=` and any other PredictRLM
@@ -110,6 +112,20 @@
   types change).
 - Agents: a PredictRLM file output that has no host path, lies outside the step's
   reserved output folder, or is missing now raises `ava.agent.AgentOutputError`.
+- **Breaking** — Evaluations: `ctx.inputs` is now the validated inputs of the agent
+  call, an instance of the signature's input model as the runtime received it, like
+  `ctx.output`. Selectors read fields as attributes:
+
+  ```python
+  # before
+  state=lambda ctx: {"document": ctx.inputs["document"], "summary": ctx.output.summary}
+
+  # after
+  state=lambda ctx: {"document": ctx.inputs.document, "summary": ctx.output.summary}
+  ```
+
+  The input paths an evaluation declaration records change the same way (`document`
+  instead of `['document']`); the UI shows both as `input.document`.
 - **Breaking** — Operator: agent live events and final traces have a new,
   runtime-neutral body (schema version 2). Each live event carries Avalanche's own
   sequence number, the common event (a finished turn, a model or tool call, generated
@@ -125,8 +141,15 @@
   `AgentTraceFinishedEvent`, `AgentTraceUnavailableEvent`) instead of dictionaries.
   BREAKING-PROTOCOL: part of Delta protocol 2.0 (agent evidence and the operator's
   agent event and trace bodies change; proto field 8 `telemetry_json` is reserved).
-- Operator: the agent trace header no longer carries PredictRLM's telemetry
-  reference; it is in the PredictRLM part of the final trace body.
+- Agents: a trace's runtime-specific part moves from `AgentTrace.native` into the
+  header, `AgentTrace.header.native`, so every shared object has its own runtime
+  part. The models are renamed `PredictRLMTraceHeader` (PredictRLM's sub-model,
+  iteration limit, per-model usage and telemetry reference) and
+  `ClaudeAgentTraceHeader` (the SDK's result subtype, turn count, API time,
+  permission denials and errors), both in `avalanche.agent.native`. Code reading
+  `ctx.trace.native` in evaluations must read `ctx.trace.header.native`; older
+  stored traces are not converted. BREAKING-PROTOCOL: part of Delta protocol 2.0
+  (final trace body and trace header change; new `TraceHeaderV2.native_json`).
 - Agents: new `ava.runtimes.ClaudeAgent` runs agent steps with Claude through the
   Claude Agent SDK. Install the new `claude` extra (`avalanche-ai[claude]`) and the
   Claude Code CLI, then choose a model with `ClaudeAgent(model="claude-haiku-5-5")`.
@@ -167,6 +190,15 @@
   longer carry `model_call_count` (its field number is reserved), and the
   `MODEL_STARTED`, `MODEL_FINISHED` and `CODE_GENERATED` agent event kinds are
   reserved.
+- Live agent events: PredictRLM's `run.succeeded` event describes `ava.File`
+  outputs as the file references the step returns (workspace, path, name, size and
+  checksum), the same form as its inputs, instead of PredictRLM's own
+  `predict_rlm_file` value with the host path. The web UI no longer has a special
+  display for `predict_rlm_file` values. BREAKING-PROTOCOL: part of Delta protocol
+  2.0 (agent live event bodies change).
+- Live agent events: a PredictRLM turn trimmed for size no longer appends an
+  "omitted N tool calls" note to the turn's message; the event's omission counts
+  (`omitted_tool_calls` and PredictRLM's `omissions`) report it.
 - Web UI and TUI: each turn shows its message first and keeps model reasoning in a
   collapsed "Model reasoning" section at the end, shown only when there is some.
   PredictRLM turns show their code and output from the turn's own part and list

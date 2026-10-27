@@ -3,6 +3,7 @@ import { GrpcWebFetchTransport } from "@protobuf-ts/grpcweb-transport";
 import { AgentEventKindV2, AgentTraceStatusV2, PageOrderV2 } from "./generated/operator";
 import { DescriptorPageOrder } from "./model";
 import { mapEvaluationRecord, type EvaluationRecord } from "./evaluations";
+import { parseTraceHeaderNative } from "./agentTrace/common";
 
 import {
   OperatorServiceV2Client,
@@ -83,6 +84,12 @@ function mapTraceHeader(header: TraceHeaderV2): TraceHeaderMsg {
   if (!header.runtimeKind || !header.traceFormat) {
     throw new Error("Agent trace header is missing its runtime kind or trace format");
   }
+  const native = parseTraceHeaderNative(JSON.parse(header.nativeJson));
+  if (native.format !== header.traceFormat) {
+    throw new Error(
+      `Agent trace header part ${native.format} does not match trace format ${header.traceFormat}`,
+    );
+  }
   const mapped: TraceHeaderMsg = {
     status,
     runtimeKind: header.runtimeKind,
@@ -90,6 +97,7 @@ function mapTraceHeader(header: TraceHeaderV2): TraceHeaderMsg {
     durationMs: header.durationMs,
     turnCount: header.turnCount,
     toolCallCount: header.toolCallCount,
+    native,
   };
   if (header.model !== undefined) mapped.model = header.model;
   if (header.usage) mapped.usage = mapTokenUsage(header.usage);

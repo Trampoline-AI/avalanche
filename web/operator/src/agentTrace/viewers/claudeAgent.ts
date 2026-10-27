@@ -60,9 +60,6 @@ function retainedValue(event: AgentLiveEvent, kind: "inputs" | "outputs"): unkno
 
 export const claudeAgentViewer: TraceViewer = {
   turn,
-  // The common header already holds the model, usage and cost, so the body is not read.
-  usageInBody: false,
-  hasSubModel: false,
   turnUnit: "turns",
   activityLabels: {
     started: "Prompt sent",

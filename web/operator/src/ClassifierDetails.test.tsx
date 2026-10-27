@@ -24,7 +24,7 @@ const declaration: ClassifierDeclaration = {
     route: {
       type: "choice",
       instructions: {
-        kind: "predict_rlm_file",
+        kind: "file",
         path: "/an/authored/question",
         task: "Route the request",
         constraints: ["Use the current policy", { version: 4 }],

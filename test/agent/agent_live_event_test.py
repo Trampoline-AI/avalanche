@@ -186,3 +186,37 @@ def test_a_turn_travels_with_a_native_event_of_its_own_format():
 
     with pytest.raises(ValidationError, match="does not belong"):
         _live(runtime_kind="claude_agent", common=common, native=MessageFinished())
+
+
+@pytest.mark.parametrize("written", [True, False], ids=["written", "missing"])
+def test_a_file_output_travels_as_its_file_reference_never_its_host_path(tmp_path, written):
+    from avalanche.runtimes.predict_rlm.events import project_event
+    from avalanche.runtimes.predict_rlm.files import AgentFileBridge, predict_signature
+
+    class Redact(ava.Signature):
+        document: str = ava.InputField()
+        redacted: ava.File = ava.OutputField()
+
+    workspace = ava.Workspace.from_directory(tmp_path, reference="snapshot:test")
+    with ava.file_reference_context(workspace, attempt="attempt-1"):
+        bridge = AgentFileBridge("redact", predict_signature(Redact))
+        output = bridge.output_dir / "redacted.txt"
+        if written:
+            output.write_bytes(b"[redacted]")
+        native, _ = project_event(
+            RunEvent(
+                "run",
+                1,
+                RunEventKind.RUN_SUCCEEDED,
+                1,
+                {"status": "completed", "outputs": {"redacted": {"path": str(output)}}},
+            ),
+            files=bridge,
+        )
+
+    redacted = native.outputs["redacted"]
+    assert redacted["kind"] == ("file" if written else "unavailable")
+    if written:
+        assert redacted["workspace"] == "snapshot:test"
+        assert redacted["path"].startswith(".outputs/redact/attempt-1/")
+    assert str(tmp_path) not in native.model_dump_json()

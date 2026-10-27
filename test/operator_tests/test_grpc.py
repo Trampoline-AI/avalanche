@@ -358,7 +358,9 @@ def test_paged_details_and_chunked_trace_materialize_without_cross_run_invalidat
         trace = provider.hydrate_trace(run.run_id, "agent-1")
         body = trace.trace_body
         assert body.invocation_id == "test-invocation"
-        assert body.record.native.telemetry_ref == {"payload": "x" * (2 * 1024 * 1024 + 17)}
+        assert body.record.header.native.telemetry_ref == {
+            "payload": "x" * (2 * 1024 * 1024 + 17)
+        }
         assert body.record.turns == ()
         assert body.record.header.turn_count == 5
         assert body.record.header.external_run_id == "sdk-run-target"
