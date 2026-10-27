@@ -29,7 +29,8 @@ async def summarize(document: str, *, agent: ava.Agent) -> str:
 
 `Summarize` and `lookup_term` are defined on the
 [agent runtimes page](../agent-runtime-contract.md#calling-an-agent-step). A
-step without `runtime=` uses `ava.runtimes.PredictRLM()`.
+step without `runtime=` uses the workflow's `agent_defaults` runtime, else
+`ava.runtimes.PredictRLM()`.
 
 ## Settings
 
