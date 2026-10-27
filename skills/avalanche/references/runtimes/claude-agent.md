@@ -56,15 +56,12 @@ The Claude CLI's own bundled skills are hidden.
 
 ## Trace example
 
-The `Summarize` call above. Claude looked up a term, then answered through the
-`StructuredOutput` tool.
+The `Summarize` call above, as `result.trace`. Claude looked up a term, then
+answered through the `StructuredOutput` tool.
 
 ```json
 {
-  "schema_version": 2,
   "header": {
-    "runtime_kind": "claude_agent",
-    "trace_format": "claude_agent.messages/v1",
     "status": "succeeded",
     "stop_reason": "success",
     "model": "claude-haiku-5-5",
@@ -152,8 +149,7 @@ The `Summarize` call above. Claude looked up a term, then answered through the
         "api_error": null
       }
     }
-  ],
-  "turns_streamed": false
+  ]
 }
 ```
 
@@ -187,59 +183,26 @@ class ClaudeAgentTurn:
 
 ## Native live events
 
-The `native` part of each live event. Every class also has
-`format: Literal["claude_agent.messages/v1"]`. The comment names the `common`
-event it is sent with.
+The `native` part of a live event, for what only Claude reports. Every class also
+has `format: Literal["claude_agent.messages/v1"]`. Both are sent with
+`common: None`; every other ClaudeAgent event is a shared event alone, with
+`native: None`.
 
 ```python
-ClaudeAgentNativeEvent = (
-    Started | SessionInitialized | ToolUsed | ToolReturned
-    | MessageFinished | RateLimited | Finished
-)
+ClaudeAgentNativeEvent = SessionInitialized | RateLimited
 
 
-class Started:                     # common: None; the inputs as the trace keeps them, files by reference
-    kind: Literal["started"]
-    model: str | None
-    inputs: JsonValue
-
-
-class SessionInitialized:          # common: None
+class SessionInitialized:          # the CLI's report of the session it started
     kind: Literal["session.initialized"]
     session_id: str | None
     model: str | None
     tools: tuple[str, ...]         # every tool Claude can use
 
 
-class ToolUsed:                    # common: tool.started
-    kind: Literal["tool.used"]
-    turn_index: int
-
-
-class ToolReturned:                # common: tool.finished
-    kind: Literal["tool.returned"]
-    turn_index: int
-
-
-class MessageFinished:             # common: turn.finished, which holds the turn
-    kind: Literal["message.finished"]
-
-
-class RateLimited:                 # common: None
+class RateLimited:
     kind: Literal["rate_limit"]
     status: str
     limit_type: str | None
-
-
-class Finished:                    # common: None; the session's result
-    kind: Literal["finished"]
-    subtype: str
-    is_error: bool
-    num_turns: int
-    structured_output: JsonValue   # Claude's answer; None when output_omitted
-    output_omitted: bool           # True when the answer is over 256 KiB
-    workspace_outputs: tuple[str, ...]  # ava.Workspace output fields Avalanche fills
-    errors: tuple[str, ...]
 ```
 
 The session starting, with the tools Claude can use:
@@ -251,7 +214,6 @@ The session starting, with the tools Claude can use:
   "invocation_id": "3f9a0c7e",
   "sequence": 2,
   "timestamp_ns": 1761480000045000000,
-  "runtime_kind": "claude_agent",
   "common": null,
   "native": {
     "format": "claude_agent.messages/v1",
@@ -259,31 +221,6 @@ The session starting, with the tools Claude can use:
     "session_id": "9f2c-session",
     "model": "claude-haiku-5-5",
     "tools": ["Read", "Grep", "mcp__avalanche__lookup_term"]
-  }
-}
-```
-
-The session ending, with Claude's answer:
-
-```json
-{
-  "kind": "event",
-  "schema_version": 2,
-  "invocation_id": "3f9a0c7e",
-  "sequence": 7,
-  "timestamp_ns": 1761480005400000000,
-  "runtime_kind": "claude_agent",
-  "common": null,
-  "native": {
-    "format": "claude_agent.messages/v1",
-    "kind": "finished",
-    "subtype": "success",
-    "is_error": false,
-    "num_turns": 3,
-    "structured_output": {"summary": "Avalanche runs DAGs.", "word_count": 3},
-    "output_omitted": false,
-    "workspace_outputs": [],
-    "errors": []
   }
 }
 ```
@@ -323,12 +260,41 @@ result, and the trace records it in the call's `error`.
 
 | `common.kind` | Claude |
 | --- | --- |
-| `tool.started` | Claude asked for a tool. |
-| `tool.finished` | The tool's result reached Claude. |
+| `run.started` | Sent before the CLI starts. `model` is the `model` setting, `None` when the CLI chooses; `inputs` are the step's inputs, files and workspaces by reference. |
+| `tool.started` | Claude asked for a tool. `turn` is the turn that asked. |
+| `tool.finished` | The tool's result reached Claude. `turn` is the turn that asked; `error` is set when the tool failed. |
 | `turn.finished` | Claude finished a response. |
+
+The `Summarize` call above sends, in order: `run.started`,
+`session.initialized`, then `tool.started`, `tool.finished` and `turn.finished`
+for each of its two turns (the second for `StructuredOutput`), then the final
+event.
 
 Subagents' own messages are not recorded; their work shows as the result of the
 tool call that started them.
+
+### Final event
+
+Sent once the session has ended and its outputs, if any, are built.
+
+| Final event | Claude |
+| --- | --- |
+| `trace_finished` | The session returned a result. `outputs` is Claude's JSON answer, with `ava.File` outputs as file references and `ava.Workspace` outputs by reference (see [file and workspace values](../agent-runtime-contract.md#file-and-workspace-values)). `outputs` is `None` when the header's `status` is `"failed"`, or when turning the answer into outputs failed, for example a file path outside the output folder; the step then raises. |
+| `trace_unavailable` | The call was cancelled, the Claude CLI is not installed, the SDK raised, or the CLI ended without a result. |
+
+The final event of the call above:
+
+```json
+{
+  "kind": "trace_finished",
+  "schema_version": 2,
+  "invocation_id": "3f9a0c7e",
+  "header": { "...": "as in the trace example" },
+  "outputs": {"summary": "Avalanche runs DAGs.", "word_count": 3},
+  "omitted_outputs": [],
+  "complete": true
+}
+```
 
 ### Trace header
 

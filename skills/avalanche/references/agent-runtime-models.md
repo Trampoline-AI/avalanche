@@ -100,19 +100,15 @@ class JsonOutputs:
 `avalanche.agent.trace`, `avalanche.agent.native`
 
 ```python
-class AgentTrace:
-    schema_version: Literal[2] = 2
+class AgentTrace:                        # kept in process; always has every turn
     header: AgentTraceHeader
-    turns: tuple[Turn, ...]              # () when turns_streamed
-    turns_streamed: bool
+    turns: tuple[Turn, ...]
 
 
 AgentTraceStatus = Literal["succeeded", "failed", "cancelled"]
 
 
 class AgentTraceHeader:
-    runtime_kind: RuntimeKind
-    trace_format: str                    # equals native.format
     status: AgentTraceStatus
     stop_reason: str | None
     model: str | None
@@ -123,6 +119,11 @@ class AgentTraceHeader:
     external_run_id: str | None
     session_id: str | None
     native: TraceHeaderNative            # at most 64 KiB as JSON
+
+    @property
+    def runtime_kind(self) -> RuntimeKind: ...  # native.runtime_kind
+    @property
+    def trace_format(self) -> str: ...   # native.format
 
 
 class Turn:
@@ -159,6 +160,9 @@ class TokenUsage:
 ### File and workspace values
 
 How an `ava.File` or `ava.Workspace` appears in a trace or live event's JSON.
+`evidence_value` and `retained_fields` in `avalanche.agent.trace` turn the inputs
+of `run.started` and the outputs of the final event into this form; together the
+kept fields stay within `RETAINED_VALUES_LIMIT_BYTES`, 4 MiB.
 
 ```python
 FileInputEvidenceValue = Annotated[
@@ -276,13 +280,24 @@ class AgentLiveEvent:
     invocation_id: str                   # min_length=1
     sequence: PositiveInt
     timestamp_ns: NonNegativeInt
-    runtime_kind: RuntimeKind
     common: AgentEvent | None
-    native: NativeEvent
+    native: NativeEvent | None           # at least one of common and native is set
+
+    @property
+    def runtime_kind(self) -> RuntimeKind | None: ...  # from native, else a turn's native
 
 
-AgentEvent = Annotated[TurnFinished | ToolStarted | ToolFinished, Field(discriminator="kind")]
-CommonEventKind = Literal["turn.finished", "tool.started", "tool.finished"]
+AgentEvent = Annotated[
+    RunStarted | TurnFinished | ToolStarted | ToolFinished,
+    Field(discriminator="kind"),
+]
+
+
+class RunStarted:
+    kind: Literal["run.started"] = "run.started"
+    model: str | None
+    inputs: dict[str, JsonValue]
+    omitted_inputs: tuple[str, ...]
 
 
 class TurnFinished:
@@ -295,12 +310,14 @@ class ToolStarted:
     kind: Literal["tool.started"] = "tool.started"
     call_id: str
     name: str
+    turn: PositiveInt | None
 
 
 class ToolFinished:
     kind: Literal["tool.finished"] = "tool.finished"
     call_id: str
     name: str
+    turn: PositiveInt | None
     error: str | None
 ```
 
@@ -316,7 +333,9 @@ class AgentTraceFinished:
     kind: Literal["trace_finished"] = "trace_finished"
     schema_version: Literal[2] = 2
     invocation_id: str                   # min_length=1
-    record: AgentTrace                   # turns_streamed is True
+    header: AgentTraceHeader
+    outputs: dict[str, JsonValue] | None
+    omitted_outputs: tuple[str, ...]     # () when outputs is None; never also in outputs
     complete: bool
 
 
@@ -345,21 +364,15 @@ the `common` event it travels with.
 
 ```python
 PredictRLMNativeEvent = Annotated[
-    RunStarted | Lifecycle | IterationRecorded | CodeGenerated | PredictStarted
-    | PredictFinished | Correlated | CodeExecuted | RunSucceeded | RunEnded,
+    Lifecycle | IterationRecorded | CodeGenerated | PredictStarted | PredictFinished
+    | CodeExecuted | RunEnded,
     Field(discriminator="kind"),
 ]
 
 
-class RunStarted:                        # None
-    kind: Literal["run.started"] = "run.started"
-    input_fields: tuple[str, ...]
-    inputs: JsonValue
-
-
-class IterationRecorded:                 # turn.finished
+class IterationRecorded:                 # turn.finished, only when it left calls out
     kind: Literal["iteration.recorded"] = "iteration.recorded"
-    omissions: PredictRLMOmissions | None
+    omissions: PredictRLMOmissions
 
 
 class PredictRLMOmissions:
@@ -389,21 +402,11 @@ class PredictFinished:                   # None
     predict_error: str | None
 
 
-class Correlated:                        # tool.started or tool.finished, same as kind
-    kind: Literal["tool.started", "tool.finished"]
-
-
 class CodeExecuted:                      # None
     kind: Literal["code.executed"] = "code.executed"
     iteration: NonNegativeInt
     output: str | None
     execution_error: str | None
-
-
-class RunSucceeded:                      # None
-    kind: Literal["run.succeeded"] = "run.succeeded"
-    status: str
-    outputs: JsonValue
 
 
 class RunEnded:                          # None
@@ -430,16 +433,9 @@ comment is the `common` event it travels with.
 
 ```python
 ClaudeAgentNativeEvent = Annotated[
-    Started | SessionInitialized | ToolUsed | ToolReturned | MessageFinished
-    | RateLimited | Finished,
+    SessionInitialized | RateLimited,
     Field(discriminator="kind"),
 ]
-
-
-class Started:                           # None
-    kind: Literal["started"] = "started"
-    model: str | None
-    inputs: JsonValue
 
 
 class SessionInitialized:                # None
@@ -449,33 +445,8 @@ class SessionInitialized:                # None
     tools: tuple[str, ...]
 
 
-class ToolUsed:                          # tool.started
-    kind: Literal["tool.used"] = "tool.used"
-    turn_index: NonNegativeInt
-
-
-class ToolReturned:                      # tool.finished
-    kind: Literal["tool.returned"] = "tool.returned"
-    turn_index: NonNegativeInt
-
-
-class MessageFinished:                   # turn.finished
-    kind: Literal["message.finished"] = "message.finished"
-
-
 class RateLimited:                       # None
     kind: Literal["rate_limit"] = "rate_limit"
     status: str
     limit_type: str | None
-
-
-class Finished:                          # None
-    kind: Literal["finished"] = "finished"
-    subtype: str
-    is_error: bool
-    num_turns: NonNegativeInt
-    structured_output: JsonValue
-    output_omitted: bool
-    workspace_outputs: tuple[str, ...]
-    errors: tuple[str, ...]
 ```
