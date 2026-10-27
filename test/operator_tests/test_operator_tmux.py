@@ -298,7 +298,8 @@ async def test_operator_tui_extensions_live_pilot(tmp_path):
             await pilot.click("#form-submit")
             await wait_for(
                 pilot,
-                lambda: any(log.message == "live-stderr-sentinel" for log in app.store.logs),
+                lambda: {log.channel for log in app.store.logs if "live-" in log.message}
+                >= {"stdout", "stderr", "log"},
             )
             run = app.store.current_run
             assert run is not None and run.status == RunStatus.RUNNING
