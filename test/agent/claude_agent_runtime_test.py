@@ -126,7 +126,7 @@ def _success_stream(*, tool_error: bool = False, total: object = 15) -> list[obj
 
 @pytest.fixture
 def replay(monkeypatch):
-    """Replace the SDK's ``query`` with a recorded stream; returns the options it saw."""
+    """Replace the Claude session with a recorded stream; returns the options it saw."""
     seen: dict[str, object] = {}
 
     def install(messages, *, error: BaseException | None = None):
@@ -137,7 +137,7 @@ def replay(monkeypatch):
             if error is not None:
                 raise error
 
-        monkeypatch.setattr(sdk_module, "query", query)
+        monkeypatch.setattr(sdk_module, "_session", query)
         return seen
 
     return install
@@ -394,7 +394,7 @@ async def test_a_workspace_is_the_working_directory_and_comes_back_as_an_output(
         for message in [_init(), _result({"summary": "done"})]:
             yield message
 
-    monkeypatch.setattr(sdk_module, "query", edit_then_finish)
+    monkeypatch.setattr(sdk_module, "_session", edit_then_finish)
     result = await ava.Agent(
         signature=Edit, step_name="edit", runtime=ClaudeAgent(model=MODEL)
     )(workspace=workspace, document=ava.File.from_path(tmp_path / "draft.txt"))
@@ -477,7 +477,7 @@ async def test_file_outputs_are_reserved_in_the_run_workspace(monkeypatch, tmp_p
         for message in [_init(), _result(result)]:
             yield message
 
-    monkeypatch.setattr(sdk_module, "query", write_then_finish)
+    monkeypatch.setattr(sdk_module, "_session", write_then_finish)
     with ava.file_reference_context(workspace, attempt="attempt-1"):
         result = await ava.Agent(signature=Report, step_name="report", runtime=ClaudeAgent())(
             question="q"
@@ -763,7 +763,7 @@ async def test_the_message_stream_is_closed_when_handling_a_message_fails(monkey
         finally:
             closed.append(True)
 
-    monkeypatch.setattr(sdk_module, "query", query)
+    monkeypatch.setattr(sdk_module, "_session", query)
     observed = []
     with capture_agent_evidence(observed.append, errors="raise"):
         with pytest.raises(AgentStepExecutionError, match="unknown tool call"):
@@ -771,6 +771,38 @@ async def test_the_message_stream_is_closed_when_handling_a_message_fails(monkey
 
     assert closed == [True]
     assert observed[-1].kind == "trace_unavailable"
+
+
+@pytest.mark.asyncio
+async def test_the_cli_has_stopped_before_its_working_folder_is_removed(monkeypatch):
+    seen = {}
+
+    class Client:
+        def __init__(self, *, options):
+            self.options = options
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *exc_info):
+            seen["cwd"] = Path(self.options.cwd)
+            seen["cwd_existed_at_disconnect"] = seen["cwd"].is_dir()
+
+        async def query(self, prompt):
+            pass
+
+        async def receive_response(self):
+            yield _init()
+            yield UserMessage(content=[ToolResultBlock(tool_use_id="nowhere", content="?")])
+            yield _result({"total": 1})
+
+    monkeypatch.setattr(sdk_module, "ClaudeSDKClient", Client)
+    with capture_agent_evidence(lambda _: None, errors="raise"):
+        with pytest.raises(AgentStepExecutionError, match="unknown tool call"):
+            await _agent()(a=2, b=3)
+
+    assert seen["cwd_existed_at_disconnect"]
+    assert not seen["cwd"].exists()
 
 
 @pytest.mark.asyncio

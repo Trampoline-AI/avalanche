@@ -8,7 +8,7 @@ import inspect
 import json
 import tempfile
 import types
-from collections.abc import Callable, Mapping
+from collections.abc import AsyncIterator, Callable, Mapping
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import TYPE_CHECKING, Annotated, Any, Union, get_args, get_origin, get_type_hints
@@ -16,7 +16,9 @@ from typing import TYPE_CHECKING, Annotated, Any, Union, get_args, get_origin, g
 from claude_agent_sdk import (
     AssistantMessage,
     ClaudeAgentOptions,
+    ClaudeSDKClient,
     CLINotFoundError,
+    Message,
     RateLimitEvent,
     ResultMessage,
     SystemMessage,
@@ -26,7 +28,6 @@ from claude_agent_sdk import (
     ToolUseBlock,
     UserMessage,
     create_sdk_mcp_server,
-    query,
     tool,
 )
 from pydantic import (
@@ -176,9 +177,12 @@ async def run(
             None,
         )
         try:
-            # Closing the stream stops the CLI even when handling a message raises.
+            # Closing the stream waits for the CLI to stop, even when handling a message
+            # raises, so the working folder outlives it.
             async with contextlib.aclosing(
-                query(prompt=_prompt(prompt_inputs, output_folder, directory), options=options)
+                _session(
+                    prompt=_prompt(prompt_inputs, output_folder, directory), options=options
+                )
             ) as messages:
                 async for message in messages:
                     await transcript.add(message)
@@ -284,6 +288,15 @@ def _input_files(request: AgentRequest) -> list[File]:
         elif info.annotation == list[File]:
             files.extend(value)
     return files
+
+
+async def _session(*, prompt: str, options: ClaudeAgentOptions) -> AsyncIterator[Message]:
+    """The session's messages up to its result; closing it awaits the CLI's exit."""
+    async with ClaudeSDKClient(options=options) as client:
+        await client.query(prompt)
+        async with contextlib.aclosing(client.receive_response()) as messages:
+            async for message in messages:
+                yield message
 
 
 def _prompt_path(path: Path, directory: Path) -> str:
