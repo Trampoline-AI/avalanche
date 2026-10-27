@@ -157,13 +157,14 @@ class Skill(BaseModel):
 def _split_frontmatter(skill_file: Path) -> tuple[Mapping[str, object], str]:
     """The frontmatter mapping and the Markdown body of a ``SKILL.md`` file."""
     lines = skill_file.read_text(encoding="utf-8").splitlines()
-    if not lines or lines[0].strip() != _FRONTMATTER_DELIMITER:
+    # Delimiters start at column 0; an indented "---" belongs to a YAML value.
+    if not lines or lines[0].rstrip() != _FRONTMATTER_DELIMITER:
         raise SkillFormatError(f"{skill_file}: must start with a '---' frontmatter line")
     try:
         end = next(
             index
             for index, line in enumerate(lines[1:], start=1)
-            if line.strip() == _FRONTMATTER_DELIMITER
+            if line.rstrip() == _FRONTMATTER_DELIMITER
         )
     except StopIteration:
         raise SkillFormatError(f"{skill_file}: frontmatter has no closing '---' line") from None
