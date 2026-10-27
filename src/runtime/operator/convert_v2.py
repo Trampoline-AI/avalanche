@@ -184,6 +184,7 @@ _TRACE_STATUS_TO_V2: Mapping[AgentTraceStatus, int] = {
 _TRACE_STATUS_FROM_V2 = {value: key for key, value in _TRACE_STATUS_TO_V2.items()}
 _AGENT_EVENT_KIND_TO_V2: Mapping[AgentEventKind, int] = {
     "native": pb.AGENT_EVENT_KIND_V2_NATIVE,
+    "run.started": pb.AGENT_EVENT_KIND_V2_RUN_STARTED,
     "turn.finished": pb.AGENT_EVENT_KIND_V2_TURN_FINISHED,
     "tool.started": pb.AGENT_EVENT_KIND_V2_TOOL_STARTED,
     "tool.finished": pb.AGENT_EVENT_KIND_V2_TOOL_FINISHED,
@@ -861,8 +862,6 @@ def trace_header_from_v2(msg: pb.TraceHeaderV2) -> TraceHeader:
         )
     return TraceHeader(
         status=_TRACE_STATUS_FROM_V2[msg.status],
-        runtime_kind=msg.runtime_kind,
-        trace_format=msg.trace_format,
         model=msg.model if msg.HasField("model") else None,
         duration_ms=msg.duration_ms,
         usage=token_usage_from_v2(msg.usage) if msg.HasField("usage") else None,

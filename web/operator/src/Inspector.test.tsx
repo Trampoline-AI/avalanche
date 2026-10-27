@@ -23,8 +23,8 @@ import {
 import type { AgentEventKind } from "./model";
 import {
   predictRlmTraceHeader,
+  finishedTrace,
   runStartedEvent,
-  runSucceededEvent,
   tokenUsage,
   turnEvent,
   type TurnOptions,
@@ -90,8 +90,6 @@ const run = RunSnapshotMsg.create({
         available: true,
         header: {
           status: "succeeded",
-          runtimeKind: "predict_rlm",
-          traceFormat: "predict_rlm.run/v1",
           model: "retained-model",
           turnCount: "2",
           toolCallCount: "0",
@@ -109,16 +107,24 @@ const run = RunSnapshotMsg.create({
     },
   ],
 });
+// Events with only a common part; any other kind is a runtime's own (native) kind.
+// A run whose final event, which carries the step's outputs, can be read.
+const runWithOutputs = RunSnapshotMsg.create({
+  ...run,
+  nodes: [{ ...run.nodes[0], trace: { ...run.nodes[0].trace, bodyToken: "trace-body" } }],
+});
 const COMMON_EVENT_KINDS: Record<string, AgentEventKind> = {
-  "iteration.recorded": "turn.finished",
+  "run.started": "run.started",
+  "turn.finished": "turn.finished",
   "tool.started": "tool.started",
   "tool.finished": "tool.finished",
 };
-function event(sequence: number, nativeEventKind = "iteration.recorded") {
+function event(sequence: number, kind = "turn.finished") {
+  const common = COMMON_EVENT_KINDS[kind];
   return AgentEventDescriptorMsg.create({
     eventSequence: String(sequence),
-    nativeEventKind,
-    agentEventKind: COMMON_EVENT_KINDS[nativeEventKind] ?? "native",
+    nativeEventKind: common ? "" : kind,
+    agentEventKind: common ?? "native",
     bodyToken: `event-${sequence}`,
     sizeBytes: "64",
     turn: sequence,
@@ -391,45 +397,53 @@ describe("retained run inspection", () => {
     const api = createApi({
       listAgentEventPage: async (request) =>
         request.expectedRunId === "other-run"
-          ? eventPage([event(3, "run.started"), event(4, "run.succeeded")])
-          : eventPage([event(1, "run.started"), event(2, "run.succeeded")]),
+          ? eventPage([event(3, "run.started"), event(4)])
+          : eventPage([event(1, "run.started"), event(2)]),
       readJsonDetail: (token, signal) => {
         if (token === "event-1") {
           inputSignal = signal;
           return input.promise;
         }
-        if (token === "event-2") {
+        if (token === "trace-body") {
           outputSignal = signal;
           return output.promise;
         }
         return Promise.resolve(
           token === "event-3"
             ? runStartedEvent({ question: "new input" })
-            : runSucceededEvent({ answer: "new output" }),
+            : finishedTrace({ outputs: { answer: "new output" } }),
         );
       },
     });
+    const otherRun = RunSnapshotMsg.create({
+      ...runWithOutputs,
+      summary: { ...run.summary, runId: "other-run" },
+      nodes: runWithOutputs.nodes.map((item) => ({
+        ...item,
+        trace: { ...item.trace, bodyToken: "other-trace-body" },
+      })),
+    });
     const view = render(
-      <Inspector api={api} run={run} nodeId={node.nodeId} onClose={() => undefined} />,
+      <Inspector
+        api={api}
+        run={runWithOutputs}
+        nodeId={node.nodeId}
+        onClose={() => undefined}
+      />,
     );
     openRunIo();
     await waitFor(() => expect(inputSignal).toBeDefined());
     await waitFor(() => expect(outputSignal).toBeDefined());
     expect(inputSignal?.aborted).toBe(false);
     await act(async () => {
-      output.resolve(runSucceededEvent({ answer: "independent output" }));
+      output.resolve(finishedTrace({ outputs: { answer: "independent output" } }));
       await output.promise;
     });
     expect(await screen.findByText("independent output")).toBeInTheDocument();
     expect(inputSignal?.aborted).toBe(false);
 
     view.rerender(
-      <Inspector
-        api={api}
-        run={RunSnapshotMsg.create({ ...run, summary: { ...run.summary, runId: "other-run" } })}
-        nodeId={node.nodeId}
-        onClose={() => undefined}
-      />,
+      <Inspector api={api} run={otherRun} nodeId={node.nodeId} onClose={() => undefined} />,
     );
     expect(inputSignal?.aborted).toBe(true);
     expect(outputSignal?.aborted).toBe(true);
@@ -444,7 +458,7 @@ describe("retained run inspection", () => {
     expect(screen.queryByText("independent output")).not.toBeInTheDocument();
   });
 
-  it("keeps both roots while paging beyond the descriptor window using independent cursors", async () => {
+  it("keeps the input root while paging beyond the descriptor window", async () => {
     const listAgentEventPage = vi.fn<OperatorApi["listAgentEventPage"]>(async (request) => {
       const pageIndex = request.pageToken === "events" ? 0 : Number(request.pageToken);
       const records = Array.from({ length: 100 }, (_, index) => {
@@ -452,14 +466,7 @@ describe("retained run inspection", () => {
         const sequence =
           request.order === DescriptorPageOrder.FORWARD ? offset + 1 : 600 - offset;
         // Non-turn lifecycle events avoid hydrating trace bodies before switching views.
-        return event(
-          sequence,
-          sequence === 1
-            ? "run.started"
-            : sequence === 600
-              ? "run.succeeded"
-              : "activity.recorded",
-        );
+        return event(sequence, sequence === 1 ? "run.started" : "activity.recorded");
       });
       return eventPage(records, pageIndex < 5 ? String(pageIndex + 1) : "");
     });
@@ -468,9 +475,16 @@ describe("retained run inspection", () => {
       readJsonDetail: async (token) =>
         token === "event-1"
           ? runStartedEvent({ question: "Original input" })
-          : runSucceededEvent({ answer: "Final output" }),
+          : finishedTrace({ outputs: { answer: "Final output" } }),
     });
-    render(<Inspector api={api} run={run} nodeId={node.nodeId} onClose={() => undefined} />);
+    render(
+      <Inspector
+        api={api}
+        run={runWithOutputs}
+        nodeId={node.nodeId}
+        onClose={() => undefined}
+      />,
+    );
     openRunIo();
     await screen.findByText("Original input");
     await screen.findByText("Final output");
@@ -500,29 +514,11 @@ describe("retained run inspection", () => {
         ).not.toBeInTheDocument(),
       );
     }
-    expect(screen.getByText("Original input")).toBeInTheDocument();
-    expect(screen.getByText("Final output")).toBeInTheDocument();
-    for (let page = 1; page < 6; page += 1) {
-      const outputMore = screen.getByRole("button", { name: "Load more output events" });
-      await waitFor(() => expect(outputMore).toBeEnabled());
-      fireEvent.click(outputMore);
-      await waitFor(() =>
-        expect(listAgentEventPage).toHaveBeenCalledWith(
-          expect.objectContaining({
-            order: DescriptorPageOrder.NEWEST_FIRST,
-            pageToken: String(page),
-            afterEventSequence: "0",
-            beforeEventSequence: String(601 - page * 100),
-          }),
-          expect.any(AbortSignal),
-        ),
-      );
-      await waitFor(() =>
-        expect(
-          screen.queryByRole("button", { name: "Loading output events…" }),
-        ).not.toBeInTheDocument(),
-      );
-    }
+    // Outputs come from the final event, so only the inputs page through events.
+    expect(listAgentEventPage).not.toHaveBeenCalledWith(
+      expect.objectContaining({ order: DescriptorPageOrder.NEWEST_FIRST }),
+      expect.any(AbortSignal),
+    );
     expect(screen.getByText("Original input")).toBeInTheDocument();
     expect(screen.getByText("Final output")).toBeInTheDocument();
     expect(
@@ -535,11 +531,18 @@ describe("retained run inspection", () => {
       listAgentEventPage: async (request) => {
         if (request.order === DescriptorPageOrder.FORWARD)
           throw new Error("Input page unavailable");
-        return eventPage([event(2, "run.succeeded")]);
+        return eventPage([event(2)]);
       },
-      readJsonDetail: async () => runSucceededEvent({ answer: "available output" }),
+      readJsonDetail: async () => finishedTrace({ outputs: { answer: "available output" } }),
     });
-    render(<Inspector api={api} run={run} nodeId={node.nodeId} onClose={() => undefined} />);
+    render(
+      <Inspector
+        api={api}
+        run={runWithOutputs}
+        nodeId={node.nodeId}
+        onClose={() => undefined}
+      />,
+    );
     openRunIo();
     expect(
       await within(await screen.findByRole("region", { name: "Inputs" })).findByRole("alert"),
@@ -547,16 +550,39 @@ describe("retained run inspection", () => {
     expect(await screen.findByText("available output")).toBeInTheDocument();
   });
 
+  it("names the outputs and inputs the trace left out for size", async () => {
+    const api = createApi({
+      listAgentEventPage: async () => eventPage([event(1, "run.started")]),
+      readJsonDetail: async (token) =>
+        token === "trace-body"
+          ? finishedTrace({ outputs: {}, omittedOutputs: ["answer"] })
+          : runStartedEvent({}, 1, ["question"]),
+    });
+    render(
+      <Inspector
+        api={api}
+        run={runWithOutputs}
+        nodeId={node.nodeId}
+        onClose={() => undefined}
+      />,
+    );
+    openRunIo();
+    const inputs = await screen.findByRole("region", { name: "Inputs" });
+    const outputs = screen.getByRole("region", { name: "Outputs" });
+    expect(await within(inputs).findByRole("note")).toHaveTextContent("question");
+    expect(await within(outputs).findByRole("note")).toHaveTextContent("answer");
+  });
+
   it("keeps run history visible when the current node is absent", async () => {
     const api = createApi({
-      listAgentEventPage: async () => eventPage([event(2, "run.succeeded")]),
-      readJsonDetail: async () => runSucceededEvent({ answer: "historical answer" }),
+      listAgentEventPage: async () => eventPage([event(2)]),
+      readJsonDetail: async () => finishedTrace({ outputs: { answer: "historical answer" } }),
     });
     const view = render(
       <Inspector
         api={api}
         workflow={agentWorkflow}
-        run={run}
+        run={runWithOutputs}
         nodeId={node.nodeId}
         onClose={() => undefined}
       />,
@@ -573,7 +599,7 @@ describe("retained run inspection", () => {
           nodeIds: ["replacement"],
           displayNames: { replacement: "Fetch" },
         })}
-        run={run}
+        run={runWithOutputs}
         nodeId={node.nodeId}
         onClose={() => undefined}
       />,
@@ -852,8 +878,6 @@ describe("retained run inspection", () => {
             bodyToken: "trace-body",
             header: {
               ...run.nodes[0].trace!.header!,
-              runtimeKind: "claude_agent",
-              traceFormat: "claude_agent.messages/v1",
               turnCount: "3",
               usage: { inputTokens: "12", outputTokens: "3", costUsd: 0.01 },
               native: {
@@ -920,6 +944,8 @@ describe("retained run inspection", () => {
       expect(header).toHaveTextContent("2 of 4 iterations");
       expect(header).toHaveTextContent("0.13s");
       if (tab === "Trace") {
+        // The header holds every detail, so the final event is not read for it.
+        expect(readJsonDetail).not.toHaveBeenCalledWith("trace-body", expect.anything());
         const tracePanel = screen.getByRole("region", { name: "Agent trace" });
         expect(
           within(tracePanel).queryByRole("heading", { name: "Agent trace" }),
@@ -931,8 +957,8 @@ describe("retained run inspection", () => {
         expect(tracePanel).not.toHaveTextContent("$0.0100");
       }
     }
-    // The header holds every detail, so the final trace body is never read for it.
-    expect(readJsonDetail).not.toHaveBeenCalledWith("trace-body", expect.anything());
+    // Only the Run I/O tab reads the final event, for the step's outputs.
+    expect(readJsonDetail).toHaveBeenCalledWith("trace-body", expect.anything());
   });
 
   it("opens skill Markdown separately while tool source and runtime stay inline", async () => {

@@ -330,7 +330,8 @@ message TraceHeaderV2 {
   reserved "sub_model", "iterations", "max_iterations", "usage_json", "telemetry_json";
   optional string model = 2;
   uint64 duration_ms = 6;
-  // Open strings, so a new runtime needs no protobuf change.
+  // Open strings, so a new runtime needs no protobuf change; both repeat what
+  // native_json says, for clients that do not parse it.
   string runtime_kind = 9;
   string trace_format = 10;
   uint64 turn_count = 11;
@@ -422,7 +423,8 @@ message RunActivityDescriptorV2 {
   optional uint32 turn = 21;
   // Agent events only: tool calls the event reports, sub-model calls included.
   uint32 tool_call_count = 22;
-  // Agent events only: the runtime's own event kind, such as "iteration.recorded".
+  // Agent events only: the runtime's own event kind, such as "iteration.recorded";
+  // empty when the event has only a common part.
   string native_event_kind = 23;
   // Agent events only: the common kind, or NATIVE when the event has none.
   AgentEventKindV2 agent_event_kind = 24;
@@ -440,6 +442,7 @@ enum AgentEventKindV2 {
       "AGENT_EVENT_KIND_V2_CODE_GENERATED";
   AGENT_EVENT_KIND_V2_TOOL_STARTED = 5;
   AGENT_EVENT_KIND_V2_TOOL_FINISHED = 6;
+  AGENT_EVENT_KIND_V2_RUN_STARTED = 8;
 }
 
 message ClassifierInvocationSummaryV2 {

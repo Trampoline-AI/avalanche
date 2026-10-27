@@ -6,17 +6,16 @@ can use ``GenericViewer`` as is.
 
 from __future__ import annotations
 
-from collections.abc import Mapping, Sequence
+from collections.abc import Sequence
 from dataclasses import dataclass
 
-from pydantic import JsonValue
-
 from avalanche.agent.live import AgentLiveEvent
-from avalanche.agent.trace import AgentTrace, TokenUsage, ToolCall, Turn
+from avalanche.agent.trace import AgentTraceHeader, TokenUsage, ToolCall, Turn
 
 from . import InspectionTurn, PendingStep, TraceGroup, TraceItem, TraceSection, TurnView
 
 COMMON_LABELS = {
+    "run.started": "Run started",
     "turn.finished": "Turn completed",
     "tool.started": "Tool call started",
     "tool.finished": "Tool call finished",
@@ -78,8 +77,7 @@ def reasoning_items(turn: Turn) -> list[TraceItem]:
 class GenericViewer:
     """Shows the common layer only."""
 
-    def header(self, record: AgentTrace) -> tuple[tuple[str, str], ...]:
-        header = record.header
+    def header(self, header: AgentTraceHeader) -> tuple[tuple[str, str], ...]:
         return (
             (f"Model: {header.model}", ""),
             (
@@ -90,11 +88,11 @@ class GenericViewer:
             (f"Usage: {usage_label(header.usage)}", ""),
         )
 
-    def turn_limit(self, record: AgentTrace | None) -> int | None:
+    def turn_limit(self, header: AgentTraceHeader | None) -> int | None:
         return None
 
-    def submitted(self, record: AgentTrace) -> bool:
-        return record.header.status == "succeeded"
+    def submitted(self, header: AgentTraceHeader) -> bool:
+        return header.status == "succeeded"
 
     def turn(self, turn: InspectionTurn, *, full_output: bool) -> TurnView:
         common = turn.finished
@@ -125,13 +123,10 @@ class GenericViewer:
     def live_label(self, event: AgentLiveEvent) -> str:
         if event.common is not None:
             return COMMON_LABELS[event.common.kind]
-        return event.native.kind
+        return event.kind_label
 
     def pending(self, events: Sequence[AgentLiveEvent]) -> tuple[PendingStep, ...]:
         return ()
-
-    def outputs(self, events: Sequence[AgentLiveEvent]) -> Mapping[str, JsonValue] | None:
-        return None
 
 
 GENERIC = GenericViewer()

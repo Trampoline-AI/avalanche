@@ -50,6 +50,7 @@
             {
               "discriminator": {
                 "mapping": {
+                  "run.started": "#/$defs/RunStarted",
                   "tool.finished": "#/$defs/ToolFinished",
                   "tool.started": "#/$defs/ToolStarted",
                   "turn.finished": "#/$defs/TurnFinished"
@@ -57,6 +58,9 @@
                 "propertyName": "kind"
               },
               "oneOf": [
+                {
+                  "$ref": "#/$defs/RunStarted"
+                },
                 {
                   "$ref": "#/$defs/TurnFinished"
                 },
@@ -86,218 +90,151 @@
           "type": "string"
         },
         "native": {
-          "discriminator": {
-            "mapping": {
-              "claude_agent.messages/v1": {
-                "discriminator": {
-                  "mapping": {
-                    "finished": "#/$defs/Finished",
-                    "message.finished": "#/$defs/MessageFinished",
-                    "rate_limit": "#/$defs/RateLimited",
-                    "session.initialized": "#/$defs/SessionInitialized",
-                    "started": "#/$defs/Started",
-                    "tool.returned": "#/$defs/ToolReturned",
-                    "tool.used": "#/$defs/ToolUsed"
-                  },
-                  "propertyName": "kind"
-                },
-                "oneOf": [
-                  {
-                    "$ref": "#/$defs/Started"
-                  },
-                  {
-                    "$ref": "#/$defs/SessionInitialized"
-                  },
-                  {
-                    "$ref": "#/$defs/ToolUsed"
-                  },
-                  {
-                    "$ref": "#/$defs/ToolReturned"
-                  },
-                  {
-                    "$ref": "#/$defs/MessageFinished"
-                  },
-                  {
-                    "$ref": "#/$defs/RateLimited"
-                  },
-                  {
-                    "$ref": "#/$defs/Finished"
-                  }
-                ]
-              },
-              "predict_rlm.run/v1": {
-                "discriminator": {
-                  "mapping": {
-                    "artifact.collected": "#/$defs/Lifecycle",
-                    "artifact.mounted": "#/$defs/Lifecycle",
-                    "code.executed": "#/$defs/CodeExecuted",
-                    "code.generated": "#/$defs/CodeGenerated",
-                    "input.prepared": "#/$defs/Lifecycle",
-                    "iteration.recorded": "#/$defs/IterationRecorded",
-                    "output.materialized": "#/$defs/Lifecycle",
-                    "output.reserved": "#/$defs/Lifecycle",
-                    "packages.installed": "#/$defs/Lifecycle",
-                    "predict.finished": "#/$defs/PredictFinished",
-                    "predict.started": "#/$defs/PredictStarted",
-                    "run.cancelled": "#/$defs/RunEnded",
-                    "run.failed": "#/$defs/RunEnded",
-                    "run.started": "#/$defs/RunStarted",
-                    "run.succeeded": "#/$defs/RunSucceeded",
-                    "session.finalize_failed": "#/$defs/Lifecycle",
-                    "session.finalized": "#/$defs/Lifecycle",
-                    "session.release_failed": "#/$defs/Lifecycle",
-                    "session.released": "#/$defs/Lifecycle",
-                    "session.started": "#/$defs/Lifecycle",
-                    "tool.finished": "#/$defs/Correlated",
-                    "tool.started": "#/$defs/Correlated"
-                  },
-                  "propertyName": "kind"
-                },
-                "oneOf": [
-                  {
-                    "$ref": "#/$defs/RunStarted"
-                  },
-                  {
-                    "$ref": "#/$defs/Lifecycle"
-                  },
-                  {
-                    "$ref": "#/$defs/IterationRecorded"
-                  },
-                  {
-                    "$ref": "#/$defs/CodeGenerated"
-                  },
-                  {
-                    "$ref": "#/$defs/PredictStarted"
-                  },
-                  {
-                    "$ref": "#/$defs/PredictFinished"
-                  },
-                  {
-                    "$ref": "#/$defs/Correlated"
-                  },
-                  {
-                    "$ref": "#/$defs/CodeExecuted"
-                  },
-                  {
-                    "$ref": "#/$defs/RunSucceeded"
-                  },
-                  {
-                    "$ref": "#/$defs/RunEnded"
-                  }
-                ]
-              }
-            },
-            "propertyName": "format"
-          },
-          "oneOf": [
+          "anyOf": [
             {
               "discriminator": {
                 "mapping": {
-                  "artifact.collected": "#/$defs/Lifecycle",
-                  "artifact.mounted": "#/$defs/Lifecycle",
-                  "code.executed": "#/$defs/CodeExecuted",
-                  "code.generated": "#/$defs/CodeGenerated",
-                  "input.prepared": "#/$defs/Lifecycle",
-                  "iteration.recorded": "#/$defs/IterationRecorded",
-                  "output.materialized": "#/$defs/Lifecycle",
-                  "output.reserved": "#/$defs/Lifecycle",
-                  "packages.installed": "#/$defs/Lifecycle",
-                  "predict.finished": "#/$defs/PredictFinished",
-                  "predict.started": "#/$defs/PredictStarted",
-                  "run.cancelled": "#/$defs/RunEnded",
-                  "run.failed": "#/$defs/RunEnded",
-                  "run.started": "#/$defs/RunStarted",
-                  "run.succeeded": "#/$defs/RunSucceeded",
-                  "session.finalize_failed": "#/$defs/Lifecycle",
-                  "session.finalized": "#/$defs/Lifecycle",
-                  "session.release_failed": "#/$defs/Lifecycle",
-                  "session.released": "#/$defs/Lifecycle",
-                  "session.started": "#/$defs/Lifecycle",
-                  "tool.finished": "#/$defs/Correlated",
-                  "tool.started": "#/$defs/Correlated"
+                  "claude_agent.messages/v1": {
+                    "discriminator": {
+                      "mapping": {
+                        "rate_limit": "#/$defs/RateLimited",
+                        "session.initialized": "#/$defs/SessionInitialized"
+                      },
+                      "propertyName": "kind"
+                    },
+                    "oneOf": [
+                      {
+                        "$ref": "#/$defs/SessionInitialized"
+                      },
+                      {
+                        "$ref": "#/$defs/RateLimited"
+                      }
+                    ]
+                  },
+                  "predict_rlm.run/v1": {
+                    "discriminator": {
+                      "mapping": {
+                        "artifact.collected": "#/$defs/Lifecycle",
+                        "artifact.mounted": "#/$defs/Lifecycle",
+                        "code.executed": "#/$defs/CodeExecuted",
+                        "code.generated": "#/$defs/CodeGenerated",
+                        "input.prepared": "#/$defs/Lifecycle",
+                        "iteration.recorded": "#/$defs/IterationRecorded",
+                        "output.materialized": "#/$defs/Lifecycle",
+                        "output.reserved": "#/$defs/Lifecycle",
+                        "packages.installed": "#/$defs/Lifecycle",
+                        "predict.finished": "#/$defs/PredictFinished",
+                        "predict.started": "#/$defs/PredictStarted",
+                        "run.cancelled": "#/$defs/RunEnded",
+                        "run.failed": "#/$defs/RunEnded",
+                        "session.finalize_failed": "#/$defs/Lifecycle",
+                        "session.finalized": "#/$defs/Lifecycle",
+                        "session.release_failed": "#/$defs/Lifecycle",
+                        "session.released": "#/$defs/Lifecycle",
+                        "session.started": "#/$defs/Lifecycle"
+                      },
+                      "propertyName": "kind"
+                    },
+                    "oneOf": [
+                      {
+                        "$ref": "#/$defs/Lifecycle"
+                      },
+                      {
+                        "$ref": "#/$defs/IterationRecorded"
+                      },
+                      {
+                        "$ref": "#/$defs/CodeGenerated"
+                      },
+                      {
+                        "$ref": "#/$defs/PredictStarted"
+                      },
+                      {
+                        "$ref": "#/$defs/PredictFinished"
+                      },
+                      {
+                        "$ref": "#/$defs/CodeExecuted"
+                      },
+                      {
+                        "$ref": "#/$defs/RunEnded"
+                      }
+                    ]
+                  }
                 },
-                "propertyName": "kind"
+                "propertyName": "format"
               },
               "oneOf": [
                 {
-                  "$ref": "#/$defs/RunStarted"
+                  "discriminator": {
+                    "mapping": {
+                      "artifact.collected": "#/$defs/Lifecycle",
+                      "artifact.mounted": "#/$defs/Lifecycle",
+                      "code.executed": "#/$defs/CodeExecuted",
+                      "code.generated": "#/$defs/CodeGenerated",
+                      "input.prepared": "#/$defs/Lifecycle",
+                      "iteration.recorded": "#/$defs/IterationRecorded",
+                      "output.materialized": "#/$defs/Lifecycle",
+                      "output.reserved": "#/$defs/Lifecycle",
+                      "packages.installed": "#/$defs/Lifecycle",
+                      "predict.finished": "#/$defs/PredictFinished",
+                      "predict.started": "#/$defs/PredictStarted",
+                      "run.cancelled": "#/$defs/RunEnded",
+                      "run.failed": "#/$defs/RunEnded",
+                      "session.finalize_failed": "#/$defs/Lifecycle",
+                      "session.finalized": "#/$defs/Lifecycle",
+                      "session.release_failed": "#/$defs/Lifecycle",
+                      "session.released": "#/$defs/Lifecycle",
+                      "session.started": "#/$defs/Lifecycle"
+                    },
+                    "propertyName": "kind"
+                  },
+                  "oneOf": [
+                    {
+                      "$ref": "#/$defs/Lifecycle"
+                    },
+                    {
+                      "$ref": "#/$defs/IterationRecorded"
+                    },
+                    {
+                      "$ref": "#/$defs/CodeGenerated"
+                    },
+                    {
+                      "$ref": "#/$defs/PredictStarted"
+                    },
+                    {
+                      "$ref": "#/$defs/PredictFinished"
+                    },
+                    {
+                      "$ref": "#/$defs/CodeExecuted"
+                    },
+                    {
+                      "$ref": "#/$defs/RunEnded"
+                    }
+                  ]
                 },
                 {
-                  "$ref": "#/$defs/Lifecycle"
-                },
-                {
-                  "$ref": "#/$defs/IterationRecorded"
-                },
-                {
-                  "$ref": "#/$defs/CodeGenerated"
-                },
-                {
-                  "$ref": "#/$defs/PredictStarted"
-                },
-                {
-                  "$ref": "#/$defs/PredictFinished"
-                },
-                {
-                  "$ref": "#/$defs/Correlated"
-                },
-                {
-                  "$ref": "#/$defs/CodeExecuted"
-                },
-                {
-                  "$ref": "#/$defs/RunSucceeded"
-                },
-                {
-                  "$ref": "#/$defs/RunEnded"
+                  "discriminator": {
+                    "mapping": {
+                      "rate_limit": "#/$defs/RateLimited",
+                      "session.initialized": "#/$defs/SessionInitialized"
+                    },
+                    "propertyName": "kind"
+                  },
+                  "oneOf": [
+                    {
+                      "$ref": "#/$defs/SessionInitialized"
+                    },
+                    {
+                      "$ref": "#/$defs/RateLimited"
+                    }
+                  ]
                 }
               ]
             },
             {
-              "discriminator": {
-                "mapping": {
-                  "finished": "#/$defs/Finished",
-                  "message.finished": "#/$defs/MessageFinished",
-                  "rate_limit": "#/$defs/RateLimited",
-                  "session.initialized": "#/$defs/SessionInitialized",
-                  "started": "#/$defs/Started",
-                  "tool.returned": "#/$defs/ToolReturned",
-                  "tool.used": "#/$defs/ToolUsed"
-                },
-                "propertyName": "kind"
-              },
-              "oneOf": [
-                {
-                  "$ref": "#/$defs/Started"
-                },
-                {
-                  "$ref": "#/$defs/SessionInitialized"
-                },
-                {
-                  "$ref": "#/$defs/ToolUsed"
-                },
-                {
-                  "$ref": "#/$defs/ToolReturned"
-                },
-                {
-                  "$ref": "#/$defs/MessageFinished"
-                },
-                {
-                  "$ref": "#/$defs/RateLimited"
-                },
-                {
-                  "$ref": "#/$defs/Finished"
-                }
-              ]
+              "type": "null"
             }
           ],
           "title": "Native"
-        },
-        "runtime_kind": {
-          "enum": [
-            "predict_rlm",
-            "claude_agent"
-          ],
-          "title": "Runtime Kind",
-          "type": "string"
         },
         "schema_version": {
           "const": 2,
@@ -322,54 +259,22 @@
         "invocation_id",
         "sequence",
         "timestamp_ns",
-        "runtime_kind",
         "common",
         "native"
       ],
       "title": "AgentLiveEvent",
       "type": "object"
     },
-    "AgentTrace": {
-      "additionalProperties": false,
-      "description": "The complete trace of one agent invocation.\n\nWhen ``turns_streamed`` is true, turns travelled as live events and the\nrecord carries none; the header still states how many there were.",
-      "properties": {
-        "header": {
-          "$ref": "#/$defs/AgentTraceHeader"
-        },
-        "schema_version": {
-          "const": 2,
-          "default": 2,
-          "title": "Schema Version",
-          "type": "integer"
-        },
-        "turns": {
-          "items": {
-            "$ref": "#/$defs/Turn"
-          },
-          "title": "Turns",
-          "type": "array"
-        },
-        "turns_streamed": {
-          "title": "Turns Streamed",
-          "type": "boolean"
-        }
-      },
-      "required": [
-        "schema_version",
-        "header",
-        "turns",
-        "turns_streamed"
-      ],
-      "title": "AgentTrace",
-      "type": "object"
-    },
     "AgentTraceFinished": {
       "additionalProperties": false,
-      "description": "The final trace of an invocation; its turns travelled as live events.\n\n``complete`` says whether every live event of the invocation was delivered.",
+      "description": "The end of an invocation: its trace header and the step's outputs.\n\nThe turns travelled as live events. ``outputs`` is ``None`` when the run\nreturned none; files and workspaces appear by reference, and fields too large\nto keep are left out and named in ``omitted_outputs``. ``complete`` says\nwhether every live event of the invocation was delivered.",
       "properties": {
         "complete": {
           "title": "Complete",
           "type": "boolean"
+        },
+        "header": {
+          "$ref": "#/$defs/AgentTraceHeader"
         },
         "invocation_id": {
           "minLength": 1,
@@ -382,8 +287,26 @@
           "title": "Kind",
           "type": "string"
         },
-        "record": {
-          "$ref": "#/$defs/AgentTrace"
+        "omitted_outputs": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Omitted Outputs",
+          "type": "array"
+        },
+        "outputs": {
+          "anyOf": [
+            {
+              "additionalProperties": {
+                "$ref": "#/$defs/JsonValue"
+              },
+              "type": "object"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Outputs"
         },
         "schema_version": {
           "const": 2,
@@ -396,7 +319,9 @@
         "kind",
         "schema_version",
         "invocation_id",
-        "record",
+        "header",
+        "outputs",
+        "omitted_outputs",
         "complete"
       ],
       "title": "AgentTraceFinished",
@@ -451,14 +376,6 @@
           ],
           "title": "Native"
         },
-        "runtime_kind": {
-          "enum": [
-            "predict_rlm",
-            "claude_agent"
-          ],
-          "title": "Runtime Kind",
-          "type": "string"
-        },
         "session_id": {
           "anyOf": [
             {
@@ -495,10 +412,6 @@
           "title": "Tool Call Count",
           "type": "integer"
         },
-        "trace_format": {
-          "title": "Trace Format",
-          "type": "string"
-        },
         "turn_count": {
           "minimum": 0,
           "title": "Turn Count",
@@ -516,8 +429,6 @@
         }
       },
       "required": [
-        "runtime_kind",
-        "trace_format",
         "status",
         "stop_reason",
         "model",
@@ -873,32 +784,6 @@
       "title": "CodeGenerated",
       "type": "object"
     },
-    "Correlated": {
-      "additionalProperties": false,
-      "description": "Native kinds whose common event already carries everything.",
-      "properties": {
-        "format": {
-          "const": "predict_rlm.run/v1",
-          "default": "predict_rlm.run/v1",
-          "title": "Format",
-          "type": "string"
-        },
-        "kind": {
-          "enum": [
-            "tool.started",
-            "tool.finished"
-          ],
-          "title": "Kind",
-          "type": "string"
-        }
-      },
-      "required": [
-        "format",
-        "kind"
-      ],
-      "title": "Correlated",
-      "type": "object"
-    },
     "FieldDeclaration": {
       "additionalProperties": false,
       "description": "One signature field as shown to people: its name, type name and description.",
@@ -924,74 +809,9 @@
       "title": "FieldDeclaration",
       "type": "object"
     },
-    "Finished": {
-      "additionalProperties": false,
-      "description": "The SDK's result message: how the session ended and the structured output.",
-      "properties": {
-        "errors": {
-          "items": {
-            "type": "string"
-          },
-          "title": "Errors",
-          "type": "array"
-        },
-        "format": {
-          "const": "claude_agent.messages/v1",
-          "default": "claude_agent.messages/v1",
-          "title": "Format",
-          "type": "string"
-        },
-        "is_error": {
-          "title": "Is Error",
-          "type": "boolean"
-        },
-        "kind": {
-          "const": "finished",
-          "default": "finished",
-          "title": "Kind",
-          "type": "string"
-        },
-        "num_turns": {
-          "minimum": 0,
-          "title": "Num Turns",
-          "type": "integer"
-        },
-        "output_omitted": {
-          "title": "Output Omitted",
-          "type": "boolean"
-        },
-        "structured_output": {
-          "$ref": "#/$defs/JsonValue"
-        },
-        "subtype": {
-          "title": "Subtype",
-          "type": "string"
-        },
-        "workspace_outputs": {
-          "items": {
-            "type": "string"
-          },
-          "title": "Workspace Outputs",
-          "type": "array"
-        }
-      },
-      "required": [
-        "format",
-        "kind",
-        "subtype",
-        "is_error",
-        "num_turns",
-        "structured_output",
-        "output_omitted",
-        "workspace_outputs",
-        "errors"
-      ],
-      "title": "Finished",
-      "type": "object"
-    },
     "IterationRecorded": {
       "additionalProperties": false,
-      "description": "A finished turn, which is the common event; this says what its live event left out.",
+      "description": "What a finished turn's live event left out; sent only when it left something out.",
       "properties": {
         "format": {
           "const": "predict_rlm.run/v1",
@@ -1006,14 +826,7 @@
           "type": "string"
         },
         "omissions": {
-          "anyOf": [
-            {
-              "$ref": "#/$defs/PredictRLMOmissions"
-            },
-            {
-              "type": "null"
-            }
-          ]
+          "$ref": "#/$defs/PredictRLMOmissions"
         }
       },
       "required": [
@@ -1058,30 +871,6 @@
         "kind"
       ],
       "title": "Lifecycle",
-      "type": "object"
-    },
-    "MessageFinished": {
-      "additionalProperties": false,
-      "description": "One assistant message, completed by its tool results; the turn is common.",
-      "properties": {
-        "format": {
-          "const": "claude_agent.messages/v1",
-          "default": "claude_agent.messages/v1",
-          "title": "Format",
-          "type": "string"
-        },
-        "kind": {
-          "const": "message.finished",
-          "default": "message.finished",
-          "title": "Kind",
-          "type": "string"
-        }
-      },
-      "required": [
-        "format",
-        "kind"
-      ],
-      "title": "MessageFinished",
       "type": "object"
     },
     "PredictFinished": {
@@ -1691,69 +1480,47 @@
     },
     "RunStarted": {
       "additionalProperties": false,
+      "description": "The call as the runtime started it: the step's inputs and the model it asked for.\n\nFiles and workspaces appear by reference. Inputs too large for the event are\nleft out and named in ``omitted_inputs``.",
       "properties": {
-        "format": {
-          "const": "predict_rlm.run/v1",
-          "default": "predict_rlm.run/v1",
-          "title": "Format",
-          "type": "string"
-        },
-        "input_fields": {
-          "items": {
-            "type": "string"
-          },
-          "title": "Input Fields",
-          "type": "array"
-        },
         "inputs": {
-          "$ref": "#/$defs/JsonValue"
+          "additionalProperties": {
+            "$ref": "#/$defs/JsonValue"
+          },
+          "title": "Inputs",
+          "type": "object"
         },
         "kind": {
           "const": "run.started",
           "default": "run.started",
           "title": "Kind",
           "type": "string"
+        },
+        "model": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Model"
+        },
+        "omitted_inputs": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Omitted Inputs",
+          "type": "array"
         }
       },
       "required": [
-        "format",
         "kind",
-        "input_fields",
-        "inputs"
+        "model",
+        "inputs",
+        "omitted_inputs"
       ],
       "title": "RunStarted",
-      "type": "object"
-    },
-    "RunSucceeded": {
-      "additionalProperties": false,
-      "properties": {
-        "format": {
-          "const": "predict_rlm.run/v1",
-          "default": "predict_rlm.run/v1",
-          "title": "Format",
-          "type": "string"
-        },
-        "kind": {
-          "const": "run.succeeded",
-          "default": "run.succeeded",
-          "title": "Kind",
-          "type": "string"
-        },
-        "outputs": {
-          "$ref": "#/$defs/JsonValue"
-        },
-        "status": {
-          "title": "Status",
-          "type": "string"
-        }
-      },
-      "required": [
-        "format",
-        "kind",
-        "status",
-        "outputs"
-      ],
-      "title": "RunSucceeded",
       "type": "object"
     },
     "SessionInitialized": {
@@ -1845,46 +1612,6 @@
         "outputs"
       ],
       "title": "SignatureDeclaration",
-      "type": "object"
-    },
-    "Started": {
-      "additionalProperties": false,
-      "description": "The prompt Avalanche sent: the step's inputs and its working directory's role.",
-      "properties": {
-        "format": {
-          "const": "claude_agent.messages/v1",
-          "default": "claude_agent.messages/v1",
-          "title": "Format",
-          "type": "string"
-        },
-        "inputs": {
-          "$ref": "#/$defs/JsonValue"
-        },
-        "kind": {
-          "const": "started",
-          "default": "started",
-          "title": "Kind",
-          "type": "string"
-        },
-        "model": {
-          "anyOf": [
-            {
-              "type": "string"
-            },
-            {
-              "type": "null"
-            }
-          ],
-          "title": "Model"
-        }
-      },
-      "required": [
-        "format",
-        "kind",
-        "model",
-        "inputs"
-      ],
-      "title": "Started",
       "type": "object"
     },
     "TokenUsage": {
@@ -2072,45 +1799,28 @@
         "name": {
           "title": "Name",
           "type": "string"
+        },
+        "turn": {
+          "anyOf": [
+            {
+              "exclusiveMinimum": 0,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Turn"
         }
       },
       "required": [
         "kind",
         "call_id",
         "name",
+        "turn",
         "error"
       ],
       "title": "ToolFinished",
-      "type": "object"
-    },
-    "ToolReturned": {
-      "additionalProperties": false,
-      "description": "A tool's result reached the model; the common event says whether it failed.",
-      "properties": {
-        "format": {
-          "const": "claude_agent.messages/v1",
-          "default": "claude_agent.messages/v1",
-          "title": "Format",
-          "type": "string"
-        },
-        "kind": {
-          "const": "tool.returned",
-          "default": "tool.returned",
-          "title": "Kind",
-          "type": "string"
-        },
-        "turn_index": {
-          "minimum": 0,
-          "title": "Turn Index",
-          "type": "integer"
-        }
-      },
-      "required": [
-        "format",
-        "kind",
-        "turn_index"
-      ],
-      "title": "ToolReturned",
       "type": "object"
     },
     "ToolStarted": {
@@ -2129,44 +1839,27 @@
         "name": {
           "title": "Name",
           "type": "string"
+        },
+        "turn": {
+          "anyOf": [
+            {
+              "exclusiveMinimum": 0,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Turn"
         }
       },
       "required": [
         "kind",
         "call_id",
-        "name"
+        "name",
+        "turn"
       ],
       "title": "ToolStarted",
-      "type": "object"
-    },
-    "ToolUsed": {
-      "additionalProperties": false,
-      "description": "The model asked for a tool; the common event names the call.",
-      "properties": {
-        "format": {
-          "const": "claude_agent.messages/v1",
-          "default": "claude_agent.messages/v1",
-          "title": "Format",
-          "type": "string"
-        },
-        "kind": {
-          "const": "tool.used",
-          "default": "tool.used",
-          "title": "Kind",
-          "type": "string"
-        },
-        "turn_index": {
-          "minimum": 0,
-          "title": "Turn Index",
-          "type": "integer"
-        }
-      },
-      "required": [
-        "format",
-        "kind",
-        "turn_index"
-      ],
-      "title": "ToolUsed",
       "type": "object"
     },
     "Turn": {

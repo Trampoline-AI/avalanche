@@ -989,7 +989,6 @@ def _mock_agent_trace() -> AgentTraceEnvelope:
     *live, terminal = sent
     assert isinstance(terminal, AgentTraceFinished)
     return AgentTraceEnvelope(
-        schema_version=2,
         invocation_id="agent-mock",
         status="succeeded",
         events=tuple(event for event in live if isinstance(event, AgentLiveEvent)),

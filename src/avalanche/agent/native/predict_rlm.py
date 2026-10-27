@@ -1,17 +1,16 @@
 """PredictRLM's native header, turn and live-event parts, format ``predict_rlm.run/v1``.
 
 The header carries PredictRLM's run details, each turn its own part (its code and
-output), and each live event carries the common event, when there is one, plus the
-details only PredictRLM has. These models mirror the parts of PredictRLM's own records
-that the common layer does not hold, and import nothing from PredictRLM, so the
-operator, client and TUI validate them without the runtime installed.
+output), and live events carry the details only PredictRLM has; events the common
+layer describes fully, such as tool calls, have no native part. These models mirror
+the parts of PredictRLM's own records that the common layer does not hold, and import
+nothing from PredictRLM, so the operator, client and TUI validate them without the
+runtime installed.
 """
 
 from __future__ import annotations
 
-from collections.abc import Mapping
-from types import MappingProxyType
-from typing import Annotated, ClassVar, Literal, get_args
+from typing import Annotated, ClassVar, Literal
 
 from pydantic import (
     BaseModel,
@@ -23,7 +22,7 @@ from pydantic import (
     PositiveInt,
 )
 
-from ..kinds import CommonEventKind, RuntimeKind
+from ..kinds import RuntimeKind
 
 _STRICT = ConfigDict(
     strict=True,
@@ -126,8 +125,6 @@ class _Event(BaseModel):
 
     format: Literal["predict_rlm.run/v1"] = FORMAT
     runtime_kind: ClassVar[RuntimeKind] = "predict_rlm"
-    # The common event kind each native kind travels with; ``None`` for none.
-    common_kinds: ClassVar[Mapping[str, CommonEventKind | None]]
 
     @property
     def turn(self) -> int | None:
@@ -140,28 +137,18 @@ class _Event(BaseModel):
         return None
 
 
-class RunStarted(_Event):
-    kind: Literal["run.started"] = "run.started"
-    common_kinds = MappingProxyType({"run.started": None})
-
-    input_fields: tuple[str, ...]
-    inputs: JsonValue
-
-
 class IterationRecorded(_Event):
-    """A finished turn, which is the common event; this says what its live event left out."""
+    """What a finished turn's live event left out; sent only when it left something out."""
 
     kind: Literal["iteration.recorded"] = "iteration.recorded"
-    common_kinds = MappingProxyType({"iteration.recorded": "turn.finished"})
 
-    omissions: PredictRLMOmissions | None
+    omissions: PredictRLMOmissions
 
 
 class CodeGenerated(_Event):
     """The code of a turn still running; the finished turn carries it too."""
 
     kind: Literal["code.generated"] = "code.generated"
-    common_kinds = MappingProxyType({"code.generated": None})
 
     iteration: NonNegativeInt
     code: str
@@ -175,7 +162,6 @@ class PredictStarted(_Event):
     """A sub-model call started by the agent's code."""
 
     kind: Literal["predict.started"] = "predict.started"
-    common_kinds = MappingProxyType({"predict.started": None})
 
     call_id: str
     signature: str
@@ -185,7 +171,6 @@ class PredictStarted(_Event):
 
 class PredictFinished(_Event):
     kind: Literal["predict.finished"] = "predict.finished"
-    common_kinds = MappingProxyType({"predict.finished": None})
 
     call_id: str
     predict_error: str | None
@@ -195,18 +180,8 @@ class PredictFinished(_Event):
         return self.predict_error
 
 
-class Correlated(_Event):
-    """Native kinds whose common event already carries everything."""
-
-    kind: Literal["tool.started", "tool.finished"]
-    common_kinds = MappingProxyType(
-        {"tool.started": "tool.started", "tool.finished": "tool.finished"}
-    )
-
-
 class CodeExecuted(_Event):
     kind: Literal["code.executed"] = "code.executed"
-    common_kinds = MappingProxyType({"code.executed": None})
 
     iteration: NonNegativeInt
     output: str | None
@@ -221,19 +196,10 @@ class CodeExecuted(_Event):
         return self.execution_error
 
 
-class RunSucceeded(_Event):
-    kind: Literal["run.succeeded"] = "run.succeeded"
-    common_kinds = MappingProxyType({"run.succeeded": None})
-
-    status: str
-    outputs: JsonValue
-
-
 class RunEnded(_Event):
     """A run that failed or was cancelled."""
 
     kind: Literal["run.failed", "run.cancelled"]
-    common_kinds = MappingProxyType({"run.failed": None, "run.cancelled": None})
 
     error_type: str
     run_error: str
@@ -262,19 +228,15 @@ class Lifecycle(_Event):
     """Sandbox and artifact lifecycle steps; Avalanche keeps only that they happened."""
 
     kind: LifecycleKind
-    common_kinds = MappingProxyType(dict.fromkeys(get_args(LifecycleKind)))
 
 
 PredictRLMNativeEvent = Annotated[
-    RunStarted
-    | Lifecycle
+    Lifecycle
     | IterationRecorded
     | CodeGenerated
     | PredictStarted
     | PredictFinished
-    | Correlated
     | CodeExecuted
-    | RunSucceeded
     | RunEnded,
     Field(discriminator="kind"),
 ]

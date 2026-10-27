@@ -425,7 +425,7 @@ export function AgentTraceExplorer({
                 <span className="relative inline-flex size-2 rounded-full bg-agent" />
               </span>
               <span>
-                {activityLabel(currentActivity.nativeEventKind)}
+                {activityLabel(currentActivity.nativeEventKind, currentActivity.agentEventKind)}
                 {currentActivity.turn ? ` · turn ${currentActivity.turn}` : ""}
               </span>
             </div>

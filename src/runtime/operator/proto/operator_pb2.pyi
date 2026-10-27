@@ -21,6 +21,7 @@ class AgentEventKindV2(int, metaclass=_enum_type_wrapper.EnumTypeWrapper):
     AGENT_EVENT_KIND_V2_TURN_FINISHED: _ClassVar[AgentEventKindV2]
     AGENT_EVENT_KIND_V2_TOOL_STARTED: _ClassVar[AgentEventKindV2]
     AGENT_EVENT_KIND_V2_TOOL_FINISHED: _ClassVar[AgentEventKindV2]
+    AGENT_EVENT_KIND_V2_RUN_STARTED: _ClassVar[AgentEventKindV2]
 
 class PageOrderV2(int, metaclass=_enum_type_wrapper.EnumTypeWrapper):
     __slots__ = ()
@@ -36,6 +37,7 @@ AGENT_EVENT_KIND_V2_NATIVE: AgentEventKindV2
 AGENT_EVENT_KIND_V2_TURN_FINISHED: AgentEventKindV2
 AGENT_EVENT_KIND_V2_TOOL_STARTED: AgentEventKindV2
 AGENT_EVENT_KIND_V2_TOOL_FINISHED: AgentEventKindV2
+AGENT_EVENT_KIND_V2_RUN_STARTED: AgentEventKindV2
 PAGE_ORDER_V2_FORWARD: PageOrderV2
 PAGE_ORDER_V2_NEWEST_FIRST: PageOrderV2
 
