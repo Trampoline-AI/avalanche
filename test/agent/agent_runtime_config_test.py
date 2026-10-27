@@ -230,11 +230,14 @@ def test_step_skills_are_declared_next_to_tools():
 def test_step_skills_must_be_distinct_agent_skills(skills, error, message):
     with pytest.raises(error, match=message):
         ava.agent_step(Echo, skills=skills)
+    with pytest.raises(error, match=message):
+        ava.Agent(signature=Echo, step_name="echo", skills=skills)
 
 
 @pytest.mark.asyncio
 async def test_a_predict_rlm_step_with_agent_skills_fails_before_the_agent_starts():
-    agent = ava.Agent(signature=Echo, step_name="echo", skills=(_STYLE,))
+    # A list is accepted like any sequence; the request fails only for the runtime.
+    agent = ava.Agent(signature=Echo, step_name="echo", skills=[_STYLE])
 
     with pytest.raises(ava.agent.AgentStepError, match="ava.runtimes.predict_rlm.skills"):
         await agent(text="hi")

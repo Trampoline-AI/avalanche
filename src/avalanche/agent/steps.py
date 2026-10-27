@@ -182,14 +182,14 @@ class Agent:
         step_name: str,
         runtime: AgentRuntime | None = None,
         tools: tuple[Callable[..., Any], ...] = (),
-        skills: tuple[Skill, ...] = (),
+        skills: Sequence[Skill] = (),
     ) -> None:
         self._signature_declaration = signature
         self._step_name = step_name
         # PredictRLM when no runtime is given; built lazily, so nothing loads here.
         self._runtime = runtime
         self._declared_tools = tools
-        self._skills = skills
+        self._skills = _step_skills("ava.Agent", skills)
         self._signature: SignatureSpec | None = None
         self._tools: tuple[ToolSpec, ...] = ()
 
@@ -468,6 +468,10 @@ def _step_configuration(
     for tool in tools:
         if not callable(tool):
             raise TypeError(f"{owner} tools must be callable")
+    return runtime, tuple(tools), _step_skills(owner, skills)
+
+
+def _step_skills(owner: str, skills: object) -> tuple[Skill, ...]:
     if not isinstance(skills, Sequence) or isinstance(skills, str):
         raise TypeError(f"{owner} skills must be a sequence of ava.agent.Skill")
     for skill in skills:
@@ -480,7 +484,7 @@ def _step_configuration(
     duplicates = sorted({name for name in names if names.count(name) > 1})
     if duplicates:
         raise AgentStepError(f"{owner} has several skills named {duplicates}")
-    return runtime, tuple(tools), tuple(skills)
+    return tuple(skills)
 
 
 def agent_step(
