@@ -93,7 +93,7 @@ def test_a_minimal_skill_needs_only_a_name_and_description(tmp_path):
             f"---\nname: x\ndescription: d\ncompatibility: {'c' * 501}\n---\n",
             "compatibility",
         ),
-        ("x", "---\nname: x\ndescription: d\nmetadata:\n  version: 1.0\n---\n", "metadata"),
+        ("x", "---\nname: x\ndescription: d\nmetadata:\n  version: [1]\n---\n", "metadata"),
         ("x", "---\nname: x\ndescription: d\nmetadata: plain\n---\n", "metadata"),
         ("x", "---\nname: x\ndescription: d\nallowed-tools: [Read]\n---\n", "allowed_tools"),
         ("x", "---\nname: x\ndescription: d\nmodel: opus\n---\n", r"\['model'\]"),
@@ -147,6 +147,34 @@ def test_the_name_matches_a_symlinked_folder_as_given(tmp_path):
     assert Skill.from_dir(tmp_path / "pdf").name == "pdf"
     with pytest.raises(SkillFormatError, match="'pdf-v2'"):
         Skill.from_dir(tmp_path / "vendor" / "pdf-v2")
+
+
+@pytest.mark.parametrize("name", ["on", "no", "null", "123"])
+def test_frontmatter_scalars_stay_strings(tmp_path, name):
+    folder = _write_skill(
+        tmp_path,
+        name,
+        f"---\nname: {name}\ndescription: yes\nmetadata:\n  version: 1.0\n---\n",
+    )
+
+    skill = Skill.from_dir(folder)
+
+    assert (skill.name, skill.description, dict(skill.metadata)) == (
+        name,
+        "yes",
+        {"version": "1.0"},
+    )
+
+
+def test_from_dir_rejects_a_symlinked_folder(tmp_path):
+    shared = tmp_path / "shared"
+    shared.mkdir()
+    (shared / "guide.md").write_text("guide")
+    folder = _write_skill(tmp_path, "notes", "---\nname: notes\ndescription: d\n---\n")
+    (folder / "references").symlink_to(shared, target_is_directory=True)
+
+    with pytest.raises(SkillFormatError, match=r"\['references'\]"):
+        Skill.from_dir(folder)
 
 
 def test_from_dir_needs_a_skill_file(tmp_path):
