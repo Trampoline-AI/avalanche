@@ -124,11 +124,14 @@ ava.runtimes.ClaudeAgent(model="claude-haiku-5-5", max_turns=10, builtin_tools=(
 
 **Setup.** Install the `claude` extra and the Claude Code CLI on every machine that runs the step, Ray workers included. A workflow that only declares Claude steps imports and publishes without them; running a step without the SDK raises `AgentStepExecutionError` naming the extra.
 
-**Sign-in.** The CLI signs in as it does in a terminal, using the first of:
+**Sign-in.** The CLI signs in as it does in a script, using the first of:
 
-- an existing `claude` login;
+- `ANTHROPIC_API_KEY`, billed to that key's Claude Console account. When it is set, it
+  is always used, even if you are also signed in with a subscription;
 - `CLAUDE_CODE_OAUTH_TOKEN`, created for a Claude subscription with `claude setup-token`;
-- `ANTHROPIC_API_KEY`.
+- an existing `claude` login.
+
+To run steps on your subscription, unset `ANTHROPIC_API_KEY` where the step runs.
 
 **Isolation.** Each call ignores your own Claude setup: user and project settings are not loaded, and MCP servers and claude.ai connectors from your account are not offered. The agent sees only the step's tools and the `builtin_tools` you list.
 
