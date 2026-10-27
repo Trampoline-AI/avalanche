@@ -11,6 +11,8 @@
   longer share lines. Connections that skip a step pass between the cards instead of
   running underneath them along the bottom of the graph, and steps are ordered to
   avoid crossings.
+- Fix an intermittent CI failure in the live operator TUI test, which checked for a
+  worker's logging output before it had arrived.
 - Keep input and output names whole on browser UI step cards; long types now wrap
   between words and show the full name and type on hover.
 - **Upgrading** — This release makes agent steps runtime-neutral. Code that defines
